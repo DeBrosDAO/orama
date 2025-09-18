@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"git.debros.io/DeBros/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
 // MakeJWT creates a minimal JWT-like token with a json payload

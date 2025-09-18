@@ -1,15 +1,15 @@
 package gateway
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"time"
 
-	"git.debros.io/DeBros/network/pkg/client"
-	"git.debros.io/DeBros/network/pkg/storage"
+	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/storage"
 	"github.com/gorilla/websocket"
 )
 
@@ -25,51 +25,51 @@ var wsUpgrader = websocket.Upgrader{
 // are published to the same namespaced topic.
 func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request) {
 	if g.client == nil {
-        g.logger.ComponentWarn("gateway", "pubsub ws: client not initialized")
-        writeError(w, http.StatusServiceUnavailable, "client not initialized")
+		g.logger.ComponentWarn("gateway", "pubsub ws: client not initialized")
+		writeError(w, http.StatusServiceUnavailable, "client not initialized")
 		return
 	}
 	if r.Method != http.MethodGet {
-        g.logger.ComponentWarn("gateway", "pubsub ws: method not allowed",)
-        writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		g.logger.ComponentWarn("gateway", "pubsub ws: method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	// Resolve namespace from auth context
-    ns := resolveNamespaceFromRequest(r)
+	ns := resolveNamespaceFromRequest(r)
 	if ns == "" {
-        g.logger.ComponentWarn("gateway", "pubsub ws: namespace not resolved")
-        writeError(w, http.StatusForbidden, "namespace not resolved")
+		g.logger.ComponentWarn("gateway", "pubsub ws: namespace not resolved")
+		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
 
 	topic := r.URL.Query().Get("topic")
-    if topic == "" {
-        g.logger.ComponentWarn("gateway", "pubsub ws: missing topic")
-        writeError(w, http.StatusBadRequest, "missing 'topic'")
+	if topic == "" {
+		g.logger.ComponentWarn("gateway", "pubsub ws: missing topic")
+		writeError(w, http.StatusBadRequest, "missing 'topic'")
 		return
 	}
-    conn, err := wsUpgrader.Upgrade(w, r, nil)
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-        g.logger.ComponentWarn("gateway", "pubsub ws: upgrade failed",)
+		g.logger.ComponentWarn("gateway", "pubsub ws: upgrade failed")
 		return
 	}
 	defer conn.Close()
 
 	// Channel to deliver PubSub messages to WS writer
 	msgs := make(chan []byte, 128)
-    // Use internal auth context when interacting with client to avoid circular auth requirements
-    ctx := client.WithInternalAuth(r.Context())
-    // Subscribe to the topic; push data into msgs with simple per-connection de-dup
-    recent := make(map[string]time.Time)
-    h := func(_ string, data []byte) error {
-        // Drop duplicates seen in the last 2 seconds
-        sum := sha256.Sum256(data)
-        key := hex.EncodeToString(sum[:])
-        if t, ok := recent[key]; ok && time.Since(t) < 2*time.Second {
-            return nil
-        }
-        recent[key] = time.Now()
+	// Use internal auth context when interacting with client to avoid circular auth requirements
+	ctx := client.WithInternalAuth(r.Context())
+	// Subscribe to the topic; push data into msgs with simple per-connection de-dup
+	recent := make(map[string]time.Time)
+	h := func(_ string, data []byte) error {
+		// Drop duplicates seen in the last 2 seconds
+		sum := sha256.Sum256(data)
+		key := hex.EncodeToString(sum[:])
+		if t, ok := recent[key]; ok && time.Since(t) < 2*time.Second {
+			return nil
+		}
+		recent[key] = time.Now()
 		select {
 		case msgs <- data:
 			return nil
@@ -78,14 +78,14 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 			return nil
 		}
 	}
-    if err := g.client.PubSub().Subscribe(ctx, topic, h); err != nil {
-        g.logger.ComponentWarn("gateway", "pubsub ws: subscribe failed",)
-        writeError(w, http.StatusInternalServerError, err.Error())
+	if err := g.client.PubSub().Subscribe(ctx, topic, h); err != nil {
+		g.logger.ComponentWarn("gateway", "pubsub ws: subscribe failed")
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-    defer func() { _ = g.client.PubSub().Unsubscribe(ctx, topic) }()
+	defer func() { _ = g.client.PubSub().Unsubscribe(ctx, topic) }()
 
-    // no extra fan-out; rely on libp2p subscription
+	// no extra fan-out; rely on libp2p subscription
 
 	// Writer loop
 	done := make(chan struct{})
@@ -116,7 +116,7 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 	}()
 
 	// Reader loop: treat any client message as publish to the same topic
-    for {
+	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -124,7 +124,7 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 		if mt != websocket.TextMessage && mt != websocket.BinaryMessage {
 			continue
 		}
-        if err := g.client.PubSub().Publish(ctx, topic, data); err != nil {
+		if err := g.client.PubSub().Publish(ctx, topic, data); err != nil {
 			// Best-effort notify client
 			_ = conn.WriteMessage(websocket.TextMessage, []byte("publish_error"))
 		}
@@ -142,14 +142,14 @@ func (g *Gateway) pubsubPublishHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-    ns := resolveNamespaceFromRequest(r)
+	ns := resolveNamespaceFromRequest(r)
 	if ns == "" {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
 	var body struct {
-		Topic     string `json:"topic"`
-		DataB64   string `json:"data_base64"`
+		Topic   string `json:"topic"`
+		DataB64 string `json:"data_base64"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Topic == "" || body.DataB64 == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: expected {topic,data_base64}")
@@ -160,11 +160,11 @@ func (g *Gateway) pubsubPublishHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid base64 data")
 		return
 	}
-    if err := g.client.PubSub().Publish(client.WithInternalAuth(r.Context()), body.Topic, data); err != nil {
+	if err := g.client.PubSub().Publish(client.WithInternalAuth(r.Context()), body.Topic, data); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-    // rely on libp2p to deliver to WS subscribers
+	// rely on libp2p to deliver to WS subscribers
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -179,13 +179,13 @@ func (g *Gateway) pubsubTopicsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
-    all, err := g.client.PubSub().ListTopics(client.WithInternalAuth(r.Context()))
+	all, err := g.client.PubSub().ListTopics(client.WithInternalAuth(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-    // Client returns topics already trimmed to its namespace; return as-is
-    writeJSON(w, http.StatusOK, map[string]any{"topics": all})
+	// Client returns topics already trimmed to its namespace; return as-is
+	writeJSON(w, http.StatusOK, map[string]any{"topics": all})
 }
 
 // resolveNamespaceFromRequest gets namespace from context set by auth middleware

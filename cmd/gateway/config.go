@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"git.debros.io/DeBros/network/pkg/gateway"
-	"git.debros.io/DeBros/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/gateway"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
 

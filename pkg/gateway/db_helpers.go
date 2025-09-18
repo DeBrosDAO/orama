@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 
-	"git.debros.io/DeBros/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
 func (g *Gateway) resolveNamespaceID(ctx context.Context, ns string) (interface{}, error) {

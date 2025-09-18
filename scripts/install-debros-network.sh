@@ -17,7 +17,7 @@ NOCOLOR='\033[0m'
 
 # Defaults
 INSTALL_DIR="/opt/debros"
-REPO_URL="https://git.debros.io/DeBros/network.git"
+REPO_URL="https://github.com/DeBrosOfficial/network.git"
 MIN_GO_VERSION="1.21"
 NODE_PORT="4001"
 RQLITE_PORT="5001"

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"git.debros.io/DeBros/network/pkg/client"
-	"git.debros.io/DeBros/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
 

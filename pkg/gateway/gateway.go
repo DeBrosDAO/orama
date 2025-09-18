@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-    
 
-	"git.debros.io/DeBros/network/pkg/client"
-	"git.debros.io/DeBros/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
 
@@ -59,7 +58,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
-    gw := &Gateway{
+	gw := &Gateway{
 		logger:    logger,
 		cfg:       cfg,
 		client:    c,

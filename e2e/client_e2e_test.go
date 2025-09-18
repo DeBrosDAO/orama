@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"git.debros.io/DeBros/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
 func getenv(k, def string) string {
@@ -42,7 +42,9 @@ func TestClient_Database_CreateQueryMigrate(t *testing.T) {
 		var peers []string
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
-			if p != "" { peers = append(peers, p) }
+			if p != "" {
+				peers = append(peers, p)
+			}
 		}
 		cfg.BootstrapPeers = peers
 	}
@@ -52,9 +54,13 @@ func TestClient_Database_CreateQueryMigrate(t *testing.T) {
 	}
 
 	c, err := client.NewClient(cfg)
-	if err != nil { t.Fatalf("new client: %v", err) }
-	if err := c.Connect(); err != nil { t.Fatalf("connect: %v", err) }
-	t.Cleanup(func(){ _ = c.Disconnect() })
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if err := c.Connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Disconnect() })
 
 	// Unique table per run
 	table := fmt.Sprintf("e2e_items_client_%d", time.Now().UnixNano())
@@ -78,6 +84,10 @@ func TestClient_Database_CreateQueryMigrate(t *testing.T) {
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel3()
 	res, err := c.Database().Query(ctx3, fmt.Sprintf("SELECT name FROM %s ORDER BY id", table))
-	if err != nil { t.Fatalf("query: %v", err) }
-	if res.Count < 2 { t.Fatalf("expected at least 2 rows, got %d", res.Count) }
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if res.Count < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", res.Count)
+	}
 }

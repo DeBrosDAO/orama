@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"git.debros.io/DeBros/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/rqlite/gorqlite"

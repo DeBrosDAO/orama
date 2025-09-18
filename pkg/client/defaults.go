@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.debros.io/DeBros/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/multiformats/go-multiaddr"
 )
 

@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"git.debros.io/DeBros/network/pkg/anyoneproxy"
-	"git.debros.io/DeBros/network/pkg/config"
-	"git.debros.io/DeBros/network/pkg/logging"
-	"git.debros.io/DeBros/network/pkg/node"
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/node"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )

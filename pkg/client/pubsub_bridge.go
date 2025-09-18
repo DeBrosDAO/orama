@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"git.debros.io/DeBros/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
 // pubSubBridge bridges between our PubSubClient interface and the pubsub package

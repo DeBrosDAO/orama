@@ -20,8 +20,8 @@ import (
 
 	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
 
-	"git.debros.io/DeBros/network/pkg/anyoneproxy"
-	"git.debros.io/DeBros/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
 // Client implements the NetworkClient interface

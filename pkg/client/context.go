@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 
-	"git.debros.io/DeBros/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
 // contextKey for internal operations

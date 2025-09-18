@@ -22,11 +22,11 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
-	"git.debros.io/DeBros/network/pkg/anyoneproxy"
-	"git.debros.io/DeBros/network/pkg/config"
-	"git.debros.io/DeBros/network/pkg/database"
-	"git.debros.io/DeBros/network/pkg/logging"
-	"git.debros.io/DeBros/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/database"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
 // Node represents a network node with RQLite database

@@ -11,7 +11,7 @@ Thanks for helping improve the network! This guide covers setup, local dev, test
 ## Setup
 
 ```bash
-git clone https://git.debros.io/DeBros/network.git
+git clone https://github.com/DeBrosOfficial/network.git
 cd network
 make deps
 ```

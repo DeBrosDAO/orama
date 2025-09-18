@@ -15,7 +15,7 @@ import (
 	"github.com/rqlite/gorqlite"
 	"go.uber.org/zap"
 
-	"git.debros.io/DeBros/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/config"
 )
 
 // RQLiteManager manages an RQLite node instance

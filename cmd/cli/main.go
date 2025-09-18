@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"git.debros.io/DeBros/network/pkg/anyoneproxy"
-	"git.debros.io/DeBros/network/pkg/auth"
-	"git.debros.io/DeBros/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )

@@ -94,7 +94,7 @@ A robust, decentralized peer-to-peer network built in Go, providing distributed 
 ### 1. Clone and Setup
 
 ```bash
-git clone https://git.debros.io/DeBros/network.git
+git clone https://github.com/DeBrosOfficial/network.git
 cd network
 ```
 
@@ -138,7 +138,7 @@ go run ./cmd/node --config configs/node.yaml
 Run the install script for a secure, production-ready setup:
 
 ```bash
-curl -sSL https://git.debros.io/DeBros/network/raw/branch/main/scripts/install-debros-network.sh | sudo bash
+curl -sSL https://github.com/DeBrosOfficial/network/raw/branch/main/scripts/install-debros-network.sh | sudo bash
 ```
 
 **What the Script Does:**
@@ -279,7 +279,7 @@ logging:
 ./bin/network-cli peers                     # List connected peers
 ```
 
- 
+
 
 ### Database Operations
 
@@ -435,7 +435,7 @@ GET  /v1/auth/whoami       # Current auth status
 POST /v1/auth/api-key      # Generate API key (authenticated)
 ```
 
- 
+
 
 #### Network Operations
 ```http
@@ -542,7 +542,7 @@ curl -X POST http://localhost:8080/v1/auth/verify \
   -d '{"wallet":"0x...","nonce":"...","signature":"0x..."}'
 ```
 
- 
+
 
 #### Real-time Messaging
 ```javascript

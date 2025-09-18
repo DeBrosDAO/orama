@@ -7,16 +7,16 @@ import (
 	"net/http"
 	"strings"
 
-	"git.debros.io/DeBros/network/pkg/storage"
+	"github.com/DeBrosOfficial/network/pkg/storage"
 )
 
 // appsHandler implements minimal CRUD for apps within a namespace.
 // Routes handled:
-//  - GET  /v1/apps                 -> list
-//  - POST /v1/apps                 -> create
-//  - GET  /v1/apps/{app_id}        -> fetch
-//  - PUT  /v1/apps/{app_id}        -> update (name/public_key)
-//  - DELETE /v1/apps/{app_id}      -> delete
+//   - GET  /v1/apps                 -> list
+//   - POST /v1/apps                 -> create
+//   - GET  /v1/apps/{app_id}        -> fetch
+//   - PUT  /v1/apps/{app_id}        -> update (name/public_key)
+//   - DELETE /v1/apps/{app_id}      -> delete
 func (g *Gateway) appsHandler(w http.ResponseWriter, r *http.Request) {
 	if g.client == nil {
 		writeError(w, http.StatusServiceUnavailable, "client not initialized")
@@ -29,7 +29,9 @@ func (g *Gateway) appsHandler(w http.ResponseWriter, r *http.Request) {
 			ns = s
 		}
 	}
-	if strings.TrimSpace(ns) == "" { ns = "default" }
+	if strings.TrimSpace(ns) == "" {
+		ns = "default"
+	}
 	db := g.client.Database()
 	nsID, err := g.resolveNamespaceID(ctx, ns)
 	if err != nil {

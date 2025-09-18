@@ -33,7 +33,7 @@ build: deps
 	go build -ldflags "$(LDFLAGS)" -o bin/node ./cmd/node
 	go build -ldflags "$(LDFLAGS)" -o bin/network-cli cmd/cli/main.go
 	# Inject gateway build metadata via pkg path variables
-	go build -ldflags "$(LDFLAGS) -X 'git.debros.io/DeBros/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'git.debros.io/DeBros/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'git.debros.io/DeBros/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
+	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	@echo "Build complete! Run ./bin/network-cli version"
 
 # Clean build artifacts
