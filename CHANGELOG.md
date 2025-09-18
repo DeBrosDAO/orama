@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 - Created node_test, write tests for CalculateNextBackoff, AddJitter, GetPeerId, LoadOrCreateIdentity, hasBootstrapConnections
 
 ### Changed
+- replaced git.debros.io with github.com
 
 ### Deprecated
 
