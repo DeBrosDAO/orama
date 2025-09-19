@@ -689,7 +689,7 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Further Reading
 
-- [DeBros Network Documentation](https://docs.debros.io)
+- [DeBros Network Documentation](https://network.debros.io/docs/)
 - [RQLite Documentation](https://github.com/rqlite/rqlite)
 - [LibP2P Documentation](https://libp2p.io)
 
