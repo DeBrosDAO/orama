@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Removed
 
+- Removed unused command setup-production-security.sh
+
 ### Fixed
 
 ### Security
