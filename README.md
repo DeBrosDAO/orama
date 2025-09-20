@@ -138,7 +138,7 @@ go run ./cmd/node --config configs/node.yaml
 Run the install script for a secure, production-ready setup:
 
 ```bash
-curl -sSL https://github.com/DeBrosOfficial/network/raw/branch/main/scripts/install-debros-network.sh | sudo bash
+curl -sSL https://github.com/DeBrosOfficial/network/raw/main/scripts/install-debros-network.sh | sudo bash
 ```
 
 **What the Script Does:**
