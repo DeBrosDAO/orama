@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.43.6] - 2025-09-20
+
+### Added
+
 - Added Gateway port on install-debros-network.sh
 - Added default bootstrap peers on config.go
 
