@@ -8,7 +8,11 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+- Added Gateway port on install-debros-network.sh
+
 ### Changed
+
+- Updated Gateway port from 8080/8005 to 6001
 
 ### Deprecated
 

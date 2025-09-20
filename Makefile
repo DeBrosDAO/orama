@@ -7,12 +7,12 @@ test:
 
 # Gateway-focused E2E tests assume gateway and nodes are already running
 # Configure via env:
-#   GATEWAY_BASE_URL (default http://127.0.0.1:8080)
+#   GATEWAY_BASE_URL (default http://127.0.0.1:6001)
 #   GATEWAY_API_KEY  (required for auth-protected routes)
 .PHONY: test-e2e
 test-e2e:
 	@echo "Running gateway E2E tests (HTTP/WS only)..."
-	@echo "Base URL: $${GATEWAY_BASE_URL:-http://127.0.0.1:8080}"
+	@echo "Base URL: $${GATEWAY_BASE_URL:-http://127.0.0.1:6001}"
 	@test -n "$$GATEWAY_API_KEY" || (echo "GATEWAY_API_KEY must be set" && exit 1)
 	go test -v -tags e2e ./e2e
 
@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports
 
-VERSION := 0.42.4-beta
+VERSION := 0.42.5-beta
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'

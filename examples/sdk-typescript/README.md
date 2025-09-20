@@ -6,7 +6,7 @@ Usage:
 
 ```bash
 npm i
-export GATEWAY_BASE_URL=http://127.0.0.1:8080
+export GATEWAY_BASE_URL=http://127.0.0.1:6001
 export GATEWAY_API_KEY=your_api_key
 ```
 
