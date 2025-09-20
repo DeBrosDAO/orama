@@ -10,7 +10,7 @@
     "mode": "debug",
     "program": "./cmd/gateway",
     "env": {
-      "GATEWAY_ADDR": ":8080",
+      "GATEWAY_ADDR": ":6001",
       "GATEWAY_BOOTSTRAP_PEERS": "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWSHHwEY6cga3ng7tD1rzStAU58ogQXVMX3LZJ6Gqf6dee",
       "GATEWAY_NAMESPACE": "default",
       "GATEWAY_API_KEY": "ak_iGustrsFk9H8uXpwczCATe5U:default"
@@ -30,12 +30,12 @@
   },
   {
     "adapter": "Delve",
-    "label": "Gateway Go 8005 Port (Delve)",
+    "label": "Gateway Go 6001 Port (Delve)",
     "request": "launch",
     "mode": "debug",
     "program": "./cmd/gateway",
     "env": {
-      "GATEWAY_ADDR": ":8005",
+      "GATEWAY_ADDR": ":6001",
       "GATEWAY_BOOTSTRAP_PEERS": "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWSHHwEY6cga3ng7tD1rzStAU58ogQXVMX3LZJ6Gqf6dee",
       "GATEWAY_NAMESPACE": "default",
       "GATEWAY_API_KEY": "ak_iGustrsFk9H8uXpwczCATe5U:default"

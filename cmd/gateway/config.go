@@ -39,7 +39,7 @@ func getEnvBoolDefault(key string, def bool) bool {
 // parseGatewayConfig parses flags and environment variables into GatewayConfig.
 // Priority: flags > env > defaults.
 func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
-	addr := flag.String("addr", getEnvDefault("GATEWAY_ADDR", ":8080"), "HTTP listen address (e.g., :8080)")
+	addr := flag.String("addr", getEnvDefault("GATEWAY_ADDR", ":6001"), "HTTP listen address (e.g., :6001)")
 	ns := flag.String("namespace", getEnvDefault("GATEWAY_NAMESPACE", "default"), "Client namespace for scoping resources")
 	peers := flag.String("bootstrap-peers", getEnvDefault("GATEWAY_BOOTSTRAP_PEERS", ""), "Comma-separated bootstrap peers for network client")
 

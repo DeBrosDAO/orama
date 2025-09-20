@@ -4,7 +4,7 @@ info:
   version: 0.40.0
   description: REST API over the DeBros Network client for storage, database, and pubsub.
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost:6001
 security:
   - ApiKeyAuth: []
   - BearerAuth: []

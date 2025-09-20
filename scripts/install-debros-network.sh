@@ -21,6 +21,7 @@ REPO_URL="https://github.com/DeBrosOfficial/network.git"
 MIN_GO_VERSION="1.21"
 NODE_PORT="4001"
 RQLITE_PORT="5001"
+GATEWAY_PORT="6001"
 RAFT_PORT="7001"
 UPDATE_MODE=false
 NON_INTERACTIVE=false
@@ -249,7 +250,7 @@ install_rqlite() {
 }
 
 check_ports() {
-    local ports=($NODE_PORT $RQLITE_PORT $RAFT_PORT)
+    local ports=($NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT)
     for port in "${ports[@]}"; do
         if sudo netstat -tuln 2>/dev/null | grep -q ":$port " || ss -tuln 2>/dev/null | grep -q ":$port "; then
             error "Port $port is already in use. Please free it up and try again."
@@ -427,7 +428,7 @@ configure_firewall() {
         log "Configuring firewall rules..."
         if command -v ufw &> /dev/null; then
             log "Adding UFW rules for DeBros Network ports..."
-            for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT; do
+            for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT; do
                 if ! sudo ufw allow $port; then
                     error "Failed to allow port $port"
                     exit 1
@@ -562,6 +563,7 @@ main() {
     log "${GREEN}Node Port:${NOCOLOR} ${CYAN}$NODE_PORT${NOCOLOR}"
     log "${GREEN}RQLite Port:${NOCOLOR} ${CYAN}$RQLITE_PORT${NOCOLOR}"
     log "${GREEN}Raft Port:${NOCOLOR} ${CYAN}$RAFT_PORT${NOCOLOR}"
+    log "${GREEN}Gateway Port:${NOCOLOR} ${CYAN}$GATEWAY_PORT${NOCOLOR}"
     log "${BLUE}==================================================${NOCOLOR}"
     log "${GREEN}Management Commands:${NOCOLOR}"
     log "${CYAN}  - sudo systemctl status debros-node${NOCOLOR} (Check status)"

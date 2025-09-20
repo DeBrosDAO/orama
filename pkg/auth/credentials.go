@@ -173,7 +173,7 @@ func GetDefaultGatewayURL() string {
 	if envURL := os.Getenv("DEBROS_GATEWAY"); envURL != "" {
 		return envURL
 	}
-	return "http://localhost:8005"
+	return "http://localhost:6001"
 }
 
 // HasValidCredentials checks if there are valid credentials for the default gateway

@@ -379,7 +379,7 @@ The gateway can be configured via environment variables:
 
 ```bash
 # Basic Configuration
-export GATEWAY_ADDR="0.0.0.0:8080"
+export GATEWAY_ADDR="0.0.0.0:6001"
 export GATEWAY_NAMESPACE="my-app"
 export GATEWAY_BOOTSTRAP_PEERS="/ip4/127.0.0.1/tcp/4001/p2p/YOUR_PEER_ID"
 
@@ -533,11 +533,11 @@ resp, err := http.DefaultClient.Do(req)
 #### Wallet Authentication Flow
 ```bash
 # 1. Get challenge (automatic)
-curl -X POST http://localhost:8080/v1/auth/challenge
+curl -X POST http://localhost:6001/v1/auth/challenge
 
 # 2. Sign challenge with wallet (handled by client)
 # 3. Verify signature (automatic)
-curl -X POST http://localhost:8080/v1/auth/verify \
+curl -X POST http://localhost:6001/v1/auth/verify \
   -H "Content-Type: application/json" \
   -d '{"wallet":"0x...","nonce":"...","signature":"0x..."}'
 ```
@@ -547,7 +547,7 @@ curl -X POST http://localhost:8080/v1/auth/verify \
 #### Real-time Messaging
 ```javascript
 // WebSocket connection
-const ws = new WebSocket('ws://localhost:8080/v1/pubsub/ws?topic=chat');
+const ws = new WebSocket('ws://localhost:6001/v1/pubsub/ws?topic=chat');
 
 ws.onmessage = (event) => {
   console.log('Received:', event.data);
@@ -661,8 +661,8 @@ export LOG_LEVEL=debug
 ./bin/network-cli pubsub subscribe test 10s
 
 # Gateway health checks
-curl http://localhost:8080/health
-curl http://localhost:8080/v1/status
+curl http://localhost:6001/health
+curl http://localhost:6001/v1/status
 ```
 
 ### Service Logs
