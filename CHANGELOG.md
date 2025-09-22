@@ -18,6 +18,28 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Security
 
+## [0.44.0] - 2025-09-25
+
+### Added
+
+- Added gateway.yaml file for gateway default configurations
+
+### Changed
+
+- Updated readme to include all options for .yaml files
+
+### Deprecated
+
+### Removed
+
+- Removed unused command setup-production-security.sh
+- Removed anyone proxy from libp2p proxy
+
+### Fixed
+
+### Security
+
+
 ## [0.43.6] - 2025-09-20
 
 ### Added
