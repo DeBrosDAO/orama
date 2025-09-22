@@ -8,6 +8,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 // For transition, alias main.GatewayConfig to pkg/gateway.Config
@@ -36,36 +37,101 @@ func getEnvBoolDefault(key string, def bool) bool {
 	}
 }
 
-// parseGatewayConfig parses flags and environment variables into GatewayConfig.
-// Priority: flags > env > defaults.
+// parseGatewayConfig loads optional configs/gateway.yaml then applies env and flags.
+// Priority: flags > env > yaml > defaults.
 func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
-	addr := flag.String("addr", getEnvDefault("GATEWAY_ADDR", ":6001"), "HTTP listen address (e.g., :6001)")
-	ns := flag.String("namespace", getEnvDefault("GATEWAY_NAMESPACE", "default"), "Client namespace for scoping resources")
-	peers := flag.String("bootstrap-peers", getEnvDefault("GATEWAY_BOOTSTRAP_PEERS", ""), "Comma-separated bootstrap peers for network client")
+	// Base defaults
+	cfg := &gateway.Config{
+		ListenAddr:      ":6001",
+		ClientNamespace: "default",
+		BootstrapPeers:  nil,
+	}
 
-	// Do not call flag.Parse() elsewhere to avoid double-parsing
-	flag.Parse()
-
-	var bootstrap []string
-	if p := strings.TrimSpace(*peers); p != "" {
-		parts := strings.Split(p, ",")
-		for _, part := range parts {
-			val := strings.TrimSpace(part)
-			if val != "" {
-				bootstrap = append(bootstrap, val)
+	// 1) YAML (optional)
+	{
+		type yamlCfg struct {
+			ListenAddr      string   `yaml:"listen_addr"`
+			ClientNamespace string   `yaml:"client_namespace"`
+			BootstrapPeers  []string `yaml:"bootstrap_peers"`
+		}
+		const path = "configs/gateway.yaml"
+		if data, err := os.ReadFile(path); err == nil {
+			var y yamlCfg
+			if err := yaml.Unmarshal(data, &y); err != nil {
+				logger.ComponentWarn(logging.ComponentGeneral, "failed to parse configs/gateway.yaml; ignoring", zap.Error(err))
+			} else {
+				if v := strings.TrimSpace(y.ListenAddr); v != "" {
+					cfg.ListenAddr = v
+				}
+				if v := strings.TrimSpace(y.ClientNamespace); v != "" {
+					cfg.ClientNamespace = v
+				}
+				if len(y.BootstrapPeers) > 0 {
+					var bp []string
+					for _, p := range y.BootstrapPeers {
+						p = strings.TrimSpace(p)
+						if p != "" {
+							bp = append(bp, p)
+						}
+					}
+					if len(bp) > 0 {
+						cfg.BootstrapPeers = bp
+					}
+				}
 			}
 		}
 	}
 
+	// 2) Env overrides
+	if v := strings.TrimSpace(os.Getenv("GATEWAY_ADDR")); v != "" {
+		cfg.ListenAddr = v
+	}
+	if v := strings.TrimSpace(os.Getenv("GATEWAY_NAMESPACE")); v != "" {
+		cfg.ClientNamespace = v
+	}
+	if v := strings.TrimSpace(os.Getenv("GATEWAY_BOOTSTRAP_PEERS")); v != "" {
+		parts := strings.Split(v, ",")
+		var bp []string
+		for _, part := range parts {
+			s := strings.TrimSpace(part)
+			if s != "" {
+				bp = append(bp, s)
+			}
+		}
+		cfg.BootstrapPeers = bp
+	}
+
+	// 3) Flags (override env)
+	addr := flag.String("addr", "", "HTTP listen address (e.g., :6001)")
+	ns := flag.String("namespace", "", "Client namespace for scoping resources")
+	peers := flag.String("bootstrap-peers", "", "Comma-separated bootstrap peers for network client")
+
+	// Do not call flag.Parse() elsewhere to avoid double-parsing
+	flag.Parse()
+
+	if a := strings.TrimSpace(*addr); a != "" {
+		cfg.ListenAddr = a
+	}
+	if n := strings.TrimSpace(*ns); n != "" {
+		cfg.ClientNamespace = n
+	}
+	if p := strings.TrimSpace(*peers); p != "" {
+		parts := strings.Split(p, ",")
+		var bp []string
+		for _, part := range parts {
+			s := strings.TrimSpace(part)
+			if s != "" {
+				bp = append(bp, s)
+			}
+		}
+		cfg.BootstrapPeers = bp
+	}
+
 	logger.ComponentInfo(logging.ComponentGeneral, "Loaded gateway configuration",
-		zap.String("addr", *addr),
-		zap.String("namespace", *ns),
-		zap.Int("bootstrap_peer_count", len(bootstrap)),
+		zap.String("addr", cfg.ListenAddr),
+		zap.String("namespace", cfg.ClientNamespace),
+		zap.Int("bootstrap_peer_count", len(cfg.BootstrapPeers)),
 	)
 
-	return &gateway.Config{
-		ListenAddr:      *addr,
-		ClientNamespace: *ns,
-		BootstrapPeers:  bootstrap,
-	}
+	return cfg
 }

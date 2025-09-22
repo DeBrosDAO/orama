@@ -8,13 +8,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+- Added gateway.yaml file for gateway default configurations
+
 ### Changed
+
+- Updated readme to include all options for .yaml files
 
 ### Deprecated
 
 ### Removed
 
 - Removed unused command setup-production-security.sh
+- Removed anyone proxy from libp2p proxy
 
 ### Fixed
 

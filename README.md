@@ -185,7 +185,6 @@ node:
     - "/ip4/0.0.0.0/tcp/4001"
   data_dir: "./data/bootstrap"
   max_connections: 100
-  disable_anonrc: true
 
 database:
   data_dir: "./data/db"
@@ -224,7 +223,6 @@ node:
     - "/ip4/0.0.0.0/tcp/4002"
   data_dir: "./data/node2"
   max_connections: 50
-  disable_anonrc: true
 
 database:
   data_dir: "./data/db"
@@ -255,11 +253,118 @@ logging:
   output_file: ""
 ```
 
+### YAML Reference
+
+#### Node YAML (configs/node.yaml or configs/bootstrap.yaml)
+
+The .yaml files are required in order for the nodes and the gateway to run correctly.
+
+node:
+- id (string) Optional node ID. Auto-generated if empty.
+- type (string) "bootstrap" or "node". Default: "node".
+- listen_addresses (string[]) LibP2P listen multiaddrs. Default: ["/ip4/0.0.0.0/tcp/4001"].
+- data_dir (string) Data directory. Default: "./data".
+- max_connections (int) Max peer connections. Default: 50.
+
+database:
+- data_dir (string) Directory for database files. Default: "./data/db".
+- replication_factor (int) Number of replicas. Default: 3.
+- shard_count (int) Shards for data distribution. Default: 16.
+- max_database_size (int64 bytes) Max DB size. Default: 1073741824 (1GB).
+- backup_interval (duration) e.g., "24h". Default: 24h.
+- rqlite_port (int) RQLite HTTP API port. Default: 5001.
+- rqlite_raft_port (int) RQLite Raft port. Default: 7001.
+- rqlite_join_address (string) HTTP address of an existing RQLite node to join. Empty for bootstrap.
+
+discovery:
+- bootstrap_peers (string[]) List of LibP2P multiaddrs of bootstrap peers.
+- discovery_interval (duration) How often to announce/discover peers. Default: 15s.
+- bootstrap_port (int) Default port for bootstrap nodes. Default: 4001.
+- http_adv_address (string) Advertised HTTP address for RQLite (host:port).
+- raft_adv_address (string) Advertised Raft address (host:port).
+- node_namespace (string) Namespace for node identifiers. Default: "default".
+
+security:
+- enable_tls (bool) Enable TLS for externally exposed services. Default: false.
+- private_key_file (string) Path to TLS private key (if TLS enabled).
+- certificate_file (string) Path to TLS certificate (if TLS enabled).
+
+logging:
+- level (string) one of "debug", "info", "warn", "error". Default: "info".
+- format (string) "json" or "console". Default: "console".
+- output_file (string) Empty for stdout; otherwise path to log file.
+
+Precedence (node): Flags > YAML > Defaults.
+
+Example node.yaml
+
+```yaml
+node:
+  id: "node2"
+  listen_addresses:
+    - "/ip4/0.0.0.0/tcp/4002"
+  data_dir: "./data/node2"
+  max_connections: 50
+  disable_anonrc: true
+
+database:
+  data_dir: "./data/db"
+  replication_factor: 3
+  shard_count: 16
+  max_database_size: 1073741824
+  backup_interval: 24h
+  rqlite_port: 5001
+  rqlite_raft_port: 7001
+  rqlite_join_address: "http://127.0.0.1:5001"
+
+discovery:
+  bootstrap_peers:
+    - "<YOUR_BOOTSTRAP_PEER_ID_MULTIADDR>"
+  discovery_interval: 15s
+  bootstrap_port: 4001
+  http_adv_address: "127.0.0.1"
+  raft_adv_address: ""
+  node_namespace: "default"
+
+security:
+  enable_tls: false
+  private_key_file: ""
+  certificate_file: ""
+  auth_enabled: false
+
+logging:
+  level: "info"
+  format: "console"
+  output_file: ""
+```
+
+#### Gateway YAML (configs/gateway.yaml)
+
+- listen_addr (string) HTTP listen address, e.g., ":6001". Default: ":6001".
+- client_namespace (string) Namespace used by the gateway client. Default: "default".
+- bootstrap_peers (string[]) List of bootstrap peer multiaddrs. Default: empty.
+
+Precedence (gateway): Flags > Environment Variables > YAML > Defaults.
+Environment variables:
+- GATEWAY_ADDR
+- GATEWAY_NAMESPACE
+- GATEWAY_BOOTSTRAP_PEERS (comma-separated)
+
+Example gateway.yaml
+
+```yaml
+listen_addr: ":6001"
+client_namespace: "default"
+bootstrap_peers:
+  - "<YOUR_BOOTSTRAP_PEER_ID_MULTIADDR>"
+```
+
 ### Flags & Environment Variables
 
 - **Flags**: Override config at startup (`--data`, `--p2p-port`, `--rqlite-http-port`, etc.)
 - **Env Vars**: Override config and flags (`NODE_ID`, `RQLITE_PORT`, `BOOTSTRAP_PEERS`, etc.)
-- **Precedence**: Flags > Env Vars > YAML > Defaults
+- **Precedence (gateway)**: Flags > Env Vars > YAML > Defaults
+- **Precedence (node)**: Flags > YAML > Defaults
 
 ### Bootstrap & Database Endpoints
 
@@ -303,7 +408,6 @@ logging:
 --timeout 30s                 # Set operation timeout
 --bootstrap <multiaddr>       # Override bootstrap peer
 --production                  # Use production bootstrap peers
---disable-anonrc              # Disable anonymous routing (Tor/SOCKS5)
 ```
 
 ### Database Operations (Gateway REST)
@@ -375,7 +479,7 @@ go run ./cmd/gateway
 
 ### Configuration
 
-The gateway can be configured via environment variables:
+The gateway can be configured via configs/gateway.yaml and environment variables (env override YAML):
 
 ```bash
 # Basic Configuration

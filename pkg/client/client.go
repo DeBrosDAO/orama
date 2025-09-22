@@ -13,14 +13,12 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
-	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
 	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
@@ -131,15 +129,8 @@ func (c *Client) Connect() error {
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
 	)
-	if anyoneproxy.Enabled() {
-		opts = append(opts, libp2p.Transport(tcp.NewTCPTransport, tcp.WithDialerForAddr(anyoneproxy.DialerForAddr())))
-	} else {
-		opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
-	}
+	opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
 	// Enable QUIC only when not proxying. When proxy is enabled, prefer TCP via SOCKS5.
-	if !anyoneproxy.Enabled() {
-		opts = append(opts, libp2p.Transport(libp2pquic.NewTransport))
-	}
 	h, err := libp2p.New(opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create libp2p host: %w", err)
