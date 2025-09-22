@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.44.0] - 2025-09-25
+
+### Added
+
 - Added gateway.yaml file for gateway default configurations
 
 ### Changed
@@ -24,6 +38,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Fixed
 
 ### Security
+
 
 ## [0.43.6] - 2025-09-20
 
