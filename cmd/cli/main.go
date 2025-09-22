@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -24,7 +23,6 @@ var (
 	timeout       = 30 * time.Second
 	format        = "table"
 	useProduction = false
-	disableAnon   = false
 )
 
 // version metadata populated via -ldflags at build time
@@ -45,9 +43,6 @@ func main() {
 
 	// Parse global flags
 	parseGlobalFlags(args)
-
-	// Apply disable flag early so all network operations honor it
-	anyoneproxy.SetDisabled(disableAnon)
 
 	switch command {
 	case "version":
@@ -111,8 +106,6 @@ func parseGlobalFlags(args []string) {
 			}
 		case "--production":
 			useProduction = true
-		case "--disable-anonrc":
-			disableAnon = true
 		}
 	}
 }

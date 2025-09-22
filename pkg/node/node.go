@@ -22,7 +22,6 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/database"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -223,18 +222,6 @@ func (n *Node) startLibP2P() error {
 		return fmt.Errorf("failed to load identity: %w", err)
 	}
 
-	// Log Anyone proxy status before constructing host
-	n.logger.ComponentInfo(logging.ComponentLibP2P, "Anyone proxy status",
-		zap.Bool("proxy_enabled", anyoneproxy.Enabled()),
-		zap.String("proxy_addr", anyoneproxy.Address()),
-		zap.Bool("proxy_running", anyoneproxy.Running()),
-	)
-
-	if anyoneproxy.Enabled() && !anyoneproxy.Running() {
-		n.logger.Warn("Anyone proxy is enabled but not reachable",
-			zap.String("addr", anyoneproxy.Address()))
-	}
-
 	// Create LibP2P host with persistent identity
 	// Build options allowing conditional proxying via Anyone SOCKS5
 	var opts []libp2p.Option
@@ -246,11 +233,7 @@ func (n *Node) startLibP2P() error {
 	)
 
 	// TCP transport with optional SOCKS5 dialer override
-	if anyoneproxy.Enabled() {
-		opts = append(opts, libp2p.Transport(tcp.NewTCPTransport, tcp.WithDialerForAddr(anyoneproxy.DialerForAddr())))
-	} else {
-		opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
-	}
+	opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
 
 	h, err := libp2p.New(opts...)
 	if err != nil {

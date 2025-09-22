@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/node"
@@ -32,7 +31,7 @@ func setup_logger(component logging.Component) (logger *logging.ColoredLogger) {
 }
 
 // parse_and_return_network_flags it initializes all the network flags coming from the .yaml files
-func parse_and_return_network_flags() (configPath *string, dataDir, nodeID *string, p2pPort, rqlHTTP, rqlRaft *int, disableAnon *bool, rqlJoinAddr *string, advAddr *string, help *bool) {
+func parse_and_return_network_flags() (configPath *string, dataDir, nodeID *string, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr *string, advAddr *string, help *bool) {
 	logger := setup_logger(logging.ComponentNode)
 
 	configPath = flag.String("config", "", "Path to config YAML file (overrides defaults)")
@@ -41,7 +40,6 @@ func parse_and_return_network_flags() (configPath *string, dataDir, nodeID *stri
 	p2pPort = flag.Int("p2p-port", 4001, "LibP2P listen port")
 	rqlHTTP = flag.Int("rqlite-http-port", 5001, "RQLite HTTP API port")
 	rqlRaft = flag.Int("rqlite-raft-port", 7001, "RQLite Raft port")
-	disableAnon = flag.Bool("disable-anonrc", false, "Disable Anyone proxy routing (defaults to enabled on 127.0.0.1:9050)")
 	rqlJoinAddr = flag.String("rqlite-join-address", "", "RQLite address to join (e.g., /ip4/)")
 	advAddr = flag.String("adv-addr", "127.0.0.1", "Default Advertise address for rqlite and rafts")
 	help = flag.Bool("help", false, "Show help")
@@ -78,7 +76,6 @@ func parse_and_return_network_flags() (configPath *string, dataDir, nodeID *stri
 			&p2pPortVal,
 			&cfg.Database.RQLitePort,
 			&cfg.Database.RQLiteRaftPort,
-			&cfg.Node.DisableAnonRC,
 			&cfg.Database.RQLiteJoinAddress,
 			&cfg.Discovery.HttpAdvAddress,
 			help
@@ -98,19 +95,6 @@ func LoadConfigFromYAML(path string) (*config.Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal YAML: %w", err)
 	}
 	return &cfg, nil
-}
-
-// disable_anon_proxy disables the anonymous proxy routing, by default on development
-// it is not suggested to run anyone proxy
-func disable_anon_proxy(disableAnon *bool) bool {
-	anyoneproxy.SetDisabled(*disableAnon)
-	logger := setup_logger(logging.ComponentAnyone)
-
-	if *disableAnon {
-		logger.Info("Anyone proxy routing is disabled. This means the node will not use the default Tor proxy for anonymous routing.\n")
-	}
-
-	return true
 }
 
 // check_if_should_open_help checks if the help flag is set and opens the help if it is
@@ -209,9 +193,8 @@ func load_args_into_config(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, r
 func main() {
 	logger := setup_logger(logging.ComponentNode)
 
-	_, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, disableAnon, rqlJoinAddr, advAddr, help := parse_and_return_network_flags()
+	_, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, help := parse_and_return_network_flags()
 
-	disable_anon_proxy(disableAnon)
 	check_if_should_open_help(help)
 	select_data_dir(dataDir, nodeID)
 
