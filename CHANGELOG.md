@@ -16,6 +16,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+## [0.50.0] - 2025-09-23
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
 - Fixed wrong URL /v1/db to /v1/rqlite
 
 ### Security
