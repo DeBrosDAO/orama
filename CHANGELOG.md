@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.50.0] - 2025-09-23
+
+### Added
+
 - Created new rqlite folder
 - Created rqlite adapter, client, gateway, migrations and rqlite init
 - Created namespace_helpers on gateway
@@ -30,7 +44,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Security
 
-## [0.44.0] - 2025-09-25
+## [0.44.0] - 2025-09-22
 
 ### Added
 
