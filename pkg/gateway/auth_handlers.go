@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
-	"github.com/DeBrosOfficial/network/pkg/storage"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -20,7 +19,7 @@ func (g *Gateway) whoamiHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Determine namespace (may be overridden by auth layer)
 	ns := g.cfg.ClientNamespace
-	if v := ctx.Value(storage.CtxKeyNamespaceOverride); v != nil {
+	if v := ctx.Value(ctxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok && s != "" {
 			ns = s
 		}

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
-	"github.com/DeBrosOfficial/network/pkg/storage"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -190,7 +190,7 @@ func (g *Gateway) pubsubTopicsHandler(w http.ResponseWriter, r *http.Request) {
 
 // resolveNamespaceFromRequest gets namespace from context set by auth middleware
 func resolveNamespaceFromRequest(r *http.Request) string {
-	if v := r.Context().Value(storage.CtxKeyNamespaceOverride); v != nil {
+	if v := r.Context().Value(ctxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok {
 			return s
 		}

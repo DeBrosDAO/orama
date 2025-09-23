@@ -1,4 +1,4 @@
-package database
+package rqlite
 
 import (
 	"database/sql"

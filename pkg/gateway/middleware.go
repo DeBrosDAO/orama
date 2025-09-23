@@ -11,7 +11,6 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/logging"
-	"github.com/DeBrosOfficial/network/pkg/storage"
 	"go.uber.org/zap"
 )
 
@@ -19,8 +18,9 @@ import (
 type contextKey string
 
 const (
-	ctxKeyAPIKey contextKey = "api_key"
-	ctxKeyJWT    contextKey = "jwt_claims"
+	ctxKeyAPIKey            contextKey = "api_key"
+	ctxKeyJWT               contextKey = "jwt_claims"
+	ctxKeyNamespaceOverride contextKey = "namespace_override"
 )
 
 // withMiddleware adds CORS and logging middleware
@@ -78,7 +78,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 						// Attach JWT claims and namespace to context
 						ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
-							ctx = storage.WithNamespace(ctx, ns)
+							ctx = context.WithValue(ctx, ctxKeyNamespaceOverride, ns)
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -125,7 +125,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 
 		// Attach auth metadata to context for downstream use
 		reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
-		reqCtx = storage.WithNamespace(reqCtx, ns)
+		reqCtx = context.WithValue(reqCtx, ctxKeyNamespaceOverride, ns)
 		next.ServeHTTP(w, r.WithContext(reqCtx))
 	})
 }
@@ -190,7 +190,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// Determine namespace from context
 		ctx := r.Context()
 		ns := ""
-		if v := ctx.Value(storage.CtxKeyNamespaceOverride); v != nil {
+		if v := ctx.Value(ctxKeyNamespaceOverride); v != nil {
 			if s, ok := v.(string); ok {
 				ns = strings.TrimSpace(s)
 			}
@@ -265,16 +265,13 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 // requiresNamespaceOwnership returns true if the path should be guarded by
 // namespace ownership checks.
 func requiresNamespaceOwnership(p string) bool {
-	if p == "/storage" || p == "/v1/storage" || strings.HasPrefix(p, "/v1/storage/") {
-		return true
-	}
-	if p == "/v1/apps" || strings.HasPrefix(p, "/v1/apps/") {
+	if p == "/rqlite" || p == "/v1/rqlite" || strings.HasPrefix(p, "/v1/rqlite/") {
 		return true
 	}
 	if strings.HasPrefix(p, "/v1/pubsub") {
 		return true
 	}
-	if strings.HasPrefix(p, "/v1/db/") {
+	if strings.HasPrefix(p, "/v1/rqlite/") {
 		return true
 	}
 	return false
