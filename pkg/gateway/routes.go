@@ -27,7 +27,7 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/auth/logout", g.logoutHandler)
 	mux.HandleFunc("/v1/auth/whoami", g.whoamiHandler)
 
-	// rqlite ORM HTTP gateway (mounts /v1/db/* endpoints)
+	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints)
 	if g.ormHTTP != nil {
 		g.ormHTTP.BasePath = "/v1/rqlite"
 		g.ormHTTP.RegisterRoutes(mux)

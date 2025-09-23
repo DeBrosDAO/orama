@@ -192,7 +192,7 @@ paths:
                 key: { type: string }
       responses:
         "200": { description: OK }
-  /v1/db/create-table:
+  /v1/rqlite/create-table:
     post:
       summary: Create tables via SQL DDL
       requestBody:
@@ -220,7 +220,7 @@ paths:
                   { schema: { $ref: "#/components/schemas/Error" } },
               },
           }
-  /v1/db/drop-table:
+  /v1/rqlite/drop-table:
     post:
       summary: Drop a table
       requestBody:
@@ -230,7 +230,7 @@ paths:
             schema: { $ref: "#/components/schemas/DropTableRequest" }
       responses:
         "200": { description: OK }
-  /v1/db/query:
+  /v1/rqlite/query:
     post:
       summary: Execute a single SQL query
       requestBody:
@@ -262,7 +262,7 @@ paths:
                   { schema: { $ref: "#/components/schemas/Error" } },
               },
           }
-  /v1/db/transaction:
+  /v1/rqlite/transaction:
     post:
       summary: Execute multiple SQL statements atomically
       requestBody:
@@ -290,7 +290,7 @@ paths:
                   { schema: { $ref: "#/components/schemas/Error" } },
               },
           }
-  /v1/db/schema:
+  /v1/rqlite/schema:
     get:
       summary: Get current database schema
       responses:

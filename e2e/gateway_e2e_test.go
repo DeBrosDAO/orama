@@ -170,7 +170,7 @@ func TestGateway_Database_CreateQueryMigrate(t *testing.T) {
 	// Create table
 	schema := `CREATE TABLE IF NOT EXISTS e2e_items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`
 	body := fmt.Sprintf(`{"schema":%q}`, schema)
-	req, _ := http.NewRequest(http.MethodPost, base+"/v1/db/create-table", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/create-table", strings.NewReader(body))
 	req.Header = authHeader(key)
 	resp, err := httpClient().Do(req)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestGateway_Database_CreateQueryMigrate(t *testing.T) {
 
 	// Insert via transaction (simulate migration/data seed)
 	txBody := `{"statements":["INSERT INTO e2e_items(name) VALUES ('one')","INSERT INTO e2e_items(name) VALUES ('two')"]}`
-	req, _ = http.NewRequest(http.MethodPost, base+"/v1/db/transaction", strings.NewReader(txBody))
+	req, _ = http.NewRequest(http.MethodPost, base+"/v1/rqlite/transaction", strings.NewReader(txBody))
 	req.Header = authHeader(key)
 	resp, err = httpClient().Do(req)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestGateway_Database_CreateQueryMigrate(t *testing.T) {
 
 	// Query rows
 	qBody := `{"sql":"SELECT name FROM e2e_items ORDER BY id ASC"}`
-	req, _ = http.NewRequest(http.MethodPost, base+"/v1/db/query", strings.NewReader(qBody))
+	req, _ = http.NewRequest(http.MethodPost, base+"/v1/rqlite/query", strings.NewReader(qBody))
 	req.Header = authHeader(key)
 	resp, err = httpClient().Do(req)
 	if err != nil {
@@ -219,7 +219,7 @@ func TestGateway_Database_CreateQueryMigrate(t *testing.T) {
 	}
 
 	// Schema endpoint returns tables
-	req, _ = http.NewRequest(http.MethodGet, base+"/v1/db/schema", nil)
+	req, _ = http.NewRequest(http.MethodGet, base+"/v1/rqlite/schema", nil)
 	req.Header = authHeader(key)
 	resp2, err := httpClient().Do(req)
 	if err != nil {
@@ -239,7 +239,7 @@ func TestGateway_Database_DropTable(t *testing.T) {
 	schema := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, note TEXT)", table)
 	// create
 	body := fmt.Sprintf(`{"schema":%q}`, schema)
-	req, _ := http.NewRequest(http.MethodPost, base+"/v1/db/create-table", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/create-table", strings.NewReader(body))
 	req.Header = authHeader(key)
 	resp, err := httpClient().Do(req)
 	if err != nil {
@@ -251,7 +251,7 @@ func TestGateway_Database_DropTable(t *testing.T) {
 	}
 	// drop
 	dbody := fmt.Sprintf(`{"table":%q}`, table)
-	req, _ = http.NewRequest(http.MethodPost, base+"/v1/db/drop-table", strings.NewReader(dbody))
+	req, _ = http.NewRequest(http.MethodPost, base+"/v1/rqlite/drop-table", strings.NewReader(dbody))
 	req.Header = authHeader(key)
 	resp, err = httpClient().Do(req)
 	if err != nil {
@@ -262,7 +262,7 @@ func TestGateway_Database_DropTable(t *testing.T) {
 		t.Fatalf("drop-table status: %d", resp.StatusCode)
 	}
 	// verify not in schema
-	req, _ = http.NewRequest(http.MethodGet, base+"/v1/db/schema", nil)
+	req, _ = http.NewRequest(http.MethodGet, base+"/v1/rqlite/schema", nil)
 	req.Header = authHeader(key)
 	resp2, err := httpClient().Do(req)
 	if err != nil {
@@ -298,7 +298,7 @@ func TestGateway_Database_RecreateWithFK(t *testing.T) {
 	createUsers := fmt.Sprintf(`{"schema":%q}`, fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, name TEXT, org_id INTEGER, age TEXT)", users))
 
 	for _, body := range []string{createOrgs, createUsers} {
-		req, _ := http.NewRequest(http.MethodPost, base+"/v1/db/create-table", strings.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/create-table", strings.NewReader(body))
 		req.Header = authHeader(key)
 		resp, err := httpClient().Do(req)
 		if err != nil {
@@ -311,7 +311,7 @@ func TestGateway_Database_RecreateWithFK(t *testing.T) {
 	}
 	// seed data
 	txSeed := fmt.Sprintf(`{"statements":["INSERT INTO %s(id,name) VALUES (1,'org')","INSERT INTO %s(id,name,org_id,age) VALUES (1,'alice',1,'30')"]}`, orgs, users)
-	req, _ := http.NewRequest(http.MethodPost, base+"/v1/db/transaction", strings.NewReader(txSeed))
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/transaction", strings.NewReader(txSeed))
 	req.Header = authHeader(key)
 	resp, err := httpClient().Do(req)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestGateway_Database_RecreateWithFK(t *testing.T) {
       "DROP TABLE %s",
       "ALTER TABLE %s_new RENAME TO %s"
     ]}`, users, orgs, users, users, users, users, users)
-	req, _ = http.NewRequest(http.MethodPost, base+"/v1/db/transaction", strings.NewReader(txMig))
+	req, _ = http.NewRequest(http.MethodPost, base+"/v1/rqlite/transaction", strings.NewReader(txMig))
 	req.Header = authHeader(key)
 	resp, err = httpClient().Do(req)
 	if err != nil {
@@ -344,7 +344,7 @@ func TestGateway_Database_RecreateWithFK(t *testing.T) {
 
 	// verify schema type change
 	qBody := fmt.Sprintf(`{"sql":"PRAGMA table_info(%s)"}`, users)
-	req, _ = http.NewRequest(http.MethodPost, base+"/v1/db/query", strings.NewReader(qBody))
+	req, _ = http.NewRequest(http.MethodPost, base+"/v1/rqlite/query", strings.NewReader(qBody))
 	req.Header = authHeader(key)
 	resp, err = httpClient().Do(req)
 	if err != nil {
@@ -375,7 +375,7 @@ func TestGateway_Database_RecreateWithFK(t *testing.T) {
 	if !ageIsInt {
 		// Fallback: inspect CREATE TABLE SQL from sqlite_master
 		qBody2 := fmt.Sprintf(`{"sql":"SELECT sql FROM sqlite_master WHERE type='table' AND name='%s'"}`, users)
-		req2, _ := http.NewRequest(http.MethodPost, base+"/v1/db/query", strings.NewReader(qBody2))
+		req2, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/query", strings.NewReader(qBody2))
 		req2.Header = authHeader(key)
 		resp3, err := httpClient().Do(req2)
 		if err != nil {

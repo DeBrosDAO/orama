@@ -143,6 +143,7 @@ curl -sSL https://github.com/DeBrosOfficial/network/raw/main/scripts/install-deb
 ```
 
 **What the Script Does:**
+
 - Detects OS, installs Go, RQLite, dependencies
 - Creates `debros` system user, secure directory structure
 - Generates LibP2P identity keys
@@ -152,6 +153,7 @@ curl -sSL https://github.com/DeBrosOfficial/network/raw/main/scripts/install-deb
 - Generates YAML config in `/opt/debros/configs/node.yaml`
 
 **Directory Structure:**
+
 ```
 /opt/debros/
 ├── bin/           # Binaries
@@ -163,6 +165,7 @@ curl -sSL https://github.com/DeBrosOfficial/network/raw/main/scripts/install-deb
 ```
 
 **Service Management:**
+
 ```bash
 sudo systemctl status debros-node
 sudo systemctl start debros-node
@@ -261,6 +264,7 @@ logging:
 The .yaml files are required in order for the nodes and the gateway to run correctly.
 
 node:
+
 - id (string) Optional node ID. Auto-generated if empty.
 - type (string) "bootstrap" or "node". Default: "node".
 - listen_addresses (string[]) LibP2P listen multiaddrs. Default: ["/ip4/0.0.0.0/tcp/4001"].
@@ -268,6 +272,7 @@ node:
 - max_connections (int) Max peer connections. Default: 50.
 
 database:
+
 - data_dir (string) Directory for database files. Default: "./data/db".
 - replication_factor (int) Number of replicas. Default: 3.
 - shard_count (int) Shards for data distribution. Default: 16.
@@ -278,6 +283,7 @@ database:
 - rqlite_join_address (string) HTTP address of an existing RQLite node to join. Empty for bootstrap.
 
 discovery:
+
 - bootstrap_peers (string[]) List of LibP2P multiaddrs of bootstrap peers.
 - discovery_interval (duration) How often to announce/discover peers. Default: 15s.
 - bootstrap_port (int) Default port for bootstrap nodes. Default: 4001.
@@ -286,11 +292,13 @@ discovery:
 - node_namespace (string) Namespace for node identifiers. Default: "default".
 
 security:
+
 - enable_tls (bool) Enable TLS for externally exposed services. Default: false.
 - private_key_file (string) Path to TLS private key (if TLS enabled).
 - certificate_file (string) Path to TLS certificate (if TLS enabled).
 
 logging:
+
 - level (string) one of "debug", "info", "warn", "error". Default: "info".
 - format (string) "json" or "console". Default: "console".
 - output_file (string) Empty for stdout; otherwise path to log file.
@@ -347,6 +355,7 @@ logging:
 
 Precedence (gateway): Flags > Environment Variables > YAML > Defaults.
 Environment variables:
+
 - GATEWAY_ADDR
 - GATEWAY_NAMESPACE
 - GATEWAY_BOOTSTRAP_PEERS (comma-separated)
@@ -385,8 +394,6 @@ bootstrap_peers:
 ./bin/network-cli peers                     # List connected peers
 ```
 
-
-
 ### Database Operations
 
 ```bash
@@ -414,27 +421,27 @@ bootstrap_peers:
 ### Database Operations (Gateway REST)
 
 ```http
-POST /v1/db/exec             # Body: {"sql": "INSERT/UPDATE/DELETE/DDL ...", "args": [...]}
-POST /v1/db/find             # Body: {"table":"...", "criteria":{"col":val,...}, "options":{...}}
-POST /v1/db/find-one         # Body: same as /find, returns a single row (404 if not found)
-POST /v1/db/select           # Body: {"table":"...", "select":[...], "where":[...], "joins":[...], "order_by":[...], "limit":N, "offset":N, "one":false}
-POST /v1/db/transaction      # Body: {"ops":[{"kind":"exec|query","sql":"...","args":[...]}], "return_results": true}
-POST /v1/db/query            # Body: {"sql": "SELECT ...", "args": [..]}  (legacy-friendly SELECT)
-GET  /v1/db/schema           # Returns tables/views + create SQL
-POST /v1/db/create-table     # Body: {"schema": "CREATE TABLE ..."}
-POST /v1/db/drop-table       # Body: {"table": "table_name"}
+POST /v1/rqlite/exec             # Body: {"sql": "INSERT/UPDATE/DELETE/DDL ...", "args": [...]}
+POST /v1/rqlite/find             # Body: {"table":"...", "criteria":{"col":val,...}, "options":{...}}
+POST /v1/rqlite/find-one         # Body: same as /find, returns a single row (404 if not found)
+POST /v1/rqlite/select           # Body: {"table":"...", "select":[...], "where":[...], "joins":[...], "order_by":[...], "limit":N, "offset":N, "one":false}
+POST /v1/rqlite/transaction      # Body: {"ops":[{"kind":"exec|query","sql":"...","args":[...]}], "return_results": true}
+POST /v1/rqlite/query            # Body: {"sql": "SELECT ...", "args": [..]}  (legacy-friendly SELECT)
+GET  /v1/rqlite/schema           # Returns tables/views + create SQL
+POST /v1/rqlite/create-table     # Body: {"schema": "CREATE TABLE ..."}
+POST /v1/rqlite/drop-table       # Body: {"table": "table_name"}
 ```
 
 Common workflows:
 
 ```bash
 # Exec (INSERT/UPDATE/DELETE/DDL)
-curl -X POST "$GW/v1/db/exec" \
+curl -X POST "$GW/v1/rqlite/exec" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{"sql":"INSERT INTO users(name,email) VALUES(?,?)","args":["Alice","alice@example.com"]}'
 
 # Find (criteria + options)
-curl -X POST "$GW/v1/db/find" \
+curl -X POST "$GW/v1/rqlite/find" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{
         "table":"users",
@@ -443,7 +450,7 @@ curl -X POST "$GW/v1/db/find" \
       }'
 
 # Select (fluent builder via JSON)
-curl -X POST "$GW/v1/db/select" \
+curl -X POST "$GW/v1/rqlite/select" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{
         "table":"orders o",
@@ -455,7 +462,7 @@ curl -X POST "$GW/v1/db/select" \
       }'
 
 # Transaction (atomic batch)
-curl -X POST "$GW/v1/db/transaction" \
+curl -X POST "$GW/v1/rqlite/transaction" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{
         "return_results": true,
@@ -466,12 +473,12 @@ curl -X POST "$GW/v1/db/transaction" \
       }'
 
 # Schema
-curl "$GW/v1/db/schema" -H "Authorization: Bearer $API_KEY"
+curl "$GW/v1/rqlite/schema" -H "Authorization: Bearer $API_KEY"
 
 # DDL helpers
-curl -X POST "$GW/v1/db/create-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+curl -X POST "$GW/v1/rqlite/create-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{"schema":"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"}'
-curl -X POST "$GW/v1/db/drop-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+curl -X POST "$GW/v1/rqlite/drop-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{"table":"users"}'
 ```
 
@@ -485,12 +492,14 @@ The CLI features an enhanced authentication system with automatic wallet detecti
 - **Enhanced User Experience:** Streamlined authentication flow with better error handling and user feedback
 
 When using operations that require authentication (storage, database, pubsub), the CLI will automatically:
+
 1. Check for existing valid credentials
 2. Prompt for wallet authentication if needed
 3. Handle signature verification
 4. Persist credentials for future use
 
 **Example with automatic authentication:**
+
 ```bash
 # First time - will prompt for wallet authentication when needed
 ./bin/network-cli pubsub publish notifications "Hello World"
@@ -530,6 +539,7 @@ export GATEWAY_API_KEYS="key1:namespace1,key2:namespace2"
 The gateway features a significantly improved authentication system with the following capabilities:
 
 #### Key Features
+
 - **Automatic Authentication:** No manual auth commands required - authentication happens automatically when needed
 - **Multi-Wallet Support:** Seamlessly manage multiple wallet credentials with automatic switching
 - **Persistent Sessions:** Wallet credentials are automatically saved and restored
@@ -538,22 +548,26 @@ The gateway features a significantly improved authentication system with the fol
 #### Authentication Methods
 
 **Wallet-Based Authentication (Ethereum EIP-191)**
+
 - Uses `personal_sign` for secure wallet verification
 - Supports multiple wallets with automatic detection
 - Addresses are case-insensitive with normalized signature handling
 
 **JWT Tokens**
+
 - Issued by the gateway with configurable expiration
 - JWKS endpoints available at `/v1/auth/jwks` and `/.well-known/jwks.json`
 - Automatic refresh capability
 
 **API Keys**
+
 - Support for pre-configured API keys via `Authorization: Bearer <key>` or `X-API-Key` headers
 - Optional namespace mapping for multi-tenant applications
 
 ### API Endpoints
 
 #### Health & Status
+
 ```http
 GET /health                 # Basic health check
 GET /v1/health             # Detailed health status
@@ -562,6 +576,7 @@ GET /v1/version            # Version information
 ```
 
 #### Authentication (Public Endpoints)
+
 ```http
 POST /v1/auth/challenge    # Generate wallet challenge
 POST /v1/auth/verify       # Verify wallet signature
@@ -578,19 +593,20 @@ The gateway now exposes a full HTTP interface over the Go ORM-like client (see `
 
 - Base path: `/v1/db`
 - Endpoints:
-  - `POST /v1/db/exec` — Execute write/DDL SQL; returns `{ rows_affected, last_insert_id }`
-  - `POST /v1/db/find` — Map-based criteria; returns `{ items: [...], count: N }`
-  - `POST /v1/db/find-one` — Single row; 404 if not found
-  - `POST /v1/db/select` — Fluent SELECT via JSON (joins, where, order, group, limit, offset)
-  - `POST /v1/db/transaction` — Atomic batch of exec/query ops, optional per-op results
-  - `POST /v1/db/query` — Arbitrary SELECT (legacy-friendly), returns `items`
-  - `GET  /v1/db/schema` — List user tables/views + create SQL
-  - `POST /v1/db/create-table` — Convenience for DDL
-  - `POST /v1/db/drop-table` — Safe drop (identifier validated)
+  - `POST /v1/rqlite/exec` — Execute write/DDL SQL; returns `{ rows_affected, last_insert_id }`
+  - `POST /v1/rqlite/find` — Map-based criteria; returns `{ items: [...], count: N }`
+  - `POST /v1/rqlite/find-one` — Single row; 404 if not found
+  - `POST /v1/rqlite/select` — Fluent SELECT via JSON (joins, where, order, group, limit, offset)
+  - `POST /v1/rqlite/transaction` — Atomic batch of exec/query ops, optional per-op results
+  - `POST /v1/rqlite/query` — Arbitrary SELECT (legacy-friendly), returns `items`
+  - `GET  /v1/rqlite/schema` — List user tables/views + create SQL
+  - `POST /v1/rqlite/create-table` — Convenience for DDL
+  - `POST /v1/rqlite/drop-table` — Safe drop (identifier validated)
 
 Payload examples are shown in the [Database Operations (Gateway REST)](#database-operations-gateway-rest) section.
 
 #### Network Operations
+
 ```http
 GET  /v1/network/status    # Network status
 GET  /v1/network/peers     # Connected peers
@@ -601,11 +617,13 @@ POST /v1/network/disconnect # Disconnect from peer
 #### Pub/Sub Messaging
 
 **WebSocket Interface**
+
 ```http
 GET /v1/pubsub/ws?topic=<topic>  # WebSocket connection for real-time messaging
 ```
 
 **REST Interface**
+
 ```http
 POST /v1/pubsub/publish    # Publish message to topic
 GET  /v1/pubsub/topics     # List active topics
@@ -616,31 +634,34 @@ GET  /v1/pubsub/topics     # List active topics
 ## SDK Authoring Guide
 
 ### Base concepts
+
 - OpenAPI: a machine-readable spec is available at `openapi/gateway.yaml` for SDK code generation.
 - **Auth**: send `X-API-Key: <key>` or `Authorization: Bearer <key|JWT>` with every request.
 - **Versioning**: all endpoints are under `/v1/`.
 - **Responses**: mutations return `{status:"ok"}`; queries/lists return JSON; errors return `{ "error": "message" }` with proper HTTP status.
 
 ### Key HTTP endpoints for SDKs
+
 - **Database**
-  - Exec: `POST /v1/db/exec` `{sql, args?}` → `{rows_affected,last_insert_id}`
-  - Find: `POST /v1/db/find` `{table, criteria, options?}` → `{items,count}`
-  - FindOne: `POST /v1/db/find-one` `{table, criteria, options?}` → single object or 404
-  - Select: `POST /v1/db/select` `{table, select?, joins?, where?, order_by?, group_by?, limit?, offset?, one?}`
-  - Transaction: `POST /v1/db/transaction` `{ops:[{kind,sql,args?}], return_results?}`
-  - Query: `POST /v1/db/query` `{sql, args?}` → `{items,count}`
-  - Schema: `GET /v1/db/schema`
-  - Create Table: `POST /v1/db/create-table` `{schema}`
-  - Drop Table: `POST /v1/db/drop-table` `{table}`
+  - Exec: `POST /v1/rqlite/exec` `{sql, args?}` → `{rows_affected,last_insert_id}`
+  - Find: `POST /v1/rqlite/find` `{table, criteria, options?}` → `{items,count}`
+  - FindOne: `POST /v1/rqlite/find-one` `{table, criteria, options?}` → single object or 404
+  - Select: `POST /v1/rqlite/select` `{table, select?, joins?, where?, order_by?, group_by?, limit?, offset?, one?}`
+  - Transaction: `POST /v1/rqlite/transaction` `{ops:[{kind,sql,args?}], return_results?}`
+  - Query: `POST /v1/rqlite/query` `{sql, args?}` → `{items,count}`
+  - Schema: `GET /v1/rqlite/schema`
+  - Create Table: `POST /v1/rqlite/create-table` `{schema}`
+  - Drop Table: `POST /v1/rqlite/drop-table` `{table}`
 - **PubSub**
   - WS Subscribe: `GET /v1/pubsub/ws?topic=<topic>`
   - Publish: `POST /v1/pubsub/publish` `{topic, data_base64}` → `{status:"ok"}`
   - Topics: `GET /v1/pubsub/topics` → `{topics:[...]}`
 
 ### Migrations
+
 - Add column: `ALTER TABLE users ADD COLUMN age INTEGER`
 - Change type / add FK (recreate pattern): create `_new` table, copy data, drop old, rename.
-- Always send as one `POST /v1/db/transaction`.
+- Always send as one `POST /v1/rqlite/transaction`.
 
 ### Minimal examples
 
@@ -649,8 +670,13 @@ TypeScript (Node)
 ```ts
 import { GatewayClient } from "../examples/sdk-typescript/src/client";
 
-const client = new GatewayClient(process.env.GATEWAY_BASE_URL!, process.env.GATEWAY_API_KEY!);
-await client.createTable("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+const client = new GatewayClient(
+  process.env.GATEWAY_BASE_URL!,
+  process.env.GATEWAY_API_KEY!
+);
+await client.createTable(
+  "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
+);
 const res = await client.query("SELECT name FROM users WHERE id = ?", [1]);
 ```
 
@@ -664,7 +690,7 @@ KEY  = os.environ['GATEWAY_API_KEY']
 H    = { 'X-API-Key': KEY, 'Content-Type': 'application/json' }
 
 def query(sql, args=None):
-    r = requests.post(f'{BASE}/v1/db/query', json={ 'sql': sql, 'args': args or [] }, headers=H, timeout=15)
+    r = requests.post(f'{BASE}/v1/rqlite/query', json={ 'sql': sql, 'args': args or [] }, headers=H, timeout=15)
     r.raise_for_status()
     return r.json()['rows']
 ```
@@ -672,7 +698,7 @@ def query(sql, args=None):
 Go
 
 ```go
-req, _ := http.NewRequest(http.MethodPost, base+"/v1/db/create-table", bytes.NewBufferString(`{"schema":"CREATE TABLE ..."}`))
+req, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/create-table", bytes.NewBufferString(`{"schema":"CREATE TABLE ..."}`))
 req.Header.Set("X-API-Key", apiKey)
 req.Header.Set("Content-Type", "application/json")
 resp, err := http.DefaultClient.Do(req)
@@ -688,6 +714,7 @@ resp, err := http.DefaultClient.Do(req)
 ### Usage Examples
 
 #### Wallet Authentication Flow
+
 ```bash
 # 1. Get challenge (automatic)
 curl -X POST http://localhost:6001/v1/auth/challenge
@@ -699,26 +726,25 @@ curl -X POST http://localhost:6001/v1/auth/verify \
   -d '{"wallet":"0x...","nonce":"...","signature":"0x..."}'
 ```
 
-
-
 #### Real-time Messaging
+
 ```javascript
 // WebSocket connection
-const ws = new WebSocket('ws://localhost:6001/v1/pubsub/ws?topic=chat');
+const ws = new WebSocket("ws://localhost:6001/v1/pubsub/ws?topic=chat");
 
 ws.onmessage = (event) => {
-  console.log('Received:', event.data);
+  console.log("Received:", event.data);
 };
 
 // Send message
-ws.send('Hello, network!');
+ws.send("Hello, network!");
 ```
 
 ---
 
 ## Development
-</text>
 
+</text>
 
 ### Project Structure
 
@@ -758,6 +784,7 @@ scripts/test-multinode.sh
 ## Database Client (Go ORM-like)
 
 A lightweight ORM-like client over rqlite using Go’s `database/sql`. It provides:
+
 - Query/Exec for raw SQL
 - A fluent QueryBuilder (`Where`, `InnerJoin`, `LeftJoin`, `OrderBy`, `GroupBy`, `Limit`, `Offset`)
 - Simple repositories with `Find`/`FindOne`
@@ -772,7 +799,7 @@ A lightweight ORM-like client over rqlite using Go’s `database/sql`. It provid
 
 ### Quick Start
 
-```go
+````go
 package main
 
 import (
@@ -834,7 +861,7 @@ type Post struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 func (Post) TableName() string { return "posts" }
-```
+````
 
 ### Basic queries
 
@@ -987,7 +1014,6 @@ if err := rqlite.ApplyMigrationsDirs(ctx, db, dirs, logger); err != nil {
     logger.Fatal("apply migrations failed", zap.Error(err))
 }
 ```
-
 
 ---
 
