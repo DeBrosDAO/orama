@@ -23,9 +23,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
-	"github.com/DeBrosOfficial/network/pkg/database"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // Node represents a network node with RQLite database

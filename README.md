@@ -15,6 +15,7 @@ A robust, decentralized peer-to-peer network built in Go, providing distributed 
 - [CLI Usage](#cli-usage)
 - [HTTP Gateway](#http-gateway)
 - [Development](#development)
+- [Database Client (Go ORM-like)](#database-client-go-orm-like)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -699,6 +700,242 @@ make clean           # Clean build artifacts
 ```bash
 scripts/test-multinode.sh
 ```
+
+---
+
+## Database Client (Go ORM-like)
+
+A lightweight ORM-like client over rqlite using Go’s `database/sql`. It provides:
+- Query/Exec for raw SQL
+- A fluent QueryBuilder (`Where`, `InnerJoin`, `LeftJoin`, `OrderBy`, `GroupBy`, `Limit`, `Offset`)
+- Simple repositories with `Find`/`FindOne`
+- `Save`/`Remove` for entities with primary keys
+- Transaction support via `Tx`
+
+### Installation
+
+- Ensure rqlite is running (the node starts and manages rqlite automatically).
+- Import the client:
+  - Package: `github.com/DeBrosOfficial/network/pkg/rqlite`
+
+### Quick Start
+
+```go
+package main
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	_ "github.com/rqlite/gorqlite/stdlib"
+)
+
+type User struct {
+	ID        int64     `db:"id,pk,auto"`
+	Email     string    `db:"email"`
+	FirstName string    `db:"first_name"`
+	LastName  string    `db:"last_name"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
+func (User) TableName() string { return "users" }
+
+func main() {
+	ctx := context.Background()
+
+	adapter, _ := rqlite.NewRQLiteAdapter(manager)
+	client := rqlite.NewClientFromAdapter(adapter)
+
+	// Save (INSERT)
+	u := &User{Email: "alice@example.com", FirstName: "Alice", LastName: "A"}
+	_ = client.Save(ctx, u) // auto-sets u.ID if autoincrement is available
+
+	// FindOneBy
+	var one User
+	_ = client.FindOneBy(ctx, &one, "users", map[string]any{"email": "alice@example.com"})
+
+	// QueryBuilder
+	var users []User
+	_ = client.CreateQueryBuilder("users").
+		Where("email LIKE ?", "%@example.com").
+		OrderBy("created_at DESC").
+		Limit(10).
+		GetMany(ctx, &users)
+}
+
+### Entities and Mapping
+
+- Use struct tags: `db:"column_name"`; the first tag value is the column name.
+- Mark primary key: `db:"id,pk"` (and `auto` if autoincrement): `db:"id,pk,auto"`.
+- Fallbacks:
+  - If no `db` tag is provided, the field name is used as the column (case-insensitive).
+  - If a field is named `ID`, it is treated as the primary key by default.
+
+```go
+type Post struct {
+	ID        int64     `db:"id,pk,auto"`
+	UserID    int64     `db:"user_id"`
+	Title     string    `db:"title"`
+	Body      string    `db:"body"`
+	CreatedAt time.Time `db:"created_at"`
+}
+func (Post) TableName() string { return "posts" }
+```
+
+### Basic queries
+
+Raw SQL with scanning into structs or maps:
+
+```go
+var users []User
+err := client.Query(ctx, &users, "SELECT id, email, first_name, last_name, created_at FROM users WHERE email LIKE ?", "%@example.com")
+if err != nil {
+	// handle
+}
+
+var rows []map[string]any
+_ = client.Query(ctx, &rows, "SELECT id, email FROM users WHERE id IN (?,?)", 1, 2)
+```
+
+### Query Buider
+
+Build complex SELECTs with joins, filters, grouping, ordering, and pagination.
+
+```go
+var results []User
+qb := client.CreateQueryBuilder("users u").
+	InnerJoin("posts p", "p.user_id = u.id").
+	Where("u.email LIKE ?", "%@example.com").
+	AndWhere("p.created_at >= ?", "2024-01-01T00:00:00Z").
+	GroupBy("u.id").
+	OrderBy("u.created_at DESC").
+	Limit(20).
+	Offset(0)
+
+if err := qb.GetMany(ctx, &results); err != nil {
+	// handle
+}
+
+// Single row (LIMIT 1)
+var one User
+if err := qb.Limit(1).GetOne(ctx, &one); err != nil {
+	// handle sql.ErrNoRows, etc.
+}
+```
+
+### FindBy / FindOneBy
+
+Simple map-based filters:
+
+```go
+var active []User
+_ = client.FindBy(ctx, &active, "users", map[string]any{"last_name": "A"}, rqlite.WithOrderBy("created_at DESC"), rqlite.WithLimit(50))
+
+var u User
+if err := client.FindOneBy(ctx, &u, "users", map[string]any{"email": "alice@example.com"}); err != nil {
+	// sql.ErrNoRows if not found
+}
+```
+
+### Save / Remove
+
+`Save` inserts if PK is zero, otherwise updates by PK.
+`Remove` deletes by PK.
+
+```go
+// Insert (ID is zero)
+u := &User{Email: "bob@example.com", FirstName: "Bob"}
+_ = client.Save(ctx, u) // INSERT; sets u.ID if autoincrement
+
+// Update (ID is non-zero)
+u.FirstName = "Bobby"
+_ = client.Save(ctx, u) // UPDATE ... WHERE id = ?
+
+// Remove
+_ = client.Remove(ctx, u) // DELETE ... WHERE id = ?
+
+```
+
+### transactions
+
+Run multiple operations atomically. If your function returns an error, the transaction is rolled back; otherwise it commits.
+
+```go
+err := client.Tx(ctx, func(tx rqlite.Tx) error {
+	// Read inside the same transaction
+	var me User
+	if err := tx.Query(ctx, &me, "SELECT * FROM users WHERE id = ?", 1); err != nil {
+		return err
+	}
+
+	// Write inside the same transaction
+	me.LastName = "Updated"
+	if err := tx.Save(ctx, &me); err != nil {
+		return err
+	}
+
+	// Complex query via builder
+	var recent []User
+	if err := tx.CreateQueryBuilder("users").
+		OrderBy("created_at DESC").
+		Limit(5).
+		GetMany(ctx, &recent); err != nil {
+		return err
+	}
+
+	return nil // commit
+})
+
+```
+
+### Repositories (optional, generic)
+
+Strongly-typed convenience layer bound to a table:
+
+```go
+repo := client.Repository[User]("users")
+
+var many []User
+_ = repo.Find(ctx, &many, map[string]any{"last_name": "A"}, rqlite.WithOrderBy("created_at DESC"), rqlite.WithLimit(10))
+
+var one User
+_ = repo.FindOne(ctx, &one, map[string]any{"email": "alice@example.com"})
+
+_ = repo.Save(ctx, &one)
+_ = repo.Remove(ctx, &one)
+
+```
+
+### Migrations
+
+Option A: From the node (after rqlite is ready)
+
+```go
+ctx := context.Background()
+dirs := []string{
+    "network/migrations",           // default
+    "path/to/your/app/migrations",  // extra
+}
+
+if err := rqliteManager.ApplyMigrationsDirs(ctx, dirs); err != nil {
+    logger.Fatal("apply migrations failed", zap.Error(err))
+}
+```
+
+Option B: Using the adapter sql.DB
+
+```go
+ctx := context.Background()
+db := adapter.GetSQLDB()
+dirs := []string{"network/migrations", "app/migrations"}
+
+if err := rqlite.ApplyMigrationsDirs(ctx, db, dirs, logger); err != nil {
+    logger.Fatal("apply migrations failed", zap.Error(err))
+}
+```
+
 
 ---
 

@@ -8,11 +8,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+- Created new rqlite folder
+- Created rqlite adapter, client, gateway, migrations and rqlite init
+
 ### Changed
+
+- Updated node.go to support new rqlite architecture
+- Updated readme
 
 ### Deprecated
 
 ### Removed
+
+- Removed old storage folder
 
 ### Fixed
 

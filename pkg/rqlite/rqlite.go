@@ -1,4 +1,4 @@
-package database
+package rqlite
 
 import (
 	"context"
@@ -172,6 +172,14 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 			}
 			return fmt.Errorf("RQLite SQL not available: %w", err)
 		}
+	}
+
+	// After waitForLeadership / waitForSQLAvailable succeeds, before returning:
+	migrationsDir := "network/migrations"
+
+	if err := r.ApplyMigrations(ctx, migrationsDir); err != nil {
+		r.logger.Error("Migrations failed", zap.Error(err), zap.String("dir", migrationsDir))
+		return fmt.Errorf("apply migrations: %w", err)
 	}
 
 	r.logger.Info("RQLite node started successfully")
