@@ -414,33 +414,65 @@ bootstrap_peers:
 ### Database Operations (Gateway REST)
 
 ```http
-POST /v1/db/create-table      # Body: {"schema": "CREATE TABLE ..."}
-POST /v1/db/drop-table        # Body: {"table": "table_name"}
-POST /v1/db/query             # Body: {"sql": "SELECT ...", "args": [..]}
-POST /v1/db/transaction       # Body: {"statements": ["SQL 1", "SQL 2", ...]}
-GET  /v1/db/schema            # Returns current tables and columns
+POST /v1/db/exec             # Body: {"sql": "INSERT/UPDATE/DELETE/DDL ...", "args": [...]}
+POST /v1/db/find             # Body: {"table":"...", "criteria":{"col":val,...}, "options":{...}}
+POST /v1/db/find-one         # Body: same as /find, returns a single row (404 if not found)
+POST /v1/db/select           # Body: {"table":"...", "select":[...], "where":[...], "joins":[...], "order_by":[...], "limit":N, "offset":N, "one":false}
+POST /v1/db/transaction      # Body: {"ops":[{"kind":"exec|query","sql":"...","args":[...]}], "return_results": true}
+POST /v1/db/query            # Body: {"sql": "SELECT ...", "args": [..]}  (legacy-friendly SELECT)
+GET  /v1/db/schema           # Returns tables/views + create SQL
+POST /v1/db/create-table     # Body: {"schema": "CREATE TABLE ..."}
+POST /v1/db/drop-table       # Body: {"table": "table_name"}
 ```
 
-Common migration workflow:
+Common workflows:
 
 ```bash
-# Add a new table
-curl -X POST "$GW/v1/db/create-table" \
+# Exec (INSERT/UPDATE/DELETE/DDL)
+curl -X POST "$GW/v1/db/exec" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"schema":"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)"}'
+  -d '{"sql":"INSERT INTO users(name,email) VALUES(?,?)","args":["Alice","alice@example.com"]}'
 
-# Apply multiple statements atomically
+# Find (criteria + options)
+curl -X POST "$GW/v1/db/find" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{
+        "table":"users",
+        "criteria":{"active":true},
+        "options":{"select":["id","email"],"order_by":["created_at DESC"],"limit":25}
+      }'
+
+# Select (fluent builder via JSON)
+curl -X POST "$GW/v1/db/select" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{
+        "table":"orders o",
+        "select":["o.id","o.total","u.email AS user_email"],
+        "joins":[{"kind":"INNER","table":"users u","on":"u.id = o.user_id"}],
+        "where":[{"conj":"AND","expr":"o.total > ?","args":[100]}],
+        "order_by":["o.created_at DESC"],
+        "limit":10
+      }'
+
+# Transaction (atomic batch)
 curl -X POST "$GW/v1/db/transaction" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"statements":[
-        "ALTER TABLE users ADD COLUMN email TEXT",
-        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
-      ]}'
+  -d '{
+        "return_results": true,
+        "ops": [
+          {"kind":"exec","sql":"INSERT INTO users(email) VALUES(?)","args":["bob@example.com"]},
+          {"kind":"query","sql":"SELECT last_insert_rowid() AS id","args":[]}
+        ]
+      }'
 
-# Verify
-curl -X POST "$GW/v1/db/query" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"sql":"PRAGMA table_info(users)"}'
+# Schema
+curl "$GW/v1/db/schema" -H "Authorization: Bearer $API_KEY"
+
+# DDL helpers
+curl -X POST "$GW/v1/db/create-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"schema":"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"}'
+curl -X POST "$GW/v1/db/drop-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"table":"users"}'
 ```
 
 ### Authentication
@@ -540,7 +572,23 @@ GET  /v1/auth/whoami       # Current auth status
 POST /v1/auth/api-key      # Generate API key (authenticated)
 ```
 
+#### RQLite HTTP ORM Gateway (/v1/db)
 
+The gateway now exposes a full HTTP interface over the Go ORM-like client (see `pkg/rqlite/gateway.go`) so you can build SDKs in any language.
+
+- Base path: `/v1/db`
+- Endpoints:
+  - `POST /v1/db/exec` — Execute write/DDL SQL; returns `{ rows_affected, last_insert_id }`
+  - `POST /v1/db/find` — Map-based criteria; returns `{ items: [...], count: N }`
+  - `POST /v1/db/find-one` — Single row; 404 if not found
+  - `POST /v1/db/select` — Fluent SELECT via JSON (joins, where, order, group, limit, offset)
+  - `POST /v1/db/transaction` — Atomic batch of exec/query ops, optional per-op results
+  - `POST /v1/db/query` — Arbitrary SELECT (legacy-friendly), returns `items`
+  - `GET  /v1/db/schema` — List user tables/views + create SQL
+  - `POST /v1/db/create-table` — Convenience for DDL
+  - `POST /v1/db/drop-table` — Safe drop (identifier validated)
+
+Payload examples are shown in the [Database Operations (Gateway REST)](#database-operations-gateway-rest) section.
 
 #### Network Operations
 ```http
@@ -575,11 +623,15 @@ GET  /v1/pubsub/topics     # List active topics
 
 ### Key HTTP endpoints for SDKs
 - **Database**
-  - Create Table: `POST /v1/db/create-table` `{schema}` → `{status:"ok"}`
-  - Drop Table: `POST /v1/db/drop-table` `{table}` → `{status:"ok"}`
-  - Query: `POST /v1/db/query` `{sql, args?}` → `{columns, rows, count}`
-  - Transaction: `POST /v1/db/transaction` `{statements:[...]}` → `{status:"ok"}`
-  - Schema: `GET /v1/db/schema` → schema JSON
+  - Exec: `POST /v1/db/exec` `{sql, args?}` → `{rows_affected,last_insert_id}`
+  - Find: `POST /v1/db/find` `{table, criteria, options?}` → `{items,count}`
+  - FindOne: `POST /v1/db/find-one` `{table, criteria, options?}` → single object or 404
+  - Select: `POST /v1/db/select` `{table, select?, joins?, where?, order_by?, group_by?, limit?, offset?, one?}`
+  - Transaction: `POST /v1/db/transaction` `{ops:[{kind,sql,args?}], return_results?}`
+  - Query: `POST /v1/db/query` `{sql, args?}` → `{items,count}`
+  - Schema: `GET /v1/db/schema`
+  - Create Table: `POST /v1/db/create-table` `{schema}`
+  - Drop Table: `POST /v1/db/drop-table` `{table}`
 - **PubSub**
   - WS Subscribe: `GET /v1/pubsub/ws?topic=<topic>`
   - Publish: `POST /v1/pubsub/publish` `{topic, data_base64}` → `{status:"ok"}`

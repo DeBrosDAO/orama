@@ -175,7 +175,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	}
 
 	// After waitForLeadership / waitForSQLAvailable succeeds, before returning:
-	migrationsDir := "network/migrations"
+	migrationsDir := "migrations"
 
 	if err := r.ApplyMigrations(ctx, migrationsDir); err != nil {
 		r.logger.Error("Migrations failed", zap.Error(err), zap.String("dir", migrationsDir))
@@ -325,9 +325,6 @@ func (r *RQLiteManager) waitForJoinTarget(ctx context.Context, joinAddress strin
 		}
 	}
 
-	if lastErr == nil {
-		lastErr = fmt.Errorf("join target not reachable within %s", timeout)
-	}
 	return lastErr
 }
 

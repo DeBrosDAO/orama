@@ -254,47 +254,26 @@ func isNoSuchTable(err error) bool {
 	return strings.Contains(msg, "no such table") || strings.Contains(msg, "does not exist")
 }
 
-// applySQL tries to run the entire script in one Exec.
-// If the driver rejects multi-statement Exec, it falls back to splitting statements and executing sequentially.
+// applySQL splits the script into individual statements, strips explicit
+// transaction control (BEGIN/COMMIT/ROLLBACK/END), and executes statements
+// sequentially to avoid nested transaction issues with rqlite.
 func applySQL(ctx context.Context, db *sql.DB, script string) error {
 	s := strings.TrimSpace(script)
 	if s == "" {
 		return nil
 	}
-	if _, err := db.ExecContext(ctx, s); err == nil {
-		return nil
-	} else {
-		// Fall back to splitting into statements and executing sequentially (respecting BEGIN/COMMIT if present).
-		stmts := splitSQLStatements(s)
-		// If the script already contains explicit BEGIN/COMMIT, we just run as-is.
-		// Otherwise, we attempt to wrap in a transaction; if BeginTx fails, execute one-by-one.
-		hasExplicitTxn := containsToken(stmts, "BEGIN") || containsToken(stmts, "BEGIN;")
-		if !hasExplicitTxn {
-			if tx, txErr := db.BeginTx(ctx, nil); txErr == nil {
-				for _, stmt := range stmts {
-					if stmt == "" {
-						continue
-					}
-					if _, execErr := tx.ExecContext(ctx, stmt); execErr != nil {
-						_ = tx.Rollback()
-						return fmt.Errorf("exec stmt failed: %w (stmt: %s)", execErr, snippet(stmt))
-					}
-				}
-				return tx.Commit()
-			}
-			// Fall through to plain sequential exec if BeginTx not supported.
-		}
+	stmts := splitSQLStatements(s)
+	stmts = filterOutTxnControls(stmts)
 
-		for _, stmt := range stmts {
-			if stmt == "" {
-				continue
-			}
-			if _, execErr := db.ExecContext(ctx, stmt); execErr != nil {
-				return fmt.Errorf("exec stmt failed: %w (stmt: %s)", execErr, snippet(stmt))
-			}
+	for _, stmt := range stmts {
+		if strings.TrimSpace(stmt) == "" {
+			continue
 		}
-		return nil
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("exec stmt failed: %w (stmt: %s)", err, snippet(stmt))
+		}
 	}
+	return nil
 }
 
 func containsToken(stmts []string, token string) bool {
@@ -304,6 +283,33 @@ func containsToken(stmts []string, token string) bool {
 		}
 	}
 	return false
+}
+
+// removed duplicate helper
+
+// removed duplicate helper
+
+// isTxnControl returns true if the statement is a transaction control command.
+func isTxnControl(s string) bool {
+	t := strings.ToUpper(strings.TrimSpace(s))
+	switch t {
+	case "BEGIN", "BEGIN TRANSACTION", "COMMIT", "END", "ROLLBACK":
+		return true
+	default:
+		return false
+	}
+}
+
+// filterOutTxnControls removes BEGIN/COMMIT/ROLLBACK/END statements.
+func filterOutTxnControls(stmts []string) []string {
+	out := make([]string, 0, len(stmts))
+	for _, s := range stmts {
+		if isTxnControl(s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func snippet(s string) string {
