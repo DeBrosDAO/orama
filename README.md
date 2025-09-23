@@ -15,6 +15,7 @@ A robust, decentralized peer-to-peer network built in Go, providing distributed 
 - [CLI Usage](#cli-usage)
 - [HTTP Gateway](#http-gateway)
 - [Development](#development)
+- [Database Client (Go ORM-like)](#database-client-go-orm-like)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -413,33 +414,65 @@ bootstrap_peers:
 ### Database Operations (Gateway REST)
 
 ```http
-POST /v1/db/create-table      # Body: {"schema": "CREATE TABLE ..."}
-POST /v1/db/drop-table        # Body: {"table": "table_name"}
-POST /v1/db/query             # Body: {"sql": "SELECT ...", "args": [..]}
-POST /v1/db/transaction       # Body: {"statements": ["SQL 1", "SQL 2", ...]}
-GET  /v1/db/schema            # Returns current tables and columns
+POST /v1/db/exec             # Body: {"sql": "INSERT/UPDATE/DELETE/DDL ...", "args": [...]}
+POST /v1/db/find             # Body: {"table":"...", "criteria":{"col":val,...}, "options":{...}}
+POST /v1/db/find-one         # Body: same as /find, returns a single row (404 if not found)
+POST /v1/db/select           # Body: {"table":"...", "select":[...], "where":[...], "joins":[...], "order_by":[...], "limit":N, "offset":N, "one":false}
+POST /v1/db/transaction      # Body: {"ops":[{"kind":"exec|query","sql":"...","args":[...]}], "return_results": true}
+POST /v1/db/query            # Body: {"sql": "SELECT ...", "args": [..]}  (legacy-friendly SELECT)
+GET  /v1/db/schema           # Returns tables/views + create SQL
+POST /v1/db/create-table     # Body: {"schema": "CREATE TABLE ..."}
+POST /v1/db/drop-table       # Body: {"table": "table_name"}
 ```
 
-Common migration workflow:
+Common workflows:
 
 ```bash
-# Add a new table
-curl -X POST "$GW/v1/db/create-table" \
+# Exec (INSERT/UPDATE/DELETE/DDL)
+curl -X POST "$GW/v1/db/exec" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"schema":"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)"}'
+  -d '{"sql":"INSERT INTO users(name,email) VALUES(?,?)","args":["Alice","alice@example.com"]}'
 
-# Apply multiple statements atomically
+# Find (criteria + options)
+curl -X POST "$GW/v1/db/find" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{
+        "table":"users",
+        "criteria":{"active":true},
+        "options":{"select":["id","email"],"order_by":["created_at DESC"],"limit":25}
+      }'
+
+# Select (fluent builder via JSON)
+curl -X POST "$GW/v1/db/select" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{
+        "table":"orders o",
+        "select":["o.id","o.total","u.email AS user_email"],
+        "joins":[{"kind":"INNER","table":"users u","on":"u.id = o.user_id"}],
+        "where":[{"conj":"AND","expr":"o.total > ?","args":[100]}],
+        "order_by":["o.created_at DESC"],
+        "limit":10
+      }'
+
+# Transaction (atomic batch)
 curl -X POST "$GW/v1/db/transaction" \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"statements":[
-        "ALTER TABLE users ADD COLUMN email TEXT",
-        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
-      ]}'
+  -d '{
+        "return_results": true,
+        "ops": [
+          {"kind":"exec","sql":"INSERT INTO users(email) VALUES(?)","args":["bob@example.com"]},
+          {"kind":"query","sql":"SELECT last_insert_rowid() AS id","args":[]}
+        ]
+      }'
 
-# Verify
-curl -X POST "$GW/v1/db/query" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"sql":"PRAGMA table_info(users)"}'
+# Schema
+curl "$GW/v1/db/schema" -H "Authorization: Bearer $API_KEY"
+
+# DDL helpers
+curl -X POST "$GW/v1/db/create-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"schema":"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"}'
+curl -X POST "$GW/v1/db/drop-table" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"table":"users"}'
 ```
 
 ### Authentication
@@ -539,7 +572,23 @@ GET  /v1/auth/whoami       # Current auth status
 POST /v1/auth/api-key      # Generate API key (authenticated)
 ```
 
+#### RQLite HTTP ORM Gateway (/v1/db)
 
+The gateway now exposes a full HTTP interface over the Go ORM-like client (see `pkg/rqlite/gateway.go`) so you can build SDKs in any language.
+
+- Base path: `/v1/db`
+- Endpoints:
+  - `POST /v1/db/exec` — Execute write/DDL SQL; returns `{ rows_affected, last_insert_id }`
+  - `POST /v1/db/find` — Map-based criteria; returns `{ items: [...], count: N }`
+  - `POST /v1/db/find-one` — Single row; 404 if not found
+  - `POST /v1/db/select` — Fluent SELECT via JSON (joins, where, order, group, limit, offset)
+  - `POST /v1/db/transaction` — Atomic batch of exec/query ops, optional per-op results
+  - `POST /v1/db/query` — Arbitrary SELECT (legacy-friendly), returns `items`
+  - `GET  /v1/db/schema` — List user tables/views + create SQL
+  - `POST /v1/db/create-table` — Convenience for DDL
+  - `POST /v1/db/drop-table` — Safe drop (identifier validated)
+
+Payload examples are shown in the [Database Operations (Gateway REST)](#database-operations-gateway-rest) section.
 
 #### Network Operations
 ```http
@@ -574,11 +623,15 @@ GET  /v1/pubsub/topics     # List active topics
 
 ### Key HTTP endpoints for SDKs
 - **Database**
-  - Create Table: `POST /v1/db/create-table` `{schema}` → `{status:"ok"}`
-  - Drop Table: `POST /v1/db/drop-table` `{table}` → `{status:"ok"}`
-  - Query: `POST /v1/db/query` `{sql, args?}` → `{columns, rows, count}`
-  - Transaction: `POST /v1/db/transaction` `{statements:[...]}` → `{status:"ok"}`
-  - Schema: `GET /v1/db/schema` → schema JSON
+  - Exec: `POST /v1/db/exec` `{sql, args?}` → `{rows_affected,last_insert_id}`
+  - Find: `POST /v1/db/find` `{table, criteria, options?}` → `{items,count}`
+  - FindOne: `POST /v1/db/find-one` `{table, criteria, options?}` → single object or 404
+  - Select: `POST /v1/db/select` `{table, select?, joins?, where?, order_by?, group_by?, limit?, offset?, one?}`
+  - Transaction: `POST /v1/db/transaction` `{ops:[{kind,sql,args?}], return_results?}`
+  - Query: `POST /v1/db/query` `{sql, args?}` → `{items,count}`
+  - Schema: `GET /v1/db/schema`
+  - Create Table: `POST /v1/db/create-table` `{schema}`
+  - Drop Table: `POST /v1/db/drop-table` `{table}`
 - **PubSub**
   - WS Subscribe: `GET /v1/pubsub/ws?topic=<topic>`
   - Publish: `POST /v1/pubsub/publish` `{topic, data_base64}` → `{status:"ok"}`
@@ -699,6 +752,242 @@ make clean           # Clean build artifacts
 ```bash
 scripts/test-multinode.sh
 ```
+
+---
+
+## Database Client (Go ORM-like)
+
+A lightweight ORM-like client over rqlite using Go’s `database/sql`. It provides:
+- Query/Exec for raw SQL
+- A fluent QueryBuilder (`Where`, `InnerJoin`, `LeftJoin`, `OrderBy`, `GroupBy`, `Limit`, `Offset`)
+- Simple repositories with `Find`/`FindOne`
+- `Save`/`Remove` for entities with primary keys
+- Transaction support via `Tx`
+
+### Installation
+
+- Ensure rqlite is running (the node starts and manages rqlite automatically).
+- Import the client:
+  - Package: `github.com/DeBrosOfficial/network/pkg/rqlite`
+
+### Quick Start
+
+```go
+package main
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	_ "github.com/rqlite/gorqlite/stdlib"
+)
+
+type User struct {
+	ID        int64     `db:"id,pk,auto"`
+	Email     string    `db:"email"`
+	FirstName string    `db:"first_name"`
+	LastName  string    `db:"last_name"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
+func (User) TableName() string { return "users" }
+
+func main() {
+	ctx := context.Background()
+
+	adapter, _ := rqlite.NewRQLiteAdapter(manager)
+	client := rqlite.NewClientFromAdapter(adapter)
+
+	// Save (INSERT)
+	u := &User{Email: "alice@example.com", FirstName: "Alice", LastName: "A"}
+	_ = client.Save(ctx, u) // auto-sets u.ID if autoincrement is available
+
+	// FindOneBy
+	var one User
+	_ = client.FindOneBy(ctx, &one, "users", map[string]any{"email": "alice@example.com"})
+
+	// QueryBuilder
+	var users []User
+	_ = client.CreateQueryBuilder("users").
+		Where("email LIKE ?", "%@example.com").
+		OrderBy("created_at DESC").
+		Limit(10).
+		GetMany(ctx, &users)
+}
+
+### Entities and Mapping
+
+- Use struct tags: `db:"column_name"`; the first tag value is the column name.
+- Mark primary key: `db:"id,pk"` (and `auto` if autoincrement): `db:"id,pk,auto"`.
+- Fallbacks:
+  - If no `db` tag is provided, the field name is used as the column (case-insensitive).
+  - If a field is named `ID`, it is treated as the primary key by default.
+
+```go
+type Post struct {
+	ID        int64     `db:"id,pk,auto"`
+	UserID    int64     `db:"user_id"`
+	Title     string    `db:"title"`
+	Body      string    `db:"body"`
+	CreatedAt time.Time `db:"created_at"`
+}
+func (Post) TableName() string { return "posts" }
+```
+
+### Basic queries
+
+Raw SQL with scanning into structs or maps:
+
+```go
+var users []User
+err := client.Query(ctx, &users, "SELECT id, email, first_name, last_name, created_at FROM users WHERE email LIKE ?", "%@example.com")
+if err != nil {
+	// handle
+}
+
+var rows []map[string]any
+_ = client.Query(ctx, &rows, "SELECT id, email FROM users WHERE id IN (?,?)", 1, 2)
+```
+
+### Query Buider
+
+Build complex SELECTs with joins, filters, grouping, ordering, and pagination.
+
+```go
+var results []User
+qb := client.CreateQueryBuilder("users u").
+	InnerJoin("posts p", "p.user_id = u.id").
+	Where("u.email LIKE ?", "%@example.com").
+	AndWhere("p.created_at >= ?", "2024-01-01T00:00:00Z").
+	GroupBy("u.id").
+	OrderBy("u.created_at DESC").
+	Limit(20).
+	Offset(0)
+
+if err := qb.GetMany(ctx, &results); err != nil {
+	// handle
+}
+
+// Single row (LIMIT 1)
+var one User
+if err := qb.Limit(1).GetOne(ctx, &one); err != nil {
+	// handle sql.ErrNoRows, etc.
+}
+```
+
+### FindBy / FindOneBy
+
+Simple map-based filters:
+
+```go
+var active []User
+_ = client.FindBy(ctx, &active, "users", map[string]any{"last_name": "A"}, rqlite.WithOrderBy("created_at DESC"), rqlite.WithLimit(50))
+
+var u User
+if err := client.FindOneBy(ctx, &u, "users", map[string]any{"email": "alice@example.com"}); err != nil {
+	// sql.ErrNoRows if not found
+}
+```
+
+### Save / Remove
+
+`Save` inserts if PK is zero, otherwise updates by PK.
+`Remove` deletes by PK.
+
+```go
+// Insert (ID is zero)
+u := &User{Email: "bob@example.com", FirstName: "Bob"}
+_ = client.Save(ctx, u) // INSERT; sets u.ID if autoincrement
+
+// Update (ID is non-zero)
+u.FirstName = "Bobby"
+_ = client.Save(ctx, u) // UPDATE ... WHERE id = ?
+
+// Remove
+_ = client.Remove(ctx, u) // DELETE ... WHERE id = ?
+
+```
+
+### transactions
+
+Run multiple operations atomically. If your function returns an error, the transaction is rolled back; otherwise it commits.
+
+```go
+err := client.Tx(ctx, func(tx rqlite.Tx) error {
+	// Read inside the same transaction
+	var me User
+	if err := tx.Query(ctx, &me, "SELECT * FROM users WHERE id = ?", 1); err != nil {
+		return err
+	}
+
+	// Write inside the same transaction
+	me.LastName = "Updated"
+	if err := tx.Save(ctx, &me); err != nil {
+		return err
+	}
+
+	// Complex query via builder
+	var recent []User
+	if err := tx.CreateQueryBuilder("users").
+		OrderBy("created_at DESC").
+		Limit(5).
+		GetMany(ctx, &recent); err != nil {
+		return err
+	}
+
+	return nil // commit
+})
+
+```
+
+### Repositories (optional, generic)
+
+Strongly-typed convenience layer bound to a table:
+
+```go
+repo := client.Repository[User]("users")
+
+var many []User
+_ = repo.Find(ctx, &many, map[string]any{"last_name": "A"}, rqlite.WithOrderBy("created_at DESC"), rqlite.WithLimit(10))
+
+var one User
+_ = repo.FindOne(ctx, &one, map[string]any{"email": "alice@example.com"})
+
+_ = repo.Save(ctx, &one)
+_ = repo.Remove(ctx, &one)
+
+```
+
+### Migrations
+
+Option A: From the node (after rqlite is ready)
+
+```go
+ctx := context.Background()
+dirs := []string{
+    "network/migrations",           // default
+    "path/to/your/app/migrations",  // extra
+}
+
+if err := rqliteManager.ApplyMigrationsDirs(ctx, dirs); err != nil {
+    logger.Fatal("apply migrations failed", zap.Error(err))
+}
+```
+
+Option B: Using the adapter sql.DB
+
+```go
+ctx := context.Background()
+db := adapter.GetSQLDB()
+dirs := []string{"network/migrations", "app/migrations"}
+
+if err := rqlite.ApplyMigrationsDirs(ctx, db, dirs, logger); err != nil {
+    logger.Fatal("apply migrations failed", zap.Error(err))
+}
+```
+
 
 ---
 

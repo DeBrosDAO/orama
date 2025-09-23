@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"net/http"
+	"database/sql"
 	"strconv"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
+
+	_ "github.com/rqlite/gorqlite/stdlib"
 )
 
 // Config holds configuration for the gateway server
@@ -18,6 +21,10 @@ type Config struct {
 	ListenAddr      string
 	ClientNamespace string
 	BootstrapPeers  []string
+
+	// Optional DSN for rqlite database/sql driver, e.g. "http://localhost:4001"
+	// If empty, defaults to "http://localhost:4001".
+	RQLiteDSN string
 }
 
 type Gateway struct {
@@ -27,6 +34,11 @@ type Gateway struct {
 	startedAt  time.Time
 	signingKey *rsa.PrivateKey
 	keyID      string
+
+	// rqlite SQL connection and HTTP ORM gateway
+	sqlDB     *sql.DB
+	ormClient rqlite.Client
+	ormHTTP   *rqlite.HTTPGateway
 }
 
 // New creates and initializes a new Gateway instance
@@ -75,28 +87,24 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentWarn(logging.ComponentGeneral, "failed to generate RSA key; jwks will be empty", zap.Error(err))
 	}
 
-	logger.ComponentInfo(logging.ComponentGeneral, "Starting database migrations goroutine...")
-	// Non-blocking DB migrations: probe RQLite; if reachable, apply migrations asynchronously
-	go func() {
-		if gw.probeRQLiteReachable(3 * time.Second) {
-			internalCtx := gw.withInternalAuth(context.Background())
-			if err := gw.applyMigrations(internalCtx); err != nil {
-				if err == errNoMigrationsFound {
-					if err2 := gw.applyAutoMigrations(internalCtx); err2 != nil {
-						logger.ComponentWarn(logging.ComponentDatabase, "auto migrations failed", zap.Error(err2))
-					} else {
-						logger.ComponentInfo(logging.ComponentDatabase, "auto migrations applied")
-					}
-				} else {
-					logger.ComponentWarn(logging.ComponentDatabase, "migrations failed", zap.Error(err))
-				}
-			} else {
-				logger.ComponentInfo(logging.ComponentDatabase, "migrations applied")
-			}
-		} else {
-			logger.ComponentWarn(logging.ComponentDatabase, "RQLite not reachable; skipping migrations for now")
-		}
-	}()
+	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")
+	dsn := cfg.RQLiteDSN
+	if dsn == "" {
+		dsn = "http://localhost:4001"
+	}
+	db, dbErr := sql.Open("rqlite", dsn)
+	if dbErr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral, "failed to open rqlite sql db; http orm gateway disabled", zap.Error(dbErr))
+	} else {
+		gw.sqlDB = db
+		orm := rqlite.NewClient(db)
+		gw.ormClient = orm
+		gw.ormHTTP = rqlite.NewHTTPGateway(orm, "/v1/db")
+		logger.ComponentInfo(logging.ComponentGeneral, "RQLite ORM HTTP gateway ready",
+			zap.String("dsn", dsn),
+			zap.String("base_path", "/v1/db"),
+		)
+	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed, returning...")
 	return gw, nil
@@ -107,36 +115,14 @@ func (g *Gateway) withInternalAuth(ctx context.Context) context.Context {
 	return client.WithInternalAuth(ctx)
 }
 
-// probeRQLiteReachable performs a quick GET /status against candidate endpoints with a short timeout.
-func (g *Gateway) probeRQLiteReachable(timeout time.Duration) bool {
-	endpoints := client.DefaultDatabaseEndpoints()
-	httpClient := &http.Client{Timeout: timeout}
-	for _, ep := range endpoints {
-		url := ep
-		if url == "" {
-			continue
-		}
-		if url[len(url)-1] == '/' {
-			url = url[:len(url)-1]
-		}
-		reqURL := url + "/status"
-		resp, err := httpClient.Get(reqURL)
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			return true
-		}
-	}
-	return false
-}
-
 // Close disconnects the gateway client
 func (g *Gateway) Close() {
 	if g.client != nil {
 		if err := g.client.Disconnect(); err != nil {
 			g.logger.ComponentWarn(logging.ComponentClient, "error during client disconnect", zap.Error(err))
 		}
+	}
+	if g.sqlDB != nil {
+		_ = g.sqlDB.Close()
 	}
 }

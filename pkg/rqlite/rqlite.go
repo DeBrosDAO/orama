@@ -1,4 +1,4 @@
-package database
+package rqlite
 
 import (
 	"context"
@@ -174,6 +174,14 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		}
 	}
 
+	// After waitForLeadership / waitForSQLAvailable succeeds, before returning:
+	migrationsDir := "migrations"
+
+	if err := r.ApplyMigrations(ctx, migrationsDir); err != nil {
+		r.logger.Error("Migrations failed", zap.Error(err), zap.String("dir", migrationsDir))
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
 	r.logger.Info("RQLite node started successfully")
 	return nil
 }
@@ -317,9 +325,6 @@ func (r *RQLiteManager) waitForJoinTarget(ctx context.Context, joinAddress strin
 		}
 	}
 
-	if lastErr == nil {
-		lastErr = fmt.Errorf("join target not reachable within %s", timeout)
-	}
 	return lastErr
 }
 

@@ -18,7 +18,33 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Security
 
-## [0.44.0] - 2025-09-25
+## [0.50.0] - 2025-09-23
+
+### Added
+
+- Created new rqlite folder
+- Created rqlite adapter, client, gateway, migrations and rqlite init
+- Created namespace_helpers on gateway
+- Created new rqlite implementation
+
+### Changed
+
+- Updated node.go to support new rqlite architecture
+- Updated readme
+
+
+### Deprecated
+
+### Removed
+
+- Removed old storage folder
+- Removed old pkg/gatway storage and migrated to new rqlite
+
+### Fixed
+
+### Security
+
+## [0.44.0] - 2025-09-22
 
 ### Added
 

@@ -27,16 +27,11 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/auth/logout", g.logoutHandler)
 	mux.HandleFunc("/v1/auth/whoami", g.whoamiHandler)
 
-	// apps CRUD
-	mux.HandleFunc("/v1/apps", g.appsHandler)
-	mux.HandleFunc("/v1/apps/", g.appsHandler)
-
-	// database
-	mux.HandleFunc("/v1/db/query", g.dbQueryHandler)
-	mux.HandleFunc("/v1/db/transaction", g.dbTransactionHandler)
-	mux.HandleFunc("/v1/db/schema", g.dbSchemaHandler)
-	mux.HandleFunc("/v1/db/create-table", g.dbCreateTableHandler)
-	mux.HandleFunc("/v1/db/drop-table", g.dbDropTableHandler)
+	// rqlite ORM HTTP gateway (mounts /v1/db/* endpoints)
+	if g.ormHTTP != nil {
+		g.ormHTTP.BasePath = "/v1/rqlite"
+		g.ormHTTP.RegisterRoutes(mux)
+	}
 
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
