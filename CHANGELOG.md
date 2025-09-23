@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+- Fixed wrong URL /v1/db to /v1/rqlite
+
 ### Security
 
 ## [0.50.0] - 2025-09-23
@@ -31,7 +33,6 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 - Updated node.go to support new rqlite architecture
 - Updated readme
-
 
 ### Deprecated
 
@@ -65,7 +66,6 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Security
 
-
 ## [0.43.6] - 2025-09-20
 
 ### Added
@@ -88,11 +88,13 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ## [0.43.4] - 2025-09-18
 
 ### Added
+
 - Added extra comments on main.go
 - Remove backoff_test.go and associated backoff tests
 - Created node_test, write tests for CalculateNextBackoff, AddJitter, GetPeerId, LoadOrCreateIdentity, hasBootstrapConnections
 
 ### Changed
+
 - replaced git.debros.io with github.com
 
 ### Deprecated
@@ -106,20 +108,24 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ## [0.43.3] - 2025-09-15
 
 ### Added
+
 - User authentication module with OAuth2 support.
 
 ### Changed
+
 - Make file version to 0.43.2
 
 ### Deprecated
 
 ### Removed
+
 - Removed cli, network-cli binaries from project
 - Removed AI_CONTEXT.md
 - Removed Network.md
 - Removed unused log from monitoring.go
 
 ### Fixed
+
 - Resolved race condition when saving settings.
 
 ### Security
