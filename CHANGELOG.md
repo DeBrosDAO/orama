@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+## [0.51.0] - 2025-09-26
+
+### Added
+
 - Added identity/main.go to generate identity and peer id
 - Added encryption module identity.go for reusable identity create, save etc funtions
 
@@ -23,6 +35,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 
 ## [0.50.1] - 2025-09-23
 
