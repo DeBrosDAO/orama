@@ -16,6 +16,39 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+## [0.51.0] - 2025-09-26
+
+### Added
+
+- Added identity/main.go to generate identity and peer id
+- Added encryption module identity.go for reusable identity create, save etc funtions
+
+### Changed
+
+- Updated make file to support identity/main.go
+- Updated node/node.go on loadOrCreateIdentity to use encryption.identity
+- Updated cli/main.go to remove fallbacks for identity
+- Updated install-debros-network.sh script to use new ./cmd/identity and fixed port order on print
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+
+## [0.50.1] - 2025-09-23
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
 - Fixed wrong URL /v1/db to /v1/rqlite
 
 ### Security

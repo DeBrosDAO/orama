@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -363,50 +362,6 @@ func handlePeerID() {
 		}
 	}
 
-	// Fallback: try to extract from local identity files
-	identityPaths := []string{
-		"/opt/debros/data/node/identity.key",
-		"/opt/debros/data/bootstrap/identity.key",
-		"/opt/debros/keys/node/identity.key",
-		"./data/node/identity.key",
-		"./data/bootstrap/identity.key",
-	}
-
-	for _, path := range identityPaths {
-		if peerID := extractPeerIDFromFile(path); peerID != "" {
-			if format == "json" {
-				printJSON(map[string]string{"peer_id": peerID, "source": "local_identity"})
-			} else {
-				fmt.Printf("🆔 Peer ID: %s\n", peerID)
-				fmt.Printf("📂 Source: %s\n", path)
-			}
-			return
-		}
-	}
-
-	// Check peer.info files as last resort
-	peerInfoPaths := []string{
-		"/opt/debros/data/node/peer.info",
-		"/opt/debros/data/bootstrap/peer.info",
-		"./data/node/peer.info",
-		"./data/bootstrap/peer.info",
-	}
-
-	for _, path := range peerInfoPaths {
-		if data, err := os.ReadFile(path); err == nil {
-			multiaddr := strings.TrimSpace(string(data))
-			if peerID := extractPeerIDFromMultiaddr(multiaddr); peerID != "" {
-				if format == "json" {
-					printJSON(map[string]string{"peer_id": peerID, "source": "peer_info"})
-				} else {
-					fmt.Printf("🆔 Peer ID: %s\n", peerID)
-					fmt.Printf("📂 Source: %s\n", path)
-				}
-				return
-			}
-		}
-	}
-
 	fmt.Fprintf(os.Stderr, "❌ Could not find peer ID. Make sure the node is running or identity files exist.\n")
 	os.Exit(1)
 }
@@ -468,20 +423,6 @@ func discoverBootstrapPeer() string {
 	}
 
 	return "" // Return empty string if no peer info found
-}
-
-func tryDecodeBase64(s string) string {
-	// Only try to decode if it looks like base64 (no spaces, reasonable length)
-	if len(s) > 0 && len(s)%4 == 0 && !strings.ContainsAny(s, " \n\r\t") {
-		if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
-			// Check if decoded result looks like readable text
-			decodedStr := string(decoded)
-			if isPrintableText(decodedStr) {
-				return decodedStr
-			}
-		}
-	}
-	return s
 }
 
 func isPrintableText(s string) bool {

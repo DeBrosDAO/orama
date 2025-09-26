@@ -335,40 +335,8 @@ generate_identity() {
     fi
     log "Generating node identity..."
     cd "$INSTALL_DIR/src"
-    cat > /tmp/generate_identity_custom.go << 'EOF'
-package main
-import (
-    "crypto/rand"
-    "flag"
-    "fmt"
-    "os"
-    "path/filepath"
-    "github.com/libp2p/go-libp2p/core/crypto"
-    "github.com/libp2p/go-libp2p/core/peer"
-)
-func main() {
-    var outputPath string
-    flag.StringVar(&outputPath, "output", "", "Output path for identity key")
-    flag.Parse()
-    if outputPath == "" {
-        fmt.Println("Usage: go run generate_identity_custom.go -output <path>")
-        os.Exit(1)
-    }
-    priv, pub, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
-    if err != nil { panic(err) }
-    peerID, err := peer.IDFromPublicKey(pub)
-    if err != nil { panic(err) }
-    data, err := crypto.MarshalPrivateKey(priv)
-    if err != nil { panic(err) }
-    if err := os.MkdirAll(filepath.Dir(outputPath), 0700); err != nil { panic(err) }
-    if err := os.WriteFile(outputPath, data, 0600); err != nil { panic(err) }
-    fmt.Printf("Generated Peer ID: %s\n", peerID.String())
-    fmt.Printf("Identity saved to: %s\n", outputPath)
-}
-EOF
     export PATH=$PATH:/usr/local/go/bin
-    sudo -u debros env "PATH=$PATH:/usr/local/go/bin" "GOMOD=$(pwd)" go run /tmp/generate_identity_custom.go -output "$identity_file"
-    rm /tmp/generate_identity_custom.go
+    sudo -u debros env "PATH=$PATH:/usr/local/go/bin" go run ./cmd/identity -output "$identity_file"
     success "Node identity generated"
 }
 
@@ -560,10 +528,10 @@ main() {
     log "${GREEN}Installation Directory:${NOCOLOR} ${CYAN}$INSTALL_DIR${NOCOLOR}"
     log "${GREEN}Configuration:${NOCOLOR} ${CYAN}$INSTALL_DIR/configs/node.yaml${NOCOLOR}"
     log "${GREEN}Logs:${NOCOLOR} ${CYAN}$INSTALL_DIR/logs/node.log${NOCOLOR}"
-    log "${GREEN}Node Port:${NOCOLOR} ${CYAN}$NODE_PORT${NOCOLOR}"
+    log "${GREEN}LibP2P Port:${NOCOLOR} ${CYAN}$NODE_PORT${NOCOLOR}"
     log "${GREEN}RQLite Port:${NOCOLOR} ${CYAN}$RQLITE_PORT${NOCOLOR}"
-    log "${GREEN}Raft Port:${NOCOLOR} ${CYAN}$RAFT_PORT${NOCOLOR}"
     log "${GREEN}Gateway Port:${NOCOLOR} ${CYAN}$GATEWAY_PORT${NOCOLOR}"
+    log "${GREEN}Raft Port:${NOCOLOR} ${CYAN}$RAFT_PORT${NOCOLOR}"
     log "${BLUE}==================================================${NOCOLOR}"
     log "${GREEN}Management Commands:${NOCOLOR}"
     log "${CYAN}  - sudo systemctl status debros-node${NOCOLOR} (Check status)"
