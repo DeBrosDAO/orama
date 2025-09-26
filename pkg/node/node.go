@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	mathrand "math/rand"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -375,64 +375,40 @@ func (n *Node) startLibP2P() error {
 }
 
 // loadOrCreateIdentity loads an existing identity or creates a new one
+// loadOrCreateIdentity loads an existing identity or creates a new one
 func (n *Node) loadOrCreateIdentity() (crypto.PrivKey, error) {
 	identityFile := filepath.Join(n.config.Node.DataDir, "identity.key")
 
-	// Try to load existing identity
+	// Try to load existing identity using the shared package
 	if _, err := os.Stat(identityFile); err == nil {
-		data, err := os.ReadFile(identityFile)
+		info, err := encryption.LoadIdentity(identityFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read identity file: %w", err)
-		}
-
-		priv, err := crypto.UnmarshalPrivateKey(data)
-		if err != nil {
-			n.logger.Warn("Failed to unmarshal existing identity, creating new one", zap.Error(err))
+			n.logger.Warn("Failed to load existing identity, creating new one", zap.Error(err))
 		} else {
-			// Extract peer ID from private key for logging
-			peerID, err := peer.IDFromPrivateKey(priv)
-			if err != nil {
-				n.logger.ComponentInfo(logging.ComponentNode, "Loaded existing identity",
-					zap.String("file", identityFile),
-					zap.String("peer_id", "unable_to_extract"))
-			} else {
-				n.logger.ComponentInfo(logging.ComponentNode, "Loaded existing identity",
-					zap.String("file", identityFile),
-					zap.String("peer_id", peerID.String()))
-			}
-			return priv, nil
+			n.logger.ComponentInfo(logging.ComponentNode, "Loaded existing identity",
+				zap.String("file", identityFile),
+				zap.String("peer_id", info.PeerID.String()))
+			return info.PrivateKey, nil
 		}
 	}
 
-	// Create new identity
+	// Create new identity using shared package
 	n.logger.Info("Creating new identity", zap.String("file", identityFile))
-	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	info, err := encryption.GenerateIdentity()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate key pair: %w", err)
+		return nil, fmt.Errorf("failed to generate identity: %w", err)
 	}
 
-	// Extract peer ID from private key for logging
-	peerID, err := peer.IDFromPrivateKey(priv)
-	if err != nil {
-		n.logger.Info("Identity created",
-			zap.String("peer_id", "unable_to_extract"))
-	} else {
-		n.logger.Info("Identity created",
-			zap.String("peer_id", peerID.String()))
-	}
-
-	// Save identity
-	data, err := crypto.MarshalPrivateKey(priv)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal private key: %w", err)
-	}
-
-	if err := os.WriteFile(identityFile, data, 0600); err != nil {
+	// Save identity using shared package
+	if err := encryption.SaveIdentity(info, identityFile); err != nil {
 		return nil, fmt.Errorf("failed to save identity: %w", err)
 	}
 
-	n.logger.Info("Identity saved", zap.String("file", identityFile))
-	return priv, nil
+	n.logger.Info("Identity saved",
+		zap.String("file", identityFile),
+		zap.String("peer_id", info.PeerID.String()))
+
+	return info.PrivateKey, nil
 }
 
 // GetPeerID returns the peer ID of this node
