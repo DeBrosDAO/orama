@@ -6,14 +6,12 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
 	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
@@ -22,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
@@ -38,11 +37,13 @@ type Node struct {
 	rqliteAdapter *database.RQLiteAdapter
 
 	// Peer discovery
-	discoveryCancel context.CancelFunc
 	bootstrapCancel context.CancelFunc
 
 	// PubSub
 	pubsub *pubsub.ClientAdapter
+
+	// Discovery
+	discoveryManager *discovery.Manager
 }
 
 // NewNode creates a new network node
@@ -363,7 +364,11 @@ func (n *Node) startLibP2P() error {
 		}
 	}
 
-	n.logger.ComponentInfo(logging.ComponentNode, "LibP2P host started successfully - using bootstrap + peer exchange discovery")
+	// Initialize discovery manager with peer exchange protocol
+	n.discoveryManager = discovery.NewManager(h, nil, n.logger.Logger)
+	n.discoveryManager.StartProtocolHandler()
+
+	n.logger.ComponentInfo(logging.ComponentNode, "LibP2P host started successfully - using active peer exchange discovery")
 
 	// Start peer discovery and monitoring
 	n.startPeerDiscovery()
@@ -421,131 +426,31 @@ func (n *Node) GetPeerID() string {
 
 // startPeerDiscovery starts periodic peer discovery for the node
 func (n *Node) startPeerDiscovery() {
-	// Create a cancellation context for discovery
-	ctx, cancel := context.WithCancel(context.Background())
-	n.discoveryCancel = cancel
-
-	// Start bootstrap peer connections immediately
-	go func() {
-		n.connectToBootstrapPeers(ctx)
-
-		// Periodic peer discovery using interval from config
-		ticker := time.NewTicker(n.config.Discovery.DiscoveryInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				n.discoverPeers(ctx)
-			}
-		}
-	}()
-}
-
-// discoverPeers discovers and connects to new peers using peer exchange
-func (n *Node) discoverPeers(ctx context.Context) {
-	if n.host == nil {
+	if n.discoveryManager == nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Discovery manager not initialized")
 		return
 	}
 
-	connectedPeers := n.host.Network().Peers()
-	initialCount := len(connectedPeers)
+	// Start the discovery manager with config from node config
+	discoveryConfig := discovery.Config{
+		DiscoveryInterval: n.config.Discovery.DiscoveryInterval,
+		MaxConnections:    n.config.Node.MaxConnections,
+	}
 
-	if initialCount == 0 {
-		// No peers connected - exponential backoff system handles bootstrap reconnection
-		n.logger.ComponentDebug(logging.ComponentNode, "No peers connected, relying on exponential backoff for bootstrap")
+	if err := n.discoveryManager.Start(discoveryConfig); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start discovery manager", zap.Error(err))
 		return
 	}
 
-	n.logger.ComponentDebug(logging.ComponentNode, "Discovering peers via peer exchange",
-		zap.Int("current_peers", initialCount))
-
-	// Strategy: Use peer exchange through libp2p's identify protocol
-	// LibP2P automatically exchanges peer information when peers connect
-	// We just need to try connecting to peers in our peerstore
-
-	newConnections := n.discoverViaPeerExchange(ctx)
-
-	finalPeerCount := len(n.host.Network().Peers())
-
-	if newConnections > 0 {
-		n.logger.ComponentInfo(logging.ComponentNode, "Peer discovery completed",
-			zap.Int("new_connections", newConnections),
-			zap.Int("initial_peers", initialCount),
-			zap.Int("final_peers", finalPeerCount))
-	}
-}
-
-// discoverViaPeerExchange discovers new peers using peer exchange (identify protocol)
-func (n *Node) discoverViaPeerExchange(ctx context.Context) int {
-	connected := 0
-	maxConnections := 3 // Conservative limit to avoid overwhelming proxy
-
-	// Get all peers from peerstore (includes peers discovered through identify protocol)
-	allKnownPeers := n.host.Peerstore().Peers()
-
-	for _, knownPeer := range allKnownPeers {
-		if knownPeer == n.host.ID() {
-			continue
-		}
-
-		// Skip if already connected
-		if n.host.Network().Connectedness(knownPeer) == network.Connected {
-			continue
-		}
-
-		// Get addresses for this peer
-		addrs := n.host.Peerstore().Addrs(knownPeer)
-		if len(addrs) == 0 {
-			continue
-		}
-
-		// Filter to only standard P2P ports (avoid ephemeral client ports)
-		var validAddrs []multiaddr.Multiaddr
-		for _, addr := range addrs {
-			addrStr := addr.String()
-			// Keep addresses with standard P2P ports (4000-4999 range)
-			if strings.Contains(addrStr, ":400") {
-				validAddrs = append(validAddrs, addr)
-			}
-		}
-
-		if len(validAddrs) == 0 {
-			continue
-		}
-
-		// Try to connect with shorter timeout (proxy connections are slower)
-		connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		peerInfo := peer.AddrInfo{ID: knownPeer, Addrs: validAddrs}
-
-		if err := n.host.Connect(connectCtx, peerInfo); err != nil {
-			cancel()
-			n.logger.ComponentDebug(logging.ComponentNode, "Failed to connect to peer via exchange",
-				zap.String("peer", knownPeer.String()),
-				zap.Error(err))
-			continue
-		}
-		cancel()
-
-		n.logger.ComponentInfo(logging.ComponentNode, "Connected to new peer via peer exchange",
-			zap.String("peer", knownPeer.String()))
-		connected++
-
-		if connected >= maxConnections {
-			break
-		}
-	}
-
-	return connected
+	n.logger.ComponentInfo(logging.ComponentNode, "Peer discovery manager started",
+		zap.Duration("interval", discoveryConfig.DiscoveryInterval),
+		zap.Int("max_connections", discoveryConfig.MaxConnections))
 }
 
 // stopPeerDiscovery stops peer discovery
 func (n *Node) stopPeerDiscovery() {
-	if n.discoveryCancel != nil {
-		n.discoveryCancel()
-		n.discoveryCancel = nil
+	if n.discoveryManager != nil {
+		n.discoveryManager.Stop()
 	}
 	n.logger.ComponentInfo(logging.ComponentNode, "Peer discovery stopped")
 }

@@ -16,6 +16,25 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+## [0.51.1] - 2025-10-22
+
+### Added
+
+### Changed
+
+- Changed the configuration file for run-node3 to use node3.yaml.
+- Modified select_data_dir function to require a hasConfigFile parameter and added error handling for missing configuration.
+- Updated main function to pass the config path to select_data_dir.
+- Introduced a peer exchange protocol in the discovery package, allowing nodes to request and exchange peer information.
+- Refactored peer discovery logic in the node package to utilize the new discovery manager for active peer exchange.
+
+### Deprecated
+
+### Removed
+- Cleaned up unused code related to previous peer discovery methods.
+
+### Fixed
+
 ## [0.51.0] - 2025-09-26
 
 ### Added

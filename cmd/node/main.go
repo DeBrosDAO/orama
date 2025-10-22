@@ -106,11 +106,13 @@ func check_if_should_open_help(help *bool) {
 }
 
 // select_data_dir selects the data directory for the node
-func select_data_dir(dataDir *string, nodeID *string) {
+// If none of (hasConfigFile, nodeID, dataDir) are present, throw an error and do not start
+func select_data_dir(dataDir *string, nodeID *string, hasConfigFile bool) {
 	logger := setup_logger(logging.ComponentNode)
 
-	if *nodeID == "" {
-		*dataDir = "./data/node"
+	if !hasConfigFile && (*nodeID == "" || nodeID == nil) && (*dataDir == "" || dataDir == nil) {
+		logger.Error("No config file, node ID, or data directory specified. Please provide at least one. Refusing to start.")
+		os.Exit(1)
 	}
 
 	logger.Info("Successfully selected Data Directory of: %s", zap.String("dataDir", *dataDir))
@@ -193,10 +195,10 @@ func load_args_into_config(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, r
 func main() {
 	logger := setup_logger(logging.ComponentNode)
 
-	_, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, help := parse_and_return_network_flags()
+	configPath, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, help := parse_and_return_network_flags()
 
 	check_if_should_open_help(help)
-	select_data_dir(dataDir, nodeID)
+	select_data_dir(dataDir, nodeID, *configPath != "")
 
 	// Load Node Configuration
 	var cfg *config.Config
