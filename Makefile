@@ -59,7 +59,7 @@ run-node2:
 # Usage: make run-node3 JOINADDR=/ip4/127.0.0.1/tcp/5001 HTTP=5003 RAFT=7003 P2P=4003
 run-node3:
 	@echo "Starting regular node3 with config..."
-	go run ./cmd/node --config configs/node.yaml
+	go run ./cmd/node --config configs/node3.yaml
 
 # Run gateway HTTP server
 # Usage examples:
