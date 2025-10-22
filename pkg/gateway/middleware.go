@@ -130,7 +130,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// extractAPIKey extracts API key from Authorization or X-API-Key
+// extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
 func extractAPIKey(r *http.Request) string {
 	// Prefer Authorization header
 	auth := r.Header.Get("Authorization")
@@ -148,8 +148,16 @@ func extractAPIKey(r *http.Request) string {
 			return strings.TrimSpace(auth)
 		}
 	}
-	// Fallback header
+	// Fallback to X-API-Key header
 	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
+		return v
+	}
+	// Fallback to query parameter (for WebSocket support)
+	if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
+		return v
+	}
+	// Also check token query parameter (alternative name)
+	if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
 		return v
 	}
 	return ""

@@ -90,7 +90,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")
 	dsn := cfg.RQLiteDSN
 	if dsn == "" {
-		dsn = "http://localhost:4001"
+		dsn = "http://localhost:5001"
 	}
 	db, dbErr := sql.Open("rqlite", dsn)
 	if dbErr != nil {
