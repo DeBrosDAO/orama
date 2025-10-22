@@ -60,7 +60,8 @@ func (g *Gateway) statusHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "client not initialized")
 		return
 	}
-	ctx := r.Context()
+	// Use internal auth context to bypass client credential requirements
+	ctx := client.WithInternalAuth(r.Context())
 	status, err := g.client.Network().GetStatus(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
