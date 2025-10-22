@@ -16,7 +16,16 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
-## [0.51.0] - 2025-09-26
+## [0.51.2] - 2025-09-26
+
+### Added
+
+### Changed
+
+- Enhance gateway configuration by adding RQLiteDSN support and updating default connection settings. Updated config parsing to include RQLiteDSN from YAML and environment variables. Changed default RQLite connection URL from port 4001 to 5001.
+- Update CHANGELOG.md for version 0.51.2, enhance API key extraction to support query parameters, and implement internal auth context in status and storage handlers.
+
+## [0.51.1] - 2025-09-26
 
 ### Added
 
@@ -29,6 +38,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 - Updated node/node.go on loadOrCreateIdentity to use encryption.identity
 - Updated cli/main.go to remove fallbacks for identity
 - Updated install-debros-network.sh script to use new ./cmd/identity and fixed port order on print
+- Updated makefile and changelog
 
 ### Deprecated
 
@@ -37,7 +47,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Fixed
 
 
-## [0.50.1] - 2025-09-23
+## [0.50.0] - 2025-09-23
 
 ### Added
 
