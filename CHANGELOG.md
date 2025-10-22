@@ -29,16 +29,14 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
-- Added identity/main.go to generate identity and peer id
-- Added encryption module identity.go for reusable identity create, save etc funtions
-
 ### Changed
 
-- Updated make file to support identity/main.go
-- Updated node/node.go on loadOrCreateIdentity to use encryption.identity
-- Updated cli/main.go to remove fallbacks for identity
-- Updated install-debros-network.sh script to use new ./cmd/identity and fixed port order on print
-- Updated makefile and changelog
+- Changed the configuration file for run-node3 to use node3.yaml.
+- Modified select_data_dir function to require a hasConfigFile parameter and added error handling for missing configuration.
+- Updated main function to pass the config path to select_data_dir.
+- Introduced a peer exchange protocol in the discovery package, allowing nodes to request and exchange peer information.
+- Refactored peer discovery logic in the node package to utilize the new discovery manager for active peer exchange.
+- Cleaned up unused code related to previous peer discovery methods.
 
 ### Deprecated
 
