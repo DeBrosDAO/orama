@@ -45,6 +45,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		ListenAddr:      ":6001",
 		ClientNamespace: "default",
 		BootstrapPeers:  nil,
+		RQLiteDSN:       "",
 	}
 
 	// 1) YAML (optional)
@@ -52,6 +53,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		type yamlCfg struct {
 			ListenAddr      string   `yaml:"listen_addr"`
 			ClientNamespace string   `yaml:"client_namespace"`
+			RQLiteDSN       string   `yaml:"rqlite_dsn"`
 			BootstrapPeers  []string `yaml:"bootstrap_peers"`
 		}
 		const path = "configs/gateway.yaml"
@@ -65,6 +67,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 				}
 				if v := strings.TrimSpace(y.ClientNamespace); v != "" {
 					cfg.ClientNamespace = v
+				}
+				if v := strings.TrimSpace(y.RQLiteDSN); v != "" {
+					cfg.RQLiteDSN = v
 				}
 				if len(y.BootstrapPeers) > 0 {
 					var bp []string
@@ -88,6 +93,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if v := strings.TrimSpace(os.Getenv("GATEWAY_NAMESPACE")); v != "" {
 		cfg.ClientNamespace = v
+	}
+	if v := strings.TrimSpace(os.Getenv("GATEWAY_RQLITE_DSN")); v != "" {
+		cfg.RQLiteDSN = v
 	}
 	if v := strings.TrimSpace(os.Getenv("GATEWAY_BOOTSTRAP_PEERS")); v != "" {
 		parts := strings.Split(v, ",")
