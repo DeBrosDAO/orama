@@ -445,6 +445,15 @@ Solution: Remove unsupported keys. Supported keys are documented in the YAML Ref
 
 ## CLI Usage
 
+### Authentication Commands
+
+```bash
+./bin/network-cli auth login                  # Authenticate with wallet
+./bin/network-cli auth whoami                 # Show current authentication status
+./bin/network-cli auth status                 # Show detailed authentication info
+./bin/network-cli auth logout                 # Clear stored credentials
+```
+
 ### Network Operations
 
 ```bash
@@ -543,14 +552,39 @@ curl -X POST "$GW/v1/rqlite/drop-table" -H "Authorization: Bearer $API_KEY" -H '
 
 ### Authentication
 
-The CLI features an enhanced authentication system with automatic wallet detection and multi-wallet support:
+The CLI features an enhanced authentication system with explicit command support and automatic wallet detection:
 
-- **Automatic Authentication:** No manual auth commands required - authentication happens automatically when operations need credentials
+#### Explicit Authentication Commands
+
+Use the `auth` command to manage your credentials:
+
+```bash
+# Authenticate with your wallet (opens browser for signature)
+./bin/network-cli auth login
+
+# Check if you're authenticated
+./bin/network-cli auth whoami
+
+# View detailed authentication info
+./bin/network-cli auth status
+
+# Clear all stored credentials
+./bin/network-cli auth logout
+```
+
+Credentials are stored securely in `~/.debros/credentials.json` with restricted file permissions (readable only by owner).
+
+#### Key Features
+
+- **Explicit Authentication:** Use `auth login` command to authenticate with your wallet
+- **Automatic Authentication:** Commands that require auth (query, pubsub, etc.) automatically prompt if needed
 - **Multi-Wallet Management:** Seamlessly switch between multiple wallet credentials
 - **Persistent Sessions:** Wallet credentials are automatically saved and restored between sessions
 - **Enhanced User Experience:** Streamlined authentication flow with better error handling and user feedback
 
-When using operations that require authentication (storage, database, pubsub), the CLI will automatically:
+#### Automatic Authentication Flow
+
+When using operations that require authentication (query, pubsub publish/subscribe), the CLI will automatically:
 
 1. Check for existing valid credentials
 2. Prompt for wallet authentication if needed
@@ -562,6 +596,15 @@ When using operations that require authentication (storage, database, pubsub), t
 ```bash
 # First time - will prompt for wallet authentication when needed
 ./bin/network-cli pubsub publish notifications "Hello World"
+```
+
+#### Environment Variables
+
+You can override the gateway URL used for authentication:
+
+```bash
+export DEBROS_GATEWAY_URL="http://localhost:6001"
+./bin/network-cli auth login
 ```
 
 ---
@@ -714,270 +757,4 @@ GET  /v1/pubsub/topics     # List active topics
 - **PubSub**
   - WS Subscribe: `GET /v1/pubsub/ws?topic=<topic>`
   - Publish: `POST /v1/pubsub/publish` `{topic, data_base64}` → `{status:"ok"}`
-  - Topics: `GET /v1/pubsub/topics` → `{topics:[...]}`
-
-### Migrations
-
-- Add column: `ALTER TABLE users ADD COLUMN age INTEGER`
-- Change type / add FK (recreate pattern): create `_new` table, copy data, drop old, rename.
-- Always send as one `POST /v1/rqlite/transaction`.
-
-### Minimal examples
-
-TypeScript (Node)
-
-```ts
-import { GatewayClient } from "../examples/sdk-typescript/src/client";
-
-const client = new GatewayClient(
-  process.env.GATEWAY_BASE_URL!,
-  process.env.GATEWAY_API_KEY!
-);
-await client.createTable(
-  "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
-);
-const res = await client.query("SELECT name FROM users WHERE id = ?", [1]);
-```
-
-Python
-
-```python
-import os, requests
-
-BASE = os.environ['GATEWAY_BASE_URL']
-KEY  = os.environ['GATEWAY_API_KEY']
-H    = { 'X-API-Key': KEY, 'Content-Type': 'application/json' }
-
-def query(sql, args=None):
-    r = requests.post(f'{BASE}/v1/rqlite/query', json={ 'sql': sql, 'args': args or [] }, headers=H, timeout=15)
-    r.raise_for_status()
-    return r.json()['rows']
-```
-
-Go
-
-```go
-req, _ := http.NewRequest(http.MethodPost, base+"/v1/rqlite/create-table", bytes.NewBufferString(`{"schema":"CREATE TABLE ..."}`))
-req.Header.Set("X-API-Key", apiKey)
-req.Header.Set("Content-Type", "application/json")
-resp, err := http.DefaultClient.Do(req)
-```
-
-### Security Features
-
-- **Namespace Enforcement:** All operations are automatically prefixed with namespace for isolation
-- **CORS Support:** Configurable CORS policies (permissive for development, configurable for production)
-- **Transport Security:** All network communications use Noise/TLS encryption
-- **Authentication Middleware:** Flexible authentication with support for multiple credential types
-
-### Usage Examples
-
-#### Wallet Authentication Flow
-
-```bash
-# 1. Get challenge (automatic)
-curl -X POST http://localhost:6001/v1/auth/challenge
-
-# 2. Sign challenge with wallet (handled by client)
-# 3. Verify signature (automatic)
-curl -X POST http://localhost:6001/v1/auth/verify \
-  -H "Content-Type: application/json" \
-  -d '{"wallet":"0x...","nonce":"...","signature":"0x..."}'
-```
-
-#### Real-time Messaging
-
-```javascript
-// WebSocket connection
-const ws = new WebSocket("ws://localhost:6001/v1/pubsub/ws?topic=chat");
-
-ws.onmessage = (event) => {
-  console.log("Received:", event.data);
-};
-
-// Send message
-ws.send("Hello, network!");
-```
-
----
-
-## Development
-
-### Project Structure
-
-```
-network/
-├── cmd/
-│   ├── node/         # Network node executable
-│   └── cli/          # Command-line interface
-├── pkg/
-│   ├── client/       # Client library
-│   ├── node/         # Node implementation
-│   ├── database/     # RQLite integration
-│   ├── pubsub/       # Pub/Sub messaging
-│   ├── config/       # Centralized config
-│   └── discovery/    # Peer discovery (node only)
-├── scripts/          # Install, test scripts
-├── configs/          # YAML configs
-├── bin/              # Built executables
-```
-
-### Build & Test
-
-```bash
-make build           # Build all executables
-make test            # Run unit tests
-make clean           # Clean build artifacts
-```
-
-### Local Multi-Node Testing
-
-```bash
-scripts/test-multinode.sh
-```
-
----
-
-## Database Client (Go ORM-like)
-
-A lightweight ORM-like client over rqlite using Go’s `database/sql`. It provides:
-
-- Query/Exec for raw SQL
-- A fluent QueryBuilder (`Where`, `InnerJoin`, `LeftJoin`, `OrderBy`, `GroupBy`, `Limit`, `Offset`)
-- Simple repositories with `Find`/`FindOne`
-- `Save`/`Remove` for entities with primary keys
-- Transaction support via `Tx`
-
-### Installation
-
-- Ensure rqlite is running (the node starts and manages rqlite automatically).
-- Import the client:
-  - Package: `github.com/DeBrosOfficial/network/pkg/rqlite`
-
-### Quick Start
-
-````go
-package main
-
-import (
-	"context"
-	"database/sql"
-	"time"
-
-	"github.com/DeBrosOfficial/network/pkg/rqlite"
-	_ "github.com/rqlite/gorqlite/stdlib"
-)
-
-type User struct {
-	ID        int64     `db:"id,pk,auto"`
-	Email     string    `db:"email"`
-	FirstName string    `db:"first_name"`
-	LastName  string    `db:"last_name"`
-	CreatedAt time.Time `db:"created_at"`
-}
-
-func (User) TableName() string { return "users" }
-
-func main() {
-	ctx := context.Background()
-
-	adapter, _ := rqlite.NewRQLiteAdapter(manager)
-	client := rqlite.NewClientFromAdapter(adapter)
-
-	// Save (INSERT)
-	u := &User{Email: "alice@example.com", FirstName: "Alice", LastName: "A"}
-	_ = client.Save(ctx, u) // auto-sets u.ID if autoincrement is available
-
-	// FindOneBy
-	var one User
-	_ = client.FindOneBy(ctx, &one, "users", map[string]any{"email": "alice@example.com"})
-
-	// QueryBuilder
-	var users []User
-	_ = client.CreateQueryBuilder("users").
-		Where("email LIKE ?", "%@example.com").
-		OrderBy("created_at DESC").
-		Limit(10).
-		GetMany(ctx, &users)
-}
-
-### Entities and Mapping
-
-- Use struct tags: `db:"column_name"`; the first tag value is the column name.
-- Mark primary key: `db:"id,pk"` (and `auto` if autoincrement): `db:"id,pk,auto"`.
-- Fallbacks:
-  - If no `db` tag is provided, the field name is used as the column (case-insensitive).
-  - If a field is named `ID`, it is treated as the primary key by default.
-
-```go
-type Post struct {
-	ID        int64     `db:"id,pk,auto"`
-	UserID    int64     `db:"user_id"`
-	Title     string    `db:"title"`
-	Body      string    `db:"body"`
-	CreatedAt time.Time `db:"created_at"`
-}
-func (Post) TableName() string { return "posts" }
-````
-
-### Basic queries
-
-Raw SQL with scanning into structs or maps:
-
-```go
-var users []User
-err := client.Query(ctx, &users, "SELECT id, email, first_name, last_name, created_at FROM users WHERE email LIKE ?", "%@example.com")
-if err != nil {
-	// handle
-}
-
-var rows []map[string]any
-_ = client.Query(ctx, &rows, "SELECT id, email FROM users WHERE id IN (?,?)", 1, 2)
-```
-
-### Query Buider
-
-Build complex SELECTs with joins, filters, grouping, ordering, and pagination.
-
-```go
-var results []User
-qb := client.CreateQueryBuilder("users u").
-	InnerJoin("posts p", "p.user_id = u.id").
-	Where("u.email LIKE ?", "%@example.com").
-	AndWhere("p.created_at >= ?", "2024-01-01T00:00:00Z").
-	GroupBy("u.id").
-	OrderBy("u.created_at DESC").
-	Limit(20).
-	Offset(0)
-
-if err := qb.GetMany(ctx, &results); err != nil {
-	// handle
-}
-
-// Single row (LIMIT 1)
-var one User
-if err := qb.Limit(1).GetOne(ctx, &one); err != nil {
-	// handle sql.ErrNoRows, etc.
-}
-```
-
-### FindBy / FindOneBy
-
-Simple map-based filters:
-
-```go
-var active []User
-_ = client.FindBy(ctx, &active, "users", map[string]any{"last_name": "A"}, rqlite.WithOrderBy("created_at DESC"), rqlite.WithLimit(50))
-
-var u User
-if err := client.FindOneBy(ctx, &u, "users", map[string]any{"email": "alice@example.com"}); err != nil {
-	// sql.ErrNoRows if not found
-}
-```
-
-### Save / Remove
-
-`Save` inserts if PK is zero, otherwise updates by PK.
-`Remove` deletes by PK.
-
-```
+  - Topics: `GET /v1/pubsub/topics` → `
