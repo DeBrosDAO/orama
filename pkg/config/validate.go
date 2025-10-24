@@ -456,25 +456,46 @@ func validateDataDir(path string) error {
 		return fmt.Errorf("must not be empty")
 	}
 
-	if info, err := os.Stat(path); err == nil {
+	// Expand ~ to home directory
+	expandedPath := os.ExpandEnv(path)
+	if strings.HasPrefix(expandedPath, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine home directory: %v", err)
+		}
+		expandedPath = filepath.Join(home, expandedPath[1:])
+	}
+
+	if info, err := os.Stat(expandedPath); err == nil {
 		// Directory exists; check if it's a directory and writable
 		if !info.IsDir() {
 			return fmt.Errorf("path exists but is not a directory")
 		}
 		// Try to write a test file to check permissions
-		testFile := filepath.Join(path, ".write_test")
+		testFile := filepath.Join(expandedPath, ".write_test")
 		if err := os.WriteFile(testFile, []byte(""), 0644); err != nil {
 			return fmt.Errorf("directory not writable: %v", err)
 		}
 		os.Remove(testFile)
 	} else if os.IsNotExist(err) {
 		// Directory doesn't exist; check if parent is writable
-		parent := filepath.Dir(path)
+		parent := filepath.Dir(expandedPath)
 		if parent == "" || parent == "." {
 			parent = "."
 		}
-		if err := validateDirWritable(parent); err != nil {
-			return fmt.Errorf("parent directory not writable: %v", err)
+		// Allow parent not existing - it will be created at runtime
+		if info, err := os.Stat(parent); err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("parent directory not accessible: %v", err)
+			}
+			// Parent doesn't exist either - that's ok, will be created
+		} else if !info.IsDir() {
+			return fmt.Errorf("parent path is not a directory")
+		} else {
+			// Parent exists, check if writable
+			if err := validateDirWritable(parent); err != nil {
+				return fmt.Errorf("parent directory not writable: %v", err)
+			}
 		}
 	} else {
 		return fmt.Errorf("cannot access path: %v", err)

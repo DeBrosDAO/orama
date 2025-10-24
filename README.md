@@ -88,6 +88,75 @@ A robust, decentralized peer-to-peer network built in Go, providing distributed 
 - **5001:** RQLite HTTP API
 - **7001:** RQLite Raft consensus
 
+### Filesystem Permissions
+
+DeBros Network stores all configuration and data in `~/.debros/` directory. Ensure you have:
+
+- **Read/Write access** to your home directory (`~`)
+- **Available disk space**: At least 10GB for database and logs
+- **No restrictive mount options**: The home directory must not be mounted read-only
+- **Unix permissions**: Standard user permissions are sufficient (no root/sudo required)
+
+#### Directory Structure
+
+DeBros automatically creates the following directory structure:
+
+```
+~/.debros/
+├── bootstrap.yaml          # Bootstrap node config
+├── node.yaml               # Node config
+├── gateway.yaml            # Gateway config
+├── bootstrap/              # Bootstrap node data (auto-created)
+│   ├── rqlite/             # RQLite database files
+│   │   ├── db.sqlite       # Main database
+│   │   ├── raft/           # Raft consensus data
+│   │   └── rsnapshots/     # Raft snapshots
+│   ├── peer.info           # Node multiaddr (created at startup)
+│   └── identity.key        # Node private key (created at startup)
+├── node/                   # Node data (auto-created)
+│   ├── rqlite/             # RQLite database files
+│   ├── raft/               # Raft data
+│   ├── peer.info           # Node multiaddr (created at startup)
+│   └── identity.key        # Node private key (created at startup)
+└── node2/                  # Additional node configs (if running multiple)
+    └── rqlite/             # RQLite database files
+```
+
+**Files Created at Startup:**
+- `identity.key` - LibP2P private key for the node (generated once, reused)
+- `peer.info` - The node's multiaddr (e.g., `/ip4/0.0.0.0/tcp/4001/p2p/12D3KooW...`)
+
+**Automatic Creation**: The node automatically creates all necessary data directories when started. You only need to ensure:
+1. `~/.debros/` is writable
+2. Sufficient disk space available
+3. Correct config files exist
+
+**Permission Check:**
+
+```bash
+# Verify home directory is writable
+touch ~/test-write && rm ~/test-write && echo "✓ Home directory is writable"
+
+# Check available disk space
+df -h ~
+```
+
+**If you get permission errors:**
+
+```
+Error: Failed to create/access config directory
+Please ensure:
+  1. Home directory is accessible
+  2. You have write permissions to home directory
+  3. Disk space is available
+```
+
+**Solution:**
+
+- Ensure you're not running with overly restrictive umask: `umask` should show `0022` or similar
+- Check home directory permissions: `ls -ld ~` should show your user as owner
+- For sandboxed/containerized environments: Ensure `/home/<user>` is writable
+
 ---
 
 ## Quick Start
@@ -110,7 +179,7 @@ make build
 ```bash
 make run-node
 # Or manually:
-go run ./cmd/node --config configs/bootstrap.yaml
+go run ./cmd/node --config configs/node.yaml
 ```
 
 ### 4. Start Additional Nodes
@@ -178,212 +247,141 @@ sudo journalctl -u debros-node.service -f
 
 ## Configuration
 
-### Example Configuration Files
+### Configuration Files Location
 
-#### `configs/bootstrap.yaml`
+All configuration files are stored in `~/.debros/` for both local development and production deployments:
 
-```yaml
-node:
-  id: ""
-  type: "bootstrap"
-  listen_addresses:
-    - "/ip4/0.0.0.0/tcp/4001"
-  data_dir: "./data/bootstrap"
-  max_connections: 100
+- `~/.debros/node.yaml` - Node configuration
+- `~/.debros/node.yaml` - Bootstrap node configuration
+- `~/.debros/gateway.yaml` - Gateway configuration
 
-database:
-  data_dir: "./data/bootstrap/rqlite"
-  replication_factor: 3
-  shard_count: 16
-  max_database_size: 1073741824
-  backup_interval: 24h
-  rqlite_port: 5001
-  rqlite_raft_port: 7001
-  rqlite_join_address: ""
+The system will **only** load config from `~/.debros/` and will error if required config files are missing.
 
-discovery:
-  bootstrap_peers: []
-  discovery_interval: 15s
-  bootstrap_port: 4001
-  http_adv_address: "127.0.0.1"
-  raft_adv_address: ""
+### Generating Configuration Files
 
-security:
-  enable_tls: false
-  private_key_file: ""
-  certificate_file: ""
+Use the `network-cli config init` command to generate configuration files:
 
-logging:
-  level: "info"
-  format: "console"
-  output_file: ""
+#### Generate a Node Config
+
+```bash
+# Generate basic node config with bootstrap peers
+network-cli config init --type node --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx,/ip4/127.0.0.1/tcp/4002/p2p/QmYyy"
+
+# With custom ports
+network-cli config init --type node --name node2.yaml --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002 --join localhost:5001 --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
+
+# Force overwrite existing config
+network-cli config init --type node --force
 ```
 
-#### `configs/node.yaml`
+#### Generate a Bootstrap Node Config
 
-```yaml
-node:
-  id: "node2"
-  type: "node"
-  listen_addresses:
-    - "/ip4/0.0.0.0/tcp/4002"
-  data_dir: "./data/node2"
-  max_connections: 50
+```bash
+# Generate bootstrap node (no join address required)
+network-cli config init --type bootstrap
 
-database:
-  data_dir: "./data/node2/rqlite"
-  replication_factor: 3
-  shard_count: 16
-  max_database_size: 1073741824
-  backup_interval: 24h
-  rqlite_port: 5002
-  rqlite_raft_port: 7002
-  rqlite_join_address: "127.0.0.1:7001"
-
-discovery:
-  bootstrap_peers:
-    - "/ip4/127.0.0.1/tcp/4001/p2p/<YOUR_BOOTSTRAP_PEER_ID>"
-  discovery_interval: 15s
-  bootstrap_port: 4002
-  http_adv_address: "127.0.0.1"
-  raft_adv_address: ""
-
-security:
-  enable_tls: false
-  private_key_file: ""
-  certificate_file: ""
-
-logging:
-  level: "info"
-  format: "console"
-  output_file: ""
+# With custom ports
+network-cli config init --type bootstrap --listen-port 4001 --rqlite-http-port 5001 --rqlite-raft-port 7001
 ```
 
-### YAML Reference
+#### Generate a Gateway Config
 
-#### Node YAML (configs/node.yaml or configs/bootstrap.yaml)
+```bash
+# Generate gateway config
+network-cli config init --type gateway
 
-The .yaml files are required in order for the nodes and the gateway to run correctly.
-
-node:
-
-- id (string) Optional node ID. Auto-generated if empty.
-- type (string) "bootstrap" or "node". Default: "node".
-- listen_addresses (string[]) LibP2P listen multiaddrs. Default: ["/ip4/0.0.0.0/tcp/4001"].
-- data_dir (string) Data directory. Default: "./data".
-- max_connections (int) Max peer connections. Default: 50.
-
-database:
-
-- data_dir (string) Directory for database files. Default: "./data/db".
-- replication_factor (int) Number of replicas. Default: 3.
-- shard_count (int) Shards for data distribution. Default: 16.
-- max_database_size (int64 bytes) Max DB size. Default: 1073741824 (1GB).
-- backup_interval (duration) e.g., "24h". Default: 24h.
-- rqlite_port (int) RQLite HTTP API port. Default: 5001.
-- rqlite_raft_port (int) RQLite Raft port. Default: 7001.
-- rqlite_join_address (string) Raft address of an existing RQLite node to join (host:port format). Empty for bootstrap.
-
-discovery:
-
-- bootstrap_peers (string[]) List of LibP2P multiaddrs of bootstrap peers.
-- discovery_interval (duration) How often to announce/discover peers. Default: 15s.
-- bootstrap_port (int) Default port for bootstrap nodes. Default: 4001.
-- http_adv_address (string) Advertised HTTP address for RQLite (host:port).
-- raft_adv_address (string) Advertised Raft address (host:port).
-- node_namespace (string) Namespace for node identifiers. Default: "default".
-
-security:
-
-- enable_tls (bool) Enable TLS for externally exposed services. Default: false.
-- private_key_file (string) Path to TLS private key (if TLS enabled).
-- certificate_file (string) Path to TLS certificate (if TLS enabled).
-
-logging:
-
-- level (string) one of "debug", "info", "warn", "error". Default: "info".
-- format (string) "json" or "console". Default: "console".
-- output_file (string) Empty for stdout; otherwise path to log file.
-
-Precedence (node): Flags > YAML > Defaults.
-
-Example node.yaml
-
-```yaml
-node:
-  id: "node2"
-  type: "node"
-  listen_addresses:
-    - "/ip4/0.0.0.0/tcp/4002"
-  data_dir: "./data/node2"
-  max_connections: 50
-
-database:
-  data_dir: "./data/node2/rqlite"
-  replication_factor: 3
-  shard_count: 16
-  max_database_size: 1073741824
-  backup_interval: 24h
-  rqlite_port: 5002
-  rqlite_raft_port: 7002
-  rqlite_join_address: "127.0.0.1:7001"
-
-discovery:
-  bootstrap_peers:
-    - "/ip4/127.0.0.1/tcp/4001/p2p/<YOUR_BOOTSTRAP_PEER_ID>"
-  discovery_interval: 15s
-  bootstrap_port: 4001
-  http_adv_address: "127.0.0.1"
-  raft_adv_address: ""
-  node_namespace: "default"
-
-security:
-  enable_tls: false
-  private_key_file: ""
-  certificate_file: ""
-
-logging:
-  level: "info"
-  format: "console"
-  output_file: ""
+# With bootstrap peers
+network-cli config init --type gateway --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
 ```
 
-#### Gateway YAML (configs/gateway.yaml)
+### Running Multiple Nodes on the Same Machine
 
-- listen_addr (string) HTTP listen address, e.g., ":6001". Default: ":6001".
-- client_namespace (string) Namespace used by the gateway client. Default: "default".
-- bootstrap_peers (string[]) List of bootstrap peer multiaddrs. Default: empty.
+You can run multiple nodes on a single machine by creating separate configuration files and using the `--config` flag:
 
-Precedence (gateway): Flags > Environment Variables > YAML > Defaults.
-Environment variables:
+#### Create Multiple Node Configs
 
-- GATEWAY_ADDR
-- GATEWAY_NAMESPACE
-- GATEWAY_BOOTSTRAP_PEERS (comma-separated)
+```bash
+# Node 1
+./bin/network-cli config init --type node --name node1.yaml \
+  --listen-port 4001 --rqlite-http-port 5001 --rqlite-raft-port 7001 \
+  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
 
-Example gateway.yaml
+# Node 2
+./bin/network-cli config init --type node --name node2.yaml \
+  --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002 \
+  --join localhost:5001 \
+  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
 
-```yaml
-listen_addr: ":6001"
-client_namespace: "default"
-bootstrap_peers:
-  - "<YOUR_BOOTSTRAP_PEER_ID_MULTIADDR>"
+# Node 3
+./bin/network-cli config init --type node --name node3.yaml \
+  --listen-port 4003 --rqlite-http-port 5003 --rqlite-raft-port 7003 \
+  --join localhost:5001 \
+  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
 ```
 
-### Flags & Environment Variables
+#### Run Multiple Nodes in Separate Terminals
 
-- **Flags**: Override config at startup (`--data`, `--p2p-port`, `--rqlite-http-port`, etc.)
-- **Env Vars**: Override config and flags (`NODE_ID`, `RQLITE_PORT`, `BOOTSTRAP_PEERS`, etc.)
-- **Precedence (gateway)**: Flags > Env Vars > YAML > Defaults
-- **Precedence (node)**: Flags > YAML > Defaults
+```bash
+# Terminal 1 - Bootstrap node
+go run ./cmd/node --config bootstrap.yaml
 
-### Bootstrap & Database Endpoints
+# Terminal 2 - Node 1
+go run ./cmd/node --config node1.yaml
 
-- **Bootstrap peers**: Set in config or via `BOOTSTRAP_PEERS` env var.
-- **Database endpoints**: Set in config or via `RQLITE_NODES` env var.
-- **Development mode**: Use `NETWORK_DEV_LOCAL=1` for localhost defaults.
+# Terminal 3 - Node 2
+go run ./cmd/node --config node2.yaml
 
-### Configuration Validation
+# Terminal 4 - Node 3
+go run ./cmd/node --config node3.yaml
+```
+
+#### Or Use Makefile Targets
+
+```bash
+# Terminal 1
+make run-node      # Runs: go run ./cmd/node --config bootstrap.yaml
+
+# Terminal 2
+make run-node2     # Runs: go run ./cmd/node --config node.yaml
+
+# Terminal 3
+make run-node3     # Runs: go run ./cmd/node --config node2.yaml
+```
+
+#### Key Points for Multiple Nodes
+
+- **Each node needs unique ports**: P2P port, RQLite HTTP port, and RQLite Raft port must all be different
+- **Join address**: Non-bootstrap nodes need `rqlite_join_address` pointing to the bootstrap or an existing node
+- **Bootstrap peers**: All nodes need the bootstrap node's multiaddr in `discovery.bootstrap_peers`
+- **Config files**: Store all configs in `~/.debros/` with different filenames
+- **--config flag**: Specify which config file to load (defaults to `node.yaml`)
+
+⚠️ **Common Mistake - Same Ports:**
+If all nodes use the same ports (e.g., 5001, 7001), they will try to bind to the same addresses and fail to communicate. Verify each node has unique ports:
+
+```bash
+# Bootstrap
+grep "rqlite_port\|rqlite_raft_port" ~/.debros/bootstrap.yaml
+# Should show: rqlite_port: 5001, rqlite_raft_port: 7001
+
+# Node 2
+grep "rqlite_port\|rqlite_raft_port" ~/.debros/node.yaml
+# Should show: rqlite_port: 5002, rqlite_raft_port: 7002
+
+# Node 3
+grep "rqlite_port\|rqlite_raft_port" ~/.debros/node2.yaml
+# Should show: rqlite_port: 5003, rqlite_raft_port: 7003
+```
+
+If ports are wrong, regenerate the config with `--force`:
+
+```bash
+./bin/network-cli config init --type node --name node.yaml \
+  --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002 \
+  --join localhost:5001 --bootstrap-peers '<bootstrap_multiaddr>' --force
+```
+
+### Validating Configuration
 
 DeBros Network performs strict validation of all configuration files at startup. This ensures invalid configurations are caught immediately rather than causing silent failures later.
 
@@ -757,4 +755,196 @@ GET  /v1/pubsub/topics     # List active topics
 - **PubSub**
   - WS Subscribe: `GET /v1/pubsub/ws?topic=<topic>`
   - Publish: `POST /v1/pubsub/publish` `{topic, data_base64}` → `{status:"ok"}`
-  - Topics: `GET /v1/pubsub/topics` → `
+  - Topics: `GET /v1/pubsub/topics` → `{topics:[...]}`
+
+---
+
+## Troubleshooting
+
+### Configuration & Permissions
+
+**Error: "Failed to create/access config directory"**
+
+This happens when DeBros cannot access or create `~/.debros/` directory.
+
+**Causes:**
+1. Home directory is not writable
+2. Home directory doesn't exist
+3. Filesystem is read-only (sandboxed/containerized environment)
+4. Permission denied (running with wrong user/umask)
+
+**Solutions:**
+
+```bash
+# Check home directory exists and is writable
+ls -ld ~
+touch ~/test-write && rm ~/test-write
+
+# Check umask (should be 0022 or 0002)
+umask
+
+# If umask is too restrictive, change it
+umask 0022
+
+# Check disk space
+df -h ~
+
+# For containerized environments, ensure /home/<user> is mounted with write permissions
+docker run -v /home:/home --user $(id -u):$(id -g) debros-network
+```
+
+**Error: "Config file not found at ~/.debros/node.yaml"**
+
+The node requires a config file to exist before starting.
+
+**Solution:**
+
+Generate config files first:
+
+```bash
+# Build CLI
+make build
+
+# Generate configs
+./bin/network-cli config init --type bootstrap
+./bin/network-cli config init --type node --bootstrap-peers '<peer_multiaddr>'
+./bin/network-cli config init --type gateway
+```
+
+### Node Startup Issues
+
+**Error: "node.data_dir: parent directory not writable"**
+
+The data directory parent is not accessible.
+
+**Solution:**
+
+Ensure `~/.debros` is writable and has at least 10GB free space:
+
+```bash
+# Check permissions
+ls -ld ~/.debros
+
+# Check available space
+df -h ~/.debros
+
+# Recreate if corrupted
+rm -rf ~/.debros
+./bin/network-cli config init --type bootstrap
+```
+
+**Error: "failed to create data directory"**
+
+The node cannot create its data directory in `~/.debros`.
+
+**Causes:**
+1. `~/.debros` is not writable
+2. Parent directory path in config uses `~` which isn't expanded properly
+3. Disk is full
+
+**Solutions:**
+
+```bash
+# Check ~/.debros exists and is writable
+mkdir -p ~/.debros
+ls -ld ~/.debros
+
+# Verify data_dir in config uses ~ (e.g., ~/.debros/node)
+cat ~/.debros/node.yaml | grep data_dir
+
+# Check disk space
+df -h ~
+
+# Ensure user owns ~/.debros
+chown -R $(whoami) ~/.debros
+
+# Retry node startup
+make run-node
+```
+
+**Error: "stat ~/.debros: no such file or directory"**
+
+**Port Already in Use**
+
+If you get "address already in use" errors:
+
+```bash
+# Find processes using ports
+lsof -i :4001  # P2P port
+lsof -i :5001  # RQLite HTTP
+lsof -i :7001  # RQLite Raft
+
+# Kill if needed
+kill -9 <PID>
+
+# Or use different ports in config
+./bin/network-cli config init --type node --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002
+```
+
+### Common Configuration Errors
+
+**Error: "discovery.bootstrap_peers: required for node type"**
+
+Nodes (non-bootstrap) must specify bootstrap peers to discover the network.
+
+**Solution:**
+
+Generate node config with bootstrap peers:
+
+```bash
+./bin/network-cli config init --type node --bootstrap-peers '/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...'
+```
+
+**Error: "database.rqlite_join_address: required for node type"**
+
+Non-bootstrap nodes must specify which node to join in the Raft cluster.
+
+**Solution:**
+
+Generate config with join address:
+
+```bash
+./bin/network-cli config init --type node --join localhost:5001
+```
+
+**Error: "database.rqlite_raft_port: must differ from database.rqlite_port"**
+
+HTTP and Raft ports cannot be the same.
+
+**Solution:**
+
+Use different ports (RQLite HTTP and Raft must be on different ports):
+
+```bash
+./bin/network-cli config init --type node \
+  --rqlite-http-port 5001 \
+  --rqlite-raft-port 7001
+```
+
+### Peer Discovery Issues
+
+If nodes can't find each other:
+
+1. **Verify bootstrap node is running:**
+   ```bash
+   ./bin/network-cli health
+   ./bin/network-cli peers
+   ```
+
+2. **Check bootstrap peer multiaddr is correct:**
+   ```bash
+   cat ~/.debros/bootstrap/peer.info  # On bootstrap node
+   # Should match value in other nodes' discovery.bootstrap_peers
+   ```
+
+3. **Ensure all nodes have same bootstrap peers in config**
+
+4. **Check firewall/network:**
+   ```bash
+   # Verify P2P port is open
+   nc -zv 127.0.0.1 4001
+   ```
+
+---
+
+## License

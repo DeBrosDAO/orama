@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
@@ -29,15 +31,8 @@ func setup_logger(component logging.Component) (logger *logging.ColoredLogger) {
 }
 
 // parse_flags parses command-line flags and returns them.
-func parse_flags() (configPath, dataDir, nodeID *string, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr, advAddr *string, help *bool) {
-	configPath = flag.String("config", "", "Path to config YAML file (overrides defaults)")
-	dataDir = flag.String("data", "", "Data directory (auto-detected if not provided)")
-	nodeID = flag.String("id", "", "Node identifier (for running multiple local nodes)")
-	p2pPort = flag.Int("p2p-port", 4001, "LibP2P listen port")
-	rqlHTTP = flag.Int("rqlite-http-port", 5001, "RQLite HTTP API port")
-	rqlRaft = flag.Int("rqlite-raft-port", 7001, "RQLite Raft port")
-	rqlJoinAddr = flag.String("rqlite-join-address", "", "RQLite address to join (e.g., /ip4/)")
-	advAddr = flag.String("adv-addr", "127.0.0.1", "Default Advertise address for rqlite and rafts")
+func parse_flags() (configName *string, help *bool) {
+	configName = flag.String("config", "node.yaml", "Config filename in ~/.debros (default: node.yaml)")
 	help = flag.Bool("help", false, "Show help")
 	flag.Parse()
 
@@ -67,18 +62,39 @@ func check_if_should_open_help(help *bool) {
 	}
 }
 
-// select_data_dir selects the data directory for the node
-// If none of (hasConfigFile, nodeID, dataDir) are present, throw an error and do not start
-func select_data_dir(dataDir *string, nodeID *string, hasConfigFile bool) {
+// select_data_dir validates that we can load the config from ~/.debros
+func select_data_dir_check(configName *string) {
 	logger := setup_logger(logging.ComponentNode)
 
-	if !hasConfigFile && (*nodeID == "" || nodeID == nil) && (*dataDir == "" || dataDir == nil) {
-		logger.Error("No config file, node ID, or data directory specified. Please provide at least one. Refusing to start.")
+	// Ensure config directory exists and is writable
+	_, err := config.EnsureConfigDir()
+	if err != nil {
+		logger.Error("Failed to ensure config directory", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
+		fmt.Fprintf(os.Stderr, "Failed to create/access config directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\nPlease ensure:\n")
+		fmt.Fprintf(os.Stderr, "  1. Home directory is accessible: %s\n", os.ExpandEnv("~"))
+		fmt.Fprintf(os.Stderr, "  2. You have write permissions to home directory\n")
+		fmt.Fprintf(os.Stderr, "  3. Disk space is available\n")
 		os.Exit(1)
 	}
 
-	if *dataDir != "" {
-		logger.Info("Data directory selected: %s", zap.String("dataDir", *dataDir))
+	configPath, err := config.DefaultPath(*configName)
+	if err != nil {
+		logger.Error("Failed to determine config path", zap.Error(err))
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(configPath); err != nil {
+		logger.Error("Config file not found",
+			zap.String("path", configPath),
+			zap.Error(err))
+		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
+		fmt.Fprintf(os.Stderr, "Config file not found at %s\n", configPath)
+		fmt.Fprintf(os.Stderr, "\nGenerate it with one of:\n")
+		fmt.Fprintf(os.Stderr, "  network-cli config init --type bootstrap\n")
+		fmt.Fprintf(os.Stderr, "  network-cli config init --type node --bootstrap-peers '<peer_multiaddr>'\n")
+		os.Exit(1)
 	}
 }
 
@@ -97,9 +113,21 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 		return err
 	}
 
+	// Expand data directory path for peer.info file
+	dataDir := os.ExpandEnv(cfg.Node.DataDir)
+	if strings.HasPrefix(dataDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			logger.Error("failed to determine home directory: %v", zap.Error(err))
+			dataDir = cfg.Node.DataDir
+		} else {
+			dataDir = filepath.Join(home, dataDir[1:])
+		}
+	}
+
 	// Save the peer ID to a file for CLI access (especially useful for bootstrap)
 	peerID := n.GetPeerID()
-	peerInfoFile := filepath.Join(cfg.Node.DataDir, "peer.info")
+	peerInfoFile := filepath.Join(dataDir, "peer.info")
 	peerMultiaddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d/p2p/%s", port, peerID)
 
 	if err := os.WriteFile(peerInfoFile, []byte(peerMultiaddr), 0644); err != nil {
@@ -168,53 +196,106 @@ func printValidationErrors(errs []error) {
 	os.Exit(1)
 }
 
+// ensureDataDirectories ensures that all necessary data directories exist and have correct permissions.
+func ensureDataDirectories(cfg *config.Config, logger *logging.ColoredLogger) error {
+	// Expand ~ in data_dir path
+	dataDir := os.ExpandEnv(cfg.Node.DataDir)
+	if strings.HasPrefix(dataDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		dataDir = filepath.Join(home, dataDir[1:])
+	}
+
+	// Ensure Node.DataDir exists and is writable
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory %s: %w", dataDir, err)
+	}
+	logger.ComponentInfo(logging.ComponentNode, "Data directory created/verified", zap.String("path", dataDir))
+
+	// Ensure RQLite data directory exists
+	rqliteDir := filepath.Join(dataDir, "rqlite")
+	if err := os.MkdirAll(rqliteDir, 0755); err != nil {
+		return fmt.Errorf("failed to create rqlite data directory: %w", err)
+	}
+	logger.ComponentInfo(logging.ComponentNode, "RQLite data directory created/verified", zap.String("path", rqliteDir))
+
+	return nil
+}
+
 func main() {
 	logger := setup_logger(logging.ComponentNode)
 
 	// Parse command-line flags
-	configPath, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, help := parse_flags()
+	configName, help := parse_flags()
 
 	check_if_should_open_help(help)
-	select_data_dir(dataDir, nodeID, *configPath != "")
 
-	// Load configuration
-	var cfg *config.Config
-	if *configPath != "" {
-		// Load from YAML with strict decoding
-		var err error
-		cfg, err = LoadConfigFromYAML(*configPath)
-		if err != nil {
-			logger.Error("Failed to load config from YAML", zap.Error(err))
-			fmt.Fprintf(os.Stderr, "Configuration load error: %v\n", err)
-			os.Exit(1)
-		}
-		logger.ComponentInfo(logging.ComponentNode, "Configuration loaded from YAML file", zap.String("path", *configPath))
-	} else {
-		// Use default configuration
-		cfg = config.DefaultConfig()
-		logger.ComponentInfo(logging.ComponentNode, "Default configuration loaded successfully")
+	// Check if config file exists
+	select_data_dir_check(configName)
+
+	// Load configuration from ~/.debros/node.yaml
+	configPath, err := config.DefaultPath(*configName)
+	if err != nil {
+		logger.Error("Failed to determine config path", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Apply command-line flag overrides
-	apply_flag_overrides(cfg, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, dataDir)
-	logger.ComponentInfo(logging.ComponentNode, "Command line arguments applied to configuration")
+	var cfg *config.Config
+	var cfgErr error
+	cfg, cfgErr = LoadConfigFromYAML(configPath)
+	if cfgErr != nil {
+		logger.Error("Failed to load config from YAML", zap.Error(cfgErr))
+		fmt.Fprintf(os.Stderr, "Configuration load error: %v\n", cfgErr)
+		os.Exit(1)
+	}
+	logger.ComponentInfo(logging.ComponentNode, "Configuration loaded from YAML file", zap.String("path", configPath))
+
+	// Set default advertised addresses if empty
+	if cfg.Discovery.HttpAdvAddress == "" {
+		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("127.0.0.1:%d", cfg.Database.RQLitePort)
+	}
+	if cfg.Discovery.RaftAdvAddress == "" {
+		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("127.0.0.1:%d", cfg.Database.RQLiteRaftPort)
+	}
 
 	// Validate configuration
 	if errs := cfg.Validate(); len(errs) > 0 {
 		printValidationErrors(errs)
 	}
 
-	// LibP2P uses configurable port (default 4001); RQLite uses 5001 (HTTP) and 7001 (Raft)
-	port := *p2pPort
+	// Expand and create data directories
+	if err := ensureDataDirectories(cfg, logger); err != nil {
+		logger.Error("Failed to create data directories", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "\n❌ Data Directory Error:\n")
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
 
 	logger.ComponentInfo(logging.ComponentNode, "Node configuration summary",
 		zap.Strings("listen_addresses", cfg.Node.ListenAddresses),
 		zap.Int("rqlite_http_port", cfg.Database.RQLitePort),
 		zap.Int("rqlite_raft_port", cfg.Database.RQLiteRaftPort),
-		zap.Int("p2p_port", port),
 		zap.Strings("bootstrap_peers", cfg.Discovery.BootstrapPeers),
 		zap.String("rqlite_join_address", cfg.Database.RQLiteJoinAddress),
 		zap.String("data_directory", cfg.Node.DataDir))
+
+	// Extract P2P port from listen addresses
+	p2pPort := 4001 // default
+	if len(cfg.Node.ListenAddresses) > 0 {
+		// Parse port from multiaddr like "/ip4/0.0.0.0/tcp/4001"
+		parts := strings.Split(cfg.Node.ListenAddresses[0], "/")
+		for i, part := range parts {
+			if part == "tcp" && i+1 < len(parts) {
+				if port, err := strconv.Atoi(parts[i+1]); err == nil {
+					p2pPort = port
+					break
+				}
+			}
+		}
+	}
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -224,7 +305,7 @@ func main() {
 	errChan := make(chan error, 1)
 	doneChan := make(chan struct{})
 	go func() {
-		if err := startNode(ctx, cfg, port); err != nil {
+		if err := startNode(ctx, cfg, p2pPort); err != nil {
 			errChan <- err
 		}
 		close(doneChan)

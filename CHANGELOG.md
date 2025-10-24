@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Changed
 
 - Updated readme
+- Where we read .yaml files from and where data is saved to ~/.debros
 
 ### Deprecated
 
