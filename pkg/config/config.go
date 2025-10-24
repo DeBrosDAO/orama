@@ -108,12 +108,7 @@ func DefaultConfig() *Config {
 			RQLiteJoinAddress: "", // Empty for bootstrap node
 		},
 		Discovery: DiscoveryConfig{
-			BootstrapPeers: []string{
-				"/ip4/217.76.54.178/tcp/4001/p2p/12D3KooWKZnirPwNT4URtNSWK45f6vLkEs4xyUZ792F8Uj1oYnm1",
-				"/ip4/51.83.128.181/tcp/4001/p2p/12D3KooWBn2Zf1R8v9pEfmz7hDZ5b3oADxfejA3zJBYzKRCzgvhR",
-				"/ip4/155.133.27.199/tcp/4001/p2p/12D3KooWC69SBzM5QUgrLrfLWUykE8au32X5LwT7zwv9bixrQPm1",
-				"/ip4/217.76.56.2/tcp/4001/p2p/12D3KooWEiqJHvznxqJ5p2y8mUs6Ky6dfU1xTYFQbyKRCABfcZz4",
-			},
+			BootstrapPeers:    []string{},
 			BootstrapPort:     4001,             // Default LibP2P port
 			DiscoveryInterval: time.Second * 15, // Back to 15 seconds for testing
 			HttpAdvAddress:    "",

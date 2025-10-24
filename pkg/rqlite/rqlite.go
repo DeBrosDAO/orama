@@ -69,8 +69,18 @@ func NewRQLiteManager(cfg *config.DatabaseConfig, discoveryCfg *config.Discovery
 
 // Start starts the RQLite node
 func (r *RQLiteManager) Start(ctx context.Context) error {
+	// Expand ~ in data directory path
+	dataDir := os.ExpandEnv(r.dataDir)
+	if strings.HasPrefix(dataDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		dataDir = filepath.Join(home, dataDir[1:])
+	}
+
 	// Create data directory
-	rqliteDataDir := filepath.Join(r.dataDir, "rqlite")
+	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	if err := os.MkdirAll(rqliteDataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create RQLite data directory: %w", err)
 	}
@@ -100,7 +110,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		}
 
 		// Wait for join target to become reachable to avoid forming a separate cluster (wait indefinitely)
-		if err := r.waitForJoinTarget(ctx, joinArg, 0); err != nil {
+		if err := r.waitForJoinTarget(ctx, r.config.RQLiteJoinAddress, 0); err != nil {
 			r.logger.Warn("Join target did not become reachable within timeout; will still attempt to join",
 				zap.String("join_address", r.config.RQLiteJoinAddress),
 				zap.Error(err))
@@ -126,7 +136,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	// Start RQLite process (not bound to ctx for graceful Stop handling)
 	r.cmd = exec.Command("rqlited", args...)
 
-	// Uncomment if you want to see the stdout/stderr of the RQLite process
+	// Enable debug logging of RQLite process to help diagnose issues
 	// r.cmd.Stdout = os.Stdout
 	// r.cmd.Stderr = os.Stderr
 
@@ -166,7 +176,15 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		}
 	} else {
 		r.logger.Info("Waiting for RQLite SQL availability (leader discovery)")
-		if err := r.waitForSQLAvailable(ctx); err != nil {
+		// For joining nodes, wait longer for SQL availability
+		sqlCtx := ctx
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			// If no deadline in context, create one for SQL availability check
+			var cancel context.CancelFunc
+			sqlCtx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+		}
+		if err := r.waitForSQLAvailable(sqlCtx); err != nil {
 			if r.cmd != nil && r.cmd.Process != nil {
 				_ = r.cmd.Process.Kill()
 			}
@@ -207,7 +225,9 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	for i := 0; i < 30; i++ {
+	// Give joining nodes more time (120 seconds vs 30)
+	maxAttempts := 30
+	for i := 0; i < maxAttempts; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -16,6 +16,26 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+## [0.51.5] - 2025-10-24
+
+### Added
+
+- Added validation for yaml files
+- Added authenticaiton command on cli
+
+### Changed
+
+- Updated readme
+- Where we read .yaml files from and where data is saved to ~/.debros
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- Regular nodes rqlite not starting 
+
 ## [0.51.2] - 2025-09-26
 
 ### Added
