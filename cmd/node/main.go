@@ -4,8 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,7 +13,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/node"
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 // setup_logger initializes a logger for the given component.
@@ -24,16 +21,15 @@ func setup_logger(component logging.Component) (logger *logging.ColoredLogger) {
 
 	logger, err = logging.NewColoredLogger(component, true)
 	if err != nil {
-		log.Fatalf("Failed to create logger: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to create logger: %v\n", err)
+		os.Exit(1)
 	}
 
 	return logger
 }
 
-// parse_and_return_network_flags it initializes all the network flags coming from the .yaml files
-func parse_and_return_network_flags() (configPath *string, dataDir, nodeID *string, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr *string, advAddr *string, help *bool) {
-	logger := setup_logger(logging.ComponentNode)
-
+// parse_flags parses command-line flags and returns them.
+func parse_flags() (configPath, dataDir, nodeID *string, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr, advAddr *string, help *bool) {
 	configPath = flag.String("config", "", "Path to config YAML file (overrides defaults)")
 	dataDir = flag.String("data", "", "Data directory (auto-detected if not provided)")
 	nodeID = flag.String("id", "", "Node identifier (for running multiple local nodes)")
@@ -45,54 +41,20 @@ func parse_and_return_network_flags() (configPath *string, dataDir, nodeID *stri
 	help = flag.Bool("help", false, "Show help")
 	flag.Parse()
 
-	logger.Info("Successfully parsed all flags and arguments.")
-
-	if *configPath != "" {
-		cfg, err := LoadConfigFromYAML(*configPath)
-		if err != nil {
-			logger.Error("Failed to load config from YAML", zap.Error(err))
-			os.Exit(1)
-		}
-		logger.ComponentInfo(logging.ComponentNode, "Configuration loaded from YAML file", zap.String("path", *configPath))
-
-		// Instead of returning flag values, return config values
-		// For ListenAddresses, extract port from multiaddr string if possible, else use default
-		var p2pPortVal int
-		if len(cfg.Node.ListenAddresses) > 0 {
-			// Try to parse port from multiaddr string
-			var port int
-			_, err := fmt.Sscanf(cfg.Node.ListenAddresses[0], "/ip4/0.0.0.0/tcp/%d", &port)
-			if err == nil {
-				p2pPortVal = port
-			} else {
-				p2pPortVal = 4001
-			}
-		} else {
-			p2pPortVal = 4001
-		}
-		return configPath,
-			&cfg.Node.DataDir,
-			&cfg.Node.ID,
-			&p2pPortVal,
-			&cfg.Database.RQLitePort,
-			&cfg.Database.RQLiteRaftPort,
-			&cfg.Database.RQLiteJoinAddress,
-			&cfg.Discovery.HttpAdvAddress,
-			help
-	}
-
 	return
 }
 
-// LoadConfigFromYAML loads a config from a YAML file
+// LoadConfigFromYAML loads a config from a YAML file using strict decoding.
 func LoadConfigFromYAML(path string) (*config.Config, error) {
-	data, err := ioutil.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, fmt.Errorf("failed to open config file: %w", err)
 	}
+	defer file.Close()
+
 	var cfg config.Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal YAML: %w", err)
+	if err := config.DecodeStrict(file, &cfg); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }
@@ -101,7 +63,7 @@ func LoadConfigFromYAML(path string) (*config.Config, error) {
 func check_if_should_open_help(help *bool) {
 	if *help {
 		flag.Usage()
-		return
+		os.Exit(0)
 	}
 }
 
@@ -115,7 +77,9 @@ func select_data_dir(dataDir *string, nodeID *string, hasConfigFile bool) {
 		os.Exit(1)
 	}
 
-	logger.Info("Successfully selected Data Directory of: %s", zap.String("dataDir", *dataDir))
+	if *dataDir != "" {
+		logger.Info("Data directory selected: %s", zap.String("dataDir", *dataDir))
+	}
 }
 
 // startNode starts the node with the given configuration and port
@@ -125,10 +89,12 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 	n, err := node.NewNode(cfg)
 	if err != nil {
 		logger.Error("failed to create node: %v", zap.Error(err))
+		return err
 	}
 
 	if err := n.Start(ctx); err != nil {
 		logger.Error("failed to start node: %v", zap.Error(err))
+		return err
 	}
 
 	// Save the peer ID to a file for CLI access (especially useful for bootstrap)
@@ -152,8 +118,8 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 	return n.Stop()
 }
 
-// load_args_into_config applies command line argument overrides to the config
-func load_args_into_config(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr *string, advAddr *string, dataDir *string) {
+// apply_flag_overrides applies command line argument overrides to the config
+func apply_flag_overrides(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr *string, advAddr *string, dataDir *string) {
 	logger := setup_logger(logging.ComponentNode)
 
 	// Apply RQLite HTTP port override
@@ -183,8 +149,8 @@ func load_args_into_config(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, r
 	}
 
 	if *advAddr != "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("%s:%d", *advAddr, *rqlHTTP)
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("%s:%d", *advAddr, *rqlRaft)
+		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("%s:%d", *advAddr, cfg.Database.RQLitePort)
+		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("%s:%d", *advAddr, cfg.Database.RQLiteRaftPort)
 	}
 
 	if *dataDir != "" {
@@ -192,22 +158,51 @@ func load_args_into_config(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, r
 	}
 }
 
+// printValidationErrors prints aggregated validation errors and exits.
+func printValidationErrors(errs []error) {
+	fmt.Fprintf(os.Stderr, "\nConfiguration errors (%d):\n", len(errs))
+	for _, err := range errs {
+		fmt.Fprintf(os.Stderr, "  - %s\n", err)
+	}
+	fmt.Fprintf(os.Stderr, "\nPlease fix the configuration and try again.\n")
+	os.Exit(1)
+}
+
 func main() {
 	logger := setup_logger(logging.ComponentNode)
 
-	configPath, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, help := parse_and_return_network_flags()
+	// Parse command-line flags
+	configPath, dataDir, nodeID, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, help := parse_flags()
 
 	check_if_should_open_help(help)
 	select_data_dir(dataDir, nodeID, *configPath != "")
 
-	// Load Node Configuration
+	// Load configuration
 	var cfg *config.Config
-	cfg = config.DefaultConfig()
-	logger.ComponentInfo(logging.ComponentNode, "Default configuration loaded successfully")
+	if *configPath != "" {
+		// Load from YAML with strict decoding
+		var err error
+		cfg, err = LoadConfigFromYAML(*configPath)
+		if err != nil {
+			logger.Error("Failed to load config from YAML", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "Configuration load error: %v\n", err)
+			os.Exit(1)
+		}
+		logger.ComponentInfo(logging.ComponentNode, "Configuration loaded from YAML file", zap.String("path", *configPath))
+	} else {
+		// Use default configuration
+		cfg = config.DefaultConfig()
+		logger.ComponentInfo(logging.ComponentNode, "Default configuration loaded successfully")
+	}
 
-	// Apply command line argument overrides
-	load_args_into_config(cfg, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, dataDir)
+	// Apply command-line flag overrides
+	apply_flag_overrides(cfg, p2pPort, rqlHTTP, rqlRaft, rqlJoinAddr, advAddr, dataDir)
 	logger.ComponentInfo(logging.ComponentNode, "Command line arguments applied to configuration")
+
+	// Validate configuration
+	if errs := cfg.Validate(); len(errs) > 0 {
+		printValidationErrors(errs)
+	}
 
 	// LibP2P uses configurable port (default 4001); RQLite uses 5001 (HTTP) and 7001 (Raft)
 	port := *p2pPort
@@ -219,7 +214,7 @@ func main() {
 		zap.Int("p2p_port", port),
 		zap.Strings("bootstrap_peers", cfg.Discovery.BootstrapPeers),
 		zap.String("rqlite_join_address", cfg.Database.RQLiteJoinAddress),
-		zap.String("data_directory", *dataDir))
+		zap.String("data_directory", cfg.Node.DataDir))
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

@@ -185,20 +185,21 @@ sudo journalctl -u debros-node.service -f
 ```yaml
 node:
   id: ""
+  type: "bootstrap"
   listen_addresses:
     - "/ip4/0.0.0.0/tcp/4001"
   data_dir: "./data/bootstrap"
   max_connections: 100
 
 database:
-  data_dir: "./data/db"
+  data_dir: "./data/bootstrap/rqlite"
   replication_factor: 3
   shard_count: 16
   max_database_size: 1073741824
   backup_interval: 24h
   rqlite_port: 5001
   rqlite_raft_port: 7001
-  rqlite_join_address: "" # Bootstrap node does not join
+  rqlite_join_address: ""
 
 discovery:
   bootstrap_peers: []
@@ -223,20 +224,21 @@ logging:
 ```yaml
 node:
   id: "node2"
+  type: "node"
   listen_addresses:
     - "/ip4/0.0.0.0/tcp/4002"
   data_dir: "./data/node2"
   max_connections: 50
 
 database:
-  data_dir: "./data/db"
+  data_dir: "./data/node2/rqlite"
   replication_factor: 3
   shard_count: 16
   max_database_size: 1073741824
   backup_interval: 24h
   rqlite_port: 5002
   rqlite_raft_port: 7002
-  rqlite_join_address: "http://127.0.0.1:5001"
+  rqlite_join_address: "127.0.0.1:7001"
 
 discovery:
   bootstrap_peers:
@@ -280,7 +282,7 @@ database:
 - backup_interval (duration) e.g., "24h". Default: 24h.
 - rqlite_port (int) RQLite HTTP API port. Default: 5001.
 - rqlite_raft_port (int) RQLite Raft port. Default: 7001.
-- rqlite_join_address (string) HTTP address of an existing RQLite node to join. Empty for bootstrap.
+- rqlite_join_address (string) Raft address of an existing RQLite node to join (host:port format). Empty for bootstrap.
 
 discovery:
 
@@ -310,25 +312,25 @@ Example node.yaml
 ```yaml
 node:
   id: "node2"
+  type: "node"
   listen_addresses:
     - "/ip4/0.0.0.0/tcp/4002"
   data_dir: "./data/node2"
   max_connections: 50
-  disable_anonrc: true
 
 database:
-  data_dir: "./data/db"
+  data_dir: "./data/node2/rqlite"
   replication_factor: 3
   shard_count: 16
   max_database_size: 1073741824
   backup_interval: 24h
-  rqlite_port: 5001
-  rqlite_raft_port: 7001
-  rqlite_join_address: "http://127.0.0.1:5001"
+  rqlite_port: 5002
+  rqlite_raft_port: 7002
+  rqlite_join_address: "127.0.0.1:7001"
 
 discovery:
   bootstrap_peers:
-    - "<YOUR_BOOTSTRAP_PEER_ID_MULTIADDR>"
+    - "/ip4/127.0.0.1/tcp/4001/p2p/<YOUR_BOOTSTRAP_PEER_ID>"
   discovery_interval: 15s
   bootstrap_port: 4001
   http_adv_address: "127.0.0.1"
@@ -339,7 +341,6 @@ security:
   enable_tls: false
   private_key_file: ""
   certificate_file: ""
-  auth_enabled: false
 
 logging:
   level: "info"
@@ -381,6 +382,64 @@ bootstrap_peers:
 - **Bootstrap peers**: Set in config or via `BOOTSTRAP_PEERS` env var.
 - **Database endpoints**: Set in config or via `RQLITE_NODES` env var.
 - **Development mode**: Use `NETWORK_DEV_LOCAL=1` for localhost defaults.
+
+### Configuration Validation
+
+DeBros Network performs strict validation of all configuration files at startup. This ensures invalid configurations are caught immediately rather than causing silent failures later.
+
+#### Validation Features
+
+- **Strict YAML Parsing:** Unknown configuration keys are rejected with helpful error messages
+- **Format Validation:** Multiaddrs, ports, durations, and other formats are validated for correctness
+- **Cross-Field Validation:** Configuration constraints (e.g., bootstrap nodes don't join clusters) are enforced
+- **Aggregated Error Reporting:** All validation errors are reported together, not one-by-one
+
+#### Common Validation Errors
+
+**Missing or Invalid `node.type`**
+```
+node.type: must be one of [bootstrap node]; got "invalid"
+```
+Solution: Set `type: "bootstrap"` or `type: "node"`
+
+**Invalid Bootstrap Peer Format**
+```
+discovery.bootstrap_peers[0]: invalid multiaddr; expected /ip{4,6}/.../tcp/<port>/p2p/<peerID>
+discovery.bootstrap_peers[0]: missing /p2p/<peerID> component
+```
+Solution: Use full multiaddr format: `/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...`
+
+**Port Conflicts**
+```
+database.rqlite_raft_port: must differ from database.rqlite_port (5001)
+```
+Solution: Use different ports for HTTP and Raft (e.g., 5001 and 7001)
+
+**RQLite Join Address Issues (Nodes)**
+```
+database.rqlite_join_address: required for node type (non-bootstrap)
+database.rqlite_join_address: invalid format; expected host:port
+```
+Solution: Non-bootstrap nodes must specify where to join the cluster. Use Raft port: `127.0.0.1:7001`
+
+**Bootstrap Nodes Cannot Join**
+```
+database.rqlite_join_address: must be empty for bootstrap type
+```
+Solution: Bootstrap nodes should have `rqlite_join_address: ""`
+
+**Invalid Listen Addresses**
+```
+node.listen_addresses[0]: invalid TCP port 99999; port must be between 1 and 65535
+```
+Solution: Use valid ports [1-65535], e.g., `/ip4/0.0.0.0/tcp/4001`
+
+**Unknown Configuration Keys**
+```
+invalid config: yaml: unmarshal errors:
+  line 42: field migrations_path not found in type config.DatabaseConfig
+```
+Solution: Remove unsupported keys. Supported keys are documented in the YAML Reference section above.
 
 ---
 
@@ -744,8 +803,6 @@ ws.send("Hello, network!");
 
 ## Development
 
-</text>
-
 ### Project Structure
 
 ```
@@ -923,195 +980,4 @@ if err := client.FindOneBy(ctx, &u, "users", map[string]any{"email": "alice@exam
 `Save` inserts if PK is zero, otherwise updates by PK.
 `Remove` deletes by PK.
 
-```go
-// Insert (ID is zero)
-u := &User{Email: "bob@example.com", FirstName: "Bob"}
-_ = client.Save(ctx, u) // INSERT; sets u.ID if autoincrement
-
-// Update (ID is non-zero)
-u.FirstName = "Bobby"
-_ = client.Save(ctx, u) // UPDATE ... WHERE id = ?
-
-// Remove
-_ = client.Remove(ctx, u) // DELETE ... WHERE id = ?
-
 ```
-
-### transactions
-
-Run multiple operations atomically. If your function returns an error, the transaction is rolled back; otherwise it commits.
-
-```go
-err := client.Tx(ctx, func(tx rqlite.Tx) error {
-	// Read inside the same transaction
-	var me User
-	if err := tx.Query(ctx, &me, "SELECT * FROM users WHERE id = ?", 1); err != nil {
-		return err
-	}
-
-	// Write inside the same transaction
-	me.LastName = "Updated"
-	if err := tx.Save(ctx, &me); err != nil {
-		return err
-	}
-
-	// Complex query via builder
-	var recent []User
-	if err := tx.CreateQueryBuilder("users").
-		OrderBy("created_at DESC").
-		Limit(5).
-		GetMany(ctx, &recent); err != nil {
-		return err
-	}
-
-	return nil // commit
-})
-
-```
-
-### Repositories (optional, generic)
-
-Strongly-typed convenience layer bound to a table:
-
-```go
-repo := client.Repository[User]("users")
-
-var many []User
-_ = repo.Find(ctx, &many, map[string]any{"last_name": "A"}, rqlite.WithOrderBy("created_at DESC"), rqlite.WithLimit(10))
-
-var one User
-_ = repo.FindOne(ctx, &one, map[string]any{"email": "alice@example.com"})
-
-_ = repo.Save(ctx, &one)
-_ = repo.Remove(ctx, &one)
-
-```
-
-### Migrations
-
-Option A: From the node (after rqlite is ready)
-
-```go
-ctx := context.Background()
-dirs := []string{
-    "network/migrations",           // default
-    "path/to/your/app/migrations",  // extra
-}
-
-if err := rqliteManager.ApplyMigrationsDirs(ctx, dirs); err != nil {
-    logger.Fatal("apply migrations failed", zap.Error(err))
-}
-```
-
-Option B: Using the adapter sql.DB
-
-```go
-ctx := context.Background()
-db := adapter.GetSQLDB()
-dirs := []string{"network/migrations", "app/migrations"}
-
-if err := rqlite.ApplyMigrationsDirs(ctx, db, dirs, logger); err != nil {
-    logger.Fatal("apply migrations failed", zap.Error(err))
-}
-```
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-#### Bootstrap Connection Failed
-
-- **Symptoms:** `Failed to connect to bootstrap peer`
-- **Solutions:** Check node is running, firewall settings, peer ID validity.
-
-#### Database Operations Timeout
-
-- **Symptoms:** `Query timeout` or `No RQLite connection available`
-- **Solutions:** Ensure RQLite ports are open, leader election completed, cluster join config correct.
-
-#### Message Delivery Failures
-
-- **Symptoms:** Messages not received by subscribers
-- **Solutions:** Verify topic names, active subscriptions, network connectivity.
-
-#### High Memory Usage
-
-- **Symptoms:** Memory usage grows continuously
-- **Solutions:** Unsubscribe when done, monitor connection pool, review message retention.
-
-#### Authentication Issues
-
-- **Symptoms:** `Authentication failed`, `Invalid wallet signature`, `JWT token expired`
-- **Solutions:**
-  - Check wallet signature format (65-byte r||s||v hex)
-  - Ensure nonce matches exactly during wallet verification
-  - Verify wallet address case-insensitivity
-  - Use refresh endpoint or re-authenticate for expired tokens
-  - Clear credential cache if multi-wallet conflicts occur: `rm -rf ~/.debros/credentials`
-
-#### Gateway Issues
-
-- **Symptoms:** `Gateway connection refused`, `CORS errors`, `WebSocket disconnections`
-- **Solutions:**
-  - Verify gateway is running and accessible on configured port
-  - Check CORS configuration for web applications
-  - Ensure proper authentication headers for protected endpoints
-  - Verify namespace configuration and enforcement
-
-#### Database Migration Issues
-
-- **Symptoms:** `Migration failed`, `SQL syntax error`, `Version conflict`
-- **Solutions:**
-  - Check SQL syntax in migration files
-  - Ensure proper statement termination
-  - Verify migration file naming and sequential order
-  - Review migration logs for transaction rollbacks
-
-### Debugging & Health Checks
-
-```bash
-export LOG_LEVEL=debug
-./bin/network-cli health
-./bin/network-cli peers
-./bin/network-cli query "SELECT 1"
-./bin/network-cli pubsub publish test "hello"
-./bin/network-cli pubsub subscribe test 10s
-
-# Gateway health checks
-curl http://localhost:6001/health
-curl http://localhost:6001/v1/status
-```
-
-### Service Logs
-
-```bash
-# Node service logs
-sudo journalctl -u debros-node.service --since "1 hour ago"
-
-# Gateway service logs (if running as service)
-sudo journalctl -u debros-gateway.service --since "1 hour ago"
-
-# Application logs
-tail -f ./logs/gateway.log
-tail -f ./logs/node.log
-```
-
----
-
-## License
-
-Distributed under the MIT License. See [LICENSE](LICENSE) for details.
-
----
-
-## Further Reading
-
-- [DeBros Network Documentation](https://network.debros.io/docs/)
-- [RQLite Documentation](https://github.com/rqlite/rqlite)
-- [LibP2P Documentation](https://libp2p.io)
-
----
-
-_This README reflects the latest architecture, configuration, and operational practices for the DeBros Network. For questions or contributions, please open an issue or pull request._
