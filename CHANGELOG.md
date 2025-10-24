@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+- LibP2P added support over NAT
+
 ### Changed
 
 ### Deprecated

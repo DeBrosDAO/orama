@@ -16,7 +16,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
-	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
@@ -81,6 +80,39 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	n.rqliteAdapter = adapter
 
 	return nil
+}
+
+// bootstrapPeerSource returns a PeerSource that yields peers from BootstrapPeers.
+func bootstrapPeerSource(bootstrapAddrs []string, logger *zap.Logger) func(context.Context, int) <-chan peer.AddrInfo {
+    return func(ctx context.Context, num int) <-chan peer.AddrInfo {
+        out := make(chan peer.AddrInfo, num)
+        go func() {
+            defer close(out)
+            count := 0
+            for _, s := range bootstrapAddrs {
+                if count >= num {
+                    return
+                }
+                ma, err := multiaddr.NewMultiaddr(s)
+                if err != nil {
+                    logger.Debug("invalid bootstrap multiaddr", zap.String("addr", s), zap.Error(err))
+                    continue
+                }
+                ai, err := peer.AddrInfoFromP2pAddr(ma)
+                if err != nil {
+                    logger.Debug("failed to parse bootstrap peer", zap.String("addr", s), zap.Error(err))
+                    continue
+                }
+                select {
+                case out <- *ai:
+                    count++
+                case <-ctx.Done():
+                    return
+                }
+            }
+        }()
+        return out
+    }
 }
 
 // hasBootstrapConnections checks if we're connected to any bootstrap peers
@@ -212,30 +244,26 @@ func (n *Node) connectToBootstrapPeers(ctx context.Context) error {
 func (n *Node) startLibP2P() error {
 	n.logger.ComponentInfo(logging.ComponentLibP2P, "Starting LibP2P host")
 
-	// Get listen addresses
-	listenAddrs, err := n.config.ParseMultiaddrs()
-	if err != nil {
-		return fmt.Errorf("failed to parse listen addresses: %w", err)
-	}
-
 	// Load or create persistent identity
 	identity, err := n.loadOrCreateIdentity()
 	if err != nil {
 		return fmt.Errorf("failed to load identity: %w", err)
 	}
 
-	// Create LibP2P host with persistent identity
-	// Build options allowing conditional proxying via Anyone SOCKS5
+	// Create LibP2P host with NAT traversal support
 	var opts []libp2p.Option
 	opts = append(opts,
 		libp2p.Identity(identity),
-		libp2p.ListenAddrs(listenAddrs...),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
+		libp2p.EnableNATService(),
+		libp2p.EnableAutoNATv2(),
+		libp2p.EnableRelay(),
+		libp2p.NATPortMap(),
+		libp2p.EnableAutoRelayWithPeerSource(
+			bootstrapPeerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
+		),
 	)
-
-	// TCP transport with optional SOCKS5 dialer override
-	opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
