@@ -631,7 +631,7 @@ func handleConfigInit(args []string) {
 	// Parse flags
 	var (
 		cfgType        = "node"
-		name           = "node.yaml"
+		name           = "" // Will be set based on type if not provided
 		id             string
 		listenPort     = 4001
 		rqliteHTTPPort = 5001
@@ -700,6 +700,18 @@ func handleConfigInit(args []string) {
 		os.Exit(1)
 	}
 
+	// Set default name based on type if not provided
+	if name == "" {
+		switch cfgType {
+		case "bootstrap":
+			name = "bootstrap.yaml"
+		case "gateway":
+			name = "gateway.yaml"
+		default:
+			name = "node.yaml"
+		}
+	}
+
 	// Ensure config directory exists
 	configDir, err := config.EnsureConfigDir()
 	if err != nil {
@@ -725,7 +737,7 @@ func handleConfigInit(args []string) {
 	case "bootstrap":
 		configContent = generateBootstrapConfig(name, id, listenPort, rqliteHTTPPort, rqliteRaftPort)
 	case "gateway":
-		configContent = generateGatewayConfig()
+		configContent = generateGatewayConfig(bootstrapPeers)
 	}
 
 	// Write config file
@@ -899,12 +911,31 @@ logging:
 `, nodeID, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, 4001, rqliteHTTPPort, rqliteRaftPort)
 }
 
-func generateGatewayConfig() string {
-	return `listen_addr: ":6001"
+func generateGatewayConfig(bootstrapPeers string) string {
+	var peers []string
+	if bootstrapPeers != "" {
+		for _, p := range strings.Split(bootstrapPeers, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
+			}
+		}
+	}
+
+	var peersYAML strings.Builder
+	if len(peers) == 0 {
+		peersYAML.WriteString("  bootstrap_peers: []")
+	} else {
+		peersYAML.WriteString("  bootstrap_peers:\n")
+		for _, p := range peers {
+			fmt.Fprintf(&peersYAML, "    - \"%s\"\n", p)
+		}
+	}
+
+	return fmt.Sprintf(`listen_addr: ":6001"
 client_namespace: "default"
 rqlite_dsn: ""
-bootstrap_peers: []
-`
+%s
+`, peersYAML.String())
 }
 
 func showHelp() {
