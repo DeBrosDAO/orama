@@ -8,13 +8,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+- Added validation for yaml files
+- Added authenticaiton command on cli
+
 ### Changed
+
+- Updated readme
 
 ### Deprecated
 
 ### Removed
 
 ### Fixed
+
+- Regular nodes rqlite not starting 
 
 ## [0.51.2] - 2025-09-26
 

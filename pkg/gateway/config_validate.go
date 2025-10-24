@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/multiformats/go-multiaddr"
-	manet "github.com/multiformats/go-multiaddr/net"
 )
 
 // ValidateConfig performs comprehensive validation of gateway configuration.
@@ -35,7 +34,7 @@ func (c *Config) ValidateConfig() []error {
 	for i, peer := range c.BootstrapPeers {
 		path := fmt.Sprintf("gateway.bootstrap_peers[%d]", i)
 
-		ma, err := multiaddr.NewMultiaddr(peer)
+		_, err := multiaddr.NewMultiaddr(peer)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: invalid multiaddr: %v; expected /ip{4,6}/.../tcp/<port>/p2p/<peerID>", path, err))
 			continue
@@ -46,16 +45,16 @@ func (c *Config) ValidateConfig() []error {
 			errs = append(errs, fmt.Errorf("%s: missing /p2p/<peerID> component; expected /ip{4,6}/.../tcp/<port>/p2p/<peerID>", path))
 		}
 
-		// Try to extract TCP addr to validate port
-		tcpAddr, err := manet.ToNetAddr(ma)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: cannot convert to network address: %v", path, err))
+		// Extract TCP port by parsing the multiaddr string directly
+		tcpPortStr := extractTCPPort(peer)
+		if tcpPortStr == "" {
+			errs = append(errs, fmt.Errorf("%s: missing /tcp/<port> component; expected /ip{4,6}/.../tcp/<port>/p2p/<peerID>", path))
 			continue
 		}
 
-		tcpPort := tcpAddr.(*net.TCPAddr).Port
-		if tcpPort < 1 || tcpPort > 65535 {
-			errs = append(errs, fmt.Errorf("%s: invalid TCP port %d; port must be between 1 and 65535", path, tcpPort))
+		tcpPort, err := strconv.Atoi(tcpPortStr)
+		if err != nil || tcpPort < 1 || tcpPort > 65535 {
+			errs = append(errs, fmt.Errorf("%s: invalid TCP port %s; port must be between 1 and 65535", path, tcpPortStr))
 		}
 
 		if seenPeers[peer] {
@@ -114,4 +113,25 @@ func validateRQLiteDSN(dsn string) error {
 	}
 
 	return nil
+}
+
+// extractTCPPort extracts the TCP port from a multiaddr string.
+// It assumes the multiaddr is in the format /ip{4,6}/.../tcp/<port>/p2p/<peerID>.
+func extractTCPPort(multiaddrStr string) string {
+	// Find the last /tcp/ component
+	lastTCPIndex := strings.LastIndex(multiaddrStr, "/tcp/")
+	if lastTCPIndex == -1 {
+		return ""
+	}
+
+	// Extract the port part after /tcp/
+	portPart := multiaddrStr[lastTCPIndex+len("/tcp/"):]
+
+	// Find the first / component after the port part
+	firstSlashIndex := strings.Index(portPart, "/")
+	if firstSlashIndex == -1 {
+		return portPart
+	}
+
+	return portPart[:firstSlashIndex]
 }

@@ -76,6 +76,8 @@ func main() {
 		handleConnect(args[0])
 	case "peer-id":
 		handlePeerID()
+	case "auth":
+		handleAuth(args)
 	case "help", "--help", "-h":
 		showHelp()
 
@@ -289,6 +291,145 @@ func handlePubSub(args []string) {
 	}
 }
 
+func handleAuth(args []string) {
+	if len(args) == 0 {
+		showAuthHelp()
+		return
+	}
+
+	subcommand := args[0]
+	switch subcommand {
+	case "login":
+		handleAuthLogin()
+	case "logout":
+		handleAuthLogout()
+	case "whoami":
+		handleAuthWhoami()
+	case "status":
+		handleAuthStatus()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown auth command: %s\n", subcommand)
+		showAuthHelp()
+		os.Exit(1)
+	}
+}
+
+func handleAuthLogin() {
+	gatewayURL := auth.GetDefaultGatewayURL()
+	fmt.Printf("🔐 Authenticating with gateway at: %s\n", gatewayURL)
+
+	// Use the wallet authentication flow
+	creds, err := auth.PerformWalletAuthentication(gatewayURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Save credentials to file
+	if err := auth.SaveCredentialsForDefaultGateway(creds); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to save credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	credsPath, _ := auth.GetCredentialsPath()
+	fmt.Printf("✅ Authentication successful!\n")
+	fmt.Printf("📁 Credentials saved to: %s\n", credsPath)
+	fmt.Printf("🎯 Wallet: %s\n", creds.Wallet)
+	fmt.Printf("🏢 Namespace: %s\n", creds.Namespace)
+}
+
+func handleAuthLogout() {
+	if err := auth.ClearAllCredentials(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to clear credentials: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ Logged out successfully - all credentials have been cleared")
+}
+
+func handleAuthWhoami() {
+	store, err := auth.LoadCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	gatewayURL := auth.GetDefaultGatewayURL()
+	creds, exists := store.GetCredentialsForGateway(gatewayURL)
+
+	if !exists || !creds.IsValid() {
+		fmt.Println("❌ Not authenticated - run 'network-cli auth login' to authenticate")
+		os.Exit(1)
+	}
+
+	fmt.Println("✅ Authenticated")
+	fmt.Printf("  Wallet:    %s\n", creds.Wallet)
+	fmt.Printf("  Namespace: %s\n", creds.Namespace)
+	fmt.Printf("  Issued At: %s\n", creds.IssuedAt.Format("2006-01-02 15:04:05"))
+	if !creds.ExpiresAt.IsZero() {
+		fmt.Printf("  Expires At: %s\n", creds.ExpiresAt.Format("2006-01-02 15:04:05"))
+	}
+	if !creds.LastUsedAt.IsZero() {
+		fmt.Printf("  Last Used: %s\n", creds.LastUsedAt.Format("2006-01-02 15:04:05"))
+	}
+	if creds.Plan != "" {
+		fmt.Printf("  Plan:      %s\n", creds.Plan)
+	}
+}
+
+func handleAuthStatus() {
+	store, err := auth.LoadCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	gatewayURL := auth.GetDefaultGatewayURL()
+	creds, exists := store.GetCredentialsForGateway(gatewayURL)
+
+	fmt.Println("🔐 Authentication Status")
+	fmt.Printf("  Gateway URL: %s\n", gatewayURL)
+
+	if !exists || creds == nil {
+		fmt.Println("  Status:     ❌ Not authenticated")
+		return
+	}
+
+	if !creds.IsValid() {
+		fmt.Println("  Status:     ⚠️  Credentials expired")
+		if !creds.ExpiresAt.IsZero() {
+			fmt.Printf("  Expired At: %s\n", creds.ExpiresAt.Format("2006-01-02 15:04:05"))
+		}
+		return
+	}
+
+	fmt.Println("  Status:     ✅ Authenticated")
+	fmt.Printf("  Wallet:     %s\n", creds.Wallet)
+	fmt.Printf("  Namespace:  %s\n", creds.Namespace)
+	if !creds.ExpiresAt.IsZero() {
+		fmt.Printf("  Expires:    %s\n", creds.ExpiresAt.Format("2006-01-02 15:04:05"))
+	}
+	if !creds.LastUsedAt.IsZero() {
+		fmt.Printf("  Last Used:  %s\n", creds.LastUsedAt.Format("2006-01-02 15:04:05"))
+	}
+}
+
+func showAuthHelp() {
+	fmt.Printf("🔐 Authentication Commands\n\n")
+	fmt.Printf("Usage: network-cli auth <subcommand>\n\n")
+	fmt.Printf("Subcommands:\n")
+	fmt.Printf("  login      - Authenticate with wallet\n")
+	fmt.Printf("  logout     - Clear stored credentials\n")
+	fmt.Printf("  whoami     - Show current authentication status\n")
+	fmt.Printf("  status     - Show detailed authentication info\n\n")
+	fmt.Printf("Examples:\n")
+	fmt.Printf("  network-cli auth login\n")
+	fmt.Printf("  network-cli auth whoami\n")
+	fmt.Printf("  network-cli auth status\n")
+	fmt.Printf("  network-cli auth logout\n\n")
+	fmt.Printf("Environment Variables:\n")
+	fmt.Printf("  DEBROS_GATEWAY_URL - Gateway URL (default: http://localhost:6001)\n")
+}
+
 func ensureAuthenticated() *auth.Credentials {
 	gatewayURL := auth.GetDefaultGatewayURL()
 
@@ -440,6 +581,7 @@ func showHelp() {
 	fmt.Printf("Usage: network-cli <command> [args...]\n\n")
 	fmt.Printf("🔐 Authentication: Commands requiring authentication will automatically prompt for wallet connection.\n\n")
 	fmt.Printf("Commands:\n")
+	fmt.Printf("  auth <subcommand>         🔐 Authentication management (login, logout, whoami, status)\n")
 	fmt.Printf("  health                    - Check network health\n")
 	fmt.Printf("  peers                     - List connected peers\n")
 	fmt.Printf("  status                    - Show network status\n")
@@ -457,10 +599,13 @@ func showHelp() {
 	fmt.Printf("  -t, --timeout <duration>  - Operation timeout (default: 30s)\n")
 	fmt.Printf("  --production              - Connect to production bootstrap peers\n\n")
 	fmt.Printf("Authentication:\n")
+	fmt.Printf("  Use 'network-cli auth login' to authenticate with your wallet\n")
 	fmt.Printf("  Commands marked with 🔐 will automatically prompt for wallet authentication\n")
 	fmt.Printf("  if no valid credentials are found. You can manage multiple wallets and\n")
 	fmt.Printf("  choose between them during the authentication flow.\n\n")
 	fmt.Printf("Examples:\n")
+	fmt.Printf("  network-cli auth login\n")
+	fmt.Printf("  network-cli auth whoami\n")
 	fmt.Printf("  network-cli health\n")
 	fmt.Printf("  network-cli peer-id\n")
 	fmt.Printf("  network-cli peer-id --format json\n")
