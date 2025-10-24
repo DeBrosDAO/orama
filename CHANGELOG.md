@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+## [0.51.5] - 2025-10-24
+
+### Added
+
 - Added validation for yaml files
 - Added authenticaiton command on cli
 
