@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports
 
-VERSION := 0.51.2-beta
+VERSION := 0.51.5-beta
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -46,35 +46,35 @@ clean:
 
 # Run bootstrap node (auto-selects identity and data dir)
 run-node:
-	@echo "Starting bootstrap node with config..."
-	go run ./cmd/node --config configs/bootstrap.yaml
+	@echo "Starting bootstrap node..."
+	@echo "Config: ~/.debros/bootstrap.yaml"
+	@echo "Generate it with: network-cli config init --type bootstrap"
+	go run ./cmd/node --config node.yaml
 
 # Run second node (regular) - requires join address of bootstrap node
 # Usage: make run-node2 JOINADDR=/ip4/127.0.0.1/tcp/5001 HTTP=5002 RAFT=7002 P2P=4002
 run-node2:
-	@echo "Starting regular node2 with config..."
-	go run ./cmd/node --config configs/node.yaml
+	@echo "Starting regular node (node.yaml)..."
+	@echo "Config: ~/.debros/node.yaml"
+	@echo "Generate it with: network-cli config init --type node --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
+	go run ./cmd/node --config node2.yaml
 
 # Run third node (regular) - requires join address of bootstrap node
 # Usage: make run-node3 JOINADDR=/ip4/127.0.0.1/tcp/5001 HTTP=5003 RAFT=7003 P2P=4003
 run-node3:
-	@echo "Starting regular node3 with config..."
-	go run ./cmd/node --config configs/node3.yaml
+	@echo "Starting regular node (node2.yaml)..."
+	@echo "Config: ~/.debros/node2.yaml"
+	@echo "Generate it with: network-cli config init --type node --name node2.yaml --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
+	go run ./cmd/node --config node3.yaml
 
 # Run gateway HTTP server
 # Usage examples:
-#   make run-gateway                                   # uses defaults (:8080, namespace=default)
-#   GATEWAY_ADDR=":8081" make run-gateway              # override listen addr via env
-#   GATEWAY_NAMESPACE=myapp make run-gateway           # set namespace
-#   GATEWAY_BOOTSTRAP_PEERS="/ip4/127.0.0.1/tcp/4001/p2p/<ID>" make run-gateway
-#   GATEWAY_REQUIRE_AUTH=1 GATEWAY_API_KEYS="key1:ns1,key2:ns2" make run-gateway
+#   make run-gateway                                   # uses ~/.debros/gateway.yaml
+#   Config generated with: network-cli config init --type gateway
 run-gateway:
 	@echo "Starting gateway HTTP server..."
-	GATEWAY_ADDR=$(or $(ADDR),$(GATEWAY_ADDR)) \
-	GATEWAY_NAMESPACE=$(or $(NAMESPACE),$(GATEWAY_NAMESPACE)) \
-	GATEWAY_BOOTSTRAP_PEERS=$(GATEWAY_BOOTSTRAP_PEERS) \
-	GATEWAY_REQUIRE_AUTH=$(GATEWAY_REQUIRE_AUTH) \
-	GATEWAY_API_KEYS=$(GATEWAY_API_KEYS) \
+	@echo "Note: Config must be in ~/.debros/gateway.yaml"
+	@echo "Generate it with: network-cli config init --type gateway"
 	go run ./cmd/gateway
 
 # Run basic usage example
@@ -155,15 +155,28 @@ dev-setup: deps
 
 # Start development cluster (requires multiple terminals)
 dev-cluster:
-	@echo "To start a development cluster, run these commands in separate terminals:"
-	@echo "1. make run-node           # Start bootstrap node (uses configs/bootstrap.yaml)"
-	@echo "2. make run-node2          # Start second node (uses configs/node.yaml)"
-	@echo "3. make run-node3          # Start third node (uses configs/node.yaml)"
-	@echo "4. make run-example        # Test basic functionality"
-	@echo "5. make cli-health         # Check network health"
-	@echo "6. make cli-peers          # List peers"
-	@echo "7. make cli-storage-test   # Test storage"
-	@echo "8. make cli-pubsub-test    # Test messaging"
+	@echo "To start a development cluster with 3 nodes:"
+	@echo ""
+	@echo "1. Generate config files in ~/.debros:"
+	@echo "   make build"
+	@echo "   ./bin/network-cli config init --type bootstrap"
+	@echo "   ./bin/network-cli config init --type node --name node.yaml --bootstrap-peers '<bootstrap_peer_multiaddr>'"
+	@echo "   ./bin/network-cli config init --type node --name node2.yaml --bootstrap-peers '<bootstrap_peer_multiaddr>'"
+	@echo ""
+	@echo "2. Run in separate terminals:"
+	@echo "   Terminal 1: make run-node           # Start bootstrap node (bootstrap.yaml)"
+	@echo "   Terminal 2: make run-node2          # Start node 1 (node.yaml)"
+	@echo "   Terminal 3: make run-node3          # Start node 2 (node2.yaml)"
+	@echo "   Terminal 4: make run-gateway        # Start gateway"
+	@echo ""
+	@echo "3. Or run custom node with any config file:"
+	@echo "   go run ./cmd/node --config custom-node.yaml"
+	@echo ""
+	@echo "4. Test:"
+	@echo "   make cli-health                     # Check network health"
+	@echo "   make cli-peers                      # List peers"
+	@echo "   make cli-storage-test               # Test storage"
+	@echo "   make cli-pubsub-test                # Test messaging"
 
 # Full development workflow
 dev: clean build test
@@ -175,22 +188,43 @@ help:
 	@echo "  build         - Build all executables"
 	@echo "  clean         - Clean build artifacts"
 	@echo "  test          - Run tests"
+	@echo ""
+	@echo "Configuration (NEW):"
+	@echo "  First, generate config files in ~/.debros with:"
+	@echo "    make build                                         # Build CLI first"
+	@echo "    ./bin/network-cli config init --type bootstrap     # Generate bootstrap config"
+	@echo "    ./bin/network-cli config init --type node --bootstrap-peers '<peer_multiaddr>'"
+	@echo "    ./bin/network-cli config init --type gateway"
+	@echo ""
+	@echo "Network Targets (requires config files in ~/.debros):"
 	@echo "  run-node      - Start bootstrap node"
-	@echo "  run-node2     - Start second node (requires JOINADDR, optional HTTP/RAFT/P2P)"
-	@echo "  run-node3     - Start third node (requires JOINADDR, optional HTTP/RAFT/P2P)"
-	@echo "  run-gateway   - Start HTTP gateway (flags via env: GATEWAY_ADDR, GATEWAY_NAMESPACE, GATEWAY_BOOTSTRAP_PEERS, GATEWAY_REQUIRE_AUTH, GATEWAY_API_KEYS)"
+	@echo "  run-node2     - Start second node"
+	@echo "  run-node3     - Start third node"
+	@echo "  run-gateway   - Start HTTP gateway"
 	@echo "  run-example   - Run usage example"
+	@echo ""
+	@echo "Running Multiple Nodes:"
+	@echo "  Nodes use --config flag to select which YAML file in ~/.debros to load:"
+	@echo "    go run ./cmd/node --config bootstrap.yaml"
+	@echo "    go run ./cmd/node --config node.yaml"
+	@echo "    go run ./cmd/node --config node2.yaml"
+	@echo "  Generate configs with: ./bin/network-cli config init --name <filename.yaml>"
+	@echo ""
+	@echo "CLI Commands:"
 	@echo "  run-cli       - Run network CLI help"
-	@echo "  show-bootstrap - Show example bootstrap usage with flags"
 	@echo "  cli-health    - Check network health"
 	@echo "  cli-peers     - List network peers"
 	@echo "  cli-status    - Get network status"
 	@echo "  cli-storage-test - Test storage operations"
 	@echo "  cli-pubsub-test  - Test pub/sub operations"
+	@echo ""
+	@echo "Development:"
 	@echo "  test-multinode   - Full multi-node test with 1 bootstrap + 2 nodes"
 	@echo "  test-peer-discovery - Test peer discovery (requires running nodes)"
 	@echo "  test-replication - Test data replication (requires running nodes)"
 	@echo "  test-consensus   - Test database consensus (requires running nodes)"
+	@echo ""
+	@echo "Maintenance:"
 	@echo "  deps          - Download dependencies"
 	@echo "  tidy          - Tidy dependencies"
 	@echo "  fmt           - Format code"

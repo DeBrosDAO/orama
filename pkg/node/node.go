@@ -6,6 +6,7 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
@@ -384,6 +385,16 @@ func (n *Node) startLibP2P() error {
 func (n *Node) loadOrCreateIdentity() (crypto.PrivKey, error) {
 	identityFile := filepath.Join(n.config.Node.DataDir, "identity.key")
 
+	// Expand ~ in data directory path
+	identityFile = os.ExpandEnv(identityFile)
+	if strings.HasPrefix(identityFile, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		identityFile = filepath.Join(home, identityFile[1:])
+	}
+
 	// Try to load existing identity using the shared package
 	if _, err := os.Stat(identityFile); err == nil {
 		info, err := encryption.LoadIdentity(identityFile)
@@ -489,8 +500,19 @@ func (n *Node) Stop() error {
 func (n *Node) Start(ctx context.Context) error {
 	n.logger.Info("Starting network node", zap.String("data_dir", n.config.Node.DataDir))
 
+	// Expand ~ in data directory path
+	dataDir := n.config.Node.DataDir
+	dataDir = os.ExpandEnv(dataDir)
+	if strings.HasPrefix(dataDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		dataDir = filepath.Join(home, dataDir[1:])
+	}
+
 	// Create data directory
-	if err := os.MkdirAll(n.config.Node.DataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
