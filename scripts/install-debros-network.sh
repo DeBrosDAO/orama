@@ -15,6 +15,9 @@ BLUE='\033[38;2;2;128;175m'
 YELLOW='\033[1;33m'
 NOCOLOR='\033[0m'
 
+# Get absolute path of this script
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
 # Defaults
 INSTALL_DIR="/home/debros"
 REPO_URL="https://github.com/DeBrosOfficial/network.git"
@@ -32,21 +35,133 @@ error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
 
-# Check if we need to switch to debros user
-check_and_switch_user() {
+# Check if we need to create debros user first (requires root)
+check_and_setup_debros_user() {
     CURRENT_USER=$(whoami)
-    if [ "$CURRENT_USER" != "$DEBROS_USER" ]; then
-        log "Current user is '$CURRENT_USER', switching to '$DEBROS_USER'..."
-        if ! id "$DEBROS_USER" &>/dev/null; then
-            log "User '$DEBROS_USER' does not exist yet, will be created during setup"
-            log "Running installation as root, will create user and directories, then you can continue as debros user"
-            return 0
-        fi
-        # Re-run this script as the debros user
-        log "Re-executing script as '$DEBROS_USER' user..."
-        exec sudo -u "$DEBROS_USER" bash "$0"
+    
+    # If running as debros user directly, we're good to go
+    if [ "$CURRENT_USER" = "$DEBROS_USER" ]; then
+        return 0
     fi
+    
+    # If running as root via sudo from debros user, that's also okay for proceeding with installation
+    if [ "$CURRENT_USER" = "root" ] && [ "$SUDO_USER" = "$DEBROS_USER" ]; then
+        # Switch back to debros user to run the installation properly
+        exec sudo -u "$DEBROS_USER" bash "$SCRIPT_PATH"
+    fi
+    
+    # If not debros user and not root, abort and give instructions
+    if [ "$CURRENT_USER" != "root" ]; then
+        error "This script must be run as root"
+        echo -e ""
+        echo -e "${YELLOW}To install DeBros Network, run:${NOCOLOR}"
+        echo -e "${CYAN}  sudo bash $0${NOCOLOR}"
+        echo -e ""
+        exit 1
+    fi
+    
+    # At this point, we're running as root but not as debros user
+    # Check if debros user exists
+    if ! id "$DEBROS_USER" &>/dev/null; then
+        log "The '$DEBROS_USER' user does not exist on this system."
+        echo -e ""
+        echo -e "${YELLOW}DeBros requires a '$DEBROS_USER' system user to run services.${NOCOLOR}"
+        echo -e ""
+        
+        # Ask for permission to create the user
+        while true; do
+            read -p "Would you like to create the '$DEBROS_USER' user? (yes/no): " CREATE_USER_CHOICE
+            case "$CREATE_USER_CHOICE" in
+                [Yy][Ee][Ss]|[Yy])
+                    log "Creating system user '$DEBROS_USER'..."
+                    useradd -r -m -s /bin/bash -d "$INSTALL_DIR" "$DEBROS_USER" 2>/dev/null || true
+                    if id "$DEBROS_USER" &>/dev/null; then
+                        success "System user '$DEBROS_USER' created"
+                        
+                        # Prompt for password
+                        echo -e ""
+                        log "Setting password for '$DEBROS_USER' user..."
+                        echo -e "${YELLOW}Note: You can leave the password empty for passwordless login${NOCOLOR}"
+                        echo -e ""
+                        echo -n "Enter password for '$DEBROS_USER' user (or press Enter for no password): "
+                        read -s DEBROS_PASSWORD
+                        echo ""
+                        echo -n "Confirm password: "
+                        read -s DEBROS_PASSWORD_CONFIRM
+                        echo ""
+                        
+                        # Verify passwords match
+                        if [ "$DEBROS_PASSWORD" != "$DEBROS_PASSWORD_CONFIRM" ]; then
+                            error "Passwords do not match!"
+                            exit 1
+                        fi
+                        
+                        # Set password or enable passwordless login
+                        if [ -z "$DEBROS_PASSWORD" ]; then
+                            # For passwordless login, we need to use a special approach
+                            # First, set a temporary password, then remove it
+                            TEMP_PASS="temp123"
+                            echo "$DEBROS_USER:$TEMP_PASS" | chpasswd
+                            # Now remove the password to make it passwordless
+                            passwd -d "$DEBROS_USER" 2>/dev/null || true
+                            success "Passwordless login enabled for '$DEBROS_USER' user"
+                        else
+                            # Set password using chpasswd
+                            echo "$DEBROS_USER:$DEBROS_PASSWORD" | chpasswd
+                            if [ $? -eq 0 ]; then
+                                success "Password set successfully for '$DEBROS_USER' user"
+                            else
+                                error "Failed to set password for '$DEBROS_USER' user"
+                                exit 1
+                            fi
+                        fi
+                    else
+                        error "Failed to create user '$DEBROS_USER'"
+                        exit 1
+                    fi
+                    break
+                    ;;
+                [Nn][Oo]|[Nn])
+                    error "Cannot continue without '$DEBROS_USER' user. Exiting."
+                    exit 1
+                    ;;
+                *)
+                    error "Invalid choice. Please enter 'yes' or 'no'."
+                    ;;
+            esac
+        done
+    else
+        log "User '$DEBROS_USER' already exists"
+    fi
+    
+    # Add debros user to sudoers
+    log "Adding '$DEBROS_USER' to sudoers..."
+    echo "$DEBROS_USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$DEBROS_USER > /dev/null
+    sudo chmod 0440 /etc/sudoers.d/$DEBROS_USER
+    success "Added '$DEBROS_USER' to sudoers"
+    
+    # Inform user they need to manually switch to debros user
+    echo -e ""
+    echo -e "${BLUE}========================================================================${NOCOLOR}"
+    echo -e "${YELLOW}IMPORTANT: Manual User Switch Required${NOCOLOR}"
+    echo -e "${BLUE}========================================================================${NOCOLOR}"
+    echo -e ""
+    echo -e "${CYAN}The '$DEBROS_USER' user is now ready.${NOCOLOR}"
+    echo -e "${CYAN}To continue the installation, please switch to the '$DEBROS_USER' user${NOCOLOR}"
+    echo -e "${CYAN}and re-run the script.${NOCOLOR}"
+    echo -e ""
+    echo -e "${GREEN}Run the following command:${NOCOLOR}"
+    echo -e "${YELLOW}  su - $DEBROS_USER${NOCOLOR}"
+    echo -e ""
+    echo -e "${CYAN}Then re-run the script${NOCOLOR}"
+    echo -e ""
+    echo -e "${BLUE}========================================================================${NOCOLOR}"
+    echo -e ""
+    exit 0
 }
+
+# Check and setup debros user (called before other checks)
+check_and_setup_debros_user
 
 # Detect non-interactive mode
 if [ ! -t 0 ]; then
@@ -73,8 +188,6 @@ else
         error "sudo command not found. Please ensure you have sudo privileges."
         exit 1
     fi
-    # Check and switch to debros user if not already
-    check_and_switch_user
 fi
 
 # Detect OS and package manager
@@ -113,19 +226,37 @@ check_existing_installation() {
             return 0
         fi
         echo -e "${YELLOW}Existing installation detected!${NOCOLOR}"
-        echo -e "${CYAN}Options:${NOCOLOR}"
-        echo -e "${CYAN}1) Update existing installation${NOCOLOR}"
-        echo -e "${CYAN}2) Remove and reinstall${NOCOLOR}"
-        echo -e "${CYAN}3) Exit installer${NOCOLOR}"
-        while true; do
-            read -rp "Enter your choice (1, 2, or 3): " EXISTING_CHOICE
-            case $EXISTING_CHOICE in
-                1) UPDATE_MODE=true; log "Will update existing installation"; return 0 ;;
-                2) log "Will remove and reinstall"; remove_existing_installation; UPDATE_MODE=false; return 0 ;;
-                3) log "Installation cancelled by user"; exit 0 ;;
-                *) error "Invalid choice. Please enter 1, 2, or 3." ;;
-            esac
-        done
+        
+        # Check if we're running as debros user
+        CURRENT_USER=$(whoami)
+        if [ "$CURRENT_USER" = "$DEBROS_USER" ]; then
+            warning "Running as '$DEBROS_USER' user - only update mode is available"
+            echo -e "${CYAN}Options:${NOCOLOR}"
+            echo -e "${CYAN}1) Update existing installation${NOCOLOR}"
+            echo -e "${CYAN}2) Exit installer${NOCOLOR}"
+            while true; do
+                read -rp "Enter your choice (1 or 2): " EXISTING_CHOICE
+                case $EXISTING_CHOICE in
+                    1) UPDATE_MODE=true; log "Will update existing installation"; return 0 ;;
+                    2) log "Installation cancelled by user"; exit 0 ;;
+                    *) error "Invalid choice. Please enter 1 or 2." ;;
+                esac
+            done
+        else
+            echo -e "${CYAN}Options:${NOCOLOR}"
+            echo -e "${CYAN}1) Update existing installation${NOCOLOR}"
+            echo -e "${CYAN}2) Remove and reinstall${NOCOLOR}"
+            echo -e "${CYAN}3) Exit installer${NOCOLOR}"
+            while true; do
+                read -rp "Enter your choice (1, 2, or 3): " EXISTING_CHOICE
+                case $EXISTING_CHOICE in
+                    1) UPDATE_MODE=true; log "Will update existing installation"; return 0 ;;
+                    2) log "Will remove and reinstall"; remove_existing_installation; UPDATE_MODE=false; return 0 ;;
+                    3) log "Installation cancelled by user"; exit 0 ;;
+                    *) error "Invalid choice. Please enter 1, 2, or 3." ;;
+                esac
+            done
+        fi
     else
         UPDATE_MODE=false
         return 0
@@ -282,26 +413,11 @@ check_ports() {
 setup_directories() {
     log "Setting up directories and permissions..."
     
-    # Create debros user if it doesn't exist (only works if running as root)
-    if [[ $EUID -eq 0 ]]; then
-        if ! id "$DEBROS_USER" &>/dev/null; then
-            log "Creating system user '$DEBROS_USER' (no password required - system user)..."
-            sudo useradd -r -m -s /usr/sbin/nologin -d "$INSTALL_DIR" "$DEBROS_USER" 2>/dev/null || true
-            if id "$DEBROS_USER" &>/dev/null; then
-                success "System user '$DEBROS_USER' created"
-            else
-                error "Failed to create user '$DEBROS_USER'"
-                exit 1
-            fi
-        else
-            log "User '$DEBROS_USER' already exists"
-            # Update home directory if needed
-            EXISTING_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~' 2>/dev/null)
-            if [ "$EXISTING_HOME" != "$INSTALL_DIR" ]; then
-                log "Updating '$DEBROS_USER' home directory to $INSTALL_DIR..."
-                usermod -d "$INSTALL_DIR" "$DEBROS_USER"
-            fi
-        fi
+    # At this point, debros user should already exist
+    # (either we're running as debros, or root just created it)
+    if ! id "$DEBROS_USER" &>/dev/null; then
+        error "User '$DEBROS_USER' does not exist. This should not happen."
+        exit 1
     fi
     
     sudo mkdir -p "$INSTALL_DIR"/{bin,src}
@@ -458,7 +574,6 @@ SyslogIdentifier=debros-node
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=yes
 ReadWritePaths=$INSTALL_DIR
 
 [Install]
@@ -497,7 +612,6 @@ SyslogIdentifier=debros-gateway
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=yes
 ReadWritePaths=$INSTALL_DIR
 
 # Allow binding to privileged ports (80, 443) for ACME TLS
