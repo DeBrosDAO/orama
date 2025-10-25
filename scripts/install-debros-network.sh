@@ -289,16 +289,20 @@ setup_directories() {
 setup_source_code() {
     log "Setting up source code..."
     if [ -d "$INSTALL_DIR/src/.git" ]; then
-        log "Updating existing repository..."
+        log "Updating existing repository (on 'nightly' branch)..."
         cd "$INSTALL_DIR/src"
-        sudo -u "$DEBROS_USER" git pull
+        # Always ensure we're on 'nightly' before pulling
+        sudo -u "$DEBROS_USER" git fetch
+        sudo -u "$DEBROS_USER" git checkout nightly || sudo -u "$DEBROS_USER" git checkout -b nightly origin/nightly
+        sudo -u "$DEBROS_USER" git pull origin nightly
     else
-        log "Cloning repository..."
-        sudo -u "$DEBROS_USER" git clone "$REPO_URL" "$INSTALL_DIR/src"
+        log "Cloning repository (branch: nightly)..."
+        sudo -u "$DEBROS_USER" git clone --branch nightly --single-branch "$REPO_URL" "$INSTALL_DIR/src"
         cd "$INSTALL_DIR/src"
     fi
     success "Source code ready"
 }
+
 
 build_binaries() {
     log "Building DeBros Network binaries..."
