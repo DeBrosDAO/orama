@@ -53,6 +53,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		ClientNamespace string   `yaml:"client_namespace"`
 		RQLiteDSN       string   `yaml:"rqlite_dsn"`
 		BootstrapPeers  []string `yaml:"bootstrap_peers"`
+		Domain          string   `yaml:"domain"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -101,6 +102,10 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		if len(bp) > 0 {
 			cfg.BootstrapPeers = bp
 		}
+	}
+
+	if v := strings.TrimSpace(y.Domain); v != "" {
+		cfg.Domain = v
 	}
 
 	// Validate configuration

@@ -70,6 +70,13 @@ func (c *Config) ValidateConfig() []error {
 		}
 	}
 
+	// Validate domain if provided (optional for TLS in production)
+	if c.Domain != "" {
+		if err := validateDomain(c.Domain); err != nil {
+			errs = append(errs, fmt.Errorf("gateway.domain: %v", err))
+		}
+	}
+
 	return errs
 }
 
@@ -134,4 +141,32 @@ func extractTCPPort(multiaddrStr string) string {
 	}
 
 	return portPart[:firstSlashIndex]
+}
+
+// validateDomain checks if a domain is valid (basic hostname validation).
+// Forbids schemes, slashes, and leading dots.
+func validateDomain(domain string) error {
+	if strings.Contains(domain, "://") {
+		return fmt.Errorf("domain must not contain a scheme (e.g., 'http://')")
+	}
+	if strings.Contains(domain, "/") {
+		return fmt.Errorf("domain must not contain slashes")
+	}
+	if strings.HasPrefix(domain, ".") {
+		return fmt.Errorf("domain must not start with a dot")
+	}
+	// Basic length check
+	if len(domain) > 253 {
+		return fmt.Errorf("domain is too long (max 253 characters)")
+	}
+	if len(domain) < 1 {
+		return fmt.Errorf("domain must not be empty")
+	}
+	// Allow alphanumeric, dots, hyphens (basic hostname check)
+	for _, ch := range domain {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '-') {
+			return fmt.Errorf("domain contains invalid characters; only alphanumeric, dots, and hyphens allowed")
+		}
+	}
+	return nil
 }
