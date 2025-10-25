@@ -174,23 +174,36 @@ cd network
 make build
 ```
 
-### 3. Start a Bootstrap Node
+### 3. Generate Configuration Files
 
 ```bash
-make run-node
-# Or manually:
-go run ./cmd/node --config configs/node.yaml
+# Generate all configs (bootstrap, node2, node3, gateway) with one command
+./bin/network-cli config init
 ```
 
-### 4. Start Additional Nodes
+This creates:
+- `~/.debros/bootstrap.yaml` - Bootstrap node
+- `~/.debros/node2.yaml` - Regular node 2
+- `~/.debros/node3.yaml` - Regular node 3
+- `~/.debros/gateway.yaml` - HTTP Gateway
+
+Plus auto-generated identities for each node.
+
+### 4. Start the Complete Network Stack
 
 ```bash
-make run-node2
-# Or manually:
-go run ./cmd/node --config configs/node.yaml
+make dev
 ```
 
-### 5. Test with CLI
+This starts:
+- Bootstrap node (P2P: 4001, RQLite HTTP: 5001, Raft: 7001)
+- Node 2 (P2P: 4002, RQLite HTTP: 5002, Raft: 7002)
+- Node 3 (P2P: 4003, RQLite HTTP: 5003, Raft: 7003)
+- Gateway (HTTP: 6001)
+
+Logs stream to terminal. Press **Ctrl+C** to stop all processes.
+
+### 5. Test with CLI (in another terminal)
 
 ```bash
 ./bin/network-cli health
@@ -261,100 +274,103 @@ The system will **only** load config from `~/.debros/` and will error if require
 
 Use the `network-cli config init` command to generate configuration files:
 
-#### Generate a Node Config
+### Generate Complete Stack (Recommended)
+
+```bash
+# Generate bootstrap, node2, node3, and gateway configs in one command
+./bin/network-cli config init
+
+# Force regenerate (overwrites existing configs)
+./bin/network-cli config init --force
+```
+
+This is the **recommended way** to get started with a local development network.
+
+### Generate Individual Configs (Advanced)
+
+For custom setups or production deployments, you can generate individual configs:
+
+#### Generate a Single Node Config
 
 ```bash
 # Generate basic node config with bootstrap peers
-network-cli config init --type node --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx,/ip4/127.0.0.1/tcp/4002/p2p/QmYyy"
+./bin/network-cli config init --type node --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
 
 # With custom ports
-network-cli config init --type node --name node2.yaml --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002 --join localhost:5001 --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
+./bin/network-cli config init --type node --name node2.yaml \
+  --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002 \
+  --join localhost:5001 --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
 
 # Force overwrite existing config
-network-cli config init --type node --force
+./bin/network-cli config init --type node --force
 ```
 
 #### Generate a Bootstrap Node Config
 
 ```bash
 # Generate bootstrap node (no join address required)
-network-cli config init --type bootstrap
+./bin/network-cli config init --type bootstrap
 
 # With custom ports
-network-cli config init --type bootstrap --listen-port 4001 --rqlite-http-port 5001 --rqlite-raft-port 7001
+./bin/network-cli config init --type bootstrap --listen-port 4001 --rqlite-http-port 5001 --rqlite-raft-port 7001
 ```
 
 #### Generate a Gateway Config
 
 ```bash
 # Generate gateway config
-network-cli config init --type gateway
+./bin/network-cli config init --type gateway
 
 # With bootstrap peers
-network-cli config init --type gateway --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
+./bin/network-cli config init --type gateway --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/QmXxx"
 ```
 
-### Running Multiple Nodes on the Same Machine
+### Running the Network
 
-You can run multiple nodes on a single machine by creating separate configuration files and using the `--config` flag:
-
-#### Create Multiple Node Configs
+Once configs are generated, start the complete stack with:
 
 ```bash
-# Node 1
-./bin/network-cli config init --type node --name node1.yaml \
-  --listen-port 4001 --rqlite-http-port 5001 --rqlite-raft-port 7001 \
-  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
-
-# Node 2
-./bin/network-cli config init --type node --name node2.yaml \
-  --listen-port 4002 --rqlite-http-port 5002 --rqlite-raft-port 7002 \
-  --join localhost:5001 \
-  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
-
-# Node 3
-./bin/network-cli config init --type node --name node3.yaml \
-  --listen-port 4003 --rqlite-http-port 5003 --rqlite-raft-port 7003 \
-  --join localhost:5001 \
-  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
+make dev
 ```
 
-#### Run Multiple Nodes in Separate Terminals
+Or start individual components (in separate terminals):
 
 ```bash
 # Terminal 1 - Bootstrap node
 go run ./cmd/node --config bootstrap.yaml
 
-# Terminal 2 - Node 1
-go run ./cmd/node --config node1.yaml
-
-# Terminal 3 - Node 2
+# Terminal 2 - Node 2
 go run ./cmd/node --config node2.yaml
 
-# Terminal 4 - Node 3
+# Terminal 3 - Node 3
 go run ./cmd/node --config node3.yaml
+
+# Terminal 4 - Gateway
+go run ./cmd/gateway --config gateway.yaml
 ```
 
-#### Or Use Makefile Targets
+### Running Multiple Nodes on the Same Machine
+
+The default `make dev` creates a 3-node setup. For additional nodes, generate individual configs:
 
 ```bash
-# Terminal 1
-make run-node      # Runs: go run ./cmd/node --config bootstrap.yaml
+# Generate additional node configs with unique ports
+./bin/network-cli config init --type node --name node4.yaml \
+  --listen-port 4004 --rqlite-http-port 5004 --rqlite-raft-port 7004 \
+  --join localhost:5001 \
+  --bootstrap-peers "/ip4/127.0.0.1/tcp/4001/p2p/<BOOTSTRAP_ID>"
 
-# Terminal 2
-make run-node2     # Runs: go run ./cmd/node --config node.yaml
-
-# Terminal 3
-make run-node3     # Runs: go run ./cmd/node --config node2.yaml
+# Start the additional node
+go run ./cmd/node --config node4.yaml
 ```
 
 #### Key Points for Multiple Nodes
 
 - **Each node needs unique ports**: P2P port, RQLite HTTP port, and RQLite Raft port must all be different
-- **Join address**: Non-bootstrap nodes need `rqlite_join_address` pointing to the bootstrap or an existing node
+- **Join address**: Non-bootstrap nodes need `rqlite_join_address` pointing to the bootstrap or an existing node (use Raft port)
 - **Bootstrap peers**: All nodes need the bootstrap node's multiaddr in `discovery.bootstrap_peers`
 - **Config files**: Store all configs in `~/.debros/` with different filenames
-- **--config flag**: Specify which config file to load (defaults to `node.yaml`)
+- **--config flag**: Specify which config file to load
 
 ⚠️ **Common Mistake - Same Ports:**
 If all nodes use the same ports (e.g., 5001, 7001), they will try to bind to the same addresses and fail to communicate. Verify each node has unique ports:
@@ -365,11 +381,11 @@ grep "rqlite_port\|rqlite_raft_port" ~/.debros/bootstrap.yaml
 # Should show: rqlite_port: 5001, rqlite_raft_port: 7001
 
 # Node 2
-grep "rqlite_port\|rqlite_raft_port" ~/.debros/node.yaml
+grep "rqlite_port\|rqlite_raft_port" ~/.debros/node2.yaml
 # Should show: rqlite_port: 5002, rqlite_raft_port: 7002
 
 # Node 3
-grep "rqlite_port\|rqlite_raft_port" ~/.debros/node2.yaml
+grep "rqlite_port\|rqlite_raft_port" ~/.debros/node3.yaml
 # Should show: rqlite_port: 5003, rqlite_raft_port: 7003
 ```
 

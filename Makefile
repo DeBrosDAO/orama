@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports
 
-VERSION := 0.51.6-beta
+VERSION := 0.51.7-beta
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -77,110 +77,45 @@ run-gateway:
 	@echo "Generate it with: network-cli config init --type gateway"
 	go run ./cmd/gateway
 
-# Run basic usage example
-run-example:
-	@echo "Running basic usage example..."
-	go run examples/basic_usage.go
-
-# Show how to run with flags
-show-bootstrap:
-	@echo "Provide join address via flags, e.g.:"
-	@echo "  make run-node2 JOINADDR=/ip4/127.0.0.1/tcp/5001 HTTP=5002 RAFT=7002 P2P=4002"
-
-# Run network CLI
-run-cli:
-	@echo "Running network CLI help..."
-	./bin/network-cli help
-
-# Network CLI helper commands
-cli-health:
-	@echo "Checking network health..."
-	./bin/network-cli health
-
-cli-peers:
-	@echo "Listing network peers..."
-	./bin/network-cli peers
-
-cli-status:
-	@echo "Getting network status..."
-	./bin/network-cli status
-
-cli-storage-test:
-	@echo "Testing storage operations..."
-	@./bin/network-cli storage put test-key "Hello Network" || echo "Storage test requires running network"
-	@./bin/network-cli storage get test-key || echo "Storage test requires running network"
-	@./bin/network-cli storage list || echo "Storage test requires running network"
-
-cli-pubsub-test:
-	@echo "Testing pub/sub operations..."
-	@./bin/network-cli pubsub publish test-topic "Hello World" || echo "PubSub test requires running network"
-	@./bin/network-cli pubsub topics || echo "PubSub test requires running network"
-
-# Download dependencies
-deps:
-	@echo "Downloading dependencies..."
-	go mod download
-
-# Tidy dependencies
-tidy:
-	@echo "Tidying dependencies..."
-	go mod tidy
-
-# Format code
-fmt:
-	@echo "Formatting code..."
-	go fmt ./...
-
-# Vet code
-vet:
-	@echo "Vetting code..."
-	go vet ./...
-
-# Lint alias (lightweight for now)
-lint: fmt vet
-	@echo "Linting complete (fmt + vet)"
-
-# Clear common development ports
-clear-ports:
-	@echo "Clearing common dev ports (4001/4002, 5001/5002, 7001/7002)..."
-	@chmod +x scripts/clear-ports.sh || true
-	@scripts/clear-ports.sh
-
-# Development setup
-dev-setup: deps
-	@echo "Setting up development environment..."
-	@mkdir -p data/bootstrap data/node data/node2 data/node3
-	@mkdir -p data/test-bootstrap data/test-node1 data/test-node2
-	@echo "Development setup complete!"
-
-# Start development cluster (requires multiple terminals)
-dev-cluster:
-	@echo "To start a development cluster with 3 nodes:"
+# One-command dev: Start bootstrap, node2, node3, and gateway in background
+# Requires: configs already exist in ~/.debros
+dev: build
+	@echo "🚀 Starting development network stack..."
+	@mkdir -p .dev/pids
+	@mkdir -p $$HOME/.debros/logs
+	@echo "Starting bootstrap node..."
+	@nohup ./bin/node --config bootstrap.yaml > $$HOME/.debros/logs/bootstrap.log 2>&1 & echo $$! > .dev/pids/bootstrap.pid
+	@sleep 2
+	@echo "Starting node2..."
+	@nohup ./bin/node --config node2.yaml > $$HOME/.debros/logs/node2.log 2>&1 & echo $$! > .dev/pids/node2.pid
+	@sleep 1
+	@echo "Starting node3..."
+	@nohup ./bin/node --config node3.yaml > $$HOME/.debros/logs/node3.log 2>&1 & echo $$! > .dev/pids/node3.pid
+	@sleep 1
+	@echo "Starting gateway..."
+	@nohup ./bin/gateway --config gateway.yaml > $$HOME/.debros/logs/gateway.log 2>&1 & echo $$! > .dev/pids/gateway.pid
 	@echo ""
-	@echo "1. Generate config files in ~/.debros:"
-	@echo "   make build"
-	@echo "   ./bin/network-cli config init --type bootstrap"
-	@echo "   ./bin/network-cli config init --type node --name node.yaml --bootstrap-peers '<bootstrap_peer_multiaddr>'"
-	@echo "   ./bin/network-cli config init --type node --name node2.yaml --bootstrap-peers '<bootstrap_peer_multiaddr>'"
+	@echo "============================================================"
+	@echo "✅ Development stack started!"
+	@echo "============================================================"
 	@echo ""
-	@echo "2. Run in separate terminals:"
-	@echo "   Terminal 1: make run-node           # Start bootstrap node (bootstrap.yaml)"
-	@echo "   Terminal 2: make run-node2          # Start node 1 (node.yaml)"
-	@echo "   Terminal 3: make run-node3          # Start node 2 (node2.yaml)"
-	@echo "   Terminal 4: make run-gateway        # Start gateway"
+	@echo "Processes:"
+	@echo "  Bootstrap: PID=$$(cat .dev/pids/bootstrap.pid)"
+	@echo "  Node2:     PID=$$(cat .dev/pids/node2.pid)"
+	@echo "  Node3:     PID=$$(cat .dev/pids/node3.pid)"
+	@echo "  Gateway:   PID=$$(cat .dev/pids/gateway.pid)"
 	@echo ""
-	@echo "3. Or run custom node with any config file:"
-	@echo "   go run ./cmd/node --config custom-node.yaml"
+	@echo "Ports:"
+	@echo "  Bootstrap P2P: 4001, HTTP: 5001, Raft: 7001"
+	@echo "  Node2     P2P: 4002, HTTP: 5002, Raft: 7002"
+	@echo "  Node3     P2P: 4003, HTTP: 5003, Raft: 7003"
+	@echo "  Gateway:       6001"
 	@echo ""
-	@echo "4. Test:"
-	@echo "   make cli-health                     # Check network health"
-	@echo "   make cli-peers                      # List peers"
-	@echo "   make cli-storage-test               # Test storage"
-	@echo "   make cli-pubsub-test                # Test messaging"
-
-# Full development workflow
-dev: clean build test
-	@echo "Development workflow complete!"
+	@echo "Press Ctrl+C to stop all processes"
+	@echo "============================================================"
+	@echo ""
+	@trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
+	tail -f $$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log
 
 # Help
 help:
@@ -189,12 +124,14 @@ help:
 	@echo "  clean         - Clean build artifacts"
 	@echo "  test          - Run tests"
 	@echo ""
+	@echo "Development:"
+	@echo "  dev           - Start full dev stack (bootstrap + 2 nodes + gateway)"
+	@echo "                 Requires: configs in ~/.debros (run 'network-cli config init' first)"
+	@echo ""
 	@echo "Configuration (NEW):"
 	@echo "  First, generate config files in ~/.debros with:"
 	@echo "    make build                                         # Build CLI first"
-	@echo "    ./bin/network-cli config init --type bootstrap     # Generate bootstrap config"
-	@echo "    ./bin/network-cli config init --type node --bootstrap-peers '<peer_multiaddr>'"
-	@echo "    ./bin/network-cli config init --type gateway"
+	@echo "    ./bin/network-cli config init                      # Generate full stack"
 	@echo ""
 	@echo "Network Targets (requires config files in ~/.debros):"
 	@echo "  run-node      - Start bootstrap node"

@@ -8,13 +8,37 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+- One-command `make dev` target to start full development stack (bootstrap + node2 + node3 + gateway in background)
+- New `network-cli config init` (no --type) generates complete development stack with all configs and identities
+- Full stack initialization with auto-generated peer identities for bootstrap and all nodes
+- Explicit control over LibP2P listen addresses for better localhost/development support
+- Production/development mode detection for NAT services (disabled for localhost, enabled for production)
+- Process management with .dev/pids directory for background process tracking
+- Centralized logging to ~/.debros/logs/ for all network services
+
 ### Changed
+
+- Simplified Makefile: removed legacy dev commands, replaced with unified `make dev` target
+- Updated README with clearer getting started instructions (single `make dev` command)
+- Simplified `network-cli config init` behavior: defaults to generating full stack instead of single node
+- `network-cli config init` now handles bootstrap peer discovery and join addresses automatically
+- LibP2P configuration: removed always-on NAT services for development environments
+- Code formatting in pkg/node/node.go (indentation fixes in bootstrapPeerSource)
 
 ### Deprecated
 
 ### Removed
 
+- Removed legacy Makefile targets: run-example, show-bootstrap, run-cli, cli-health, cli-peers, cli-status, cli-storage-test, cli-pubsub-test
+- Removed verbose dev-setup, dev-cluster, and old dev workflow targets
+
 ### Fixed
+
+- Fixed indentation in bootstrapPeerSource function for consistency
+- Fixed gateway.yaml generation with correct YAML indentation for bootstrap_peers
+- Fixed script for running and added gateway running as well
+
+### Security
 
 ## [0.51.6] - 2025-10-24
 

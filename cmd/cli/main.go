@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -607,30 +608,35 @@ func showConfigHelp() {
 	fmt.Printf("Config Management Commands\n\n")
 	fmt.Printf("Usage: network-cli config <subcommand> [options]\n\n")
 	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  init                      - Generate configuration files in ~/.debros\n")
+	fmt.Printf("  init                      - Generate full network stack in ~/.debros (bootstrap + 2 nodes + gateway)\n")
 	fmt.Printf("  validate --name <file>    - Validate a config file\n\n")
+	fmt.Printf("Init Default Behavior (no --type):\n")
+	fmt.Printf("  Generates bootstrap.yaml, node2.yaml, node3.yaml, gateway.yaml with:\n")
+	fmt.Printf("  - Auto-generated identities for bootstrap, node2, node3\n")
+	fmt.Printf("  - Correct bootstrap_peers and join addresses\n")
+	fmt.Printf("  - Default ports: P2P 4001-4003, HTTP 5001-5003, Raft 7001-7003\n\n")
 	fmt.Printf("Init Options:\n")
-	fmt.Printf("  --type <type>             - Config type: node, bootstrap, gateway (default: node)\n")
-	fmt.Printf("  --name <file>             - Output filename (default: node.yaml)\n")
+	fmt.Printf("  --type <type>             - Single config type: node, bootstrap, gateway (skips stack generation)\n")
+	fmt.Printf("  --name <file>             - Output filename (default: depends on --type or 'stack' for full stack)\n")
+	fmt.Printf("  --force                   - Overwrite existing config/stack files\n\n")
+	fmt.Printf("Single Config Options (with --type):\n")
 	fmt.Printf("  --id <id>                 - Node ID for bootstrap peers\n")
 	fmt.Printf("  --listen-port <port>      - LibP2P listen port (default: 4001)\n")
 	fmt.Printf("  --rqlite-http-port <port> - RQLite HTTP port (default: 5001)\n")
 	fmt.Printf("  --rqlite-raft-port <port> - RQLite Raft port (default: 7001)\n")
 	fmt.Printf("  --join <host:port>        - RQLite address to join (required for non-bootstrap)\n")
-	fmt.Printf("  --bootstrap-peers <peers> - Comma-separated bootstrap peer multiaddrs\n")
-	fmt.Printf("  --force                   - Overwrite existing config\n\n")
+	fmt.Printf("  --bootstrap-peers <peers> - Comma-separated bootstrap peer multiaddrs\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  network-cli config init\n")
-	fmt.Printf("  network-cli config init --type node --bootstrap-peers /ip4/127.0.0.1/tcp/4001/p2p/QmXxx,/ip4/127.0.0.1/tcp/4002/p2p/QmYyy\n")
-	fmt.Printf("  network-cli config init --type bootstrap\n")
-	fmt.Printf("  network-cli config init --type gateway\n")
+	fmt.Printf("  network-cli config init                    # Generate full stack\n")
+	fmt.Printf("  network-cli config init --force            # Overwrite existing stack\n")
+	fmt.Printf("  network-cli config init --type bootstrap   # Single bootstrap config (legacy)\n")
 	fmt.Printf("  network-cli config validate --name node.yaml\n")
 }
 
 func handleConfigInit(args []string) {
 	// Parse flags
 	var (
-		cfgType        = "node"
+		cfgType        = ""
 		name           = "" // Will be set based on type if not provided
 		id             string
 		listenPort     = 4001
@@ -694,6 +700,13 @@ func handleConfigInit(args []string) {
 		}
 	}
 
+	// If --type is not specified, generate full stack
+	if cfgType == "" {
+		initFullStack(force)
+		return
+	}
+
+	// Otherwise, continue with single-file generation
 	// Validate type
 	if cfgType != "node" && cfgType != "bootstrap" && cfgType != "gateway" {
 		fmt.Fprintf(os.Stderr, "Invalid --type: %s (expected: node, bootstrap, or gateway)\n", cfgType)
@@ -797,6 +810,192 @@ func handleConfigValidate(args []string) {
 	}
 
 	fmt.Printf("✅ Config is valid: %s\n", configPath)
+}
+
+func initFullStack(force bool) {
+	fmt.Printf("🚀 Initializing full network stack...\n")
+
+	// Ensure ~/.debros directory exists
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
+		os.Exit(1)
+	}
+	debrosDir := filepath.Join(homeDir, ".debros")
+	if err := os.MkdirAll(debrosDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create ~/.debros directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Step 1: Generate bootstrap identity
+	bootstrapIdentityDir := filepath.Join(debrosDir, "bootstrap")
+	bootstrapIdentityPath := filepath.Join(bootstrapIdentityDir, "identity.key")
+
+	if !force {
+		if _, err := os.Stat(bootstrapIdentityPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Bootstrap identity already exists at %s (use --force to overwrite)\n", bootstrapIdentityPath)
+			os.Exit(1)
+		}
+	}
+
+	bootstrapInfo, err := encryption.GenerateIdentity()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate bootstrap identity: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(bootstrapIdentityDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create bootstrap data directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := encryption.SaveIdentity(bootstrapInfo, bootstrapIdentityPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save bootstrap identity: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated bootstrap identity: %s (Peer ID: %s)\n", bootstrapIdentityPath, bootstrapInfo.PeerID.String())
+
+	// Construct bootstrap multiaddr
+	bootstrapMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
+	fmt.Printf("   Bootstrap multiaddr: %s\n", bootstrapMultiaddr)
+
+	// Step 2: Generate bootstrap.yaml
+	bootstrapName := "bootstrap.yaml"
+	bootstrapPath := filepath.Join(debrosDir, bootstrapName)
+	if !force {
+		if _, err := os.Stat(bootstrapPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Bootstrap config already exists at %s (use --force to overwrite)\n", bootstrapPath)
+			os.Exit(1)
+		}
+	}
+	bootstrapContent := generateBootstrapConfig(bootstrapName, "", 4001, 5001, 7001)
+	if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write bootstrap config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated bootstrap config: %s\n", bootstrapPath)
+
+	// Step 3: Generate node2 identity and config
+	node2IdentityDir := filepath.Join(debrosDir, "node2")
+	node2IdentityPath := filepath.Join(node2IdentityDir, "identity.key")
+
+	if !force {
+		if _, err := os.Stat(node2IdentityPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Node2 identity already exists at %s (use --force to overwrite)\n", node2IdentityPath)
+			os.Exit(1)
+		}
+	}
+
+	node2Info, err := encryption.GenerateIdentity()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate node2 identity: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(node2IdentityDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create node2 data directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := encryption.SaveIdentity(node2Info, node2IdentityPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save node2 identity: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated node2 identity: %s (Peer ID: %s)\n", node2IdentityPath, node2Info.PeerID.String())
+
+	node2Name := "node2.yaml"
+	node2Path := filepath.Join(debrosDir, node2Name)
+	if !force {
+		if _, err := os.Stat(node2Path); err == nil {
+			fmt.Fprintf(os.Stderr, "Node2 config already exists at %s (use --force to overwrite)\n", node2Path)
+			os.Exit(1)
+		}
+	}
+	node2Content := generateNodeConfig(node2Name, "", 4002, 5002, 7002, "127.0.0.1:7001", bootstrapMultiaddr)
+	if err := os.WriteFile(node2Path, []byte(node2Content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write node2 config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated node2 config: %s\n", node2Path)
+
+	// Step 4: Generate node3 identity and config
+	node3IdentityDir := filepath.Join(debrosDir, "node3")
+	node3IdentityPath := filepath.Join(node3IdentityDir, "identity.key")
+
+	if !force {
+		if _, err := os.Stat(node3IdentityPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Node3 identity already exists at %s (use --force to overwrite)\n", node3IdentityPath)
+			os.Exit(1)
+		}
+	}
+
+	node3Info, err := encryption.GenerateIdentity()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate node3 identity: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(node3IdentityDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create node3 data directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := encryption.SaveIdentity(node3Info, node3IdentityPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save node3 identity: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated node3 identity: %s (Peer ID: %s)\n", node3IdentityPath, node3Info.PeerID.String())
+
+	node3Name := "node3.yaml"
+	node3Path := filepath.Join(debrosDir, node3Name)
+	if !force {
+		if _, err := os.Stat(node3Path); err == nil {
+			fmt.Fprintf(os.Stderr, "Node3 config already exists at %s (use --force to overwrite)\n", node3Path)
+			os.Exit(1)
+		}
+	}
+	node3Content := generateNodeConfig(node3Name, "", 4003, 5003, 7003, "127.0.0.1:7001", bootstrapMultiaddr)
+	if err := os.WriteFile(node3Path, []byte(node3Content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write node3 config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated node3 config: %s\n", node3Path)
+
+	// Step 5: Generate gateway.yaml
+	gatewayName := "gateway.yaml"
+	gatewayPath := filepath.Join(debrosDir, gatewayName)
+	if !force {
+		if _, err := os.Stat(gatewayPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Gateway config already exists at %s (use --force to overwrite)\n", gatewayPath)
+			os.Exit(1)
+		}
+	}
+	gatewayContent := generateGatewayConfig(bootstrapMultiaddr)
+	if err := os.WriteFile(gatewayPath, []byte(gatewayContent), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write gateway config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated gateway config: %s\n", gatewayPath)
+
+	// Print summary
+	fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
+	fmt.Printf("✅ Full network stack initialized successfully!\n")
+	fmt.Printf(strings.Repeat("=", 60) + "\n\n")
+	fmt.Printf("Configuration files created in: %s\n\n", debrosDir)
+	fmt.Printf("Bootstrap Node:\n")
+	fmt.Printf("  Config:  %s\n", bootstrapPath)
+	fmt.Printf("  Peer ID: %s\n", bootstrapInfo.PeerID.String())
+	fmt.Printf("  Ports:   P2P=4001, HTTP=5001, Raft=7001\n\n")
+	fmt.Printf("Node2:\n")
+	fmt.Printf("  Config:  %s\n", node2Path)
+	fmt.Printf("  Ports:   P2P=4002, HTTP=5002, Raft=7002\n")
+	fmt.Printf("  Join:    127.0.0.1:7001\n\n")
+	fmt.Printf("Node3:\n")
+	fmt.Printf("  Config:  %s\n", node3Path)
+	fmt.Printf("  Ports:   P2P=4003, HTTP=5003, Raft=7003\n")
+	fmt.Printf("  Join:    127.0.0.1:7001\n\n")
+	fmt.Printf("Gateway:\n")
+	fmt.Printf("  Config:  %s\n\n", gatewayPath)
+	fmt.Printf("To start the network:\n")
+	fmt.Printf("  Terminal 1: ./bin/node --config bootstrap.yaml\n")
+	fmt.Printf("  Terminal 2: ./bin/node --config node2.yaml\n")
+	fmt.Printf("  Terminal 3: ./bin/node --config node3.yaml\n")
+	fmt.Printf("  Terminal 4: ./bin/gateway --config gateway.yaml\n")
+	fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
 }
 
 func generateNodeConfig(name, id string, listenPort, rqliteHTTPPort, rqliteRaftPort int, joinAddr, bootstrapPeers string) string {
@@ -923,11 +1122,11 @@ func generateGatewayConfig(bootstrapPeers string) string {
 
 	var peersYAML strings.Builder
 	if len(peers) == 0 {
-		peersYAML.WriteString("  bootstrap_peers: []")
+		peersYAML.WriteString("bootstrap_peers: []")
 	} else {
-		peersYAML.WriteString("  bootstrap_peers:\n")
+		peersYAML.WriteString("bootstrap_peers:\n")
 		for _, p := range peers {
-			fmt.Fprintf(&peersYAML, "    - \"%s\"\n", p)
+			fmt.Fprintf(&peersYAML, "  - \"%s\"\n", p)
 		}
 	}
 
