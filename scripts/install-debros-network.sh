@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # DeBros Network Production Installation Script
-# Installs and configures a complete DeBros network node (bootstrap) with gateway.
+# Installs and configures a complete DeBros network node (regular node) with gateway.
 # Supports idempotent updates and secure systemd service management.
 
 set -e
@@ -41,6 +41,8 @@ GATEWAY_PORT="6001"
 RAFT_PORT="7001"
 UPDATE_MODE=false
 DEBROS_USER="debros"
+BOOTSTRAP_PEERS=""
+RQLITE_JOIN_ADDRESS=""
 
 log() { echo -e "${CYAN}[$(date '+%Y-%m-%d %H:%M:%S')]${NOCOLOR} $1"; }
 error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
@@ -164,9 +166,9 @@ check_and_setup_debros_user() {
     echo -e ""
     echo -e "${GREEN}Run the following command:${NOCOLOR}"
     echo -e "${YELLOW}  su - $DEBROS_USER${NOCOLOR}"
-    echo -e ""
-    echo -e "${CYAN}Then re-run the script with:${NOCOLOR}"
-    echo -e "${YELLOW}  bash $SCRIPT_PATH${NOCOLOR}"
+    echo -e "${YELLOW}  wget https://raw.githubusercontent.com/DeBrosOfficial/network/refs/heads/main/scripts/install-debros-network.sh"
+    echo -e "${YELLOW}  chmod +x install-debros-network.sh${NOCOLOR}"
+    echo -e "${YELLOW}  sudo bash install-debros-network.sh${NOCOLOR}"
     echo -e ""
     echo -e "${BLUE}========================================================================${NOCOLOR}"
     echo -e ""
@@ -492,13 +494,95 @@ generate_configs() {
     log "Generating configuration files via network-cli..."
     DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
     
-    # Generate bootstrap config
-    log "Generating bootstrap.yaml..."
-    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type bootstrap --force
+    # Prompt for bootstrap peers interactively
+    if [ -z "$BOOTSTRAP_PEERS" ]; then
+        echo -e ""
+        echo -e "${CYAN}==================================================================${NOCOLOR}"
+        echo -e "${CYAN}Bootstrap Peers Configuration${NOCOLOR}"
+        echo -e "${CYAN}==================================================================${NOCOLOR}"
+        echo -e ""
+        echo -e "${YELLOW}Enter bootstrap peer multiaddresses.${NOCOLOR}"
+        echo -e "${YELLOW}Format: /ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>${NOCOLOR}"
+        echo -e "${YELLOW}Example: /ip4/127.0.0.1/tcp/4001/p2p/12D3KooWKhDH46jwsGks5grJwifxZnQesMdcsnrzxWv3BjN2qG9g${NOCOLOR}"
+        echo -e ""
+        
+        BOOTSTRAP_ARRAY=()
+        PEER_COUNT=0
+        
+        while true; do
+            PEER_COUNT=$((PEER_COUNT + 1))
+            echo -n "Bootstrap peer #$PEER_COUNT (or press Enter to finish): "
+            read -r BOOTSTRAP_PEER
+            
+            if [ -z "$BOOTSTRAP_PEER" ]; then
+                break
+            fi
+            
+            # Validate multiaddr format
+            if [[ ! "$BOOTSTRAP_PEER" =~ ^/ip[46]/ ]] || [[ ! "$BOOTSTRAP_PEER" =~ /p2p/ ]]; then
+                error "Invalid multiaddr format: $BOOTSTRAP_PEER"
+                echo -e "${CYAN}Expected format: /ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>${NOCOLOR}"
+                PEER_COUNT=$((PEER_COUNT - 1))
+                continue
+            fi
+            
+            BOOTSTRAP_ARRAY+=("$BOOTSTRAP_PEER")
+            echo -e "${GREEN}✓ Added bootstrap peer #$PEER_COUNT${NOCOLOR}"
+        done
+        
+        # Join array into comma-separated string for CLI
+        BOOTSTRAP_PEERS=$(IFS=','; echo "${BOOTSTRAP_ARRAY[*]}")
+        
+        echo -e ""
+        echo -e "${GREEN}Bootstrap peers configured:${NOCOLOR}"
+        for i in "${!BOOTSTRAP_ARRAY[@]}"; do
+            echo -e "${CYAN}  $((i+1)). ${BOOTSTRAP_ARRAY[$i]}${NOCOLOR}"
+        done
+        echo -e ""
+    fi
+    
+    # Prompt for RQLite join address
+    if [ -z "$RQLITE_JOIN_ADDRESS" ]; then
+        echo -e "${CYAN}==================================================================${NOCOLOR}"
+        echo -e "${CYAN}RQLite Cluster Configuration${NOCOLOR}"
+        echo -e "${CYAN}==================================================================${NOCOLOR}"
+        echo -e ""
+        echo -e "${YELLOW}Enter the RQLite cluster join address.${NOCOLOR}"
+        echo -e "${YELLOW}Format: <HOST>:<RAFT_PORT>${NOCOLOR}"
+        echo -e "${YELLOW}Example: 127.0.0.1:7001${NOCOLOR}"
+        echo -e ""
+        echo -n "RQLite join address: "
+        read -r RQLITE_JOIN_ADDRESS
+        if [ -z "$RQLITE_JOIN_ADDRESS" ]; then
+            error "RQLite join address is required for regular node setup"
+            exit 1
+        fi
+        
+        # Validate format (should be host:port)
+        if [[ ! "$RQLITE_JOIN_ADDRESS" =~ ^[^:]+:[0-9]+$ ]]; then
+            error "Invalid RQLite join address format: $RQLITE_JOIN_ADDRESS"
+            echo -e "${CYAN}Expected format: <HOST>:<RAFT_PORT>${NOCOLOR}"
+            exit 1
+        fi
+        
+        echo -e "${GREEN}✓ RQLite join address configured: $RQLITE_JOIN_ADDRESS${NOCOLOR}"
+        echo -e ""
+    fi
+    
+    # Generate node config (regular node, not bootstrap)
+    log "Generating node.yaml (regular node)..."
+    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init \
+        --type node \
+        --bootstrap-peers "$BOOTSTRAP_PEERS" \
+        --join "$RQLITE_JOIN_ADDRESS" \
+        --listen-port $NODE_PORT \
+        --rqlite-http-port $RQLITE_PORT \
+        --rqlite-raft-port $RAFT_PORT \
+        --force
     
     # Generate gateway config
     log "Generating gateway.yaml..."
-    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type gateway --force
+    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type gateway --bootstrap-peers "$BOOTSTRAP_PEERS" --force
     
     success "Configuration files generated"
 }
@@ -547,7 +631,7 @@ create_systemd_services() {
     local exec_start="$INSTALL_DIR/bin/node --config $INSTALL_DIR/configs/node.yaml"
     cat > /tmp/debros-node.service << EOF
 [Unit]
-Description=DeBros Network Node (Bootstrap)
+Description=DeBros Network Node (Regular Node)
 After=network-online.target
 Wants=network-online.target
 
@@ -556,7 +640,7 @@ Type=simple
 User=debros
 Group=debros
 WorkingDirectory=$INSTALL_DIR/src
-ExecStart=$INSTALL_DIR/bin/node --config bootstrap.yaml
+ExecStart=$INSTALL_DIR/bin/node --config node.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal

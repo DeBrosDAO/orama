@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Deprecated
 
+### Fixed
+
+- Fixed install script to be more clear and bug fixing
+
 ## [0.51.9] - 2025-10-25
 
 ### Added
