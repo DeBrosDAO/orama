@@ -535,6 +535,12 @@ main() {
         configure_firewall
     else
         log "Update mode: keeping existing configuration"
+        # But check if configs are missing and generate them if needed
+        DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
+        if [ ! -f "$DEBROS_HOME/.debros/bootstrap.yaml" ] || [ ! -f "$DEBROS_HOME/.debros/gateway.yaml" ]; then
+            log "Update mode: detected missing configuration files, generating them..."
+            generate_configs
+        fi
     fi
     create_systemd_services
     start_services
