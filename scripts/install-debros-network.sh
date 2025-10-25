@@ -389,9 +389,10 @@ create_systemd_services() {
         sudo systemctl disable debros-node.service 2>/dev/null || true
         sudo rm -f "$node_service_file"
     fi
-    
-    log "Creating debros-node.service..."
-    cat > /tmp/debros-node.service << 'EOF'
+    sudo systemctl daemon-reload
+    log "Creating new systemd service..."
+    local exec_start="$INSTALL_DIR/bin/node --config $INSTALL_DIR/configs/node.yaml"
+    cat > /tmp/debros-node.service << EOF
 [Unit]
 Description=DeBros Network Node (Bootstrap)
 After=network-online.target

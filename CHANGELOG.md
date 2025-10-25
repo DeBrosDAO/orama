@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+## [0.51.9] - 2025-10-25
+
+### Added
+
 - One-command `make dev` target to start full development stack (bootstrap + node2 + node3 + gateway in background)
 - New `network-cli config init` (no --type) generates complete development stack with all configs and identities
 - Full stack initialization with auto-generated peer identities for bootstrap and all nodes
