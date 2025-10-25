@@ -430,7 +430,7 @@ create_systemd_service() {
     fi
     sudo systemctl daemon-reload
     log "Creating new systemd service..."
-    local exec_start="$INSTALL_DIR/bin/node -data $INSTALL_DIR/data/node"
+    local exec_start="$INSTALL_DIR/bin/node --config $INSTALL_DIR/configs/node.yaml"
     cat > /tmp/debros-node.service << EOF
 [Unit]
 Description=DeBros Network Node
