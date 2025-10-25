@@ -16,7 +16,7 @@ YELLOW='\033[1;33m'
 NOCOLOR='\033[0m'
 
 # Defaults
-INSTALL_DIR="/opt/debros"
+INSTALL_DIR="$HOME"
 REPO_URL="https://github.com/DeBrosOfficial/network.git"
 MIN_GO_VERSION="1.21"
 NODE_PORT="4001"
@@ -412,8 +412,8 @@ Wants=network-online.target
 Type=simple
 User=debros
 Group=debros
-WorkingDirectory=/opt/debros/src
-ExecStart=/opt/debros/bin/node --config bootstrap.yaml
+WorkingDirectory=$INSTALL_DIR/src
+ExecStart=$INSTALL_DIR/bin/node --config bootstrap.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -424,7 +424,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/opt/debros
+ReadWritePaths=$INSTALL_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -441,7 +441,7 @@ EOF
     fi
     
     log "Creating debros-gateway.service..."
-    cat > /tmp/debros-gateway.service << 'EOF'
+    cat > /tmp/debros-gateway.service << EOF
 [Unit]
 Description=DeBros Gateway (HTTP/WebSocket)
 After=debros-node.service
@@ -451,8 +451,8 @@ Wants=debros-node.service
 Type=simple
 User=debros
 Group=debros
-WorkingDirectory=/opt/debros/src
-ExecStart=/opt/debros/bin/gateway
+WorkingDirectory=$INSTALL_DIR/src
+ExecStart=$INSTALL_DIR/bin/gateway
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -463,7 +463,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/opt/debros
+ReadWritePaths=$INSTALL_DIR
 
 # Allow binding to privileged ports (80, 443) for ACME TLS
 AmbientCapabilities=CAP_NET_BIND_SERVICE
