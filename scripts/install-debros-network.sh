@@ -35,6 +35,12 @@ error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
 
+# Detect non-interactive mode EARLY (before any function calls that require user input)
+if [ ! -t 0 ]; then
+    NON_INTERACTIVE=true
+    log "Running in non-interactive mode"
+fi
+
 # Check if we need to create debros user first (requires root)
 check_and_setup_debros_user() {
     CURRENT_USER=$(whoami)
@@ -68,68 +74,85 @@ check_and_setup_debros_user() {
         echo -e "${YELLOW}DeBros requires a '$DEBROS_USER' system user to run services.${NOCOLOR}"
         echo -e ""
         
-        # Ask for permission to create the user
-        while true; do
-            read -rp "Would you like to create the '$DEBROS_USER' user? (yes/no): " CREATE_USER_CHOICE
-            case "$CREATE_USER_CHOICE" in
-                [Yy][Ee][Ss]|[Yy])
-                    log "Creating system user '$DEBROS_USER'..."
-                    useradd -r -m -s /bin/bash -d "$INSTALL_DIR" "$DEBROS_USER" 2>/dev/null || true
-                    if id "$DEBROS_USER" &>/dev/null; then
-                        success "System user '$DEBROS_USER' created"
-                        
-                        # Prompt for password
-                        echo -e ""
-                        log "Setting password for '$DEBROS_USER' user..."
-                        echo -e "${YELLOW}Note: You can leave the password empty for passwordless login${NOCOLOR}"
-                        echo -e ""
-                        echo -n "Enter password for '$DEBROS_USER' user (or press Enter for no password): "
-                        read -s DEBROS_PASSWORD
-                        echo ""
-                        echo -n "Confirm password: "
-                        read -s DEBROS_PASSWORD_CONFIRM
-                        echo ""
-                        
-                        # Verify passwords match
-                        if [ "$DEBROS_PASSWORD" != "$DEBROS_PASSWORD_CONFIRM" ]; then
-                            error "Passwords do not match!"
-                            exit 1
-                        fi
-                        
-                        # Set password or enable passwordless login
-                        if [ -z "$DEBROS_PASSWORD" ]; then
-                            # For passwordless login, we need to use a special approach
-                            # First, set a temporary password, then remove it
-                            TEMP_PASS="temp123"
-                            echo "$DEBROS_USER:$TEMP_PASS" | chpasswd
-                            # Now remove the password to make it passwordless
-                            passwd -d "$DEBROS_USER" 2>/dev/null || true
-                            success "Passwordless login enabled for '$DEBROS_USER' user"
-                        else
-                            # Set password using chpasswd
-                            echo "$DEBROS_USER:$DEBROS_PASSWORD" | chpasswd
-                            if [ $? -eq 0 ]; then
-                                success "Password set successfully for '$DEBROS_USER' user"
-                            else
-                                error "Failed to set password for '$DEBROS_USER' user"
+        # In non-interactive mode, automatically create the user
+        if [ "$NON_INTERACTIVE" = true ]; then
+            log "Non-interactive mode: automatically creating '$DEBROS_USER' user..."
+            useradd -r -m -s /bin/bash -d "$INSTALL_DIR" "$DEBROS_USER" 2>/dev/null || true
+            if id "$DEBROS_USER" &>/dev/null; then
+                success "System user '$DEBROS_USER' created"
+                # Enable passwordless login in non-interactive mode
+                TEMP_PASS="temp123"
+                echo "$DEBROS_USER:$TEMP_PASS" | chpasswd
+                passwd -d "$DEBROS_USER" 2>/dev/null || true
+                success "Passwordless login enabled for '$DEBROS_USER' user"
+            else
+                error "Failed to create user '$DEBROS_USER'"
+                exit 1
+            fi
+        else
+            # Ask for permission to create the user
+            while true; do
+                read -rp "Would you like to create the '$DEBROS_USER' user? (yes/no): " CREATE_USER_CHOICE
+                case "$CREATE_USER_CHOICE" in
+                    [Yy][Ee][Ss]|[Yy])
+                        log "Creating system user '$DEBROS_USER'..."
+                        useradd -r -m -s /bin/bash -d "$INSTALL_DIR" "$DEBROS_USER" 2>/dev/null || true
+                        if id "$DEBROS_USER" &>/dev/null; then
+                            success "System user '$DEBROS_USER' created"
+                            
+                            # Prompt for password
+                            echo -e ""
+                            log "Setting password for '$DEBROS_USER' user..."
+                            echo -e "${YELLOW}Note: You can leave the password empty for passwordless login${NOCOLOR}"
+                            echo -e ""
+                            echo -n "Enter password for '$DEBROS_USER' user (or press Enter for no password): "
+                            read -s DEBROS_PASSWORD
+                            echo ""
+                            echo -n "Confirm password: "
+                            read -s DEBROS_PASSWORD_CONFIRM
+                            echo ""
+                            
+                            # Verify passwords match
+                            if [ "$DEBROS_PASSWORD" != "$DEBROS_PASSWORD_CONFIRM" ]; then
+                                error "Passwords do not match!"
                                 exit 1
                             fi
+                            
+                            # Set password or enable passwordless login
+                            if [ -z "$DEBROS_PASSWORD" ]; then
+                                # For passwordless login, we need to use a special approach
+                                # First, set a temporary password, then remove it
+                                TEMP_PASS="temp123"
+                                echo "$DEBROS_USER:$TEMP_PASS" | chpasswd
+                                # Now remove the password to make it passwordless
+                                passwd -d "$DEBROS_USER" 2>/dev/null || true
+                                success "Passwordless login enabled for '$DEBROS_USER' user"
+                            else
+                                # Set password using chpasswd
+                                echo "$DEBROS_USER:$DEBROS_PASSWORD" | chpasswd
+                                if [ $? -eq 0 ]; then
+                                    success "Password set successfully for '$DEBROS_USER' user"
+                                else
+                                    error "Failed to set password for '$DEBROS_USER' user"
+                                    exit 1
+                                fi
+                            fi
+                        else
+                            error "Failed to create user '$DEBROS_USER'"
+                            exit 1
                         fi
-                    else
-                        error "Failed to create user '$DEBROS_USER'"
+                        break
+                        ;;
+                    [Nn][Oo]|[Nn])
+                        error "Cannot continue without '$DEBROS_USER' user. Exiting."
                         exit 1
-                    fi
-                    break
-                    ;;
-                [Nn][Oo]|[Nn])
-                    error "Cannot continue without '$DEBROS_USER' user. Exiting."
-                    exit 1
-                    ;;
-                *)
-                    error "Invalid choice. Please enter 'yes' or 'no'."
-                    ;;
-            esac
-        done
+                        ;;
+                    *)
+                        error "Invalid choice. Please enter 'yes' or 'no'."
+                        ;;
+                esac
+            done
+        fi
     else
         log "User '$DEBROS_USER' already exists"
     fi
@@ -163,18 +186,12 @@ check_and_setup_debros_user() {
 # Check and setup debros user (called before other checks)
 check_and_setup_debros_user
 
-# Detect non-interactive mode
-if [ ! -t 0 ]; then
-    NON_INTERACTIVE=true
-    log "Running in non-interactive mode"
-fi
-
 # Root/sudo checks
 if [[ $EUID -eq 0 ]]; then
     warning "Running as root is not recommended for security reasons."
     if [ "$NON_INTERACTIVE" != true ]; then
         echo -n "Are you sure you want to continue? (yes/no): "
-        read ROOT_CONFIRM
+        read -r ROOT_CONFIRM
         if [[ "$ROOT_CONFIRM" != "yes" ]]; then
             error "Installation cancelled for security reasons."
             exit 1
