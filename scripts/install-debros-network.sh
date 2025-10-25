@@ -251,7 +251,7 @@ install_rqlite() {
 }
 
 check_ports() {
-    local ports=($NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT)
+    local ports=($NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT 80 443)
     for port in "${ports[@]}"; do
         if sudo netstat -tuln 2>/dev/null | grep -q ":$port " || ss -tuln 2>/dev/null | grep -q ":$port "; then
             error "Port $port is already in use. Please free it up and try again."
@@ -279,22 +279,30 @@ setup_directories() {
     sudo -u "$DEBROS_USER" mkdir -p "$DEBROS_HOME/.debros"
     sudo chmod 0700 "$DEBROS_HOME/.debros"
     
+    # Create ~/.debros/certmagic for ACME certificate storage
+    sudo -u "$DEBROS_USER" mkdir -p "$DEBROS_HOME/.debros/certmagic"
+    sudo chmod 0700 "$DEBROS_HOME/.debros/certmagic"
+    
     success "Directory structure ready"
 }
 
 setup_source_code() {
     log "Setting up source code..."
     if [ -d "$INSTALL_DIR/src/.git" ]; then
-        log "Updating existing repository..."
+        log "Updating existing repository (on 'nightly' branch)..."
         cd "$INSTALL_DIR/src"
-        sudo -u "$DEBROS_USER" git pull
+        # Always ensure we're on 'nightly' before pulling
+        sudo -u "$DEBROS_USER" git fetch
+        sudo -u "$DEBROS_USER" git checkout nightly || sudo -u "$DEBROS_USER" git checkout -b nightly origin/nightly
+        sudo -u "$DEBROS_USER" git pull origin nightly
     else
-        log "Cloning repository..."
-        sudo -u "$DEBROS_USER" git clone "$REPO_URL" "$INSTALL_DIR/src"
+        log "Cloning repository (branch: nightly)..."
+        sudo -u "$DEBROS_USER" git clone --branch nightly --single-branch "$REPO_URL" "$INSTALL_DIR/src"
         cd "$INSTALL_DIR/src"
     fi
     success "Source code ready"
 }
+
 
 build_binaries() {
     log "Building DeBros Network binaries..."
@@ -354,7 +362,7 @@ configure_firewall() {
     log "Configuring firewall rules..."
     if command -v ufw &> /dev/null; then
         log "Adding UFW rules for DeBros Network ports..."
-        for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT; do
+        for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT 80 443; do
             if ! sudo ufw allow $port 2>/dev/null; then
                 error "Failed to allow port $port"
                 exit 1
@@ -375,6 +383,8 @@ configure_firewall() {
         log "  - Port $RQLITE_PORT (RQLite HTTP)"
         log "  - Port $RAFT_PORT (RQLite Raft)"
         log "  - Port $GATEWAY_PORT (Gateway)"
+        log "  - Port 80 (HTTP - ACME challenges)"
+        log "  - Port 443 (HTTPS - Production TLS)"
     fi
 }
 
@@ -454,6 +464,10 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/opt/debros
+
+# Allow binding to privileged ports (80, 443) for ACME TLS
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -538,8 +552,16 @@ main() {
     log "${GREEN}Config Directory:${NOCOLOR} ${CYAN}$DEBROS_HOME/.debros${NOCOLOR}"
     log "${GREEN}LibP2P Port:${NOCOLOR} ${CYAN}$NODE_PORT${NOCOLOR}"
     log "${GREEN}RQLite Port:${NOCOLOR} ${CYAN}$RQLITE_PORT${NOCOLOR}"
-    log "${GREEN}Gateway Port:${NOCOLOR} ${CYAN}$GATEWAY_PORT${NOCOLOR}"
+    log "${GREEN}Gateway Port (Dev):${NOCOLOR} ${CYAN}$GATEWAY_PORT${NOCOLOR}"
     log "${GREEN}Raft Port:${NOCOLOR} ${CYAN}$RAFT_PORT${NOCOLOR}"
+    log "${GREEN}HTTP/ACME (Production):${NOCOLOR} ${CYAN}80${NOCOLOR}"
+    log "${GREEN}HTTPS/TLS (Production):${NOCOLOR} ${CYAN}443${NOCOLOR}"
+    log "${BLUE}==================================================${NOCOLOR}"
+    log "${GREEN}Production ACME Setup:${NOCOLOR}"
+    log "${CYAN}  Edit $DEBROS_HOME/.debros/gateway.yaml and add:${NOCOLOR}"
+    log "${CYAN}    domain: \"api.example.com\"${NOCOLOR}"
+    log "${CYAN}  Ensure DNS A record points to this server IP${NOCOLOR}"
+    log "${CYAN}  Certificate will auto-provision on first gateway start${NOCOLOR}"
     log "${BLUE}==================================================${NOCOLOR}"
     log "${GREEN}Service Management:${NOCOLOR}"
     log "${CYAN}  - sudo systemctl status debros-node${NOCOLOR} (Check node status)"

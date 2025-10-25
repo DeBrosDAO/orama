@@ -25,6 +25,9 @@ type Config struct {
 	// Optional DSN for rqlite database/sql driver, e.g. "http://localhost:4001"
 	// If empty, defaults to "http://localhost:4001".
 	RQLiteDSN string
+
+	// Production domain for HTTPS/ACME
+	Domain string
 }
 
 type Gateway struct {
