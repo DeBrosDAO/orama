@@ -52,8 +52,12 @@ check_and_setup_debros_user() {
     
     # If running as root via sudo from debros user, that's also okay for proceeding with installation
     if [ "$CURRENT_USER" = "root" ] && [ "$SUDO_USER" = "$DEBROS_USER" ]; then
-        # Switch back to debros user to run the installation properly
-        exec sudo -u "$DEBROS_USER" bash "$SCRIPT_PATH"
+        # Skip re-exec in non-interactive mode (piped script)
+        if [ "$NON_INTERACTIVE" != true ]; then
+            # Switch back to debros user to run the installation properly
+            exec sudo -u "$DEBROS_USER" bash "$SCRIPT_PATH"
+        fi
+        # In non-interactive mode, just proceed as root (user already explicitly used sudo)
     fi
     
     # If not debros user and not root, abort and give instructions
