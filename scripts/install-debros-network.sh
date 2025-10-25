@@ -16,7 +16,7 @@ YELLOW='\033[1;33m'
 NOCOLOR='\033[0m'
 
 # Defaults
-INSTALL_DIR="$HOME"
+INSTALL_DIR="/home/debros"
 REPO_URL="https://github.com/DeBrosOfficial/network.git"
 MIN_GO_VERSION="1.21"
 NODE_PORT="4001"
@@ -31,6 +31,22 @@ log() { echo -e "${CYAN}[$(date '+%Y-%m-%d %H:%M:%S')]${NOCOLOR} $1"; }
 error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
+
+# Check if we need to switch to debros user
+check_and_switch_user() {
+    CURRENT_USER=$(whoami)
+    if [ "$CURRENT_USER" != "$DEBROS_USER" ]; then
+        log "Current user is '$CURRENT_USER', switching to '$DEBROS_USER'..."
+        if ! id "$DEBROS_USER" &>/dev/null; then
+            log "User '$DEBROS_USER' does not exist yet, will be created during setup"
+            log "Running installation as root, will create user and directories, then you can continue as debros user"
+            return 0
+        fi
+        # Re-run this script as the debros user
+        log "Re-executing script as '$DEBROS_USER' user..."
+        exec sudo -u "$DEBROS_USER" bash "$0"
+    fi
+}
 
 # Detect non-interactive mode
 if [ ! -t 0 ]; then
@@ -57,6 +73,8 @@ else
         error "sudo command not found. Please ensure you have sudo privileges."
         exit 1
     fi
+    # Check and switch to debros user if not already
+    check_and_switch_user
 fi
 
 # Detect OS and package manager
@@ -263,12 +281,29 @@ check_ports() {
 
 setup_directories() {
     log "Setting up directories and permissions..."
-    if ! id "$DEBROS_USER" &>/dev/null; then
-        sudo useradd -r -s /usr/sbin/nologin -d "$INSTALL_DIR" "$DEBROS_USER"
-        log "Created debros user"
-    else
-        log "User 'debros' already exists"
+    
+    # Create debros user if it doesn't exist (only works if running as root)
+    if [[ $EUID -eq 0 ]]; then
+        if ! id "$DEBROS_USER" &>/dev/null; then
+            log "Creating system user '$DEBROS_USER' (no password required - system user)..."
+            sudo useradd -r -m -s /usr/sbin/nologin -d "$INSTALL_DIR" "$DEBROS_USER" 2>/dev/null || true
+            if id "$DEBROS_USER" &>/dev/null; then
+                success "System user '$DEBROS_USER' created"
+            else
+                error "Failed to create user '$DEBROS_USER'"
+                exit 1
+            fi
+        else
+            log "User '$DEBROS_USER' already exists"
+            # Update home directory if needed
+            EXISTING_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~' 2>/dev/null)
+            if [ "$EXISTING_HOME" != "$INSTALL_DIR" ]; then
+                log "Updating '$DEBROS_USER' home directory to $INSTALL_DIR..."
+                usermod -d "$INSTALL_DIR" "$DEBROS_USER"
+            fi
+        fi
     fi
+    
     sudo mkdir -p "$INSTALL_DIR"/{bin,src}
     sudo chown -R "$DEBROS_USER:$DEBROS_USER" "$INSTALL_DIR"
     sudo chmod 755 "$INSTALL_DIR"
