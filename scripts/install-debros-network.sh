@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# DeBros Network Node Installation Script (Modern Node-Only Setup)
-# Installs, configures, and manages a DeBros network node with secure defaults.
-# Supports update-in-place, systemd service, and CLI management.
+# DeBros Network Production Installation Script
+# Installs and configures a complete DeBros network node (bootstrap) with gateway.
+# Supports idempotent updates and secure systemd service management.
 
 set -e
 trap 'echo -e "${RED}An error occurred. Installation aborted.${NOCOLOR}"; exit 1' ERR
@@ -25,6 +25,7 @@ GATEWAY_PORT="6001"
 RAFT_PORT="7001"
 UPDATE_MODE=false
 NON_INTERACTIVE=false
+DEBROS_USER="debros"
 
 log() { echo -e "${CYAN}[$(date '+%Y-%m-%d %H:%M:%S')]${NOCOLOR} $1"; }
 error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
@@ -115,7 +116,7 @@ check_existing_installation() {
 
 remove_existing_installation() {
     log "Removing existing installation..."
-    for service in debros-node; do
+    for service in debros-node debros-gateway; do
         if systemctl list-unit-files | grep -q "$service.service"; then
             log "Stopping $service service..."
             sudo systemctl stop $service.service 2>/dev/null || true
@@ -128,8 +129,8 @@ remove_existing_installation() {
         sudo rm -rf "$INSTALL_DIR"
         log "Removed installation directory"
     fi
-    if id "debros" &>/dev/null; then
-        sudo userdel debros 2>/dev/null || true
+    if id "$DEBROS_USER" &>/dev/null; then
+        sudo userdel "$DEBROS_USER" 2>/dev/null || true
         log "Removed debros user"
     fi
     success "Existing installation removed"
@@ -260,50 +261,24 @@ check_ports() {
     success "All required ports are available"
 }
 
-configuration_wizard() {
-    log "${BLUE}==================================================${NOCOLOR}"
-    log "${GREEN}        DeBros Network Configuration Wizard       ${NOCOLOR}"
-    log "${BLUE}==================================================${NOCOLOR}"
-    if [ "$NON_INTERACTIVE" = true ]; then
-        log "Non-interactive mode: using default configuration"
-        SOLANA_WALLET="11111111111111111111111111111111"
-        CONFIGURE_FIREWALL="yes"
-        log "Installation Directory: $INSTALL_DIR"
-        log "Firewall Configuration: $CONFIGURE_FIREWALL"
-        success "Configuration completed with defaults"
-        return 0
-    fi
-    log "${GREEN}Enter your Solana wallet address for node operator rewards:${NOCOLOR}"
-    while true; do
-        read -rp "Solana Wallet Address: " SOLANA_WALLET
-        if [[ -n "$SOLANA_WALLET" && ${#SOLANA_WALLET} -ge 32 ]]; then break; else error "Please enter a valid Solana wallet address"; fi
-    done
-    read -rp "Installation directory [default: $INSTALL_DIR]: " CUSTOM_INSTALL_DIR
-    if [[ -n "$CUSTOM_INSTALL_DIR" ]]; then INSTALL_DIR="$CUSTOM_INSTALL_DIR"; fi
-    read -rp "Configure firewall automatically? (yes/no) [default: yes]: " CONFIGURE_FIREWALL
-    CONFIGURE_FIREWALL="${CONFIGURE_FIREWALL:-yes}"
-    success "Configuration completed"
-}
-
 setup_directories() {
     log "Setting up directories and permissions..."
-    if ! id "debros" &>/dev/null; then
-        sudo useradd -r -s /bin/false -d "$INSTALL_DIR" debros
+    if ! id "$DEBROS_USER" &>/dev/null; then
+        sudo useradd -r -s /usr/sbin/nologin -d "$INSTALL_DIR" "$DEBROS_USER"
         log "Created debros user"
     else
         log "User 'debros' already exists"
     fi
-    sudo mkdir -p "$INSTALL_DIR"/{bin,configs,keys,data,logs,src}
-    sudo mkdir -p "$INSTALL_DIR/keys/node"
-    sudo mkdir -p "$INSTALL_DIR/data/node"/{rqlite,storage}
-    sudo chown -R debros:debros "$INSTALL_DIR"
+    sudo mkdir -p "$INSTALL_DIR"/{bin,src}
+    sudo chown -R "$DEBROS_USER:$DEBROS_USER" "$INSTALL_DIR"
     sudo chmod 755 "$INSTALL_DIR"
-    sudo chmod 700 "$INSTALL_DIR/keys"
-    sudo chmod 700 "$INSTALL_DIR/keys/node"
-    sudo chmod 755 "$INSTALL_DIR/data"
-    sudo chmod 755 "$INSTALL_DIR/logs"
-    sudo chmod 755 "$INSTALL_DIR/configs"
     sudo chmod 755 "$INSTALL_DIR/bin"
+    
+    # Create ~/.debros for the debros user
+    DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
+    sudo -u "$DEBROS_USER" mkdir -p "$DEBROS_HOME/.debros"
+    sudo chmod 0700 "$DEBROS_HOME/.debros"
+    
     success "Directory structure ready"
 }
 
@@ -312,39 +287,20 @@ setup_source_code() {
     if [ -d "$INSTALL_DIR/src/.git" ]; then
         log "Updating existing repository..."
         cd "$INSTALL_DIR/src"
-        sudo -u debros git pull
+        sudo -u "$DEBROS_USER" git pull
     else
         log "Cloning repository..."
-        sudo -u debros git clone "$REPO_URL" "$INSTALL_DIR/src"
+        sudo -u "$DEBROS_USER" git clone "$REPO_URL" "$INSTALL_DIR/src"
         cd "$INSTALL_DIR/src"
     fi
     success "Source code ready"
-}
-
-generate_identity() {
-    local identity_file="$INSTALL_DIR/keys/node/identity.key"
-    if [ -f "$identity_file" ]; then
-        if [ "$UPDATE_MODE" = true ]; then
-            log "Identity key already exists, keeping existing key"
-            success "Using existing node identity"
-            return 0
-        else
-            log "Identity key already exists, regenerating..."
-            sudo rm -f "$identity_file"
-        fi
-    fi
-    log "Generating node identity..."
-    cd "$INSTALL_DIR/src"
-    export PATH=$PATH:/usr/local/go/bin
-    sudo -u debros env "PATH=$PATH:/usr/local/go/bin" go run ./cmd/identity -output "$identity_file"
-    success "Node identity generated"
 }
 
 build_binaries() {
     log "Building DeBros Network binaries..."
     cd "$INSTALL_DIR/src"
     export PATH=$PATH:/usr/local/go/bin
-    sudo -u debros env "PATH=$PATH:/usr/local/go/bin" make build
+    
     local services_were_running=()
     if [ "$UPDATE_MODE" = true ]; then
         log "Update mode: checking for running services before binary update..."
@@ -353,13 +309,22 @@ build_binaries() {
             sudo systemctl stop debros-node.service
             services_were_running+=("debros-node")
         fi
+        if systemctl is-active --quiet debros-gateway.service 2>/dev/null; then
+            log "Stopping debros-gateway service to update binaries..."
+            sudo systemctl stop debros-gateway.service
+            services_were_running+=("debros-gateway")
+        fi
         if [ ${#services_were_running[@]} -gt 0 ]; then
             log "Waiting for services to stop completely..."
             sleep 3
         fi
     fi
+    
+    sudo -u "$DEBROS_USER" env "PATH=$PATH:/usr/local/go/bin" make build
     sudo cp bin/* "$INSTALL_DIR/bin/"
-    sudo chown debros:debros "$INSTALL_DIR/bin/"*
+    sudo chown "$DEBROS_USER:$DEBROS_USER" "$INSTALL_DIR/bin/"*
+    sudo chmod 755 "$INSTALL_DIR/bin/"*
+    
     if [ "$UPDATE_MODE" = true ] && [ ${#services_were_running[@]} -gt 0 ]; then
         log "Restarting previously running services..."
         for service in "${services_were_running[@]}"; do
@@ -371,81 +336,75 @@ build_binaries() {
 }
 
 generate_configs() {
-    log "Generating configuration files..."
-    cat > /tmp/node.yaml << EOF
-node:
-  data_dir: "$INSTALL_DIR/data/node"
-  key_file: "$INSTALL_DIR/keys/node/identity.key"
-  listen_addresses:
-    - "/ip4/0.0.0.0/tcp/$NODE_PORT"
-  solana_wallet: "$SOLANA_WALLET"
-database:
-  rqlite_port: $RQLITE_PORT
-  rqlite_raft_port: $RAFT_PORT
-logging:
-  level: "info"
-  file: "$INSTALL_DIR/logs/node.log"
-EOF
-    sudo mv /tmp/node.yaml "$INSTALL_DIR/configs/node.yaml"
-    sudo chown debros:debros "$INSTALL_DIR/configs/node.yaml"
+    log "Generating configuration files via network-cli..."
+    DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
+    
+    # Generate bootstrap config
+    log "Generating bootstrap.yaml..."
+    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type bootstrap --force
+    
+    # Generate gateway config
+    log "Generating gateway.yaml..."
+    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type gateway --force
+    
     success "Configuration files generated"
 }
 
 configure_firewall() {
-    if [[ "$CONFIGURE_FIREWALL" == "yes" ]]; then
-        log "Configuring firewall rules..."
-        if command -v ufw &> /dev/null; then
-            log "Adding UFW rules for DeBros Network ports..."
-            for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT; do
-                if ! sudo ufw allow $port; then
-                    error "Failed to allow port $port"
-                    exit 1
-                fi
-                log "Added UFW rule: allow port $port"
-            done
-            UFW_STATUS=$(sudo ufw status | grep -o "Status: [a-z]\+" | awk '{print $2}' || echo "inactive")
-            if [[ "$UFW_STATUS" == "active" ]]; then
-                success "Firewall rules added and active"
-            else
-                success "Firewall rules added (UFW is inactive - rules will take effect when UFW is enabled)"
-                log "To enable UFW with current rules: sudo ufw enable"
+    log "Configuring firewall rules..."
+    if command -v ufw &> /dev/null; then
+        log "Adding UFW rules for DeBros Network ports..."
+        for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT; do
+            if ! sudo ufw allow $port 2>/dev/null; then
+                error "Failed to allow port $port"
+                exit 1
             fi
+            log "Added UFW rule: allow port $port"
+        done
+        UFW_STATUS=$(sudo ufw status | grep -o "Status: [a-z]\+" | awk '{print $2}' || echo "inactive")
+        if [[ "$UFW_STATUS" == "active" ]]; then
+            success "Firewall rules added and active"
         else
-            warning "UFW not found. Please configure firewall manually."
-            log "Required ports to allow:"
-            log "  - Port $NODE_PORT (Node)"
-            log "  - Port $RQLITE_PORT (RQLite)"
-            log "  - Port $RAFT_PORT (Raft)"
+            success "Firewall rules added (UFW is inactive - rules will take effect when UFW is enabled)"
+            log "To enable UFW with current rules: sudo ufw enable"
         fi
+    else
+        warning "UFW not found. Please configure firewall manually."
+        log "Required ports to allow:"
+        log "  - Port $NODE_PORT (Node P2P)"
+        log "  - Port $RQLITE_PORT (RQLite HTTP)"
+        log "  - Port $RAFT_PORT (RQLite Raft)"
+        log "  - Port $GATEWAY_PORT (Gateway)"
     fi
 }
 
-create_systemd_service() {
-    local service_file="/etc/systemd/system/debros-node.service"
-    if [ -f "$service_file" ]; then
+create_systemd_services() {
+    log "Creating systemd service units..."
+    
+    # Node service
+    local node_service_file="/etc/systemd/system/debros-node.service"
+    if [ -f "$node_service_file" ]; then
         log "Cleaning up existing node service..."
         sudo systemctl stop debros-node.service 2>/dev/null || true
         sudo systemctl disable debros-node.service 2>/dev/null || true
-        sudo rm -f "$service_file"
+        sudo rm -f "$node_service_file"
     fi
-    sudo systemctl daemon-reload
-    log "Creating new systemd service..."
-    local exec_start="$INSTALL_DIR/bin/node -data $INSTALL_DIR/data/node"
-    cat > /tmp/debros-node.service << EOF
+    
+    log "Creating debros-node.service..."
+    cat > /tmp/debros-node.service << 'EOF'
 [Unit]
-Description=DeBros Network Node
-After=network.target
+Description=DeBros Network Node (Bootstrap)
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=debros
 Group=debros
-WorkingDirectory=$INSTALL_DIR
-Environment=ENVIRONMENT=production
-ExecStart=$exec_start
+WorkingDirectory=/opt/debros/src
+ExecStart=/opt/debros/bin/node --config bootstrap.yaml
 Restart=always
-RestartSec=10
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=debros-node
@@ -454,26 +413,78 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=$INSTALL_DIR
+ReadWritePaths=/opt/debros
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    sudo mv /tmp/debros-node.service "$service_file"
+    sudo mv /tmp/debros-node.service "$node_service_file"
+    
+    # Gateway service
+    local gateway_service_file="/etc/systemd/system/debros-gateway.service"
+    if [ -f "$gateway_service_file" ]; then
+        log "Cleaning up existing gateway service..."
+        sudo systemctl stop debros-gateway.service 2>/dev/null || true
+        sudo systemctl disable debros-gateway.service 2>/dev/null || true
+        sudo rm -f "$gateway_service_file"
+    fi
+    
+    log "Creating debros-gateway.service..."
+    cat > /tmp/debros-gateway.service << 'EOF'
+[Unit]
+Description=DeBros Gateway (HTTP/WebSocket)
+After=debros-node.service
+Wants=debros-node.service
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+WorkingDirectory=/opt/debros/src
+ExecStart=/opt/debros/bin/gateway
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=debros-gateway
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/debros
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo mv /tmp/debros-gateway.service "$gateway_service_file"
+    
     sudo systemctl daemon-reload
     sudo systemctl enable debros-node.service
-    success "Systemd service ready"
+    sudo systemctl enable debros-gateway.service
+    success "Systemd services ready"
 }
 
-start_service() {
-    log "Starting DeBros Network service..."
+start_services() {
+    log "Starting DeBros Network services..."
     sudo systemctl start debros-node.service
     sleep 3
     if systemctl is-active --quiet debros-node.service; then
-        success "DeBros Network service started successfully"
+        success "DeBros Node service started successfully"
     else
-        error "Failed to start DeBros Network service"
-        log "Check logs with: sudo journalctl -u debros-node.service"
+        error "Failed to start DeBros Node service"
+        log "Check logs with: sudo journalctl -u debros-node.service -f"
+        exit 1
+    fi
+    
+    sleep 2
+    sudo systemctl start debros-gateway.service
+    sleep 2
+    if systemctl is-active --quiet debros-gateway.service; then
+        success "DeBros Gateway service started successfully"
+    else
+        error "Failed to start DeBros Gateway service"
+        log "Check logs with: sudo journalctl -u debros-gateway.service -f"
         exit 1
     fi
 }
@@ -501,14 +512,8 @@ main() {
     if ! check_go_installation; then install_go; fi
     install_dependencies
     install_rqlite
-    if [ "$UPDATE_MODE" != true ]; then configuration_wizard; else
-        log "Update mode: skipping configuration wizard"
-        SOLANA_WALLET="11111111111111111111111111111111"
-        CONFIGURE_FIREWALL="yes"
-    fi
     setup_directories
     setup_source_code
-    generate_identity
     build_binaries
     if [ "$UPDATE_MODE" != true ]; then
         generate_configs
@@ -516,8 +521,11 @@ main() {
     else
         log "Update mode: keeping existing configuration"
     fi
-    create_systemd_service
-    start_service
+    create_systemd_services
+    start_services
+    
+    DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
+    
     log "${BLUE}==================================================${NOCOLOR}"
     if [ "$UPDATE_MODE" = true ]; then
         log "${GREEN}        Update Complete!                          ${NOCOLOR}"
@@ -526,21 +534,28 @@ main() {
     fi
     log "${BLUE}==================================================${NOCOLOR}"
     log "${GREEN}Installation Directory:${NOCOLOR} ${CYAN}$INSTALL_DIR${NOCOLOR}"
-    log "${GREEN}Configuration:${NOCOLOR} ${CYAN}$INSTALL_DIR/configs/node.yaml${NOCOLOR}"
-    log "${GREEN}Logs:${NOCOLOR} ${CYAN}$INSTALL_DIR/logs/node.log${NOCOLOR}"
+    log "${GREEN}Config Directory:${NOCOLOR} ${CYAN}$DEBROS_HOME/.debros${NOCOLOR}"
     log "${GREEN}LibP2P Port:${NOCOLOR} ${CYAN}$NODE_PORT${NOCOLOR}"
     log "${GREEN}RQLite Port:${NOCOLOR} ${CYAN}$RQLITE_PORT${NOCOLOR}"
     log "${GREEN}Gateway Port:${NOCOLOR} ${CYAN}$GATEWAY_PORT${NOCOLOR}"
     log "${GREEN}Raft Port:${NOCOLOR} ${CYAN}$RAFT_PORT${NOCOLOR}"
     log "${BLUE}==================================================${NOCOLOR}"
-    log "${GREEN}Management Commands:${NOCOLOR}"
-    log "${CYAN}  - sudo systemctl status debros-node${NOCOLOR} (Check status)"
-    log "${CYAN}  - sudo systemctl restart debros-node${NOCOLOR} (Restart service)"
-    log "${CYAN}  - sudo systemctl stop debros-node${NOCOLOR} (Stop service)"
-    log "${CYAN}  - sudo systemctl start debros-node${NOCOLOR} (Start service)"
-    log "${CYAN}  - sudo journalctl -u debros-node.service -f${NOCOLOR} (View logs)"
-    log "${CYAN}  - $INSTALL_DIR/bin/network-cli${NOCOLOR} (Use CLI tools)"
+    log "${GREEN}Service Management:${NOCOLOR}"
+    log "${CYAN}  - sudo systemctl status debros-node${NOCOLOR} (Check node status)"
+    log "${CYAN}  - sudo systemctl status debros-gateway${NOCOLOR} (Check gateway status)"
+    log "${CYAN}  - sudo systemctl restart debros-node${NOCOLOR} (Restart node)"
+    log "${CYAN}  - sudo systemctl restart debros-gateway${NOCOLOR} (Restart gateway)"
+    log "${CYAN}  - sudo systemctl stop debros-node${NOCOLOR} (Stop node)"
+    log "${CYAN}  - sudo systemctl stop debros-gateway${NOCOLOR} (Stop gateway)"
+    log "${CYAN}  - sudo journalctl -u debros-node.service -f${NOCOLOR} (View node logs)"
+    log "${CYAN}  - sudo journalctl -u debros-gateway.service -f${NOCOLOR} (View gateway logs)"
     log "${BLUE}==================================================${NOCOLOR}"
+    log "${GREEN}Verify Installation:${NOCOLOR}"
+    log "${CYAN}  - Node health: curl http://127.0.0.1:5001/status${NOCOLOR}"
+    log "${CYAN}  - Gateway health: curl http://127.0.0.1:6001/health${NOCOLOR}"
+    log "${CYAN}  - Show bootstrap peer: cat $DEBROS_HOME/.debros/bootstrap/peer.info${NOCOLOR}"
+    log "${BLUE}==================================================${NOCOLOR}"
+    
     if [ "$UPDATE_MODE" = true ]; then
         success "DeBros Network has been updated and is running!"
     else

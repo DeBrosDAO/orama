@@ -73,3 +73,5 @@ data/bootstrap/rqlite/
 .env.*
 
 configs/
+
+.dev/
