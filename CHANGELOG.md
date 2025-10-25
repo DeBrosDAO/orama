@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 - Fixed indentation in bootstrapPeerSource function for consistency
 - Fixed gateway.yaml generation with correct YAML indentation for bootstrap_peers
+- Fixed script for running and added gateway running as well
 
 ### Security
 
