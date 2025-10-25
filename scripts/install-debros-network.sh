@@ -70,7 +70,7 @@ check_and_setup_debros_user() {
         
         # Ask for permission to create the user
         while true; do
-            read -p "Would you like to create the '$DEBROS_USER' user? (yes/no): " CREATE_USER_CHOICE
+            read -rp "Would you like to create the '$DEBROS_USER' user? (yes/no): " CREATE_USER_CHOICE
             case "$CREATE_USER_CHOICE" in
                 [Yy][Ee][Ss]|[Yy])
                     log "Creating system user '$DEBROS_USER'..."
