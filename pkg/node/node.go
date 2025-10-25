@@ -84,35 +84,35 @@ func (n *Node) startRQLite(ctx context.Context) error {
 
 // bootstrapPeerSource returns a PeerSource that yields peers from BootstrapPeers.
 func bootstrapPeerSource(bootstrapAddrs []string, logger *zap.Logger) func(context.Context, int) <-chan peer.AddrInfo {
-    return func(ctx context.Context, num int) <-chan peer.AddrInfo {
-        out := make(chan peer.AddrInfo, num)
-        go func() {
-            defer close(out)
-            count := 0
-            for _, s := range bootstrapAddrs {
-                if count >= num {
-                    return
-                }
-                ma, err := multiaddr.NewMultiaddr(s)
-                if err != nil {
-                    logger.Debug("invalid bootstrap multiaddr", zap.String("addr", s), zap.Error(err))
-                    continue
-                }
-                ai, err := peer.AddrInfoFromP2pAddr(ma)
-                if err != nil {
-                    logger.Debug("failed to parse bootstrap peer", zap.String("addr", s), zap.Error(err))
-                    continue
-                }
-                select {
-                case out <- *ai:
-                    count++
-                case <-ctx.Done():
-                    return
-                }
-            }
-        }()
-        return out
-    }
+	return func(ctx context.Context, num int) <-chan peer.AddrInfo {
+		out := make(chan peer.AddrInfo, num)
+		go func() {
+			defer close(out)
+			count := 0
+			for _, s := range bootstrapAddrs {
+				if count >= num {
+					return
+				}
+				ma, err := multiaddr.NewMultiaddr(s)
+				if err != nil {
+					logger.Debug("invalid bootstrap multiaddr", zap.String("addr", s), zap.Error(err))
+					continue
+				}
+				ai, err := peer.AddrInfoFromP2pAddr(ma)
+				if err != nil {
+					logger.Debug("failed to parse bootstrap peer", zap.String("addr", s), zap.Error(err))
+					continue
+				}
+				select {
+				case out <- *ai:
+					count++
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		return out
+	}
 }
 
 // hasBootstrapConnections checks if we're connected to any bootstrap peers
@@ -250,20 +250,51 @@ func (n *Node) startLibP2P() error {
 		return fmt.Errorf("failed to load identity: %w", err)
 	}
 
-	// Create LibP2P host with NAT traversal support
+	// Create LibP2P host with explicit listen addresses
 	var opts []libp2p.Option
 	opts = append(opts,
 		libp2p.Identity(identity),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
-		libp2p.EnableNATService(),
-		libp2p.EnableAutoNATv2(),
-		libp2p.EnableRelay(),
-		libp2p.NATPortMap(),
-		libp2p.EnableAutoRelayWithPeerSource(
-			bootstrapPeerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
-		),
 	)
+
+	// Add explicit listen addresses from config
+	if len(n.config.Node.ListenAddresses) > 0 {
+		listenAddrs := make([]multiaddr.Multiaddr, 0, len(n.config.Node.ListenAddresses))
+		for _, addr := range n.config.Node.ListenAddresses {
+			ma, err := multiaddr.NewMultiaddr(addr)
+			if err != nil {
+				return fmt.Errorf("invalid listen address %s: %w", addr, err)
+			}
+			listenAddrs = append(listenAddrs, ma)
+		}
+		opts = append(opts, libp2p.ListenAddrs(listenAddrs...))
+		n.logger.ComponentInfo(logging.ComponentLibP2P, "Configured listen addresses",
+			zap.Strings("addrs", n.config.Node.ListenAddresses))
+	}
+
+	// For localhost/development, disable NAT services
+	// For production, these would be enabled
+	isLocalhost := len(n.config.Node.ListenAddresses) > 0 &&
+		(strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1") ||
+			strings.Contains(n.config.Node.ListenAddresses[0], "localhost"))
+
+	if isLocalhost {
+		n.logger.ComponentInfo(logging.ComponentLibP2P, "Localhost detected - disabling NAT services for local development")
+		// Don't add NAT/AutoRelay options for localhost
+	} else {
+		// Production: enable NAT traversal
+		n.logger.ComponentInfo(logging.ComponentLibP2P, "Production mode - enabling NAT services")
+		opts = append(opts,
+			libp2p.EnableNATService(),
+			libp2p.EnableAutoNATv2(),
+			libp2p.EnableRelay(),
+			libp2p.NATPortMap(),
+			libp2p.EnableAutoRelayWithPeerSource(
+				bootstrapPeerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
+			),
+		)
+	}
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
