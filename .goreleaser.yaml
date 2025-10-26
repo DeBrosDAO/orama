@@ -1,5 +1,6 @@
 # GoReleaser Configuration for DeBros Network
-# This config builds and publishes binaries and Debian packages
+# Builds and releases the network-cli binary for multiple platforms
+# Other binaries (node, gateway, identity) are installed via: network-cli setup
 
 project_name: debros-network
 
@@ -7,7 +8,7 @@ env:
   - GO111MODULE=on
 
 builds:
-  # network-cli binary
+  # network-cli binary - only build the CLI
   - id: network-cli
     main: ./cmd/cli
     binary: network-cli
@@ -23,57 +24,9 @@ builds:
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
     mod_timestamp: '{{ .CommitTimestamp }}'
-    
-  # node binary
-  - id: node
-    main: ./cmd/node
-    binary: node
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
-    mod_timestamp: '{{ .CommitTimestamp }}'
-    
-  # gateway binary
-  - id: gateway
-    main: ./cmd/gateway
-    binary: gateway
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
-    mod_timestamp: '{{ .CommitTimestamp }}'
-    
-  # identity binary
-  - id: identity
-    main: ./cmd/identity
-    binary: identity
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
-    mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
-  # Tar.gz archives for each binary
+  # Tar.gz archives for network-cli
   - id: binaries
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

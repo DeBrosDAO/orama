@@ -10,10 +10,15 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Changed
 
+- **GoReleaser**: Updated to build only `network-cli` binary (v0.52.2+)
+  - Other binaries (node, gateway, identity) now installed via `network-cli setup`
+  - Cleaner, smaller release packages
+  - Resolves archive mismatch errors
+- **GitHub Actions**: Updated artifact actions from v3 to v4 (deprecated versions)
+
 ### Deprecated
 
 ### Fixed
-
 
 - Fixed install script to be more clear and bug fixing
 
