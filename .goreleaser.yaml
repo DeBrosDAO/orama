@@ -1,64 +1,113 @@
-# GoReleaser config for network
-project_name: network
+# GoReleaser Configuration for DeBros Network
+# This config builds and publishes binaries and Debian packages
 
-before:
-  hooks:
-    - go mod tidy
+project_name: debros-network
+
+env:
+  - GO111MODULE=on
 
 builds:
-  - id: network-node
-    main: ./cmd/node
-    binary: network-node
-    env:
-      - CGO_ENABLED=0
-    flags: ["-trimpath"]
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    mod_timestamp: '{{ .CommitDate }}'
-
+  # network-cli binary
   - id: network-cli
     main: ./cmd/cli
     binary: network-cli
-    env:
-      - CGO_ENABLED=0
-    flags: ["-trimpath"]
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
+      - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    mod_timestamp: '{{ .CommitDate }}'
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    
+  # node binary
+  - id: node
+    main: ./cmd/node
+    binary: node
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    
+  # gateway binary
+  - id: gateway
+    main: ./cmd/gateway
+    binary: gateway
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    
+  # identity binary
+  - id: identity
+    main: ./cmd/identity
+    binary: identity
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
-  - id: default
-    builds: [network-node, network-cli]
+  # Tar.gz archives for each binary
+  - id: binaries
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - LICENSE*
       - README.md
+      - LICENSE
+      - CHANGELOG.md
+    format_overrides:
+      - goos: windows
+        format: zip
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
 
-signs:
-  - artifacts: checksum
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
-  use: git
+  abbrev: -1
   filters:
     exclude:
       - '^docs:'
       - '^test:'
+      - '^chore:'
       - '^ci:'
+      - Merge pull request
+      - Merge branch
 
 release:
+  github:
+    owner: DeBrosOfficial
+    name: network
+  draft: false
   prerelease: auto
+  name_template: "Release {{.Version}}"
