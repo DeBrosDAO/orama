@@ -380,21 +380,12 @@ func cloneAndBuild() {
 	// Build
 	fmt.Printf("   Building binaries...\n")
 
-	// Properly build environment with Go in PATH, avoiding duplicate PATH entries
-	var env []string
-	goPath := os.Getenv("PATH") + ":/usr/local/go/bin"
-	for _, e := range os.Environ() {
-		// Skip existing PATH entries to avoid duplicates
-		if !strings.HasPrefix(e, "PATH=") {
-			env = append(env, e)
-		}
-	}
-	// Add our modified PATH with Go
-	env = append(env, "PATH="+goPath)
+	// Ensure Go is in PATH for the build
+	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/go/bin")
 
-	cmd := exec.Command("sudo", "-u", "debros", "make", "build")
+	// Use sudo with --preserve-env=PATH to pass Go path to debros user
+	cmd := exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
 	cmd.Dir = "/home/debros/src"
-	cmd.Env = env
 	if output, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to build: %v\n%s\n", err, output)
 		os.Exit(1)
