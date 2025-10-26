@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -85,19 +86,16 @@ func HandleSetupCommand(args []string) {
 	// Step 5: Setup directories
 	setupDirectories()
 
-	// Step 6: Initialize environments
-	initializeEnvironments()
-
-	// Step 7: Clone and build
+	// Step 6: Clone and build
 	cloneAndBuild()
 
-	// Step 8: Generate configs (interactive)
+	// Step 7: Generate configs (interactive)
 	generateConfigsInteractive(force)
 
-	// Step 9: Create systemd services
+	// Step 8: Create systemd services
 	createSystemdServices()
 
-	// Step 10: Start services
+	// Step 9: Start services
 	startServices()
 
 	// Done!
@@ -157,6 +155,40 @@ func promptYesNo() bool {
 	return response == "yes" || response == "y"
 }
 
+// isValidMultiaddr validates bootstrap peer multiaddr format
+func isValidMultiaddr(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if !(strings.HasPrefix(s, "/ip4/") || strings.HasPrefix(s, "/ip6/")) {
+		return false
+	}
+	return strings.Contains(s, "/p2p/")
+}
+
+// isValidHostPort validates host:port format
+func isValidHostPort(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return false
+	}
+	host := strings.TrimSpace(parts[0])
+	port := strings.TrimSpace(parts[1])
+	if host == "" {
+		return false
+	}
+	// Port must be a valid number between 1 and 65535
+	if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
+		return false
+	}
+	return true
+}
+
 func setupDebrosUser() {
 	fmt.Printf("👤 Setting up 'debros' user...\n")
 
@@ -170,13 +202,6 @@ func setupDebrosUser() {
 	cmd := exec.Command("useradd", "-r", "-m", "-s", "/bin/bash", "-d", "/home/debros", "debros")
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to create user 'debros': %v\n", err)
-		os.Exit(1)
-	}
-
-	// Add to sudoers
-	sudoersContent := "debros ALL=(ALL) NOPASSWD:ALL\n"
-	if err := os.WriteFile("/etc/sudoers.d/debros", []byte(sudoersContent), 0440); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to add debros to sudoers: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -311,33 +336,6 @@ func installRQLite() {
 	fmt.Printf("   ✓ RQLite installed\n")
 }
 
-func initializeEnvironments() {
-	fmt.Printf("🔄 Initializing environments...\n")
-
-	// Create .debros directory
-	if err := os.MkdirAll("/home/debros/.debros", 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to create .debros directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Create .debros/environments.json
-	environmentsConfig := `{
-	"node": {
-		"bootstrap-peers": [],
-		"join": "127.0.0.1:7001"
-	},
-	"gateway": {
-		"bootstrap-peers": []
-	}
-}`
-	if err := os.WriteFile("/home/debros/.debros/environments.json", []byte(environmentsConfig), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to create environments config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("   ✓ Environments initialized\n")
-}
-
 func setupDirectories() {
 	fmt.Printf("📁 Creating directories...\n")
 
@@ -372,7 +370,7 @@ func cloneAndBuild() {
 		}
 	} else {
 		fmt.Printf("   Cloning repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", "nightly", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
+		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", "nightly", "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n", err)
 			os.Exit(1)
@@ -381,9 +379,22 @@ func cloneAndBuild() {
 
 	// Build
 	fmt.Printf("   Building binaries...\n")
+
+	// Properly build environment with Go in PATH, avoiding duplicate PATH entries
+	var env []string
+	goPath := os.Getenv("PATH") + ":/usr/local/go/bin"
+	for _, e := range os.Environ() {
+		// Skip existing PATH entries to avoid duplicates
+		if !strings.HasPrefix(e, "PATH=") {
+			env = append(env, e)
+		}
+	}
+	// Add our modified PATH with Go
+	env = append(env, "PATH="+goPath)
+
 	cmd := exec.Command("sudo", "-u", "debros", "make", "build")
 	cmd.Dir = "/home/debros/src"
-	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
+	cmd.Env = env
 	if output, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to build: %v\n%s\n", err, output)
 		os.Exit(1)
@@ -415,13 +426,30 @@ func generateConfigsInteractive(force bool) {
 		if line == "" {
 			break
 		}
+		if !isValidMultiaddr(line) {
+			fmt.Printf("❌ Invalid multiaddr format. Must start with /ip4 or /ip6 and contain /p2p/\n")
+			continue
+		}
 		bootstrapPeers = append(bootstrapPeers, line)
+		fmt.Printf("✓ Added peer\n")
 	}
 
-	// Prompt for RQLite join address
-	fmt.Printf("\nEnter RQLite join address (host:port, e.g., 10.0.1.5:7001): ")
-	joinAddr, _ := reader.ReadString('\n')
-	joinAddr = strings.TrimSpace(joinAddr)
+	// Prompt for RQLite join address with validation
+	var joinAddr string
+	for {
+		fmt.Printf("\nEnter RQLite join address (host:port, e.g., 10.0.1.5:7001): ")
+		input, _ := reader.ReadString('\n')
+		joinAddr = strings.TrimSpace(input)
+		if joinAddr == "" {
+			fmt.Printf("⚠️  Join address is required\n")
+			continue
+		}
+		if !isValidHostPort(joinAddr) {
+			fmt.Printf("❌ Invalid host:port format\n")
+			continue
+		}
+		break
+	}
 
 	// Generate configs using network-cli
 	bootstrapPeersStr := strings.Join(bootstrapPeers, ",")
@@ -467,7 +495,9 @@ Type=simple
 User=debros
 Group=debros
 WorkingDirectory=/home/debros/src
-ExecStart=/home/debros/bin/node --config /home/debros/.debros/environments.json
+ExecStart=/home/debros/bin/node --config node.yaml
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/debros
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -499,7 +529,9 @@ Type=simple
 User=debros
 Group=debros
 WorkingDirectory=/home/debros/src
-ExecStart=/home/debros/bin/gateway --config /home/debros/.debros/environments.json
+ExecStart=/home/debros/bin/gateway
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/debros
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -537,9 +569,6 @@ func startServices() {
 	} else {
 		fmt.Printf("   ✓ Node service started\n")
 	}
-
-	// Wait a bit
-	exec.Command("sleep", "3").Run()
 
 	// Start gateway
 	if err := exec.Command("systemctl", "start", "debros-gateway").Run(); err != nil {
