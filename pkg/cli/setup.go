@@ -242,8 +242,26 @@ func ensureGo() {
 		os.Exit(1)
 	}
 
-	// Add to PATH
+	// Add to PATH for current process
 	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/go/bin")
+
+	// Also add to debros user's .bashrc for persistent availability
+	debrosHome := "/home/debros"
+	bashrc := debrosHome + "/.bashrc"
+	pathLine := "\nexport PATH=$PATH:/usr/local/go/bin\n"
+
+	// Read existing bashrc
+	existing, _ := os.ReadFile(bashrc)
+	existingStr := string(existing)
+
+	// Add PATH if not already present
+	if !strings.Contains(existingStr, "/usr/local/go/bin") {
+		if err := os.WriteFile(bashrc, []byte(existingStr+pathLine), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to update debros .bashrc: %v\n", err)
+		}
+		// Fix ownership
+		exec.Command("chown", "debros:debros", bashrc).Run()
+	}
 
 	fmt.Printf("   ✓ Go installed\n")
 }
