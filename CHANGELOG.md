@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+
 - Fixed install script to be more clear and bug fixing
 
 ## [0.52.1] - 2025-10-26
