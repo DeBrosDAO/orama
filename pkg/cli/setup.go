@@ -59,8 +59,9 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  5. Create directories (/home/debros/bin, /home/debros/src)\n")
 	fmt.Printf("  6. Clone and build DeBros Network\n")
 	fmt.Printf("  7. Generate configuration files\n")
-	fmt.Printf("  8. Create systemd services (debros-node, debros-gateway)\n")
-	fmt.Printf("  9. Start and enable services\n")
+	fmt.Printf("  8. Configure firewall (UFW) for ports 22, 4001, 6001\n")
+	fmt.Printf("  9. Create systemd services (debros-node, debros-gateway)\n")
+	fmt.Printf("  10. Start and enable services\n")
 	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
 
 	fmt.Printf("Ready to begin setup? (yes/no): ")
@@ -92,10 +93,13 @@ func HandleSetupCommand(args []string) {
 	// Step 7: Generate configs (interactive)
 	generateConfigsInteractive(force)
 
-	// Step 8: Create systemd services
+	// Step 8: Configure firewall
+	configureFirewall()
+
+	// Step 9: Create systemd services
 	createSystemdServices()
 
-	// Step 9: Start services
+	// Step 10: Start services
 	startServices()
 
 	// Done!
@@ -507,6 +511,121 @@ func generateConfigsInteractive(force bool) {
 	fmt.Printf("   ✓ Configurations generated\n")
 }
 
+func configureFirewall() {
+	fmt.Printf("🔥 Configuring firewall (UFW)...\n")
+
+	// Check if UFW is installed
+	if _, err := exec.LookPath("ufw"); err != nil {
+		fmt.Printf("   ℹ️  UFW not installed, skipping firewall configuration\n")
+		fmt.Printf("   To install later: sudo apt install ufw\n")
+		fmt.Printf("   Required ports: 22 (SSH), 4001 (P2P), 6001 (Gateway)\n\n")
+		return
+	}
+
+	// Check if UFW is active
+	output, _ := exec.Command("ufw", "status").CombinedOutput()
+	isActive := strings.Contains(string(output), "Status: active")
+
+	if isActive {
+		// UFW is already active - show current status and ask before modifying
+		fmt.Printf("\n   ⚠️  UFW firewall is already active with existing rules.\n")
+		fmt.Printf("   Current status:\n")
+		statusCmd := exec.Command("ufw", "status", "numbered")
+		statusOutput, _ := statusCmd.CombinedOutput()
+		lines := strings.Split(string(statusOutput), "\n")
+		for i, line := range lines {
+			if i < 15 && line != "" {
+				fmt.Printf("   %s\n", line)
+			}
+		}
+		fmt.Printf("\n   DeBros Network requires these ports:\n")
+		fmt.Printf("     • 22/tcp   - SSH (critical - don't block this!)\n")
+		fmt.Printf("     • 4001/tcp - LibP2P P2P Network\n")
+		fmt.Printf("     • 6001/tcp - Gateway HTTP API\n")
+		fmt.Printf("     • 5001, 7001 kept internal (RQLite)\n\n")
+		fmt.Printf("   Add DeBros ports to your existing firewall? (yes/no): ")
+		if !promptYesNo() {
+			fmt.Printf("   ⏭️  Skipping firewall configuration\n")
+			fmt.Printf("   You can manually add rules later:\n")
+			fmt.Printf("     sudo ufw allow 4001/tcp\n")
+			fmt.Printf("     sudo ufw allow 6001/tcp\n\n")
+			return
+		}
+	} else {
+		// UFW is not active - ask before enabling
+		fmt.Printf("\n   UFW firewall is not active.\n")
+		fmt.Printf("   DeBros Network requires these ports:\n")
+		fmt.Printf("     • 22/tcp   - SSH (will be allowed first)\n")
+		fmt.Printf("     • 4001/tcp - LibP2P P2P Network\n")
+		fmt.Printf("     • 6001/tcp - Gateway HTTP API\n")
+		fmt.Printf("     • 5001, 7001 kept internal (RQLite)\n\n")
+		fmt.Printf("   Enable UFW and configure DeBros ports? (yes/no): ")
+		if !promptYesNo() {
+			fmt.Printf("   ⏭️  Skipping firewall configuration\n")
+			fmt.Printf("   You can manually configure later:\n")
+			fmt.Printf("     sudo ufw allow 22/tcp\n")
+			fmt.Printf("     sudo ufw allow 4001/tcp\n")
+			fmt.Printf("     sudo ufw allow 6001/tcp\n")
+			fmt.Printf("     sudo ufw enable\n\n")
+			return
+		}
+
+		fmt.Printf("\n   Enabling UFW...\n")
+
+		// CRITICAL: Allow SSH first to prevent lockout
+		if err := exec.Command("ufw", "allow", "22/tcp").Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "   ❌ Failed to allow SSH port: %v\n", err)
+			return
+		}
+		fmt.Printf("   ✓ Allowed SSH port 22/tcp (critical)\n")
+
+		// Enable UFW with --force to avoid interactive prompt
+		if err := exec.Command("ufw", "--force", "enable").Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "   ❌ Failed to enable UFW: %v\n", err)
+			return
+		}
+		fmt.Printf("   ✓ UFW enabled\n")
+	}
+
+	// Configure required DeBros ports
+	ports := map[string]string{
+		"4001/tcp": "LibP2P (P2P Network)",
+		"6001/tcp": "Gateway API",
+	}
+
+	for port, description := range ports {
+		// Check if rule already exists
+		checkCmd := exec.Command("ufw", "status", "numbered")
+		checkOutput, _ := checkCmd.CombinedOutput()
+
+		if strings.Contains(string(checkOutput), port) {
+			fmt.Printf("   ✓ Port %s already allowed (%s)\n", port, description)
+			continue
+		}
+
+		// Add the rule
+		if err := exec.Command("ufw", "allow", port).Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "   ⚠️  Failed to allow port %s: %v\n", port, err)
+		} else {
+			fmt.Printf("   ✓ Allowed port %s (%s)\n", port, description)
+		}
+	}
+
+	// Show updated firewall status
+	fmt.Printf("\n   Updated firewall configuration:\n")
+	statusCmd := exec.Command("ufw", "status", "verbose")
+	statusOutput, _ := statusCmd.CombinedOutput()
+	lines := strings.Split(string(statusOutput), "\n")
+	for i, line := range lines {
+		if i < 12 && line != "" {
+			fmt.Printf("   %s\n", line)
+		}
+	}
+
+	fmt.Printf("\n   ✅ Firewall configured successfully\n")
+	fmt.Printf("   Note: Ports 5001 (RQLite HTTP) and 7001 (RQLite Raft) are kept internal\n\n")
+}
+
 func createSystemdServices() {
 	fmt.Printf("🔧 Creating systemd services...\n")
 
@@ -563,6 +682,8 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=debros-gateway
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 NoNewPrivileges=yes
 PrivateTmp=yes

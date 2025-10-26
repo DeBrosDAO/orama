@@ -241,7 +241,7 @@ show_completion() {
     echo -e "  • Switch to testnet:   ${CYAN}network-cli testnet enable${NOCOLOR}"
     echo -e "  • Show environment:    ${CYAN}network-cli env current${NOCOLOR}"
     echo -e ""
-    echo -e "${CYAN}Documentation: https://docs.debros.io${NOCOLOR}"
+    echo -e "${CYAN}Documentation: https://debros.network/docs${NOCOLOR}"
     echo -e ""
 }
 
