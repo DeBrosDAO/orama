@@ -41,7 +41,7 @@ func HandleSetupCommand(args []string) {
 
 	if !isSupportedOS(osInfo) {
 		fmt.Fprintf(os.Stderr, "⚠️  Unsupported OS: %s\n", osInfo)
-		fmt.Fprintf(os.Stderr, "   Supported: Ubuntu 22.04/24.04, Debian 12\n")
+		fmt.Fprintf(os.Stderr, "   Supported: Ubuntu 22.04/24.04/25.04, Debian 12\n")
 		fmt.Printf("\nContinue anyway? (yes/no): ")
 		if !promptYesNo() {
 			fmt.Println("Setup cancelled.")
@@ -138,6 +138,7 @@ func isSupportedOS(osInfo string) bool {
 	supported := []string{
 		"ubuntu 22.04",
 		"ubuntu 24.04",
+		"ubuntu 25.04",
 		"debian 12",
 	}
 	for _, s := range supported {
@@ -392,7 +393,7 @@ func cloneAndBuild() {
 	}
 
 	// Copy binaries
-	exec.Command("cp", "-r", "/home/debros/src/bin/", "/home/debros/bin/").Run()
+	exec.Command("sh", "-c", "cp -r /home/debros/src/bin/* /home/debros/bin/").Run()
 	exec.Command("chown", "-R", "debros:debros", "/home/debros/bin").Run()
 	exec.Command("chmod", "-R", "755", "/home/debros/bin").Run()
 
