@@ -402,71 +402,65 @@ func cloneAndBuild() {
 func generateConfigsInteractive(force bool) {
 	fmt.Printf("⚙️  Generating configurations...\n")
 
-	// Prompt for bootstrap peers
+	// For single-node VPS setup, use sensible defaults
+	// This creates a bootstrap node that acts as the cluster leader
 	fmt.Printf("\n")
-	fmt.Printf("Enter bootstrap peer multiaddresses (one per line, empty line to finish):\n")
-	fmt.Printf("Format: /ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>\n")
-	fmt.Printf("Example: /ip4/127.0.0.1/tcp/4001/p2p/12D3Koo...\n\n")
+	fmt.Printf("Setting up single-node configuration...\n")
+	fmt.Printf("  • Bootstrap node (cluster leader)\n")
+	fmt.Printf("  • No external peers required\n")
+	fmt.Printf("  • Gateway connected to local node\n\n")
 
-	reader := bufio.NewReader(os.Stdin)
-	var bootstrapPeers []string
-	for {
-		fmt.Printf("Bootstrap peer: ")
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(line)
-		if line == "" {
-			break
-		}
-		if !isValidMultiaddr(line) {
-			fmt.Printf("❌ Invalid multiaddr format. Must start with /ip4 or /ip6 and contain /p2p/\n")
-			continue
-		}
-		bootstrapPeers = append(bootstrapPeers, line)
-		fmt.Printf("✓ Added peer\n")
-	}
-
-	// Prompt for RQLite join address with validation
-	var joinAddr string
-	for {
-		fmt.Printf("\nEnter RQLite join address (host:port, e.g., 10.0.1.5:7001): ")
-		input, _ := reader.ReadString('\n')
-		joinAddr = strings.TrimSpace(input)
-		if joinAddr == "" {
-			fmt.Printf("⚠️  Join address is required\n")
-			continue
-		}
-		if !isValidHostPort(joinAddr) {
-			fmt.Printf("❌ Invalid host:port format\n")
-			continue
-		}
-		break
-	}
-
-	// Generate configs using network-cli
-	bootstrapPeersStr := strings.Join(bootstrapPeers, ",")
-
-	args := []string{
+	// Generate bootstrap node config with explicit parameters
+	// Pass empty bootstrap-peers and no join address for bootstrap node
+	bootstrapArgs := []string{
+		"-u", "debros",
 		"/home/debros/bin/network-cli", "config", "init",
-		"--type", "node",
-		"--bootstrap-peers", bootstrapPeersStr,
-		"--join", joinAddr,
+		"--type", "bootstrap",
+		"--bootstrap-peers", "",
 	}
 	if force {
-		args = append(args, "--force")
+		bootstrapArgs = append(bootstrapArgs, "--force")
 	}
 
-	cmd := exec.Command("sudo", append([]string{"-u", "debros"}, args...)...)
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to generate node config: %v\n", err)
+	cmd := exec.Command("sudo", bootstrapArgs...)
+	cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to generate bootstrap config: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+	} else {
+		fmt.Printf("   ✓ Bootstrap node config created\n")
 	}
 
-	// Generate gateway config
-	cmd = exec.Command("sudo", "-u", "debros", "/home/debros/bin/network-cli", "config", "init", "--type", "gateway", "--bootstrap-peers", bootstrapPeersStr)
+	// Rename bootstrap.yaml to node.yaml so the service can find it
+	renameCmd := exec.Command("sudo", "-u", "debros", "mv", "/home/debros/.debros/bootstrap.yaml", "/home/debros/.debros/node.yaml")
+	if err := renameCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to rename config: %v\n", err)
+	}
+
+	// Generate gateway config with explicit empty bootstrap peers
+	gatewayArgs := []string{
+		"-u", "debros",
+		"/home/debros/bin/network-cli", "config", "init",
+		"--type", "gateway",
+		"--bootstrap-peers", "",
+	}
 	if force {
-		cmd.Args = append(cmd.Args, "--force")
+		gatewayArgs = append(gatewayArgs, "--force")
 	}
-	if err := cmd.Run(); err != nil {
+
+	cmd = exec.Command("sudo", gatewayArgs...)
+	cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
+	output, err = cmd.CombinedOutput()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Failed to generate gateway config: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+	} else {
+		fmt.Printf("   ✓ Gateway config created\n")
 	}
 
 	fmt.Printf("   ✓ Configurations generated\n")
