@@ -107,6 +107,8 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  network-cli service status all\n")
 	fmt.Printf("  network-cli service logs node --follow\n")
 	fmt.Printf("  network-cli service restart gateway\n\n")
+	fmt.Printf("Access DeBros User:\n")
+	fmt.Printf("  sudo -u debros bash\n\n")
 	fmt.Printf("Verify Installation:\n")
 	fmt.Printf("  curl http://localhost:6001/health\n")
 	fmt.Printf("  curl http://localhost:5001/status\n\n")
@@ -194,19 +196,57 @@ func setupDebrosUser() {
 	fmt.Printf("👤 Setting up 'debros' user...\n")
 
 	// Check if user exists
+	userExists := false
 	if _, err := exec.Command("id", "debros").CombinedOutput(); err == nil {
 		fmt.Printf("   ✓ User 'debros' already exists\n")
+		userExists = true
+	} else {
+		// Create user
+		cmd := exec.Command("useradd", "-r", "-m", "-s", "/bin/bash", "-d", "/home/debros", "debros")
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to create user 'debros': %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("   ✓ Created user 'debros'\n")
+	}
+
+	// Get the user who invoked sudo (the actual user, not root)
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser == "" {
+		// If not running via sudo, skip sudoers setup
 		return
 	}
 
-	// Create user
-	cmd := exec.Command("useradd", "-r", "-m", "-s", "/bin/bash", "-d", "/home/debros", "debros")
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to create user 'debros': %v\n", err)
-		os.Exit(1)
+	// Create sudoers rule to allow passwordless access to debros user
+	sudoersRule := fmt.Sprintf("%s ALL=(debros) NOPASSWD: ALL\n", sudoUser)
+	sudoersFile := "/etc/sudoers.d/debros-access"
+
+	// Check if sudoers rule already exists
+	if existing, err := os.ReadFile(sudoersFile); err == nil {
+		if strings.Contains(string(existing), sudoUser) {
+			if !userExists {
+				fmt.Printf("   ✓ Sudoers access configured\n")
+			}
+			return
+		}
 	}
 
-	fmt.Printf("   ✓ Created user 'debros'\n")
+	// Write sudoers rule
+	if err := os.WriteFile(sudoersFile, []byte(sudoersRule), 0440); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to create sudoers rule: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   You can manually switch to debros using: sudo -u debros bash\n")
+		return
+	}
+
+	// Validate the sudoers file
+	if err := exec.Command("visudo", "-c", "-f", sudoersFile).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Sudoers rule validation failed, removing file\n")
+		os.Remove(sudoersFile)
+		return
+	}
+
+	fmt.Printf("   ✓ Sudoers access configured\n")
+	fmt.Printf("   You can now run: sudo -u debros bash\n")
 }
 
 func installSystemDependencies() {
