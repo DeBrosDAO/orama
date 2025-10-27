@@ -7,7 +7,9 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
-// Subscribe subscribes to a topic
+// Subscribe subscribes to a topic with a handler.
+// Returns a HandlerID that can be used to unsubscribe this specific handler.
+// Multiple handlers can subscribe to the same topic.
 func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
 	if m.pubsub == nil {
 		return fmt.Errorf("pubsub not initialized")
@@ -22,15 +24,23 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 	}
 	namespacedTopic := fmt.Sprintf("%s.%s", ns, topic)
 
-	// Check if already subscribed
 	m.mu.Lock()
-	if _, exists := m.subscriptions[namespacedTopic]; exists {
-		m.mu.Unlock()
-		// Already subscribed - this is normal for LibP2P pubsub
+	defer m.mu.Unlock()
+
+	// Check if we already have a subscription for this topic
+	topicSub, exists := m.subscriptions[namespacedTopic]
+	
+	if exists {
+		// Add handler to existing subscription
+		handlerID := generateHandlerID()
+		topicSub.mu.Lock()
+		topicSub.handlers[handlerID] = handler
+		topicSub.refCount++
+		topicSub.mu.Unlock()
 		return nil
 	}
-	m.mu.Unlock()
 
+	// Create new subscription
 	// Get or create topic
 	libp2pTopic, err := m.getOrCreateTopic(namespacedTopic)
 	if err != nil {
@@ -46,15 +56,17 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 	// Create cancellable context for this subscription
 	subCtx, cancel := context.WithCancel(context.Background())
 
-	// Store subscription
-	m.mu.Lock()
-	m.subscriptions[namespacedTopic] = &subscription{
-		sub:    sub,
-		cancel: cancel,
+	// Create topic subscription with initial handler
+	handlerID := generateHandlerID()
+	topicSub = &topicSubscription{
+		sub:      sub,
+		cancel:   cancel,
+		handlers: map[HandlerID]MessageHandler{handlerID: handler},
+		refCount: 1,
 	}
-	m.mu.Unlock()
+	m.subscriptions[namespacedTopic] = topicSub
 
-	// Start message handler goroutine
+	// Start message handler goroutine (fan-out to all handlers)
 	go func() {
 		defer func() {
 			sub.Cancel()
@@ -73,10 +85,20 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 					continue
 				}
 
-				// Call the handler
-				if err := handler(topic, msg.Data); err != nil {
-					// Log error but continue processing
-					continue
+				// Broadcast to all handlers
+				topicSub.mu.RLock()
+				handlers := make([]MessageHandler, 0, len(topicSub.handlers))
+				for _, h := range topicSub.handlers {
+					handlers = append(handlers, h)
+				}
+				topicSub.mu.RUnlock()
+
+				// Call each handler (don't block on individual handler errors)
+				for _, h := range handlers {
+					if err := h(topic, msg.Data); err != nil {
+						// Log error but continue processing other handlers
+						continue
+					}
 				}
 			}
 		}
@@ -85,7 +107,9 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 	return nil
 }
 
-// Unsubscribe unsubscribes from a topic
+// Unsubscribe decrements the subscription refcount for a topic.
+// The subscription is only truly cancelled when refcount reaches zero.
+// This allows multiple subscribers to the same topic.
 func (m *Manager) Unsubscribe(ctx context.Context, topic string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -99,9 +123,20 @@ func (m *Manager) Unsubscribe(ctx context.Context, topic string) error {
 	}
 	namespacedTopic := fmt.Sprintf("%s.%s", ns, topic)
 
-	if subscription, exists := m.subscriptions[namespacedTopic]; exists {
-		// Cancel the subscription context to stop the message handler goroutine
-		subscription.cancel()
+	topicSub, exists := m.subscriptions[namespacedTopic]
+	if !exists {
+		return nil // Already unsubscribed
+	}
+
+	// Decrement ref count
+	topicSub.mu.Lock()
+	topicSub.refCount--
+	shouldCancel := topicSub.refCount <= 0
+	topicSub.mu.Unlock()
+
+	// Only cancel and remove if no more subscribers
+	if shouldCancel {
+		topicSub.cancel()
 		delete(m.subscriptions, namespacedTopic)
 	}
 
@@ -142,7 +177,7 @@ func (m *Manager) Close() error {
 	for _, sub := range m.subscriptions {
 		sub.cancel()
 	}
-	m.subscriptions = make(map[string]*subscription)
+	m.subscriptions = make(map[string]*topicSubscription)
 
 	// Close all topics
 	for _, topic := range m.topics {

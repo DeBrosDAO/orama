@@ -1,14 +1,13 @@
 package gateway
 
 import (
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
@@ -61,22 +60,14 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 	msgs := make(chan []byte, 128)
 	// Use internal auth context when interacting with client to avoid circular auth requirements
 	ctx := client.WithInternalAuth(r.Context())
-	// Subscribe to the topic; push data into msgs with simple per-connection de-dup
-	recent := make(map[string]time.Time)
+	// Apply namespace isolation
+	ctx = pubsub.WithNamespace(ctx, ns)
+	// Subscribe to the topic and forward messages to WS client
 	h := func(_ string, data []byte) error {
 		g.logger.ComponentInfo("gateway", "pubsub ws: received message",
 			zap.String("topic", topic),
 			zap.Int("data_len", len(data)))
 		
-		// Drop duplicates seen in the last 2 seconds
-		sum := sha256.Sum256(data)
-		key := hex.EncodeToString(sum[:])
-		if t, ok := recent[key]; ok && time.Since(t) < 2*time.Second {
-			g.logger.ComponentInfo("gateway", "pubsub ws: dropping duplicate",
-				zap.String("topic", topic))
-			return nil
-		}
-		recent[key] = time.Now()
 		select {
 		case msgs <- data:
 			g.logger.ComponentInfo("gateway", "pubsub ws: forwarded to client",
@@ -198,8 +189,10 @@ func (g *Gateway) pubsubPublishHandler(w http.ResponseWriter, r *http.Request) {
 		zap.String("topic", body.Topic),
 		zap.String("namespace", ns),
 		zap.Int("data_len", len(data)))
-		
-	if err := g.client.PubSub().Publish(client.WithInternalAuth(r.Context()), body.Topic, data); err != nil {
+	
+	// Apply namespace isolation
+	ctx := pubsub.WithNamespace(client.WithInternalAuth(r.Context()), ns)
+	if err := g.client.PubSub().Publish(ctx, body.Topic, data); err != nil {
 		g.logger.ComponentWarn("gateway", "pubsub publish: failed",
 			zap.String("topic", body.Topic),
 			zap.Error(err))
@@ -225,7 +218,9 @@ func (g *Gateway) pubsubTopicsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
-	all, err := g.client.PubSub().ListTopics(client.WithInternalAuth(r.Context()))
+	// Apply namespace isolation
+	ctx := pubsub.WithNamespace(client.WithInternalAuth(r.Context()), ns)
+	all, err := g.client.PubSub().ListTopics(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
