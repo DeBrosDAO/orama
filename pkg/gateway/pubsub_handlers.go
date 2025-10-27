@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
 )
@@ -63,18 +64,28 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 	// Subscribe to the topic; push data into msgs with simple per-connection de-dup
 	recent := make(map[string]time.Time)
 	h := func(_ string, data []byte) error {
+		g.logger.ComponentInfo("gateway", "pubsub ws: received message",
+			zap.String("topic", topic),
+			zap.Int("data_len", len(data)))
+		
 		// Drop duplicates seen in the last 2 seconds
 		sum := sha256.Sum256(data)
 		key := hex.EncodeToString(sum[:])
 		if t, ok := recent[key]; ok && time.Since(t) < 2*time.Second {
+			g.logger.ComponentInfo("gateway", "pubsub ws: dropping duplicate",
+				zap.String("topic", topic))
 			return nil
 		}
 		recent[key] = time.Now()
 		select {
 		case msgs <- data:
+			g.logger.ComponentInfo("gateway", "pubsub ws: forwarded to client",
+				zap.String("topic", topic))
 			return nil
 		default:
 			// Drop if client is slow to avoid blocking network
+			g.logger.ComponentWarn("gateway", "pubsub ws: client slow, dropping message",
+				zap.String("topic", topic))
 			return nil
 		}
 	}
@@ -100,8 +111,19 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 					close(done)
 					return
 				}
+				// Format message as JSON envelope with data (base64 encoded), timestamp, and topic
+				// This matches the SDK's Message interface: {data: string, timestamp: number, topic: string}
+				envelope := map[string]interface{}{
+					"data":      base64.StdEncoding.EncodeToString(b),
+					"timestamp": time.Now().UnixMilli(),
+					"topic":     topic,
+				}
+				envelopeJSON, err := json.Marshal(envelope)
+				if err != nil {
+					continue
+				}
 				conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-				if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
+				if err := conn.WriteMessage(websocket.TextMessage, envelopeJSON); err != nil {
 					close(done)
 					return
 				}
@@ -160,10 +182,23 @@ func (g *Gateway) pubsubPublishHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid base64 data")
 		return
 	}
+	
+	g.logger.ComponentInfo("gateway", "pubsub publish: publishing message",
+		zap.String("topic", body.Topic),
+		zap.String("namespace", ns),
+		zap.Int("data_len", len(data)))
+		
 	if err := g.client.PubSub().Publish(client.WithInternalAuth(r.Context()), body.Topic, data); err != nil {
+		g.logger.ComponentWarn("gateway", "pubsub publish: failed",
+			zap.String("topic", body.Topic),
+			zap.Error(err))
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	
+	g.logger.ComponentInfo("gateway", "pubsub publish: message published successfully",
+		zap.String("topic", body.Topic))
+	
 	// rely on libp2p to deliver to WS subscribers
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }

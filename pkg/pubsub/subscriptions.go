@@ -82,9 +82,6 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 		}
 	}()
 
-	// Force peer discovery for this topic (application-agnostic)
-	go m.announceTopicInterest(namespacedTopic)
-
 	return nil
 }
 

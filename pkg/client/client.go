@@ -158,6 +158,8 @@ func (c *Client) Connect() error {
 	var ps *libp2ppubsub.PubSub
 	ps, err = libp2ppubsub.NewGossipSub(context.Background(), h,
 		libp2ppubsub.WithPeerExchange(true),
+		libp2ppubsub.WithFloodPublish(true), // Ensure messages reach all peers, not just mesh
+		libp2ppubsub.WithDirectPeers(nil),   // Enable direct peer connections
 	)
 	if err != nil {
 		h.Close()

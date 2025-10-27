@@ -309,12 +309,65 @@ func initFullStack(force bool) {
 	}
 	fmt.Printf("✅ Generated bootstrap config: %s\n", bootstrapPath)
 
-	// Generate node2, node3, gateway configs...
-	// (keeping implementation similar to original)
+	// Step 3: Generate node2.yaml
+	node2Name := "node2.yaml"
+	node2Path := filepath.Join(debrosDir, node2Name)
+	if !force {
+		if _, err := os.Stat(node2Path); err == nil {
+			fmt.Fprintf(os.Stderr, "Node2 config already exists at %s (use --force to overwrite)\n", node2Path)
+			os.Exit(1)
+		}
+	}
+	node2Content := GenerateNodeConfig(node2Name, "", 4002, 5002, 7002, "localhost:7001", bootstrapMultiaddr)
+	if err := os.WriteFile(node2Path, []byte(node2Content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write node2 config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated node2 config: %s\n", node2Path)
+
+	// Step 4: Generate node3.yaml
+	node3Name := "node3.yaml"
+	node3Path := filepath.Join(debrosDir, node3Name)
+	if !force {
+		if _, err := os.Stat(node3Path); err == nil {
+			fmt.Fprintf(os.Stderr, "Node3 config already exists at %s (use --force to overwrite)\n", node3Path)
+			os.Exit(1)
+		}
+	}
+	node3Content := GenerateNodeConfig(node3Name, "", 4003, 5003, 7003, "localhost:7001", bootstrapMultiaddr)
+	if err := os.WriteFile(node3Path, []byte(node3Content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write node3 config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated node3 config: %s\n", node3Path)
+
+	// Step 5: Generate gateway.yaml
+	gatewayName := "gateway.yaml"
+	gatewayPath := filepath.Join(debrosDir, gatewayName)
+	if !force {
+		if _, err := os.Stat(gatewayPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Gateway config already exists at %s (use --force to overwrite)\n", gatewayPath)
+			os.Exit(1)
+		}
+	}
+	gatewayContent := GenerateGatewayConfig(bootstrapMultiaddr)
+	if err := os.WriteFile(gatewayPath, []byte(gatewayContent), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write gateway config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Generated gateway config: %s\n", gatewayPath)
 
 	fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
 	fmt.Printf("✅ Full network stack initialized successfully!\n")
 	fmt.Printf(strings.Repeat("=", 60) + "\n")
+	fmt.Printf("\nBootstrap Peer ID: %s\n", bootstrapInfo.PeerID.String())
+	fmt.Printf("Bootstrap Multiaddr: %s\n", bootstrapMultiaddr)
+	fmt.Printf("\nGenerated configs:\n")
+	fmt.Printf("  - %s\n", bootstrapPath)
+	fmt.Printf("  - %s\n", node2Path)
+	fmt.Printf("  - %s\n", node3Path)
+	fmt.Printf("  - %s\n", gatewayPath)
+	fmt.Printf("\nStart the network with: make dev\n")
 }
 
 // GenerateNodeConfig generates a node configuration
