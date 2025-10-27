@@ -146,6 +146,17 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 		if mt != websocket.TextMessage && mt != websocket.BinaryMessage {
 			continue
 		}
+		
+		// Filter out WebSocket heartbeat messages
+		// Don't publish them to the topic
+		var msg map[string]interface{}
+		if err := json.Unmarshal(data, &msg); err == nil {
+			if msgType, ok := msg["type"].(string); ok && msgType == "ping" {
+				g.logger.ComponentInfo("gateway", "pubsub ws: filtering out heartbeat ping")
+				continue
+			}
+		}
+		
 		if err := g.client.PubSub().Publish(ctx, topic, data); err != nil {
 			// Best-effort notify client
 			_ = conn.WriteMessage(websocket.TextMessage, []byte("publish_error"))
