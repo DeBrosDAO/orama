@@ -1,11 +1,13 @@
 package gateway
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -143,6 +145,7 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 		Nonce     string `json:"nonce"`
 		Signature string `json:"signature"`
 		Namespace string `json:"namespace"`
+		ChainType string `json:"chain_type"` // "ETH" or "SOL", defaults to "ETH"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
@@ -176,36 +179,94 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	nonceID := nres.Rows[0][0]
 
-	// EVM personal_sign verification of the nonce
-	// Hash: keccak256("\x19Ethereum Signed Message:\n" + len(nonce) + nonce)
-	msg := []byte(req.Nonce)
-	prefix := []byte("\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msg)))
-	hash := ethcrypto.Keccak256(prefix, msg)
+	// Determine chain type (default to ETH for backward compatibility)
+	chainType := strings.ToUpper(strings.TrimSpace(req.ChainType))
+	if chainType == "" {
+		chainType = "ETH"
+	}
 
-	// Decode signature (expects 65-byte r||s||v, hex with optional 0x)
-	sigHex := strings.TrimSpace(req.Signature)
-	if strings.HasPrefix(sigHex, "0x") || strings.HasPrefix(sigHex, "0X") {
-		sigHex = sigHex[2:]
-	}
-	sig, err := hex.DecodeString(sigHex)
-	if err != nil || len(sig) != 65 {
-		writeError(w, http.StatusBadRequest, "invalid signature format")
+	// Verify signature based on chain type
+	var verified bool
+	var verifyErr error
+
+	switch chainType {
+	case "ETH":
+		// EVM personal_sign verification of the nonce
+		// Hash: keccak256("\x19Ethereum Signed Message:\n" + len(nonce) + nonce)
+		msg := []byte(req.Nonce)
+		prefix := []byte("\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msg)))
+		hash := ethcrypto.Keccak256(prefix, msg)
+
+		// Decode signature (expects 65-byte r||s||v, hex with optional 0x)
+		sigHex := strings.TrimSpace(req.Signature)
+		if strings.HasPrefix(sigHex, "0x") || strings.HasPrefix(sigHex, "0X") {
+			sigHex = sigHex[2:]
+		}
+		sig, err := hex.DecodeString(sigHex)
+		if err != nil || len(sig) != 65 {
+			writeError(w, http.StatusBadRequest, "invalid signature format")
+			return
+		}
+		// Normalize V to 0/1 as expected by geth
+		if sig[64] >= 27 {
+			sig[64] -= 27
+		}
+		pub, err := ethcrypto.SigToPub(hash, sig)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "signature recovery failed")
+			return
+		}
+		addr := ethcrypto.PubkeyToAddress(*pub).Hex()
+		want := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(req.Wallet, "0x"), "0X"))
+		got := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(addr, "0x"), "0X"))
+		if got != want {
+			writeError(w, http.StatusUnauthorized, "signature does not match wallet")
+			return
+		}
+		verified = true
+
+	case "SOL":
+		// Solana uses Ed25519 signatures
+		// Signature is base64-encoded, public key is the wallet address (base58)
+		
+		// Decode base64 signature (Solana signatures are 64 bytes)
+		sig, err := base64.StdEncoding.DecodeString(req.Signature)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid base64 signature: %v", err))
+			return
+		}
+		if len(sig) != 64 {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid signature length: expected 64 bytes, got %d", len(sig)))
+			return
+		}
+
+		// Decode base58 public key (Solana wallet address)
+		// Using a simple base58 decoder
+		pubKeyBytes, err := base58Decode(req.Wallet)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid wallet address: %v", err))
+			return
+		}
+		if len(pubKeyBytes) != 32 {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid public key length: expected 32 bytes, got %d", len(pubKeyBytes)))
+			return
+		}
+
+		// Verify Ed25519 signature
+		message := []byte(req.Nonce)
+		if !ed25519.Verify(ed25519.PublicKey(pubKeyBytes), message, sig) {
+			writeError(w, http.StatusUnauthorized, "signature verification failed")
+			return
+		}
+		verified = true
+
+	default:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported chain type: %s (must be ETH or SOL)", chainType))
 		return
 	}
-	// Normalize V to 0/1 as expected by geth
-	if sig[64] >= 27 {
-		sig[64] -= 27
-	}
-	pub, err := ethcrypto.SigToPub(hash, sig)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "signature recovery failed")
-		return
-	}
-	addr := ethcrypto.PubkeyToAddress(*pub).Hex()
-	want := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(req.Wallet, "0x"), "0X"))
-	got := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(addr, "0x"), "0X"))
-	if got != want {
-		writeError(w, http.StatusUnauthorized, "signature does not match wallet")
+
+	if !verified {
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("signature verification failed: %v", verifyErr))
 		return
 	}
 
@@ -1024,4 +1085,42 @@ func (g *Gateway) logoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, http.StatusBadRequest, "nothing to revoke: provide refresh_token or all=true")
+}
+
+// base58Decode decodes a base58-encoded string (Bitcoin alphabet)
+// Used for decoding Solana public keys (base58-encoded 32-byte ed25519 public keys)
+func base58Decode(encoded string) ([]byte, error) {
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	
+	// Build reverse lookup map
+	lookup := make(map[rune]int)
+	for i, c := range alphabet {
+		lookup[c] = i
+	}
+	
+	// Convert to big integer
+	num := big.NewInt(0)
+	base := big.NewInt(58)
+	
+	for _, c := range encoded {
+		val, ok := lookup[c]
+		if !ok {
+			return nil, fmt.Errorf("invalid base58 character: %c", c)
+		}
+		num.Mul(num, base)
+		num.Add(num, big.NewInt(int64(val)))
+	}
+	
+	// Convert to bytes
+	decoded := num.Bytes()
+	
+	// Add leading zeros for each leading '1' in the input
+	for _, c := range encoded {
+		if c != '1' {
+			break
+		}
+		decoded = append([]byte{0}, decoded...)
+	}
+	
+	return decoded, nil
 }
