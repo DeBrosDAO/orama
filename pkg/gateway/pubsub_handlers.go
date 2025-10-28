@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -287,27 +288,25 @@ func (g *Gateway) pubsubPublishHandler(w http.ResponseWriter, r *http.Request) {
 		zap.Int("local_subscribers", len(localSubs)),
 		zap.Int("local_delivered", localDeliveryCount))
 	
-	// Still publish to libp2p for cross-node delivery
-	ctx := pubsub.WithNamespace(client.WithInternalAuth(r.Context()), ns)
-	if err := g.client.PubSub().Publish(ctx, body.Topic, data); err != nil {
-		// Log but don't fail - local delivery succeeded
-		g.logger.ComponentWarn("gateway", "libp2p publish failed (local delivery succeeded)",
-			zap.String("topic", body.Topic),
-			zap.Error(err))
-		// Still return OK since local delivery worked
-		if localDeliveryCount > 0 {
-			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "local_only": true})
-			return
+	// Publish to libp2p asynchronously for cross-node delivery
+	// This prevents blocking the HTTP response if libp2p network is slow
+	go func() {
+		publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		
+		ctx := pubsub.WithNamespace(client.WithInternalAuth(publishCtx), ns)
+		if err := g.client.PubSub().Publish(ctx, body.Topic, data); err != nil {
+			g.logger.ComponentWarn("gateway", "async libp2p publish failed",
+				zap.String("topic", body.Topic),
+				zap.Error(err))
+		} else {
+			g.logger.ComponentDebug("gateway", "async libp2p publish succeeded",
+				zap.String("topic", body.Topic))
 		}
-		// If no local delivery, return error
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	}()
 	
-	g.logger.ComponentInfo("gateway", "pubsub publish: message published successfully",
-		zap.String("topic", body.Topic),
-		zap.String("delivery", "local+libp2p"))
-	
+	// Return immediately after local delivery
+	// Local WebSocket subscribers already received the message
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
