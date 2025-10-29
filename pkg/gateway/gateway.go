@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"database/sql"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -39,6 +40,16 @@ type Gateway struct {
 	sqlDB     *sql.DB
 	ormClient rqlite.Client
 	ormHTTP   *rqlite.HTTPGateway
+
+	// Local pub/sub bypass for same-gateway subscribers
+	localSubscribers map[string][]*localSubscriber // topic+namespace -> subscribers
+	mu               sync.RWMutex
+}
+
+// localSubscriber represents a WebSocket subscriber for local message delivery
+type localSubscriber struct {
+	msgChan   chan []byte
+	namespace string
 }
 
 // New creates and initializes a new Gateway instance
@@ -71,10 +82,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
 	gw := &Gateway{
-		logger:    logger,
-		cfg:       cfg,
-		client:    c,
-		startedAt: time.Now(),
+		logger:           logger,
+		cfg:              cfg,
+		client:           c,
+		startedAt:        time.Now(),
+		localSubscribers: make(map[string][]*localSubscriber),
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Generating RSA signing key...")
@@ -125,4 +137,13 @@ func (g *Gateway) Close() {
 	if g.sqlDB != nil {
 		_ = g.sqlDB.Close()
 	}
+}
+
+// getLocalSubscribers returns all local subscribers for a given topic and namespace
+func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscriber {
+	topicKey := namespace + "." + topic
+	if subs, ok := g.localSubscribers[topicKey]; ok {
+		return subs
+	}
+	return nil
 }

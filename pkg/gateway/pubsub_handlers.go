@@ -1,14 +1,16 @@
 package gateway
 
 import (
-	"crypto/sha256"
+	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
 )
@@ -58,53 +60,103 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 
 	// Channel to deliver PubSub messages to WS writer
 	msgs := make(chan []byte, 128)
+	
+	// NEW: Register as local subscriber for direct message delivery
+	localSub := &localSubscriber{
+		msgChan:   msgs,
+		namespace: ns,
+	}
+	topicKey := fmt.Sprintf("%s.%s", ns, topic)
+	
+	g.mu.Lock()
+	g.localSubscribers[topicKey] = append(g.localSubscribers[topicKey], localSub)
+	subscriberCount := len(g.localSubscribers[topicKey])
+	g.mu.Unlock()
+	
+	g.logger.ComponentInfo("gateway", "pubsub ws: registered local subscriber",
+		zap.String("topic", topic),
+		zap.String("namespace", ns),
+		zap.Int("total_subscribers", subscriberCount))
+	
+	// Unregister on close
+	defer func() {
+		g.mu.Lock()
+		subs := g.localSubscribers[topicKey]
+		for i, sub := range subs {
+			if sub == localSub {
+				g.localSubscribers[topicKey] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+		remainingCount := len(g.localSubscribers[topicKey])
+		if remainingCount == 0 {
+			delete(g.localSubscribers, topicKey)
+		}
+		g.mu.Unlock()
+		g.logger.ComponentInfo("gateway", "pubsub ws: unregistered local subscriber",
+			zap.String("topic", topic),
+			zap.Int("remaining_subscribers", remainingCount))
+	}()
+	
 	// Use internal auth context when interacting with client to avoid circular auth requirements
 	ctx := client.WithInternalAuth(r.Context())
-	// Subscribe to the topic; push data into msgs with simple per-connection de-dup
-	recent := make(map[string]time.Time)
-	h := func(_ string, data []byte) error {
-		// Drop duplicates seen in the last 2 seconds
-		sum := sha256.Sum256(data)
-		key := hex.EncodeToString(sum[:])
-		if t, ok := recent[key]; ok && time.Since(t) < 2*time.Second {
-			return nil
-		}
-		recent[key] = time.Now()
-		select {
-		case msgs <- data:
-			return nil
-		default:
-			// Drop if client is slow to avoid blocking network
-			return nil
-		}
-	}
-	if err := g.client.PubSub().Subscribe(ctx, topic, h); err != nil {
-		g.logger.ComponentWarn("gateway", "pubsub ws: subscribe failed")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer func() { _ = g.client.PubSub().Unsubscribe(ctx, topic) }()
-
-	// no extra fan-out; rely on libp2p subscription
-
-	// Writer loop
+	// Apply namespace isolation
+	ctx = pubsub.WithNamespace(ctx, ns)
+	
+	// Writer loop - START THIS FIRST before libp2p subscription
 	done := make(chan struct{})
 	go func() {
+		g.logger.ComponentInfo("gateway", "pubsub ws: writer goroutine started",
+			zap.String("topic", topic))
+		defer g.logger.ComponentInfo("gateway", "pubsub ws: writer goroutine exiting",
+			zap.String("topic", topic))
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case b, ok := <-msgs:
 				if !ok {
+					g.logger.ComponentWarn("gateway", "pubsub ws: message channel closed",
+						zap.String("topic", topic))
 					_ = conn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(5*time.Second))
 					close(done)
 					return
 				}
+				
+				g.logger.ComponentInfo("gateway", "pubsub ws: sending message to client",
+					zap.String("topic", topic),
+					zap.Int("data_len", len(b)))
+				
+				// Format message as JSON envelope with data (base64 encoded), timestamp, and topic
+				// This matches the SDK's Message interface: {data: string, timestamp: number, topic: string}
+				envelope := map[string]interface{}{
+					"data":      base64.StdEncoding.EncodeToString(b),
+					"timestamp": time.Now().UnixMilli(),
+					"topic":     topic,
+				}
+				envelopeJSON, err := json.Marshal(envelope)
+				if err != nil {
+					g.logger.ComponentWarn("gateway", "pubsub ws: failed to marshal envelope",
+						zap.String("topic", topic),
+						zap.Error(err))
+					continue
+				}
+				
+				g.logger.ComponentDebug("gateway", "pubsub ws: envelope created",
+					zap.String("topic", topic),
+					zap.Int("envelope_len", len(envelopeJSON)))
+				
 				conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-				if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
+				if err := conn.WriteMessage(websocket.TextMessage, envelopeJSON); err != nil {
+					g.logger.ComponentWarn("gateway", "pubsub ws: failed to write to websocket",
+						zap.String("topic", topic),
+						zap.Error(err))
 					close(done)
 					return
 				}
+				
+				g.logger.ComponentInfo("gateway", "pubsub ws: message sent successfully",
+					zap.String("topic", topic))
 			case <-ticker.C:
 				// Ping keepalive
 				_ = conn.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(5*time.Second))
@@ -113,6 +165,42 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 				return
 			}
 		}
+	}()
+
+	// Subscribe to libp2p for cross-node messages (in background, non-blocking)
+	go func() {
+		h := func(_ string, data []byte) error {
+			g.logger.ComponentInfo("gateway", "pubsub ws: received message from libp2p",
+				zap.String("topic", topic),
+				zap.Int("data_len", len(data)))
+			
+			select {
+			case msgs <- data:
+				g.logger.ComponentInfo("gateway", "pubsub ws: forwarded to client",
+					zap.String("topic", topic),
+					zap.String("source", "libp2p"))
+				return nil
+			default:
+				// Drop if client is slow to avoid blocking network
+				g.logger.ComponentWarn("gateway", "pubsub ws: client slow, dropping message",
+					zap.String("topic", topic))
+				return nil
+			}
+		}
+		if err := g.client.PubSub().Subscribe(ctx, topic, h); err != nil {
+			g.logger.ComponentWarn("gateway", "pubsub ws: libp2p subscribe failed (will use local-only)",
+				zap.String("topic", topic),
+				zap.Error(err))
+			return
+		}
+		g.logger.ComponentInfo("gateway", "pubsub ws: libp2p subscription established",
+			zap.String("topic", topic))
+		
+		// Keep subscription alive until done
+		<-done
+		_ = g.client.PubSub().Unsubscribe(ctx, topic)
+		g.logger.ComponentInfo("gateway", "pubsub ws: libp2p subscription closed",
+			zap.String("topic", topic))
 	}()
 
 	// Reader loop: treat any client message as publish to the same topic
@@ -124,6 +212,17 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 		if mt != websocket.TextMessage && mt != websocket.BinaryMessage {
 			continue
 		}
+		
+		// Filter out WebSocket heartbeat messages
+		// Don't publish them to the topic
+		var msg map[string]interface{}
+		if err := json.Unmarshal(data, &msg); err == nil {
+			if msgType, ok := msg["type"].(string); ok && msgType == "ping" {
+				g.logger.ComponentInfo("gateway", "pubsub ws: filtering out heartbeat ping")
+				continue
+			}
+		}
+		
 		if err := g.client.PubSub().Publish(ctx, topic, data); err != nil {
 			// Best-effort notify client
 			_ = conn.WriteMessage(websocket.TextMessage, []byte("publish_error"))
@@ -160,11 +259,54 @@ func (g *Gateway) pubsubPublishHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid base64 data")
 		return
 	}
-	if err := g.client.PubSub().Publish(client.WithInternalAuth(r.Context()), body.Topic, data); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	
+	// NEW: Check for local websocket subscribers FIRST and deliver directly
+	g.mu.RLock()
+	localSubs := g.getLocalSubscribers(body.Topic, ns)
+	g.mu.RUnlock()
+	
+	localDeliveryCount := 0
+	if len(localSubs) > 0 {
+		for _, sub := range localSubs {
+			select {
+			case sub.msgChan <- data:
+				localDeliveryCount++
+				g.logger.ComponentDebug("gateway", "delivered to local subscriber",
+					zap.String("topic", body.Topic))
+			default:
+				// Drop if buffer full
+				g.logger.ComponentWarn("gateway", "local subscriber buffer full, dropping message",
+					zap.String("topic", body.Topic))
+			}
+		}
 	}
-	// rely on libp2p to deliver to WS subscribers
+	
+	g.logger.ComponentInfo("gateway", "pubsub publish: processing message",
+		zap.String("topic", body.Topic),
+		zap.String("namespace", ns),
+		zap.Int("data_len", len(data)),
+		zap.Int("local_subscribers", len(localSubs)),
+		zap.Int("local_delivered", localDeliveryCount))
+	
+	// Publish to libp2p asynchronously for cross-node delivery
+	// This prevents blocking the HTTP response if libp2p network is slow
+	go func() {
+		publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		
+		ctx := pubsub.WithNamespace(client.WithInternalAuth(publishCtx), ns)
+		if err := g.client.PubSub().Publish(ctx, body.Topic, data); err != nil {
+			g.logger.ComponentWarn("gateway", "async libp2p publish failed",
+				zap.String("topic", body.Topic),
+				zap.Error(err))
+		} else {
+			g.logger.ComponentDebug("gateway", "async libp2p publish succeeded",
+				zap.String("topic", body.Topic))
+		}
+	}()
+	
+	// Return immediately after local delivery
+	// Local WebSocket subscribers already received the message
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -179,7 +321,9 @@ func (g *Gateway) pubsubTopicsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
-	all, err := g.client.PubSub().ListTopics(client.WithInternalAuth(r.Context()))
+	// Apply namespace isolation
+	ctx := pubsub.WithNamespace(client.WithInternalAuth(r.Context()), ns)
+	all, err := g.client.PubSub().ListTopics(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

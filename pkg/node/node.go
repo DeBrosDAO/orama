@@ -306,6 +306,8 @@ func (n *Node) startLibP2P() error {
 	// Initialize pubsub
 	ps, err := libp2ppubsub.NewGossipSub(context.Background(), h,
 		libp2ppubsub.WithPeerExchange(true),
+		libp2ppubsub.WithFloodPublish(true), // Ensure messages reach all peers, not just mesh
+		libp2ppubsub.WithDirectPeers(nil),   // Enable direct peer connections
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create pubsub: %w", err)

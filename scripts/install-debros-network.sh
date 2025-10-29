@@ -1,8 +1,14 @@
 #!/bin/bash
 
-# DeBros Network Production Installation Script
-# Installs and configures a complete DeBros network node (bootstrap) with gateway.
-# Supports idempotent updates and secure systemd service management.
+# DeBros Network Installation Script
+# Downloads network-cli from GitHub releases and runs interactive setup
+# 
+# Supported: Ubuntu 18.04+, Debian 10+
+# 
+# Usage:
+#   curl -fsSL https://install.debros.network | bash
+#   OR
+#   bash scripts/install-debros-network.sh
 
 set -e
 trap 'echo -e "${RED}An error occurred. Installation aborted.${NOCOLOR}"; exit 1' ERR
@@ -15,480 +21,39 @@ BLUE='\033[38;2;2;128;175m'
 YELLOW='\033[1;33m'
 NOCOLOR='\033[0m'
 
-# Defaults
-INSTALL_DIR="/opt/debros"
-REPO_URL="https://github.com/DeBrosOfficial/network.git"
-MIN_GO_VERSION="1.21"
-NODE_PORT="4001"
-RQLITE_PORT="5001"
-GATEWAY_PORT="6001"
-RAFT_PORT="7001"
-UPDATE_MODE=false
-NON_INTERACTIVE=false
-DEBROS_USER="debros"
+# Configuration
+GITHUB_REPO="DeBrosOfficial/network"
+GITHUB_API="https://api.github.com/repos/$GITHUB_REPO"
+INSTALL_DIR="/usr/local/bin"
 
 log() { echo -e "${CYAN}[$(date '+%Y-%m-%d %H:%M:%S')]${NOCOLOR} $1"; }
 error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
 
-# Detect non-interactive mode
+# REQUIRE INTERACTIVE MODE
 if [ ! -t 0 ]; then
-    NON_INTERACTIVE=true
-    log "Running in non-interactive mode"
+    error "This script requires an interactive terminal."
+    echo -e ""
+    echo -e "${YELLOW}Please run this script directly:${NOCOLOR}"
+    echo -e "${CYAN}  bash <(curl -fsSL https://install.debros.network)${NOCOLOR}"
+    echo -e ""
+    exit 1
 fi
 
-# Root/sudo checks
+# Check if running as root
 if [[ $EUID -eq 0 ]]; then
-    warning "Running as root is not recommended for security reasons."
-    if [ "$NON_INTERACTIVE" != true ]; then
-        echo -n "Are you sure you want to continue? (yes/no): "
-        read ROOT_CONFIRM
-        if [[ "$ROOT_CONFIRM" != "yes" ]]; then
-            error "Installation cancelled for security reasons."
-            exit 1
-        fi
-    else
-        log "Non-interactive mode: proceeding with root (use at your own risk)"
-    fi
-    alias sudo=''
-else
-    if ! command -v sudo &>/dev/null; then
-        error "sudo command not found. Please ensure you have sudo privileges."
-        exit 1
-    fi
+    error "This script should NOT be run as root"
+    echo -e "${YELLOW}Run as a regular user with sudo privileges:${NOCOLOR}"
+    echo -e "${CYAN}  bash $0${NOCOLOR}"
+    exit 1
 fi
 
-# Detect OS and package manager
-detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        VERSION=$VERSION_ID
-    else
-        error "Cannot detect operating system"
-        exit 1
-    fi
-    case $OS in
-        ubuntu|debian) PACKAGE_MANAGER="apt" ;;
-        centos|rhel|fedora)
-            PACKAGE_MANAGER="yum"
-            if command -v dnf &> /dev/null; then PACKAGE_MANAGER="dnf"; fi
-            ;;
-        *) error "Unsupported operating system: $OS"; exit 1 ;;
-    esac
-    log "Detected OS: $OS $VERSION"
-}
-
-# Check for existing install
-check_existing_installation() {
-    if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/bin/node" ]; then
-        log "Found existing DeBros Network installation at $INSTALL_DIR"
-        NODE_RUNNING=false
-        if systemctl is-active --quiet debros-node.service 2>/dev/null; then
-            NODE_RUNNING=true
-            log "Node service is currently running"
-        fi
-        if [ "$NON_INTERACTIVE" = true ]; then
-            log "Non-interactive mode: updating existing installation"
-            UPDATE_MODE=true
-            return 0
-        fi
-        echo -e "${YELLOW}Existing installation detected!${NOCOLOR}"
-        echo -e "${CYAN}Options:${NOCOLOR}"
-        echo -e "${CYAN}1) Update existing installation${NOCOLOR}"
-        echo -e "${CYAN}2) Remove and reinstall${NOCOLOR}"
-        echo -e "${CYAN}3) Exit installer${NOCOLOR}"
-        while true; do
-            read -rp "Enter your choice (1, 2, or 3): " EXISTING_CHOICE
-            case $EXISTING_CHOICE in
-                1) UPDATE_MODE=true; log "Will update existing installation"; return 0 ;;
-                2) log "Will remove and reinstall"; remove_existing_installation; UPDATE_MODE=false; return 0 ;;
-                3) log "Installation cancelled by user"; exit 0 ;;
-                *) error "Invalid choice. Please enter 1, 2, or 3." ;;
-            esac
-        done
-    else
-        UPDATE_MODE=false
-        return 0
-    fi
-}
-
-remove_existing_installation() {
-    log "Removing existing installation..."
-    for service in debros-node debros-gateway; do
-        if systemctl list-unit-files | grep -q "$service.service"; then
-            log "Stopping $service service..."
-            sudo systemctl stop $service.service 2>/dev/null || true
-            sudo systemctl disable $service.service 2>/dev/null || true
-            sudo rm -f /etc/systemd/system/$service.service
-        fi
-    done
-    sudo systemctl daemon-reload
-    if [ -d "$INSTALL_DIR" ]; then
-        sudo rm -rf "$INSTALL_DIR"
-        log "Removed installation directory"
-    fi
-    if id "$DEBROS_USER" &>/dev/null; then
-        sudo userdel "$DEBROS_USER" 2>/dev/null || true
-        log "Removed debros user"
-    fi
-    success "Existing installation removed"
-}
-
-check_go_installation() {
-    if command -v go &> /dev/null; then
-        GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-        log "Found Go version: $GO_VERSION"
-        if [ "$(printf '%s\n' "$MIN_GO_VERSION" "$GO_VERSION" | sort -V | head -n1)" = "$MIN_GO_VERSION" ]; then
-            success "Go version is sufficient"
-            return 0
-        else
-            warning "Go version $GO_VERSION is too old. Minimum required: $MIN_GO_VERSION"
-            return 1
-        fi
-    else
-        log "Go not found on system"
-        return 1
-    fi
-}
-
-install_go() {
-    log "Installing Go..."
-    case $PACKAGE_MANAGER in
-        apt) sudo apt update; sudo apt install -y wget ;;
-        yum|dnf) sudo $PACKAGE_MANAGER install -y wget ;;
-    esac
-    GO_TARBALL="go1.21.6.linux-amd64.tar.gz"
-    ARCH=$(uname -m)
-    if [ "$ARCH" = "aarch64" ]; then GO_TARBALL="go1.21.6.linux-arm64.tar.gz"; fi
-    cd /tmp
-    wget -q "https://go.dev/dl/$GO_TARBALL"
-    sudo rm -rf /usr/local/go
-    sudo tar -C /usr/local -xzf "$GO_TARBALL"
-    if ! grep -q "/usr/local/go/bin" /etc/environment 2>/dev/null; then
-        echo 'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/go/bin"' | sudo tee /etc/environment > /dev/null
-    fi
-    if ! grep -q "/usr/local/go/bin" ~/.bashrc; then
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-    fi
-    export PATH=$PATH:/usr/local/go/bin
-    success "Go installed successfully"
-}
-
-install_dependencies() {
-    log "Checking system dependencies..."
-    MISSING_DEPS=()
-    case $PACKAGE_MANAGER in
-        apt)
-            for pkg in git make build-essential curl; do
-                if ! dpkg -l | grep -q "^ii  $pkg "; then MISSING_DEPS+=($pkg); fi
-            done
-            if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
-                log "Installing missing dependencies: ${MISSING_DEPS[*]}"
-                sudo apt update
-                sudo apt install -y "${MISSING_DEPS[@]}"
-            else
-                success "All system dependencies already installed"
-            fi
-            ;;
-        yum|dnf)
-            for pkg in git make curl; do
-                if ! rpm -q $pkg &>/dev/null; then MISSING_DEPS+=($pkg); fi
-            done
-            if ! rpm -q gcc &>/dev/null; then MISSING_DEPS+=("Development Tools"); fi
-            if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
-                log "Installing missing dependencies: ${MISSING_DEPS[*]}"
-                if [[ " ${MISSING_DEPS[*]} " =~ " Development Tools " ]]; then
-                    sudo $PACKAGE_MANAGER groupinstall -y "Development Tools"
-                fi
-                MISSING_DEPS=($(printf '%s\n' "${MISSING_DEPS[@]}" | grep -v "Development Tools"))
-                if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
-                    sudo $PACKAGE_MANAGER install -y "${MISSING_DEPS[@]}"
-                fi
-            else
-                success "All system dependencies already installed"
-            fi
-            ;;
-    esac
-    success "System dependencies ready"
-}
-
-install_rqlite() {
-    if command -v rqlited &> /dev/null; then
-        RQLITE_VERSION=$(rqlited -version | head -n1 | awk '{print $2}')
-        log "Found RQLite version: $RQLITE_VERSION"
-        success "RQLite already installed"
-        return 0
-    fi
-    log "Installing RQLite..."
-    ARCH=$(uname -m)
-    case $ARCH in
-        x86_64) RQLITE_ARCH="amd64" ;;
-        aarch64|arm64) RQLITE_ARCH="arm64" ;;
-        armv7l) RQLITE_ARCH="arm" ;;
-        *) error "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-    RQLITE_VERSION="8.43.0"
-    RQLITE_TARBALL="rqlite-v${RQLITE_VERSION}-linux-${RQLITE_ARCH}.tar.gz"
-    RQLITE_URL="https://github.com/rqlite/rqlite/releases/download/v${RQLITE_VERSION}/${RQLITE_TARBALL}"
-    cd /tmp
-    if ! wget -q "$RQLITE_URL"; then error "Failed to download RQLite from $RQLITE_URL"; exit 1; fi
-    tar -xzf "$RQLITE_TARBALL"
-    RQLITE_DIR="rqlite-v${RQLITE_VERSION}-linux-${RQLITE_ARCH}"
-    sudo cp "$RQLITE_DIR/rqlited" /usr/local/bin/
-    sudo cp "$RQLITE_DIR/rqlite" /usr/local/bin/
-    sudo chmod +x /usr/local/bin/rqlited
-    sudo chmod +x /usr/local/bin/rqlite
-    rm -rf "$RQLITE_TARBALL" "$RQLITE_DIR"
-    if command -v rqlited &> /dev/null; then
-        INSTALLED_VERSION=$(rqlited -version | head -n1 | awk '{print $2}')
-        success "RQLite v$INSTALLED_VERSION installed successfully"
-    else
-        error "RQLite installation failed"
-        exit 1
-    fi
-}
-
-check_ports() {
-    local ports=($NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT)
-    for port in "${ports[@]}"; do
-        if sudo netstat -tuln 2>/dev/null | grep -q ":$port " || ss -tuln 2>/dev/null | grep -q ":$port "; then
-            error "Port $port is already in use. Please free it up and try again."
-            exit 1
-        fi
-    done
-    success "All required ports are available"
-}
-
-setup_directories() {
-    log "Setting up directories and permissions..."
-    if ! id "$DEBROS_USER" &>/dev/null; then
-        sudo useradd -r -s /usr/sbin/nologin -d "$INSTALL_DIR" "$DEBROS_USER"
-        log "Created debros user"
-    else
-        log "User 'debros' already exists"
-    fi
-    sudo mkdir -p "$INSTALL_DIR"/{bin,src}
-    sudo chown -R "$DEBROS_USER:$DEBROS_USER" "$INSTALL_DIR"
-    sudo chmod 755 "$INSTALL_DIR"
-    sudo chmod 755 "$INSTALL_DIR/bin"
-    
-    # Create ~/.debros for the debros user
-    DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
-    sudo -u "$DEBROS_USER" mkdir -p "$DEBROS_HOME/.debros"
-    sudo chmod 0700 "$DEBROS_HOME/.debros"
-    
-    success "Directory structure ready"
-}
-
-setup_source_code() {
-    log "Setting up source code..."
-    if [ -d "$INSTALL_DIR/src/.git" ]; then
-        log "Updating existing repository..."
-        cd "$INSTALL_DIR/src"
-        sudo -u "$DEBROS_USER" git pull
-    else
-        log "Cloning repository..."
-        sudo -u "$DEBROS_USER" git clone "$REPO_URL" "$INSTALL_DIR/src"
-        cd "$INSTALL_DIR/src"
-    fi
-    success "Source code ready"
-}
-
-build_binaries() {
-    log "Building DeBros Network binaries..."
-    cd "$INSTALL_DIR/src"
-    export PATH=$PATH:/usr/local/go/bin
-    
-    local services_were_running=()
-    if [ "$UPDATE_MODE" = true ]; then
-        log "Update mode: checking for running services before binary update..."
-        if systemctl is-active --quiet debros-node.service 2>/dev/null; then
-            log "Stopping debros-node service to update binaries..."
-            sudo systemctl stop debros-node.service
-            services_were_running+=("debros-node")
-        fi
-        if systemctl is-active --quiet debros-gateway.service 2>/dev/null; then
-            log "Stopping debros-gateway service to update binaries..."
-            sudo systemctl stop debros-gateway.service
-            services_were_running+=("debros-gateway")
-        fi
-        if [ ${#services_were_running[@]} -gt 0 ]; then
-            log "Waiting for services to stop completely..."
-            sleep 3
-        fi
-    fi
-    
-    sudo -u "$DEBROS_USER" env "PATH=$PATH:/usr/local/go/bin" make build
-    sudo cp bin/* "$INSTALL_DIR/bin/"
-    sudo chown "$DEBROS_USER:$DEBROS_USER" "$INSTALL_DIR/bin/"*
-    sudo chmod 755 "$INSTALL_DIR/bin/"*
-    
-    if [ "$UPDATE_MODE" = true ] && [ ${#services_were_running[@]} -gt 0 ]; then
-        log "Restarting previously running services..."
-        for service in "${services_were_running[@]}"; do
-            log "Starting $service service..."
-            sudo systemctl start $service.service
-        done
-    fi
-    success "Binaries built and installed"
-}
-
-generate_configs() {
-    log "Generating configuration files via network-cli..."
-    DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
-    
-    # Generate bootstrap config
-    log "Generating bootstrap.yaml..."
-    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type bootstrap --force
-    
-    # Generate gateway config
-    log "Generating gateway.yaml..."
-    sudo -u "$DEBROS_USER" "$INSTALL_DIR/bin/network-cli" config init --type gateway --force
-    
-    success "Configuration files generated"
-}
-
-configure_firewall() {
-    log "Configuring firewall rules..."
-    if command -v ufw &> /dev/null; then
-        log "Adding UFW rules for DeBros Network ports..."
-        for port in $NODE_PORT $RQLITE_PORT $RAFT_PORT $GATEWAY_PORT; do
-            if ! sudo ufw allow $port 2>/dev/null; then
-                error "Failed to allow port $port"
-                exit 1
-            fi
-            log "Added UFW rule: allow port $port"
-        done
-        UFW_STATUS=$(sudo ufw status | grep -o "Status: [a-z]\+" | awk '{print $2}' || echo "inactive")
-        if [[ "$UFW_STATUS" == "active" ]]; then
-            success "Firewall rules added and active"
-        else
-            success "Firewall rules added (UFW is inactive - rules will take effect when UFW is enabled)"
-            log "To enable UFW with current rules: sudo ufw enable"
-        fi
-    else
-        warning "UFW not found. Please configure firewall manually."
-        log "Required ports to allow:"
-        log "  - Port $NODE_PORT (Node P2P)"
-        log "  - Port $RQLITE_PORT (RQLite HTTP)"
-        log "  - Port $RAFT_PORT (RQLite Raft)"
-        log "  - Port $GATEWAY_PORT (Gateway)"
-    fi
-}
-
-create_systemd_services() {
-    log "Creating systemd service units..."
-    
-    # Node service
-    local node_service_file="/etc/systemd/system/debros-node.service"
-    if [ -f "$node_service_file" ]; then
-        log "Cleaning up existing node service..."
-        sudo systemctl stop debros-node.service 2>/dev/null || true
-        sudo systemctl disable debros-node.service 2>/dev/null || true
-        sudo rm -f "$node_service_file"
-    fi
-    sudo systemctl daemon-reload
-    log "Creating new systemd service..."
-    local exec_start="$INSTALL_DIR/bin/node --config $INSTALL_DIR/configs/node.yaml"
-    cat > /tmp/debros-node.service << EOF
-[Unit]
-Description=DeBros Network Node (Bootstrap)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=debros
-Group=debros
-WorkingDirectory=/opt/debros/src
-ExecStart=/opt/debros/bin/node --config bootstrap.yaml
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=debros-node
-
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/opt/debros
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    sudo mv /tmp/debros-node.service "$node_service_file"
-    
-    # Gateway service
-    local gateway_service_file="/etc/systemd/system/debros-gateway.service"
-    if [ -f "$gateway_service_file" ]; then
-        log "Cleaning up existing gateway service..."
-        sudo systemctl stop debros-gateway.service 2>/dev/null || true
-        sudo systemctl disable debros-gateway.service 2>/dev/null || true
-        sudo rm -f "$gateway_service_file"
-    fi
-    
-    log "Creating debros-gateway.service..."
-    cat > /tmp/debros-gateway.service << 'EOF'
-[Unit]
-Description=DeBros Gateway (HTTP/WebSocket)
-After=debros-node.service
-Wants=debros-node.service
-
-[Service]
-Type=simple
-User=debros
-Group=debros
-WorkingDirectory=/opt/debros/src
-ExecStart=/opt/debros/bin/gateway
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=debros-gateway
-
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/opt/debros
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    sudo mv /tmp/debros-gateway.service "$gateway_service_file"
-    
-    sudo systemctl daemon-reload
-    sudo systemctl enable debros-node.service
-    sudo systemctl enable debros-gateway.service
-    success "Systemd services ready"
-}
-
-start_services() {
-    log "Starting DeBros Network services..."
-    sudo systemctl start debros-node.service
-    sleep 3
-    if systemctl is-active --quiet debros-node.service; then
-        success "DeBros Node service started successfully"
-    else
-        error "Failed to start DeBros Node service"
-        log "Check logs with: sudo journalctl -u debros-node.service -f"
-        exit 1
-    fi
-    
-    sleep 2
-    sudo systemctl start debros-gateway.service
-    sleep 2
-    if systemctl is-active --quiet debros-gateway.service; then
-        success "DeBros Gateway service started successfully"
-    else
-        error "Failed to start DeBros Gateway service"
-        log "Check logs with: sudo journalctl -u debros-gateway.service -f"
-        exit 1
-    fi
-}
+# Check for sudo
+if ! command -v sudo &>/dev/null; then
+    error "sudo command not found. Please ensure you have sudo privileges."
+    exit 1
+fi
 
 display_banner() {
     echo -e "${BLUE}========================================================================${NOCOLOR}"
@@ -500,69 +65,216 @@ display_banner() {
    |____/ \\___|____/|_|  \\___/|___/  |_| \\_|\\___|\\__| \\_/\\_/ \\___/|_|  |_|\\_\\
 ${NOCOLOR}"
     echo -e "${BLUE}========================================================================${NOCOLOR}"
+    echo -e "${GREEN}                    Quick Install Script                               ${NOCOLOR}"
+    echo -e "${BLUE}========================================================================${NOCOLOR}"
+}
+
+detect_os() {
+    if [ ! -f /etc/os-release ]; then
+        error "Cannot detect operating system"
+        exit 1
+    fi
+    
+    . /etc/os-release
+    OS=$ID
+    VERSION=$VERSION_ID
+    
+    # Only support Debian and Ubuntu
+    case $OS in
+        ubuntu|debian)
+            log "Detected OS: $OS ${VERSION:-unknown}"
+            ;;
+        *)
+            error "Unsupported operating system: $OS"
+            echo -e "${YELLOW}This script only supports Ubuntu 18.04+ and Debian 10+${NOCOLOR}"
+            exit 1
+            ;;
+    esac
+}
+
+check_architecture() {
+    ARCH=$(uname -m)
+    case $ARCH in
+        x86_64)
+            GITHUB_ARCH="amd64"
+            ;;
+        aarch64|arm64)
+            GITHUB_ARCH="arm64"
+            ;;
+        *)
+            error "Unsupported architecture: $ARCH"
+            echo -e "${YELLOW}Supported: x86_64, aarch64/arm64${NOCOLOR}"
+            exit 1
+            ;;
+    esac
+    log "Architecture: $ARCH (using $GITHUB_ARCH)"
+}
+
+check_dependencies() {
+    log "Checking required tools..."
+    
+    local missing_deps=()
+    
+    for cmd in curl tar; do
+        if ! command -v $cmd &>/dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        log "Installing missing dependencies: ${missing_deps[*]}"
+        sudo apt update
+        sudo apt install -y "${missing_deps[@]}"
+    fi
+    
+    success "All required tools available"
+}
+
+get_latest_release() {
+    log "Fetching latest release information..."
+    
+    # Get latest release (exclude pre-releases and nightly)
+    LATEST_RELEASE=$(curl -fsSL "$GITHUB_API/releases" | \
+        grep -v "prerelease.*true" | \
+        grep -v "draft.*true" | \
+        grep '"tag_name"' | \
+        head -1 | \
+        cut -d'"' -f4)
+    
+    if [ -z "$LATEST_RELEASE" ]; then
+        error "Could not determine latest release"
+        exit 1
+    fi
+    
+    log "Latest release: $LATEST_RELEASE"
+}
+
+download_and_install() {
+    log "Downloading network-cli..."
+    
+    # Construct download URL
+    DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/$LATEST_RELEASE/debros-network_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}.tar.gz"
+    
+    # Create temporary directory
+    TEMP_DIR=$(mktemp -d)
+    trap "rm -rf $TEMP_DIR" EXIT
+    
+    # Download
+    log "Downloading from: $DOWNLOAD_URL"
+    if ! curl -fsSL -o "$TEMP_DIR/network-cli.tar.gz" "$DOWNLOAD_URL"; then
+        error "Failed to download network-cli"
+        exit 1
+    fi
+    
+    # Extract
+    log "Extracting network-cli..."
+    cd "$TEMP_DIR"
+    tar xzf network-cli.tar.gz
+    
+    # Install
+    log "Installing to $INSTALL_DIR..."
+    sudo cp network-cli "$INSTALL_DIR/"
+    sudo chmod +x "$INSTALL_DIR/network-cli"
+    
+    success "network-cli installed successfully"
+}
+
+verify_installation() {
+    if command -v network-cli &>/dev/null; then
+        INSTALLED_VERSION=$(network-cli version 2>/dev/null || echo "unknown")
+        success "network-cli is ready: $INSTALLED_VERSION"
+        return 0
+    else
+        error "network-cli not found in PATH"
+        return 1
+    fi
+}
+
+run_setup() {
+    echo -e ""
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e "${GREEN}Step 2: Run Interactive Setup${NOCOLOR}"
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e ""
+    
+    log "The setup command will:"
+    log "  • Create system user and directories"
+    log "  • Install dependencies (RQLite, etc.)"
+    log "  • Build DeBros binaries"
+    log "  • Configure network settings"
+    log "  • Create and start systemd services"
+    echo -e ""
+    
+    echo -e "${YELLOW}Ready to run setup? This will prompt for configuration details.${NOCOLOR}"
+    echo -n "Continue? (yes/no): "
+    read -r CONTINUE_SETUP
+    
+    if [[ "$CONTINUE_SETUP" != "yes" && "$CONTINUE_SETUP" != "y" ]]; then
+        echo -e ""
+        success "network-cli installed successfully!"
+        echo -e ""
+        echo -e "${CYAN}To complete setup later, run:${NOCOLOR}"
+        echo -e "${GREEN}  sudo network-cli setup${NOCOLOR}"
+        echo -e ""
+        return 0
+    fi
+    
+    echo -e ""
+    log "Running setup (requires sudo)..."
+    sudo network-cli setup
+}
+
+show_completion() {
+    echo -e ""
+    echo -e "${BLUE}========================================================================${NOCOLOR}"
+    success "DeBros Network installation complete!"
+    echo -e "${BLUE}========================================================================${NOCOLOR}"
+    echo -e ""
+    echo -e "${GREEN}Next Steps:${NOCOLOR}"
+    echo -e "  • Verify installation: ${CYAN}curl http://localhost:6001/health${NOCOLOR}"
+    echo -e "  • Check services:      ${CYAN}sudo network-cli service status all${NOCOLOR}"
+    echo -e "  • View logs:           ${CYAN}sudo network-cli service logs node --follow${NOCOLOR}"
+    echo -e "  • Authenticate:        ${CYAN}network-cli auth login${NOCOLOR}"
+    echo -e ""
+    echo -e "${CYAN}Environment Management:${NOCOLOR}"
+    echo -e "  • Switch to devnet:    ${CYAN}network-cli devnet enable${NOCOLOR}"
+    echo -e "  • Switch to testnet:   ${CYAN}network-cli testnet enable${NOCOLOR}"
+    echo -e "  • Show environment:    ${CYAN}network-cli env current${NOCOLOR}"
+    echo -e ""
+    echo -e "${CYAN}Documentation: https://docs.debros.io${NOCOLOR}"
+    echo -e ""
 }
 
 main() {
     display_banner
-    log "${BLUE}==================================================${NOCOLOR}"
-    log "${GREEN}        Starting DeBros Network Installation      ${NOCOLOR}"
-    log "${BLUE}==================================================${NOCOLOR}"
+    
+    echo -e ""
+    log "Starting DeBros Network installation..."
+    echo -e ""
+    
     detect_os
-    check_existing_installation
-    if [ "$UPDATE_MODE" != true ]; then check_ports; else log "Update mode: skipping port availability check"; fi
-    if ! check_go_installation; then install_go; fi
-    install_dependencies
-    install_rqlite
-    setup_directories
-    setup_source_code
-    build_binaries
-    if [ "$UPDATE_MODE" != true ]; then
-        generate_configs
-        configure_firewall
-    else
-        log "Update mode: keeping existing configuration"
-    fi
-    create_systemd_services
-    start_services
+    check_architecture
+    check_dependencies
     
-    DEBROS_HOME=$(sudo -u "$DEBROS_USER" sh -c 'echo ~')
+    echo -e ""
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e "${GREEN}Step 1: Install network-cli${NOCOLOR}"
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e ""
     
-    log "${BLUE}==================================================${NOCOLOR}"
-    if [ "$UPDATE_MODE" = true ]; then
-        log "${GREEN}        Update Complete!                          ${NOCOLOR}"
-    else
-        log "${GREEN}        Installation Complete!                    ${NOCOLOR}"
-    fi
-    log "${BLUE}==================================================${NOCOLOR}"
-    log "${GREEN}Installation Directory:${NOCOLOR} ${CYAN}$INSTALL_DIR${NOCOLOR}"
-    log "${GREEN}Config Directory:${NOCOLOR} ${CYAN}$DEBROS_HOME/.debros${NOCOLOR}"
-    log "${GREEN}LibP2P Port:${NOCOLOR} ${CYAN}$NODE_PORT${NOCOLOR}"
-    log "${GREEN}RQLite Port:${NOCOLOR} ${CYAN}$RQLITE_PORT${NOCOLOR}"
-    log "${GREEN}Gateway Port:${NOCOLOR} ${CYAN}$GATEWAY_PORT${NOCOLOR}"
-    log "${GREEN}Raft Port:${NOCOLOR} ${CYAN}$RAFT_PORT${NOCOLOR}"
-    log "${BLUE}==================================================${NOCOLOR}"
-    log "${GREEN}Service Management:${NOCOLOR}"
-    log "${CYAN}  - sudo systemctl status debros-node${NOCOLOR} (Check node status)"
-    log "${CYAN}  - sudo systemctl status debros-gateway${NOCOLOR} (Check gateway status)"
-    log "${CYAN}  - sudo systemctl restart debros-node${NOCOLOR} (Restart node)"
-    log "${CYAN}  - sudo systemctl restart debros-gateway${NOCOLOR} (Restart gateway)"
-    log "${CYAN}  - sudo systemctl stop debros-node${NOCOLOR} (Stop node)"
-    log "${CYAN}  - sudo systemctl stop debros-gateway${NOCOLOR} (Stop gateway)"
-    log "${CYAN}  - sudo journalctl -u debros-node.service -f${NOCOLOR} (View node logs)"
-    log "${CYAN}  - sudo journalctl -u debros-gateway.service -f${NOCOLOR} (View gateway logs)"
-    log "${BLUE}==================================================${NOCOLOR}"
-    log "${GREEN}Verify Installation:${NOCOLOR}"
-    log "${CYAN}  - Node health: curl http://127.0.0.1:5001/status${NOCOLOR}"
-    log "${CYAN}  - Gateway health: curl http://127.0.0.1:6001/health${NOCOLOR}"
-    log "${CYAN}  - Show bootstrap peer: cat $DEBROS_HOME/.debros/bootstrap/peer.info${NOCOLOR}"
-    log "${BLUE}==================================================${NOCOLOR}"
+    get_latest_release
+    download_and_install
     
-    if [ "$UPDATE_MODE" = true ]; then
-        success "DeBros Network has been updated and is running!"
-    else
-        success "DeBros Network is now running!"
+    # Verify installation
+    if ! verify_installation; then
+        exit 1
     fi
-    log "${CYAN}For documentation visit: https://docs.debros.io${NOCOLOR}"
+    
+    # Run setup
+    run_setup
+    
+    # Show completion message
+    show_completion
 }
 
 main "$@"

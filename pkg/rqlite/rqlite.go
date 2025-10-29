@@ -137,8 +137,8 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	r.cmd = exec.Command("rqlited", args...)
 
 	// Enable debug logging of RQLite process to help diagnose issues
-	// r.cmd.Stdout = os.Stdout
-	// r.cmd.Stderr = os.Stderr
+	r.cmd.Stdout = os.Stdout
+	r.cmd.Stderr = os.Stderr
 
 	if err := r.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start RQLite: %w", err)

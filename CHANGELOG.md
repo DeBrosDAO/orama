@@ -10,7 +10,52 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Changed
 
+- **GoReleaser**: Updated to build only `network-cli` binary (v0.52.2+)
+  - Other binaries (node, gateway, identity) now installed via `network-cli setup`
+  - Cleaner, smaller release packages
+  - Resolves archive mismatch errors
+- **GitHub Actions**: Updated artifact actions from v3 to v4 (deprecated versions)
+
 ### Deprecated
+
+### Fixed
+
+- Fixed install script to be more clear and bug fixing
+
+## [0.52.1] - 2025-10-26
+
+### Added
+
+- **CLI Refactor**: Modularized monolithic CLI into `pkg/cli/` package structure for better maintainability
+  - New `environment.go`: Multi-environment management system (local, devnet, testnet)
+  - New `env_commands.go`: Environment switching commands (`env list`, `env switch`, `devnet enable`, `testnet enable`)
+  - New `setup.go`: Interactive VPS installation command (`network-cli setup`) that replaces bash install script
+  - New `service.go`: Systemd service management commands (`service start|stop|restart|status|logs`)
+  - New `auth_commands.go`, `config_commands.go`, `basic_commands.go`: Refactored commands into modular pkg/cli
+- **Release Pipeline**: Complete automated release infrastructure via `.goreleaser.yaml` and GitHub Actions
+  - Multi-platform binary builds (Linux/macOS, amd64/arm64)
+  - Automatic GitHub Release creation with changelog and artifacts
+  - Semantic versioning support with pre-release handling
+- **Environment Configuration**: Multi-environment switching system
+  - Default environments: local (http://localhost:6001), devnet (https://devnet.debros.network), testnet (https://testnet.debros.network)
+  - Stored in `~/.debros/environments.json`
+  - CLI auto-uses active environment for authentication and operations
+- **Comprehensive Documentation**
+  - `.cursor/RELEASES.md`: Overview and quick start
+  - `.cursor/goreleaser-guide.md`: Detailed distribution guide
+  - `.cursor/release-checklist.md`: Quick reference
+
+### Changed
+
+- **CLI Refactoring**: `cmd/cli/main.go` reduced from 1340 → 180 lines (thin router pattern)
+  - All business logic moved to modular `pkg/cli/` functions
+  - Easier to test, maintain, and extend individual commands
+- **Installation**: `scripts/install-debros-network.sh` now APT-ready with fallback to source build
+- **Setup Process**: Consolidated all installation logic into `network-cli setup` command
+  - Single unified installation regardless of installation method
+  - Interactive user experience with clear progress indicators
+
+### Removed
 
 ## [0.51.9] - 2025-10-25
 
@@ -241,3 +286,4 @@ _Initial release._
 
 [keepachangelog]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
+
