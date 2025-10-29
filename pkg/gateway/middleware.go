@@ -214,6 +214,8 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// Identify actor from context
 		ownerType := ""
 		ownerID := ""
+		apiKeyFallback := ""
+
 		if v := ctx.Value(ctxKeyJWT); v != nil {
 			if claims, ok := v.(*jwtClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
 				// Determine subject type.
@@ -237,12 +239,25 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 					ownerID = strings.TrimSpace(s)
 				}
 			}
+		} else if ownerType == "wallet" {
+			// If we have a JWT wallet, also capture the API key as fallback
+			if v := ctx.Value(ctxKeyAPIKey); v != nil {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					apiKeyFallback = strings.TrimSpace(s)
+				}
+			}
 		}
 
 		if ownerType == "" || ownerID == "" {
 			writeError(w, http.StatusForbidden, "missing identity")
 			return
 		}
+
+		g.logger.ComponentInfo("gateway", "namespace auth check",
+			zap.String("namespace", ns),
+			zap.String("owner_type", ownerType),
+			zap.String("owner_id", ownerID),
+		)
 
 		// Check ownership in DB using internal auth context
 		db := g.client.Database()
@@ -261,6 +276,12 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 
 		q := "SELECT 1 FROM namespace_ownership WHERE namespace_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1"
 		res, err := db.Query(internalCtx, q, nsID, ownerType, ownerID)
+
+		// If primary owner check fails and we have a JWT wallet with API key fallback, try the API key
+		if (err != nil || res == nil || res.Count == 0) && ownerType == "wallet" && apiKeyFallback != "" {
+			res, err = db.Query(internalCtx, q, nsID, "api_key", apiKeyFallback)
+		}
+
 		if err != nil || res == nil || res.Count == 0 {
 			writeError(w, http.StatusForbidden, "forbidden: not an owner of namespace")
 			return

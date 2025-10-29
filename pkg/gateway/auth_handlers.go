@@ -192,7 +192,6 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 	switch chainType {
 	case "ETH":
 		// EVM personal_sign verification of the nonce
-		// Hash: keccak256("\x19Ethereum Signed Message:\n" + len(nonce) + nonce)
 		msg := []byte(req.Nonce)
 		prefix := []byte("\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msg)))
 		hash := ethcrypto.Keccak256(prefix, msg)
@@ -228,7 +227,7 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 	case "SOL":
 		// Solana uses Ed25519 signatures
 		// Signature is base64-encoded, public key is the wallet address (base58)
-		
+
 		// Decode base64 signature (Solana signatures are 64 bytes)
 		sig, err := base64.StdEncoding.DecodeString(req.Signature)
 		if err != nil {
@@ -241,7 +240,6 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Decode base58 public key (Solana wallet address)
-		// Using a simple base58 decoder
 		pubKeyBytes, err := base58Decode(req.Wallet)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid wallet address: %v", err))
@@ -296,6 +294,45 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Ensure API key exists for this (namespace, wallet) and record ownerships
+	// This is done automatically after successful verification; no second nonce needed
+	var apiKey string
+
+	// Try existing linkage
+	r1, err := db.Query(internalCtx,
+		"SELECT api_keys.key FROM wallet_api_keys JOIN api_keys ON wallet_api_keys.api_key_id = api_keys.id WHERE wallet_api_keys.namespace_id = ? AND LOWER(wallet_api_keys.wallet) = LOWER(?) LIMIT 1",
+		nsID, req.Wallet,
+	)
+	if err == nil && r1 != nil && r1.Count > 0 && len(r1.Rows) > 0 && len(r1.Rows[0]) > 0 {
+		if s, ok := r1.Rows[0][0].(string); ok {
+			apiKey = s
+		} else {
+			b, _ := json.Marshal(r1.Rows[0][0])
+			_ = json.Unmarshal(b, &apiKey)
+		}
+	}
+
+	if strings.TrimSpace(apiKey) == "" {
+		// Create new API key with format ak_<random>:<namespace>
+		buf := make([]byte, 18)
+		if _, err := rand.Read(buf); err == nil {
+			apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + ns
+			if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", apiKey, "", nsID); err == nil {
+				// Link wallet -> api_key
+				rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", apiKey)
+				if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
+					apiKeyID := rid.Rows[0][0]
+					_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, strings.ToLower(req.Wallet), apiKeyID)
+				}
+			}
+		}
+	}
+
+	// Record ownerships (best-effort)
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, apiKey)
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, req.Wallet)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":       token,
 		"token_type":         "Bearer",
@@ -303,6 +340,7 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 		"refresh_token":      refresh,
 		"subject":            req.Wallet,
 		"namespace":          ns,
+		"api_key":            apiKey,
 		"nonce":              req.Nonce,
 		"signature_verified": true,
 	})
@@ -1091,17 +1129,17 @@ func (g *Gateway) logoutHandler(w http.ResponseWriter, r *http.Request) {
 // Used for decoding Solana public keys (base58-encoded 32-byte ed25519 public keys)
 func base58Decode(encoded string) ([]byte, error) {
 	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-	
+
 	// Build reverse lookup map
 	lookup := make(map[rune]int)
 	for i, c := range alphabet {
 		lookup[c] = i
 	}
-	
+
 	// Convert to big integer
 	num := big.NewInt(0)
 	base := big.NewInt(58)
-	
+
 	for _, c := range encoded {
 		val, ok := lookup[c]
 		if !ok {
@@ -1110,10 +1148,10 @@ func base58Decode(encoded string) ([]byte, error) {
 		num.Mul(num, base)
 		num.Add(num, big.NewInt(int64(val)))
 	}
-	
+
 	// Convert to bytes
 	decoded := num.Bytes()
-	
+
 	// Add leading zeros for each leading '1' in the input
 	for _, c := range encoded {
 		if c != '1' {
@@ -1121,6 +1159,6 @@ func base58Decode(encoded string) ([]byte, error) {
 		}
 		decoded = append([]byte{0}, decoded...)
 	}
-	
+
 	return decoded, nil
 }
