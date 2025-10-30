@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports
 
-VERSION := 0.52.14
+VERSION := 0.52.15
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -77,12 +77,34 @@ run-gateway:
 	@echo "Generate it with: network-cli config init --type gateway"
 	go run ./cmd/gateway
 
-# One-command dev: Start bootstrap, node2, node3, and gateway in background
+# One-command dev: Start bootstrap, node2, node3, gateway, and anon in background
 # Requires: configs already exist in ~/.debros
 dev: build
 	@echo "🚀 Starting development network stack..."
 	@mkdir -p .dev/pids
 	@mkdir -p $$HOME/.debros/logs
+	@echo "Starting Anyone client (anon proxy)..."
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "  Detected macOS - using npx anyone-client"; \
+		if command -v npx >/dev/null 2>&1; then \
+			nohup npx anyone-client > $$HOME/.debros/logs/anon.log 2>&1 & echo $$! > .dev/pids/anon.pid; \
+			echo "  Anyone client started (PID: $$(cat .dev/pids/anon.pid))"; \
+		else \
+			echo "  ⚠️  npx not found - skipping Anyone client"; \
+			echo "  Install with: npm install -g npm"; \
+		fi; \
+	elif [ "$$(uname)" = "Linux" ]; then \
+		echo "  Detected Linux - checking systemctl"; \
+		if systemctl is-active --quiet anon 2>/dev/null; then \
+			echo "  ✓ Anon service already running"; \
+		elif command -v systemctl >/dev/null 2>&1; then \
+			echo "  Starting anon service..."; \
+			sudo systemctl start anon 2>/dev/null || echo "  ⚠️  Failed to start anon service"; \
+		else \
+			echo "  ⚠️  systemctl not found - skipping Anon"; \
+		fi; \
+	fi
+	@sleep 2
 	@echo "Starting bootstrap node..."
 	@nohup ./bin/node --config bootstrap.yaml > $$HOME/.debros/logs/bootstrap.log 2>&1 & echo $$! > .dev/pids/bootstrap.pid
 	@sleep 2
@@ -100,12 +122,16 @@ dev: build
 	@echo "============================================================"
 	@echo ""
 	@echo "Processes:"
+	@if [ -f .dev/pids/anon.pid ]; then \
+		echo "  Anon:      PID=$$(cat .dev/pids/anon.pid) (SOCKS: 9050)"; \
+	fi
 	@echo "  Bootstrap: PID=$$(cat .dev/pids/bootstrap.pid)"
 	@echo "  Node2:     PID=$$(cat .dev/pids/node2.pid)"
 	@echo "  Node3:     PID=$$(cat .dev/pids/node3.pid)"
 	@echo "  Gateway:   PID=$$(cat .dev/pids/gateway.pid)"
 	@echo ""
 	@echo "Ports:"
+	@echo "  Anon SOCKS:    9050 (proxy endpoint: POST /v1/proxy/anon)"
 	@echo "  Bootstrap P2P: 4001, HTTP: 5001, Raft: 7001"
 	@echo "  Node2     P2P: 4002, HTTP: 5002, Raft: 7002"
 	@echo "  Node3     P2P: 4003, HTTP: 5003, Raft: 7003"
@@ -114,8 +140,13 @@ dev: build
 	@echo "Press Ctrl+C to stop all processes"
 	@echo "============================================================"
 	@echo ""
-	@trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
-	tail -f $$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log
+	@if [ -f .dev/pids/anon.pid ]; then \
+		trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
+		tail -f $$HOME/.debros/logs/anon.log $$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log; \
+	else \
+		trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
+		tail -f $$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log; \
+	fi
 
 # Help
 help:

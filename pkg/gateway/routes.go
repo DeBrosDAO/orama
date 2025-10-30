@@ -44,5 +44,8 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/pubsub/publish", g.pubsubPublishHandler)
 	mux.HandleFunc("/v1/pubsub/topics", g.pubsubTopicsHandler)
 
+	// anon proxy (authenticated users only)
+	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)
+
 	return g.withMiddleware(mux)
 }
