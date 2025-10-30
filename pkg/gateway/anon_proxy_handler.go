@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -176,11 +177,15 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 		zap.Int("bytes", len(respBody)),
 		zap.Duration("duration", duration))
 
+	// Base64-encode the body to safely handle binary data in JSON
+	// This prevents corruption when binary data is converted to a string
+	bodyBase64 := base64.StdEncoding.EncodeToString(respBody)
+
 	// Return the proxied response
 	writeJSON(w, http.StatusOK, anonProxyResponse{
 		StatusCode: resp.StatusCode,
 		Headers:    respHeaders,
-		Body:       string(respBody),
+		Body:       bodyBase64,
 	})
 }
 

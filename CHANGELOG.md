@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Changed
 
+### Deprecated
+
+### Fixed
+
+## [0.52.15]
+
+### Added
+
+- Added Base64 encoding for the response body in the anonProxyHandler to prevent corruption of binary data when returned in JSON format.
+
+### Changed
+
 - **GoReleaser**: Updated to build only `network-cli` binary (v0.52.2+)
   - Other binaries (node, gateway, identity) now installed via `network-cli setup`
   - Cleaner, smaller release packages
@@ -125,7 +137,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
-- Regular nodes rqlite not starting 
+- Regular nodes rqlite not starting
 
 ## [0.51.2] - 2025-09-26
 
@@ -154,7 +166,6 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
-
 
 ## [0.50.0] - 2025-09-23
 
@@ -286,4 +297,3 @@ _Initial release._
 
 [keepachangelog]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-
