@@ -190,6 +190,168 @@ verify_installation() {
     fi
 }
 
+install_anon() {
+    echo -e ""
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e "${GREEN}Step 1.5: Install Anyone Relay (Anon)${NOCOLOR}"
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e ""
+    
+    log "Installing Anyone relay for anonymous networking..."
+    
+    # Check if anon is already installed
+    if command -v anon &>/dev/null; then
+        success "Anon already installed"
+        configure_anon_logs
+        configure_firewall_for_anon
+        return 0
+    fi
+    
+    # Install via APT (official method from docs.anyone.io)
+    log "Adding Anyone APT repository..."
+    
+    # Add GPG key
+    if ! curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg 2>/dev/null; then
+        warning "Failed to add Anyone GPG key"
+        log "You can manually install later with:"
+        log "  curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg"
+        log "  echo 'deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main' | sudo tee /etc/apt/sources.list.d/anyone.list"
+        log "  sudo apt update && sudo apt install -y anon"
+        return 1
+    fi
+    
+    # Add repository
+    echo "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main" | sudo tee /etc/apt/sources.list.d/anyone.list >/dev/null
+    
+    # Update and install
+    log "Installing Anon package..."
+    sudo apt update -qq
+    if ! sudo apt install -y anon; then
+        warning "Anon installation failed"
+        return 1
+    fi
+    
+    # Verify installation
+    if ! command -v anon &>/dev/null; then
+        warning "Anon installation may have failed"
+        return 1
+    fi
+    
+    success "Anon installed successfully"
+    
+    # Configure with sensible defaults
+    configure_anon_defaults
+    
+    # Configure log directory
+    configure_anon_logs
+    
+    # Configure firewall if present
+    configure_firewall_for_anon
+    
+    # Enable and start service
+    log "Enabling Anon service..."
+    sudo systemctl enable anon 2>/dev/null || true
+    sudo systemctl start anon 2>/dev/null || true
+    
+    if systemctl is-active --quiet anon; then
+        success "Anon service is running"
+    else
+        warning "Anon service may not be running. Check: sudo systemctl status anon"
+    fi
+    
+    return 0
+}
+
+configure_anon_defaults() {
+    log "Configuring Anon with default settings..."
+    
+    HOSTNAME=$(hostname -s 2>/dev/null || echo "debros-node")
+    
+    # Create or update anonrc with our defaults
+    if [ -f /etc/anon/anonrc ]; then
+        # Backup existing config
+        sudo cp /etc/anon/anonrc /etc/anon/anonrc.bak 2>/dev/null || true
+        
+        # Update key settings if not already set
+        if ! grep -q "^Nickname" /etc/anon/anonrc; then
+            echo "Nickname ${HOSTNAME}" | sudo tee -a /etc/anon/anonrc >/dev/null
+        fi
+        
+        if ! grep -q "^ControlPort" /etc/anon/anonrc; then
+            echo "ControlPort 9051" | sudo tee -a /etc/anon/anonrc >/dev/null
+        fi
+        
+        if ! grep -q "^SocksPort" /etc/anon/anonrc; then
+            echo "SocksPort 9050" | sudo tee -a /etc/anon/anonrc >/dev/null
+        fi
+        
+        log "  Nickname: ${HOSTNAME}"
+        log "  ORPort: 9001 (default)"
+        log "  ControlPort: 9051"
+        log "  SOCKSPort: 9050"
+    fi
+}
+
+configure_anon_logs() {
+    log "Configuring Anon logs..."
+    
+    # Create log directory
+    sudo mkdir -p /home/debros/.debros/logs/anon
+    
+    # Change ownership to debian-anon (the user anon runs as)
+    sudo chown -R debian-anon:debian-anon /home/debros/.debros/logs/anon 2>/dev/null || true
+    
+    # Update anonrc to point logs to our directory
+    if [ -f /etc/anon/anonrc ]; then
+        sudo sed -i.bak 's|Log notice file.*|Log notice file /home/debros/.debros/logs/anon/notices.log|g' /etc/anon/anonrc
+        success "Anon logs configured to /home/debros/.debros/logs/anon"
+    fi
+}
+
+configure_firewall_for_anon() {
+    log "Checking firewall configuration..."
+    
+    # Check for UFW
+    if command -v ufw &>/dev/null && sudo ufw status | grep -q "Status: active"; then
+        log "UFW detected and active, adding Anon ports..."
+        sudo ufw allow 9001/tcp comment 'Anon ORPort' 2>/dev/null || true
+        sudo ufw allow 9051/tcp comment 'Anon ControlPort' 2>/dev/null || true
+        success "UFW rules added for Anon"
+        return 0
+    fi
+    
+    # Check for firewalld
+    if command -v firewall-cmd &>/dev/null && sudo firewall-cmd --state 2>/dev/null | grep -q "running"; then
+        log "firewalld detected and active, adding Anon ports..."
+        sudo firewall-cmd --permanent --add-port=9001/tcp 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-port=9051/tcp 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+        success "firewalld rules added for Anon"
+        return 0
+    fi
+    
+    # Check for iptables
+    if command -v iptables &>/dev/null; then
+        # Check if iptables has any rules (indicating it's in use)
+        if sudo iptables -L -n | grep -q "Chain INPUT"; then
+            log "iptables detected, adding Anon ports..."
+            sudo iptables -A INPUT -p tcp --dport 9001 -j ACCEPT -m comment --comment "Anon ORPort" 2>/dev/null || true
+            sudo iptables -A INPUT -p tcp --dport 9051 -j ACCEPT -m comment --comment "Anon ControlPort" 2>/dev/null || true
+            
+            # Try to save rules if iptables-persistent is available
+            if command -v netfilter-persistent &>/dev/null; then
+                sudo netfilter-persistent save 2>/dev/null || true
+            elif command -v iptables-save &>/dev/null; then
+                sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
+            fi
+            success "iptables rules added for Anon"
+            return 0
+        fi
+    fi
+    
+    log "No active firewall detected, skipping firewall configuration"
+}
+
 run_setup() {
     echo -e ""
     echo -e "${BLUE}========================================${NOCOLOR}"
@@ -241,6 +403,11 @@ show_completion() {
     echo -e "  • Switch to testnet:   ${CYAN}network-cli testnet enable${NOCOLOR}"
     echo -e "  • Show environment:    ${CYAN}network-cli env current${NOCOLOR}"
     echo -e ""
+    echo -e "${CYAN}Anyone Relay (Anon):${NOCOLOR}"
+    echo -e "  • Check Anon status:   ${CYAN}sudo systemctl status anon${NOCOLOR}"
+    echo -e "  • View Anon logs:      ${CYAN}sudo tail -f /home/debros/.debros/logs/anon/notices.log${NOCOLOR}"
+    echo -e "  • Proxy endpoint:      ${CYAN}POST http://localhost:6001/v1/proxy/anon${NOCOLOR}"
+    echo -e ""
     echo -e "${CYAN}Documentation: https://docs.debros.io${NOCOLOR}"
     echo -e ""
 }
@@ -269,6 +436,9 @@ main() {
     if ! verify_installation; then
         exit 1
     fi
+    
+    # Install Anon (optional but recommended)
+    install_anon || warning "Anon installation skipped or failed"
     
     # Run setup
     run_setup

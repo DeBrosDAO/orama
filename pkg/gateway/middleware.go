@@ -303,6 +303,9 @@ func requiresNamespaceOwnership(p string) bool {
 	if strings.HasPrefix(p, "/v1/rqlite/") {
 		return true
 	}
+	if strings.HasPrefix(p, "/v1/proxy/") {
+		return true
+	}
 	return false
 }
 

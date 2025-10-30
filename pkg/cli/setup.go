@@ -56,11 +56,12 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  2. Install system dependencies (curl, git, make, build tools)\n")
 	fmt.Printf("  3. Install Go 1.21+ (if needed)\n")
 	fmt.Printf("  4. Install RQLite database\n")
-	fmt.Printf("  5. Create directories (/home/debros/bin, /home/debros/src)\n")
-	fmt.Printf("  6. Clone and build DeBros Network\n")
-	fmt.Printf("  7. Generate configuration files\n")
-	fmt.Printf("  8. Create systemd services (debros-node, debros-gateway)\n")
-	fmt.Printf("  9. Start and enable services\n")
+	fmt.Printf("  5. Install Anyone Relay (Anon) for anonymous networking\n")
+	fmt.Printf("  6. Create directories (/home/debros/bin, /home/debros/src)\n")
+	fmt.Printf("  7. Clone and build DeBros Network\n")
+	fmt.Printf("  8. Generate configuration files\n")
+	fmt.Printf("  9. Create systemd services (debros-node, debros-gateway)\n")
+	fmt.Printf(" 10. Start and enable services\n")
 	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
 
 	fmt.Printf("Ready to begin setup? (yes/no): ")
@@ -82,6 +83,9 @@ func HandleSetupCommand(args []string) {
 
 	// Step 4: Install RQLite
 	installRQLite()
+
+	// Step 4.5: Install Anon (Anyone relay)
+	installAnon()
 
 	// Step 5: Setup directories
 	setupDirectories()
@@ -112,6 +116,10 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("Verify Installation:\n")
 	fmt.Printf("  curl http://localhost:6001/health\n")
 	fmt.Printf("  curl http://localhost:5001/status\n\n")
+	fmt.Printf("Anyone Relay (Anon):\n")
+	fmt.Printf("  sudo systemctl status anon\n")
+	fmt.Printf("  sudo tail -f /home/debros/.debros/logs/anon/notices.log\n")
+	fmt.Printf("  Proxy endpoint: POST http://localhost:6001/v1/proxy/anon\n\n")
 }
 
 func detectLinuxDistro() string {
@@ -375,6 +383,212 @@ func installRQLite() {
 	exec.Command("chmod", "+x", "/usr/local/bin/rqlite").Run()
 
 	fmt.Printf("   ✓ RQLite installed\n")
+}
+
+func installAnon() {
+	fmt.Printf("🔐 Installing Anyone Relay (Anon)...\n")
+
+	// Check if already installed
+	if _, err := exec.LookPath("anon"); err == nil {
+		fmt.Printf("   ✓ Anon already installed\n")
+		configureAnonLogs()
+		configureFirewallForAnon()
+		return
+	}
+
+	// Install via APT (official method from docs.anyone.io)
+	fmt.Printf("   Adding Anyone APT repository...\n")
+
+	// Add GPG key
+	cmd := exec.Command("sh", "-c", "curl -fsSL https://deb.anyone.io/gpg.key | gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg")
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to add Anyone GPG key: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   You can manually install with:\n")
+		fmt.Fprintf(os.Stderr, "   curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg\n")
+		fmt.Fprintf(os.Stderr, "   echo 'deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main' | sudo tee /etc/apt/sources.list.d/anyone.list\n")
+		fmt.Fprintf(os.Stderr, "   sudo apt update && sudo apt install -y anon\n")
+		return
+	}
+
+	// Add repository
+	repoLine := "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main"
+	if err := os.WriteFile("/etc/apt/sources.list.d/anyone.list", []byte(repoLine+"\n"), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to add Anyone repository: %v\n", err)
+		return
+	}
+
+	// Update package list
+	fmt.Printf("   Updating package list...\n")
+	exec.Command("apt", "update", "-qq").Run()
+
+	// Install anon
+	fmt.Printf("   Installing Anon package...\n")
+	cmd = exec.Command("apt", "install", "-y", "anon")
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Anon installation failed: %v\n", err)
+		return
+	}
+
+	// Verify installation
+	if _, err := exec.LookPath("anon"); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Anon installation may have failed\n")
+		return
+	}
+
+	fmt.Printf("   ✓ Anon installed\n")
+
+	// Configure with sensible defaults
+	configureAnonDefaults()
+
+	// Configure logs
+	configureAnonLogs()
+
+	// Configure firewall
+	configureFirewallForAnon()
+
+	// Enable and start service
+	fmt.Printf("   Enabling Anon service...\n")
+	exec.Command("systemctl", "enable", "anon").Run()
+	exec.Command("systemctl", "start", "anon").Run()
+
+	if exec.Command("systemctl", "is-active", "--quiet", "anon").Run() == nil {
+		fmt.Printf("   ✓ Anon service is running\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "⚠️  Anon service may not be running. Check: systemctl status anon\n")
+	}
+}
+
+func configureAnonDefaults() {
+	fmt.Printf("   Configuring Anon with default settings...\n")
+
+	hostname := "debros-node"
+	if h, err := os.Hostname(); err == nil && h != "" {
+		hostname = strings.Split(h, ".")[0]
+	}
+
+	anonrcPath := "/etc/anon/anonrc"
+	if _, err := os.Stat(anonrcPath); err == nil {
+		// Backup existing config
+		exec.Command("cp", anonrcPath, anonrcPath+".bak").Run()
+
+		// Read existing config
+		data, err := os.ReadFile(anonrcPath)
+		if err != nil {
+			return
+		}
+		config := string(data)
+
+		// Add settings if not present
+		if !strings.Contains(config, "Nickname") {
+			config += fmt.Sprintf("\nNickname %s\n", hostname)
+		}
+		if !strings.Contains(config, "ControlPort") {
+			config += "ControlPort 9051\n"
+		}
+		if !strings.Contains(config, "SocksPort") {
+			config += "SocksPort 9050\n"
+		}
+
+		// Write back
+		os.WriteFile(anonrcPath, []byte(config), 0644)
+
+		fmt.Printf("   Nickname: %s\n", hostname)
+		fmt.Printf("   ORPort: 9001 (default)\n")
+		fmt.Printf("   ControlPort: 9051\n")
+		fmt.Printf("   SOCKSPort: 9050\n")
+	}
+}
+
+func configureAnonLogs() {
+	fmt.Printf("   Configuring Anon logs...\n")
+
+	// Create log directory
+	logDir := "/home/debros/.debros/logs/anon"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to create log directory: %v\n", err)
+		return
+	}
+
+	// Change ownership to debian-anon (the user anon runs as)
+	exec.Command("chown", "-R", "debian-anon:debian-anon", logDir).Run()
+
+	// Update anonrc if it exists
+	anonrcPath := "/etc/anon/anonrc"
+	if _, err := os.Stat(anonrcPath); err == nil {
+		// Read current config
+		data, err := os.ReadFile(anonrcPath)
+		if err == nil {
+			config := string(data)
+
+			// Replace log file path
+			newConfig := strings.ReplaceAll(config,
+				"Log notice file /var/log/anon/notices.log",
+				"Log notice file /home/debros/.debros/logs/anon/notices.log")
+
+			// Write back
+			if err := os.WriteFile(anonrcPath, []byte(newConfig), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to update anonrc: %v\n", err)
+			} else {
+				fmt.Printf("   ✓ Anon logs configured to %s\n", logDir)
+
+				// Restart anon service if running
+				if exec.Command("systemctl", "is-active", "--quiet", "anon").Run() == nil {
+					exec.Command("systemctl", "restart", "anon").Run()
+				}
+			}
+		}
+	}
+}
+
+func configureFirewallForAnon() {
+	fmt.Printf("   Checking firewall configuration...\n")
+
+	// Check for UFW
+	if _, err := exec.LookPath("ufw"); err == nil {
+		output, _ := exec.Command("ufw", "status").CombinedOutput()
+		if strings.Contains(string(output), "Status: active") {
+			fmt.Printf("   Adding UFW rules for Anon...\n")
+			exec.Command("ufw", "allow", "9001/tcp", "comment", "Anon ORPort").Run()
+			exec.Command("ufw", "allow", "9051/tcp", "comment", "Anon ControlPort").Run()
+			fmt.Printf("   ✓ UFW rules added\n")
+			return
+		}
+	}
+
+	// Check for firewalld
+	if _, err := exec.LookPath("firewall-cmd"); err == nil {
+		output, _ := exec.Command("firewall-cmd", "--state").CombinedOutput()
+		if strings.Contains(string(output), "running") {
+			fmt.Printf("   Adding firewalld rules for Anon...\n")
+			exec.Command("firewall-cmd", "--permanent", "--add-port=9001/tcp").Run()
+			exec.Command("firewall-cmd", "--permanent", "--add-port=9051/tcp").Run()
+			exec.Command("firewall-cmd", "--reload").Run()
+			fmt.Printf("   ✓ firewalld rules added\n")
+			return
+		}
+	}
+
+	// Check for iptables
+	if _, err := exec.LookPath("iptables"); err == nil {
+		output, _ := exec.Command("iptables", "-L", "-n").CombinedOutput()
+		if strings.Contains(string(output), "Chain INPUT") {
+			fmt.Printf("   Adding iptables rules for Anon...\n")
+			exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport", "9001", "-j", "ACCEPT", "-m", "comment", "--comment", "Anon ORPort").Run()
+			exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport", "9051", "-j", "ACCEPT", "-m", "comment", "--comment", "Anon ControlPort").Run()
+
+			// Try to save rules
+			if _, err := exec.LookPath("netfilter-persistent"); err == nil {
+				exec.Command("netfilter-persistent", "save").Run()
+			} else if _, err := exec.LookPath("iptables-save"); err == nil {
+				cmd := exec.Command("sh", "-c", "iptables-save > /etc/iptables/rules.v4")
+				cmd.Run()
+			}
+			fmt.Printf("   ✓ iptables rules added\n")
+			return
+		}
+	}
+
+	fmt.Printf("   No active firewall detected\n")
 }
 
 func setupDirectories() {
