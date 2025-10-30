@@ -665,6 +665,17 @@ func generateConfigsInteractive(force bool) {
 	fmt.Printf("  • No external peers required\n")
 	fmt.Printf("  • Gateway connected to local node\n\n")
 
+	bootstrapPath := "/home/debros/.debros/bootstrap.yaml"
+	nodeConfigPath := "/home/debros/.debros/node.yaml"
+	gatewayPath := "/home/debros/.debros/gateway.yaml"
+
+	// Check if node.yaml already exists
+	nodeExists := false
+	if _, err := os.Stat(nodeConfigPath); err == nil {
+		nodeExists = true
+		fmt.Printf("   ℹ️  node.yaml already exists, will not overwrite\n")
+	}
+
 	// Generate bootstrap node config with explicit parameters
 	// Pass empty bootstrap-peers and no join address for bootstrap node
 	bootstrapArgs := []string{
@@ -680,45 +691,85 @@ func generateConfigsInteractive(force bool) {
 	cmd := exec.Command("sudo", bootstrapArgs...)
 	cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
 	output, err := cmd.CombinedOutput()
+	bootstrapCreated := (err == nil)
+
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to generate bootstrap config: %v\n", err)
-		if len(output) > 0 {
-			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		// Check if bootstrap.yaml already exists (config init failed because it exists)
+		if _, statErr := os.Stat(bootstrapPath); statErr == nil {
+			fmt.Printf("   ℹ️  bootstrap.yaml already exists, skipping creation\n")
+			bootstrapCreated = true
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to generate bootstrap config: %v\n", err)
+			if len(output) > 0 {
+				fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+			}
 		}
 	} else {
 		fmt.Printf("   ✓ Bootstrap node config created\n")
 	}
 
-	// Rename bootstrap.yaml to node.yaml so the service can find it
-	renameCmd := exec.Command("sudo", "-u", "debros", "mv", "/home/debros/.debros/bootstrap.yaml", "/home/debros/.debros/node.yaml")
-	if err := renameCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to rename config: %v\n", err)
+	// Rename bootstrap.yaml to node.yaml only if node.yaml doesn't exist
+	if !nodeExists && bootstrapCreated {
+		// Check if bootstrap.yaml exists before renaming
+		if _, err := os.Stat(bootstrapPath); err == nil {
+			renameCmd := exec.Command("sudo", "-u", "debros", "mv", bootstrapPath, nodeConfigPath)
+			if err := renameCmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to rename config: %v\n", err)
+			} else {
+				fmt.Printf("   ✓ Renamed bootstrap.yaml to node.yaml\n")
+			}
+		}
+	} else if nodeExists {
+		// If node.yaml exists, we can optionally remove bootstrap.yaml if it was just created
+		if bootstrapCreated && !force {
+			// Clean up bootstrap.yaml if it was just created but node.yaml already exists
+			if _, err := os.Stat(bootstrapPath); err == nil {
+				exec.Command("sudo", "-u", "debros", "rm", "-f", bootstrapPath).Run()
+			}
+		}
+		fmt.Printf("   ℹ️  Using existing node.yaml\n")
 	}
 
 	// Generate gateway config with explicit empty bootstrap peers
-	gatewayArgs := []string{
-		"-u", "debros",
-		"/home/debros/bin/network-cli", "config", "init",
-		"--type", "gateway",
-		"--bootstrap-peers", "",
-	}
-	if force {
-		gatewayArgs = append(gatewayArgs, "--force")
-	}
-
-	cmd = exec.Command("sudo", gatewayArgs...)
-	cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to generate gateway config: %v\n", err)
-		if len(output) > 0 {
-			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+	// Check if gateway.yaml already exists
+	gatewayExists := false
+	if _, err := os.Stat(gatewayPath); err == nil {
+		gatewayExists = true
+		if !force {
+			fmt.Printf("   ℹ️  gateway.yaml already exists, skipping creation\n")
 		}
-	} else {
-		fmt.Printf("   ✓ Gateway config created\n")
 	}
 
-	fmt.Printf("   ✓ Configurations generated\n")
+	if !gatewayExists || force {
+		gatewayArgs := []string{
+			"-u", "debros",
+			"/home/debros/bin/network-cli", "config", "init",
+			"--type", "gateway",
+			"--bootstrap-peers", "",
+		}
+		if force {
+			gatewayArgs = append(gatewayArgs, "--force")
+		}
+
+		cmd = exec.Command("sudo", gatewayArgs...)
+		cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			// Check if gateway.yaml already exists (config init failed because it exists)
+			if _, statErr := os.Stat(gatewayPath); statErr == nil {
+				fmt.Printf("   ℹ️  gateway.yaml already exists, skipping creation\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to generate gateway config: %v\n", err)
+				if len(output) > 0 {
+					fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+				}
+			}
+		} else {
+			fmt.Printf("   ✓ Gateway config created\n")
+		}
+	}
+
+	fmt.Printf("   ✓ Configurations ready\n")
 }
 
 func createSystemdServices() {
