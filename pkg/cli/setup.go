@@ -409,43 +409,53 @@ func installAnon() {
 		return
 	}
 
-	// Install via APT (official method from docs.anyone.io)
-	fmt.Printf("   Adding Anyone APT repository...\n")
-
-	// Add GPG key
-	cmd := exec.Command("sh", "-c", "curl -fsSL https://deb.anyone.io/gpg.key | gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg")
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to add Anyone GPG key: %v\n", err)
-		fmt.Fprintf(os.Stderr, "   You can manually install with:\n")
-		fmt.Fprintf(os.Stderr, "   curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg\n")
-		fmt.Fprintf(os.Stderr, "   echo 'deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main' | sudo tee /etc/apt/sources.list.d/anyone.list\n")
-		fmt.Fprintf(os.Stderr, "   sudo apt update && sudo apt install -y anon\n")
+	// Check Ubuntu version - Ubuntu 25.04 is not yet supported by Anon repository
+	osInfo := detectLinuxDistro()
+	if strings.Contains(strings.ToLower(osInfo), "ubuntu 25.04") || strings.Contains(strings.ToLower(osInfo), "plucky") {
+		fmt.Fprintf(os.Stderr, "⚠️  Ubuntu 25.04 (Plucky) is not yet supported by Anon repository\n")
+		fmt.Fprintf(os.Stderr, "   Anon installation will be skipped. The gateway will work without it,\n")
+		fmt.Fprintf(os.Stderr, "   but anonymous proxy functionality will not be available.\n")
+		fmt.Fprintf(os.Stderr, "   You can manually install Anon later when support is added:\n")
+		fmt.Fprintf(os.Stderr, "   sudo /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh)\"\n\n")
 		return
 	}
 
-	// Add repository
-	repoLine := "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main"
-	if err := os.WriteFile("/etc/apt/sources.list.d/anyone.list", []byte(repoLine+"\n"), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to add Anyone repository: %v\n", err)
-		return
+	// Install via official installation script (from GitHub)
+	fmt.Printf("   Installing Anon using official installation script...\n")
+	fmt.Printf("   Note: The installation script may prompt for configuration\n")
+
+	// Clean up any old APT repository files from previous installation attempts
+	gpgKeyPath := "/usr/share/keyrings/anyone-archive-keyring.gpg"
+	repoPath := "/etc/apt/sources.list.d/anyone.list"
+	if _, err := os.Stat(gpgKeyPath); err == nil {
+		fmt.Printf("   Removing old GPG key file...\n")
+		os.Remove(gpgKeyPath)
+	}
+	if _, err := os.Stat(repoPath); err == nil {
+		fmt.Printf("   Removing old repository file...\n")
+		os.Remove(repoPath)
 	}
 
-	// Update package list
-	fmt.Printf("   Updating package list...\n")
-	exec.Command("apt", "update", "-qq").Run()
+	// Use the official installation script from GitHub
+	installScriptURL := "https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh"
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | bash", installScriptURL))
+	cmd.Stdin = os.Stdin // Allow interactive prompts if needed
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	// Install anon
-	fmt.Printf("   Installing Anon package...\n")
-	cmd = exec.Command("apt", "install", "-y", "anon")
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Anon installation failed: %v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "   The gateway will work without Anon, but anonymous proxy functionality will not be available.\n")
+		fmt.Fprintf(os.Stderr, "   You can manually install Anon later:\n")
+		fmt.Fprintf(os.Stderr, "   sudo /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh)\"\n")
+		return // Continue setup without Anon
 	}
 
 	// Verify installation
 	if _, err := exec.LookPath("anon"); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Anon installation may have failed\n")
-		return
+		fmt.Fprintf(os.Stderr, "⚠️  Anon installation verification failed: binary not found in PATH\n")
+		fmt.Fprintf(os.Stderr, "   Continuing setup without Anon...\n")
+		return // Continue setup without Anon
 	}
 
 	fmt.Printf("   ✓ Anon installed\n")
@@ -461,11 +471,28 @@ func installAnon() {
 
 	// Enable and start service
 	fmt.Printf("   Enabling Anon service...\n")
-	exec.Command("systemctl", "enable", "anon").Run()
-	exec.Command("systemctl", "start", "anon").Run()
+	enableCmd := exec.Command("systemctl", "enable", "anon")
+	if output, err := enableCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to enable Anon service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+	}
 
+	startCmd := exec.Command("systemctl", "start", "anon")
+	if output, err := startCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to start Anon service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+		fmt.Fprintf(os.Stderr, "   Check service status: systemctl status anon\n")
+	} else {
+		fmt.Printf("   ✓ Anon service started\n")
+	}
+
+	// Verify service is running
 	if exec.Command("systemctl", "is-active", "--quiet", "anon").Run() == nil {
-		fmt.Printf("   ✓ Anon service is running\n")
+		fmt.Printf("   ✓ Anon service is active\n")
 	} else {
 		fmt.Fprintf(os.Stderr, "⚠️  Anon service may not be running. Check: systemctl status anon\n")
 	}
