@@ -108,13 +108,22 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	if dbErr != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "failed to open rqlite sql db; http orm gateway disabled", zap.Error(dbErr))
 	} else {
+		// Configure connection pool with proper timeouts and limits
+		db.SetMaxOpenConns(25)                 // Maximum number of open connections
+		db.SetMaxIdleConns(5)                  // Maximum number of idle connections
+		db.SetConnMaxLifetime(5 * time.Minute) // Maximum lifetime of a connection
+		db.SetConnMaxIdleTime(2 * time.Minute) // Maximum idle time before closing
+
 		gw.sqlDB = db
 		orm := rqlite.NewClient(db)
 		gw.ormClient = orm
 		gw.ormHTTP = rqlite.NewHTTPGateway(orm, "/v1/db")
+		// Set a reasonable timeout for HTTP requests (30 seconds)
+		gw.ormHTTP.Timeout = 30 * time.Second
 		logger.ComponentInfo(logging.ComponentGeneral, "RQLite ORM HTTP gateway ready",
 			zap.String("dsn", dsn),
 			zap.String("base_path", "/v1/db"),
+			zap.Duration("timeout", gw.ormHTTP.Timeout),
 		)
 	}
 
