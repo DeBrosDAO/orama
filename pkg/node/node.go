@@ -89,23 +89,32 @@ func (n *Node) startRQLite(ctx context.Context) error {
 			n.logger.Logger,
 		)
 
-		// Set discovery service on RQLite manager
+		// Set discovery service on RQLite manager BEFORE starting RQLite
+		// This is critical for pre-start cluster discovery during recovery
 		n.rqliteManager.SetDiscoveryService(n.clusterDiscovery)
 
-		// Start cluster discovery
+		// Start cluster discovery (but don't trigger initial sync yet)
 		if err := n.clusterDiscovery.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start cluster discovery: %w", err)
 		}
 
-		// Update our own metadata
+		// Publish initial metadata (with log_index=0) so peers can discover us during recovery
+		// The metadata will be updated with actual log index after RQLite starts
 		n.clusterDiscovery.UpdateOwnMetadata()
 
-		n.logger.Info("Cluster discovery service started")
+		n.logger.Info("Cluster discovery service started (waiting for RQLite)")
 	}
 
-	// Start RQLite
+	// Start RQLite FIRST before updating metadata
 	if err := n.rqliteManager.Start(ctx); err != nil {
 		return err
+	}
+
+	// NOW update metadata after RQLite is running
+	if n.clusterDiscovery != nil {
+		n.clusterDiscovery.UpdateOwnMetadata()
+		n.clusterDiscovery.TriggerSync() // Do initial cluster sync now that RQLite is ready
+		n.logger.Info("RQLite metadata published and cluster synced")
 	}
 
 	// Create adapter for sql.DB compatibility

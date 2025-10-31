@@ -24,8 +24,8 @@ type PeerExchangeRequest struct {
 
 // PeerExchangeResponse represents a list of peers to exchange
 type PeerExchangeResponse struct {
-	Peers          []PeerInfo           `json:"peers"`
-	RQLiteMetadata *RQLiteNodeMetadata  `json:"rqlite_metadata,omitempty"`
+	Peers          []PeerInfo          `json:"peers"`
+	RQLiteMetadata *RQLiteNodeMetadata `json:"rqlite_metadata,omitempty"`
 }
 
 // PeerInfo contains peer identity and addresses
@@ -387,6 +387,38 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 	}
 
 	return resp.Peers
+}
+
+// TriggerPeerExchange manually triggers peer exchange with all connected peers
+// This is useful for pre-startup cluster discovery to populate the peerstore with RQLite metadata
+func (d *Manager) TriggerPeerExchange(ctx context.Context) int {
+	connectedPeers := d.host.Network().Peers()
+	if len(connectedPeers) == 0 {
+		d.logger.Debug("No connected peers for peer exchange")
+		return 0
+	}
+
+	d.logger.Info("Manually triggering peer exchange",
+		zap.Int("connected_peers", len(connectedPeers)))
+
+	metadataCollected := 0
+	for _, peerID := range connectedPeers {
+		// Request peer list from this peer (which includes their RQLite metadata)
+		_ = d.requestPeersFromPeer(ctx, peerID, 50) // Request up to 50 peers
+
+		// Check if we got RQLite metadata from this peer
+		if val, err := d.host.Peerstore().Get(peerID, "rqlite_metadata"); err == nil {
+			if _, ok := val.([]byte); ok {
+				metadataCollected++
+			}
+		}
+	}
+
+	d.logger.Info("Peer exchange completed",
+		zap.Int("peers_with_metadata", metadataCollected),
+		zap.Int("total_peers", len(connectedPeers)))
+
+	return metadataCollected
 }
 
 // connectToPeer attempts to connect to a specific peer using its peerstore info.

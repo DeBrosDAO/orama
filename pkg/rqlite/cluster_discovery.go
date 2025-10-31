@@ -120,16 +120,12 @@ func (c *ClusterDiscoveryService) Stop() {
 
 // periodicSync runs periodic cluster membership synchronization
 func (c *ClusterDiscoveryService) periodicSync(ctx context.Context) {
-	c.logger.Info("periodicSync goroutine started, doing initial sync immediately")
+	c.logger.Info("periodicSync goroutine started, waiting for RQLite readiness")
 
 	ticker := time.NewTicker(c.updateInterval)
 	defer ticker.Stop()
 
-	// Do initial sync immediately
-	c.logger.Info("Running initial cluster membership sync")
-	c.updateClusterMembership()
-	c.logger.Info("Initial cluster membership sync completed")
-
+	// Wait for first ticker interval before syncing (RQLite needs time to start)
 	for {
 		select {
 		case <-ctx.Done():
@@ -167,7 +163,7 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 
 	// Add ourselves
 	ourMetadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         c.nodeID,
+		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
 		RaftAddress:    c.raftAddress,
 		HTTPAddress:    c.httpAddress,
 		NodeType:       c.nodeType,
@@ -332,7 +328,7 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 
 	for _, peer := range c.knownPeers {
 		peerEntry := map[string]interface{}{
-			"id":        peer.NodeID,
+			"id":        peer.RaftAddress, // RQLite uses raft address as node ID
 			"address":   peer.RaftAddress,
 			"non_voter": false,
 		}
@@ -446,10 +442,23 @@ func (c *ClusterDiscoveryService) GetActivePeers() []*discovery.RQLiteNodeMetada
 
 	peers := make([]*discovery.RQLiteNodeMetadata, 0, len(c.knownPeers))
 	for _, peer := range c.knownPeers {
-		// Skip self
-		if peer.NodeID == c.nodeID {
+		// Skip self (compare by raft address since that's the NodeID now)
+		if peer.NodeID == c.raftAddress {
 			continue
 		}
+		peers = append(peers, peer)
+	}
+
+	return peers
+}
+
+// GetAllPeers returns a list of all known peers (including self)
+func (c *ClusterDiscoveryService) GetAllPeers() []*discovery.RQLiteNodeMetadata {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	peers := make([]*discovery.RQLiteNodeMetadata, 0, len(c.knownPeers))
+	for _, peer := range c.knownPeers {
 		peers = append(peers, peer)
 	}
 
@@ -465,8 +474,8 @@ func (c *ClusterDiscoveryService) GetNodeWithHighestLogIndex() *discovery.RQLite
 	var maxIndex uint64 = 0
 
 	for _, peer := range c.knownPeers {
-		// Skip self
-		if peer.NodeID == c.nodeID {
+		// Skip self (compare by raft address since that's the NodeID now)
+		if peer.NodeID == c.raftAddress {
 			continue
 		}
 
@@ -535,13 +544,40 @@ func (c *ClusterDiscoveryService) WaitForDiscoverySettling(ctx context.Context) 
 		zap.Int("peer_count", peerCount))
 }
 
+// TriggerSync manually triggers a cluster membership sync
+func (c *ClusterDiscoveryService) TriggerSync() {
+	c.logger.Info("Manually triggering cluster membership sync")
+
+	// For bootstrap nodes, wait a bit for peer discovery to stabilize
+	if c.nodeType == "bootstrap" {
+		c.logger.Info("Bootstrap node: waiting for peer discovery to complete")
+		time.Sleep(5 * time.Second)
+	}
+
+	c.updateClusterMembership()
+}
+
+// TriggerPeerExchange actively exchanges peer information with connected peers
+// This populates the peerstore with RQLite metadata from other nodes
+func (c *ClusterDiscoveryService) TriggerPeerExchange(ctx context.Context) error {
+	if c.discoveryMgr == nil {
+		return fmt.Errorf("discovery manager not available")
+	}
+
+	c.logger.Info("Triggering peer exchange via discovery manager")
+	collected := c.discoveryMgr.TriggerPeerExchange(ctx)
+	c.logger.Info("Peer exchange completed", zap.Int("peers_with_metadata", collected))
+
+	return nil
+}
+
 // UpdateOwnMetadata updates our own RQLite metadata in the peerstore
 func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 	c.logger.Info("Updating own RQLite metadata for peer exchange",
 		zap.String("node_id", c.nodeID))
 
 	metadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         c.nodeID,
+		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
 		RaftAddress:    c.raftAddress,
 		HTTPAddress:    c.httpAddress,
 		NodeType:       c.nodeType,
