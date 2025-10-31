@@ -318,7 +318,7 @@ func initFullStack(force bool) {
 			os.Exit(1)
 		}
 	}
-	node2Content := GenerateNodeConfig(node2Name, "", 4002, 5002, 7002, "localhost:7001", bootstrapMultiaddr)
+	node2Content := GenerateNodeConfig(node2Name, "", 4002, 5002, 7002, "localhost:5001", bootstrapMultiaddr)
 	if err := os.WriteFile(node2Path, []byte(node2Content), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write node2 config: %v\n", err)
 		os.Exit(1)
@@ -334,7 +334,7 @@ func initFullStack(force bool) {
 			os.Exit(1)
 		}
 	}
-	node3Content := GenerateNodeConfig(node3Name, "", 4003, 5003, 7003, "localhost:7001", bootstrapMultiaddr)
+	node3Content := GenerateNodeConfig(node3Name, "", 4003, 5003, 7003, "localhost:5001", bootstrapMultiaddr)
 	if err := os.WriteFile(node3Path, []byte(node3Content), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write node3 config: %v\n", err)
 		os.Exit(1)

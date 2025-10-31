@@ -1260,18 +1260,19 @@ func generateConfigsInteractive(force bool) {
 		} else {
 			// Extract IP from bootstrap peer multiaddr for rqlite_join_address
 			// Use first bootstrap peer if multiple provided
+			const defaultRQLiteHTTPPort = 5001
 			var joinAddr string
 			if bootstrapPeers != "" {
 				firstPeer := strings.Split(bootstrapPeers, ",")[0]
 				firstPeer = strings.TrimSpace(firstPeer)
 				extractedIP := extractIPFromMultiaddr(firstPeer)
 				if extractedIP != "" {
-					joinAddr = fmt.Sprintf("%s:7001", extractedIP)
+					joinAddr = fmt.Sprintf("%s:%d", extractedIP, defaultRQLiteHTTPPort)
 				} else {
-					joinAddr = "localhost:7001"
+					joinAddr = fmt.Sprintf("localhost:%d", defaultRQLiteHTTPPort)
 				}
 			} else {
-				joinAddr = "localhost:7001"
+				joinAddr = fmt.Sprintf("localhost:%d", defaultRQLiteHTTPPort)
 			}
 			nodeConfig = generateNodeConfigWithIP("node", "", 4001, 5001, 7001, joinAddr, bootstrapPeers, vpsIP)
 		}
@@ -1425,7 +1426,7 @@ func generateNodeConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqlit
 	}
 
 	if joinAddr == "" {
-		joinAddr = "localhost:7001"
+		joinAddr = fmt.Sprintf("localhost:%d", rqliteHTTPPort)
 	}
 
 	return fmt.Sprintf(`node:
