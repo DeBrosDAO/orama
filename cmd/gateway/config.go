@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
@@ -53,6 +54,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		ClientNamespace string   `yaml:"client_namespace"`
 		RQLiteDSN       string   `yaml:"rqlite_dsn"`
 		BootstrapPeers  []string `yaml:"bootstrap_peers"`
+		EnableHTTPS     bool     `yaml:"enable_https"`
+		DomainName      string   `yaml:"domain_name"`
+		TLSCacheDir     string   `yaml:"tls_cache_dir"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -79,6 +83,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		ClientNamespace: "default",
 		BootstrapPeers:  nil,
 		RQLiteDSN:       "",
+		EnableHTTPS:     false,
+		DomainName:      "",
+		TLSCacheDir:     "",
 	}
 
 	if v := strings.TrimSpace(y.ListenAddr); v != "" {
@@ -100,6 +107,21 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		}
 		if len(bp) > 0 {
 			cfg.BootstrapPeers = bp
+		}
+	}
+
+	// HTTPS configuration
+	cfg.EnableHTTPS = y.EnableHTTPS
+	if v := strings.TrimSpace(y.DomainName); v != "" {
+		cfg.DomainName = v
+	}
+	if v := strings.TrimSpace(y.TLSCacheDir); v != "" {
+		cfg.TLSCacheDir = v
+	} else if cfg.EnableHTTPS {
+		// Default TLS cache directory if HTTPS is enabled but not specified
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			cfg.TLSCacheDir = filepath.Join(homeDir, ".debros", "tls-cache")
 		}
 	}
 

@@ -26,6 +26,11 @@ type Config struct {
 	// Optional DSN for rqlite database/sql driver, e.g. "http://localhost:4001"
 	// If empty, defaults to "http://localhost:4001".
 	RQLiteDSN string
+
+	// HTTPS configuration
+	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
+	DomainName  string // Domain name for HTTPS certificate
+	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.debros/tls-cache)
 }
 
 type Gateway struct {

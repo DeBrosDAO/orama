@@ -70,6 +70,21 @@ func (c *Config) ValidateConfig() []error {
 		}
 	}
 
+	// Validate HTTPS configuration
+	if c.EnableHTTPS {
+		if c.DomainName == "" {
+			errs = append(errs, fmt.Errorf("gateway.domain_name: must be set when enable_https is true"))
+		} else {
+			// Basic domain validation
+			if !isValidDomainName(c.DomainName) {
+				errs = append(errs, fmt.Errorf("gateway.domain_name: invalid domain format"))
+			}
+		}
+		if c.TLSCacheDir == "" {
+			errs = append(errs, fmt.Errorf("gateway.tls_cache_dir: must be set when enable_https is true"))
+		}
+	}
+
 	return errs
 }
 
@@ -134,4 +149,39 @@ func extractTCPPort(multiaddrStr string) string {
 	}
 
 	return portPart[:firstSlashIndex]
+}
+
+// isValidDomainName validates a domain name format
+func isValidDomainName(domain string) bool {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return false
+	}
+
+	// Basic validation: domain should contain at least one dot
+	// and not start/end with dot or hyphen
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+
+	if strings.HasPrefix(domain, "-") || strings.HasSuffix(domain, "-") {
+		return false
+	}
+
+	// Check for valid characters (letters, numbers, dots, hyphens)
+	for _, char := range domain {
+		if !((char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '.' ||
+			char == '-') {
+			return false
+		}
+	}
+
+	return true
 }

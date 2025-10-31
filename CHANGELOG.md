@@ -14,6 +14,32 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+## [0.53.8] - 2025-10-31
+
+### Added
+
+- **HTTPS/ACME Support**: Gateway now supports automatic HTTPS with Let's Encrypt certificates via ACME
+  - Interactive domain configuration during `network-cli setup` command
+  - Automatic port availability checking for ports 80 and 443 before enabling HTTPS
+  - DNS resolution verification to ensure domain points to the server IP
+  - TLS certificate cache directory management (`~/.debros/tls-cache`)
+  - Gateway automatically serves HTTP (port 80) for ACME challenges and HTTPS (port 443) for traffic
+  - New gateway config fields: `enable_https`, `domain_name`, `tls_cache_dir`
+- **Domain Validation**: Added domain name validation and DNS verification helpers in setup CLI
+- **Port Checking**: Added port availability checking utilities to detect conflicts before HTTPS setup
+
+### Changed
+
+- Updated `generateGatewayConfigDirect` to include HTTPS configuration fields
+- Enhanced gateway config parsing to support HTTPS settings with validation
+- Modified gateway startup to handle both HTTP-only and HTTPS+ACME modes
+- Gateway now automatically manages ACME certificate acquisition and renewal
+
+### Fixed
+
+- Improved error handling during HTTPS setup with clear messaging when ports are unavailable
+- Enhanced DNS verification flow with better user feedback during setup
+
 ## [0.53.0] - 2025-10-31
 
 ### Added
