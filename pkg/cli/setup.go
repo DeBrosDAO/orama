@@ -680,7 +680,8 @@ func setupDirectories() {
 		"/home/debros/bin",
 		"/home/debros/src",
 		"/home/debros/.debros",
-		"/home/debros/go", // Go module cache directory
+		"/home/debros/go",     // Go module cache directory
+		"/home/debros/.cache", // Go build cache directory
 	}
 
 	for _, dir := range dirs {
