@@ -960,19 +960,46 @@ WantedBy=multi-user.target
 }
 
 func startServices() {
-	fmt.Printf("🚀 Starting services...\n")
+	fmt.Printf("🚀 Starting/Restarting services...\n")
 
-	// Start node
-	if err := exec.Command("systemctl", "start", "debros-node").Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to start node service: %v\n", err)
-	} else {
-		fmt.Printf("   ✓ Node service started\n")
+	// Helper function to start or restart a service
+	startOrRestartService := func(serviceName string) {
+		// Check if service is active/running
+		checkCmd := exec.Command("systemctl", "is-active", "--quiet", serviceName)
+		isRunning := checkCmd.Run() == nil
+
+		if isRunning {
+			// Service is running, restart it
+			fmt.Printf("   Restarting %s service...\n", serviceName)
+			if err := exec.Command("systemctl", "restart", serviceName).Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to restart %s service: %v\n", serviceName, err)
+			} else {
+				fmt.Printf("   ✓ %s service restarted\n", serviceName)
+			}
+		} else {
+			// Service is not running, start it
+			fmt.Printf("   Starting %s service...\n", serviceName)
+			if err := exec.Command("systemctl", "start", serviceName).Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to start %s service: %v\n", serviceName, err)
+			} else {
+				fmt.Printf("   ✓ %s service started\n", serviceName)
+			}
+		}
 	}
 
-	// Start gateway
-	if err := exec.Command("systemctl", "start", "debros-gateway").Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to start gateway service: %v\n", err)
-	} else {
-		fmt.Printf("   ✓ Gateway service started\n")
+	// Start or restart node service
+	startOrRestartService("debros-node")
+
+	// Start or restart gateway service
+	startOrRestartService("debros-gateway")
+
+	// Also restart Anon service if it's running (to pick up any config changes)
+	if exec.Command("systemctl", "is-active", "--quiet", "anon").Run() == nil {
+		fmt.Printf("   Restarting Anon service to pick up config changes...\n")
+		if err := exec.Command("systemctl", "restart", "anon").Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to restart Anon service: %v\n", err)
+		} else {
+			fmt.Printf("   ✓ Anon service restarted\n")
+		}
 	}
 }

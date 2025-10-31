@@ -422,6 +422,9 @@ database:
   rqlite_port: %d
   rqlite_raft_port: %d
   rqlite_join_address: "%s"
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 1
 
 discovery:
 %s
@@ -466,6 +469,9 @@ database:
   rqlite_port: %d
   rqlite_raft_port: %d
   rqlite_join_address: ""
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 1
 
 discovery:
   bootstrap_peers: []
