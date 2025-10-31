@@ -20,12 +20,13 @@ import (
 
 // RQLiteManager manages an RQLite node instance
 type RQLiteManager struct {
-	config         *config.DatabaseConfig
-	discoverConfig *config.DiscoveryConfig
-	dataDir        string
-	logger         *zap.Logger
-	cmd            *exec.Cmd
-	connection     *gorqlite.Connection
+	config           *config.DatabaseConfig
+	discoverConfig   *config.DiscoveryConfig
+	dataDir          string
+	logger           *zap.Logger
+	cmd              *exec.Cmd
+	connection       *gorqlite.Connection
+	discoveryService *ClusterDiscoveryService
 }
 
 // waitForSQLAvailable waits until a simple query succeeds, indicating a leader is known and queries can be served.
@@ -65,6 +66,11 @@ func NewRQLiteManager(cfg *config.DatabaseConfig, discoveryCfg *config.Discovery
 		dataDir:        dataDir,
 		logger:         logger,
 	}
+}
+
+// SetDiscoveryService sets the cluster discovery service for this RQLite manager
+func (r *RQLiteManager) SetDiscoveryService(service *ClusterDiscoveryService) {
+	r.discoveryService = service
 }
 
 // Start starts the RQLite node
@@ -162,26 +168,65 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	}
 	r.connection = conn
 
-	// Leadership/SQL readiness gating
-	//
-	// Fresh bootstrap (no join, no prior state): wait for leadership so queries will work.
-	// Existing state or joiners: wait for SQL availability (leader known) before proceeding,
-	// so higher layers (storage) don't fail with 500 leader-not-found.
-	if r.config.RQLiteJoinAddress == "" && !r.hasExistingState(rqliteDataDir) {
-		if err := r.waitForLeadership(ctx); err != nil {
-			if r.cmd != nil && r.cmd.Process != nil {
-				_ = r.cmd.Process.Kill()
+	// Leadership/SQL readiness gating with dynamic discovery support
+	if r.config.RQLiteJoinAddress == "" {
+		// Bootstrap node logic with data safety checks
+		r.logger.Info("Bootstrap node: checking if safe to lead")
+		
+		// SAFETY: Check if we can safely become leader
+		canLead, err := r.canSafelyBecomeLeader()
+		if !canLead && err != nil {
+			r.logger.Warn("Not safe to become leader, attempting to join existing cluster",
+				zap.Error(err))
+			
+			// Find node with highest log index and join it
+			if r.discoveryService != nil {
+				targetNode := r.discoveryService.GetNodeWithHighestLogIndex()
+				if targetNode != nil {
+					r.logger.Info("Joining node with higher data",
+						zap.String("target_node", targetNode.NodeID),
+						zap.String("raft_address", targetNode.RaftAddress),
+						zap.Uint64("their_index", targetNode.RaftLogIndex))
+					return r.joinExistingCluster(ctx, targetNode.RaftAddress)
+				}
 			}
-			return fmt.Errorf("RQLite failed to establish leadership: %w", err)
+		}
+		
+		// Safe to lead - attempt leadership
+		leadershipErr := r.waitForLeadership(ctx)
+		if leadershipErr == nil {
+			r.logger.Info("Bootstrap node successfully established leadership")
+		} else {
+			// Leadership failed - check if peers.json from discovery exists
+			if r.discoveryService != nil && r.discoveryService.HasRecentPeersJSON() {
+				r.logger.Info("Retrying leadership after discovery update")
+				leadershipErr = r.waitForLeadership(ctx)
+			}
+			
+			// Final fallback: SQL availability
+			if leadershipErr != nil {
+				r.logger.Warn("Leadership failed, trying SQL availability")
+				sqlCtx := ctx
+				if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+					var cancel context.CancelFunc
+					sqlCtx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+					defer cancel()
+				}
+				if err := r.waitForSQLAvailable(sqlCtx); err != nil {
+					if r.cmd != nil && r.cmd.Process != nil {
+						_ = r.cmd.Process.Kill()
+					}
+					return fmt.Errorf("RQLite SQL not available: %w", err)
+				}
+			}
 		}
 	} else {
+		// Joining node logic
 		r.logger.Info("Waiting for RQLite SQL availability (leader discovery)")
-		// For joining nodes, wait longer for SQL availability
 		sqlCtx := ctx
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			// If no deadline in context, create one for SQL availability check
 			var cancel context.CancelFunc
-			sqlCtx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+			sqlCtx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 		}
 		if err := r.waitForSQLAvailable(sqlCtx); err != nil {
@@ -379,4 +424,81 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 
 	r.logger.Info("Leader HTTP reachable", zap.String("status_url", statusURL))
 	return nil
+}
+
+// canSafelyBecomeLeader checks if this node can safely become leader without causing data loss
+func (r *RQLiteManager) canSafelyBecomeLeader() (bool, error) {
+	// Get our current Raft log index
+	ourLogIndex := r.getRaftLogIndex()
+	
+	// If no discovery service, assume it's safe (backward compatibility)
+	if r.discoveryService == nil {
+		r.logger.Debug("No discovery service, assuming safe to lead")
+		return true, nil
+	}
+	
+	// Query discovery service for other nodes
+	otherNodes := r.discoveryService.GetActivePeers()
+	
+	if len(otherNodes) == 0 {
+		// No other nodes - safe to bootstrap
+		r.logger.Debug("No other nodes discovered, safe to lead",
+			zap.Uint64("our_log_index", ourLogIndex))
+		return true, nil
+	}
+	
+	// Check if any other node has higher log index
+	for _, peer := range otherNodes {
+		if peer.RaftLogIndex > ourLogIndex {
+			// Other node has more data - we should join them
+			return false, fmt.Errorf(
+				"node %s has higher log index (%d > %d), should join as follower",
+				peer.NodeID, peer.RaftLogIndex, ourLogIndex)
+		}
+	}
+	
+	// We have most recent data or equal - safe to lead
+	r.logger.Info("Safe to lead - we have most recent data",
+		zap.Uint64("our_log_index", ourLogIndex),
+		zap.Int("other_nodes_checked", len(otherNodes)))
+	return true, nil
+}
+
+// joinExistingCluster attempts to join an existing cluster as a follower
+func (r *RQLiteManager) joinExistingCluster(ctx context.Context, raftAddress string) error {
+	r.logger.Info("Attempting to join existing cluster",
+		zap.String("target_raft_address", raftAddress))
+	
+	// Wait for the target to be reachable
+	if err := r.waitForJoinTarget(ctx, raftAddress, 2*time.Minute); err != nil {
+		return fmt.Errorf("join target not reachable: %w", err)
+	}
+	
+	// Wait for SQL availability (the target should have a leader)
+	sqlCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		sqlCtx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+	}
+	
+	if err := r.waitForSQLAvailable(sqlCtx); err != nil {
+		return fmt.Errorf("failed to join cluster - SQL not available: %w", err)
+	}
+	
+	r.logger.Info("Successfully joined existing cluster")
+	return nil
+}
+
+// exponentialBackoff calculates exponential backoff duration with jitter
+func (r *RQLiteManager) exponentialBackoff(attempt int, baseDelay time.Duration, maxDelay time.Duration) time.Duration {
+	// Calculate exponential backoff: baseDelay * 2^attempt
+	delay := baseDelay * time.Duration(1<<uint(attempt))
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	
+	// Add jitter (±20%)
+	jitter := time.Duration(float64(delay) * 0.2 * (2.0*float64(time.Now().UnixNano()%100)/100.0 - 1.0))
+	return delay + jitter
 }

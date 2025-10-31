@@ -24,7 +24,8 @@ type PeerExchangeRequest struct {
 
 // PeerExchangeResponse represents a list of peers to exchange
 type PeerExchangeResponse struct {
-	Peers []PeerInfo `json:"peers"`
+	Peers          []PeerInfo           `json:"peers"`
+	RQLiteMetadata *RQLiteNodeMetadata  `json:"rqlite_metadata,omitempty"`
 }
 
 // PeerInfo contains peer identity and addresses
@@ -123,6 +124,16 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 		added++
 	}
 
+	// Add RQLite metadata if available
+	if val, err := d.host.Peerstore().Get(d.host.ID(), "rqlite_metadata"); err == nil {
+		if jsonData, ok := val.([]byte); ok {
+			var metadata RQLiteNodeMetadata
+			if err := json.Unmarshal(jsonData, &metadata); err == nil {
+				resp.RQLiteMetadata = &metadata
+			}
+		}
+	}
+
 	// Send response
 	encoder := json.NewEncoder(s)
 	if err := encoder.Encode(&resp); err != nil {
@@ -131,7 +142,8 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 	}
 
 	d.logger.Debug("Sent peer exchange response",
-		zap.Int("peer_count", len(resp.Peers)))
+		zap.Int("peer_count", len(resp.Peers)),
+		zap.Bool("has_rqlite_metadata", resp.RQLiteMetadata != nil))
 }
 
 // Start begins periodic peer discovery
@@ -361,6 +373,17 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 			d.logger.Debug("Failed to read peer exchange response", zap.Error(err))
 		}
 		return nil
+	}
+
+	// Store remote peer's RQLite metadata if available
+	if resp.RQLiteMetadata != nil {
+		metadataJSON, err := json.Marshal(resp.RQLiteMetadata)
+		if err == nil {
+			_ = d.host.Peerstore().Put(peerID, "rqlite_metadata", metadataJSON)
+			d.logger.Debug("Stored RQLite metadata from peer",
+				zap.String("peer_id", peerID.String()[:8]+"..."),
+				zap.String("node_id", resp.RQLiteMetadata.NodeID))
+		}
 	}
 
 	return resp.Peers

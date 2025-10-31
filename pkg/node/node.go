@@ -33,8 +33,9 @@ type Node struct {
 	logger *logging.ColoredLogger
 	host   host.Host
 
-	rqliteManager *database.RQLiteManager
-	rqliteAdapter *database.RQLiteAdapter
+	rqliteManager    *database.RQLiteManager
+	rqliteAdapter    *database.RQLiteAdapter
+	clusterDiscovery *database.ClusterDiscoveryService
 
 	// Peer discovery
 	bootstrapCancel context.CancelFunc
@@ -66,6 +67,41 @@ func (n *Node) startRQLite(ctx context.Context) error {
 
 	// Create RQLite manager
 	n.rqliteManager = database.NewRQLiteManager(&n.config.Database, &n.config.Discovery, n.config.Node.DataDir, n.logger.Logger)
+
+	// Initialize cluster discovery service if LibP2P host is available
+	if n.host != nil && n.discoveryManager != nil {
+		// Determine node type
+		nodeType := "node"
+		if n.config.Node.Type == "bootstrap" {
+			nodeType = "bootstrap"
+		}
+
+		// Create cluster discovery service
+		n.clusterDiscovery = database.NewClusterDiscoveryService(
+			n.host,
+			n.discoveryManager,
+			n.rqliteManager,
+			n.config.Node.ID,
+			nodeType,
+			n.config.Discovery.RaftAdvAddress,
+			n.config.Discovery.HttpAdvAddress,
+			n.config.Node.DataDir,
+			n.logger.Logger,
+		)
+
+		// Set discovery service on RQLite manager
+		n.rqliteManager.SetDiscoveryService(n.clusterDiscovery)
+
+		// Start cluster discovery
+		if err := n.clusterDiscovery.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start cluster discovery: %w", err)
+		}
+
+		// Update our own metadata
+		n.clusterDiscovery.UpdateOwnMetadata()
+
+		n.logger.Info("Cluster discovery service started")
+	}
 
 	// Start RQLite
 	if err := n.rqliteManager.Start(ctx); err != nil {
@@ -532,6 +568,11 @@ func (n *Node) stopPeerDiscovery() {
 func (n *Node) Stop() error {
 	n.logger.ComponentInfo(logging.ComponentNode, "Stopping network node")
 
+	// Stop cluster discovery
+	if n.clusterDiscovery != nil {
+		n.clusterDiscovery.Stop()
+	}
+
 	// Stop bootstrap reconnection loop
 	if n.bootstrapCancel != nil {
 		n.bootstrapCancel()
@@ -577,14 +618,14 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Start RQLite
-	if err := n.startRQLite(ctx); err != nil {
-		return fmt.Errorf("failed to start RQLite: %w", err)
-	}
-
-	// Start LibP2P host
+	// Start LibP2P host first (needed for cluster discovery)
 	if err := n.startLibP2P(); err != nil {
 		return fmt.Errorf("failed to start LibP2P: %w", err)
+	}
+
+	// Start RQLite with cluster discovery
+	if err := n.startRQLite(ctx); err != nil {
+		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
 	// Get listen addresses for logging
