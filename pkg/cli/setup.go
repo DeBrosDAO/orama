@@ -1071,12 +1071,24 @@ func cloneAndBuild() {
 	// Remove existing repository if it exists (always start fresh)
 	if _, err := os.Stat("/home/debros/src"); err == nil {
 		fmt.Printf("   Removing existing repository...\n")
-		// Remove as root since we're running as root
-		if err := os.RemoveAll("/home/debros/src"); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Failed to remove existing repo: %v\n", err)
-			// Try to continue anyway
+		// Remove as debros user to avoid permission issues
+		removeCmd := exec.Command("sudo", "-u", "debros", "rm", "-rf", "/home/debros/src")
+		if output, err := removeCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to remove existing repo as debros user: %v\n%s\n", err, output)
+			// Try as root as fallback
+			if err := os.RemoveAll("/home/debros/src"); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to remove existing repo as root: %v\n", err)
+			}
 		}
+		// Wait a moment to ensure filesystem syncs
+		time.Sleep(100 * time.Millisecond)
 	}
+
+	// Ensure parent directory exists and has correct permissions
+	if err := os.MkdirAll("/home/debros", 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to ensure debros home directory exists: %v\n", err)
+	}
+	exec.Command("chown", "debros:debros", "/home/debros").Run()
 
 	// Clone fresh repository
 	fmt.Printf("   Cloning repository...\n")
