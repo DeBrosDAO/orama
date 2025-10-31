@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
@@ -50,6 +51,15 @@ func (c *Config) Validate() []error {
 func (c *Config) validateNode() []error {
 	var errs []error
 	nc := c.Node
+
+	// Validate node ID (required for RQLite cluster membership)
+	if nc.ID == "" {
+		errs = append(errs, ValidationError{
+			Path:    "node.id",
+			Message: "must not be empty (required for cluster membership)",
+			Hint:    "will be auto-generated if empty, but explicit ID recommended",
+		})
+	}
 
 	// Validate type
 	if nc.Type != "bootstrap" && nc.Type != "node" {
@@ -233,6 +243,40 @@ func (c *Config) validateDatabase() []error {
 		}
 	}
 
+	// Validate cluster_sync_interval
+	if dc.ClusterSyncInterval != 0 && dc.ClusterSyncInterval < 10*time.Second {
+		errs = append(errs, ValidationError{
+			Path:    "database.cluster_sync_interval",
+			Message: fmt.Sprintf("must be >= 10s or 0 (for default); got %v", dc.ClusterSyncInterval),
+			Hint:    "recommended: 30s",
+		})
+	}
+
+	// Validate peer_inactivity_limit
+	if dc.PeerInactivityLimit != 0 {
+		if dc.PeerInactivityLimit < time.Hour {
+			errs = append(errs, ValidationError{
+				Path:    "database.peer_inactivity_limit",
+				Message: fmt.Sprintf("must be >= 1h or 0 (for default); got %v", dc.PeerInactivityLimit),
+				Hint:    "recommended: 24h",
+			})
+		} else if dc.PeerInactivityLimit > 7*24*time.Hour {
+			errs = append(errs, ValidationError{
+				Path:    "database.peer_inactivity_limit",
+				Message: fmt.Sprintf("must be <= 7d; got %v", dc.PeerInactivityLimit),
+				Hint:    "recommended: 24h",
+			})
+		}
+	}
+
+	// Validate min_cluster_size
+	if dc.MinClusterSize < 1 {
+		errs = append(errs, ValidationError{
+			Path:    "database.min_cluster_size",
+			Message: fmt.Sprintf("must be >= 1; got %d", dc.MinClusterSize),
+		})
+	}
+
 	return errs
 }
 
@@ -320,8 +364,14 @@ func (c *Config) validateDiscovery() []error {
 		seenPeers[peer] = true
 	}
 
-	// Validate http_adv_address
-	if disc.HttpAdvAddress != "" {
+	// Validate http_adv_address (required for cluster discovery)
+	if disc.HttpAdvAddress == "" {
+		errs = append(errs, ValidationError{
+			Path:    "discovery.http_adv_address",
+			Message: "required for RQLite cluster discovery",
+			Hint:    "set to your public HTTP address (e.g., 51.83.128.181:5001)",
+		})
+	} else {
 		if err := validateHostOrHostPort(disc.HttpAdvAddress); err != nil {
 			errs = append(errs, ValidationError{
 				Path:    "discovery.http_adv_address",
@@ -331,8 +381,14 @@ func (c *Config) validateDiscovery() []error {
 		}
 	}
 
-	// Validate raft_adv_address
-	if disc.RaftAdvAddress != "" {
+	// Validate raft_adv_address (required for cluster discovery)
+	if disc.RaftAdvAddress == "" {
+		errs = append(errs, ValidationError{
+			Path:    "discovery.raft_adv_address",
+			Message: "required for RQLite cluster discovery",
+			Hint:    "set to your public Raft address (e.g., 51.83.128.181:7001)",
+		})
+	} else {
 		if err := validateHostOrHostPort(disc.RaftAdvAddress); err != nil {
 			errs = append(errs, ValidationError{
 				Path:    "discovery.raft_adv_address",

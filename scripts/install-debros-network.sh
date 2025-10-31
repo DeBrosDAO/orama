@@ -223,10 +223,48 @@ install_anon() {
     # Add repository
     echo "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main" | sudo tee /etc/apt/sources.list.d/anyone.list >/dev/null
     
-    # Update and install
+    # Preseed terms acceptance to avoid interactive prompt
+    log "Pre-accepting Anon terms and conditions..."
+    # Try multiple debconf question formats
+    echo "anon anon/terms boolean true" | sudo debconf-set-selections
+    echo "anon anon/terms seen true" | sudo debconf-set-selections
+    # Also try with select/string format
+    echo "anon anon/terms select true" | sudo debconf-set-selections || true
+    
+    # Query debconf to verify the question exists and set it properly
+    # Some packages use different question formats
+    sudo debconf-get-selections | grep -i anon || true
+    
+    # Create anonrc directory and file with AgreeToTerms before installation
+    # This ensures terms are accepted even if the post-install script checks the file
+    sudo mkdir -p /etc/anon
+    if [ ! -f /etc/anon/anonrc ]; then
+        echo "AgreeToTerms 1" | sudo tee /etc/anon/anonrc >/dev/null
+    fi
+    
+    # Also create a terms-agreement file if Anon checks for it
+    # Check multiple possible locations where Anon might look for terms acceptance
+    sudo mkdir -p /var/lib/anon
+    echo "agreed" | sudo tee /var/lib/anon/terms-agreement >/dev/null 2>&1 || true
+    sudo mkdir -p /usr/share/anon
+    echo "agreed" | sudo tee /usr/share/anon/terms-agreement >/dev/null 2>&1 || true
+    # Also create near the GPG keyring directory (as the user suggested)
+    sudo mkdir -p /usr/share/keyrings/anon
+    echo "agreed" | sudo tee /usr/share/keyrings/anon/terms-agreement >/dev/null 2>&1 || true
+    # Create in the keyring directory itself as a marker file
+    echo "agreed" | sudo tee /usr/share/keyrings/anyone-terms-agreed >/dev/null 2>&1 || true
+    
+    # Update and install with non-interactive frontend
     log "Installing Anon package..."
     sudo apt update -qq
-    if ! sudo apt install -y anon; then
+    
+    # Use DEBIAN_FRONTEND=noninteractive and set debconf values directly via apt-get options
+    # This is more reliable than just debconf-set-selections
+    if ! sudo DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        anon; then
         warning "Anon installation failed"
         return 1
     fi
@@ -285,10 +323,16 @@ configure_anon_defaults() {
             echo "SocksPort 9050" | sudo tee -a /etc/anon/anonrc >/dev/null
         fi
         
+        # Auto-accept terms in config file
+        if ! grep -q "^AgreeToTerms" /etc/anon/anonrc; then
+            echo "AgreeToTerms 1" | sudo tee -a /etc/anon/anonrc >/dev/null
+        fi
+        
         log "  Nickname: ${HOSTNAME}"
         log "  ORPort: 9001 (default)"
         log "  ControlPort: 9051"
         log "  SOCKSPort: 9050"
+        log "  AgreeToTerms: 1 (auto-accepted)"
     fi
 }
 

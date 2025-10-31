@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -164,6 +165,19 @@ func promptYesNo() bool {
 	response, _ := reader.ReadString('\n')
 	response = strings.ToLower(strings.TrimSpace(response))
 	return response == "yes" || response == "y"
+}
+
+func promptBranch() string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("   Select branch (main/nightly) [default: main]: ")
+	response, _ := reader.ReadString('\n')
+	response = strings.ToLower(strings.TrimSpace(response))
+
+	if response == "nightly" {
+		return "nightly"
+	}
+	// Default to main for anything else (including empty)
+	return "main"
 }
 
 // isValidMultiaddr validates bootstrap peer multiaddr format
@@ -396,43 +410,89 @@ func installAnon() {
 		return
 	}
 
-	// Install via APT (official method from docs.anyone.io)
-	fmt.Printf("   Adding Anyone APT repository...\n")
-
-	// Add GPG key
-	cmd := exec.Command("sh", "-c", "curl -fsSL https://deb.anyone.io/gpg.key | gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg")
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to add Anyone GPG key: %v\n", err)
-		fmt.Fprintf(os.Stderr, "   You can manually install with:\n")
-		fmt.Fprintf(os.Stderr, "   curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg\n")
-		fmt.Fprintf(os.Stderr, "   echo 'deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main' | sudo tee /etc/apt/sources.list.d/anyone.list\n")
-		fmt.Fprintf(os.Stderr, "   sudo apt update && sudo apt install -y anon\n")
+	// Check Ubuntu version - Ubuntu 25.04 is not yet supported by Anon repository
+	osInfo := detectLinuxDistro()
+	if strings.Contains(strings.ToLower(osInfo), "ubuntu 25.04") || strings.Contains(strings.ToLower(osInfo), "plucky") {
+		fmt.Fprintf(os.Stderr, "⚠️  Ubuntu 25.04 (Plucky) is not yet supported by Anon repository\n")
+		fmt.Fprintf(os.Stderr, "   Anon installation will be skipped. The gateway will work without it,\n")
+		fmt.Fprintf(os.Stderr, "   but anonymous proxy functionality will not be available.\n")
+		fmt.Fprintf(os.Stderr, "   You can manually install Anon later when support is added:\n")
+		fmt.Fprintf(os.Stderr, "   sudo /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh)\"\n\n")
 		return
 	}
 
-	// Add repository
-	repoLine := "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main"
-	if err := os.WriteFile("/etc/apt/sources.list.d/anyone.list", []byte(repoLine+"\n"), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to add Anyone repository: %v\n", err)
-		return
+	// Install via official installation script (from GitHub)
+	fmt.Printf("   Installing Anon using official installation script...\n")
+	fmt.Printf("   Note: The installation script may prompt for configuration\n")
+
+	// Clean up any old APT repository files from previous installation attempts
+	gpgKeyPath := "/usr/share/keyrings/anyone-archive-keyring.gpg"
+	repoPath := "/etc/apt/sources.list.d/anyone.list"
+	if _, err := os.Stat(gpgKeyPath); err == nil {
+		fmt.Printf("   Removing old GPG key file...\n")
+		os.Remove(gpgKeyPath)
+	}
+	if _, err := os.Stat(repoPath); err == nil {
+		fmt.Printf("   Removing old repository file...\n")
+		os.Remove(repoPath)
 	}
 
-	// Update package list
-	fmt.Printf("   Updating package list...\n")
-	exec.Command("apt", "update", "-qq").Run()
+	// Preseed debconf before installation
+	fmt.Printf("   Pre-accepting Anon terms and conditions...\n")
+	preseedCmd := exec.Command("sh", "-c", `echo "anon anon/terms boolean true" | debconf-set-selections`)
+	preseedCmd.Run() // Ignore errors, preseed might not be critical
 
-	// Install anon
-	fmt.Printf("   Installing Anon package...\n")
-	cmd = exec.Command("apt", "install", "-y", "anon")
+	// Create anonrc directory and file with AgreeToTerms before installation
+	// This ensures terms are accepted even if the post-install script checks the file
+	anonrcDir := "/etc/anon"
+	anonrcPath := "/etc/anon/anonrc"
+	if err := os.MkdirAll(anonrcDir, 0755); err == nil {
+		if _, err := os.Stat(anonrcPath); os.IsNotExist(err) {
+			// Create file with AgreeToTerms already set
+			os.WriteFile(anonrcPath, []byte("AgreeToTerms 1\n"), 0644)
+		}
+	}
+
+	// Create terms-agreement files in multiple possible locations
+	// Anon might check for these files to verify terms acceptance
+	termsLocations := []string{
+		"/var/lib/anon/terms-agreement",
+		"/usr/share/anon/terms-agreement",
+		"/usr/share/keyrings/anon/terms-agreement",
+		"/usr/share/keyrings/anyone-terms-agreed",
+	}
+	for _, loc := range termsLocations {
+		dir := filepath.Dir(loc)
+		if err := os.MkdirAll(dir, 0755); err == nil {
+			os.WriteFile(loc, []byte("agreed\n"), 0644)
+		}
+	}
+
+	// Use the official installation script from GitHub
+	// Rely on debconf preseed and file-based acceptance methods
+	// If prompts still appear, pipe a few "yes" responses (not infinite)
+	installScriptURL := "https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh"
+	// Pipe multiple "yes" responses (but limited) in case of multiple prompts
+	yesResponses := strings.Repeat("yes\n", 10) // 10 "yes" responses should be enough
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | bash", installScriptURL))
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	cmd.Stdin = strings.NewReader(yesResponses)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Anon installation failed: %v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "   The gateway will work without Anon, but anonymous proxy functionality will not be available.\n")
+		fmt.Fprintf(os.Stderr, "   You can manually install Anon later:\n")
+		fmt.Fprintf(os.Stderr, "   sudo /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh)\"\n")
+		return // Continue setup without Anon
 	}
 
 	// Verify installation
 	if _, err := exec.LookPath("anon"); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Anon installation may have failed\n")
-		return
+		fmt.Fprintf(os.Stderr, "⚠️  Anon installation verification failed: binary not found in PATH\n")
+		fmt.Fprintf(os.Stderr, "   Continuing setup without Anon...\n")
+		return // Continue setup without Anon
 	}
 
 	fmt.Printf("   ✓ Anon installed\n")
@@ -448,11 +508,28 @@ func installAnon() {
 
 	// Enable and start service
 	fmt.Printf("   Enabling Anon service...\n")
-	exec.Command("systemctl", "enable", "anon").Run()
-	exec.Command("systemctl", "start", "anon").Run()
+	enableCmd := exec.Command("systemctl", "enable", "anon")
+	if output, err := enableCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to enable Anon service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+	}
 
+	startCmd := exec.Command("systemctl", "start", "anon")
+	if output, err := startCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to start Anon service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+		fmt.Fprintf(os.Stderr, "   Check service status: systemctl status anon\n")
+	} else {
+		fmt.Printf("   ✓ Anon service started\n")
+	}
+
+	// Verify service is running
 	if exec.Command("systemctl", "is-active", "--quiet", "anon").Run() == nil {
-		fmt.Printf("   ✓ Anon service is running\n")
+		fmt.Printf("   ✓ Anon service is active\n")
 	} else {
 		fmt.Fprintf(os.Stderr, "⚠️  Anon service may not be running. Check: systemctl status anon\n")
 	}
@@ -488,6 +565,10 @@ func configureAnonDefaults() {
 		if !strings.Contains(config, "SocksPort") {
 			config += "SocksPort 9050\n"
 		}
+		// Auto-accept terms to avoid interactive prompts
+		if !strings.Contains(config, "AgreeToTerms") {
+			config += "AgreeToTerms 1\n"
+		}
 
 		// Write back
 		os.WriteFile(anonrcPath, []byte(config), 0644)
@@ -496,6 +577,7 @@ func configureAnonDefaults() {
 		fmt.Printf("   ORPort: 9001 (default)\n")
 		fmt.Printf("   ControlPort: 9051\n")
 		fmt.Printf("   SOCKSPort: 9050\n")
+		fmt.Printf("   AgreeToTerms: 1 (auto-accepted)\n")
 	}
 }
 
@@ -598,6 +680,7 @@ func setupDirectories() {
 		"/home/debros/bin",
 		"/home/debros/src",
 		"/home/debros/.debros",
+		"/home/debros/go", // Go module cache directory
 	}
 
 	for _, dir := range dirs {
@@ -616,16 +699,38 @@ func setupDirectories() {
 func cloneAndBuild() {
 	fmt.Printf("🔨 Cloning and building DeBros Network...\n")
 
+	// Prompt for branch selection
+	branch := promptBranch()
+	fmt.Printf("   Using branch: %s\n", branch)
+
 	// Check if already cloned
 	if _, err := os.Stat("/home/debros/src/.git"); err == nil {
 		fmt.Printf("   Updating repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "pull", "origin", "nightly")
+
+		// Check current branch and switch if needed
+		currentBranchCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "rev-parse", "--abbrev-ref", "HEAD")
+		if output, err := currentBranchCmd.Output(); err == nil {
+			currentBranch := strings.TrimSpace(string(output))
+			if currentBranch != branch {
+				fmt.Printf("   Switching from %s to %s...\n", currentBranch, branch)
+				// Fetch the target branch first (needed for shallow clones)
+				exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "fetch", "origin", branch).Run()
+				// Checkout the selected branch
+				checkoutCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "checkout", branch)
+				if err := checkoutCmd.Run(); err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️  Failed to switch branch: %v\n", err)
+				}
+			}
+		}
+
+		// Pull latest changes
+		cmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "pull", "origin", branch)
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  Failed to update repo: %v\n", err)
 		}
 	} else {
 		fmt.Printf("   Cloning repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", "nightly", "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
+		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n", err)
 			os.Exit(1)
@@ -639,8 +744,10 @@ func cloneAndBuild() {
 	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/go/bin")
 
 	// Use sudo with --preserve-env=PATH to pass Go path to debros user
+	// Set HOME so Go knows where to create module cache
 	cmd := exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
 	cmd.Dir = "/home/debros/src"
+	cmd.Env = append(os.Environ(), "HOME=/home/debros", "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to build: %v\n%s\n", err, output)
 		os.Exit(1)

@@ -91,12 +91,13 @@ func announceMetrics(n *Node, peers []peer.ID, cpuUsage uint64, memUsage *memory
 	}
 
 	msg := struct {
-		PeerID    string   `json:"peer_id"`
-		PeerCount int      `json:"peer_count"`
-		PeerIDs   []string `json:"peer_ids,omitempty"`
-		CPU       uint64   `json:"cpu_usage"`
-		Memory    uint64   `json:"memory_usage"`
-		Timestamp int64    `json:"timestamp"`
+		PeerID         string                 `json:"peer_id"`
+		PeerCount      int                    `json:"peer_count"`
+		PeerIDs        []string               `json:"peer_ids,omitempty"`
+		CPU            uint64                 `json:"cpu_usage"`
+		Memory         uint64                 `json:"memory_usage"`
+		Timestamp      int64                  `json:"timestamp"`
+		ClusterHealth  map[string]interface{} `json:"cluster_health,omitempty"`
 	}{
 		PeerID:    n.host.ID().String(),
 		PeerCount: len(peers),
@@ -104,6 +105,20 @@ func announceMetrics(n *Node, peers []peer.ID, cpuUsage uint64, memUsage *memory
 		CPU:       cpuUsage,
 		Memory:    memUsage.Used,
 		Timestamp: time.Now().Unix(),
+	}
+
+	// Add cluster health metrics if available
+	if n.clusterDiscovery != nil {
+		metrics := n.clusterDiscovery.GetMetrics()
+		msg.ClusterHealth = map[string]interface{}{
+			"cluster_size":        metrics.ClusterSize,
+			"active_nodes":        metrics.ActiveNodes,
+			"inactive_nodes":      metrics.InactiveNodes,
+			"discovery_status":    metrics.DiscoveryStatus,
+			"current_leader":      metrics.CurrentLeader,
+			"average_peer_health": metrics.AveragePeerHealth,
+			"last_update":         metrics.LastUpdate.Format(time.RFC3339),
+		}
 	}
 
 	data, err := json.Marshal(msg)
@@ -117,6 +132,50 @@ func announceMetrics(n *Node, peers []peer.ID, cpuUsage uint64, memUsage *memory
 	}
 
 	return nil
+}
+
+// GetClusterHealth returns cluster health information
+func (n *Node) GetClusterHealth() map[string]interface{} {
+	if n.clusterDiscovery == nil {
+		return map[string]interface{}{
+			"status": "not_initialized",
+		}
+	}
+
+	metrics := n.clusterDiscovery.GetMetrics()
+	return map[string]interface{}{
+		"cluster_size":        metrics.ClusterSize,
+		"active_nodes":        metrics.ActiveNodes,
+		"inactive_nodes":      metrics.InactiveNodes,
+		"discovery_status":    metrics.DiscoveryStatus,
+		"current_leader":      metrics.CurrentLeader,
+		"average_peer_health": metrics.AveragePeerHealth,
+		"last_update":         metrics.LastUpdate,
+	}
+}
+
+// GetDiscoveryStatus returns discovery service status
+func (n *Node) GetDiscoveryStatus() map[string]interface{} {
+	if n.clusterDiscovery == nil {
+		return map[string]interface{}{
+			"status":  "disabled",
+			"message": "cluster discovery not initialized",
+		}
+	}
+
+	metrics := n.clusterDiscovery.GetMetrics()
+	status := "healthy"
+	if metrics.DiscoveryStatus == "no_peers" {
+		status = "warning"
+	} else if metrics.DiscoveryStatus == "degraded" {
+		status = "degraded"
+	}
+
+	return map[string]interface{}{
+		"status":       status,
+		"cluster_size": metrics.ClusterSize,
+		"last_update":  metrics.LastUpdate,
+	}
 }
 
 // startConnectionMonitoring starts minimal connection monitoring for the lightweight client.

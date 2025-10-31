@@ -36,6 +36,11 @@ type DatabaseConfig struct {
 	RQLitePort        int    `yaml:"rqlite_port"`         // RQLite HTTP API port
 	RQLiteRaftPort    int    `yaml:"rqlite_raft_port"`    // RQLite Raft consensus port
 	RQLiteJoinAddress string `yaml:"rqlite_join_address"` // Address to join RQLite cluster
+	
+	// Dynamic discovery configuration (always enabled)
+	ClusterSyncInterval time.Duration `yaml:"cluster_sync_interval"` // default: 30s
+	PeerInactivityLimit time.Duration `yaml:"peer_inactivity_limit"` // default: 24h
+	MinClusterSize      int           `yaml:"min_cluster_size"`      // default: 1
 }
 
 // DiscoveryConfig contains peer discovery configuration
@@ -106,6 +111,11 @@ func DefaultConfig() *Config {
 			RQLitePort:        5001,
 			RQLiteRaftPort:    7001,
 			RQLiteJoinAddress: "", // Empty for bootstrap node
+			
+			// Dynamic discovery (always enabled)
+			ClusterSyncInterval: 30 * time.Second,
+			PeerInactivityLimit: 24 * time.Hour,
+			MinClusterSize:      1,
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers:    []string{},

@@ -24,7 +24,8 @@ type PeerExchangeRequest struct {
 
 // PeerExchangeResponse represents a list of peers to exchange
 type PeerExchangeResponse struct {
-	Peers []PeerInfo `json:"peers"`
+	Peers          []PeerInfo          `json:"peers"`
+	RQLiteMetadata *RQLiteNodeMetadata `json:"rqlite_metadata,omitempty"`
 }
 
 // PeerInfo contains peer identity and addresses
@@ -38,9 +39,10 @@ type PeerInfo struct {
 // interface{} to remain source-compatible with previous call sites that
 // passed a DHT instance. The value is ignored.
 type Manager struct {
-	host   host.Host
-	logger *zap.Logger
-	cancel context.CancelFunc
+	host                host.Host
+	logger              *zap.Logger
+	cancel              context.CancelFunc
+	failedPeerExchanges map[peer.ID]time.Time // Track failed peer exchange attempts to suppress repeated warnings
 }
 
 // Config contains discovery configuration
@@ -55,8 +57,10 @@ type Config struct {
 // previously passed a DHT instance can continue to do so; the value is ignored.
 func NewManager(h host.Host, _ interface{}, logger *zap.Logger) *Manager {
 	return &Manager{
-		host:   h,
-		logger: logger,
+		host:                h,
+		logger:              logger.With(zap.String("component", "peer-discovery")),
+		cancel:              nil,
+		failedPeerExchanges: make(map[peer.ID]time.Time),
 	}
 }
 
@@ -123,6 +127,16 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 		added++
 	}
 
+	// Add RQLite metadata if available
+	if val, err := d.host.Peerstore().Get(d.host.ID(), "rqlite_metadata"); err == nil {
+		if jsonData, ok := val.([]byte); ok {
+			var metadata RQLiteNodeMetadata
+			if err := json.Unmarshal(jsonData, &metadata); err == nil {
+				resp.RQLiteMetadata = &metadata
+			}
+		}
+	}
+
 	// Send response
 	encoder := json.NewEncoder(s)
 	if err := encoder.Encode(&resp); err != nil {
@@ -131,7 +145,8 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 	}
 
 	d.logger.Debug("Sent peer exchange response",
-		zap.Int("peer_count", len(resp.Peers)))
+		zap.Int("peer_count", len(resp.Peers)),
+		zap.Bool("has_rqlite_metadata", resp.RQLiteMetadata != nil))
 }
 
 // Start begins periodic peer discovery
@@ -332,12 +347,20 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 	// Open a stream to the peer
 	stream, err := d.host.NewStream(ctx, peerID, PeerExchangeProtocol)
 	if err != nil {
-		d.logger.Debug("Failed to open peer exchange stream",
-			zap.String("peer_id", peerID.String()[:8]+"..."),
-			zap.Error(err))
+		// Suppress repeated warnings for the same peer (log once per minute max)
+		lastFailure, seen := d.failedPeerExchanges[peerID]
+		if !seen || time.Since(lastFailure) > time.Minute {
+			d.logger.Debug("Failed to open peer exchange stream",
+				zap.String("peer_id", peerID.String()[:8]+"..."),
+				zap.Error(err))
+			d.failedPeerExchanges[peerID] = time.Now()
+		}
 		return nil
 	}
 	defer stream.Close()
+
+	// Clear failure tracking on success
+	delete(d.failedPeerExchanges, peerID)
 
 	// Send request
 	req := PeerExchangeRequest{Limit: limit}
@@ -363,7 +386,50 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 		return nil
 	}
 
+	// Store remote peer's RQLite metadata if available
+	if resp.RQLiteMetadata != nil {
+		metadataJSON, err := json.Marshal(resp.RQLiteMetadata)
+		if err == nil {
+			_ = d.host.Peerstore().Put(peerID, "rqlite_metadata", metadataJSON)
+			d.logger.Debug("Stored RQLite metadata from peer",
+				zap.String("peer_id", peerID.String()[:8]+"..."),
+				zap.String("node_id", resp.RQLiteMetadata.NodeID))
+		}
+	}
+
 	return resp.Peers
+}
+
+// TriggerPeerExchange manually triggers peer exchange with all connected peers
+// This is useful for pre-startup cluster discovery to populate the peerstore with RQLite metadata
+func (d *Manager) TriggerPeerExchange(ctx context.Context) int {
+	connectedPeers := d.host.Network().Peers()
+	if len(connectedPeers) == 0 {
+		d.logger.Debug("No connected peers for peer exchange")
+		return 0
+	}
+
+	d.logger.Info("Manually triggering peer exchange",
+		zap.Int("connected_peers", len(connectedPeers)))
+
+	metadataCollected := 0
+	for _, peerID := range connectedPeers {
+		// Request peer list from this peer (which includes their RQLite metadata)
+		_ = d.requestPeersFromPeer(ctx, peerID, 50) // Request up to 50 peers
+
+		// Check if we got RQLite metadata from this peer
+		if val, err := d.host.Peerstore().Get(peerID, "rqlite_metadata"); err == nil {
+			if _, ok := val.([]byte); ok {
+				metadataCollected++
+			}
+		}
+	}
+
+	d.logger.Info("Peer exchange completed",
+		zap.Int("peers_with_metadata", metadataCollected),
+		zap.Int("total_peers", len(connectedPeers)))
+
+	return metadataCollected
 }
 
 // connectToPeer attempts to connect to a specific peer using its peerstore info.
