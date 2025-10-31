@@ -166,6 +166,19 @@ func promptYesNo() bool {
 	return response == "yes" || response == "y"
 }
 
+func promptBranch() string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("   Select branch (main/nightly) [default: main]: ")
+	response, _ := reader.ReadString('\n')
+	response = strings.ToLower(strings.TrimSpace(response))
+
+	if response == "nightly" {
+		return "nightly"
+	}
+	// Default to main for anything else (including empty)
+	return "main"
+}
+
 // isValidMultiaddr validates bootstrap peer multiaddr format
 func isValidMultiaddr(s string) bool {
 	s = strings.TrimSpace(s)
@@ -616,16 +629,38 @@ func setupDirectories() {
 func cloneAndBuild() {
 	fmt.Printf("🔨 Cloning and building DeBros Network...\n")
 
+	// Prompt for branch selection
+	branch := promptBranch()
+	fmt.Printf("   Using branch: %s\n", branch)
+
 	// Check if already cloned
 	if _, err := os.Stat("/home/debros/src/.git"); err == nil {
 		fmt.Printf("   Updating repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "pull", "origin", "nightly")
+
+		// Check current branch and switch if needed
+		currentBranchCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "rev-parse", "--abbrev-ref", "HEAD")
+		if output, err := currentBranchCmd.Output(); err == nil {
+			currentBranch := strings.TrimSpace(string(output))
+			if currentBranch != branch {
+				fmt.Printf("   Switching from %s to %s...\n", currentBranch, branch)
+				// Fetch the target branch first (needed for shallow clones)
+				exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "fetch", "origin", branch).Run()
+				// Checkout the selected branch
+				checkoutCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "checkout", branch)
+				if err := checkoutCmd.Run(); err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️  Failed to switch branch: %v\n", err)
+				}
+			}
+		}
+
+		// Pull latest changes
+		cmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "pull", "origin", branch)
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  Failed to update repo: %v\n", err)
 		}
 	} else {
 		fmt.Printf("   Cloning repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", "nightly", "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
+		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n", err)
 			os.Exit(1)
