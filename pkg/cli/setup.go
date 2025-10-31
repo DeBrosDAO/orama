@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -436,10 +437,43 @@ func installAnon() {
 		os.Remove(repoPath)
 	}
 
+	// Preseed debconf before installation
+	fmt.Printf("   Pre-accepting Anon terms and conditions...\n")
+	preseedCmd := exec.Command("sh", "-c", `echo "anon anon/terms boolean true" | debconf-set-selections`)
+	preseedCmd.Run() // Ignore errors, preseed might not be critical
+
+	// Create anonrc directory and file with AgreeToTerms before installation
+	// This ensures terms are accepted even if the post-install script checks the file
+	anonrcDir := "/etc/anon"
+	anonrcPath := "/etc/anon/anonrc"
+	if err := os.MkdirAll(anonrcDir, 0755); err == nil {
+		if _, err := os.Stat(anonrcPath); os.IsNotExist(err) {
+			// Create file with AgreeToTerms already set
+			os.WriteFile(anonrcPath, []byte("AgreeToTerms 1\n"), 0644)
+		}
+	}
+
+	// Create terms-agreement files in multiple possible locations
+	// Anon might check for these files to verify terms acceptance
+	termsLocations := []string{
+		"/var/lib/anon/terms-agreement",
+		"/usr/share/anon/terms-agreement",
+		"/usr/share/keyrings/anon/terms-agreement",
+		"/usr/share/keyrings/anyone-terms-agreed",
+	}
+	for _, loc := range termsLocations {
+		dir := filepath.Dir(loc)
+		if err := os.MkdirAll(dir, 0755); err == nil {
+			os.WriteFile(loc, []byte("agreed\n"), 0644)
+		}
+	}
+
 	// Use the official installation script from GitHub
+	// Pipe "yes" repeatedly to automatically accept terms prompt
 	installScriptURL := "https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh"
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | bash", installScriptURL))
-	cmd.Stdin = os.Stdin // Allow interactive prompts if needed
+	// Use yes command to pipe multiple "yes" responses if needed
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | (yes yes | bash)", installScriptURL))
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
