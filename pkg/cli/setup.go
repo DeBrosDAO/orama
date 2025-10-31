@@ -3,12 +3,16 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
 )
 
 // HandleSetupCommand handles the interactive 'setup' command for VPS installation
@@ -108,6 +112,13 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("✅ Setup Complete!\n")
 	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
 	fmt.Printf("DeBros Network is now running!\n\n")
+
+	// Try to get and display peer ID
+	peerID := getPeerID()
+	if peerID != "" {
+		fmt.Printf("🆔 Node Peer ID: %s\n\n", peerID)
+	}
+
 	fmt.Printf("Service Management:\n")
 	fmt.Printf("  network-cli service status all\n")
 	fmt.Printf("  network-cli service logs node --follow\n")
@@ -121,6 +132,84 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  sudo systemctl status anon\n")
 	fmt.Printf("  sudo tail -f /home/debros/.debros/logs/anon/notices.log\n")
 	fmt.Printf("  Proxy endpoint: POST http://localhost:6001/v1/proxy/anon\n\n")
+}
+
+// getVPSIPv4Address gets the primary IPv4 address of the VPS
+func getVPSIPv4Address() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+
+	for _, iface := range interfaces {
+		// Skip loopback and down interfaces
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ip := ipNet.IP
+			// Check if it's IPv4 and not a loopback address
+			if ip.To4() != nil && !ip.IsLoopback() {
+				return ip.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("could not find a non-loopback IPv4 address")
+}
+
+// getPeerID attempts to retrieve the peer ID from peer.info based on node type
+func getPeerID() string {
+	debrosDir := "/home/debros/.debros"
+	nodeConfigPath := filepath.Join(debrosDir, "node.yaml")
+
+	// Determine node type from config
+	var nodeType string
+	if file, err := os.Open(nodeConfigPath); err == nil {
+		defer file.Close()
+		var cfg config.Config
+		if err := config.DecodeStrict(file, &cfg); err == nil {
+			nodeType = cfg.Node.Type
+		}
+	}
+
+	// Determine the peer.info path based on node type
+	var peerInfoPath string
+	if nodeType == "bootstrap" {
+		peerInfoPath = filepath.Join(debrosDir, "bootstrap", "peer.info")
+	} else {
+		// Default to "node" directory for regular nodes
+		peerInfoPath = filepath.Join(debrosDir, "node", "peer.info")
+	}
+
+	// Try to read from peer.info file
+	if data, err := os.ReadFile(peerInfoPath); err == nil {
+		peerInfo := strings.TrimSpace(string(data))
+		// Extract peer ID from multiaddr format: /ip4/.../p2p/<peer-id>
+		if strings.Contains(peerInfo, "/p2p/") {
+			parts := strings.Split(peerInfo, "/p2p/")
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+		// If it's just the peer ID, return it
+		if len(peerInfo) > 0 && !strings.Contains(peerInfo, "/") {
+			return peerInfo
+		}
+	}
+
+	return ""
 }
 
 func detectLinuxDistro() string {
@@ -763,17 +852,40 @@ func cloneAndBuild() {
 }
 
 func generateConfigsInteractive(force bool) {
-	fmt.Printf("⚙️  Generating configurations...\n")
+	fmt.Printf("⚙️  Generating configurations...\n\n")
 
-	// For single-node VPS setup, use sensible defaults
-	// This creates a bootstrap node that acts as the cluster leader
-	fmt.Printf("\n")
-	fmt.Printf("Setting up single-node configuration...\n")
-	fmt.Printf("  • Bootstrap node (cluster leader)\n")
-	fmt.Printf("  • No external peers required\n")
-	fmt.Printf("  • Gateway connected to local node\n\n")
+	// Get VPS IPv4 address
+	fmt.Printf("Detecting VPS IPv4 address...\n")
+	vpsIP, err := getVPSIPv4Address()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to detect IPv4 address: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   Using 0.0.0.0 as fallback. You may need to edit config files manually.\n")
+		vpsIP = "0.0.0.0"
+	} else {
+		fmt.Printf("   ✓ Detected IPv4 address: %s\n\n", vpsIP)
+	}
 
-	bootstrapPath := "/home/debros/.debros/bootstrap.yaml"
+	// Ask about node type
+	fmt.Printf("What type of node is this?\n")
+	fmt.Printf("  1. Bootstrap node (cluster leader)\n")
+	fmt.Printf("  2. Regular node (joins existing cluster)\n")
+	fmt.Printf("Enter choice (1 or 2): ")
+	reader := bufio.NewReader(os.Stdin)
+	choice, _ := reader.ReadString('\n')
+	choice = strings.ToLower(strings.TrimSpace(choice))
+
+	isBootstrap := choice == "1" || choice == "bootstrap" || choice == "b"
+
+	var bootstrapPeers string
+	if !isBootstrap {
+		// Ask for bootstrap peer multiaddr
+		fmt.Printf("\nEnter bootstrap peer multiaddr(s) (comma-separated if multiple):\n")
+		fmt.Printf("Example: /ip4/192.168.1.100/tcp/4001/p2p/12D3KooW...\n")
+		fmt.Printf("Bootstrap peer(s): ")
+		bootstrapPeers, _ = reader.ReadString('\n')
+		bootstrapPeers = strings.TrimSpace(bootstrapPeers)
+	}
+
 	nodeConfigPath := "/home/debros/.debros/node.yaml"
 	gatewayPath := "/home/debros/.debros/gateway.yaml"
 
@@ -781,65 +893,31 @@ func generateConfigsInteractive(force bool) {
 	nodeExists := false
 	if _, err := os.Stat(nodeConfigPath); err == nil {
 		nodeExists = true
-		fmt.Printf("   ℹ️  node.yaml already exists, will not overwrite\n")
+		if !force {
+			fmt.Printf("\n   ℹ️  node.yaml already exists, will not overwrite\n")
+		}
 	}
 
-	// Generate bootstrap node config with explicit parameters
-	// Pass empty bootstrap-peers and no join address for bootstrap node
-	bootstrapArgs := []string{
-		"-u", "debros",
-		"/home/debros/bin/network-cli", "config", "init",
-		"--type", "bootstrap",
-		"--bootstrap-peers", "",
-	}
-	if force {
-		bootstrapArgs = append(bootstrapArgs, "--force")
-	}
-
-	cmd := exec.Command("sudo", bootstrapArgs...)
-	cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
-	output, err := cmd.CombinedOutput()
-	bootstrapCreated := (err == nil)
-
-	if err != nil {
-		// Check if bootstrap.yaml already exists (config init failed because it exists)
-		if _, statErr := os.Stat(bootstrapPath); statErr == nil {
-			fmt.Printf("   ℹ️  bootstrap.yaml already exists, skipping creation\n")
-			bootstrapCreated = true
+	// Generate node config
+	if !nodeExists || force {
+		var nodeConfig string
+		if isBootstrap {
+			nodeConfig = generateBootstrapConfigWithIP("bootstrap", "", 4001, 5001, 7001, vpsIP)
 		} else {
-			fmt.Fprintf(os.Stderr, "⚠️  Failed to generate bootstrap config: %v\n", err)
-			if len(output) > 0 {
-				fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
-			}
+			nodeConfig = generateNodeConfigWithIP("node", "", 4001, 5001, 7001, "", bootstrapPeers, vpsIP)
 		}
-	} else {
-		fmt.Printf("   ✓ Bootstrap node config created\n")
+
+		// Write node config
+		if err := os.WriteFile(nodeConfigPath, []byte(nodeConfig), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to write node config: %v\n", err)
+			os.Exit(1)
+		}
+		// Fix ownership
+		exec.Command("chown", "debros:debros", nodeConfigPath).Run()
+		fmt.Printf("   ✓ Node config created: %s\n", nodeConfigPath)
 	}
 
-	// Rename bootstrap.yaml to node.yaml only if node.yaml doesn't exist
-	if !nodeExists && bootstrapCreated {
-		// Check if bootstrap.yaml exists before renaming
-		if _, err := os.Stat(bootstrapPath); err == nil {
-			renameCmd := exec.Command("sudo", "-u", "debros", "mv", bootstrapPath, nodeConfigPath)
-			if err := renameCmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️  Failed to rename config: %v\n", err)
-			} else {
-				fmt.Printf("   ✓ Renamed bootstrap.yaml to node.yaml\n")
-			}
-		}
-	} else if nodeExists {
-		// If node.yaml exists, we can optionally remove bootstrap.yaml if it was just created
-		if bootstrapCreated && !force {
-			// Clean up bootstrap.yaml if it was just created but node.yaml already exists
-			if _, err := os.Stat(bootstrapPath); err == nil {
-				exec.Command("sudo", "-u", "debros", "rm", "-f", bootstrapPath).Run()
-			}
-		}
-		fmt.Printf("   ℹ️  Using existing node.yaml\n")
-	}
-
-	// Generate gateway config with explicit empty bootstrap peers
-	// Check if gateway.yaml already exists
+	// Generate gateway config
 	gatewayExists := false
 	if _, err := os.Stat(gatewayPath); err == nil {
 		gatewayExists = true
@@ -849,35 +927,165 @@ func generateConfigsInteractive(force bool) {
 	}
 
 	if !gatewayExists || force {
-		gatewayArgs := []string{
-			"-u", "debros",
-			"/home/debros/bin/network-cli", "config", "init",
-			"--type", "gateway",
-			"--bootstrap-peers", "",
+		// Gateway config should include bootstrap peers if this is a regular node
+		// (bootstrap nodes don't need bootstrap peers since they are the bootstrap)
+		gatewayConfig := generateGatewayConfigDirect(bootstrapPeers)
+		if err := os.WriteFile(gatewayPath, []byte(gatewayConfig), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to write gateway config: %v\n", err)
+			os.Exit(1)
 		}
-		if force {
-			gatewayArgs = append(gatewayArgs, "--force")
-		}
+		// Fix ownership
+		exec.Command("chown", "debros:debros", gatewayPath).Run()
+		fmt.Printf("   ✓ Gateway config created: %s\n", gatewayPath)
+	}
 
-		cmd = exec.Command("sudo", gatewayArgs...)
-		cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			// Check if gateway.yaml already exists (config init failed because it exists)
-			if _, statErr := os.Stat(gatewayPath); statErr == nil {
-				fmt.Printf("   ℹ️  gateway.yaml already exists, skipping creation\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "⚠️  Failed to generate gateway config: %v\n", err)
-				if len(output) > 0 {
-					fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
-				}
+	fmt.Printf("\n   ✓ Configurations ready\n")
+}
+
+// generateBootstrapConfigWithIP generates a bootstrap config with actual IP address
+func generateBootstrapConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqliteRaftPort int, ipAddr string) string {
+	nodeID := id
+	if nodeID == "" {
+		nodeID = "bootstrap"
+	}
+
+	dataDir := "/home/debros/.debros/bootstrap"
+
+	return fmt.Sprintf(`node:
+  id: "%s"
+  type: "bootstrap"
+  listen_addresses:
+    - "/ip4/%s/tcp/%d"
+  data_dir: "%s"
+  max_connections: 50
+
+database:
+  data_dir: "%s/rqlite"
+  replication_factor: 3
+  shard_count: 16
+  max_database_size: 1073741824
+  backup_interval: "24h"
+  rqlite_port: %d
+  rqlite_raft_port: %d
+  rqlite_join_address: ""
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 1
+
+discovery:
+  bootstrap_peers: []
+  discovery_interval: "15s"
+  bootstrap_port: %d
+  http_adv_address: "%s:%d"
+  raft_adv_address: "%s:%d"
+  node_namespace: "default"
+
+security:
+  enable_tls: false
+
+logging:
+  level: "info"
+  format: "console"
+`, nodeID, ipAddr, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, 4001, ipAddr, rqliteHTTPPort, ipAddr, rqliteRaftPort)
+}
+
+// generateNodeConfigWithIP generates a node config with actual IP address
+func generateNodeConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqliteRaftPort int, joinAddr, bootstrapPeers, ipAddr string) string {
+	nodeID := id
+	if nodeID == "" {
+		nodeID = fmt.Sprintf("node-%d", time.Now().Unix())
+	}
+
+	dataDir := "/home/debros/.debros/node"
+
+	// Parse bootstrap peers
+	var peers []string
+	if bootstrapPeers != "" {
+		for _, p := range strings.Split(bootstrapPeers, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
 			}
-		} else {
-			fmt.Printf("   ✓ Gateway config created\n")
 		}
 	}
 
-	fmt.Printf("   ✓ Configurations ready\n")
+	var peersYAML strings.Builder
+	if len(peers) == 0 {
+		peersYAML.WriteString("  bootstrap_peers: []")
+	} else {
+		peersYAML.WriteString("  bootstrap_peers:\n")
+		for _, p := range peers {
+			fmt.Fprintf(&peersYAML, "    - \"%s\"\n", p)
+		}
+	}
+
+	if joinAddr == "" {
+		joinAddr = "localhost:5001"
+	}
+
+	return fmt.Sprintf(`node:
+  id: "%s"
+  type: "node"
+  listen_addresses:
+    - "/ip4/%s/tcp/%d"
+  data_dir: "%s"
+  max_connections: 50
+
+database:
+  data_dir: "%s/rqlite"
+  replication_factor: 3
+  shard_count: 16
+  max_database_size: 1073741824
+  backup_interval: "24h"
+  rqlite_port: %d
+  rqlite_raft_port: %d
+  rqlite_join_address: "%s"
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 1
+
+discovery:
+%s
+  discovery_interval: "15s"
+  bootstrap_port: %d
+  http_adv_address: "%s:%d"
+  raft_adv_address: "%s:%d"
+  node_namespace: "default"
+
+security:
+  enable_tls: false
+
+logging:
+  level: "info"
+  format: "console"
+`, nodeID, ipAddr, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, joinAddr, peersYAML.String(), 4001, ipAddr, rqliteHTTPPort, ipAddr, rqliteRaftPort)
+}
+
+// generateGatewayConfigDirect generates gateway config directly
+func generateGatewayConfigDirect(bootstrapPeers string) string {
+	var peers []string
+	if bootstrapPeers != "" {
+		for _, p := range strings.Split(bootstrapPeers, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
+			}
+		}
+	}
+
+	var peersYAML strings.Builder
+	if len(peers) == 0 {
+		peersYAML.WriteString("bootstrap_peers: []")
+	} else {
+		peersYAML.WriteString("bootstrap_peers:\n")
+		for _, p := range peers {
+			fmt.Fprintf(&peersYAML, "  - \"%s\"\n", p)
+		}
+	}
+
+	return fmt.Sprintf(`listen_addr: ":6001"
+client_namespace: "default"
+rqlite_dsn: ""
+%s
+`, peersYAML.String())
 }
 
 func createSystemdServices() {
