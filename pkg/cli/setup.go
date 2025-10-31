@@ -1068,38 +1068,22 @@ func cloneAndBuild() {
 	branch := promptBranch()
 	fmt.Printf("   Using branch: %s\n", branch)
 
-	// Check if already cloned
-	if _, err := os.Stat("/home/debros/src/.git"); err == nil {
-		fmt.Printf("   Updating repository...\n")
+	// Remove existing repository if it exists (always start fresh)
+	if _, err := os.Stat("/home/debros/src"); err == nil {
+		fmt.Printf("   Removing existing repository...\n")
+		// Remove as root since we're running as root
+		if err := os.RemoveAll("/home/debros/src"); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to remove existing repo: %v\n", err)
+			// Try to continue anyway
+		}
+	}
 
-		// Check current branch and switch if needed
-		currentBranchCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "rev-parse", "--abbrev-ref", "HEAD")
-		if output, err := currentBranchCmd.Output(); err == nil {
-			currentBranch := strings.TrimSpace(string(output))
-			if currentBranch != branch {
-				fmt.Printf("   Switching from %s to %s...\n", currentBranch, branch)
-				// Fetch the target branch first (needed for shallow clones)
-				exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "fetch", "origin", branch).Run()
-				// Checkout the selected branch
-				checkoutCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "checkout", branch)
-				if err := checkoutCmd.Run(); err != nil {
-					fmt.Fprintf(os.Stderr, "⚠️  Failed to switch branch: %v\n", err)
-				}
-			}
-		}
-
-		// Pull latest changes
-		cmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "pull", "origin", branch)
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Failed to update repo: %v\n", err)
-		}
-	} else {
-		fmt.Printf("   Cloning repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n", err)
-			os.Exit(1)
-		}
+	// Clone fresh repository
+	fmt.Printf("   Cloning repository...\n")
+	cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n%s\n", err, output)
+		os.Exit(1)
 	}
 
 	// Build
@@ -1110,7 +1094,7 @@ func cloneAndBuild() {
 
 	// Use sudo with --preserve-env=PATH to pass Go path to debros user
 	// Set HOME so Go knows where to create module cache
-	cmd := exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
+	cmd = exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
 	cmd.Dir = "/home/debros/src"
 	cmd.Env = append(os.Environ(), "HOME=/home/debros", "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -1119,9 +1103,21 @@ func cloneAndBuild() {
 	}
 
 	// Copy binaries
-	exec.Command("sh", "-c", "cp -r /home/debros/src/bin/* /home/debros/bin/").Run()
-	exec.Command("chown", "-R", "debros:debros", "/home/debros/bin").Run()
-	exec.Command("chmod", "-R", "755", "/home/debros/bin").Run()
+	copyCmd := exec.Command("sh", "-c", "cp -r /home/debros/src/bin/* /home/debros/bin/")
+	if output, err := copyCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to copy binaries: %v\n%s\n", err, output)
+		os.Exit(1)
+	}
+
+	chownCmd := exec.Command("chown", "-R", "debros:debros", "/home/debros/bin")
+	if err := chownCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to chown binaries: %v\n", err)
+	}
+
+	chmodCmd := exec.Command("chmod", "-R", "755", "/home/debros/bin")
+	if err := chmodCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to chmod binaries: %v\n", err)
+	}
 
 	fmt.Printf("   ✓ Built and installed\n")
 }
