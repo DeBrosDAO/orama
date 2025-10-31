@@ -680,6 +680,7 @@ func setupDirectories() {
 		"/home/debros/bin",
 		"/home/debros/src",
 		"/home/debros/.debros",
+		"/home/debros/go", // Go module cache directory
 	}
 
 	for _, dir := range dirs {
@@ -743,8 +744,10 @@ func cloneAndBuild() {
 	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/go/bin")
 
 	// Use sudo with --preserve-env=PATH to pass Go path to debros user
+	// Set HOME so Go knows where to create module cache
 	cmd := exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
 	cmd.Dir = "/home/debros/src"
+	cmd.Env = append(os.Environ(), "HOME=/home/debros", "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to build: %v\n%s\n", err, output)
 		os.Exit(1)
