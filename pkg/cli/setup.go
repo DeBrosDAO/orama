@@ -469,11 +469,14 @@ func installAnon() {
 	}
 
 	// Use the official installation script from GitHub
-	// Pipe "yes" repeatedly to automatically accept terms prompt
+	// Rely on debconf preseed and file-based acceptance methods
+	// If prompts still appear, pipe a few "yes" responses (not infinite)
 	installScriptURL := "https://raw.githubusercontent.com/anyone-protocol/anon-install/refs/heads/main/install.sh"
-	// Use yes command to pipe multiple "yes" responses if needed
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | (yes yes | bash)", installScriptURL))
+	// Pipe multiple "yes" responses (but limited) in case of multiple prompts
+	yesResponses := strings.Repeat("yes\n", 10) // 10 "yes" responses should be enough
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | bash", installScriptURL))
 	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	cmd.Stdin = strings.NewReader(yesResponses)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
