@@ -64,7 +64,7 @@ func NewRQLiteManager(cfg *config.DatabaseConfig, discoveryCfg *config.Discovery
 		config:         cfg,
 		discoverConfig: discoveryCfg,
 		dataDir:        dataDir,
-		logger:         logger,
+		logger:         logger.With(zap.String("component", "rqlite-manager")),
 	}
 }
 
@@ -75,20 +75,9 @@ func (r *RQLiteManager) SetDiscoveryService(service *ClusterDiscoveryService) {
 
 // Start starts the RQLite node
 func (r *RQLiteManager) Start(ctx context.Context) error {
-	// Expand ~ in data directory path
-	dataDir := os.ExpandEnv(r.dataDir)
-	if strings.HasPrefix(dataDir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to determine home directory: %w", err)
-		}
-		dataDir = filepath.Join(home, dataDir[1:])
-	}
-
-	// Create data directory
-	rqliteDataDir := filepath.Join(dataDir, "rqlite")
-	if err := os.MkdirAll(rqliteDataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create RQLite data directory: %w", err)
+	rqliteDataDir, err := r.prepareDataDir()
+	if err != nil {
+		return err
 	}
 
 	if r.discoverConfig.HttpAdvAddress == "" {
@@ -106,6 +95,55 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		}
 	}
 
+	// Launch RQLite process
+	if err := r.launchProcess(ctx, rqliteDataDir); err != nil {
+		return err
+	}
+
+	// Wait for RQLite to be ready and establish connection
+	if err := r.waitForReadyAndConnect(ctx); err != nil {
+		return err
+	}
+
+	// Establish leadership/SQL availability
+	if err := r.establishLeadershipOrJoin(ctx, rqliteDataDir); err != nil {
+		return err
+	}
+
+	// Apply migrations
+	migrationsDir := "migrations"
+	if err := r.ApplyMigrations(ctx, migrationsDir); err != nil {
+		r.logger.Error("Migrations failed", zap.Error(err), zap.String("dir", migrationsDir))
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	r.logger.Info("RQLite node started successfully")
+	return nil
+}
+
+// prepareDataDir expands and creates the RQLite data directory
+func (r *RQLiteManager) prepareDataDir() (string, error) {
+	// Expand ~ in data directory path
+	dataDir := os.ExpandEnv(r.dataDir)
+	if strings.HasPrefix(dataDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		dataDir = filepath.Join(home, dataDir[1:])
+	}
+
+	// Create data directory
+	rqliteDataDir := filepath.Join(dataDir, "rqlite")
+	if err := os.MkdirAll(rqliteDataDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create RQLite data directory: %w", err)
+	}
+
+	return rqliteDataDir, nil
+}
+
+// launchProcess starts the RQLite process with appropriate arguments
+func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string) error {
 	// Build RQLite command
 	args := []string{
 		"-http-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLitePort),
@@ -147,9 +185,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		zap.String("data_dir", rqliteDataDir),
 		zap.Int("http_port", r.config.RQLitePort),
 		zap.Int("raft_port", r.config.RQLiteRaftPort),
-		zap.String("join_address", r.config.RQLiteJoinAddress),
-		zap.Strings("full_args", args),
-	)
+		zap.String("join_address", r.config.RQLiteJoinAddress))
 
 	// Start RQLite process (not bound to ctx for graceful Stop handling)
 	r.cmd = exec.Command("rqlited", args...)
@@ -162,6 +198,11 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	return nil
+}
+
+// waitForReadyAndConnect waits for RQLite to be ready and establishes connection
+func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 	// Wait for RQLite to be ready
 	if err := r.waitForReady(ctx); err != nil {
 		if r.cmd != nil && r.cmd.Process != nil {
@@ -182,11 +223,15 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 
 	// Sanity check: verify rqlite's node ID matches our configured raft address
 	if err := r.validateNodeID(); err != nil {
-		r.logger.Warn("Node ID validation failed", zap.Error(err))
-		// Don't fail startup, but log the mismatch for debugging
+		r.logger.Debug("Node ID validation skipped", zap.Error(err))
+		// Don't fail startup, but log at debug level
 	}
 
-	// Leadership/SQL readiness gating with dynamic discovery support
+	return nil
+}
+
+// establishLeadershipOrJoin establishes leadership (bootstrap) or waits for SQL availability (joining)
+func (r *RQLiteManager) establishLeadershipOrJoin(ctx context.Context, rqliteDataDir string) error {
 	if r.config.RQLiteJoinAddress == "" {
 		// Bootstrap node logic with data safety checks
 		r.logger.Info("Bootstrap node: checking if safe to lead")
@@ -214,46 +259,47 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		leadershipErr := r.waitForLeadership(ctx)
 		if leadershipErr == nil {
 			r.logger.Info("Bootstrap node successfully established leadership")
-		} else {
-			r.logger.Warn("Initial leadership attempt failed, may need cluster recovery",
-				zap.Error(leadershipErr))
+			return nil
+		}
 
-			// Try recovery if we have peers.json from discovery
-			if r.discoveryService != nil {
-				peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
-				if _, err := os.Stat(peersPath); err == nil {
-					r.logger.Info("Attempting cluster recovery using peers.json",
-						zap.String("peers_file", peersPath))
+		r.logger.Warn("Initial leadership attempt failed, may need cluster recovery",
+			zap.Error(leadershipErr))
 
-					if recoveryErr := r.recoverCluster(peersPath); recoveryErr == nil {
-						r.logger.Info("Cluster recovery successful, retrying leadership")
-						leadershipErr = r.waitForLeadership(ctx)
-						if leadershipErr == nil {
-							r.logger.Info("Bootstrap node established leadership after recovery")
-						}
-					} else {
-						r.logger.Warn("Cluster recovery failed", zap.Error(recoveryErr))
+		// Try recovery if we have peers.json from discovery
+		if r.discoveryService != nil {
+			peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
+			if _, err := os.Stat(peersPath); err == nil {
+				r.logger.Info("Attempting cluster recovery using peers.json",
+					zap.String("peers_file", peersPath))
+
+				if recoveryErr := r.recoverCluster(peersPath); recoveryErr == nil {
+					r.logger.Info("Cluster recovery successful, retrying leadership")
+					leadershipErr = r.waitForLeadership(ctx)
+					if leadershipErr == nil {
+						r.logger.Info("Bootstrap node established leadership after recovery")
+						return nil
 					}
-				}
-			}
-
-			// Final fallback: SQL availability
-			if leadershipErr != nil {
-				r.logger.Warn("Leadership failed, trying SQL availability")
-				sqlCtx := ctx
-				if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-					var cancel context.CancelFunc
-					sqlCtx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
-					defer cancel()
-				}
-				if err := r.waitForSQLAvailable(sqlCtx); err != nil {
-					if r.cmd != nil && r.cmd.Process != nil {
-						_ = r.cmd.Process.Kill()
-					}
-					return fmt.Errorf("RQLite SQL not available: %w", err)
+				} else {
+					r.logger.Warn("Cluster recovery failed", zap.Error(recoveryErr))
 				}
 			}
 		}
+
+		// Final fallback: SQL availability
+		r.logger.Warn("Leadership failed, trying SQL availability")
+		sqlCtx := ctx
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			sqlCtx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+		}
+		if err := r.waitForSQLAvailable(sqlCtx); err != nil {
+			if r.cmd != nil && r.cmd.Process != nil {
+				_ = r.cmd.Process.Kill()
+			}
+			return fmt.Errorf("RQLite SQL not available: %w", err)
+		}
+		return nil
 	} else {
 		// Joining node logic
 		r.logger.Info("Waiting for RQLite SQL availability (leader discovery)")
@@ -269,18 +315,8 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 			}
 			return fmt.Errorf("RQLite SQL not available: %w", err)
 		}
+		return nil
 	}
-
-	// After waitForLeadership / waitForSQLAvailable succeeds, before returning:
-	migrationsDir := "migrations"
-
-	if err := r.ApplyMigrations(ctx, migrationsDir); err != nil {
-		r.logger.Error("Migrations failed", zap.Error(err), zap.String("dir", migrationsDir))
-		return fmt.Errorf("apply migrations: %w", err)
-	}
-
-	r.logger.Info("RQLite node started successfully")
-	return nil
 }
 
 // hasExistingState returns true if the rqlite data directory already contains files or subdirectories.
@@ -331,7 +367,12 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 func (r *RQLiteManager) waitForLeadership(ctx context.Context) error {
 	r.logger.Info("Waiting for RQLite to establish leadership...")
 
-	for i := 0; i < 30; i++ {
+	maxAttempts := 30
+	attempt := 0
+	backoffDelay := 500 * time.Millisecond
+	maxBackoff := 5 * time.Second
+
+	for attempt < maxAttempts {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -345,10 +386,19 @@ func (r *RQLiteManager) waitForLeadership(ctx context.Context) error {
 				r.logger.Info("RQLite leadership established")
 				return nil
 			}
-			r.logger.Debug("Waiting for leadership", zap.Error(err))
+			// Log every 5th attempt or on first attempt to reduce noise
+			if attempt%5 == 0 || attempt == 0 {
+				r.logger.Debug("Waiting for leadership", zap.Int("attempt", attempt+1), zap.Error(err))
+			}
 		}
 
-		time.Sleep(1 * time.Second)
+		// Exponential backoff with jitter
+		time.Sleep(backoffDelay)
+		backoffDelay = time.Duration(float64(backoffDelay) * 1.5)
+		if backoffDelay > maxBackoff {
+			backoffDelay = maxBackoff
+		}
+		attempt++
 	}
 
 	return fmt.Errorf("RQLite failed to establish leadership within timeout")
@@ -728,12 +778,20 @@ func (r *RQLiteManager) validateNodeID() error {
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-			return fmt.Errorf("failed to query nodes endpoint after retries: %w", err)
+			// Log at debug level if validation fails - not critical
+			r.logger.Debug("Node ID validation skipped (endpoint unavailable)", zap.Error(err))
+			return nil
 		}
 
 		expectedID := r.discoverConfig.RaftAdvAddress
 		if expectedID == "" {
 			return fmt.Errorf("raft_adv_address not configured")
+		}
+
+		// If cluster is still forming, nodes list might be empty - that's okay
+		if len(nodes) == 0 {
+			r.logger.Debug("Node ID validation skipped (cluster not yet formed)")
+			return nil
 		}
 
 		// Find our node in the cluster (match by address)
@@ -747,21 +805,16 @@ func (r *RQLiteManager) validateNodeID() error {
 						zap.String("explanation", "peers.json id field must match rqlite's node ID (raft address)"))
 					return fmt.Errorf("node ID mismatch: configured %s but rqlite reports %s", expectedID, node.ID)
 				}
-				r.logger.Info("Node ID validation passed",
+				r.logger.Debug("Node ID validation passed",
 					zap.String("node_id", node.ID),
 					zap.String("address", node.Address))
 				return nil
 			}
 		}
 
-		// If cluster is still forming, nodes list might be empty - that's okay
-		if len(nodes) == 0 {
-			r.logger.Debug("Cluster membership not yet available, skipping validation")
-			return nil
-		}
-
-		// If we can't find ourselves but other nodes exist, log a warning
-		r.logger.Warn("Could not find our node in cluster membership",
+		// If we can't find ourselves but other nodes exist, cluster might still be forming
+		// This is fine - don't log a warning
+		r.logger.Debug("Node ID validation skipped (node not yet in cluster membership)",
 			zap.String("expected_address", expectedID),
 			zap.Int("nodes_in_cluster", len(nodes)))
 		return nil

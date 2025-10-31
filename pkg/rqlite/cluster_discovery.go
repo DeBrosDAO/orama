@@ -64,7 +64,7 @@ func NewClusterDiscoveryService(
 		peerHealth:      make(map[string]*PeerHealth),
 		updateInterval:  30 * time.Second,
 		inactivityLimit: 24 * time.Hour,
-		logger:          logger,
+		logger:          logger.With(zap.String("component", "cluster-discovery")),
 	}
 }
 
@@ -82,9 +82,8 @@ func (c *ClusterDiscoveryService) Start(ctx context.Context) error {
 	c.cancel = cancel
 
 	c.logger.Info("Starting cluster discovery service",
-		zap.String("node_id", c.nodeID),
-		zap.String("node_type", c.nodeType),
 		zap.String("raft_address", c.raftAddress),
+		zap.String("node_type", c.nodeType),
 		zap.String("http_address", c.httpAddress),
 		zap.String("data_dir", c.dataDir),
 		zap.Duration("update_interval", c.updateInterval),
@@ -120,7 +119,7 @@ func (c *ClusterDiscoveryService) Stop() {
 
 // periodicSync runs periodic cluster membership synchronization
 func (c *ClusterDiscoveryService) periodicSync(ctx context.Context) {
-	c.logger.Info("periodicSync goroutine started, waiting for RQLite readiness")
+	c.logger.Debug("periodicSync goroutine started, waiting for RQLite readiness")
 
 	ticker := time.NewTicker(c.updateInterval)
 	defer ticker.Stop()
@@ -129,10 +128,9 @@ func (c *ClusterDiscoveryService) periodicSync(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("periodicSync goroutine stopping")
+			c.logger.Debug("periodicSync goroutine stopping")
 			return
 		case <-ticker.C:
-			c.logger.Debug("Running periodic cluster membership sync")
 			c.updateClusterMembership()
 		}
 	}
@@ -193,6 +191,14 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 	return metadata
 }
 
+// membershipUpdateResult contains the result of a membership update operation
+type membershipUpdateResult struct {
+	peersJSON []map[string]interface{}
+	added     []string
+	updated   []string
+	changed   bool
+}
+
 // updateClusterMembership updates the cluster membership based on discovered peers
 func (c *ClusterDiscoveryService) updateClusterMembership() {
 	metadata := c.collectPeerMetadata()
@@ -200,15 +206,58 @@ func (c *ClusterDiscoveryService) updateClusterMembership() {
 	c.logger.Debug("Collected peer metadata",
 		zap.Int("metadata_count", len(metadata)))
 
+	// Compute membership changes while holding lock
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	result := c.computeMembershipChangesLocked(metadata)
+	c.mu.Unlock()
 
+	// Perform file I/O outside the lock
+	if result.changed {
+		// Log state changes (peer added/removed) at Info level
+		if len(result.added) > 0 || len(result.updated) > 0 {
+			c.logger.Info("Cluster membership changed",
+				zap.Int("added", len(result.added)),
+				zap.Int("updated", len(result.updated)),
+				zap.Strings("added_ids", result.added),
+				zap.Strings("updated_ids", result.updated))
+		}
+
+		// Write peers.json without holding lock
+		if err := c.writePeersJSONWithData(result.peersJSON); err != nil {
+			c.logger.Error("CRITICAL: Failed to write peers.json",
+				zap.Error(err),
+				zap.String("data_dir", c.dataDir),
+				zap.Int("peer_count", len(result.peersJSON)))
+		} else {
+			c.logger.Debug("peers.json updated",
+				zap.Int("peer_count", len(result.peersJSON)))
+		}
+
+		// Update lastUpdate timestamp
+		c.mu.Lock()
+		c.lastUpdate = time.Now()
+		c.mu.Unlock()
+	} else {
+		c.mu.RLock()
+		totalPeers := len(c.knownPeers)
+		c.mu.RUnlock()
+		c.logger.Debug("No changes to cluster membership",
+			zap.Int("total_peers", totalPeers))
+	}
+}
+
+// computeMembershipChangesLocked computes membership changes and returns snapshot data
+// Must be called with lock held
+func (c *ClusterDiscoveryService) computeMembershipChangesLocked(metadata []*discovery.RQLiteNodeMetadata) membershipUpdateResult {
 	// Track changes
 	added := []string{}
 	updated := []string{}
 
-	// Update known peers
+	// Update known peers, but skip self for health tracking
 	for _, meta := range metadata {
+		// Skip self-metadata for health tracking (we only track remote peers)
+		isSelf := meta.NodeID == c.raftAddress
+
 		if existing, ok := c.knownPeers[meta.NodeID]; ok {
 			// Update existing peer
 			if existing.RaftLogIndex != meta.RaftLogIndex ||
@@ -228,55 +277,45 @@ func (c *ClusterDiscoveryService) updateClusterMembership() {
 
 		c.knownPeers[meta.NodeID] = meta
 
-		// Update health tracking
-		if _, ok := c.peerHealth[meta.NodeID]; !ok {
-			c.peerHealth[meta.NodeID] = &PeerHealth{
-				LastSeen:       time.Now(),
-				LastSuccessful: time.Now(),
-				Status:         "active",
+		// Update health tracking only for remote peers
+		if !isSelf {
+			if _, ok := c.peerHealth[meta.NodeID]; !ok {
+				c.peerHealth[meta.NodeID] = &PeerHealth{
+					LastSeen:       time.Now(),
+					LastSuccessful: time.Now(),
+					Status:         "active",
+				}
+			} else {
+				c.peerHealth[meta.NodeID].LastSeen = time.Now()
+				c.peerHealth[meta.NodeID].Status = "active"
+				c.peerHealth[meta.NodeID].FailureCount = 0
 			}
-		} else {
-			c.peerHealth[meta.NodeID].LastSeen = time.Now()
-			c.peerHealth[meta.NodeID].Status = "active"
-			c.peerHealth[meta.NodeID].FailureCount = 0
 		}
 	}
 
-	// Generate and write peers.json if there are changes OR if this is the first time
+	// Determine if we should write peers.json
 	shouldWrite := len(added) > 0 || len(updated) > 0 || c.lastUpdate.IsZero()
 
 	if shouldWrite {
-		c.logger.Info("Updating peers.json",
-			zap.Int("added", len(added)),
-			zap.Int("updated", len(updated)),
-			zap.Int("total_peers", len(c.knownPeers)),
-			zap.Bool("first_run", c.lastUpdate.IsZero()))
-
-		// Get peers JSON while holding the lock
-		peers := c.getPeersJSONUnlocked()
-
-		// Release lock before file I/O
-		c.mu.Unlock()
-
-		// Write without holding lock
-		if err := c.writePeersJSONWithData(peers); err != nil {
-			c.logger.Error("CRITICAL: Failed to write peers.json",
-				zap.Error(err),
-				zap.String("data_dir", c.dataDir),
-				zap.Int("peer_count", len(peers)))
-		} else {
-			c.logger.Info("Successfully wrote peers.json",
-				zap.Int("peer_count", len(peers)))
+		// Log initial sync if this is the first time
+		if c.lastUpdate.IsZero() {
+			c.logger.Info("Initial cluster membership sync",
+				zap.Int("total_peers", len(c.knownPeers)))
 		}
 
-		// Re-acquire lock to update lastUpdate
-		c.mu.Lock()
-	} else {
-		c.logger.Debug("No changes to cluster membership",
-			zap.Int("total_peers", len(c.knownPeers)))
+		// Get peers JSON snapshot
+		peers := c.getPeersJSONUnlocked()
+		return membershipUpdateResult{
+			peersJSON: peers,
+			added:     added,
+			updated:   updated,
+			changed:   true,
+		}
 	}
 
-	c.lastUpdate = time.Now()
+	return membershipUpdateResult{
+		changed: false,
+	}
 }
 
 // removeInactivePeers removes peers that haven't been seen for longer than the inactivity limit
@@ -349,12 +388,6 @@ func (c *ClusterDiscoveryService) writePeersJSON() error {
 
 // writePeersJSONWithData writes the peers.json file with provided data (no lock needed)
 func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]interface{}) error {
-	c.logger.Info("writePeersJSON: Starting",
-		zap.String("data_dir", c.dataDir))
-
-	c.logger.Info("writePeersJSON: Got peers JSON",
-		zap.Int("peer_count", len(peers)))
-
 	// Expand ~ in data directory path
 	dataDir := os.ExpandEnv(c.dataDir)
 	if strings.HasPrefix(dataDir, "~") {
@@ -365,14 +398,14 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 		dataDir = filepath.Join(home, dataDir[1:])
 	}
 
-	c.logger.Info("writePeersJSON: Expanded data dir",
-		zap.String("expanded_path", dataDir))
-
 	// Get the RQLite raft directory
 	rqliteDir := filepath.Join(dataDir, "rqlite", "raft")
 
-	c.logger.Info("writePeersJSON: Creating raft directory",
-		zap.String("raft_dir", rqliteDir))
+	c.logger.Debug("Writing peers.json",
+		zap.String("data_dir", c.dataDir),
+		zap.String("expanded_path", dataDir),
+		zap.String("raft_dir", rqliteDir),
+		zap.Int("peer_count", len(peers)))
 
 	if err := os.MkdirAll(rqliteDir, 0755); err != nil {
 		return fmt.Errorf("failed to create raft directory %s: %w", rqliteDir, err)
@@ -381,13 +414,9 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 	peersFile := filepath.Join(rqliteDir, "peers.json")
 	backupFile := filepath.Join(rqliteDir, "peers.json.backup")
 
-	c.logger.Info("writePeersJSON: File paths",
-		zap.String("peers_file", peersFile),
-		zap.String("backup_file", backupFile))
-
 	// Backup existing peers.json if it exists
 	if _, err := os.Stat(peersFile); err == nil {
-		c.logger.Info("writePeersJSON: Backing up existing peers.json")
+		c.logger.Debug("Backing up existing peers.json", zap.String("backup_file", backupFile))
 		data, err := os.ReadFile(peersFile)
 		if err == nil {
 			_ = os.WriteFile(backupFile, data, 0644)
@@ -395,26 +424,18 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 	}
 
 	// Marshal to JSON
-	c.logger.Info("writePeersJSON: Marshaling to JSON")
 	data, err := json.MarshalIndent(peers, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal peers.json: %w", err)
 	}
 
-	c.logger.Info("writePeersJSON: JSON marshaled",
-		zap.Int("data_size", len(data)))
+	c.logger.Debug("Marshaled peers.json", zap.Int("data_size", len(data)))
 
 	// Write atomically using temp file + rename
 	tempFile := peersFile + ".tmp"
-
-	c.logger.Info("writePeersJSON: Writing temp file",
-		zap.String("temp_file", tempFile))
-
 	if err := os.WriteFile(tempFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp peers.json %s: %w", tempFile, err)
 	}
-
-	c.logger.Info("writePeersJSON: Renaming temp file to final")
 
 	if err := os.Rename(tempFile, peersFile); err != nil {
 		return fmt.Errorf("failed to rename %s to %s: %w", tempFile, peersFile, err)
@@ -427,7 +448,7 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 		}
 	}
 
-	c.logger.Info("peers.json successfully written!",
+	c.logger.Info("peers.json written",
 		zap.String("file", peersFile),
 		zap.Int("node_count", len(peers)),
 		zap.Strings("node_ids", nodeIDs))
@@ -573,9 +594,6 @@ func (c *ClusterDiscoveryService) TriggerPeerExchange(ctx context.Context) error
 
 // UpdateOwnMetadata updates our own RQLite metadata in the peerstore
 func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
-	c.logger.Info("Updating own RQLite metadata for peer exchange",
-		zap.String("node_id", c.nodeID))
-
 	metadata := &discovery.RQLiteNodeMetadata{
 		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
 		RaftAddress:    c.raftAddress,
@@ -585,12 +603,6 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
 	}
-
-	c.logger.Info("Created metadata struct",
-		zap.String("node_id", metadata.NodeID),
-		zap.String("raft_address", metadata.RaftAddress),
-		zap.String("http_address", metadata.HTTPAddress),
-		zap.Uint64("log_index", metadata.RaftLogIndex))
 
 	// Store in our own peerstore for peer exchange
 	data, err := json.Marshal(metadata)
@@ -604,8 +616,8 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 		return
 	}
 
-	c.logger.Info("Successfully stored own RQLite metadata in peerstore",
-		zap.String("node_id", c.nodeID),
+	c.logger.Debug("Updated own RQLite metadata",
+		zap.String("node_id", metadata.NodeID),
 		zap.Uint64("log_index", metadata.RaftLogIndex))
 }
 

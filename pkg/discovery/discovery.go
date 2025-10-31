@@ -39,9 +39,10 @@ type PeerInfo struct {
 // interface{} to remain source-compatible with previous call sites that
 // passed a DHT instance. The value is ignored.
 type Manager struct {
-	host   host.Host
-	logger *zap.Logger
-	cancel context.CancelFunc
+	host                host.Host
+	logger              *zap.Logger
+	cancel              context.CancelFunc
+	failedPeerExchanges map[peer.ID]time.Time // Track failed peer exchange attempts to suppress repeated warnings
 }
 
 // Config contains discovery configuration
@@ -56,8 +57,10 @@ type Config struct {
 // previously passed a DHT instance can continue to do so; the value is ignored.
 func NewManager(h host.Host, _ interface{}, logger *zap.Logger) *Manager {
 	return &Manager{
-		host:   h,
-		logger: logger,
+		host:                h,
+		logger:              logger.With(zap.String("component", "peer-discovery")),
+		cancel:              nil,
+		failedPeerExchanges: make(map[peer.ID]time.Time),
 	}
 }
 
@@ -344,12 +347,20 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 	// Open a stream to the peer
 	stream, err := d.host.NewStream(ctx, peerID, PeerExchangeProtocol)
 	if err != nil {
-		d.logger.Debug("Failed to open peer exchange stream",
-			zap.String("peer_id", peerID.String()[:8]+"..."),
-			zap.Error(err))
+		// Suppress repeated warnings for the same peer (log once per minute max)
+		lastFailure, seen := d.failedPeerExchanges[peerID]
+		if !seen || time.Since(lastFailure) > time.Minute {
+			d.logger.Debug("Failed to open peer exchange stream",
+				zap.String("peer_id", peerID.String()[:8]+"..."),
+				zap.Error(err))
+			d.failedPeerExchanges[peerID] = time.Now()
+		}
 		return nil
 	}
 	defer stream.Close()
+
+	// Clear failure tracking on success
+	delete(d.failedPeerExchanges, peerID)
 
 	// Send request
 	req := PeerExchangeRequest{Limit: limit}

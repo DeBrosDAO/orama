@@ -17,7 +17,7 @@ func (r *RQLiteManager) getRaftLogIndex() uint64 {
 		r.logger.Debug("Failed to get Raft log index", zap.Error(err))
 		return 0
 	}
-	
+
 	// Return the highest index we have
 	maxIndex := status.Store.Raft.LastLogIndex
 	if status.Store.Raft.AppliedIndex > maxIndex {
@@ -26,7 +26,7 @@ func (r *RQLiteManager) getRaftLogIndex() uint64 {
 	if status.Store.Raft.CommitIndex > maxIndex {
 		maxIndex = status.Store.Raft.CommitIndex
 	}
-	
+
 	return maxIndex
 }
 
@@ -34,23 +34,23 @@ func (r *RQLiteManager) getRaftLogIndex() uint64 {
 func (r *RQLiteManager) getRQLiteStatus() (*RQLiteStatus, error) {
 	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
 	client := &http.Client{Timeout: 5 * time.Second}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query status: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("status endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	var status RQLiteStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return nil, fmt.Errorf("failed to decode status: %w", err)
 	}
-	
+
 	return &status, nil
 }
 
@@ -58,23 +58,37 @@ func (r *RQLiteManager) getRQLiteStatus() (*RQLiteStatus, error) {
 func (r *RQLiteManager) getRQLiteNodes() (RQLiteNodes, error) {
 	url := fmt.Sprintf("http://localhost:%d/nodes?ver=2", r.config.RQLitePort)
 	client := &http.Client{Timeout: 5 * time.Second}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query nodes: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("nodes endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
-	
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read nodes response: %w", err)
+	}
+
+	// rqlite v8 wraps nodes in a top-level object; fall back to a raw array for older versions.
+	var wrapped struct {
+		Nodes RQLiteNodes `json:"nodes"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Nodes != nil {
+		return wrapped.Nodes, nil
+	}
+
+	// Try legacy format (plain array)
 	var nodes RQLiteNodes
-	if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
+	if err := json.Unmarshal(body, &nodes); err != nil {
 		return nil, fmt.Errorf("failed to decode nodes: %w", err)
 	}
-	
+
 	return nodes, nil
 }
 
@@ -84,12 +98,12 @@ func (r *RQLiteManager) getRQLiteLeader() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	leaderAddr := status.Store.Raft.LeaderAddr
 	if leaderAddr == "" {
 		return "", fmt.Errorf("no leader found")
 	}
-	
+
 	return leaderAddr, nil
 }
 
@@ -97,13 +111,12 @@ func (r *RQLiteManager) getRQLiteLeader() (string, error) {
 func (r *RQLiteManager) isNodeReachable(httpAddress string) bool {
 	url := fmt.Sprintf("http://%s/status", httpAddress)
 	client := &http.Client{Timeout: 3 * time.Second}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return false
 	}
 	defer resp.Body.Close()
-	
+
 	return resp.StatusCode == http.StatusOK
 }
-

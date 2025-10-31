@@ -14,6 +14,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 
+## [0.53.0] - 2025-10-31
+
+### Added
+
+- Discovery manager now tracks failed peer-exchange attempts to suppress repeated warnings while peers negotiate supported protocols.
+
+### Changed
+
+- Scoped logging throughout `cluster_discovery`, `rqlite`, and `discovery` packages so logs carry component tags and keep verbose output at debug level.
+- Refactored `ClusterDiscoveryService` membership handling: metadata updates happen under lock, `peers.json` is written outside the lock, self-health is skipped, and change detection is centralized in `computeMembershipChangesLocked`.
+- Reworked `RQLiteManager.Start` into helper functions (`prepareDataDir`, `launchProcess`, `waitForReadyAndConnect`, `establishLeadershipOrJoin`) with clearer logging, better error handling, and exponential backoff while waiting for leadership.
+- `validateNodeID` now treats empty membership results as transitional states, logging at debug level instead of warning to avoid noisy startups.
+
+### Fixed
+
+- Eliminated spurious `peers.json` churn and node-ID mismatch warnings during cluster formation by aligning IDs with raft addresses and tightening discovery logging.
+
 ## [0.52.15]
 
 ### Added
