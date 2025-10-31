@@ -528,6 +528,10 @@ func configureAnonDefaults() {
 		if !strings.Contains(config, "SocksPort") {
 			config += "SocksPort 9050\n"
 		}
+		// Auto-accept terms to avoid interactive prompts
+		if !strings.Contains(config, "AgreeToTerms") {
+			config += "AgreeToTerms 1\n"
+		}
 
 		// Write back
 		os.WriteFile(anonrcPath, []byte(config), 0644)
@@ -536,6 +540,7 @@ func configureAnonDefaults() {
 		fmt.Printf("   ORPort: 9001 (default)\n")
 		fmt.Printf("   ControlPort: 9051\n")
 		fmt.Printf("   SOCKSPort: 9050\n")
+		fmt.Printf("   AgreeToTerms: 1 (auto-accepted)\n")
 	}
 }
 

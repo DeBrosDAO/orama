@@ -223,6 +223,10 @@ install_anon() {
     # Add repository
     echo "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main" | sudo tee /etc/apt/sources.list.d/anyone.list >/dev/null
     
+    # Preseed terms acceptance to avoid interactive prompt
+    log "Pre-accepting Anon terms and conditions..."
+    echo "anon anon/terms boolean true" | sudo debconf-set-selections
+    
     # Update and install
     log "Installing Anon package..."
     sudo apt update -qq
@@ -285,10 +289,16 @@ configure_anon_defaults() {
             echo "SocksPort 9050" | sudo tee -a /etc/anon/anonrc >/dev/null
         fi
         
+        # Auto-accept terms in config file
+        if ! grep -q "^AgreeToTerms" /etc/anon/anonrc; then
+            echo "AgreeToTerms 1" | sudo tee -a /etc/anon/anonrc >/dev/null
+        fi
+        
         log "  Nickname: ${HOSTNAME}"
         log "  ORPort: 9001 (default)"
         log "  ControlPort: 9051"
         log "  SOCKSPort: 9050"
+        log "  AgreeToTerms: 1 (auto-accepted)"
     fi
 }
 
