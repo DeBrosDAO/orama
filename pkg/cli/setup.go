@@ -458,6 +458,126 @@ func verifyDNSResolution(domain, expectedIP string) bool {
 	return false
 }
 
+// promptDomainForHTTPS prompts for domain name and verifies DNS configuration
+func promptDomainForHTTPS(reader *bufio.Reader, vpsIP string) string {
+	for {
+		fmt.Printf("\nEnter your domain name (e.g., example.com): ")
+		domainInput, _ := reader.ReadString('\n')
+		domain := strings.TrimSpace(domainInput)
+
+		if domain == "" {
+			fmt.Printf("   Domain name cannot be empty. Skipping HTTPS configuration.\n")
+			return ""
+		}
+
+		if !isValidDomain(domain) {
+			fmt.Printf("   ❌ Invalid domain format. Please enter a valid domain name.\n")
+			continue
+		}
+
+		// Verify DNS is configured
+		fmt.Printf("\n   Verifying DNS configuration...\n")
+		fmt.Printf("   Please ensure your domain %s points to this server's IP (%s)\n", domain, vpsIP)
+		fmt.Printf("   Have you configured the DNS record? (yes/no): ")
+		dnsResponse, _ := reader.ReadString('\n')
+		dnsResponse = strings.ToLower(strings.TrimSpace(dnsResponse))
+
+		if dnsResponse == "yes" || dnsResponse == "y" {
+			// Try to verify DNS resolution
+			fmt.Printf("   Checking DNS resolution...\n")
+			if verifyDNSResolution(domain, vpsIP) {
+				fmt.Printf("   ✓ DNS is correctly configured\n")
+				return domain
+			} else {
+				fmt.Printf("   ⚠️  DNS does not resolve to this server's IP (%s)\n", vpsIP)
+				fmt.Printf("   DNS may still be propagating. Continue anyway? (yes/no): ")
+				continueResponse, _ := reader.ReadString('\n')
+				continueResponse = strings.ToLower(strings.TrimSpace(continueResponse))
+				if continueResponse == "yes" || continueResponse == "y" {
+					fmt.Printf("   Continuing with domain configuration (DNS may need time to propagate)\n")
+					return domain
+				}
+				// User chose not to continue, ask for domain again
+				fmt.Printf("   Please configure DNS and try again, or press Enter to skip HTTPS\n")
+				continue
+			}
+		} else {
+			fmt.Printf("   Please configure DNS first. Type 'skip' to skip HTTPS configuration: ")
+			skipResponse, _ := reader.ReadString('\n')
+			skipResponse = strings.ToLower(strings.TrimSpace(skipResponse))
+			if skipResponse == "skip" {
+				return ""
+			}
+			continue
+		}
+	}
+}
+
+// updateGatewayConfigWithHTTPS updates an existing gateway.yaml file with HTTPS settings
+func updateGatewayConfigWithHTTPS(gatewayPath, domain string) error {
+	// Read existing config
+	data, err := os.ReadFile(gatewayPath)
+	if err != nil {
+		return fmt.Errorf("failed to read gateway config: %w", err)
+	}
+
+	configContent := string(data)
+	tlsCacheDir := "/home/debros/.debros/tls-cache"
+
+	// Check if HTTPS is already enabled
+	if strings.Contains(configContent, "enable_https: true") {
+		// Update existing HTTPS settings
+		lines := strings.Split(configContent, "\n")
+		var updatedLines []string
+		domainUpdated := false
+		cacheDirUpdated := false
+
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "enable_https:") {
+				updatedLines = append(updatedLines, "enable_https: true")
+			} else if strings.HasPrefix(trimmed, "domain_name:") {
+				updatedLines = append(updatedLines, fmt.Sprintf("domain_name: \"%s\"", domain))
+				domainUpdated = true
+			} else if strings.HasPrefix(trimmed, "tls_cache_dir:") {
+				updatedLines = append(updatedLines, fmt.Sprintf("tls_cache_dir: \"%s\"", tlsCacheDir))
+				cacheDirUpdated = true
+			} else {
+				updatedLines = append(updatedLines, line)
+			}
+		}
+
+		// Add missing fields if not found
+		if !domainUpdated {
+			updatedLines = append(updatedLines, fmt.Sprintf("domain_name: \"%s\"", domain))
+		}
+		if !cacheDirUpdated {
+			updatedLines = append(updatedLines, fmt.Sprintf("tls_cache_dir: \"%s\"", tlsCacheDir))
+		}
+
+		configContent = strings.Join(updatedLines, "\n")
+	} else {
+		// Add HTTPS configuration at the end
+		configContent = strings.TrimRight(configContent, "\n")
+		if !strings.HasSuffix(configContent, "\n") && configContent != "" {
+			configContent += "\n"
+		}
+		configContent += "enable_https: true\n"
+		configContent += fmt.Sprintf("domain_name: \"%s\"\n", domain)
+		configContent += fmt.Sprintf("tls_cache_dir: \"%s\"\n", tlsCacheDir)
+	}
+
+	// Write updated config
+	if err := os.WriteFile(gatewayPath, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write gateway config: %w", err)
+	}
+
+	// Fix ownership
+	exec.Command("chown", "debros:debros", gatewayPath).Run()
+
+	return nil
+}
+
 func setupDebrosUser() {
 	fmt.Printf("👤 Setting up 'debros' user...\n")
 
@@ -1009,6 +1129,78 @@ func cloneAndBuild() {
 func generateConfigsInteractive(force bool) {
 	fmt.Printf("⚙️  Generating configurations...\n\n")
 
+	nodeConfigPath := "/home/debros/.debros/node.yaml"
+	gatewayPath := "/home/debros/.debros/gateway.yaml"
+
+	// Check if configs already exist
+	nodeExists := false
+	gatewayExists := false
+	if _, err := os.Stat(nodeConfigPath); err == nil {
+		nodeExists = true
+	}
+	if _, err := os.Stat(gatewayPath); err == nil {
+		gatewayExists = true
+	}
+
+	// If both configs exist and not forcing, skip configuration prompts
+	if nodeExists && gatewayExists && !force {
+		fmt.Printf("   ℹ️  Configuration files already exist (node.yaml and gateway.yaml)\n")
+		fmt.Printf("   ℹ️  Skipping configuration generation\n\n")
+
+		// Only offer to add HTTPS if not already enabled
+		httpsAlreadyEnabled := false
+		if data, err := os.ReadFile(gatewayPath); err == nil {
+			httpsAlreadyEnabled = strings.Contains(string(data), "enable_https: true")
+		}
+
+		if !httpsAlreadyEnabled {
+			fmt.Printf("🌐 Domain and HTTPS Configuration\n")
+			fmt.Printf("Would you like to add HTTPS with a domain name to your existing gateway config? (yes/no) [default: no]: ")
+			reader := bufio.NewReader(os.Stdin)
+			addHTTPSResponse, _ := reader.ReadString('\n')
+			addHTTPSResponse = strings.ToLower(strings.TrimSpace(addHTTPSResponse))
+
+			if addHTTPSResponse == "yes" || addHTTPSResponse == "y" {
+				// Get VPS IP for DNS verification
+				vpsIP, err := getVPSIPv4Address()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️  Failed to detect IPv4 address: %v\n", err)
+					fmt.Fprintf(os.Stderr, "   Using 0.0.0.0 as fallback\n")
+					vpsIP = "0.0.0.0"
+				}
+
+				// Check if ports 80 and 443 are available
+				portsAvailable, portIssues := checkPorts80And443()
+				if !portsAvailable {
+					fmt.Fprintf(os.Stderr, "\n⚠️  Cannot enable HTTPS: %s is already in use\n", portIssues)
+					fmt.Fprintf(os.Stderr, "   You will need to configure HTTPS manually if you want to use a domain.\n\n")
+				} else {
+					// Prompt for domain and update existing config
+					domain := promptDomainForHTTPS(reader, vpsIP)
+					if domain != "" {
+						// Update existing gateway config with HTTPS settings
+						if err := updateGatewayConfigWithHTTPS(gatewayPath, domain); err != nil {
+							fmt.Fprintf(os.Stderr, "⚠️  Failed to update gateway config with HTTPS: %v\n", err)
+						} else {
+							fmt.Printf("   ✓ HTTPS configuration added to existing gateway.yaml\n")
+							// Create TLS cache directory
+							tlsCacheDir := "/home/debros/.debros/tls-cache"
+							if err := os.MkdirAll(tlsCacheDir, 0755); err == nil {
+								exec.Command("chown", "-R", "debros:debros", tlsCacheDir).Run()
+								fmt.Printf("   ✓ TLS cache directory created: %s\n", tlsCacheDir)
+							}
+						}
+					}
+				}
+			}
+		} else {
+			fmt.Printf("   ℹ️  HTTPS is already enabled in gateway.yaml\n")
+		}
+
+		fmt.Printf("\n   ✓ Configurations ready\n")
+		return
+	}
+
 	// Get VPS IPv4 address
 	fmt.Printf("Detecting VPS IPv4 address...\n")
 	vpsIP, err := getVPSIPv4Address()
@@ -1041,11 +1233,7 @@ func generateConfigsInteractive(force bool) {
 		bootstrapPeers = strings.TrimSpace(bootstrapPeers)
 	}
 
-	nodeConfigPath := "/home/debros/.debros/node.yaml"
-	gatewayPath := "/home/debros/.debros/gateway.yaml"
-
 	// Check if node.yaml already exists
-	nodeExists := false
 	if _, err := os.Stat(nodeConfigPath); err == nil {
 		nodeExists = true
 		if !force {
@@ -1088,7 +1276,6 @@ func generateConfigsInteractive(force bool) {
 	}
 
 	// Generate gateway config
-	gatewayExists := false
 	if _, err := os.Stat(gatewayPath); err == nil {
 		gatewayExists = true
 		if !force {
@@ -1116,66 +1303,11 @@ func generateConfigsInteractive(force bool) {
 				fmt.Fprintf(os.Stderr, "   Continuing without HTTPS configuration...\n\n")
 				enableHTTPS = false
 			} else {
-				enableHTTPS = true
-
 				// Prompt for domain name
-				for {
-					fmt.Printf("\nEnter your domain name (e.g., example.com): ")
-					domainInput, _ := reader.ReadString('\n')
-					domain = strings.TrimSpace(domainInput)
-
-					if domain == "" {
-						fmt.Printf("   Domain name cannot be empty. Skipping HTTPS configuration.\n")
-						enableHTTPS = false
-						break
-					}
-
-					if !isValidDomain(domain) {
-						fmt.Printf("   ❌ Invalid domain format. Please enter a valid domain name.\n")
-						continue
-					}
-
-					// Verify DNS is configured
-					fmt.Printf("\n   Verifying DNS configuration...\n")
-					fmt.Printf("   Please ensure your domain %s points to this server's IP (%s)\n", domain, vpsIP)
-					fmt.Printf("   Have you configured the DNS record? (yes/no): ")
-					dnsResponse, _ := reader.ReadString('\n')
-					dnsResponse = strings.ToLower(strings.TrimSpace(dnsResponse))
-
-					if dnsResponse == "yes" || dnsResponse == "y" {
-						// Try to verify DNS resolution
-						fmt.Printf("   Checking DNS resolution...\n")
-						if verifyDNSResolution(domain, vpsIP) {
-							fmt.Printf("   ✓ DNS is correctly configured\n")
-							break
-						} else {
-							fmt.Printf("   ⚠️  DNS does not resolve to this server's IP (%s)\n", vpsIP)
-							fmt.Printf("   DNS may still be propagating. Continue anyway? (yes/no): ")
-							continueResponse, _ := reader.ReadString('\n')
-							continueResponse = strings.ToLower(strings.TrimSpace(continueResponse))
-							if continueResponse == "yes" || continueResponse == "y" {
-								fmt.Printf("   Continuing with domain configuration (DNS may need time to propagate)\n")
-								break
-							}
-							// User chose not to continue, ask for domain again
-							fmt.Printf("   Please configure DNS and try again, or press Enter to skip HTTPS\n")
-							continue
-						}
-					} else {
-						fmt.Printf("   Please configure DNS first. Type 'skip' to skip HTTPS configuration: ")
-						skipResponse, _ := reader.ReadString('\n')
-						skipResponse = strings.ToLower(strings.TrimSpace(skipResponse))
-						if skipResponse == "skip" {
-							enableHTTPS = false
-							domain = ""
-							break
-						}
-						continue
-					}
-				}
-
-				// Set TLS cache directory if HTTPS is enabled
-				if enableHTTPS && domain != "" {
+				domain = promptDomainForHTTPS(reader, vpsIP)
+				if domain != "" {
+					enableHTTPS = true
+					// Set TLS cache directory if HTTPS is enabled
 					tlsCacheDir = "/home/debros/.debros/tls-cache"
 					// Create TLS cache directory
 					if err := os.MkdirAll(tlsCacheDir, 0755); err != nil {
@@ -1184,6 +1316,8 @@ func generateConfigsInteractive(force bool) {
 						exec.Command("chown", "-R", "debros:debros", tlsCacheDir).Run()
 						fmt.Printf("   ✓ TLS cache directory created: %s\n", tlsCacheDir)
 					}
+				} else {
+					enableHTTPS = false
 				}
 			}
 		}
