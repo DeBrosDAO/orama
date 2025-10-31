@@ -134,6 +134,37 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  Proxy endpoint: POST http://localhost:6001/v1/proxy/anon\n\n")
 }
 
+// extractIPFromMultiaddr extracts the IP address from a multiaddr string
+// Format: /ip4/51.83.128.181/tcp/4001/p2p/12D3KooW...
+func extractIPFromMultiaddr(multiaddr string) string {
+	if multiaddr == "" {
+		return ""
+	}
+
+	// Split by "/ip4/"
+	parts := strings.Split(multiaddr, "/ip4/")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	// Get the part after "/ip4/"
+	ipPart := parts[1]
+	// Extract IP until the next "/"
+	ipEnd := strings.Index(ipPart, "/")
+	if ipEnd == -1 {
+		// If no "/" found, the whole string might be the IP
+		return strings.TrimSpace(ipPart)
+	}
+
+	ip := strings.TrimSpace(ipPart[:ipEnd])
+	// Validate it looks like an IP address
+	if net.ParseIP(ip) != nil {
+		return ip
+	}
+
+	return ""
+}
+
 // getVPSIPv4Address gets the primary IPv4 address of the VPS
 func getVPSIPv4Address() (string, error) {
 	interfaces, err := net.Interfaces()
@@ -904,7 +935,22 @@ func generateConfigsInteractive(force bool) {
 		if isBootstrap {
 			nodeConfig = generateBootstrapConfigWithIP("bootstrap", "", 4001, 5001, 7001, vpsIP)
 		} else {
-			nodeConfig = generateNodeConfigWithIP("node", "", 4001, 5001, 7001, "", bootstrapPeers, vpsIP)
+			// Extract IP from bootstrap peer multiaddr for rqlite_join_address
+			// Use first bootstrap peer if multiple provided
+			var joinAddr string
+			if bootstrapPeers != "" {
+				firstPeer := strings.Split(bootstrapPeers, ",")[0]
+				firstPeer = strings.TrimSpace(firstPeer)
+				extractedIP := extractIPFromMultiaddr(firstPeer)
+				if extractedIP != "" {
+					joinAddr = fmt.Sprintf("%s:7001", extractedIP)
+				} else {
+					joinAddr = "localhost:7001"
+				}
+			} else {
+				joinAddr = "localhost:7001"
+			}
+			nodeConfig = generateNodeConfigWithIP("node", "", 4001, 5001, 7001, joinAddr, bootstrapPeers, vpsIP)
 		}
 
 		// Write node config
@@ -1019,7 +1065,7 @@ func generateNodeConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqlit
 	}
 
 	if joinAddr == "" {
-		joinAddr = "localhost:5001"
+		joinAddr = "localhost:7001"
 	}
 
 	return fmt.Sprintf(`node:
