@@ -85,6 +85,8 @@ ${UNPUSHED_DIFF}"
 # Check if there are any changes
 if [ -z "$(echo "$UNSTAGED_DIFF$STAGED_DIFF$UNPUSHED_DIFF" | tr -d '[:space:]')" ]; then
     log "No changes detected (unstaged, staged, or unpushed). Skipping changelog update."
+    # Clean up any old preview files
+    rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
     exit 0
 fi
 
@@ -261,6 +263,11 @@ fi
 
 CHANGELOG_ENTRY+="
 "
+
+# Save preview to temp file for pre-push hook
+PREVIEW_FILE="$REPO_ROOT/.changelog_preview.tmp"
+echo "$CHANGELOG_ENTRY" > "$PREVIEW_FILE"
+echo "$NEW_VERSION" > "$REPO_ROOT/.changelog_version.tmp"
 
 # Insert after [Unreleased] section using awk (more portable)
 # Find the line number after [Unreleased] section (after the "### Fixed" line)
