@@ -10,7 +10,8 @@ NOCOLOR='\033[0m'
 
 # Get the directory where this hook is located
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$HOOK_DIR/.." && pwd)"
+# Go up from .git/hooks/ to repo root
+REPO_ROOT="$(cd "$HOOK_DIR/../.." && pwd)"
 CHANGELOG_SCRIPT="$REPO_ROOT/scripts/update_changelog.sh"
 PREVIEW_FILE="$REPO_ROOT/.changelog_preview.tmp"
 VERSION_FILE="$REPO_ROOT/.changelog_version.tmp"

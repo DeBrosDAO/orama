@@ -19,7 +19,7 @@ test-e2e:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports
+.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks
 
 VERSION := 0.53.13
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -36,6 +36,11 @@ build: deps
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	@echo "Build complete! Run ./bin/network-cli version"
+
+# Install git hooks
+install-hooks:
+	@echo "Installing git hooks..."
+	@bash scripts/install-hooks.sh
 
 # Clean build artifacts
 clean:
