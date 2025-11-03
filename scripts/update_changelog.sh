@@ -15,7 +15,8 @@ success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
 
 # OpenRouter API key
-OPENROUTER_API_KEY="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"
+# To update: Edit this variable or set OPENROUTER_API_KEY environment variable
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-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}"
 
 # File paths
 CHANGELOG_FILE="CHANGELOG.md"
@@ -135,6 +136,8 @@ set +e  # Temporarily disable exit on error to check curl response
 RESPONSE=$(curl -s -X POST "https://openrouter.ai/api/v1/chat/completions" \
   -H "Authorization: Bearer $OPENROUTER_API_KEY" \
   -H "Content-Type: application/json" \
+  -H "HTTP-Referer: https://github.com/DeBrosOfficial/network" \
+  -H "X-Title: DeBros Network Changelog Generator" \
   -d "{
     \"model\": \"google/gemini-2.5-flash-preview-09-2025\",
     \"messages\": [
@@ -157,7 +160,13 @@ fi
 # Check for API errors in response
 if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
     error "OpenRouter API error:"
-    echo "$RESPONSE" | jq -r '.error.message // .error'
+    ERROR_MESSAGE=$(echo "$RESPONSE" | jq -r '.error.message // .error' 2>/dev/null || echo "$RESPONSE")
+    echo "$ERROR_MESSAGE"
+    echo ""
+    error "Full API response:"
+    echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+    echo ""
+    error "The API key may be invalid or expired. Please check your OpenRouter API key."
     exit 1
 fi
 
