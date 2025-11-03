@@ -139,6 +139,10 @@ fi
 
 log "Current version: $CURRENT_VERSION"
 
+# Get today's date programmatically (YYYY-MM-DD format)
+TODAY_DATE=$(date +%Y-%m-%d)
+log "Using date: $TODAY_DATE"
+
 # Prepare prompt for OpenRouter
 PROMPT="You are analyzing git diffs to create a changelog entry. Based on the following git diffs, create a simple, easy-to-understand changelog entry.
 
@@ -153,7 +157,6 @@ Please respond with ONLY a valid JSON object in this exact format:
 {
   \"version\": \"x.y.z\",
   \"bump_type\": \"minor\" or \"patch\",
-  \"date\": \"YYYY-MM-DD\",
   \"added\": [\"item1\", \"item2\"],
   \"changed\": [\"item1\", \"item2\"],
   \"fixed\": [\"item1\", \"item2\"]
@@ -165,7 +168,7 @@ Rules:
 - Keep descriptions simple and easy to understand (1-2 sentences max per item)
 - Only include items that actually changed
 - If a category is empty, use an empty array []
-- Date should be today's date in YYYY-MM-DD format"
+- Do NOT include a date field - the date will be set programmatically"
 
 # Call OpenRouter API
 log "Calling OpenRouter API to generate changelog..."
@@ -262,23 +265,16 @@ fi
 # Parse JSON
 NEW_VERSION=$(echo "$JSON_CONTENT" | jq -r '.version')
 BUMP_TYPE=$(echo "$JSON_CONTENT" | jq -r '.bump_type')
-DATE=$(echo "$JSON_CONTENT" | jq -r '.date')
 ADDED=$(echo "$JSON_CONTENT" | jq -r '.added[]?' | sed 's/^/- /')
 CHANGED=$(echo "$JSON_CONTENT" | jq -r '.changed[]?' | sed 's/^/- /')
 FIXED=$(echo "$JSON_CONTENT" | jq -r '.fixed[]?' | sed 's/^/- /')
 
 log "Generated version: $NEW_VERSION ($BUMP_TYPE bump)"
-log "Date: $DATE"
+log "Date: $TODAY_DATE"
 
 # Validate version format
 if ! echo "$NEW_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     error "Invalid version format: $NEW_VERSION"
-    exit 1
-fi
-
-# Validate date format
-if ! echo "$DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
-    error "Invalid date format: $DATE (expected YYYY-MM-DD)"
     exit 1
 fi
 
@@ -303,7 +299,7 @@ success "Makefile updated to version $NEW_VERSION"
 log "Updating CHANGELOG.md..."
 
 # Create changelog entry
-CHANGELOG_ENTRY="## [$NEW_VERSION] - $DATE
+CHANGELOG_ENTRY="## [$NEW_VERSION] - $TODAY_DATE
 
 ### Added
 "
