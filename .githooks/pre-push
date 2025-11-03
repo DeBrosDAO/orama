@@ -57,6 +57,18 @@ if [ -f "$CHANGELOG_SCRIPT" ]; then
     fi
     
     echo -e "${GREEN}Proceeding with push...${NOCOLOR}"
+    
+    # Commit the updated CHANGELOG.md and Makefile
+    echo -e "${CYAN}Staging CHANGELOG.md and Makefile...${NOCOLOR}"
+    git add CHANGELOG.md Makefile
+    
+    echo -e "${CYAN}Committing changes...${NOCOLOR}"
+    NEW_VERSION=$(cat "$VERSION_FILE")
+    git commit -m "chore: update changelog and version to $NEW_VERSION" || {
+      # If commit fails (e.g., no changes to commit), continue anyway
+      echo -e "${YELLOW}Note: Could not commit changes (may already be committed)${NOCOLOR}"
+    }
+    
     # Clean up temp files
     rm -f "$PREVIEW_FILE" "$VERSION_FILE"
   fi
