@@ -16,7 +16,7 @@ warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
 
 # OpenRouter API key
 # To update: Edit this variable or set OPENROUTER_API_KEY environment variable
-OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-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}"
+OPENROUTER_API_KEY="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"
 
 # File paths
 CHANGELOG_FILE="CHANGELOG.md"
