@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.53.18] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Increased the connection timeout during peer discovery from 15 seconds to 20 seconds to improve connection reliability.
+- Removed unnecessary debug logging related to filtering out ephemeral port addresses during peer exchange.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.53.17] - 2025-11-03
 
 ### Added

@@ -128,11 +128,6 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 					// Common LibP2P ports are typically < 10000
 					if portNum > 0 && portNum <= 32767 {
 						filteredAddrs = append(filteredAddrs, addr)
-					} else {
-						d.logger.Debug("Filtering out ephemeral port address",
-							zap.String("peer_id", pid.String()[:8]+"..."),
-							zap.String("addr", addr.String()),
-							zap.Int("port", portNum))
 					}
 				} else {
 					// If we can't parse port, include it anyway (might be non-TCP)
@@ -358,7 +353,7 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 			d.host.Peerstore().AddAddrs(parsedID, addrs, time.Hour*24)
 
 			// Try to connect
-			connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			peerAddrInfo := peer.AddrInfo{ID: parsedID, Addrs: addrs}
 
 			if err := d.host.Connect(connectCtx, peerAddrInfo); err != nil {
