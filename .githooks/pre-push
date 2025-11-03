@@ -1,5 +1,23 @@
 #!/bin/bash
 
+# Get the directory where this hook is located
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HOOK_DIR/.." && pwd)"
+CHANGELOG_SCRIPT="$REPO_ROOT/scripts/update_changelog.sh"
+
+# Update changelog before push
+if [ -f "$CHANGELOG_SCRIPT" ]; then
+  echo -e "\nUpdating changelog..."
+  bash "$CHANGELOG_SCRIPT"
+  changelog_status=$?
+  if [ $changelog_status -ne 0 ]; then
+    echo "Push aborted: changelog update failed."
+    exit 1
+  fi
+else
+  echo "Warning: changelog update script not found at $CHANGELOG_SCRIPT"
+fi
+
 echo -e "\nRunning tests:"
 go test ./...   # Runs all tests in your repo
 status=$?
