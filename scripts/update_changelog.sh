@@ -108,6 +108,28 @@ UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "")
 UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
 [ -z "$UNPUSHED_COMMITS" ] && UNPUSHED_COMMITS="0"
 
+# Check if the only unpushed commit is a changelog update commit
+# If so, exclude it from the diff to avoid infinite loops
+if [ "$UNPUSHED_COMMITS" -gt 0 ]; then
+    LATEST_COMMIT_MSG=$(git log -1 --pretty=%B HEAD 2>/dev/null || echo "")
+    if echo "$LATEST_COMMIT_MSG" | grep -q "chore: update changelog and version"; then
+        # If the latest commit is a changelog commit, check if there are other commits
+        if [ "$UNPUSHED_COMMITS" -eq 1 ]; then
+            log "Latest commit is a changelog update. No other changes detected. Skipping changelog update."
+            # Clean up any old preview files
+            rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
+            exit 0
+        else
+            # Multiple commits, exclude the latest changelog commit from diff
+            log "Multiple unpushed commits detected. Excluding latest changelog commit from analysis."
+            # Get all commits except the latest one
+            UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD~1 2>/dev/null || echo "")
+            UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD~1 2>/dev/null || echo "0")
+            [ -z "$UNPUSHED_COMMITS" ] && UNPUSHED_COMMITS="0"
+        fi
+    fi
+fi
+
 log "Found: $UNSTAGED_COUNT unstaged file(s), $STAGED_COUNT staged file(s), $UNPUSHED_COMMITS unpushed commit(s)"
 
 # Combine all diffs
