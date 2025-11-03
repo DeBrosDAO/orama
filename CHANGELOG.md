@@ -30,6 +30,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Fixed
 \n
+## [0.53.15] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Improved the pre-push git hook to automatically commit updated changelog and Makefile after generation.
+- Updated the changelog generation script to load the OpenRouter API key from the .env file or environment variables for better security.
+- Modified the pre-push hook to read user confirmation from /dev/tty for better compatibility.
+- Updated the bootstrap peer logic to prioritize the DEBROS_BOOTSTRAP_PEERS environment variable for easier configuration.
+- Improved the gateway's private host check to correctly handle IPv6 addresses with or without brackets and ports.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.53.14] - 2025-11-03
 
 ### Added
