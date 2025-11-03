@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.53.14] - 2025-11-03
+
+### Added
+- Added a new `install-hooks` target to the Makefile to easily set up git hooks.
+- Added a script (`scripts/install-hooks.sh`) to copy git hooks from `.githooks` to `.git/hooks`.
+
+### Changed
+- Improved the pre-push git hook to automatically commit the updated `CHANGELOG.md` and `Makefile` after generating the changelog.
+- Updated the changelog generation script (`scripts/update_changelog.sh`) to load the OpenRouter API key from the `.env` file or environment variables, improving security and configuration.
+- Modified the pre-push hook to read user confirmation from `/dev/tty` for better compatibility in various terminal environments.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 
 ## [0.53.8] - 2025-10-31
 
