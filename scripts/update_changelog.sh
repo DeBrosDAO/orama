@@ -14,10 +14,6 @@ error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
 warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
 
-# OpenRouter API key
-# To update: Edit this variable or set OPENROUTER_API_KEY environment variable
-OPENROUTER_API_KEY="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"
-
 # File paths
 CHANGELOG_FILE="CHANGELOG.md"
 MAKEFILE="Makefile"
@@ -25,6 +21,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
+
+# Load environment variables from .env file if it exists
+if [ -f "$REPO_ROOT/.env" ]; then
+    # Export variables from .env file (more portable than source <())
+    set -a
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ "$key" =~ ^#.*$ ]] && continue
+        [[ -z "$key" ]] && continue
+        # Remove quotes if present
+        value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+        export "$key=$value"
+    done < "$REPO_ROOT/.env"
+    set +a
+fi
+
+# OpenRouter API key
+# Priority: 1. Environment variable, 2. .env file, 3. Exit with error
+if [ -z "$OPENROUTER_API_KEY" ]; then
+    error "OPENROUTER_API_KEY not found!"
+    echo ""
+    echo "Please set the API key in one of these ways:"
+    echo "  1. Create a .env file in the repo root with:"
+    echo "     OPENROUTER_API_KEY=your-api-key-here"
+    echo ""
+    echo "  2. Set it as an environment variable:"
+    echo "     export OPENROUTER_API_KEY=your-api-key-here"
+    echo ""
+    echo "  3. Copy .env.example to .env and fill in your key:"
+    echo "     cp .env.example .env"
+    echo ""
+    echo "Get your API key from: https://openrouter.ai/keys"
+    exit 1
+fi
 
 # Check dependencies
 if ! command -v jq > /dev/null 2>&1; then
@@ -148,40 +178,62 @@ REQUEST_BODY=$(cat <<EOF
 EOF
 )
 
+# Debug: Check API key format (first 10 chars only)
+API_KEY_PREFIX="${OPENROUTER_API_KEY:0:10}..."
+log "Using API key: $API_KEY_PREFIX (length: ${#OPENROUTER_API_KEY})"
+
 set +e  # Temporarily disable exit on error to check curl response
-RESPONSE=$(curl -s -X POST "https://openrouter.ai/api/v1/chat/completions" \
+RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST "https://openrouter.ai/api/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENROUTER_API_KEY" \
   -d "$REQUEST_BODY")
 CURL_EXIT_CODE=$?
+
+# Extract HTTP code and response body
+HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+RESPONSE_BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+
 set -e  # Re-enable exit on error
 
+log "HTTP Status Code: $HTTP_CODE"
+
 # Check if API call succeeded
-if [ $CURL_EXIT_CODE -ne 0 ] || [ -z "$RESPONSE" ]; then
+if [ $CURL_EXIT_CODE -ne 0 ] || [ -z "$RESPONSE_BODY" ]; then
     error "Failed to call OpenRouter API"
+    if [ $CURL_EXIT_CODE -ne 0 ]; then
+        echo "Network error (curl exit code: $CURL_EXIT_CODE)"
+    else
+        echo "Empty response from API"
+    fi
     exit 1
 fi
 
 # Check for API errors in response
-if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+if echo "$RESPONSE_BODY" | jq -e '.error' > /dev/null 2>&1; then
     error "OpenRouter API error:"
-    ERROR_MESSAGE=$(echo "$RESPONSE" | jq -r '.error.message // .error' 2>/dev/null || echo "$RESPONSE")
+    ERROR_MESSAGE=$(echo "$RESPONSE_BODY" | jq -r '.error.message // .error' 2>/dev/null || echo "$RESPONSE_BODY")
     echo "$ERROR_MESSAGE"
     echo ""
     error "Full API response:"
-    echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+    echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
     echo ""
-    error "The API key may be invalid or expired. Please check your OpenRouter API key."
+    error "The API key may be invalid or expired. Please verify your OpenRouter API key at https://openrouter.ai/keys"
+    echo ""
+    error "To test your API key manually, run:"
+    echo "  curl https://openrouter.ai/api/v1/chat/completions \\"
+    echo "    -H \"Content-Type: application/json\" \\"
+    echo "    -H \"Authorization: Bearer YOUR_API_KEY\" \\"
+    echo "    -d '{\"model\": \"google/gemini-2.5-flash-preview-09-2025\", \"messages\": [{\"role\": \"user\", \"content\": \"test\"}]}'"
     exit 1
 fi
 
 # Extract JSON from response
-JSON_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content' 2>/dev/null)
+JSON_CONTENT=$(echo "$RESPONSE_BODY" | jq -r '.choices[0].message.content' 2>/dev/null)
 
 # Check if content was extracted
 if [ -z "$JSON_CONTENT" ] || [ "$JSON_CONTENT" = "null" ]; then
     error "Failed to extract content from API response"
-    echo "Response: $RESPONSE"
+    echo "Response: $RESPONSE_BODY"
     exit 1
 fi
 
