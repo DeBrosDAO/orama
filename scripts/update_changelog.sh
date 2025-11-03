@@ -95,12 +95,17 @@ log "Collecting git diffs..."
 
 # Unstaged changes
 UNSTAGED_DIFF=$(git diff 2>/dev/null || echo "")
+UNSTAGED_COUNT=$(echo "$UNSTAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
 
 # Staged changes
 STAGED_DIFF=$(git diff --cached 2>/dev/null || echo "")
+STAGED_COUNT=$(echo "$STAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
 
 # Unpushed commits
 UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "")
+UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
+
+log "Found: $UNSTAGED_COUNT unstaged file(s), $STAGED_COUNT staged file(s), $UNPUSHED_COMMITS unpushed commit(s)"
 
 # Combine all diffs
 ALL_DIFFS="${UNSTAGED_DIFF}
