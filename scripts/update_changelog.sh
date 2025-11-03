@@ -132,22 +132,27 @@ Rules:
 # Call OpenRouter API
 log "Calling OpenRouter API to generate changelog..."
 
+# Prepare the JSON payload properly
+PROMPT_ESCAPED=$(echo "$PROMPT" | jq -Rs .)
+REQUEST_BODY=$(cat <<EOF
+{
+  "model": "google/gemini-2.5-flash-preview-09-2025",
+  "messages": [
+    {
+      "role": "user",
+      "content": $PROMPT_ESCAPED
+    }
+  ],
+  "temperature": 0.3
+}
+EOF
+)
+
 set +e  # Temporarily disable exit on error to check curl response
 RESPONSE=$(curl -s -X POST "https://openrouter.ai/api/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "HTTP-Referer: https://github.com/DeBrosOfficial/network" \
-  -H "X-Title: DeBros Network Changelog Generator" \
-  -d "{
-    \"model\": \"google/gemini-2.5-flash-preview-09-2025\",
-    \"messages\": [
-      {
-        \"role\": \"user\",
-        \"content\": $(echo "$PROMPT" | jq -Rs .)
-      }
-    ],
-    \"temperature\": 0.3
-  }")
+  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  -d "$REQUEST_BODY")
 CURL_EXIT_CODE=$?
 set -e  # Re-enable exit on error
 
