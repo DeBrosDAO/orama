@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.53.16] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Improved the changelog generation script to prevent infinite loops when the only unpushed commit is a previous changelog update.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.53.15] - 2025-11-03
 
 ### Added
