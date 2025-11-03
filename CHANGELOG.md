@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.53.17] - 2025-11-03
+
+### Added
+- Added a new Git `pre-commit` hook to automatically update the changelog and version before committing, ensuring version consistency.
+
+### Changed
+- Refactored the `update_changelog.sh` script to support different execution contexts (pre-commit vs. pre-push), allowing it to analyze only staged changes during commit.
+- The Git `pre-push` hook was simplified by removing the changelog update logic, which is now handled by the `pre-commit` hook.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.53.16] - 2025-11-03
 
 ### Added

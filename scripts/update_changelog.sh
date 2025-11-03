@@ -93,47 +93,76 @@ fi
 # Gather all git diffs
 log "Collecting git diffs..."
 
-# Unstaged changes
-UNSTAGED_DIFF=$(git diff 2>/dev/null || echo "")
-UNSTAGED_COUNT=$(echo "$UNSTAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
-[ -z "$UNSTAGED_COUNT" ] && UNSTAGED_COUNT="0"
-
-# Staged changes
-STAGED_DIFF=$(git diff --cached 2>/dev/null || echo "")
-STAGED_COUNT=$(echo "$STAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
-[ -z "$STAGED_COUNT" ] && STAGED_COUNT="0"
-
-# Unpushed commits
-UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "")
-UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
-[ -z "$UNPUSHED_COMMITS" ] && UNPUSHED_COMMITS="0"
-
-# Check if the only unpushed commit is a changelog update commit
-# If so, exclude it from the diff to avoid infinite loops
-if [ "$UNPUSHED_COMMITS" -gt 0 ]; then
-    LATEST_COMMIT_MSG=$(git log -1 --pretty=%B HEAD 2>/dev/null || echo "")
-    if echo "$LATEST_COMMIT_MSG" | grep -q "chore: update changelog and version"; then
-        # If the latest commit is a changelog commit, check if there are other commits
-        if [ "$UNPUSHED_COMMITS" -eq 1 ]; then
-            log "Latest commit is a changelog update. No other changes detected. Skipping changelog update."
-            # Clean up any old preview files
-            rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
-            exit 0
-        else
-            # Multiple commits, exclude the latest changelog commit from diff
-            log "Multiple unpushed commits detected. Excluding latest changelog commit from analysis."
-            # Get all commits except the latest one
-            UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD~1 2>/dev/null || echo "")
-            UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD~1 2>/dev/null || echo "0")
-            [ -z "$UNPUSHED_COMMITS" ] && UNPUSHED_COMMITS="0"
+# Check if running from pre-commit context
+if [ "$CHANGELOG_CONTEXT" = "pre-commit" ]; then
+    log "Running in pre-commit context - analyzing staged changes only"
+    
+    # Unstaged changes (usually none in pre-commit, but check anyway)
+    UNSTAGED_DIFF=$(git diff 2>/dev/null || echo "")
+    UNSTAGED_COUNT=$(echo "$UNSTAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
+    [ -z "$UNSTAGED_COUNT" ] && UNSTAGED_COUNT="0"
+    
+    # Staged changes (these are what we're committing)
+    STAGED_DIFF=$(git diff --cached 2>/dev/null || echo "")
+    STAGED_COUNT=$(echo "$STAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
+    [ -z "$STAGED_COUNT" ] && STAGED_COUNT="0"
+    
+    # No unpushed commits analysis in pre-commit context
+    UNPUSHED_DIFF=""
+    UNPUSHED_COMMITS="0"
+    
+    log "Found: $UNSTAGED_COUNT unstaged file(s), $STAGED_COUNT staged file(s)"
+else
+    # Pre-push context - analyze everything
+    # Unstaged changes
+    UNSTAGED_DIFF=$(git diff 2>/dev/null || echo "")
+    UNSTAGED_COUNT=$(echo "$UNSTAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
+    [ -z "$UNSTAGED_COUNT" ] && UNSTAGED_COUNT="0"
+    
+    # Staged changes
+    STAGED_DIFF=$(git diff --cached 2>/dev/null || echo "")
+    STAGED_COUNT=$(echo "$STAGED_DIFF" | grep -c "^diff\|^index" 2>/dev/null || echo "0")
+    [ -z "$STAGED_COUNT" ] && STAGED_COUNT="0"
+    
+    # Unpushed commits
+    UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "")
+    UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
+    [ -z "$UNPUSHED_COMMITS" ] && UNPUSHED_COMMITS="0"
+    
+    # Check if the only unpushed commit is a changelog update commit
+    # If so, exclude it from the diff to avoid infinite loops
+    if [ "$UNPUSHED_COMMITS" -gt 0 ]; then
+        LATEST_COMMIT_MSG=$(git log -1 --pretty=%B HEAD 2>/dev/null || echo "")
+        if echo "$LATEST_COMMIT_MSG" | grep -q "chore: update changelog and version"; then
+            # If the latest commit is a changelog commit, check if there are other commits
+            if [ "$UNPUSHED_COMMITS" -eq 1 ]; then
+                log "Latest commit is a changelog update. No other changes detected. Skipping changelog update."
+                # Clean up any old preview files
+                rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
+                exit 0
+            else
+                # Multiple commits, exclude the latest changelog commit from diff
+                log "Multiple unpushed commits detected. Excluding latest changelog commit from analysis."
+                # Get all commits except the latest one
+                UNPUSHED_DIFF=$(git diff "$REMOTE_BRANCH"..HEAD~1 2>/dev/null || echo "")
+                UNPUSHED_COMMITS=$(git rev-list --count "$REMOTE_BRANCH"..HEAD~1 2>/dev/null || echo "0")
+                [ -z "$UNPUSHED_COMMITS" ] && UNPUSHED_COMMITS="0"
+            fi
         fi
     fi
+    
+    log "Found: $UNSTAGED_COUNT unstaged file(s), $STAGED_COUNT staged file(s), $UNPUSHED_COMMITS unpushed commit(s)"
 fi
 
-log "Found: $UNSTAGED_COUNT unstaged file(s), $STAGED_COUNT staged file(s), $UNPUSHED_COMMITS unpushed commit(s)"
-
 # Combine all diffs
-ALL_DIFFS="${UNSTAGED_DIFF}
+if [ "$CHANGELOG_CONTEXT" = "pre-commit" ]; then
+    ALL_DIFFS="${UNSTAGED_DIFF}
+---
+STAGED CHANGES:
+---
+${STAGED_DIFF}"
+else
+    ALL_DIFFS="${UNSTAGED_DIFF}
 ---
 STAGED CHANGES:
 ---
@@ -142,13 +171,23 @@ ${STAGED_DIFF}
 UNPUSHED COMMITS:
 ---
 ${UNPUSHED_DIFF}"
+fi
 
 # Check if there are any changes
-if [ -z "$(echo "$UNSTAGED_DIFF$STAGED_DIFF$UNPUSHED_DIFF" | tr -d '[:space:]')" ]; then
-    log "No changes detected (unstaged, staged, or unpushed). Skipping changelog update."
-    # Clean up any old preview files
-    rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
-    exit 0
+if [ "$CHANGELOG_CONTEXT" = "pre-commit" ]; then
+    # In pre-commit, only check staged changes
+    if [ -z "$(echo "$STAGED_DIFF" | tr -d '[:space:]')" ]; then
+        log "No staged changes detected. Skipping changelog update."
+        rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
+        exit 0
+    fi
+else
+    # In pre-push, check all changes
+    if [ -z "$(echo "$UNSTAGED_DIFF$STAGED_DIFF$UNPUSHED_DIFF" | tr -d '[:space:]')" ]; then
+        log "No changes detected (unstaged, staged, or unpushed). Skipping changelog update."
+        rm -f "$REPO_ROOT/.changelog_preview.tmp" "$REPO_ROOT/.changelog_version.tmp"
+        exit 0
+    fi
 fi
 
 # Get current version from Makefile
