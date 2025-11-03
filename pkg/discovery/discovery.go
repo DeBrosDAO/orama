@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -114,9 +115,41 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 			continue
 		}
 
+		// Filter addresses to only include configured listen addresses, not ephemeral ports
+		// Ephemeral ports are typically > 32768, so we filter those out
+		filteredAddrs := make([]multiaddr.Multiaddr, 0)
+		for _, addr := range addrs {
+			// Extract TCP port from multiaddr
+			port, err := addr.ValueForProtocol(multiaddr.P_TCP)
+			if err == nil {
+				portNum, err := strconv.Atoi(port)
+				if err == nil {
+					// Only include ports that are reasonable (not ephemeral ports > 32768)
+					// Common LibP2P ports are typically < 10000
+					if portNum > 0 && portNum <= 32767 {
+						filteredAddrs = append(filteredAddrs, addr)
+					}
+				} else {
+					// If we can't parse port, include it anyway (might be non-TCP)
+					filteredAddrs = append(filteredAddrs, addr)
+				}
+			} else {
+				// If no TCP port found, include it anyway (might be non-TCP)
+				filteredAddrs = append(filteredAddrs, addr)
+			}
+		}
+
+		// If no addresses remain after filtering, skip this peer
+		if len(filteredAddrs) == 0 {
+			d.logger.Debug("No valid addresses after filtering ephemeral ports",
+				zap.String("peer_id", pid.String()[:8]+"..."),
+				zap.Int("original_count", len(addrs)))
+			continue
+		}
+
 		// Convert addresses to strings
-		addrStrs := make([]string, len(addrs))
-		for i, addr := range addrs {
+		addrStrs := make([]string, len(filteredAddrs))
+		for i, addr := range filteredAddrs {
 			addrStrs[i] = addr.String()
 		}
 
@@ -320,7 +353,7 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 			d.host.Peerstore().AddAddrs(parsedID, addrs, time.Hour*24)
 
 			// Try to connect
-			connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			peerAddrInfo := peer.AddrInfo{ID: parsedID, Addrs: addrs}
 
 			if err := d.host.Connect(connectCtx, peerAddrInfo); err != nil {

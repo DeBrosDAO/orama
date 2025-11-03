@@ -12,6 +12,21 @@ import (
 // DefaultBootstrapPeers returns the library's default bootstrap peer multiaddrs.
 // These can be overridden by environment variables or config.
 func DefaultBootstrapPeers() []string {
+	// Check environment variable first
+	if envPeers := os.Getenv("DEBROS_BOOTSTRAP_PEERS"); envPeers != "" {
+		peers := splitCSVOrSpace(envPeers)
+		// Filter out empty strings
+		result := make([]string, 0, len(peers))
+		for _, p := range peers {
+			if p != "" {
+				result = append(result, p)
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
+	}
+
 	defaultCfg := config.DefaultConfig()
 	return defaultCfg.Discovery.BootstrapPeers
 }

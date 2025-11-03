@@ -206,9 +206,31 @@ func isHopByHopHeader(header string) bool {
 
 // isPrivateOrLocalHost checks if a host is private, local, or loopback
 func isPrivateOrLocalHost(host string) bool {
-	// Strip port if present
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
+	// Strip port if present, handling IPv6 addresses properly
+	// IPv6 addresses in URLs are bracketed: [::1]:8080
+	if strings.HasPrefix(host, "[") {
+		// IPv6 address with brackets
+		if idx := strings.LastIndex(host, "]"); idx != -1 {
+			if idx+1 < len(host) && host[idx+1] == ':' {
+				// Port present, strip it
+				host = host[1:idx] // Remove brackets and port
+			} else {
+				// No port, just remove brackets
+				host = host[1:idx]
+			}
+		}
+	} else {
+		// IPv4 or hostname, check for port
+		if idx := strings.LastIndex(host, ":"); idx != -1 {
+			// Check if it's an IPv6 address without brackets (contains multiple colons)
+			colonCount := strings.Count(host, ":")
+			if colonCount == 1 {
+				// Single colon, likely IPv4 with port
+				host = host[:idx]
+			}
+			// If multiple colons, it's IPv6 without brackets and no port
+			// Leave host as-is
+		}
 	}
 
 	// Check for localhost variants

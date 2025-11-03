@@ -328,7 +328,6 @@ func (n *Node) startLibP2P() error {
 		n.logger.ComponentInfo(logging.ComponentLibP2P, "Localhost detected - disabling NAT services for local development")
 		// Don't add NAT/AutoRelay options for localhost
 	} else {
-		// Production: enable NAT traversal
 		n.logger.ComponentInfo(logging.ComponentLibP2P, "Production mode - enabling NAT services")
 		opts = append(opts,
 			libp2p.EnableNATService(),

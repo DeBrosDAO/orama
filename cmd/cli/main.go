@@ -108,6 +108,10 @@ func main() {
 		}
 		cli.HandleConnectCommand(args[0], timeout)
 
+	// RQLite commands
+	case "rqlite":
+		cli.HandleRQLiteCommand(args)
+
 	// Help
 	case "help", "--help", "-h":
 		showHelp()
@@ -174,6 +178,9 @@ func showHelp() {
 
 	fmt.Printf("🗄️  Database:\n")
 	fmt.Printf("  query <sql>                   🔐 Execute database query\n\n")
+
+	fmt.Printf("🔧 RQLite:\n")
+	fmt.Printf("  rqlite fix                    🔧 Fix misconfigured join address and clean raft state\n\n")
 
 	fmt.Printf("📡 PubSub:\n")
 	fmt.Printf("  pubsub publish <topic> <msg>  🔐 Publish message\n")

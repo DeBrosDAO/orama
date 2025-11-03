@@ -3,12 +3,16 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
 )
 
 // HandleSetupCommand handles the interactive 'setup' command for VPS installation
@@ -108,19 +112,179 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("✅ Setup Complete!\n")
 	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
 	fmt.Printf("DeBros Network is now running!\n\n")
+
+	// Try to get and display peer ID
+	peerID := getPeerID()
+	if peerID != "" {
+		fmt.Printf("🆔 Node Peer ID: %s\n\n", peerID)
+	}
+
 	fmt.Printf("Service Management:\n")
 	fmt.Printf("  network-cli service status all\n")
 	fmt.Printf("  network-cli service logs node --follow\n")
 	fmt.Printf("  network-cli service restart gateway\n\n")
 	fmt.Printf("Access DeBros User:\n")
 	fmt.Printf("  sudo -u debros bash\n\n")
+
+	// Check if HTTPS is enabled
+	gatewayConfigPath := "/home/debros/.debros/gateway.yaml"
+	httpsEnabled := false
+	var domainName string
+	if data, err := os.ReadFile(gatewayConfigPath); err == nil {
+		var cfg config.Config
+		if err := config.DecodeStrict(strings.NewReader(string(data)), &cfg); err == nil {
+			// Try to parse as gateway config
+			if strings.Contains(string(data), "enable_https: true") {
+				httpsEnabled = true
+				// Extract domain name from config
+				lines := strings.Split(string(data), "\n")
+				for _, line := range lines {
+					if strings.HasPrefix(strings.TrimSpace(line), "domain_name:") {
+						parts := strings.Split(line, ":")
+						if len(parts) > 1 {
+							domainName = strings.Trim(strings.TrimSpace(parts[1]), "\"")
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
 	fmt.Printf("Verify Installation:\n")
-	fmt.Printf("  curl http://localhost:6001/health\n")
+	if httpsEnabled && domainName != "" {
+		fmt.Printf("  curl https://%s/health\n", domainName)
+		fmt.Printf("  curl http://localhost:6001/health (HTTP fallback)\n")
+	} else {
+		fmt.Printf("  curl http://localhost:6001/health\n")
+	}
 	fmt.Printf("  curl http://localhost:5001/status\n\n")
+
+	if httpsEnabled && domainName != "" {
+		fmt.Printf("HTTPS Configuration:\n")
+		fmt.Printf("  Domain: %s\n", domainName)
+		fmt.Printf("  HTTPS endpoint: https://%s\n", domainName)
+		fmt.Printf("  Certificate cache: /home/debros/.debros/tls-cache\n")
+		fmt.Printf("  Certificates are automatically managed via Let's Encrypt (ACME)\n\n")
+	}
+
 	fmt.Printf("Anyone Relay (Anon):\n")
 	fmt.Printf("  sudo systemctl status anon\n")
 	fmt.Printf("  sudo tail -f /home/debros/.debros/logs/anon/notices.log\n")
-	fmt.Printf("  Proxy endpoint: POST http://localhost:6001/v1/proxy/anon\n\n")
+	if httpsEnabled && domainName != "" {
+		fmt.Printf("  Proxy endpoint: POST https://%s/v1/proxy/anon\n\n", domainName)
+	} else {
+		fmt.Printf("  Proxy endpoint: POST http://localhost:6001/v1/proxy/anon\n\n")
+	}
+}
+
+// extractIPFromMultiaddr extracts the IP address from a multiaddr string
+// Format: /ip4/51.83.128.181/tcp/4001/p2p/12D3KooW...
+func extractIPFromMultiaddr(multiaddr string) string {
+	if multiaddr == "" {
+		return ""
+	}
+
+	// Split by "/ip4/"
+	parts := strings.Split(multiaddr, "/ip4/")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	// Get the part after "/ip4/"
+	ipPart := parts[1]
+	// Extract IP until the next "/"
+	ipEnd := strings.Index(ipPart, "/")
+	if ipEnd == -1 {
+		// If no "/" found, the whole string might be the IP
+		return strings.TrimSpace(ipPart)
+	}
+
+	ip := strings.TrimSpace(ipPart[:ipEnd])
+	// Validate it looks like an IP address
+	if net.ParseIP(ip) != nil {
+		return ip
+	}
+
+	return ""
+}
+
+// getVPSIPv4Address gets the primary IPv4 address of the VPS
+func getVPSIPv4Address() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+
+	for _, iface := range interfaces {
+		// Skip loopback and down interfaces
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ip := ipNet.IP
+			// Check if it's IPv4 and not a loopback address
+			if ip.To4() != nil && !ip.IsLoopback() {
+				return ip.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("could not find a non-loopback IPv4 address")
+}
+
+// getPeerID attempts to retrieve the peer ID from peer.info based on node type
+func getPeerID() string {
+	debrosDir := "/home/debros/.debros"
+	nodeConfigPath := filepath.Join(debrosDir, "node.yaml")
+
+	// Determine node type from config
+	var nodeType string
+	if file, err := os.Open(nodeConfigPath); err == nil {
+		defer file.Close()
+		var cfg config.Config
+		if err := config.DecodeStrict(file, &cfg); err == nil {
+			nodeType = cfg.Node.Type
+		}
+	}
+
+	// Determine the peer.info path based on node type
+	var peerInfoPath string
+	if nodeType == "bootstrap" {
+		peerInfoPath = filepath.Join(debrosDir, "bootstrap", "peer.info")
+	} else {
+		// Default to "node" directory for regular nodes
+		peerInfoPath = filepath.Join(debrosDir, "node", "peer.info")
+	}
+
+	// Try to read from peer.info file
+	if data, err := os.ReadFile(peerInfoPath); err == nil {
+		peerInfo := strings.TrimSpace(string(data))
+		// Extract peer ID from multiaddr format: /ip4/.../p2p/<peer-id>
+		if strings.Contains(peerInfo, "/p2p/") {
+			parts := strings.Split(peerInfo, "/p2p/")
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+		// If it's just the peer ID, return it
+		if len(peerInfo) > 0 && !strings.Contains(peerInfo, "/") {
+			return peerInfo
+		}
+	}
+
+	return ""
 }
 
 func detectLinuxDistro() string {
@@ -212,6 +376,206 @@ func isValidHostPort(s string) bool {
 		return false
 	}
 	return true
+}
+
+// isPortAvailable checks if a port is available for binding
+func isPortAvailable(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
+// checkPorts80And443 checks if ports 80 and 443 are available
+func checkPorts80And443() (bool, string) {
+	port80Available := isPortAvailable(80)
+	port443Available := isPortAvailable(443)
+
+	if !port80Available || !port443Available {
+		var issues []string
+		if !port80Available {
+			issues = append(issues, "port 80")
+		}
+		if !port443Available {
+			issues = append(issues, "port 443")
+		}
+		return false, strings.Join(issues, " and ")
+	}
+
+	return true, ""
+}
+
+// isValidDomain validates a domain name format
+func isValidDomain(domain string) bool {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return false
+	}
+
+	// Basic validation: domain should contain at least one dot
+	// and not start/end with dot or hyphen
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+
+	if strings.HasPrefix(domain, "-") || strings.HasSuffix(domain, "-") {
+		return false
+	}
+
+	// Check for valid characters (letters, numbers, dots, hyphens)
+	for _, char := range domain {
+		if !((char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '.' ||
+			char == '-') {
+			return false
+		}
+	}
+
+	return true
+}
+
+// verifyDNSResolution verifies that a domain resolves to the VPS IP
+func verifyDNSResolution(domain, expectedIP string) bool {
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		return false
+	}
+
+	for _, ip := range ips {
+		if ip.To4() != nil && ip.String() == expectedIP {
+			return true
+		}
+	}
+
+	return false
+}
+
+// promptDomainForHTTPS prompts for domain name and verifies DNS configuration
+func promptDomainForHTTPS(reader *bufio.Reader, vpsIP string) string {
+	for {
+		fmt.Printf("\nEnter your domain name (e.g., example.com): ")
+		domainInput, _ := reader.ReadString('\n')
+		domain := strings.TrimSpace(domainInput)
+
+		if domain == "" {
+			fmt.Printf("   Domain name cannot be empty. Skipping HTTPS configuration.\n")
+			return ""
+		}
+
+		if !isValidDomain(domain) {
+			fmt.Printf("   ❌ Invalid domain format. Please enter a valid domain name.\n")
+			continue
+		}
+
+		// Verify DNS is configured
+		fmt.Printf("\n   Verifying DNS configuration...\n")
+		fmt.Printf("   Please ensure your domain %s points to this server's IP (%s)\n", domain, vpsIP)
+		fmt.Printf("   Have you configured the DNS record? (yes/no): ")
+		dnsResponse, _ := reader.ReadString('\n')
+		dnsResponse = strings.ToLower(strings.TrimSpace(dnsResponse))
+
+		if dnsResponse == "yes" || dnsResponse == "y" {
+			// Try to verify DNS resolution
+			fmt.Printf("   Checking DNS resolution...\n")
+			if verifyDNSResolution(domain, vpsIP) {
+				fmt.Printf("   ✓ DNS is correctly configured\n")
+				return domain
+			} else {
+				fmt.Printf("   ⚠️  DNS does not resolve to this server's IP (%s)\n", vpsIP)
+				fmt.Printf("   DNS may still be propagating. Continue anyway? (yes/no): ")
+				continueResponse, _ := reader.ReadString('\n')
+				continueResponse = strings.ToLower(strings.TrimSpace(continueResponse))
+				if continueResponse == "yes" || continueResponse == "y" {
+					fmt.Printf("   Continuing with domain configuration (DNS may need time to propagate)\n")
+					return domain
+				}
+				// User chose not to continue, ask for domain again
+				fmt.Printf("   Please configure DNS and try again, or press Enter to skip HTTPS\n")
+				continue
+			}
+		} else {
+			fmt.Printf("   Please configure DNS first. Type 'skip' to skip HTTPS configuration: ")
+			skipResponse, _ := reader.ReadString('\n')
+			skipResponse = strings.ToLower(strings.TrimSpace(skipResponse))
+			if skipResponse == "skip" {
+				return ""
+			}
+			continue
+		}
+	}
+}
+
+// updateGatewayConfigWithHTTPS updates an existing gateway.yaml file with HTTPS settings
+func updateGatewayConfigWithHTTPS(gatewayPath, domain string) error {
+	// Read existing config
+	data, err := os.ReadFile(gatewayPath)
+	if err != nil {
+		return fmt.Errorf("failed to read gateway config: %w", err)
+	}
+
+	configContent := string(data)
+	tlsCacheDir := "/home/debros/.debros/tls-cache"
+
+	// Check if HTTPS is already enabled
+	if strings.Contains(configContent, "enable_https: true") {
+		// Update existing HTTPS settings
+		lines := strings.Split(configContent, "\n")
+		var updatedLines []string
+		domainUpdated := false
+		cacheDirUpdated := false
+
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "enable_https:") {
+				updatedLines = append(updatedLines, "enable_https: true")
+			} else if strings.HasPrefix(trimmed, "domain_name:") {
+				updatedLines = append(updatedLines, fmt.Sprintf("domain_name: \"%s\"", domain))
+				domainUpdated = true
+			} else if strings.HasPrefix(trimmed, "tls_cache_dir:") {
+				updatedLines = append(updatedLines, fmt.Sprintf("tls_cache_dir: \"%s\"", tlsCacheDir))
+				cacheDirUpdated = true
+			} else {
+				updatedLines = append(updatedLines, line)
+			}
+		}
+
+		// Add missing fields if not found
+		if !domainUpdated {
+			updatedLines = append(updatedLines, fmt.Sprintf("domain_name: \"%s\"", domain))
+		}
+		if !cacheDirUpdated {
+			updatedLines = append(updatedLines, fmt.Sprintf("tls_cache_dir: \"%s\"", tlsCacheDir))
+		}
+
+		configContent = strings.Join(updatedLines, "\n")
+	} else {
+		// Add HTTPS configuration at the end
+		configContent = strings.TrimRight(configContent, "\n")
+		if !strings.HasSuffix(configContent, "\n") && configContent != "" {
+			configContent += "\n"
+		}
+		configContent += "enable_https: true\n"
+		configContent += fmt.Sprintf("domain_name: \"%s\"\n", domain)
+		configContent += fmt.Sprintf("tls_cache_dir: \"%s\"\n", tlsCacheDir)
+	}
+
+	// Write updated config
+	if err := os.WriteFile(gatewayPath, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write gateway config: %w", err)
+	}
+
+	// Fix ownership
+	exec.Command("chown", "debros:debros", gatewayPath).Run()
+
+	return nil
 }
 
 func setupDebrosUser() {
@@ -704,38 +1068,37 @@ func cloneAndBuild() {
 	branch := promptBranch()
 	fmt.Printf("   Using branch: %s\n", branch)
 
-	// Check if already cloned
-	if _, err := os.Stat("/home/debros/src/.git"); err == nil {
-		fmt.Printf("   Updating repository...\n")
-
-		// Check current branch and switch if needed
-		currentBranchCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "rev-parse", "--abbrev-ref", "HEAD")
-		if output, err := currentBranchCmd.Output(); err == nil {
-			currentBranch := strings.TrimSpace(string(output))
-			if currentBranch != branch {
-				fmt.Printf("   Switching from %s to %s...\n", currentBranch, branch)
-				// Fetch the target branch first (needed for shallow clones)
-				exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "fetch", "origin", branch).Run()
-				// Checkout the selected branch
-				checkoutCmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "checkout", branch)
-				if err := checkoutCmd.Run(); err != nil {
-					fmt.Fprintf(os.Stderr, "⚠️  Failed to switch branch: %v\n", err)
-				}
+	// Remove existing repository if it exists (always start fresh)
+	if _, err := os.Stat("/home/debros/src"); err == nil {
+		fmt.Printf("   Removing existing repository...\n")
+		// Remove as root since we're running as root
+		if err := os.RemoveAll("/home/debros/src"); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to remove existing repo as root: %v\n", err)
+			// Try as debros user as fallback (might work if files are owned by debros)
+			removeCmd := exec.Command("sudo", "-u", "debros", "rm", "-rf", "/home/debros/src")
+			if output, err := removeCmd.CombinedOutput(); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to remove existing repo as debros user: %v\n%s\n", err, output)
 			}
 		}
+		// Wait a moment to ensure filesystem syncs
+		time.Sleep(100 * time.Millisecond)
+	}
 
-		// Pull latest changes
-		cmd := exec.Command("sudo", "-u", "debros", "git", "-C", "/home/debros/src", "pull", "origin", branch)
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Failed to update repo: %v\n", err)
-		}
-	} else {
-		fmt.Printf("   Cloning repository...\n")
-		cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n", err)
-			os.Exit(1)
-		}
+	// Ensure parent directory exists and has correct permissions
+	if err := os.MkdirAll("/home/debros", 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to ensure debros home directory exists: %v\n", err)
+		os.Exit(1)
+	}
+	if err := exec.Command("chown", "debros:debros", "/home/debros").Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to chown debros home directory: %v\n", err)
+	}
+
+	// Clone fresh repository
+	fmt.Printf("   Cloning repository...\n")
+	cmd := exec.Command("sudo", "-u", "debros", "git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", "/home/debros/src")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to clone repo: %v\n%s\n", err, output)
+		os.Exit(1)
 	}
 
 	// Build
@@ -746,7 +1109,7 @@ func cloneAndBuild() {
 
 	// Use sudo with --preserve-env=PATH to pass Go path to debros user
 	// Set HOME so Go knows where to create module cache
-	cmd := exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
+	cmd = exec.Command("sudo", "--preserve-env=PATH", "-u", "debros", "make", "build")
 	cmd.Dir = "/home/debros/src"
 	cmd.Env = append(os.Environ(), "HOME=/home/debros", "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -755,92 +1118,176 @@ func cloneAndBuild() {
 	}
 
 	// Copy binaries
-	exec.Command("sh", "-c", "cp -r /home/debros/src/bin/* /home/debros/bin/").Run()
-	exec.Command("chown", "-R", "debros:debros", "/home/debros/bin").Run()
-	exec.Command("chmod", "-R", "755", "/home/debros/bin").Run()
+	copyCmd := exec.Command("sh", "-c", "cp -r /home/debros/src/bin/* /home/debros/bin/")
+	if output, err := copyCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to copy binaries: %v\n%s\n", err, output)
+		os.Exit(1)
+	}
+
+	chownCmd := exec.Command("chown", "-R", "debros:debros", "/home/debros/bin")
+	if err := chownCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to chown binaries: %v\n", err)
+	}
+
+	chmodCmd := exec.Command("chmod", "-R", "755", "/home/debros/bin")
+	if err := chmodCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to chmod binaries: %v\n", err)
+	}
 
 	fmt.Printf("   ✓ Built and installed\n")
 }
 
 func generateConfigsInteractive(force bool) {
-	fmt.Printf("⚙️  Generating configurations...\n")
+	fmt.Printf("⚙️  Generating configurations...\n\n")
 
-	// For single-node VPS setup, use sensible defaults
-	// This creates a bootstrap node that acts as the cluster leader
-	fmt.Printf("\n")
-	fmt.Printf("Setting up single-node configuration...\n")
-	fmt.Printf("  • Bootstrap node (cluster leader)\n")
-	fmt.Printf("  • No external peers required\n")
-	fmt.Printf("  • Gateway connected to local node\n\n")
-
-	bootstrapPath := "/home/debros/.debros/bootstrap.yaml"
 	nodeConfigPath := "/home/debros/.debros/node.yaml"
 	gatewayPath := "/home/debros/.debros/gateway.yaml"
 
-	// Check if node.yaml already exists
+	// Check if configs already exist
 	nodeExists := false
+	gatewayExists := false
 	if _, err := os.Stat(nodeConfigPath); err == nil {
 		nodeExists = true
-		fmt.Printf("   ℹ️  node.yaml already exists, will not overwrite\n")
+	}
+	if _, err := os.Stat(gatewayPath); err == nil {
+		gatewayExists = true
 	}
 
-	// Generate bootstrap node config with explicit parameters
-	// Pass empty bootstrap-peers and no join address for bootstrap node
-	bootstrapArgs := []string{
-		"-u", "debros",
-		"/home/debros/bin/network-cli", "config", "init",
-		"--type", "bootstrap",
-		"--bootstrap-peers", "",
-	}
-	if force {
-		bootstrapArgs = append(bootstrapArgs, "--force")
-	}
+	// If both configs exist and not forcing, skip configuration prompts
+	if nodeExists && gatewayExists && !force {
+		fmt.Printf("   ℹ️  Configuration files already exist (node.yaml and gateway.yaml)\n")
+		fmt.Printf("   ℹ️  Skipping configuration generation\n\n")
 
-	cmd := exec.Command("sudo", bootstrapArgs...)
-	cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
-	output, err := cmd.CombinedOutput()
-	bootstrapCreated := (err == nil)
+		// Only offer to add HTTPS if not already enabled
+		httpsAlreadyEnabled := false
+		if data, err := os.ReadFile(gatewayPath); err == nil {
+			httpsAlreadyEnabled = strings.Contains(string(data), "enable_https: true")
+		}
 
-	if err != nil {
-		// Check if bootstrap.yaml already exists (config init failed because it exists)
-		if _, statErr := os.Stat(bootstrapPath); statErr == nil {
-			fmt.Printf("   ℹ️  bootstrap.yaml already exists, skipping creation\n")
-			bootstrapCreated = true
+		if !httpsAlreadyEnabled {
+			fmt.Printf("🌐 Domain and HTTPS Configuration\n")
+			fmt.Printf("Would you like to add HTTPS with a domain name to your existing gateway config? (yes/no) [default: no]: ")
+			reader := bufio.NewReader(os.Stdin)
+			addHTTPSResponse, _ := reader.ReadString('\n')
+			addHTTPSResponse = strings.ToLower(strings.TrimSpace(addHTTPSResponse))
+
+			if addHTTPSResponse == "yes" || addHTTPSResponse == "y" {
+				// Get VPS IP for DNS verification
+				vpsIP, err := getVPSIPv4Address()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️  Failed to detect IPv4 address: %v\n", err)
+					fmt.Fprintf(os.Stderr, "   Using 0.0.0.0 as fallback\n")
+					vpsIP = "0.0.0.0"
+				}
+
+				// Check if ports 80 and 443 are available
+				portsAvailable, portIssues := checkPorts80And443()
+				if !portsAvailable {
+					fmt.Fprintf(os.Stderr, "\n⚠️  Cannot enable HTTPS: %s is already in use\n", portIssues)
+					fmt.Fprintf(os.Stderr, "   You will need to configure HTTPS manually if you want to use a domain.\n\n")
+				} else {
+					// Prompt for domain and update existing config
+					domain := promptDomainForHTTPS(reader, vpsIP)
+					if domain != "" {
+						// Update existing gateway config with HTTPS settings
+						if err := updateGatewayConfigWithHTTPS(gatewayPath, domain); err != nil {
+							fmt.Fprintf(os.Stderr, "⚠️  Failed to update gateway config with HTTPS: %v\n", err)
+						} else {
+							fmt.Printf("   ✓ HTTPS configuration added to existing gateway.yaml\n")
+							// Create TLS cache directory
+							tlsCacheDir := "/home/debros/.debros/tls-cache"
+							if err := os.MkdirAll(tlsCacheDir, 0755); err == nil {
+								exec.Command("chown", "-R", "debros:debros", tlsCacheDir).Run()
+								fmt.Printf("   ✓ TLS cache directory created: %s\n", tlsCacheDir)
+							}
+						}
+					}
+				}
+			}
 		} else {
-			fmt.Fprintf(os.Stderr, "⚠️  Failed to generate bootstrap config: %v\n", err)
-			if len(output) > 0 {
-				fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
-			}
+			fmt.Printf("   ℹ️  HTTPS is already enabled in gateway.yaml\n")
 		}
+
+		fmt.Printf("\n   ✓ Configurations ready\n")
+		return
+	}
+
+	// Get VPS IPv4 address
+	fmt.Printf("Detecting VPS IPv4 address...\n")
+	vpsIP, err := getVPSIPv4Address()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to detect IPv4 address: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   Using 0.0.0.0 as fallback. You may need to edit config files manually.\n")
+		vpsIP = "0.0.0.0"
 	} else {
-		fmt.Printf("   ✓ Bootstrap node config created\n")
+		fmt.Printf("   ✓ Detected IPv4 address: %s\n\n", vpsIP)
 	}
 
-	// Rename bootstrap.yaml to node.yaml only if node.yaml doesn't exist
-	if !nodeExists && bootstrapCreated {
-		// Check if bootstrap.yaml exists before renaming
-		if _, err := os.Stat(bootstrapPath); err == nil {
-			renameCmd := exec.Command("sudo", "-u", "debros", "mv", bootstrapPath, nodeConfigPath)
-			if err := renameCmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️  Failed to rename config: %v\n", err)
+	// Ask about node type
+	fmt.Printf("What type of node is this?\n")
+	fmt.Printf("  1. Bootstrap node (cluster leader)\n")
+	fmt.Printf("  2. Regular node (joins existing cluster)\n")
+	fmt.Printf("Enter choice (1 or 2): ")
+	reader := bufio.NewReader(os.Stdin)
+	choice, _ := reader.ReadString('\n')
+	choice = strings.ToLower(strings.TrimSpace(choice))
+
+	isBootstrap := choice == "1" || choice == "bootstrap" || choice == "b"
+
+	var bootstrapPeers string
+	if !isBootstrap {
+		// Ask for bootstrap peer multiaddr
+		fmt.Printf("\nEnter bootstrap peer multiaddr(s) (comma-separated if multiple):\n")
+		fmt.Printf("Example: /ip4/192.168.1.100/tcp/4001/p2p/12D3KooW...\n")
+		fmt.Printf("Bootstrap peer(s): ")
+		bootstrapPeers, _ = reader.ReadString('\n')
+		bootstrapPeers = strings.TrimSpace(bootstrapPeers)
+	}
+
+	// Check if node.yaml already exists
+	if _, err := os.Stat(nodeConfigPath); err == nil {
+		nodeExists = true
+		if !force {
+			fmt.Printf("\n   ℹ️  node.yaml already exists, will not overwrite\n")
+		}
+	}
+
+	// Generate node config
+	if !nodeExists || force {
+		var nodeConfig string
+		if isBootstrap {
+			nodeConfig = generateBootstrapConfigWithIP("bootstrap", "", 4001, 5001, 7001, vpsIP)
+		} else {
+			// Extract IP from bootstrap peer multiaddr for rqlite_join_address
+			// Use first bootstrap peer if multiple provided
+			const defaultRQLiteHTTPPort = 5001
+			var joinAddr string
+			if bootstrapPeers != "" {
+				firstPeer := strings.Split(bootstrapPeers, ",")[0]
+				firstPeer = strings.TrimSpace(firstPeer)
+				extractedIP := extractIPFromMultiaddr(firstPeer)
+				if extractedIP != "" {
+					joinAddr = fmt.Sprintf("%s:%d", extractedIP, defaultRQLiteHTTPPort)
+				} else {
+					joinAddr = fmt.Sprintf("localhost:%d", defaultRQLiteHTTPPort)
+				}
 			} else {
-				fmt.Printf("   ✓ Renamed bootstrap.yaml to node.yaml\n")
+				joinAddr = fmt.Sprintf("localhost:%d", defaultRQLiteHTTPPort)
 			}
+			nodeConfig = generateNodeConfigWithIP("node", "", 4001, 5001, 7001, joinAddr, bootstrapPeers, vpsIP)
 		}
-	} else if nodeExists {
-		// If node.yaml exists, we can optionally remove bootstrap.yaml if it was just created
-		if bootstrapCreated && !force {
-			// Clean up bootstrap.yaml if it was just created but node.yaml already exists
-			if _, err := os.Stat(bootstrapPath); err == nil {
-				exec.Command("sudo", "-u", "debros", "rm", "-f", bootstrapPath).Run()
-			}
+
+		// Write node config
+		if err := os.WriteFile(nodeConfigPath, []byte(nodeConfig), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to write node config: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Printf("   ℹ️  Using existing node.yaml\n")
+		// Fix ownership
+		exec.Command("chown", "debros:debros", nodeConfigPath).Run()
+		fmt.Printf("   ✓ Node config created: %s\n", nodeConfigPath)
 	}
 
-	// Generate gateway config with explicit empty bootstrap peers
-	// Check if gateway.yaml already exists
-	gatewayExists := false
+	// Generate gateway config
 	if _, err := os.Stat(gatewayPath); err == nil {
 		gatewayExists = true
 		if !force {
@@ -849,35 +1296,215 @@ func generateConfigsInteractive(force bool) {
 	}
 
 	if !gatewayExists || force {
-		gatewayArgs := []string{
-			"-u", "debros",
-			"/home/debros/bin/network-cli", "config", "init",
-			"--type", "gateway",
-			"--bootstrap-peers", "",
-		}
-		if force {
-			gatewayArgs = append(gatewayArgs, "--force")
-		}
+		// Prompt for domain and HTTPS configuration
+		var domain string
+		var enableHTTPS bool
+		var tlsCacheDir string
 
-		cmd = exec.Command("sudo", gatewayArgs...)
-		cmd.Stdin = nil // Explicitly close stdin to prevent interactive prompts
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			// Check if gateway.yaml already exists (config init failed because it exists)
-			if _, statErr := os.Stat(gatewayPath); statErr == nil {
-				fmt.Printf("   ℹ️  gateway.yaml already exists, skipping creation\n")
+		fmt.Printf("\n🌐 Domain and HTTPS Configuration\n")
+		fmt.Printf("Would you like to configure HTTPS with a domain name? (yes/no) [default: no]: ")
+		response, _ := reader.ReadString('\n')
+		response = strings.ToLower(strings.TrimSpace(response))
+
+		if response == "yes" || response == "y" {
+			// Check if ports 80 and 443 are available
+			portsAvailable, portIssues := checkPorts80And443()
+			if !portsAvailable {
+				fmt.Fprintf(os.Stderr, "\n⚠️  Cannot enable HTTPS: %s is already in use\n", portIssues)
+				fmt.Fprintf(os.Stderr, "   You will need to configure HTTPS manually if you want to use a domain.\n")
+				fmt.Fprintf(os.Stderr, "   Continuing without HTTPS configuration...\n\n")
+				enableHTTPS = false
 			} else {
-				fmt.Fprintf(os.Stderr, "⚠️  Failed to generate gateway config: %v\n", err)
-				if len(output) > 0 {
-					fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+				// Prompt for domain name
+				domain = promptDomainForHTTPS(reader, vpsIP)
+				if domain != "" {
+					enableHTTPS = true
+					// Set TLS cache directory if HTTPS is enabled
+					tlsCacheDir = "/home/debros/.debros/tls-cache"
+					// Create TLS cache directory
+					if err := os.MkdirAll(tlsCacheDir, 0755); err != nil {
+						fmt.Fprintf(os.Stderr, "⚠️  Failed to create TLS cache directory: %v\n", err)
+					} else {
+						exec.Command("chown", "-R", "debros:debros", tlsCacheDir).Run()
+						fmt.Printf("   ✓ TLS cache directory created: %s\n", tlsCacheDir)
+					}
+				} else {
+					enableHTTPS = false
 				}
 			}
-		} else {
-			fmt.Printf("   ✓ Gateway config created\n")
+		}
+
+		// Gateway config should include bootstrap peers if this is a regular node
+		// (bootstrap nodes don't need bootstrap peers since they are the bootstrap)
+		gatewayConfig := generateGatewayConfigDirect(bootstrapPeers, enableHTTPS, domain, tlsCacheDir)
+		if err := os.WriteFile(gatewayPath, []byte(gatewayConfig), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to write gateway config: %v\n", err)
+			os.Exit(1)
+		}
+		// Fix ownership
+		exec.Command("chown", "debros:debros", gatewayPath).Run()
+		fmt.Printf("   ✓ Gateway config created: %s\n", gatewayPath)
+	}
+
+	fmt.Printf("\n   ✓ Configurations ready\n")
+}
+
+// generateBootstrapConfigWithIP generates a bootstrap config with actual IP address
+func generateBootstrapConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqliteRaftPort int, ipAddr string) string {
+	nodeID := id
+	if nodeID == "" {
+		nodeID = "bootstrap"
+	}
+
+	dataDir := "/home/debros/.debros/bootstrap"
+
+	return fmt.Sprintf(`node:
+  id: "%s"
+  type: "bootstrap"
+  listen_addresses:
+    - "/ip4/%s/tcp/%d"
+  data_dir: "%s"
+  max_connections: 50
+
+database:
+  data_dir: "%s/rqlite"
+  replication_factor: 3
+  shard_count: 16
+  max_database_size: 1073741824
+  backup_interval: "24h"
+  rqlite_port: %d
+  rqlite_raft_port: %d
+  rqlite_join_address: ""
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 1
+
+discovery:
+  bootstrap_peers: []
+  discovery_interval: "15s"
+  bootstrap_port: %d
+  http_adv_address: "%s:%d"
+  raft_adv_address: "%s:%d"
+  node_namespace: "default"
+
+security:
+  enable_tls: false
+
+logging:
+  level: "info"
+  format: "console"
+`, nodeID, ipAddr, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, 4001, ipAddr, rqliteHTTPPort, ipAddr, rqliteRaftPort)
+}
+
+// generateNodeConfigWithIP generates a node config with actual IP address
+func generateNodeConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqliteRaftPort int, joinAddr, bootstrapPeers, ipAddr string) string {
+	nodeID := id
+	if nodeID == "" {
+		nodeID = fmt.Sprintf("node-%d", time.Now().Unix())
+	}
+
+	dataDir := "/home/debros/.debros/node"
+
+	// Parse bootstrap peers
+	var peers []string
+	if bootstrapPeers != "" {
+		for _, p := range strings.Split(bootstrapPeers, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
+			}
 		}
 	}
 
-	fmt.Printf("   ✓ Configurations ready\n")
+	var peersYAML strings.Builder
+	if len(peers) == 0 {
+		peersYAML.WriteString("  bootstrap_peers: []")
+	} else {
+		peersYAML.WriteString("  bootstrap_peers:\n")
+		for _, p := range peers {
+			fmt.Fprintf(&peersYAML, "    - \"%s\"\n", p)
+		}
+	}
+
+	if joinAddr == "" {
+		joinAddr = fmt.Sprintf("localhost:%d", rqliteHTTPPort)
+	}
+
+	return fmt.Sprintf(`node:
+  id: "%s"
+  type: "node"
+  listen_addresses:
+    - "/ip4/%s/tcp/%d"
+  data_dir: "%s"
+  max_connections: 50
+
+database:
+  data_dir: "%s/rqlite"
+  replication_factor: 3
+  shard_count: 16
+  max_database_size: 1073741824
+  backup_interval: "24h"
+  rqlite_port: %d
+  rqlite_raft_port: %d
+  rqlite_join_address: "%s"
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 1
+
+discovery:
+%s
+  discovery_interval: "15s"
+  bootstrap_port: %d
+  http_adv_address: "%s:%d"
+  raft_adv_address: "%s:%d"
+  node_namespace: "default"
+
+security:
+  enable_tls: false
+
+logging:
+  level: "info"
+  format: "console"
+`, nodeID, ipAddr, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, joinAddr, peersYAML.String(), 4001, ipAddr, rqliteHTTPPort, ipAddr, rqliteRaftPort)
+}
+
+// generateGatewayConfigDirect generates gateway config directly
+func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain, tlsCacheDir string) string {
+	var peers []string
+	if bootstrapPeers != "" {
+		for _, p := range strings.Split(bootstrapPeers, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
+			}
+		}
+	}
+
+	var peersYAML strings.Builder
+	if len(peers) == 0 {
+		peersYAML.WriteString("bootstrap_peers: []")
+	} else {
+		peersYAML.WriteString("bootstrap_peers:\n")
+		for _, p := range peers {
+			fmt.Fprintf(&peersYAML, "  - \"%s\"\n", p)
+		}
+	}
+
+	var httpsYAML strings.Builder
+	if enableHTTPS && domain != "" {
+		fmt.Fprintf(&httpsYAML, "enable_https: true\n")
+		fmt.Fprintf(&httpsYAML, "domain_name: \"%s\"\n", domain)
+		if tlsCacheDir != "" {
+			fmt.Fprintf(&httpsYAML, "tls_cache_dir: \"%s\"\n", tlsCacheDir)
+		}
+	} else {
+		fmt.Fprintf(&httpsYAML, "enable_https: false\n")
+	}
+
+	return fmt.Sprintf(`listen_addr: ":6001"
+client_namespace: "default"
+rqlite_dsn: ""
+%s
+%s
+`, peersYAML.String(), httpsYAML.String())
 }
 
 func createSystemdServices() {
@@ -936,6 +1563,10 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=debros-gateway
+
+# Allow binding to privileged ports (80, 443) for HTTPS/ACME
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 NoNewPrivileges=yes
 PrivateTmp=yes

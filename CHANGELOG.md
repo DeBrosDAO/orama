@@ -13,6 +13,144 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.53.18] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Increased the connection timeout during peer discovery from 15 seconds to 20 seconds to improve connection reliability.
+- Removed unnecessary debug logging related to filtering out ephemeral port addresses during peer exchange.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.53.17] - 2025-11-03
+
+### Added
+- Added a new Git `pre-commit` hook to automatically update the changelog and version before committing, ensuring version consistency.
+
+### Changed
+- Refactored the `update_changelog.sh` script to support different execution contexts (pre-commit vs. pre-push), allowing it to analyze only staged changes during commit.
+- The Git `pre-push` hook was simplified by removing the changelog update logic, which is now handled by the `pre-commit` hook.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.53.16] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Improved the changelog generation script to prevent infinite loops when the only unpushed commit is a previous changelog update.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.53.15] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Improved the pre-push git hook to automatically commit updated changelog and Makefile after generation.
+- Updated the changelog generation script to load the OpenRouter API key from the .env file or environment variables for better security.
+- Modified the pre-push hook to read user confirmation from /dev/tty for better compatibility.
+- Updated the bootstrap peer logic to prioritize the DEBROS_BOOTSTRAP_PEERS environment variable for easier configuration.
+- Improved the gateway's private host check to correctly handle IPv6 addresses with or without brackets and ports.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.53.15] - 2025-11-03
+
+### Added
+\n
+### Changed
+- Improved the pre-push git hook to automatically commit updated changelog and Makefile after generation.
+- Updated the changelog generation script to load the OpenRouter API key from the .env file or environment variables for better security.
+- Modified the pre-push hook to read user confirmation from /dev/tty for better compatibility.
+- Updated the bootstrap peer logic to prioritize the DEBROS_BOOTSTRAP_PEERS environment variable for easier configuration.
+- Improved the gateway's private host check to correctly handle IPv6 addresses with or without brackets and ports.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.53.14] - 2025-11-03
+
+### Added
+- Added a new `install-hooks` target to the Makefile to easily set up git hooks.
+- Added a script (`scripts/install-hooks.sh`) to copy git hooks from `.githooks` to `.git/hooks`.
+
+### Changed
+- Improved the pre-push git hook to automatically commit the updated `CHANGELOG.md` and `Makefile` after generating the changelog.
+- Updated the changelog generation script (`scripts/update_changelog.sh`) to load the OpenRouter API key from the `.env` file or environment variables, improving security and configuration.
+- Modified the pre-push hook to read user confirmation from `/dev/tty` for better compatibility in various terminal environments.
+- Updated the bootstrap peer logic to check the `DEBROS_BOOTSTRAP_PEERS` environment variable first, allowing easier configuration override.
+- Improved the gateway's private host check to correctly handle IPv6 addresses with or without brackets and ports.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.53.14] - 2025-11-03
+
+### Added
+- Added a new `install-hooks` target to the Makefile to easily set up git hooks.
+- Added a script (`scripts/install-hooks.sh`) to copy git hooks from `.githooks` to `.git/hooks`.
+
+### Changed
+- Improved the pre-push git hook to automatically commit the updated `CHANGELOG.md` and `Makefile` after generating the changelog.
+- Updated the changelog generation script (`scripts/update_changelog.sh`) to load the OpenRouter API key from the `.env` file or environment variables, improving security and configuration.
+- Modified the pre-push hook to read user confirmation from `/dev/tty` for better compatibility in various terminal environments.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+
+## [0.53.8] - 2025-10-31
+
+### Added
+
+- **HTTPS/ACME Support**: Gateway now supports automatic HTTPS with Let's Encrypt certificates via ACME
+  - Interactive domain configuration during `network-cli setup` command
+  - Automatic port availability checking for ports 80 and 443 before enabling HTTPS
+  - DNS resolution verification to ensure domain points to the server IP
+  - TLS certificate cache directory management (`~/.debros/tls-cache`)
+  - Gateway automatically serves HTTP (port 80) for ACME challenges and HTTPS (port 443) for traffic
+  - New gateway config fields: `enable_https`, `domain_name`, `tls_cache_dir`
+- **Domain Validation**: Added domain name validation and DNS verification helpers in setup CLI
+- **Port Checking**: Added port availability checking utilities to detect conflicts before HTTPS setup
+
+### Changed
+
+- Updated `generateGatewayConfigDirect` to include HTTPS configuration fields
+- Enhanced gateway config parsing to support HTTPS settings with validation
+- Modified gateway startup to handle both HTTP-only and HTTPS+ACME modes
+- Gateway now automatically manages ACME certificate acquisition and renewal
+
+### Fixed
+
+- Improved error handling during HTTPS setup with clear messaging when ports are unavailable
+- Enhanced DNS verification flow with better user feedback during setup
 
 ## [0.53.0] - 2025-10-31
 
