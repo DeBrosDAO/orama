@@ -59,6 +59,7 @@ if [ -f "$CHANGELOG_SCRIPT" ]; then
     echo -e "${GREEN}Proceeding with push...${NOCOLOR}"
     
     # Commit the updated CHANGELOG.md and Makefile
+    cd "$REPO_ROOT"
     echo -e "${CYAN}Staging CHANGELOG.md and Makefile...${NOCOLOR}"
     git add CHANGELOG.md Makefile
     
