@@ -44,7 +44,8 @@ if [ -f "$CHANGELOG_SCRIPT" ]; then
     echo -e "${BLUE}────────────────────────────────────────────────────────────────────────${NOCOLOR}"
     echo ""
     echo -e "${YELLOW}Do you want to proceed with the push? (yes/no):${NOCOLOR} "
-    read -r confirmation
+    # Read from /dev/tty to ensure we can read from terminal even in git hook context
+    read -r confirmation < /dev/tty
     
     if [ "$confirmation" != "yes" ]; then
       echo -e "${RED}Push aborted by user.${NOCOLOR}"
