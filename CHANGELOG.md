@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.54.0] - 2025-11-03
+
+### Added
+- Integrated Olric distributed cache for high-speed key-value storage and caching.
+- Added new HTTP Gateway endpoints for cache operations (GET, PUT, DELETE, SCAN) via `/v1/cache/`.
+- Added `olric_servers` and `olric_timeout` configuration options to the Gateway.
+- Updated the automated installation script (`install-debros-network.sh`) to include Olric installation, configuration, and firewall rules (ports 3320, 3322).
+
+### Changed
+- Refactored README for better clarity and organization, focusing on quick start and core features.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.53.18] - 2025-11-03
 
 ### Added

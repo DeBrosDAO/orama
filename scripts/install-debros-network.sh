@@ -396,6 +396,50 @@ configure_firewall_for_anon() {
     log "No active firewall detected, skipping firewall configuration"
 }
 
+configure_firewall_for_olric() {
+    log "Checking firewall configuration for Olric..."
+    
+    # Check for UFW
+    if command -v ufw &>/dev/null && sudo ufw status | grep -q "Status: active"; then
+        log "UFW detected and active, adding Olric ports..."
+        sudo ufw allow 3320/tcp comment 'Olric HTTP API' 2>/dev/null || true
+        sudo ufw allow 3322/tcp comment 'Olric Memberlist' 2>/dev/null || true
+        success "UFW rules added for Olric"
+        return 0
+    fi
+    
+    # Check for firewalld
+    if command -v firewall-cmd &>/dev/null && sudo firewall-cmd --state 2>/dev/null | grep -q "running"; then
+        log "firewalld detected and active, adding Olric ports..."
+        sudo firewall-cmd --permanent --add-port=3320/tcp 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-port=3322/tcp 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+        success "firewalld rules added for Olric"
+        return 0
+    fi
+    
+    # Check for iptables
+    if command -v iptables &>/dev/null; then
+        # Check if iptables has any rules (indicating it's in use)
+        if sudo iptables -L -n | grep -q "Chain INPUT"; then
+            log "iptables detected, adding Olric ports..."
+            sudo iptables -A INPUT -p tcp --dport 3320 -j ACCEPT -m comment --comment "Olric HTTP API" 2>/dev/null || true
+            sudo iptables -A INPUT -p tcp --dport 3322 -j ACCEPT -m comment --comment "Olric Memberlist" 2>/dev/null || true
+            
+            # Try to save rules if iptables-persistent is available
+            if command -v netfilter-persistent &>/dev/null; then
+                sudo netfilter-persistent save 2>/dev/null || true
+            elif command -v iptables-save &>/dev/null; then
+                sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
+            fi
+            success "iptables rules added for Olric"
+            return 0
+        fi
+    fi
+    
+    log "No active firewall detected for Olric, skipping firewall configuration"
+}
+
 run_setup() {
     echo -e ""
     echo -e "${BLUE}========================================${NOCOLOR}"

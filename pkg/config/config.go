@@ -41,6 +41,10 @@ type DatabaseConfig struct {
 	ClusterSyncInterval time.Duration `yaml:"cluster_sync_interval"` // default: 30s
 	PeerInactivityLimit time.Duration `yaml:"peer_inactivity_limit"` // default: 24h
 	MinClusterSize      int           `yaml:"min_cluster_size"`      // default: 1
+
+	// Olric cache configuration
+	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 3320)
+	OlricMemberlistPort int `yaml:"olric_memberlist_port"` // Olric memberlist port (default: 3322)
 }
 
 // DiscoveryConfig contains peer discovery configuration
@@ -116,6 +120,10 @@ func DefaultConfig() *Config {
 			ClusterSyncInterval: 30 * time.Second,
 			PeerInactivityLimit: 24 * time.Hour,
 			MinClusterSize:      1,
+
+			// Olric cache configuration
+			OlricHTTPPort:       3320,
+			OlricMemberlistPort: 3322,
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers:    []string{},

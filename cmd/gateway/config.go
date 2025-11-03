@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
@@ -57,6 +58,8 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		EnableHTTPS     bool     `yaml:"enable_https"`
 		DomainName      string   `yaml:"domain_name"`
 		TLSCacheDir     string   `yaml:"tls_cache_dir"`
+		OlricServers    []string `yaml:"olric_servers"`
+		OlricTimeout    string   `yaml:"olric_timeout"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -86,6 +89,8 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		EnableHTTPS:     false,
 		DomainName:      "",
 		TLSCacheDir:     "",
+		OlricServers:    nil,
+		OlricTimeout:    0,
 	}
 
 	if v := strings.TrimSpace(y.ListenAddr); v != "" {
@@ -122,6 +127,18 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			cfg.TLSCacheDir = filepath.Join(homeDir, ".debros", "tls-cache")
+		}
+	}
+
+	// Olric configuration
+	if len(y.OlricServers) > 0 {
+		cfg.OlricServers = y.OlricServers
+	}
+	if v := strings.TrimSpace(y.OlricTimeout); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			cfg.OlricTimeout = parsed
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "invalid olric_timeout, using default", zap.String("value", v), zap.Error(err))
 		}
 	}
 

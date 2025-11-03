@@ -62,11 +62,12 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  3. Install Go 1.21+ (if needed)\n")
 	fmt.Printf("  4. Install RQLite database\n")
 	fmt.Printf("  5. Install Anyone Relay (Anon) for anonymous networking\n")
-	fmt.Printf("  6. Create directories (/home/debros/bin, /home/debros/src)\n")
-	fmt.Printf("  7. Clone and build DeBros Network\n")
-	fmt.Printf("  8. Generate configuration files\n")
-	fmt.Printf("  9. Create systemd services (debros-node, debros-gateway)\n")
-	fmt.Printf(" 10. Start and enable services\n")
+	fmt.Printf("  6. Install Olric cache server\n")
+	fmt.Printf("  7. Create directories (/home/debros/bin, /home/debros/src)\n")
+	fmt.Printf("  8. Clone and build DeBros Network\n")
+	fmt.Printf("  9. Generate configuration files\n")
+	fmt.Printf(" 10. Create systemd services (debros-node, debros-gateway, debros-olric)\n")
+	fmt.Printf(" 11. Start and enable services\n")
 	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
 
 	fmt.Printf("Ready to begin setup? (yes/no): ")
@@ -91,6 +92,9 @@ func HandleSetupCommand(args []string) {
 
 	// Step 4.5: Install Anon (Anyone relay)
 	installAnon()
+
+	// Step 4.6: Install Olric cache server
+	installOlric()
 
 	// Step 5: Setup directories
 	setupDirectories()
@@ -1037,6 +1041,132 @@ func configureFirewallForAnon() {
 	fmt.Printf("   No active firewall detected\n")
 }
 
+func installOlric() {
+	fmt.Printf("💾 Installing Olric cache server...\n")
+
+	// Check if already installed
+	if _, err := exec.LookPath("olric-server"); err == nil {
+		fmt.Printf("   ✓ Olric already installed\n")
+		configureFirewallForOlric()
+		return
+	}
+
+	// Ensure Go is available (required for go install)
+	if _, err := exec.LookPath("go"); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Go not found - cannot install Olric. Please install Go first.\n")
+		return
+	}
+
+	fmt.Printf("   Installing Olric server via go install...\n")
+	cmd := exec.Command("go", "install", "github.com/olric-data/olric/cmd/olric-server@v0.7.0")
+	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to install Olric: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+		}
+		fmt.Fprintf(os.Stderr, "   You can manually install with: go install github.com/olric-data/olric/cmd/olric-server@v0.7.0\n")
+		return
+	}
+
+	// Verify installation
+	if _, err := exec.LookPath("olric-server"); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Olric installation verification failed: binary not found in PATH\n")
+		fmt.Fprintf(os.Stderr, "   Make sure /usr/local/bin is in PATH\n")
+		return
+	}
+
+	fmt.Printf("   ✓ Olric installed\n")
+
+	// Configure firewall
+	configureFirewallForOlric()
+
+	// Create Olric config directory
+	olricConfigDir := "/home/debros/.debros/olric"
+	if err := os.MkdirAll(olricConfigDir, 0755); err == nil {
+		configPath := olricConfigDir + "/config.yaml"
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			configContent := `memberlist:
+  bind-addr: "0.0.0.0"
+  bind-port: 3322
+client:
+  bind-addr: "0.0.0.0"
+  bind-port: 3320
+
+# Durability and replication configuration
+# Replicates data across entire network for fault tolerance
+dmaps:
+  default:
+    replication:
+      mode: sync  # Synchronous replication for durability
+      replica_count: 2  # Replicate to 2 backup nodes (3 total copies: 1 primary + 2 backups)
+    write_quorum: 2  # Require 2 nodes to acknowledge writes
+    read_quorum: 1   # Read from 1 node (faster reads)
+    read_repair: true  # Enable read-repair for consistency
+
+# Split-brain protection
+member_count_quorum: 2  # Require at least 2 nodes to operate (prevents split-brain)
+`
+			if err := os.WriteFile(configPath, []byte(configContent), 0644); err == nil {
+				exec.Command("chown", "debros:debros", configPath).Run()
+				fmt.Printf("   ✓ Olric config created at %s\n", configPath)
+			}
+		}
+		exec.Command("chown", "-R", "debros:debros", olricConfigDir).Run()
+	}
+}
+
+func configureFirewallForOlric() {
+	fmt.Printf("   Checking firewall configuration for Olric...\n")
+
+	// Check for UFW
+	if _, err := exec.LookPath("ufw"); err == nil {
+		output, _ := exec.Command("ufw", "status").CombinedOutput()
+		if strings.Contains(string(output), "Status: active") {
+			fmt.Printf("   Adding UFW rules for Olric...\n")
+			exec.Command("ufw", "allow", "3320/tcp", "comment", "Olric HTTP API").Run()
+			exec.Command("ufw", "allow", "3322/tcp", "comment", "Olric Memberlist").Run()
+			fmt.Printf("   ✓ UFW rules added for Olric\n")
+			return
+		}
+	}
+
+	// Check for firewalld
+	if _, err := exec.LookPath("firewall-cmd"); err == nil {
+		output, _ := exec.Command("firewall-cmd", "--state").CombinedOutput()
+		if strings.Contains(string(output), "running") {
+			fmt.Printf("   Adding firewalld rules for Olric...\n")
+			exec.Command("firewall-cmd", "--permanent", "--add-port=3320/tcp").Run()
+			exec.Command("firewall-cmd", "--permanent", "--add-port=3322/tcp").Run()
+			exec.Command("firewall-cmd", "--reload").Run()
+			fmt.Printf("   ✓ firewalld rules added for Olric\n")
+			return
+		}
+	}
+
+	// Check for iptables
+	if _, err := exec.LookPath("iptables"); err == nil {
+		output, _ := exec.Command("iptables", "-L", "-n").CombinedOutput()
+		if strings.Contains(string(output), "Chain INPUT") {
+			fmt.Printf("   Adding iptables rules for Olric...\n")
+			exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport", "3320", "-j", "ACCEPT", "-m", "comment", "--comment", "Olric HTTP API").Run()
+			exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport", "3322", "-j", "ACCEPT", "-m", "comment", "--comment", "Olric Memberlist").Run()
+
+			// Try to save rules
+			if _, err := exec.LookPath("netfilter-persistent"); err == nil {
+				exec.Command("netfilter-persistent", "save").Run()
+			} else if _, err := exec.LookPath("iptables-save"); err == nil {
+				cmd := exec.Command("sh", "-c", "iptables-save > /etc/iptables/rules.v4")
+				cmd.Run()
+			}
+			fmt.Printf("   ✓ iptables rules added for Olric\n")
+			return
+		}
+	}
+
+	fmt.Printf("   No active firewall detected for Olric\n")
+}
+
 func setupDirectories() {
 	fmt.Printf("📁 Creating directories...\n")
 
@@ -1285,6 +1415,19 @@ func generateConfigsInteractive(force bool) {
 		// Fix ownership
 		exec.Command("chown", "debros:debros", nodeConfigPath).Run()
 		fmt.Printf("   ✓ Node config created: %s\n", nodeConfigPath)
+
+		// Generate Olric config file for this node (uses multicast discovery)
+		var olricConfigPath string
+		if isBootstrap {
+			olricConfigPath = "/home/debros/.debros/bootstrap/olric-config.yaml"
+		} else {
+			olricConfigPath = "/home/debros/.debros/node/olric-config.yaml"
+		}
+		if err := generateOlricConfig(olricConfigPath, vpsIP, 3320, 3322); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to generate Olric config: %v\n", err)
+		} else {
+			fmt.Printf("   ✓ Olric config created: %s\n", olricConfigPath)
+		}
 	}
 
 	// Generate gateway config
@@ -1334,9 +1477,20 @@ func generateConfigsInteractive(force bool) {
 			}
 		}
 
+		// For Olric servers, use localhost for local dev, or current node IP
+		// In production, gateway will discover Olric nodes via LibP2P network
+		var olricServers []string
+		if bootstrapPeers == "" {
+			// Local development - use localhost
+			olricServers = []string{"localhost:3320"}
+		} else {
+			// Production - start with current node, will discover others via LibP2P
+			olricServers = []string{fmt.Sprintf("%s:3320", vpsIP)}
+		}
+
 		// Gateway config should include bootstrap peers if this is a regular node
 		// (bootstrap nodes don't need bootstrap peers since they are the bootstrap)
-		gatewayConfig := generateGatewayConfigDirect(bootstrapPeers, enableHTTPS, domain, tlsCacheDir)
+		gatewayConfig := generateGatewayConfigDirect(bootstrapPeers, enableHTTPS, domain, tlsCacheDir, olricServers)
 		if err := os.WriteFile(gatewayPath, []byte(gatewayConfig), 0644); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Failed to write gateway config: %v\n", err)
 			os.Exit(1)
@@ -1429,6 +1583,10 @@ func generateNodeConfigWithIP(name, id string, listenPort, rqliteHTTPPort, rqlit
 		joinAddr = fmt.Sprintf("localhost:%d", rqliteHTTPPort)
 	}
 
+	// Generate Olric config file for regular node (uses multicast discovery)
+	olricConfigPath := "/home/debros/.debros/node/olric-config.yaml"
+	generateOlricConfig(olricConfigPath, ipAddr, 3320, 3322)
+
 	return fmt.Sprintf(`node:
   id: "%s"
   type: "node"
@@ -1468,7 +1626,7 @@ logging:
 }
 
 // generateGatewayConfigDirect generates gateway config directly
-func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain, tlsCacheDir string) string {
+func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain, tlsCacheDir string, olricServers []string) string {
 	var peers []string
 	if bootstrapPeers != "" {
 		for _, p := range strings.Split(bootstrapPeers, ",") {
@@ -1499,12 +1657,71 @@ func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain
 		fmt.Fprintf(&httpsYAML, "enable_https: false\n")
 	}
 
+	// Olric servers configuration
+	var olricYAML strings.Builder
+	if len(olricServers) > 0 {
+		olricYAML.WriteString("olric_servers:\n")
+		for _, server := range olricServers {
+			fmt.Fprintf(&olricYAML, "  - \"%s\"\n", server)
+		}
+	} else {
+		// Default to localhost for local development
+		olricYAML.WriteString("olric_servers:\n")
+		olricYAML.WriteString("  - \"localhost:3320\"\n")
+	}
+
 	return fmt.Sprintf(`listen_addr: ":6001"
 client_namespace: "default"
 rqlite_dsn: ""
 %s
 %s
-`, peersYAML.String(), httpsYAML.String())
+%s
+`, peersYAML.String(), httpsYAML.String(), olricYAML.String())
+}
+
+// generateOlricConfig generates an Olric configuration file
+// Uses multicast discovery - peers will be discovered dynamically via LibP2P network
+func generateOlricConfig(configPath, bindIP string, httpPort, memberlistPort int) error {
+	// Ensure directory exists
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create Olric config directory: %w", err)
+	}
+
+	var config strings.Builder
+	config.WriteString("memberlist:\n")
+	config.WriteString(fmt.Sprintf("  bind-addr: \"%s\"\n", bindIP))
+	config.WriteString(fmt.Sprintf("  bind-port: %d\n", memberlistPort))
+	config.WriteString("  # Multicast discovery enabled - peers discovered dynamically via LibP2P network\n")
+
+	config.WriteString("client:\n")
+	config.WriteString(fmt.Sprintf("  bind-addr: \"%s\"\n", bindIP))
+	config.WriteString(fmt.Sprintf("  bind-port: %d\n", httpPort))
+
+	// Durability and replication settings
+	config.WriteString("\n# Durability and replication configuration\n")
+	config.WriteString("# Replicates data across entire network for fault tolerance\n")
+	config.WriteString("dmaps:\n")
+	config.WriteString("  default:\n")
+	config.WriteString("    replication:\n")
+	config.WriteString("      mode: sync  # Synchronous replication for durability\n")
+	config.WriteString("      replica_count: 2  # Replicate to 2 backup nodes (3 total copies: 1 primary + 2 backups)\n")
+	config.WriteString("    write_quorum: 2  # Require 2 nodes to acknowledge writes\n")
+	config.WriteString("    read_quorum: 1   # Read from 1 node (faster reads)\n")
+	config.WriteString("    read_repair: true  # Enable read-repair for consistency\n")
+
+	// Split-brain protection
+	config.WriteString("\n# Split-brain protection\n")
+	config.WriteString("member_count_quorum: 2  # Require at least 2 nodes to operate (prevents split-brain)\n")
+
+	// Write config file
+	if err := os.WriteFile(configPath, []byte(config.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write Olric config: %w", err)
+	}
+
+	// Fix ownership
+	exec.Command("chown", "debros:debros", configPath).Run()
+	return nil
 }
 
 func createSystemdServices() {
