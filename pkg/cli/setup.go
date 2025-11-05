@@ -1871,6 +1871,60 @@ func getOrGenerateClusterSecret() (string, error) {
 	return secret, nil
 }
 
+// getOrGenerateSwarmKey gets or generates a shared IPFS swarm key
+// Returns the swarm key content as bytes (formatted for IPFS)
+func getOrGenerateSwarmKey() ([]byte, error) {
+	secretPath := "/home/debros/.debros/swarm.key"
+
+	// Try to read existing key
+	if data, err := os.ReadFile(secretPath); err == nil {
+		// Validate it's a proper swarm key format
+		content := string(data)
+		if strings.Contains(content, "/key/swarm/psk/1.0.0/") {
+			return data, nil
+		}
+	}
+
+	// Generate new key (32 bytes)
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate swarm key: %w", err)
+	}
+
+	// Format as IPFS swarm key file
+	keyHex := strings.ToUpper(hex.EncodeToString(keyBytes))
+	content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", keyHex)
+
+	// Save key
+	if err := os.WriteFile(secretPath, []byte(content), 0600); err != nil {
+		return nil, fmt.Errorf("failed to save swarm key: %w", err)
+	}
+	exec.Command("chown", "debros:debros", secretPath).Run()
+
+	fmt.Printf("   ✓ Generated private swarm key\n")
+	return []byte(content), nil
+}
+
+// ensureSwarmKey ensures the swarm key exists in the IPFS repo
+func ensureSwarmKey(repoPath string, swarmKey []byte) error {
+	swarmKeyPath := filepath.Join(repoPath, "swarm.key")
+
+	// Check if swarm key already exists
+	if _, err := os.Stat(swarmKeyPath); err == nil {
+		// Verify it matches (optional: could compare content)
+		return nil
+	}
+
+	// Create swarm key file in repo
+	if err := os.WriteFile(swarmKeyPath, swarmKey, 0600); err != nil {
+		return fmt.Errorf("failed to write swarm key to repo: %w", err)
+	}
+
+	// Fix ownership
+	exec.Command("chown", "debros:debros", swarmKeyPath).Run()
+	return nil
+}
+
 // initializeIPFSForNode initializes IPFS and IPFS Cluster for a node
 func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
 	fmt.Printf("   Initializing IPFS and Cluster for node %s...\n", nodeID)
@@ -1879,6 +1933,12 @@ func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
 	secret, err := getOrGenerateClusterSecret()
 	if err != nil {
 		return fmt.Errorf("failed to get cluster secret: %w", err)
+	}
+
+	// Get or generate swarm key for private network
+	swarmKey, err := getOrGenerateSwarmKey()
+	if err != nil {
+		return fmt.Errorf("failed to get swarm key: %w", err)
 	}
 
 	// Determine data directories
@@ -1906,11 +1966,22 @@ func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
 			return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
 		}
 
+		// Ensure swarm key is in place (creates private network)
+		if err := ensureSwarmKey(ipfsRepoPath, swarmKey); err != nil {
+			return fmt.Errorf("failed to set swarm key: %w", err)
+		}
+
 		// Configure IPFS API and Gateway addresses
 		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.API", `["/ip4/localhost/tcp/5001"]`, "--repo-dir="+ipfsRepoPath).Run()
 		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Gateway", `["/ip4/localhost/tcp/8080"]`, "--repo-dir="+ipfsRepoPath).Run()
 		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Swarm", `["/ip4/0.0.0.0/tcp/4001","/ip6/::/tcp/4001"]`, "--repo-dir="+ipfsRepoPath).Run()
-		fmt.Printf("      ✓ IPFS initialized\n")
+		fmt.Printf("      ✓ IPFS initialized with private swarm key\n")
+	} else {
+		// Repo exists, but ensure swarm key is present
+		if err := ensureSwarmKey(ipfsRepoPath, swarmKey); err != nil {
+			return fmt.Errorf("failed to set swarm key: %w", err)
+		}
+		fmt.Printf("      ✓ IPFS repository already exists, swarm key ensured\n")
 	}
 
 	// Initialize IPFS Cluster if not already initialized
@@ -2084,6 +2155,7 @@ User=debros
 Group=debros
 Environment=HOME=/home/debros
 ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/node.yaml ]; then export IPFS_PATH=/home/debros/.debros/node/ipfs/repo; elif [ -f /home/debros/.debros/bootstrap.yaml ]; then export IPFS_PATH=/home/debros/.debros/bootstrap/ipfs/repo; else export IPFS_PATH=/home/debros/.debros/bootstrap/ipfs/repo; fi'
+ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/swarm.key ] && [ ! -f ${IPFS_PATH}/swarm.key ]; then cp /home/debros/.debros/swarm.key ${IPFS_PATH}/swarm.key && chmod 600 ${IPFS_PATH}/swarm.key; fi'
 ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=${IPFS_PATH}
 Restart=always
 RestartSec=5

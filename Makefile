@@ -117,45 +117,61 @@ dev: build
 			ipfs-cluster-service --version >/dev/null 2>&1 && openssl rand -hex 32 > $$CLUSTER_SECRET || echo "0000000000000000000000000000000000000000000000000000000000000000" > $$CLUSTER_SECRET; \
 		fi; \
 		SECRET=$$(cat $$CLUSTER_SECRET); \
+		SWARM_KEY=$$HOME/.debros/swarm.key; \
+		if [ ! -f $$SWARM_KEY ]; then \
+			echo "  Generating private swarm key..."; \
+			KEY_HEX=$$(openssl rand -hex 32 | tr '[:lower:]' '[:upper:]'); \
+			printf "/key/swarm/psk/1.0.0/\n/base16/\n%s\n" "$$KEY_HEX" > $$SWARM_KEY; \
+			chmod 600 $$SWARM_KEY; \
+		fi; \
 		echo "  Setting up bootstrap node (IPFS: 5001, Cluster: 9094)..."; \
 		if [ ! -d $$HOME/.debros/bootstrap/ipfs/repo ]; then \
 			echo "    Initializing IPFS..."; \
 			mkdir -p $$HOME/.debros/bootstrap/ipfs; \
 			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.API '["/ip4/localhost/tcp/5001"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/localhost/tcp/8080"]' 2>&1 | grep -v "generating" || true; \
+			cp $$SWARM_KEY $$HOME/.debros/bootstrap/ipfs/repo/swarm.key; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5001"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8080"]' 2>&1 | grep -v "generating" || true; \
 			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4101","/ip6/::/tcp/4101"]' 2>&1 | grep -v "generating" || true; \
+		else \
+			if [ ! -f $$HOME/.debros/bootstrap/ipfs/repo/swarm.key ]; then \
+				cp $$SWARM_KEY $$HOME/.debros/bootstrap/ipfs/repo/swarm.key; \
+			fi; \
 		fi; \
-		echo "    Initializing IPFS Cluster..."; \
+		echo "    Creating IPFS Cluster directories (config will be managed by Go code)..."; \
 		mkdir -p $$HOME/.debros/bootstrap/ipfs-cluster; \
-		env IPFS_CLUSTER_PATH=$$HOME/.debros/bootstrap/ipfs-cluster ipfs-cluster-service init --force >/dev/null 2>&1 || true; \
-		jq '.cluster.peername = "bootstrap" | .cluster.secret = "'$$SECRET'" | .cluster.listen_multiaddress = ["/ip4/0.0.0.0/tcp/9096"] | .consensus.crdt.cluster_name = "debros-cluster" | .consensus.crdt.trusted_peers = ["*"] | .api.restapi.http_listen_multiaddress = "/ip4/0.0.0.0/tcp/9094" | .api.ipfsproxy.listen_multiaddress = "/ip4/127.0.0.1/tcp/9095" | .api.pinsvcapi.http_listen_multiaddress = "/ip4/127.0.0.1/tcp/9097" | .ipfs_connector.ipfshttp.node_multiaddress = "/ip4/127.0.0.1/tcp/5001"' $$HOME/.debros/bootstrap/ipfs-cluster/service.json > $$HOME/.debros/bootstrap/ipfs-cluster/service.json.tmp && mv $$HOME/.debros/bootstrap/ipfs-cluster/service.json.tmp $$HOME/.debros/bootstrap/ipfs-cluster/service.json; \
 		echo "  Setting up node2 (IPFS: 5002, Cluster: 9104)..."; \
 		if [ ! -d $$HOME/.debros/node2/ipfs/repo ]; then \
 			echo "    Initializing IPFS..."; \
 			mkdir -p $$HOME/.debros/node2/ipfs; \
 			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.API '["/ip4/localhost/tcp/5002"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/localhost/tcp/8081"]' 2>&1 | grep -v "generating" || true; \
+			cp $$SWARM_KEY $$HOME/.debros/node2/ipfs/repo/swarm.key; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5002"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8081"]' 2>&1 | grep -v "generating" || true; \
 			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4102","/ip6/::/tcp/4102"]' 2>&1 | grep -v "generating" || true; \
+		else \
+			if [ ! -f $$HOME/.debros/node2/ipfs/repo/swarm.key ]; then \
+				cp $$SWARM_KEY $$HOME/.debros/node2/ipfs/repo/swarm.key; \
+			fi; \
 		fi; \
-		echo "    Initializing IPFS Cluster..."; \
+		echo "    Creating IPFS Cluster directories (config will be managed by Go code)..."; \
 		mkdir -p $$HOME/.debros/node2/ipfs-cluster; \
-		env IPFS_CLUSTER_PATH=$$HOME/.debros/node2/ipfs-cluster ipfs-cluster-service init --force >/dev/null 2>&1 || true; \
-		jq '.cluster.peername = "node2" | .cluster.secret = "'$$SECRET'" | .cluster.listen_multiaddress = ["/ip4/0.0.0.0/tcp/9106"] | .consensus.crdt.cluster_name = "debros-cluster" | .consensus.crdt.trusted_peers = ["*"] | .api.restapi.http_listen_multiaddress = "/ip4/0.0.0.0/tcp/9104" | .api.ipfsproxy.listen_multiaddress = "/ip4/127.0.0.1/tcp/9105" | .api.pinsvcapi.http_listen_multiaddress = "/ip4/127.0.0.1/tcp/9107" | .ipfs_connector.ipfshttp.node_multiaddress = "/ip4/127.0.0.1/tcp/5002"' $$HOME/.debros/node2/ipfs-cluster/service.json > $$HOME/.debros/node2/ipfs-cluster/service.json.tmp && mv $$HOME/.debros/node2/ipfs-cluster/service.json.tmp $$HOME/.debros/node2/ipfs-cluster/service.json; \
 		echo "  Setting up node3 (IPFS: 5003, Cluster: 9114)..."; \
 		if [ ! -d $$HOME/.debros/node3/ipfs/repo ]; then \
 			echo "    Initializing IPFS..."; \
 			mkdir -p $$HOME/.debros/node3/ipfs; \
 			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.API '["/ip4/localhost/tcp/5003"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/localhost/tcp/8082"]' 2>&1 | grep -v "generating" || true; \
+			cp $$SWARM_KEY $$HOME/.debros/node3/ipfs/repo/swarm.key; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5003"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8082"]' 2>&1 | grep -v "generating" || true; \
 			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4103","/ip6/::/tcp/4103"]' 2>&1 | grep -v "generating" || true; \
+		else \
+			if [ ! -f $$HOME/.debros/node3/ipfs/repo/swarm.key ]; then \
+				cp $$SWARM_KEY $$HOME/.debros/node3/ipfs/repo/swarm.key; \
+			fi; \
 		fi; \
-		echo "    Initializing IPFS Cluster..."; \
+		echo "    Creating IPFS Cluster directories (config will be managed by Go code)..."; \
 		mkdir -p $$HOME/.debros/node3/ipfs-cluster; \
-		env IPFS_CLUSTER_PATH=$$HOME/.debros/node3/ipfs-cluster ipfs-cluster-service init --force >/dev/null 2>&1 || true; \
-		jq '.cluster.peername = "node3" | .cluster.secret = "'$$SECRET'" | .cluster.listen_multiaddress = ["/ip4/0.0.0.0/tcp/9116"] | .consensus.crdt.cluster_name = "debros-cluster" | .consensus.crdt.trusted_peers = ["*"] | .api.restapi.http_listen_multiaddress = "/ip4/0.0.0.0/tcp/9114" | .api.ipfsproxy.listen_multiaddress = "/ip4/127.0.0.1/tcp/9115" | .api.pinsvcapi.http_listen_multiaddress = "/ip4/127.0.0.1/tcp/9117" | .ipfs_connector.ipfshttp.node_multiaddress = "/ip4/127.0.0.1/tcp/5003"' $$HOME/.debros/node3/ipfs-cluster/service.json > $$HOME/.debros/node3/ipfs-cluster/service.json.tmp && mv $$HOME/.debros/node3/ipfs-cluster/service.json.tmp $$HOME/.debros/node3/ipfs-cluster/service.json; \
 		echo "Starting IPFS daemons..."; \
 		if [ ! -f .dev/pids/ipfs-bootstrap.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-bootstrap.pid) 2>/dev/null; then \
 			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo nohup ipfs daemon --enable-pubsub-experiment > $$HOME/.debros/logs/ipfs-bootstrap.log 2>&1 & echo $$! > .dev/pids/ipfs-bootstrap.pid; \
@@ -178,29 +194,6 @@ dev: build
 		else \
 			echo "  ✓ Node3 IPFS already running"; \
 		fi; \
-		\
-		echo "Starting IPFS Cluster peers..."; \
-		if [ ! -f .dev/pids/ipfs-cluster-bootstrap.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-bootstrap.pid) 2>/dev/null; then \
-			env IPFS_CLUSTER_PATH=$$HOME/.debros/bootstrap/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-bootstrap.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-bootstrap.pid; \
-			echo "  Bootstrap Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-bootstrap.pid), API: 9094)"; \
-			sleep 3; \
-		else \
-			echo "  ✓ Bootstrap Cluster already running"; \
-		fi; \
-		if [ ! -f .dev/pids/ipfs-cluster-node2.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-node2.pid) 2>/dev/null; then \
-			env IPFS_CLUSTER_PATH=$$HOME/.debros/node2/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-node2.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-node2.pid; \
-			echo "  Node2 Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-node2.pid), API: 9104)"; \
-			sleep 3; \
-		else \
-			echo "  ✓ Node2 Cluster already running"; \
-		fi; \
-		if [ ! -f .dev/pids/ipfs-cluster-node3.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-node3.pid) 2>/dev/null; then \
-			env IPFS_CLUSTER_PATH=$$HOME/.debros/node3/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-node3.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-node3.pid; \
-			echo "  Node3 Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-node3.pid), API: 9114)"; \
-			sleep 3; \
-		else \
-			echo "  ✓ Node3 Cluster already running"; \
-		fi; \
 	else \
 		echo "  ⚠️  ipfs or ipfs-cluster-service not found - skipping IPFS setup"; \
 		echo "  Install with: https://docs.ipfs.tech/install/ and https://ipfscluster.io/documentation/guides/install/"; \
@@ -208,12 +201,58 @@ dev: build
 	@sleep 2
 	@echo "Starting bootstrap node..."
 	@nohup ./bin/node --config bootstrap.yaml > $$HOME/.debros/logs/bootstrap.log 2>&1 & echo $$! > .dev/pids/bootstrap.pid
-	@sleep 2
+	@sleep 3
 	@echo "Starting node2..."
 	@nohup ./bin/node --config node2.yaml > $$HOME/.debros/logs/node2.log 2>&1 & echo $$! > .dev/pids/node2.pid
-	@sleep 1
+	@sleep 2
 	@echo "Starting node3..."
 	@nohup ./bin/node --config node3.yaml > $$HOME/.debros/logs/node3.log 2>&1 & echo $$! > .dev/pids/node3.pid
+	@sleep 3
+	@echo "Starting IPFS Cluster daemons (after Go nodes have configured them)..."
+	@if command -v ipfs-cluster-service >/dev/null 2>&1; then \
+		if [ ! -f .dev/pids/ipfs-cluster-bootstrap.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-bootstrap.pid) 2>/dev/null; then \
+			if [ -f $$HOME/.debros/bootstrap/ipfs-cluster/service.json ]; then \
+				env IPFS_CLUSTER_PATH=$$HOME/.debros/bootstrap/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-bootstrap.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-bootstrap.pid; \
+				echo "  Bootstrap Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-bootstrap.pid), API: 9094)"; \
+				echo "  Waiting for bootstrap cluster to be ready..."; \
+				for i in $$(seq 1 30); do \
+					if curl -s http://localhost:9094/peers >/dev/null 2>&1; then \
+						break; \
+					fi; \
+					sleep 1; \
+				done; \
+				sleep 2; \
+			else \
+				echo "  ⚠️  Bootstrap cluster config not ready yet"; \
+			fi; \
+		else \
+			echo "  ✓ Bootstrap Cluster already running"; \
+		fi; \
+		if [ ! -f .dev/pids/ipfs-cluster-node2.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-node2.pid) 2>/dev/null; then \
+			if [ -f $$HOME/.debros/node2/ipfs-cluster/service.json ]; then \
+				env IPFS_CLUSTER_PATH=$$HOME/.debros/node2/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-node2.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-node2.pid; \
+				echo "  Node2 Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-node2.pid), API: 9104)"; \
+				sleep 3; \
+			else \
+				echo "  ⚠️  Node2 cluster config not ready yet"; \
+			fi; \
+		else \
+			echo "  ✓ Node2 Cluster already running"; \
+		fi; \
+		if [ ! -f .dev/pids/ipfs-cluster-node3.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-node3.pid) 2>/dev/null; then \
+			if [ -f $$HOME/.debros/node3/ipfs-cluster/service.json ]; then \
+				env IPFS_CLUSTER_PATH=$$HOME/.debros/node3/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-node3.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-node3.pid; \
+				echo "  Node3 Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-node3.pid), API: 9114)"; \
+				sleep 3; \
+			else \
+				echo "  ⚠️  Node3 cluster config not ready yet"; \
+			fi; \
+		else \
+			echo "  ✓ Node3 Cluster already running"; \
+		fi; \
+	else \
+		echo "  ⚠️  ipfs-cluster-service not found - skipping cluster daemon startup"; \
+	fi
 	@sleep 1
 	@echo "Starting Olric cache server..."
 	@if command -v olric-server >/dev/null 2>&1; then \
