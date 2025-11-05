@@ -177,13 +177,13 @@ func TestHashBootstrapConnections(t *testing.T) {
 		}
 
 		// Create two hosts (A and B) listening on localhost TCP
-		hA, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/localhost/tcp/0"))
+		hA, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 		if err != nil {
 			t.Fatalf("libp2p.New (A): %v", err)
 		}
 		defer hA.Close()
 
-		hB, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/localhost/tcp/0"))
+		hB, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 		if err != nil {
 			t.Fatalf("libp2p.New (B): %v", err)
 		}
@@ -244,19 +244,19 @@ func TestHashBootstrapConnections(t *testing.T) {
 		}
 
 		// Create three hosts (A, B, C) listening on localhost TCP
-		hA, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/localhost/tcp/0"))
+		hA, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 		if err != nil {
 			t.Fatalf("libp2p.New (A): %v", err)
 		}
 		defer hA.Close()
 
-		hB, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/localhost/tcp/0"))
+		hB, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 		if err != nil {
 			t.Fatalf("libp2p.New (B): %v", err)
 		}
 		defer hB.Close()
 
-		hC, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/localhost/tcp/0"))
+		hC, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 		if err != nil {
 			t.Fatalf("libp2p.New (C): %v", err)
 		}

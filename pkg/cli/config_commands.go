@@ -286,7 +286,7 @@ func initFullStack(force bool) {
 	fmt.Printf("✅ Generated bootstrap identity: %s (Peer ID: %s)\n", bootstrapIdentityPath, bootstrapInfo.PeerID.String())
 
 	// Construct bootstrap multiaddr
-	bootstrapMultiaddr := fmt.Sprintf("/ip4/localhost/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
+	bootstrapMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
 	fmt.Printf("   Bootstrap multiaddr: %s\n", bootstrapMultiaddr)
 
 	// Generate configs for all nodes...
