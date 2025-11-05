@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks
 
-VERSION := 0.54.0
+VERSION := 0.56.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -119,6 +119,58 @@ dev: build
 	@echo "Starting node3..."
 	@nohup ./bin/node --config node3.yaml > $$HOME/.debros/logs/node3.log 2>&1 & echo $$! > .dev/pids/node3.pid
 	@sleep 1
+	@echo "Starting IPFS daemon..."
+	@if command -v ipfs >/dev/null 2>&1; then \
+		if [ ! -d $$HOME/.debros/ipfs ]; then \
+			echo "  Initializing IPFS repository..."; \
+			IPFS_PATH=$$HOME/.debros/ipfs ipfs init 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
+		fi; \
+		if ! pgrep -f "ipfs daemon" >/dev/null 2>&1; then \
+			IPFS_PATH=$$HOME/.debros/ipfs nohup ipfs daemon > $$HOME/.debros/logs/ipfs.log 2>&1 & echo $$! > .dev/pids/ipfs.pid; \
+			echo "  IPFS daemon started (PID: $$(cat .dev/pids/ipfs.pid))"; \
+			sleep 5; \
+		else \
+			echo "  ✓ IPFS daemon already running"; \
+		fi; \
+	else \
+		echo "  ⚠️  ipfs command not found - skipping IPFS (storage endpoints will be disabled)"; \
+		echo "  Install with: https://docs.ipfs.tech/install/"; \
+	fi
+	@echo "Starting IPFS Cluster daemon..."
+	@if command -v ipfs-cluster-service >/dev/null 2>&1; then \
+		if [ ! -d $$HOME/.debros/ipfs-cluster ]; then \
+			echo "  Initializing IPFS Cluster..."; \
+			CLUSTER_PATH=$$HOME/.debros/ipfs-cluster ipfs-cluster-service init --force 2>&1 | grep -v "peer identity" || true; \
+		fi; \
+		if ! pgrep -f "ipfs-cluster-service" >/dev/null 2>&1; then \
+			CLUSTER_PATH=$$HOME/.debros/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster.pid; \
+			echo "  IPFS Cluster daemon started (PID: $$(cat .dev/pids/ipfs-cluster.pid))"; \
+			sleep 5; \
+		else \
+			echo "  ✓ IPFS Cluster daemon already running"; \
+		fi; \
+	else \
+		echo "  ⚠️  ipfs-cluster-service command not found - skipping IPFS Cluster (storage endpoints will be disabled)"; \
+		echo "  Install with: https://ipfscluster.io/documentation/guides/install/"; \
+	fi
+	@echo "Starting Olric cache server..."
+	@if command -v olric-server >/dev/null 2>&1; then \
+		if [ ! -f $$HOME/.debros/olric-config.yaml ]; then \
+			echo "  Creating Olric config..."; \
+			mkdir -p $$HOME/.debros; \
+		fi; \
+		if ! pgrep -f "olric-server" >/dev/null 2>&1; then \
+			OLRIC_SERVER_CONFIG=$$HOME/.debros/olric-config.yaml nohup olric-server > $$HOME/.debros/logs/olric.log 2>&1 & echo $$! > .dev/pids/olric.pid; \
+			echo "  Olric cache server started (PID: $$(cat .dev/pids/olric.pid))"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Olric cache server already running"; \
+		fi; \
+	else \
+		echo "  ⚠️  olric-server command not found - skipping Olric (cache endpoints will be disabled)"; \
+		echo "  Install with: go install github.com/olric-data/olric/cmd/olric-server@v0.7.0"; \
+	fi
+	@sleep 1
 	@echo "Starting gateway..."
 	@nohup ./bin/gateway --config gateway.yaml > $$HOME/.debros/logs/gateway.log 2>&1 & echo $$! > .dev/pids/gateway.pid
 	@echo ""
@@ -130,6 +182,15 @@ dev: build
 	@if [ -f .dev/pids/anon.pid ]; then \
 		echo "  Anon:      PID=$$(cat .dev/pids/anon.pid) (SOCKS: 9050)"; \
 	fi
+	@if [ -f .dev/pids/ipfs.pid ]; then \
+		echo "  IPFS:      PID=$$(cat .dev/pids/ipfs.pid) (API: 5001)"; \
+	fi
+	@if [ -f .dev/pids/ipfs-cluster.pid ]; then \
+		echo "  IPFS Cluster: PID=$$(cat .dev/pids/ipfs-cluster.pid) (API: 9094)"; \
+	fi
+	@if [ -f .dev/pids/olric.pid ]; then \
+		echo "  Olric:     PID=$$(cat .dev/pids/olric.pid) (API: 3320)"; \
+	fi
 	@echo "  Bootstrap: PID=$$(cat .dev/pids/bootstrap.pid)"
 	@echo "  Node2:     PID=$$(cat .dev/pids/node2.pid)"
 	@echo "  Node3:     PID=$$(cat .dev/pids/node3.pid)"
@@ -137,6 +198,13 @@ dev: build
 	@echo ""
 	@echo "Ports:"
 	@echo "  Anon SOCKS:    9050 (proxy endpoint: POST /v1/proxy/anon)"
+	@if [ -f .dev/pids/ipfs.pid ]; then \
+		echo "  IPFS API:      5001 (content retrieval)"; \
+		echo "  IPFS Cluster: 9094 (pin management)"; \
+	fi
+	@if [ -f .dev/pids/olric.pid ]; then \
+		echo "  Olric:         3320 (cache API)"; \
+	fi
 	@echo "  Bootstrap P2P: 4001, HTTP: 5001, Raft: 7001"
 	@echo "  Node2     P2P: 4002, HTTP: 5002, Raft: 7002"
 	@echo "  Node3     P2P: 4003, HTTP: 5003, Raft: 7003"
@@ -145,13 +213,18 @@ dev: build
 	@echo "Press Ctrl+C to stop all processes"
 	@echo "============================================================"
 	@echo ""
-	@if [ -f .dev/pids/anon.pid ]; then \
-		trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
-		tail -f $$HOME/.debros/logs/anon.log $$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log; \
-	else \
-		trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
-		tail -f $$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log; \
-	fi
+	@LOGS="$$HOME/.debros/logs/bootstrap.log $$HOME/.debros/logs/node2.log $$HOME/.debros/logs/node3.log $$HOME/.debros/logs/gateway.log"; \
+	if [ -f .dev/pids/anon.pid ]; then \
+		LOGS="$$LOGS $$HOME/.debros/logs/anon.log"; \
+	fi; \
+	if [ -f .dev/pids/ipfs.pid ]; then \
+		LOGS="$$LOGS $$HOME/.debros/logs/ipfs.log"; \
+	fi; \
+	if [ -f .dev/pids/ipfs-cluster.pid ]; then \
+		LOGS="$$LOGS $$HOME/.debros/logs/ipfs-cluster.log"; \
+	fi; \
+	trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
+	tail -f $$LOGS
 
 # Help
 help:

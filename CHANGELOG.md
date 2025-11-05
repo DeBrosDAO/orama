@@ -13,6 +13,42 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.56.0] - 2025-11-05
+
+### Added
+- Added IPFS storage endpoints to the Gateway for content upload, pinning, status, retrieval, and unpinning.
+- Introduced `StorageClient` interface and implementation in the Go client library for interacting with the new IPFS storage endpoints.
+- Added support for automatically starting IPFS daemon, IPFS Cluster daemon, and Olric cache server in the `dev` environment setup.
+
+### Changed
+- Updated Gateway configuration to include settings for IPFS Cluster API URL, IPFS API URL, timeout, and replication factor.
+- Refactored Olric configuration generation to use a simpler, local-environment focused setup.
+- Improved IPFS content retrieval (`Get`) to fall back to the IPFS Gateway (port 8080) if the IPFS API (port 5001) returns a 404.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.55.0] - 2025-11-05
+
+### Added
+- Added IPFS storage endpoints to the Gateway for content upload, pinning, status, retrieval, and unpinning.
+- Introduced `StorageClient` interface and implementation in the Go client library for interacting with the new IPFS storage endpoints.
+- Added support for automatically starting IPFS daemon, IPFS Cluster daemon, and Olric cache server in the `dev` environment setup.
+
+### Changed
+- Updated Gateway configuration to include settings for IPFS Cluster API URL, IPFS API URL, timeout, and replication factor.
+- Refactored Olric configuration generation to use a simpler, local-environment focused setup.
+- Improved `dev` environment logging to include logs from IPFS and Olric services when running.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.54.0] - 2025-11-03
 
 ### Added

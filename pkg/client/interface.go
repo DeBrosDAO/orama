@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -16,6 +17,9 @@ type NetworkClient interface {
 
 	// Network information
 	Network() NetworkInfo
+
+	// Storage operations (IPFS)
+	Storage() StorageClient
 
 	// Lifecycle
 	Connect() error
@@ -49,6 +53,24 @@ type NetworkInfo interface {
 	GetStatus(ctx context.Context) (*NetworkStatus, error)
 	ConnectToPeer(ctx context.Context, peerAddr string) error
 	DisconnectFromPeer(ctx context.Context, peerID string) error
+}
+
+// StorageClient provides IPFS storage operations
+type StorageClient interface {
+	// Upload uploads content to IPFS and pins it
+	Upload(ctx context.Context, reader io.Reader, name string) (*StorageUploadResult, error)
+
+	// Pin pins an existing CID
+	Pin(ctx context.Context, cid string, name string) (*StoragePinResult, error)
+
+	// Status gets the pin status for a CID
+	Status(ctx context.Context, cid string) (*StorageStatus, error)
+
+	// Get retrieves content from IPFS by CID
+	Get(ctx context.Context, cid string) (io.ReadCloser, error)
+
+	// Unpin removes a pin from a CID
+	Unpin(ctx context.Context, cid string) error
 }
 
 // MessageHandler is called when a pub/sub message is received
@@ -107,12 +129,38 @@ type HealthStatus struct {
 	ResponseTime time.Duration     `json:"response_time"`
 }
 
+// StorageUploadResult represents the result of uploading content to IPFS
+type StorageUploadResult struct {
+	Cid  string `json:"cid"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// StoragePinResult represents the result of pinning a CID
+type StoragePinResult struct {
+	Cid  string `json:"cid"`
+	Name string `json:"name"`
+}
+
+// StorageStatus represents the status of a pinned CID
+type StorageStatus struct {
+	Cid               string   `json:"cid"`
+	Name              string   `json:"name"`
+	Status            string   `json:"status"` // "pinned", "pinning", "queued", "unpinned", "error"
+	ReplicationMin    int      `json:"replication_min"`
+	ReplicationMax    int      `json:"replication_max"`
+	ReplicationFactor int      `json:"replication_factor"`
+	Peers             []string `json:"peers"`
+	Error             string   `json:"error,omitempty"`
+}
+
 // ClientConfig represents configuration for network clients
 type ClientConfig struct {
 	AppName           string        `json:"app_name"`
 	DatabaseName      string        `json:"database_name"`
 	BootstrapPeers    []string      `json:"bootstrap_peers"`
 	DatabaseEndpoints []string      `json:"database_endpoints"`
+	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access (e.g., "http://localhost:6001")
 	ConnectTimeout    time.Duration `json:"connect_timeout"`
 	RetryAttempts     int           `json:"retry_attempts"`
 	RetryDelay        time.Duration `json:"retry_delay"`
@@ -132,6 +180,7 @@ func DefaultClientConfig(appName string) *ClientConfig {
 		DatabaseName:      fmt.Sprintf("%s_db", appName),
 		BootstrapPeers:    peers,
 		DatabaseEndpoints: endpoints,
+		GatewayURL:        "http://localhost:6001",
 		ConnectTimeout:    time.Second * 30,
 		RetryAttempts:     3,
 		RetryDelay:        time.Second * 5,

@@ -3,10 +3,13 @@
 package e2e
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -404,6 +407,201 @@ func TestGateway_Database_RecreateWithFK(t *testing.T) {
 		if !found {
 			t.Fatalf("age column type not INTEGER after migration")
 		}
+	}
+}
+
+func TestGateway_Storage_UploadMultipart(t *testing.T) {
+	key := requireAPIKey(t)
+	base := gatewayBaseURL()
+
+	// Create multipart form data using proper multipart writer
+	content := []byte("test file content for IPFS upload")
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "test.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/storage/upload", &buf)
+	req.Header = authHeader(key)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		t.Fatalf("upload do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		t.Skip("IPFS storage not available; skipping storage tests")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var uploadResp struct {
+		Cid  string `json:"cid"`
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&uploadResp); err != nil {
+		t.Fatalf("upload decode: %v", err)
+	}
+	if uploadResp.Cid == "" {
+		t.Fatalf("upload returned empty CID")
+	}
+	if uploadResp.Name != "test.txt" {
+		t.Fatalf("upload name mismatch: got %s", uploadResp.Name)
+	}
+	if uploadResp.Size == 0 {
+		t.Fatalf("upload size is zero")
+	}
+
+	// Test pinning the uploaded content
+	pinBody := fmt.Sprintf(`{"cid":"%s","name":"test-pinned"}`, uploadResp.Cid)
+	req2, _ := http.NewRequest(http.MethodPost, base+"/v1/storage/pin", strings.NewReader(pinBody))
+	req2.Header = authHeader(key)
+	resp2, err := httpClient().Do(req2)
+	if err != nil {
+		t.Fatalf("pin do: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("pin status: %d, body: %s", resp2.StatusCode, string(body))
+	}
+
+	// Test getting pin status
+	req3, _ := http.NewRequest(http.MethodGet, base+"/v1/storage/status/"+uploadResp.Cid, nil)
+	req3.Header = authHeader(key)
+	resp3, err := httpClient().Do(req3)
+	if err != nil {
+		t.Fatalf("status do: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp3.Body)
+		t.Fatalf("status status: %d, body: %s", resp3.StatusCode, string(body))
+	}
+
+	var statusResp struct {
+		Cid               string   `json:"cid"`
+		Status            string   `json:"status"`
+		ReplicationFactor int      `json:"replication_factor"`
+		Peers             []string `json:"peers"`
+	}
+	if err := json.NewDecoder(resp3.Body).Decode(&statusResp); err != nil {
+		t.Fatalf("status decode: %v", err)
+	}
+	if statusResp.Cid != uploadResp.Cid {
+		t.Fatalf("status CID mismatch: got %s", statusResp.Cid)
+	}
+
+	// Test retrieving content
+	req4, _ := http.NewRequest(http.MethodGet, base+"/v1/storage/get/"+uploadResp.Cid, nil)
+	req4.Header = authHeader(key)
+	resp4, err := httpClient().Do(req4)
+	if err != nil {
+		t.Fatalf("get do: %v", err)
+	}
+	defer resp4.Body.Close()
+	if resp4.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp4.Body)
+		t.Fatalf("get status: %d, body: %s", resp4.StatusCode, string(body))
+	}
+
+	retrieved, err := io.ReadAll(resp4.Body)
+	if err != nil {
+		t.Fatalf("get read: %v", err)
+	}
+	if string(retrieved) != string(content) {
+		t.Fatalf("retrieved content mismatch: got %q", string(retrieved))
+	}
+
+	// Test unpinning
+	req5, _ := http.NewRequest(http.MethodDelete, base+"/v1/storage/unpin/"+uploadResp.Cid, nil)
+	req5.Header = authHeader(key)
+	resp5, err := httpClient().Do(req5)
+	if err != nil {
+		t.Fatalf("unpin do: %v", err)
+	}
+	defer resp5.Body.Close()
+	if resp5.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp5.Body)
+		t.Fatalf("unpin status: %d, body: %s", resp5.StatusCode, string(body))
+	}
+}
+
+func TestGateway_Storage_UploadJSON(t *testing.T) {
+	key := requireAPIKey(t)
+	base := gatewayBaseURL()
+
+	// Test JSON upload with base64 data
+	content := []byte("test json upload content")
+	b64 := base64.StdEncoding.EncodeToString(content)
+	body := fmt.Sprintf(`{"name":"test.json","data":"%s"}`, b64)
+
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/storage/upload", strings.NewReader(body))
+	req.Header = authHeader(key)
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		t.Fatalf("upload json do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		t.Skip("IPFS storage not available; skipping storage tests")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload json status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var uploadResp struct {
+		Cid  string `json:"cid"`
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&uploadResp); err != nil {
+		t.Fatalf("upload json decode: %v", err)
+	}
+	if uploadResp.Cid == "" {
+		t.Fatalf("upload json returned empty CID")
+	}
+	if uploadResp.Name != "test.json" {
+		t.Fatalf("upload json name mismatch: got %s", uploadResp.Name)
+	}
+}
+
+func TestGateway_Storage_InvalidCID(t *testing.T) {
+	key := requireAPIKey(t)
+	base := gatewayBaseURL()
+
+	// Test status with invalid CID
+	req, _ := http.NewRequest(http.MethodGet, base+"/v1/storage/status/QmInvalidCID123", nil)
+	req.Header = authHeader(key)
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		t.Fatalf("status invalid do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		t.Skip("IPFS storage not available; skipping storage tests")
+	}
+
+	// Should return error but not crash
+	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected error status for invalid CID, got %d", resp.StatusCode)
 	}
 }
 

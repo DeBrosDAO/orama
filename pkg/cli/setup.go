@@ -1086,26 +1086,15 @@ func installOlric() {
 	if err := os.MkdirAll(olricConfigDir, 0755); err == nil {
 		configPath := olricConfigDir + "/config.yaml"
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			configContent := `memberlist:
-  bind-addr: "0.0.0.0"
-  bind-port: 3322
-client:
-  bind-addr: "0.0.0.0"
-  bind-port: 3320
+			configContent := `server:
+  bindAddr: "127.0.0.1"
+  bindPort: 3320
 
-# Durability and replication configuration
-# Replicates data across entire network for fault tolerance
-dmaps:
-  default:
-    replication:
-      mode: sync  # Synchronous replication for durability
-      replica_count: 2  # Replicate to 2 backup nodes (3 total copies: 1 primary + 2 backups)
-    write_quorum: 2  # Require 2 nodes to acknowledge writes
-    read_quorum: 1   # Read from 1 node (faster reads)
-    read_repair: true  # Enable read-repair for consistency
+memberlist:
+  environment: local
+  bindAddr: "127.0.0.1"
+  bindPort: 3322
 
-# Split-brain protection
-member_count_quorum: 2  # Require at least 2 nodes to operate (prevents split-brain)
 `
 			if err := os.WriteFile(configPath, []byte(configContent), 0644); err == nil {
 				exec.Command("chown", "debros:debros", configPath).Run()
@@ -1532,6 +1521,17 @@ database:
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 1
+  ipfs:
+    # IPFS Cluster API endpoint for pin management (leave empty to disable)
+    cluster_api_url: "http://localhost:9094"
+    # IPFS HTTP API endpoint for content retrieval
+    api_url: "http://localhost:5001"
+    # Timeout for IPFS operations
+    timeout: "60s"
+    # Replication factor for pinned content
+    replication_factor: 3
+    # Enable client-side encryption before upload
+    enable_encryption: true
 
 discovery:
   bootstrap_peers: []
@@ -1607,6 +1607,17 @@ database:
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 1
+  ipfs:
+    # IPFS Cluster API endpoint for pin management (leave empty to disable)
+    cluster_api_url: "http://localhost:9094"
+    # IPFS HTTP API endpoint for content retrieval
+    api_url: "http://localhost:5001"
+    # Timeout for IPFS operations
+    timeout: "60s"
+    # Replication factor for pinned content
+    replication_factor: 3
+    # Enable client-side encryption before upload
+    enable_encryption: true
 
 discovery:
 %s
@@ -1670,13 +1681,23 @@ func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain
 		olricYAML.WriteString("  - \"localhost:3320\"\n")
 	}
 
+	// IPFS Cluster configuration (defaults - can be customized later)
+	ipfsYAML := `# IPFS Cluster configuration (optional)
+# Uncomment and configure if you have IPFS Cluster running:
+# ipfs_cluster_api_url: "http://localhost:9094"
+# ipfs_api_url: "http://localhost:5001"
+# ipfs_timeout: "60s"
+# ipfs_replication_factor: 3
+`
+
 	return fmt.Sprintf(`listen_addr: ":6001"
 client_namespace: "default"
 rqlite_dsn: ""
 %s
 %s
 %s
-`, peersYAML.String(), httpsYAML.String(), olricYAML.String())
+%s
+`, peersYAML.String(), httpsYAML.String(), olricYAML.String(), ipfsYAML)
 }
 
 // generateOlricConfig generates an Olric configuration file
@@ -1689,30 +1710,15 @@ func generateOlricConfig(configPath, bindIP string, httpPort, memberlistPort int
 	}
 
 	var config strings.Builder
+	config.WriteString("server:\n")
+	config.WriteString(fmt.Sprintf("  bindAddr: \"%s\"\n", bindIP))
+	config.WriteString(fmt.Sprintf("  bindPort: %d\n", httpPort))
+	config.WriteString("\n")
 	config.WriteString("memberlist:\n")
-	config.WriteString(fmt.Sprintf("  bind-addr: \"%s\"\n", bindIP))
-	config.WriteString(fmt.Sprintf("  bind-port: %d\n", memberlistPort))
-	config.WriteString("  # Multicast discovery enabled - peers discovered dynamically via LibP2P network\n")
-
-	config.WriteString("client:\n")
-	config.WriteString(fmt.Sprintf("  bind-addr: \"%s\"\n", bindIP))
-	config.WriteString(fmt.Sprintf("  bind-port: %d\n", httpPort))
-
-	// Durability and replication settings
-	config.WriteString("\n# Durability and replication configuration\n")
-	config.WriteString("# Replicates data across entire network for fault tolerance\n")
-	config.WriteString("dmaps:\n")
-	config.WriteString("  default:\n")
-	config.WriteString("    replication:\n")
-	config.WriteString("      mode: sync  # Synchronous replication for durability\n")
-	config.WriteString("      replica_count: 2  # Replicate to 2 backup nodes (3 total copies: 1 primary + 2 backups)\n")
-	config.WriteString("    write_quorum: 2  # Require 2 nodes to acknowledge writes\n")
-	config.WriteString("    read_quorum: 1   # Read from 1 node (faster reads)\n")
-	config.WriteString("    read_repair: true  # Enable read-repair for consistency\n")
-
-	// Split-brain protection
-	config.WriteString("\n# Split-brain protection\n")
-	config.WriteString("member_count_quorum: 2  # Require at least 2 nodes to operate (prevents split-brain)\n")
+	config.WriteString("  environment: local\n")
+	config.WriteString(fmt.Sprintf("  bindAddr: \"%s\"\n", bindIP))
+	config.WriteString(fmt.Sprintf("  bindPort: %d\n", memberlistPort))
+	config.WriteString("\n")
 
 	// Write config file
 	if err := os.WriteFile(configPath, []byte(config.String()), 0644); err != nil {
