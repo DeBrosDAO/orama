@@ -122,7 +122,7 @@ If automatic setup didn't work, you can manually initialize:
 
 ```bash
 sudo -u debros ipfs init --profile=server --repo-dir=~/.debros/bootstrap/ipfs/repo
-sudo -u debros ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5001"]' --repo-dir=~/.debros/bootstrap/ipfs/repo
+sudo -u debros ipfs config --json Addresses.API '["/ip4/localhost/tcp/5001"]' --repo-dir=~/.debros/bootstrap/ipfs/repo
 ```
 
 ### 2. Initialize Cluster

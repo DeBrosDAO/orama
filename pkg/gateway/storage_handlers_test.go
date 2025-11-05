@@ -18,11 +18,12 @@ import (
 
 // mockIPFSClient is a mock implementation of ipfs.IPFSClient for testing
 type mockIPFSClient struct {
-	addFunc       func(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
-	pinFunc       func(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
-	pinStatusFunc func(ctx context.Context, cid string) (*ipfs.PinStatus, error)
-	getFunc       func(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
-	unpinFunc     func(ctx context.Context, cid string) error
+	addFunc          func(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
+	pinFunc          func(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
+	pinStatusFunc    func(ctx context.Context, cid string) (*ipfs.PinStatus, error)
+	getFunc          func(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
+	unpinFunc        func(ctx context.Context, cid string) error
+	getPeerCountFunc func(ctx context.Context) (int, error)
 }
 
 func (m *mockIPFSClient) Add(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error) {
@@ -70,6 +71,13 @@ func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
 
 func (m *mockIPFSClient) Health(ctx context.Context) error {
 	return nil
+}
+
+func (m *mockIPFSClient) GetPeerCount(ctx context.Context) (int, error) {
+	if m.getPeerCountFunc != nil {
+		return m.getPeerCountFunc(ctx)
+	}
+	return 3, nil
 }
 
 func (m *mockIPFSClient) Close(ctx context.Context) error {

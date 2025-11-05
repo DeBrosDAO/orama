@@ -255,10 +255,10 @@ func main() {
 
 	// Set default advertised addresses if empty
 	if cfg.Discovery.HttpAdvAddress == "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("127.0.0.1:%d", cfg.Database.RQLitePort)
+		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLitePort)
 	}
 	if cfg.Discovery.RaftAdvAddress == "" {
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("127.0.0.1:%d", cfg.Database.RQLiteRaftPort)
+		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLiteRaftPort)
 	}
 
 	// Validate configuration

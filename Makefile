@@ -7,12 +7,12 @@ test:
 
 # Gateway-focused E2E tests assume gateway and nodes are already running
 # Configure via env:
-#   GATEWAY_BASE_URL (default http://127.0.0.1:6001)
+#   GATEWAY_BASE_URL (default http://localhost:6001)
 #   GATEWAY_API_KEY  (required for auth-protected routes)
 .PHONY: test-e2e
 test-e2e:
 	@echo "Running gateway E2E tests (HTTP/WS only)..."
-	@echo "Base URL: $${GATEWAY_BASE_URL:-http://127.0.0.1:6001}"
+	@echo "Base URL: $${GATEWAY_BASE_URL:-http://localhost:6001}"
 	@test -n "$$GATEWAY_API_KEY" || (echo "GATEWAY_API_KEY must be set" && exit 1)
 	go test -v -tags e2e ./e2e
 
@@ -57,7 +57,7 @@ run-node:
 	go run ./cmd/node --config node.yaml
 
 # Run second node (regular) - requires join address of bootstrap node
-# Usage: make run-node2 JOINADDR=/ip4/127.0.0.1/tcp/5001 HTTP=5002 RAFT=7002 P2P=4002
+# Usage: make run-node2 JOINADDR=/ip4/localhost/tcp/5001 HTTP=5002 RAFT=7002 P2P=4002
 run-node2:
 	@echo "Starting regular node (node.yaml)..."
 	@echo "Config: ~/.debros/node.yaml"
@@ -65,7 +65,7 @@ run-node2:
 	go run ./cmd/node --config node2.yaml
 
 # Run third node (regular) - requires join address of bootstrap node
-# Usage: make run-node3 JOINADDR=/ip4/127.0.0.1/tcp/5001 HTTP=5003 RAFT=7003 P2P=4003
+# Usage: make run-node3 JOINADDR=/ip4/localhost/tcp/5001 HTTP=5003 RAFT=7003 P2P=4003
 run-node3:
 	@echo "Starting regular node (node2.yaml)..."
 	@echo "Config: ~/.debros/node2.yaml"
@@ -122,9 +122,9 @@ dev: build
 			echo "    Initializing IPFS..."; \
 			mkdir -p $$HOME/.debros/bootstrap/ipfs; \
 			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5001"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8080"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001","/ip6/::/tcp/4001"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.API '["/ip4/localhost/tcp/5001"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/localhost/tcp/8080"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4101","/ip6/::/tcp/4101"]' 2>&1 | grep -v "generating" || true; \
 		fi; \
 		echo "    Initializing IPFS Cluster..."; \
 		mkdir -p $$HOME/.debros/bootstrap/ipfs-cluster; \
@@ -135,9 +135,9 @@ dev: build
 			echo "    Initializing IPFS..."; \
 			mkdir -p $$HOME/.debros/node2/ipfs; \
 			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5002"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8081"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4002","/ip6/::/tcp/4002"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.API '["/ip4/localhost/tcp/5002"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/localhost/tcp/8081"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4102","/ip6/::/tcp/4102"]' 2>&1 | grep -v "generating" || true; \
 		fi; \
 		echo "    Initializing IPFS Cluster..."; \
 		mkdir -p $$HOME/.debros/node2/ipfs-cluster; \
@@ -148,9 +148,9 @@ dev: build
 			echo "    Initializing IPFS..."; \
 			mkdir -p $$HOME/.debros/node3/ipfs; \
 			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5003"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8082"]' 2>&1 | grep -v "generating" || true; \
-			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4003","/ip6/::/tcp/4003"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.API '["/ip4/localhost/tcp/5003"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/localhost/tcp/8082"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4103","/ip6/::/tcp/4103"]' 2>&1 | grep -v "generating" || true; \
 		fi; \
 		echo "    Initializing IPFS Cluster..."; \
 		mkdir -p $$HOME/.debros/node3/ipfs-cluster; \

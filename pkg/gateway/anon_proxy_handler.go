@@ -234,7 +234,7 @@ func isPrivateOrLocalHost(host string) bool {
 	}
 
 	// Check for localhost variants
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+	if host == "localhost" || host == "localhost" || host == "::1" {
 		return true
 	}
 

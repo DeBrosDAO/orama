@@ -7,7 +7,7 @@ import (
 
 // validConfigForType returns a valid config for the given node type
 func validConfigForType(nodeType string) *Config {
-	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
+	validPeer := "/ip4/localhost/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
 	cfg := &Config{
 		Node: NodeConfig{
 			Type:            nodeType,
@@ -30,8 +30,8 @@ func validConfigForType(nodeType string) *Config {
 			BootstrapPeers:    []string{validPeer},
 			DiscoveryInterval: 15 * time.Second,
 			BootstrapPort:     4001,
-			HttpAdvAddress:    "127.0.0.1:5001",
-			RaftAdvAddress:    "127.0.0.1:7001",
+			HttpAdvAddress:    "localhost:5001",
+			RaftAdvAddress:    "localhost:7001",
 			NodeNamespace:     "default",
 		},
 		Logging: LoggingConfig{
@@ -205,7 +205,7 @@ func TestValidateRQLiteJoinAddress(t *testing.T) {
 }
 
 func TestValidateBootstrapPeers(t *testing.T) {
-	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
+	validPeer := "/ip4/localhost/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
 	tests := []struct {
 		name        string
 		nodeType    string
@@ -217,9 +217,9 @@ func TestValidateBootstrapPeers(t *testing.T) {
 		{"bootstrap with peer", "bootstrap", []string{validPeer}, false},
 		{"bootstrap without peer", "bootstrap", []string{}, false},
 		{"invalid multiaddr", "node", []string{"invalid"}, true},
-		{"missing p2p", "node", []string{"/ip4/127.0.0.1/tcp/4001"}, true},
+		{"missing p2p", "node", []string{"/ip4/localhost/tcp/4001"}, true},
 		{"duplicate peer", "node", []string{validPeer, validPeer}, true},
-		{"invalid port", "node", []string{"/ip4/127.0.0.1/tcp/99999/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"}, true},
+		{"invalid port", "node", []string{"/ip4/localhost/tcp/99999/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"}, true},
 	}
 
 	for _, tt := range tests {
@@ -392,17 +392,17 @@ func TestValidateCompleteConfig(t *testing.T) {
 			BackupInterval:    24 * time.Hour,
 			RQLitePort:        5002,
 			RQLiteRaftPort:    7002,
-			RQLiteJoinAddress: "127.0.0.1:7001",
+			RQLiteJoinAddress: "localhost:7001",
 			MinClusterSize:    1,
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers: []string{
-				"/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj",
+				"/ip4/localhost/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj",
 			},
 			DiscoveryInterval: 15 * time.Second,
 			BootstrapPort:     4001,
-			HttpAdvAddress:    "127.0.0.1:5001",
-			RaftAdvAddress:    "127.0.0.1:7001",
+			HttpAdvAddress:    "localhost:5001",
+			RaftAdvAddress:    "localhost:7001",
 			NodeNamespace:     "default",
 		},
 		Security: SecurityConfig{

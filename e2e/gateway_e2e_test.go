@@ -37,7 +37,7 @@ func requireAPIKey(t *testing.T) string {
 }
 
 func gatewayBaseURL() string {
-	return getEnv("GATEWAY_BASE_URL", "http://127.0.0.1:6001")
+	return getEnv("GATEWAY_BASE_URL", "http://localhost:6001")
 }
 
 func httpClient() *http.Client {

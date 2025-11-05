@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -158,14 +159,19 @@ func TestClient_Pin(t *testing.T) {
 				t.Errorf("Expected method POST, got %s", r.Method)
 			}
 
-			var reqBody map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-				t.Errorf("Failed to decode request: %v", err)
-				return
+			if cid := strings.TrimPrefix(r.URL.Path, "/pins/"); cid != expectedCID {
+				t.Errorf("Expected CID %s in path, got %s", expectedCID, cid)
 			}
 
-			if reqBody["cid"] != expectedCID {
-				t.Errorf("Expected CID %s, got %v", expectedCID, reqBody["cid"])
+			query := r.URL.Query()
+			if got := query.Get("replication-min"); got != strconv.Itoa(expectedReplicationFactor) {
+				t.Errorf("Expected replication-min %d, got %s", expectedReplicationFactor, got)
+			}
+			if got := query.Get("replication-max"); got != strconv.Itoa(expectedReplicationFactor) {
+				t.Errorf("Expected replication-max %d, got %s", expectedReplicationFactor, got)
+			}
+			if got := query.Get("name"); got != expectedName {
+				t.Errorf("Expected name %s, got %s", expectedName, got)
 			}
 
 			response := PinResponse{
@@ -231,14 +237,14 @@ func TestClient_PinStatus(t *testing.T) {
 				t.Errorf("Expected method GET, got %s", r.Method)
 			}
 
-			response := PinStatus{
-				Cid:               expectedCID,
-				Name:              "test-file",
-				Status:            "pinned",
-				ReplicationMin:    3,
-				ReplicationMax:    3,
-				ReplicationFactor: 3,
-				Peers:             []string{"peer1", "peer2", "peer3"},
+			response := map[string]interface{}{
+				"cid":  expectedCID,
+				"name": "test-file",
+				"peer_map": map[string]interface{}{
+					"peer1": map[string]interface{}{"status": "pinned"},
+					"peer2": map[string]interface{}{"status": "pinned"},
+					"peer3": map[string]interface{}{"status": "pinned"},
+				},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)

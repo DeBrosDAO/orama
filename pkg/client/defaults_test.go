@@ -11,7 +11,7 @@ func TestDefaultBootstrapPeersNonEmpty(t *testing.T) {
 	old := os.Getenv("DEBROS_BOOTSTRAP_PEERS")
 	t.Cleanup(func() { os.Setenv("DEBROS_BOOTSTRAP_PEERS", old) })
 	// Set a valid bootstrap peer
-	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
+	validPeer := "/ip4/localhost/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
 	_ = os.Setenv("DEBROS_BOOTSTRAP_PEERS", validPeer)
 	peers := DefaultBootstrapPeers()
 	if len(peers) == 0 {
@@ -50,8 +50,8 @@ func TestNormalizeEndpoints(t *testing.T) {
 }
 
 func TestEndpointFromMultiaddr(t *testing.T) {
-	ma, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-	if ep := endpointFromMultiaddr(ma, 5001); ep != "http://127.0.0.1:5001" {
+	ma, _ := multiaddr.NewMultiaddr("/ip4/localhost/tcp/4001")
+	if ep := endpointFromMultiaddr(ma, 5001); ep != "http://localhost:5001" {
 		t.Fatalf("unexpected endpoint: %s", ep)
 	}
 }

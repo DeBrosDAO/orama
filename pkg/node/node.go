@@ -321,7 +321,7 @@ func (n *Node) startLibP2P() error {
 	// For localhost/development, disable NAT services
 	// For production, these would be enabled
 	isLocalhost := len(n.config.Node.ListenAddresses) > 0 &&
-		(strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1") ||
+		(strings.Contains(n.config.Node.ListenAddresses[0], "localhost") ||
 			strings.Contains(n.config.Node.ListenAddresses[0], "localhost"))
 
 	if isLocalhost {

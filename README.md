@@ -68,7 +68,7 @@ Use `make dev` for the complete stack or run binaries individually with `go run 
 All runtime configuration lives in `~/.debros/`.
 
 - `bootstrap.yaml`: `type: bootstrap`, blank `database.rqlite_join_address`
-- `node*.yaml`: `type: node`, set `database.rqlite_join_address` (e.g. `127.0.0.1:7001`) and include the bootstrap `discovery.bootstrap_peers`
+- `node*.yaml`: `type: node`, set `database.rqlite_join_address` (e.g. `localhost:7001`) and include the bootstrap `discovery.bootstrap_peers`
 - `gateway.yaml`: configure `gateway.bootstrap_peers`, `gateway.namespace`, and optional auth flags
 
 Validation reminders:
@@ -127,7 +127,7 @@ Environment overrides:
 ```bash
 export GATEWAY_ADDR="0.0.0.0:6001"
 export GATEWAY_NAMESPACE="my-app"
-export GATEWAY_BOOTSTRAP_PEERS="/ip4/127.0.0.1/tcp/4001/p2p/<peerID>"
+export GATEWAY_BOOTSTRAP_PEERS="/ip4/localhost/tcp/4001/p2p/<peerID>"
 export GATEWAY_REQUIRE_AUTH=true
 export GATEWAY_API_KEYS="key1:namespace1,key2:namespace2"
 ```

@@ -371,7 +371,7 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 			}
 
 			// Skip localhost loopback addresses (we'll use localhost:3320 as fallback)
-			if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
+			if ip == "localhost" || ip == "::1" || ip == "localhost" {
 				continue
 			}
 
@@ -402,7 +402,7 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 			}
 
 			// Skip localhost
-			if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
+			if ip == "localhost" || ip == "::1" || ip == "localhost" {
 				continue
 			}
 

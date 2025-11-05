@@ -1102,12 +1102,12 @@ func installOlric() {
 		configPath := olricConfigDir + "/config.yaml"
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			configContent := `server:
-  bindAddr: "127.0.0.1"
+  bindAddr: "localhost"
   bindPort: 3320
 
 memberlist:
   environment: local
-  bindAddr: "127.0.0.1"
+  bindAddr: "localhost"
   bindPort: 3322
 
 `
@@ -1907,8 +1907,8 @@ func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
 		}
 
 		// Configure IPFS API and Gateway addresses
-		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.API", `["/ip4/127.0.0.1/tcp/5001"]`, "--repo-dir="+ipfsRepoPath).Run()
-		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Gateway", `["/ip4/127.0.0.1/tcp/8080"]`, "--repo-dir="+ipfsRepoPath).Run()
+		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.API", `["/ip4/localhost/tcp/5001"]`, "--repo-dir="+ipfsRepoPath).Run()
+		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Gateway", `["/ip4/localhost/tcp/8080"]`, "--repo-dir="+ipfsRepoPath).Run()
 		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Swarm", `["/ip4/0.0.0.0/tcp/4001","/ip6/::/tcp/4001"]`, "--repo-dir="+ipfsRepoPath).Run()
 		fmt.Printf("      ✓ IPFS initialized\n")
 	}
@@ -2059,7 +2059,7 @@ func generateClusterServiceConfig(nodeID, vpsIP, secret string, isBootstrap bool
 		},
 		IPFSConnector: ipfsConnectorConfig{
 			IPFSHTTP: ipfsHTTPConfig{
-				NodeMultiaddress: "/ip4/127.0.0.1/tcp/5001",
+				NodeMultiaddress: "/ip4/localhost/tcp/5001",
 			},
 		},
 		Datastore: datastoreConfig{

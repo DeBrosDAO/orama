@@ -286,7 +286,7 @@ func initFullStack(force bool) {
 	fmt.Printf("✅ Generated bootstrap identity: %s (Peer ID: %s)\n", bootstrapIdentityPath, bootstrapInfo.PeerID.String())
 
 	// Construct bootstrap multiaddr
-	bootstrapMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
+	bootstrapMultiaddr := fmt.Sprintf("/ip4/localhost/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
 	fmt.Printf("   Bootstrap multiaddr: %s\n", bootstrapMultiaddr)
 
 	// Generate configs for all nodes...
@@ -430,8 +430,8 @@ discovery:
 %s
   discovery_interval: "15s"
   bootstrap_port: %d
-  http_adv_address: "127.0.0.1:%d"
-  raft_adv_address: "127.0.0.1:%d"
+  http_adv_address: "localhost:%d"
+  raft_adv_address: "localhost:%d"
   node_namespace: "default"
 
 security:
@@ -477,8 +477,8 @@ discovery:
   bootstrap_peers: []
   discovery_interval: "15s"
   bootstrap_port: %d
-  http_adv_address: "127.0.0.1:%d"
-  raft_adv_address: "127.0.0.1:%d"
+  http_adv_address: "localhost:%d"
+  raft_adv_address: "localhost:%d"
   node_namespace: "default"
 
 security:
