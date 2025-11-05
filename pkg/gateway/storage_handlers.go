@@ -275,7 +275,12 @@ func (g *Gateway) storageGetHandler(w http.ResponseWriter, r *http.Request) {
 	reader, err := g.ipfsClient.Get(ctx, path, ipfsAPIURL)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "failed to get content from IPFS", zap.Error(err), zap.String("cid", path))
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get content: %v", err))
+		// Check if error indicates content not found (404)
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "status 404") {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("content not found: %s", path))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get content: %v", err))
+		}
 		return
 	}
 	defer reader.Close()

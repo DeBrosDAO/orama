@@ -254,6 +254,25 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize IPFS Cluster client; storage endpoints disabled", zap.Error(ipfsErr))
 	} else {
 		gw.ipfsClient = ipfsClient
+
+		// Check peer count and warn if insufficient (use background context to avoid blocking)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if peerCount, err := ipfsClient.GetPeerCount(ctx); err == nil {
+			if peerCount < ipfsReplicationFactor {
+				logger.ComponentWarn(logging.ComponentGeneral, "insufficient cluster peers for replication factor",
+					zap.Int("peer_count", peerCount),
+					zap.Int("replication_factor", ipfsReplicationFactor),
+					zap.String("message", "Some pin operations may fail until more peers join the cluster"))
+			} else {
+				logger.ComponentInfo(logging.ComponentGeneral, "IPFS Cluster peer count sufficient",
+					zap.Int("peer_count", peerCount),
+					zap.Int("replication_factor", ipfsReplicationFactor))
+			}
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "failed to get cluster peer count", zap.Error(err))
+		}
+
 		logger.ComponentInfo(logging.ComponentGeneral, "IPFS Cluster client ready",
 			zap.String("cluster_api_url", ipfsCfg.ClusterAPIURL),
 			zap.String("ipfs_api_url", ipfsAPIURL),

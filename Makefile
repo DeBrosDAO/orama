@@ -19,7 +19,7 @@ test-e2e:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks
+.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
 VERSION := 0.56.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -109,6 +109,102 @@ dev: build
 			echo "  ⚠️  systemctl not found - skipping Anon"; \
 		fi; \
 	fi
+	@echo "Initializing IPFS and Cluster for all nodes..."
+	@if command -v ipfs >/dev/null 2>&1 && command -v ipfs-cluster-service >/dev/null 2>&1; then \
+		CLUSTER_SECRET=$$HOME/.debros/cluster-secret; \
+		if [ ! -f $$CLUSTER_SECRET ]; then \
+			echo "  Generating shared cluster secret..."; \
+			ipfs-cluster-service --version >/dev/null 2>&1 && openssl rand -hex 32 > $$CLUSTER_SECRET || echo "0000000000000000000000000000000000000000000000000000000000000000" > $$CLUSTER_SECRET; \
+		fi; \
+		SECRET=$$(cat $$CLUSTER_SECRET); \
+		echo "  Setting up bootstrap node (IPFS: 5001, Cluster: 9094)..."; \
+		if [ ! -d $$HOME/.debros/bootstrap/ipfs/repo ]; then \
+			echo "    Initializing IPFS..."; \
+			mkdir -p $$HOME/.debros/bootstrap/ipfs; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5001"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8080"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001","/ip6/::/tcp/4001"]' 2>&1 | grep -v "generating" || true; \
+		fi; \
+		echo "    Initializing IPFS Cluster..."; \
+		mkdir -p $$HOME/.debros/bootstrap/ipfs-cluster; \
+		env IPFS_CLUSTER_PATH=$$HOME/.debros/bootstrap/ipfs-cluster ipfs-cluster-service init --force >/dev/null 2>&1 || true; \
+		jq '.cluster.peername = "bootstrap" | .cluster.secret = "'$$SECRET'" | .cluster.listen_multiaddress = ["/ip4/0.0.0.0/tcp/9096"] | .consensus.crdt.cluster_name = "debros-cluster" | .consensus.crdt.trusted_peers = ["*"] | .api.restapi.http_listen_multiaddress = "/ip4/0.0.0.0/tcp/9094" | .api.ipfsproxy.listen_multiaddress = "/ip4/127.0.0.1/tcp/9095" | .api.pinsvcapi.http_listen_multiaddress = "/ip4/127.0.0.1/tcp/9097" | .ipfs_connector.ipfshttp.node_multiaddress = "/ip4/127.0.0.1/tcp/5001"' $$HOME/.debros/bootstrap/ipfs-cluster/service.json > $$HOME/.debros/bootstrap/ipfs-cluster/service.json.tmp && mv $$HOME/.debros/bootstrap/ipfs-cluster/service.json.tmp $$HOME/.debros/bootstrap/ipfs-cluster/service.json; \
+		echo "  Setting up node2 (IPFS: 5002, Cluster: 9104)..."; \
+		if [ ! -d $$HOME/.debros/node2/ipfs/repo ]; then \
+			echo "    Initializing IPFS..."; \
+			mkdir -p $$HOME/.debros/node2/ipfs; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5002"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8081"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4002","/ip6/::/tcp/4002"]' 2>&1 | grep -v "generating" || true; \
+		fi; \
+		echo "    Initializing IPFS Cluster..."; \
+		mkdir -p $$HOME/.debros/node2/ipfs-cluster; \
+		env IPFS_CLUSTER_PATH=$$HOME/.debros/node2/ipfs-cluster ipfs-cluster-service init --force >/dev/null 2>&1 || true; \
+		jq '.cluster.peername = "node2" | .cluster.secret = "'$$SECRET'" | .cluster.listen_multiaddress = ["/ip4/0.0.0.0/tcp/9106"] | .consensus.crdt.cluster_name = "debros-cluster" | .consensus.crdt.trusted_peers = ["*"] | .api.restapi.http_listen_multiaddress = "/ip4/0.0.0.0/tcp/9104" | .api.ipfsproxy.listen_multiaddress = "/ip4/127.0.0.1/tcp/9105" | .api.pinsvcapi.http_listen_multiaddress = "/ip4/127.0.0.1/tcp/9107" | .ipfs_connector.ipfshttp.node_multiaddress = "/ip4/127.0.0.1/tcp/5002"' $$HOME/.debros/node2/ipfs-cluster/service.json > $$HOME/.debros/node2/ipfs-cluster/service.json.tmp && mv $$HOME/.debros/node2/ipfs-cluster/service.json.tmp $$HOME/.debros/node2/ipfs-cluster/service.json; \
+		echo "  Setting up node3 (IPFS: 5003, Cluster: 9114)..."; \
+		if [ ! -d $$HOME/.debros/node3/ipfs/repo ]; then \
+			echo "    Initializing IPFS..."; \
+			mkdir -p $$HOME/.debros/node3/ipfs; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs init --profile=server 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.API '["/ip4/127.0.0.1/tcp/5003"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Gateway '["/ip4/127.0.0.1/tcp/8082"]' 2>&1 | grep -v "generating" || true; \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4003","/ip6/::/tcp/4003"]' 2>&1 | grep -v "generating" || true; \
+		fi; \
+		echo "    Initializing IPFS Cluster..."; \
+		mkdir -p $$HOME/.debros/node3/ipfs-cluster; \
+		env IPFS_CLUSTER_PATH=$$HOME/.debros/node3/ipfs-cluster ipfs-cluster-service init --force >/dev/null 2>&1 || true; \
+		jq '.cluster.peername = "node3" | .cluster.secret = "'$$SECRET'" | .cluster.listen_multiaddress = ["/ip4/0.0.0.0/tcp/9116"] | .consensus.crdt.cluster_name = "debros-cluster" | .consensus.crdt.trusted_peers = ["*"] | .api.restapi.http_listen_multiaddress = "/ip4/0.0.0.0/tcp/9114" | .api.ipfsproxy.listen_multiaddress = "/ip4/127.0.0.1/tcp/9115" | .api.pinsvcapi.http_listen_multiaddress = "/ip4/127.0.0.1/tcp/9117" | .ipfs_connector.ipfshttp.node_multiaddress = "/ip4/127.0.0.1/tcp/5003"' $$HOME/.debros/node3/ipfs-cluster/service.json > $$HOME/.debros/node3/ipfs-cluster/service.json.tmp && mv $$HOME/.debros/node3/ipfs-cluster/service.json.tmp $$HOME/.debros/node3/ipfs-cluster/service.json; \
+		echo "Starting IPFS daemons..."; \
+		if [ ! -f .dev/pids/ipfs-bootstrap.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-bootstrap.pid) 2>/dev/null; then \
+			IPFS_PATH=$$HOME/.debros/bootstrap/ipfs/repo nohup ipfs daemon --enable-pubsub-experiment > $$HOME/.debros/logs/ipfs-bootstrap.log 2>&1 & echo $$! > .dev/pids/ipfs-bootstrap.pid; \
+			echo "  Bootstrap IPFS started (PID: $$(cat .dev/pids/ipfs-bootstrap.pid), API: 5001)"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Bootstrap IPFS already running"; \
+		fi; \
+		if [ ! -f .dev/pids/ipfs-node2.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-node2.pid) 2>/dev/null; then \
+			IPFS_PATH=$$HOME/.debros/node2/ipfs/repo nohup ipfs daemon --enable-pubsub-experiment > $$HOME/.debros/logs/ipfs-node2.log 2>&1 & echo $$! > .dev/pids/ipfs-node2.pid; \
+			echo "  Node2 IPFS started (PID: $$(cat .dev/pids/ipfs-node2.pid), API: 5002)"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Node2 IPFS already running"; \
+		fi; \
+		if [ ! -f .dev/pids/ipfs-node3.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-node3.pid) 2>/dev/null; then \
+			IPFS_PATH=$$HOME/.debros/node3/ipfs/repo nohup ipfs daemon --enable-pubsub-experiment > $$HOME/.debros/logs/ipfs-node3.log 2>&1 & echo $$! > .dev/pids/ipfs-node3.pid; \
+			echo "  Node3 IPFS started (PID: $$(cat .dev/pids/ipfs-node3.pid), API: 5003)"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Node3 IPFS already running"; \
+		fi; \
+		\
+		echo "Starting IPFS Cluster peers..."; \
+		if [ ! -f .dev/pids/ipfs-cluster-bootstrap.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-bootstrap.pid) 2>/dev/null; then \
+			env IPFS_CLUSTER_PATH=$$HOME/.debros/bootstrap/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-bootstrap.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-bootstrap.pid; \
+			echo "  Bootstrap Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-bootstrap.pid), API: 9094)"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Bootstrap Cluster already running"; \
+		fi; \
+		if [ ! -f .dev/pids/ipfs-cluster-node2.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-node2.pid) 2>/dev/null; then \
+			env IPFS_CLUSTER_PATH=$$HOME/.debros/node2/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-node2.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-node2.pid; \
+			echo "  Node2 Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-node2.pid), API: 9104)"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Node2 Cluster already running"; \
+		fi; \
+		if [ ! -f .dev/pids/ipfs-cluster-node3.pid ] || ! kill -0 $$(cat .dev/pids/ipfs-cluster-node3.pid) 2>/dev/null; then \
+			env IPFS_CLUSTER_PATH=$$HOME/.debros/node3/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster-node3.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster-node3.pid; \
+			echo "  Node3 Cluster started (PID: $$(cat .dev/pids/ipfs-cluster-node3.pid), API: 9114)"; \
+			sleep 3; \
+		else \
+			echo "  ✓ Node3 Cluster already running"; \
+		fi; \
+	else \
+		echo "  ⚠️  ipfs or ipfs-cluster-service not found - skipping IPFS setup"; \
+		echo "  Install with: https://docs.ipfs.tech/install/ and https://ipfscluster.io/documentation/guides/install/"; \
+	fi
 	@sleep 2
 	@echo "Starting bootstrap node..."
 	@nohup ./bin/node --config bootstrap.yaml > $$HOME/.debros/logs/bootstrap.log 2>&1 & echo $$! > .dev/pids/bootstrap.pid
@@ -119,40 +215,6 @@ dev: build
 	@echo "Starting node3..."
 	@nohup ./bin/node --config node3.yaml > $$HOME/.debros/logs/node3.log 2>&1 & echo $$! > .dev/pids/node3.pid
 	@sleep 1
-	@echo "Starting IPFS daemon..."
-	@if command -v ipfs >/dev/null 2>&1; then \
-		if [ ! -d $$HOME/.debros/ipfs ]; then \
-			echo "  Initializing IPFS repository..."; \
-			IPFS_PATH=$$HOME/.debros/ipfs ipfs init 2>&1 | grep -v "generating" | grep -v "peer identity" || true; \
-		fi; \
-		if ! pgrep -f "ipfs daemon" >/dev/null 2>&1; then \
-			IPFS_PATH=$$HOME/.debros/ipfs nohup ipfs daemon > $$HOME/.debros/logs/ipfs.log 2>&1 & echo $$! > .dev/pids/ipfs.pid; \
-			echo "  IPFS daemon started (PID: $$(cat .dev/pids/ipfs.pid))"; \
-			sleep 5; \
-		else \
-			echo "  ✓ IPFS daemon already running"; \
-		fi; \
-	else \
-		echo "  ⚠️  ipfs command not found - skipping IPFS (storage endpoints will be disabled)"; \
-		echo "  Install with: https://docs.ipfs.tech/install/"; \
-	fi
-	@echo "Starting IPFS Cluster daemon..."
-	@if command -v ipfs-cluster-service >/dev/null 2>&1; then \
-		if [ ! -d $$HOME/.debros/ipfs-cluster ]; then \
-			echo "  Initializing IPFS Cluster..."; \
-			CLUSTER_PATH=$$HOME/.debros/ipfs-cluster ipfs-cluster-service init --force 2>&1 | grep -v "peer identity" || true; \
-		fi; \
-		if ! pgrep -f "ipfs-cluster-service" >/dev/null 2>&1; then \
-			CLUSTER_PATH=$$HOME/.debros/ipfs-cluster nohup ipfs-cluster-service daemon > $$HOME/.debros/logs/ipfs-cluster.log 2>&1 & echo $$! > .dev/pids/ipfs-cluster.pid; \
-			echo "  IPFS Cluster daemon started (PID: $$(cat .dev/pids/ipfs-cluster.pid))"; \
-			sleep 5; \
-		else \
-			echo "  ✓ IPFS Cluster daemon already running"; \
-		fi; \
-	else \
-		echo "  ⚠️  ipfs-cluster-service command not found - skipping IPFS Cluster (storage endpoints will be disabled)"; \
-		echo "  Install with: https://ipfscluster.io/documentation/guides/install/"; \
-	fi
 	@echo "Starting Olric cache server..."
 	@if command -v olric-server >/dev/null 2>&1; then \
 		if [ ! -f $$HOME/.debros/olric-config.yaml ]; then \
@@ -182,11 +244,23 @@ dev: build
 	@if [ -f .dev/pids/anon.pid ]; then \
 		echo "  Anon:      PID=$$(cat .dev/pids/anon.pid) (SOCKS: 9050)"; \
 	fi
-	@if [ -f .dev/pids/ipfs.pid ]; then \
-		echo "  IPFS:      PID=$$(cat .dev/pids/ipfs.pid) (API: 5001)"; \
+	@if [ -f .dev/pids/ipfs-bootstrap.pid ]; then \
+		echo "  Bootstrap IPFS:      PID=$$(cat .dev/pids/ipfs-bootstrap.pid) (API: 5001)"; \
 	fi
-	@if [ -f .dev/pids/ipfs-cluster.pid ]; then \
-		echo "  IPFS Cluster: PID=$$(cat .dev/pids/ipfs-cluster.pid) (API: 9094)"; \
+	@if [ -f .dev/pids/ipfs-node2.pid ]; then \
+		echo "  Node2 IPFS:          PID=$$(cat .dev/pids/ipfs-node2.pid) (API: 5002)"; \
+	fi
+	@if [ -f .dev/pids/ipfs-node3.pid ]; then \
+		echo "  Node3 IPFS:          PID=$$(cat .dev/pids/ipfs-node3.pid) (API: 5003)"; \
+	fi
+	@if [ -f .dev/pids/ipfs-cluster-bootstrap.pid ]; then \
+		echo "  Bootstrap Cluster:  PID=$$(cat .dev/pids/ipfs-cluster-bootstrap.pid) (API: 9094)"; \
+	fi
+	@if [ -f .dev/pids/ipfs-cluster-node2.pid ]; then \
+		echo "  Node2 Cluster:      PID=$$(cat .dev/pids/ipfs-cluster-node2.pid) (API: 9104)"; \
+	fi
+	@if [ -f .dev/pids/ipfs-cluster-node3.pid ]; then \
+		echo "  Node3 Cluster:      PID=$$(cat .dev/pids/ipfs-cluster-node3.pid) (API: 9114)"; \
 	fi
 	@if [ -f .dev/pids/olric.pid ]; then \
 		echo "  Olric:     PID=$$(cat .dev/pids/olric.pid) (API: 3320)"; \
@@ -198,9 +272,13 @@ dev: build
 	@echo ""
 	@echo "Ports:"
 	@echo "  Anon SOCKS:    9050 (proxy endpoint: POST /v1/proxy/anon)"
-	@if [ -f .dev/pids/ipfs.pid ]; then \
-		echo "  IPFS API:      5001 (content retrieval)"; \
-		echo "  IPFS Cluster: 9094 (pin management)"; \
+	@if [ -f .dev/pids/ipfs-bootstrap.pid ]; then \
+		echo "  Bootstrap IPFS API: 5001"; \
+		echo "  Node2 IPFS API:     5002"; \
+		echo "  Node3 IPFS API:     5003"; \
+		echo "  Bootstrap Cluster: 9094 (pin management)"; \
+		echo "  Node2 Cluster:     9104 (pin management)"; \
+		echo "  Node3 Cluster:     9114 (pin management)"; \
 	fi
 	@if [ -f .dev/pids/olric.pid ]; then \
 		echo "  Olric:         3320 (cache API)"; \
@@ -217,14 +295,84 @@ dev: build
 	if [ -f .dev/pids/anon.pid ]; then \
 		LOGS="$$LOGS $$HOME/.debros/logs/anon.log"; \
 	fi; \
-	if [ -f .dev/pids/ipfs.pid ]; then \
-		LOGS="$$LOGS $$HOME/.debros/logs/ipfs.log"; \
+	if [ -f .dev/pids/ipfs-bootstrap.pid ]; then \
+		LOGS="$$LOGS $$HOME/.debros/logs/ipfs-bootstrap.log $$HOME/.debros/logs/ipfs-node2.log $$HOME/.debros/logs/ipfs-node3.log"; \
 	fi; \
-	if [ -f .dev/pids/ipfs-cluster.pid ]; then \
-		LOGS="$$LOGS $$HOME/.debros/logs/ipfs-cluster.log"; \
+	if [ -f .dev/pids/ipfs-cluster-bootstrap.pid ]; then \
+		LOGS="$$LOGS $$HOME/.debros/logs/ipfs-cluster-bootstrap.log $$HOME/.debros/logs/ipfs-cluster-node2.log $$HOME/.debros/logs/ipfs-cluster-node3.log"; \
+	fi; \
+	if [ -f .dev/pids/olric.pid ]; then \
+		LOGS="$$LOGS $$HOME/.debros/logs/olric.log"; \
 	fi; \
 	trap 'echo "Stopping all processes..."; kill $$(cat .dev/pids/*.pid) 2>/dev/null; rm -f .dev/pids/*.pid; exit 0' INT; \
 	tail -f $$LOGS
+
+# Kill all processes
+kill:
+	@echo "🛑 Stopping all DeBros network services..."
+	@echo ""
+	@echo "Stopping DeBros nodes and gateway..."
+	@if [ -f .dev/pids/gateway.pid ]; then \
+		kill -TERM $$(cat .dev/pids/gateway.pid) 2>/dev/null && echo "  ✓ Gateway stopped" || echo "  ✗ Gateway not running"; \
+		rm -f .dev/pids/gateway.pid; \
+	fi
+	@if [ -f .dev/pids/bootstrap.pid ]; then \
+		kill -TERM $$(cat .dev/pids/bootstrap.pid) 2>/dev/null && echo "  ✓ Bootstrap node stopped" || echo "  ✗ Bootstrap not running"; \
+		rm -f .dev/pids/bootstrap.pid; \
+	fi
+	@if [ -f .dev/pids/node2.pid ]; then \
+		kill -TERM $$(cat .dev/pids/node2.pid) 2>/dev/null && echo "  ✓ Node2 stopped" || echo "  ✗ Node2 not running"; \
+		rm -f .dev/pids/node2.pid; \
+	fi
+	@if [ -f .dev/pids/node3.pid ]; then \
+		kill -TERM $$(cat .dev/pids/node3.pid) 2>/dev/null && echo "  ✓ Node3 stopped" || echo "  ✗ Node3 not running"; \
+		rm -f .dev/pids/node3.pid; \
+	fi
+	@echo ""
+	@echo "Stopping IPFS Cluster peers..."
+	@if [ -f .dev/pids/ipfs-cluster-bootstrap.pid ]; then \
+		kill -TERM $$(cat .dev/pids/ipfs-cluster-bootstrap.pid) 2>/dev/null && echo "  ✓ Bootstrap Cluster stopped" || echo "  ✗ Bootstrap Cluster not running"; \
+		rm -f .dev/pids/ipfs-cluster-bootstrap.pid; \
+	fi
+	@if [ -f .dev/pids/ipfs-cluster-node2.pid ]; then \
+		kill -TERM $$(cat .dev/pids/ipfs-cluster-node2.pid) 2>/dev/null && echo "  ✓ Node2 Cluster stopped" || echo "  ✗ Node2 Cluster not running"; \
+		rm -f .dev/pids/ipfs-cluster-node2.pid; \
+	fi
+	@if [ -f .dev/pids/ipfs-cluster-node3.pid ]; then \
+		kill -TERM $$(cat .dev/pids/ipfs-cluster-node3.pid) 2>/dev/null && echo "  ✓ Node3 Cluster stopped" || echo "  ✗ Node3 Cluster not running"; \
+		rm -f .dev/pids/ipfs-cluster-node3.pid; \
+	fi
+	@echo ""
+	@echo "Stopping IPFS daemons..."
+	@if [ -f .dev/pids/ipfs-bootstrap.pid ]; then \
+		kill -TERM $$(cat .dev/pids/ipfs-bootstrap.pid) 2>/dev/null && echo "  ✓ Bootstrap IPFS stopped" || echo "  ✗ Bootstrap IPFS not running"; \
+		rm -f .dev/pids/ipfs-bootstrap.pid; \
+	fi
+	@if [ -f .dev/pids/ipfs-node2.pid ]; then \
+		kill -TERM $$(cat .dev/pids/ipfs-node2.pid) 2>/dev/null && echo "  ✓ Node2 IPFS stopped" || echo "  ✗ Node2 IPFS not running"; \
+		rm -f .dev/pids/ipfs-node2.pid; \
+	fi
+	@if [ -f .dev/pids/ipfs-node3.pid ]; then \
+		kill -TERM $$(cat .dev/pids/ipfs-node3.pid) 2>/dev/null && echo "  ✓ Node3 IPFS stopped" || echo "  ✗ Node3 IPFS not running"; \
+		rm -f .dev/pids/ipfs-node3.pid; \
+	fi
+	@echo ""
+	@echo "Stopping Olric cache..."
+	@if [ -f .dev/pids/olric.pid ]; then \
+		kill -TERM $$(cat .dev/pids/olric.pid) 2>/dev/null && echo "  ✓ Olric stopped" || echo "  ✗ Olric not running"; \
+		rm -f .dev/pids/olric.pid; \
+	fi
+	@echo ""
+	@echo "Stopping Anon proxy..."
+	@if [ -f .dev/pids/anyone.pid ]; then \
+		kill -TERM $$(cat .dev/pids/anyone.pid) 2>/dev/null && echo "  ✓ Anon proxy stopped" || echo "  ✗ Anon proxy not running"; \
+		rm -f .dev/pids/anyone.pid; \
+	fi
+	@echo ""
+	@echo "Cleaning up any remaining processes on ports..."
+	@lsof -ti:7001,7002,7003,5001,5002,5003,6001,4001,4002,4003,9050,3320,3322,9094,9095,9096,9097,9104,9105,9106,9107,9114,9115,9116,9117,8080,8081,8082 2>/dev/null | xargs kill -9 2>/dev/null && echo "  ✓ Cleaned up remaining port bindings" || echo "  ✓ No lingering processes found"
+	@echo ""
+	@echo "✅ All services stopped!"
 
 # Help
 help:
@@ -277,6 +425,7 @@ help:
 	@echo "  vet           - Vet code"
 	@echo "  lint          - Lint code (fmt + vet)"
 	@echo "  clear-ports   - Clear common dev ports"
+	@echo "  kill          - Stop all running services (nodes, IPFS, cluster, gateway, olric)"
 	@echo "  dev-setup     - Setup development environment"
 	@echo "  dev-cluster   - Show cluster startup commands"
 	@echo "  dev           - Full development workflow"

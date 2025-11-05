@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.uber.org/zap"
@@ -21,6 +22,7 @@ type IPFSClient interface {
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
 	Health(ctx context.Context) error
+	GetPeerCount(ctx context.Context) (int, error)
 	Close(ctx context.Context) error
 }
 
@@ -110,6 +112,33 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
+// GetPeerCount returns the number of cluster peers
+func (c *Client) GetPeerCount(ctx context.Context) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.apiURL+"/peers", nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create peers request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("peers request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("peers request failed with status: %d", resp.StatusCode)
+	}
+
+	var peers []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+		return 0, fmt.Errorf("failed to decode peers response: %w", err)
+	}
+
+	return len(peers), nil
+}
+
 // Add adds content to IPFS and returns the CID
 func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddResponse, error) {
 	// Create multipart form request for IPFS Cluster API
@@ -157,27 +186,24 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 }
 
 // Pin pins a CID with specified replication factor
+// IPFS Cluster expects pin options (including name) as query parameters, not in JSON body
 func (c *Client) Pin(ctx context.Context, cid string, name string, replicationFactor int) (*PinResponse, error) {
-	reqBody := map[string]interface{}{
-		"cid":                    cid,
-		"replication_factor_min": replicationFactor,
-		"replication_factor_max": replicationFactor,
-	}
+	// Build URL with query parameters
+	reqURL := c.apiURL + "/pins/" + cid
+	values := url.Values{}
+	values.Set("replication-min", fmt.Sprintf("%d", replicationFactor))
+	values.Set("replication-max", fmt.Sprintf("%d", replicationFactor))
 	if name != "" {
-		reqBody["name"] = name
+		values.Set("name", name)
+	}
+	if len(values) > 0 {
+		reqURL += "?" + values.Encode()
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal pin request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.apiURL+"/pins/"+cid, bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pin request: %w", err)
 	}
-
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -242,6 +268,9 @@ func (c *Client) PinStatus(ctx context.Context, cid string) (*PinStatus, error) 
 		return nil, fmt.Errorf("failed to decode pin status response: %w", err)
 	}
 
+	// Use name from GlobalPinInfo
+	name := gpi.Name
+
 	// Extract status from peer map (use first peer's status, or aggregate)
 	status := "unknown"
 	peers := make([]string, 0, len(gpi.PeerMap))
@@ -274,7 +303,7 @@ func (c *Client) PinStatus(ctx context.Context, cid string) (*PinStatus, error) 
 
 	result := &PinStatus{
 		Cid:               gpi.Cid,
-		Name:              gpi.Name,
+		Name:              name,
 		Status:            status,
 		ReplicationMin:    0, // Not available in GlobalPinInfo
 		ReplicationMax:    0, // Not available in GlobalPinInfo
@@ -331,8 +360,12 @@ func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.Rea
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("get failed with status %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("content not found (CID: %s). The content may not be available on the IPFS node, or the IPFS API may not be accessible at %s", cid, ipfsAPIURL)
+		}
+		return nil, fmt.Errorf("get failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return resp.Body, nil
