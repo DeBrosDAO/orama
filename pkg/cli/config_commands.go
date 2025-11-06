@@ -430,8 +430,8 @@ discovery:
 %s
   discovery_interval: "15s"
   bootstrap_port: %d
-  http_adv_address: "127.0.0.1:%d"
-  raft_adv_address: "127.0.0.1:%d"
+  http_adv_address: "localhost:%d"
+  raft_adv_address: "localhost:%d"
   node_namespace: "default"
 
 security:
@@ -477,8 +477,8 @@ discovery:
   bootstrap_peers: []
   discovery_interval: "15s"
   bootstrap_port: %d
-  http_adv_address: "127.0.0.1:%d"
-  raft_adv_address: "127.0.0.1:%d"
+  http_adv_address: "localhost:%d"
+  raft_adv_address: "localhost:%d"
   node_namespace: "default"
 
 security:

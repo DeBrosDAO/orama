@@ -11,7 +11,7 @@
     "program": "./cmd/gateway",
     "env": {
       "GATEWAY_ADDR": ":6001",
-      "GATEWAY_BOOTSTRAP_PEERS": "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWSHHwEY6cga3ng7tD1rzStAU58ogQXVMX3LZJ6Gqf6dee",
+      "GATEWAY_BOOTSTRAP_PEERS": "/ip4/localhost/tcp/4001/p2p/12D3KooWSHHwEY6cga3ng7tD1rzStAU58ogQXVMX3LZJ6Gqf6dee",
       "GATEWAY_NAMESPACE": "default",
       "GATEWAY_API_KEY": "ak_iGustrsFk9H8uXpwczCATe5U:default"
     }
@@ -36,7 +36,7 @@
     "program": "./cmd/gateway",
     "env": {
       "GATEWAY_ADDR": ":6001",
-      "GATEWAY_BOOTSTRAP_PEERS": "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWSHHwEY6cga3ng7tD1rzStAU58ogQXVMX3LZJ6Gqf6dee",
+      "GATEWAY_BOOTSTRAP_PEERS": "/ip4/localhost/tcp/4001/p2p/12D3KooWSHHwEY6cga3ng7tD1rzStAU58ogQXVMX3LZJ6Gqf6dee",
       "GATEWAY_NAMESPACE": "default",
       "GATEWAY_API_KEY": "ak_iGustrsFk9H8uXpwczCATe5U:default"
     }

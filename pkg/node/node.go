@@ -22,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/DeBrosOfficial/network/pkg/encryption"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -45,6 +46,9 @@ type Node struct {
 
 	// Discovery
 	discoveryManager *discovery.Manager
+
+	// IPFS Cluster config manager
+	clusterConfigManager *ipfs.ClusterConfigManager
 }
 
 // NewNode creates a new network node
@@ -321,7 +325,7 @@ func (n *Node) startLibP2P() error {
 	// For localhost/development, disable NAT services
 	// For production, these would be enabled
 	isLocalhost := len(n.config.Node.ListenAddresses) > 0 &&
-		(strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1") ||
+		(strings.Contains(n.config.Node.ListenAddresses[0], "localhost") ||
 			strings.Contains(n.config.Node.ListenAddresses[0], "localhost"))
 
 	if isLocalhost {
@@ -631,6 +635,14 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start LibP2P: %w", err)
 	}
 
+	// Initialize IPFS Cluster configuration if enabled
+	if n.config.Database.IPFS.ClusterAPIURL != "" {
+		if err := n.startIPFSClusterConfig(); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to initialize IPFS Cluster config", zap.Error(err))
+			// Don't fail node startup if cluster config fails
+		}
+	}
+
 	// Start RQLite with cluster discovery
 	if err := n.startRQLite(ctx); err != nil {
 		return fmt.Errorf("failed to start RQLite: %w", err)
@@ -649,5 +661,43 @@ func (n *Node) Start(ctx context.Context) error {
 
 	n.startConnectionMonitoring()
 
+	return nil
+}
+
+// startIPFSClusterConfig initializes and ensures IPFS Cluster configuration
+func (n *Node) startIPFSClusterConfig() error {
+	n.logger.ComponentInfo(logging.ComponentNode, "Initializing IPFS Cluster configuration")
+
+	// Create config manager
+	cm, err := ipfs.NewClusterConfigManager(n.config, n.logger.Logger)
+	if err != nil {
+		return fmt.Errorf("failed to create cluster config manager: %w", err)
+	}
+	n.clusterConfigManager = cm
+
+	// Fix IPFS config addresses (localhost -> 127.0.0.1) before ensuring cluster config
+	if err := cm.FixIPFSConfigAddresses(); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to fix IPFS config addresses", zap.Error(err))
+		// Don't fail startup if config fix fails - cluster config will handle it
+	}
+
+	// Ensure configuration exists and is correct
+	if err := cm.EnsureConfig(); err != nil {
+		return fmt.Errorf("failed to ensure cluster config: %w", err)
+	}
+
+	// If this is not the bootstrap node, try to update bootstrap peer info
+	if n.config.Node.Type != "bootstrap" && len(n.config.Discovery.BootstrapPeers) > 0 {
+		// Try to find bootstrap cluster API URL from config
+		// For now, we'll discover it from the first bootstrap peer
+		// In a real scenario, you might want to configure this explicitly
+		bootstrapClusterAPI := "http://localhost:9094" // Default bootstrap cluster API
+		if err := cm.UpdateBootstrapPeers(bootstrapClusterAPI); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to update bootstrap peers, will retry later", zap.Error(err))
+			// Don't fail - peers can connect later via mDNS or manual config
+		}
+	}
+
+	n.logger.ComponentInfo(logging.ComponentNode, "IPFS Cluster configuration initialized")
 	return nil
 }

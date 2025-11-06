@@ -51,15 +51,19 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 
 	// Load YAML
 	type yamlCfg struct {
-		ListenAddr      string   `yaml:"listen_addr"`
-		ClientNamespace string   `yaml:"client_namespace"`
-		RQLiteDSN       string   `yaml:"rqlite_dsn"`
-		BootstrapPeers  []string `yaml:"bootstrap_peers"`
-		EnableHTTPS     bool     `yaml:"enable_https"`
-		DomainName      string   `yaml:"domain_name"`
-		TLSCacheDir     string   `yaml:"tls_cache_dir"`
-		OlricServers    []string `yaml:"olric_servers"`
-		OlricTimeout    string   `yaml:"olric_timeout"`
+		ListenAddr            string   `yaml:"listen_addr"`
+		ClientNamespace       string   `yaml:"client_namespace"`
+		RQLiteDSN             string   `yaml:"rqlite_dsn"`
+		BootstrapPeers        []string `yaml:"bootstrap_peers"`
+		EnableHTTPS           bool     `yaml:"enable_https"`
+		DomainName            string   `yaml:"domain_name"`
+		TLSCacheDir           string   `yaml:"tls_cache_dir"`
+		OlricServers          []string `yaml:"olric_servers"`
+		OlricTimeout          string   `yaml:"olric_timeout"`
+		IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url"`
+		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
+		IPFSTimeout           string   `yaml:"ipfs_timeout"`
+		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -82,15 +86,19 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 
 	// Build config from YAML
 	cfg := &gateway.Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "default",
-		BootstrapPeers:  nil,
-		RQLiteDSN:       "",
-		EnableHTTPS:     false,
-		DomainName:      "",
-		TLSCacheDir:     "",
-		OlricServers:    nil,
-		OlricTimeout:    0,
+		ListenAddr:            ":6001",
+		ClientNamespace:       "default",
+		BootstrapPeers:        nil,
+		RQLiteDSN:             "",
+		EnableHTTPS:           false,
+		DomainName:            "",
+		TLSCacheDir:           "",
+		OlricServers:          nil,
+		OlricTimeout:          0,
+		IPFSClusterAPIURL:     "",
+		IPFSAPIURL:            "",
+		IPFSTimeout:           0,
+		IPFSReplicationFactor: 0,
 	}
 
 	if v := strings.TrimSpace(y.ListenAddr); v != "" {
@@ -140,6 +148,24 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		} else {
 			logger.ComponentWarn(logging.ComponentGeneral, "invalid olric_timeout, using default", zap.String("value", v), zap.Error(err))
 		}
+	}
+
+	// IPFS configuration
+	if v := strings.TrimSpace(y.IPFSClusterAPIURL); v != "" {
+		cfg.IPFSClusterAPIURL = v
+	}
+	if v := strings.TrimSpace(y.IPFSAPIURL); v != "" {
+		cfg.IPFSAPIURL = v
+	}
+	if v := strings.TrimSpace(y.IPFSTimeout); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			cfg.IPFSTimeout = parsed
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "invalid ipfs_timeout, using default", zap.String("value", v), zap.Error(err))
+		}
+	}
+	if y.IPFSReplicationFactor > 0 {
+		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
 	}
 
 	// Validate configuration

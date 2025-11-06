@@ -30,8 +30,8 @@ func validConfigForType(nodeType string) *Config {
 			BootstrapPeers:    []string{validPeer},
 			DiscoveryInterval: 15 * time.Second,
 			BootstrapPort:     4001,
-			HttpAdvAddress:    "127.0.0.1:5001",
-			RaftAdvAddress:    "127.0.0.1:7001",
+			HttpAdvAddress:    "localhost:5001",
+			RaftAdvAddress:    "localhost:7001",
 			NodeNamespace:     "default",
 		},
 		Logging: LoggingConfig{
@@ -392,7 +392,7 @@ func TestValidateCompleteConfig(t *testing.T) {
 			BackupInterval:    24 * time.Hour,
 			RQLitePort:        5002,
 			RQLiteRaftPort:    7002,
-			RQLiteJoinAddress: "127.0.0.1:7001",
+			RQLiteJoinAddress: "localhost:7001",
 			MinClusterSize:    1,
 		},
 		Discovery: DiscoveryConfig{
@@ -401,8 +401,8 @@ func TestValidateCompleteConfig(t *testing.T) {
 			},
 			DiscoveryInterval: 15 * time.Second,
 			BootstrapPort:     4001,
-			HttpAdvAddress:    "127.0.0.1:5001",
-			RaftAdvAddress:    "127.0.0.1:7001",
+			HttpAdvAddress:    "localhost:5001",
+			RaftAdvAddress:    "localhost:7001",
 			NodeNamespace:     "default",
 		},
 		Security: SecurityConfig{

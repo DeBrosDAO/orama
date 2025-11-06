@@ -54,5 +54,12 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/cache/delete", g.cacheDeleteHandler)
 	mux.HandleFunc("/v1/cache/scan", g.cacheScanHandler)
 
+	// storage endpoints (IPFS)
+	mux.HandleFunc("/v1/storage/upload", g.storageUploadHandler)
+	mux.HandleFunc("/v1/storage/pin", g.storagePinHandler)
+	mux.HandleFunc("/v1/storage/status/", g.storageStatusHandler)
+	mux.HandleFunc("/v1/storage/get/", g.storageGetHandler)
+	mux.HandleFunc("/v1/storage/unpin/", g.storageUnpinHandler)
+
 	return g.withMiddleware(mux)
 }

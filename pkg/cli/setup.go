@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -63,11 +66,12 @@ func HandleSetupCommand(args []string) {
 	fmt.Printf("  4. Install RQLite database\n")
 	fmt.Printf("  5. Install Anyone Relay (Anon) for anonymous networking\n")
 	fmt.Printf("  6. Install Olric cache server\n")
-	fmt.Printf("  7. Create directories (/home/debros/bin, /home/debros/src)\n")
-	fmt.Printf("  8. Clone and build DeBros Network\n")
-	fmt.Printf("  9. Generate configuration files\n")
-	fmt.Printf(" 10. Create systemd services (debros-node, debros-gateway, debros-olric)\n")
-	fmt.Printf(" 11. Start and enable services\n")
+	fmt.Printf("  7. Install IPFS (Kubo) and IPFS Cluster\n")
+	fmt.Printf("  8. Create directories (/home/debros/bin, /home/debros/src)\n")
+	fmt.Printf("  9. Clone and build DeBros Network\n")
+	fmt.Printf(" 10. Generate configuration files\n")
+	fmt.Printf(" 11. Create systemd services (debros-ipfs, debros-ipfs-cluster, debros-node, debros-gateway, debros-olric)\n")
+	fmt.Printf(" 12. Start and enable services\n")
 	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
 
 	fmt.Printf("Ready to begin setup? (yes/no): ")
@@ -96,6 +100,9 @@ func HandleSetupCommand(args []string) {
 	// Step 4.6: Install Olric cache server
 	installOlric()
 
+	// Step 4.7: Install IPFS and IPFS Cluster
+	installIPFS()
+
 	// Step 5: Setup directories
 	setupDirectories()
 
@@ -122,6 +129,14 @@ func HandleSetupCommand(args []string) {
 	if peerID != "" {
 		fmt.Printf("🆔 Node Peer ID: %s\n\n", peerID)
 	}
+
+	// Display IPFS Cluster information
+	fmt.Printf("IPFS Cluster Setup:\n")
+	fmt.Printf("  Each node runs its own IPFS Cluster peer\n")
+	fmt.Printf("  Cluster peers use CRDT consensus for automatic discovery\n")
+	fmt.Printf("  To verify cluster is working:\n")
+	fmt.Printf("    sudo -u debros ipfs-cluster-ctl --host http://localhost:9094 peers ls\n")
+	fmt.Printf("  You should see all cluster peers listed\n\n")
 
 	fmt.Printf("Service Management:\n")
 	fmt.Printf("  network-cli service status all\n")
@@ -1086,26 +1101,15 @@ func installOlric() {
 	if err := os.MkdirAll(olricConfigDir, 0755); err == nil {
 		configPath := olricConfigDir + "/config.yaml"
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			configContent := `memberlist:
-  bind-addr: "0.0.0.0"
-  bind-port: 3322
-client:
-  bind-addr: "0.0.0.0"
-  bind-port: 3320
+			configContent := `server:
+  bindAddr: "localhost"
+  bindPort: 3320
 
-# Durability and replication configuration
-# Replicates data across entire network for fault tolerance
-dmaps:
-  default:
-    replication:
-      mode: sync  # Synchronous replication for durability
-      replica_count: 2  # Replicate to 2 backup nodes (3 total copies: 1 primary + 2 backups)
-    write_quorum: 2  # Require 2 nodes to acknowledge writes
-    read_quorum: 1   # Read from 1 node (faster reads)
-    read_repair: true  # Enable read-repair for consistency
+memberlist:
+  environment: local
+  bindAddr: "localhost"
+  bindPort: 3322
 
-# Split-brain protection
-member_count_quorum: 2  # Require at least 2 nodes to operate (prevents split-brain)
 `
 			if err := os.WriteFile(configPath, []byte(configContent), 0644); err == nil {
 				exec.Command("chown", "debros:debros", configPath).Run()
@@ -1165,6 +1169,92 @@ func configureFirewallForOlric() {
 	}
 
 	fmt.Printf("   No active firewall detected for Olric\n")
+}
+
+func installIPFS() {
+	fmt.Printf("🌐 Installing IPFS (Kubo) and IPFS Cluster...\n")
+
+	// Check if IPFS is already installed
+	if _, err := exec.LookPath("ipfs"); err == nil {
+		fmt.Printf("   ✓ IPFS (Kubo) already installed\n")
+	} else {
+		fmt.Printf("   Installing IPFS (Kubo)...\n")
+		// Install IPFS via official installation script
+		cmd := exec.Command("bash", "-c", "curl -fsSL https://dist.ipfs.tech/kubo/v0.27.0/install.sh | bash")
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to install IPFS: %v\n", err)
+			fmt.Fprintf(os.Stderr, "   You may need to install IPFS manually: https://docs.ipfs.tech/install/command-line/\n")
+			return
+		}
+		// Make sure ipfs is in PATH
+		exec.Command("ln", "-sf", "/usr/local/bin/ipfs", "/usr/bin/ipfs").Run()
+		fmt.Printf("   ✓ IPFS (Kubo) installed\n")
+	}
+
+	// Check if IPFS Cluster is already installed
+	if _, err := exec.LookPath("ipfs-cluster-service"); err == nil {
+		fmt.Printf("   ✓ IPFS Cluster already installed\n")
+	} else {
+		fmt.Printf("   Installing IPFS Cluster...\n")
+		// Install IPFS Cluster via go install
+		if _, err := exec.LookPath("go"); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Go not found - cannot install IPFS Cluster. Please install Go first.\n")
+			return
+		}
+		cmd := exec.Command("go", "install", "github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest")
+		cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to install IPFS Cluster: %v\n", err)
+			if len(output) > 0 {
+				fmt.Fprintf(os.Stderr, "   Output: %s\n", string(output))
+			}
+			fmt.Fprintf(os.Stderr, "   You can manually install with: go install github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest\n")
+			return
+		}
+		// Also install ipfs-cluster-ctl for management
+		exec.Command("go", "install", "github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-ctl@latest").Run()
+		fmt.Printf("   ✓ IPFS Cluster installed\n")
+	}
+
+	// Configure firewall for IPFS and Cluster
+	configureFirewallForIPFS()
+
+	fmt.Printf("   ✓ IPFS and IPFS Cluster setup complete\n")
+}
+
+func configureFirewallForIPFS() {
+	fmt.Printf("   Checking firewall configuration for IPFS...\n")
+
+	// Check for UFW
+	if _, err := exec.LookPath("ufw"); err == nil {
+		output, _ := exec.Command("ufw", "status").CombinedOutput()
+		if strings.Contains(string(output), "Status: active") {
+			fmt.Printf("   Adding UFW rules for IPFS and Cluster...\n")
+			exec.Command("ufw", "allow", "4001/tcp", "comment", "IPFS Swarm").Run()
+			exec.Command("ufw", "allow", "5001/tcp", "comment", "IPFS API").Run()
+			exec.Command("ufw", "allow", "9094/tcp", "comment", "IPFS Cluster API").Run()
+			exec.Command("ufw", "allow", "9096/tcp", "comment", "IPFS Cluster Swarm").Run()
+			fmt.Printf("   ✓ UFW rules added for IPFS\n")
+			return
+		}
+	}
+
+	// Check for firewalld
+	if _, err := exec.LookPath("firewall-cmd"); err == nil {
+		output, _ := exec.Command("firewall-cmd", "--state").CombinedOutput()
+		if strings.Contains(string(output), "running") {
+			fmt.Printf("   Adding firewalld rules for IPFS...\n")
+			exec.Command("firewall-cmd", "--permanent", "--add-port=4001/tcp").Run()
+			exec.Command("firewall-cmd", "--permanent", "--add-port=5001/tcp").Run()
+			exec.Command("firewall-cmd", "--permanent", "--add-port=9094/tcp").Run()
+			exec.Command("firewall-cmd", "--permanent", "--add-port=9096/tcp").Run()
+			exec.Command("firewall-cmd", "--reload").Run()
+			fmt.Printf("   ✓ firewalld rules added for IPFS\n")
+			return
+		}
+	}
+
+	fmt.Printf("   No active firewall detected for IPFS\n")
 }
 
 func setupDirectories() {
@@ -1416,6 +1506,18 @@ func generateConfigsInteractive(force bool) {
 		exec.Command("chown", "debros:debros", nodeConfigPath).Run()
 		fmt.Printf("   ✓ Node config created: %s\n", nodeConfigPath)
 
+		// Initialize IPFS and Cluster for this node
+		var nodeID string
+		if isBootstrap {
+			nodeID = "bootstrap"
+		} else {
+			nodeID = "node"
+		}
+		if err := initializeIPFSForNode(nodeID, vpsIP, isBootstrap); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to initialize IPFS/Cluster: %v\n", err)
+			fmt.Fprintf(os.Stderr, "   You may need to initialize IPFS and Cluster manually\n")
+		}
+
 		// Generate Olric config file for this node (uses multicast discovery)
 		var olricConfigPath string
 		if isBootstrap {
@@ -1532,6 +1634,17 @@ database:
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 1
+  ipfs:
+    # IPFS Cluster API endpoint for pin management (leave empty to disable)
+    cluster_api_url: "http://localhost:9094"
+    # IPFS HTTP API endpoint for content retrieval
+    api_url: "http://localhost:5001"
+    # Timeout for IPFS operations
+    timeout: "60s"
+    # Replication factor for pinned content
+    replication_factor: 3
+    # Enable client-side encryption before upload
+    enable_encryption: true
 
 discovery:
   bootstrap_peers: []
@@ -1607,6 +1720,17 @@ database:
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 1
+  ipfs:
+    # IPFS Cluster API endpoint for pin management (leave empty to disable)
+    cluster_api_url: "http://localhost:9094"
+    # IPFS HTTP API endpoint for content retrieval
+    api_url: "http://localhost:5001"
+    # Timeout for IPFS operations
+    timeout: "60s"
+    # Replication factor for pinned content
+    replication_factor: 3
+    # Enable client-side encryption before upload
+    enable_encryption: true
 
 discovery:
 %s
@@ -1670,13 +1794,23 @@ func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain
 		olricYAML.WriteString("  - \"localhost:3320\"\n")
 	}
 
+	// IPFS Cluster configuration (defaults - can be customized later)
+	ipfsYAML := `# IPFS Cluster configuration (optional)
+# Uncomment and configure if you have IPFS Cluster running:
+# ipfs_cluster_api_url: "http://localhost:9094"
+# ipfs_api_url: "http://localhost:5001"
+# ipfs_timeout: "60s"
+# ipfs_replication_factor: 3
+`
+
 	return fmt.Sprintf(`listen_addr: ":6001"
 client_namespace: "default"
 rqlite_dsn: ""
 %s
 %s
 %s
-`, peersYAML.String(), httpsYAML.String(), olricYAML.String())
+%s
+`, peersYAML.String(), httpsYAML.String(), olricYAML.String(), ipfsYAML)
 }
 
 // generateOlricConfig generates an Olric configuration file
@@ -1689,30 +1823,15 @@ func generateOlricConfig(configPath, bindIP string, httpPort, memberlistPort int
 	}
 
 	var config strings.Builder
+	config.WriteString("server:\n")
+	config.WriteString(fmt.Sprintf("  bindAddr: \"%s\"\n", bindIP))
+	config.WriteString(fmt.Sprintf("  bindPort: %d\n", httpPort))
+	config.WriteString("\n")
 	config.WriteString("memberlist:\n")
-	config.WriteString(fmt.Sprintf("  bind-addr: \"%s\"\n", bindIP))
-	config.WriteString(fmt.Sprintf("  bind-port: %d\n", memberlistPort))
-	config.WriteString("  # Multicast discovery enabled - peers discovered dynamically via LibP2P network\n")
-
-	config.WriteString("client:\n")
-	config.WriteString(fmt.Sprintf("  bind-addr: \"%s\"\n", bindIP))
-	config.WriteString(fmt.Sprintf("  bind-port: %d\n", httpPort))
-
-	// Durability and replication settings
-	config.WriteString("\n# Durability and replication configuration\n")
-	config.WriteString("# Replicates data across entire network for fault tolerance\n")
-	config.WriteString("dmaps:\n")
-	config.WriteString("  default:\n")
-	config.WriteString("    replication:\n")
-	config.WriteString("      mode: sync  # Synchronous replication for durability\n")
-	config.WriteString("      replica_count: 2  # Replicate to 2 backup nodes (3 total copies: 1 primary + 2 backups)\n")
-	config.WriteString("    write_quorum: 2  # Require 2 nodes to acknowledge writes\n")
-	config.WriteString("    read_quorum: 1   # Read from 1 node (faster reads)\n")
-	config.WriteString("    read_repair: true  # Enable read-repair for consistency\n")
-
-	// Split-brain protection
-	config.WriteString("\n# Split-brain protection\n")
-	config.WriteString("member_count_quorum: 2  # Require at least 2 nodes to operate (prevents split-brain)\n")
+	config.WriteString("  environment: local\n")
+	config.WriteString(fmt.Sprintf("  bindAddr: \"%s\"\n", bindIP))
+	config.WriteString(fmt.Sprintf("  bindPort: %d\n", memberlistPort))
+	config.WriteString("\n")
 
 	// Write config file
 	if err := os.WriteFile(configPath, []byte(config.String()), 0644); err != nil {
@@ -1724,14 +1843,381 @@ func generateOlricConfig(configPath, bindIP string, httpPort, memberlistPort int
 	return nil
 }
 
+// getOrGenerateClusterSecret gets or generates a shared cluster secret
+func getOrGenerateClusterSecret() (string, error) {
+	secretPath := "/home/debros/.debros/cluster-secret"
+
+	// Try to read existing secret
+	if data, err := os.ReadFile(secretPath); err == nil {
+		secret := strings.TrimSpace(string(data))
+		if len(secret) == 64 {
+			return secret, nil
+		}
+	}
+
+	// Generate new secret (64 hex characters = 32 bytes)
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate cluster secret: %w", err)
+	}
+	secret := hex.EncodeToString(bytes)
+
+	// Save secret
+	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+		return "", fmt.Errorf("failed to save cluster secret: %w", err)
+	}
+	exec.Command("chown", "debros:debros", secretPath).Run()
+
+	return secret, nil
+}
+
+// getOrGenerateSwarmKey gets or generates a shared IPFS swarm key
+// Returns the swarm key content as bytes (formatted for IPFS)
+func getOrGenerateSwarmKey() ([]byte, error) {
+	secretPath := "/home/debros/.debros/swarm.key"
+
+	// Try to read existing key
+	if data, err := os.ReadFile(secretPath); err == nil {
+		// Validate it's a proper swarm key format
+		content := string(data)
+		if strings.Contains(content, "/key/swarm/psk/1.0.0/") {
+			return data, nil
+		}
+	}
+
+	// Generate new key (32 bytes)
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate swarm key: %w", err)
+	}
+
+	// Format as IPFS swarm key file
+	keyHex := strings.ToUpper(hex.EncodeToString(keyBytes))
+	content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", keyHex)
+
+	// Save key
+	if err := os.WriteFile(secretPath, []byte(content), 0600); err != nil {
+		return nil, fmt.Errorf("failed to save swarm key: %w", err)
+	}
+	exec.Command("chown", "debros:debros", secretPath).Run()
+
+	fmt.Printf("   ✓ Generated private swarm key\n")
+	return []byte(content), nil
+}
+
+// ensureSwarmKey ensures the swarm key exists in the IPFS repo
+func ensureSwarmKey(repoPath string, swarmKey []byte) error {
+	swarmKeyPath := filepath.Join(repoPath, "swarm.key")
+
+	// Check if swarm key already exists
+	if _, err := os.Stat(swarmKeyPath); err == nil {
+		// Verify it matches (optional: could compare content)
+		return nil
+	}
+
+	// Create swarm key file in repo
+	if err := os.WriteFile(swarmKeyPath, swarmKey, 0600); err != nil {
+		return fmt.Errorf("failed to write swarm key to repo: %w", err)
+	}
+
+	// Fix ownership
+	exec.Command("chown", "debros:debros", swarmKeyPath).Run()
+	return nil
+}
+
+// initializeIPFSForNode initializes IPFS and IPFS Cluster for a node
+func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
+	fmt.Printf("   Initializing IPFS and Cluster for node %s...\n", nodeID)
+
+	// Get or generate cluster secret
+	secret, err := getOrGenerateClusterSecret()
+	if err != nil {
+		return fmt.Errorf("failed to get cluster secret: %w", err)
+	}
+
+	// Get or generate swarm key for private network
+	swarmKey, err := getOrGenerateSwarmKey()
+	if err != nil {
+		return fmt.Errorf("failed to get swarm key: %w", err)
+	}
+
+	// Determine data directories
+	var ipfsDataDir, clusterDataDir string
+	if nodeID == "bootstrap" {
+		ipfsDataDir = "/home/debros/.debros/bootstrap/ipfs"
+		clusterDataDir = "/home/debros/.debros/bootstrap/ipfs-cluster"
+	} else {
+		ipfsDataDir = "/home/debros/.debros/node/ipfs"
+		clusterDataDir = "/home/debros/.debros/node/ipfs-cluster"
+	}
+
+	// Create directories
+	os.MkdirAll(ipfsDataDir, 0755)
+	os.MkdirAll(clusterDataDir, 0755)
+	exec.Command("chown", "-R", "debros:debros", ipfsDataDir).Run()
+	exec.Command("chown", "-R", "debros:debros", clusterDataDir).Run()
+
+	// Initialize IPFS if not already initialized
+	ipfsRepoPath := filepath.Join(ipfsDataDir, "repo")
+	if _, err := os.Stat(filepath.Join(ipfsRepoPath, "config")); os.IsNotExist(err) {
+		fmt.Printf("      Initializing IPFS repository...\n")
+		cmd := exec.Command("sudo", "-u", "debros", "ipfs", "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
+		}
+
+		// Ensure swarm key is in place (creates private network)
+		if err := ensureSwarmKey(ipfsRepoPath, swarmKey); err != nil {
+			return fmt.Errorf("failed to set swarm key: %w", err)
+		}
+
+		// Configure IPFS API and Gateway addresses
+		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.API", `["/ip4/localhost/tcp/5001"]`, "--repo-dir="+ipfsRepoPath).Run()
+		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Gateway", `["/ip4/localhost/tcp/8080"]`, "--repo-dir="+ipfsRepoPath).Run()
+		exec.Command("sudo", "-u", "debros", "ipfs", "config", "--json", "Addresses.Swarm", `["/ip4/0.0.0.0/tcp/4001","/ip6/::/tcp/4001"]`, "--repo-dir="+ipfsRepoPath).Run()
+		fmt.Printf("      ✓ IPFS initialized with private swarm key\n")
+	} else {
+		// Repo exists, but ensure swarm key is present
+		if err := ensureSwarmKey(ipfsRepoPath, swarmKey); err != nil {
+			return fmt.Errorf("failed to set swarm key: %w", err)
+		}
+		fmt.Printf("      ✓ IPFS repository already exists, swarm key ensured\n")
+	}
+
+	// Initialize IPFS Cluster if not already initialized
+	clusterConfigPath := filepath.Join(clusterDataDir, "service.json")
+	if _, err := os.Stat(clusterConfigPath); os.IsNotExist(err) {
+		fmt.Printf("      Initializing IPFS Cluster...\n")
+
+		// Generate cluster config
+		clusterConfig := generateClusterServiceConfig(nodeID, vpsIP, secret, isBootstrap)
+
+		// Write config
+		configJSON, err := json.MarshalIndent(clusterConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal cluster config: %w", err)
+		}
+
+		if err := os.WriteFile(clusterConfigPath, configJSON, 0644); err != nil {
+			return fmt.Errorf("failed to write cluster config: %w", err)
+		}
+		exec.Command("chown", "debros:debros", clusterConfigPath).Run()
+
+		fmt.Printf("      ✓ IPFS Cluster initialized\n")
+	}
+
+	return nil
+}
+
+// getClusterPeerID gets the cluster peer ID from a running cluster service
+func getClusterPeerID(clusterAPIURL string) (string, error) {
+	cmd := exec.Command("ipfs-cluster-ctl", "--host", clusterAPIURL, "id")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to get cluster peer ID: %v\n%s", err, string(output))
+	}
+
+	// Parse output to extract peer ID
+	// Output format: "12D3KooW..."
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "12D3Koo") {
+			return line, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not parse cluster peer ID from output: %s", string(output))
+}
+
+// getClusterPeerMultiaddr constructs the cluster peer multiaddr
+func getClusterPeerMultiaddr(vpsIP, peerID string) string {
+	return fmt.Sprintf("/ip4/%s/tcp/9096/p2p/%s", vpsIP, peerID)
+}
+
+// clusterServiceConfig represents IPFS Cluster service.json structure
+type clusterServiceConfig struct {
+	Cluster       clusterConfig       `json:"cluster"`
+	Consensus     consensusConfig     `json:"consensus"`
+	API           apiConfig           `json:"api"`
+	IPFSConnector ipfsConnectorConfig `json:"ipfs_connector"`
+	Datastore     datastoreConfig     `json:"datastore"`
+}
+
+type clusterConfig struct {
+	ID                string                  `json:"id"`
+	PrivateKey        string                  `json:"private_key"`
+	Secret            string                  `json:"secret"`
+	Peername          string                  `json:"peername"`
+	Bootstrap         []string                `json:"bootstrap"`
+	LeaveOnShutdown   bool                    `json:"leave_on_shutdown"`
+	ListenMultiaddr   string                  `json:"listen_multiaddress"`
+	ConnectionManager connectionManagerConfig `json:"connection_manager"`
+}
+
+type connectionManagerConfig struct {
+	LowWater    int    `json:"low_water"`
+	HighWater   int    `json:"high_water"`
+	GracePeriod string `json:"grace_period"`
+}
+
+type consensusConfig struct {
+	CRDT crdtConfig `json:"crdt"`
+}
+
+type crdtConfig struct {
+	ClusterName  string   `json:"cluster_name"`
+	TrustedPeers []string `json:"trusted_peers"`
+}
+
+type apiConfig struct {
+	RestAPI restAPIConfig `json:"restapi"`
+}
+
+type restAPIConfig struct {
+	HTTPListenMultiaddress string      `json:"http_listen_multiaddress"`
+	ID                     string      `json:"id"`
+	BasicAuthCredentials   interface{} `json:"basic_auth_credentials"`
+}
+
+type ipfsConnectorConfig struct {
+	IPFSHTTP ipfsHTTPConfig `json:"ipfshttp"`
+}
+
+type ipfsHTTPConfig struct {
+	NodeMultiaddress string `json:"node_multiaddress"`
+}
+
+type datastoreConfig struct {
+	Type string `json:"type"`
+	Path string `json:"path"`
+}
+
+// generateClusterServiceConfig generates IPFS Cluster service.json config
+func generateClusterServiceConfig(nodeID, vpsIP, secret string, isBootstrap bool) clusterServiceConfig {
+	clusterListenAddr := "/ip4/0.0.0.0/tcp/9096"
+	restAPIListenAddr := "/ip4/0.0.0.0/tcp/9094"
+
+	// For bootstrap node, use empty bootstrap list
+	// For other nodes, bootstrap list will be set when starting the service
+	bootstrap := []string{}
+
+	return clusterServiceConfig{
+		Cluster: clusterConfig{
+			Peername:        nodeID,
+			Secret:          secret,
+			Bootstrap:       bootstrap,
+			LeaveOnShutdown: false,
+			ListenMultiaddr: clusterListenAddr,
+			ConnectionManager: connectionManagerConfig{
+				LowWater:    50,
+				HighWater:   200,
+				GracePeriod: "20s",
+			},
+		},
+		Consensus: consensusConfig{
+			CRDT: crdtConfig{
+				ClusterName:  "debros-cluster",
+				TrustedPeers: []string{"*"}, // Trust all peers
+			},
+		},
+		API: apiConfig{
+			RestAPI: restAPIConfig{
+				HTTPListenMultiaddress: restAPIListenAddr,
+				ID:                     "",
+				BasicAuthCredentials:   nil,
+			},
+		},
+		IPFSConnector: ipfsConnectorConfig{
+			IPFSHTTP: ipfsHTTPConfig{
+				NodeMultiaddress: "/ip4/localhost/tcp/5001",
+			},
+		},
+		Datastore: datastoreConfig{
+			Type: "badger",
+			Path: fmt.Sprintf("/home/debros/.debros/%s/ipfs-cluster/badger", nodeID),
+		},
+	}
+}
+
 func createSystemdServices() {
 	fmt.Printf("🔧 Creating systemd services...\n")
+
+	// IPFS service (runs on all nodes)
+	ipfsService := `[Unit]
+Description=IPFS Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+Environment=HOME=/home/debros
+ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/node.yaml ]; then export IPFS_PATH=/home/debros/.debros/node/ipfs/repo; elif [ -f /home/debros/.debros/bootstrap.yaml ]; then export IPFS_PATH=/home/debros/.debros/bootstrap/ipfs/repo; else export IPFS_PATH=/home/debros/.debros/bootstrap/ipfs/repo; fi'
+ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/swarm.key ] && [ ! -f ${IPFS_PATH}/swarm.key ]; then cp /home/debros/.debros/swarm.key ${IPFS_PATH}/swarm.key && chmod 600 ${IPFS_PATH}/swarm.key; fi'
+ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=${IPFS_PATH}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipfs
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/debros
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	if err := os.WriteFile("/etc/systemd/system/debros-ipfs.service", []byte(ipfsService), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to create IPFS service: %v\n", err)
+		os.Exit(1)
+	}
+
+	// IPFS Cluster service (runs on all nodes)
+	clusterService := `[Unit]
+Description=IPFS Cluster Service
+After=debros-ipfs.service
+Wants=debros-ipfs.service
+Requires=debros-ipfs.service
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+WorkingDirectory=/home/debros
+Environment=HOME=/home/debros
+ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/node.yaml ]; then export CLUSTER_PATH=/home/debros/.debros/node/ipfs-cluster; elif [ -f /home/debros/.debros/bootstrap.yaml ]; then export CLUSTER_PATH=/home/debros/.debros/bootstrap/ipfs-cluster; else export CLUSTER_PATH=/home/debros/.debros/bootstrap/ipfs-cluster; fi'
+ExecStart=/usr/local/bin/ipfs-cluster-service daemon --config ${CLUSTER_PATH}/service.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipfs-cluster
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/debros
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	if err := os.WriteFile("/etc/systemd/system/debros-ipfs-cluster.service", []byte(clusterService), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to create IPFS Cluster service: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Node service
 	nodeService := `[Unit]
 Description=DeBros Network Node
-After=network-online.target
-Wants=network-online.target
+After=network-online.target debros-ipfs-cluster.service
+Wants=network-online.target debros-ipfs-cluster.service
+Requires=debros-ipfs-cluster.service
 
 [Service]
 Type=simple
@@ -1801,6 +2287,8 @@ WantedBy=multi-user.target
 
 	// Reload systemd
 	exec.Command("systemctl", "daemon-reload").Run()
+	exec.Command("systemctl", "enable", "debros-ipfs").Run()
+	exec.Command("systemctl", "enable", "debros-ipfs-cluster").Run()
 	exec.Command("systemctl", "enable", "debros-node").Run()
 	exec.Command("systemctl", "enable", "debros-gateway").Run()
 
@@ -1834,6 +2322,18 @@ func startServices() {
 			}
 		}
 	}
+
+	// Start IPFS first (required by Cluster)
+	startOrRestartService("debros-ipfs")
+
+	// Wait a bit for IPFS to start
+	time.Sleep(2 * time.Second)
+
+	// Start IPFS Cluster (required by Node)
+	startOrRestartService("debros-ipfs-cluster")
+
+	// Wait a bit for Cluster to start
+	time.Sleep(2 * time.Second)
 
 	// Start or restart node service
 	startOrRestartService("debros-node")

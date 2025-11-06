@@ -30,6 +30,15 @@ if [ -z "$OTHER_FILES" ]; then
   exit 0
 fi
 
+# Check for skip flag
+# To skip changelog generation, set SKIP_CHANGELOG=1 before committing:
+#   SKIP_CHANGELOG=1 git commit -m "your message"
+#   SKIP_CHANGELOG=1 git commit
+if [ "$SKIP_CHANGELOG" = "1" ] || [ "$SKIP_CHANGELOG" = "true" ]; then
+  echo -e "${YELLOW}Skipping changelog update (SKIP_CHANGELOG is set)${NOCOLOR}"
+  exit 0
+fi
+
 # Update changelog before commit
 if [ -f "$CHANGELOG_SCRIPT" ]; then
   echo -e "\n${CYAN}Updating changelog...${NOCOLOR}"

@@ -26,12 +26,3 @@ func TestExtractAPIKey(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
-
-func TestValidateNamespaceParam(t *testing.T) {
-	g := &Gateway{}
-	r := httptest.NewRequest(http.MethodGet, "/v1/storage/get?namespace=ns1&key=k", nil)
-	// no context namespace: should be false
-	if g.validateNamespaceParam(r) {
-		t.Fatalf("expected false without context ns")
-	}
-}

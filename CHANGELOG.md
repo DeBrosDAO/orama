@@ -13,15 +13,38 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+
+## [0.56.0] - 2025-11-05
+
+### Added
+
+- Added IPFS storage endpoints to the Gateway for content upload, pinning, status, retrieval, and unpinning.
+- Introduced `StorageClient` interface and implementation in the Go client library for interacting with the new IPFS storage endpoints.
+- Added support for automatically starting IPFS daemon, IPFS Cluster daemon, and Olric cache server in the `dev` environment setup.
+
+### Changed
+
+- Updated Gateway configuration to include settings for IPFS Cluster API URL, IPFS API URL, timeout, and replication factor.
+- Refactored Olric configuration generation to use a simpler, local-environment focused setup.
+- Improved IPFS content retrieval (`Get`) to fall back to the IPFS Gateway (port 8080) if the IPFS API (port 5001) returns a 404.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
 ## [0.54.0] - 2025-11-03
 
 ### Added
+
 - Integrated Olric distributed cache for high-speed key-value storage and caching.
 - Added new HTTP Gateway endpoints for cache operations (GET, PUT, DELETE, SCAN) via `/v1/cache/`.
 - Added `olric_servers` and `olric_timeout` configuration options to the Gateway.
 - Updated the automated installation script (`install-debros-network.sh`) to include Olric installation, configuration, and firewall rules (ports 3320, 3322).
 
 ### Changed
+
 - Refactored README for better clarity and organization, focusing on quick start and core features.
 
 ### Deprecated
@@ -29,12 +52,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.18] - 2025-11-03
 
 ### Added
+
 \n
+
 ### Changed
+
 - Increased the connection timeout during peer discovery from 15 seconds to 20 seconds to improve connection reliability.
 - Removed unnecessary debug logging related to filtering out ephemeral port addresses during peer exchange.
 
@@ -43,13 +71,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.17] - 2025-11-03
 
 ### Added
+
 - Added a new Git `pre-commit` hook to automatically update the changelog and version before committing, ensuring version consistency.
 
 ### Changed
+
 - Refactored the `update_changelog.sh` script to support different execution contexts (pre-commit vs. pre-push), allowing it to analyze only staged changes during commit.
 - The Git `pre-push` hook was simplified by removing the changelog update logic, which is now handled by the `pre-commit` hook.
 
@@ -58,12 +90,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.16] - 2025-11-03
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved the changelog generation script to prevent infinite loops when the only unpushed commit is a previous changelog update.
 
 ### Deprecated
@@ -71,12 +108,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.15] - 2025-11-03
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved the pre-push git hook to automatically commit updated changelog and Makefile after generation.
 - Updated the changelog generation script to load the OpenRouter API key from the .env file or environment variables for better security.
 - Modified the pre-push hook to read user confirmation from /dev/tty for better compatibility.
@@ -88,12 +130,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.15] - 2025-11-03
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved the pre-push git hook to automatically commit updated changelog and Makefile after generation.
 - Updated the changelog generation script to load the OpenRouter API key from the .env file or environment variables for better security.
 - Modified the pre-push hook to read user confirmation from /dev/tty for better compatibility.
@@ -105,14 +152,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.14] - 2025-11-03
 
 ### Added
+
 - Added a new `install-hooks` target to the Makefile to easily set up git hooks.
 - Added a script (`scripts/install-hooks.sh`) to copy git hooks from `.githooks` to `.git/hooks`.
 
 ### Changed
+
 - Improved the pre-push git hook to automatically commit the updated `CHANGELOG.md` and `Makefile` after generating the changelog.
 - Updated the changelog generation script (`scripts/update_changelog.sh`) to load the OpenRouter API key from the `.env` file or environment variables, improving security and configuration.
 - Modified the pre-push hook to read user confirmation from `/dev/tty` for better compatibility in various terminal environments.
@@ -124,14 +175,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.53.14] - 2025-11-03
 
 ### Added
+
 - Added a new `install-hooks` target to the Makefile to easily set up git hooks.
 - Added a script (`scripts/install-hooks.sh`) to copy git hooks from `.githooks` to `.git/hooks`.
 
 ### Changed
+
 - Improved the pre-push git hook to automatically commit the updated `CHANGELOG.md` and `Makefile` after generating the changelog.
 - Updated the changelog generation script (`scripts/update_changelog.sh`) to load the OpenRouter API key from the `.env` file or environment variables, improving security and configuration.
 - Modified the pre-push hook to read user confirmation from `/dev/tty` for better compatibility in various terminal environments.
@@ -141,6 +196,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
 
 ## [0.53.8] - 2025-10-31

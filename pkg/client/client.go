@@ -35,6 +35,7 @@ type Client struct {
 	database *DatabaseClientImpl
 	network  *NetworkInfoImpl
 	pubsub   *pubSubBridge
+	storage  *StorageClientImpl
 
 	// State
 	connected bool
@@ -70,6 +71,7 @@ func NewClient(config *ClientConfig) (NetworkClient, error) {
 	// Initialize components (will be configured when connected)
 	client.database = &DatabaseClientImpl{client: client}
 	client.network = &NetworkInfoImpl{client: client}
+	client.storage = &StorageClientImpl{client: client}
 
 	return client, nil
 }
@@ -87,6 +89,11 @@ func (c *Client) PubSub() PubSubClient {
 // Network returns the network info client
 func (c *Client) Network() NetworkInfo {
 	return c.network
+}
+
+// Storage returns the storage client
+func (c *Client) Storage() StorageClient {
+	return c.storage
 }
 
 // Config returns a snapshot copy of the client's configuration
