@@ -80,9 +80,22 @@ func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to decode the value from Olric
-	// Values stored as JSON bytes need to be deserialized, while basic types
-	// (strings, numbers, bools) can be retrieved directly
+	value, err := decodeValueFromOlric(gr)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to decode value: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key":   req.Key,
+		"value": value,
+		"dmap":  req.DMap,
+	})
+}
+
+// decodeValueFromOlric decodes a value from Olric GetResponse
+// Handles JSON-serialized complex types and basic types (string, number, bool)
+func decodeValueFromOlric(gr *olriclib.GetResponse) (any, error) {
 	var value any
 
 	// First, try to get as bytes (for JSON-serialized complex types)
@@ -113,10 +126,84 @@ func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	return value, nil
+}
+
+func (g *Gateway) cacheMultiGetHandler(w http.ResponseWriter, r *http.Request) {
+	if g.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		DMap string   `json:"dmap"` // Distributed map name
+		Keys []string `json:"keys"` // Keys to retrieve
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	if strings.TrimSpace(req.DMap) == "" {
+		writeError(w, http.StatusBadRequest, "dmap is required")
+		return
+	}
+
+	if len(req.Keys) == 0 {
+		writeError(w, http.StatusBadRequest, "keys array is required and cannot be empty")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	client := g.olricClient.GetClient()
+	dm, err := client.NewDMap(req.DMap)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		return
+	}
+
+	// Get all keys and collect results
+	var results []map[string]any
+	for _, key := range req.Keys {
+		if strings.TrimSpace(key) == "" {
+			continue // Skip empty keys
+		}
+
+		gr, err := dm.Get(ctx, key)
+		if err != nil {
+			// Skip keys that are not found - don't include them in results
+			// This matches the SDK's expectation that only found keys are returned
+			if err == olriclib.ErrKeyNotFound {
+				continue
+			}
+			// For other errors, log but continue with other keys
+			// We don't want one bad key to fail the entire request
+			continue
+		}
+
+		value, err := decodeValueFromOlric(gr)
+		if err != nil {
+			// If we can't decode, skip this key
+			continue
+		}
+
+		results = append(results, map[string]any{
+			"key":   key,
+			"value": value,
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"key":   req.Key,
-		"value": value,
-		"dmap":  req.DMap,
+		"results": results,
+		"dmap":    req.DMap,
 	})
 }
 

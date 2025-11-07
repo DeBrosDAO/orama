@@ -131,27 +131,40 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 }
 
 // extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
+// Note: Bearer tokens that look like JWTs (have 2 dots) are skipped (they're JWTs, handled separately)
+// X-API-Key header is preferred when both Authorization and X-API-Key are present
 func extractAPIKey(r *http.Request) string {
-	// Prefer Authorization header
-	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		// Support "Bearer <token>" and "ApiKey <token>"
-		lower := strings.ToLower(auth)
-		if strings.HasPrefix(lower, "bearer ") {
-			return strings.TrimSpace(auth[len("Bearer "):])
-		}
-		if strings.HasPrefix(lower, "apikey ") {
-			return strings.TrimSpace(auth[len("ApiKey "):])
-		}
-		// If header has no scheme, treat the whole value as token (lenient for dev)
-		if !strings.Contains(auth, " ") {
-			return strings.TrimSpace(auth)
-		}
-	}
-	// Fallback to X-API-Key header
+	// Prefer X-API-Key header (most explicit) - check this first
 	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
 		return v
 	}
+
+	// Check Authorization header for ApiKey scheme or non-JWT Bearer tokens
+	auth := r.Header.Get("Authorization")
+	if auth != "" {
+		lower := strings.ToLower(auth)
+		if strings.HasPrefix(lower, "bearer ") {
+			tok := strings.TrimSpace(auth[len("Bearer "):])
+			// Skip Bearer tokens that look like JWTs (have 2 dots) - they're JWTs
+			// But allow Bearer tokens that don't look like JWTs (for backward compatibility)
+			if strings.Count(tok, ".") == 2 {
+				// This is a JWT, skip it
+			} else {
+				// This doesn't look like a JWT, treat as API key (backward compatibility)
+				return tok
+			}
+		} else if strings.HasPrefix(lower, "apikey ") {
+			return strings.TrimSpace(auth[len("ApiKey "):])
+		} else if !strings.Contains(auth, " ") {
+			// If header has no scheme, treat the whole value as token (lenient for dev)
+			// But skip if it looks like a JWT (has 2 dots)
+			tok := strings.TrimSpace(auth)
+			if strings.Count(tok, ".") != 2 {
+				return tok
+			}
+		}
+	}
+
 	// Fallback to query parameter (for WebSocket support)
 	if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
 		return v

@@ -50,6 +50,7 @@ func (g *Gateway) Routes() http.Handler {
 	// cache endpoints (Olric)
 	mux.HandleFunc("/v1/cache/health", g.cacheHealthHandler)
 	mux.HandleFunc("/v1/cache/get", g.cacheGetHandler)
+	mux.HandleFunc("/v1/cache/mget", g.cacheMultiGetHandler)
 	mux.HandleFunc("/v1/cache/put", g.cachePutHandler)
 	mux.HandleFunc("/v1/cache/delete", g.cacheDeleteHandler)
 	mux.HandleFunc("/v1/cache/scan", g.cacheScanHandler)

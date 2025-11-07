@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.57.0] - 2025-11-07
+
+### Added
+- Added a new endpoint `/v1/cache/mget` to retrieve multiple keys from the distributed cache in a single request.
+
+### Changed
+- Improved API key extraction logic to prioritize the `X-API-Key` header and better handle different authorization schemes (Bearer, ApiKey) while avoiding confusion with JWTs.
+- Refactored cache retrieval logic to use a dedicated function for decoding values from the distributed cache.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 
 ## [0.56.0] - 2025-11-05
 
