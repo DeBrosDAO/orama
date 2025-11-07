@@ -405,6 +405,10 @@ func GenerateNodeConfig(name, id string, listenPort, rqliteHTTPPort, rqliteRaftP
 		joinAddr = "localhost:5001"
 	}
 
+	// Calculate IPFS cluster API port (9094 for bootstrap, 9104+ for nodes)
+	// Pattern: Bootstrap (5001) -> 9094, Node2 (5002) -> 9104, Node3 (5003) -> 9114
+	clusterAPIPort := 9094 + (rqliteHTTPPort-5001)*10
+
 	return fmt.Sprintf(`node:
   id: "%s"
   type: "node"
@@ -425,6 +429,17 @@ database:
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 1
+  ipfs:
+    # IPFS Cluster API endpoint for pin management (leave empty to disable)
+    cluster_api_url: "http://localhost:%d"
+    # IPFS HTTP API endpoint for content retrieval
+    api_url: "http://localhost:%d"
+    # Timeout for IPFS operations
+    timeout: "60s"
+    # Replication factor for pinned content
+    replication_factor: 3
+    # Enable client-side encryption before upload
+    enable_encryption: true
 
 discovery:
 %s
@@ -440,7 +455,7 @@ security:
 logging:
   level: "info"
   format: "console"
-`, nodeID, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, joinAddr, peersYAML.String(), 4001, rqliteHTTPPort, rqliteRaftPort)
+`, nodeID, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, joinAddr, clusterAPIPort, rqliteHTTPPort, peersYAML.String(), 4001, rqliteHTTPPort, rqliteRaftPort)
 }
 
 // GenerateBootstrapConfig generates a bootstrap configuration
@@ -472,6 +487,17 @@ database:
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 1
+  ipfs:
+    # IPFS Cluster API endpoint for pin management (leave empty to disable)
+    cluster_api_url: "http://localhost:9094"
+    # IPFS HTTP API endpoint for content retrieval
+    api_url: "http://localhost:%d"
+    # Timeout for IPFS operations
+    timeout: "60s"
+    # Replication factor for pinned content
+    replication_factor: 3
+    # Enable client-side encryption before upload
+    enable_encryption: true
 
 discovery:
   bootstrap_peers: []
@@ -487,7 +513,7 @@ security:
 logging:
   level: "info"
   format: "console"
-`, nodeID, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, 4001, rqliteHTTPPort, rqliteRaftPort)
+`, nodeID, listenPort, dataDir, dataDir, rqliteHTTPPort, rqliteRaftPort, rqliteHTTPPort, 4001, rqliteHTTPPort, rqliteRaftPort)
 }
 
 // GenerateGatewayConfig generates a gateway configuration
@@ -515,5 +541,12 @@ func GenerateGatewayConfig(bootstrapPeers string) string {
 client_namespace: "default"
 rqlite_dsn: ""
 %s
+olric_servers:
+  - "127.0.0.1:3320"
+olric_timeout: "10s"
+ipfs_cluster_api_url: "http://localhost:9094"
+ipfs_api_url: "http://localhost:9105"
+ipfs_timeout: "60s"
+ipfs_replication_factor: 3
 `, peersYAML.String())
 }

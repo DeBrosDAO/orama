@@ -1794,13 +1794,11 @@ func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain
 		olricYAML.WriteString("  - \"localhost:3320\"\n")
 	}
 
-	// IPFS Cluster configuration (defaults - can be customized later)
-	ipfsYAML := `# IPFS Cluster configuration (optional)
-# Uncomment and configure if you have IPFS Cluster running:
-# ipfs_cluster_api_url: "http://localhost:9094"
-# ipfs_api_url: "http://localhost:5001"
-# ipfs_timeout: "60s"
-# ipfs_replication_factor: 3
+	// IPFS Cluster configuration
+	ipfsYAML := `ipfs_cluster_api_url: "http://localhost:9094"
+ipfs_api_url: "http://localhost:9105"
+ipfs_timeout: "60s"
+ipfs_replication_factor: 3
 `
 
 	return fmt.Sprintf(`listen_addr: ":6001"

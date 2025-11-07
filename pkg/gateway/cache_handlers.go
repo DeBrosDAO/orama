@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/logging"
 	olriclib "github.com/olric-data/olric"
+	"go.uber.org/zap"
 )
 
 // Cache HTTP handlers for Olric distributed cache
@@ -76,12 +78,20 @@ func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
+		g.logger.ComponentError(logging.ComponentGeneral, "failed to get key from cache",
+			zap.String("dmap", req.DMap),
+			zap.String("key", req.Key),
+			zap.Error(err))
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get key: %v", err))
 		return
 	}
 
 	value, err := decodeValueFromOlric(gr)
 	if err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral, "failed to decode value from cache",
+			zap.String("dmap", req.DMap),
+			zap.String("key", req.Key),
+			zap.Error(err))
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to decode value: %v", err))
 		return
 	}

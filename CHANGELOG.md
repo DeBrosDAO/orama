@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.58.0] - 2025-11-07
+
+### Added
+- Added default configuration for IPFS Cluster and IPFS API settings in node and gateway configurations.
+- Added `ipfs` configuration section to node configuration, including settings for cluster API URL, replication factor, and encryption.
+
+### Changed
+- Improved error logging for cache operations in the Gateway.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.57.0] - 2025-11-07
 
 ### Added
