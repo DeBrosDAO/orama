@@ -1273,9 +1273,12 @@ func setupDirectories() {
 			fmt.Fprintf(os.Stderr, "❌ Failed to create %s: %v\n", dir, err)
 			os.Exit(1)
 		}
-		// Change ownership to debros
+		// Change ownership to debros (log failures but continue)
 		cmd := exec.Command("chown", "-R", "debros:debros", dir)
-		cmd.Run()
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to set ownership for %s: %v\n", dir, err)
+			fmt.Fprintf(os.Stderr, "   This may cause permission issues - consider running: sudo chown -R debros:debros %s\n", dir)
+		}
 	}
 
 	fmt.Printf("   ✓ Directories created\n")
@@ -1373,6 +1376,16 @@ func generateConfigsInteractive(force bool) {
 		gatewayExists = true
 	}
 
+	// Get VPS IP early for port checking
+	vpsIP, err := getVPSIPv4Address()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to detect IPv4 address: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   Using 0.0.0.0 as fallback. You may need to edit config files manually.\n")
+		vpsIP = "0.0.0.0"
+	} else {
+		fmt.Printf("   ✓ Detected IPv4 address: %s\n\n", vpsIP)
+	}
+
 	// If both configs exist and not forcing, skip configuration prompts
 	if nodeExists && gatewayExists && !force {
 		fmt.Printf("   ℹ️  Configuration files already exist (node.yaml and gateway.yaml)\n")
@@ -1432,23 +1445,16 @@ func generateConfigsInteractive(force bool) {
 		return
 	}
 
-	// Get VPS IPv4 address
-	fmt.Printf("Detecting VPS IPv4 address...\n")
-	vpsIP, err := getVPSIPv4Address()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to detect IPv4 address: %v\n", err)
-		fmt.Fprintf(os.Stderr, "   Using 0.0.0.0 as fallback. You may need to edit config files manually.\n")
-		vpsIP = "0.0.0.0"
-	} else {
-		fmt.Printf("   ✓ Detected IPv4 address: %s\n\n", vpsIP)
-	}
+	// Create reader for prompts
+	reader := bufio.NewReader(os.Stdin)
+
+	// vpsIP was already obtained earlier, continue with configuration
 
 	// Ask about node type
 	fmt.Printf("What type of node is this?\n")
 	fmt.Printf("  1. Bootstrap node (cluster leader)\n")
 	fmt.Printf("  2. Regular node (joins existing cluster)\n")
 	fmt.Printf("Enter choice (1 or 2): ")
-	reader := bufio.NewReader(os.Stdin)
 	choice, _ := reader.ReadString('\n')
 	choice = strings.ToLower(strings.TrimSpace(choice))
 
@@ -1563,7 +1569,8 @@ func generateConfigsInteractive(force bool) {
 		response = strings.ToLower(strings.TrimSpace(response))
 
 		if response == "yes" || response == "y" {
-			// Check if ports 80 and 443 are available
+			// Check if ports 80 and 443 are available BEFORE proceeding
+			fmt.Printf("\n   Checking if ports 80 and 443 are available...\n")
 			portsAvailable, portIssues := checkPorts80And443()
 			if !portsAvailable {
 				fmt.Fprintf(os.Stderr, "\n⚠️  Cannot enable HTTPS: %s is already in use\n", portIssues)
@@ -1571,6 +1578,7 @@ func generateConfigsInteractive(force bool) {
 				fmt.Fprintf(os.Stderr, "   Continuing without HTTPS configuration...\n\n")
 				enableHTTPS = false
 			} else {
+				fmt.Printf("   ✓ Ports 80 and 443 are available\n")
 				// Prompt for domain name
 				domain = promptDomainForHTTPS(reader, vpsIP)
 				if domain != "" {
@@ -1873,7 +1881,7 @@ func promptClusterSecret(reader *bufio.Reader) (string, error) {
 		// Validate input (must be 64 hex characters)
 		input = strings.ToUpper(input)
 		if len(input) != 64 {
-			fmt.Printf("   ❌ Invalid: cluster secret must be exactly 64 hex characters\n")
+			fmt.Printf("   ❌ Invalid: cluster secret must be exactly 64 hex characters (got %d)\n", len(input))
 			continue
 		}
 
@@ -1890,6 +1898,7 @@ func promptClusterSecret(reader *bufio.Reader) (string, error) {
 			continue
 		}
 
+		fmt.Printf("   ✓ Cluster secret validated (length: %d, all hex)\n", len(input))
 		return input, nil
 	}
 }
@@ -1952,7 +1961,7 @@ func promptSwarmKey(reader *bufio.Reader) ([]byte, error) {
 		// Validate input (must be 64 hex characters)
 		input = strings.ToUpper(input)
 		if len(input) != 64 {
-			fmt.Printf("   ❌ Invalid: swarm key must be exactly 64 hex characters\n")
+			fmt.Printf("   ❌ Invalid: swarm key must be exactly 64 hex characters (got %d)\n", len(input))
 			continue
 		}
 
@@ -1970,6 +1979,7 @@ func promptSwarmKey(reader *bufio.Reader) ([]byte, error) {
 		}
 
 		// Format as IPFS swarm key file
+		fmt.Printf("   ✓ Swarm key validated (length: %d, all hex)\n", len(input))
 		content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", input)
 		return []byte(content), nil
 	}
@@ -2280,6 +2290,14 @@ func generateClusterServiceConfig(nodeID, vpsIP, secret string, isBootstrap bool
 
 func createSystemdServices() {
 	fmt.Printf("🔧 Creating systemd services...\n")
+
+	// Check if systemd is available
+	if _, err := os.Stat("/etc/systemd"); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "⚠️  systemd not detected on this system\n")
+		fmt.Fprintf(os.Stderr, "   Systemd service files cannot be created on non-systemd systems\n")
+		fmt.Fprintf(os.Stderr, "   Please manually start services or use an alternative init system\n")
+		return
+	}
 
 	// IPFS service (runs on all nodes)
 	// Determine IPFS path based on config file

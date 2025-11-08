@@ -11,7 +11,7 @@
 #   bash scripts/install-debros-network.sh
 
 set -e
-trap 'echo -e "${RED}An error occurred. Installation aborted.${NOCOLOR}"; exit 1' ERR
+trap 'error "An error occurred. Installation aborted."; execute_traps; exit 1' ERR
 
 # Color codes
 RED='\033[0;31m'
@@ -26,10 +26,33 @@ GITHUB_REPO="DeBrosOfficial/network"
 GITHUB_API="https://api.github.com/repos/$GITHUB_REPO"
 INSTALL_DIR="/usr/local/bin"
 
+# Upgrade detection flags
+PREVIOUS_INSTALL=false
+SETUP_EXECUTED=false
+PREVIOUS_VERSION=""
+LATEST_VERSION=""
+VERSION_CHANGED=false
+
+# Cleanup handlers (for proper trap stacking)
+declare -a CLEANUP_HANDLERS
+
 log() { echo -e "${CYAN}[$(date '+%Y-%m-%d %H:%M:%S')]${NOCOLOR} $1"; }
-error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
+error() { echo -e "${RED}[ERROR]${NOCOLOR} $1" >&2; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
-warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
+warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1" >&2; }
+
+# Stack-based trap cleanup
+push_trap() {
+    local handler="$1"
+    local signal="${2:-EXIT}"
+    CLEANUP_HANDLERS+=("$handler")
+}
+
+execute_traps() {
+    for ((i=${#CLEANUP_HANDLERS[@]}-1; i>=0; i--)); do
+        eval "${CLEANUP_HANDLERS[$i]}"
+    done
+}
 
 # REQUIRE INTERACTIVE MODE
 if [ ! -t 0 ]; then
@@ -133,13 +156,21 @@ check_dependencies() {
 get_latest_release() {
     log "Fetching latest release information..."
     
-    # Get latest release (exclude pre-releases and nightly)
-    LATEST_RELEASE=$(curl -fsSL "$GITHUB_API/releases" | \
-        grep -v "prerelease.*true" | \
-        grep -v "draft.*true" | \
-        grep '"tag_name"' | \
-        head -1 | \
-        cut -d'"' -f4)
+    # Check if jq is available for robust JSON parsing
+    if command -v jq &>/dev/null; then
+        # Use jq for structured JSON parsing
+        LATEST_RELEASE=$(curl -fsSL -H "Accept: application/vnd.github+json" "$GITHUB_API/releases" | \
+            jq -r '.[] | select(.prerelease == false and .draft == false) | .tag_name' | head -1)
+    else
+        # Fallback to grep-based parsing
+        log "Note: jq not available, using basic parsing (consider installing jq for robustness)"
+        LATEST_RELEASE=$(curl -fsSL "$GITHUB_API/releases" | \
+            grep -v "prerelease.*true" | \
+            grep -v "draft.*true" | \
+            grep '"tag_name"' | \
+            head -1 | \
+            cut -d'"' -f4)
+    fi
     
     if [ -z "$LATEST_RELEASE" ]; then
         error "Could not determine latest release"
@@ -154,16 +185,35 @@ download_and_install() {
     
     # Construct download URL
     DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/$LATEST_RELEASE/debros-network_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}.tar.gz"
+    CHECKSUM_URL="https://github.com/$GITHUB_REPO/releases/download/$LATEST_RELEASE/checksums.txt"
     
     # Create temporary directory
     TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT
+    push_trap "rm -rf $TEMP_DIR" EXIT
     
     # Download
     log "Downloading from: $DOWNLOAD_URL"
     if ! curl -fsSL -o "$TEMP_DIR/network-cli.tar.gz" "$DOWNLOAD_URL"; then
         error "Failed to download network-cli"
         exit 1
+    fi
+    
+    # Try to download and verify checksum
+    CHECKSUM_FILE="$TEMP_DIR/checksums.txt"
+    if curl -fsSL -o "$CHECKSUM_FILE" "$CHECKSUM_URL" 2>/dev/null; then
+        log "Verifying checksum..."
+        cd "$TEMP_DIR"
+        if command -v sha256sum &>/dev/null; then
+            if sha256sum -c "$CHECKSUM_FILE" --ignore-missing >/dev/null 2>&1; then
+                success "Checksum verified"
+            else
+                warning "Checksum verification failed (continuing anyway)"
+            fi
+        else
+            log "sha256sum not available, skipping checksum verification"
+        fi
+    else
+        log "Checksums not available for this release (continuing without verification)"
     fi
     
     # Extract
@@ -179,6 +229,51 @@ download_and_install() {
     success "network-cli installed successfully"
 }
 
+check_existing_installation() {
+    if command -v network-cli &>/dev/null 2>&1; then
+        PREVIOUS_INSTALL=true
+        PREVIOUS_VERSION=$(network-cli version 2>/dev/null | head -n1 || echo "unknown")
+        echo -e ""
+        echo -e "${YELLOW}⚠️  Existing installation detected: ${PREVIOUS_VERSION}${NOCOLOR}"
+        echo -e ""
+        
+        # Version will be compared after fetching latest release
+        # If they match, we skip the service stop/restart to minimize downtime
+    else
+        log "No previous installation detected - performing fresh install"
+    fi
+}
+
+compare_versions() {
+    # Compare previous and latest versions
+    if [ "$PREVIOUS_INSTALL" = true ] && [ ! -z "$PREVIOUS_VERSION" ] && [ ! -z "$LATEST_VERSION" ]; then
+        if [ "$PREVIOUS_VERSION" = "$LATEST_VERSION" ]; then
+            VERSION_CHANGED=false
+            log "Installed version ($PREVIOUS_VERSION) matches latest release ($LATEST_VERSION)"
+            log "Skipping service restart - no upgrade needed"
+            return 0
+        else
+            VERSION_CHANGED=true
+            log "Version change detected: $PREVIOUS_VERSION → $LATEST_VERSION"
+            log "Services will be stopped before updating."
+            echo -e ""
+            
+            # Check if services are running
+            if sudo network-cli service status all >/dev/null 2>&1; then
+                log "Stopping DeBros services before upgrade..."
+                log "Note: Anon (if running) will not be stopped as it may be managed separately"
+                if sudo network-cli service stop all; then
+                    success "DeBros services stopped successfully"
+                else
+                    warning "Failed to stop some services (continuing anyway)"
+                fi
+            else
+                log "DeBros services already stopped or not running"
+            fi
+        fi
+    fi
+}
+
 verify_installation() {
     if command -v network-cli &>/dev/null; then
         INSTALLED_VERSION=$(network-cli version 2>/dev/null || echo "unknown")
@@ -190,6 +285,28 @@ verify_installation() {
     fi
 }
 
+# Check if port 9050 is in use (Anon SOCKS port)
+is_anon_running() {
+    # Check if port 9050 is listening
+    if command -v ss &>/dev/null; then
+        if ss -tlnp 2>/dev/null | grep -q ":9050"; then
+            return 0
+        fi
+    elif command -v netstat &>/dev/null; then
+        if netstat -tlnp 2>/dev/null | grep -q ":9050"; then
+            return 0
+        fi
+    elif command -v lsof &>/dev/null; then
+        # Try to check without sudo first (in case of passwordless sudo issues)
+        if sudo -n lsof -i :9050 >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    
+    # Fallback: assume Anon is not running if we can't determine
+    return 1
+}
+
 install_anon() {
     echo -e ""
     echo -e "${BLUE}========================================${NOCOLOR}"
@@ -197,15 +314,27 @@ install_anon() {
     echo -e "${BLUE}========================================${NOCOLOR}"
     echo -e ""
     
-    log "Installing Anyone relay for anonymous networking..."
+    log "Checking Anyone relay (Anon) status..."
     
-    # Check if anon is already installed
-    if command -v anon &>/dev/null; then
-        success "Anon already installed"
+    # Check if Anon is already running on port 9050
+    if is_anon_running; then
+        success "Anon is already running on port 9050"
+        log "Skipping Anon installation - using existing instance"
         configure_anon_logs
         configure_firewall_for_anon
         return 0
     fi
+    
+    # Check if anon binary is already installed
+    if command -v anon &>/dev/null; then
+        success "Anon binary already installed"
+        log "Anon is installed but not running. You can start it manually if needed."
+        configure_anon_logs
+        configure_firewall_for_anon
+        return 0
+    fi
+    
+    log "Installing Anyone relay for anonymous networking..."
     
     # Install via APT (official method from docs.anyone.io)
     log "Adding Anyone APT repository..."
@@ -471,7 +600,45 @@ run_setup() {
     
     echo -e ""
     log "Running setup (requires sudo)..."
+    SETUP_EXECUTED=true
     sudo network-cli setup
+}
+
+perform_health_check() {
+    echo -e ""
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    log "Performing post-install health checks..."
+    echo -e "${BLUE}========================================${NOCOLOR}"
+    echo -e ""
+    
+    local health_ok=true
+    
+    # Give services a moment to start if they were just restarted
+    sleep 2
+    
+    # Check gateway health
+    if curl -sf http://localhost:6001/health >/dev/null 2>&1; then
+        success "Gateway health check passed"
+    else
+        warning "Gateway health check failed - check logs with: sudo network-cli service logs gateway"
+        health_ok=false
+    fi
+    
+    # Check if node is running (may not respond immediately)
+    if sudo network-cli service status node >/dev/null 2>&1; then
+        success "Node service is running"
+    else
+        warning "Node service is not running - check with: sudo network-cli service status node"
+        health_ok=false
+    fi
+    
+    echo -e ""
+    if [ "$health_ok" = true ]; then
+        success "All health checks passed!"
+    else
+        warning "Some health checks failed - review logs and start services if needed"
+    fi
+    echo -e ""
 }
 
 show_completion() {
@@ -496,6 +663,11 @@ show_completion() {
     echo -e "  • View Anon logs:      ${CYAN}sudo tail -f /home/debros/.debros/logs/anon/notices.log${NOCOLOR}"
     echo -e "  • Proxy endpoint:      ${CYAN}POST http://localhost:6001/v1/proxy/anon${NOCOLOR}"
     echo -e ""
+    echo -e "${CYAN}🔐 Shared Secrets (for adding more nodes):${NOCOLOR}"
+    echo -e "  • Swarm key:           ${CYAN}cat /home/debros/.debros/swarm.key${NOCOLOR}"
+    echo -e "  • Cluster secret:      ${CYAN}sudo cat /home/debros/.debros/cluster-secret${NOCOLOR}"
+    echo -e "  • Copy these to bootstrap node before setting up secondary nodes${NOCOLOR}"
+    echo -e ""
     echo -e "${CYAN}Documentation: https://docs.debros.io${NOCOLOR}"
     echo -e ""
 }
@@ -506,6 +678,9 @@ main() {
     echo -e ""
     log "Starting DeBros Network installation..."
     echo -e ""
+    
+    # Check for existing installation and stop services if needed
+    check_existing_installation
     
     detect_os
     check_architecture
@@ -518,6 +693,11 @@ main() {
     echo -e ""
     
     get_latest_release
+    LATEST_VERSION="$LATEST_RELEASE"
+    
+    # Compare versions and determine if upgrade is needed
+    compare_versions
+    
     download_and_install
     
     # Verify installation
@@ -530,6 +710,34 @@ main() {
     
     # Run setup
     run_setup
+    
+    # If this was an upgrade and setup wasn't run, restart services
+    if [ "$PREVIOUS_INSTALL" = true ] && [ "$VERSION_CHANGED" = true ] && [ "$SETUP_EXECUTED" = false ]; then
+        echo -e ""
+        log "Restarting services that were stopped earlier..."
+        
+        # Check services individually and provide detailed feedback
+        failed_services=()
+        if ! sudo network-cli service start all 2>&1 | tee /tmp/service-start.log; then
+            # Parse which services failed
+            while IFS= read -r line; do
+                if [[ $line =~ "Failed to start" ]]; then
+                    service_name=$(echo "$line" | grep -oP '(?<=Failed to start\s)\S+(?=:)' || echo "unknown")
+                    failed_services+=("$service_name")
+                fi
+            done < /tmp/service-start.log
+            
+            if [ ${#failed_services[@]} -gt 0 ]; then
+                error "Failed to restart: ${failed_services[*]}"
+                error "Please check service status: sudo network-cli service status all"
+            fi
+        else
+            success "Services restarted successfully"
+        fi
+    fi
+    
+    # Post-install health check
+    perform_health_check
     
     # Show completion message
     show_completion

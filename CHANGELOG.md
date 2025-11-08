@@ -13,6 +13,25 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.59.2] - 2025-11-08
+
+### Added
+- Added health checks to the installation script to verify the gateway and node services are running after setup or upgrade.
+- The installation script now attempts to verify the downloaded binary using checksums.txt if available.
+- Added checks in the CLI setup to ensure systemd is available before attempting to create service files.
+
+### Changed
+- Improved the installation script to detect existing installations, stop services before upgrading, and restart them afterward to minimize downtime.
+- Enhanced the CLI setup process by detecting the VPS IP address earlier and improving validation feedback for cluster secrets and swarm keys.
+- Modified directory setup to log warnings instead of exiting if `chown` fails, providing manual instructions for fixing ownership issues.
+- Improved the HTTPS configuration flow to check for port 80/443 availability before prompting for a domain name.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.59.1] - 2025-11-08
 
 ### Added
