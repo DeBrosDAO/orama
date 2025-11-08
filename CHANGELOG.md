@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.59.1] - 2025-11-08
+
+### Added
+\n
+### Changed
+- Improved interactive setup to prompt for existing IPFS Cluster secret and Swarm key, allowing easier joining of existing private networks.
+- Updated default IPFS API URL in configuration files from `http://localhost:9105` to the standard `http://localhost:5001`.
+- Updated systemd service files (debros-ipfs.service and debros-ipfs-cluster.service) to correctly determine and use the IPFS and Cluster repository paths.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.59.0] - 2025-11-08
 
 ### Added

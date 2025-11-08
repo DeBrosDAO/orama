@@ -1513,7 +1513,18 @@ func generateConfigsInteractive(force bool) {
 		} else {
 			nodeID = "node"
 		}
-		if err := initializeIPFSForNode(nodeID, vpsIP, isBootstrap); err != nil {
+
+		// Parse bootstrap peers from config
+		var bootstrapPeerList []string
+		if bootstrapPeers != "" {
+			for _, p := range strings.Split(bootstrapPeers, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					bootstrapPeerList = append(bootstrapPeerList, p)
+				}
+			}
+		}
+
+		if err := initializeIPFSForNode(nodeID, vpsIP, isBootstrap, bootstrapPeerList, reader); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  Failed to initialize IPFS/Cluster: %v\n", err)
 			fmt.Fprintf(os.Stderr, "   You may need to initialize IPFS and Cluster manually\n")
 		}
@@ -1796,7 +1807,7 @@ func generateGatewayConfigDirect(bootstrapPeers string, enableHTTPS bool, domain
 
 	// IPFS Cluster configuration
 	ipfsYAML := `ipfs_cluster_api_url: "http://localhost:9094"
-ipfs_api_url: "http://localhost:9105"
+ipfs_api_url: "http://localhost:5001"
 ipfs_timeout: "60s"
 ipfs_replication_factor: 3
 `
@@ -1841,24 +1852,72 @@ func generateOlricConfig(configPath, bindIP string, httpPort, memberlistPort int
 	return nil
 }
 
+// promptClusterSecret prompts the user for a cluster secret (64 hex characters)
+func promptClusterSecret(reader *bufio.Reader) (string, error) {
+	for {
+		fmt.Printf("\n   Enter cluster secret (64 hex characters, or press Enter to generate new): ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		if input == "" {
+			// Generate new secret
+			bytes := make([]byte, 32)
+			if _, err := rand.Read(bytes); err != nil {
+				return "", fmt.Errorf("failed to generate cluster secret: %w", err)
+			}
+			secret := hex.EncodeToString(bytes)
+			fmt.Printf("   ✓ Generated new cluster secret\n")
+			return secret, nil
+		}
+
+		// Validate input (must be 64 hex characters)
+		input = strings.ToUpper(input)
+		if len(input) != 64 {
+			fmt.Printf("   ❌ Invalid: cluster secret must be exactly 64 hex characters\n")
+			continue
+		}
+
+		// Validate hex characters
+		valid := true
+		for _, char := range input {
+			if !((char >= '0' && char <= '9') || (char >= 'A' && char <= 'F')) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			fmt.Printf("   ❌ Invalid: cluster secret must contain only hex characters (0-9, A-F)\n")
+			continue
+		}
+
+		return input, nil
+	}
+}
+
 // getOrGenerateClusterSecret gets or generates a shared cluster secret
-func getOrGenerateClusterSecret() (string, error) {
+func getOrGenerateClusterSecret(reader *bufio.Reader) (string, error) {
 	secretPath := "/home/debros/.debros/cluster-secret"
 
 	// Try to read existing secret
 	if data, err := os.ReadFile(secretPath); err == nil {
 		secret := strings.TrimSpace(string(data))
 		if len(secret) == 64 {
+			fmt.Printf("   ✓ Using existing cluster secret\n")
 			return secret, nil
 		}
 	}
 
-	// Generate new secret (64 hex characters = 32 bytes)
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate cluster secret: %w", err)
+	// Prompt for secret
+	fmt.Printf("\n🔐 Cluster Secret Configuration\n")
+	fmt.Printf("   The cluster secret is used to authenticate IPFS Cluster peers.\n")
+	fmt.Printf("   All nodes in the cluster must use the same secret.\n")
+	fmt.Printf("   If this is the first node, press Enter to generate a new secret.\n")
+	fmt.Printf("   If joining an existing cluster, enter the secret from the bootstrap node.\n")
+
+	secret, err := promptClusterSecret(reader)
+	if err != nil {
+		return "", err
 	}
-	secret := hex.EncodeToString(bytes)
 
 	// Save secret
 	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
@@ -1869,9 +1928,56 @@ func getOrGenerateClusterSecret() (string, error) {
 	return secret, nil
 }
 
+// promptSwarmKey prompts the user for a swarm key (64 hex characters)
+func promptSwarmKey(reader *bufio.Reader) ([]byte, error) {
+	for {
+		fmt.Printf("\n   Enter swarm key (64 hex characters, or press Enter to generate new): ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		if input == "" {
+			// Generate new key (32 bytes)
+			keyBytes := make([]byte, 32)
+			if _, err := rand.Read(keyBytes); err != nil {
+				return nil, fmt.Errorf("failed to generate swarm key: %w", err)
+			}
+
+			// Format as IPFS swarm key file
+			keyHex := strings.ToUpper(hex.EncodeToString(keyBytes))
+			content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", keyHex)
+			fmt.Printf("   ✓ Generated new swarm key\n")
+			return []byte(content), nil
+		}
+
+		// Validate input (must be 64 hex characters)
+		input = strings.ToUpper(input)
+		if len(input) != 64 {
+			fmt.Printf("   ❌ Invalid: swarm key must be exactly 64 hex characters\n")
+			continue
+		}
+
+		// Validate hex characters
+		valid := true
+		for _, char := range input {
+			if !((char >= '0' && char <= '9') || (char >= 'A' && char <= 'F')) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			fmt.Printf("   ❌ Invalid: swarm key must contain only hex characters (0-9, A-F)\n")
+			continue
+		}
+
+		// Format as IPFS swarm key file
+		content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", input)
+		return []byte(content), nil
+	}
+}
+
 // getOrGenerateSwarmKey gets or generates a shared IPFS swarm key
 // Returns the swarm key content as bytes (formatted for IPFS)
-func getOrGenerateSwarmKey() ([]byte, error) {
+func getOrGenerateSwarmKey(reader *bufio.Reader) ([]byte, error) {
 	secretPath := "/home/debros/.debros/swarm.key"
 
 	// Try to read existing key
@@ -1879,28 +1985,31 @@ func getOrGenerateSwarmKey() ([]byte, error) {
 		// Validate it's a proper swarm key format
 		content := string(data)
 		if strings.Contains(content, "/key/swarm/psk/1.0.0/") {
+			fmt.Printf("   ✓ Using existing swarm key\n")
 			return data, nil
 		}
 	}
 
-	// Generate new key (32 bytes)
-	keyBytes := make([]byte, 32)
-	if _, err := rand.Read(keyBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate swarm key: %w", err)
+	// Prompt for key
+	fmt.Printf("\n🔐 IPFS Swarm Key Configuration\n")
+	fmt.Printf("   The swarm key creates a private IPFS network.\n")
+	fmt.Printf("   All nodes in the network must use the same swarm key.\n")
+	fmt.Printf("   If this is the first node, press Enter to generate a new key.\n")
+	fmt.Printf("   If joining an existing network, enter the key from the bootstrap node.\n")
+	fmt.Printf("   Enter only the 64 hex characters (e.g., F62B18F11C5457F11E1863126ECAA259E76DA967121A291351FBFA2542B4BF56)\n")
+
+	swarmKey, err := promptSwarmKey(reader)
+	if err != nil {
+		return nil, err
 	}
 
-	// Format as IPFS swarm key file
-	keyHex := strings.ToUpper(hex.EncodeToString(keyBytes))
-	content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", keyHex)
-
 	// Save key
-	if err := os.WriteFile(secretPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(secretPath, swarmKey, 0600); err != nil {
 		return nil, fmt.Errorf("failed to save swarm key: %w", err)
 	}
 	exec.Command("chown", "debros:debros", secretPath).Run()
 
-	fmt.Printf("   ✓ Generated private swarm key\n")
-	return []byte(content), nil
+	return swarmKey, nil
 }
 
 // ensureSwarmKey ensures the swarm key exists in the IPFS repo
@@ -1924,17 +2033,17 @@ func ensureSwarmKey(repoPath string, swarmKey []byte) error {
 }
 
 // initializeIPFSForNode initializes IPFS and IPFS Cluster for a node
-func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
+func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool, bootstrapPeers []string, reader *bufio.Reader) error {
 	fmt.Printf("   Initializing IPFS and Cluster for node %s...\n", nodeID)
 
 	// Get or generate cluster secret
-	secret, err := getOrGenerateClusterSecret()
+	secret, err := getOrGenerateClusterSecret(reader)
 	if err != nil {
 		return fmt.Errorf("failed to get cluster secret: %w", err)
 	}
 
 	// Get or generate swarm key for private network
-	swarmKey, err := getOrGenerateSwarmKey()
+	swarmKey, err := getOrGenerateSwarmKey(reader)
 	if err != nil {
 		return fmt.Errorf("failed to get swarm key: %w", err)
 	}
@@ -1988,7 +2097,7 @@ func initializeIPFSForNode(nodeID, vpsIP string, isBootstrap bool) error {
 		fmt.Printf("      Initializing IPFS Cluster...\n")
 
 		// Generate cluster config
-		clusterConfig := generateClusterServiceConfig(nodeID, vpsIP, secret, isBootstrap)
+		clusterConfig := generateClusterServiceConfig(nodeID, vpsIP, secret, isBootstrap, bootstrapPeers)
 
 		// Write config
 		configJSON, err := json.MarshalIndent(clusterConfig, "", "  ")
@@ -2091,14 +2200,45 @@ type datastoreConfig struct {
 	Path string `json:"path"`
 }
 
+// extractClusterBootstrapAddresses extracts IPFS Cluster bootstrap addresses from node bootstrap peers
+// IPFS Cluster uses port 9096 for cluster communication
+// Note: We extract IP addresses, but cluster peer IDs will be discovered at runtime
+// For CRDT consensus, bootstrap peers are optional but help with initial discovery
+func extractClusterBootstrapAddresses(bootstrapPeers []string) []string {
+	var clusterBootstrap []string
+
+	for _, peerAddr := range bootstrapPeers {
+		// Extract IP from multiaddr format: /ip4/IP/tcp/PORT/p2p/PEER_ID
+		ip := extractIPFromMultiaddr(peerAddr)
+		if ip != "" && ip != "127.0.0.1" && ip != "localhost" {
+			// Construct cluster bootstrap address (port 9096 is standard for IPFS Cluster)
+			// Note: We don't have the cluster peer ID yet, but we can construct the address
+			// IPFS Cluster CRDT will discover peers automatically, but having IPs helps
+			// For now, we'll leave bootstrap empty and rely on CRDT auto-discovery
+			// The IP addresses can be used later when cluster peer IDs are known
+			_ = ip // Store for potential future use
+		}
+	}
+
+	// For now, return empty bootstrap list - CRDT consensus will auto-discover peers
+	// Bootstrap peers can be added later when cluster peer IDs are known
+	return clusterBootstrap
+}
+
 // generateClusterServiceConfig generates IPFS Cluster service.json config
-func generateClusterServiceConfig(nodeID, vpsIP, secret string, isBootstrap bool) clusterServiceConfig {
+func generateClusterServiceConfig(nodeID, vpsIP, secret string, isBootstrap bool, bootstrapPeers []string) clusterServiceConfig {
 	clusterListenAddr := "/ip4/0.0.0.0/tcp/9096"
 	restAPIListenAddr := "/ip4/0.0.0.0/tcp/9094"
 
 	// For bootstrap node, use empty bootstrap list
-	// For other nodes, bootstrap list will be set when starting the service
-	bootstrap := []string{}
+	// For other nodes, extract bootstrap addresses from node config
+	// Note: IPFS Cluster CRDT consensus can auto-discover peers, so bootstrap is optional
+	var bootstrap []string
+	if !isBootstrap && len(bootstrapPeers) > 0 {
+		bootstrap = extractClusterBootstrapAddresses(bootstrapPeers)
+		// For now, bootstrap will be empty as we need cluster peer IDs
+		// CRDT will handle peer discovery automatically
+	}
 
 	return clusterServiceConfig{
 		Cluster: clusterConfig{
@@ -2142,7 +2282,17 @@ func createSystemdServices() {
 	fmt.Printf("🔧 Creating systemd services...\n")
 
 	// IPFS service (runs on all nodes)
-	ipfsService := `[Unit]
+	// Determine IPFS path based on config file
+	var ipfsPath string
+	if _, err := os.Stat("/home/debros/.debros/node.yaml"); err == nil {
+		ipfsPath = "/home/debros/.debros/node/ipfs/repo"
+	} else if _, err := os.Stat("/home/debros/.debros/bootstrap.yaml"); err == nil {
+		ipfsPath = "/home/debros/.debros/bootstrap/ipfs/repo"
+	} else {
+		ipfsPath = "/home/debros/.debros/bootstrap/ipfs/repo"
+	}
+
+	ipfsService := fmt.Sprintf(`[Unit]
 Description=IPFS Daemon
 After=network-online.target
 Wants=network-online.target
@@ -2152,9 +2302,9 @@ Type=simple
 User=debros
 Group=debros
 Environment=HOME=/home/debros
-ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/node.yaml ]; then export IPFS_PATH=/home/debros/.debros/node/ipfs/repo; elif [ -f /home/debros/.debros/bootstrap.yaml ]; then export IPFS_PATH=/home/debros/.debros/bootstrap/ipfs/repo; else export IPFS_PATH=/home/debros/.debros/bootstrap/ipfs/repo; fi'
-ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/swarm.key ] && [ ! -f ${IPFS_PATH}/swarm.key ]; then cp /home/debros/.debros/swarm.key ${IPFS_PATH}/swarm.key && chmod 600 ${IPFS_PATH}/swarm.key; fi'
-ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=${IPFS_PATH}
+Environment=IPFS_PATH=%s
+ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/swarm.key ] && [ ! -f %s/swarm.key ]; then cp /home/debros/.debros/swarm.key %s/swarm.key && chmod 600 %s/swarm.key; fi'
+ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=%s
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -2168,7 +2318,7 @@ ReadWritePaths=/home/debros
 
 [Install]
 WantedBy=multi-user.target
-`
+`, ipfsPath, ipfsPath, ipfsPath, ipfsPath, ipfsPath)
 
 	if err := os.WriteFile("/etc/systemd/system/debros-ipfs.service", []byte(ipfsService), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to create IPFS service: %v\n", err)
@@ -2176,7 +2326,17 @@ WantedBy=multi-user.target
 	}
 
 	// IPFS Cluster service (runs on all nodes)
-	clusterService := `[Unit]
+	// Determine Cluster path based on config file
+	var clusterPath string
+	if _, err := os.Stat("/home/debros/.debros/node.yaml"); err == nil {
+		clusterPath = "/home/debros/.debros/node/ipfs-cluster"
+	} else if _, err := os.Stat("/home/debros/.debros/bootstrap.yaml"); err == nil {
+		clusterPath = "/home/debros/.debros/bootstrap/ipfs-cluster"
+	} else {
+		clusterPath = "/home/debros/.debros/bootstrap/ipfs-cluster"
+	}
+
+	clusterService := fmt.Sprintf(`[Unit]
 Description=IPFS Cluster Service
 After=debros-ipfs.service
 Wants=debros-ipfs.service
@@ -2188,8 +2348,8 @@ User=debros
 Group=debros
 WorkingDirectory=/home/debros
 Environment=HOME=/home/debros
-ExecStartPre=/bin/bash -c 'if [ -f /home/debros/.debros/node.yaml ]; then export CLUSTER_PATH=/home/debros/.debros/node/ipfs-cluster; elif [ -f /home/debros/.debros/bootstrap.yaml ]; then export CLUSTER_PATH=/home/debros/.debros/bootstrap/ipfs-cluster; else export CLUSTER_PATH=/home/debros/.debros/bootstrap/ipfs-cluster; fi'
-ExecStart=/usr/local/bin/ipfs-cluster-service daemon --config ${CLUSTER_PATH}/service.json
+Environment=CLUSTER_PATH=%s
+ExecStart=/usr/local/bin/ipfs-cluster-service daemon --config %s/service.json
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -2203,7 +2363,7 @@ ReadWritePaths=/home/debros
 
 [Install]
 WantedBy=multi-user.target
-`
+`, clusterPath, clusterPath)
 
 	if err := os.WriteFile("/etc/systemd/system/debros-ipfs-cluster.service", []byte(clusterService), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to create IPFS Cluster service: %v\n", err)

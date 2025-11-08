@@ -545,7 +545,7 @@ olric_servers:
   - "127.0.0.1:3320"
 olric_timeout: "10s"
 ipfs_cluster_api_url: "http://localhost:9094"
-ipfs_api_url: "http://localhost:9105"
+ipfs_api_url: "http://localhost:5001"
 ipfs_timeout: "60s"
 ipfs_replication_factor: 3
 `, peersYAML.String())
