@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.59.0] - 2025-11-08
+
+### Added
+- Added support for asynchronous pinning of uploaded files, improving upload speed.
+- Added an optional `pin` flag to the storage upload endpoint to control whether content is pinned (defaults to true).
+
+### Changed
+- Improved handling of IPFS Cluster responses during the Add operation to correctly process streaming NDJSON output.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.58.0] - 2025-11-07
 
 ### Added

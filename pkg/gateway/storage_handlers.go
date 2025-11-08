@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -81,6 +82,7 @@ func (g *Gateway) storageUploadHandler(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	var reader io.Reader
 	var name string
+	var shouldPin bool = true // Default to true
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		// Handle multipart upload
@@ -98,6 +100,11 @@ func (g *Gateway) storageUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		reader = file
 		name = header.Filename
+
+		// Parse pin flag from form (default: true)
+		if pinValue := r.FormValue("pin"); pinValue != "" {
+			shouldPin = strings.ToLower(pinValue) == "true"
+		}
 	} else {
 		// Handle JSON request with base64 data
 		var req StorageUploadRequest
@@ -120,6 +127,7 @@ func (g *Gateway) storageUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		reader = bytes.NewReader(data)
 		name = req.Name
+		// For JSON requests, pin defaults to true (can be extended if needed)
 	}
 
 	// Add to IPFS
@@ -131,17 +139,16 @@ func (g *Gateway) storageUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pin with replication factor
-	_, err = g.ipfsClient.Pin(ctx, addResp.Cid, name, replicationFactor)
-	if err != nil {
-		g.logger.ComponentWarn(logging.ComponentGeneral, "failed to pin content", zap.Error(err), zap.String("cid", addResp.Cid))
-		// Still return success, but log the pin failure
-	}
-
+	// Return response immediately - don't block on pinning
 	response := StorageUploadResponse{
 		Cid:  addResp.Cid,
 		Name: addResp.Name,
 		Size: addResp.Size,
+	}
+
+	// Pin asynchronously in background if requested
+	if shouldPin {
+		go g.pinAsync(addResp.Cid, name, replicationFactor)
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -320,6 +327,34 @@ func (g *Gateway) storageUnpinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path})
+}
+
+// pinAsync pins a CID asynchronously in the background with retry logic
+// Retries once if the first attempt fails, then gives up
+func (g *Gateway) pinAsync(cid, name string, replicationFactor int) {
+	ctx := context.Background()
+
+	// First attempt
+	_, err := g.ipfsClient.Pin(ctx, cid, name, replicationFactor)
+	if err == nil {
+		g.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded", zap.String("cid", cid))
+		return
+	}
+
+	// Log first failure
+	g.logger.ComponentWarn(logging.ComponentGeneral, "async pin failed, retrying once",
+		zap.Error(err), zap.String("cid", cid))
+
+	// Retry once after a short delay
+	time.Sleep(2 * time.Second)
+	_, err = g.ipfsClient.Pin(ctx, cid, name, replicationFactor)
+	if err != nil {
+		// Final failure - log and give up
+		g.logger.ComponentWarn(logging.ComponentGeneral, "async pin retry failed, giving up",
+			zap.Error(err), zap.String("cid", cid))
+	} else {
+		g.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
+	}
 }
 
 // base64Decode decodes base64 string to bytes

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -177,12 +178,35 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 		return nil, fmt.Errorf("add failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var result AddResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode add response: %w", err)
+	// IPFS Cluster streams NDJSON responses. We need to drain the entire stream
+	// to prevent the connection from closing prematurely, which would cancel
+	// the cluster's pinning operation. Read all JSON objects and keep the last one.
+	dec := json.NewDecoder(resp.Body)
+	var last AddResponse
+	var hasResult bool
+
+	for {
+		var chunk AddResponse
+		if err := dec.Decode(&chunk); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("failed to decode add response: %w", err)
+		}
+		last = chunk
+		hasResult = true
 	}
 
-	return &result, nil
+	if !hasResult {
+		return nil, fmt.Errorf("add response missing CID")
+	}
+
+	// Ensure name is set if provided
+	if last.Name == "" && name != "" {
+		last.Name = name
+	}
+
+	return &last, nil
 }
 
 // Pin pins a CID with specified replication factor
