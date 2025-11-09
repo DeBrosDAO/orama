@@ -64,19 +64,17 @@ func main() {
 			os.Exit(1)
 		}
 
-	// Setup and service commands
-	case "setup":
-		cli.HandleSetupCommand(args)
-	case "service":
-		cli.HandleServiceCommand(args)
+	// Development environment commands
+	case "dev":
+		cli.HandleDevCommand(args)
+
+	// Production environment commands
+	case "prod":
+		cli.HandleProdCommand(args)
 
 	// Authentication commands
 	case "auth":
 		cli.HandleAuthCommand(args)
-
-	// Config commands
-	case "config":
-		cli.HandleConfigCommand(args)
 
 	// Basic network commands
 	case "health":
@@ -107,10 +105,6 @@ func main() {
 			os.Exit(1)
 		}
 		cli.HandleConnectCommand(args[0], timeout)
-
-	// RQLite commands
-	case "rqlite":
-		cli.HandleRQLiteCommand(args)
 
 	// Help
 	case "help", "--help", "-h":
@@ -151,23 +145,24 @@ func showHelp() {
 	fmt.Printf("  devnet enable                 - Shorthand for switching to devnet\n")
 	fmt.Printf("  testnet enable                - Shorthand for switching to testnet\n\n")
 
-	fmt.Printf("🚀 Setup & Services:\n")
-	fmt.Printf("  setup [--force]               - Interactive VPS setup (Linux only, requires root)\n")
-	fmt.Printf("  service start <target>        - Start service (node, gateway, all)\n")
-	fmt.Printf("  service stop <target>         - Stop service\n")
-	fmt.Printf("  service restart <target>      - Restart service\n")
-	fmt.Printf("  service status [target]       - Show service status\n")
-	fmt.Printf("  service logs <target> [opts]  - View service logs (--follow, --since=1h)\n\n")
+	fmt.Printf("💻 Local Development:\n")
+	fmt.Printf("  dev up                        - Start full local dev environment\n")
+	fmt.Printf("  dev down                      - Stop all dev services\n")
+	fmt.Printf("  dev status                    - Show status of dev services\n")
+	fmt.Printf("  dev logs <component>          - View dev component logs\n\n")
+
+	fmt.Printf("🚀 Production Deployment:\n")
+	fmt.Printf("  prod install [--bootstrap]    - Full production bootstrap (requires root)\n")
+	fmt.Printf("  prod upgrade                  - Upgrade existing installation\n")
+	fmt.Printf("  prod status                   - Show production service status\n")
+	fmt.Printf("  prod logs <service>           - View production service logs\n")
+	fmt.Printf("  prod uninstall                - Remove production services (preserves data)\n\n")
 
 	fmt.Printf("🔐 Authentication:\n")
 	fmt.Printf("  auth login                    - Authenticate with wallet\n")
 	fmt.Printf("  auth logout                   - Clear stored credentials\n")
 	fmt.Printf("  auth whoami                   - Show current authentication\n")
 	fmt.Printf("  auth status                   - Show detailed auth info\n\n")
-
-	fmt.Printf("⚙️  Configuration:\n")
-	fmt.Printf("  config init [--type <type>]   - Generate configs (full stack or single)\n")
-	fmt.Printf("  config validate --name <file> - Validate config file\n\n")
 
 	fmt.Printf("🌐 Network Commands:\n")
 	fmt.Printf("  health                        - Check network health\n")
@@ -178,9 +173,6 @@ func showHelp() {
 
 	fmt.Printf("🗄️  Database:\n")
 	fmt.Printf("  query <sql>                   🔐 Execute database query\n\n")
-
-	fmt.Printf("🔧 RQLite:\n")
-	fmt.Printf("  rqlite fix                    🔧 Fix misconfigured join address and clean raft state\n\n")
 
 	fmt.Printf("📡 PubSub:\n")
 	fmt.Printf("  pubsub publish <topic> <msg>  🔐 Publish message\n")

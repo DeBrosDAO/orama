@@ -1,0 +1,27 @@
+[Unit]
+Description=IPFS Daemon ({{.NodeType}})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+Environment=HOME={{.HomeDir}}
+Environment=IPFS_PATH={{.IPFSRepoPath}}
+ExecStartPre=/bin/bash -c 'if [ -f {{.SecretsDir}}/swarm.key ] && [ ! -f {{.IPFSRepoPath}}/swarm.key ]; then cp {{.SecretsDir}}/swarm.key {{.IPFSRepoPath}}/swarm.key && chmod 600 {{.IPFSRepoPath}}/swarm.key; fi'
+ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir={{.IPFSRepoPath}}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipfs-{{.NodeType}}
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths={{.DebrosDir}}
+
+[Install]
+WantedBy=multi-user.target
+

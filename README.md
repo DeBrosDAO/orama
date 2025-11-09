@@ -43,7 +43,7 @@ DeBros Network is a decentralized peer-to-peer data platform built in Go. It com
    make dev
    ```
 
-   This starts three nodes and the HTTP gateway. Stop with `Ctrl+C`.
+   This starts three nodes and the HTTP gateway. **The command will not complete successfully until all services pass health checks** (IPFS peer connectivity, RQLite cluster formation, and LibP2P connectivity). If health checks fail, all services are stopped automatically. Stop with `Ctrl+C`.
 
 4. Validate the network from another terminal:
 

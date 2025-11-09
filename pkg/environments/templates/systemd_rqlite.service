@@ -1,0 +1,25 @@
+[Unit]
+Description=RQLite Database ({{.NodeType}})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+Environment=HOME={{.HomeDir}}
+ExecStart=/usr/local/bin/rqlited -http-addr 0.0.0.0:{{.HTTPPort}} -http-adv-addr 127.0.0.1:{{.HTTPPort}} -raft-adv-addr 127.0.0.1:{{.RaftPort}} -raft-addr 0.0.0.0:{{.RaftPort}}{{if .JoinAddr}} -join {{.JoinAddr}} -join-attempts 30 -join-interval 10s{{end}} {{.DataDir}}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rqlite-{{.NodeType}}
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths={{.DebrosDir}}
+
+[Install]
+WantedBy=multi-user.target
+
