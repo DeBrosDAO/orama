@@ -37,8 +37,8 @@ func (pm *ProcessManager) IPFSHealthCheck(ctx context.Context, nodes []ipfsNodeI
 		for _, line := range peerLines {
 			if strings.TrimSpace(line) != "" {
 				peerCount++
-			}
-		}
+	}
+}
 
 		if peerCount < 2 {
 			result.Details += fmt.Sprintf("%s: only %d peers (want 2+); ", node.name, peerCount)
@@ -99,7 +99,7 @@ func (pm *ProcessManager) checkRQLiteNode(ctx context.Context, name string, http
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		result.Details = fmt.Sprintf("decode error: %v", err)
 		return result
-	}
+}
 
 	// Check the store.raft structure (RQLite 8 format)
 	store, ok := status["store"].(map[string]interface{})

@@ -120,26 +120,26 @@ func (ce *ConfigEnsurer) ensureBootstrap() error {
 
 	// Ensure bootstrap config - always regenerate to ensure template fixes are applied
 	bootstrapConfigPath := filepath.Join(ce.debrosDir, "bootstrap.yaml")
-	data := templates.BootstrapConfigData{
-		NodeID:         "bootstrap",
-		P2PPort:        4001,
-		DataDir:        bootstrapDir,
-		RQLiteHTTPPort: 5001,
-		RQLiteRaftPort: 7001,
-		ClusterAPIPort: 9094,
-		IPFSAPIPort:    4501,
-	}
+		data := templates.BootstrapConfigData{
+			NodeID:         "bootstrap",
+			P2PPort:        4001,
+			DataDir:        bootstrapDir,
+			RQLiteHTTPPort: 5001,
+			RQLiteRaftPort: 7001,
+			ClusterAPIPort: 9094,
+			IPFSAPIPort:    4501,
+		}
 
-	config, err := templates.RenderBootstrapConfig(data)
-	if err != nil {
-		return fmt.Errorf("failed to render bootstrap config: %w", err)
-	}
+		config, err := templates.RenderBootstrapConfig(data)
+		if err != nil {
+			return fmt.Errorf("failed to render bootstrap config: %w", err)
+		}
 
-	if err := os.WriteFile(bootstrapConfigPath, []byte(config), 0644); err != nil {
-		return fmt.Errorf("failed to write bootstrap config: %w", err)
-	}
+		if err := os.WriteFile(bootstrapConfigPath, []byte(config), 0644); err != nil {
+			return fmt.Errorf("failed to write bootstrap config: %w", err)
+		}
 
-	fmt.Printf("✓ Generated bootstrap.yaml\n")
+		fmt.Printf("✓ Generated bootstrap.yaml\n")
 
 	return nil
 }
@@ -171,32 +171,32 @@ func (ce *ConfigEnsurer) ensureNode2And3() error {
 		configPath := filepath.Join(ce.debrosDir, fmt.Sprintf("%s.yaml", node.name))
 
 		// Always regenerate to ensure template fixes are applied
-		if err := os.MkdirAll(nodeDir, 0755); err != nil {
-			return fmt.Errorf("failed to create %s directory: %w", node.name, err)
-		}
+			if err := os.MkdirAll(nodeDir, 0755); err != nil {
+				return fmt.Errorf("failed to create %s directory: %w", node.name, err)
+			}
 
-		data := templates.NodeConfigData{
-			NodeID:            node.name,
-			P2PPort:           node.p2pPort,
-			DataDir:           nodeDir,
-			RQLiteHTTPPort:    node.rqliteHTTPPort,
-			RQLiteRaftPort:    node.rqliteRaftPort,
-			RQLiteJoinAddress: "localhost:7001",
-			BootstrapPeers:    []string{bootstrapMultiaddr},
-			ClusterAPIPort:    node.clusterAPIPort,
-			IPFSAPIPort:       node.ipfsAPIPort,
-		}
+			data := templates.NodeConfigData{
+				NodeID:            node.name,
+				P2PPort:           node.p2pPort,
+				DataDir:           nodeDir,
+				RQLiteHTTPPort:    node.rqliteHTTPPort,
+				RQLiteRaftPort:    node.rqliteRaftPort,
+				RQLiteJoinAddress: "localhost:7001",
+				BootstrapPeers:    []string{bootstrapMultiaddr},
+				ClusterAPIPort:    node.clusterAPIPort,
+				IPFSAPIPort:       node.ipfsAPIPort,
+			}
 
-		config, err := templates.RenderNodeConfig(data)
-		if err != nil {
-			return fmt.Errorf("failed to render %s config: %w", node.name, err)
-		}
+			config, err := templates.RenderNodeConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to render %s config: %w", node.name, err)
+			}
 
-		if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-			return fmt.Errorf("failed to write %s config: %w", node.name, err)
-		}
+			if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+				return fmt.Errorf("failed to write %s config: %w", node.name, err)
+			}
 
-		fmt.Printf("✓ Generated %s.yaml\n", node.name)
+			fmt.Printf("✓ Generated %s.yaml\n", node.name)
 	}
 
 	return nil
@@ -207,32 +207,32 @@ func (ce *ConfigEnsurer) ensureGateway() error {
 	configPath := filepath.Join(ce.debrosDir, "gateway.yaml")
 
 	// Always regenerate to ensure template fixes are applied
-	// Get bootstrap multiaddr
-	bootstrapInfo, err := encryption.LoadIdentity(filepath.Join(ce.debrosDir, "bootstrap", "identity.key"))
-	if err != nil {
-		return fmt.Errorf("failed to load bootstrap identity: %w", err)
-	}
+		// Get bootstrap multiaddr
+		bootstrapInfo, err := encryption.LoadIdentity(filepath.Join(ce.debrosDir, "bootstrap", "identity.key"))
+		if err != nil {
+			return fmt.Errorf("failed to load bootstrap identity: %w", err)
+		}
 
-	bootstrapMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
+		bootstrapMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/4001/p2p/%s", bootstrapInfo.PeerID.String())
 
-	data := templates.GatewayConfigData{
-		ListenPort:     6001,
-		BootstrapPeers: []string{bootstrapMultiaddr},
-		OlricServers:   []string{"127.0.0.1:3320"},
-		ClusterAPIPort: 9094,
-		IPFSAPIPort:    4501,
-	}
+		data := templates.GatewayConfigData{
+			ListenPort:     6001,
+			BootstrapPeers: []string{bootstrapMultiaddr},
+			OlricServers:   []string{"127.0.0.1:3320"},
+			ClusterAPIPort: 9094,
+			IPFSAPIPort:    4501,
+		}
 
-	config, err := templates.RenderGatewayConfig(data)
-	if err != nil {
-		return fmt.Errorf("failed to render gateway config: %w", err)
-	}
+		config, err := templates.RenderGatewayConfig(data)
+		if err != nil {
+			return fmt.Errorf("failed to render gateway config: %w", err)
+		}
 
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-		return fmt.Errorf("failed to write gateway config: %w", err)
-	}
+		if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+			return fmt.Errorf("failed to write gateway config: %w", err)
+		}
 
-	fmt.Printf("✓ Generated gateway.yaml\n")
+		fmt.Printf("✓ Generated gateway.yaml\n")
 	return nil
 }
 
@@ -241,22 +241,22 @@ func (ce *ConfigEnsurer) ensureOlric() error {
 	configPath := filepath.Join(ce.debrosDir, "olric-config.yaml")
 
 	// Always regenerate to ensure template fixes are applied
-	data := templates.OlricConfigData{
-		BindAddr:       "127.0.0.1",
-		HTTPPort:       3320,
-		MemberlistPort: 3322,
-	}
+		data := templates.OlricConfigData{
+			BindAddr:       "127.0.0.1",
+			HTTPPort:       3320,
+			MemberlistPort: 3322,
+		}
 
-	config, err := templates.RenderOlricConfig(data)
-	if err != nil {
-		return fmt.Errorf("failed to render olric config: %w", err)
-	}
+		config, err := templates.RenderOlricConfig(data)
+		if err != nil {
+			return fmt.Errorf("failed to render olric config: %w", err)
+		}
 
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-		return fmt.Errorf("failed to write olric config: %w", err)
-	}
+		if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+			return fmt.Errorf("failed to write olric config: %w", err)
+		}
 
-	fmt.Printf("✓ Generated olric-config.yaml\n")
+		fmt.Printf("✓ Generated olric-config.yaml\n")
 	return nil
 }
 

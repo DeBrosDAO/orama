@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.60.1] - 2025-11-09
+
+### Added
+- Improved IPFS Cluster startup logic in development environment to ensure proper peer discovery and configuration.
+
+### Changed
+- Refactored IPFS Cluster initialization in the development environment to use a multi-phase startup (bootstrap first, then followers) and explicitly clean stale cluster state (pebble, peerstore) before initialization.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where IPFS Cluster nodes in the development environment might fail to join due to incorrect bootstrap configuration or stale state.
+
 ## [0.60.0] - 2025-11-09
 
 ### Added
