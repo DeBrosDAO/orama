@@ -347,6 +347,25 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 			fmt.Fprintf(pm.logWriter, "    Warning: failed to set Swarm addresses: %v\n", err)
 		}
 
+		// Ensure AutoConf is disabled for private swarm repos to avoid mainnet autoconf error
+		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "AutoConf.Enabled", "false").Run(); err != nil {
+			fmt.Fprintf(pm.logWriter, "    Warning: failed to disable AutoConf for %s: %v\n", nodes[i].name, err)
+		}
+
+		// Clear 'auto' placeholders that are invalid when AutoConf is disabled
+		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Bootstrap", "[]").Run(); err != nil {
+			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear Bootstrap for %s: %v\n", nodes[i].name, err)
+		}
+		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "DNS.Resolvers", "[]").Run(); err != nil {
+			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear DNS.Resolvers for %s: %v\n", nodes[i].name, err)
+		}
+		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Routing.DelegatedRouters", "[]").Run(); err != nil {
+			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear Routing.DelegatedRouters for %s: %v\n", nodes[i].name, err)
+		}
+		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Ipns.DelegatedPublishers", "[]").Run(); err != nil {
+			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear Ipns.DelegatedPublishers for %s: %v\n", nodes[i].name, err)
+		}
+
 		// Read peer ID from config BEFORE daemon starts
 		peerID, err := readIPFSConfigValue(ctx, nodes[i].ipfsPath, "PeerID")
 		if err != nil {
