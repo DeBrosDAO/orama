@@ -13,7 +13,7 @@ func TestRenderBootstrapConfig(t *testing.T) {
 		RQLiteHTTPPort: 5001,
 		RQLiteRaftPort: 7001,
 		ClusterAPIPort: 9094,
-		IPFSAPIPORT:    5001,
+		IPFSAPIPort:    5001,
 	}
 
 	result, err := RenderBootstrapConfig(data)
@@ -50,7 +50,7 @@ func TestRenderNodeConfig(t *testing.T) {
 		RQLiteJoinAddress: "localhost:5001",
 		BootstrapPeers:    []string{bootstrapMultiaddr},
 		ClusterAPIPort:    9104,
-		IPFSAPIPORT:       5002,
+		IPFSAPIPort:       5002,
 	}
 
 	result, err := RenderNodeConfig(data)
@@ -84,7 +84,7 @@ func TestRenderGatewayConfig(t *testing.T) {
 		BootstrapPeers: []string{bootstrapMultiaddr},
 		OlricServers:   []string{"127.0.0.1:3320"},
 		ClusterAPIPort: 9094,
-		IPFSAPIPORT:    5001,
+		IPFSAPIPort:    5001,
 	}
 
 	result, err := RenderGatewayConfig(data)
@@ -150,7 +150,7 @@ func TestRenderWithMultipleBootstrapPeers(t *testing.T) {
 		RQLiteJoinAddress: "localhost:5001",
 		BootstrapPeers:    peers,
 		ClusterAPIPort:    9104,
-		IPFSAPIPORT:       5002,
+		IPFSAPIPort:       5002,
 	}
 
 	result, err := RenderNodeConfig(data)

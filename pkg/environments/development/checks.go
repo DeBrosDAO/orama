@@ -136,6 +136,10 @@ func (pc *PortChecker) CheckAll() ([]int, error) {
 
 // isPortAvailable checks if a TCP port is available for binding
 func isPortAvailable(port int) bool {
+	// Port 0 is reserved and means "assign any available port"
+	if port == 0 {
+		return false
+	}
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return false
