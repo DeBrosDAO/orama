@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.60.0] - 2025-11-09
+
+### Added
+- Introduced comprehensive `network-cli dev` commands for managing the local development environment (start, stop, status, logs).
+- Added `network-cli prod` commands for streamlined production installation, upgrade, and service management on Linux systems (requires root).
+
+### Changed
+- Refactored `Makefile` targets (`dev` and `kill`) to use the new `network-cli dev up` and `network-cli dev down` commands, significantly simplifying the development workflow.
+- Removed deprecated `network-cli config`, `network-cli setup`, `network-cli service`, and `network-cli rqlite` commands, consolidating functionality under `dev` and `prod`.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.59.2] - 2025-11-08
 
 ### Added
