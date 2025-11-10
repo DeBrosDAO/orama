@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.63.2] - 2025-11-10
+
+### Added
+\n
+### Changed
+- Improved process termination logic in development environments to ensure child processes are also killed.
+- Enhanced the `dev-kill-all.sh` script to reliably kill all processes using development ports, including orphaned processes and their children.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.63.1] - 2025-11-10
 
 ### Added

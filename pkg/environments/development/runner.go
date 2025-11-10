@@ -1022,7 +1022,7 @@ func (pm *ProcessManager) startGateway(ctx context.Context) error {
 	return nil
 }
 
-// stopProcess terminates a managed process
+// stopProcess terminates a managed process and its children
 func (pm *ProcessManager) stopProcess(name string) error {
 	pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("%s.pid", name))
 	pidBytes, err := os.ReadFile(pidPath)
@@ -1030,8 +1030,9 @@ func (pm *ProcessManager) stopProcess(name string) error {
 		return nil // Process not running or PID not found
 	}
 
-	pid, err := strconv.Atoi(string(pidBytes))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
 	if err != nil {
+		os.Remove(pidPath)
 		return nil
 	}
 
@@ -1041,7 +1042,25 @@ func (pm *ProcessManager) stopProcess(name string) error {
 		return nil
 	}
 
+	// Try graceful shutdown first
 	proc.Signal(os.Interrupt)
+
+	// Wait a bit for graceful shutdown
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if process is still running
+	if checkProcessRunning(pid) {
+		// Force kill if still running
+		proc.Signal(os.Kill)
+		time.Sleep(200 * time.Millisecond)
+
+		// Also kill any child processes (platform-specific)
+		if runtime.GOOS != "windows" {
+			// Use pkill to kill children on Unix-like systems
+			exec.Command("pkill", "-9", "-P", fmt.Sprintf("%d", pid)).Run()
+		}
+	}
+
 	os.Remove(pidPath)
 
 	fmt.Fprintf(pm.logWriter, "✓ %s stopped\n", name)
