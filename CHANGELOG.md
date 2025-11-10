@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.64.1] - 2025-11-10
+
+### Added
+\n
+### Changed
+- Improved the accuracy of the Raft log index reporting by falling back to reading persisted snapshot metadata from disk if the running RQLite instance is not yet reachable or reports a zero index.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.64.0] - 2025-11-10
 
 ### Added

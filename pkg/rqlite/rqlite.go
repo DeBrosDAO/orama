@@ -123,8 +123,9 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// prepareDataDir expands and creates the RQLite data directory
-func (r *RQLiteManager) prepareDataDir() (string, error) {
+// rqliteDataDirPath returns the resolved path to the RQLite data directory
+// This centralizes the path resolution logic used throughout the codebase
+func (r *RQLiteManager) rqliteDataDirPath() (string, error) {
 	// Expand ~ in data directory path
 	dataDir := os.ExpandEnv(r.dataDir)
 	if strings.HasPrefix(dataDir, "~") {
@@ -135,8 +136,17 @@ func (r *RQLiteManager) prepareDataDir() (string, error) {
 		dataDir = filepath.Join(home, dataDir[1:])
 	}
 
+	return filepath.Join(dataDir, "rqlite"), nil
+}
+
+// prepareDataDir expands and creates the RQLite data directory
+func (r *RQLiteManager) prepareDataDir() (string, error) {
+	rqliteDataDir, err := r.rqliteDataDirPath()
+	if err != nil {
+		return "", err
+	}
+
 	// Create data directory
-	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	if err := os.MkdirAll(rqliteDataDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create RQLite data directory: %w", err)
 	}
@@ -689,16 +699,11 @@ func (r *RQLiteManager) recoverCluster(peersJSONPath string) error {
 	// Restart RQLite - it will automatically detect peers.json and perform recovery
 	r.logger.Info("Restarting RQLite (will auto-recover using peers.json)")
 
-	// Build the same args as original Start() - expand ~ in data directory
-	dataDir := os.ExpandEnv(r.dataDir)
-	if strings.HasPrefix(dataDir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to determine home directory: %w", err)
-		}
-		dataDir = filepath.Join(home, dataDir[1:])
+	// Rebuild the launch arguments using the centralized path helper
+	rqliteDataDir, err := r.rqliteDataDirPath()
+	if err != nil {
+		return fmt.Errorf("failed to resolve RQLite data directory: %w", err)
 	}
-	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	args := []string{
 		"-http-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLitePort),
 		"-http-adv-addr", r.discoverConfig.HttpAdvAddress,
