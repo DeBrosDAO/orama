@@ -6,14 +6,12 @@ test:
 	go test -v $(TEST)
 
 # Gateway-focused E2E tests assume gateway and nodes are already running
-# Configure via env:
-#   GATEWAY_BASE_URL (default http://localhost:6001)
-#   GATEWAY_API_KEY  (required for auth-protected routes)
+# Auto-discovers configuration from ~/.debros and queries database for API key
+# No environment variables required
 .PHONY: test-e2e
 test-e2e:
-	@echo "Running gateway E2E tests (HTTP/WS only)..."
-	@echo "Base URL: $${GATEWAY_BASE_URL:-http://localhost:6001}"
-	@test -n "$$GATEWAY_API_KEY" || (echo "GATEWAY_API_KEY must be set" && exit 1)
+	@echo "Running comprehensive E2E tests..."
+	@echo "Auto-discovering configuration from ~/.debros..."
 	go test -v -tags e2e ./e2e
 
 # Network - Distributed P2P Database System
@@ -21,7 +19,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.63.3
+VERSION := 0.64.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'

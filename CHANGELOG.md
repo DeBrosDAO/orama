@@ -13,6 +13,27 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.64.0] - 2025-11-10
+
+### Added
+- Comprehensive End-to-End (E2E) test suite for Gateway API endpoints (Cache, RQLite, Storage, Network, Auth).
+- New E2E tests for concurrent operations and TTL expiry in the distributed cache.
+- New E2E tests for LibP2P peer connectivity and discovery.
+
+### Changed
+- Improved Gateway E2E test configuration: automatically discovers Gateway URL and API Key from local `~/.debros` configuration files, removing the need for environment variables.
+- The `/v1/network/peers` endpoint now returns a flattened list of multiaddresses for all connected peers.
+- Improved robustness of Cache API handlers to correctly identify and return 404 (Not Found) errors when keys are missing, even when wrapped by underlying library errors.
+- The RQLite transaction handler now supports the legacy `statements` array format in addition to the `ops` array format for easier use.
+- The RQLite schema endpoint now returns tables under the `tables` key instead of `objects`.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected IPFS Add operation to return the actual file size (byte count) instead of the DAG size in the response.
+
 ## [0.63.3] - 2025-11-10
 
 ### Added

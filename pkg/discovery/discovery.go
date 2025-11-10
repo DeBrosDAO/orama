@@ -115,8 +115,8 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 			continue
 		}
 
-		// Filter addresses to only include configured listen addresses, not ephemeral ports
-		// Ephemeral ports are typically > 32768, so we filter those out
+		// Include all addresses with valid TCP ports
+		// This allows test clients and dynamic allocations to participate in peer discovery
 		filteredAddrs := make([]multiaddr.Multiaddr, 0)
 		for _, addr := range addrs {
 			// Extract TCP port from multiaddr
@@ -124,9 +124,9 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 			if err == nil {
 				portNum, err := strconv.Atoi(port)
 				if err == nil {
-					// Only include ports that are reasonable (not ephemeral ports > 32768)
-					// Common LibP2P ports are typically < 10000
-					if portNum > 0 && portNum <= 32767 {
+					// Accept all valid TCP ports > 0, including ephemeral ports
+					// Test clients and dynamic allocations may use high ports (> 32768)
+					if portNum > 0 {
 						filteredAddrs = append(filteredAddrs, addr)
 					}
 				} else {
@@ -141,7 +141,7 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 
 		// If no addresses remain after filtering, skip this peer
 		if len(filteredAddrs) == 0 {
-			d.logger.Debug("No valid addresses after filtering ephemeral ports",
+			d.logger.Debug("No valid addresses after filtering",
 				zap.String("peer_id", pid.String()[:8]+"..."),
 				zap.Int("original_count", len(addrs)))
 			continue

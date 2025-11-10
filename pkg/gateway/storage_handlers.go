@@ -401,7 +401,19 @@ func (g *Gateway) networkPeersHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, peers)
+	// Flatten peer addresses into a list of multiaddr strings
+	// Each PeerInfo can have multiple addresses, so we collect all of them
+	peerAddrs := make([]string, 0)
+	for _, peer := range peers {
+		// Add peer ID as /p2p/ multiaddr format
+		if peer.ID != "" {
+			peerAddrs = append(peerAddrs, "/p2p/"+peer.ID)
+		}
+		// Add all addresses for this peer
+		peerAddrs = append(peerAddrs, peer.Addresses...)
+	}
+	// Return peers in expected format: {"peers": ["/p2p/...", "/ip4/...", ...]}
+	writeJSON(w, http.StatusOK, map[string]any{"peers": peerAddrs})
 }
 
 func (g *Gateway) networkConnectHandler(w http.ResponseWriter, r *http.Request) {

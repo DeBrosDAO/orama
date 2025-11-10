@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -74,7 +75,8 @@ func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
 
 	gr, err := dm.Get(ctx, req.Key)
 	if err != nil {
-		if err == olriclib.ErrKeyNotFound {
+		// Check for key not found error - handle both wrapped and direct errors
+		if errors.Is(err, olriclib.ErrKeyNotFound) || err.Error() == "key not found" || strings.Contains(err.Error(), "key not found") {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
@@ -372,7 +374,8 @@ func (g *Gateway) cacheDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	deletedCount, err := dm.Delete(ctx, req.Key)
 	if err != nil {
-		if err == olriclib.ErrKeyNotFound {
+		// Check for key not found error - handle both wrapped and direct errors
+		if errors.Is(err, olriclib.ErrKeyNotFound) || err.Error() == "key not found" || strings.Contains(err.Error(), "key not found") {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}

@@ -151,6 +151,14 @@ func (c *Client) GetPeerCount(ctx context.Context) (int, error) {
 
 // Add adds content to IPFS and returns the CID
 func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddResponse, error) {
+	// Track original size by reading into memory first
+	// This allows us to return the actual byte count, not the DAG size
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data: %w", err)
+	}
+	originalSize := int64(len(data))
+
 	// Create multipart form request for IPFS Cluster API
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -161,7 +169,7 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 		return nil, fmt.Errorf("failed to create form file: %w", err)
 	}
 
-	if _, err := io.Copy(part, reader); err != nil {
+	if _, err := io.Copy(part, bytes.NewReader(data)); err != nil {
 		return nil, fmt.Errorf("failed to copy data: %w", err)
 	}
 
@@ -214,6 +222,9 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 	if last.Name == "" && name != "" {
 		last.Name = name
 	}
+
+	// Override size with original byte count (not DAG size)
+	last.Size = originalSize
 
 	return &last, nil
 }
