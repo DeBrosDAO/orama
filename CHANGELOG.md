@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.63.0] - 2025-11-10
+
+### Added
+- Added a new `kill` command to the Makefile for forcefully shutting down all development processes.
+- Introduced a new `stop` command in the Makefile for graceful shutdown of development processes.
+
+### Changed
+- The `kill` command now performs a graceful shutdown attempt followed by a force kill of any lingering processes and verifies that development ports are free.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.62.0] - 2025-11-10
 
 ### Added

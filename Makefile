@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.62.0
+VERSION := 0.63.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -87,8 +87,11 @@ run-gateway:
 dev: build
 	@./bin/dbn dev up
 
-# Kill all processes using dbn dev down
+# Kill all processes (graceful shutdown + force kill stray processes)
 kill:
+	@bash scripts/dev-kill-all.sh
+
+stop:
 	@./bin/dbn dev down
 
 # Help
