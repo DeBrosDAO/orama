@@ -826,9 +826,12 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		time.Sleep(2 * time.Second)
 	}
 
-	if discoveredPeers == 0 {
-		r.logger.Warn("No peers discovered during pre-start discovery window, will attempt solo recovery")
-		// Continue anyway - might be the only node left
+	// CRITICAL FIX: Skip recovery if no peers were discovered (other than ourselves)
+	// Only ourselves in the cluster means this is a fresh bootstrap, not a recovery scenario
+	if discoveredPeers <= 1 {
+		r.logger.Info("No peers discovered during pre-start discovery window - skipping recovery (fresh bootstrap)",
+			zap.Int("discovered_peers", discoveredPeers))
+		return nil
 	}
 
 	// Trigger final sync to ensure peers.json is up to date with latest discovered peers

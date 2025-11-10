@@ -17,7 +17,7 @@ database:
   rqlite_join_address: "{{.RQLiteJoinAddress}}"
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
-  min_cluster_size: 1
+  min_cluster_size: 3
   ipfs:
     cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
     api_url: "http://localhost:{{.IPFSAPIPort}}"

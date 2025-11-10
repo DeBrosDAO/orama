@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.63.1] - 2025-11-10
+
+### Added
+\n
+### Changed
+- Increased the default minimum cluster size for database environments from 1 to 3.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Prevented unnecessary cluster recovery attempts when a node starts up as the first node (fresh bootstrap).
+
 ## [0.63.0] - 2025-11-10
 
 ### Added
