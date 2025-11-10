@@ -72,7 +72,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 			zap.String("path", configPath),
 			zap.Error(err))
 		fmt.Fprintf(os.Stderr, "\nConfig file not found at %s\n", configPath)
-		fmt.Fprintf(os.Stderr, "Generate it using: network-cli config init --type gateway\n")
+		fmt.Fprintf(os.Stderr, "Generate it using: dbn config init --type gateway\n")
 		os.Exit(1)
 	}
 

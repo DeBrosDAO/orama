@@ -1,6 +1,7 @@
 package ipfs
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -533,19 +534,22 @@ func parseIPFSPort(apiURL string) (int, error) {
 func getBootstrapPeerID(apiURL string) (string, error) {
 	// Simple HTTP client to query /peers endpoint
 	client := &standardHTTPClient{}
-	peersResp, err := client.Get(fmt.Sprintf("%s/peers", apiURL))
+	resp, err := client.Get(fmt.Sprintf("%s/peers", apiURL))
 	if err != nil {
 		return "", err
 	}
 
-	var peersData struct {
+	// The /peers endpoint returns NDJSON (newline-delimited JSON)
+	// We need to read the first peer object to get the bootstrap peer ID
+	dec := json.NewDecoder(bytes.NewReader(resp))
+	var firstPeer struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(peersResp, &peersData); err != nil {
-		return "", err
+	if err := dec.Decode(&firstPeer); err != nil {
+		return "", fmt.Errorf("failed to decode first peer: %w", err)
 	}
 
-	return peersData.ID, nil
+	return firstPeer.ID, nil
 }
 
 // loadOrGenerateClusterSecret loads cluster secret or generates a new one

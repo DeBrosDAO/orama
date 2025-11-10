@@ -2,8 +2,10 @@ package rqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -202,6 +204,7 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 }
 
 // waitForReadyAndConnect waits for RQLite to be ready and establishes connection
+// For joining nodes, retries if gorqlite.Open fails with "store is not open" error
 func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 	// Wait for RQLite to be ready
 	if err := r.waitForReady(ctx); err != nil {
@@ -211,15 +214,55 @@ func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 		return fmt.Errorf("RQLite failed to become ready: %w", err)
 	}
 
-	// Create connection
-	conn, err := gorqlite.Open(fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
-	if err != nil {
+	// For joining nodes, retry gorqlite.Open if store is not yet open
+	// This handles recovery scenarios where the store opens after HTTP is responsive
+	var conn *gorqlite.Connection
+	var err error
+	maxConnectAttempts := 10
+	connectBackoff := 500 * time.Millisecond
+
+	for attempt := 0; attempt < maxConnectAttempts; attempt++ {
+		// Create connection
+		conn, err = gorqlite.Open(fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+		if err == nil {
+			// Success
+			r.connection = conn
+			r.logger.Debug("Successfully connected to RQLite", zap.Int("attempt", attempt+1))
+			break
+		}
+
+		// Check if error is "store is not open" (recovery scenario)
+		if strings.Contains(err.Error(), "store is not open") {
+			if attempt < maxConnectAttempts-1 {
+				// Only retry for joining nodes; bootstrap nodes should fail fast
+				if r.config.RQLiteJoinAddress != "" {
+					if attempt%3 == 0 {
+						r.logger.Debug("RQLite store not yet accessible for connection, retrying...",
+							zap.Int("attempt", attempt+1), zap.Error(err))
+					}
+					time.Sleep(connectBackoff)
+					connectBackoff = time.Duration(float64(connectBackoff) * 1.5)
+					if connectBackoff > 5*time.Second {
+						connectBackoff = 5 * time.Second
+					}
+					continue
+				}
+			}
+		}
+
+		// For any other error or final attempt, fail
 		if r.cmd != nil && r.cmd.Process != nil {
 			_ = r.cmd.Process.Kill()
 		}
 		return fmt.Errorf("failed to connect to RQLite: %w", err)
 	}
-	r.connection = conn
+
+	if conn == nil {
+		if r.cmd != nil && r.cmd.Process != nil {
+			_ = r.cmd.Process.Kill()
+		}
+		return fmt.Errorf("failed to establish RQLite connection after %d attempts", maxConnectAttempts)
+	}
 
 	// Sanity check: verify rqlite's node ID matches our configured raft address
 	if err := r.validateNodeID(); err != nil {
@@ -336,12 +379,24 @@ func (r *RQLiteManager) hasExistingState(rqliteDataDir string) bool {
 }
 
 // waitForReady waits for RQLite to be ready to accept connections
+// It checks for HTTP 200 + valid raft state (leader/follower)
+// The store may not be fully open initially during recovery, but connection retries will handle it
+// For joining nodes in recovery, this may take longer (up to 3 minutes)
 func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	// Give joining nodes more time (120 seconds vs 30)
-	maxAttempts := 30
+	// Determine timeout based on whether this is a joining node
+	// Joining nodes in recovery may take longer to open the store
+	var maxAttempts int
+	if r.config.RQLiteJoinAddress != "" {
+		// Joining node: allow up to 180 seconds (3 minutes) for recovery
+		maxAttempts = 180
+	} else {
+		// Bootstrap node: allow 30 seconds
+		maxAttempts = 30
+	}
+
 	for i := 0; i < maxAttempts; i++ {
 		select {
 		case <-ctx.Done():
@@ -350,11 +405,41 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 		}
 
 		resp, err := client.Get(url)
-		if err == nil {
+		if err == nil && resp.StatusCode == http.StatusOK {
+			// Parse the response to check for valid raft state
+			body, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
+			if err == nil {
+				var statusResp map[string]interface{}
+				if err := json.Unmarshal(body, &statusResp); err == nil {
+					// Check for valid raft state (leader or follower)
+					// If raft is established, we consider the node ready even if store.open is false
+					// The store will eventually open during recovery, and connection retries will handle it
+					if raft, ok := statusResp["raft"].(map[string]interface{}); ok {
+						state, ok := raft["state"].(string)
+						if ok && (state == "leader" || state == "follower") {
+							r.logger.Debug("RQLite raft ready", zap.String("state", state), zap.Int("attempt", i+1))
+							return nil
+						}
+						// Raft not yet ready (likely in candidate state)
+						if i%10 == 0 {
+							r.logger.Debug("RQLite raft not yet ready", zap.String("state", state), zap.Int("attempt", i+1))
+						}
+					} else {
+						// If no raft field, fall back to treating HTTP 200 as ready
+						// (for backwards compatibility with older RQLite versions)
+						r.logger.Debug("RQLite HTTP responsive (no raft field)", zap.Int("attempt", i+1))
+						return nil
+					}
+				} else {
+					resp.Body.Close()
+				}
 			}
+		} else if err != nil && i%20 == 0 {
+			// Log connection errors only periodically (every ~20s)
+			r.logger.Debug("RQLite not yet reachable", zap.Int("attempt", i+1), zap.Error(err))
+		} else if resp != nil {
+			resp.Body.Close()
 		}
 
 		time.Sleep(1 * time.Second)

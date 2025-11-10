@@ -22,19 +22,19 @@ make deps
 - Test: `make test`
 - Format/Vet: `make fmt vet` (or `make lint`)
 
-```
+````
 
 Useful CLI commands:
 
 ```bash
-./bin/network-cli health
-./bin/network-cli peers
-./bin/network-cli status
-```
+./bin/dbn health
+./bin/dbn peers
+./bin/dbn status
+````
 
 ## Versioning
 
-- The CLI reports its version via `network-cli version`.
+- The CLI reports its version via `dbn version`.
 - Releases are tagged (e.g., `v0.18.0-beta`) and published via GoReleaser.
 
 ## Pull Requests

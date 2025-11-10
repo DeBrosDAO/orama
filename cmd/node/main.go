@@ -92,8 +92,8 @@ func select_data_dir_check(configName *string) {
 		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
 		fmt.Fprintf(os.Stderr, "Config file not found at %s\n", configPath)
 		fmt.Fprintf(os.Stderr, "\nGenerate it with one of:\n")
-		fmt.Fprintf(os.Stderr, "  network-cli config init --type bootstrap\n")
-		fmt.Fprintf(os.Stderr, "  network-cli config init --type node --bootstrap-peers '<peer_multiaddr>'\n")
+		fmt.Fprintf(os.Stderr, "  dbn config init --type bootstrap\n")
+		fmt.Fprintf(os.Stderr, "  dbn config init --type node --bootstrap-peers '<peer_multiaddr>'\n")
 		os.Exit(1)
 	}
 }

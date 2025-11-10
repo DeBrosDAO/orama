@@ -40,7 +40,7 @@ func HandleDevCommand(args []string) {
 
 func showDevHelp() {
 	fmt.Printf("🚀 Development Environment Commands\n\n")
-	fmt.Printf("Usage: network-cli dev <subcommand> [options]\n\n")
+	fmt.Printf("Usage: dbn dev <subcommand> [options]\n\n")
 	fmt.Printf("Subcommands:\n")
 	fmt.Printf("  up                - Start development environment (bootstrap + 2 nodes + gateway)\n")
 	fmt.Printf("  down              - Stop all development services\n")
@@ -48,10 +48,10 @@ func showDevHelp() {
 	fmt.Printf("  logs <component>  - Tail logs for a component\n")
 	fmt.Printf("  help              - Show this help\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  network-cli dev up\n")
-	fmt.Printf("  network-cli dev down\n")
-	fmt.Printf("  network-cli dev status\n")
-	fmt.Printf("  network-cli dev logs bootstrap --follow\n")
+	fmt.Printf("  dbn dev up\n")
+	fmt.Printf("  dbn dev down\n")
+	fmt.Printf("  dbn dev status\n")
+	fmt.Printf("  dbn dev logs bootstrap --follow\n")
 }
 
 func handleDevUp(args []string) {
@@ -114,9 +114,9 @@ func handleDevUp(args []string) {
 	fmt.Printf("  Anon SOCKS:        127.0.0.1:9050\n")
 	fmt.Printf("  Olric Cache:       http://localhost:3320\n\n")
 	fmt.Printf("Useful commands:\n")
-	fmt.Printf("  network-cli dev status           - Show status\n")
-	fmt.Printf("  network-cli dev logs bootstrap   - Bootstrap logs\n")
-	fmt.Printf("  network-cli dev down             - Stop all services\n\n")
+	fmt.Printf("  dbn dev status           - Show status\n")
+	fmt.Printf("  dbn dev logs bootstrap   - Bootstrap logs\n")
+	fmt.Printf("  dbn dev down             - Stop all services\n\n")
 	fmt.Printf("Logs directory: %s/logs\n\n", debrosDir)
 }
 
@@ -152,7 +152,7 @@ func handleDevStatus(args []string) {
 
 func handleDevLogs(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: network-cli dev logs <component> [--follow]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dbn dev logs <component> [--follow]\n")
 		fmt.Fprintf(os.Stderr, "\nComponents: bootstrap, node2, node3, gateway, ipfs-bootstrap, ipfs-node2, ipfs-node3, olric, anon\n")
 		os.Exit(1)
 	}

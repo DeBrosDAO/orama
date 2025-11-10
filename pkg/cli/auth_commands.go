@@ -33,29 +33,34 @@ func HandleAuthCommand(args []string) {
 
 func showAuthHelp() {
 	fmt.Printf("🔐 Authentication Commands\n\n")
-	fmt.Printf("Usage: network-cli auth <subcommand>\n\n")
+	fmt.Printf("Usage: dbn auth <subcommand>\n\n")
 	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  login      - Authenticate with wallet\n")
+	fmt.Printf("  login      - Authenticate by providing your wallet address\n")
 	fmt.Printf("  logout     - Clear stored credentials\n")
 	fmt.Printf("  whoami     - Show current authentication status\n")
 	fmt.Printf("  status     - Show detailed authentication info\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  network-cli auth login\n")
-	fmt.Printf("  network-cli auth whoami\n")
-	fmt.Printf("  network-cli auth status\n")
-	fmt.Printf("  network-cli auth logout\n\n")
+	fmt.Printf("  dbn auth login          # Enter wallet address interactively\n")
+	fmt.Printf("  dbn auth whoami         # Check who you're logged in as\n")
+	fmt.Printf("  dbn auth status         # View detailed authentication info\n")
+	fmt.Printf("  dbn auth logout         # Clear all stored credentials\n\n")
 	fmt.Printf("Environment Variables:\n")
 	fmt.Printf("  DEBROS_GATEWAY_URL - Gateway URL (overrides environment config)\n\n")
+	fmt.Printf("Authentication Flow:\n")
+	fmt.Printf("  1. Run 'dbn auth login'\n")
+	fmt.Printf("  2. Enter your wallet address when prompted\n")
+	fmt.Printf("  3. Enter your namespace (or press Enter for 'default')\n")
+	fmt.Printf("  4. An API key will be generated and saved to ~/.debros/credentials.json\n\n")
 	fmt.Printf("Note: Authentication uses the currently active environment.\n")
-	fmt.Printf("      Use 'network-cli env current' to see your active environment.\n")
+	fmt.Printf("      Use 'dbn env current' to see your active environment.\n")
 }
 
 func handleAuthLogin() {
 	gatewayURL := getGatewayURL()
 	fmt.Printf("🔐 Authenticating with gateway at: %s\n", gatewayURL)
 
-	// Use the wallet authentication flow
-	creds, err := auth.PerformWalletAuthentication(gatewayURL)
+	// Use the simple authentication flow
+	creds, err := auth.PerformSimpleAuthentication(gatewayURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
 		os.Exit(1)
@@ -72,6 +77,7 @@ func handleAuthLogin() {
 	fmt.Printf("📁 Credentials saved to: %s\n", credsPath)
 	fmt.Printf("🎯 Wallet: %s\n", creds.Wallet)
 	fmt.Printf("🏢 Namespace: %s\n", creds.Namespace)
+	fmt.Printf("🔑 API Key: %s\n", creds.APIKey)
 }
 
 func handleAuthLogout() {
@@ -93,7 +99,7 @@ func handleAuthWhoami() {
 	creds, exists := store.GetCredentialsForGateway(gatewayURL)
 
 	if !exists || !creds.IsValid() {
-		fmt.Println("❌ Not authenticated - run 'network-cli auth login' to authenticate")
+		fmt.Println("❌ Not authenticated - run 'dbn auth login' to authenticate")
 		os.Exit(1)
 	}
 

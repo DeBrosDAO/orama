@@ -43,7 +43,7 @@ func HandleProdCommand(args []string) {
 
 func showProdHelp() {
 	fmt.Printf("Production Environment Commands\n\n")
-	fmt.Printf("Usage: network-cli prod <subcommand> [options]\n\n")
+	fmt.Printf("Usage: dbn prod <subcommand> [options]\n\n")
 	fmt.Printf("Subcommands:\n")
 	fmt.Printf("  install                   - Full production bootstrap (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
@@ -59,10 +59,10 @@ func showProdHelp() {
 	fmt.Printf("      --follow              - Follow logs in real-time\n")
 	fmt.Printf("  uninstall                 - Remove production services (requires root/sudo)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  sudo network-cli prod install --bootstrap\n")
-	fmt.Printf("  sudo network-cli prod install --peers /ip4/1.2.3.4/tcp/4001/p2p/Qm...\n")
-	fmt.Printf("  network-cli prod status\n")
-	fmt.Printf("  network-cli prod logs node --follow\n")
+	fmt.Printf("  sudo dbn prod install --bootstrap\n")
+	fmt.Printf("  sudo dbn prod install --peers /ip4/1.2.3.4/tcp/4001/p2p/Qm...\n")
+	fmt.Printf("  dbn prod status\n")
+	fmt.Printf("  dbn prod logs node --follow\n")
 }
 
 func handleProdInstall(args []string) {
@@ -236,12 +236,12 @@ func handleProdStatus() {
 		fmt.Printf("  ❌ %s not found\n", debrosDir)
 	}
 
-	fmt.Printf("\nView logs with: network-cli prod logs <service>\n")
+	fmt.Printf("\nView logs with: dbn prod logs <service>\n")
 }
 
 func handleProdLogs(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: network-cli prod logs <service> [--follow]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dbn prod logs <service> [--follow]\n")
 		os.Exit(1)
 	}
 

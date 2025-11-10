@@ -130,14 +130,23 @@ func (c *Client) GetPeerCount(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("peers request failed with status: %d", resp.StatusCode)
 	}
 
-	var peers []struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
-		return 0, fmt.Errorf("failed to decode peers response: %w", err)
+	// The /peers endpoint returns NDJSON (newline-delimited JSON), not a JSON array
+	// We need to stream-read each peer object
+	dec := json.NewDecoder(resp.Body)
+	peerCount := 0
+	for {
+		var peer map[string]interface{}
+		err := dec.Decode(&peer)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, fmt.Errorf("failed to decode peers response: %w", err)
+		}
+		peerCount++
 	}
 
-	return len(peers), nil
+	return peerCount, nil
 }
 
 // Add adds content to IPFS and returns the CID

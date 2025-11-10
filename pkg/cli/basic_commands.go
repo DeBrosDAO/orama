@@ -158,7 +158,7 @@ func HandlePeerIDCommand(format string, timeout time.Duration) {
 // HandlePubSubCommand handles pubsub commands
 func HandlePubSubCommand(args []string, format string, timeout time.Duration) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: network-cli pubsub <publish|subscribe|topics> [args...]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dbn pubsub <publish|subscribe|topics> [args...]\n")
 		os.Exit(1)
 	}
 
@@ -179,7 +179,7 @@ func HandlePubSubCommand(args []string, format string, timeout time.Duration) {
 	switch subcommand {
 	case "publish":
 		if len(args) < 3 {
-			fmt.Fprintf(os.Stderr, "Usage: network-cli pubsub publish <topic> <message>\n")
+			fmt.Fprintf(os.Stderr, "Usage: dbn pubsub publish <topic> <message>\n")
 			os.Exit(1)
 		}
 		err := cli.PubSub().Publish(ctx, args[1], []byte(args[2]))
@@ -191,7 +191,7 @@ func HandlePubSubCommand(args []string, format string, timeout time.Duration) {
 
 	case "subscribe":
 		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: network-cli pubsub subscribe <topic> [duration]\n")
+			fmt.Fprintf(os.Stderr, "Usage: dbn pubsub subscribe <topic> [duration]\n")
 			os.Exit(1)
 		}
 		duration := 30 * time.Second
@@ -243,7 +243,7 @@ func HandlePubSubCommand(args []string, format string, timeout time.Duration) {
 // Helper functions
 
 func createClient() (client.NetworkClient, error) {
-	config := client.DefaultClientConfig("network-cli")
+	config := client.DefaultClientConfig("dbn")
 
 	// Check for existing credentials using enhanced authentication
 	creds, err := auth.GetValidEnhancedCredentials()

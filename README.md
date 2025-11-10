@@ -34,7 +34,7 @@ DeBros Network is a decentralized peer-to-peer data platform built in Go. It com
 2. Generate local configuration (bootstrap, node2, node3, gateway):
 
    ```bash
-   ./bin/network-cli config init
+   ./bin/dbn config init
    ```
 
 3. Launch the full development stack:
@@ -48,10 +48,10 @@ DeBros Network is a decentralized peer-to-peer data platform built in Go. It com
 4. Validate the network from another terminal:
 
    ```bash
-   ./bin/network-cli health
-   ./bin/network-cli peers
-   ./bin/network-cli pubsub publish notifications "Hello World"
-   ./bin/network-cli pubsub subscribe notifications 10s
+   ./bin/dbn health
+   ./bin/dbn peers
+   ./bin/dbn pubsub publish notifications "Hello World"
+   ./bin/dbn pubsub subscribe notifications 10s
    ```
 
 ## Components & Ports
@@ -78,7 +78,7 @@ Validation reminders:
 - Bootstrap nodes cannot define a join address
 - Multiaddrs must end with `/p2p/<peerID>`
 
-Regenerate configs any time with `./bin/network-cli config init --force`.
+Regenerate configs any time with `./bin/dbn config init --force`.
 
 ## CLI Highlights
 
@@ -87,33 +87,33 @@ All commands accept `--format json`, `--timeout <duration>`, and `--bootstrap <m
 - **Auth**
 
   ```bash
-  ./bin/network-cli auth login
-  ./bin/network-cli auth status
-  ./bin/network-cli auth logout
+  ./bin/dbn auth login
+  ./bin/dbn auth status
+  ./bin/dbn auth logout
   ```
 
 - **Network**
 
   ```bash
-  ./bin/network-cli health
-  ./bin/network-cli status
-  ./bin/network-cli peers
+  ./bin/dbn health
+  ./bin/dbn status
+  ./bin/dbn peers
   ```
 
 - **Database**
 
   ```bash
-  ./bin/network-cli query "SELECT * FROM users"
-  ./bin/network-cli query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
-  ./bin/network-cli transaction --file ops.json
+  ./bin/dbn query "SELECT * FROM users"
+  ./bin/dbn query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
+  ./bin/dbn transaction --file ops.json
   ```
 
 - **Pub/Sub**
 
   ```bash
-  ./bin/network-cli pubsub publish <topic> <message>
-  ./bin/network-cli pubsub subscribe <topic> 30s
-  ./bin/network-cli pubsub topics
+  ./bin/dbn pubsub publish <topic> <message>
+  ./bin/dbn pubsub subscribe <topic> 30s
+  ./bin/dbn pubsub topics
   ```
 
 Credentials live at `~/.debros/credentials.json` with user-only permissions.
@@ -145,7 +145,7 @@ Common endpoints (see `openapi/gateway.yaml` for the full spec):
 
 - **Config directory errors**: Ensure `~/.debros/` exists, is writable, and has free disk space (`touch ~/.debros/test && rm ~/.debros/test`).
 - **Port conflicts**: Inspect with `lsof -i :4001` (or other ports) and stop conflicting processes or regenerate configs with new ports.
-- **Missing configs**: Run `./bin/network-cli config init` before starting nodes.
+- **Missing configs**: Run `./bin/dbn config init` before starting nodes.
 - **Cluster join issues**: Confirm the bootstrap node is running, `peer.info` multiaddr matches `bootstrap_peers`, and firewall rules allow the P2P ports.
 
 ## Resources

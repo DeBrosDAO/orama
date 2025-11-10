@@ -22,6 +22,7 @@ func (g *Gateway) Routes() http.Handler {
 	// New: issue JWT from API key; new: create or return API key for a wallet after verification
 	mux.HandleFunc("/v1/auth/token", g.apiKeyToJWTHandler)
 	mux.HandleFunc("/v1/auth/api-key", g.issueAPIKeyHandler)
+	mux.HandleFunc("/v1/auth/simple-key", g.simpleAPIKeyHandler)
 	mux.HandleFunc("/v1/auth/register", g.registerHandler)
 	mux.HandleFunc("/v1/auth/refresh", g.refreshHandler)
 	mux.HandleFunc("/v1/auth/logout", g.logoutHandler)

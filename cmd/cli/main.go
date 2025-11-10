@@ -34,7 +34,7 @@ func main() {
 
 	switch command {
 	case "version":
-		fmt.Printf("network-cli %s", version)
+		fmt.Printf("dbn %s", version)
 		if commit != "" {
 			fmt.Printf(" (commit %s)", commit)
 		}
@@ -60,7 +60,7 @@ func main() {
 				fmt.Printf("   Gateway URL: %s\n", env.GatewayURL)
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "Usage: network-cli %s enable\n", command)
+			fmt.Fprintf(os.Stderr, "Usage: dbn %s enable\n", command)
 			os.Exit(1)
 		}
 
@@ -89,7 +89,7 @@ func main() {
 	// Query command
 	case "query":
 		if len(args) == 0 {
-			fmt.Fprintf(os.Stderr, "Usage: network-cli query <sql>\n")
+			fmt.Fprintf(os.Stderr, "Usage: dbn query <sql>\n")
 			os.Exit(1)
 		}
 		cli.HandleQueryCommand(args[0], format, timeout)
@@ -101,7 +101,7 @@ func main() {
 	// Connect command
 	case "connect":
 		if len(args) == 0 {
-			fmt.Fprintf(os.Stderr, "Usage: network-cli connect <peer_address>\n")
+			fmt.Fprintf(os.Stderr, "Usage: dbn connect <peer_address>\n")
 			os.Exit(1)
 		}
 		cli.HandleConnectCommand(args[0], timeout)
@@ -136,7 +136,7 @@ func parseGlobalFlags(args []string) {
 
 func showHelp() {
 	fmt.Printf("Network CLI - Distributed P2P Network Management Tool\n\n")
-	fmt.Printf("Usage: network-cli <command> [args...]\n\n")
+	fmt.Printf("Usage: dbn <command> [args...]\n\n")
 
 	fmt.Printf("🌍 Environment Management:\n")
 	fmt.Printf("  env list                      - List available environments\n")
@@ -187,16 +187,16 @@ func showHelp() {
 
 	fmt.Printf("Examples:\n")
 	fmt.Printf("  # Switch to devnet\n")
-	fmt.Printf("  network-cli devnet enable\n\n")
+	fmt.Printf("  dbn devnet enable\n\n")
 
 	fmt.Printf("  # Authenticate and query\n")
-	fmt.Printf("  network-cli auth login\n")
-	fmt.Printf("  network-cli query \"SELECT * FROM users LIMIT 10\"\n\n")
+	fmt.Printf("  dbn auth login\n")
+	fmt.Printf("  dbn query \"SELECT * FROM users LIMIT 10\"\n\n")
 
 	fmt.Printf("  # Setup VPS (Linux only)\n")
-	fmt.Printf("  sudo network-cli setup\n\n")
+	fmt.Printf("  sudo dbn setup\n\n")
 
 	fmt.Printf("  # Manage services\n")
-	fmt.Printf("  sudo network-cli service status all\n")
-	fmt.Printf("  sudo network-cli service logs node --follow\n")
+	fmt.Printf("  sudo dbn service status all\n")
+	fmt.Printf("  sudo dbn service logs node --follow\n")
 }

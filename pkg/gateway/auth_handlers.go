@@ -1125,6 +1125,108 @@ func (g *Gateway) logoutHandler(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusBadRequest, "nothing to revoke: provide refresh_token or all=true")
 }
 
+// simpleAPIKeyHandler creates an API key directly from a wallet address without signature verification
+// This is a simplified flow for development/testing
+// Requires: POST { wallet, namespace }
+func (g *Gateway) simpleAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
+	if g.client == nil {
+		writeError(w, http.StatusServiceUnavailable, "client not initialized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		Wallet    string `json:"wallet"`
+		Namespace string `json:"namespace"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	if strings.TrimSpace(req.Wallet) == "" {
+		writeError(w, http.StatusBadRequest, "wallet is required")
+		return
+	}
+
+	ns := strings.TrimSpace(req.Namespace)
+	if ns == "" {
+		ns = strings.TrimSpace(g.cfg.ClientNamespace)
+		if ns == "" {
+			ns = "default"
+		}
+	}
+
+	ctx := r.Context()
+	internalCtx := client.WithInternalAuth(ctx)
+	db := g.client.Database()
+
+	// Resolve or create namespace
+	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", ns); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	nres, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
+	if err != nil || nres == nil || nres.Count == 0 || len(nres.Rows) == 0 || len(nres.Rows[0]) == 0 {
+		writeError(w, http.StatusInternalServerError, "failed to resolve namespace")
+		return
+	}
+	nsID := nres.Rows[0][0]
+
+	// Check if api key already exists for (namespace, wallet)
+	var apiKey string
+	r1, err := db.Query(internalCtx,
+		"SELECT api_keys.key FROM wallet_api_keys JOIN api_keys ON wallet_api_keys.api_key_id = api_keys.id WHERE wallet_api_keys.namespace_id = ? AND LOWER(wallet_api_keys.wallet) = LOWER(?) LIMIT 1",
+		nsID, req.Wallet,
+	)
+	if err == nil && r1 != nil && r1.Count > 0 && len(r1.Rows) > 0 && len(r1.Rows[0]) > 0 {
+		if s, ok := r1.Rows[0][0].(string); ok {
+			apiKey = s
+		} else {
+			b, _ := json.Marshal(r1.Rows[0][0])
+			_ = json.Unmarshal(b, &apiKey)
+		}
+	}
+
+	// If no existing key, create a new one
+	if strings.TrimSpace(apiKey) == "" {
+		buf := make([]byte, 18)
+		if _, err := rand.Read(buf); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate api key")
+			return
+		}
+		apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + ns
+
+		if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", apiKey, "", nsID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		// Link wallet to api key
+		rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", apiKey)
+		if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
+			apiKeyID := rid.Rows[0][0]
+			_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, strings.ToLower(req.Wallet), apiKeyID)
+		}
+	}
+
+	// Record ownerships (best-effort)
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, apiKey)
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, req.Wallet)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"api_key":   apiKey,
+		"namespace": ns,
+		"wallet":    strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(req.Wallet, "0x"), "0X")),
+		"created":   time.Now().Format(time.RFC3339),
+	})
+}
+
 // base58Decode decodes a base58-encoded string (Bitcoin alphabet)
 // Used for decoding Solana public keys (base58-encoded 32-byte ed25519 public keys)
 func base58Decode(encoded string) ([]byte, error) {

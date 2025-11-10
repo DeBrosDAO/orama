@@ -21,7 +21,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.60.1
+VERSION := 0.61.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -32,10 +32,10 @@ build: deps
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
 	go build -ldflags "$(LDFLAGS)" -o bin/node ./cmd/node
-	go build -ldflags "$(LDFLAGS)" -o bin/network-cli cmd/cli/main.go
+	go build -ldflags "$(LDFLAGS)" -o bin/dbn cmd/cli/main.go
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
-	@echo "Build complete! Run ./bin/network-cli version"
+	@echo "Build complete! Run ./bin/dbn version"
 
 # Install git hooks
 install-hooks:
@@ -53,7 +53,7 @@ clean:
 run-node:
 	@echo "Starting bootstrap node..."
 	@echo "Config: ~/.debros/bootstrap.yaml"
-	@echo "Generate it with: network-cli config init --type bootstrap"
+	@echo "Generate it with: dbn config init --type bootstrap"
 	go run ./cmd/node --config node.yaml
 
 # Run second node (regular) - requires join address of bootstrap node
@@ -61,7 +61,7 @@ run-node:
 run-node2:
 	@echo "Starting regular node (node.yaml)..."
 	@echo "Config: ~/.debros/node.yaml"
-	@echo "Generate it with: network-cli config init --type node --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
+	@echo "Generate it with: dbn config init --type node --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
 	go run ./cmd/node --config node2.yaml
 
 # Run third node (regular) - requires join address of bootstrap node
@@ -69,27 +69,27 @@ run-node2:
 run-node3:
 	@echo "Starting regular node (node2.yaml)..."
 	@echo "Config: ~/.debros/node2.yaml"
-	@echo "Generate it with: network-cli config init --type node --name node2.yaml --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
+	@echo "Generate it with: dbn config init --type node --name node2.yaml --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
 	go run ./cmd/node --config node3.yaml
 
 # Run gateway HTTP server
 # Usage examples:
 #   make run-gateway                                   # uses ~/.debros/gateway.yaml
-#   Config generated with: network-cli config init --type gateway
+#   Config generated with: dbn config init --type gateway
 run-gateway:
 	@echo "Starting gateway HTTP server..."
 	@echo "Note: Config must be in ~/.debros/gateway.yaml"
-	@echo "Generate it with: network-cli config init --type gateway"
+	@echo "Generate it with: dbn config init --type gateway"
 	go run ./cmd/gateway
 
 # Development environment target
-# Uses network-cli dev up to start full stack with dependency and port checking
+# Uses dbn dev up to start full stack with dependency and port checking
 dev: build
-	@./bin/network-cli dev up
+	@./bin/dbn dev up
 
-# Kill all processes using network-cli dev down
+# Kill all processes using dbn dev down
 kill:
-	@./bin/network-cli dev down
+	@./bin/dbn dev down
 
 # Help
 help:
@@ -108,9 +108,9 @@ help:
 	@echo "                 - Includes comprehensive logging"
 	@echo "  make kill     - Stop all development services"
 	@echo ""
-	@echo "Development Management (via network-cli):"
-	@echo "  ./bin/network-cli dev status  - Show status of all dev services"
-	@echo "  ./bin/network-cli dev logs <component> [--follow]"
+	@echo "Development Management (via dbn):"
+	@echo "  ./bin/dbn dev status  - Show status of all dev services"
+	@echo "  ./bin/dbn dev logs <component> [--follow]"
 	@echo ""
 	@echo "Individual Node Targets (advanced):"
 	@echo "  run-node      - Start bootstrap node directly"

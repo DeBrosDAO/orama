@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # DeBros Network Installation Script
-# Downloads network-cli from GitHub releases and runs the new 'network-cli prod install' flow
+# Downloads dbn from GitHub releases and runs the new 'dbn prod install' flow
 # 
 # Supported: Ubuntu 20.04+, Debian 11+
 # 
@@ -124,18 +124,18 @@ download_and_install_cli() {
     BINARY_NAME="network-cli_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}"
     DOWNLOAD_URL="$GITHUB_REPO/releases/download/$LATEST_RELEASE/$BINARY_NAME"
     
-    log "Downloading network-cli from GitHub releases..."
-    if ! curl -fsSL -o /tmp/network-cli "https://github.com/$DOWNLOAD_URL"; then
-        error "Failed to download network-cli"
+    log "Downloading dbn from GitHub releases..."
+    if ! curl -fsSL -o /tmp/dbn "https://github.com/$DOWNLOAD_URL"; then
+        error "Failed to download dbn"
         exit 1
     fi
     
-    chmod +x /tmp/network-cli
+    chmod +x /tmp/dbn
     
-    log "Installing network-cli to $INSTALL_DIR..."
-    mv /tmp/network-cli "$INSTALL_DIR/network-cli"
+    log "Installing dbn to $INSTALL_DIR..."
+    mv /tmp/dbn "$INSTALL_DIR/dbn"
     
-    success "network-cli installed successfully"
+    success "dbn installed successfully"
 }
 
 # Main flow
@@ -157,14 +157,14 @@ echo ""
 echo -e "${CYAN}Next, run the production setup:${NOCOLOR}"
 echo ""
 echo "Bootstrap node (first node):"
-echo -e "  ${BLUE}sudo network-cli prod install --bootstrap${NOCOLOR}"
+echo -e "  ${BLUE}sudo dbn prod install --bootstrap${NOCOLOR}"
 echo ""
 echo "Secondary node (join existing cluster):"
-echo -e "  ${BLUE}sudo network-cli prod install --vps-ip <bootstrap_ip> --peers <multiaddr>${NOCOLOR}"
+echo -e "  ${BLUE}sudo dbn prod install --vps-ip <bootstrap_ip> --peers <multiaddr>${NOCOLOR}"
 echo ""
 echo "With HTTPS/domain:"
-echo -e "  ${BLUE}sudo network-cli prod install --bootstrap --domain example.com${NOCOLOR}"
+echo -e "  ${BLUE}sudo dbn prod install --bootstrap --domain example.com${NOCOLOR}"
 echo ""
 echo "For more help:"
-echo -e "  ${BLUE}network-cli prod --help${NOCOLOR}"
+echo -e "  ${BLUE}dbn prod --help${NOCOLOR}"
 echo ""

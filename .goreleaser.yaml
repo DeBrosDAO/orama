@@ -1,6 +1,6 @@
 # GoReleaser Configuration for DeBros Network
-# Builds and releases the network-cli binary for multiple platforms
-# Other binaries (node, gateway, identity) are installed via: network-cli setup
+# Builds and releases the dbn binary for multiple platforms
+# Other binaries (node, gateway, identity) are installed via: dbn setup
 
 project_name: debros-network
 
@@ -8,10 +8,10 @@ env:
   - GO111MODULE=on
 
 builds:
-  # network-cli binary - only build the CLI
-  - id: network-cli
+  # dbn binary - only build the CLI
+  - id: dbn
     main: ./cmd/cli
-    binary: network-cli
+    binary: dbn
     goos:
       - linux
       - darwin
@@ -23,10 +23,10 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
-    mod_timestamp: '{{ .CommitTimestamp }}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  # Tar.gz archives for network-cli
+  # Tar.gz archives for dbn
   - id: binaries
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -50,10 +50,10 @@ changelog:
   abbrev: -1
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
-      - '^ci:'
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
       - Merge pull request
       - Merge branch
 

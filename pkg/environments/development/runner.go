@@ -226,6 +226,107 @@ func readIPFSConfigValue(ctx context.Context, repoPath string, key string) (stri
 	return "", fmt.Errorf("key %s not found in IPFS config", key)
 }
 
+// configureIPFSRepo directly modifies IPFS config JSON to set addresses, bootstrap, and CORS headers
+// This avoids shell commands which fail on some systems and instead manipulates the config directly
+// Returns the peer ID from the config
+func configureIPFSRepo(repoPath string, apiPort, gatewayPort, swarmPort int) (string, error) {
+	configPath := filepath.Join(repoPath, "config")
+
+	// Read existing config
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read IPFS config: %w", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", fmt.Errorf("failed to parse IPFS config: %w", err)
+	}
+
+	// Set Addresses
+	config["Addresses"] = map[string]interface{}{
+		"API":     []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", apiPort)},
+		"Gateway": []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", gatewayPort)},
+		"Swarm": []string{
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", swarmPort),
+			fmt.Sprintf("/ip6/::/tcp/%d", swarmPort),
+		},
+	}
+
+	// Disable AutoConf for private swarm
+	config["AutoConf"] = map[string]interface{}{
+		"Enabled": false,
+	}
+
+	// Clear Bootstrap (will be set via HTTP API after startup)
+	config["Bootstrap"] = []string{}
+
+	// Clear DNS Resolvers
+	if dns, ok := config["DNS"].(map[string]interface{}); ok {
+		dns["Resolvers"] = map[string]interface{}{}
+	} else {
+		config["DNS"] = map[string]interface{}{
+			"Resolvers": map[string]interface{}{},
+		}
+	}
+
+	// Clear Routing DelegatedRouters
+	if routing, ok := config["Routing"].(map[string]interface{}); ok {
+		routing["DelegatedRouters"] = []string{}
+	} else {
+		config["Routing"] = map[string]interface{}{
+			"DelegatedRouters": []string{},
+		}
+	}
+
+	// Clear IPNS DelegatedPublishers
+	if ipns, ok := config["Ipns"].(map[string]interface{}); ok {
+		ipns["DelegatedPublishers"] = []string{}
+	} else {
+		config["Ipns"] = map[string]interface{}{
+			"DelegatedPublishers": []string{},
+		}
+	}
+
+	// Set API HTTPHeaders with CORS (must be map[string][]string)
+	if api, ok := config["API"].(map[string]interface{}); ok {
+		api["HTTPHeaders"] = map[string][]string{
+			"Access-Control-Allow-Origin":   {"*"},
+			"Access-Control-Allow-Methods":  {"GET", "PUT", "POST", "DELETE", "OPTIONS"},
+			"Access-Control-Allow-Headers":  {"Content-Type", "X-Requested-With"},
+			"Access-Control-Expose-Headers": {"Content-Length", "Content-Range"},
+		}
+	} else {
+		config["API"] = map[string]interface{}{
+			"HTTPHeaders": map[string][]string{
+				"Access-Control-Allow-Origin":   {"*"},
+				"Access-Control-Allow-Methods":  {"GET", "PUT", "POST", "DELETE", "OPTIONS"},
+				"Access-Control-Allow-Headers":  {"Content-Type", "X-Requested-With"},
+				"Access-Control-Expose-Headers": {"Content-Length", "Content-Range"},
+			},
+		}
+	}
+
+	// Write config back
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal IPFS config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, updatedData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write IPFS config: %w", err)
+	}
+
+	// Extract and return peer ID
+	if id, ok := config["Identity"].(map[string]interface{}); ok {
+		if peerID, ok := id["PeerID"].(string); ok {
+			return peerID, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not extract peer ID from config")
+}
+
 // seedIPFSPeersWithHTTP configures each IPFS node to bootstrap with its local peers using HTTP API
 func (pm *ProcessManager) seedIPFSPeersWithHTTP(ctx context.Context, nodes []ipfsNodeInfo) error {
 	fmt.Fprintf(pm.logWriter, "  Seeding IPFS local bootstrap peers via HTTP API...\n")
@@ -332,44 +433,11 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 			}
 		}
 
-		// Always reapply address settings to ensure correct ports (before daemon starts)
-		apiAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", nodes[i].apiPort)
-		gatewayAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", nodes[i].gatewayPort)
-		swarmAddrs := fmt.Sprintf("[\"/ip4/0.0.0.0/tcp/%d\", \"/ip6/::/tcp/%d\"]", nodes[i].swarmPort, nodes[i].swarmPort)
-
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "Addresses.API", apiAddr).Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to set API address: %v\n", err)
-		}
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "Addresses.Gateway", gatewayAddr).Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to set Gateway address: %v\n", err)
-		}
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Addresses.Swarm", swarmAddrs).Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to set Swarm addresses: %v\n", err)
-		}
-
-		// Ensure AutoConf is disabled for private swarm repos to avoid mainnet autoconf error
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "AutoConf.Enabled", "false").Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to disable AutoConf for %s: %v\n", nodes[i].name, err)
-		}
-
-		// Clear 'auto' placeholders that are invalid when AutoConf is disabled
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Bootstrap", "[]").Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear Bootstrap for %s: %v\n", nodes[i].name, err)
-		}
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "DNS.Resolvers", "[]").Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear DNS.Resolvers for %s: %v\n", nodes[i].name, err)
-		}
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Routing.DelegatedRouters", "[]").Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear Routing.DelegatedRouters for %s: %v\n", nodes[i].name, err)
-		}
-		if err := exec.CommandContext(ctx, "ipfs", "config", "--repo-dir="+nodes[i].ipfsPath, "--json", "Ipns.DelegatedPublishers", "[]").Run(); err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to clear Ipns.DelegatedPublishers for %s: %v\n", nodes[i].name, err)
-		}
-
-		// Read peer ID from config BEFORE daemon starts
-		peerID, err := readIPFSConfigValue(ctx, nodes[i].ipfsPath, "PeerID")
+		// Configure the IPFS config directly (addresses, bootstrap, DNS, routing, CORS headers)
+		// This replaces shell commands which can fail on some systems
+		peerID, err := configureIPFSRepo(nodes[i].ipfsPath, nodes[i].apiPort, nodes[i].gatewayPort, nodes[i].swarmPort)
 		if err != nil {
-			fmt.Fprintf(pm.logWriter, "    Warning: failed to read peer ID for %s: %v\n", nodes[i].name, err)
+			fmt.Fprintf(pm.logWriter, "    Warning: failed to configure IPFS repo for %s: %v\n", nodes[i].name, err)
 		} else {
 			nodes[i].peerID = peerID
 			fmt.Fprintf(pm.logWriter, "    Peer ID for %s: %s\n", nodes[i].name, peerID)
@@ -662,14 +730,24 @@ func (pm *ProcessManager) waitClusterFormed(ctx context.Context, bootstrapRestAP
 		httpURL := fmt.Sprintf("http://127.0.0.1:%d/peers", bootstrapRestAPIPort)
 		resp, err := http.Get(httpURL)
 		if err == nil && resp.StatusCode == 200 {
-			var peers []interface{}
-			if err := json.NewDecoder(resp.Body).Decode(&peers); err == nil {
-				resp.Body.Close()
-				if len(peers) >= requiredPeers {
-					return nil // All peers have formed
+			// The /peers endpoint returns NDJSON (newline-delimited JSON), not a JSON array
+			// We need to stream-read each peer object
+			dec := json.NewDecoder(resp.Body)
+			peerCount := 0
+			for {
+				var peer interface{}
+				err := dec.Decode(&peer)
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					break // Stop on parse error
 				}
-			} else {
-				resp.Body.Close()
+				peerCount++
+			}
+			resp.Body.Close()
+			if peerCount >= requiredPeers {
+				return nil // All peers have formed
 			}
 		}
 		if resp != nil {
