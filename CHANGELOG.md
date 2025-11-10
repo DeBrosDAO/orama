@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.63.3] - 2025-11-10
+
+### Added
+\n
+### Changed
+- Improved RQLite cluster stability by automatically clearing stale Raft state on startup if peers have a higher log index, allowing the node to join cleanly.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.63.2] - 2025-11-10
 
 ### Added

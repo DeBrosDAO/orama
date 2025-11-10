@@ -774,6 +774,61 @@ func (r *RQLiteManager) checkNeedsClusterRecovery(rqliteDataDir string) (bool, e
 	return false, nil
 }
 
+// hasExistingRaftState checks if this node has any existing Raft state files
+// Returns true if raft.db exists and has content, or if peers.json exists
+func (r *RQLiteManager) hasExistingRaftState(rqliteDataDir string) bool {
+	// Check for raft.db
+	raftLogPath := filepath.Join(rqliteDataDir, "raft.db")
+	if info, err := os.Stat(raftLogPath); err == nil {
+		// If raft.db exists and has meaningful content (> 1KB), we have state
+		if info.Size() > 1024 {
+			return true
+		}
+	}
+
+	// Check for peers.json
+	peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
+	if _, err := os.Stat(peersPath); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// clearRaftState safely removes Raft state files to allow a clean join
+// This removes raft.db and peers.json but preserves db.sqlite
+func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
+	r.logger.Warn("Clearing Raft state to allow clean cluster join",
+		zap.String("data_dir", rqliteDataDir))
+
+	// Remove raft.db if it exists
+	raftLogPath := filepath.Join(rqliteDataDir, "raft.db")
+	if err := os.Remove(raftLogPath); err != nil && !os.IsNotExist(err) {
+		r.logger.Warn("Failed to remove raft.db", zap.Error(err))
+	} else if err == nil {
+		r.logger.Info("Removed raft.db")
+	}
+
+	// Remove peers.json if it exists
+	peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
+	if err := os.Remove(peersPath); err != nil && !os.IsNotExist(err) {
+		r.logger.Warn("Failed to remove peers.json", zap.Error(err))
+	} else if err == nil {
+		r.logger.Info("Removed peers.json")
+	}
+
+	// Remove raft directory if it's empty
+	raftDir := filepath.Join(rqliteDataDir, "raft")
+	if entries, err := os.ReadDir(raftDir); err == nil && len(entries) == 0 {
+		if err := os.Remove(raftDir); err != nil {
+			r.logger.Debug("Failed to remove empty raft directory", zap.Error(err))
+		}
+	}
+
+	r.logger.Info("Raft state cleared successfully - node will join as fresh follower")
+	return nil
+}
+
 // performPreStartClusterDiscovery waits for peer discovery and builds a complete peers.json
 // before starting RQLite. This ensures all nodes use the same cluster membership for recovery.
 func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rqliteDataDir string) error {
@@ -832,6 +887,38 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		r.logger.Info("No peers discovered during pre-start discovery window - skipping recovery (fresh bootstrap)",
 			zap.Int("discovered_peers", discoveredPeers))
 		return nil
+	}
+
+	// AUTOMATIC RECOVERY: Check if we have stale Raft state that conflicts with cluster
+	// If we have existing state but peers have higher log indexes, clear our state to allow clean join
+	allPeers := r.discoveryService.GetAllPeers()
+	hasExistingState := r.hasExistingRaftState(rqliteDataDir)
+
+	if hasExistingState {
+		// Find the highest log index among other peers (excluding ourselves)
+		maxPeerIndex := uint64(0)
+		for _, peer := range allPeers {
+			// Skip ourselves (compare by raft address)
+			if peer.NodeID == r.discoverConfig.RaftAdvAddress {
+				continue
+			}
+			if peer.RaftLogIndex > maxPeerIndex {
+				maxPeerIndex = peer.RaftLogIndex
+			}
+		}
+
+		// If peers have meaningful log history (> 0) and we have stale state, clear it
+		// This handles the case where we're starting with old state but the cluster has moved on
+		if maxPeerIndex > 0 {
+			r.logger.Warn("Detected stale Raft state - clearing to allow clean cluster join",
+				zap.Uint64("peer_max_log_index", maxPeerIndex),
+				zap.String("data_dir", rqliteDataDir))
+
+			if err := r.clearRaftState(rqliteDataDir); err != nil {
+				r.logger.Error("Failed to clear Raft state", zap.Error(err))
+				// Continue anyway - rqlite might still be able to recover
+			}
+		}
 	}
 
 	// Trigger final sync to ensure peers.json is up to date with latest discovered peers
