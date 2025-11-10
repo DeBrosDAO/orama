@@ -128,21 +128,24 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
-	// Phase 2c: Initialize services
+	// Determine node type early
 	nodeType := "node"
 	if isBootstrap {
 		nodeType = "bootstrap"
 	}
-	fmt.Printf("\nPhase 2c: Initializing services...\n")
-	if err := setup.Phase2cInitializeServices(nodeType); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
-		os.Exit(1)
-	}
 
-	// Phase 3: Generate secrets
+	// Phase 3: Generate secrets FIRST (before service initialization)
+	// This ensures cluster secret and swarm key exist before repos are seeded
 	fmt.Printf("\n🔐 Phase 3: Generating secrets...\n")
 	if err := setup.Phase3GenerateSecrets(isBootstrap); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Secret generation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Phase 2c: Initialize services (after secrets are in place)
+	fmt.Printf("\nPhase 2c: Initializing services...\n")
+	if err := setup.Phase2cInitializeServices(nodeType); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -161,8 +164,8 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
-	// Log completion
-	setup.LogSetupComplete("< peer ID from config >")
+	// Log completion with actual peer ID
+	setup.LogSetupComplete(setup.NodePeerID)
 	fmt.Printf("✅ Production installation complete!\n\n")
 }
 
@@ -205,27 +208,49 @@ func handleProdUpgrade(args []string) {
 func handleProdStatus() {
 	fmt.Printf("Production Environment Status\n\n")
 
-	servicesList := []struct {
-		name string
-		desc string
-	}{
-		{"debros-ipfs-bootstrap", "IPFS Daemon (Bootstrap)"},
-		{"debros-ipfs-cluster-bootstrap", "IPFS Cluster (Bootstrap)"},
-		{"debros-rqlite-bootstrap", "RQLite Database (Bootstrap)"},
-		{"debros-olric", "Olric Cache Server"},
-		{"debros-node-bootstrap", "DeBros Node (Bootstrap)"},
-		{"debros-gateway", "DeBros Gateway"},
+	// Check for all possible service names (bootstrap and node variants)
+	serviceNames := []string{
+		"debros-ipfs-bootstrap",
+		"debros-ipfs-node",
+		"debros-ipfs-cluster-bootstrap",
+		"debros-ipfs-cluster-node",
+		"debros-rqlite-bootstrap",
+		"debros-rqlite-node",
+		"debros-olric",
+		"debros-node-bootstrap",
+		"debros-node-node",
+		"debros-gateway",
+	}
+
+	// Friendly descriptions
+	descriptions := map[string]string{
+		"debros-ipfs-bootstrap":         "IPFS Daemon (Bootstrap)",
+		"debros-ipfs-node":              "IPFS Daemon (Node)",
+		"debros-ipfs-cluster-bootstrap": "IPFS Cluster (Bootstrap)",
+		"debros-ipfs-cluster-node":      "IPFS Cluster (Node)",
+		"debros-rqlite-bootstrap":       "RQLite Database (Bootstrap)",
+		"debros-rqlite-node":            "RQLite Database (Node)",
+		"debros-olric":                  "Olric Cache Server",
+		"debros-node-bootstrap":         "DeBros Node (Bootstrap)",
+		"debros-node-node":              "DeBros Node (Node)",
+		"debros-gateway":                "DeBros Gateway",
 	}
 
 	fmt.Printf("Services:\n")
-	for _, svc := range servicesList {
-		cmd := "systemctl"
-		err := exec.Command(cmd, "is-active", "--quiet", svc.name).Run()
+	found := false
+	for _, svc := range serviceNames {
+		cmd := exec.Command("systemctl", "is-active", "--quiet", svc)
+		err := cmd.Run()
 		status := "❌ Inactive"
 		if err == nil {
 			status = "✅ Active"
+			found = true
 		}
-		fmt.Printf("  %s: %s\n", status, svc.desc)
+		fmt.Printf("  %s: %s\n", status, descriptions[svc])
+	}
+
+	if !found {
+		fmt.Printf("  (No services found - installation may be incomplete)\n")
 	}
 
 	fmt.Printf("\nDirectories:\n")

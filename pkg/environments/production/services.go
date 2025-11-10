@@ -81,8 +81,8 @@ User=debros
 Group=debros
 WorkingDirectory=%s
 Environment=HOME=%s
-Environment=CLUSTER_PATH=%s
-ExecStart=/usr/local/bin/ipfs-cluster-service daemon --config %s/service.json
+Environment=IPFS_CLUSTER_PATH=%s
+ExecStart=/usr/local/bin/ipfs-cluster-service daemon
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -96,7 +96,7 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, clusterPath, clusterPath, nodeType, ssg.debrosDir)
+`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, clusterPath, nodeType, ssg.debrosDir)
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit

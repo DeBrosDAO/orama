@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -29,6 +30,7 @@ type ProductionSetup struct {
 	serviceController *SystemdController
 	binaryInstaller   *BinaryInstaller
 	branch            string
+	NodePeerID        string // Captured during Phase3 for later display
 }
 
 // NewProductionSetup creates a new production setup orchestrator
@@ -199,27 +201,23 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 	ps.logf("Phase 2c: Initializing services...")
 
-	// Get cluster secret for IPFS
-	clusterSecret, err := os.ReadFile(ps.debrosDir + "/secrets/cluster-secret")
-	if err != nil {
-		clusterSecret = []byte("")
-	}
+	// Build paths with nodeType awareness to match systemd unit definitions
+	dataDir := filepath.Join(ps.debrosDir, "data", nodeType)
 
-	// Initialize IPFS repo
-	ipfsRepoPath := ps.debrosDir + "/data/ipfs"
-	if err := ps.binaryInstaller.InitializeIPFSRepo(nodeType, ipfsRepoPath, ps.debrosDir+"/secrets/swarm.key"); err != nil {
+	// Initialize IPFS repo with correct path structure
+	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
+	if err := ps.binaryInstaller.InitializeIPFSRepo(nodeType, ipfsRepoPath, filepath.Join(ps.debrosDir, "secrets", "swarm.key")); err != nil {
 		ps.logf("  ⚠️  IPFS initialization warning: %v", err)
 	}
 
-	// Initialize IPFS Cluster config
-	clusterPath := ps.debrosDir + "/data/ipfs-cluster"
-	ipfsAPIPort := 4501
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, string(clusterSecret), ipfsAPIPort); err != nil {
+	// Initialize IPFS Cluster path (just ensure directory exists, actual init happens in daemon startup)
+	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, "", 4501); err != nil {
 		ps.logf("  ⚠️  IPFS Cluster initialization warning: %v", err)
 	}
 
 	// Initialize RQLite data directory
-	rqliteDataDir := ps.debrosDir + "/data/rqlite"
+	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	if err := ps.binaryInstaller.InitializeRQLiteDataDir(nodeType, rqliteDataDir); err != nil {
 		ps.logf("  ⚠️  RQLite initialization warning: %v", err)
 	}
@@ -254,7 +252,9 @@ func (ps *ProductionSetup) Phase3GenerateSecrets(isBootstrap bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to ensure node identity: %w", err)
 	}
-	ps.logf("  ✓ Node identity ensured (Peer ID: %s)", peerID.String())
+	peerIDStr := peerID.String()
+	ps.NodePeerID = peerIDStr // Capture for later display
+	ps.logf("  ✓ Node identity ensured (Peer ID: %s)", peerIDStr)
 
 	return nil
 }

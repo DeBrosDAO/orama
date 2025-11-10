@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // BinaryInstaller handles downloading and installing external binaries
@@ -227,9 +226,11 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS repo for %s...\n", nodeType)
 
-	os.MkdirAll(ipfsRepoPath, 0755)
+	if err := os.MkdirAll(ipfsRepoPath, 0755); err != nil {
+		return fmt.Errorf("failed to create IPFS repo directory: %w", err)
+	}
 
-	// Initialize IPFS
+	// Initialize IPFS with the correct repo path
 	cmd := exec.Command("ipfs", "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
@@ -237,13 +238,20 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 
 	// Copy swarm key if present
 	if data, err := os.ReadFile(swarmKeyPath); err == nil {
-		os.WriteFile(filepath.Join(ipfsRepoPath, "swarm.key"), data, 0600)
+		if err := os.WriteFile(filepath.Join(ipfsRepoPath, "swarm.key"), data, 0600); err != nil {
+			return fmt.Errorf("failed to copy swarm key: %w", err)
+		}
 	}
+
+	// Fix ownership
+	exec.Command("chown", "-R", "debros:debros", ipfsRepoPath).Run()
 
 	return nil
 }
 
 // InitializeIPFSClusterConfig initializes IPFS Cluster configuration
+// Note: This is a placeholder config. The full initialization will occur via `ipfs-cluster-service init`
+// which is run during Phase2cInitializeServices with the IPFS_CLUSTER_PATH env var set.
 func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret string, ipfsAPIPort int) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	if _, err := os.Stat(serviceJSONPath); err == nil {
@@ -251,43 +259,10 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 		return nil
 	}
 
-	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS Cluster config for %s...\n", nodeType)
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Preparing IPFS Cluster path for %s...\n", nodeType)
 
-	os.MkdirAll(clusterPath, 0755)
-
-	// For now, just create a minimal service.json
-	// This will be properly configured during service startup
-	cfgContent := fmt.Sprintf(`{
-  "cluster": {
-    "peername": "%s",
-    "secret": "%s",
-    "listen_multiaddress": ["/ip4/0.0.0.0/tcp/9096"],
-    "leave_on_shutdown": false
-  },
-  "api": {
-    "restapi": {
-      "http_listen_multiaddress": "/ip4/0.0.0.0/tcp/9094"
-    }
-  },
-  "ipfs_connector": {
-    "ipfshttp": {
-      "node_multiaddress": "/ip4/127.0.0.1/tcp/%d"
-    }
-  },
-  "consensus": {
-    "crdt": {
-      "cluster_name": "debros",
-      "trusted_peers": ["*"]
-    }
-  },
-  "datastore": {
-    "type": "badger",
-    "path": "%s/badger"
-  }
-}`, nodeType, strings.TrimSpace(clusterSecret), ipfsAPIPort, clusterPath)
-
-	if err := os.WriteFile(serviceJSONPath, []byte(cfgContent), 0644); err != nil {
-		return fmt.Errorf("failed to write cluster config: %w", err)
+	if err := os.MkdirAll(clusterPath, 0755); err != nil {
+		return fmt.Errorf("failed to create IPFS Cluster directory: %w", err)
 	}
 
 	exec.Command("chown", "-R", "debros:debros", clusterPath).Run()

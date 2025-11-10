@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.62.0] - 2025-11-10
+
+### Added
+- The `prod status` command now correctly checks for both 'bootstrap' and 'node' service variants.
+
+### Changed
+- The production installation process now generates secrets (like the cluster secret and peer ID) before initializing services. This ensures all necessary secrets are available when services start.
+- The `prod install` command now displays the actual Peer ID upon completion instead of a placeholder.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where IPFS Cluster initialization was using a hardcoded configuration file instead of relying on the standard `ipfs-cluster-service init` process.
+
 ## [0.61.0] - 2025-11-10
 
 ### Added
