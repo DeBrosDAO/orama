@@ -59,7 +59,8 @@ func TestClient_Add(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		expectedCID := "QmTest123"
 		expectedName := "test.txt"
-		expectedSize := int64(100)
+		testContent := "test content"
+		expectedSize := int64(len(testContent)) // Client overrides server size with actual content length
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/add" {
@@ -89,10 +90,11 @@ func TestClient_Add(t *testing.T) {
 			// Read file content
 			_, _ = io.ReadAll(file)
 
+			// Return a different size to verify the client correctly overrides it
 			response := AddResponse{
 				Cid:  expectedCID,
 				Name: expectedName,
-				Size: expectedSize,
+				Size: 999, // Client will override this with actual content size
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
@@ -105,7 +107,7 @@ func TestClient_Add(t *testing.T) {
 			t.Fatalf("Failed to create client: %v", err)
 		}
 
-		reader := strings.NewReader("test content")
+		reader := strings.NewReader(testContent)
 		resp, err := client.Add(context.Background(), reader, expectedName)
 		if err != nil {
 			t.Fatalf("Failed to add content: %v", err)
