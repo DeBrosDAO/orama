@@ -67,7 +67,7 @@ Use `make dev` for the complete stack or run binaries individually with `go run 
 
 All runtime configuration lives in `~/.debros/`.
 
-- `bootstrap.yaml`: `type: bootstrap`, blank `database.rqlite_join_address`
+- `bootstrap.yaml`: `type: bootstrap`, optionally set `database.rqlite_join_address` to join another bootstrap's cluster
 - `node*.yaml`: `type: node`, set `database.rqlite_join_address` (e.g. `localhost:7001`) and include the bootstrap `discovery.bootstrap_peers`
 - `gateway.yaml`: configure `gateway.bootstrap_peers`, `gateway.namespace`, and optional auth flags
 
@@ -75,7 +75,7 @@ Validation reminders:
 
 - HTTP and Raft ports must differ
 - Non-bootstrap nodes require a join address and bootstrap peers
-- Bootstrap nodes cannot define a join address
+- Bootstrap nodes can optionally define a join address to synchronize with another bootstrap
 - Multiaddrs must end with `/p2p/<peerID>`
 
 Regenerate configs any time with `./bin/dbn config init --force`.

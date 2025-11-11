@@ -183,7 +183,7 @@ func TestValidateRQLiteJoinAddress(t *testing.T) {
 	}{
 		{"node with join", "node", "localhost:5001", false},
 		{"node without join", "node", "", true},
-		{"bootstrap with join", "bootstrap", "localhost:5001", true},
+		{"bootstrap with join", "bootstrap", "localhost:5001", false},
 		{"bootstrap without join", "bootstrap", "", false},
 		{"invalid join format", "node", "localhost", true},
 		{"invalid join port", "node", "localhost:99999", true},

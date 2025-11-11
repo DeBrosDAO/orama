@@ -493,12 +493,7 @@ func (c *Config) validateCrossFields() []error {
 	}
 
 	// Cross-check rqlite_join_address vs node type
-	if c.Node.Type == "bootstrap" && c.Database.RQLiteJoinAddress != "" {
-		errs = append(errs, ValidationError{
-			Path:    "database.rqlite_join_address",
-			Message: "must be empty for bootstrap node type",
-		})
-	}
+	// Note: Bootstrap nodes can optionally join another bootstrap's cluster
 
 	if c.Node.Type == "node" && c.Database.RQLiteJoinAddress == "" {
 		errs = append(errs, ValidationError{

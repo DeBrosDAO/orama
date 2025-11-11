@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.66.1] - 2025-11-11
+
+### Added
+\n
+### Changed
+- Allow bootstrap nodes to optionally define a join address to synchronize with another bootstrap cluster.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.66.0] - 2025-11-11
 
 ### Added
