@@ -415,10 +415,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	if err != nil {
 		return fmt.Errorf("ipfs-cluster-service binary not available: %w", err)
 	}
-	rqliteBinary, err := ps.binaryInstaller.ResolveBinaryPath("rqlited", "/usr/local/bin/rqlited", "/usr/bin/rqlited")
-	if err != nil {
-		return fmt.Errorf("rqlited binary not available: %w", err)
-	}
+	// Note: rqlited binary is not needed as a separate service - node manages RQLite internally
 	olricBinary, err := ps.binaryInstaller.ResolveBinaryPath("olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server")
 	if err != nil {
 		return fmt.Errorf("olric-server binary not available: %w", err)
@@ -440,25 +437,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 	ps.logf("  ✓ IPFS Cluster service created: %s", clusterUnitName)
 
-	// RQLite service with join address for non-bootstrap nodes
-	rqliteJoinAddr := ""
-	if nodeType != "bootstrap" && vpsIP != "" {
-		rqliteJoinAddr = vpsIP + ":7001"
-	}
-
-	// Log the advertise configuration for verification
-	advertiseIP := vpsIP
-	if advertiseIP == "" {
-		advertiseIP = "127.0.0.1"
-	}
-	ps.logf("  RQLite will advertise: %s (advertise IP: %s)", rqliteJoinAddr, advertiseIP)
-
-	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(nodeType, rqliteBinary, 5001, 7001, rqliteJoinAddr, advertiseIP)
-	rqliteUnitName := fmt.Sprintf("debros-rqlite-%s.service", nodeType)
-	if err := ps.serviceController.WriteServiceUnit(rqliteUnitName, rqliteUnit); err != nil {
-		return fmt.Errorf("failed to write RQLite service: %w", err)
-	}
-	ps.logf("  ✓ RQLite service created: %s", rqliteUnitName)
+	// Note: RQLite is managed internally by the node process, not as a separate systemd service
+	ps.logf("  ℹ️  RQLite will be managed by the node process")
 
 	// Olric service
 	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
@@ -488,8 +468,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable services
-	services := []string{unitName, clusterUnitName, rqliteUnitName, "debros-olric.service", nodeUnitName, "debros-gateway.service"}
+	// Enable services (RQLite is managed by node, not as separate service)
+	services := []string{unitName, clusterUnitName, "debros-olric.service", nodeUnitName, "debros-gateway.service"}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -501,8 +481,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	// Start services in dependency order
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, RQLite, Olric)
-	infraServices := []string{unitName, rqliteUnitName, "debros-olric.service"}
+	// Start infrastructure first (IPFS, Olric) - RQLite is managed by node
+	infraServices := []string{unitName, "debros-olric.service"}
 	for _, svc := range infraServices {
 		if err := ps.serviceController.StartService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)

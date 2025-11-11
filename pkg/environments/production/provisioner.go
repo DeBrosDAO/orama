@@ -55,18 +55,26 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure(nodeType string) error
 	}
 
 	// Create log files with correct permissions so systemd can write to them
+	// Only create logs for the specific nodeType being installed
 	logsDir := filepath.Join(fp.debrosDir, "logs")
 	logFiles := []string{
 		"olric.log",
 		"gateway.log",
-		"ipfs-bootstrap.log",
-		"ipfs-cluster-bootstrap.log",
-		"rqlite-bootstrap.log",
-		"node-bootstrap.log",
-		"ipfs-node.log",
-		"ipfs-cluster-node.log",
-		"rqlite-node.log",
-		"node-node.log",
+	}
+
+	// Add node-type-specific log files only if nodeType is specified
+	if nodeType == "bootstrap" {
+		logFiles = append(logFiles,
+			"ipfs-bootstrap.log",
+			"ipfs-cluster-bootstrap.log",
+			"node-bootstrap.log",
+		)
+	} else if nodeType == "node" {
+		logFiles = append(logFiles,
+			"ipfs-node.log",
+			"ipfs-cluster-node.log",
+			"node-node.log",
+		)
 	}
 
 	for _, logFile := range logFiles {

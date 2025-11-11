@@ -330,8 +330,7 @@ func handleProdUpgrade(args []string) {
 			"debros-ipfs-cluster-node.service",
 			"debros-ipfs-bootstrap.service",
 			"debros-ipfs-node.service",
-			"debros-rqlite-bootstrap.service",
-			"debros-rqlite-node.service",
+			// Note: RQLite is managed by node process, not as separate service
 			"debros-olric.service",
 		}
 		for _, svc := range services {
@@ -515,7 +514,7 @@ func handleProdUpgrade(args []string) {
 		services := []string{
 			"debros-ipfs-bootstrap",
 			"debros-ipfs-cluster-bootstrap",
-			"debros-rqlite-bootstrap",
+			// Note: RQLite is managed by node process, not as separate service
 			"debros-olric",
 			"debros-node-bootstrap",
 			"debros-gateway",
@@ -541,8 +540,7 @@ func handleProdStatus() {
 		"debros-ipfs-node",
 		"debros-ipfs-cluster-bootstrap",
 		"debros-ipfs-cluster-node",
-		"debros-rqlite-bootstrap",
-		"debros-rqlite-node",
+		// Note: RQLite is managed by node process, not as separate service
 		"debros-olric",
 		"debros-node-bootstrap",
 		"debros-node-node",
@@ -555,11 +553,9 @@ func handleProdStatus() {
 		"debros-ipfs-node":              "IPFS Daemon (Node)",
 		"debros-ipfs-cluster-bootstrap": "IPFS Cluster (Bootstrap)",
 		"debros-ipfs-cluster-node":      "IPFS Cluster (Node)",
-		"debros-rqlite-bootstrap":       "RQLite Database (Bootstrap)",
-		"debros-rqlite-node":            "RQLite Database (Node)",
 		"debros-olric":                  "Olric Cache Server",
-		"debros-node-bootstrap":         "DeBros Node (Bootstrap)",
-		"debros-node-node":              "DeBros Node (Node)",
+		"debros-node-bootstrap":         "DeBros Node (Bootstrap) - includes RQLite",
+		"debros-node-node":              "DeBros Node (Node) - includes RQLite",
 		"debros-gateway":                "DeBros Gateway",
 	}
 
@@ -626,8 +622,7 @@ func getProductionServices() []string {
 		"debros-node-node",
 		"debros-node-bootstrap",
 		"debros-olric",
-		"debros-rqlite-bootstrap",
-		"debros-rqlite-node",
+		// Note: RQLite is managed by node process, not as separate service
 		"debros-ipfs-cluster-bootstrap",
 		"debros-ipfs-cluster-node",
 		"debros-ipfs-bootstrap",
@@ -748,8 +743,7 @@ func handleProdUninstall() {
 		"debros-node-node",
 		"debros-node-bootstrap",
 		"debros-olric",
-		"debros-rqlite-bootstrap",
-		"debros-rqlite-node",
+		// Note: RQLite is managed by node process, not as separate service
 		"debros-ipfs-cluster-bootstrap",
 		"debros-ipfs-cluster-node",
 		"debros-ipfs-bootstrap",
