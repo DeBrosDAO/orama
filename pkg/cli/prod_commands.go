@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 )
@@ -294,6 +295,36 @@ func handleProdUpgrade(args []string) {
 		os.Exit(1)
 	}
 
+	// Stop services before upgrading binaries (if this is an upgrade)
+	if setup.IsUpdate() {
+		fmt.Printf("\n⏹️  Stopping services before upgrade...\n")
+		serviceController := production.NewSystemdController()
+		services := []string{
+			"debros-gateway.service",
+			"debros-node-bootstrap.service",
+			"debros-node-node.service",
+			"debros-ipfs-cluster-bootstrap.service",
+			"debros-ipfs-cluster-node.service",
+			"debros-ipfs-bootstrap.service",
+			"debros-ipfs-node.service",
+			"debros-rqlite-bootstrap.service",
+			"debros-rqlite-node.service",
+			"debros-olric.service",
+		}
+		for _, svc := range services {
+			unitPath := filepath.Join("/etc/systemd/system", svc)
+			if _, err := os.Stat(unitPath); err == nil {
+				if err := serviceController.StopService(svc); err != nil {
+					fmt.Printf("  ⚠️  Warning: Failed to stop %s: %v\n", svc, err)
+				} else {
+					fmt.Printf("  ✓ Stopped %s\n", svc)
+				}
+			}
+		}
+		// Give services time to shut down gracefully
+		time.Sleep(2 * time.Second)
+	}
+
 	// Phase 2b: Install/update binaries
 	fmt.Printf("\nPhase 2b: Installing/updating binaries...\n")
 	if err := setup.Phase2bInstallBinaries(); err != nil {
@@ -337,11 +368,110 @@ func handleProdUpgrade(args []string) {
 	}
 
 	// Phase 4: Regenerate configs (updates to latest format)
-	// Note: This will overwrite existing configs, but preserves secrets
-	bootstrapPeers := []string{} // Could be read from existing config if needed
+	// Preserve existing config settings (bootstrap_peers, domain, join_address, etc.)
 	enableHTTPS := false
 	domain := ""
 	bootstrapJoin := ""
+
+	// Helper function to extract multiaddr list from config
+	extractBootstrapPeers := func(configPath string) []string {
+		var peers []string
+		if data, err := os.ReadFile(configPath); err == nil {
+			configStr := string(data)
+			inBootstrapPeers := false
+			for _, line := range strings.Split(configStr, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "bootstrap_peers:") || strings.HasPrefix(trimmed, "bootstrap peers:") {
+					inBootstrapPeers = true
+					continue
+				}
+				if inBootstrapPeers {
+					if strings.HasPrefix(trimmed, "-") {
+						// Extract multiaddr after the dash
+						parts := strings.SplitN(trimmed, "-", 2)
+						if len(parts) > 1 {
+							peer := strings.TrimSpace(parts[1])
+							peer = strings.Trim(peer, "\"'")
+							if peer != "" && strings.HasPrefix(peer, "/") {
+								peers = append(peers, peer)
+							}
+						}
+					} else if trimmed == "" || !strings.HasPrefix(trimmed, "-") {
+						// End of bootstrap_peers list
+						break
+					}
+				}
+			}
+		}
+		return peers
+	}
+
+	// Read existing node config to preserve bootstrap_peers and join_address
+	nodeConfigFile := "bootstrap.yaml"
+	if nodeType == "node" {
+		nodeConfigFile = "node.yaml"
+	}
+	nodeConfigPath := filepath.Join(debrosDir, "configs", nodeConfigFile)
+
+	// Extract bootstrap peers from existing node config
+	bootstrapPeers := extractBootstrapPeers(nodeConfigPath)
+
+	// Extract bootstrap join address if it's a bootstrap node
+	if nodeType == "bootstrap" {
+		if data, err := os.ReadFile(nodeConfigPath); err == nil {
+			configStr := string(data)
+			for _, line := range strings.Split(configStr, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "rqlite_join_address:") {
+					parts := strings.SplitN(trimmed, ":", 2)
+					if len(parts) > 1 {
+						bootstrapJoin = strings.TrimSpace(parts[1])
+						bootstrapJoin = strings.Trim(bootstrapJoin, "\"'")
+						if bootstrapJoin == "null" || bootstrapJoin == "" {
+							bootstrapJoin = ""
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Read existing gateway config to preserve domain and HTTPS settings
+	gatewayConfigPath := filepath.Join(debrosDir, "configs", "gateway.yaml")
+	if data, err := os.ReadFile(gatewayConfigPath); err == nil {
+		configStr := string(data)
+		if strings.Contains(configStr, "domain:") {
+			for _, line := range strings.Split(configStr, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "domain:") {
+					parts := strings.SplitN(trimmed, ":", 2)
+					if len(parts) > 1 {
+						domain = strings.TrimSpace(parts[1])
+						if domain != "" && domain != "\"\"" && domain != "''" && domain != "null" {
+							domain = strings.Trim(domain, "\"'")
+							enableHTTPS = true
+						} else {
+							domain = ""
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	fmt.Printf("  Preserving existing configuration:\n")
+	if len(bootstrapPeers) > 0 {
+		fmt.Printf("    - Bootstrap peers: %d peer(s) preserved\n", len(bootstrapPeers))
+	}
+	if domain != "" {
+		fmt.Printf("    - Domain: %s\n", domain)
+	}
+	if bootstrapJoin != "" {
+		fmt.Printf("    - Bootstrap join address: %s\n", bootstrapJoin)
+	}
+
 	if err := setup.Phase4GenerateConfigs(nodeType == "bootstrap", bootstrapPeers, "", enableHTTPS, domain, bootstrapJoin); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Config generation warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   Existing configs preserved\n")

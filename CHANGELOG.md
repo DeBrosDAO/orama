@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.1] - 2025-11-11
+
+### Added
+- Added automatic service stopping before binary upgrades during the `prod upgrade` process to ensure a clean update.
+- Added logic to preserve existing configuration settings (like `bootstrap_peers`, `domain`, and `rqlite_join_address`) when regenerating configurations during `prod upgrade`.
+
+### Changed
+- Improved the `prod upgrade` process to be more robust by preserving critical configuration details and gracefully stopping services.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.0] - 2025-11-11
 
 ### Added
