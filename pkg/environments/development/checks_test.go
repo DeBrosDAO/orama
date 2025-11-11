@@ -17,7 +17,7 @@ func TestPortChecker(t *testing.T) {
 	}
 
 	// Check that required port counts match expectations
-	expectedPortCount := 22 // Based on RequiredPorts
+	expectedPortCount := 44 // Based on RequiredPorts
 	if len(checker.ports) != expectedPortCount {
 		t.Errorf("Expected %d ports, got %d", expectedPortCount, len(checker.ports))
 	}
