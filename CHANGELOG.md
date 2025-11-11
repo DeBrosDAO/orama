@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.5] - 2025-11-11
+
+### Added
+- Added `--restart` option to `dbn prod upgrade` to automatically restart services after upgrade.
+- The gateway now supports an optional `--config` flag to specify the configuration file path.
+
+### Changed
+- Improved `dbn prod upgrade` process to better handle existing installations, including detecting node type and ensuring configurations are updated to the latest format.
+- Configuration loading logic for `node` and `gateway` commands now correctly handles absolute paths passed via command line or systemd.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue during production upgrades where IPFS repositories in private swarms might fail to start due to `AutoConf` not being disabled.
+
 ## [0.67.4] - 2025-11-11
 
 ### Added

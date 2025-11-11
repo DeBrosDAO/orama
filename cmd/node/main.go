@@ -245,11 +245,14 @@ func main() {
 	select_data_dir_check(configName)
 
 	// Determine config path (handle both absolute and relative paths)
+	// Note: select_data_dir_check already validated the path exists, so we can safely determine it here
 	var configPath string
 	var err error
 	if filepath.IsAbs(*configName) {
+		// Absolute path passed directly (e.g., from systemd service)
 		configPath = *configName
 	} else {
+		// Relative path - use DefaultPath which checks both ~/.debros/configs/ and ~/.debros/
 		configPath, err = config.DefaultPath(*configName)
 		if err != nil {
 			logger.Error("Failed to determine config path", zap.Error(err))

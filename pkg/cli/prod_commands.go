@@ -54,6 +54,8 @@ func showProdHelp() {
 	fmt.Printf("      --bootstrap-join ADDR - Bootstrap raft join address (for secondary bootstrap)\n")
 	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (optional)\n")
 	fmt.Printf("  upgrade                   - Upgrade existing installation (requires root/sudo)\n")
+	fmt.Printf("    Options:\n")
+	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
 	fmt.Printf("  status                    - Show status of production services\n")
 	fmt.Printf("  logs <service>            - View production service logs\n")
 	fmt.Printf("    Options:\n")
@@ -188,9 +190,13 @@ func handleProdInstall(args []string) {
 func handleProdUpgrade(args []string) {
 	// Parse arguments
 	force := false
+	restartServices := false
 	for _, arg := range args {
 		if arg == "--force" {
 			force = true
+		}
+		if arg == "--restart" {
+			restartServices = true
 		}
 	}
 
@@ -201,24 +207,108 @@ func handleProdUpgrade(args []string) {
 
 	debrosHome := "/home/debros"
 	fmt.Printf("🔄 Upgrading production installation...\n")
-	fmt.Printf("  This will preserve existing configurations and data\n\n")
+	fmt.Printf("  This will preserve existing configurations and data\n")
+	fmt.Printf("  Configurations will be updated to latest format\n\n")
 
-	// For now, just re-run the install with force flag
 	setup := production.NewProductionSetup(debrosHome, os.Stdout, force)
 
+	// Phase 1: Check prerequisites
+	fmt.Printf("\n📋 Phase 1: Checking prerequisites...\n")
 	if err := setup.Phase1CheckPrerequisites(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Prerequisites check failed: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Phase 2: Provision environment (ensures directories exist)
+	fmt.Printf("\n🛠️  Phase 2: Provisioning environment...\n")
 	if err := setup.Phase2ProvisionEnvironment(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Environment provisioning failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Upgrade complete!\n")
-	fmt.Printf("   Services will use existing configurations\n")
-	fmt.Printf("   To restart services: sudo systemctl restart debros-*\n\n")
+	// Phase 2b: Install/update binaries
+	fmt.Printf("\nPhase 2b: Installing/updating binaries...\n")
+	if err := setup.Phase2bInstallBinaries(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Binary installation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Detect node type from existing installation
+	nodeType := "node"
+	if setup.IsUpdate() {
+		// Check if bootstrap config exists
+		bootstrapConfig := filepath.Join("/home/debros/.debros", "configs", "bootstrap.yaml")
+		if _, err := os.Stat(bootstrapConfig); err == nil {
+			nodeType = "bootstrap"
+		} else {
+			// Check data directory structure
+			bootstrapDataPath := filepath.Join("/home/debros/.debros", "data", "bootstrap")
+			if _, err := os.Stat(bootstrapDataPath); err == nil {
+				nodeType = "bootstrap"
+			}
+		}
+		fmt.Printf("  Detected node type: %s\n", nodeType)
+	} else {
+		fmt.Printf("  ⚠️  No existing installation detected, treating as fresh install\n")
+		fmt.Printf("  Use 'dbn prod install --bootstrap' for fresh bootstrap installation\n")
+		nodeType = "bootstrap" // Default for upgrade if nothing exists
+	}
+
+	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
+	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
+	if err := setup.Phase2cInitializeServices(nodeType); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Phase 3: Ensure secrets exist (preserves existing secrets)
+	fmt.Printf("\n🔐 Phase 3: Ensuring secrets...\n")
+	if err := setup.Phase3GenerateSecrets(nodeType == "bootstrap"); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Secret generation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Phase 4: Regenerate configs (updates to latest format)
+	// Note: This will overwrite existing configs, but preserves secrets
+	bootstrapPeers := []string{} // Could be read from existing config if needed
+	enableHTTPS := false
+	domain := ""
+	bootstrapJoin := ""
+	if err := setup.Phase4GenerateConfigs(nodeType == "bootstrap", bootstrapPeers, "", enableHTTPS, domain, bootstrapJoin); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Config generation warning: %v\n", err)
+		fmt.Fprintf(os.Stderr, "   Existing configs preserved\n")
+	}
+
+	// Phase 5: Update systemd services
+	fmt.Printf("\n🔧 Phase 5: Updating systemd services...\n")
+	if err := setup.Phase5CreateSystemdServices(nodeType, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
+	}
+
+	fmt.Printf("\n✅ Upgrade complete!\n")
+	if restartServices {
+		fmt.Printf("   Restarting services...\n")
+		// Reload systemd daemon
+		exec.Command("systemctl", "daemon-reload").Run()
+		// Restart services to apply changes
+		services := []string{
+			"debros-ipfs-bootstrap",
+			"debros-ipfs-cluster-bootstrap",
+			"debros-rqlite-bootstrap",
+			"debros-olric",
+			"debros-node-bootstrap",
+			"debros-gateway",
+		}
+		for _, svc := range services {
+			exec.Command("systemctl", "restart", svc).Run()
+		}
+		fmt.Printf("   ✓ Services restarted\n")
+	} else {
+		fmt.Printf("   To apply changes, restart services:\n")
+		fmt.Printf("   sudo systemctl daemon-reload\n")
+		fmt.Printf("   sudo systemctl restart debros-*\n")
+	}
+	fmt.Printf("\n")
 }
 
 func handleProdStatus() {

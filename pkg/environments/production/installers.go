@@ -340,12 +340,13 @@ func (bi *BinaryInstaller) InstallSystemDependencies() error {
 // InitializeIPFSRepo initializes an IPFS repository for a node
 func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swarmKeyPath string) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
+	repoExists := false
 	if _, err := os.Stat(configPath); err == nil {
-		// Already initialized
-		return nil
+		repoExists = true
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    IPFS repo for %s already exists, ensuring configuration...\n", nodeType)
+	} else {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS repo for %s...\n", nodeType)
 	}
-
-	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS repo for %s...\n", nodeType)
 
 	if err := os.MkdirAll(ipfsRepoPath, 0755); err != nil {
 		return fmt.Errorf("failed to create IPFS repo directory: %w", err)
@@ -357,25 +358,30 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 		return err
 	}
 
-	// Initialize IPFS with the correct repo path
-	cmd := exec.Command(ipfsBinary, "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
+	// Initialize IPFS if repo doesn't exist
+	if !repoExists {
+		cmd := exec.Command(ipfsBinary, "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
+		}
 	}
 
 	// Copy swarm key if present
 	swarmKeyExists := false
 	if data, err := os.ReadFile(swarmKeyPath); err == nil {
-		if err := os.WriteFile(filepath.Join(ipfsRepoPath, "swarm.key"), data, 0600); err != nil {
+		swarmKeyDest := filepath.Join(ipfsRepoPath, "swarm.key")
+		if err := os.WriteFile(swarmKeyDest, data, 0600); err != nil {
 			return fmt.Errorf("failed to copy swarm key: %w", err)
 		}
 		swarmKeyExists = true
 	}
 
-	// Disable AutoConf for private swarm (required when swarm.key is present)
-	// This prevents IPFS from trying to use the public mainnet AutoConf service
+	// Always disable AutoConf for private swarm when swarm.key is present
+	// This is critical - IPFS will fail to start if AutoConf is enabled on a private network
+	// We do this even for existing repos to fix repos initialized before this fix was applied
 	if swarmKeyExists {
-		cmd = exec.Command(ipfsBinary, "config", "--json", "AutoConf.Enabled", "false")
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Disabling AutoConf for private swarm...\n")
+		cmd := exec.Command(ipfsBinary, "config", "--json", "AutoConf.Enabled", "false")
 		cmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to disable AutoConf: %v\n%s", err, string(output))
@@ -390,14 +396,16 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 
 // InitializeIPFSClusterConfig initializes IPFS Cluster configuration
 // This runs `ipfs-cluster-service init` to create the service.json configuration file.
+// For existing installations, it ensures the cluster secret is up to date.
 func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret string, ipfsAPIPort int) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
+	configExists := false
 	if _, err := os.Stat(serviceJSONPath); err == nil {
-		// Already initialized
-		return nil
+		configExists = true
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    IPFS Cluster config for %s already exists, ensuring it's up to date...\n", nodeType)
+	} else {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Preparing IPFS Cluster path for %s...\n", nodeType)
 	}
-
-	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Preparing IPFS Cluster path for %s...\n", nodeType)
 
 	if err := os.MkdirAll(clusterPath, 0755); err != nil {
 		return fmt.Errorf("failed to create IPFS Cluster directory: %w", err)
@@ -412,23 +420,28 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 		return fmt.Errorf("ipfs-cluster-service binary not found: %w", err)
 	}
 
-	// Initialize cluster config with ipfs-cluster-service init
-	// This creates the service.json file with all required sections
-	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS Cluster config...\n")
-	cmd := exec.Command(clusterBinary, "init", "--force")
-	cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to initialize IPFS Cluster config: %v\n%s", err, string(output))
+	// Initialize cluster config if it doesn't exist
+	if !configExists {
+		// Initialize cluster config with ipfs-cluster-service init
+		// This creates the service.json file with all required sections
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS Cluster config...\n")
+		cmd := exec.Command(clusterBinary, "init", "--force")
+		cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to initialize IPFS Cluster config: %v\n%s", err, string(output))
+		}
 	}
 
-	// Update the cluster secret in service.json if provided
+	// Always update the cluster secret (for both new and existing configs)
+	// This ensures existing installations get the secret synchronized
 	if clusterSecret != "" {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret...\n")
 		if err := bi.updateClusterSecret(clusterPath, clusterSecret); err != nil {
 			return fmt.Errorf("failed to update cluster secret: %w", err)
 		}
 	}
 
-	// Fix ownership again after init
+	// Fix ownership again after updates
 	exec.Command("chown", "-R", "debros:debros", clusterPath).Run()
 
 	return nil

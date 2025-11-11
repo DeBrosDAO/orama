@@ -68,6 +68,11 @@ func (ps *ProductionSetup) logf(format string, args ...interface{}) {
 	}
 }
 
+// IsUpdate detects if this is an update to an existing installation
+func (ps *ProductionSetup) IsUpdate() bool {
+	return ps.stateDetector.IsConfigured() || ps.stateDetector.HasIPFSData()
+}
+
 // Phase1CheckPrerequisites performs initial environment validation
 func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	ps.logf("Phase 1: Checking prerequisites...")
@@ -286,7 +291,12 @@ func (ps *ProductionSetup) Phase3GenerateSecrets(isBootstrap bool) error {
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
 func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeers []string, vpsIP string, enableHTTPS bool, domain string, bootstrapJoin string) error {
-	ps.logf("Phase 4: Generating configurations...")
+	if ps.IsUpdate() {
+		ps.logf("Phase 4: Updating configurations...")
+		ps.logf("  (Existing configs will be updated to latest format)")
+	} else {
+		ps.logf("Phase 4: Generating configurations...")
+	}
 
 	// Node config
 	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(isBootstrap, bootstrapPeers, vpsIP, bootstrapJoin)

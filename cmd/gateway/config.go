@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,13 +41,35 @@ func getEnvBoolDefault(key string, def bool) bool {
 }
 
 // parseGatewayConfig loads gateway.yaml from ~/.debros exclusively.
+// It accepts an optional --config flag for absolute paths (used by systemd services).
 func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
+	// Parse --config flag (optional, for systemd services that pass absolute paths)
+	configFlag := flag.String("config", "", "Config file path (absolute path or filename in ~/.debros)")
+	flag.Parse()
+
 	// Determine config path
-	configPath, err := config.DefaultPath("gateway.yaml")
-	if err != nil {
-		logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-		os.Exit(1)
+	var configPath string
+	var err error
+	if *configFlag != "" {
+		// If --config flag is provided, use it (handles both absolute and relative paths)
+		if filepath.IsAbs(*configFlag) {
+			configPath = *configFlag
+		} else {
+			configPath, err = config.DefaultPath(*configFlag)
+			if err != nil {
+				logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
+				fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	} else {
+		// Default behavior: look for gateway.yaml in ~/.debros/configs/ or ~/.debros/
+		configPath, err = config.DefaultPath("gateway.yaml")
+		if err != nil {
+			logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Load YAML
