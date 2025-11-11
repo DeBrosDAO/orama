@@ -1,6 +1,7 @@
 package production
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -363,9 +364,21 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 	}
 
 	// Copy swarm key if present
+	swarmKeyExists := false
 	if data, err := os.ReadFile(swarmKeyPath); err == nil {
 		if err := os.WriteFile(filepath.Join(ipfsRepoPath, "swarm.key"), data, 0600); err != nil {
 			return fmt.Errorf("failed to copy swarm key: %w", err)
+		}
+		swarmKeyExists = true
+	}
+
+	// Disable AutoConf for private swarm (required when swarm.key is present)
+	// This prevents IPFS from trying to use the public mainnet AutoConf service
+	if swarmKeyExists {
+		cmd = exec.Command(ipfsBinary, "config", "--json", "AutoConf.Enabled", "false")
+		cmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to disable AutoConf: %v\n%s", err, string(output))
 		}
 	}
 
@@ -376,8 +389,7 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 }
 
 // InitializeIPFSClusterConfig initializes IPFS Cluster configuration
-// Note: This is a placeholder config. The full initialization will occur via `ipfs-cluster-service init`
-// which is run during Phase2cInitializeServices with the IPFS_CLUSTER_PATH env var set.
+// This runs `ipfs-cluster-service init` to create the service.json configuration file.
 func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret string, ipfsAPIPort int) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	if _, err := os.Stat(serviceJSONPath); err == nil {
@@ -391,7 +403,72 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 		return fmt.Errorf("failed to create IPFS Cluster directory: %w", err)
 	}
 
+	// Fix ownership before running init
 	exec.Command("chown", "-R", "debros:debros", clusterPath).Run()
+
+	// Resolve ipfs-cluster-service binary path
+	clusterBinary, err := bi.ResolveBinaryPath("ipfs-cluster-service", "/usr/local/bin/ipfs-cluster-service", "/usr/bin/ipfs-cluster-service")
+	if err != nil {
+		return fmt.Errorf("ipfs-cluster-service binary not found: %w", err)
+	}
+
+	// Initialize cluster config with ipfs-cluster-service init
+	// This creates the service.json file with all required sections
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS Cluster config...\n")
+	cmd := exec.Command(clusterBinary, "init", "--force")
+	cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to initialize IPFS Cluster config: %v\n%s", err, string(output))
+	}
+
+	// Update the cluster secret in service.json if provided
+	if clusterSecret != "" {
+		if err := bi.updateClusterSecret(clusterPath, clusterSecret); err != nil {
+			return fmt.Errorf("failed to update cluster secret: %w", err)
+		}
+	}
+
+	// Fix ownership again after init
+	exec.Command("chown", "-R", "debros:debros", clusterPath).Run()
+
+	return nil
+}
+
+// updateClusterSecret updates the secret field in IPFS Cluster service.json
+func (bi *BinaryInstaller) updateClusterSecret(clusterPath, secret string) error {
+	serviceJSONPath := filepath.Join(clusterPath, "service.json")
+
+	// Read existing config
+	data, err := os.ReadFile(serviceJSONPath)
+	if err != nil {
+		return fmt.Errorf("failed to read service.json: %w", err)
+	}
+
+	// Parse JSON
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse service.json: %w", err)
+	}
+
+	// Update cluster secret
+	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
+		cluster["secret"] = secret
+	} else {
+		config["cluster"] = map[string]interface{}{
+			"secret": secret,
+		}
+	}
+
+	// Write back
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal service.json: %w", err)
+	}
+
+	if err := os.WriteFile(serviceJSONPath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write service.json: %w", err)
+	}
+
 	return nil
 }
 

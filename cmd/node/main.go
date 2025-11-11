@@ -66,23 +66,32 @@ func check_if_should_open_help(help *bool) {
 func select_data_dir_check(configName *string) {
 	logger := setup_logger(logging.ComponentNode)
 
-	// Ensure config directory exists and is writable
-	_, err := config.EnsureConfigDir()
-	if err != nil {
-		logger.Error("Failed to ensure config directory", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
-		fmt.Fprintf(os.Stderr, "Failed to create/access config directory: %v\n", err)
-		fmt.Fprintf(os.Stderr, "\nPlease ensure:\n")
-		fmt.Fprintf(os.Stderr, "  1. Home directory is accessible: %s\n", os.ExpandEnv("~"))
-		fmt.Fprintf(os.Stderr, "  2. You have write permissions to home directory\n")
-		fmt.Fprintf(os.Stderr, "  3. Disk space is available\n")
-		os.Exit(1)
-	}
+	var configPath string
+	var err error
 
-	configPath, err := config.DefaultPath(*configName)
-	if err != nil {
-		logger.Error("Failed to determine config path", zap.Error(err))
-		os.Exit(1)
+	// Check if configName is an absolute path
+	if filepath.IsAbs(*configName) {
+		// Use absolute path directly
+		configPath = *configName
+	} else {
+		// Ensure config directory exists and is writable
+		_, err = config.EnsureConfigDir()
+		if err != nil {
+			logger.Error("Failed to ensure config directory", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
+			fmt.Fprintf(os.Stderr, "Failed to create/access config directory: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\nPlease ensure:\n")
+			fmt.Fprintf(os.Stderr, "  1. Home directory is accessible: %s\n", os.ExpandEnv("~"))
+			fmt.Fprintf(os.Stderr, "  2. You have write permissions to home directory\n")
+			fmt.Fprintf(os.Stderr, "  3. Disk space is available\n")
+			os.Exit(1)
+		}
+
+		configPath, err = config.DefaultPath(*configName)
+		if err != nil {
+			logger.Error("Failed to determine config path", zap.Error(err))
+			os.Exit(1)
+		}
 	}
 
 	if _, err := os.Stat(configPath); err != nil {
@@ -232,15 +241,21 @@ func main() {
 
 	check_if_should_open_help(help)
 
-	// Check if config file exists
+	// Check if config file exists and determine path
 	select_data_dir_check(configName)
 
-	// Load configuration from ~/.debros/node.yaml
-	configPath, err := config.DefaultPath(*configName)
-	if err != nil {
-		logger.Error("Failed to determine config path", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-		os.Exit(1)
+	// Determine config path (handle both absolute and relative paths)
+	var configPath string
+	var err error
+	if filepath.IsAbs(*configName) {
+		configPath = *configName
+	} else {
+		configPath, err = config.DefaultPath(*configName)
+		if err != nil {
+			logger.Error("Failed to determine config path", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	var cfg *config.Config

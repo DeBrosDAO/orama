@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.4] - 2025-11-11
+
+### Added
+\n
+### Changed
+- Improved configuration file loading logic to support absolute paths for config files.
+- Updated IPFS Cluster initialization during setup to run `ipfs-cluster-service init` and automatically configure the cluster secret.
+- IPFS repositories initialized with a private swarm key will now automatically disable AutoConf.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed configuration path resolution to correctly check for config files in both the legacy (`~/.debros/`) and production (`~/.debros/configs/`) directories.
+
 ## [0.67.3] - 2025-11-11
 
 ### Added

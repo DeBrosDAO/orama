@@ -231,10 +231,14 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
-	// Initialize IPFS Cluster path (just ensure directory exists, actual init happens in daemon startup)
+	// Initialize IPFS Cluster config (runs ipfs-cluster-service init)
 	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, "", 4501); err != nil {
-		ps.logf("  ⚠️  IPFS Cluster initialization warning: %v", err)
+	clusterSecret, err := ps.secretGenerator.EnsureClusterSecret()
+	if err != nil {
+		return fmt.Errorf("failed to get cluster secret: %w", err)
+	}
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret, 4501); err != nil {
+		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
 	// Initialize RQLite data directory
