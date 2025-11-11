@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.6] - 2025-11-11
+
+### Added
+\n
+### Changed
+- The binary installer now updates the source repository if it already exists, instead of only cloning it if missing.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Resolved an issue where disabling AutoConf in the IPFS repository could leave 'auto' placeholders in the config, causing startup errors.
+
 ## [0.67.5] - 2025-11-11
 
 ### Added

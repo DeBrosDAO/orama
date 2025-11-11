@@ -285,12 +285,29 @@ func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome strin
 	os.MkdirAll(srcDir, 0755)
 	os.MkdirAll(binDir, 0755)
 
-	// Clone repository if not present
-	if _, err := os.Stat(filepath.Join(srcDir, "Makefile")); os.IsNotExist(err) {
+	// Check if git repository is already initialized
+	repoInitialized := false
+	if _, err := os.Stat(filepath.Join(srcDir, ".git")); err == nil {
+		repoInitialized = true
+	}
+
+	// Clone repository if not present, otherwise update it
+	if !repoInitialized {
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Cloning repository...\n")
 		cmd := exec.Command("git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", srcDir)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to clone repository: %w", err)
+		}
+	} else {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating repository to latest changes...\n")
+		if output, err := exec.Command("git", "-C", srcDir, "fetch", "origin", branch).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to fetch repository updates: %v\n%s", err, string(output))
+		}
+		if output, err := exec.Command("git", "-C", srcDir, "reset", "--hard", "origin/"+branch).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to reset repository: %v\n%s", err, string(output))
+		}
+		if output, err := exec.Command("git", "-C", srcDir, "clean", "-fd").CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to clean repository: %v\n%s", err, string(output))
 		}
 	}
 
@@ -385,6 +402,32 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 		cmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to disable AutoConf: %v\n%s", err, string(output))
+		}
+
+		// Clear AutoConf placeholders from config to prevent Kubo startup errors
+		// When AutoConf is disabled, 'auto' placeholders must be replaced with explicit values or empty
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Clearing AutoConf placeholders from IPFS config...\n")
+
+		type configCommand struct {
+			desc string
+			args []string
+		}
+
+		// List of config replacements to clear 'auto' placeholders
+		cleanup := []configCommand{
+			{"clearing Bootstrap peers", []string{"config", "Bootstrap", "--json", "[]"}},
+			{"clearing Routing.DelegatedRouters", []string{"config", "Routing.DelegatedRouters", "--json", "[]"}},
+			{"clearing Ipns.DelegatedPublishers", []string{"config", "Ipns.DelegatedPublishers", "--json", "[]"}},
+			{"clearing DNS.Resolvers", []string{"config", "DNS.Resolvers", "--json", "{}"}},
+		}
+
+		for _, step := range cleanup {
+			fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "      %s...\n", step.desc)
+			cmd := exec.Command(ipfsBinary, step.args...)
+			cmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed while %s: %v\n%s", step.desc, err, string(output))
+			}
 		}
 	}
 
