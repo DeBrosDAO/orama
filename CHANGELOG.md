@@ -13,6 +13,40 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.0] - 2025-11-11
+
+### Added
+- Added support for joining a cluster as a secondary bootstrap node using the new `--bootstrap-join` flag.
+- Added a new flag `--vps-ip` to specify the public IP address for non-bootstrap nodes, which is now required for cluster joining.
+
+### Changed
+- Updated the installation script to correctly download and install the CLI binary from the GitHub release archive.
+- Improved RQLite service configuration to correctly use the public IP address (`--vps-ip`) for advertising its raft and HTTP addresses.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where non-bootstrap nodes could be installed without specifying the required `--vps-ip`.
+
+## [0.67.0] - 2025-11-11
+
+### Added
+- Added support for joining a cluster as a secondary bootstrap node using the new `--bootstrap-join` flag.
+- Added a new flag `--vps-ip` to specify the public IP address for non-bootstrap nodes, which is now required for cluster joining.
+
+### Changed
+- Updated the installation script to correctly download and install the CLI binary from the GitHub release archive.
+- Improved RQLite service configuration to correctly use the public IP address (`--vps-ip`) for advertising its raft and HTTP addresses.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where non-bootstrap nodes could be installed without specifying the required `--vps-ip`.
+
 ## [0.66.1] - 2025-11-11
 
 ### Added

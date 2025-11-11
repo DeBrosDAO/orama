@@ -104,7 +104,7 @@ WantedBy=multi-user.target
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
-func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, httpPort, raftPort int, joinAddr string) string {
+func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
 	var dataDir string
 	if nodeType == "bootstrap" {
 		dataDir = filepath.Join(ssg.debrosDir, "data", "bootstrap", "rqlite")
@@ -112,9 +112,14 @@ func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, httpP
 		dataDir = filepath.Join(ssg.debrosDir, "data", "node", "rqlite")
 	}
 
+	// Use public IP for advertise if provided, otherwise default to localhost
+	if advertiseIP == "" {
+		advertiseIP = "127.0.0.1"
+	}
+
 	args := fmt.Sprintf(
-		`-http-addr 0.0.0.0:%d -http-adv-addr 127.0.0.1:%d -raft-adv-addr 127.0.0.1:%d -raft-addr 0.0.0.0:%d`,
-		httpPort, httpPort, raftPort, raftPort,
+		`-http-addr 0.0.0.0:%d -http-adv-addr %s:%d -raft-adv-addr %s:%d -raft-addr 0.0.0.0:%d`,
+		httpPort, advertiseIP, httpPort, advertiseIP, raftPort, raftPort,
 	)
 
 	if joinAddr != "" {

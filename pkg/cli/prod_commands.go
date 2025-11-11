@@ -49,8 +49,9 @@ func showProdHelp() {
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --force               - Reconfigure all settings\n")
 	fmt.Printf("      --bootstrap           - Install as bootstrap node\n")
+	fmt.Printf("      --vps-ip IP           - VPS public IP address (required for non-bootstrap)\n")
 	fmt.Printf("      --peers ADDRS         - Comma-separated bootstrap peers (for non-bootstrap)\n")
-	fmt.Printf("      --vps-ip IP           - VPS public IP address\n")
+	fmt.Printf("      --bootstrap-join ADDR - Bootstrap raft join address (for secondary bootstrap)\n")
 	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (optional)\n")
 	fmt.Printf("  upgrade                   - Upgrade existing installation (requires root/sudo)\n")
 	fmt.Printf("  status                    - Show status of production services\n")
@@ -59,8 +60,12 @@ func showProdHelp() {
 	fmt.Printf("      --follow              - Follow logs in real-time\n")
 	fmt.Printf("  uninstall                 - Remove production services (requires root/sudo)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  sudo dbn prod install --bootstrap\n")
-	fmt.Printf("  sudo dbn prod install --peers /ip4/1.2.3.4/tcp/4001/p2p/Qm...\n")
+	fmt.Printf("  # Bootstrap node\n")
+	fmt.Printf("  sudo dbn prod install --bootstrap\n\n")
+	fmt.Printf("  # Join existing cluster\n")
+	fmt.Printf("  sudo dbn prod install --vps-ip 10.0.0.2 --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...\n\n")
+	fmt.Printf("  # Secondary bootstrap joining existing cluster\n")
+	fmt.Printf("  sudo dbn prod install --bootstrap --vps-ip 10.0.0.2 --bootstrap-join 10.0.0.1:7001\n\n")
 	fmt.Printf("  dbn prod status\n")
 	fmt.Printf("  dbn prod logs node --follow\n")
 }
@@ -69,7 +74,7 @@ func handleProdInstall(args []string) {
 	// Parse arguments
 	force := false
 	isBootstrap := false
-	var vpsIP, domain, peersStr string
+	var vpsIP, domain, peersStr, bootstrapJoin string
 
 	for i, arg := range args {
 		switch arg {
@@ -89,6 +94,10 @@ func handleProdInstall(args []string) {
 			if i+1 < len(args) {
 				domain = args[i+1]
 			}
+		case "--bootstrap-join":
+			if i+1 < len(args) {
+				bootstrapJoin = args[i+1]
+			}
 		}
 	}
 
@@ -101,6 +110,13 @@ func handleProdInstall(args []string) {
 	// Validate setup requirements
 	if os.Geteuid() != 0 {
 		fmt.Fprintf(os.Stderr, "❌ Production install must be run as root (use sudo)\n")
+		os.Exit(1)
+	}
+
+	// Enforce --vps-ip for non-bootstrap nodes
+	if !isBootstrap && vpsIP == "" {
+		fmt.Fprintf(os.Stderr, "❌ --vps-ip is required for non-bootstrap nodes\n")
+		fmt.Fprintf(os.Stderr, "   Usage: sudo dbn prod install --vps-ip <public_ip> --peers <multiaddr>\n")
 		os.Exit(1)
 	}
 
@@ -152,14 +168,14 @@ func handleProdInstall(args []string) {
 	// Phase 4: Generate configs
 	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
 	enableHTTPS := domain != ""
-	if err := setup.Phase4GenerateConfigs(isBootstrap, bootstrapPeers, vpsIP, enableHTTPS, domain); err != nil {
+	if err := setup.Phase4GenerateConfigs(isBootstrap, bootstrapPeers, vpsIP, enableHTTPS, domain, bootstrapJoin); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Configuration generation failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Phase 5: Create systemd services
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
-	if err := setup.Phase5CreateSystemdServices(nodeType); err != nil {
+	if err := setup.Phase5CreateSystemdServices(nodeType, vpsIP); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Service creation failed: %v\n", err)
 		os.Exit(1)
 	}

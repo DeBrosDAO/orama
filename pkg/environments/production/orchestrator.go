@@ -281,11 +281,11 @@ func (ps *ProductionSetup) Phase3GenerateSecrets(isBootstrap bool) error {
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
-func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeers []string, vpsIP string, enableHTTPS bool, domain string) error {
+func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeers []string, vpsIP string, enableHTTPS bool, domain string, bootstrapJoin string) error {
 	ps.logf("Phase 4: Generating configurations...")
 
 	// Node config
-	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(isBootstrap, bootstrapPeers, vpsIP)
+	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(isBootstrap, bootstrapPeers, vpsIP, bootstrapJoin)
 	if err != nil {
 		return fmt.Errorf("failed to generate node config: %w", err)
 	}
@@ -337,7 +337,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 }
 
 // Phase5CreateSystemdServices creates and enables systemd units
-func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string) error {
+func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP string) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
 	// IPFS service
@@ -356,8 +356,20 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string) error {
 	}
 	ps.logf("  ✓ IPFS Cluster service created: %s", clusterUnitName)
 
-	// RQLite service (only for bootstrap in single-node, or conditionally)
-	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(nodeType, 5001, 7001, "")
+	// RQLite service with join address for non-bootstrap nodes
+	rqliteJoinAddr := ""
+	if nodeType != "bootstrap" && vpsIP != "" {
+		rqliteJoinAddr = vpsIP + ":7001"
+	}
+
+	// Log the advertise configuration for verification
+	advertiseIP := vpsIP
+	if advertiseIP == "" {
+		advertiseIP = "127.0.0.1"
+	}
+	ps.logf("  RQLite will advertise: %s (advertise IP: %s)", rqliteJoinAddr, advertiseIP)
+
+	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(nodeType, 5001, 7001, rqliteJoinAddr, advertiseIP)
 	rqliteUnitName := fmt.Sprintf("debros-rqlite-%s.service", nodeType)
 	if err := ps.serviceController.WriteServiceUnit(rqliteUnitName, rqliteUnit); err != nil {
 		return fmt.Errorf("failed to write RQLite service: %w", err)

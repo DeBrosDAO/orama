@@ -27,7 +27,7 @@ func NewConfigGenerator(debrosDir string) *ConfigGenerator {
 }
 
 // GenerateNodeConfig generates node.yaml configuration
-func (cg *ConfigGenerator) GenerateNodeConfig(isBootstrap bool, bootstrapPeers []string, vpsIP string) (string, error) {
+func (cg *ConfigGenerator) GenerateNodeConfig(isBootstrap bool, bootstrapPeers []string, vpsIP string, bootstrapJoin string) (string, error) {
 	var nodeID string
 	if isBootstrap {
 		nodeID = "bootstrap"
@@ -36,19 +36,22 @@ func (cg *ConfigGenerator) GenerateNodeConfig(isBootstrap bool, bootstrapPeers [
 	}
 
 	if isBootstrap {
+		// Bootstrap node - populate peer list and optional join address
 		data := templates.BootstrapConfigData{
-			NodeID:         nodeID,
-			P2PPort:        4001,
-			DataDir:        filepath.Join(cg.debrosDir, "data", "bootstrap"),
-			RQLiteHTTPPort: 5001,
-			RQLiteRaftPort: 7001,
-			ClusterAPIPort: 9094,
-			IPFSAPIPort:    4501,
+			NodeID:            nodeID,
+			P2PPort:           4001,
+			DataDir:           filepath.Join(cg.debrosDir, "data", "bootstrap"),
+			RQLiteHTTPPort:    5001,
+			RQLiteRaftPort:    7001,
+			ClusterAPIPort:    9094,
+			IPFSAPIPort:       4501,
+			BootstrapPeers:    bootstrapPeers,
+			RQLiteJoinAddress: bootstrapJoin,
 		}
 		return templates.RenderBootstrapConfig(data)
 	}
 
-	// Regular node
+	// Regular node - must have join address
 	rqliteJoinAddr := "localhost:7001"
 	if vpsIP != "" {
 		rqliteJoinAddr = vpsIP + ":7001"

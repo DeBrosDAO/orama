@@ -101,12 +101,11 @@ get_latest_release() {
     log "Fetching latest release..."
     
     if command -v jq &>/dev/null; then
+        # Get the latest release (including pre-releases/nightly)
         LATEST_RELEASE=$(curl -fsSL -H "Accept: application/vnd.github+json" "$GITHUB_API/releases" | \
-            jq -r '.[] | select(.prerelease == false and .draft == false) | .tag_name' | head -1)
+            jq -r '.[0] | .tag_name')
     else
         LATEST_RELEASE=$(curl -fsSL "$GITHUB_API/releases" | \
-            grep -v "prerelease.*true" | \
-            grep -v "draft.*true" | \
             grep '"tag_name"' | \
             head -1 | \
             cut -d'"' -f4)
@@ -121,19 +120,52 @@ get_latest_release() {
 }
 
 download_and_install_cli() {
-    BINARY_NAME="network-cli_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}"
+    BINARY_NAME="debros-network_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}.tar.gz"
     DOWNLOAD_URL="$GITHUB_REPO/releases/download/$LATEST_RELEASE/$BINARY_NAME"
     
     log "Downloading dbn from GitHub releases..."
-    if ! curl -fsSL -o /tmp/dbn "https://github.com/$DOWNLOAD_URL"; then
+    log "URL: https://github.com/$DOWNLOAD_URL"
+    
+    # Clean up any stale binaries
+    rm -f /tmp/network-cli /tmp/dbn.tar.gz "$INSTALL_DIR/dbn"
+    
+    if ! curl -fsSL -o /tmp/dbn.tar.gz "https://github.com/$DOWNLOAD_URL"; then
         error "Failed to download dbn"
         exit 1
     fi
     
-    chmod +x /tmp/dbn
+    # Verify the download was successful
+    if [ ! -f /tmp/dbn.tar.gz ]; then
+        error "Download file not found"
+        exit 1
+    fi
+    
+    log "Extracting dbn..."
+    # Extract to /tmp
+    tar -xzf /tmp/dbn.tar.gz -C /tmp/
+    
+    # Check if binary exists after extraction (it's named network-cli in the archive)
+    if [ ! -f /tmp/network-cli ]; then
+        error "Failed to extract network-cli binary"
+        ls -la /tmp/ | grep -E "(network|cli|dbn)"
+        exit 1
+    fi
+    
+    chmod +x /tmp/network-cli
     
     log "Installing dbn to $INSTALL_DIR..."
-    mv /tmp/dbn "$INSTALL_DIR/dbn"
+    # Rename network-cli to dbn during installation
+    mv /tmp/network-cli "$INSTALL_DIR/dbn"
+    
+    # Sanity check: verify the installed binary is functional and reports correct version
+    if ! "$INSTALL_DIR/dbn" version &>/dev/null; then
+        error "Installed dbn failed sanity check (version command failed)"
+        rm -f "$INSTALL_DIR/dbn"
+        exit 1
+    fi
+    
+    # Clean up
+    rm -f /tmp/dbn.tar.gz
     
     success "dbn installed successfully"
 }
