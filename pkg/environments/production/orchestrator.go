@@ -21,6 +21,7 @@ type ProductionSetup struct {
 	privChecker       *PrivilegeChecker
 	osDetector        *OSDetector
 	archDetector      *ArchitectureDetector
+	resourceChecker   *ResourceChecker
 	fsProvisioner     *FilesystemProvisioner
 	userProvisioner   *UserProvisioner
 	stateDetector     *StateDetector
@@ -48,6 +49,7 @@ func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure
 		privChecker:       &PrivilegeChecker{},
 		osDetector:        &OSDetector{},
 		archDetector:      &ArchitectureDetector{},
+		resourceChecker:   NewResourceChecker(),
 		fsProvisioner:     NewFilesystemProvisioner(debrosHome),
 		userProvisioner:   NewUserProvisioner("debros", debrosHome, "/bin/bash"),
 		stateDetector:     NewStateDetector(debrosDir),
@@ -114,6 +116,25 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 		return err
 	}
 	ps.logf("  ✓ Basic dependencies available")
+
+	// Check system resources
+	if err := ps.resourceChecker.CheckDiskSpace(ps.debrosHome); err != nil {
+		ps.logf("  ❌ %v", err)
+		return err
+	}
+	ps.logf("  ✓ Sufficient disk space available")
+
+	if err := ps.resourceChecker.CheckRAM(); err != nil {
+		ps.logf("  ❌ %v", err)
+		return err
+	}
+	ps.logf("  ✓ Sufficient RAM available")
+
+	if err := ps.resourceChecker.CheckCPU(); err != nil {
+		ps.logf("  ❌ %v", err)
+		return err
+	}
+	ps.logf("  ✓ Sufficient CPU cores available")
 
 	return nil
 }
@@ -426,8 +447,15 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("\nNode Peer ID: %s", peerID)
 	ps.logf("\nService Management:")
 	ps.logf("  systemctl status debros-ipfs-bootstrap")
-	ps.logf("  systemctl logs debros-node-bootstrap")
-	ps.logf("  sudo tail -f %s/logs/node.log", ps.debrosDir)
+	ps.logf("  journalctl -u debros-node-bootstrap -f")
+	ps.logf("  tail -f %s/logs/node-bootstrap.log", ps.debrosDir)
+	ps.logf("\nLog Files:")
+	ps.logf("  %s/logs/ipfs-bootstrap.log", ps.debrosDir)
+	ps.logf("  %s/logs/ipfs-cluster-bootstrap.log", ps.debrosDir)
+	ps.logf("  %s/logs/rqlite-bootstrap.log", ps.debrosDir)
+	ps.logf("  %s/logs/olric.log", ps.debrosDir)
+	ps.logf("  %s/logs/node-bootstrap.log", ps.debrosDir)
+	ps.logf("  %s/logs/gateway.log", ps.debrosDir)
 	ps.logf("\nStart All Services:")
 	ps.logf("  systemctl start debros-ipfs-bootstrap debros-ipfs-cluster-bootstrap debros-rqlite-bootstrap debros-olric debros-node-bootstrap debros-gateway")
 	ps.logf("\nVerify Installation:")

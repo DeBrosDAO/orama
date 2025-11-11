@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.66.0] - 2025-11-11
+
+### Added
+- Pre-installation checks for minimum system resources (10GB disk space, 2GB RAM, 2 CPU cores) are now performed during setup.
+- All systemd services (IPFS, RQLite, Olric, Node, Gateway) now log directly to dedicated files in the logs directory instead of using the system journal.
+
+### Changed
+- Improved logging instructions in the setup completion message to reference the new dedicated log files.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.65.0] - 2025-11-11
 
 ### Added

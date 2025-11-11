@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 // OSInfo contains detected operating system information
@@ -212,4 +214,75 @@ func (etc *ExternalToolChecker) CheckAnonAvailable() bool {
 func (etc *ExternalToolChecker) CheckGoAvailable() bool {
 	_, err := exec.LookPath("go")
 	return err == nil
+}
+
+// ResourceChecker validates system resources for production deployment
+type ResourceChecker struct{}
+
+// NewResourceChecker creates a new resource checker
+func NewResourceChecker() *ResourceChecker {
+	return &ResourceChecker{}
+}
+
+// CheckDiskSpace validates sufficient disk space (minimum 10GB free)
+func (rc *ResourceChecker) CheckDiskSpace(path string) error {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return fmt.Errorf("failed to check disk space: %w", err)
+	}
+
+	// Available space in bytes
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	minRequiredBytes := uint64(10 * 1024 * 1024 * 1024) // 10GB
+
+	if availableBytes < minRequiredBytes {
+		availableGB := float64(availableBytes) / (1024 * 1024 * 1024)
+		return fmt.Errorf("insufficient disk space: %.1fGB available, minimum 10GB required", availableGB)
+	}
+
+	return nil
+}
+
+// CheckRAM validates sufficient RAM (minimum 2GB total)
+func (rc *ResourceChecker) CheckRAM() error {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return fmt.Errorf("failed to read memory info: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	totalKB := uint64(0)
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "MemTotal:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				if kb, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+					totalKB = kb
+					break
+				}
+			}
+		}
+	}
+
+	if totalKB == 0 {
+		return fmt.Errorf("could not determine total RAM")
+	}
+
+	minRequiredKB := uint64(2 * 1024 * 1024) // 2GB in KB
+	if totalKB < minRequiredKB {
+		totalGB := float64(totalKB) / (1024 * 1024)
+		return fmt.Errorf("insufficient RAM: %.1fGB total, minimum 2GB required", totalGB)
+	}
+
+	return nil
+}
+
+// CheckCPU validates sufficient CPU cores (minimum 2 cores)
+func (rc *ResourceChecker) CheckCPU() error {
+	cores := runtime.NumCPU()
+	if cores < 2 {
+		return fmt.Errorf("insufficient CPU cores: %d available, minimum 2 required", cores)
+	}
+	return nil
 }

@@ -31,6 +31,8 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSService(nodeType string) string 
 		ipfsRepoPath = filepath.Join(ssg.debrosDir, "data", "node", "ipfs", "repo")
 	}
 
+	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("ipfs-%s.log", nodeType))
+
 	return fmt.Sprintf(`[Unit]
 Description=IPFS Daemon (%s)
 After=network-online.target
@@ -46,8 +48,8 @@ ExecStartPre=/bin/bash -c 'if [ -f %s/secrets/swarm.key ] && [ ! -f %s/swarm.key
 ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=%s
 Restart=always
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=file:%s
+StandardError=file:%s
 SyslogIdentifier=ipfs-%s
 
 NoNewPrivileges=yes
@@ -57,7 +59,7 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, ipfsRepoPath, ssg.debrosDir, ipfsRepoPath, ssg.debrosDir, ipfsRepoPath, ipfsRepoPath, ipfsRepoPath, nodeType, ssg.debrosDir)
+`, nodeType, ssg.debrosHome, ipfsRepoPath, ssg.debrosDir, ipfsRepoPath, ssg.debrosDir, ipfsRepoPath, ipfsRepoPath, ipfsRepoPath, logFile, logFile, nodeType, ssg.debrosDir)
 }
 
 // GenerateIPFSClusterService generates the IPFS Cluster systemd unit
@@ -68,6 +70,8 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(nodeType string) 
 	} else {
 		clusterPath = filepath.Join(ssg.debrosDir, "data", "node", "ipfs-cluster")
 	}
+
+	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", nodeType))
 
 	return fmt.Sprintf(`[Unit]
 Description=IPFS Cluster Service (%s)
@@ -85,8 +89,8 @@ Environment=IPFS_CLUSTER_PATH=%s
 ExecStart=/usr/local/bin/ipfs-cluster-service daemon
 Restart=always
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=file:%s
+StandardError=file:%s
 SyslogIdentifier=ipfs-cluster-%s
 
 NoNewPrivileges=yes
@@ -96,7 +100,7 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, clusterPath, nodeType, ssg.debrosDir)
+`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, clusterPath, logFile, logFile, nodeType, ssg.debrosDir)
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
@@ -119,6 +123,8 @@ func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, httpP
 
 	args += fmt.Sprintf(` %s`, dataDir)
 
+	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("rqlite-%s.log", nodeType))
+
 	return fmt.Sprintf(`[Unit]
 Description=RQLite Database (%s)
 After=network-online.target
@@ -132,8 +138,8 @@ Environment=HOME=%s
 ExecStart=/usr/local/bin/rqlited %s
 Restart=always
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=file:%s
+StandardError=file:%s
 SyslogIdentifier=rqlite-%s
 
 NoNewPrivileges=yes
@@ -143,12 +149,13 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, args, nodeType, ssg.debrosDir)
+`, nodeType, ssg.debrosHome, args, logFile, logFile, nodeType, ssg.debrosDir)
 }
 
 // GenerateOlricService generates the Olric systemd unit
 func (ssg *SystemdServiceGenerator) GenerateOlricService() string {
 	olricConfigPath := filepath.Join(ssg.debrosDir, "configs", "olric", "config.yaml")
+	logFile := filepath.Join(ssg.debrosDir, "logs", "olric.log")
 
 	return fmt.Sprintf(`[Unit]
 Description=Olric Cache Server
@@ -164,8 +171,8 @@ Environment=OLRIC_SERVER_CONFIG=%s
 ExecStart=/usr/local/bin/olric-server
 Restart=always
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=file:%s
+StandardError=file:%s
 SyslogIdentifier=olric
 
 NoNewPrivileges=yes
@@ -175,7 +182,7 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.debrosHome, olricConfigPath, ssg.debrosDir)
+`, ssg.debrosHome, olricConfigPath, logFile, logFile, ssg.debrosDir)
 }
 
 // GenerateNodeService generates the DeBros Node systemd unit
@@ -186,6 +193,8 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService(nodeType string) string 
 	} else {
 		configFile = "node.yaml"
 	}
+
+	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("node-%s.log", nodeType))
 
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Network Node (%s)
@@ -202,8 +211,8 @@ Environment=HOME=%s
 ExecStart=%s/bin/node --config %s/configs/%s
 Restart=always
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=file:%s
+StandardError=file:%s
 SyslogIdentifier=debros-node-%s
 
 NoNewPrivileges=yes
@@ -213,12 +222,13 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, configFile, nodeType, ssg.debrosDir)
+`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, configFile, logFile, logFile, nodeType, ssg.debrosDir)
 }
 
 // GenerateGatewayService generates the DeBros Gateway systemd unit
 func (ssg *SystemdServiceGenerator) GenerateGatewayService(nodeType string) string {
 	nodeService := fmt.Sprintf("debros-node-%s.service", nodeType)
+	logFile := filepath.Join(ssg.debrosDir, "logs", "gateway.log")
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Gateway
 After=%s
@@ -233,8 +243,8 @@ Environment=HOME=%s
 ExecStart=%s/bin/gateway --config %s/configs/gateway.yaml
 Restart=always
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=file:%s
+StandardError=file:%s
 SyslogIdentifier=debros-gateway
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -247,7 +257,7 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeService, nodeService, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, ssg.debrosDir)
+`, nodeService, nodeService, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, logFile, logFile, ssg.debrosDir)
 }
 
 // SystemdController manages systemd service operations
