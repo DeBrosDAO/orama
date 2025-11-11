@@ -6,6 +6,7 @@ DeBros Network is a decentralized peer-to-peer data platform built in Go. It com
 
 - [At a Glance](#at-a-glance)
 - [Quick Start](#quick-start)
+- [Production Deployment](#production-deployment)
 - [Components & Ports](#components--ports)
 - [Configuration Cheatsheet](#configuration-cheatsheet)
 - [CLI Highlights](#cli-highlights)
@@ -53,6 +54,286 @@ DeBros Network is a decentralized peer-to-peer data platform built in Go. It com
    ./bin/dbn pubsub publish notifications "Hello World"
    ./bin/dbn pubsub subscribe notifications 10s
    ```
+
+## Production Deployment
+
+DeBros Network can be deployed as production systemd services on Linux servers. The production installer handles all dependencies, configuration, and service management automatically.
+
+### Prerequisites
+
+- **OS**: Ubuntu 20.04+, Debian 11+, or compatible Linux distribution
+- **Architecture**: `amd64` (x86_64) or `arm64` (aarch64)
+- **Permissions**: Root access (use `sudo`)
+- **Resources**: Minimum 2GB RAM, 10GB disk space, 2 CPU cores
+
+### Installation
+
+#### Quick Install
+
+Install the CLI tool first:
+
+```bash
+curl -fsSL https://install.debros.network | sudo bash
+```
+
+Or download manually from [GitHub Releases](https://github.com/DeBrosOfficial/network/releases).
+
+#### Bootstrap Node (First Node)
+
+Install the first node in your cluster:
+
+```bash
+# Main branch (stable releases)
+sudo dbn prod install --bootstrap
+
+# Nightly branch (latest development)
+sudo dbn prod install --bootstrap --branch nightly
+```
+
+The bootstrap node initializes the cluster and serves as the primary peer for other nodes to join.
+
+#### Secondary Node (Join Existing Cluster)
+
+Join an existing cluster by providing the bootstrap node's IP and peer multiaddr:
+
+```bash
+sudo dbn prod install \
+  --vps-ip <your_public_ip> \
+  --peers /ip4/<bootstrap_ip>/tcp/4001/p2p/<peer_id> \
+  --branch nightly
+```
+
+**Required flags for secondary nodes:**
+
+- `--vps-ip`: Your server's public IP address
+- `--peers`: Comma-separated list of bootstrap peer multiaddrs
+
+**Optional flags:**
+
+- `--branch`: Git branch to use (`main` or `nightly`, default: `main`)
+- `--domain`: Domain name for HTTPS (enables ACME/Let's Encrypt)
+- `--bootstrap-join`: Raft join address for secondary bootstrap nodes
+
+#### Secondary Bootstrap Node
+
+Create a secondary bootstrap node that joins an existing Raft cluster:
+
+```bash
+sudo dbn prod install \
+  --bootstrap \
+  --vps-ip <your_public_ip> \
+  --bootstrap-join <primary_bootstrap_ip>:7001 \
+  --branch nightly
+```
+
+### Branch Selection
+
+DeBros Network supports two branches:
+
+- **`main`**: Stable releases (default). Recommended for production.
+- **`nightly`**: Latest development builds. Use for testing new features.
+
+**Branch preference is saved automatically** during installation. Future upgrades will use the same branch unless you override it with `--branch`.
+
+**Examples:**
+
+```bash
+# Install with nightly branch
+sudo dbn prod install --bootstrap --branch nightly
+
+# Upgrade using saved branch preference
+sudo dbn prod upgrade --restart
+
+# Upgrade and switch to main branch
+sudo dbn prod upgrade --restart --branch main
+```
+
+### Upgrade
+
+Upgrade an existing installation to the latest version:
+
+```bash
+# Upgrade using saved branch preference
+sudo dbn prod upgrade --restart
+
+# Upgrade and switch branches
+sudo dbn prod upgrade --restart --branch nightly
+
+# Upgrade without restarting services
+sudo dbn prod upgrade
+```
+
+The upgrade process:
+
+1. ✅ Checks prerequisites
+2. ✅ Updates binaries (fetches latest from selected branch)
+3. ✅ Preserves existing configurations and data
+4. ✅ Updates configurations to latest format
+5. ✅ Updates systemd service files
+6. ✅ Optionally restarts services (`--restart` flag)
+
+**Note**: The upgrade automatically detects your node type (bootstrap vs. regular node) and preserves all secrets, data, and configurations.
+
+### Service Management
+
+All services run as systemd units under the `debros` user.
+
+#### Check Status
+
+```bash
+# View status of all services
+dbn prod status
+
+# Or use systemctl directly
+systemctl status debros-node-bootstrap
+systemctl status debros-ipfs-bootstrap
+systemctl status debros-gateway
+```
+
+#### View Logs
+
+```bash
+# View recent logs
+dbn prod logs node
+
+# Follow logs in real-time
+dbn prod logs node --follow
+
+# View specific service logs
+dbn prod logs ipfs --follow
+dbn prod logs gateway --follow
+```
+
+Available log targets: `node`, `ipfs`, `ipfs-cluster`, `rqlite`, `olric`, `gateway`
+
+#### Service Control Commands
+
+Use `dbn prod` commands for convenient service management:
+
+```bash
+# Start all services
+sudo dbn prod start
+
+# Stop all services
+sudo dbn prod stop
+
+# Restart all services
+sudo dbn prod restart
+```
+
+Or use `systemctl` directly for more control:
+
+```bash
+# Restart all services
+sudo systemctl restart debros-*
+
+# Restart specific service
+sudo systemctl restart debros-node-bootstrap
+
+# Stop services
+sudo systemctl stop debros-*
+
+# Start services
+sudo systemctl start debros-*
+
+# Enable services (start on boot)
+sudo systemctl enable debros-*
+```
+
+### Directory Structure
+
+Production installations use `/home/debros/.debros/`:
+
+```
+/home/debros/.debros/
+├── configs/              # Configuration files
+│   ├── bootstrap.yaml    # Bootstrap node config
+│   ├── node.yaml         # Regular node config
+│   ├── gateway.yaml      # Gateway config
+│   └── olric/            # Olric cache config
+├── data/                 # Runtime data
+│   ├── bootstrap/        # Bootstrap node data
+│   │   ├── ipfs/         # IPFS repository
+│   │   ├── ipfs-cluster/ # IPFS Cluster data
+│   │   └── rqlite/       # RQLite database
+│   └── node/             # Regular node data
+├── secrets/              # Secrets and keys
+│   ├── cluster-secret    # IPFS Cluster secret
+│   └── swarm.key         # IPFS swarm key
+├── logs/                 # Service logs
+│   ├── node-bootstrap.log
+│   ├── ipfs-bootstrap.log
+│   └── gateway.log
+└── .branch               # Saved branch preference
+```
+
+### Uninstall
+
+Remove all production services (preserves data and configs):
+
+```bash
+sudo dbn prod uninstall
+```
+
+This stops and removes all systemd services but keeps `/home/debros/.debros/` intact. To completely remove:
+
+```bash
+sudo dbn prod uninstall
+sudo rm -rf /home/debros/.debros
+```
+
+### Production Troubleshooting
+
+#### Services Not Starting
+
+```bash
+# Check service status
+systemctl status debros-node-bootstrap
+
+# View detailed logs
+journalctl -u debros-node-bootstrap -n 100
+
+# Check log files
+tail -f /home/debros/.debros/logs/node-bootstrap.log
+```
+
+#### Configuration Issues
+
+```bash
+# Verify configs exist
+ls -la /home/debros/.debros/configs/
+
+# Regenerate configs (preserves secrets)
+sudo dbn prod upgrade --restart
+```
+
+#### IPFS AutoConf Errors
+
+If you see "AutoConf.Enabled=false but 'auto' placeholder is used" errors, the upgrade process should fix this automatically. If not:
+
+```bash
+# Re-run upgrade to fix IPFS config
+sudo dbn prod upgrade --restart
+```
+
+#### Port Conflicts
+
+```bash
+# Check what's using ports
+sudo lsof -i :4001  # P2P port
+sudo lsof -i :5001  # RQLite HTTP
+sudo lsof -i :6001  # Gateway
+```
+
+#### Reset Installation
+
+To start fresh (⚠️ **destroys all data**):
+
+```bash
+sudo dbn prod uninstall
+sudo rm -rf /home/debros/.debros
+sudo dbn prod install --bootstrap --branch nightly
+```
 
 ## Components & Ports
 

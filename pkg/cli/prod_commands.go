@@ -28,6 +28,12 @@ func HandleProdCommand(args []string) {
 		handleProdUpgrade(subargs)
 	case "status":
 		handleProdStatus()
+	case "start":
+		handleProdStart()
+	case "stop":
+		handleProdStop()
+	case "restart":
+		handleProdRestart()
 	case "logs":
 		handleProdLogs(subargs)
 	case "uninstall":
@@ -59,6 +65,9 @@ func showProdHelp() {
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
 	fmt.Printf("      --branch BRANCH        - Git branch to use (main or nightly, uses saved preference if not specified)\n")
 	fmt.Printf("  status                    - Show status of production services\n")
+	fmt.Printf("  start                     - Start all production services (requires root/sudo)\n")
+	fmt.Printf("  stop                      - Stop all production services (requires root/sudo)\n")
+	fmt.Printf("  restart                   - Restart all production services (requires root/sudo)\n")
 	fmt.Printf("  logs <service>            - View production service logs\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --follow              - Follow logs in real-time\n")
@@ -76,6 +85,10 @@ func showProdHelp() {
 	fmt.Printf("  sudo dbn prod upgrade --restart\n\n")
 	fmt.Printf("  # Upgrade and switch to nightly branch\n")
 	fmt.Printf("  sudo dbn prod upgrade --restart --branch nightly\n\n")
+	fmt.Printf("  # Service management\n")
+	fmt.Printf("  sudo dbn prod start\n")
+	fmt.Printf("  sudo dbn prod stop\n")
+	fmt.Printf("  sudo dbn prod restart\n\n")
 	fmt.Printf("  dbn prod status\n")
 	fmt.Printf("  dbn prod logs node --follow\n")
 }
@@ -450,6 +463,112 @@ func handleProdLogs(args []string) {
 		cmd.Stderr = os.Stderr
 		cmd.Run()
 	}
+}
+
+// getProductionServices returns a list of all DeBros production service names that exist
+func getProductionServices() []string {
+	// All possible service names (both bootstrap and node variants)
+	allServices := []string{
+		"debros-gateway",
+		"debros-node-node",
+		"debros-node-bootstrap",
+		"debros-olric",
+		"debros-rqlite-bootstrap",
+		"debros-rqlite-node",
+		"debros-ipfs-cluster-bootstrap",
+		"debros-ipfs-cluster-node",
+		"debros-ipfs-bootstrap",
+		"debros-ipfs-node",
+	}
+
+	// Filter to only existing services by checking if unit file exists
+	var existing []string
+	for _, svc := range allServices {
+		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+		if _, err := os.Stat(unitPath); err == nil {
+			existing = append(existing, svc)
+		}
+	}
+
+	return existing
+}
+
+func handleProdStart() {
+	if os.Geteuid() != 0 {
+		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Starting all DeBros production services...\n")
+
+	services := getProductionServices()
+	if len(services) == 0 {
+		fmt.Printf("  ⚠️  No DeBros services found\n")
+		return
+	}
+
+	for _, svc := range services {
+		cmd := exec.Command("systemctl", "start", svc)
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("  ⚠️  Failed to start %s: %v\n", svc, err)
+		} else {
+			fmt.Printf("  ✓ Started %s\n", svc)
+		}
+	}
+
+	fmt.Printf("\n✅ All services started\n")
+}
+
+func handleProdStop() {
+	if os.Geteuid() != 0 {
+		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Stopping all DeBros production services...\n")
+
+	services := getProductionServices()
+	if len(services) == 0 {
+		fmt.Printf("  ⚠️  No DeBros services found\n")
+		return
+	}
+
+	for _, svc := range services {
+		cmd := exec.Command("systemctl", "stop", svc)
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("  ⚠️  Failed to stop %s: %v\n", svc, err)
+		} else {
+			fmt.Printf("  ✓ Stopped %s\n", svc)
+		}
+	}
+
+	fmt.Printf("\n✅ All services stopped\n")
+}
+
+func handleProdRestart() {
+	if os.Geteuid() != 0 {
+		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Restarting all DeBros production services...\n")
+
+	services := getProductionServices()
+	if len(services) == 0 {
+		fmt.Printf("  ⚠️  No DeBros services found\n")
+		return
+	}
+
+	for _, svc := range services {
+		cmd := exec.Command("systemctl", "restart", svc)
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("  ⚠️  Failed to restart %s: %v\n", svc, err)
+		} else {
+			fmt.Printf("  ✓ Restarted %s\n", svc)
+		}
+	}
+
+	fmt.Printf("\n✅ All services restarted\n")
 }
 
 func handleProdUninstall() {

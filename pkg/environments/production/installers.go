@@ -355,7 +355,7 @@ func (bi *BinaryInstaller) InstallSystemDependencies() error {
 }
 
 // InitializeIPFSRepo initializes an IPFS repository for a node
-func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swarmKeyPath string) error {
+func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 	repoExists := false
 	if _, err := os.Stat(configPath); err == nil {
@@ -391,6 +391,13 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 			return fmt.Errorf("failed to copy swarm key: %w", err)
 		}
 		swarmKeyExists = true
+	}
+
+	// Configure IPFS addresses (API, Gateway, Swarm) by modifying the config file directly
+	// This ensures the ports are set correctly and avoids conflicts with RQLite on port 5001
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Configuring IPFS addresses (API: %d, Gateway: %d, Swarm: %d)...\n", apiPort, gatewayPort, swarmPort)
+	if err := bi.configureIPFSAddresses(ipfsRepoPath, apiPort, gatewayPort, swarmPort); err != nil {
+		return fmt.Errorf("failed to configure IPFS addresses: %w", err)
 	}
 
 	// Always disable AutoConf for private swarm when swarm.key is present
@@ -433,6 +440,44 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 
 	// Fix ownership
 	exec.Command("chown", "-R", "debros:debros", ipfsRepoPath).Run()
+
+	return nil
+}
+
+// configureIPFSAddresses configures the IPFS API, Gateway, and Swarm addresses in the config file
+func (bi *BinaryInstaller) configureIPFSAddresses(ipfsRepoPath string, apiPort, gatewayPort, swarmPort int) error {
+	configPath := filepath.Join(ipfsRepoPath, "config")
+
+	// Read existing config
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read IPFS config: %w", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse IPFS config: %w", err)
+	}
+
+	// Set Addresses
+	config["Addresses"] = map[string]interface{}{
+		"API":     []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", apiPort)},
+		"Gateway": []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", gatewayPort)},
+		"Swarm": []string{
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", swarmPort),
+			fmt.Sprintf("/ip6/::/tcp/%d", swarmPort),
+		},
+	}
+
+	// Write config back
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal IPFS config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
+		return fmt.Errorf("failed to write IPFS config: %w", err)
+	}
 
 	return nil
 }

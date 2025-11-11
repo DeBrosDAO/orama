@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.68.0] - 2025-11-11
+
+### Added
+- Added comprehensive documentation for production deployment, including installation, upgrade, service management, and troubleshooting.
+- Added new CLI commands (`dbn prod start`, `dbn prod stop`, `dbn prod restart`) for convenient management of production systemd services.
+
+### Changed
+- Updated IPFS configuration during production installation to use port 4501 for the API (to avoid conflicts with RQLite on port 5001) and port 8080 for the Gateway.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Ensured that IPFS configuration automatically disables AutoConf when a private swarm key is present during installation and upgrade, preventing startup errors.
+
 ## [0.67.7] - 2025-11-11
 
 ### Added

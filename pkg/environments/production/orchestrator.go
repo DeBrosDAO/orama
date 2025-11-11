@@ -263,8 +263,9 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 	dataDir := filepath.Join(ps.debrosDir, "data", nodeType)
 
 	// Initialize IPFS repo with correct path structure
+	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4001 for swarm
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(nodeType, ipfsRepoPath, filepath.Join(ps.debrosDir, "secrets", "swarm.key")); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(nodeType, ipfsRepoPath, filepath.Join(ps.debrosDir, "secrets", "swarm.key"), 4501, 8080, 4001); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
