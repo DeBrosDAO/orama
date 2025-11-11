@@ -23,7 +23,7 @@ func NewSystemdServiceGenerator(debrosHome, debrosDir string) *SystemdServiceGen
 }
 
 // GenerateIPFSService generates the IPFS daemon systemd unit
-func (ssg *SystemdServiceGenerator) GenerateIPFSService(nodeType string) string {
+func (ssg *SystemdServiceGenerator) GenerateIPFSService(nodeType string, ipfsBinary string) string {
 	var ipfsRepoPath string
 	if nodeType == "bootstrap" {
 		ipfsRepoPath = filepath.Join(ssg.debrosDir, "data", "bootstrap", "ipfs", "repo")
@@ -34,7 +34,7 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSService(nodeType string) string 
 	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("ipfs-%s.log", nodeType))
 
 	return fmt.Sprintf(`[Unit]
-Description=IPFS Daemon (%s)
+Description=IPFS Daemon (%[1]s)
 After=network-online.target
 Wants=network-online.target
 
@@ -42,28 +42,28 @@ Wants=network-online.target
 Type=simple
 User=debros
 Group=debros
-Environment=HOME=%s
-Environment=IPFS_PATH=%s
-ExecStartPre=/bin/bash -c 'if [ -f %s/secrets/swarm.key ] && [ ! -f %s/swarm.key ]; then cp %s/secrets/swarm.key %s/swarm.key && chmod 600 %s/swarm.key; fi'
-ExecStart=/usr/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=%s
+Environment=HOME=%[2]s
+Environment=IPFS_PATH=%[3]s
+ExecStartPre=/bin/bash -c 'if [ -f %[4]s/secrets/swarm.key ] && [ ! -f %[3]s/swarm.key ]; then cp %[4]s/secrets/swarm.key %[3]s/swarm.key && chmod 600 %[3]s/swarm.key; fi'
+ExecStart=%[6]s daemon --enable-pubsub-experiment --repo-dir=%[3]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%s
-StandardError=file:%s
-SyslogIdentifier=ipfs-%s
+StandardOutput=file:%[5]s
+StandardError=file:%[5]s
+SyslogIdentifier=ipfs-%[1]s
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%s
+ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, ipfsRepoPath, ssg.debrosDir, ipfsRepoPath, ssg.debrosDir, ipfsRepoPath, ipfsRepoPath, ipfsRepoPath, logFile, logFile, nodeType, ssg.debrosDir)
+`, nodeType, ssg.debrosHome, ipfsRepoPath, ssg.debrosDir, logFile, ipfsBinary)
 }
 
 // GenerateIPFSClusterService generates the IPFS Cluster systemd unit
-func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(nodeType string) string {
+func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(nodeType string, clusterBinary string) string {
 	var clusterPath string
 	if nodeType == "bootstrap" {
 		clusterPath = filepath.Join(ssg.debrosDir, "data", "bootstrap", "ipfs-cluster")
@@ -74,37 +74,37 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(nodeType string) 
 	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", nodeType))
 
 	return fmt.Sprintf(`[Unit]
-Description=IPFS Cluster Service (%s)
-After=debros-ipfs-%s.service
-Wants=debros-ipfs-%s.service
-Requires=debros-ipfs-%s.service
+Description=IPFS Cluster Service (%[1]s)
+After=debros-ipfs-%[1]s.service
+Wants=debros-ipfs-%[1]s.service
+Requires=debros-ipfs-%[1]s.service
 
 [Service]
 Type=simple
 User=debros
 Group=debros
-WorkingDirectory=%s
-Environment=HOME=%s
-Environment=IPFS_CLUSTER_PATH=%s
-ExecStart=/usr/local/bin/ipfs-cluster-service daemon
+WorkingDirectory=%[2]s
+Environment=HOME=%[2]s
+Environment=IPFS_CLUSTER_PATH=%[3]s
+ExecStart=%[6]s daemon
 Restart=always
 RestartSec=5
-StandardOutput=file:%s
-StandardError=file:%s
-SyslogIdentifier=ipfs-cluster-%s
+StandardOutput=file:%[4]s
+StandardError=file:%[4]s
+SyslogIdentifier=ipfs-cluster-%[1]s
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%s
+ReadWritePaths=%[5]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, clusterPath, logFile, logFile, nodeType, ssg.debrosDir)
+`, nodeType, ssg.debrosHome, clusterPath, logFile, ssg.debrosDir, clusterBinary)
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
-func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
+func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, rqliteBinary string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
 	var dataDir string
 	if nodeType == "bootstrap" {
 		dataDir = filepath.Join(ssg.debrosDir, "data", "bootstrap", "rqlite")
@@ -131,7 +131,7 @@ func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, httpP
 	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("rqlite-%s.log", nodeType))
 
 	return fmt.Sprintf(`[Unit]
-Description=RQLite Database (%s)
+Description=RQLite Database (%[1]s)
 After=network-online.target
 Wants=network-online.target
 
@@ -139,26 +139,26 @@ Wants=network-online.target
 Type=simple
 User=debros
 Group=debros
-Environment=HOME=%s
-ExecStart=/usr/local/bin/rqlited %s
+Environment=HOME=%[2]s
+ExecStart=%[6]s %[3]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%s
-StandardError=file:%s
-SyslogIdentifier=rqlite-%s
+StandardOutput=file:%[4]s
+StandardError=file:%[4]s
+SyslogIdentifier=rqlite-%[1]s
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%s
+ReadWritePaths=%[5]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, args, logFile, logFile, nodeType, ssg.debrosDir)
+`, nodeType, ssg.debrosHome, args, logFile, ssg.debrosDir, rqliteBinary)
 }
 
 // GenerateOlricService generates the Olric systemd unit
-func (ssg *SystemdServiceGenerator) GenerateOlricService() string {
+func (ssg *SystemdServiceGenerator) GenerateOlricService(olricBinary string) string {
 	olricConfigPath := filepath.Join(ssg.debrosDir, "configs", "olric", "config.yaml")
 	logFile := filepath.Join(ssg.debrosDir, "logs", "olric.log")
 
@@ -171,23 +171,23 @@ Wants=network-online.target
 Type=simple
 User=debros
 Group=debros
-Environment=HOME=%s
-Environment=OLRIC_SERVER_CONFIG=%s
-ExecStart=/usr/local/bin/olric-server
+Environment=HOME=%[1]s
+Environment=OLRIC_SERVER_CONFIG=%[2]s
+ExecStart=%[5]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%s
-StandardError=file:%s
+StandardOutput=file:%[3]s
+StandardError=file:%[3]s
 SyslogIdentifier=olric
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%s
+ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.debrosHome, olricConfigPath, logFile, logFile, ssg.debrosDir)
+`, ssg.debrosHome, olricConfigPath, logFile, ssg.debrosDir, olricBinary)
 }
 
 // GenerateNodeService generates the DeBros Node systemd unit

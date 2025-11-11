@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.2] - 2025-11-11
+
+### Added
+- Added a new utility function to reliably resolve the full path of required external binaries (like ipfs, rqlited, etc.).
+
+### Changed
+- Improved service initialization by validating the availability and path of all required external binaries before creating systemd service units.
+- Updated systemd service generation logic to use the resolved, fully-qualified paths for external binaries instead of relying on hardcoded paths.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Changed IPFS initialization from a warning to a fatal error if the repo fails to initialize, ensuring setup stops on critical failures.
+
 ## [0.67.1] - 2025-11-11
 
 ### Added

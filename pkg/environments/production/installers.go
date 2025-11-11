@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // BinaryInstaller handles downloading and installing external binaries
@@ -153,6 +154,44 @@ func (bi *BinaryInstaller) InstallGo() error {
 	return nil
 }
 
+// ResolveBinaryPath finds the fully-qualified path to a required executable
+func (bi *BinaryInstaller) ResolveBinaryPath(binary string, extraPaths ...string) (string, error) {
+	// First try to find in PATH
+	if path, err := exec.LookPath(binary); err == nil {
+		if abs, err := filepath.Abs(path); err == nil {
+			return abs, nil
+		}
+		return path, nil
+	}
+
+	// Then try extra candidate paths
+	for _, candidate := range extraPaths {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			if abs, err := filepath.Abs(candidate); err == nil {
+				return abs, nil
+			}
+			return candidate, nil
+		}
+	}
+
+	// Not found - generate error message
+	checked := make([]string, 0, len(extraPaths))
+	for _, candidate := range extraPaths {
+		if candidate != "" {
+			checked = append(checked, candidate)
+		}
+	}
+
+	if len(checked) == 0 {
+		return "", fmt.Errorf("required binary %q not found in path", binary)
+	}
+
+	return "", fmt.Errorf("required binary %q not found in path (also checked %s)", binary, strings.Join(checked, ", "))
+}
+
 // InstallDeBrosBinaries clones and builds DeBros binaries
 func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome string) error {
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  Building DeBros binaries...\n")
@@ -230,8 +269,14 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swa
 		return fmt.Errorf("failed to create IPFS repo directory: %w", err)
 	}
 
+	// Resolve IPFS binary path
+	ipfsBinary, err := bi.ResolveBinaryPath("ipfs", "/usr/local/bin/ipfs", "/usr/bin/ipfs")
+	if err != nil {
+		return err
+	}
+
 	// Initialize IPFS with the correct repo path
-	cmd := exec.Command("ipfs", "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
+	cmd := exec.Command(ipfsBinary, "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
 	}

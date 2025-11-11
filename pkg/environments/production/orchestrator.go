@@ -228,7 +228,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 	// Initialize IPFS repo with correct path structure
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
 	if err := ps.binaryInstaller.InitializeIPFSRepo(nodeType, ipfsRepoPath, filepath.Join(ps.debrosDir, "secrets", "swarm.key")); err != nil {
-		ps.logf("  ⚠️  IPFS initialization warning: %v", err)
+		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
 	// Initialize IPFS Cluster path (just ensure directory exists, actual init happens in daemon startup)
@@ -340,8 +340,26 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP string) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
+	// Validate all required binaries are available before creating services
+	ipfsBinary, err := ps.binaryInstaller.ResolveBinaryPath("ipfs", "/usr/local/bin/ipfs", "/usr/bin/ipfs")
+	if err != nil {
+		return fmt.Errorf("ipfs binary not available: %w", err)
+	}
+	clusterBinary, err := ps.binaryInstaller.ResolveBinaryPath("ipfs-cluster-service", "/usr/local/bin/ipfs-cluster-service", "/usr/bin/ipfs-cluster-service")
+	if err != nil {
+		return fmt.Errorf("ipfs-cluster-service binary not available: %w", err)
+	}
+	rqliteBinary, err := ps.binaryInstaller.ResolveBinaryPath("rqlited", "/usr/local/bin/rqlited", "/usr/bin/rqlited")
+	if err != nil {
+		return fmt.Errorf("rqlited binary not available: %w", err)
+	}
+	olricBinary, err := ps.binaryInstaller.ResolveBinaryPath("olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server")
+	if err != nil {
+		return fmt.Errorf("olric-server binary not available: %w", err)
+	}
+
 	// IPFS service
-	ipfsUnit := ps.serviceGenerator.GenerateIPFSService(nodeType)
+	ipfsUnit := ps.serviceGenerator.GenerateIPFSService(nodeType, ipfsBinary)
 	unitName := fmt.Sprintf("debros-ipfs-%s.service", nodeType)
 	if err := ps.serviceController.WriteServiceUnit(unitName, ipfsUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS service: %w", err)
@@ -349,7 +367,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	ps.logf("  ✓ IPFS service created: %s", unitName)
 
 	// IPFS Cluster service
-	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(nodeType)
+	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(nodeType, clusterBinary)
 	clusterUnitName := fmt.Sprintf("debros-ipfs-cluster-%s.service", nodeType)
 	if err := ps.serviceController.WriteServiceUnit(clusterUnitName, clusterUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS Cluster service: %w", err)
@@ -369,7 +387,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 	ps.logf("  RQLite will advertise: %s (advertise IP: %s)", rqliteJoinAddr, advertiseIP)
 
-	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(nodeType, 5001, 7001, rqliteJoinAddr, advertiseIP)
+	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(nodeType, rqliteBinary, 5001, 7001, rqliteJoinAddr, advertiseIP)
 	rqliteUnitName := fmt.Sprintf("debros-rqlite-%s.service", nodeType)
 	if err := ps.serviceController.WriteServiceUnit(rqliteUnitName, rqliteUnit); err != nil {
 		return fmt.Errorf("failed to write RQLite service: %w", err)
@@ -377,7 +395,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	ps.logf("  ✓ RQLite service created: %s", rqliteUnitName)
 
 	// Olric service
-	olricUnit := ps.serviceGenerator.GenerateOlricService()
+	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
 	if err := ps.serviceController.WriteServiceUnit("debros-olric.service", olricUnit); err != nil {
 		return fmt.Errorf("failed to write Olric service: %w", err)
 	}
