@@ -551,12 +551,12 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 		}
 	}
 
-	// Always update the cluster secret (for both new and existing configs)
-	// This ensures existing installations get the secret synchronized
+	// Always update the cluster secret and IPFS port (for both new and existing configs)
+	// This ensures existing installations get the secret and port synchronized
 	if clusterSecret != "" {
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret...\n")
-		if err := bi.updateClusterSecret(clusterPath, clusterSecret); err != nil {
-			return fmt.Errorf("failed to update cluster secret: %w", err)
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret and IPFS port...\n")
+		if err := bi.updateClusterConfig(clusterPath, clusterSecret, ipfsAPIPort); err != nil {
+			return fmt.Errorf("failed to update cluster config: %w", err)
 		}
 	}
 
@@ -566,8 +566,8 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 	return nil
 }
 
-// updateClusterSecret updates the secret field in IPFS Cluster service.json
-func (bi *BinaryInstaller) updateClusterSecret(clusterPath, secret string) error {
+// updateClusterConfig updates the secret and IPFS port in IPFS Cluster service.json
+func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsAPIPort int) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 
 	// Read existing config
@@ -588,6 +588,21 @@ func (bi *BinaryInstaller) updateClusterSecret(clusterPath, secret string) error
 	} else {
 		config["cluster"] = map[string]interface{}{
 			"secret": secret,
+		}
+	}
+
+	// Update IPFS port in IPFS Proxy configuration
+	ipfsNodeMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", ipfsAPIPort)
+	if api, ok := config["api"].(map[string]interface{}); ok {
+		if ipfsproxy, ok := api["ipfsproxy"].(map[string]interface{}); ok {
+			ipfsproxy["node_multiaddress"] = ipfsNodeMultiaddr
+		}
+	}
+
+	// Update IPFS port in IPFS Connector configuration
+	if ipfsConnector, ok := config["ipfs_connector"].(map[string]interface{}); ok {
+		if ipfshttp, ok := ipfsConnector["ipfshttp"].(map[string]interface{}); ok {
+			ipfshttp["node_multiaddress"] = ipfsNodeMultiaddr
 		}
 	}
 

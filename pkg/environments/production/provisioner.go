@@ -24,23 +24,28 @@ func NewFilesystemProvisioner(debrosHome string) *FilesystemProvisioner {
 }
 
 // EnsureDirectoryStructure creates all required directories
-func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
+// nodeType can be "bootstrap", "node", or "" (empty string means create base directories only)
+func (fp *FilesystemProvisioner) EnsureDirectoryStructure(nodeType string) error {
+	// Base directories that are always needed
 	dirs := []string{
 		fp.debrosDir,
 		filepath.Join(fp.debrosDir, "configs"),
 		filepath.Join(fp.debrosDir, "secrets"),
 		filepath.Join(fp.debrosDir, "data"),
-		filepath.Join(fp.debrosDir, "data", "bootstrap", "ipfs", "repo"),
-		filepath.Join(fp.debrosDir, "data", "bootstrap", "ipfs-cluster"),
-		filepath.Join(fp.debrosDir, "data", "bootstrap", "rqlite"),
-		filepath.Join(fp.debrosDir, "data", "node", "ipfs", "repo"),
-		filepath.Join(fp.debrosDir, "data", "node", "ipfs-cluster"),
-		filepath.Join(fp.debrosDir, "data", "node", "rqlite"),
 		filepath.Join(fp.debrosDir, "logs"),
 		filepath.Join(fp.debrosDir, "tls-cache"),
 		filepath.Join(fp.debrosDir, "backups"),
 		filepath.Join(fp.debrosHome, "bin"),
 		filepath.Join(fp.debrosHome, "src"),
+	}
+
+	// Only create directories for the requested node type
+	if nodeType == "bootstrap" || nodeType == "node" {
+		dirs = append(dirs,
+			filepath.Join(fp.debrosDir, "data", nodeType, "ipfs", "repo"),
+			filepath.Join(fp.debrosDir, "data", nodeType, "ipfs-cluster"),
+			filepath.Join(fp.debrosDir, "data", nodeType, "rqlite"),
+		)
 	}
 
 	for _, dir := range dirs {

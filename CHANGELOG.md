@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.0] - 2025-11-11
+
+### Added
+- Added comprehensive documentation for setting up HTTPS using a domain name, including configuration steps for both installation and existing setups.
+- Added the `--force` flag to the `install` command for reconfiguring all settings.
+- Added new log targets (`ipfs-cluster`, `rqlite`, `olric`) and improved the `dbn prod logs` command documentation.
+
+### Changed
+- Improved the IPFS Cluster configuration logic to ensure the cluster secret and IPFS API port are correctly synchronized during updates.
+- Refined the directory structure creation process to ensure node-specific data directories are created only when initializing services.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.68.1] - 2025-11-11
 
 ### Added

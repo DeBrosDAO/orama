@@ -200,8 +200,8 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 		}
 	}
 
-	// Create directory structure
-	if err := ps.fsProvisioner.EnsureDirectoryStructure(); err != nil {
+	// Create directory structure (base directories only - node-specific dirs created in Phase2c)
+	if err := ps.fsProvisioner.EnsureDirectoryStructure(""); err != nil {
 		return fmt.Errorf("failed to create directory structure: %w", err)
 	}
 	ps.logf("  ✓ Directory structure created")
@@ -258,6 +258,11 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 // Phase2cInitializeServices initializes service repositories and configurations
 func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 	ps.logf("Phase 2c: Initializing services...")
+
+	// Ensure node-specific directories exist
+	if err := ps.fsProvisioner.EnsureDirectoryStructure(nodeType); err != nil {
+		return fmt.Errorf("failed to create node-specific directories: %w", err)
+	}
 
 	// Build paths with nodeType awareness to match systemd unit definitions
 	dataDir := filepath.Join(ps.debrosDir, "data", nodeType)

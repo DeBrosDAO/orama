@@ -111,8 +111,9 @@ sudo dbn prod install \
 **Optional flags:**
 
 - `--branch`: Git branch to use (`main` or `nightly`, default: `main`)
-- `--domain`: Domain name for HTTPS (enables ACME/Let's Encrypt)
+- `--domain`: Domain name for HTTPS (enables ACME/Let's Encrypt) - see [HTTPS Setup](#https-setup-with-domain) below
 - `--bootstrap-join`: Raft join address for secondary bootstrap nodes
+- `--force`: Reconfigure all settings (use with caution)
 
 #### Secondary Bootstrap Node
 
@@ -174,6 +175,103 @@ The upgrade process:
 
 **Note**: The upgrade automatically detects your node type (bootstrap vs. regular node) and preserves all secrets, data, and configurations.
 
+**Note**: Currently, the `upgrade` command does not support adding a domain via `--domain` flag. To enable HTTPS after installation, see [Adding Domain After Installation](#adding-domain-after-installation) below.
+
+### HTTPS Setup with Domain
+
+DeBros Gateway supports automatic HTTPS with Let's Encrypt certificates via ACME. This enables secure connections on ports 80 (HTTP redirect) and 443 (HTTPS).
+
+#### Prerequisites
+
+- Domain name pointing to your server's public IP address
+- Ports 80 and 443 open and accessible from the internet
+- Gateway service running
+
+#### Adding Domain During Installation
+
+Specify your domain during installation:
+
+```bash
+# Bootstrap node with HTTPS
+sudo dbn prod install --bootstrap --domain node-kv4la8.debros.network --branch nightly
+
+# Secondary node with HTTPS
+sudo dbn prod install \
+  --vps-ip <your_public_ip> \
+  --peers /ip4/<bootstrap_ip>/tcp/4001/p2p/<peer_id> \
+  --domain example.com \
+  --branch nightly
+```
+
+The gateway will automatically:
+
+- Obtain Let's Encrypt certificates via ACME
+- Serve HTTP on port 80 (redirects to HTTPS)
+- Serve HTTPS on port 443
+- Renew certificates automatically
+
+#### Adding Domain After Installation
+
+Currently, the `upgrade` command doesn't support `--domain` flag. To enable HTTPS on an existing installation:
+
+1. **Edit the gateway configuration:**
+
+```bash
+sudo nano /home/debros/.debros/configs/gateway.yaml
+```
+
+2. **Update the configuration:**
+
+```yaml
+listen_addr: ":6001"
+client_namespace: "default"
+rqlite_dsn: ""
+bootstrap_peers: []
+enable_https: true
+domain_name: "your-domain.com"
+tls_cache_dir: "/home/debros/.debros/tls-cache"
+olric_servers:
+  - "127.0.0.1:3320"
+olric_timeout: "10s"
+ipfs_cluster_api_url: "http://localhost:9094"
+ipfs_api_url: "http://localhost:4501"
+ipfs_timeout: "60s"
+ipfs_replication_factor: 3
+```
+
+3. **Ensure ports 80 and 443 are available:**
+
+```bash
+# Check if ports are in use
+sudo lsof -i :80
+sudo lsof -i :443
+
+# If needed, stop conflicting services
+```
+
+4. **Restart the gateway:**
+
+```bash
+sudo systemctl restart debros-gateway.service
+```
+
+5. **Verify HTTPS is working:**
+
+```bash
+# Check gateway logs
+sudo journalctl -u debros-gateway.service -f
+
+# Test HTTPS endpoint
+curl https://your-domain.com/health
+```
+
+**Important Notes:**
+
+- The gateway will automatically obtain Let's Encrypt certificates on first start
+- Certificates are cached in `/home/debros/.debros/tls-cache`
+- Certificate renewal happens automatically
+- Ensure your domain's DNS A record points to the server's public IP before enabling HTTPS
+
 ### Service Management
 
 All services run as systemd units under the `debros` user.
@@ -193,7 +291,7 @@ systemctl status debros-gateway
 #### View Logs
 
 ```bash
-# View recent logs
+# View recent logs (last 50 lines)
 dbn prod logs node
 
 # Follow logs in real-time
@@ -201,10 +299,22 @@ dbn prod logs node --follow
 
 # View specific service logs
 dbn prod logs ipfs --follow
+dbn prod logs ipfs-cluster --follow
+dbn prod logs rqlite --follow
+dbn prod logs olric --follow
 dbn prod logs gateway --follow
 ```
 
-Available log targets: `node`, `ipfs`, `ipfs-cluster`, `rqlite`, `olric`, `gateway`
+**Available log service names:**
+
+- `node` - DeBros Network Node (bootstrap or regular)
+- `ipfs` - IPFS Daemon
+- `ipfs-cluster` - IPFS Cluster Service
+- `rqlite` - RQLite Database
+- `olric` - Olric Cache Server
+- `gateway` - DeBros Gateway
+
+**Note:** The `logs` command uses journalctl and accepts the full systemd service name. Use the short names above for convenience.
 
 #### Service Control Commands
 
@@ -238,6 +348,59 @@ sudo systemctl start debros-*
 
 # Enable services (start on boot)
 sudo systemctl enable debros-*
+```
+
+### Complete Production Commands Reference
+
+#### Installation & Upgrade
+
+```bash
+# Install bootstrap node
+sudo dbn prod install --bootstrap [--domain DOMAIN] [--branch BRANCH]
+
+# Install secondary node
+sudo dbn prod install --vps-ip IP --peers ADDRS [--domain DOMAIN] [--branch BRANCH]
+
+# Install secondary bootstrap
+sudo dbn prod install --bootstrap --vps-ip IP --bootstrap-join ADDR [--domain DOMAIN] [--branch BRANCH]
+
+# Upgrade installation
+sudo dbn prod upgrade [--restart] [--branch BRANCH]
+```
+
+#### Service Management
+
+```bash
+# Check service status (no sudo required)
+dbn prod status
+
+# Start all services
+sudo dbn prod start
+
+# Stop all services
+sudo dbn prod stop
+
+# Restart all services
+sudo dbn prod restart
+```
+
+#### Logs
+
+```bash
+# View recent logs
+dbn prod logs <service>
+
+# Follow logs in real-time
+dbn prod logs <service> --follow
+
+# Available services: node, ipfs, ipfs-cluster, rqlite, olric, gateway
+```
+
+#### Uninstall
+
+```bash
+# Remove all services (preserves data and configs)
+sudo dbn prod uninstall
 ```
 
 ### Directory Structure
@@ -275,7 +438,9 @@ Remove all production services (preserves data and configs):
 sudo dbn prod uninstall
 ```
 
-This stops and removes all systemd services but keeps `/home/debros/.debros/` intact. To completely remove:
+This stops and removes all systemd services but keeps `/home/debros/.debros/` intact. You'll be prompted to confirm before uninstalling.
+
+**To completely remove everything:**
 
 ```bash
 sudo dbn prod uninstall
