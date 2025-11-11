@@ -45,7 +45,32 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+			return fmt.Errorf("failed to create directory %s: %w", dir)
+		}
+	}
+
+	// Create log files with correct permissions so systemd can write to them
+	logsDir := filepath.Join(fp.debrosDir, "logs")
+	logFiles := []string{
+		"olric.log",
+		"gateway.log",
+		"ipfs-bootstrap.log",
+		"ipfs-cluster-bootstrap.log",
+		"rqlite-bootstrap.log",
+		"node-bootstrap.log",
+		"ipfs-node.log",
+		"ipfs-cluster-node.log",
+		"rqlite-node.log",
+		"node-node.log",
+	}
+
+	for _, logFile := range logFiles {
+		logPath := filepath.Join(logsDir, logFile)
+		// Create empty file if it doesn't exist
+		if _, err := os.Stat(logPath); os.IsNotExist(err) {
+			if err := os.WriteFile(logPath, []byte{}, 0644); err != nil {
+				return fmt.Errorf("failed to create log file %s: %w", logPath, err)
+			}
 		}
 	}
 
@@ -54,22 +79,23 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 
 // FixOwnership changes ownership of .debros directory to debros user
 func (fp *FilesystemProvisioner) FixOwnership() error {
+	// Fix entire .debros directory recursively (includes all data, configs, logs, etc.)
 	cmd := exec.Command("chown", "-R", "debros:debros", fp.debrosDir)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set ownership for %s: %w", fp.debrosDir, err)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.debrosDir, err, string(output))
 	}
 
 	// Also fix home directory ownership
 	cmd = exec.Command("chown", "debros:debros", fp.debrosHome)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set ownership for %s: %w", fp.debrosHome, err)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.debrosHome, err, string(output))
 	}
 
 	// Fix bin directory
 	binDir := filepath.Join(fp.debrosHome, "bin")
 	cmd = exec.Command("chown", "-R", "debros:debros", binDir)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set ownership for %s: %w", binDir, err)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", binDir, err, string(output))
 	}
 
 	return nil

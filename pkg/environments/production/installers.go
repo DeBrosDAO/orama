@@ -322,9 +322,40 @@ func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome strin
 
 	// Copy binaries
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Copying binaries...\n")
-	cmd = exec.Command("sh", "-c", fmt.Sprintf("cp -r %s/bin/* %s/", srcDir, binDir))
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to copy binaries: %w", err)
+	srcBinDir := filepath.Join(srcDir, "bin")
+
+	// Check if source bin directory exists
+	if _, err := os.Stat(srcBinDir); os.IsNotExist(err) {
+		return fmt.Errorf("source bin directory does not exist at %s - build may have failed", srcBinDir)
+	}
+
+	// Check if there are any files to copy
+	entries, err := os.ReadDir(srcBinDir)
+	if err != nil {
+		return fmt.Errorf("failed to read source bin directory: %w", err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("source bin directory is empty - build may have failed")
+	}
+
+	// Copy each binary individually to avoid wildcard expansion issues
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		srcPath := filepath.Join(srcBinDir, entry.Name())
+		dstPath := filepath.Join(binDir, entry.Name())
+
+		// Read source file
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return fmt.Errorf("failed to read binary %s: %w", entry.Name(), err)
+		}
+
+		// Write destination file
+		if err := os.WriteFile(dstPath, data, 0755); err != nil {
+			return fmt.Errorf("failed to write binary %s: %w", entry.Name(), err)
+		}
 	}
 
 	exec.Command("chmod", "-R", "755", binDir).Run()

@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.68.1] - 2025-11-11
+
+### Added
+- Pre-create log files during setup to ensure correct permissions for systemd logging.
+
+### Changed
+- Improved binary installation process to handle copying files individually, preventing potential shell wildcard issues.
+- Enhanced ownership fixing logic during installation to ensure all files created by root (especially during service initialization) are correctly owned by the 'debros' user.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.68.0] - 2025-11-11
 
 ### Added

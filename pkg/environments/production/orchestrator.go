@@ -285,6 +285,12 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 		ps.logf("  ⚠️  RQLite initialization warning: %v", err)
 	}
 
+	// Ensure all directories and files created during service initialization have correct ownership
+	// This is critical because directories/files created as root need to be owned by debros user
+	if err := ps.fsProvisioner.FixOwnership(); err != nil {
+		return fmt.Errorf("failed to fix ownership after service initialization: %w", err)
+	}
+
 	ps.logf("  ✓ Services initialized")
 	return nil
 }
