@@ -61,6 +61,7 @@ func showProdHelp() {
 	fmt.Printf("      --bootstrap-join ADDR - Bootstrap raft join address (for secondary bootstrap)\n")
 	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (optional)\n")
 	fmt.Printf("      --branch BRANCH       - Git branch to use (main or nightly, default: main)\n")
+	fmt.Printf("      --ignore-resource-checks - Skip disk/RAM/CPU prerequisite validation\n")
 	fmt.Printf("  upgrade                   - Upgrade existing installation (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
@@ -101,6 +102,7 @@ func handleProdInstall(args []string) {
 	// Parse arguments
 	force := false
 	isBootstrap := false
+	skipResourceChecks := false
 	var vpsIP, domain, peersStr, bootstrapJoin, branch string
 
 	for i, arg := range args {
@@ -129,6 +131,8 @@ func handleProdInstall(args []string) {
 			if i+1 < len(args) {
 				branch = args[i+1]
 			}
+		case "--ignore-resource-checks":
+			skipResourceChecks = true
 		}
 	}
 
@@ -164,7 +168,7 @@ func handleProdInstall(args []string) {
 
 	debrosHome := "/home/debros"
 	debrosDir := debrosHome + "/.debros"
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch, false)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch, false, skipResourceChecks)
 
 	// Save branch preference for future upgrades
 	if err := production.SaveBranchPreference(debrosDir, branch); err != nil {
@@ -279,7 +283,7 @@ func handleProdUpgrade(args []string) {
 	fmt.Printf("  This will preserve existing configurations and data\n")
 	fmt.Printf("  Configurations will be updated to latest format\n\n")
 
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch, noPull)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch, noPull, false)
 
 	// Log if --no-pull is enabled
 	if noPull {

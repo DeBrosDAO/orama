@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.3] - 2025-11-11
+
+### Added
+- Added `--ignore-resource-checks` flag to the install command to skip disk, RAM, and CPU prerequisite validation.
+
+### Changed
+\n
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.2] - 2025-11-11
 
 ### Added

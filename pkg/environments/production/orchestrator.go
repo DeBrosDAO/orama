@@ -11,28 +11,29 @@ import (
 
 // ProductionSetup orchestrates the entire production deployment
 type ProductionSetup struct {
-	osInfo            *OSInfo
-	arch              string
-	debrosHome        string
-	debrosDir         string
-	logWriter         io.Writer
-	forceReconfigure  bool
-	skipOptionalDeps  bool
-	privChecker       *PrivilegeChecker
-	osDetector        *OSDetector
-	archDetector      *ArchitectureDetector
-	resourceChecker   *ResourceChecker
-	fsProvisioner     *FilesystemProvisioner
-	userProvisioner   *UserProvisioner
-	stateDetector     *StateDetector
-	configGenerator   *ConfigGenerator
-	secretGenerator   *SecretGenerator
-	serviceGenerator  *SystemdServiceGenerator
-	serviceController *SystemdController
-	binaryInstaller   *BinaryInstaller
-	branch            string
-	skipRepoUpdate    bool
-	NodePeerID        string // Captured during Phase3 for later display
+	osInfo             *OSInfo
+	arch               string
+	debrosHome         string
+	debrosDir          string
+	logWriter          io.Writer
+	forceReconfigure   bool
+	skipOptionalDeps   bool
+	skipResourceChecks bool
+	privChecker        *PrivilegeChecker
+	osDetector         *OSDetector
+	archDetector       *ArchitectureDetector
+	resourceChecker    *ResourceChecker
+	fsProvisioner      *FilesystemProvisioner
+	userProvisioner    *UserProvisioner
+	stateDetector      *StateDetector
+	configGenerator    *ConfigGenerator
+	secretGenerator    *SecretGenerator
+	serviceGenerator   *SystemdServiceGenerator
+	serviceController  *SystemdController
+	binaryInstaller    *BinaryInstaller
+	branch             string
+	skipRepoUpdate     bool
+	NodePeerID         string // Captured during Phase3 for later display
 }
 
 // ReadBranchPreference reads the stored branch preference from disk
@@ -63,7 +64,7 @@ func SaveBranchPreference(debrosDir, branch string) error {
 }
 
 // NewProductionSetup creates a new production setup orchestrator
-func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool) *ProductionSetup {
+func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool, skipResourceChecks bool) *ProductionSetup {
 	debrosDir := debrosHome + "/.debros"
 	arch, _ := (&ArchitectureDetector{}).Detect()
 
@@ -73,25 +74,26 @@ func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure
 	}
 
 	return &ProductionSetup{
-		debrosHome:        debrosHome,
-		debrosDir:         debrosDir,
-		logWriter:         logWriter,
-		forceReconfigure:  forceReconfigure,
-		arch:              arch,
-		branch:            branch,
-		skipRepoUpdate:    skipRepoUpdate,
-		privChecker:       &PrivilegeChecker{},
-		osDetector:        &OSDetector{},
-		archDetector:      &ArchitectureDetector{},
-		resourceChecker:   NewResourceChecker(),
-		fsProvisioner:     NewFilesystemProvisioner(debrosHome),
-		userProvisioner:   NewUserProvisioner("debros", debrosHome, "/bin/bash"),
-		stateDetector:     NewStateDetector(debrosDir),
-		configGenerator:   NewConfigGenerator(debrosDir),
-		secretGenerator:   NewSecretGenerator(debrosDir),
-		serviceGenerator:  NewSystemdServiceGenerator(debrosHome, debrosDir),
-		serviceController: NewSystemdController(),
-		binaryInstaller:   NewBinaryInstaller(arch, logWriter),
+		debrosHome:         debrosHome,
+		debrosDir:          debrosDir,
+		logWriter:          logWriter,
+		forceReconfigure:   forceReconfigure,
+		arch:               arch,
+		branch:             branch,
+		skipRepoUpdate:     skipRepoUpdate,
+		skipResourceChecks: skipResourceChecks,
+		privChecker:        &PrivilegeChecker{},
+		osDetector:         &OSDetector{},
+		archDetector:       &ArchitectureDetector{},
+		resourceChecker:    NewResourceChecker(),
+		fsProvisioner:      NewFilesystemProvisioner(debrosHome),
+		userProvisioner:    NewUserProvisioner("debros", debrosHome, "/bin/bash"),
+		stateDetector:      NewStateDetector(debrosDir),
+		configGenerator:    NewConfigGenerator(debrosDir),
+		secretGenerator:    NewSecretGenerator(debrosDir),
+		serviceGenerator:   NewSystemdServiceGenerator(debrosHome, debrosDir),
+		serviceController:  NewSystemdController(),
+		binaryInstaller:    NewBinaryInstaller(arch, logWriter),
 	}
 }
 
@@ -157,23 +159,27 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	ps.logf("  ✓ Basic dependencies available")
 
 	// Check system resources
-	if err := ps.resourceChecker.CheckDiskSpace(ps.debrosHome); err != nil {
-		ps.logf("  ❌ %v", err)
-		return err
-	}
-	ps.logf("  ✓ Sufficient disk space available")
+	if ps.skipResourceChecks {
+		ps.logf("  ⚠️  Skipping system resource checks (disk, RAM, CPU) due to --ignore-resource-checks flag")
+	} else {
+		if err := ps.resourceChecker.CheckDiskSpace(ps.debrosHome); err != nil {
+			ps.logf("  ❌ %v", err)
+			return err
+		}
+		ps.logf("  ✓ Sufficient disk space available")
 
-	if err := ps.resourceChecker.CheckRAM(); err != nil {
-		ps.logf("  ❌ %v", err)
-		return err
-	}
-	ps.logf("  ✓ Sufficient RAM available")
+		if err := ps.resourceChecker.CheckRAM(); err != nil {
+			ps.logf("  ❌ %v", err)
+			return err
+		}
+		ps.logf("  ✓ Sufficient RAM available")
 
-	if err := ps.resourceChecker.CheckCPU(); err != nil {
-		ps.logf("  ❌ %v", err)
-		return err
+		if err := ps.resourceChecker.CheckCPU(); err != nil {
+			ps.logf("  ❌ %v", err)
+			return err
+		}
+		ps.logf("  ✓ Sufficient CPU cores available")
 	}
-	ps.logf("  ✓ Sufficient CPU cores available")
 
 	return nil
 }
