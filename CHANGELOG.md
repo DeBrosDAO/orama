@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.5] - 2025-11-11
+
+### Added
+\n
+### Changed
+- Moved the default location for `gateway.yaml` configuration file from `configs/` to the new `data/` directory for better organization.
+- Updated configuration path logic to search for `gateway.yaml` in the new `data/` directory first.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.4] - 2025-11-11
 
 ### Added

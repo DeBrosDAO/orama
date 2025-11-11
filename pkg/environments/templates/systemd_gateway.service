@@ -9,7 +9,7 @@ User=debros
 Group=debros
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
-ExecStart={{.HomeDir}}/bin/gateway --config {{.DebrosDir}}/configs/gateway.yaml
+ExecStart={{.HomeDir}}/bin/gateway --config {{.DebrosDir}}/data/gateway.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal

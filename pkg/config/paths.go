@@ -29,7 +29,7 @@ func EnsureConfigDir() (string, error) {
 
 // DefaultPath returns the path to the config file for the given component name.
 // component should be e.g., "node.yaml", "bootstrap.yaml", "gateway.yaml"
-// It checks both ~/.debros/ and ~/.debros/configs/ for backward compatibility.
+// It checks ~/.debros/data/, ~/.debros/configs/, and ~/.debros/ for backward compatibility.
 // If component is already an absolute path, it returns it as-is.
 func DefaultPath(component string) (string, error) {
 	// If component is already an absolute path, return it directly
@@ -40,6 +40,16 @@ func DefaultPath(component string) (string, error) {
 	dir, err := ConfigDir()
 	if err != nil {
 		return "", err
+	}
+
+	// For gateway.yaml, check data/ directory first (production location)
+	if component == "gateway.yaml" {
+		dataPath := filepath.Join(dir, "data", component)
+		if _, err := os.Stat(dataPath); err == nil {
+			return dataPath, nil
+		}
+		// Return data path as default for gateway.yaml (even if it doesn't exist yet)
+		return dataPath, nil
 	}
 
 	// First check in ~/.debros/configs/ (production installer location)

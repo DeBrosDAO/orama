@@ -63,7 +63,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 			}
 		}
 	} else {
-		// Default behavior: look for gateway.yaml in ~/.debros/configs/ or ~/.debros/
+		// Default behavior: look for gateway.yaml in ~/.debros/data/, ~/.debros/configs/, or ~/.debros/
 		configPath, err = config.DefaultPath("gateway.yaml")
 		if err != nil {
 			logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))

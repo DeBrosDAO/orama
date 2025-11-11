@@ -224,9 +224,16 @@ func (sg *SecretGenerator) EnsureNodeIdentity(nodeType string) (peer.ID, error) 
 
 // SaveConfig writes a configuration file to disk
 func (sg *SecretGenerator) SaveConfig(filename string, content string) error {
-	configDir := filepath.Join(sg.debrosDir, "configs")
+	var configDir string
+	// gateway.yaml goes to data/ directory, other configs go to configs/
+	if filename == "gateway.yaml" {
+		configDir = filepath.Join(sg.debrosDir, "data")
+	} else {
+		configDir = filepath.Join(sg.debrosDir, "configs")
+	}
+
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create configs directory: %w", err)
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	configPath := filepath.Join(configDir, filename)
