@@ -42,14 +42,11 @@ func TestProdCommandFlagParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Extract flags manually to verify parsing logic
-			force := false
 			isBootstrap := false
-			var vpsIP, domain, peersStr, bootstrapJoin string
+			var vpsIP, peersStr, bootstrapJoin string
 
 			for i, arg := range tt.args {
 				switch arg {
-				case "--force":
-					force = true
 				case "--bootstrap":
 					isBootstrap = true
 				case "--peers":
@@ -59,10 +56,6 @@ func TestProdCommandFlagParsing(t *testing.T) {
 				case "--vps-ip":
 					if i+1 < len(tt.args) {
 						vpsIP = tt.args[i+1]
-					}
-				case "--domain":
-					if i+1 < len(tt.args) {
-						domain = tt.args[i+1]
 					}
 				case "--bootstrap-join":
 					if i+1 < len(tt.args) {
