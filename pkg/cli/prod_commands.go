@@ -53,21 +53,29 @@ func showProdHelp() {
 	fmt.Printf("      --peers ADDRS         - Comma-separated bootstrap peers (for non-bootstrap)\n")
 	fmt.Printf("      --bootstrap-join ADDR - Bootstrap raft join address (for secondary bootstrap)\n")
 	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (optional)\n")
+	fmt.Printf("      --branch BRANCH       - Git branch to use (main or nightly, default: main)\n")
 	fmt.Printf("  upgrade                   - Upgrade existing installation (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
+	fmt.Printf("      --branch BRANCH        - Git branch to use (main or nightly, uses saved preference if not specified)\n")
 	fmt.Printf("  status                    - Show status of production services\n")
 	fmt.Printf("  logs <service>            - View production service logs\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --follow              - Follow logs in real-time\n")
 	fmt.Printf("  uninstall                 - Remove production services (requires root/sudo)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  # Bootstrap node\n")
+	fmt.Printf("  # Bootstrap node (main branch)\n")
 	fmt.Printf("  sudo dbn prod install --bootstrap\n\n")
+	fmt.Printf("  # Bootstrap node (nightly branch)\n")
+	fmt.Printf("  sudo dbn prod install --bootstrap --branch nightly\n\n")
 	fmt.Printf("  # Join existing cluster\n")
 	fmt.Printf("  sudo dbn prod install --vps-ip 10.0.0.2 --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...\n\n")
 	fmt.Printf("  # Secondary bootstrap joining existing cluster\n")
 	fmt.Printf("  sudo dbn prod install --bootstrap --vps-ip 10.0.0.2 --bootstrap-join 10.0.0.1:7001\n\n")
+	fmt.Printf("  # Upgrade using saved branch preference\n")
+	fmt.Printf("  sudo dbn prod upgrade --restart\n\n")
+	fmt.Printf("  # Upgrade and switch to nightly branch\n")
+	fmt.Printf("  sudo dbn prod upgrade --restart --branch nightly\n\n")
 	fmt.Printf("  dbn prod status\n")
 	fmt.Printf("  dbn prod logs node --follow\n")
 }
@@ -76,7 +84,7 @@ func handleProdInstall(args []string) {
 	// Parse arguments
 	force := false
 	isBootstrap := false
-	var vpsIP, domain, peersStr, bootstrapJoin string
+	var vpsIP, domain, peersStr, bootstrapJoin, branch string
 
 	for i, arg := range args {
 		switch arg {
@@ -100,7 +108,22 @@ func handleProdInstall(args []string) {
 			if i+1 < len(args) {
 				bootstrapJoin = args[i+1]
 			}
+		case "--branch":
+			if i+1 < len(args) {
+				branch = args[i+1]
+			}
 		}
+	}
+
+	// Validate branch if provided
+	if branch != "" && branch != "main" && branch != "nightly" {
+		fmt.Fprintf(os.Stderr, "❌ Invalid branch: %s (must be 'main' or 'nightly')\n", branch)
+		os.Exit(1)
+	}
+
+	// Default to main if not specified
+	if branch == "" {
+		branch = "main"
 	}
 
 	// Parse bootstrap peers if provided
@@ -123,7 +146,13 @@ func handleProdInstall(args []string) {
 	}
 
 	debrosHome := "/home/debros"
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, force)
+	debrosDir := debrosHome + "/.debros"
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch)
+
+	// Save branch preference for future upgrades
+	if err := production.SaveBranchPreference(debrosDir, branch); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save branch preference: %v\n", err)
+	}
 
 	// Phase 1: Check prerequisites
 	fmt.Printf("\n📋 Phase 1: Checking prerequisites...\n")
@@ -191,13 +220,25 @@ func handleProdUpgrade(args []string) {
 	// Parse arguments
 	force := false
 	restartServices := false
-	for _, arg := range args {
+	branch := ""
+	for i, arg := range args {
 		if arg == "--force" {
 			force = true
 		}
 		if arg == "--restart" {
 			restartServices = true
 		}
+		if arg == "--branch" {
+			if i+1 < len(args) {
+				branch = args[i+1]
+			}
+		}
+	}
+
+	// Validate branch if provided
+	if branch != "" && branch != "main" && branch != "nightly" {
+		fmt.Fprintf(os.Stderr, "❌ Invalid branch: %s (must be 'main' or 'nightly')\n", branch)
+		os.Exit(1)
 	}
 
 	if os.Geteuid() != 0 {
@@ -206,11 +247,25 @@ func handleProdUpgrade(args []string) {
 	}
 
 	debrosHome := "/home/debros"
+	debrosDir := debrosHome + "/.debros"
 	fmt.Printf("🔄 Upgrading production installation...\n")
 	fmt.Printf("  This will preserve existing configurations and data\n")
 	fmt.Printf("  Configurations will be updated to latest format\n\n")
 
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, force)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch)
+
+	// If branch was explicitly provided, save it for future upgrades
+	if branch != "" {
+		if err := production.SaveBranchPreference(debrosDir, branch); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save branch preference: %v\n", err)
+		} else {
+			fmt.Printf("  Using branch: %s (saved for future upgrades)\n", branch)
+		}
+	} else {
+		// Show which branch is being used (read from saved preference)
+		currentBranch := production.ReadBranchPreference(debrosDir)
+		fmt.Printf("  Using branch: %s (from saved preference)\n", currentBranch)
+	}
 
 	// Phase 1: Check prerequisites
 	fmt.Printf("\n📋 Phase 1: Checking prerequisites...\n")

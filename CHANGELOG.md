@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.7] - 2025-11-11
+
+### Added
+- Added support for specifying the Git branch (main or nightly) during `prod install` and `prod upgrade`.
+- The chosen branch is now saved and automatically used for future upgrades unless explicitly overridden.
+
+### Changed
+- Updated help messages and examples for production commands to include branch options.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.67.6] - 2025-11-11
 
 ### Added

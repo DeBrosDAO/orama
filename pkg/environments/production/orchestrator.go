@@ -34,10 +34,42 @@ type ProductionSetup struct {
 	NodePeerID        string // Captured during Phase3 for later display
 }
 
+// ReadBranchPreference reads the stored branch preference from disk
+func ReadBranchPreference(debrosDir string) string {
+	branchFile := filepath.Join(debrosDir, ".branch")
+	data, err := os.ReadFile(branchFile)
+	if err != nil {
+		return "main" // Default to main if file doesn't exist
+	}
+	branch := strings.TrimSpace(string(data))
+	if branch == "" {
+		return "main"
+	}
+	return branch
+}
+
+// SaveBranchPreference saves the branch preference to disk
+func SaveBranchPreference(debrosDir, branch string) error {
+	branchFile := filepath.Join(debrosDir, ".branch")
+	if err := os.MkdirAll(debrosDir, 0755); err != nil {
+		return fmt.Errorf("failed to create debros directory: %w", err)
+	}
+	if err := os.WriteFile(branchFile, []byte(branch), 0644); err != nil {
+		return fmt.Errorf("failed to save branch preference: %w", err)
+	}
+	exec.Command("chown", "debros:debros", branchFile).Run()
+	return nil
+}
+
 // NewProductionSetup creates a new production setup orchestrator
-func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool) *ProductionSetup {
+func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool, branch string) *ProductionSetup {
 	debrosDir := debrosHome + "/.debros"
 	arch, _ := (&ArchitectureDetector{}).Detect()
+
+	// If branch is empty, try to read from stored preference, otherwise default to main
+	if branch == "" {
+		branch = ReadBranchPreference(debrosDir)
+	}
 
 	return &ProductionSetup{
 		debrosHome:        debrosHome,
@@ -45,7 +77,7 @@ func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure
 		logWriter:         logWriter,
 		forceReconfigure:  forceReconfigure,
 		arch:              arch,
-		branch:            "main",
+		branch:            branch,
 		privChecker:       &PrivilegeChecker{},
 		osDetector:        &OSDetector{},
 		archDetector:      &ArchitectureDetector{},
