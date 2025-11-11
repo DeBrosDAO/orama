@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.1] - 2025-11-11
+
+### Added
+\n
+### Changed
+- Improved disk space check logic to correctly check the parent directory if the specified path does not exist.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue in the installation script where the extracted CLI binary might be named 'dbn' instead of 'network-cli', ensuring successful installation regardless of the extracted filename.
+
 ## [0.67.0] - 2025-11-11
 
 ### Added

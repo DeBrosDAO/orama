@@ -144,18 +144,23 @@ download_and_install_cli() {
     # Extract to /tmp
     tar -xzf /tmp/dbn.tar.gz -C /tmp/
     
-    # Check if binary exists after extraction (it's named network-cli in the archive)
-    if [ ! -f /tmp/network-cli ]; then
-        error "Failed to extract network-cli binary"
+    # Check for extracted binary (could be named network-cli or dbn)
+    EXTRACTED_BINARY=""
+    if [ -f /tmp/network-cli ]; then
+        EXTRACTED_BINARY="/tmp/network-cli"
+    elif [ -f /tmp/dbn ]; then
+        EXTRACTED_BINARY="/tmp/dbn"
+    else
+        error "Failed to extract binary (neither network-cli nor dbn found)"
         ls -la /tmp/ | grep -E "(network|cli|dbn)"
         exit 1
     fi
     
-    chmod +x /tmp/network-cli
+    chmod +x "$EXTRACTED_BINARY"
     
     log "Installing dbn to $INSTALL_DIR..."
-    # Rename network-cli to dbn during installation
-    mv /tmp/network-cli "$INSTALL_DIR/dbn"
+    # Always rename to dbn during installation
+    mv "$EXTRACTED_BINARY" "$INSTALL_DIR/dbn"
     
     # Sanity check: verify the installed binary is functional and reports correct version
     if ! "$INSTALL_DIR/dbn" version &>/dev/null; then

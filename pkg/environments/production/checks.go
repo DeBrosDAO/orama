@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -226,8 +227,18 @@ func NewResourceChecker() *ResourceChecker {
 
 // CheckDiskSpace validates sufficient disk space (minimum 10GB free)
 func (rc *ResourceChecker) CheckDiskSpace(path string) error {
+	checkPath := path
+
+	// If the path doesn't exist, check the parent directory instead
+	for checkPath != "/" {
+		if _, err := os.Stat(checkPath); err == nil {
+			break
+		}
+		checkPath = filepath.Dir(checkPath)
+	}
+
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
+	if err := syscall.Statfs(checkPath, &stat); err != nil {
 		return fmt.Errorf("failed to check disk space: %w", err)
 	}
 
