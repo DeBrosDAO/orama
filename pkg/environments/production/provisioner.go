@@ -45,7 +45,7 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir)
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 
