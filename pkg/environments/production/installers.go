@@ -49,14 +49,20 @@ func (bi *BinaryInstaller) InstallRQLite() error {
 
 	// Copy binaries
 	dir := fmt.Sprintf("/tmp/rqlite-v%s-linux-%s", version, bi.arch)
-	exec.Command("cp", dir+"/rqlited", "/usr/local/bin/").Run()
+	if err := exec.Command("cp", dir+"/rqlited", "/usr/local/bin/").Run(); err != nil {
+		return fmt.Errorf("failed to copy rqlited binary: %w", err)
+	}
 	exec.Command("chmod", "+x", "/usr/local/bin/rqlited").Run()
+
+	// Ensure PATH includes /usr/local/bin
+	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/bin")
 
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ RQLite installed\n")
 	return nil
 }
 
 // InstallIPFS downloads and installs IPFS (Kubo)
+// Follows official steps from https://docs.ipfs.tech/install/command-line/
 func (bi *BinaryInstaller) InstallIPFS() error {
 	if _, err := exec.LookPath("ipfs"); err == nil {
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ IPFS already installed\n")
@@ -65,13 +71,82 @@ func (bi *BinaryInstaller) InstallIPFS() error {
 
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  Installing IPFS (Kubo)...\n")
 
-	// Use official install script
-	cmd := exec.Command("bash", "-c", "curl -fsSL https://dist.ipfs.tech/kubo/v0.27.0/install.sh | bash")
+	// Follow official installation steps in order
+	kuboVersion := "v0.38.2"
+	tarball := fmt.Sprintf("kubo_%s_linux-%s.tar.gz", kuboVersion, bi.arch)
+	url := fmt.Sprintf("https://dist.ipfs.tech/kubo/%s/%s", kuboVersion, tarball)
+	tmpDir := "/tmp"
+	tarPath := filepath.Join(tmpDir, tarball)
+	kuboDir := filepath.Join(tmpDir, "kubo")
+
+	// Step 1: Download the Linux binary from dist.ipfs.tech
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Step 1: Downloading Kubo v%s...\n", kuboVersion)
+	cmd := exec.Command("wget", "-q", url, "-O", tarPath)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install IPFS: %w", err)
+		return fmt.Errorf("failed to download kubo from %s: %w", url, err)
 	}
 
-	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ IPFS installed\n")
+	// Verify tarball exists
+	if _, err := os.Stat(tarPath); err != nil {
+		return fmt.Errorf("kubo tarball not found after download at %s: %w", tarPath, err)
+	}
+
+	// Step 2: Unzip the file
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Step 2: Extracting Kubo archive...\n")
+	cmd = exec.Command("tar", "-xzf", tarPath, "-C", tmpDir)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to extract kubo tarball: %w", err)
+	}
+
+	// Verify extraction
+	if _, err := os.Stat(kuboDir); err != nil {
+		return fmt.Errorf("kubo directory not found after extraction at %s: %w", kuboDir, err)
+	}
+
+	// Step 3: Move into the kubo folder (cd kubo)
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Step 3: Running installation script...\n")
+
+	// Step 4: Run the installation script (sudo bash install.sh)
+	installScript := filepath.Join(kuboDir, "install.sh")
+	if _, err := os.Stat(installScript); err != nil {
+		return fmt.Errorf("install.sh not found in extracted kubo directory at %s: %w", installScript, err)
+	}
+
+	cmd = exec.Command("bash", installScript)
+	cmd.Dir = kuboDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to run install.sh: %v\n%s", err, string(output))
+	}
+
+	// Step 5: Test that Kubo has installed correctly
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Step 5: Verifying installation...\n")
+	cmd = exec.Command("ipfs", "--version")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// ipfs might not be in PATH yet in this process, check file directly
+		ipfsLocations := []string{"/usr/local/bin/ipfs", "/usr/bin/ipfs"}
+		found := false
+		for _, loc := range ipfsLocations {
+			if info, err := os.Stat(loc); err == nil && !info.IsDir() {
+				found = true
+				// Ensure it's executable
+				if info.Mode()&0111 == 0 {
+					os.Chmod(loc, 0755)
+				}
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("ipfs binary not found after installation in %v", ipfsLocations)
+		}
+	} else {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "      %s", string(output))
+	}
+
+	// Ensure PATH is updated for current process
+	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/bin")
+
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ IPFS installed successfully\n")
 	return nil
 }
 
@@ -86,7 +161,7 @@ func (bi *BinaryInstaller) InstallIPFSCluster() error {
 
 	// Check if Go is available
 	if _, err := exec.LookPath("go"); err != nil {
-		return fmt.Errorf("Go not found - required to install IPFS Cluster. Please install Go first")
+		return fmt.Errorf("go not found - required to install IPFS Cluster. Please install Go first")
 	}
 
 	cmd := exec.Command("go", "install", "github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest")
@@ -110,7 +185,7 @@ func (bi *BinaryInstaller) InstallOlric() error {
 
 	// Check if Go is available
 	if _, err := exec.LookPath("go"); err != nil {
-		return fmt.Errorf("Go not found - required to install Olric. Please install Go first")
+		return fmt.Errorf("go not found - required to install Olric. Please install Go first")
 	}
 
 	cmd := exec.Command("go", "install", "github.com/olric-data/olric/cmd/olric-server@v0.7.0")
@@ -148,7 +223,13 @@ func (bi *BinaryInstaller) InstallGo() error {
 	}
 
 	// Add to PATH
-	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/go/bin")
+	newPath := os.Getenv("PATH") + ":/usr/local/go/bin"
+	os.Setenv("PATH", newPath)
+
+	// Verify installation
+	if _, err := exec.LookPath("go"); err != nil {
+		return fmt.Errorf("go installed but not found in PATH after installation")
+	}
 
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ Go installed\n")
 	return nil

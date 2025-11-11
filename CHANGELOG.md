@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.67.3] - 2025-11-11
+
+### Added
+\n
+### Changed
+- Improved reliability of IPFS (Kubo) installation by switching from a single install script to the official step-by-step download and extraction process.
+- Updated IPFS (Kubo) installation to use version v0.38.2.
+- Enhanced binary installation routines (RQLite, IPFS, Go) to ensure the installed binaries are immediately available in the current process's PATH.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed potential installation failures for RQLite by adding error checking to the binary copy command.
+
 ## [0.67.2] - 2025-11-11
 
 ### Added
