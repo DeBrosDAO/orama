@@ -42,7 +42,7 @@ func showDevHelp() {
 	fmt.Printf("🚀 Development Environment Commands\n\n")
 	fmt.Printf("Usage: dbn dev <subcommand> [options]\n\n")
 	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  up                - Start development environment (bootstrap + 2 nodes + gateway)\n")
+	fmt.Printf("  up                - Start development environment (2 bootstraps + 3 nodes + gateway)\n")
 	fmt.Printf("  down              - Stop all development services\n")
 	fmt.Printf("  status            - Show status of running services\n")
 	fmt.Printf("  logs <component>  - Tail logs for a component\n")
@@ -107,15 +107,18 @@ func handleDevUp(args []string) {
 	// Step 5: Show summary
 	fmt.Printf("🎉 Development environment is running!\n\n")
 	fmt.Printf("Key endpoints:\n")
-	fmt.Printf("  Gateway:           http://localhost:6001\n")
-	fmt.Printf("  Bootstrap IPFS:    http://localhost:4501\n")
-	fmt.Printf("  Node2 IPFS:        http://localhost:4502\n")
-	fmt.Printf("  Node3 IPFS:        http://localhost:4503\n")
-	fmt.Printf("  Anon SOCKS:        127.0.0.1:9050\n")
-	fmt.Printf("  Olric Cache:       http://localhost:3320\n\n")
+	fmt.Printf("  Gateway:              http://localhost:6001\n")
+	fmt.Printf("  Bootstrap IPFS:       http://localhost:4501\n")
+	fmt.Printf("  Bootstrap2 IPFS:      http://localhost:4511\n")
+	fmt.Printf("  Node2 IPFS:           http://localhost:4502\n")
+	fmt.Printf("  Node3 IPFS:           http://localhost:4503\n")
+	fmt.Printf("  Node4 IPFS:           http://localhost:4504\n")
+	fmt.Printf("  Anon SOCKS:           127.0.0.1:9050\n")
+	fmt.Printf("  Olric Cache:          http://localhost:3320\n\n")
 	fmt.Printf("Useful commands:\n")
 	fmt.Printf("  dbn dev status           - Show status\n")
 	fmt.Printf("  dbn dev logs bootstrap   - Bootstrap logs\n")
+	fmt.Printf("  dbn dev logs bootstrap2  - Bootstrap2 logs\n")
 	fmt.Printf("  dbn dev down             - Stop all services\n\n")
 	fmt.Printf("Logs directory: %s/logs\n\n", debrosDir)
 }
@@ -153,7 +156,7 @@ func handleDevStatus(args []string) {
 func handleDevLogs(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: dbn dev logs <component> [--follow]\n")
-		fmt.Fprintf(os.Stderr, "\nComponents: bootstrap, node2, node3, gateway, ipfs-bootstrap, ipfs-node2, ipfs-node3, olric, anon\n")
+		fmt.Fprintf(os.Stderr, "\nComponents: bootstrap, bootstrap2, node2, node3, node4, gateway, ipfs-bootstrap, ipfs-bootstrap2, ipfs-node2, ipfs-node3, ipfs-node4, olric, anon\n")
 		os.Exit(1)
 	}
 

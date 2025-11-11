@@ -3,8 +3,31 @@ set -euo pipefail
 
 echo "Force killing all processes on dev ports..."
 
-# Define all dev ports
-PORTS=(4001 4002 4003 4101 4102 4103 4501 4502 4503 5001 5002 5003 6001 7001 7002 7003 7501 7502 7503 8080 8081 8082 9094 9095 9096 9097 9104 9105 9106 9107 9114 9115 9116 9117 3320 3322 9050)
+# Define all dev ports (5 nodes topology: bootstrap, bootstrap2, node2, node3, node4)
+PORTS=(
+  # LibP2P
+  4001 4011 4002 4003 4004
+  # IPFS Swarm
+  4101 4111 4102 4103 4104
+  # IPFS API
+  4501 4511 4502 4503 4504
+  # RQLite HTTP
+  5001 5011 5002 5003 5004
+  # RQLite Raft
+  7001 7011 7002 7003 7004
+  # IPFS Gateway
+  7501 7511 7502 7503 7504
+  # Gateway
+  6001
+  # Olric
+  3320 3322
+  # Anon SOCKS
+  9050
+  # IPFS Cluster REST API
+  9094 9104 9114 9124 9134
+  # IPFS Cluster P2P
+  9096 9106 9116 9126 9136
+)
 
 killed_count=0
 killed_pids=()
@@ -35,7 +58,7 @@ for cmd in "${COMMANDS[@]}"; do
   if [[ -n "$all_pids" ]]; then
     for pid in $all_pids; do
       # Check if this process is using any of our dev ports
-      port_match=$(lsof -nP -p "$pid" -iTCP 2>/dev/null | grep -E ":(400[1-3]|410[1-3]|450[1-3]|500[1-3]|6001|700[1-3]|750[1-3]|808[0-2]|909[4-7]|910[4-7]|911[4-7]|332[02]|9050)" || true)
+      port_match=$(lsof -nP -p "$pid" -iTCP 2>/dev/null | grep -E ":(400[1-4]|401[1-1]|410[1-4]|411[1-1]|450[1-4]|451[1-1]|500[1-4]|501[1-1]|600[1-1]|700[1-4]|701[1-1]|750[1-4]|751[1-1]|332[02]|9050|909[4-9]|910[4-9]|911[4-9]|912[4-9]|913[4-9]|909[6-9]|910[6-9]|911[6-9]|912[6-9]|913[6-9])" || true)
       if [[ -n "$port_match" ]]; then
         echo "Killing orphaned $cmd process (PID: $pid) using dev ports"
         kill -9 "$pid" 2>/dev/null || true

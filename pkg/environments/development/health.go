@@ -37,17 +37,19 @@ func (pm *ProcessManager) IPFSHealthCheck(ctx context.Context, nodes []ipfsNodeI
 		for _, line := range peerLines {
 			if strings.TrimSpace(line) != "" {
 				peerCount++
-	}
-}
+			}
+		}
 
-		if peerCount < 2 {
-			result.Details += fmt.Sprintf("%s: only %d peers (want 2+); ", node.name, peerCount)
+		// With 5 nodes, expect each node to see at least 3 other peers
+		if peerCount < 3 {
+			result.Details += fmt.Sprintf("%s: only %d peers (want 3+); ", node.name, peerCount)
 		} else {
 			result.Details += fmt.Sprintf("%s: %d peers; ", node.name, peerCount)
 			healthyCount++
 		}
 	}
 
+	// Require all 5 nodes to have healthy peer counts
 	result.Healthy = healthyCount == len(nodes)
 	return result
 }
@@ -56,24 +58,19 @@ func (pm *ProcessManager) IPFSHealthCheck(ctx context.Context, nodes []ipfsNodeI
 func (pm *ProcessManager) RQLiteHealthCheck(ctx context.Context) HealthCheckResult {
 	result := HealthCheckResult{Name: "RQLite Cluster"}
 
-	// Check bootstrap node
-	bootstrapStatus := pm.checkRQLiteNode(ctx, "bootstrap", 5001)
-	if !bootstrapStatus.Healthy {
-		result.Details += fmt.Sprintf("bootstrap: %s; ", bootstrapStatus.Details)
-		return result
+	topology := DefaultTopology()
+	healthyCount := 0
+
+	for _, nodeSpec := range topology.Nodes {
+		status := pm.checkRQLiteNode(ctx, nodeSpec.Name, nodeSpec.RQLiteHTTPPort)
+		if status.Healthy {
+			healthyCount++
+		}
+		result.Details += fmt.Sprintf("%s: %s; ", nodeSpec.Name, status.Details)
 	}
 
-	// Check node2 and node3
-	node2Status := pm.checkRQLiteNode(ctx, "node2", 5002)
-	node3Status := pm.checkRQLiteNode(ctx, "node3", 5003)
-
-	if node2Status.Healthy && node3Status.Healthy {
-		result.Healthy = true
-		result.Details = fmt.Sprintf("bootstrap: leader ok; node2: %s; node3: %s", node2Status.Details, node3Status.Details)
-	} else {
-		result.Details = fmt.Sprintf("bootstrap: ok; node2: %s; node3: %s", node2Status.Details, node3Status.Details)
-	}
-
+	// Require at least 3 out of 5 nodes to be healthy for quorum
+	result.Healthy = healthyCount >= 3
 	return result
 }
 
@@ -99,7 +96,7 @@ func (pm *ProcessManager) checkRQLiteNode(ctx context.Context, name string, http
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		result.Details = fmt.Sprintf("decode error: %v", err)
 		return result
-}
+	}
 
 	// Check the store.raft structure (RQLite 8 format)
 	store, ok := status["store"].(map[string]interface{})
@@ -146,22 +143,22 @@ func (pm *ProcessManager) checkRQLiteNode(ctx context.Context, name string, http
 func (pm *ProcessManager) LibP2PHealthCheck(ctx context.Context) HealthCheckResult {
 	result := HealthCheckResult{Name: "LibP2P/Node Peers"}
 
-	// Check that at least 2 nodes are part of the RQLite cluster (implies peer connectivity)
-	// and that they can communicate via LibP2P (which they use for cluster discovery)
+	// Check that nodes are part of the RQLite cluster and can communicate via LibP2P
+	topology := DefaultTopology()
 	healthyNodes := 0
-	for i, name := range []string{"bootstrap", "node2", "node3"} {
-		httpPort := 5001 + i
-		status := pm.checkRQLiteNode(ctx, name, httpPort)
+
+	for _, nodeSpec := range topology.Nodes {
+		status := pm.checkRQLiteNode(ctx, nodeSpec.Name, nodeSpec.RQLiteHTTPPort)
 		if status.Healthy {
 			healthyNodes++
-			result.Details += fmt.Sprintf("%s: connected; ", name)
+			result.Details += fmt.Sprintf("%s: connected; ", nodeSpec.Name)
 		} else {
-			result.Details += fmt.Sprintf("%s: %s; ", name, status.Details)
+			result.Details += fmt.Sprintf("%s: %s; ", nodeSpec.Name, status.Details)
 		}
 	}
 
-	// Healthy if at least 2 nodes report connectivity (including bootstrap)
-	result.Healthy = healthyNodes >= 2
+	// Healthy if at least 3 nodes report connectivity
+	result.Healthy = healthyNodes >= 3
 	return result
 }
 

@@ -13,6 +13,24 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.65.0] - 2025-11-11
+
+### Added
+- Expanded the local development environment (`dbn dev up`) from 3 nodes to 5 nodes (2 bootstraps and 3 regular nodes) for better testing of cluster resilience and quorum.
+- Added a new `bootstrap2` node configuration and service to the development topology.
+
+### Changed
+- Updated the `dbn dev up` command to configure and start all 5 nodes and associated services (IPFS, RQLite, IPFS Cluster).
+- Modified RQLite and LibP2P health checks in the development environment to require a quorum of 3 out of 5 nodes.
+- Refactored development environment configuration logic using a new `Topology` structure for easier management of node ports and addresses.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Ensured that secondary bootstrap nodes can correctly join the primary RQLite cluster in the development environment.
+
 ## [0.64.1] - 2025-11-10
 
 ### Added

@@ -13,13 +13,15 @@ var templatesFS embed.FS
 
 // BootstrapConfigData holds parameters for bootstrap.yaml rendering
 type BootstrapConfigData struct {
-	NodeID         string
-	P2PPort        int
-	DataDir        string
-	RQLiteHTTPPort int
-	RQLiteRaftPort int
-	ClusterAPIPort int
-	IPFSAPIPort    int // Default: 4501
+	NodeID            string
+	P2PPort           int
+	DataDir           string
+	RQLiteHTTPPort    int
+	RQLiteRaftPort    int
+	ClusterAPIPort    int
+	IPFSAPIPort       int      // Default: 4501
+	BootstrapPeers    []string // List of bootstrap peer multiaddrs
+	RQLiteJoinAddress string   // Optional: join address for secondary bootstraps
 }
 
 // NodeConfigData holds parameters for node.yaml rendering

@@ -51,12 +51,10 @@ func NewProcessManager(debrosDir string, logWriter io.Writer) *ProcessManager {
 func (pm *ProcessManager) StartAll(ctx context.Context) error {
 	fmt.Fprintf(pm.logWriter, "\n🚀 Starting development environment...\n\n")
 
-	// Define IPFS nodes for later use in health checks
-	ipfsNodes := []ipfsNodeInfo{
-		{"bootstrap", filepath.Join(pm.debrosDir, "bootstrap/ipfs/repo"), 4501, 4101, 7501, ""},
-		{"node2", filepath.Join(pm.debrosDir, "node2/ipfs/repo"), 4502, 4102, 7502, ""},
-		{"node3", filepath.Join(pm.debrosDir, "node3/ipfs/repo"), 4503, 4103, 7503, ""},
-	}
+	topology := DefaultTopology()
+
+	// Build IPFS node info from topology
+	ipfsNodes := pm.buildIPFSNodes(topology)
 
 	// Start in order of dependencies
 	services := []struct {
@@ -64,12 +62,11 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		fn   func(context.Context) error
 	}{
 		{"IPFS", pm.startIPFS},
+		{"RQLite", pm.startRQLite},
 		{"IPFS Cluster", pm.startIPFSCluster},
 		{"Olric", pm.startOlric},
 		{"Anon", pm.startAnon},
-		{"Bootstrap Node", pm.startBootstrapNode},
-		{"Node2", pm.startNode2},
-		{"Node3", pm.startNode3},
+		{"Nodes (Network)", pm.startNodes},
 		{"Gateway", pm.startGateway},
 	}
 
@@ -101,23 +98,28 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 func (pm *ProcessManager) StopAll(ctx context.Context) error {
 	fmt.Fprintf(pm.logWriter, "\n🛑 Stopping development environment...\n")
 
-	services := []string{
-		"gateway",
-		"node3",
-		"node2",
-		"bootstrap",
-		"olric",
-		"ipfs-cluster-node3",
-		"ipfs-cluster-node2",
-		"ipfs-cluster-bootstrap",
-		"rqlite-node3",
-		"rqlite-node2",
-		"rqlite-bootstrap",
-		"ipfs-node3",
-		"ipfs-node2",
-		"ipfs-bootstrap",
-		"anon",
+	topology := DefaultTopology()
+	var services []string
+
+	// Build service list from topology (in reverse order)
+	services = append(services, "gateway")
+	for i := len(topology.Nodes) - 1; i >= 0; i-- {
+		node := topology.Nodes[i]
+		services = append(services, node.Name)
 	}
+	for i := len(topology.Nodes) - 1; i >= 0; i-- {
+		node := topology.Nodes[i]
+		services = append(services, fmt.Sprintf("ipfs-cluster-%s", node.Name))
+	}
+	for i := len(topology.Nodes) - 1; i >= 0; i-- {
+		node := topology.Nodes[i]
+		services = append(services, fmt.Sprintf("rqlite-%s", node.Name))
+	}
+	for i := len(topology.Nodes) - 1; i >= 0; i-- {
+		node := topology.Nodes[i]
+		services = append(services, fmt.Sprintf("ipfs-%s", node.Name))
+	}
+	services = append(services, "olric", "anon")
 
 	for _, svc := range services {
 		pm.stopProcess(svc)
@@ -132,26 +134,57 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 	fmt.Fprintf(pm.logWriter, "\n📊 Development Environment Status\n")
 	fmt.Fprintf(pm.logWriter, "================================\n\n")
 
-	services := []struct {
+	topology := DefaultTopology()
+
+	// Build service list from topology
+	var services []struct {
 		name  string
 		ports []int
-	}{
-		{"Bootstrap IPFS", []int{4501, 4101}},
-		{"Bootstrap RQLite", []int{5001, 7001}},
-		{"Node2 IPFS", []int{4502, 4102}},
-		{"Node2 RQLite", []int{5002, 7002}},
-		{"Node3 IPFS", []int{4503, 4103}},
-		{"Node3 RQLite", []int{5003, 7003}},
-		{"Bootstrap Cluster", []int{9094}},
-		{"Node2 Cluster", []int{9104}},
-		{"Node3 Cluster", []int{9114}},
-		{"Bootstrap Node (P2P)", []int{4001}},
-		{"Node2 (P2P)", []int{4002}},
-		{"Node3 (P2P)", []int{4003}},
-		{"Gateway", []int{6001}},
-		{"Olric", []int{3320, 3322}},
-		{"Anon SOCKS", []int{9050}},
 	}
+
+	for _, node := range topology.Nodes {
+		services = append(services, struct {
+			name  string
+			ports []int
+		}{
+			fmt.Sprintf("%s IPFS", node.Name),
+			[]int{node.IPFSAPIPort, node.IPFSSwarmPort},
+		})
+		services = append(services, struct {
+			name  string
+			ports []int
+		}{
+			fmt.Sprintf("%s RQLite", node.Name),
+			[]int{node.RQLiteHTTPPort, node.RQLiteRaftPort},
+		})
+		services = append(services, struct {
+			name  string
+			ports []int
+		}{
+			fmt.Sprintf("%s Cluster", node.Name),
+			[]int{node.ClusterAPIPort},
+		})
+		services = append(services, struct {
+			name  string
+			ports []int
+		}{
+			fmt.Sprintf("%s Node (P2P)", node.Name),
+			[]int{node.P2PPort},
+		})
+	}
+
+	services = append(services, struct {
+		name  string
+		ports []int
+	}{"Gateway", []int{topology.GatewayPort}})
+	services = append(services, struct {
+		name  string
+		ports []int
+	}{"Olric", []int{topology.OlricHTTPPort, topology.OlricMemberPort}})
+	services = append(services, struct {
+		name  string
+		ports []int
+	}{"Anon SOCKS", []int{topology.AnonSOCKSPort}})
 
 	for _, svc := range services {
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("%s.pid", svc.name))
@@ -173,8 +206,8 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 	}
 
 	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.debrosDir)
-	files := []string{"bootstrap.yaml", "node2.yaml", "node3.yaml", "gateway.yaml", "olric-config.yaml"}
-	for _, f := range files {
+	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node2.yaml", "node3.yaml", "node4.yaml", "gateway.yaml", "olric-config.yaml"}
+	for _, f := range configFiles {
 		path := filepath.Join(pm.debrosDir, f)
 		if _, err := os.Stat(path); err == nil {
 			fmt.Fprintf(pm.logWriter, "  ✓ %s\n", f)
@@ -187,6 +220,35 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 }
 
 // Helper functions for starting individual services
+
+// buildIPFSNodes constructs ipfsNodeInfo from topology
+func (pm *ProcessManager) buildIPFSNodes(topology *Topology) []ipfsNodeInfo {
+	var nodes []ipfsNodeInfo
+	for _, nodeSpec := range topology.Nodes {
+		nodes = append(nodes, ipfsNodeInfo{
+			name:        nodeSpec.Name,
+			ipfsPath:    filepath.Join(pm.debrosDir, nodeSpec.DataDir, "ipfs/repo"),
+			apiPort:     nodeSpec.IPFSAPIPort,
+			swarmPort:   nodeSpec.IPFSSwarmPort,
+			gatewayPort: nodeSpec.IPFSGatewayPort,
+			peerID:      "",
+		})
+	}
+	return nodes
+}
+
+// startNodes starts all network nodes (bootstraps and regular)
+func (pm *ProcessManager) startNodes(ctx context.Context) error {
+	topology := DefaultTopology()
+	for _, nodeSpec := range topology.Nodes {
+		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("%s.log", nodeSpec.Name))
+		if err := pm.startNode(nodeSpec.Name, nodeSpec.ConfigFilename, logPath); err != nil {
+			return fmt.Errorf("failed to start %s: %w", nodeSpec.Name, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return nil
+}
 
 // ipfsNodeInfo holds information about an IPFS node for peer discovery
 type ipfsNodeInfo struct {
@@ -408,11 +470,8 @@ func (pm *ProcessManager) ipfsHTTPCall(ctx context.Context, urlStr string, metho
 }
 
 func (pm *ProcessManager) startIPFS(ctx context.Context) error {
-	nodes := []ipfsNodeInfo{
-		{"bootstrap", filepath.Join(pm.debrosDir, "bootstrap/ipfs/repo"), 4501, 4101, 7501, ""},
-		{"node2", filepath.Join(pm.debrosDir, "node2/ipfs/repo"), 4502, 4102, 7502, ""},
-		{"node3", filepath.Join(pm.debrosDir, "node3/ipfs/repo"), 4503, 4103, 7503, ""},
-	}
+	topology := DefaultTopology()
+	nodes := pm.buildIPFSNodes(topology)
 
 	// Phase 1: Initialize repos and configure addresses
 	for i := range nodes {
@@ -480,25 +539,34 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 }
 
 func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
-	nodes := []struct {
+	topology := DefaultTopology()
+	var nodes []struct {
 		name        string
 		clusterPath string
 		restAPIPort int
 		clusterPort int
 		ipfsPort    int
-	}{
-		{"bootstrap", filepath.Join(pm.debrosDir, "bootstrap/ipfs-cluster"), 9094, 9096, 4501},
-		{"node2", filepath.Join(pm.debrosDir, "node2/ipfs-cluster"), 9104, 9106, 4502},
-		{"node3", filepath.Join(pm.debrosDir, "node3/ipfs-cluster"), 9114, 9116, 4503},
+	}
+
+	for _, nodeSpec := range topology.Nodes {
+		nodes = append(nodes, struct {
+			name        string
+			clusterPath string
+			restAPIPort int
+			clusterPort int
+			ipfsPort    int
+		}{
+			nodeSpec.Name,
+			filepath.Join(pm.debrosDir, nodeSpec.DataDir, "ipfs-cluster"),
+			nodeSpec.ClusterAPIPort,
+			nodeSpec.ClusterPort,
+			nodeSpec.IPFSAPIPort,
+		})
 	}
 
 	// Wait for all IPFS daemons to be ready before starting cluster services
 	fmt.Fprintf(pm.logWriter, "  Waiting for IPFS daemons to be ready...\n")
-	ipfsNodes := []ipfsNodeInfo{
-		{"bootstrap", filepath.Join(pm.debrosDir, "bootstrap/ipfs/repo"), 4501, 4101, 7501, ""},
-		{"node2", filepath.Join(pm.debrosDir, "node2/ipfs/repo"), 4502, 4102, 7502, ""},
-		{"node3", filepath.Join(pm.debrosDir, "node3/ipfs/repo"), 4503, 4103, 7503, ""},
-	}
+	ipfsNodes := pm.buildIPFSNodes(topology)
 	for _, ipfsNode := range ipfsNodes {
 		if err := pm.waitIPFSReady(ctx, ipfsNode); err != nil {
 			fmt.Fprintf(pm.logWriter, "    Warning: IPFS %s did not become ready: %v\n", ipfsNode.name, err)
@@ -875,16 +943,29 @@ func (pm *ProcessManager) ensureIPFSClusterPorts(clusterPath string, restAPIPort
 }
 
 func (pm *ProcessManager) startRQLite(ctx context.Context) error {
-	nodes := []struct {
+	topology := DefaultTopology()
+	var nodes []struct {
 		name     string
 		dataDir  string
 		httpPort int
 		raftPort int
 		joinAddr string
-	}{
-		{"bootstrap", filepath.Join(pm.debrosDir, "bootstrap/rqlite"), 5001, 7001, ""},
-		{"node2", filepath.Join(pm.debrosDir, "node2/rqlite"), 5002, 7002, "localhost:7001"},
-		{"node3", filepath.Join(pm.debrosDir, "node3/rqlite"), 5003, 7003, "localhost:7001"},
+	}
+
+	for _, nodeSpec := range topology.Nodes {
+		nodes = append(nodes, struct {
+			name     string
+			dataDir  string
+			httpPort int
+			raftPort int
+			joinAddr string
+		}{
+			nodeSpec.Name,
+			filepath.Join(pm.debrosDir, nodeSpec.DataDir, "rqlite"),
+			nodeSpec.RQLiteHTTPPort,
+			nodeSpec.RQLiteRaftPort,
+			nodeSpec.RQLiteJoinTarget,
+		})
 	}
 
 	for _, node := range nodes {
@@ -971,18 +1052,6 @@ func (pm *ProcessManager) startAnon(ctx context.Context) error {
 	fmt.Fprintf(pm.logWriter, "✓ Anon proxy started (PID: %d, SOCKS: 9050)\n", cmd.Process.Pid)
 
 	return nil
-}
-
-func (pm *ProcessManager) startBootstrapNode(ctx context.Context) error {
-	return pm.startNode("bootstrap", "bootstrap.yaml", filepath.Join(pm.debrosDir, "logs", "bootstrap.log"))
-}
-
-func (pm *ProcessManager) startNode2(ctx context.Context) error {
-	return pm.startNode("node2", "node2.yaml", filepath.Join(pm.debrosDir, "logs", "node2.log"))
-}
-
-func (pm *ProcessManager) startNode3(ctx context.Context) error {
-	return pm.startNode("node3", "node3.yaml", filepath.Join(pm.debrosDir, "logs", "node3.log"))
 }
 
 func (pm *ProcessManager) startNode(name, configFile, logPath string) error {

@@ -83,26 +83,18 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	// Determine cluster path based on data directory structure
-	// Check if dataDir contains specific node names (e.g., ~/.debros/bootstrap, ~/.debros/node2)
+	// Check if dataDir contains specific node names (e.g., ~/.debros/bootstrap, ~/.debros/bootstrap2, ~/.debros/node2-4)
 	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
-	if strings.Contains(dataDir, "bootstrap") {
-		// Check if bootstrap is a direct child
-		if filepath.Base(filepath.Dir(dataDir)) == "bootstrap" || filepath.Base(dataDir) == "bootstrap" {
-			clusterPath = filepath.Join(dataDir, "ipfs-cluster")
-		} else {
-			clusterPath = filepath.Join(dataDir, "bootstrap", "ipfs-cluster")
-		}
-	} else if strings.Contains(dataDir, "node2") {
-		if filepath.Base(filepath.Dir(dataDir)) == "node2" || filepath.Base(dataDir) == "node2" {
-			clusterPath = filepath.Join(dataDir, "ipfs-cluster")
-		} else {
-			clusterPath = filepath.Join(dataDir, "node2", "ipfs-cluster")
-		}
-	} else if strings.Contains(dataDir, "node3") {
-		if filepath.Base(filepath.Dir(dataDir)) == "node3" || filepath.Base(dataDir) == "node3" {
-			clusterPath = filepath.Join(dataDir, "ipfs-cluster")
-		} else {
-			clusterPath = filepath.Join(dataDir, "node3", "ipfs-cluster")
+	nodeNames := []string{"bootstrap", "bootstrap2", "node2", "node3", "node4"}
+	for _, nodeName := range nodeNames {
+		if strings.Contains(dataDir, nodeName) {
+			// Check if this is a direct child
+			if filepath.Base(filepath.Dir(dataDir)) == nodeName || filepath.Base(dataDir) == nodeName {
+				clusterPath = filepath.Join(dataDir, "ipfs-cluster")
+			} else {
+				clusterPath = filepath.Join(dataDir, nodeName, "ipfs-cluster")
+			}
+			break
 		}
 	}
 
@@ -151,14 +143,17 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 
 	// Determine node name
 	nodeName := cm.cfg.Node.Type
-	if nodeName == "node" {
+	if nodeName == "node" || nodeName == "bootstrap" {
 		// Try to extract from data dir or ID
-		if strings.Contains(cm.cfg.Node.DataDir, "node2") || strings.Contains(cm.cfg.Node.ID, "node2") {
-			nodeName = "node2"
-		} else if strings.Contains(cm.cfg.Node.DataDir, "node3") || strings.Contains(cm.cfg.Node.ID, "node3") {
-			nodeName = "node3"
-		} else {
-			nodeName = "node"
+		possibleNames := []string{"bootstrap", "bootstrap2", "node2", "node3", "node4"}
+		for _, name := range possibleNames {
+			if strings.Contains(cm.cfg.Node.DataDir, name) || strings.Contains(cm.cfg.Node.ID, name) {
+				nodeName = name
+				break
+			}
+		}
+		if nodeName == "node" || nodeName == "bootstrap" {
+			nodeName = cm.cfg.Node.Type
 		}
 	}
 

@@ -433,7 +433,7 @@ type ipfsDiscoveryResult struct {
 }
 
 // discoverIPFSFromNodeConfigs discovers IPFS configuration from node.yaml files
-// Checks bootstrap.yaml first, then node.yaml, node2.yaml, etc.
+// Checks bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
 func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -443,8 +443,8 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 
 	configDir := filepath.Join(homeDir, ".debros")
 
-	// Try bootstrap.yaml first, then node.yaml, node2.yaml, etc.
-	configFiles := []string{"bootstrap.yaml", "node.yaml", "node2.yaml", "node3.yaml"}
+	// Try bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
+	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"}
 
 	for _, filename := range configFiles {
 		configPath := filepath.Join(configDir, filename)

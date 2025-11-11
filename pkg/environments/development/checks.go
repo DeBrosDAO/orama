@@ -87,26 +87,8 @@ type PortChecker struct {
 }
 
 // RequiredPorts defines all ports needed for dev environment
-var RequiredPorts = []int{
-	// LibP2P
-	4001, 4002, 4003,
-	// IPFS API
-	4501, 4502, 4503,
-	// RQLite HTTP
-	5001, 5002, 5003,
-	// RQLite Raft
-	7001, 7002, 7003,
-	// Gateway
-	6001,
-	// Olric
-	3320, 3322,
-	// Anon SOCKS
-	9050,
-	// IPFS Cluster
-	9094, 9104, 9114,
-	// IPFS Gateway
-	8080, 8081, 8082,
-}
+// Computed from DefaultTopology
+var RequiredPorts = DefaultTopology().AllPorts()
 
 // NewPortChecker creates a new port checker with required ports
 func NewPortChecker() *PortChecker {
@@ -150,28 +132,5 @@ func isPortAvailable(port int) bool {
 
 // PortMap provides a human-readable mapping of ports to services
 func PortMap() map[int]string {
-	return map[int]string{
-		4001: "Bootstrap P2P",
-		4002: "Node2 P2P",
-		4003: "Node3 P2P",
-		4501: "Bootstrap IPFS API",
-		4502: "Node2 IPFS API",
-		4503: "Node3 IPFS API",
-		5001: "Bootstrap RQLite HTTP",
-		5002: "Node2 RQLite HTTP",
-		5003: "Node3 RQLite HTTP",
-		7001: "Bootstrap RQLite Raft",
-		7002: "Node2 RQLite Raft",
-		7003: "Node3 RQLite Raft",
-		6001: "Gateway",
-		3320: "Olric HTTP API",
-		3322: "Olric Memberlist",
-		9050: "Anon SOCKS Proxy",
-		9094: "Bootstrap IPFS Cluster",
-		9104: "Node2 IPFS Cluster",
-		9114: "Node3 IPFS Cluster",
-		8080: "Bootstrap IPFS Gateway",
-		8081: "Node2 IPFS Gateway",
-		8082: "Node3 IPFS Gateway",
-	}
+	return DefaultTopology().PortMap()
 }

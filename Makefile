@@ -19,7 +19,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.64.1
+VERSION := 0.65.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -102,8 +102,8 @@ help:
 	@echo "Local Development (Recommended):"
 	@echo "  make dev      - Start full development stack with one command"
 	@echo "                 - Checks dependencies and available ports"
-	@echo "                 - Generates configs (bootstrap + node2 + node3 + gateway)"
-	@echo "                 - Starts IPFS, RQLite, Olric, nodes, and gateway"
+	@echo "                 - Generates configs (2 bootstraps + 3 nodes + gateway)"
+	@echo "                 - Starts IPFS, RQLite, Olric, all nodes, and gateway"
 	@echo "                 - Validates cluster health (IPFS peers, RQLite, LibP2P)"
 	@echo "                 - Stops all services if health checks fail"
 	@echo "                 - Includes comprehensive logging"

@@ -111,8 +111,8 @@ func GetRQLiteNodes() []string {
 	}
 	cacheMutex.RUnlock()
 
-	// Try bootstrap.yaml first, then node.yaml variants
-	for _, cfgFile := range []string{"bootstrap.yaml", "node.yaml", "node2.yaml", "node3.yaml"} {
+	// Try bootstrap.yaml first, then all node variants
+	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -141,11 +141,13 @@ func queryAPIKeyFromRQLite() (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Try bootstrap first, then nodes
+	// Try bootstrap first, then all nodes
 	dbPaths := []string{
 		filepath.Join(homeDir, ".debros", "bootstrap", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".debros", "bootstrap2", "rqlite", "db.sqlite"),
 		filepath.Join(homeDir, ".debros", "node2", "rqlite", "db.sqlite"),
 		filepath.Join(homeDir, ".debros", "node3", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".debros", "node4", "rqlite", "db.sqlite"),
 	}
 
 	for _, dbPath := range dbPaths {
@@ -219,7 +221,7 @@ func GetBootstrapPeers() []string {
 	}
 	cacheMutex.RUnlock()
 
-	configFiles := []string{"bootstrap.yaml", "node.yaml", "node2.yaml", "node3.yaml"}
+	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"}
 	seen := make(map[string]struct{})
 	var peers []string
 
@@ -270,7 +272,7 @@ func GetIPFSClusterURL() string {
 	cacheMutex.RUnlock()
 
 	// Try to load from node config
-	for _, cfgFile := range []string{"bootstrap.yaml", "node.yaml", "node2.yaml", "node3.yaml"} {
+	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -302,7 +304,7 @@ func GetIPFSAPIURL() string {
 	cacheMutex.RUnlock()
 
 	// Try to load from node config
-	for _, cfgFile := range []string{"bootstrap.yaml", "node.yaml", "node2.yaml", "node3.yaml"} {
+	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -327,7 +329,7 @@ func GetIPFSAPIURL() string {
 // GetClientNamespace returns the test client namespace from config
 func GetClientNamespace() string {
 	// Try to load from node config
-	for _, cfgFile := range []string{"bootstrap.yaml", "node.yaml"} {
+	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue

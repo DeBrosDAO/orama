@@ -12,9 +12,9 @@ database:
   shard_count: 16
   max_database_size: 1073741824
   backup_interval: "24h"
-  rqlite_port: { { .RQLiteHTTPPort } }
-  rqlite_raft_port: { { .RQLiteRaftPort } }
-  rqlite_join_address: ""
+  rqlite_port: {{.RQLiteHTTPPort}}
+  rqlite_raft_port: {{.RQLiteRaftPort}}
+  rqlite_join_address: "{{.RQLiteJoinAddress}}"
   cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
   min_cluster_size: 3
@@ -26,9 +26,11 @@ database:
     enable_encryption: true
 
 discovery:
-  bootstrap_peers: []
+  bootstrap_peers:
+{{range .BootstrapPeers}}    - "{{.}}"
+{{end}}
   discovery_interval: "15s"
-  bootstrap_port: { { .P2PPort } }
+  bootstrap_port: {{.P2PPort}}
   http_adv_address: "localhost:{{.RQLiteHTTPPort}}"
   raft_adv_address: "localhost:{{.RQLiteRaftPort}}"
   node_namespace: "default"
