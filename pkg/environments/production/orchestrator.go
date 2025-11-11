@@ -31,6 +31,7 @@ type ProductionSetup struct {
 	serviceController *SystemdController
 	binaryInstaller   *BinaryInstaller
 	branch            string
+	skipRepoUpdate    bool
 	NodePeerID        string // Captured during Phase3 for later display
 }
 
@@ -62,7 +63,7 @@ func SaveBranchPreference(debrosDir, branch string) error {
 }
 
 // NewProductionSetup creates a new production setup orchestrator
-func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool, branch string) *ProductionSetup {
+func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool) *ProductionSetup {
 	debrosDir := debrosHome + "/.debros"
 	arch, _ := (&ArchitectureDetector{}).Detect()
 
@@ -78,6 +79,7 @@ func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure
 		forceReconfigure:  forceReconfigure,
 		arch:              arch,
 		branch:            branch,
+		skipRepoUpdate:    skipRepoUpdate,
 		privChecker:       &PrivilegeChecker{},
 		osDetector:        &OSDetector{},
 		archDetector:      &ArchitectureDetector{},
@@ -247,7 +249,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	}
 
 	// Install DeBros binaries
-	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.debrosHome); err != nil {
+	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.debrosHome, ps.skipRepoUpdate); err != nil {
 		return fmt.Errorf("failed to install DeBros binaries: %w", err)
 	}
 

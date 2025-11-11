@@ -275,7 +275,7 @@ func (bi *BinaryInstaller) ResolveBinaryPath(binary string, extraPaths ...string
 }
 
 // InstallDeBrosBinaries clones and builds DeBros binaries
-func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome string) error {
+func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome string, skipRepoUpdate bool) error {
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  Building DeBros binaries...\n")
 
 	srcDir := filepath.Join(debrosHome, "src")
@@ -291,23 +291,39 @@ func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome strin
 		repoInitialized = true
 	}
 
-	// Clone repository if not present, otherwise update it
-	if !repoInitialized {
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Cloning repository...\n")
-		cmd := exec.Command("git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", srcDir)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to clone repository: %w", err)
+	// Handle repository update/clone based on skipRepoUpdate flag
+	if skipRepoUpdate {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Skipping repo clone/pull (--no-pull flag)\n")
+		if !repoInitialized {
+			return fmt.Errorf("cannot skip pull: repository not found at %s", srcDir)
 		}
+		// Verify srcDir exists and has content
+		if entries, err := os.ReadDir(srcDir); err != nil {
+			return fmt.Errorf("failed to read source directory %s: %w", srcDir, err)
+		} else if len(entries) == 0 {
+			return fmt.Errorf("source directory %s is empty", srcDir)
+		}
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Using existing repository at %s (skipping git operations)\n", srcDir)
+		// Skip to build step - don't execute any git commands
 	} else {
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating repository to latest changes...\n")
-		if output, err := exec.Command("git", "-C", srcDir, "fetch", "origin", branch).CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to fetch repository updates: %v\n%s", err, string(output))
-		}
-		if output, err := exec.Command("git", "-C", srcDir, "reset", "--hard", "origin/"+branch).CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to reset repository: %v\n%s", err, string(output))
-		}
-		if output, err := exec.Command("git", "-C", srcDir, "clean", "-fd").CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to clean repository: %v\n%s", err, string(output))
+		// Clone repository if not present, otherwise update it
+		if !repoInitialized {
+			fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Cloning repository...\n")
+			cmd := exec.Command("git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", srcDir)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to clone repository: %w", err)
+			}
+		} else {
+			fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating repository to latest changes...\n")
+			if output, err := exec.Command("git", "-C", srcDir, "fetch", "origin", branch).CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to fetch repository updates: %v\n%s", err, string(output))
+			}
+			if output, err := exec.Command("git", "-C", srcDir, "reset", "--hard", "origin/"+branch).CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to reset repository: %v\n%s", err, string(output))
+			}
+			if output, err := exec.Command("git", "-C", srcDir, "clean", "-fd").CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to clean repository: %v\n%s", err, string(output))
+			}
 		}
 	}
 

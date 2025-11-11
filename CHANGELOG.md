@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.2] - 2025-11-11
+
+### Added
+- Added `--no-pull` flag to `dbn prod upgrade` to skip git repository updates and use existing source code.
+
+### Changed
+- Removed deprecated environment management commands (`env`, `devnet`, `testnet`, `local`).
+- Removed deprecated network commands (`health`, `peers`, `status`, `peer-id`, `connect`, `query`, `pubsub`) from the main CLI interface.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.1] - 2025-11-11
 
 ### Added

@@ -65,6 +65,7 @@ func showProdHelp() {
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
 	fmt.Printf("      --branch BRANCH        - Git branch to use (main or nightly, uses saved preference if not specified)\n")
+	fmt.Printf("      --no-pull              - Skip git clone/pull, use existing /home/debros/src\n")
 	fmt.Printf("  status                    - Show status of production services\n")
 	fmt.Printf("  start                     - Start all production services (requires root/sudo)\n")
 	fmt.Printf("  stop                      - Stop all production services (requires root/sudo)\n")
@@ -86,6 +87,8 @@ func showProdHelp() {
 	fmt.Printf("  sudo dbn prod upgrade --restart\n\n")
 	fmt.Printf("  # Upgrade and switch to nightly branch\n")
 	fmt.Printf("  sudo dbn prod upgrade --restart --branch nightly\n\n")
+	fmt.Printf("  # Upgrade without pulling latest code (use existing /home/debros/src)\n")
+	fmt.Printf("  sudo dbn prod upgrade --restart --no-pull\n\n")
 	fmt.Printf("  # Service management\n")
 	fmt.Printf("  sudo dbn prod start\n")
 	fmt.Printf("  sudo dbn prod stop\n")
@@ -161,7 +164,7 @@ func handleProdInstall(args []string) {
 
 	debrosHome := "/home/debros"
 	debrosDir := debrosHome + "/.debros"
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch, false)
 
 	// Save branch preference for future upgrades
 	if err := production.SaveBranchPreference(debrosDir, branch); err != nil {
@@ -234,6 +237,7 @@ func handleProdUpgrade(args []string) {
 	// Parse arguments
 	force := false
 	restartServices := false
+	noPull := false
 	branch := ""
 	for i, arg := range args {
 		if arg == "--force" {
@@ -241,6 +245,15 @@ func handleProdUpgrade(args []string) {
 		}
 		if arg == "--restart" {
 			restartServices = true
+		}
+		if arg == "--no-pull" {
+			noPull = true
+		}
+		if arg == "--nightly" {
+			branch = "nightly"
+		}
+		if arg == "--main" {
+			branch = "main"
 		}
 		if arg == "--branch" {
 			if i+1 < len(args) {
@@ -266,7 +279,13 @@ func handleProdUpgrade(args []string) {
 	fmt.Printf("  This will preserve existing configurations and data\n")
 	fmt.Printf("  Configurations will be updated to latest format\n\n")
 
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, force, branch, noPull)
+
+	// Log if --no-pull is enabled
+	if noPull {
+		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
+		fmt.Printf("     Using existing repository at %s/src\n", debrosHome)
+	}
 
 	// If branch was explicitly provided, save it for future upgrades
 	if branch != "" {
