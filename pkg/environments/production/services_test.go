@@ -56,7 +56,7 @@ func TestGenerateRQLiteService(t *testing.T) {
 				debrosDir:  "/home/debros/.debros",
 			}
 
-			unit := ssg.GenerateRQLiteService(tt.nodeType, 5001, 7001, tt.joinAddr, tt.advertiseIP)
+			unit := ssg.GenerateRQLiteService(tt.nodeType, "/usr/local/bin/rqlited", 5001, 7001, tt.joinAddr, tt.advertiseIP)
 
 			// Check advertise IP is present
 			expectedAdvertise := tt.expectAdvertiseIP + ":5001"
@@ -90,7 +90,7 @@ func TestGenerateRQLiteServiceArgs(t *testing.T) {
 		debrosDir:  "/home/debros/.debros",
 	}
 
-	unit := ssg.GenerateRQLiteService("node", 5001, 7001, "10.0.0.1:7001", "10.0.0.2")
+	unit := ssg.GenerateRQLiteService("node", "/usr/local/bin/rqlited", 5001, 7001, "10.0.0.1:7001", "10.0.0.2")
 
 	// Verify essential flags are present
 	if !strings.Contains(unit, "-http-addr 0.0.0.0:5001") {
