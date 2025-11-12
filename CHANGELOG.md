@@ -13,6 +13,27 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.6] - 2025-11-12
+
+### Added
+- Improved production service health checks and port availability validation during install, upgrade, start, and restart commands.
+- Added service aliases (node, ipfs, cluster, gateway, olric) to `dbn prod logs` command for easier log viewing.
+
+### Changed
+- Updated node configuration logic to correctly advertise public IP addresses in multiaddrs (for P2P discovery) and RQLite addresses, improving connectivity for nodes behind NAT/firewalls.
+- Enhanced `dbn prod install` and `dbn prod upgrade` to automatically detect and preserve existing VPS IP, domain, and cluster join information.
+- Improved RQLite cluster discovery to automatically replace localhost/loopback addresses with the actual public IP when exchanging metadata between peers.
+- Updated `dbn prod install` to require `--vps-ip` for all node types (bootstrap and regular) for proper network configuration.
+- Improved error handling and robustness in the installation script when fetching the latest release from GitHub.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where the RQLite process would wait indefinitely for a join target; now uses a 5-minute timeout.
+- Corrected the location of the gateway configuration file reference in the README.
+
 ## [0.69.5] - 2025-11-11
 
 ### Added

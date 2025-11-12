@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -137,7 +138,26 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 	// Save the peer ID to a file for CLI access (especially useful for bootstrap)
 	peerID := n.GetPeerID()
 	peerInfoFile := filepath.Join(dataDir, "peer.info")
-	peerMultiaddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d/p2p/%s", port, peerID)
+
+	// Extract advertise IP from config (prefer http_adv_address, fallback to raft_adv_address)
+	advertiseIP := "0.0.0.0" // Default fallback
+	if cfg.Discovery.HttpAdvAddress != "" {
+		if host, _, err := net.SplitHostPort(cfg.Discovery.HttpAdvAddress); err == nil && host != "" && host != "localhost" {
+			advertiseIP = host
+		}
+	} else if cfg.Discovery.RaftAdvAddress != "" {
+		if host, _, err := net.SplitHostPort(cfg.Discovery.RaftAdvAddress); err == nil && host != "" && host != "localhost" {
+			advertiseIP = host
+		}
+	}
+
+	// Determine IP protocol (IPv4 or IPv6) for multiaddr
+	ipProtocol := "ip4"
+	if ip := net.ParseIP(advertiseIP); ip != nil && ip.To4() == nil {
+		ipProtocol = "ip6"
+	}
+
+	peerMultiaddr := fmt.Sprintf("/%s/%s/tcp/%d/p2p/%s", ipProtocol, advertiseIP, port, peerID)
 
 	if err := os.WriteFile(peerInfoFile, []byte(peerMultiaddr), 0644); err != nil {
 		logger.Error("Failed to save peer info: %v", zap.Error(err))

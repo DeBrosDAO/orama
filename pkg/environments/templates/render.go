@@ -22,6 +22,8 @@ type BootstrapConfigData struct {
 	IPFSAPIPort       int      // Default: 4501
 	BootstrapPeers    []string // List of bootstrap peer multiaddrs
 	RQLiteJoinAddress string   // Optional: join address for secondary bootstraps
+	HTTPAdvAddress    string   // Advertised HTTP address (IP:port)
+	RaftAdvAddress    string   // Advertised Raft address (IP:port)
 }
 
 // NodeConfigData holds parameters for node.yaml rendering
@@ -34,7 +36,9 @@ type NodeConfigData struct {
 	RQLiteJoinAddress string
 	BootstrapPeers    []string
 	ClusterAPIPort    int
-	IPFSAPIPort       int // Default: 4501+
+	IPFSAPIPort       int    // Default: 4501+
+	HTTPAdvAddress    string // Advertised HTTP address (IP:port)
+	RaftAdvAddress    string // Advertised Raft address (IP:port)
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering

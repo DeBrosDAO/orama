@@ -15,6 +15,7 @@
 #   bash scripts/install-debros-network.sh --domain example.com
 
 set -e
+set -o pipefail
 trap 'error "An error occurred. Installation aborted."; exit 1' ERR
 
 # Color codes
@@ -100,19 +101,30 @@ check_root() {
 get_latest_release() {
     log "Fetching latest release..."
     
+    # Try to get latest release with better error handling
+    RELEASE_DATA=""
     if command -v jq &>/dev/null; then
         # Get the latest release (including pre-releases/nightly)
-        LATEST_RELEASE=$(curl -fsSL -H "Accept: application/vnd.github+json" "$GITHUB_API/releases" | \
-            jq -r '.[0] | .tag_name')
+        RELEASE_DATA=$(curl -fsSL -H "Accept: application/vnd.github+json" "$GITHUB_API/releases" 2>&1)
+        if [ $? -ne 0 ]; then
+            error "Failed to fetch release data from GitHub API"
+            error "Response: $RELEASE_DATA"
+            exit 1
+        fi
+        LATEST_RELEASE=$(echo "$RELEASE_DATA" | jq -r '.[0] | .tag_name' 2>/dev/null)
     else
-        LATEST_RELEASE=$(curl -fsSL "$GITHUB_API/releases" | \
-            grep '"tag_name"' | \
-            head -1 | \
-            cut -d'"' -f4)
+        RELEASE_DATA=$(curl -fsSL "$GITHUB_API/releases" 2>&1)
+        if [ $? -ne 0 ]; then
+            error "Failed to fetch release data from GitHub API"
+            error "Response: $RELEASE_DATA"
+            exit 1
+        fi
+        LATEST_RELEASE=$(echo "$RELEASE_DATA" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
     fi
     
-    if [ -z "$LATEST_RELEASE" ]; then
+    if [ -z "$LATEST_RELEASE" ] || [ "$LATEST_RELEASE" = "null" ]; then
         error "Could not determine latest release version"
+        error "GitHub API response may be empty or rate-limited"
         exit 1
     fi
     

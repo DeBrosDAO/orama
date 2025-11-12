@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	mathrand "math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,51 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	n.rqliteAdapter = adapter
 
 	return nil
+}
+
+// extractIPFromMultiaddr extracts the IP address from a bootstrap peer multiaddr
+// Supports IP4, IP6, DNS4, DNS6, and DNSADDR protocols
+func extractIPFromMultiaddr(multiaddrStr string) string {
+	ma, err := multiaddr.NewMultiaddr(multiaddrStr)
+	if err != nil {
+		return ""
+	}
+
+	// First, try to extract direct IP address
+	var ip string
+	var dnsName string
+	multiaddr.ForEach(ma, func(c multiaddr.Component) bool {
+		switch c.Protocol().Code {
+		case multiaddr.P_IP4, multiaddr.P_IP6:
+			ip = c.Value()
+			return false // Stop iteration - found IP
+		case multiaddr.P_DNS4, multiaddr.P_DNS6, multiaddr.P_DNSADDR:
+			dnsName = c.Value()
+			// Continue to check for IP, but remember DNS name as fallback
+		}
+		return true
+	})
+
+	// If we found a direct IP, return it
+	if ip != "" {
+		return ip
+	}
+
+	// If we found a DNS name, try to resolve it
+	if dnsName != "" {
+		if resolvedIPs, err := net.LookupIP(dnsName); err == nil && len(resolvedIPs) > 0 {
+			// Prefer IPv4 addresses, but accept IPv6 if that's all we have
+			for _, resolvedIP := range resolvedIPs {
+				if resolvedIP.To4() != nil {
+					return resolvedIP.String()
+				}
+			}
+			// Return first IPv6 address if no IPv4 found
+			return resolvedIPs[0].String()
+		}
+	}
+
+	return ""
 }
 
 // bootstrapPeerSource returns a PeerSource that yields peers from BootstrapPeers.
@@ -688,10 +734,14 @@ func (n *Node) startIPFSClusterConfig() error {
 
 	// If this is not the bootstrap node, try to update bootstrap peer info
 	if n.config.Node.Type != "bootstrap" && len(n.config.Discovery.BootstrapPeers) > 0 {
-		// Try to find bootstrap cluster API URL from config
-		// For now, we'll discover it from the first bootstrap peer
-		// In a real scenario, you might want to configure this explicitly
-		bootstrapClusterAPI := "http://localhost:9094" // Default bootstrap cluster API
+		// Infer bootstrap cluster API URL from first bootstrap peer multiaddr
+		bootstrapClusterAPI := "http://localhost:9094" // Default fallback
+		if len(n.config.Discovery.BootstrapPeers) > 0 {
+			// Extract IP from first bootstrap peer multiaddr
+			if ip := extractIPFromMultiaddr(n.config.Discovery.BootstrapPeers[0]); ip != "" {
+				bootstrapClusterAPI = fmt.Sprintf("http://%s:9094", ip)
+			}
+		}
 		if err := cm.UpdateBootstrapPeers(bootstrapClusterAPI); err != nil {
 			n.logger.ComponentWarn(logging.ComponentNode, "Failed to update bootstrap peers, will retry later", zap.Error(err))
 			// Don't fail - peers can connect later via mDNS or manual config

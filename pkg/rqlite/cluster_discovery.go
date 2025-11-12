@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
 
@@ -159,17 +162,31 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 	c.logger.Debug("Collecting peer metadata from LibP2P",
 		zap.Int("connected_libp2p_peers", len(connectedPeers)))
 
+	c.mu.RLock()
+	currentRaftAddr := c.raftAddress
+	currentHTTPAddr := c.httpAddress
+	c.mu.RUnlock()
+
 	// Add ourselves
 	ourMetadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
-		RaftAddress:    c.raftAddress,
-		HTTPAddress:    c.httpAddress,
+		NodeID:         currentRaftAddr, // RQLite uses raft address as node ID
+		RaftAddress:    currentRaftAddr,
+		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
 		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
 	}
+
+	if c.adjustSelfAdvertisedAddresses(ourMetadata) {
+		c.logger.Debug("Adjusted self-advertised RQLite addresses",
+			zap.String("raft_address", ourMetadata.RaftAddress),
+			zap.String("http_address", ourMetadata.HTTPAddress))
+	}
+
 	metadata = append(metadata, ourMetadata)
+
+	staleNodeIDs := make([]string, 0)
 
 	// Query connected peers for their RQLite metadata
 	// For now, we'll use a simple approach - store metadata in peer metadata store
@@ -181,11 +198,24 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 			if jsonData, ok := val.([]byte); ok {
 				var peerMeta discovery.RQLiteNodeMetadata
 				if err := json.Unmarshal(jsonData, &peerMeta); err == nil {
+					if updated, stale := c.adjustPeerAdvertisedAddresses(peerID, &peerMeta); updated && stale != "" {
+						staleNodeIDs = append(staleNodeIDs, stale)
+					}
 					peerMeta.LastSeen = time.Now()
 					metadata = append(metadata, &peerMeta)
 				}
 			}
 		}
+	}
+
+	// Clean up stale entries if NodeID changed
+	if len(staleNodeIDs) > 0 {
+		c.mu.Lock()
+		for _, id := range staleNodeIDs {
+			delete(c.knownPeers, id)
+			delete(c.peerHealth, id)
+		}
+		c.mu.Unlock()
 	}
 
 	return metadata
@@ -366,6 +396,10 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 	peers := make([]map[string]interface{}, 0, len(c.knownPeers))
 
 	for _, peer := range c.knownPeers {
+		// Skip self - RQLite knows about itself, shouldn't be in peers.json
+		if peer.NodeID == c.raftAddress {
+			continue
+		}
 		peerEntry := map[string]interface{}{
 			"id":        peer.RaftAddress, // RQLite uses raft address as node ID
 			"address":   peer.RaftAddress,
@@ -594,14 +628,26 @@ func (c *ClusterDiscoveryService) TriggerPeerExchange(ctx context.Context) error
 
 // UpdateOwnMetadata updates our own RQLite metadata in the peerstore
 func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
+	c.mu.RLock()
+	currentRaftAddr := c.raftAddress
+	currentHTTPAddr := c.httpAddress
+	c.mu.RUnlock()
+
 	metadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
-		RaftAddress:    c.raftAddress,
-		HTTPAddress:    c.httpAddress,
+		NodeID:         currentRaftAddr, // RQLite uses raft address as node ID
+		RaftAddress:    currentRaftAddr,
+		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
 		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
+	}
+
+	// Adjust addresses if needed
+	if c.adjustSelfAdvertisedAddresses(metadata) {
+		c.logger.Debug("Adjusted self-advertised RQLite addresses in UpdateOwnMetadata",
+			zap.String("raft_address", metadata.RaftAddress),
+			zap.String("http_address", metadata.HTTPAddress))
 	}
 
 	// Store in our own peerstore for peer exchange
@@ -623,6 +669,21 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 
 // StoreRemotePeerMetadata stores metadata received from a remote peer
 func (c *ClusterDiscoveryService) StoreRemotePeerMetadata(peerID peer.ID, metadata *discovery.RQLiteNodeMetadata) error {
+	if metadata == nil {
+		return fmt.Errorf("metadata is nil")
+	}
+
+	// Adjust addresses if needed (replace localhost with actual IP)
+	if updated, stale := c.adjustPeerAdvertisedAddresses(peerID, metadata); updated && stale != "" {
+		// Clean up stale entry if NodeID changed
+		c.mu.Lock()
+		delete(c.knownPeers, stale)
+		delete(c.peerHealth, stale)
+		c.mu.Unlock()
+	}
+
+	metadata.LastSeen = time.Now()
+
 	data, err := json.Marshal(metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
@@ -633,8 +694,239 @@ func (c *ClusterDiscoveryService) StoreRemotePeerMetadata(peerID peer.ID, metada
 	}
 
 	c.logger.Debug("Stored remote peer metadata",
-		zap.String("peer_id", peerID.String()[:8]+"..."),
+		zap.String("peer_id", shortPeerID(peerID)),
 		zap.String("node_id", metadata.NodeID))
 
 	return nil
+}
+
+// adjustPeerAdvertisedAddresses adjusts peer metadata addresses by replacing localhost/loopback
+// with the actual IP address from LibP2P connection. Returns (updated, staleNodeID).
+// staleNodeID is non-empty if NodeID changed (indicating old entry should be cleaned up).
+func (c *ClusterDiscoveryService) adjustPeerAdvertisedAddresses(peerID peer.ID, meta *discovery.RQLiteNodeMetadata) (bool, string) {
+	ip := c.selectPeerIP(peerID)
+	if ip == "" {
+		return false, ""
+	}
+
+	changed, stale := rewriteAdvertisedAddresses(meta, ip, true)
+	if changed {
+		c.logger.Debug("Normalized peer advertised RQLite addresses",
+			zap.String("peer_id", shortPeerID(peerID)),
+			zap.String("raft_address", meta.RaftAddress),
+			zap.String("http_address", meta.HTTPAddress))
+	}
+	return changed, stale
+}
+
+// adjustSelfAdvertisedAddresses adjusts our own metadata addresses by replacing localhost/loopback
+// with the actual IP address from LibP2P host. Updates internal state if changed.
+func (c *ClusterDiscoveryService) adjustSelfAdvertisedAddresses(meta *discovery.RQLiteNodeMetadata) bool {
+	ip := c.selectSelfIP()
+	if ip == "" {
+		return false
+	}
+
+	changed, _ := rewriteAdvertisedAddresses(meta, ip, true)
+	if !changed {
+		return false
+	}
+
+	// Update internal state with corrected addresses
+	c.mu.Lock()
+	c.raftAddress = meta.RaftAddress
+	c.httpAddress = meta.HTTPAddress
+	c.mu.Unlock()
+	return true
+}
+
+// selectPeerIP selects the best IP address for a peer from LibP2P connections.
+// Prefers public IPs, falls back to private IPs if no public IP is available.
+func (c *ClusterDiscoveryService) selectPeerIP(peerID peer.ID) string {
+	var fallback string
+
+	// First, try to get IP from active connections
+	for _, conn := range c.host.Network().ConnsToPeer(peerID) {
+		if ip, public := ipFromMultiaddr(conn.RemoteMultiaddr()); ip != "" {
+			if shouldReplaceHost(ip) {
+				continue
+			}
+			if public {
+				return ip
+			}
+			if fallback == "" {
+				fallback = ip
+			}
+		}
+	}
+
+	// Fallback to peerstore addresses
+	for _, addr := range c.host.Peerstore().Addrs(peerID) {
+		if ip, public := ipFromMultiaddr(addr); ip != "" {
+			if shouldReplaceHost(ip) {
+				continue
+			}
+			if public {
+				return ip
+			}
+			if fallback == "" {
+				fallback = ip
+			}
+		}
+	}
+
+	return fallback
+}
+
+// selectSelfIP selects the best IP address for ourselves from LibP2P host addresses.
+// Prefers public IPs, falls back to private IPs if no public IP is available.
+func (c *ClusterDiscoveryService) selectSelfIP() string {
+	var fallback string
+
+	for _, addr := range c.host.Addrs() {
+		if ip, public := ipFromMultiaddr(addr); ip != "" {
+			if shouldReplaceHost(ip) {
+				continue
+			}
+			if public {
+				return ip
+			}
+			if fallback == "" {
+				fallback = ip
+			}
+		}
+	}
+
+	return fallback
+}
+
+// rewriteAdvertisedAddresses rewrites RaftAddress and HTTPAddress in metadata,
+// replacing localhost/loopback addresses with the provided IP.
+// Returns (changed, staleNodeID). staleNodeID is non-empty if NodeID changed.
+func rewriteAdvertisedAddresses(meta *discovery.RQLiteNodeMetadata, newHost string, allowNodeIDRewrite bool) (bool, string) {
+	if meta == nil || newHost == "" {
+		return false, ""
+	}
+
+	originalNodeID := meta.NodeID
+	changed := false
+	nodeIDChanged := false
+
+	// Replace host in RaftAddress if it's localhost/loopback
+	if newAddr, replaced := replaceAddressHost(meta.RaftAddress, newHost); replaced {
+		if meta.RaftAddress != newAddr {
+			meta.RaftAddress = newAddr
+			changed = true
+		}
+	}
+
+	// Replace host in HTTPAddress if it's localhost/loopback
+	if newAddr, replaced := replaceAddressHost(meta.HTTPAddress, newHost); replaced {
+		if meta.HTTPAddress != newAddr {
+			meta.HTTPAddress = newAddr
+			changed = true
+		}
+	}
+
+	// Update NodeID to match RaftAddress if it changed
+	if allowNodeIDRewrite {
+		if meta.RaftAddress != "" && (meta.NodeID == "" || meta.NodeID == originalNodeID || shouldReplaceHost(hostFromAddress(meta.NodeID))) {
+			if meta.NodeID != meta.RaftAddress {
+				meta.NodeID = meta.RaftAddress
+				nodeIDChanged = meta.NodeID != originalNodeID
+				if nodeIDChanged {
+					changed = true
+				}
+			}
+		}
+	}
+
+	if nodeIDChanged {
+		return changed, originalNodeID
+	}
+	return changed, ""
+}
+
+// replaceAddressHost replaces the host part of an address if it's localhost/loopback.
+// Returns (newAddress, replaced). replaced is true if host was replaced.
+func replaceAddressHost(address, newHost string) (string, bool) {
+	if address == "" || newHost == "" {
+		return address, false
+	}
+
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address, false
+	}
+
+	if !shouldReplaceHost(host) {
+		return address, false
+	}
+
+	return net.JoinHostPort(newHost, port), true
+}
+
+// shouldReplaceHost returns true if the host should be replaced (localhost, loopback, etc.)
+func shouldReplaceHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	// Check if it's a loopback or unspecified address
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.IsLoopback() || addr.IsUnspecified() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hostFromAddress extracts the host part from a host:port address
+func hostFromAddress(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
+// ipFromMultiaddr extracts an IP address from a multiaddr and returns (ip, isPublic)
+func ipFromMultiaddr(addr multiaddr.Multiaddr) (string, bool) {
+	if addr == nil {
+		return "", false
+	}
+
+	if v4, err := addr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+		return v4, isPublicIP(v4)
+	}
+	if v6, err := addr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+		return v6, isPublicIP(v6)
+	}
+	return "", false
+}
+
+// isPublicIP returns true if the IP is a public (non-private, non-loopback) address
+func isPublicIP(ip string) bool {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	// Exclude loopback, unspecified, link-local, multicast, and private addresses
+	if addr.IsLoopback() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsPrivate() {
+		return false
+	}
+	return true
+}
+
+// shortPeerID returns a shortened version of a peer ID for logging
+func shortPeerID(id peer.ID) string {
+	s := id.String()
+	if len(s) <= 8 {
+		return s
+	}
+	return s[:8] + "..."
 }

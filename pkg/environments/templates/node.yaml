@@ -31,8 +31,8 @@ discovery:
 {{end}}
   discovery_interval: "15s"
   bootstrap_port: {{.P2PPort}}
-  http_adv_address: "localhost:{{.RQLiteHTTPPort}}"
-  raft_adv_address: "localhost:{{.RQLiteRaftPort}}"
+  http_adv_address: "{{.HTTPAdvAddress}}"
+  raft_adv_address: "{{.RaftAdvAddress}}"
   node_namespace: "default"
 
 security:

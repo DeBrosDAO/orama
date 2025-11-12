@@ -245,7 +245,7 @@ User=debros
 Group=debros
 WorkingDirectory=%s
 Environment=HOME=%s
-	ExecStart=%s/bin/gateway --config %s/data/gateway.yaml
+ExecStart=%s/bin/gateway --config %s/data/gateway.yaml
 Restart=always
 RestartSec=5
 StandardOutput=file:%s

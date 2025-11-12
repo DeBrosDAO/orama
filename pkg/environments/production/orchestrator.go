@@ -3,6 +3,7 @@ package production
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -368,8 +369,20 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 	}
 	ps.logf("  ✓ Node config generated: %s", configFile)
 
-	// Gateway config
-	olricServers := []string{"127.0.0.1:3320"}
+	// Gateway config - infer Olric servers from bootstrap peers or use localhost
+	olricServers := []string{"127.0.0.1:3320"} // Default to localhost for single-node
+	if len(bootstrapPeers) > 0 {
+		// Try to infer Olric servers from bootstrap peers
+		bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
+		if bootstrapIP != "" {
+			// Add bootstrap Olric server (use net.JoinHostPort for IPv6 support)
+			olricServers = []string{net.JoinHostPort(bootstrapIP, "3320")}
+			// If this is not bootstrap and vpsIP is provided, add local Olric server too
+			if !isBootstrap && vpsIP != "" {
+				olricServers = append(olricServers, net.JoinHostPort(vpsIP, "3320"))
+			}
+		}
+	}
 	gatewayConfig, err := ps.configGenerator.GenerateGatewayConfig(bootstrapPeers, enableHTTPS, domain, olricServers)
 	if err != nil {
 		return fmt.Errorf("failed to generate gateway config: %w", err)
@@ -380,8 +393,8 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 	}
 	ps.logf("  ✓ Gateway config generated")
 
-	// Olric config
-	olricConfig, err := ps.configGenerator.GenerateOlricConfig("localhost", 3320, 3322)
+	// Olric config - use 0.0.0.0 to bind on all interfaces
+	olricConfig, err := ps.configGenerator.GenerateOlricConfig("0.0.0.0", 3320, 3322)
 	if err != nil {
 		return fmt.Errorf("failed to generate olric config: %w", err)
 	}
@@ -533,7 +546,7 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/node-bootstrap.log", ps.debrosDir)
 	ps.logf("  %s/logs/gateway.log", ps.debrosDir)
 	ps.logf("\nStart All Services:")
-	ps.logf("  systemctl start debros-ipfs-bootstrap debros-ipfs-cluster-bootstrap debros-rqlite-bootstrap debros-olric debros-node-bootstrap debros-gateway")
+	ps.logf("  systemctl start debros-ipfs-bootstrap debros-ipfs-cluster-bootstrap debros-olric debros-node-bootstrap debros-gateway")
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")
 	ps.logf("  curl http://localhost:5001/status\n")

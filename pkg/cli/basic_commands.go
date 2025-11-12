@@ -245,12 +245,24 @@ func HandlePubSubCommand(args []string, format string, timeout time.Duration) {
 func createClient() (client.NetworkClient, error) {
 	config := client.DefaultClientConfig("dbn")
 
+	// Use active environment's gateway URL
+	gatewayURL := getGatewayURL()
+	config.GatewayURL = gatewayURL
+
+	// Try to get bootstrap peers from active environment
+	// For now, we'll use the default bootstrap peers from config
+	// In the future, environments could specify their own bootstrap peers
+	env, err := GetActiveEnvironment()
+	if err == nil && env != nil {
+		// Environment loaded successfully - gateway URL already set above
+		// Bootstrap peers could be added to Environment struct in the future
+		_ = env // Use env if we add bootstrap peers to it
+	}
+
 	// Check for existing credentials using enhanced authentication
 	creds, err := auth.GetValidEnhancedCredentials()
 	if err != nil {
 		// No valid credentials found, use the enhanced authentication flow
-		gatewayURL := getGatewayURL()
-
 		newCreds, authErr := auth.GetOrPromptForCredentials(gatewayURL)
 		if authErr != nil {
 			return nil, fmt.Errorf("authentication failed: %w", authErr)

@@ -112,8 +112,12 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Apply migrations
-	migrationsDir := "migrations"
+	// Apply migrations - resolve path for production vs development
+	migrationsDir, err := r.resolveMigrationsDir()
+	if err != nil {
+		r.logger.Error("Failed to resolve migrations directory", zap.Error(err))
+		return fmt.Errorf("resolve migrations directory: %w", err)
+	}
 	if err := r.ApplyMigrations(ctx, migrationsDir); err != nil {
 		r.logger.Error("Migrations failed", zap.Error(err), zap.String("dir", migrationsDir))
 		return fmt.Errorf("apply migrations: %w", err)
@@ -137,6 +141,23 @@ func (r *RQLiteManager) rqliteDataDirPath() (string, error) {
 	}
 
 	return filepath.Join(dataDir, "rqlite"), nil
+}
+
+// resolveMigrationsDir resolves the migrations directory path for production vs development
+// In production, migrations are at /home/debros/src/migrations
+// In development, migrations are relative to the project root (migrations/)
+func (r *RQLiteManager) resolveMigrationsDir() (string, error) {
+	// Check for production path first: /home/debros/src/migrations
+	productionPath := "/home/debros/src/migrations"
+	if _, err := os.Stat(productionPath); err == nil {
+		r.logger.Info("Using production migrations directory", zap.String("path", productionPath))
+		return productionPath, nil
+	}
+
+	// Fall back to relative path for development
+	devPath := "migrations"
+	r.logger.Info("Using development migrations directory", zap.String("path", devPath))
+	return devPath, nil
 }
 
 // prepareDataDir expands and creates the RQLite data directory
@@ -176,10 +197,13 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 			joinArg = strings.TrimPrefix(joinArg, "https://")
 		}
 
-		// Wait for join target to become reachable to avoid forming a separate cluster (wait indefinitely)
-		if err := r.waitForJoinTarget(ctx, r.config.RQLiteJoinAddress, 0); err != nil {
+		// Wait for join target to become reachable to avoid forming a separate cluster
+		// Use 5 minute timeout to prevent infinite waits on bad configurations
+		joinTimeout := 5 * time.Minute
+		if err := r.waitForJoinTarget(ctx, r.config.RQLiteJoinAddress, joinTimeout); err != nil {
 			r.logger.Warn("Join target did not become reachable within timeout; will still attempt to join",
 				zap.String("join_address", r.config.RQLiteJoinAddress),
+				zap.Duration("timeout", joinTimeout),
 				zap.Error(err))
 		}
 

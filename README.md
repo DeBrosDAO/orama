@@ -217,7 +217,7 @@ Currently, the `upgrade` command doesn't support `--domain` flag. To enable HTTP
 1. **Edit the gateway configuration:**
 
 ```bash
-sudo nano /home/debros/.debros/configs/gateway.yaml
+sudo nano /home/debros/.debros/data/gateway.yaml
 ```
 
 2. **Update the configuration:**
@@ -357,6 +357,9 @@ sudo systemctl enable debros-*
 ```bash
 # Install bootstrap node
 sudo dbn prod install --bootstrap [--domain DOMAIN] [--branch BRANCH]
+
+
+sudo dbn prod install --nightly --domain node-gh38V1.debros.network --vps-ip 57.128.223.92 --ignore-resource-checks --bootstrap-join
 
 # Install secondary node
 sudo dbn prod install --vps-ip IP --peers ADDRS [--domain DOMAIN] [--branch BRANCH]
