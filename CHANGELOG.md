@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.7] - 2025-11-12
+
+### Added
+\n
+### Changed
+- Improved logic for determining Olric server addresses during configuration generation, especially for bootstrap and non-bootstrap nodes.
+- Enhanced IPFS cluster configuration to correctly handle IPv6 addresses when updating bootstrap peers.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.6] - 2025-11-12
 
 ### Added

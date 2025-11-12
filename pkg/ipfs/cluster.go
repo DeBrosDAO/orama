@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -232,15 +233,24 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) err
 		return nil
 	}
 
-	// Extract bootstrap cluster port from URL
-	_, clusterPort, err := parseClusterPorts(bootstrapAPIURL)
+	// Extract bootstrap host and cluster port from URL
+	bootstrapHost, clusterPort, err := parseBootstrapHostAndPort(bootstrapAPIURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse bootstrap cluster API URL: %w", err)
 	}
 
 	// Bootstrap listens on clusterPort + 2 (same pattern)
 	bootstrapClusterPort := clusterPort + 2
-	bootstrapPeerAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", bootstrapClusterPort, peerID)
+
+	// Determine IP protocol (ip4 or ip6) based on the host
+	var ipProtocol string
+	if net.ParseIP(bootstrapHost).To4() != nil {
+		ipProtocol = "ip4"
+	} else {
+		ipProtocol = "ip6"
+	}
+
+	bootstrapPeerAddr := fmt.Sprintf("/%s/%s/tcp/%d/p2p/%s", ipProtocol, bootstrapHost, bootstrapClusterPort, peerID)
 
 	// Load current config
 	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
@@ -465,6 +475,38 @@ func ensureRequiredSection(parent map[string]interface{}, key string, defaults m
 		updateNestedMap(parent, key, defaults)
 		parent[key] = existing
 	}
+}
+
+// parseBootstrapHostAndPort extracts host and REST API port from bootstrap API URL
+func parseBootstrapHostAndPort(bootstrapAPIURL string) (host string, restAPIPort int, err error) {
+	u, err := url.Parse(bootstrapAPIURL)
+	if err != nil {
+		return "", 0, err
+	}
+
+	host = u.Hostname()
+	if host == "" {
+		return "", 0, fmt.Errorf("no host in URL: %s", bootstrapAPIURL)
+	}
+
+	portStr := u.Port()
+	if portStr == "" {
+		// Default port based on scheme
+		if u.Scheme == "http" {
+			portStr = "9094"
+		} else if u.Scheme == "https" {
+			portStr = "443"
+		} else {
+			return "", 0, fmt.Errorf("unknown scheme: %s", u.Scheme)
+		}
+	}
+
+	_, err = fmt.Sscanf(portStr, "%d", &restAPIPort)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port: %s", portStr)
+	}
+
+	return host, restAPIPort, nil
 }
 
 // parseClusterPorts extracts cluster port and REST API port from ClusterAPIURL

@@ -369,20 +369,36 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 	}
 	ps.logf("  ✓ Node config generated: %s", configFile)
 
-	// Gateway config - infer Olric servers from bootstrap peers or use localhost
-	olricServers := []string{"127.0.0.1:3320"} // Default to localhost for single-node
-	if len(bootstrapPeers) > 0 {
-		// Try to infer Olric servers from bootstrap peers
-		bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
-		if bootstrapIP != "" {
-			// Add bootstrap Olric server (use net.JoinHostPort for IPv6 support)
-			olricServers = []string{net.JoinHostPort(bootstrapIP, "3320")}
-			// If this is not bootstrap and vpsIP is provided, add local Olric server too
-			if !isBootstrap && vpsIP != "" {
-				olricServers = append(olricServers, net.JoinHostPort(vpsIP, "3320"))
+	// Determine Olric servers for gateway config
+	// Olric will bind to 0.0.0.0 (all interfaces) but gateway needs specific addresses
+	var olricServers []string
+
+	if isBootstrap {
+		// Bootstrap node: gateway should connect to vpsIP if provided, otherwise localhost
+		if vpsIP != "" {
+			olricServers = []string{net.JoinHostPort(vpsIP, "3320")}
+		} else {
+			olricServers = []string{"127.0.0.1:3320"}
+		}
+	} else {
+		// Non-bootstrap node: include bootstrap server and local server
+		olricServers = []string{"127.0.0.1:3320"} // Default to localhost for single-node
+		if len(bootstrapPeers) > 0 {
+			// Try to infer Olric servers from bootstrap peers
+			bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
+			if bootstrapIP != "" {
+				// Add bootstrap Olric server (use net.JoinHostPort for IPv6 support)
+				olricServers = []string{net.JoinHostPort(bootstrapIP, "3320")}
+				// Add local Olric server too
+				if vpsIP != "" {
+					olricServers = append(olricServers, net.JoinHostPort(vpsIP, "3320"))
+				} else {
+					olricServers = append(olricServers, "127.0.0.1:3320")
+				}
 			}
 		}
 	}
+
 	gatewayConfig, err := ps.configGenerator.GenerateGatewayConfig(bootstrapPeers, enableHTTPS, domain, olricServers)
 	if err != nil {
 		return fmt.Errorf("failed to generate gateway config: %w", err)
@@ -393,7 +409,8 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 	}
 	ps.logf("  ✓ Gateway config generated")
 
-	// Olric config - use 0.0.0.0 to bind on all interfaces
+	// Olric config - bind to 0.0.0.0 to listen on all interfaces
+	// Gateway will connect using the specific address from olricServers list above
 	olricConfig, err := ps.configGenerator.GenerateOlricConfig("0.0.0.0", 3320, 3322)
 	if err != nil {
 		return fmt.Errorf("failed to generate olric config: %w", err)
