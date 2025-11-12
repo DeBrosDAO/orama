@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -271,18 +272,19 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) (bo
 		return true, nil
 	}
 
-	// Update peer_addresses
+	// Update peerstore file FIRST - this is what IPFS Cluster reads for bootstrapping
+	// Peerstore is the source of truth, service.json is just for our tracking
+	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
+	if err := os.WriteFile(peerstorePath, []byte(bootstrapPeerAddr+"\n"), 0644); err != nil {
+		return false, fmt.Errorf("failed to write peerstore: %w", err)
+	}
+
+	// Then sync service.json from peerstore to keep them in sync
 	cfg.Cluster.PeerAddresses = []string{bootstrapPeerAddr}
 
 	// Save config
 	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
 		return false, fmt.Errorf("failed to save config: %w", err)
-	}
-
-	// Write to peerstore file
-	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
-	if err := os.WriteFile(peerstorePath, []byte(bootstrapPeerAddr+"\n"), 0644); err != nil {
-		return false, fmt.Errorf("failed to write peerstore: %w", err)
 	}
 
 	cm.logger.Info("Updated bootstrap peer configuration",
@@ -433,20 +435,21 @@ func (cm *ClusterConfigManager) UpdateAllClusterPeers() (bool, error) {
 		return true, nil
 	}
 
-	// Update peer_addresses
-	cfg.Cluster.PeerAddresses = allPeerAddresses
-
-	// Save config
-	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
-		return false, fmt.Errorf("failed to save config: %w", err)
-	}
-
-	// Also update peerstore file
+	// Update peerstore file FIRST - this is what IPFS Cluster reads for bootstrapping
+	// Peerstore is the source of truth, service.json is just for our tracking
 	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
 	peerstoreContent := strings.Join(allPeerAddresses, "\n") + "\n"
 	if err := os.WriteFile(peerstorePath, []byte(peerstoreContent), 0644); err != nil {
 		cm.logger.Warn("Failed to update peerstore file", zap.Error(err))
 		// Non-fatal, continue
+	}
+
+	// Then sync service.json from peerstore to keep them in sync
+	cfg.Cluster.PeerAddresses = allPeerAddresses
+
+	// Save config
+	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
+		return false, fmt.Errorf("failed to save config: %w", err)
 	}
 
 	cm.logger.Info("Updated cluster peer addresses",
@@ -504,6 +507,96 @@ func (cm *ClusterConfigManager) RepairBootstrapPeers() (bool, error) {
 	// If update failed (bootstrap not available), return false but no error
 	// This allows retries later
 	return false, nil
+}
+
+// DiscoverClusterPeersFromLibP2P loads IPFS cluster peer addresses from the peerstore file.
+// If peerstore is empty, it means there are no peers to connect to.
+// Returns true if peers were loaded and configured, false otherwise (non-fatal)
+func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(host host.Host) (bool, error) {
+	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
+		return false, nil // IPFS not configured
+	}
+
+	// Load peer addresses from peerstore file
+	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
+	peerstoreData, err := os.ReadFile(peerstorePath)
+	if err != nil {
+		// Peerstore file doesn't exist or can't be read - no peers to connect to
+		cm.logger.Debug("Peerstore file not found or empty - no cluster peers to connect to",
+			zap.String("peerstore_path", peerstorePath))
+		return false, nil
+	}
+
+	var allPeerAddresses []string
+	seenPeers := make(map[string]bool)
+
+	// Parse peerstore file (one multiaddr per line)
+	lines := strings.Split(strings.TrimSpace(string(peerstoreData)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.HasPrefix(line, "/") {
+			// Validate it's a proper multiaddr with p2p component
+			if ma, err := multiaddr.NewMultiaddr(line); err == nil {
+				if _, err := ma.ValueForProtocol(multiaddr.P_P2P); err == nil {
+					if !seenPeers[line] {
+						allPeerAddresses = append(allPeerAddresses, line)
+						seenPeers[line] = true
+						cm.logger.Debug("Loaded cluster peer address from peerstore",
+							zap.String("addr", line))
+					}
+				}
+			}
+		}
+	}
+
+	if len(allPeerAddresses) == 0 {
+		cm.logger.Debug("Peerstore file is empty - no cluster peers to connect to")
+		return false, nil
+	}
+
+	// Get config to update peer_addresses
+	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
+	cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if peer addresses have changed
+	addressesChanged := false
+	if len(cfg.Cluster.PeerAddresses) != len(allPeerAddresses) {
+		addressesChanged = true
+	} else {
+		currentAddrs := make(map[string]bool)
+		for _, addr := range cfg.Cluster.PeerAddresses {
+			currentAddrs[addr] = true
+		}
+		for _, addr := range allPeerAddresses {
+			if !currentAddrs[addr] {
+				addressesChanged = true
+				break
+			}
+		}
+	}
+
+	if !addressesChanged {
+		cm.logger.Debug("Cluster peer addresses already up to date",
+			zap.Int("peer_count", len(allPeerAddresses)))
+		return true, nil
+	}
+
+	// Update peer_addresses
+	cfg.Cluster.PeerAddresses = allPeerAddresses
+
+	// Save config
+	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
+		return false, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	cm.logger.Info("Loaded cluster peer addresses from peerstore",
+		zap.Int("peer_count", len(allPeerAddresses)),
+		zap.Strings("peer_addresses", allPeerAddresses))
+
+	return true, nil
 }
 
 // loadOrCreateConfig loads existing service.json or creates a template

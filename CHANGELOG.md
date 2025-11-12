@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.9] - 2025-11-12
+
+### Added
+- Added automatic recovery logic for RQLite (database) nodes stuck in a configuration mismatch, which attempts to clear stale Raft state if peers have more recent data.
+- Added logic to discover IPFS Cluster peers directly from the LibP2P host's peerstore, improving peer discovery before the Cluster API is fully operational.
+
+### Changed
+- Improved the IPFS Cluster configuration update process to prioritize writing to the `peerstore` file before updating `service.json`, ensuring the source of truth is updated first.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.8] - 2025-11-12
 
 ### Added

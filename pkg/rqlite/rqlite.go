@@ -360,6 +360,34 @@ func (r *RQLiteManager) establishLeadershipOrJoin(ctx context.Context, rqliteDat
 					r.logger.Warn("Cluster recovery failed", zap.Error(recoveryErr))
 				}
 			}
+
+			// Check if we're stuck in configuration mismatch after recovery failed
+			if leadershipErr != nil && r.isStuckInConfigurationMismatch() {
+				r.logger.Warn("Detected persistent configuration mismatch, attempting automatic recovery")
+
+				// Verify it's safe to clear state (peers have higher log indexes)
+				if r.isSafeToClearState(rqliteDataDir) {
+					r.logger.Info("Clearing stale Raft state to resolve configuration mismatch")
+					if err := r.clearRaftState(rqliteDataDir); err != nil {
+						r.logger.Error("Failed to clear Raft state", zap.Error(err))
+					} else {
+						// Restart RQLite with clean state
+						r.logger.Info("Raft state cleared, restarting RQLite for clean rejoin")
+						if recoveryErr := r.recoverCluster(peersPath); recoveryErr == nil {
+							// Retry leadership after state clear
+							leadershipErr = r.waitForLeadership(ctx)
+							if leadershipErr == nil {
+								r.logger.Info("Bootstrap node established leadership after state clear")
+								return nil
+							}
+						}
+					}
+				} else {
+					r.logger.Warn("Configuration mismatch detected but clearing state is unsafe",
+						zap.String("reason", "peers may not have more recent data"),
+						zap.String("action", "manual intervention may be required"))
+				}
+			}
 		}
 
 		// Final fallback: SQL availability
@@ -856,6 +884,150 @@ func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 
 	r.logger.Info("Raft state cleared successfully - node will join as fresh follower")
 	return nil
+}
+
+// isStuckInConfigurationMismatch checks if we're stuck due to configuration mismatch
+// This detects the "not part of stable configuration" scenario where Raft can't elect a leader
+func (r *RQLiteManager) isStuckInConfigurationMismatch() bool {
+	// Check Raft state via status endpoint
+	status, err := r.getRQLiteStatus()
+	if err != nil {
+		r.logger.Debug("Cannot check Raft status for configuration mismatch", zap.Error(err))
+		return false // Can't determine, don't clear
+	}
+
+	// Get Raft state and leader information
+	raftState := strings.ToLower(status.Store.Raft.State)
+	hasLeader := status.Store.Raft.LeaderAddr != ""
+
+	// Stuck if: no leader AND state is not "leader" or "follower"
+	// (likely stuck in "candidate" or configuration mismatch)
+	if !hasLeader && raftState != "leader" && raftState != "follower" {
+		r.logger.Debug("Detected potential configuration mismatch",
+			zap.String("raft_state", raftState),
+			zap.Bool("has_leader", hasLeader))
+		// Verify all peers are also stuck
+		if r.allPeersAreStuck() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// allPeersAreStuck checks if all discovered peers also report no leader
+// This helps confirm we're in a cluster-wide configuration mismatch, not just a local issue
+func (r *RQLiteManager) allPeersAreStuck() bool {
+	if r.discoveryService == nil {
+		r.logger.Debug("No discovery service available to check peer status")
+		return false
+	}
+
+	peers := r.discoveryService.GetActivePeers()
+	if len(peers) == 0 {
+		r.logger.Debug("No peers discovered, might be network issue")
+		return false // No peers discovered, might be network issue
+	}
+
+	// Check if we can query peers and they all report no leader
+	stuckCount := 0
+	reachableCount := 0
+	for _, peer := range peers {
+		if r.peerHasLeader(peer.HTTPAddress) {
+			// Peer has a leader, so we're not in cluster-wide mismatch
+			return false
+		}
+		// Check if peer is at least reachable
+		if r.isPeerReachable(peer.HTTPAddress) {
+			reachableCount++
+			stuckCount++
+		}
+	}
+
+	// If we have reachable peers and they're all stuck, we're likely in cluster-wide config mismatch
+	if reachableCount > 0 && stuckCount == reachableCount {
+		r.logger.Debug("All reachable peers are also stuck",
+			zap.Int("reachable_peers", reachableCount),
+			zap.Int("total_peers", len(peers)))
+		return true
+	}
+
+	return false
+}
+
+// peerHasLeader checks if a peer has a leader by querying its status endpoint
+func (r *RQLiteManager) peerHasLeader(httpAddr string) bool {
+	url := fmt.Sprintf("http://%s/status", httpAddr)
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return false // Can't reach peer
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	var status RQLiteStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return false
+	}
+
+	// Peer has leader if leader address is set
+	return status.Store.Raft.LeaderAddr != ""
+}
+
+// isPeerReachable checks if a peer is at least responding to HTTP requests
+func (r *RQLiteManager) isPeerReachable(httpAddr string) bool {
+	url := fmt.Sprintf("http://%s/status", httpAddr)
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK
+}
+
+// isSafeToClearState verifies we can safely clear Raft state
+// Returns true only if peers have higher log indexes (they have more recent data)
+// or if we have no meaningful state (index == 0)
+func (r *RQLiteManager) isSafeToClearState(rqliteDataDir string) bool {
+	if r.discoveryService == nil {
+		r.logger.Debug("No discovery service available, cannot verify safety")
+		return false // No discovery service, can't verify
+	}
+
+	ourIndex := r.getRaftLogIndex()
+	peers := r.discoveryService.GetActivePeers()
+
+	if len(peers) == 0 {
+		r.logger.Debug("No peers discovered, might be network issue")
+		return false // No peers, might be network issue
+	}
+
+	// Find max peer log index
+	maxPeerIndex := uint64(0)
+	for _, peer := range peers {
+		if peer.RaftLogIndex > maxPeerIndex {
+			maxPeerIndex = peer.RaftLogIndex
+		}
+	}
+
+	// Safe to clear if peers have higher log indexes (they have more recent data)
+	// OR if we have no meaningful state (index == 0)
+	safe := maxPeerIndex > ourIndex || ourIndex == 0
+
+	r.logger.Debug("Checking if safe to clear Raft state",
+		zap.Uint64("our_log_index", ourIndex),
+		zap.Uint64("peer_max_log_index", maxPeerIndex),
+		zap.Bool("safe_to_clear", safe))
+
+	return safe
 }
 
 // performPreStartClusterDiscovery waits for peer discovery and builds a complete peers.json

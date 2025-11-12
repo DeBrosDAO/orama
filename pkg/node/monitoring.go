@@ -217,6 +217,17 @@ func (n *Node) startConnectionMonitoring() {
 			// This discovers all cluster peers and updates peer_addresses in service.json
 			// so IPFS Cluster can automatically connect to all discovered peers
 			if n.clusterConfigManager != nil {
+				// First try to discover from LibP2P connections (works even if cluster peers aren't connected yet)
+				// This runs every minute to discover peers automatically via LibP2P discovery
+				if time.Now().Unix()%60 == 0 {
+					if success, err := n.clusterConfigManager.DiscoverClusterPeersFromLibP2P(n.host); err != nil {
+						n.logger.ComponentWarn(logging.ComponentNode, "Failed to discover cluster peers from LibP2P", zap.Error(err))
+					} else if success {
+						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses discovered from LibP2P")
+					}
+				}
+
+				// Also try to update from cluster API (works once peers are connected)
 				// Update all cluster peers every 2 minutes to discover new peers
 				if time.Now().Unix()%120 == 0 {
 					if success, err := n.clusterConfigManager.UpdateAllClusterPeers(); err != nil {
