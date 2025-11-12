@@ -115,28 +115,37 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 			continue
 		}
 
-		// Include all addresses with valid TCP ports
-		// This allows test clients and dynamic allocations to participate in peer discovery
+		// Filter addresses to only include port 4001 (standard libp2p port)
+		// This prevents including non-libp2p service ports (like RQLite ports) in peer exchange
+		const libp2pPort = 4001
 		filteredAddrs := make([]multiaddr.Multiaddr, 0)
+		filteredCount := 0
 		for _, addr := range addrs {
 			// Extract TCP port from multiaddr
 			port, err := addr.ValueForProtocol(multiaddr.P_TCP)
 			if err == nil {
 				portNum, err := strconv.Atoi(port)
 				if err == nil {
-					// Accept all valid TCP ports > 0, including ephemeral ports
-					// Test clients and dynamic allocations may use high ports (> 32768)
-					if portNum > 0 {
+					// Only include addresses with port 4001
+					if portNum == libp2pPort {
 						filteredAddrs = append(filteredAddrs, addr)
+					} else {
+						filteredCount++
 					}
-				} else {
-					// If we can't parse port, include it anyway (might be non-TCP)
-					filteredAddrs = append(filteredAddrs, addr)
 				}
+				// Skip addresses with unparseable ports
 			} else {
-				// If no TCP port found, include it anyway (might be non-TCP)
-				filteredAddrs = append(filteredAddrs, addr)
+				// Skip non-TCP addresses (libp2p uses TCP)
+				filteredCount++
 			}
+		}
+
+		// Log if addresses were filtered out
+		if filteredCount > 0 {
+			d.logger.Debug("Filtered out non-libp2p addresses",
+				zap.String("peer_id", pid.String()[:8]+"..."),
+				zap.Int("filtered_count", filteredCount),
+				zap.Int("valid_count", len(filteredAddrs)))
 		}
 
 		// If no addresses remain after filtering, skip this peer
@@ -334,7 +343,8 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 				continue
 			}
 
-			// Parse addresses
+			// Parse and filter addresses to only include port 4001 (standard libp2p port)
+			const libp2pPort = 4001
 			addrs := make([]multiaddr.Multiaddr, 0, len(peerInfo.Addrs))
 			for _, addrStr := range peerInfo.Addrs {
 				ma, err := multiaddr.NewMultiaddr(addrStr)
@@ -342,14 +352,26 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 					d.logger.Debug("Failed to parse multiaddr", zap.Error(err))
 					continue
 				}
-				addrs = append(addrs, ma)
+				// Only include addresses with port 4001
+				port, err := ma.ValueForProtocol(multiaddr.P_TCP)
+				if err == nil {
+					portNum, err := strconv.Atoi(port)
+					if err == nil && portNum == libp2pPort {
+						addrs = append(addrs, ma)
+					}
+					// Skip addresses with wrong ports
+				}
+				// Skip non-TCP addresses
 			}
 
 			if len(addrs) == 0 {
+				d.logger.Debug("No valid libp2p addresses (port 4001) for peer",
+					zap.String("peer_id", parsedID.String()[:8]+"..."),
+					zap.Int("total_addresses", len(peerInfo.Addrs)))
 				continue
 			}
 
-			// Add to peerstore
+			// Add to peerstore (only valid addresses with port 4001)
 			d.host.Peerstore().AddAddrs(parsedID, addrs, time.Hour*24)
 
 			// Try to connect

@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.8] - 2025-11-12
+
+### Added
+- Improved `dbn prod start` to automatically unmask and re-enable services if they were previously masked or disabled.
+- Added automatic discovery and configuration of all IPFS Cluster peers during runtime to improve cluster connectivity.
+
+### Changed
+- Enhanced `dbn prod start` and `dbn prod stop` reliability by adding service state resets, retries, and ensuring services are disabled when stopped.
+- Filtered peer exchange addresses in LibP2P discovery to only include the standard LibP2P port (4001), preventing exposure of internal service ports.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Improved IPFS Cluster bootstrap configuration repair logic to automatically infer and update bootstrap peer addresses if the bootstrap node is available.
+
 ## [0.69.7] - 2025-11-12
 
 ### Added

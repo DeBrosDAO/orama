@@ -862,6 +862,22 @@ func isServiceActive(service string) (bool, error) {
 	return true, nil
 }
 
+func isServiceEnabled(service string) (bool, error) {
+	cmd := exec.Command("systemctl", "is-enabled", "--quiet", service)
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			switch exitErr.ExitCode() {
+			case 1:
+				return false, nil // Service is disabled
+			case 4:
+				return false, errServiceNotFound
+			}
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func collectPortsForServices(services []string, skipActive bool) ([]portSpec, error) {
 	seen := make(map[int]portSpec)
 	for _, svc := range services {
@@ -998,6 +1014,19 @@ func getProductionServices() []string {
 	return existing
 }
 
+func isServiceMasked(service string) (bool, error) {
+	cmd := exec.Command("systemctl", "is-enabled", service)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		outputStr := string(output)
+		if strings.Contains(outputStr, "masked") {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
 func handleProdStart() {
 	if os.Geteuid() != 0 {
 		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
@@ -1012,9 +1041,26 @@ func handleProdStart() {
 		return
 	}
 
+	// Reset failed state for all services before starting
+	// This helps with services that were previously in failed state
+	resetArgs := []string{"reset-failed"}
+	resetArgs = append(resetArgs, services...)
+	exec.Command("systemctl", resetArgs...).Run()
+
 	// Check which services are inactive and need to be started
 	inactive := make([]string, 0, len(services))
 	for _, svc := range services {
+		// Check if service is masked and unmask it
+		masked, err := isServiceMasked(svc)
+		if err == nil && masked {
+			fmt.Printf("  ⚠️  %s is masked, unmasking...\n", svc)
+			if err := exec.Command("systemctl", "unmask", svc).Run(); err != nil {
+				fmt.Printf("  ⚠️  Failed to unmask %s: %v\n", svc, err)
+			} else {
+				fmt.Printf("  ✓ Unmasked %s\n", svc)
+			}
+		}
+
 		active, err := isServiceActive(svc)
 		if err != nil {
 			fmt.Printf("  ⚠️  Unable to check %s: %v\n", svc, err)
@@ -1022,6 +1068,15 @@ func handleProdStart() {
 		}
 		if active {
 			fmt.Printf("  ℹ️  %s already running\n", svc)
+			// Re-enable if disabled (in case it was stopped with 'dbn prod stop')
+			enabled, err := isServiceEnabled(svc)
+			if err == nil && !enabled {
+				if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
+					fmt.Printf("  ⚠️  Failed to re-enable %s: %v\n", svc, err)
+				} else {
+					fmt.Printf("  ✓ Re-enabled %s (will auto-start on boot)\n", svc)
+				}
+			}
 			continue
 		}
 		inactive = append(inactive, svc)
@@ -1043,8 +1098,19 @@ func handleProdStart() {
 		os.Exit(1)
 	}
 
-	// Start inactive services
+	// Enable and start inactive services
 	for _, svc := range inactive {
+		// Re-enable the service first (in case it was disabled by 'dbn prod stop')
+		enabled, err := isServiceEnabled(svc)
+		if err == nil && !enabled {
+			if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
+				fmt.Printf("  ⚠️  Failed to enable %s: %v\n", svc, err)
+			} else {
+				fmt.Printf("  ✓ Enabled %s (will auto-start on boot)\n", svc)
+			}
+		}
+
+		// Start the service
 		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
 			fmt.Printf("  ⚠️  Failed to start %s: %v\n", svc, err)
 		} else {
@@ -1052,13 +1118,37 @@ func handleProdStart() {
 		}
 	}
 
-	// Give services a moment to fully initialize before verification
+	// Give services more time to fully initialize before verification
+	// Some services may need more time to start up, especially if they're
+	// waiting for dependencies or initializing databases
 	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
+
+	// Wait for services to actually become active (with retries)
+	maxRetries := 6
+	for i := 0; i < maxRetries; i++ {
+		allActive := true
+		for _, svc := range inactive {
+			active, err := isServiceActive(svc)
+			if err != nil || !active {
+				allActive = false
+				break
+			}
+		}
+		if allActive {
+			break
+		}
+		if i < maxRetries-1 {
+			time.Sleep(2 * time.Second)
+		}
+	}
 
 	// Verify all services are healthy
 	if err := verifyProductionRuntime("prod start"); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n   Services may still be starting. Check status with:\n")
+		fmt.Fprintf(os.Stderr, "   systemctl status debros-*\n")
+		fmt.Fprintf(os.Stderr, "   dbn prod logs <service>\n")
 		os.Exit(1)
 	}
 
@@ -1079,6 +1169,31 @@ func handleProdStop() {
 		return
 	}
 
+	// Stop all services at once using a single systemctl command
+	// This is more efficient and ensures they all stop together
+	stopArgs := []string{"stop"}
+	stopArgs = append(stopArgs, services...)
+	if err := exec.Command("systemctl", stopArgs...).Run(); err != nil {
+		fmt.Printf("  ⚠️  Warning: Some services may have failed to stop: %v\n", err)
+		// Continue anyway - we'll verify and handle individually below
+	}
+
+	// Wait a moment for services to fully stop
+	time.Sleep(2 * time.Second)
+
+	// Reset failed state for any services that might be in failed state
+	// This helps with services stuck in "activating auto-restart"
+	resetArgs := []string{"reset-failed"}
+	resetArgs = append(resetArgs, services...)
+	exec.Command("systemctl", resetArgs...).Run()
+
+	// Wait again after reset-failed
+	time.Sleep(1 * time.Second)
+
+	// Stop again to ensure they're stopped (in case reset-failed caused a restart)
+	exec.Command("systemctl", stopArgs...).Run()
+	time.Sleep(1 * time.Second)
+
 	hadError := false
 	for _, svc := range services {
 		active, err := isServiceActive(svc)
@@ -1088,32 +1203,51 @@ func handleProdStop() {
 			continue
 		}
 		if !active {
-			fmt.Printf("  ℹ️  %s already stopped\n", svc)
-			continue
-		}
-		if err := exec.Command("systemctl", "stop", svc).Run(); err != nil {
-			fmt.Printf("  ⚠️  Failed to stop %s: %v\n", svc, err)
-			hadError = true
-			continue
-		}
-		// Verify the service actually stopped and didn't restart itself
-		if stillActive, err := isServiceActive(svc); err != nil {
-			fmt.Printf("  ⚠️  Unable to verify %s stop: %v\n", svc, err)
-			hadError = true
-		} else if stillActive {
-			fmt.Printf("  ❌  %s restarted itself immediately\n", svc)
-			hadError = true
-		} else {
 			fmt.Printf("  ✓ Stopped %s\n", svc)
+		} else {
+			// Service is still active, try stopping it individually
+			fmt.Printf("  ⚠️  %s still active, attempting individual stop...\n", svc)
+			if err := exec.Command("systemctl", "stop", svc).Run(); err != nil {
+				fmt.Printf("  ❌  Failed to stop %s: %v\n", svc, err)
+				hadError = true
+			} else {
+				// Wait and verify again
+				time.Sleep(1 * time.Second)
+				if stillActive, _ := isServiceActive(svc); stillActive {
+					fmt.Printf("  ❌  %s restarted itself (Restart=always)\n", svc)
+					hadError = true
+				} else {
+					fmt.Printf("  ✓ Stopped %s\n", svc)
+				}
+			}
+		}
+
+		// Disable the service to prevent it from auto-starting on boot
+		enabled, err := isServiceEnabled(svc)
+		if err != nil {
+			fmt.Printf("  ⚠️  Unable to check if %s is enabled: %v\n", svc, err)
+			// Continue anyway - try to disable
+		}
+		if enabled {
+			if err := exec.Command("systemctl", "disable", svc).Run(); err != nil {
+				fmt.Printf("  ⚠️  Failed to disable %s: %v\n", svc, err)
+				hadError = true
+			} else {
+				fmt.Printf("  ✓ Disabled %s (will not auto-start on boot)\n", svc)
+			}
+		} else {
+			fmt.Printf("  ℹ️  %s already disabled\n", svc)
 		}
 	}
 
 	if hadError {
-		fmt.Fprintf(os.Stderr, "\n❌ One or more services failed to stop cleanly\n")
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "\n⚠️  Some services may still be restarting due to Restart=always\n")
+		fmt.Fprintf(os.Stderr, "   Check status with: systemctl list-units 'debros-*'\n")
+		fmt.Fprintf(os.Stderr, "   If services are still restarting, they may need manual intervention\n")
+	} else {
+		fmt.Printf("\n✅ All services stopped and disabled (will not auto-start on boot)\n")
+		fmt.Printf("   Use 'dbn prod start' to start and re-enable services\n")
 	}
-
-	fmt.Printf("\n✅ All services stopped and remain inactive\n")
 }
 
 func handleProdRestart() {

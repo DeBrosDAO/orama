@@ -10,6 +10,8 @@ import (
 	"github.com/mackerelio/go-osstat/cpu"
 	"github.com/mackerelio/go-osstat/memory"
 	"go.uber.org/zap"
+
+	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 func logPeerStatus(n *Node, currentPeerCount int, lastPeerCount int, firstCheck bool) (int, bool) {
@@ -91,13 +93,13 @@ func announceMetrics(n *Node, peers []peer.ID, cpuUsage uint64, memUsage *memory
 	}
 
 	msg := struct {
-		PeerID         string                 `json:"peer_id"`
-		PeerCount      int                    `json:"peer_count"`
-		PeerIDs        []string               `json:"peer_ids,omitempty"`
-		CPU            uint64                 `json:"cpu_usage"`
-		Memory         uint64                 `json:"memory_usage"`
-		Timestamp      int64                  `json:"timestamp"`
-		ClusterHealth  map[string]interface{} `json:"cluster_health,omitempty"`
+		PeerID        string                 `json:"peer_id"`
+		PeerCount     int                    `json:"peer_count"`
+		PeerIDs       []string               `json:"peer_ids,omitempty"`
+		CPU           uint64                 `json:"cpu_usage"`
+		Memory        uint64                 `json:"memory_usage"`
+		Timestamp     int64                  `json:"timestamp"`
+		ClusterHealth map[string]interface{} `json:"cluster_health,omitempty"`
 	}{
 		PeerID:    n.host.ID().String(),
 		PeerCount: len(peers),
@@ -209,6 +211,29 @@ func (n *Node) startConnectionMonitoring() {
 			// Announce metrics
 			if err := announceMetrics(n, peers, cpuUsage, mem); err != nil {
 				n.logger.Error("Failed to announce metrics", zap.Error(err))
+			}
+
+			// Periodically update IPFS Cluster peer addresses
+			// This discovers all cluster peers and updates peer_addresses in service.json
+			// so IPFS Cluster can automatically connect to all discovered peers
+			if n.clusterConfigManager != nil {
+				// Update all cluster peers every 2 minutes to discover new peers
+				if time.Now().Unix()%120 == 0 {
+					if success, err := n.clusterConfigManager.UpdateAllClusterPeers(); err != nil {
+						n.logger.ComponentWarn(logging.ComponentNode, "Failed to update cluster peers during monitoring", zap.Error(err))
+					} else if success {
+						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses updated during monitoring")
+					}
+
+					// Also try to repair bootstrap peers if this is not a bootstrap node
+					if n.config.Node.Type != "bootstrap" {
+						if success, err := n.clusterConfigManager.RepairBootstrapPeers(); err != nil {
+							n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair bootstrap peers during monitoring", zap.Error(err))
+						} else if success {
+							n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap peer configuration repaired during monitoring")
+						}
+					}
+				}
 			}
 		}
 	}()

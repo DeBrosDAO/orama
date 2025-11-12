@@ -372,7 +372,7 @@ func (n *Node) startLibP2P() error {
 	// For production, these would be enabled
 	isLocalhost := len(n.config.Node.ListenAddresses) > 0 &&
 		(strings.Contains(n.config.Node.ListenAddresses[0], "localhost") ||
-			strings.Contains(n.config.Node.ListenAddresses[0], "localhost"))
+			strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1"))
 
 	if isLocalhost {
 		n.logger.ComponentInfo(logging.ComponentLibP2P, "Localhost detected - disabling NAT services for local development")
@@ -732,19 +732,15 @@ func (n *Node) startIPFSClusterConfig() error {
 		return fmt.Errorf("failed to ensure cluster config: %w", err)
 	}
 
-	// If this is not the bootstrap node, try to update bootstrap peer info
-	if n.config.Node.Type != "bootstrap" && len(n.config.Discovery.BootstrapPeers) > 0 {
-		// Infer bootstrap cluster API URL from first bootstrap peer multiaddr
-		bootstrapClusterAPI := "http://localhost:9094" // Default fallback
-		if len(n.config.Discovery.BootstrapPeers) > 0 {
-			// Extract IP from first bootstrap peer multiaddr
-			if ip := extractIPFromMultiaddr(n.config.Discovery.BootstrapPeers[0]); ip != "" {
-				bootstrapClusterAPI = fmt.Sprintf("http://%s:9094", ip)
-			}
-		}
-		if err := cm.UpdateBootstrapPeers(bootstrapClusterAPI); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to update bootstrap peers, will retry later", zap.Error(err))
-			// Don't fail - peers can connect later via mDNS or manual config
+	// Try to repair bootstrap peer configuration automatically
+	// This will be retried periodically if bootstrap is not available yet
+	if n.config.Node.Type != "bootstrap" {
+		if success, err := cm.RepairBootstrapPeers(); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair bootstrap peers, will retry later", zap.Error(err))
+		} else if success {
+			n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap peer configuration repaired successfully")
+		} else {
+			n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap peer not available yet, will retry periodically")
 		}
 	}
 

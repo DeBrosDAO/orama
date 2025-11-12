@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/multiformats/go-multiaddr"
 )
 
 // ClusterConfigManager manages IPFS Cluster configuration files
@@ -212,31 +213,36 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 }
 
 // UpdateBootstrapPeers updates peer_addresses and peerstore with bootstrap peer information
-func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) error {
+// Returns true if update was successful, false if bootstrap is not available yet (non-fatal)
+func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) (bool, error) {
 	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
-		return nil // IPFS not configured
+		return false, nil // IPFS not configured
 	}
 
 	// Skip if this is the bootstrap node itself
 	if cm.cfg.Node.Type == "bootstrap" {
-		return nil
+		return false, nil
 	}
 
 	// Query bootstrap cluster API to get peer ID
 	peerID, err := getBootstrapPeerID(bootstrapAPIURL)
 	if err != nil {
-		return fmt.Errorf("failed to get bootstrap peer ID: %w", err)
+		// Non-fatal: bootstrap might not be available yet
+		cm.logger.Debug("Bootstrap peer not available yet, will retry",
+			zap.String("bootstrap_api", bootstrapAPIURL),
+			zap.Error(err))
+		return false, nil
 	}
 
 	if peerID == "" {
-		cm.logger.Warn("Bootstrap peer ID not available yet")
-		return nil
+		cm.logger.Debug("Bootstrap peer ID not available yet")
+		return false, nil
 	}
 
 	// Extract bootstrap host and cluster port from URL
 	bootstrapHost, clusterPort, err := parseBootstrapHostAndPort(bootstrapAPIURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse bootstrap cluster API URL: %w", err)
+		return false, fmt.Errorf("failed to parse bootstrap cluster API URL: %w", err)
 	}
 
 	// Bootstrap listens on clusterPort + 2 (same pattern)
@@ -256,7 +262,13 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) err
 	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
 	cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return false, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if we already have the correct address configured
+	if len(cfg.Cluster.PeerAddresses) > 0 && cfg.Cluster.PeerAddresses[0] == bootstrapPeerAddr {
+		cm.logger.Debug("Bootstrap peer address already correct", zap.String("addr", bootstrapPeerAddr))
+		return true, nil
 	}
 
 	// Update peer_addresses
@@ -264,20 +276,234 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) err
 
 	// Save config
 	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+		return false, fmt.Errorf("failed to save config: %w", err)
 	}
 
 	// Write to peerstore file
 	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
 	if err := os.WriteFile(peerstorePath, []byte(bootstrapPeerAddr+"\n"), 0644); err != nil {
-		return fmt.Errorf("failed to write peerstore: %w", err)
+		return false, fmt.Errorf("failed to write peerstore: %w", err)
 	}
 
 	cm.logger.Info("Updated bootstrap peer configuration",
 		zap.String("bootstrap_peer_addr", bootstrapPeerAddr),
 		zap.String("peerstore_path", peerstorePath))
 
-	return nil
+	return true, nil
+}
+
+// UpdateAllClusterPeers discovers all cluster peers from the local cluster API
+// and updates peer_addresses in service.json. This allows IPFS Cluster to automatically
+// connect to all discovered peers in the cluster.
+// Returns true if update was successful, false if cluster is not available yet (non-fatal)
+func (cm *ClusterConfigManager) UpdateAllClusterPeers() (bool, error) {
+	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
+		return false, nil // IPFS not configured
+	}
+
+	// Query local cluster API to get all peers
+	client := &standardHTTPClient{}
+	peersURL := fmt.Sprintf("%s/peers", cm.cfg.Database.IPFS.ClusterAPIURL)
+	resp, err := client.Get(peersURL)
+	if err != nil {
+		// Non-fatal: cluster might not be available yet
+		cm.logger.Debug("Cluster API not available yet, will retry",
+			zap.String("peers_url", peersURL),
+			zap.Error(err))
+		return false, nil
+	}
+
+	// Parse NDJSON response
+	dec := json.NewDecoder(bytes.NewReader(resp))
+	var allPeerAddresses []string
+	seenPeers := make(map[string]bool)
+	peerIDToAddresses := make(map[string][]string)
+
+	// First pass: collect all peer IDs and their addresses
+	for {
+		var peerInfo struct {
+			ID                    string   `json:"id"`
+			Addresses             []string `json:"addresses"`
+			ClusterPeers          []string `json:"cluster_peers"`
+			ClusterPeersAddresses []string `json:"cluster_peers_addresses"`
+		}
+
+		err := dec.Decode(&peerInfo)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			cm.logger.Debug("Failed to decode peer info", zap.Error(err))
+			continue
+		}
+
+		// Store this peer's addresses
+		if peerInfo.ID != "" {
+			peerIDToAddresses[peerInfo.ID] = peerInfo.Addresses
+		}
+
+		// Also collect cluster peers addresses if available
+		// These are addresses of all peers in the cluster
+		for _, addr := range peerInfo.ClusterPeersAddresses {
+			if ma, err := multiaddr.NewMultiaddr(addr); err == nil {
+				// Validate it has p2p component (peer ID)
+				if _, err := ma.ValueForProtocol(multiaddr.P_P2P); err == nil {
+					addrStr := ma.String()
+					if !seenPeers[addrStr] {
+						allPeerAddresses = append(allPeerAddresses, addrStr)
+						seenPeers[addrStr] = true
+					}
+				}
+			}
+		}
+	}
+
+	// If we didn't get cluster_peers_addresses, try to construct them from peer IDs and addresses
+	if len(allPeerAddresses) == 0 && len(peerIDToAddresses) > 0 {
+		// Get cluster listen port from config
+		serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
+		cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
+		if err == nil && len(cfg.Cluster.ListenMultiaddress) > 0 {
+			// Extract port from listen_multiaddress (e.g., "/ip4/0.0.0.0/tcp/9098")
+			listenAddr := cfg.Cluster.ListenMultiaddress[0]
+			if ma, err := multiaddr.NewMultiaddr(listenAddr); err == nil {
+				if port, err := ma.ValueForProtocol(multiaddr.P_TCP); err == nil {
+					// For each peer ID, try to find its IP address and construct cluster multiaddr
+					for peerID, addresses := range peerIDToAddresses {
+						// Try to find an IP address in the peer's addresses
+						for _, addrStr := range addresses {
+							if ma, err := multiaddr.NewMultiaddr(addrStr); err == nil {
+								// Extract IP address (IPv4 or IPv6)
+								if ip, err := ma.ValueForProtocol(multiaddr.P_IP4); err == nil && ip != "" {
+									clusterAddr := fmt.Sprintf("/ip4/%s/tcp/%s/p2p/%s", ip, port, peerID)
+									if !seenPeers[clusterAddr] {
+										allPeerAddresses = append(allPeerAddresses, clusterAddr)
+										seenPeers[clusterAddr] = true
+									}
+									break
+								} else if ip, err := ma.ValueForProtocol(multiaddr.P_IP6); err == nil && ip != "" {
+									clusterAddr := fmt.Sprintf("/ip6/%s/tcp/%s/p2p/%s", ip, port, peerID)
+									if !seenPeers[clusterAddr] {
+										allPeerAddresses = append(allPeerAddresses, clusterAddr)
+										seenPeers[clusterAddr] = true
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(allPeerAddresses) == 0 {
+		cm.logger.Debug("No cluster peer addresses found in API response")
+		return false, nil
+	}
+
+	// Load current config
+	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
+	cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if peer addresses have changed
+	addressesChanged := false
+	if len(cfg.Cluster.PeerAddresses) != len(allPeerAddresses) {
+		addressesChanged = true
+	} else {
+		// Check if addresses are different
+		currentAddrs := make(map[string]bool)
+		for _, addr := range cfg.Cluster.PeerAddresses {
+			currentAddrs[addr] = true
+		}
+		for _, addr := range allPeerAddresses {
+			if !currentAddrs[addr] {
+				addressesChanged = true
+				break
+			}
+		}
+	}
+
+	if !addressesChanged {
+		cm.logger.Debug("Cluster peer addresses already up to date",
+			zap.Int("peer_count", len(allPeerAddresses)))
+		return true, nil
+	}
+
+	// Update peer_addresses
+	cfg.Cluster.PeerAddresses = allPeerAddresses
+
+	// Save config
+	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
+		return false, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	// Also update peerstore file
+	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
+	peerstoreContent := strings.Join(allPeerAddresses, "\n") + "\n"
+	if err := os.WriteFile(peerstorePath, []byte(peerstoreContent), 0644); err != nil {
+		cm.logger.Warn("Failed to update peerstore file", zap.Error(err))
+		// Non-fatal, continue
+	}
+
+	cm.logger.Info("Updated cluster peer addresses",
+		zap.Int("peer_count", len(allPeerAddresses)),
+		zap.Strings("peer_addresses", allPeerAddresses))
+
+	return true, nil
+}
+
+// RepairBootstrapPeers automatically discovers and repairs bootstrap peer configuration
+// Tries multiple methods: config-based discovery, bootstrap peer multiaddr, or discovery service
+func (cm *ClusterConfigManager) RepairBootstrapPeers() (bool, error) {
+	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
+		return false, nil // IPFS not configured
+	}
+
+	// Skip if this is the bootstrap node itself
+	if cm.cfg.Node.Type == "bootstrap" {
+		return false, nil
+	}
+
+	// Method 1: Try to use bootstrap API URL from config if available
+	// Check if we have a bootstrap node's cluster API URL in discovery metadata
+	// For now, we'll infer from bootstrap peers multiaddr
+
+	var bootstrapAPIURL string
+
+	// Try to extract from bootstrap peers multiaddr
+	if len(cm.cfg.Discovery.BootstrapPeers) > 0 {
+		if ip := extractIPFromMultiaddrForCluster(cm.cfg.Discovery.BootstrapPeers[0]); ip != "" {
+			// Default cluster API port is 9094
+			bootstrapAPIURL = fmt.Sprintf("http://%s:9094", ip)
+			cm.logger.Debug("Inferred bootstrap cluster API from bootstrap peer",
+				zap.String("bootstrap_api", bootstrapAPIURL))
+		}
+	}
+
+	// Fallback to localhost if nothing found (for local development)
+	if bootstrapAPIURL == "" {
+		bootstrapAPIURL = "http://localhost:9094"
+		cm.logger.Debug("Using localhost fallback for bootstrap cluster API")
+	}
+
+	// Try to update bootstrap peers
+	success, err := cm.UpdateBootstrapPeers(bootstrapAPIURL)
+	if err != nil {
+		return false, err
+	}
+
+	if success {
+		cm.logger.Info("Successfully repaired bootstrap peer configuration")
+		return true, nil
+	}
+
+	// If update failed (bootstrap not available), return false but no error
+	// This allows retries later
+	return false, nil
 }
 
 // loadOrCreateConfig loads existing service.json or creates a template
@@ -642,6 +868,28 @@ func (c *standardHTTPClient) Get(url string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// extractIPFromMultiaddrForCluster extracts IP address from a LibP2P multiaddr string
+// Used for inferring bootstrap cluster API URL
+func extractIPFromMultiaddrForCluster(multiaddrStr string) string {
+	// Parse multiaddr
+	ma, err := multiaddr.NewMultiaddr(multiaddrStr)
+	if err != nil {
+		return ""
+	}
+
+	// Try to extract IPv4 address
+	if ipv4, err := ma.ValueForProtocol(multiaddr.P_IP4); err == nil && ipv4 != "" {
+		return ipv4
+	}
+
+	// Try to extract IPv6 address
+	if ipv6, err := ma.ValueForProtocol(multiaddr.P_IP6); err == nil && ipv6 != "" {
+		return ipv6
+	}
+
+	return ""
 }
 
 // FixIPFSConfigAddresses fixes localhost addresses in IPFS config to use 127.0.0.1
