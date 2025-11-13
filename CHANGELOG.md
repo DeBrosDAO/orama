@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.10] - 2025-11-13
+
+### Added
+- Automatic health monitoring and recovery for RQLite cluster split-brain scenarios.
+- RQLite now waits indefinitely for the minimum cluster size to be met before starting, preventing single-node cluster formation.
+
+### Changed
+- Updated default IPFS swarm port from 4001 to 4101 to avoid conflicts with LibP2P.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Resolved an issue where RQLite could start as a single-node cluster if peer discovery was slow, by enforcing minimum cluster size before startup.
+- Improved cluster recovery logic to correctly use `bootstrap-expect` for new clusters and ensure proper process restart during recovery.
+
 ## [0.69.9] - 2025-11-12
 
 ### Added

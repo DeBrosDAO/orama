@@ -21,14 +21,15 @@ import (
 
 // ClusterDiscoveryService bridges LibP2P discovery with RQLite cluster management
 type ClusterDiscoveryService struct {
-	host          host.Host
-	discoveryMgr  *discovery.Manager
-	rqliteManager *RQLiteManager
-	nodeID        string
-	nodeType      string
-	raftAddress   string
-	httpAddress   string
-	dataDir       string
+	host           host.Host
+	discoveryMgr   *discovery.Manager
+	rqliteManager  *RQLiteManager
+	nodeID         string
+	nodeType       string
+	raftAddress    string
+	httpAddress    string
+	dataDir        string
+	minClusterSize int // Minimum cluster size required
 
 	knownPeers      map[string]*discovery.RQLiteNodeMetadata // NodeID -> Metadata
 	peerHealth      map[string]*PeerHealth                   // NodeID -> Health
@@ -54,6 +55,11 @@ func NewClusterDiscoveryService(
 	dataDir string,
 	logger *zap.Logger,
 ) *ClusterDiscoveryService {
+	minClusterSize := 1
+	if rqliteManager != nil && rqliteManager.config != nil {
+		minClusterSize = rqliteManager.config.MinClusterSize
+	}
+
 	return &ClusterDiscoveryService{
 		host:            h,
 		discoveryMgr:    discoveryMgr,
@@ -63,6 +69,7 @@ func NewClusterDiscoveryService(
 		raftAddress:     raftAddress,
 		httpAddress:     httpAddress,
 		dataDir:         dataDir,
+		minClusterSize:  minClusterSize,
 		knownPeers:      make(map[string]*discovery.RQLiteNodeMetadata),
 		peerHealth:      make(map[string]*PeerHealth),
 		updateInterval:  30 * time.Second,
@@ -323,18 +330,58 @@ func (c *ClusterDiscoveryService) computeMembershipChangesLocked(metadata []*dis
 		}
 	}
 
+	// CRITICAL FIX: Count remote peers (excluding self)
+	remotePeerCount := 0
+	for _, peer := range c.knownPeers {
+		if peer.NodeID != c.raftAddress {
+			remotePeerCount++
+		}
+	}
+
+	// Get peers JSON snapshot (for checking if it would be empty)
+	peers := c.getPeersJSONUnlocked()
+
 	// Determine if we should write peers.json
 	shouldWrite := len(added) > 0 || len(updated) > 0 || c.lastUpdate.IsZero()
 
+	// CRITICAL FIX: Don't write peers.json until we have minimum cluster size
+	// This prevents RQLite from starting as a single-node cluster
+	// For min_cluster_size=3, we need at least 2 remote peers (plus self = 3 total)
 	if shouldWrite {
+		// For initial sync, wait until we have at least (MinClusterSize - 1) remote peers
+		// This ensures peers.json contains enough peers for proper cluster formation
+		if c.lastUpdate.IsZero() {
+			requiredRemotePeers := c.minClusterSize - 1
+
+			if remotePeerCount < requiredRemotePeers {
+				c.logger.Info("Skipping initial peers.json write - not enough remote peers discovered",
+					zap.Int("remote_peers", remotePeerCount),
+					zap.Int("required_remote_peers", requiredRemotePeers),
+					zap.Int("min_cluster_size", c.minClusterSize),
+					zap.String("action", "will write when enough peers are discovered"))
+				return membershipUpdateResult{
+					changed: false,
+				}
+			}
+		}
+
+		// Additional safety check: don't write empty peers.json (would cause single-node cluster)
+		if len(peers) == 0 && c.lastUpdate.IsZero() {
+			c.logger.Info("Skipping peers.json write - no remote peers to include",
+				zap.String("action", "will write when peers are discovered"))
+			return membershipUpdateResult{
+				changed: false,
+			}
+		}
+
 		// Log initial sync if this is the first time
 		if c.lastUpdate.IsZero() {
 			c.logger.Info("Initial cluster membership sync",
-				zap.Int("total_peers", len(c.knownPeers)))
+				zap.Int("total_peers", len(c.knownPeers)),
+				zap.Int("remote_peers", remotePeerCount),
+				zap.Int("peers_in_json", len(peers)))
 		}
 
-		// Get peers JSON snapshot
-		peers := c.getPeersJSONUnlocked()
 		return membershipUpdateResult{
 			peersJSON: peers,
 			added:     added,
