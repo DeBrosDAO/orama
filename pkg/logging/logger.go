@@ -101,8 +101,10 @@ func getLevelColor(level zapcore.Level) string {
 // coloredConsoleEncoder creates a custom encoder with colors
 func coloredConsoleEncoder(enableColors bool) zapcore.Encoder {
 	config := zap.NewDevelopmentEncoderConfig()
+
+	// Ultra-short timestamp: HH:MM:SS (no milliseconds, no date, no timezone)
 	config.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-		timeStr := t.Format("2006-01-02T15:04:05.000Z0700")
+		timeStr := t.Format("15:04:05")
 		if enableColors {
 			enc.AppendString(fmt.Sprintf("%s%s%s", Dim, timeStr, Reset))
 		} else {
@@ -110,21 +112,41 @@ func coloredConsoleEncoder(enableColors bool) zapcore.Encoder {
 		}
 	}
 
+	// Single letter level: D, I, W, E
 	config.EncodeLevel = func(level zapcore.Level, enc zapcore.PrimitiveArrayEncoder) {
-		levelStr := strings.ToUpper(level.String())
+		levelMap := map[zapcore.Level]string{
+			zapcore.DebugLevel: "D",
+			zapcore.InfoLevel:  "I",
+			zapcore.WarnLevel:  "W",
+			zapcore.ErrorLevel: "E",
+		}
+		levelStr := levelMap[level]
+		if levelStr == "" {
+			levelStr = "?"
+		}
 		if enableColors {
 			color := getLevelColor(level)
-			enc.AppendString(fmt.Sprintf("%s%s%-5s%s", color, Bold, levelStr, Reset))
+			enc.AppendString(fmt.Sprintf("%s%s%s%s", color, Bold, levelStr, Reset))
 		} else {
-			enc.AppendString(fmt.Sprintf("%-5s", levelStr))
+			enc.AppendString(levelStr)
 		}
 	}
 
+	// Just filename, no line number for cleaner output
 	config.EncodeCaller = func(caller zapcore.EntryCaller, enc zapcore.PrimitiveArrayEncoder) {
+		file := caller.File
+		// Extract just the filename from the path
+		if idx := strings.LastIndex(file, "/"); idx >= 0 {
+			file = file[idx+1:]
+		}
+		// Remove .go extension for even more compact format
+		if strings.HasSuffix(file, ".go") {
+			file = file[:len(file)-3]
+		}
 		if enableColors {
-			enc.AppendString(fmt.Sprintf("%s%s%s", Dim, caller.TrimmedPath(), Reset))
+			enc.AppendString(fmt.Sprintf("%s%s%s", Dim, file, Reset))
 		} else {
-			enc.AppendString(caller.TrimmedPath())
+			enc.AppendString(file)
 		}
 	}
 

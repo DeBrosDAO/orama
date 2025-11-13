@@ -161,9 +161,15 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 	}
 
 	// Calculate ports based on pattern
-	proxyPort := clusterPort - 1
-	pinSvcPort := clusterPort + 1
-	clusterListenPort := clusterPort + 2
+	// REST API: 9094
+	// Proxy: 9094 - 1 = 9093 (NOT USED - keeping for reference)
+	// PinSvc: 9094 + 1 = 9095
+	// Proxy API: 9094 + 1 = 9095 (actual proxy port)
+	// PinSvc API: 9094 + 3 = 9097
+	// Cluster LibP2P: 9094 + 4 = 9098
+	proxyPort := clusterPort + 1         // 9095 (IPFSProxy API)
+	pinSvcPort := clusterPort + 3        // 9097 (PinSvc API)
+	clusterListenPort := clusterPort + 4 // 9098 (Cluster LibP2P)
 
 	// If config doesn't exist, initialize it with ipfs-cluster-service init
 	// This ensures we have all required sections (datastore, informer, etc.)
@@ -246,8 +252,9 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) (bo
 		return false, fmt.Errorf("failed to parse bootstrap cluster API URL: %w", err)
 	}
 
-	// Bootstrap listens on clusterPort + 2 (same pattern)
-	bootstrapClusterPort := clusterPort + 2
+	// Bootstrap cluster LibP2P listens on clusterPort + 4
+	// (REST API is 9094, LibP2P is 9098 = 9094 + 4)
+	bootstrapClusterPort := clusterPort + 4
 
 	// Determine IP protocol (ip4 or ip6) based on the host
 	var ipProtocol string
@@ -266,17 +273,31 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) (bo
 		return false, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Check if we already have the correct address configured
-	if len(cfg.Cluster.PeerAddresses) > 0 && cfg.Cluster.PeerAddresses[0] == bootstrapPeerAddr {
-		cm.logger.Debug("Bootstrap peer address already correct", zap.String("addr", bootstrapPeerAddr))
-		return true, nil
+	// CRITICAL: Always update peerstore file to ensure no stale addresses remain
+	// Stale addresses (e.g., from old port configurations) cause LibP2P dial backoff,
+	// preventing cluster peers from connecting even if the correct address is present.
+	// We must clean and rewrite the peerstore on every update to avoid this.
+	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
+
+	// Check if peerstore needs updating (avoid unnecessary writes but always clean stale entries)
+	needsUpdate := true
+	if peerstoreData, err := os.ReadFile(peerstorePath); err == nil {
+		// Only skip update if peerstore contains EXACTLY the correct address and nothing else
+		existingAddrs := strings.Split(strings.TrimSpace(string(peerstoreData)), "\n")
+		if len(existingAddrs) == 1 && strings.TrimSpace(existingAddrs[0]) == bootstrapPeerAddr {
+			cm.logger.Debug("Bootstrap peer address already correct in peerstore", zap.String("addr", bootstrapPeerAddr))
+			needsUpdate = false
+		}
 	}
 
-	// Update peerstore file FIRST - this is what IPFS Cluster reads for bootstrapping
-	// Peerstore is the source of truth, service.json is just for our tracking
-	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
-	if err := os.WriteFile(peerstorePath, []byte(bootstrapPeerAddr+"\n"), 0644); err != nil {
-		return false, fmt.Errorf("failed to write peerstore: %w", err)
+	if needsUpdate {
+		// Write ONLY the correct bootstrap peer address, removing any stale entries
+		if err := os.WriteFile(peerstorePath, []byte(bootstrapPeerAddr+"\n"), 0644); err != nil {
+			return false, fmt.Errorf("failed to write peerstore: %w", err)
+		}
+		cm.logger.Info("Updated peerstore with bootstrap peer (cleaned stale entries)",
+			zap.String("addr", bootstrapPeerAddr),
+			zap.String("peerstore_path", peerstorePath))
 	}
 
 	// Then sync service.json from peerstore to keep them in sync
@@ -852,8 +873,9 @@ func parseClusterPorts(clusterAPIURL string) (clusterPort, restAPIPort int, err 
 		return 0, 0, fmt.Errorf("invalid port: %s", portStr)
 	}
 
-	// Cluster listen port is typically REST API port + 2
-	clusterPort = restAPIPort + 2
+	// clusterPort is used as the base port for calculations
+	// The actual cluster LibP2P listen port is calculated as clusterPort + 4
+	clusterPort = restAPIPort
 
 	return clusterPort, restAPIPort, nil
 }

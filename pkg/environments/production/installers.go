@@ -532,7 +532,8 @@ func (bi *BinaryInstaller) configureIPFSAddresses(ipfsRepoPath string, apiPort, 
 // InitializeIPFSClusterConfig initializes IPFS Cluster configuration
 // This runs `ipfs-cluster-service init` to create the service.json configuration file.
 // For existing installations, it ensures the cluster secret is up to date.
-func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret string, ipfsAPIPort int) error {
+// bootstrapClusterPeers should be in format: ["/ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>"]
+func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret string, ipfsAPIPort int, bootstrapClusterPeers []string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	configExists := false
 	if _, err := os.Stat(serviceJSONPath); err == nil {
@@ -567,11 +568,11 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 		}
 	}
 
-	// Always update the cluster secret and IPFS port (for both new and existing configs)
+	// Always update the cluster secret, IPFS port, and peer addresses (for both new and existing configs)
 	// This ensures existing installations get the secret and port synchronized
 	if clusterSecret != "" {
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret and IPFS port...\n")
-		if err := bi.updateClusterConfig(clusterPath, clusterSecret, ipfsAPIPort); err != nil {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret, IPFS port, and peer addresses...\n")
+		if err := bi.updateClusterConfig(clusterPath, clusterSecret, ipfsAPIPort, bootstrapClusterPeers); err != nil {
 			return fmt.Errorf("failed to update cluster config: %w", err)
 		}
 	}
@@ -582,8 +583,8 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 	return nil
 }
 
-// updateClusterConfig updates the secret and IPFS port in IPFS Cluster service.json
-func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsAPIPort int) error {
+// updateClusterConfig updates the secret, IPFS port, and peer addresses in IPFS Cluster service.json
+func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsAPIPort int, bootstrapClusterPeers []string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 
 	// Read existing config
@@ -598,13 +599,22 @@ func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsA
 		return fmt.Errorf("failed to parse service.json: %w", err)
 	}
 
-	// Update cluster secret
+	// Update cluster secret and peer addresses
 	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
 		cluster["secret"] = secret
+		// Configure peer addresses for cluster discovery
+		// This allows nodes to find and connect to each other
+		if len(bootstrapClusterPeers) > 0 {
+			cluster["peer_addresses"] = bootstrapClusterPeers
+		}
 	} else {
-		config["cluster"] = map[string]interface{}{
+		clusterConfig := map[string]interface{}{
 			"secret": secret,
 		}
+		if len(bootstrapClusterPeers) > 0 {
+			clusterConfig["peer_addresses"] = bootstrapClusterPeers
+		}
+		config["cluster"] = clusterConfig
 	}
 
 	// Update IPFS port in IPFS Proxy configuration
@@ -633,6 +643,35 @@ func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsA
 	}
 
 	return nil
+}
+
+// GetClusterPeerMultiaddr reads the IPFS Cluster peer ID and returns its multiaddress
+// Returns format: /ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>
+func (bi *BinaryInstaller) GetClusterPeerMultiaddr(clusterPath string, nodeIP string) (string, error) {
+	identityPath := filepath.Join(clusterPath, "identity.json")
+
+	// Read identity file
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read identity.json: %w", err)
+	}
+
+	// Parse JSON
+	var identity map[string]interface{}
+	if err := json.Unmarshal(data, &identity); err != nil {
+		return "", fmt.Errorf("failed to parse identity.json: %w", err)
+	}
+
+	// Get peer ID
+	peerID, ok := identity["id"].(string)
+	if !ok || peerID == "" {
+		return "", fmt.Errorf("peer ID not found in identity.json")
+	}
+
+	// Construct multiaddress: /ip4/<ip>/tcp/9098/p2p/<peer-id>
+	// Port 9098 is the default cluster listen port
+	multiaddr := fmt.Sprintf("/ip4/%s/tcp/9098/p2p/%s", nodeIP, peerID)
+	return multiaddr, nil
 }
 
 // InitializeRQLiteDataDir initializes RQLite data directory

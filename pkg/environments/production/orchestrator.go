@@ -265,7 +265,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 }
 
 // Phase2cInitializeServices initializes service repositories and configurations
-func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
+func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string, bootstrapPeers []string, vpsIP string) error {
 	ps.logf("Phase 2c: Initializing services...")
 
 	// Ensure node-specific directories exist
@@ -289,7 +289,34 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get cluster secret: %w", err)
 	}
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret, 4501); err != nil {
+
+	// Get bootstrap cluster peer addresses for non-bootstrap nodes
+	var bootstrapClusterPeers []string
+	if nodeType != "bootstrap" && len(bootstrapPeers) > 0 {
+		// Try to read bootstrap cluster peer ID and construct multiaddress
+		bootstrapClusterPath := filepath.Join(ps.debrosDir, "data", "bootstrap", "ipfs-cluster")
+
+		// Infer bootstrap IP from bootstrap peers
+		bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
+		if bootstrapIP != "" {
+			// Check if bootstrap cluster identity exists
+			if _, err := os.Stat(filepath.Join(bootstrapClusterPath, "identity.json")); err == nil {
+				// Bootstrap cluster is initialized, get its multiaddress
+				if clusterMultiaddr, err := ps.binaryInstaller.GetClusterPeerMultiaddr(bootstrapClusterPath, bootstrapIP); err == nil {
+					bootstrapClusterPeers = []string{clusterMultiaddr}
+					ps.logf("  ℹ️  Configured IPFS Cluster to connect to bootstrap: %s", clusterMultiaddr)
+				} else {
+					ps.logf("  ⚠️  Could not read bootstrap cluster peer ID: %v", err)
+					ps.logf("  ⚠️  IPFS Cluster will rely on mDNS discovery (may not work across internet)")
+				}
+			} else {
+				ps.logf("  ℹ️  Bootstrap cluster not yet initialized, peer_addresses will be empty")
+				ps.logf("  ℹ️  IPFS Cluster will rely on mDNS discovery (may not work across internet)")
+			}
+		}
+	}
+
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret, 4501, bootstrapClusterPeers); err != nil {
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 

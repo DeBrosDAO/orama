@@ -13,6 +13,24 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.11] - 2025-11-13
+
+### Added
+- Added a new comprehensive shell script (`scripts/test-cluster-health.sh`) for checking the health and replication status of RQLite, IPFS, and IPFS Cluster across production environments.
+
+### Changed
+- Improved RQLite cluster discovery logic to ensure `peers.json` is correctly generated and includes the local node, which is crucial for reliable cluster recovery.
+- Refactored logging across discovery and RQLite components for cleaner, more concise output, especially for routine operations.
+- Updated the installation and upgrade process to correctly configure IPFS Cluster bootstrap peers using the node's public IP, improving cluster formation reliability.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where RQLite recovery operations (like clearing Raft state) did not correctly force the regeneration of `peers.json`, preventing successful cluster rejoin.
+- Corrected the port calculation logic for IPFS Cluster to ensure the correct LibP2P listen port (9098) is used for bootstrap peer addressing.
+
 ## [0.69.10] - 2025-11-13
 
 ### Added

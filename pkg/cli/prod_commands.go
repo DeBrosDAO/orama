@@ -264,7 +264,7 @@ func handleProdInstall(args []string) {
 
 	// Phase 2c: Initialize services (after secrets are in place)
 	fmt.Printf("\nPhase 2c: Initializing services...\n")
-	if err := setup.Phase2cInitializeServices(nodeType); err != nil {
+	if err := setup.Phase2cInitializeServices(nodeType, bootstrapPeers, *vpsIP); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -447,13 +447,6 @@ func handleProdUpgrade(args []string) {
 		nodeType = "bootstrap" // Default for upgrade if nothing exists
 	}
 
-	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
-	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
-	if err := setup.Phase2cInitializeServices(nodeType); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Phase 3: Ensure secrets exist (preserves existing secrets)
 	fmt.Printf("\n🔐 Phase 3: Ensuring secrets...\n")
 	if err := setup.Phase3GenerateSecrets(nodeType == "bootstrap"); err != nil {
@@ -582,6 +575,14 @@ func handleProdUpgrade(args []string) {
 	}
 	if bootstrapJoin != "" {
 		fmt.Printf("    - Bootstrap join address: %s\n", bootstrapJoin)
+	}
+
+	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
+	// Now that we have bootstrap peers and VPS IP, we can properly configure IPFS Cluster
+	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
+	if err := setup.Phase2cInitializeServices(nodeType, bootstrapPeers, vpsIP); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
+		os.Exit(1)
 	}
 
 	if err := setup.Phase4GenerateConfigs(nodeType == "bootstrap", bootstrapPeers, vpsIP, enableHTTPS, domain, bootstrapJoin); err != nil {

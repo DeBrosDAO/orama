@@ -34,11 +34,6 @@ type RQLiteManager struct {
 
 // waitForSQLAvailable waits until a simple query succeeds, indicating a leader is known and queries can be served.
 func (r *RQLiteManager) waitForSQLAvailable(ctx context.Context) error {
-	if r.connection == nil {
-		r.logger.Error("No rqlite connection")
-		return errors.New("no rqlite connection")
-	}
-
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -48,6 +43,16 @@ func (r *RQLiteManager) waitForSQLAvailable(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			// Check for nil connection inside the loop to handle cases where
+			// connection becomes nil during restart/recovery operations
+			if r.connection == nil {
+				attempts++
+				if attempts%5 == 0 { // log every ~5s to reduce noise
+					r.logger.Debug("Waiting for RQLite connection to be established")
+				}
+				continue
+			}
+
 			attempts++
 			_, err := r.connection.QueryOne("SELECT 1")
 			if err == nil {
@@ -417,6 +422,15 @@ func (r *RQLiteManager) establishLeadershipOrJoin(ctx context.Context, rqliteDat
 					if err := r.clearRaftState(rqliteDataDir); err != nil {
 						r.logger.Error("Failed to clear Raft state", zap.Error(err))
 					} else {
+						// Force write peers.json after clearing state
+						if r.discoveryService != nil {
+							r.logger.Info("Force writing peers.json after clearing state for configuration mismatch recovery")
+							if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+								r.logger.Error("Failed to force write peers.json", zap.Error(err))
+							}
+							// Update peersPath after force write
+							peersPath = filepath.Join(rqliteDataDir, "raft", "peers.json")
+						}
 						// Restart RQLite with clean state
 						r.logger.Info("Raft state cleared, restarting RQLite for clean rejoin")
 						if recoveryErr := r.recoverCluster(ctx, peersPath); recoveryErr == nil {
@@ -1279,14 +1293,29 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 			return fmt.Errorf("failed to clear Raft state: %w", err)
 		}
 
-		// Step 5: Ensure peers.json exists with all discovered peers
-		r.discoveryService.TriggerSync()
-		time.Sleep(2 * time.Second)
+		// Step 5: Refresh peer metadata and force write peers.json
+		// We trigger peer exchange again to ensure we have the absolute latest metadata
+		// after clearing state, then force write peers.json regardless of changes
+		r.logger.Info("Refreshing peer metadata after clearing raft state")
+		r.discoveryService.TriggerPeerExchange(ctx)
+		time.Sleep(1 * time.Second) // Brief wait for peer exchange to complete
 
+		r.logger.Info("Force writing peers.json with all discovered peers")
+		// We use ForceWritePeersJSON instead of TriggerSync because TriggerSync
+		// only writes if membership changed, but after clearing state we need
+		// to write regardless of changes
+		if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+			return fmt.Errorf("failed to force write peers.json: %w", err)
+		}
+
+		// Verify peers.json was created
 		peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
 		if _, err := os.Stat(peersPath); err != nil {
-			return fmt.Errorf("peers.json not created: %w", err)
+			return fmt.Errorf("peers.json not created after force write: %w", err)
 		}
+
+		r.logger.Info("peers.json verified after force write",
+			zap.String("peers_path", peersPath))
 
 		// Step 6: Restart RQLite to pick up new peers.json
 		r.logger.Info("Restarting RQLite to apply new cluster configuration")
@@ -1435,6 +1464,14 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 			if err := r.clearRaftState(rqliteDataDir); err != nil {
 				r.logger.Error("Failed to clear Raft state", zap.Error(err))
 				// Continue anyway - rqlite might still be able to recover
+			} else {
+				// Force write peers.json after clearing stale state
+				if r.discoveryService != nil {
+					r.logger.Info("Force writing peers.json after clearing stale Raft state")
+					if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+						r.logger.Error("Failed to force write peers.json after clearing stale state", zap.Error(err))
+					}
+				}
 			}
 		}
 	}
