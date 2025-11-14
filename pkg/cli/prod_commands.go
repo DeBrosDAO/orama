@@ -96,6 +96,7 @@ func showProdHelp() {
 	fmt.Printf("      --bootstrap           - Install as bootstrap node\n")
 	fmt.Printf("      --vps-ip IP           - VPS public IP address (required for non-bootstrap)\n")
 	fmt.Printf("      --peers ADDRS         - Comma-separated bootstrap peer multiaddrs (required for non-bootstrap)\n")
+	fmt.Printf("      --cluster-secret HEX  - 64-hex cluster secret (required for non-bootstrap)\n")
 	fmt.Printf("      --bootstrap-join ADDR - Bootstrap raft join address (for secondary bootstrap)\n")
 	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (optional)\n")
 	fmt.Printf("      --branch BRANCH       - Git branch to use (main or nightly, default: main)\n")
@@ -151,6 +152,7 @@ func handleProdInstall(args []string) {
 	peersStr := fs.String("peers", "", "Comma-separated bootstrap peer multiaddrs (required for non-bootstrap)")
 	bootstrapJoin := fs.String("bootstrap-join", "", "Bootstrap raft join address (for secondary bootstrap)")
 	branch := fs.String("branch", "main", "Git branch to use (main or nightly)")
+	clusterSecret := fs.String("cluster-secret", "", "Hex-encoded 32-byte cluster secret (required for non-bootstrap nodes)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -210,11 +212,23 @@ func handleProdInstall(args []string) {
 			fmt.Fprintf(os.Stderr, "   Example: --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...\n")
 			os.Exit(1)
 		}
+		if *clusterSecret == "" {
+			fmt.Fprintf(os.Stderr, "❌ --cluster-secret is required for non-bootstrap nodes\n")
+			fmt.Fprintf(os.Stderr, "   Provide the 64-hex secret from the bootstrap node (cat ~/.debros/secrets/cluster-secret)\n")
+			os.Exit(1)
+		}
+	}
+
+	if *clusterSecret != "" {
+		if err := production.ValidateClusterSecret(*clusterSecret); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Invalid --cluster-secret: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	debrosHome := "/home/debros"
 	debrosDir := debrosHome + "/.debros"
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, *force, *branch, false, *skipResourceChecks)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, *force, *branch, false, *skipResourceChecks, *clusterSecret)
 
 	// Check port availability before proceeding
 	if err := ensurePortsAvailable("prod install", defaultPorts()); err != nil {
@@ -349,7 +363,7 @@ func handleProdUpgrade(args []string) {
 	fmt.Printf("  This will preserve existing configurations and data\n")
 	fmt.Printf("  Configurations will be updated to latest format\n\n")
 
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, *force, *branch, *noPull, false)
+	setup := production.NewProductionSetup(debrosHome, os.Stdout, *force, *branch, *noPull, false, "")
 
 	// Log if --no-pull is enabled
 	if *noPull {

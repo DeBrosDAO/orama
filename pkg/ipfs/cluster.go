@@ -1069,7 +1069,7 @@ func (cm *ClusterConfigManager) FixIPFSConfigAddresses() error {
 	}
 
 	// Always ensure API address is correct (don't just check, always set it)
-	correctAPIAddr := fmt.Sprintf(`["/ip4/127.0.0.1/tcp/%d"]`, ipfsPort)
+	correctAPIAddr := fmt.Sprintf(`["/ip4/0.0.0.0/tcp/%d"]`, ipfsPort)
 	cm.logger.Info("Ensuring IPFS API address is correct",
 		zap.String("repo", ipfsRepoPath),
 		zap.Int("port", ipfsPort),
@@ -1083,7 +1083,7 @@ func (cm *ClusterConfigManager) FixIPFSConfigAddresses() error {
 	}
 
 	// Always ensure Gateway address is correct
-	correctGatewayAddr := fmt.Sprintf(`["/ip4/127.0.0.1/tcp/%d"]`, gatewayPort)
+	correctGatewayAddr := fmt.Sprintf(`["/ip4/0.0.0.0/tcp/%d"]`, gatewayPort)
 	cm.logger.Info("Ensuring IPFS Gateway address is correct",
 		zap.String("repo", ipfsRepoPath),
 		zap.Int("port", gatewayPort),

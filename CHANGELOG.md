@@ -13,6 +13,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.12] - 2025-11-14
+
+### Added
+- The `prod install` command now requires the `--cluster-secret` flag for all non-bootstrap nodes to ensure correct IPFS Cluster configuration.
+
+### Changed
+- Updated IPFS configuration to bind API and Gateway addresses to `0.0.0.0` instead of `127.0.0.1` for better network accessibility.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.11] - 2025-11-13
 
 ### Added

@@ -58,6 +58,23 @@ All files will be under `/home/debros/.debros`:
 └── secrets/                # Keys and certificates
 ```
 
+### Joining Additional Nodes
+
+Every non-bootstrap node must use the exact same IPFS Cluster secret as the bootstrap host. When you provision a follower node:
+
+1. Copy the secret from the bootstrap machine:
+   ```bash
+   scp debros@<bootstrap-ip>:/home/debros/.debros/secrets/cluster-secret ./cluster-secret
+   ```
+2. Run the installer with the `--cluster-secret` flag:
+   ```bash
+   sudo dbn prod install --vps-ip <public_ip> \
+     --peers /ip4/<bootstrap-ip>/tcp/4001/p2p/<peer-id> \
+     --cluster-secret $(cat ./cluster-secret)
+   ```
+
+The installer now enforces `--cluster-secret` for all non-bootstrap nodes, which prevents mismatched cluster PSKs during deployment.
+
 ## Service Management
 
 ### Check Service Status

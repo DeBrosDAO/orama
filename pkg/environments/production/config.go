@@ -7,7 +7,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/environments/templates"
@@ -224,14 +226,31 @@ func (cg *ConfigGenerator) GenerateOlricConfig(bindAddr string, httpPort, member
 
 // SecretGenerator manages generation of shared secrets and keys
 type SecretGenerator struct {
-	debrosDir string
+	debrosDir             string
+	clusterSecretOverride string
 }
 
 // NewSecretGenerator creates a new secret generator
-func NewSecretGenerator(debrosDir string) *SecretGenerator {
+func NewSecretGenerator(debrosDir string, clusterSecretOverride string) *SecretGenerator {
 	return &SecretGenerator{
-		debrosDir: debrosDir,
+		debrosDir:             debrosDir,
+		clusterSecretOverride: clusterSecretOverride,
 	}
+}
+
+// ValidateClusterSecret ensures a cluster secret is 32 bytes of hex
+func ValidateClusterSecret(secret string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return fmt.Errorf("cluster secret cannot be empty")
+	}
+	if len(secret) != 64 {
+		return fmt.Errorf("cluster secret must be 64 hex characters (32 bytes)")
+	}
+	if _, err := hex.DecodeString(secret); err != nil {
+		return fmt.Errorf("cluster secret must be valid hex: %w", err)
+	}
+	return nil
 }
 
 // EnsureClusterSecret gets or generates the IPFS Cluster secret
@@ -244,10 +263,38 @@ func (sg *SecretGenerator) EnsureClusterSecret() (string, error) {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
 
+	// Use override if provided
+	if sg.clusterSecretOverride != "" {
+		secret := strings.TrimSpace(sg.clusterSecretOverride)
+		if err := ValidateClusterSecret(secret); err != nil {
+			return "", err
+		}
+
+		needsWrite := true
+		if data, err := os.ReadFile(secretPath); err == nil {
+			if strings.TrimSpace(string(data)) == secret {
+				needsWrite = false
+			}
+		}
+
+		if needsWrite {
+			if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+				return "", fmt.Errorf("failed to save cluster secret override: %w", err)
+			}
+		}
+		if err := ensureSecretFilePermissions(secretPath); err != nil {
+			return "", err
+		}
+		return secret, nil
+	}
+
 	// Try to read existing secret
 	if data, err := os.ReadFile(secretPath); err == nil {
 		secret := strings.TrimSpace(string(data))
 		if len(secret) == 64 {
+			if err := ensureSecretFilePermissions(secretPath); err != nil {
+				return "", err
+			}
 			return secret, nil
 		}
 	}
@@ -263,8 +310,33 @@ func (sg *SecretGenerator) EnsureClusterSecret() (string, error) {
 	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return "", fmt.Errorf("failed to save cluster secret: %w", err)
 	}
+	if err := ensureSecretFilePermissions(secretPath); err != nil {
+		return "", err
+	}
 
 	return secret, nil
+}
+
+func ensureSecretFilePermissions(secretPath string) error {
+	if err := os.Chmod(secretPath, 0600); err != nil {
+		return fmt.Errorf("failed to set permissions on %s: %w", secretPath, err)
+	}
+
+	if usr, err := user.Lookup("debros"); err == nil {
+		uid, err := strconv.Atoi(usr.Uid)
+		if err != nil {
+			return fmt.Errorf("failed to parse debros UID: %w", err)
+		}
+		gid, err := strconv.Atoi(usr.Gid)
+		if err != nil {
+			return fmt.Errorf("failed to parse debros GID: %w", err)
+		}
+		if err := os.Chown(secretPath, uid, gid); err != nil {
+			return fmt.Errorf("failed to change ownership of %s: %w", secretPath, err)
+		}
+	}
+
+	return nil
 }
 
 // EnsureSwarmKey gets or generates the IPFS private swarm key

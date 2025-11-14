@@ -508,8 +508,12 @@ func (bi *BinaryInstaller) configureIPFSAddresses(ipfsRepoPath string, apiPort, 
 
 	// Set Addresses
 	config["Addresses"] = map[string]interface{}{
-		"API":     []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", apiPort)},
-		"Gateway": []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", gatewayPort)},
+		"API": []string{
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", apiPort),
+		},
+		"Gateway": []string{
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", gatewayPort),
+		},
 		"Swarm": []string{
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", swarmPort),
 			fmt.Sprintf("/ip6/::/tcp/%d", swarmPort),
