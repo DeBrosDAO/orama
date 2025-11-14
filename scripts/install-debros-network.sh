@@ -1,17 +1,22 @@
 #!/bin/bash
 
 # DeBros Network Installation Script
-# Downloads network-cli from GitHub releases and runs interactive setup
+# Downloads dbn from GitHub releases and runs the new 'dbn prod install' flow
 # 
-# Supported: Ubuntu 18.04+, Debian 10+
+# Supported: Ubuntu 20.04+, Debian 11+
 # 
 # Usage:
 #   curl -fsSL https://install.debros.network | bash
 #   OR
 #   bash scripts/install-debros-network.sh
+#   OR with specific flags:
+#   bash scripts/install-debros-network.sh --bootstrap
+#   bash scripts/install-debros-network.sh --vps-ip 1.2.3.4 --peers /ip4/1.2.3.4/tcp/4001/p2p/Qm...
+#   bash scripts/install-debros-network.sh --domain example.com
 
 set -e
-trap 'echo -e "${RED}An error occurred. Installation aborted.${NOCOLOR}"; exit 1' ERR
+set -o pipefail
+trap 'error "An error occurred. Installation aborted."; exit 1' ERR
 
 # Color codes
 RED='\033[0;31m'
@@ -27,33 +32,9 @@ GITHUB_API="https://api.github.com/repos/$GITHUB_REPO"
 INSTALL_DIR="/usr/local/bin"
 
 log() { echo -e "${CYAN}[$(date '+%Y-%m-%d %H:%M:%S')]${NOCOLOR} $1"; }
-error() { echo -e "${RED}[ERROR]${NOCOLOR} $1"; }
+error() { echo -e "${RED}[ERROR]${NOCOLOR} $1" >&2; }
 success() { echo -e "${GREEN}[SUCCESS]${NOCOLOR} $1"; }
-warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1"; }
-
-# REQUIRE INTERACTIVE MODE
-if [ ! -t 0 ]; then
-    error "This script requires an interactive terminal."
-    echo -e ""
-    echo -e "${YELLOW}Please run this script directly:${NOCOLOR}"
-    echo -e "${CYAN}  bash <(curl -fsSL https://install.debros.network)${NOCOLOR}"
-    echo -e ""
-    exit 1
-fi
-
-# Check if running as root
-if [[ $EUID -eq 0 ]]; then
-    error "This script should NOT be run as root"
-    echo -e "${YELLOW}Run as a regular user with sudo privileges:${NOCOLOR}"
-    echo -e "${CYAN}  bash $0${NOCOLOR}"
-    exit 1
-fi
-
-# Check for sudo
-if ! command -v sudo &>/dev/null; then
-    error "sudo command not found. Please ensure you have sudo privileges."
-    exit 1
-fi
+warning() { echo -e "${YELLOW}[WARNING]${NOCOLOR} $1" >&2; }
 
 display_banner() {
     echo -e "${BLUE}========================================================================${NOCOLOR}"
@@ -65,7 +46,7 @@ display_banner() {
    |____/ \\___|____/|_|  \\___/|___/  |_| \\_|\\___|\\__| \\_/\\_/ \\___/|_|  |_|\\_\\
 ${NOCOLOR}"
     echo -e "${BLUE}========================================================================${NOCOLOR}"
-    echo -e "${GREEN}                    Quick Install Script                               ${NOCOLOR}"
+    echo -e "${GREEN}                    Production Installation                           ${NOCOLOR}"
     echo -e "${BLUE}========================================================================${NOCOLOR}"
 }
 
@@ -79,15 +60,13 @@ detect_os() {
     OS=$ID
     VERSION=$VERSION_ID
     
-    # Only support Debian and Ubuntu
+    # Support Debian and Ubuntu
     case $OS in
         ubuntu|debian)
             log "Detected OS: $OS ${VERSION:-unknown}"
             ;;
         *)
-            error "Unsupported operating system: $OS"
-            echo -e "${YELLOW}This script only supports Ubuntu 18.04+ and Debian 10+${NOCOLOR}"
-            exit 1
+            warning "Unsupported operating system: $OS (may not work)"
             ;;
     esac
 }
@@ -110,385 +89,134 @@ check_architecture() {
     log "Architecture: $ARCH (using $GITHUB_ARCH)"
 }
 
-check_dependencies() {
-    log "Checking required tools..."
-    
-    local missing_deps=()
-    
-    for cmd in curl tar; do
-        if ! command -v $cmd &>/dev/null; then
-            missing_deps+=("$cmd")
-        fi
-    done
-    
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        log "Installing missing dependencies: ${missing_deps[*]}"
-        sudo apt update
-        sudo apt install -y "${missing_deps[@]}"
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root"
+        echo -e "${YELLOW}Please run with sudo:${NOCOLOR}"
+        echo -e "${CYAN}  sudo bash <(curl -fsSL https://install.debros.network)${NOCOLOR}"
+        exit 1
     fi
-    
-    success "All required tools available"
 }
 
 get_latest_release() {
-    log "Fetching latest release information..."
+    log "Fetching latest release..."
     
-    # Get latest release (exclude pre-releases and nightly)
-    LATEST_RELEASE=$(curl -fsSL "$GITHUB_API/releases" | \
-        grep -v "prerelease.*true" | \
-        grep -v "draft.*true" | \
-        grep '"tag_name"' | \
-        head -1 | \
-        cut -d'"' -f4)
+    # Try to get latest release with better error handling
+    RELEASE_DATA=""
+    if command -v jq &>/dev/null; then
+        # Get the latest release (including pre-releases/nightly)
+        RELEASE_DATA=$(curl -fsSL -H "Accept: application/vnd.github+json" "$GITHUB_API/releases" 2>&1)
+        if [ $? -ne 0 ]; then
+            error "Failed to fetch release data from GitHub API"
+            error "Response: $RELEASE_DATA"
+            exit 1
+        fi
+        LATEST_RELEASE=$(echo "$RELEASE_DATA" | jq -r '.[0] | .tag_name' 2>/dev/null)
+    else
+        RELEASE_DATA=$(curl -fsSL "$GITHUB_API/releases" 2>&1)
+        if [ $? -ne 0 ]; then
+            error "Failed to fetch release data from GitHub API"
+            error "Response: $RELEASE_DATA"
+            exit 1
+        fi
+        LATEST_RELEASE=$(echo "$RELEASE_DATA" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    fi
     
-    if [ -z "$LATEST_RELEASE" ]; then
-        error "Could not determine latest release"
+    if [ -z "$LATEST_RELEASE" ] || [ "$LATEST_RELEASE" = "null" ]; then
+        error "Could not determine latest release version"
+        error "GitHub API response may be empty or rate-limited"
         exit 1
     fi
     
     log "Latest release: $LATEST_RELEASE"
 }
 
-download_and_install() {
-    log "Downloading network-cli..."
+download_and_install_cli() {
+    BINARY_NAME="debros-network_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}.tar.gz"
+    DOWNLOAD_URL="$GITHUB_REPO/releases/download/$LATEST_RELEASE/$BINARY_NAME"
     
-    # Construct download URL
-    DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/$LATEST_RELEASE/debros-network_${LATEST_RELEASE#v}_linux_${GITHUB_ARCH}.tar.gz"
+    log "Downloading dbn from GitHub releases..."
+    log "URL: https://github.com/$DOWNLOAD_URL"
     
-    # Create temporary directory
-    TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT
+    # Clean up any stale binaries
+    rm -f /tmp/network-cli /tmp/dbn.tar.gz "$INSTALL_DIR/dbn"
     
-    # Download
-    log "Downloading from: $DOWNLOAD_URL"
-    if ! curl -fsSL -o "$TEMP_DIR/network-cli.tar.gz" "$DOWNLOAD_URL"; then
-        error "Failed to download network-cli"
+    if ! curl -fsSL -o /tmp/dbn.tar.gz "https://github.com/$DOWNLOAD_URL"; then
+        error "Failed to download dbn"
         exit 1
     fi
     
-    # Extract
-    log "Extracting network-cli..."
-    cd "$TEMP_DIR"
-    tar xzf network-cli.tar.gz
-    
-    # Install
-    log "Installing to $INSTALL_DIR..."
-    sudo cp network-cli "$INSTALL_DIR/"
-    sudo chmod +x "$INSTALL_DIR/network-cli"
-    
-    success "network-cli installed successfully"
-}
-
-verify_installation() {
-    if command -v network-cli &>/dev/null; then
-        INSTALLED_VERSION=$(network-cli version 2>/dev/null || echo "unknown")
-        success "network-cli is ready: $INSTALLED_VERSION"
-        return 0
-    else
-        error "network-cli not found in PATH"
-        return 1
-    fi
-}
-
-install_anon() {
-    echo -e ""
-    echo -e "${BLUE}========================================${NOCOLOR}"
-    echo -e "${GREEN}Step 1.5: Install Anyone Relay (Anon)${NOCOLOR}"
-    echo -e "${BLUE}========================================${NOCOLOR}"
-    echo -e ""
-    
-    log "Installing Anyone relay for anonymous networking..."
-    
-    # Check if anon is already installed
-    if command -v anon &>/dev/null; then
-        success "Anon already installed"
-        configure_anon_logs
-        configure_firewall_for_anon
-        return 0
-    fi
-    
-    # Install via APT (official method from docs.anyone.io)
-    log "Adding Anyone APT repository..."
-    
-    # Add GPG key
-    if ! curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg 2>/dev/null; then
-        warning "Failed to add Anyone GPG key"
-        log "You can manually install later with:"
-        log "  curl -fsSL https://deb.anyone.io/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/anyone-archive-keyring.gpg"
-        log "  echo 'deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main' | sudo tee /etc/apt/sources.list.d/anyone.list"
-        log "  sudo apt update && sudo apt install -y anon"
-        return 1
-    fi
-    
-    # Add repository
-    echo "deb [signed-by=/usr/share/keyrings/anyone-archive-keyring.gpg] https://deb.anyone.io/ anyone main" | sudo tee /etc/apt/sources.list.d/anyone.list >/dev/null
-    
-    # Preseed terms acceptance to avoid interactive prompt
-    log "Pre-accepting Anon terms and conditions..."
-    # Try multiple debconf question formats
-    echo "anon anon/terms boolean true" | sudo debconf-set-selections
-    echo "anon anon/terms seen true" | sudo debconf-set-selections
-    # Also try with select/string format
-    echo "anon anon/terms select true" | sudo debconf-set-selections || true
-    
-    # Query debconf to verify the question exists and set it properly
-    # Some packages use different question formats
-    sudo debconf-get-selections | grep -i anon || true
-    
-    # Create anonrc directory and file with AgreeToTerms before installation
-    # This ensures terms are accepted even if the post-install script checks the file
-    sudo mkdir -p /etc/anon
-    if [ ! -f /etc/anon/anonrc ]; then
-        echo "AgreeToTerms 1" | sudo tee /etc/anon/anonrc >/dev/null
-    fi
-    
-    # Also create a terms-agreement file if Anon checks for it
-    # Check multiple possible locations where Anon might look for terms acceptance
-    sudo mkdir -p /var/lib/anon
-    echo "agreed" | sudo tee /var/lib/anon/terms-agreement >/dev/null 2>&1 || true
-    sudo mkdir -p /usr/share/anon
-    echo "agreed" | sudo tee /usr/share/anon/terms-agreement >/dev/null 2>&1 || true
-    # Also create near the GPG keyring directory (as the user suggested)
-    sudo mkdir -p /usr/share/keyrings/anon
-    echo "agreed" | sudo tee /usr/share/keyrings/anon/terms-agreement >/dev/null 2>&1 || true
-    # Create in the keyring directory itself as a marker file
-    echo "agreed" | sudo tee /usr/share/keyrings/anyone-terms-agreed >/dev/null 2>&1 || true
-    
-    # Update and install with non-interactive frontend
-    log "Installing Anon package..."
-    sudo apt update -qq
-    
-    # Use DEBIAN_FRONTEND=noninteractive and set debconf values directly via apt-get options
-    # This is more reliable than just debconf-set-selections
-    if ! sudo DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y \
-        -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold" \
-        anon; then
-        warning "Anon installation failed"
-        return 1
-    fi
-    
-    # Verify installation
-    if ! command -v anon &>/dev/null; then
-        warning "Anon installation may have failed"
-        return 1
-    fi
-    
-    success "Anon installed successfully"
-    
-    # Configure with sensible defaults
-    configure_anon_defaults
-    
-    # Configure log directory
-    configure_anon_logs
-    
-    # Configure firewall if present
-    configure_firewall_for_anon
-    
-    # Enable and start service
-    log "Enabling Anon service..."
-    sudo systemctl enable anon 2>/dev/null || true
-    sudo systemctl start anon 2>/dev/null || true
-    
-    if systemctl is-active --quiet anon; then
-        success "Anon service is running"
-    else
-        warning "Anon service may not be running. Check: sudo systemctl status anon"
-    fi
-    
-    return 0
-}
-
-configure_anon_defaults() {
-    log "Configuring Anon with default settings..."
-    
-    HOSTNAME=$(hostname -s 2>/dev/null || echo "debros-node")
-    
-    # Create or update anonrc with our defaults
-    if [ -f /etc/anon/anonrc ]; then
-        # Backup existing config
-        sudo cp /etc/anon/anonrc /etc/anon/anonrc.bak 2>/dev/null || true
-        
-        # Update key settings if not already set
-        if ! grep -q "^Nickname" /etc/anon/anonrc; then
-            echo "Nickname ${HOSTNAME}" | sudo tee -a /etc/anon/anonrc >/dev/null
-        fi
-        
-        if ! grep -q "^ControlPort" /etc/anon/anonrc; then
-            echo "ControlPort 9051" | sudo tee -a /etc/anon/anonrc >/dev/null
-        fi
-        
-        if ! grep -q "^SocksPort" /etc/anon/anonrc; then
-            echo "SocksPort 9050" | sudo tee -a /etc/anon/anonrc >/dev/null
-        fi
-        
-        # Auto-accept terms in config file
-        if ! grep -q "^AgreeToTerms" /etc/anon/anonrc; then
-            echo "AgreeToTerms 1" | sudo tee -a /etc/anon/anonrc >/dev/null
-        fi
-        
-        log "  Nickname: ${HOSTNAME}"
-        log "  ORPort: 9001 (default)"
-        log "  ControlPort: 9051"
-        log "  SOCKSPort: 9050"
-        log "  AgreeToTerms: 1 (auto-accepted)"
-    fi
-}
-
-configure_anon_logs() {
-    log "Configuring Anon logs..."
-    
-    # Create log directory
-    sudo mkdir -p /home/debros/.debros/logs/anon
-    
-    # Change ownership to debian-anon (the user anon runs as)
-    sudo chown -R debian-anon:debian-anon /home/debros/.debros/logs/anon 2>/dev/null || true
-    
-    # Update anonrc to point logs to our directory
-    if [ -f /etc/anon/anonrc ]; then
-        sudo sed -i.bak 's|Log notice file.*|Log notice file /home/debros/.debros/logs/anon/notices.log|g' /etc/anon/anonrc
-        success "Anon logs configured to /home/debros/.debros/logs/anon"
-    fi
-}
-
-configure_firewall_for_anon() {
-    log "Checking firewall configuration..."
-    
-    # Check for UFW
-    if command -v ufw &>/dev/null && sudo ufw status | grep -q "Status: active"; then
-        log "UFW detected and active, adding Anon ports..."
-        sudo ufw allow 9001/tcp comment 'Anon ORPort' 2>/dev/null || true
-        sudo ufw allow 9051/tcp comment 'Anon ControlPort' 2>/dev/null || true
-        success "UFW rules added for Anon"
-        return 0
-    fi
-    
-    # Check for firewalld
-    if command -v firewall-cmd &>/dev/null && sudo firewall-cmd --state 2>/dev/null | grep -q "running"; then
-        log "firewalld detected and active, adding Anon ports..."
-        sudo firewall-cmd --permanent --add-port=9001/tcp 2>/dev/null || true
-        sudo firewall-cmd --permanent --add-port=9051/tcp 2>/dev/null || true
-        sudo firewall-cmd --reload 2>/dev/null || true
-        success "firewalld rules added for Anon"
-        return 0
-    fi
-    
-    # Check for iptables
-    if command -v iptables &>/dev/null; then
-        # Check if iptables has any rules (indicating it's in use)
-        if sudo iptables -L -n | grep -q "Chain INPUT"; then
-            log "iptables detected, adding Anon ports..."
-            sudo iptables -A INPUT -p tcp --dport 9001 -j ACCEPT -m comment --comment "Anon ORPort" 2>/dev/null || true
-            sudo iptables -A INPUT -p tcp --dport 9051 -j ACCEPT -m comment --comment "Anon ControlPort" 2>/dev/null || true
-            
-            # Try to save rules if iptables-persistent is available
-            if command -v netfilter-persistent &>/dev/null; then
-                sudo netfilter-persistent save 2>/dev/null || true
-            elif command -v iptables-save &>/dev/null; then
-                sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
-            fi
-            success "iptables rules added for Anon"
-            return 0
-        fi
-    fi
-    
-    log "No active firewall detected, skipping firewall configuration"
-}
-
-run_setup() {
-    echo -e ""
-    echo -e "${BLUE}========================================${NOCOLOR}"
-    echo -e "${GREEN}Step 2: Run Interactive Setup${NOCOLOR}"
-    echo -e "${BLUE}========================================${NOCOLOR}"
-    echo -e ""
-    
-    log "The setup command will:"
-    log "  • Create system user and directories"
-    log "  • Install dependencies (RQLite, etc.)"
-    log "  • Build DeBros binaries"
-    log "  • Configure network settings"
-    log "  • Create and start systemd services"
-    echo -e ""
-    
-    echo -e "${YELLOW}Ready to run setup? This will prompt for configuration details.${NOCOLOR}"
-    echo -n "Continue? (yes/no): "
-    read -r CONTINUE_SETUP
-    
-    if [[ "$CONTINUE_SETUP" != "yes" && "$CONTINUE_SETUP" != "y" ]]; then
-        echo -e ""
-        success "network-cli installed successfully!"
-        echo -e ""
-        echo -e "${CYAN}To complete setup later, run:${NOCOLOR}"
-        echo -e "${GREEN}  sudo network-cli setup${NOCOLOR}"
-        echo -e ""
-        return 0
-    fi
-    
-    echo -e ""
-    log "Running setup (requires sudo)..."
-    sudo network-cli setup
-}
-
-show_completion() {
-    echo -e ""
-    echo -e "${BLUE}========================================================================${NOCOLOR}"
-    success "DeBros Network installation complete!"
-    echo -e "${BLUE}========================================================================${NOCOLOR}"
-    echo -e ""
-    echo -e "${GREEN}Next Steps:${NOCOLOR}"
-    echo -e "  • Verify installation: ${CYAN}curl http://localhost:6001/health${NOCOLOR}"
-    echo -e "  • Check services:      ${CYAN}sudo network-cli service status all${NOCOLOR}"
-    echo -e "  • View logs:           ${CYAN}sudo network-cli service logs node --follow${NOCOLOR}"
-    echo -e "  • Authenticate:        ${CYAN}network-cli auth login${NOCOLOR}"
-    echo -e ""
-    echo -e "${CYAN}Environment Management:${NOCOLOR}"
-    echo -e "  • Switch to devnet:    ${CYAN}network-cli devnet enable${NOCOLOR}"
-    echo -e "  • Switch to testnet:   ${CYAN}network-cli testnet enable${NOCOLOR}"
-    echo -e "  • Show environment:    ${CYAN}network-cli env current${NOCOLOR}"
-    echo -e ""
-    echo -e "${CYAN}Anyone Relay (Anon):${NOCOLOR}"
-    echo -e "  • Check Anon status:   ${CYAN}sudo systemctl status anon${NOCOLOR}"
-    echo -e "  • View Anon logs:      ${CYAN}sudo tail -f /home/debros/.debros/logs/anon/notices.log${NOCOLOR}"
-    echo -e "  • Proxy endpoint:      ${CYAN}POST http://localhost:6001/v1/proxy/anon${NOCOLOR}"
-    echo -e ""
-    echo -e "${CYAN}Documentation: https://docs.debros.io${NOCOLOR}"
-    echo -e ""
-}
-
-main() {
-    display_banner
-    
-    echo -e ""
-    log "Starting DeBros Network installation..."
-    echo -e ""
-    
-    detect_os
-    check_architecture
-    check_dependencies
-    
-    echo -e ""
-    echo -e "${BLUE}========================================${NOCOLOR}"
-    echo -e "${GREEN}Step 1: Install network-cli${NOCOLOR}"
-    echo -e "${BLUE}========================================${NOCOLOR}"
-    echo -e ""
-    
-    get_latest_release
-    download_and_install
-    
-    # Verify installation
-    if ! verify_installation; then
+    # Verify the download was successful
+    if [ ! -f /tmp/dbn.tar.gz ]; then
+        error "Download file not found"
         exit 1
     fi
     
-    # Install Anon (optional but recommended)
-    install_anon || warning "Anon installation skipped or failed"
+    log "Extracting dbn..."
+    # Extract to /tmp
+    tar -xzf /tmp/dbn.tar.gz -C /tmp/
     
-    # Run setup
-    run_setup
+    # Check for extracted binary (could be named network-cli or dbn)
+    EXTRACTED_BINARY=""
+    if [ -f /tmp/network-cli ]; then
+        EXTRACTED_BINARY="/tmp/network-cli"
+    elif [ -f /tmp/dbn ]; then
+        EXTRACTED_BINARY="/tmp/dbn"
+    else
+        error "Failed to extract binary (neither network-cli nor dbn found)"
+        ls -la /tmp/ | grep -E "(network|cli|dbn)"
+        exit 1
+    fi
     
-    # Show completion message
-    show_completion
+    chmod +x "$EXTRACTED_BINARY"
+    
+    log "Installing dbn to $INSTALL_DIR..."
+    # Always rename to dbn during installation
+    mv "$EXTRACTED_BINARY" "$INSTALL_DIR/dbn"
+    
+    # Sanity check: verify the installed binary is functional and reports correct version
+    if ! "$INSTALL_DIR/dbn" version &>/dev/null; then
+        error "Installed dbn failed sanity check (version command failed)"
+        rm -f "$INSTALL_DIR/dbn"
+        exit 1
+    fi
+    
+    # Clean up
+    rm -f /tmp/dbn.tar.gz
+    
+    success "dbn installed successfully"
 }
 
-main "$@"
+# Main flow
+display_banner
+
+# Check prerequisites
+check_root
+detect_os
+check_architecture
+
+# Download and install
+get_latest_release
+download_and_install_cli
+
+# Show next steps
+echo ""
+echo -e "${GREEN}Installation complete!${NOCOLOR}"
+echo ""
+echo -e "${CYAN}Next, run the production setup:${NOCOLOR}"
+echo ""
+echo "Bootstrap node (first node, main branch):"
+echo -e "  ${BLUE}sudo dbn prod install --bootstrap${NOCOLOR}"
+echo ""
+echo "Bootstrap node (nightly branch):"
+echo -e "  ${BLUE}sudo dbn prod install --bootstrap --branch nightly${NOCOLOR}"
+echo ""
+echo "Secondary node (join existing cluster):"
+echo -e "  ${BLUE}sudo dbn prod install --vps-ip <bootstrap_ip> --peers <multiaddr>${NOCOLOR}"
+echo ""
+echo "With HTTPS/domain:"
+echo -e "  ${BLUE}sudo dbn prod install --bootstrap --domain example.com${NOCOLOR}"
+echo ""
+echo "For more help:"
+echo -e "  ${BLUE}dbn prod --help${NOCOLOR}"
+echo ""

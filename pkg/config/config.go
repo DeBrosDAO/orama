@@ -36,11 +36,41 @@ type DatabaseConfig struct {
 	RQLitePort        int    `yaml:"rqlite_port"`         // RQLite HTTP API port
 	RQLiteRaftPort    int    `yaml:"rqlite_raft_port"`    // RQLite Raft consensus port
 	RQLiteJoinAddress string `yaml:"rqlite_join_address"` // Address to join RQLite cluster
-	
+
 	// Dynamic discovery configuration (always enabled)
 	ClusterSyncInterval time.Duration `yaml:"cluster_sync_interval"` // default: 30s
 	PeerInactivityLimit time.Duration `yaml:"peer_inactivity_limit"` // default: 24h
 	MinClusterSize      int           `yaml:"min_cluster_size"`      // default: 1
+
+	// Olric cache configuration
+	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 3320)
+	OlricMemberlistPort int `yaml:"olric_memberlist_port"` // Olric memberlist port (default: 3322)
+
+	// IPFS storage configuration
+	IPFS IPFSConfig `yaml:"ipfs"`
+}
+
+// IPFSConfig contains IPFS storage configuration
+type IPFSConfig struct {
+	// ClusterAPIURL is the IPFS Cluster HTTP API URL (e.g., "http://localhost:9094")
+	// If empty, IPFS storage is disabled for this node
+	ClusterAPIURL string `yaml:"cluster_api_url"`
+
+	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:5001")
+	// If empty, defaults to "http://localhost:5001"
+	APIURL string `yaml:"api_url"`
+
+	// Timeout for IPFS operations
+	// If zero, defaults to 60 seconds
+	Timeout time.Duration `yaml:"timeout"`
+
+	// ReplicationFactor is the replication factor for pinned content
+	// If zero, defaults to 3
+	ReplicationFactor int `yaml:"replication_factor"`
+
+	// EnableEncryption enables client-side encryption before upload
+	// Defaults to true
+	EnableEncryption bool `yaml:"enable_encryption"`
 }
 
 // DiscoveryConfig contains peer discovery configuration
@@ -111,11 +141,24 @@ func DefaultConfig() *Config {
 			RQLitePort:        5001,
 			RQLiteRaftPort:    7001,
 			RQLiteJoinAddress: "", // Empty for bootstrap node
-			
+
 			// Dynamic discovery (always enabled)
 			ClusterSyncInterval: 30 * time.Second,
 			PeerInactivityLimit: 24 * time.Hour,
 			MinClusterSize:      1,
+
+			// Olric cache configuration
+			OlricHTTPPort:       3320,
+			OlricMemberlistPort: 3322,
+
+			// IPFS storage configuration
+			IPFS: IPFSConfig{
+				ClusterAPIURL:     "", // Empty = disabled
+				APIURL:            "http://localhost:5001",
+				Timeout:           60 * time.Second,
+				ReplicationFactor: 3,
+				EnableEncryption:  true,
+			},
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers:    []string{},

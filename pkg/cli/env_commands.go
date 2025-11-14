@@ -35,7 +35,7 @@ func HandleEnvCommand(args []string) {
 
 func showEnvHelp() {
 	fmt.Printf("🌍 Environment Management Commands\n\n")
-	fmt.Printf("Usage: network-cli env <subcommand>\n\n")
+	fmt.Printf("Usage: dbn env <subcommand>\n\n")
 	fmt.Printf("Subcommands:\n")
 	fmt.Printf("  list       - List all available environments\n")
 	fmt.Printf("  current    - Show current active environment\n")
@@ -46,12 +46,12 @@ func showEnvHelp() {
 	fmt.Printf("  devnet     - Development network (https://devnet.debros.network)\n")
 	fmt.Printf("  testnet    - Test network (https://testnet.debros.network)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  network-cli env list\n")
-	fmt.Printf("  network-cli env current\n")
-	fmt.Printf("  network-cli env switch devnet\n")
-	fmt.Printf("  network-cli env enable testnet\n")
-	fmt.Printf("  network-cli devnet enable      # Shorthand for switch to devnet\n")
-	fmt.Printf("  network-cli testnet enable     # Shorthand for switch to testnet\n")
+	fmt.Printf("  dbn env list\n")
+	fmt.Printf("  dbn env current\n")
+	fmt.Printf("  dbn env switch devnet\n")
+	fmt.Printf("  dbn env enable testnet\n")
+	fmt.Printf("  dbn devnet enable      # Shorthand for switch to devnet\n")
+	fmt.Printf("  dbn testnet enable     # Shorthand for switch to testnet\n")
 }
 
 func handleEnvList() {
@@ -99,7 +99,7 @@ func handleEnvCurrent() {
 
 func handleEnvSwitch(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: network-cli env switch <environment>\n")
+		fmt.Fprintf(os.Stderr, "Usage: dbn env switch <environment>\n")
 		fmt.Fprintf(os.Stderr, "Available: local, devnet, testnet\n")
 		os.Exit(1)
 	}

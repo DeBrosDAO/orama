@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -66,23 +67,32 @@ func check_if_should_open_help(help *bool) {
 func select_data_dir_check(configName *string) {
 	logger := setup_logger(logging.ComponentNode)
 
-	// Ensure config directory exists and is writable
-	_, err := config.EnsureConfigDir()
-	if err != nil {
-		logger.Error("Failed to ensure config directory", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
-		fmt.Fprintf(os.Stderr, "Failed to create/access config directory: %v\n", err)
-		fmt.Fprintf(os.Stderr, "\nPlease ensure:\n")
-		fmt.Fprintf(os.Stderr, "  1. Home directory is accessible: %s\n", os.ExpandEnv("~"))
-		fmt.Fprintf(os.Stderr, "  2. You have write permissions to home directory\n")
-		fmt.Fprintf(os.Stderr, "  3. Disk space is available\n")
-		os.Exit(1)
-	}
+	var configPath string
+	var err error
 
-	configPath, err := config.DefaultPath(*configName)
-	if err != nil {
-		logger.Error("Failed to determine config path", zap.Error(err))
-		os.Exit(1)
+	// Check if configName is an absolute path
+	if filepath.IsAbs(*configName) {
+		// Use absolute path directly
+		configPath = *configName
+	} else {
+		// Ensure config directory exists and is writable
+		_, err = config.EnsureConfigDir()
+		if err != nil {
+			logger.Error("Failed to ensure config directory", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
+			fmt.Fprintf(os.Stderr, "Failed to create/access config directory: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\nPlease ensure:\n")
+			fmt.Fprintf(os.Stderr, "  1. Home directory is accessible: %s\n", os.ExpandEnv("~"))
+			fmt.Fprintf(os.Stderr, "  2. You have write permissions to home directory\n")
+			fmt.Fprintf(os.Stderr, "  3. Disk space is available\n")
+			os.Exit(1)
+		}
+
+		configPath, err = config.DefaultPath(*configName)
+		if err != nil {
+			logger.Error("Failed to determine config path", zap.Error(err))
+			os.Exit(1)
+		}
 	}
 
 	if _, err := os.Stat(configPath); err != nil {
@@ -92,8 +102,8 @@ func select_data_dir_check(configName *string) {
 		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
 		fmt.Fprintf(os.Stderr, "Config file not found at %s\n", configPath)
 		fmt.Fprintf(os.Stderr, "\nGenerate it with one of:\n")
-		fmt.Fprintf(os.Stderr, "  network-cli config init --type bootstrap\n")
-		fmt.Fprintf(os.Stderr, "  network-cli config init --type node --bootstrap-peers '<peer_multiaddr>'\n")
+		fmt.Fprintf(os.Stderr, "  dbn config init --type bootstrap\n")
+		fmt.Fprintf(os.Stderr, "  dbn config init --type node --bootstrap-peers '<peer_multiaddr>'\n")
 		os.Exit(1)
 	}
 }
@@ -128,7 +138,26 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 	// Save the peer ID to a file for CLI access (especially useful for bootstrap)
 	peerID := n.GetPeerID()
 	peerInfoFile := filepath.Join(dataDir, "peer.info")
-	peerMultiaddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d/p2p/%s", port, peerID)
+
+	// Extract advertise IP from config (prefer http_adv_address, fallback to raft_adv_address)
+	advertiseIP := "0.0.0.0" // Default fallback
+	if cfg.Discovery.HttpAdvAddress != "" {
+		if host, _, err := net.SplitHostPort(cfg.Discovery.HttpAdvAddress); err == nil && host != "" && host != "localhost" {
+			advertiseIP = host
+		}
+	} else if cfg.Discovery.RaftAdvAddress != "" {
+		if host, _, err := net.SplitHostPort(cfg.Discovery.RaftAdvAddress); err == nil && host != "" && host != "localhost" {
+			advertiseIP = host
+		}
+	}
+
+	// Determine IP protocol (IPv4 or IPv6) for multiaddr
+	ipProtocol := "ip4"
+	if ip := net.ParseIP(advertiseIP); ip != nil && ip.To4() == nil {
+		ipProtocol = "ip6"
+	}
+
+	peerMultiaddr := fmt.Sprintf("/%s/%s/tcp/%d/p2p/%s", ipProtocol, advertiseIP, port, peerID)
 
 	if err := os.WriteFile(peerInfoFile, []byte(peerMultiaddr), 0644); err != nil {
 		logger.Error("Failed to save peer info: %v", zap.Error(err))
@@ -232,15 +261,24 @@ func main() {
 
 	check_if_should_open_help(help)
 
-	// Check if config file exists
+	// Check if config file exists and determine path
 	select_data_dir_check(configName)
 
-	// Load configuration from ~/.debros/node.yaml
-	configPath, err := config.DefaultPath(*configName)
-	if err != nil {
-		logger.Error("Failed to determine config path", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-		os.Exit(1)
+	// Determine config path (handle both absolute and relative paths)
+	// Note: select_data_dir_check already validated the path exists, so we can safely determine it here
+	var configPath string
+	var err error
+	if filepath.IsAbs(*configName) {
+		// Absolute path passed directly (e.g., from systemd service)
+		configPath = *configName
+	} else {
+		// Relative path - use DefaultPath which checks both ~/.debros/configs/ and ~/.debros/
+		configPath, err = config.DefaultPath(*configName)
+		if err != nil {
+			logger.Error("Failed to determine config path", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	var cfg *config.Config
@@ -255,10 +293,10 @@ func main() {
 
 	// Set default advertised addresses if empty
 	if cfg.Discovery.HttpAdvAddress == "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("127.0.0.1:%d", cfg.Database.RQLitePort)
+		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLitePort)
 	}
 	if cfg.Discovery.RaftAdvAddress == "" {
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("127.0.0.1:%d", cfg.Database.RQLiteRaftPort)
+		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLiteRaftPort)
 	}
 
 	// Validate configuration

@@ -235,11 +235,16 @@ func (c *Config) validateDatabase() []error {
 			}
 		}
 	} else if c.Node.Type == "bootstrap" {
+		// Bootstrap nodes can optionally join another bootstrap's RQLite cluster
+		// This allows secondary bootstraps to synchronize with the primary
 		if dc.RQLiteJoinAddress != "" {
-			errs = append(errs, ValidationError{
-				Path:    "database.rqlite_join_address",
-				Message: "must be empty for bootstrap type",
-			})
+			if err := validateHostPort(dc.RQLiteJoinAddress); err != nil {
+				errs = append(errs, ValidationError{
+					Path:    "database.rqlite_join_address",
+					Message: err.Error(),
+					Hint:    "expected format: host:port",
+				})
+			}
 		}
 	}
 
@@ -488,12 +493,7 @@ func (c *Config) validateCrossFields() []error {
 	}
 
 	// Cross-check rqlite_join_address vs node type
-	if c.Node.Type == "bootstrap" && c.Database.RQLiteJoinAddress != "" {
-		errs = append(errs, ValidationError{
-			Path:    "database.rqlite_join_address",
-			Message: "must be empty for bootstrap node type",
-		})
-	}
+	// Note: Bootstrap nodes can optionally join another bootstrap's cluster
 
 	if c.Node.Type == "node" && c.Database.RQLiteJoinAddress == "" {
 		errs = append(errs, ValidationError{

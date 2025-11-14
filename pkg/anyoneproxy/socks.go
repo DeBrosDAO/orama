@@ -19,7 +19,7 @@ var disabled bool
 func SetDisabled(v bool) { disabled = v }
 
 // Enabled reports whether Anyone proxy routing is active.
-// Defaults to true, using SOCKS5 at 127.0.0.1:9050, unless explicitly disabled
+// Defaults to true, using SOCKS5 at localhost:9050, unless explicitly disabled
 // via SetDisabled(true) or environment variable ANYONE_DISABLE=1.
 // ANYONE_SOCKS5 may override the proxy address.
 func Enabled() bool {
@@ -31,7 +31,7 @@ func Enabled() bool {
 
 // socksAddr returns the SOCKS5 address to use for proxying (host:port).
 func socksAddr() string {
-	return "127.0.0.1:9050"
+	return "localhost:9050"
 }
 
 // socksContextDialer implements tcp.ContextDialer over a SOCKS5 proxy.
@@ -57,7 +57,7 @@ func (d *socksContextDialer) DialContext(ctx context.Context, network, address s
 
 // DialerForAddr returns a tcp.DialerForAddr that routes through the Anyone SOCKS5 proxy.
 // It automatically BYPASSES the proxy for loopback, private, and link-local addresses
-// to allow local/dev networking (e.g. 127.0.0.1, 10.0.0.0/8, 192.168.0.0/16, fc00::/7, fe80::/10).
+// to allow local/dev networking (e.g. localhost, 10.0.0.0/8, 192.168.0.0/16, fc00::/7, fe80::/10).
 func DialerForAddr() tcp.DialerForAddr {
 	return func(raddr ma.Multiaddr) (tcp.ContextDialer, error) {
 		// Prefer direct dialing for local/private targets

@@ -1,0 +1,8 @@
+server:
+  bindAddr: "{{.BindAddr}}"
+  bindPort: { { .HTTPPort } }
+
+memberlist:
+  environment: local
+  bindAddr: "{{.BindAddr}}"
+  bindPort: { { .MemberlistPort } }

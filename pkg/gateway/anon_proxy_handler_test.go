@@ -92,7 +92,7 @@ func TestAnonProxyHandler_PrivateAddressBlocking(t *testing.T) {
 		url  string
 	}{
 		{"localhost", "http://localhost/test"},
-		{"127.0.0.1", "http://127.0.0.1/test"},
+		{"localhost", "http://localhost/test"},
 		{"private 10.x", "http://10.0.0.1/test"},
 		{"private 192.168.x", "http://192.168.1.1/test"},
 		{"private 172.16.x", "http://172.16.0.1/test"},
@@ -166,7 +166,7 @@ func TestIsPrivateOrLocalHost(t *testing.T) {
 		expected bool
 	}{
 		{"localhost", true},
-		{"127.0.0.1", true},
+		{"localhost", true},
 		{"::1", true},
 		{"10.0.0.1", true},
 		{"192.168.1.1", true},

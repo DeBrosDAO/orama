@@ -22,6 +22,7 @@ func (g *Gateway) Routes() http.Handler {
 	// New: issue JWT from API key; new: create or return API key for a wallet after verification
 	mux.HandleFunc("/v1/auth/token", g.apiKeyToJWTHandler)
 	mux.HandleFunc("/v1/auth/api-key", g.issueAPIKeyHandler)
+	mux.HandleFunc("/v1/auth/simple-key", g.simpleAPIKeyHandler)
 	mux.HandleFunc("/v1/auth/register", g.registerHandler)
 	mux.HandleFunc("/v1/auth/refresh", g.refreshHandler)
 	mux.HandleFunc("/v1/auth/logout", g.logoutHandler)
@@ -46,6 +47,21 @@ func (g *Gateway) Routes() http.Handler {
 
 	// anon proxy (authenticated users only)
 	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)
+
+	// cache endpoints (Olric)
+	mux.HandleFunc("/v1/cache/health", g.cacheHealthHandler)
+	mux.HandleFunc("/v1/cache/get", g.cacheGetHandler)
+	mux.HandleFunc("/v1/cache/mget", g.cacheMultiGetHandler)
+	mux.HandleFunc("/v1/cache/put", g.cachePutHandler)
+	mux.HandleFunc("/v1/cache/delete", g.cacheDeleteHandler)
+	mux.HandleFunc("/v1/cache/scan", g.cacheScanHandler)
+
+	// storage endpoints (IPFS)
+	mux.HandleFunc("/v1/storage/upload", g.storageUploadHandler)
+	mux.HandleFunc("/v1/storage/pin", g.storagePinHandler)
+	mux.HandleFunc("/v1/storage/status/", g.storageStatusHandler)
+	mux.HandleFunc("/v1/storage/get/", g.storageGetHandler)
+	mux.HandleFunc("/v1/storage/unpin/", g.storageUnpinHandler)
 
 	return g.withMiddleware(mux)
 }

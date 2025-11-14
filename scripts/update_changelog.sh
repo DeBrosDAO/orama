@@ -67,6 +67,15 @@ if ! command -v curl > /dev/null 2>&1; then
     exit 1
 fi
 
+# Check for skip flag
+# To skip changelog generation, set SKIP_CHANGELOG=1 before committing:
+#   SKIP_CHANGELOG=1 git commit -m "your message"
+#   SKIP_CHANGELOG=1 git commit
+if [ "$SKIP_CHANGELOG" = "1" ] || [ "$SKIP_CHANGELOG" = "true" ]; then
+    log "Skipping changelog update (SKIP_CHANGELOG is set)"
+    exit 0
+fi
+
 # Check if we're in a git repo
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     error "Not in a git repository"

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,19 +15,21 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
 
 // ClusterDiscoveryService bridges LibP2P discovery with RQLite cluster management
 type ClusterDiscoveryService struct {
-	host          host.Host
-	discoveryMgr  *discovery.Manager
-	rqliteManager *RQLiteManager
-	nodeID        string
-	nodeType      string
-	raftAddress   string
-	httpAddress   string
-	dataDir       string
+	host           host.Host
+	discoveryMgr   *discovery.Manager
+	rqliteManager  *RQLiteManager
+	nodeID         string
+	nodeType       string
+	raftAddress    string
+	httpAddress    string
+	dataDir        string
+	minClusterSize int // Minimum cluster size required
 
 	knownPeers      map[string]*discovery.RQLiteNodeMetadata // NodeID -> Metadata
 	peerHealth      map[string]*PeerHealth                   // NodeID -> Health
@@ -51,6 +55,11 @@ func NewClusterDiscoveryService(
 	dataDir string,
 	logger *zap.Logger,
 ) *ClusterDiscoveryService {
+	minClusterSize := 1
+	if rqliteManager != nil && rqliteManager.config != nil {
+		minClusterSize = rqliteManager.config.MinClusterSize
+	}
+
 	return &ClusterDiscoveryService{
 		host:            h,
 		discoveryMgr:    discoveryMgr,
@@ -60,6 +69,7 @@ func NewClusterDiscoveryService(
 		raftAddress:     raftAddress,
 		httpAddress:     httpAddress,
 		dataDir:         dataDir,
+		minClusterSize:  minClusterSize,
 		knownPeers:      make(map[string]*discovery.RQLiteNodeMetadata),
 		peerHealth:      make(map[string]*PeerHealth),
 		updateInterval:  30 * time.Second,
@@ -156,20 +166,33 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 	connectedPeers := c.host.Network().Peers()
 	var metadata []*discovery.RQLiteNodeMetadata
 
-	c.logger.Debug("Collecting peer metadata from LibP2P",
-		zap.Int("connected_libp2p_peers", len(connectedPeers)))
+	// Metadata collection is routine - no need to log every occurrence
+
+	c.mu.RLock()
+	currentRaftAddr := c.raftAddress
+	currentHTTPAddr := c.httpAddress
+	c.mu.RUnlock()
 
 	// Add ourselves
 	ourMetadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
-		RaftAddress:    c.raftAddress,
-		HTTPAddress:    c.httpAddress,
+		NodeID:         currentRaftAddr, // RQLite uses raft address as node ID
+		RaftAddress:    currentRaftAddr,
+		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
 		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
 	}
+
+	if c.adjustSelfAdvertisedAddresses(ourMetadata) {
+		c.logger.Debug("Adjusted self-advertised RQLite addresses",
+			zap.String("raft_address", ourMetadata.RaftAddress),
+			zap.String("http_address", ourMetadata.HTTPAddress))
+	}
+
 	metadata = append(metadata, ourMetadata)
+
+	staleNodeIDs := make([]string, 0)
 
 	// Query connected peers for their RQLite metadata
 	// For now, we'll use a simple approach - store metadata in peer metadata store
@@ -181,11 +204,24 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 			if jsonData, ok := val.([]byte); ok {
 				var peerMeta discovery.RQLiteNodeMetadata
 				if err := json.Unmarshal(jsonData, &peerMeta); err == nil {
+					if updated, stale := c.adjustPeerAdvertisedAddresses(peerID, &peerMeta); updated && stale != "" {
+						staleNodeIDs = append(staleNodeIDs, stale)
+					}
 					peerMeta.LastSeen = time.Now()
 					metadata = append(metadata, &peerMeta)
 				}
 			}
 		}
+	}
+
+	// Clean up stale entries if NodeID changed
+	if len(staleNodeIDs) > 0 {
+		c.mu.Lock()
+		for _, id := range staleNodeIDs {
+			delete(c.knownPeers, id)
+			delete(c.peerHealth, id)
+		}
+		c.mu.Unlock()
 	}
 
 	return metadata
@@ -203,9 +239,6 @@ type membershipUpdateResult struct {
 func (c *ClusterDiscoveryService) updateClusterMembership() {
 	metadata := c.collectPeerMetadata()
 
-	c.logger.Debug("Collected peer metadata",
-		zap.Int("metadata_count", len(metadata)))
-
 	// Compute membership changes while holding lock
 	c.mu.Lock()
 	result := c.computeMembershipChangesLocked(metadata)
@@ -215,35 +248,30 @@ func (c *ClusterDiscoveryService) updateClusterMembership() {
 	if result.changed {
 		// Log state changes (peer added/removed) at Info level
 		if len(result.added) > 0 || len(result.updated) > 0 {
-			c.logger.Info("Cluster membership changed",
+			c.logger.Info("Membership changed",
 				zap.Int("added", len(result.added)),
 				zap.Int("updated", len(result.updated)),
-				zap.Strings("added_ids", result.added),
-				zap.Strings("updated_ids", result.updated))
+				zap.Strings("added", result.added),
+				zap.Strings("updated", result.updated))
 		}
 
 		// Write peers.json without holding lock
 		if err := c.writePeersJSONWithData(result.peersJSON); err != nil {
-			c.logger.Error("CRITICAL: Failed to write peers.json",
+			c.logger.Error("Failed to write peers.json",
 				zap.Error(err),
 				zap.String("data_dir", c.dataDir),
-				zap.Int("peer_count", len(result.peersJSON)))
+				zap.Int("peers", len(result.peersJSON)))
 		} else {
 			c.logger.Debug("peers.json updated",
-				zap.Int("peer_count", len(result.peersJSON)))
+				zap.Int("peers", len(result.peersJSON)))
 		}
 
 		// Update lastUpdate timestamp
 		c.mu.Lock()
 		c.lastUpdate = time.Now()
 		c.mu.Unlock()
-	} else {
-		c.mu.RLock()
-		totalPeers := len(c.knownPeers)
-		c.mu.RUnlock()
-		c.logger.Debug("No changes to cluster membership",
-			zap.Int("total_peers", totalPeers))
 	}
+	// No changes - don't log (reduces noise)
 }
 
 // computeMembershipChangesLocked computes membership changes and returns snapshot data
@@ -268,10 +296,10 @@ func (c *ClusterDiscoveryService) computeMembershipChangesLocked(metadata []*dis
 		} else {
 			// New peer discovered
 			added = append(added, meta.NodeID)
-			c.logger.Info("Node added to cluster",
-				zap.String("node_id", meta.NodeID),
-				zap.String("raft_address", meta.RaftAddress),
-				zap.String("node_type", meta.NodeType),
+			c.logger.Info("Node added",
+				zap.String("node", meta.NodeID),
+				zap.String("raft", meta.RaftAddress),
+				zap.String("type", meta.NodeType),
 				zap.Uint64("log_index", meta.RaftLogIndex))
 		}
 
@@ -293,18 +321,56 @@ func (c *ClusterDiscoveryService) computeMembershipChangesLocked(metadata []*dis
 		}
 	}
 
+	// CRITICAL FIX: Count remote peers (excluding self)
+	remotePeerCount := 0
+	for _, peer := range c.knownPeers {
+		if peer.NodeID != c.raftAddress {
+			remotePeerCount++
+		}
+	}
+
+	// Get peers JSON snapshot (for checking if it would be empty)
+	peers := c.getPeersJSONUnlocked()
+
 	// Determine if we should write peers.json
 	shouldWrite := len(added) > 0 || len(updated) > 0 || c.lastUpdate.IsZero()
 
+	// CRITICAL FIX: Don't write peers.json until we have minimum cluster size
+	// This prevents RQLite from starting as a single-node cluster
+	// For min_cluster_size=3, we need at least 2 remote peers (plus self = 3 total)
 	if shouldWrite {
-		// Log initial sync if this is the first time
+		// For initial sync, wait until we have at least (MinClusterSize - 1) remote peers
+		// This ensures peers.json contains enough peers for proper cluster formation
 		if c.lastUpdate.IsZero() {
-			c.logger.Info("Initial cluster membership sync",
-				zap.Int("total_peers", len(c.knownPeers)))
+			requiredRemotePeers := c.minClusterSize - 1
+
+			if remotePeerCount < requiredRemotePeers {
+				c.logger.Info("Waiting for peers",
+					zap.Int("have", remotePeerCount),
+					zap.Int("need", requiredRemotePeers),
+					zap.Int("min_size", c.minClusterSize))
+				return membershipUpdateResult{
+					changed: false,
+				}
+			}
 		}
 
-		// Get peers JSON snapshot
-		peers := c.getPeersJSONUnlocked()
+		// Additional safety check: don't write empty peers.json (would cause single-node cluster)
+		if len(peers) == 0 && c.lastUpdate.IsZero() {
+			c.logger.Info("No remote peers - waiting")
+			return membershipUpdateResult{
+				changed: false,
+			}
+		}
+
+		// Log initial sync if this is the first time
+		if c.lastUpdate.IsZero() {
+			c.logger.Info("Initial sync",
+				zap.Int("total", len(c.knownPeers)),
+				zap.Int("remote", remotePeerCount),
+				zap.Int("in_json", len(peers)))
+		}
+
 		return membershipUpdateResult{
 			peersJSON: peers,
 			added:     added,
@@ -331,8 +397,8 @@ func (c *ClusterDiscoveryService) removeInactivePeers() {
 
 		if inactiveDuration > c.inactivityLimit {
 			// Mark as inactive and remove
-			c.logger.Warn("Node removed from cluster",
-				zap.String("node_id", nodeID),
+			c.logger.Warn("Node removed",
+				zap.String("node", nodeID),
 				zap.String("reason", "inactive"),
 				zap.Duration("inactive_duration", inactiveDuration))
 
@@ -344,9 +410,9 @@ func (c *ClusterDiscoveryService) removeInactivePeers() {
 
 	// Regenerate peers.json if any peers were removed
 	if len(removed) > 0 {
-		c.logger.Info("Removed inactive nodes, regenerating peers.json",
-			zap.Int("removed", len(removed)),
-			zap.Strings("node_ids", removed))
+		c.logger.Info("Removed inactive",
+			zap.Int("count", len(removed)),
+			zap.Strings("nodes", removed))
 
 		if err := c.writePeersJSON(); err != nil {
 			c.logger.Error("Failed to write peers.json after cleanup", zap.Error(err))
@@ -366,6 +432,11 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 	peers := make([]map[string]interface{}, 0, len(c.knownPeers))
 
 	for _, peer := range c.knownPeers {
+		// CRITICAL FIX: Include ALL peers (including self) in peers.json
+		// When using bootstrap-expect with recovery, RQLite needs the complete
+		// expected cluster configuration to properly form consensus.
+		// The peers.json file is used by RQLite's recovery mechanism to know
+		// what the full cluster membership should be, including the local node.
 		peerEntry := map[string]interface{}{
 			"id":        peer.RaftAddress, // RQLite uses raft address as node ID
 			"address":   peer.RaftAddress,
@@ -401,11 +472,7 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 	// Get the RQLite raft directory
 	rqliteDir := filepath.Join(dataDir, "rqlite", "raft")
 
-	c.logger.Debug("Writing peers.json",
-		zap.String("data_dir", c.dataDir),
-		zap.String("expanded_path", dataDir),
-		zap.String("raft_dir", rqliteDir),
-		zap.Int("peer_count", len(peers)))
+	// Writing peers.json - routine operation, no need to log details
 
 	if err := os.MkdirAll(rqliteDir, 0755); err != nil {
 		return fmt.Errorf("failed to create raft directory %s: %w", rqliteDir, err)
@@ -416,7 +483,7 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 
 	// Backup existing peers.json if it exists
 	if _, err := os.Stat(peersFile); err == nil {
-		c.logger.Debug("Backing up existing peers.json", zap.String("backup_file", backupFile))
+		// Backup existing peers.json if it exists - routine operation
 		data, err := os.ReadFile(peersFile)
 		if err == nil {
 			_ = os.WriteFile(backupFile, data, 0644)
@@ -429,7 +496,7 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 		return fmt.Errorf("failed to marshal peers.json: %w", err)
 	}
 
-	c.logger.Debug("Marshaled peers.json", zap.Int("data_size", len(data)))
+	// Marshaled peers.json - routine operation
 
 	// Write atomically using temp file + rename
 	tempFile := peersFile + ".tmp"
@@ -449,9 +516,8 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 	}
 
 	c.logger.Info("peers.json written",
-		zap.String("file", peersFile),
-		zap.Int("node_count", len(peers)),
-		zap.Strings("node_ids", nodeIDs))
+		zap.Int("peers", len(peers)),
+		zap.Strings("nodes", nodeIDs))
 
 	return nil
 }
@@ -567,15 +633,56 @@ func (c *ClusterDiscoveryService) WaitForDiscoverySettling(ctx context.Context) 
 
 // TriggerSync manually triggers a cluster membership sync
 func (c *ClusterDiscoveryService) TriggerSync() {
-	c.logger.Info("Manually triggering cluster membership sync")
-
 	// For bootstrap nodes, wait a bit for peer discovery to stabilize
 	if c.nodeType == "bootstrap" {
-		c.logger.Info("Bootstrap node: waiting for peer discovery to complete")
 		time.Sleep(5 * time.Second)
 	}
 
 	c.updateClusterMembership()
+}
+
+// ForceWritePeersJSON forces writing peers.json regardless of membership changes
+// This is useful after clearing raft state when we need to recreate peers.json
+func (c *ClusterDiscoveryService) ForceWritePeersJSON() error {
+	c.logger.Info("Force writing peers.json")
+
+	// First, collect latest peer metadata to ensure we have current information
+	metadata := c.collectPeerMetadata()
+
+	// Update known peers with latest metadata (without writing file yet)
+	c.mu.Lock()
+	for _, meta := range metadata {
+		c.knownPeers[meta.NodeID] = meta
+		// Update health tracking for remote peers
+		if meta.NodeID != c.raftAddress {
+			if _, ok := c.peerHealth[meta.NodeID]; !ok {
+				c.peerHealth[meta.NodeID] = &PeerHealth{
+					LastSeen:       time.Now(),
+					LastSuccessful: time.Now(),
+					Status:         "active",
+				}
+			} else {
+				c.peerHealth[meta.NodeID].LastSeen = time.Now()
+				c.peerHealth[meta.NodeID].Status = "active"
+			}
+		}
+	}
+	peers := c.getPeersJSONUnlocked()
+	c.mu.Unlock()
+
+	// Now force write the file
+	if err := c.writePeersJSONWithData(peers); err != nil {
+		c.logger.Error("Failed to force write peers.json",
+			zap.Error(err),
+			zap.String("data_dir", c.dataDir),
+			zap.Int("peers", len(peers)))
+		return err
+	}
+
+	c.logger.Info("peers.json written",
+		zap.Int("peers", len(peers)))
+
+	return nil
 }
 
 // TriggerPeerExchange actively exchanges peer information with connected peers
@@ -585,23 +692,34 @@ func (c *ClusterDiscoveryService) TriggerPeerExchange(ctx context.Context) error
 		return fmt.Errorf("discovery manager not available")
 	}
 
-	c.logger.Info("Triggering peer exchange via discovery manager")
 	collected := c.discoveryMgr.TriggerPeerExchange(ctx)
-	c.logger.Info("Peer exchange completed", zap.Int("peers_with_metadata", collected))
+	c.logger.Debug("Exchange completed", zap.Int("with_metadata", collected))
 
 	return nil
 }
 
 // UpdateOwnMetadata updates our own RQLite metadata in the peerstore
 func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
+	c.mu.RLock()
+	currentRaftAddr := c.raftAddress
+	currentHTTPAddr := c.httpAddress
+	c.mu.RUnlock()
+
 	metadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         c.raftAddress, // RQLite uses raft address as node ID
-		RaftAddress:    c.raftAddress,
-		HTTPAddress:    c.httpAddress,
+		NodeID:         currentRaftAddr, // RQLite uses raft address as node ID
+		RaftAddress:    currentRaftAddr,
+		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
 		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
+	}
+
+	// Adjust addresses if needed
+	if c.adjustSelfAdvertisedAddresses(metadata) {
+		c.logger.Debug("Adjusted self-advertised RQLite addresses in UpdateOwnMetadata",
+			zap.String("raft_address", metadata.RaftAddress),
+			zap.String("http_address", metadata.HTTPAddress))
 	}
 
 	// Store in our own peerstore for peer exchange
@@ -616,13 +734,28 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 		return
 	}
 
-	c.logger.Debug("Updated own RQLite metadata",
-		zap.String("node_id", metadata.NodeID),
+	c.logger.Debug("Metadata updated",
+		zap.String("node", metadata.NodeID),
 		zap.Uint64("log_index", metadata.RaftLogIndex))
 }
 
 // StoreRemotePeerMetadata stores metadata received from a remote peer
 func (c *ClusterDiscoveryService) StoreRemotePeerMetadata(peerID peer.ID, metadata *discovery.RQLiteNodeMetadata) error {
+	if metadata == nil {
+		return fmt.Errorf("metadata is nil")
+	}
+
+	// Adjust addresses if needed (replace localhost with actual IP)
+	if updated, stale := c.adjustPeerAdvertisedAddresses(peerID, metadata); updated && stale != "" {
+		// Clean up stale entry if NodeID changed
+		c.mu.Lock()
+		delete(c.knownPeers, stale)
+		delete(c.peerHealth, stale)
+		c.mu.Unlock()
+	}
+
+	metadata.LastSeen = time.Now()
+
 	data, err := json.Marshal(metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
@@ -632,9 +765,240 @@ func (c *ClusterDiscoveryService) StoreRemotePeerMetadata(peerID peer.ID, metada
 		return fmt.Errorf("failed to store metadata: %w", err)
 	}
 
-	c.logger.Debug("Stored remote peer metadata",
-		zap.String("peer_id", peerID.String()[:8]+"..."),
-		zap.String("node_id", metadata.NodeID))
+	c.logger.Debug("Metadata stored",
+		zap.String("peer", shortPeerID(peerID)),
+		zap.String("node", metadata.NodeID))
 
 	return nil
+}
+
+// adjustPeerAdvertisedAddresses adjusts peer metadata addresses by replacing localhost/loopback
+// with the actual IP address from LibP2P connection. Returns (updated, staleNodeID).
+// staleNodeID is non-empty if NodeID changed (indicating old entry should be cleaned up).
+func (c *ClusterDiscoveryService) adjustPeerAdvertisedAddresses(peerID peer.ID, meta *discovery.RQLiteNodeMetadata) (bool, string) {
+	ip := c.selectPeerIP(peerID)
+	if ip == "" {
+		return false, ""
+	}
+
+	changed, stale := rewriteAdvertisedAddresses(meta, ip, true)
+	if changed {
+		c.logger.Debug("Addresses normalized",
+			zap.String("peer", shortPeerID(peerID)),
+			zap.String("raft", meta.RaftAddress),
+			zap.String("http_address", meta.HTTPAddress))
+	}
+	return changed, stale
+}
+
+// adjustSelfAdvertisedAddresses adjusts our own metadata addresses by replacing localhost/loopback
+// with the actual IP address from LibP2P host. Updates internal state if changed.
+func (c *ClusterDiscoveryService) adjustSelfAdvertisedAddresses(meta *discovery.RQLiteNodeMetadata) bool {
+	ip := c.selectSelfIP()
+	if ip == "" {
+		return false
+	}
+
+	changed, _ := rewriteAdvertisedAddresses(meta, ip, true)
+	if !changed {
+		return false
+	}
+
+	// Update internal state with corrected addresses
+	c.mu.Lock()
+	c.raftAddress = meta.RaftAddress
+	c.httpAddress = meta.HTTPAddress
+	c.mu.Unlock()
+	return true
+}
+
+// selectPeerIP selects the best IP address for a peer from LibP2P connections.
+// Prefers public IPs, falls back to private IPs if no public IP is available.
+func (c *ClusterDiscoveryService) selectPeerIP(peerID peer.ID) string {
+	var fallback string
+
+	// First, try to get IP from active connections
+	for _, conn := range c.host.Network().ConnsToPeer(peerID) {
+		if ip, public := ipFromMultiaddr(conn.RemoteMultiaddr()); ip != "" {
+			if shouldReplaceHost(ip) {
+				continue
+			}
+			if public {
+				return ip
+			}
+			if fallback == "" {
+				fallback = ip
+			}
+		}
+	}
+
+	// Fallback to peerstore addresses
+	for _, addr := range c.host.Peerstore().Addrs(peerID) {
+		if ip, public := ipFromMultiaddr(addr); ip != "" {
+			if shouldReplaceHost(ip) {
+				continue
+			}
+			if public {
+				return ip
+			}
+			if fallback == "" {
+				fallback = ip
+			}
+		}
+	}
+
+	return fallback
+}
+
+// selectSelfIP selects the best IP address for ourselves from LibP2P host addresses.
+// Prefers public IPs, falls back to private IPs if no public IP is available.
+func (c *ClusterDiscoveryService) selectSelfIP() string {
+	var fallback string
+
+	for _, addr := range c.host.Addrs() {
+		if ip, public := ipFromMultiaddr(addr); ip != "" {
+			if shouldReplaceHost(ip) {
+				continue
+			}
+			if public {
+				return ip
+			}
+			if fallback == "" {
+				fallback = ip
+			}
+		}
+	}
+
+	return fallback
+}
+
+// rewriteAdvertisedAddresses rewrites RaftAddress and HTTPAddress in metadata,
+// replacing localhost/loopback addresses with the provided IP.
+// Returns (changed, staleNodeID). staleNodeID is non-empty if NodeID changed.
+func rewriteAdvertisedAddresses(meta *discovery.RQLiteNodeMetadata, newHost string, allowNodeIDRewrite bool) (bool, string) {
+	if meta == nil || newHost == "" {
+		return false, ""
+	}
+
+	originalNodeID := meta.NodeID
+	changed := false
+	nodeIDChanged := false
+
+	// Replace host in RaftAddress if it's localhost/loopback
+	if newAddr, replaced := replaceAddressHost(meta.RaftAddress, newHost); replaced {
+		if meta.RaftAddress != newAddr {
+			meta.RaftAddress = newAddr
+			changed = true
+		}
+	}
+
+	// Replace host in HTTPAddress if it's localhost/loopback
+	if newAddr, replaced := replaceAddressHost(meta.HTTPAddress, newHost); replaced {
+		if meta.HTTPAddress != newAddr {
+			meta.HTTPAddress = newAddr
+			changed = true
+		}
+	}
+
+	// Update NodeID to match RaftAddress if it changed
+	if allowNodeIDRewrite {
+		if meta.RaftAddress != "" && (meta.NodeID == "" || meta.NodeID == originalNodeID || shouldReplaceHost(hostFromAddress(meta.NodeID))) {
+			if meta.NodeID != meta.RaftAddress {
+				meta.NodeID = meta.RaftAddress
+				nodeIDChanged = meta.NodeID != originalNodeID
+				if nodeIDChanged {
+					changed = true
+				}
+			}
+		}
+	}
+
+	if nodeIDChanged {
+		return changed, originalNodeID
+	}
+	return changed, ""
+}
+
+// replaceAddressHost replaces the host part of an address if it's localhost/loopback.
+// Returns (newAddress, replaced). replaced is true if host was replaced.
+func replaceAddressHost(address, newHost string) (string, bool) {
+	if address == "" || newHost == "" {
+		return address, false
+	}
+
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address, false
+	}
+
+	if !shouldReplaceHost(host) {
+		return address, false
+	}
+
+	return net.JoinHostPort(newHost, port), true
+}
+
+// shouldReplaceHost returns true if the host should be replaced (localhost, loopback, etc.)
+func shouldReplaceHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	// Check if it's a loopback or unspecified address
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.IsLoopback() || addr.IsUnspecified() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hostFromAddress extracts the host part from a host:port address
+func hostFromAddress(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
+// ipFromMultiaddr extracts an IP address from a multiaddr and returns (ip, isPublic)
+func ipFromMultiaddr(addr multiaddr.Multiaddr) (string, bool) {
+	if addr == nil {
+		return "", false
+	}
+
+	if v4, err := addr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+		return v4, isPublicIP(v4)
+	}
+	if v6, err := addr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+		return v6, isPublicIP(v6)
+	}
+	return "", false
+}
+
+// isPublicIP returns true if the IP is a public (non-private, non-loopback) address
+func isPublicIP(ip string) bool {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	// Exclude loopback, unspecified, link-local, multicast, and private addresses
+	if addr.IsLoopback() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsPrivate() {
+		return false
+	}
+	return true
+}
+
+// shortPeerID returns a shortened version of a peer ID for logging
+func shortPeerID(id peer.ID) string {
+	s := id.String()
+	if len(s) <= 8 {
+		return s
+	}
+	return s[:8] + "..."
 }

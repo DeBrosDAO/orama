@@ -1,10 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
@@ -39,24 +41,52 @@ func getEnvBoolDefault(key string, def bool) bool {
 }
 
 // parseGatewayConfig loads gateway.yaml from ~/.debros exclusively.
+// It accepts an optional --config flag for absolute paths (used by systemd services).
 func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
+	// Parse --config flag (optional, for systemd services that pass absolute paths)
+	configFlag := flag.String("config", "", "Config file path (absolute path or filename in ~/.debros)")
+	flag.Parse()
+
 	// Determine config path
-	configPath, err := config.DefaultPath("gateway.yaml")
-	if err != nil {
-		logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-		os.Exit(1)
+	var configPath string
+	var err error
+	if *configFlag != "" {
+		// If --config flag is provided, use it (handles both absolute and relative paths)
+		if filepath.IsAbs(*configFlag) {
+			configPath = *configFlag
+		} else {
+			configPath, err = config.DefaultPath(*configFlag)
+			if err != nil {
+				logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
+				fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	} else {
+		// Default behavior: look for gateway.yaml in ~/.debros/data/, ~/.debros/configs/, or ~/.debros/
+		configPath, err = config.DefaultPath("gateway.yaml")
+		if err != nil {
+			logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Load YAML
 	type yamlCfg struct {
-		ListenAddr      string   `yaml:"listen_addr"`
-		ClientNamespace string   `yaml:"client_namespace"`
-		RQLiteDSN       string   `yaml:"rqlite_dsn"`
-		BootstrapPeers  []string `yaml:"bootstrap_peers"`
-		EnableHTTPS     bool     `yaml:"enable_https"`
-		DomainName      string   `yaml:"domain_name"`
-		TLSCacheDir     string   `yaml:"tls_cache_dir"`
+		ListenAddr            string   `yaml:"listen_addr"`
+		ClientNamespace       string   `yaml:"client_namespace"`
+		RQLiteDSN             string   `yaml:"rqlite_dsn"`
+		BootstrapPeers        []string `yaml:"bootstrap_peers"`
+		EnableHTTPS           bool     `yaml:"enable_https"`
+		DomainName            string   `yaml:"domain_name"`
+		TLSCacheDir           string   `yaml:"tls_cache_dir"`
+		OlricServers          []string `yaml:"olric_servers"`
+		OlricTimeout          string   `yaml:"olric_timeout"`
+		IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url"`
+		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
+		IPFSTimeout           string   `yaml:"ipfs_timeout"`
+		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -65,7 +95,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 			zap.String("path", configPath),
 			zap.Error(err))
 		fmt.Fprintf(os.Stderr, "\nConfig file not found at %s\n", configPath)
-		fmt.Fprintf(os.Stderr, "Generate it using: network-cli config init --type gateway\n")
+		fmt.Fprintf(os.Stderr, "Generate it using: dbn config init --type gateway\n")
 		os.Exit(1)
 	}
 
@@ -79,13 +109,19 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 
 	// Build config from YAML
 	cfg := &gateway.Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "default",
-		BootstrapPeers:  nil,
-		RQLiteDSN:       "",
-		EnableHTTPS:     false,
-		DomainName:      "",
-		TLSCacheDir:     "",
+		ListenAddr:            ":6001",
+		ClientNamespace:       "default",
+		BootstrapPeers:        nil,
+		RQLiteDSN:             "",
+		EnableHTTPS:           false,
+		DomainName:            "",
+		TLSCacheDir:           "",
+		OlricServers:          nil,
+		OlricTimeout:          0,
+		IPFSClusterAPIURL:     "",
+		IPFSAPIURL:            "",
+		IPFSTimeout:           0,
+		IPFSReplicationFactor: 0,
 	}
 
 	if v := strings.TrimSpace(y.ListenAddr); v != "" {
@@ -123,6 +159,36 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		if err == nil {
 			cfg.TLSCacheDir = filepath.Join(homeDir, ".debros", "tls-cache")
 		}
+	}
+
+	// Olric configuration
+	if len(y.OlricServers) > 0 {
+		cfg.OlricServers = y.OlricServers
+	}
+	if v := strings.TrimSpace(y.OlricTimeout); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			cfg.OlricTimeout = parsed
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "invalid olric_timeout, using default", zap.String("value", v), zap.Error(err))
+		}
+	}
+
+	// IPFS configuration
+	if v := strings.TrimSpace(y.IPFSClusterAPIURL); v != "" {
+		cfg.IPFSClusterAPIURL = v
+	}
+	if v := strings.TrimSpace(y.IPFSAPIURL); v != "" {
+		cfg.IPFSAPIURL = v
+	}
+	if v := strings.TrimSpace(y.IPFSTimeout); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			cfg.IPFSTimeout = parsed
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "invalid ipfs_timeout, using default", zap.String("value", v), zap.Error(err))
+		}
+	}
+	if y.IPFSReplicationFactor > 0 {
+		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
 	}
 
 	// Validate configuration

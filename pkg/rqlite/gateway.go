@@ -210,10 +210,11 @@ type txOp struct {
 }
 
 type transactionRequest struct {
-	Ops            []txOp `json:"ops"`
-	ReturnResults  bool   `json:"return_results"`  // if true, returns per-op results
-	StopOnError    bool   `json:"stop_on_error"`   // default true in tx
-	PartialResults bool   `json:"partial_results"` // ignored for actual TX (atomic); kept for API symmetry
+	Ops            []txOp   `json:"ops"`
+	Statements     []string `json:"statements"`      // legacy format: array of SQL strings (treated as exec ops)
+	ReturnResults  bool     `json:"return_results"`  // if true, returns per-op results
+	StopOnError    bool     `json:"stop_on_error"`   // default true in tx
+	PartialResults bool     `json:"partial_results"` // ignored for actual TX (atomic); kept for API symmetry
 }
 
 // --------------------
@@ -427,8 +428,21 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body transactionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Ops) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid body: {ops:[{kind,sql,args?}], return_results?}")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: {ops:[{kind,sql,args?}], return_results?} or {statements:[sql...]}")
+		return
+	}
+
+	// Support legacy "statements" format by converting to ops
+	if len(body.Statements) > 0 && len(body.Ops) == 0 {
+		body.Ops = make([]txOp, len(body.Statements))
+		for i, stmt := range body.Statements {
+			body.Ops[i] = txOp{Kind: "exec", SQL: stmt}
+		}
+	}
+
+	if len(body.Ops) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid body: {ops:[{kind,sql,args?}], return_results?} or {statements:[sql...]}")
 		return
 	}
 	ctx, cancel := g.withTimeout(r.Context())
@@ -501,8 +515,8 @@ func (g *HTTPGateway) handleSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"objects": rows,
-		"count":   len(rows),
+		"tables": rows,
+		"count":  len(rows),
 	})
 }
 

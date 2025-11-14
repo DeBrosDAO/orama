@@ -1,0 +1,44 @@
+node:
+  id: "{{.NodeID}}"
+  type: "node"
+  listen_addresses:
+    - "/ip4/0.0.0.0/tcp/{{.P2PPort}}"
+  data_dir: "{{.DataDir}}"
+  max_connections: 50
+
+database:
+  data_dir: "{{.DataDir}}/rqlite"
+  replication_factor: 3
+  shard_count: 16
+  max_database_size: 1073741824
+  backup_interval: "24h"
+  rqlite_port: {{.RQLiteHTTPPort}}
+  rqlite_raft_port: {{.RQLiteRaftPort}}
+  rqlite_join_address: "{{.RQLiteJoinAddress}}"
+  cluster_sync_interval: "30s"
+  peer_inactivity_limit: "24h"
+  min_cluster_size: 3
+  ipfs:
+    cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
+    api_url: "http://localhost:{{.IPFSAPIPort}}"
+    timeout: "60s"
+    replication_factor: 3
+    enable_encryption: true
+
+discovery:
+  bootstrap_peers:
+{{range .BootstrapPeers}}    - "{{.}}"
+{{end}}
+  discovery_interval: "15s"
+  bootstrap_port: {{.P2PPort}}
+  http_adv_address: "{{.HTTPAdvAddress}}"
+  raft_adv_address: "{{.RaftAdvAddress}}"
+  node_namespace: "default"
+
+security:
+  enable_tls: false
+
+logging:
+  level: "info"
+  format: "console"
+

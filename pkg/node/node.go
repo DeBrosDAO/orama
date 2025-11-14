@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	mathrand "math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/DeBrosOfficial/network/pkg/encryption"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -45,6 +47,9 @@ type Node struct {
 
 	// Discovery
 	discoveryManager *discovery.Manager
+
+	// IPFS Cluster config manager
+	clusterConfigManager *ipfs.ClusterConfigManager
 }
 
 // NewNode creates a new network node
@@ -125,6 +130,51 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	n.rqliteAdapter = adapter
 
 	return nil
+}
+
+// extractIPFromMultiaddr extracts the IP address from a bootstrap peer multiaddr
+// Supports IP4, IP6, DNS4, DNS6, and DNSADDR protocols
+func extractIPFromMultiaddr(multiaddrStr string) string {
+	ma, err := multiaddr.NewMultiaddr(multiaddrStr)
+	if err != nil {
+		return ""
+	}
+
+	// First, try to extract direct IP address
+	var ip string
+	var dnsName string
+	multiaddr.ForEach(ma, func(c multiaddr.Component) bool {
+		switch c.Protocol().Code {
+		case multiaddr.P_IP4, multiaddr.P_IP6:
+			ip = c.Value()
+			return false // Stop iteration - found IP
+		case multiaddr.P_DNS4, multiaddr.P_DNS6, multiaddr.P_DNSADDR:
+			dnsName = c.Value()
+			// Continue to check for IP, but remember DNS name as fallback
+		}
+		return true
+	})
+
+	// If we found a direct IP, return it
+	if ip != "" {
+		return ip
+	}
+
+	// If we found a DNS name, try to resolve it
+	if dnsName != "" {
+		if resolvedIPs, err := net.LookupIP(dnsName); err == nil && len(resolvedIPs) > 0 {
+			// Prefer IPv4 addresses, but accept IPv6 if that's all we have
+			for _, resolvedIP := range resolvedIPs {
+				if resolvedIP.To4() != nil {
+					return resolvedIP.String()
+				}
+			}
+			// Return first IPv6 address if no IPv4 found
+			return resolvedIPs[0].String()
+		}
+	}
+
+	return ""
 }
 
 // bootstrapPeerSource returns a PeerSource that yields peers from BootstrapPeers.
@@ -321,8 +371,8 @@ func (n *Node) startLibP2P() error {
 	// For localhost/development, disable NAT services
 	// For production, these would be enabled
 	isLocalhost := len(n.config.Node.ListenAddresses) > 0 &&
-		(strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1") ||
-			strings.Contains(n.config.Node.ListenAddresses[0], "localhost"))
+		(strings.Contains(n.config.Node.ListenAddresses[0], "localhost") ||
+			strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1"))
 
 	if isLocalhost {
 		n.logger.ComponentInfo(logging.ComponentLibP2P, "Localhost detected - disabling NAT services for local development")
@@ -631,6 +681,14 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start LibP2P: %w", err)
 	}
 
+	// Initialize IPFS Cluster configuration if enabled
+	if n.config.Database.IPFS.ClusterAPIURL != "" {
+		if err := n.startIPFSClusterConfig(); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to initialize IPFS Cluster config", zap.Error(err))
+			// Don't fail node startup if cluster config fails
+		}
+	}
+
 	// Start RQLite with cluster discovery
 	if err := n.startRQLite(ctx); err != nil {
 		return fmt.Errorf("failed to start RQLite: %w", err)
@@ -649,5 +707,43 @@ func (n *Node) Start(ctx context.Context) error {
 
 	n.startConnectionMonitoring()
 
+	return nil
+}
+
+// startIPFSClusterConfig initializes and ensures IPFS Cluster configuration
+func (n *Node) startIPFSClusterConfig() error {
+	n.logger.ComponentInfo(logging.ComponentNode, "Initializing IPFS Cluster configuration")
+
+	// Create config manager
+	cm, err := ipfs.NewClusterConfigManager(n.config, n.logger.Logger)
+	if err != nil {
+		return fmt.Errorf("failed to create cluster config manager: %w", err)
+	}
+	n.clusterConfigManager = cm
+
+	// Fix IPFS config addresses (localhost -> 127.0.0.1) before ensuring cluster config
+	if err := cm.FixIPFSConfigAddresses(); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to fix IPFS config addresses", zap.Error(err))
+		// Don't fail startup if config fix fails - cluster config will handle it
+	}
+
+	// Ensure configuration exists and is correct
+	if err := cm.EnsureConfig(); err != nil {
+		return fmt.Errorf("failed to ensure cluster config: %w", err)
+	}
+
+	// Try to repair bootstrap peer configuration automatically
+	// This will be retried periodically if bootstrap is not available yet
+	if n.config.Node.Type != "bootstrap" {
+		if success, err := cm.RepairBootstrapPeers(); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair bootstrap peers, will retry later", zap.Error(err))
+		} else if success {
+			n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap peer configuration repaired successfully")
+		} else {
+			n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap peer not available yet, will retry periodically")
+		}
+	}
+
+	n.logger.ComponentInfo(logging.ComponentNode, "IPFS Cluster configuration initialized")
 	return nil
 }

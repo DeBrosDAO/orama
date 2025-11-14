@@ -50,7 +50,10 @@ func TestNormalizeEndpoints(t *testing.T) {
 }
 
 func TestEndpointFromMultiaddr(t *testing.T) {
-	ma, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
+	ma, err := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
+	if err != nil {
+		t.Fatalf("failed to create multiaddr: %v", err)
+	}
 	if ep := endpointFromMultiaddr(ma, 5001); ep != "http://127.0.0.1:5001" {
 		t.Fatalf("unexpected endpoint: %s", ep)
 	}

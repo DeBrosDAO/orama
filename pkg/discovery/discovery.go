@@ -115,35 +115,34 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 			continue
 		}
 
-		// Filter addresses to only include configured listen addresses, not ephemeral ports
-		// Ephemeral ports are typically > 32768, so we filter those out
+		// Filter addresses to only include port 4001 (standard libp2p port)
+		// This prevents including non-libp2p service ports (like RQLite ports) in peer exchange
+		const libp2pPort = 4001
 		filteredAddrs := make([]multiaddr.Multiaddr, 0)
+		filteredCount := 0
 		for _, addr := range addrs {
 			// Extract TCP port from multiaddr
 			port, err := addr.ValueForProtocol(multiaddr.P_TCP)
 			if err == nil {
 				portNum, err := strconv.Atoi(port)
 				if err == nil {
-					// Only include ports that are reasonable (not ephemeral ports > 32768)
-					// Common LibP2P ports are typically < 10000
-					if portNum > 0 && portNum <= 32767 {
+					// Only include addresses with port 4001
+					if portNum == libp2pPort {
 						filteredAddrs = append(filteredAddrs, addr)
+					} else {
+						filteredCount++
 					}
-				} else {
-					// If we can't parse port, include it anyway (might be non-TCP)
-					filteredAddrs = append(filteredAddrs, addr)
 				}
+				// Skip addresses with unparseable ports
 			} else {
-				// If no TCP port found, include it anyway (might be non-TCP)
-				filteredAddrs = append(filteredAddrs, addr)
+				// Skip non-TCP addresses (libp2p uses TCP)
+				filteredCount++
 			}
 		}
 
 		// If no addresses remain after filtering, skip this peer
+		// (Filtering is routine - no need to log every occurrence)
 		if len(filteredAddrs) == 0 {
-			d.logger.Debug("No valid addresses after filtering ephemeral ports",
-				zap.String("peer_id", pid.String()[:8]+"..."),
-				zap.Int("original_count", len(addrs)))
 			continue
 		}
 
@@ -177,9 +176,7 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 		return
 	}
 
-	d.logger.Debug("Sent peer exchange response",
-		zap.Int("peer_count", len(resp.Peers)),
-		zap.Bool("has_rqlite_metadata", resp.RQLiteMetadata != nil))
+	// Response sent - routine operation, no need to log
 }
 
 // Start begins periodic peer discovery
@@ -222,9 +219,6 @@ func (d *Manager) discoverPeers(ctx context.Context, config Config) {
 	connectedPeers := d.host.Network().Peers()
 	initialCount := len(connectedPeers)
 
-	d.logger.Debug("Starting peer discovery",
-		zap.Int("current_peers", initialCount))
-
 	newConnections := 0
 
 	// Strategy 1: Try to connect to peers learned from the host's peerstore
@@ -237,11 +231,12 @@ func (d *Manager) discoverPeers(ctx context.Context, config Config) {
 
 	finalPeerCount := len(d.host.Network().Peers())
 
+	// Summary log: only log if there were changes or new connections
 	if newConnections > 0 || finalPeerCount != initialCount {
-		d.logger.Debug("Peer discovery completed",
-			zap.Int("new_connections", newConnections),
-			zap.Int("initial_peers", initialCount),
-			zap.Int("final_peers", finalPeerCount))
+		d.logger.Debug("Discovery summary",
+			zap.Int("connected", finalPeerCount),
+			zap.Int("new", newConnections),
+			zap.Int("was", initialCount))
 	}
 }
 
@@ -256,7 +251,10 @@ func (d *Manager) discoverViaPeerstore(ctx context.Context, maxConnections int) 
 
 	// Iterate over peerstore known peers
 	peers := d.host.Peerstore().Peers()
-	d.logger.Debug("Peerstore contains peers", zap.Int("count", len(peers)))
+
+	// Only connect to peers on our standard LibP2P port to avoid cross-connecting
+	// with IPFS/IPFS Cluster instances that use different ports
+	const libp2pPort = 4001
 
 	for _, pid := range peers {
 		if connected >= maxConnections {
@@ -268,6 +266,24 @@ func (d *Manager) discoverViaPeerstore(ctx context.Context, maxConnections int) 
 		}
 		// Skip already connected peers
 		if d.host.Network().Connectedness(pid) != network.NotConnected {
+			continue
+		}
+
+		// Filter peers to only include those with addresses on our port (4001)
+		// This prevents attempting to connect to IPFS (port 4101) or IPFS Cluster (port 9096)
+		peerInfo := d.host.Peerstore().PeerInfo(pid)
+		hasValidPort := false
+		for _, addr := range peerInfo.Addrs {
+			if port, err := addr.ValueForProtocol(multiaddr.P_TCP); err == nil {
+				if portNum, err := strconv.Atoi(port); err == nil && portNum == libp2pPort {
+					hasValidPort = true
+					break
+				}
+			}
+		}
+
+		// Skip peers without valid port 4001 addresses
+		if !hasValidPort {
 			continue
 		}
 
@@ -293,8 +309,8 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 		return 0
 	}
 
-	d.logger.Debug("Starting peer exchange with connected peers",
-		zap.Int("num_peers", len(connectedPeers)))
+	exchangedPeers := 0
+	metadataCollected := 0
 
 	for _, peerID := range connectedPeers {
 		if connected >= maxConnections {
@@ -307,9 +323,13 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 			continue
 		}
 
-		d.logger.Debug("Received peer list from peer",
-			zap.String("from_peer", peerID.String()[:8]+"..."),
-			zap.Int("peer_count", len(peers)))
+		exchangedPeers++
+		// Check if we got RQLite metadata
+		if val, err := d.host.Peerstore().Get(peerID, "rqlite_metadata"); err == nil {
+			if _, ok := val.([]byte); ok {
+				metadataCollected++
+			}
+		}
 
 		// Try to connect to discovered peers
 		for _, peerInfo := range peers {
@@ -334,7 +354,8 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 				continue
 			}
 
-			// Parse addresses
+			// Parse and filter addresses to only include port 4001 (standard libp2p port)
+			const libp2pPort = 4001
 			addrs := make([]multiaddr.Multiaddr, 0, len(peerInfo.Addrs))
 			for _, addrStr := range peerInfo.Addrs {
 				ma, err := multiaddr.NewMultiaddr(addrStr)
@@ -342,14 +363,24 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 					d.logger.Debug("Failed to parse multiaddr", zap.Error(err))
 					continue
 				}
-				addrs = append(addrs, ma)
+				// Only include addresses with port 4001
+				port, err := ma.ValueForProtocol(multiaddr.P_TCP)
+				if err == nil {
+					portNum, err := strconv.Atoi(port)
+					if err == nil && portNum == libp2pPort {
+						addrs = append(addrs, ma)
+					}
+					// Skip addresses with wrong ports
+				}
+				// Skip non-TCP addresses
 			}
 
 			if len(addrs) == 0 {
+				// Skip peers without valid addresses - no need to log every occurrence
 				continue
 			}
 
-			// Add to peerstore
+			// Add to peerstore (only valid addresses with port 4001)
 			d.host.Peerstore().AddAddrs(parsedID, addrs, time.Hour*24)
 
 			// Try to connect
@@ -358,18 +389,27 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 
 			if err := d.host.Connect(connectCtx, peerAddrInfo); err != nil {
 				cancel()
-				d.logger.Debug("Failed to connect to discovered peer",
-					zap.String("peer_id", parsedID.String()[:8]+"..."),
+				// Only log connection failures for debugging - errors are still useful
+				d.logger.Debug("Connect failed",
+					zap.String("peer", parsedID.String()[:8]+"..."),
 					zap.Error(err))
 				continue
 			}
 			cancel()
 
-			d.logger.Info("Successfully connected to discovered peer",
-				zap.String("peer_id", parsedID.String()[:8]+"..."),
-				zap.String("discovered_from", peerID.String()[:8]+"..."))
+			d.logger.Info("Connected",
+				zap.String("peer", parsedID.String()[:8]+"..."),
+				zap.String("from", peerID.String()[:8]+"..."))
 			connected++
 		}
+	}
+
+	// Summary log for peer exchange
+	if exchangedPeers > 0 {
+		d.logger.Debug("Exchange summary",
+			zap.Int("exchanged_with", exchangedPeers),
+			zap.Int("metadata_collected", metadataCollected),
+			zap.Int("new_connections", connected))
 	}
 
 	return connected
@@ -424,9 +464,10 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 		metadataJSON, err := json.Marshal(resp.RQLiteMetadata)
 		if err == nil {
 			_ = d.host.Peerstore().Put(peerID, "rqlite_metadata", metadataJSON)
-			d.logger.Debug("Stored RQLite metadata from peer",
-				zap.String("peer_id", peerID.String()[:8]+"..."),
-				zap.String("node_id", resp.RQLiteMetadata.NodeID))
+			// Only log when new metadata is stored (useful for debugging)
+			d.logger.Debug("Metadata stored",
+				zap.String("peer", peerID.String()[:8]+"..."),
+				zap.String("node", resp.RQLiteMetadata.NodeID))
 		}
 	}
 
@@ -442,9 +483,6 @@ func (d *Manager) TriggerPeerExchange(ctx context.Context) int {
 		return 0
 	}
 
-	d.logger.Info("Manually triggering peer exchange",
-		zap.Int("connected_peers", len(connectedPeers)))
-
 	metadataCollected := 0
 	for _, peerID := range connectedPeers {
 		// Request peer list from this peer (which includes their RQLite metadata)
@@ -458,9 +496,9 @@ func (d *Manager) TriggerPeerExchange(ctx context.Context) int {
 		}
 	}
 
-	d.logger.Info("Peer exchange completed",
-		zap.Int("peers_with_metadata", metadataCollected),
-		zap.Int("total_peers", len(connectedPeers)))
+	d.logger.Info("Exchange completed",
+		zap.Int("peers", len(connectedPeers)),
+		zap.Int("with_metadata", metadataCollected))
 
 	return metadataCollected
 }
@@ -480,8 +518,7 @@ func (d *Manager) connectToPeer(ctx context.Context, peerID peer.ID) error {
 		return err
 	}
 
-	d.logger.Debug("Successfully connected to peer",
-		zap.String("peer_id", peerID.String()[:8]+"..."))
+	// Connection success logged at higher level - no need for duplicate DEBUG log
 
 	return nil
 }

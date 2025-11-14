@@ -24,24 +24,21 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 	}
 	namespacedTopic := fmt.Sprintf("%s.%s", ns, topic)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Check if we already have a subscription for this topic
-	topicSub, exists := m.subscriptions[namespacedTopic]
-	
-	if exists {
-		// Add handler to existing subscription
+	// Fast path: we already have a subscription for this topic
+	m.mu.RLock()
+	if existing := m.subscriptions[namespacedTopic]; existing != nil {
+		m.mu.RUnlock()
 		handlerID := generateHandlerID()
-		topicSub.mu.Lock()
-		topicSub.handlers[handlerID] = handler
-		topicSub.refCount++
-		topicSub.mu.Unlock()
+		existing.mu.Lock()
+		existing.handlers[handlerID] = handler
+		existing.refCount++
+		existing.mu.Unlock()
 		return nil
 	}
+	m.mu.RUnlock()
 
-	// Create new subscription
-	// Get or create topic
+	// Create the underlying libp2p subscription without holding the manager lock
+	// to avoid re-entrant lock attempts
 	libp2pTopic, err := m.getOrCreateTopic(namespacedTopic)
 	if err != nil {
 		return fmt.Errorf("failed to get topic: %w", err)
@@ -58,26 +55,44 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 
 	// Create topic subscription with initial handler
 	handlerID := generateHandlerID()
-	topicSub = &topicSubscription{
+	newSub := &topicSubscription{
 		sub:      sub,
 		cancel:   cancel,
 		handlers: map[HandlerID]MessageHandler{handlerID: handler},
 		refCount: 1,
 	}
-	m.subscriptions[namespacedTopic] = topicSub
+
+	// Install the subscription (or merge if another goroutine beat us)
+	m.mu.Lock()
+	if existing := m.subscriptions[namespacedTopic]; existing != nil {
+		m.mu.Unlock()
+		// Another goroutine already created a subscription while we were working
+		// Clean up our resources and add to theirs
+		cancel()
+		sub.Cancel()
+		handlerID := generateHandlerID()
+		existing.mu.Lock()
+		existing.handlers[handlerID] = handler
+		existing.refCount++
+		existing.mu.Unlock()
+		return nil
+	}
+	m.subscriptions[namespacedTopic] = newSub
+	m.mu.Unlock()
+
+	// Announce topic interest to help with peer discovery
+	go m.announceTopicInterest(namespacedTopic)
 
 	// Start message handler goroutine (fan-out to all handlers)
-	go func() {
-		defer func() {
-			sub.Cancel()
-		}()
+	go func(ts *topicSubscription) {
+		defer ts.sub.Cancel()
 
 		for {
 			select {
 			case <-subCtx.Done():
 				return
 			default:
-				msg, err := sub.Next(subCtx)
+				msg, err := ts.sub.Next(subCtx)
 				if err != nil {
 					if subCtx.Err() != nil {
 						return // Context cancelled
@@ -85,13 +100,18 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 					continue
 				}
 
+				// Filter out internal discovery messages
+				if string(msg.Data) == "PEER_DISCOVERY_PING" {
+					continue
+				}
+
 				// Broadcast to all handlers
-				topicSub.mu.RLock()
-				handlers := make([]MessageHandler, 0, len(topicSub.handlers))
-				for _, h := range topicSub.handlers {
+				ts.mu.RLock()
+				handlers := make([]MessageHandler, 0, len(ts.handlers))
+				for _, h := range ts.handlers {
 					handlers = append(handlers, h)
 				}
-				topicSub.mu.RUnlock()
+				ts.mu.RUnlock()
 
 				// Call each handler (don't block on individual handler errors)
 				for _, h := range handlers {
@@ -102,7 +122,7 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 				}
 			}
 		}
-	}()
+	}(newSub)
 
 	return nil
 }
