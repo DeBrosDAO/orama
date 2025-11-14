@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.13] - 2025-11-14
+
+### Added
+\n
+### Changed
+- The Gateway service now waits for the Olric cache service to start before attempting initialization.
+- Improved robustness of Olric cache client initialization with retry logic and exponential backoff.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected the default path logic for 'gateway.yaml' to prioritize the production data directory while maintaining fallback to legacy paths.
+
 ## [0.69.12] - 2025-11-14
 
 ### Added

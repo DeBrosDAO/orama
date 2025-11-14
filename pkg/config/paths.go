@@ -42,14 +42,15 @@ func DefaultPath(component string) (string, error) {
 		return "", err
 	}
 
+	var gatewayDefault string
 	// For gateway.yaml, check data/ directory first (production location)
 	if component == "gateway.yaml" {
 		dataPath := filepath.Join(dir, "data", component)
 		if _, err := os.Stat(dataPath); err == nil {
 			return dataPath, nil
 		}
-		// Return data path as default for gateway.yaml (even if it doesn't exist yet)
-		return dataPath, nil
+		// Remember the preferred default so we can still fall back to legacy paths
+		gatewayDefault = dataPath
 	}
 
 	// First check in ~/.debros/configs/ (production installer location)
@@ -62,6 +63,12 @@ func DefaultPath(component string) (string, error) {
 	legacyPath := filepath.Join(dir, component)
 	if _, err := os.Stat(legacyPath); err == nil {
 		return legacyPath, nil
+	}
+
+	if gatewayDefault != "" {
+		// If we preferred the data path (gateway.yaml) but didn't find it anywhere else,
+		// return the data path so error messages point to the production location.
+		return gatewayDefault, nil
 	}
 
 	// Return configs path as default (even if it doesn't exist yet)

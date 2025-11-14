@@ -233,11 +233,12 @@ WantedBy=multi-user.target
 // GenerateGatewayService generates the DeBros Gateway systemd unit
 func (ssg *SystemdServiceGenerator) GenerateGatewayService(nodeType string) string {
 	nodeService := fmt.Sprintf("debros-node-%s.service", nodeType)
+	olricService := "debros-olric.service"
 	logFile := filepath.Join(ssg.debrosDir, "logs", "gateway.log")
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Gateway
-After=%s
-Wants=%s
+After=%s %s
+Wants=%s %s
 
 [Service]
 Type=simple
@@ -262,7 +263,7 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeService, nodeService, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, logFile, logFile, ssg.debrosDir)
+`, nodeService, olricService, nodeService, olricService, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, logFile, logFile, ssg.debrosDir)
 }
 
 // SystemdController manages systemd service operations

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,6 +24,12 @@ import (
 	"go.uber.org/zap"
 
 	_ "github.com/rqlite/gorqlite/stdlib"
+)
+
+const (
+	olricInitMaxAttempts    = 5
+	olricInitInitialBackoff = 500 * time.Millisecond
+	olricInitMaxBackoff     = 5 * time.Second
 )
 
 // Config holds configuration for the gateway server
@@ -182,7 +189,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		Servers: olricServers,
 		Timeout: cfg.OlricTimeout,
 	}
-	olricClient, olricErr := olric.NewClient(olricCfg, logger.Logger)
+	olricClient, olricErr := initializeOlricClientWithRetry(olricCfg, logger)
 	if olricErr != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize Olric cache client; cache endpoints disabled", zap.Error(olricErr))
 	} else {
@@ -328,6 +335,38 @@ func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscribe
 		return subs
 	}
 	return nil
+}
+
+func initializeOlricClientWithRetry(cfg olric.Config, logger *logging.ColoredLogger) (*olric.Client, error) {
+	backoff := olricInitInitialBackoff
+
+	for attempt := 1; attempt <= olricInitMaxAttempts; attempt++ {
+		client, err := olric.NewClient(cfg, logger.Logger)
+		if err == nil {
+			if attempt > 1 {
+				logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client initialized after retries",
+					zap.Int("attempts", attempt))
+			}
+			return client, nil
+		}
+
+		logger.ComponentWarn(logging.ComponentGeneral, "Olric cache client init attempt failed",
+			zap.Int("attempt", attempt),
+			zap.Duration("retry_in", backoff),
+			zap.Error(err))
+
+		if attempt == olricInitMaxAttempts {
+			return nil, fmt.Errorf("failed to initialize Olric cache client after %d attempts: %w", attempt, err)
+		}
+
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > olricInitMaxBackoff {
+			backoff = olricInitMaxBackoff
+		}
+	}
+
+	return nil, fmt.Errorf("failed to initialize Olric cache client")
 }
 
 // discoverOlricServers discovers Olric server addresses from LibP2P peers
