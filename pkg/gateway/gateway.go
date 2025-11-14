@@ -74,6 +74,7 @@ type Gateway struct {
 
 	// Olric cache client
 	olricClient *olric.Client
+	olricMu     sync.RWMutex
 
 	// IPFS storage client
 	ipfsClient ipfs.IPFSClient
@@ -192,8 +193,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	olricClient, olricErr := initializeOlricClientWithRetry(olricCfg, logger)
 	if olricErr != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize Olric cache client; cache endpoints disabled", zap.Error(olricErr))
+		gw.startOlricReconnectLoop(olricCfg)
 	} else {
-		gw.olricClient = olricClient
+		gw.setOlricClient(olricClient)
 		logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client ready",
 			zap.Strings("servers", olricCfg.Servers),
 			zap.Duration("timeout", olricCfg.Timeout),
@@ -312,10 +314,10 @@ func (g *Gateway) Close() {
 	if g.sqlDB != nil {
 		_ = g.sqlDB.Close()
 	}
-	if g.olricClient != nil {
+	if client := g.getOlricClient(); client != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := g.olricClient.Close(ctx); err != nil {
+		if err := client.Close(ctx); err != nil {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "error during Olric client close", zap.Error(err))
 		}
 	}
@@ -335,6 +337,46 @@ func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscribe
 		return subs
 	}
 	return nil
+}
+
+func (g *Gateway) setOlricClient(client *olric.Client) {
+	g.olricMu.Lock()
+	defer g.olricMu.Unlock()
+	g.olricClient = client
+}
+
+func (g *Gateway) getOlricClient() *olric.Client {
+	g.olricMu.RLock()
+	defer g.olricMu.RUnlock()
+	return g.olricClient
+}
+
+func (g *Gateway) startOlricReconnectLoop(cfg olric.Config) {
+	go func() {
+		retryDelay := 5 * time.Second
+		for {
+			client, err := initializeOlricClientWithRetry(cfg, g.logger)
+			if err == nil {
+				g.setOlricClient(client)
+				g.logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client connected after background retries",
+					zap.Strings("servers", cfg.Servers),
+					zap.Duration("timeout", cfg.Timeout))
+				return
+			}
+
+			g.logger.ComponentWarn(logging.ComponentGeneral, "Olric cache client reconnect failed",
+				zap.Duration("retry_in", retryDelay),
+				zap.Error(err))
+
+			time.Sleep(retryDelay)
+			if retryDelay < olricInitMaxBackoff {
+				retryDelay *= 2
+				if retryDelay > olricInitMaxBackoff {
+					retryDelay = olricInitMaxBackoff
+				}
+			}
+		}
+	}()
 }
 
 func initializeOlricClientWithRetry(cfg olric.Config, logger *logging.ColoredLogger) (*olric.Client, error) {

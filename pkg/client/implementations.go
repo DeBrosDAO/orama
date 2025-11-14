@@ -160,17 +160,31 @@ func (d *DatabaseClientImpl) isWriteOperation(sql string) bool {
 func (d *DatabaseClientImpl) clearConnection() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.connection = nil
+	if d.connection != nil {
+		d.connection.Close()
+		d.connection = nil
+	}
 }
 
 // getRQLiteConnection returns a connection to RQLite, creating one if needed
 func (d *DatabaseClientImpl) getRQLiteConnection() (*gorqlite.Connection, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.mu.RLock()
+	conn := d.connection
+	d.mu.RUnlock()
 
-	// Always try to get a fresh connection to handle leadership changes
-	// and node failures gracefully
-	return d.connectToAvailableNode()
+	if conn != nil {
+		return conn, nil
+	}
+
+	newConn, err := d.connectToAvailableNode()
+	if err != nil {
+		return nil, err
+	}
+
+	d.mu.Lock()
+	d.connection = newConn
+	d.mu.Unlock()
+	return newConn, nil
 }
 
 // getRQLiteNodes returns a list of RQLite node URLs with precedence:
@@ -227,7 +241,6 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 			continue
 		}
 
-		d.connection = conn
 		return conn, nil
 	}
 

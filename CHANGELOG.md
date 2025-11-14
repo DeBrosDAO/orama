@@ -13,6 +13,22 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.14] - 2025-11-14
+
+### Added
+- Added support for background reconnection to the Olric cache cluster in the Gateway, improving resilience if the cache is temporarily unavailable.
+
+### Changed
+- Improved the RQLite database client connection handling to ensure connections are properly closed and reused safely.
+- RQLite Manager now updates its advertised addresses if cluster discovery provides more accurate information (e.g., replacing localhost).
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Removed internal RQLite process management from the development runner, as RQLite is now expected to be managed externally or via Docker.
+
 ## [0.69.13] - 2025-11-14
 
 ### Added

@@ -62,7 +62,6 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		fn   func(context.Context) error
 	}{
 		{"IPFS", pm.startIPFS},
-		{"RQLite", pm.startRQLite},
 		{"IPFS Cluster", pm.startIPFSCluster},
 		{"Olric", pm.startOlric},
 		{"Anon", pm.startAnon},
@@ -113,10 +112,6 @@ func (pm *ProcessManager) StopAll(ctx context.Context) error {
 	}
 	for i := len(topology.Nodes) - 1; i >= 0; i-- {
 		node := topology.Nodes[i]
-		services = append(services, fmt.Sprintf("rqlite-%s", node.Name))
-	}
-	for i := len(topology.Nodes) - 1; i >= 0; i-- {
-		node := topology.Nodes[i]
 		services = append(services, fmt.Sprintf("ipfs-%s", node.Name))
 	}
 	services = append(services, "olric", "anon")
@@ -149,13 +144,6 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		}{
 			fmt.Sprintf("%s IPFS", node.Name),
 			[]int{node.IPFSAPIPort, node.IPFSSwarmPort},
-		})
-		services = append(services, struct {
-			name  string
-			ports []int
-		}{
-			fmt.Sprintf("%s RQLite", node.Name),
-			[]int{node.RQLiteHTTPPort, node.RQLiteRaftPort},
 		})
 		services = append(services, struct {
 			name  string
@@ -939,72 +927,6 @@ func (pm *ProcessManager) ensureIPFSClusterPorts(clusterPath string, restAPIPort
 		return fmt.Errorf("failed to write service.json: %w", err)
 	}
 
-	return nil
-}
-
-func (pm *ProcessManager) startRQLite(ctx context.Context) error {
-	topology := DefaultTopology()
-	var nodes []struct {
-		name     string
-		dataDir  string
-		httpPort int
-		raftPort int
-		joinAddr string
-	}
-
-	for _, nodeSpec := range topology.Nodes {
-		nodes = append(nodes, struct {
-			name     string
-			dataDir  string
-			httpPort int
-			raftPort int
-			joinAddr string
-		}{
-			nodeSpec.Name,
-			filepath.Join(pm.debrosDir, nodeSpec.DataDir, "rqlite"),
-			nodeSpec.RQLiteHTTPPort,
-			nodeSpec.RQLiteRaftPort,
-			nodeSpec.RQLiteJoinTarget,
-		})
-	}
-
-	for _, node := range nodes {
-		os.MkdirAll(node.dataDir, 0755)
-
-		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("rqlite-%s.pid", node.name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("rqlite-%s.log", node.name))
-
-		var args []string
-		args = append(args, fmt.Sprintf("-http-addr=0.0.0.0:%d", node.httpPort))
-		args = append(args, fmt.Sprintf("-http-adv-addr=localhost:%d", node.httpPort))
-		args = append(args, fmt.Sprintf("-raft-addr=0.0.0.0:%d", node.raftPort))
-		args = append(args, fmt.Sprintf("-raft-adv-addr=localhost:%d", node.raftPort))
-		if node.joinAddr != "" {
-			args = append(args, "-join", node.joinAddr, "-join-attempts", "30", "-join-interval", "10s")
-		}
-		args = append(args, node.dataDir)
-		cmd := exec.CommandContext(ctx, "rqlited", args...)
-
-		logFile, _ := os.Create(logPath)
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("failed to start rqlite-%s: %w", node.name, err)
-		}
-
-		os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
-		pm.processes[fmt.Sprintf("rqlite-%s", node.name)] = &ManagedProcess{
-			Name:      fmt.Sprintf("rqlite-%s", node.name),
-			PID:       cmd.Process.Pid,
-			StartTime: time.Now(),
-			LogPath:   logPath,
-		}
-
-		fmt.Fprintf(pm.logWriter, "✓ RQLite (%s) started (PID: %d, HTTP: %d, Raft: %d)\n", node.name, cmd.Process.Pid, node.httpPort, node.raftPort)
-	}
-
-	time.Sleep(2 * time.Second)
 	return nil
 }
 

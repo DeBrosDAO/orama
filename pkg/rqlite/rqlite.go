@@ -81,6 +81,24 @@ func (r *RQLiteManager) SetDiscoveryService(service *ClusterDiscoveryService) {
 	r.discoveryService = service
 }
 
+// UpdateAdvertisedAddresses overrides the discovery advertised addresses when cluster discovery
+// infers a better host than what was provided via configuration (e.g. replacing localhost).
+func (r *RQLiteManager) UpdateAdvertisedAddresses(raftAddr, httpAddr string) {
+	if r == nil || r.discoverConfig == nil {
+		return
+	}
+
+	if raftAddr != "" && r.discoverConfig.RaftAdvAddress != raftAddr {
+		r.logger.Info("Updating Raft advertised address", zap.String("addr", raftAddr))
+		r.discoverConfig.RaftAdvAddress = raftAddr
+	}
+
+	if httpAddr != "" && r.discoverConfig.HttpAdvAddress != httpAddr {
+		r.logger.Info("Updating HTTP advertised address", zap.String("addr", httpAddr))
+		r.discoverConfig.HttpAdvAddress = httpAddr
+	}
+}
+
 // Start starts the RQLite node
 func (r *RQLiteManager) Start(ctx context.Context) error {
 	rqliteDataDir, err := r.prepareDataDir()

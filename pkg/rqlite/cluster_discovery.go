@@ -809,6 +809,11 @@ func (c *ClusterDiscoveryService) adjustSelfAdvertisedAddresses(meta *discovery.
 	c.raftAddress = meta.RaftAddress
 	c.httpAddress = meta.HTTPAddress
 	c.mu.Unlock()
+
+	if c.rqliteManager != nil {
+		c.rqliteManager.UpdateAdvertisedAddresses(meta.RaftAddress, meta.HTTPAddress)
+	}
+
 	return true
 }
 
