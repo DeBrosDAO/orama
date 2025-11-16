@@ -1027,34 +1027,56 @@ func (pm *ProcessManager) stopProcess(name string) error {
 		return nil
 	}
 
+	// Check if process exists before trying to kill
+	if !checkProcessRunning(pid) {
+		os.Remove(pidPath)
+		fmt.Fprintf(pm.logWriter, "✓ %s (not running)\n", name)
+		return nil
+	}
+
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		os.Remove(pidPath)
 		return nil
 	}
 
-	// Try graceful shutdown first
+	// Try graceful shutdown first (SIGTERM)
 	proc.Signal(os.Interrupt)
 
-	// Wait a bit for graceful shutdown
-	time.Sleep(500 * time.Millisecond)
+	// Wait up to 2 seconds for graceful shutdown
+	gracefulShutdown := false
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if !checkProcessRunning(pid) {
+			gracefulShutdown = true
+			break
+		}
+	}
 
-	// Check if process is still running
-	if checkProcessRunning(pid) {
-		// Force kill if still running
+	// Force kill if still running after graceful attempt
+	if !gracefulShutdown && checkProcessRunning(pid) {
 		proc.Signal(os.Kill)
 		time.Sleep(200 * time.Millisecond)
 
-		// Also kill any child processes (platform-specific)
+		// Kill any child processes (platform-specific)
 		if runtime.GOOS != "windows" {
-			// Use pkill to kill children on Unix-like systems
 			exec.Command("pkill", "-9", "-P", fmt.Sprintf("%d", pid)).Run()
+		}
+
+		// Final force kill attempt if somehow still alive
+		if checkProcessRunning(pid) {
+			exec.Command("kill", "-9", fmt.Sprintf("%d", pid)).Run()
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
 	os.Remove(pidPath)
 
-	fmt.Fprintf(pm.logWriter, "✓ %s stopped\n", name)
+	if gracefulShutdown {
+		fmt.Fprintf(pm.logWriter, "✓ %s stopped gracefully\n", name)
+	} else {
+		fmt.Fprintf(pm.logWriter, "✓ %s stopped (forced)\n", name)
+	}
 	return nil
 }
 

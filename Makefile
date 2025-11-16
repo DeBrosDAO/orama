@@ -19,7 +19,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.69.15
+VERSION := 0.69.16
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -85,12 +85,18 @@ run-gateway:
 dev: build
 	@./bin/dbn dev up
 
-# Kill all processes (graceful shutdown + force kill stray processes)
+# Graceful shutdown of all dev services
+stop:
+	@if [ -f ./bin/dbn ]; then \
+		./bin/dbn dev down; \
+	else \
+		echo "⚠️  dbn binary not found, using force kill instead..."; \
+		bash scripts/dev-kill-all.sh; \
+	fi
+
+# Force kill all processes (immediate termination)
 kill:
 	@bash scripts/dev-kill-all.sh
-
-stop:
-	@./bin/dbn dev down
 
 # Help
 help:
@@ -107,7 +113,8 @@ help:
 	@echo "                 - Validates cluster health (IPFS peers, RQLite, LibP2P)"
 	@echo "                 - Stops all services if health checks fail"
 	@echo "                 - Includes comprehensive logging"
-	@echo "  make kill     - Stop all development services"
+	@echo "  make stop     - Gracefully stop all development services"
+	@echo "  make kill     - Force kill all development services (use if stop fails)"
 	@echo ""
 	@echo "Development Management (via dbn):"
 	@echo "  ./bin/dbn dev status  - Show status of all dev services"

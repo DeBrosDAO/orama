@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.16] - 2025-11-16
+
+### Added
+\n
+### Changed
+- Improved the `make stop` command to ensure a more robust and graceful shutdown of development services.
+- Enhanced the `make kill` command and underlying scripts for more reliable force termination of stray development processes.
+- Increased the graceful shutdown timeout for development processes from 500ms to 2 seconds before resorting to force kill.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.15] - 2025-11-16
 
 ### Added

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "Force killing all processes on dev ports..."
+echo "Force killing all debros development processes..."
 
 # Define all dev ports (5 nodes topology: bootstrap, bootstrap2, node2, node3, node4)
 PORTS=(
@@ -32,16 +32,13 @@ PORTS=(
 killed_count=0
 killed_pids=()
 
-# Kill all processes using these ports (LISTEN, ESTABLISHED, or any state)
+# Method 1: Kill all processes using these ports
 for port in "${PORTS[@]}"; do
-  # Get all PIDs using this port in ANY TCP state
   pids=$(lsof -nP -iTCP:"$port" -t 2>/dev/null || true)
   if [[ -n "$pids" ]]; then
-    echo "Killing processes on port $port: $pids"
+    echo "  Killing processes on port $port: $pids"
     for pid in $pids; do
-      # Kill the process and all its children
       kill -9 "$pid" 2>/dev/null || true
-      # Also kill any children of this process
       pkill -9 -P "$pid" 2>/dev/null || true
       killed_pids+=("$pid")
     done
@@ -49,18 +46,26 @@ for port in "${PORTS[@]}"; do
   fi
 done
 
-# Also kill processes by command name patterns (in case they're orphaned)
-# This catches processes that might be using debros ports but not showing up in lsof
-COMMANDS=("node" "ipfs" "ipfs-cluster-service" "rqlited" "olric-server" "gateway")
-for cmd in "${COMMANDS[@]}"; do
-  # Find all processes with this command name
-  all_pids=$(pgrep -f "^.*$cmd.*" 2>/dev/null || true)
+# Method 2: Kill processes by specific patterns (ONLY debros-related)
+# Be very specific to avoid killing unrelated processes
+SPECIFIC_PATTERNS=(
+  "ipfs daemon"
+  "ipfs-cluster-service daemon"
+  "olric-server"
+  "bin/node"
+  "bin/gateway"
+  "anyone-client"
+)
+
+for pattern in "${SPECIFIC_PATTERNS[@]}"; do
+  # Use exact pattern matching to avoid false positives
+  all_pids=$(pgrep -f "$pattern" 2>/dev/null || true)
   if [[ -n "$all_pids" ]]; then
     for pid in $all_pids; do
-      # Check if this process is using any of our dev ports
-      port_match=$(lsof -nP -p "$pid" -iTCP 2>/dev/null | grep -E ":(400[1-4]|401[1-1]|410[1-4]|411[1-1]|450[1-4]|451[1-1]|500[1-4]|501[1-1]|600[1-1]|700[1-4]|701[1-1]|750[1-4]|751[1-1]|332[02]|9050|909[4-9]|910[4-9]|911[4-9]|912[4-9]|913[4-9]|909[6-9]|910[6-9]|911[6-9]|912[6-9]|913[6-9])" || true)
-      if [[ -n "$port_match" ]]; then
-        echo "Killing orphaned $cmd process (PID: $pid) using dev ports"
+      # Double-check the command line to avoid killing wrong processes
+      cmdline=$(ps -p "$pid" -o command= 2>/dev/null || true)
+      if [[ "$cmdline" == *"$pattern"* ]]; then
+        echo "  Killing $pattern process (PID: $pid)"
         kill -9 "$pid" 2>/dev/null || true
         pkill -9 -P "$pid" 2>/dev/null || true
         killed_pids+=("$pid")
@@ -69,26 +74,40 @@ for cmd in "${COMMANDS[@]}"; do
   fi
 done
 
-# Clean up PID files
+# Method 3: Kill processes using PID files
 PIDS_DIR="$HOME/.debros/.pids"
 if [[ -d "$PIDS_DIR" ]]; then
-  rm -f "$PIDS_DIR"/*.pid || true
+  for pidfile in "$PIDS_DIR"/*.pid; do
+    if [[ -f "$pidfile" ]]; then
+      pid=$(cat "$pidfile" 2>/dev/null || true)
+      if [[ -n "$pid" ]] && ps -p "$pid" > /dev/null 2>&1; then
+        name=$(basename "$pidfile" .pid)
+        echo "  Killing $name (PID: $pid from pidfile)"
+        kill -9 "$pid" 2>/dev/null || true
+        pkill -9 -P "$pid" 2>/dev/null || true
+        killed_pids+=("$pid")
+      fi
+    fi
+  done
+  # Clean up all PID files
+  rm -f "$PIDS_DIR"/*.pid 2>/dev/null || true
 fi
 
 # Remove duplicates and report
 if [[ ${#killed_pids[@]} -gt 0 ]]; then
   unique_pids=($(printf '%s\n' "${killed_pids[@]}" | sort -u))
-  echo "✓ Killed ${#unique_pids[@]} unique process(es) on $killed_count port(s)"
+  echo "✓ Killed ${#unique_pids[@]} unique process(es)"
 else
-  echo "✓ No processes found on dev ports"
+  echo "✓ No debros processes found running"
 fi
 
 # Final verification: check if any ports are still in use
 still_in_use=0
+busy_ports=()
 for port in "${PORTS[@]}"; do
   pids=$(lsof -nP -iTCP:"$port" -t 2>/dev/null || true)
   if [[ -n "$pids" ]]; then
-    echo "⚠️  Warning: Port $port still in use by: $pids"
+    busy_ports+=("$port")
     still_in_use=$((still_in_use + 1))
   fi
 done
@@ -96,6 +115,7 @@ done
 if [[ $still_in_use -eq 0 ]]; then
   echo "✓ All dev ports are now free"
 else
-  echo "⚠️  $still_in_use port(s) still in use - you may need to manually kill processes"
+  echo "⚠️  Warning: $still_in_use port(s) still in use: ${busy_ports[*]}"
+  echo "    Run 'lsof -nP -iTCP:<port>' to identify the processes"
 fi
 
