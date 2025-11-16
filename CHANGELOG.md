@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.15] - 2025-11-16
+
+### Added
+\n
+### Changed
+- Improved authentication flow to handle wallet addresses case-insensitively during nonce creation and verification.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.14] - 2025-11-14
 
 ### Added
