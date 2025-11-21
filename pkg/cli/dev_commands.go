@@ -136,7 +136,10 @@ func handleDevDown(args []string) {
 
 	if err := pm.StopAll(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Error stopping services: %v\n", err)
+		os.Exit(1)
 	}
+	
+	fmt.Printf("✅ All services have been stopped\n\n")
 }
 
 func handleDevStatus(args []string) {

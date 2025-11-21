@@ -633,11 +633,7 @@ func (c *ClusterDiscoveryService) WaitForDiscoverySettling(ctx context.Context) 
 
 // TriggerSync manually triggers a cluster membership sync
 func (c *ClusterDiscoveryService) TriggerSync() {
-	// For bootstrap nodes, wait a bit for peer discovery to stabilize
-	if c.nodeType == "bootstrap" {
-		time.Sleep(5 * time.Second)
-	}
-
+	// All nodes use the same discovery timing for consistency
 	c.updateClusterMembership()
 }
 

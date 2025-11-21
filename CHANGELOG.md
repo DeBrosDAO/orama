@@ -13,6 +13,42 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.17] - 2025-11-21
+
+### Added
+- Initial implementation of a Push Notification Service for the Gateway, utilizing the Expo API.
+- Detailed documentation for RQLite operations, monitoring, and troubleshooting was added to the README.
+
+### Changed
+- Improved `make stop` and `dbn dev down` commands to ensure all development services are forcefully killed after graceful shutdown attempt.
+- Refactored RQLite startup logic to simplify cluster establishment and remove complex, error-prone leadership/recovery checks, relying on RQLite's built-in join mechanism.
+- RQLite logs are now written to individual log files (e.g., `~/.debros/logs/rqlite-bootstrap.log`) instead of stdout/stderr, improving development environment clarity.
+- Improved peer exchange discovery logging to suppress expected 'protocols not supported' warnings from lightweight clients like the Gateway.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.69.17] - 2025-11-21
+
+### Added
+- Initial implementation of a Push Notification Service for the Gateway, utilizing the Expo API.
+- Detailed documentation for RQLite operations, monitoring, and troubleshooting in the README.
+
+### Changed
+- Improved `make stop` and `dbn dev down` commands to ensure all development services are forcefully killed after graceful shutdown attempt.
+- Refactored RQLite startup logic to simplify cluster establishment and remove complex, error-prone leadership/recovery checks, relying on RQLite's built-in join mechanism.
+- RQLite logs are now written to individual log files (e.g., `~/.debros/logs/rqlite-bootstrap.log`) instead of stdout/stderr, improving development environment clarity.
+- Improved peer exchange discovery logging to suppress expected 'protocols not supported' warnings from lightweight clients like the Gateway.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.16] - 2025-11-16
 
 ### Added

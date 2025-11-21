@@ -95,7 +95,7 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 
 // StopAll stops all running processes
 func (pm *ProcessManager) StopAll(ctx context.Context) error {
-	fmt.Fprintf(pm.logWriter, "\n🛑 Stopping development environment...\n")
+	fmt.Fprintf(pm.logWriter, "\n🛑 Stopping development environment...\n\n")
 
 	topology := DefaultTopology()
 	var services []string
@@ -116,11 +116,22 @@ func (pm *ProcessManager) StopAll(ctx context.Context) error {
 	}
 	services = append(services, "olric", "anon")
 
+	fmt.Fprintf(pm.logWriter, "Stopping %d services...\n\n", len(services))
+	
+	// Stop all processes sequentially (in dependency order) and wait for each
+	stoppedCount := 0
 	for _, svc := range services {
-		pm.stopProcess(svc)
+		if err := pm.stopProcess(svc); err != nil {
+			fmt.Fprintf(pm.logWriter, "⚠️  Error stopping %s: %v\n", svc, err)
+		} else {
+			stoppedCount++
+		}
+		
+		// Show progress
+		fmt.Fprintf(pm.logWriter, "  [%d/%d] stopped\n", stoppedCount, len(services))
 	}
 
-	fmt.Fprintf(pm.logWriter, "✓ All services stopped\n\n")
+	fmt.Fprintf(pm.logWriter, "\n✅ All %d services have been stopped\n\n", stoppedCount)
 	return nil
 }
 

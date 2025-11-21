@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -420,11 +421,20 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 	// Open a stream to the peer
 	stream, err := d.host.NewStream(ctx, peerID, PeerExchangeProtocol)
 	if err != nil {
-		// Suppress repeated warnings for the same peer (log once per minute max)
+		// Check if this is a "protocols not supported" error (expected for lightweight clients like gateway)
+		if strings.Contains(err.Error(), "protocols not supported") {
+			// This is a lightweight client (gateway, etc.) that doesn't support peer exchange - expected behavior
+			// Track it to avoid repeated attempts, but don't log as it's not an error
+			d.failedPeerExchanges[peerID] = time.Now()
+			return nil
+		}
+
+		// For actual connection errors, log but suppress repeated warnings for the same peer
 		lastFailure, seen := d.failedPeerExchanges[peerID]
 		if !seen || time.Since(lastFailure) > time.Minute {
-			d.logger.Debug("Failed to open peer exchange stream",
+			d.logger.Debug("Failed to open peer exchange stream with node",
 				zap.String("peer_id", peerID.String()[:8]+"..."),
+				zap.String("reason", "peer does not support peer exchange protocol or connection failed"),
 				zap.Error(err))
 			d.failedPeerExchanges[peerID] = time.Now()
 		}

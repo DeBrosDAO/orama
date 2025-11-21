@@ -590,15 +590,350 @@ Common endpoints (see `openapi/gateway.yaml` for the full spec):
 - `POST /v1/pubsub/publish`, `GET /v1/pubsub/topics`, `GET /v1/pubsub/ws?topic=<topic>`
 - `POST /v1/storage/upload`, `POST /v1/storage/pin`, `GET /v1/storage/status/:cid`, `GET /v1/storage/get/:cid`, `DELETE /v1/storage/unpin/:cid`
 
+## RQLite Operations & Monitoring
+
+RQLite is the distributed SQL database backing DeBros Network. Proper monitoring and maintenance are critical for cluster health.
+
+### Connecting to RQLite
+
+```bash
+# Local development (bootstrap) - port 5001
+rqlite -H localhost -p 5001
+
+# Local development (bootstrap2) - port 5011
+rqlite -H localhost -p 5011
+
+# Production nodes
+rqlite -H 192.168.1.151 -p 5001
+```
+
+### Health Checks (CRITICAL for Cluster Health)
+
+```bash
+# Check node status and diagnostics
+rqlite -H localhost -p 5001 ".status"
+
+# List all nodes in cluster (verify all nodes connected)
+rqlite -H localhost -p 5001 ".nodes"
+
+# Check if node is ready for operations
+rqlite -H localhost -p 5001 ".ready"
+
+# Get Go runtime info (goroutines, memory, performance)
+rqlite -H localhost -p 5001 ".expvar"
+
+# Show all tables
+rqlite -H localhost -p 5001 ".tables"
+
+# Show schema (CREATE statements)
+rqlite -H localhost -p 5001 ".schema"
+
+# Show all indexes
+rqlite -H localhost -p 5001 ".indexes"
+```
+
+### Backup & Restore
+
+```bash
+# Backup database
+rqlite -H localhost -p 5001 ".backup ~/rqlite-backup.db"
+
+# Restore from backup
+rqlite -H localhost -p 5001 ".restore ~/rqlite-backup.db"
+
+# Dump database in SQL text format
+rqlite -H localhost -p 5001 ".dump ~/rqlite-dump.sql"
+```
+
+### Consistency Levels (Important for Data Integrity)
+
+RQLite supports three consistency levels for read operations:
+
+```bash
+# View current consistency level
+rqlite -H localhost -p 5001 ".consistency"
+
+# Set to weak (default, good balance for most applications)
+rqlite -H localhost -p 5001 ".consistency weak"
+
+# Set to strong (guaranteed consistency across entire cluster)
+rqlite -H localhost -p 5001 ".consistency strong"
+
+# Set to none (fastest reads, no consistency guarantees)
+rqlite -H localhost -p 5001 ".consistency none"
+```
+
+**Recommendation**: Use `weak` for general operations, `strong` when data integrity is critical, and `none` only for cache-like data.
+
+### Cluster Management
+
+```bash
+# Show detailed cluster diagnostics
+rqlite -H localhost -p 5001 ".sysdump /tmp/rqlite-diagnostic.txt"
+
+# Remove a node from cluster (use raft ID from .nodes output)
+rqlite -H localhost -p 5001 ".remove <raft_id>"
+```
+
+### RQLite Log Files (Development)
+
+All RQLite logs are now written to individual files for easier debugging:
+
+```
+~/.debros/logs/rqlite-bootstrap.log
+~/.debros/logs/rqlite-bootstrap2.log
+~/.debros/logs/rqlite-node2.log
+~/.debros/logs/rqlite-node3.log
+~/.debros/logs/rqlite-node4.log
+```
+
+View logs:
+
+```bash
+tail -f ~/.debros/logs/rqlite-bootstrap.log
+tail -f ~/.debros/logs/rqlite-node2.log
+dbn dev logs rqlite-bootstrap --follow
+```
+
+## Development Environment Operations
+
+### Starting & Managing Development Environment
+
+```bash
+# Start the complete development stack (2 bootstraps + 3 nodes + gateway)
+make dev
+
+# Check status of running services
+dbn dev status
+
+# Stop all services
+dbn dev down
+```
+
+### Development Logs
+
+```bash
+# View logs for specific component
+dbn dev logs bootstrap
+dbn dev logs bootstrap2
+dbn dev logs node2
+dbn dev logs node3
+dbn dev logs node4
+dbn dev logs gateway
+dbn dev logs olric
+dbn dev logs anon
+
+# Follow logs in real-time (like tail -f)
+dbn dev logs bootstrap --follow
+dbn dev logs rqlite-bootstrap --follow
+```
+
+### Key Development Endpoints
+
+```
+Gateway:              http://localhost:6001
+Bootstrap IPFS:       http://localhost:4501
+Bootstrap2 IPFS:      http://localhost:4511
+Node2 IPFS:           http://localhost:4502
+Node3 IPFS:           http://localhost:4503
+Node4 IPFS:           http://localhost:4504
+Anon SOCKS:           127.0.0.1:9050
+Olric Cache:          http://localhost:3320
+RQLite Bootstrap:     http://localhost:5001
+RQLite Bootstrap2:    http://localhost:5011
+RQLite Node2:         http://localhost:5002
+RQLite Node3:         http://localhost:5003
+RQLite Node4:         http://localhost:5004
+```
+
+## IPFS Configuration
+
+### Ensure Consistent Cluster Setup
+
+All nodes in a cluster must have identical `cluster.secret` and `swarm.key`:
+
+```bash
+# Copy swarm key to each host (adjust path for bootstrap vs node):
+
+# Bootstrap node
+sudo cp /home/debros/.debros/secrets/swarm.key /home/debros/.debros/data/bootstrap/ipfs/repo/swarm.key
+
+# Regular nodes
+sudo cp /home/debros/.debros/secrets/swarm.key /home/debros/.debros/data/node/ipfs/repo/swarm.key
+
+# Fix permissions
+sudo chown debros:debros /home/debros/.debros/data/*/ipfs/repo/swarm.key
+sudo chmod 600 /home/debros/.debros/data/*/ipfs/repo/swarm.key
+```
+
+### Important IPFS Configuration Notes
+
+- **Production**: Update Olric config - change `0.0.0.0` to actual IP address for both entries
+- **All Nodes**: Must have identical `cluster.secret` and `swarm.key` for cluster to form
+
 ## Troubleshooting
+
+### General Issues
 
 - **Config directory errors**: Ensure `~/.debros/` exists, is writable, and has free disk space (`touch ~/.debros/test && rm ~/.debros/test`).
 - **Port conflicts**: Inspect with `lsof -i :4001` (or other ports) and stop conflicting processes or regenerate configs with new ports.
 - **Missing configs**: Run `./bin/dbn config init` before starting nodes.
 - **Cluster join issues**: Confirm the bootstrap node is running, `peer.info` multiaddr matches `bootstrap_peers`, and firewall rules allow the P2P ports.
 
+### RQLite Troubleshooting
+
+#### Cluster Not Forming
+
+```bash
+# Verify all nodes see each other
+rqlite -H localhost -p 5001 ".nodes"
+
+# Check node readiness
+rqlite -H localhost -p 5001 ".ready"
+
+# Check status and Raft logs
+rqlite -H localhost -p 5001 ".status"
+```
+
+#### Broken RQLite Raft (Production)
+
+```bash
+# Fix RQLite Raft consensus
+sudo env HOME=/home/debros network-cli rqlite fix
+```
+
+#### Reset RQLite State (DESTRUCTIVE - Last Resort Only)
+
+```bash
+# ⚠️ WARNING: This destroys all RQLite data!
+rm -f ~/.debros/data/rqlite/raft.db
+rm -f ~/.debros/data/rqlite/raft/peers.json
+```
+
+#### Kill IPFS Cluster Service
+
+```bash
+pkill -f ipfs-cluster-service
+```
+
+### Services Not Starting
+
+```bash
+# Check service status
+systemctl status debros-node-bootstrap
+
+# View detailed logs
+journalctl -u debros-node-bootstrap -n 100
+
+# Check log files
+tail -f /home/debros/.debros/logs/node-bootstrap.log
+```
+
+### Port Conflicts
+
+```bash
+# Check what's using specific ports
+sudo lsof -i :4001  # P2P port
+sudo lsof -i :5001  # RQLite HTTP
+sudo lsof -i :6001  # Gateway
+sudo lsof -i :9094  # IPFS Cluster API
+
+# Kill all DeBros-related processes (except Anyone on 9050)
+lsof -ti:7001,7002,7003,5001,5002,5003,6001,4001,3320,3322,9094 | xargs kill -9 2>/dev/null && echo "Killed processes" || echo "No processes found"
+```
+
+### Systemd Service Management
+
+```bash
+# Stop all services (keeps Anyone proxy running on 9050)
+sudo systemctl stop debros-*
+
+# Disable services from auto-start
+sudo systemctl disable debros-*
+
+# Restart all services
+sudo systemctl restart debros-*
+
+# Enable services for auto-start on boot
+sudo systemctl enable debros-*
+
+# View all DeBros services
+systemctl list-units 'debros-*'
+
+# Clean up failed services
+sudo systemctl reset-failed
+```
+
+### Reset Installation (⚠️ Destroys All Data)
+
+```bash
+# Start fresh (production)
+sudo dbn prod uninstall
+sudo rm -rf /home/debros/.debros
+sudo dbn prod install --bootstrap --branch nightly
+```
+
+## Operations Cheat Sheet
+
+### User Management (Linux)
+
+```bash
+# Switch to DeBros user
+sudo -u debros bash
+
+# Kill all DeBros user processes
+sudo killall -9 -u debros
+
+# Remove DeBros user completely
+sudo userdel -r -f debros
+```
+
+### Installation & Deployment
+
+```bash
+# Local development
+make dev
+
+# Install nightly branch
+wget https://raw.githubusercontent.com/DeBrosOfficial/network/refs/heads/nightly/scripts/install-debros-network.sh
+chmod +x ./install-debros-network.sh
+./install-debros-network.sh --prerelease --nightly
+
+# Production bootstrap node
+sudo dbn prod install --bootstrap --branch nightly
+
+# Production secondary node
+sudo dbn prod install \
+  --vps-ip <your_ip> \
+  --peers /ip4/<bootstrap_ip>/tcp/4001/p2p/<peer_id> \
+  --branch nightly
+```
+
+### Configuration & Sudoers (Deploy User)
+
+```bash
+# Add to sudoers for deploy automation
+ubuntu ALL=(ALL) NOPASSWD: /bin/bash
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/make
+
+# Git configuration
+git config --global --add safe.directory /home/debros/src
+```
+
+### Authentication
+
+```bash
+# Login to gateway
+env DEBROS_GATEWAY_URL=https://node-kv4la8.debros.network dbn auth login
+```
+
 ## Resources
 
+- [RQLite CLI Documentation](https://rqlite.io/docs/cli/)
+- [RQLite Features](https://rqlite.io/docs/features/)
+- [RQLite Clustering Guide](https://rqlite.io/docs/clustering/)
+- [RQLite Security](https://rqlite.io/docs/security/)
+- [RQLite Backup & Restore](https://rqlite.io/docs/backup-and-restore/)
 - Go modules: `go mod tidy`, `go test ./...`
 - Automation: `make build`, `make dev`, `make run-gateway`, `make lint`
 - API reference: `openapi/gateway.yaml`

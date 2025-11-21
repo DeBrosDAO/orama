@@ -70,15 +70,26 @@ func NewNode(cfg *config.Config) (*Node, error) {
 func (n *Node) startRQLite(ctx context.Context) error {
 	n.logger.Info("Starting RQLite database")
 
+	// Determine node identifier for log filename - use node ID for unique filenames
+	nodeID := n.config.Node.ID
+	if nodeID == "" {
+		// Fallback to type if ID is not set
+		nodeID = n.config.Node.Type
+		if nodeID == "" {
+			nodeID = "node"
+		}
+	}
+
 	// Create RQLite manager
 	n.rqliteManager = database.NewRQLiteManager(&n.config.Database, &n.config.Discovery, n.config.Node.DataDir, n.logger.Logger)
+	n.rqliteManager.SetNodeType(nodeID)
 
 	// Initialize cluster discovery service if LibP2P host is available
 	if n.host != nil && n.discoveryManager != nil {
-		// Determine node type
-		nodeType := "node"
+		// Determine node type for cluster discovery (bootstrap or node)
+		discoveryNodeType := "node"
 		if n.config.Node.Type == "bootstrap" {
-			nodeType = "bootstrap"
+			discoveryNodeType = "bootstrap"
 		}
 
 		// Create cluster discovery service
@@ -87,7 +98,7 @@ func (n *Node) startRQLite(ctx context.Context) error {
 			n.discoveryManager,
 			n.rqliteManager,
 			n.config.Node.ID,
-			nodeType,
+			discoveryNodeType,
 			n.config.Discovery.RaftAdvAddress,
 			n.config.Discovery.HttpAdvAddress,
 			n.config.Node.DataDir,
