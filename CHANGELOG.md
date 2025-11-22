@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.20] - 2025-11-22
+
+### Added
+- Added verification step to ensure the IPFS Cluster secret is correctly written after configuration updates.
+
+### Changed
+- Improved reliability of `anyone-client` installation and verification by switching to using `npx` for execution and checks, especially for globally installed scoped packages.
+- Updated the `anyone-client` systemd service to use `npx` for execution and explicitly set the PATH environment variable to ensure the client runs correctly.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.19] - 2025-11-22
 
 ### Added

@@ -280,7 +280,8 @@ Type=simple
 User=debros
 Group=debros
 Environment=HOME=%[1]s
-ExecStart=/usr/bin/env anyone-client
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/lib/node_modules/.bin
+ExecStart=/usr/bin/npx --yes @anyone-protocol/anyone-client
 Restart=always
 RestartSec=5
 StandardOutput=file:%[2]s

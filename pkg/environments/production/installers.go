@@ -578,11 +578,18 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 
 	// Always update the cluster secret, IPFS port, and peer addresses (for both new and existing configs)
 	// This ensures existing installations get the secret and port synchronized
+	// We do this AFTER init to ensure our secret takes precedence
 	if clusterSecret != "" {
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret, IPFS port, and peer addresses...\n")
 		if err := bi.updateClusterConfig(clusterPath, clusterSecret, ipfsAPIPort, bootstrapClusterPeers); err != nil {
 			return fmt.Errorf("failed to update cluster config: %w", err)
 		}
+
+		// Verify the secret was written correctly
+		if err := bi.verifyClusterSecret(clusterPath, clusterSecret); err != nil {
+			return fmt.Errorf("cluster secret verification failed: %w", err)
+		}
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    ✓ Cluster secret verified\n")
 	}
 
 	// Fix ownership again after updates
@@ -653,6 +660,33 @@ func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsA
 	return nil
 }
 
+// verifyClusterSecret verifies that the secret in service.json matches the expected value
+func (bi *BinaryInstaller) verifyClusterSecret(clusterPath, expectedSecret string) error {
+	serviceJSONPath := filepath.Join(clusterPath, "service.json")
+
+	data, err := os.ReadFile(serviceJSONPath)
+	if err != nil {
+		return fmt.Errorf("failed to read service.json for verification: %w", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse service.json for verification: %w", err)
+	}
+
+	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
+		if secret, ok := cluster["secret"].(string); ok {
+			if secret != expectedSecret {
+				return fmt.Errorf("secret mismatch: expected %s, got %s", expectedSecret, secret)
+			}
+			return nil
+		}
+		return fmt.Errorf("secret not found in cluster config")
+	}
+
+	return fmt.Errorf("cluster section not found in service.json")
+}
+
 // GetClusterPeerMultiaddr reads the IPFS Cluster peer ID and returns its multiaddress
 // Returns format: /ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>
 func (bi *BinaryInstaller) GetClusterPeerMultiaddr(clusterPath string, nodeIP string) (string, error) {
@@ -696,8 +730,8 @@ func (bi *BinaryInstaller) InitializeRQLiteDataDir(nodeType, dataDir string) err
 
 // InstallAnyoneClient installs the anyone-client npm package globally
 func (bi *BinaryInstaller) InstallAnyoneClient() error {
-	// Check if anyone-client is already available
-	if _, err := exec.LookPath("anyone-client"); err == nil {
+	// Check if anyone-client is already available via npx (more reliable for scoped packages)
+	if cmd := exec.Command("npx", "--yes", "@anyone-protocol/anyone-client", "--version"); cmd.Run() == nil {
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ anyone-client already installed\n")
 		return nil
 	}
@@ -710,9 +744,35 @@ func (bi *BinaryInstaller) InstallAnyoneClient() error {
 		return fmt.Errorf("failed to install anyone-client: %w\n%s", err, string(output))
 	}
 
-	// Verify installation
-	if _, err := exec.LookPath("anyone-client"); err != nil {
-		return fmt.Errorf("anyone-client installation failed - not found in PATH")
+	// Verify installation - try npx first (most reliable for scoped packages)
+	verifyCmd := exec.Command("npx", "--yes", "@anyone-protocol/anyone-client", "--version")
+	if err := verifyCmd.Run(); err != nil {
+		// Fallback: check if binary exists in common locations
+		possiblePaths := []string{
+			"/usr/local/bin/anyone-client",
+			"/usr/bin/anyone-client",
+		}
+		found := false
+		for _, path := range possiblePaths {
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Try npm bin -g to find global bin directory
+			cmd := exec.Command("npm", "bin", "-g")
+			if output, err := cmd.Output(); err == nil {
+				npmBinDir := strings.TrimSpace(string(output))
+				candidate := filepath.Join(npmBinDir, "anyone-client")
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("anyone-client installation verification failed - package may not provide a binary, but npx should work")
+		}
 	}
 
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ anyone-client installed\n")
