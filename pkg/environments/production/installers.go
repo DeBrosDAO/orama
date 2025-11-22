@@ -704,8 +704,8 @@ func (bi *BinaryInstaller) InstallAnyoneClient() error {
 
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  Installing anyone-client...\n")
 
-	// Install anyone-client globally via npm
-	cmd := exec.Command("npm", "install", "-g", "anyone-client")
+	// Install anyone-client globally via npm (using scoped package name)
+	cmd := exec.Command("npm", "install", "-g", "@anyone-protocol/anyone-client")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to install anyone-client: %w\n%s", err, string(output))
 	}

@@ -13,6 +13,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.19] - 2025-11-22
+
+### Added
+\n
+### Changed
+- Updated the installation command for 'anyone-client' to use the correct scoped package name (@anyone-protocol/anyone-client).
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.18] - 2025-11-22
 
 ### Added
