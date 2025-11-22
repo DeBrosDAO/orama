@@ -74,6 +74,8 @@ Install the CLI tool first:
 
 ```bash
 curl -fsSL https://install.debros.network | sudo bash
+
+./install-debros-network.sh --prerelease --nightly
 ```
 
 Or download manually from [GitHub Releases](https://github.com/DeBrosOfficial/network/releases).

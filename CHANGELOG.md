@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.18] - 2025-11-22
+
+### Added
+- Integrated `anyone-client` (SOCKS5 proxy) installation and systemd service (`debros-anyone-client.service`).
+- Added port availability checking logic to prevent conflicts when starting services (e.g., `anyone-client` on port 9050).
+
+### Changed
+- Updated system dependencies installation to include `nodejs` and `npm` required for `anyone-client`.
+- Modified Olric configuration generation to bind to the specific VPS IP if provided, otherwise defaults to 0.0.0.0.
+- Improved IPFS Cluster initialization by passing `CLUSTER_SECRET` directly as an environment variable.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.69.17] - 2025-11-21
 
 ### Added

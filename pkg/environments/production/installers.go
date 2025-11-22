@@ -391,8 +391,8 @@ func (bi *BinaryInstaller) InstallSystemDependencies() error {
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Warning: apt update failed\n")
 	}
 
-	// Install dependencies
-	cmd = exec.Command("apt-get", "install", "-y", "curl", "git", "make", "build-essential", "wget")
+	// Install dependencies including Node.js for anyone-client
+	cmd = exec.Command("apt-get", "install", "-y", "curl", "git", "make", "build-essential", "wget", "nodejs", "npm")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install dependencies: %w", err)
 	}
@@ -567,6 +567,10 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS Cluster config...\n")
 		cmd := exec.Command(clusterBinary, "init", "--force")
 		cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath)
+		// Pass CLUSTER_SECRET to init so it writes the correct secret to service.json directly
+		if clusterSecret != "" {
+			cmd.Env = append(cmd.Env, "CLUSTER_SECRET="+clusterSecret)
+		}
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to initialize IPFS Cluster config: %v\n%s", err, string(output))
 		}
@@ -687,5 +691,30 @@ func (bi *BinaryInstaller) InitializeRQLiteDataDir(nodeType, dataDir string) err
 	}
 
 	exec.Command("chown", "-R", "debros:debros", dataDir).Run()
+	return nil
+}
+
+// InstallAnyoneClient installs the anyone-client npm package globally
+func (bi *BinaryInstaller) InstallAnyoneClient() error {
+	// Check if anyone-client is already available
+	if _, err := exec.LookPath("anyone-client"); err == nil {
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ anyone-client already installed\n")
+		return nil
+	}
+
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  Installing anyone-client...\n")
+
+	// Install anyone-client globally via npm
+	cmd := exec.Command("npm", "install", "-g", "anyone-client")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to install anyone-client: %w\n%s", err, string(output))
+	}
+
+	// Verify installation
+	if _, err := exec.LookPath("anyone-client"); err != nil {
+		return fmt.Errorf("anyone-client installation failed - not found in PATH")
+	}
+
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  ✓ anyone-client installed\n")
 	return nil
 }

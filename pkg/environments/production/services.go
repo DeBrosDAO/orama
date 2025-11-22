@@ -266,6 +266,37 @@ WantedBy=multi-user.target
 `, nodeService, olricService, nodeService, olricService, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, logFile, logFile, ssg.debrosDir)
 }
 
+// GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit
+func (ssg *SystemdServiceGenerator) GenerateAnyoneClientService() string {
+	logFile := filepath.Join(ssg.debrosDir, "logs", "anyone-client.log")
+
+	return fmt.Sprintf(`[Unit]
+Description=Anyone Client SOCKS5 Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+Environment=HOME=%[1]s
+ExecStart=/usr/bin/env anyone-client
+Restart=always
+RestartSec=5
+StandardOutput=file:%[2]s
+StandardError=file:%[2]s
+SyslogIdentifier=anyone-client
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%[3]s
+
+[Install]
+WantedBy=multi-user.target
+`, ssg.debrosHome, logFile, ssg.debrosDir)
+}
+
 // SystemdController manages systemd service operations
 type SystemdController struct {
 	systemdDir string

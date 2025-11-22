@@ -25,6 +25,7 @@ type ProductionSetup struct {
 	osDetector            *OSDetector
 	archDetector          *ArchitectureDetector
 	resourceChecker       *ResourceChecker
+	portChecker           *PortChecker
 	fsProvisioner         *FilesystemProvisioner
 	userProvisioner       *UserProvisioner
 	stateDetector         *StateDetector
@@ -90,6 +91,7 @@ func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure
 		osDetector:            &OSDetector{},
 		archDetector:          &ArchitectureDetector{},
 		resourceChecker:       NewResourceChecker(),
+		portChecker:           NewPortChecker(),
 		fsProvisioner:         NewFilesystemProvisioner(debrosHome),
 		userProvisioner:       NewUserProvisioner("debros", debrosHome, "/bin/bash"),
 		stateDetector:         NewStateDetector(debrosDir),
@@ -256,6 +258,11 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 
 	if err := ps.binaryInstaller.InstallOlric(); err != nil {
 		ps.logf("  ⚠️  Olric install warning: %v", err)
+	}
+
+	// Install anyone-client for SOCKS5 proxy
+	if err := ps.binaryInstaller.InstallAnyoneClient(); err != nil {
+		ps.logf("  ⚠️  anyone-client install warning: %v", err)
 	}
 
 	// Install DeBros binaries
@@ -439,9 +446,13 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 	}
 	ps.logf("  ✓ Gateway config generated")
 
-	// Olric config - bind to 0.0.0.0 to listen on all interfaces
+	// Olric config - bind to vpsIP if provided, otherwise all interfaces
 	// Gateway will connect using the specific address from olricServers list above
-	olricConfig, err := ps.configGenerator.GenerateOlricConfig("0.0.0.0", 3320, 3322)
+	olricBindAddr := vpsIP
+	if olricBindAddr == "" {
+		olricBindAddr = "0.0.0.0"
+	}
+	olricConfig, err := ps.configGenerator.GenerateOlricConfig(olricBindAddr, 3320, 3322)
 	if err != nil {
 		return fmt.Errorf("failed to generate olric config: %w", err)
 	}
@@ -522,6 +533,13 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 	ps.logf("  ✓ Gateway service created")
 
+	// Anyone Client service (SOCKS5 proxy)
+	anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
+	if err := ps.serviceController.WriteServiceUnit("debros-anyone-client.service", anyoneUnit); err != nil {
+		return fmt.Errorf("failed to write Anyone Client service: %w", err)
+	}
+	ps.logf("  ✓ Anyone Client service created")
+
 	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %w", err)
@@ -529,7 +547,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	ps.logf("  ✓ Systemd daemon reloaded")
 
 	// Enable services (RQLite is managed by node, not as separate service)
-	services := []string{unitName, clusterUnitName, "debros-olric.service", nodeUnitName, "debros-gateway.service"}
+	services := []string{unitName, clusterUnitName, "debros-olric.service", nodeUnitName, "debros-gateway.service", "debros-anyone-client.service"}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -541,8 +559,17 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	// Start services in dependency order
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, Olric) - RQLite is managed by node
+	// Start infrastructure first (IPFS, Olric, Anyone Client) - RQLite is managed by node
 	infraServices := []string{unitName, "debros-olric.service"}
+	
+	// Check if port 9050 is already in use (e.g., another anyone-client or similar service)
+	if ps.portChecker.IsPortInUse(9050) {
+		ps.logf("  ℹ️  Port 9050 is already in use (anyone-client or similar service running)")
+		ps.logf("  ℹ️  Skipping debros-anyone-client startup - using existing service")
+	} else {
+		infraServices = append(infraServices, "debros-anyone-client.service")
+	}
+	
 	for _, svc := range infraServices {
 		if err := ps.serviceController.StartService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
@@ -592,9 +619,11 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/olric.log", ps.debrosDir)
 	ps.logf("  %s/logs/node-bootstrap.log", ps.debrosDir)
 	ps.logf("  %s/logs/gateway.log", ps.debrosDir)
+	ps.logf("  %s/logs/anyone-client.log", ps.debrosDir)
 	ps.logf("\nStart All Services:")
-	ps.logf("  systemctl start debros-ipfs-bootstrap debros-ipfs-cluster-bootstrap debros-olric debros-node-bootstrap debros-gateway")
+	ps.logf("  systemctl start debros-ipfs-bootstrap debros-ipfs-cluster-bootstrap debros-olric debros-anyone-client debros-node-bootstrap debros-gateway")
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")
-	ps.logf("  curl http://localhost:5001/status\n")
+	ps.logf("  curl http://localhost:5001/status")
+	ps.logf("  # Anyone Client SOCKS5 proxy on localhost:9050\n")
 }
