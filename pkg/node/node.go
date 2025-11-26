@@ -5,6 +5,7 @@ import (
 	"fmt"
 	mathrand "math/rand"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,8 +53,9 @@ type Node struct {
 	// IPFS Cluster config manager
 	clusterConfigManager *ipfs.ClusterConfigManager
 
-	// HTTP reverse proxy gateway
-	httpGateway *gateway.HTTPGateway
+	// Full gateway (for API, auth, pubsub, and internal service routing)
+	apiGateway *gateway.Gateway
+	apiGatewayServer *http.Server
 }
 
 // NewNode creates a new network node
@@ -632,9 +634,16 @@ func (n *Node) stopPeerDiscovery() {
 func (n *Node) Stop() error {
 	n.logger.ComponentInfo(logging.ComponentNode, "Stopping network node")
 
-	// Stop HTTP Gateway
-	if n.httpGateway != nil {
-		_ = n.httpGateway.Stop()
+	// Stop HTTP Gateway server
+	if n.apiGatewayServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = n.apiGatewayServer.Shutdown(ctx)
+	}
+
+	// Close Gateway client
+	if n.apiGateway != nil {
+		n.apiGateway.Close()
 	}
 
 	// Stop cluster discovery
@@ -667,14 +676,14 @@ func (n *Node) Stop() error {
 	return nil
 }
 
-// startHTTPGateway initializes and starts the HTTP reverse proxy gateway
+// startHTTPGateway initializes and starts the full API gateway with auth, pubsub, and API endpoints
 func (n *Node) startHTTPGateway(ctx context.Context) error {
 	if !n.config.HTTPGateway.Enabled {
 		n.logger.ComponentInfo(logging.ComponentNode, "HTTP Gateway disabled in config")
 		return nil
 	}
 
-	// Create separate logger for unified gateway
+	// Create separate logger for gateway
 	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", fmt.Sprintf("gateway-%s.log", n.config.HTTPGateway.NodeName))
 
 	// Ensure logs directory exists
@@ -683,21 +692,57 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
-	httpGatewayLogger, err := logging.NewFileLogger(logging.ComponentGeneral, logFile, false)
+	gatewayLogger, err := logging.NewFileLogger(logging.ComponentGeneral, logFile, false)
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP gateway logger: %w", err)
+		return fmt.Errorf("failed to create gateway logger: %w", err)
 	}
 
-	// Create and start HTTP gateway with its own logger
-	n.httpGateway, err = gateway.NewHTTPGateway(httpGatewayLogger, &n.config.HTTPGateway)
-	if err != nil {
-		return fmt.Errorf("failed to create HTTP gateway: %w", err)
+	// Create full API Gateway for auth, pubsub, rqlite, and API endpoints
+	// This replaces both the old reverse proxy gateway and the standalone gateway
+	gwCfg := &gateway.Config{
+		ListenAddr:      n.config.HTTPGateway.ListenAddr,
+		ClientNamespace: n.config.HTTPGateway.ClientNamespace,
+		BootstrapPeers:  n.config.Discovery.BootstrapPeers,
+		RQLiteDSN:       n.config.HTTPGateway.RQLiteDSN,
+		OlricServers:    n.config.HTTPGateway.OlricServers,
+		OlricTimeout:    n.config.HTTPGateway.OlricTimeout,
+		IPFSClusterAPIURL: n.config.HTTPGateway.IPFSClusterAPIURL,
+		IPFSAPIURL:       n.config.HTTPGateway.IPFSAPIURL,
+		IPFSTimeout:      n.config.HTTPGateway.IPFSTimeout,
 	}
 
-	// Start gateway in a goroutine (it handles its own lifecycle)
+	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create full API gateway: %w", err)
+	}
+
+	n.apiGateway = apiGateway
+
+	// Start API Gateway in a goroutine
 	go func() {
-		if err := n.httpGateway.Start(ctx); err != nil {
-			n.logger.ComponentError(logging.ComponentNode, "HTTP Gateway error", zap.Error(err))
+		n.logger.ComponentInfo(logging.ComponentNode, "Starting full API gateway",
+			zap.String("listen_addr", gwCfg.ListenAddr),
+		)
+
+		server := &http.Server{
+			Addr:    gwCfg.ListenAddr,
+			Handler: apiGateway.Routes(),
+		}
+
+		n.apiGatewayServer = server
+
+		// Try to bind listener
+		ln, err := net.Listen("tcp", gwCfg.ListenAddr)
+		if err != nil {
+			n.logger.ComponentError(logging.ComponentNode, "failed to bind API gateway listener", zap.Error(err))
+			return
+		}
+
+		n.logger.ComponentInfo(logging.ComponentNode, "API gateway listener bound", zap.String("listen_addr", ln.Addr().String()))
+
+		// Serve HTTP
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			n.logger.ComponentError(logging.ComponentNode, "API Gateway error", zap.Error(err))
 		}
 	}()
 

@@ -28,7 +28,7 @@ var DefaultEnvironments = []Environment{
 	{
 		Name:        "local",
 		GatewayURL:  "http://localhost:6001",
-		Description: "Local development environment",
+		Description: "Local development environment (node-1)",
 		IsActive:    true,
 	},
 	{

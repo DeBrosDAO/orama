@@ -200,8 +200,8 @@ make build
 
 ```bash
 # Install via APT
-curl -fsSL https://apt.orama.network/gpg | sudo gpg --dearmor -o /usr/share/keyrings/orama.gpg
-echo "deb [signed-by=/usr/share/keyrings/orama.gpg] https://apt.orama.network stable main" | sudo tee /etc/apt/sources.list.d/orama.list
+echo "deb https://debrosficial.github.io/network/apt stable main" | sudo tee /etc/apt/sources.list.d/debros.list
+
 sudo apt update && sudo apt install orama
 
 # Interactive installation (recommended)

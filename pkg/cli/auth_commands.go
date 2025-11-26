@@ -174,6 +174,6 @@ func getGatewayURL() string {
 		return env.GatewayURL
 	}
 
-	// Fallback to default
+	// Fallback to default (node-1)
 	return "http://localhost:6001"
 }

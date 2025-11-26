@@ -106,6 +106,15 @@ type HTTPGatewayConfig struct {
 	Routes     map[string]RouteConfig `yaml:"routes"`      // Service routes
 	HTTPS      HTTPSConfig            `yaml:"https"`       // HTTPS/TLS configuration
 	SNI        SNIConfig              `yaml:"sni"`         // SNI-based TCP routing configuration
+
+	// Full gateway configuration (for API, auth, pubsub)
+	ClientNamespace   string        `yaml:"client_namespace"`    // Namespace for network client
+	RQLiteDSN         string        `yaml:"rqlite_dsn"`          // RQLite database DSN
+	OlricServers      []string      `yaml:"olric_servers"`       // List of Olric server addresses
+	OlricTimeout      time.Duration `yaml:"olric_timeout"`       // Timeout for Olric operations
+	IPFSClusterAPIURL string        `yaml:"ipfs_cluster_api_url"` // IPFS Cluster API URL
+	IPFSAPIURL        string        `yaml:"ipfs_api_url"`        // IPFS API URL
+	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`        // Timeout for IPFS operations
 }
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway
@@ -216,10 +225,17 @@ func DefaultConfig() *Config {
 			Format: "console",
 		},
 		HTTPGateway: HTTPGatewayConfig{
-			Enabled:    true,
-			ListenAddr: ":8080",
-			NodeName:   "default",
-			Routes:     make(map[string]RouteConfig),
+			Enabled:           true,
+			ListenAddr:        ":8080",
+			NodeName:          "default",
+			Routes:            make(map[string]RouteConfig),
+			ClientNamespace:   "default",
+			RQLiteDSN:         "http://localhost:5001",
+			OlricServers:      []string{"localhost:3320"},
+			OlricTimeout:      10 * time.Second,
+			IPFSClusterAPIURL: "http://localhost:9094",
+			IPFSAPIURL:        "http://localhost:5001",
+			IPFSTimeout:       60 * time.Second,
 		},
 	}
 }

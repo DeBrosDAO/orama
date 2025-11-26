@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.70.0] - 2025-11-26
+
+### Added
+\n
+### Changed
+- The HTTP Gateway is now embedded directly within each network node, simplifying deployment and removing the need for a separate gateway service.
+- The configuration for the full API Gateway (including Auth, PubSub, and internal service routing) is now part of the main node configuration.
+- Development environment setup no longer generates a separate `gateway.yaml` file or starts a standalone gateway process.
+- Updated local environment descriptions and default gateway fallback to reflect the node-1 designation.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Updated the installation instructions in the README to reflect the correct APT repository URL.
+
 ## [0.69.22] - 2025-11-26
 
 ### Added

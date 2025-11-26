@@ -67,7 +67,7 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		{"Olric", pm.startOlric},
 		{"Anon", pm.startAnon},
 		{"Nodes (Network)", pm.startNodes},
-		{"Gateway", pm.startGateway},
+		// Gateway is now per-node (embedded in each node) - no separate main gateway needed
 	}
 
 	for _, svc := range services {
@@ -238,7 +238,7 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 	}
 
 	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.oramaDir)
-	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml", "gateway.yaml", "olric-config.yaml"}
+	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml", "olric-config.yaml"}
 	for _, f := range configFiles {
 		path := filepath.Join(pm.oramaDir, f)
 		if _, err := os.Stat(path); err == nil {

@@ -46,30 +46,16 @@ http_gateway:
   enabled: true
   listen_addr: ":{{.UnifiedGatewayPort}}"
   node_name: "{{.NodeID}}"
-  routes:
-    # Node internal services - accessible on unified gateway port
-    rqlite_http:
-      path_prefix: "/rqlite/http"
-      backend_url: "http://localhost:{{.RQLiteHTTPPort}}"
-      timeout: "30s"
-      websocket: false
-    rqlite_raft:
-      path_prefix: "/rqlite/raft"
-      backend_url: "http://localhost:{{.RQLiteRaftPort}}"
-      timeout: "30s"
-      websocket: false
-    ipfs_api:
-      path_prefix: "/ipfs/api"
-      backend_url: "http://localhost:{{.IPFSAPIPort}}"
-      timeout: "60s"
-      websocket: true
-    ipfs_swarm:
-      path_prefix: "/ipfs/swarm"
-      backend_url: "http://localhost:4102"
-      timeout: "30s"
-      websocket: false
-    cluster_api:
-      path_prefix: "/cluster"
-      backend_url: "http://localhost:{{.ClusterAPIPort}}"
-      timeout: "30s"
-      websocket: false
+  
+  # Full gateway configuration (for API, auth, pubsub, and internal service routing)
+  client_namespace: "default"
+  rqlite_dsn: "http://localhost:{{.RQLiteHTTPPort}}"
+  olric_servers:
+    - "127.0.0.1:3320"
+  olric_timeout: "10s"
+  ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
+  ipfs_api_url: "http://localhost:{{.IPFSAPIPort}}"
+  ipfs_timeout: "60s"
+  
+  # Routes for internal service reverse proxy (kept for backwards compatibility but not used by full gateway)
+  routes: {}

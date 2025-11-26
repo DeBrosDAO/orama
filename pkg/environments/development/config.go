@@ -62,10 +62,8 @@ func (ce *ConfigEnsurer) EnsureAll() error {
 		}
 	}
 
-	// Ensure gateway config
-	if err := ce.ensureGateway(peerAddrs); err != nil {
-		return fmt.Errorf("failed to ensure gateway: %w", err)
-	}
+	// Gateway configuration is now embedded in each node's config
+	// No separate gateway.yaml needed anymore
 
 	// Ensure Olric config
 	if err := ce.ensureOlric(); err != nil {
@@ -171,34 +169,8 @@ func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, peerAddrs []string)
 	return nil
 }
 
-// ensureGateway creates gateway config
-func (ce *ConfigEnsurer) ensureGateway(peerAddrs []string) error {
-	configPath := filepath.Join(ce.oramaDir, "gateway.yaml")
-
-	// Get first node's cluster API port for default
-	topology := DefaultTopology()
-	firstNode := topology.GetFirstNode()
-
-	data := templates.GatewayConfigData{
-		ListenPort:     topology.GatewayPort,
-		BootstrapPeers: peerAddrs,
-		OlricServers:   []string{fmt.Sprintf("127.0.0.1:%d", topology.OlricHTTPPort)},
-		ClusterAPIPort: firstNode.ClusterAPIPort,
-		IPFSAPIPort:    firstNode.IPFSAPIPort,
-	}
-
-	config, err := templates.RenderGatewayConfig(data)
-	if err != nil {
-		return fmt.Errorf("failed to render gateway config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-		return fmt.Errorf("failed to write gateway config: %w", err)
-	}
-
-	fmt.Printf("✓ Generated gateway.yaml\n")
-	return nil
-}
+// Gateway configuration is now embedded in each node's config
+// ensureGateway is no longer needed - each node runs its own embedded gateway
 
 // ensureOlric creates Olric config
 func (ce *ConfigEnsurer) ensureOlric() error {

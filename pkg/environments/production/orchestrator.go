@@ -3,7 +3,6 @@ package production
 import (
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -376,34 +375,8 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 	ps.logf("  ✓ Node config generated: %s", configFile)
 
-	// Determine Olric servers for gateway config
-	// Olric binds to localhost, gateway connects locally
-	var olricServers []string
-
-	// Start with local Olric server
-	if vpsIP != "" {
-		olricServers = []string{net.JoinHostPort(vpsIP, "3320")}
-	} else {
-		olricServers = []string{"127.0.0.1:3320"}
-	}
-
-	// If joining existing cluster, also include peer Olric servers
-	if len(peerAddresses) > 0 {
-		peerIP := inferPeerIP(peerAddresses, "")
-		if peerIP != "" && peerIP != vpsIP {
-			olricServers = append(olricServers, net.JoinHostPort(peerIP, "3320"))
-		}
-	}
-
-	gatewayConfig, err := ps.configGenerator.GenerateGatewayConfig(peerAddresses, enableHTTPS, domain, olricServers)
-	if err != nil {
-		return fmt.Errorf("failed to generate gateway config: %w", err)
-	}
-
-	if err := ps.secretGenerator.SaveConfig("gateway.yaml", gatewayConfig); err != nil {
-		return fmt.Errorf("failed to save gateway config: %w", err)
-	}
-	ps.logf("  ✓ Gateway config generated")
+	// Gateway configuration is now embedded in each node's config
+	// No separate gateway.yaml needed - each node runs its own embedded gateway
 
 	// Olric config - bind to localhost for security
 	// External access goes through the HTTP gateway
@@ -472,19 +445,12 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 	}
 	ps.logf("  ✓ Olric service created")
 
-	// Node service (unified)
+	// Node service (unified - includes embedded gateway)
 	nodeUnit := ps.serviceGenerator.GenerateNodeService()
 	if err := ps.serviceController.WriteServiceUnit("debros-node.service", nodeUnit); err != nil {
 		return fmt.Errorf("failed to write Node service: %w", err)
 	}
-	ps.logf("  ✓ Node service created: debros-node.service")
-
-	// Gateway service
-	gatewayUnit := ps.serviceGenerator.GenerateGatewayService()
-	if err := ps.serviceController.WriteServiceUnit("debros-gateway.service", gatewayUnit); err != nil {
-		return fmt.Errorf("failed to write Gateway service: %w", err)
-	}
-	ps.logf("  ✓ Gateway service created")
+	ps.logf("  ✓ Node service created: debros-node.service (with embedded gateway)")
 
 	// Anyone Client service (SOCKS5 proxy)
 	anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
@@ -500,7 +466,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 	ps.logf("  ✓ Systemd daemon reloaded")
 
 	// Enable services (unified names - no bootstrap/node distinction)
-	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-gateway.service", "debros-anyone-client.service"}
+	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
+	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
