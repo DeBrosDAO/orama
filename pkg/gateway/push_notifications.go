@@ -181,4 +181,3 @@ func (pns *PushNotificationService) sendExpoRequest(ctx context.Context, message
 
 	return nil
 }
-

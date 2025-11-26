@@ -41,7 +41,7 @@ type Node struct {
 	clusterDiscovery *database.ClusterDiscoveryService
 
 	// Peer discovery
-	bootstrapCancel context.CancelFunc
+	peerDiscoveryCancel context.CancelFunc
 
 	// PubSub
 	pubsub *pubsub.ClientAdapter
@@ -77,11 +77,8 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	// Determine node identifier for log filename - use node ID for unique filenames
 	nodeID := n.config.Node.ID
 	if nodeID == "" {
-		// Fallback to type if ID is not set
-		nodeID = n.config.Node.Type
-		if nodeID == "" {
-			nodeID = "node"
-		}
+		// Default to "node" if ID is not set
+		nodeID = "node"
 	}
 
 	// Create RQLite manager
@@ -90,19 +87,13 @@ func (n *Node) startRQLite(ctx context.Context) error {
 
 	// Initialize cluster discovery service if LibP2P host is available
 	if n.host != nil && n.discoveryManager != nil {
-		// Determine node type for cluster discovery (bootstrap or node)
-		discoveryNodeType := "node"
-		if n.config.Node.Type == "bootstrap" {
-			discoveryNodeType = "bootstrap"
-		}
-
-		// Create cluster discovery service
+		// Create cluster discovery service (all nodes are unified)
 		n.clusterDiscovery = database.NewClusterDiscoveryService(
 			n.host,
 			n.discoveryManager,
 			n.rqliteManager,
 			n.config.Node.ID,
-			discoveryNodeType,
+			"node", // Unified node type
 			n.config.Discovery.RaftAdvAddress,
 			n.config.Discovery.HttpAdvAddress,
 			n.config.Node.DataDir,
@@ -147,7 +138,7 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	return nil
 }
 
-// extractIPFromMultiaddr extracts the IP address from a bootstrap peer multiaddr
+// extractIPFromMultiaddr extracts the IP address from a peer multiaddr
 // Supports IP4, IP6, DNS4, DNS6, and DNSADDR protocols
 func extractIPFromMultiaddr(multiaddrStr string) string {
 	ma, err := multiaddr.NewMultiaddr(multiaddrStr)
@@ -192,25 +183,25 @@ func extractIPFromMultiaddr(multiaddrStr string) string {
 	return ""
 }
 
-// bootstrapPeerSource returns a PeerSource that yields peers from BootstrapPeers.
-func bootstrapPeerSource(bootstrapAddrs []string, logger *zap.Logger) func(context.Context, int) <-chan peer.AddrInfo {
+// peerSource returns a PeerSource that yields peers from configured peers.
+func peerSource(peerAddrs []string, logger *zap.Logger) func(context.Context, int) <-chan peer.AddrInfo {
 	return func(ctx context.Context, num int) <-chan peer.AddrInfo {
 		out := make(chan peer.AddrInfo, num)
 		go func() {
 			defer close(out)
 			count := 0
-			for _, s := range bootstrapAddrs {
+			for _, s := range peerAddrs {
 				if count >= num {
 					return
 				}
 				ma, err := multiaddr.NewMultiaddr(s)
 				if err != nil {
-					logger.Debug("invalid bootstrap multiaddr", zap.String("addr", s), zap.Error(err))
+					logger.Debug("invalid peer multiaddr", zap.String("addr", s), zap.Error(err))
 					continue
 				}
 				ai, err := peer.AddrInfoFromP2pAddr(ma)
 				if err != nil {
-					logger.Debug("failed to parse bootstrap peer", zap.String("addr", s), zap.Error(err))
+					logger.Debug("failed to parse peer address", zap.String("addr", s), zap.Error(err))
 					continue
 				}
 				select {
@@ -225,8 +216,8 @@ func bootstrapPeerSource(bootstrapAddrs []string, logger *zap.Logger) func(conte
 	}
 }
 
-// hasBootstrapConnections checks if we're connected to any bootstrap peers
-func (n *Node) hasBootstrapConnections() bool {
+// hasPeerConnections checks if we're connected to any peers
+func (n *Node) hasPeerConnections() bool {
 	if n.host == nil || len(n.config.Discovery.BootstrapPeers) == 0 {
 		return false
 	}
@@ -236,10 +227,10 @@ func (n *Node) hasBootstrapConnections() bool {
 		return false
 	}
 
-	// Parse bootstrap peer IDs
-	bootstrapPeerIDs := make(map[peer.ID]bool)
-	for _, bootstrapAddr := range n.config.Discovery.BootstrapPeers {
-		ma, err := multiaddr.NewMultiaddr(bootstrapAddr)
+	// Parse peer IDs
+	peerIDs := make(map[peer.ID]bool)
+	for _, peerAddr := range n.config.Discovery.BootstrapPeers {
+		ma, err := multiaddr.NewMultiaddr(peerAddr)
 		if err != nil {
 			continue
 		}
@@ -247,12 +238,12 @@ func (n *Node) hasBootstrapConnections() bool {
 		if err != nil {
 			continue
 		}
-		bootstrapPeerIDs[peerInfo.ID] = true
+		peerIDs[peerInfo.ID] = true
 	}
 
-	// Check if any connected peer is a bootstrap peer
+	// Check if any connected peer is in our peer list
 	for _, peerID := range connectedPeers {
-		if bootstrapPeerIDs[peerID] {
+		if peerIDs[peerID] {
 			return true
 		}
 	}
@@ -287,8 +278,8 @@ func addJitter(interval time.Duration) time.Duration {
 	return result
 }
 
-// connectToBootstrapPeer connects to a single bootstrap peer
-func (n *Node) connectToBootstrapPeer(ctx context.Context, addr string) error {
+// connectToPeerAddr connects to a single peer address
+func (n *Node) connectToPeerAddr(ctx context.Context, addr string) error {
 	ma, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
 		return fmt.Errorf("invalid multiaddr: %w", err)
@@ -300,16 +291,16 @@ func (n *Node) connectToBootstrapPeer(ctx context.Context, addr string) error {
 		return fmt.Errorf("failed to extract peer info: %w", err)
 	}
 
-	// Avoid dialing ourselves: if the bootstrap address resolves to our own peer ID, skip.
+	// Avoid dialing ourselves: if the address resolves to our own peer ID, skip.
 	if n.host != nil && peerInfo.ID == n.host.ID() {
-		n.logger.ComponentDebug(logging.ComponentNode, "Skipping bootstrap address because it resolves to self",
+		n.logger.ComponentDebug(logging.ComponentNode, "Skipping peer address because it resolves to self",
 			zap.String("addr", addr),
 			zap.String("peer_id", peerInfo.ID.String()))
 		return nil
 	}
 
 	// Log resolved peer info prior to connect
-	n.logger.ComponentDebug(logging.ComponentNode, "Resolved bootstrap peer",
+	n.logger.ComponentDebug(logging.ComponentNode, "Resolved peer",
 		zap.String("peer_id", peerInfo.ID.String()),
 		zap.String("addr", addr),
 		zap.Int("addr_count", len(peerInfo.Addrs)),
@@ -320,28 +311,28 @@ func (n *Node) connectToBootstrapPeer(ctx context.Context, addr string) error {
 		return fmt.Errorf("failed to connect to peer: %w", err)
 	}
 
-	n.logger.Info("Connected to bootstrap peer",
+	n.logger.Info("Connected to peer",
 		zap.String("peer", peerInfo.ID.String()),
 		zap.String("addr", addr))
 
 	return nil
 }
 
-// connectToBootstrapPeers connects to configured LibP2P bootstrap peers
-func (n *Node) connectToBootstrapPeers(ctx context.Context) error {
+// connectToPeers connects to configured LibP2P peers
+func (n *Node) connectToPeers(ctx context.Context) error {
 	if len(n.config.Discovery.BootstrapPeers) == 0 {
-		n.logger.ComponentDebug(logging.ComponentNode, "No bootstrap peers configured")
+		n.logger.ComponentDebug(logging.ComponentNode, "No peers configured")
 		return nil
 	}
 
-	// Use passed context with a reasonable timeout for bootstrap connections
+	// Use passed context with a reasonable timeout for peer connections
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	for _, bootstrapAddr := range n.config.Discovery.BootstrapPeers {
-		if err := n.connectToBootstrapPeer(connectCtx, bootstrapAddr); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to bootstrap peer",
-				zap.String("addr", bootstrapAddr),
+	for _, peerAddr := range n.config.Discovery.BootstrapPeers {
+		if err := n.connectToPeerAddr(connectCtx, peerAddr); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to peer",
+				zap.String("addr", peerAddr),
 				zap.Error(err))
 			continue
 		}
@@ -400,7 +391,7 @@ func (n *Node) startLibP2P() error {
 			libp2p.EnableRelay(),
 			libp2p.NATPortMap(),
 			libp2p.EnableAutoRelayWithPeerSource(
-				bootstrapPeerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
+				peerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
 			),
 		)
 	}
@@ -426,59 +417,59 @@ func (n *Node) startLibP2P() error {
 	n.pubsub = pubsub.NewClientAdapter(ps, n.config.Discovery.NodeNamespace)
 	n.logger.Info("Initialized pubsub adapter on namespace", zap.String("namespace", n.config.Discovery.NodeNamespace))
 
-	// Log configured bootstrap peers
+	// Log configured peers
 	if len(n.config.Discovery.BootstrapPeers) > 0 {
-		n.logger.ComponentInfo(logging.ComponentNode, "Configured bootstrap peers",
+		n.logger.ComponentInfo(logging.ComponentNode, "Configured peers",
 			zap.Strings("peers", n.config.Discovery.BootstrapPeers))
 	} else {
-		n.logger.ComponentDebug(logging.ComponentNode, "No bootstrap peers configured")
+		n.logger.ComponentDebug(logging.ComponentNode, "No peers configured")
 	}
 
-	// Connect to LibP2P bootstrap peers if configured
-	if err := n.connectToBootstrapPeers(context.Background()); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to bootstrap peers", zap.Error(err))
-		// Don't fail - continue without bootstrap connections
+	// Connect to LibP2P peers if configured
+	if err := n.connectToPeers(context.Background()); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to peers", zap.Error(err))
+		// Don't fail - continue without peer connections
 	}
 
-	// Start exponential backoff reconnection for bootstrap peers
+	// Start exponential backoff reconnection for peers
 	if len(n.config.Discovery.BootstrapPeers) > 0 {
-		bootstrapCtx, cancel := context.WithCancel(context.Background())
-		n.bootstrapCancel = cancel
+		peerCtx, cancel := context.WithCancel(context.Background())
+		n.peerDiscoveryCancel = cancel
 
 		go func() {
 			interval := 5 * time.Second
 			consecutiveFailures := 0
 
-			n.logger.ComponentInfo(logging.ComponentNode, "Starting bootstrap peer reconnection with exponential backoff",
+			n.logger.ComponentInfo(logging.ComponentNode, "Starting peer reconnection with exponential backoff",
 				zap.Duration("initial_interval", interval),
 				zap.Duration("max_interval", 10*time.Minute))
 
 			for {
 				select {
-				case <-bootstrapCtx.Done():
-					n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap reconnection loop stopped")
+				case <-peerCtx.Done():
+					n.logger.ComponentDebug(logging.ComponentNode, "Peer reconnection loop stopped")
 					return
 				default:
 				}
 
 				// Check if we need to attempt connection
-				if !n.hasBootstrapConnections() {
-					n.logger.ComponentDebug(logging.ComponentNode, "Attempting bootstrap peer connection",
+				if !n.hasPeerConnections() {
+					n.logger.ComponentDebug(logging.ComponentNode, "Attempting peer connection",
 						zap.Duration("current_interval", interval),
 						zap.Int("consecutive_failures", consecutiveFailures))
 
-					if err := n.connectToBootstrapPeers(context.Background()); err != nil {
+					if err := n.connectToPeers(context.Background()); err != nil {
 						consecutiveFailures++
 						// Calculate next backoff interval
 						jitteredInterval := addJitter(interval)
-						n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap connection failed, backing off",
+						n.logger.ComponentDebug(logging.ComponentNode, "Peer connection failed, backing off",
 							zap.Error(err),
 							zap.Duration("next_attempt_in", jitteredInterval),
 							zap.Int("consecutive_failures", consecutiveFailures))
 
 						// Sleep with jitter
 						select {
-						case <-bootstrapCtx.Done():
+						case <-peerCtx.Done():
 							return
 						case <-time.After(jitteredInterval):
 						}
@@ -488,14 +479,14 @@ func (n *Node) startLibP2P() error {
 
 						// Log interval increases occasionally to show progress
 						if consecutiveFailures%5 == 0 {
-							n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap connection still failing",
+							n.logger.ComponentInfo(logging.ComponentNode, "Peer connection still failing",
 								zap.Int("consecutive_failures", consecutiveFailures),
 								zap.Duration("current_interval", interval))
 						}
 					} else {
 						// Success! Reset interval and counters
 						if consecutiveFailures > 0 {
-							n.logger.ComponentInfo(logging.ComponentNode, "Successfully connected to bootstrap peers",
+							n.logger.ComponentInfo(logging.ComponentNode, "Successfully connected to peers",
 								zap.Int("failures_overcome", consecutiveFailures))
 						}
 						interval = 5 * time.Second
@@ -503,15 +494,15 @@ func (n *Node) startLibP2P() error {
 
 						// Wait 30 seconds before checking connection again
 						select {
-						case <-bootstrapCtx.Done():
+						case <-peerCtx.Done():
 							return
 						case <-time.After(30 * time.Second):
 						}
 					}
 				} else {
-					// We have bootstrap connections, just wait and check periodically
+					// We have peer connections, just wait and check periodically
 					select {
-					case <-bootstrapCtx.Done():
+					case <-peerCtx.Done():
 						return
 					case <-time.After(30 * time.Second):
 					}
@@ -520,15 +511,15 @@ func (n *Node) startLibP2P() error {
 		}()
 	}
 
-	// Add bootstrap peers to peerstore for peer exchange
+	// Add peers to peerstore for peer exchange
 	if len(n.config.Discovery.BootstrapPeers) > 0 {
-		n.logger.ComponentInfo(logging.ComponentNode, "Adding bootstrap peers to peerstore")
-		for _, bootstrapAddr := range n.config.Discovery.BootstrapPeers {
-			if ma, err := multiaddr.NewMultiaddr(bootstrapAddr); err == nil {
+		n.logger.ComponentInfo(logging.ComponentNode, "Adding peers to peerstore")
+		for _, peerAddr := range n.config.Discovery.BootstrapPeers {
+			if ma, err := multiaddr.NewMultiaddr(peerAddr); err == nil {
 				if peerInfo, err := peer.AddrInfoFromP2pAddr(ma); err == nil {
 					// Add to peerstore with longer TTL for peer exchange
 					n.host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, time.Hour*24)
-					n.logger.ComponentDebug(logging.ComponentNode, "Added bootstrap peer to peerstore",
+					n.logger.ComponentDebug(logging.ComponentNode, "Added peer to peerstore",
 						zap.String("peer", peerInfo.ID.String()))
 				}
 			}
@@ -651,9 +642,9 @@ func (n *Node) Stop() error {
 		n.clusterDiscovery.Stop()
 	}
 
-	// Stop bootstrap reconnection loop
-	if n.bootstrapCancel != nil {
-		n.bootstrapCancel()
+	// Stop peer reconnection loop
+	if n.peerDiscoveryCancel != nil {
+		n.peerDiscoveryCancel()
 	}
 
 	// Stop peer discovery
@@ -685,7 +676,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 
 	// Create separate logger for unified gateway
 	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", fmt.Sprintf("gateway-%s.log", n.config.HTTPGateway.NodeName))
-	
+
 	// Ensure logs directory exists
 	logsDir := filepath.Dir(logFile)
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
@@ -795,16 +786,14 @@ func (n *Node) startIPFSClusterConfig() error {
 		return fmt.Errorf("failed to ensure cluster config: %w", err)
 	}
 
-	// Try to repair bootstrap peer configuration automatically
-	// This will be retried periodically if bootstrap is not available yet
-	if n.config.Node.Type != "bootstrap" {
-		if success, err := cm.RepairBootstrapPeers(); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair bootstrap peers, will retry later", zap.Error(err))
-		} else if success {
-			n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap peer configuration repaired successfully")
-		} else {
-			n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap peer not available yet, will retry periodically")
-		}
+	// Try to repair peer configuration automatically
+	// This will be retried periodically if peer is not available yet
+	if success, err := cm.RepairPeerConfiguration(); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer configuration, will retry later", zap.Error(err))
+	} else if success {
+		n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired successfully")
+	} else {
+		n.logger.ComponentDebug(logging.ComponentNode, "Peer not available yet, will retry periodically")
 	}
 
 	n.logger.ComponentInfo(logging.ComponentNode, "IPFS Cluster configuration initialized")

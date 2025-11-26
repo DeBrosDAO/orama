@@ -238,7 +238,7 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 	}
 
 	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.oramaDir)
-	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node2.yaml", "node3.yaml", "node4.yaml", "gateway.yaml", "olric-config.yaml"}
+	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml", "gateway.yaml", "olric-config.yaml"}
 	for _, f := range configFiles {
 		path := filepath.Join(pm.oramaDir, f)
 		if _, err := os.Stat(path); err == nil {
@@ -269,7 +269,7 @@ func (pm *ProcessManager) buildIPFSNodes(topology *Topology) []ipfsNodeInfo {
 	return nodes
 }
 
-// startNodes starts all network nodes (bootstraps and regular)
+// startNodes starts all network nodes
 func (pm *ProcessManager) startNodes(ctx context.Context) error {
 	topology := DefaultTopology()
 	for _, nodeSpec := range topology.Nodes {

@@ -209,4 +209,3 @@ func (g *TCPSNIGateway) Stop() error {
 	g.logger.ComponentInfo(logging.ComponentGeneral, "TCP SNI Gateway shutdown complete")
 	return nil
 }
-

@@ -28,7 +28,7 @@ func EnsureConfigDir() (string, error) {
 }
 
 // DefaultPath returns the path to the config file for the given component name.
-// component should be e.g., "node.yaml", "bootstrap.yaml", "gateway.yaml"
+// component should be e.g., "node.yaml", "gateway.yaml"
 // It checks ~/.orama/data/, ~/.orama/configs/, and ~/.orama/ for backward compatibility.
 // If component is already an absolute path, it returns it as-is.
 func DefaultPath(component string) (string, error) {

@@ -30,7 +30,7 @@ func NewConfigGenerator(oramaDir string) *ConfigGenerator {
 	}
 }
 
-// extractIPFromMultiaddr extracts the IP address from a bootstrap peer multiaddr
+// extractIPFromMultiaddr extracts the IP address from a peer multiaddr
 // Supports IP4, IP6, DNS4, DNS6, and DNSADDR protocols
 // Returns the IP address as a string, or empty string if extraction/resolution fails
 func extractIPFromMultiaddr(multiaddrStr string) string {
@@ -76,12 +76,12 @@ func extractIPFromMultiaddr(multiaddrStr string) string {
 	return ""
 }
 
-// inferBootstrapIP extracts the IP address from bootstrap peer multiaddrs
-// Iterates through all bootstrap peers to find a valid IP (supports DNS resolution)
+// inferPeerIP extracts the IP address from peer multiaddrs
+// Iterates through all peers to find a valid IP (supports DNS resolution)
 // Falls back to vpsIP if provided, otherwise returns empty string
-func inferBootstrapIP(bootstrapPeers []string, vpsIP string) string {
-	// Try to extract IP from each bootstrap peer (in order)
-	for _, peer := range bootstrapPeers {
+func inferPeerIP(peers []string, vpsIP string) string {
+	// Try to extract IP from each peer (in order)
+	for _, peer := range peers {
 		if ip := extractIPFromMultiaddr(peer); ip != "" {
 			return ip
 		}
@@ -93,8 +93,8 @@ func inferBootstrapIP(bootstrapPeers []string, vpsIP string) string {
 	return ""
 }
 
-// GenerateNodeConfig generates node.yaml configuration (unified - no bootstrap/node distinction)
-func (cg *ConfigGenerator) GenerateNodeConfig(bootstrapPeers []string, vpsIP string, joinAddress string, domain string) (string, error) {
+// GenerateNodeConfig generates node.yaml configuration (unified architecture)
+func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string) (string, error) {
 	// Generate node ID from domain or use default
 	nodeID := "node"
 	if domain != "" {
@@ -121,11 +121,11 @@ func (cg *ConfigGenerator) GenerateNodeConfig(bootstrapPeers []string, vpsIP str
 	if joinAddress != "" {
 		// Use explicitly provided join address
 		rqliteJoinAddr = joinAddress
-	} else if len(bootstrapPeers) > 0 {
-		// Infer join address from bootstrap peers
-		bootstrapIP := inferBootstrapIP(bootstrapPeers, "")
-		if bootstrapIP != "" {
-			rqliteJoinAddr = net.JoinHostPort(bootstrapIP, "7001")
+	} else if len(peerAddresses) > 0 {
+		// Infer join address from peers
+		peerIP := inferPeerIP(peerAddresses, "")
+		if peerIP != "" {
+			rqliteJoinAddr = net.JoinHostPort(peerIP, "7001")
 			// Validate that join address doesn't match this node's own raft address (would cause self-join)
 			if rqliteJoinAddr == raftAdvAddr {
 				rqliteJoinAddr = "" // Clear it - this is the first node
@@ -134,7 +134,7 @@ func (cg *ConfigGenerator) GenerateNodeConfig(bootstrapPeers []string, vpsIP str
 	}
 	// If no join address and no peers, this is the first node - it will create the cluster
 
-	// Unified data directory (no bootstrap/node distinction)
+	// Unified data directory (all nodes equal)
 	data := templates.NodeConfigData{
 		NodeID:             nodeID,
 		P2PPort:            4001,
@@ -142,7 +142,7 @@ func (cg *ConfigGenerator) GenerateNodeConfig(bootstrapPeers []string, vpsIP str
 		RQLiteHTTPPort:     5001,
 		RQLiteRaftPort:     7001,
 		RQLiteJoinAddress:  rqliteJoinAddr,
-		BootstrapPeers:     bootstrapPeers,
+		BootstrapPeers:     peerAddresses,
 		ClusterAPIPort:     9094,
 		IPFSAPIPort:        4501,
 		HTTPAdvAddress:     httpAdvAddr,
@@ -154,7 +154,7 @@ func (cg *ConfigGenerator) GenerateNodeConfig(bootstrapPeers []string, vpsIP str
 }
 
 // GenerateGatewayConfig generates gateway.yaml configuration
-func (cg *ConfigGenerator) GenerateGatewayConfig(bootstrapPeers []string, enableHTTPS bool, domain string, olricServers []string) (string, error) {
+func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableHTTPS bool, domain string, olricServers []string) (string, error) {
 	tlsCacheDir := ""
 	if enableHTTPS {
 		tlsCacheDir = filepath.Join(cg.oramaDir, "tls-cache")
@@ -162,7 +162,7 @@ func (cg *ConfigGenerator) GenerateGatewayConfig(bootstrapPeers []string, enable
 
 	data := templates.GatewayConfigData{
 		ListenPort:     6001,
-		BootstrapPeers: bootstrapPeers,
+		BootstrapPeers: peerAddresses,
 		OlricServers:   olricServers,
 		ClusterAPIPort: 9094,
 		IPFSAPIPort:    4501,

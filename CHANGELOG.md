@@ -13,6 +13,26 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.22] - 2025-11-26
+
+### Added
+- Added 'Peer connection status' to the health check list in the README.
+
+### Changed
+- Unified development environment nodes, renaming 'bootstrap', 'bootstrap2', 'node2', 'node3', 'node4' to 'node-1' through 'node-5'.
+- Renamed internal configuration fields and CLI flags from 'bootstrap peers' to 'peers' for consistency across the unified node architecture.
+- Updated development environment configuration files and data directories to use the unified 'node-N' naming scheme (e.g., `node-1.yaml`, `data/node-1`).
+- Changed the default main gateway port in the development environment from 6001 to 6000, reserving 6001-6005 for individual node gateways.
+- Removed the explicit 'node.type' configuration field (bootstrap/node) as all nodes now use a unified configuration.
+- Improved RQLite cluster joining logic to prioritize joining the most up-to-date peer (highest Raft log index) instead of prioritizing 'bootstrap' nodes.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed migration logic to correctly handle the transition from old unified data directories to the new 'node-1' structure.
+
 ## [0.69.21] - 2025-11-26
 
 ### Added

@@ -1,6 +1,5 @@
 node:
   id: "{{.NodeID}}"
-  type: "node"
   listen_addresses:
     - "/ip4/0.0.0.0/tcp/{{.P2PPort}}"
   data_dir: "{{.DataDir}}"

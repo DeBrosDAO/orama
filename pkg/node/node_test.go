@@ -140,7 +140,7 @@ func TestLoadOrCreateIdentity(t *testing.T) {
 	})
 }
 
-func TestHashBootstrapConnections(t *testing.T) {
+func TestHasPeerConnections(t *testing.T) {
 	cfg := &config.Config{}
 
 	n, err := NewNode(cfg)
@@ -148,8 +148,8 @@ func TestHashBootstrapConnections(t *testing.T) {
 		t.Fatalf("NewNode() error: %v", err)
 	}
 
-	// Assert: Does not have bootstrap connections
-	conns := n.hasBootstrapConnections()
+	// Assert: Does not have peer connections
+	conns := n.hasPeerConnections()
 	if conns != false {
 		t.Fatalf("expected false, got %v", conns)
 	}
@@ -162,13 +162,13 @@ func TestHashBootstrapConnections(t *testing.T) {
 	defer h.Close()
 
 	n.host = h
-	conns = n.hasBootstrapConnections()
+	conns = n.hasPeerConnections()
 	if conns != false {
 		t.Fatalf("expected false, got %v", conns)
 	}
 
-	// Assert: Return true if connected to at least one bootstrap peer
-	t.Run("returns true when connected to at least one configured bootstrap peer", func(t *testing.T) {
+	// Assert: Return true if connected to at least one peer
+	t.Run("returns true when connected to at least one configured peer", func(t *testing.T) {
 		// Fresh node and config
 		cfg := &config.Config{}
 		n2, err := NewNode(cfg)
@@ -189,7 +189,7 @@ func TestHashBootstrapConnections(t *testing.T) {
 		}
 		defer hB.Close()
 
-		// Build B's bootstrap multiaddr: <one-of-B.Addrs>/p2p/<B.ID>
+		// Build B's peer multiaddr: <one-of-B.Addrs>/p2p/<B.ID>
 		var base multiaddr.Multiaddr
 		for _, a := range hB.Addrs() {
 			if strings.Contains(a.String(), "/tcp/") {
@@ -204,11 +204,11 @@ func TestHashBootstrapConnections(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewMultiaddr(/p2p/<id>): %v", err)
 		}
-		bootstrap := base.Encapsulate(pidMA).String()
+		peerAddr := base.Encapsulate(pidMA).String()
 
-		// Configure node A with B as a bootstrap peer
+		// Configure node A with B as a peer
 		n2.host = hA
-		n2.config.Discovery.BootstrapPeers = []string{bootstrap}
+		n2.config.Discovery.BootstrapPeers = []string{peerAddr}
 
 		// Connect A -> B
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -229,13 +229,13 @@ func TestHashBootstrapConnections(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		// Assert: hasBootstrapConnections returns true
-		if !n2.hasBootstrapConnections() {
-			t.Fatalf("expected hasBootstrapConnections() to be true")
+		// Assert: hasPeerConnections returns true
+		if !n2.hasPeerConnections() {
+			t.Fatalf("expected hasPeerConnections() to be true")
 		}
 	})
 
-	t.Run("returns false when connected peers are not in the bootstrap list", func(t *testing.T) {
+	t.Run("returns false when connected peers are not in the peer list", func(t *testing.T) {
 		// Fresh node and config
 		cfg := &config.Config{}
 		n2, err := NewNode(cfg)
@@ -262,7 +262,7 @@ func TestHashBootstrapConnections(t *testing.T) {
 		}
 		defer hC.Close()
 
-		// Build C's bootstrap multiaddr: <one-of-C.Addrs>/p2p/<C.ID>
+		// Build C's peer multiaddr: <one-of-C.Addrs>/p2p/<C.ID>
 		var baseC multiaddr.Multiaddr
 		for _, a := range hC.Addrs() {
 			if strings.Contains(a.String(), "/tcp/") {
@@ -277,13 +277,13 @@ func TestHashBootstrapConnections(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewMultiaddr(/p2p/<id>): %v", err)
 		}
-		bootstrapC := baseC.Encapsulate(pidC).String()
+		peerC := baseC.Encapsulate(pidC).String()
 
-		// Configure node A with ONLY C as a bootstrap peer
+		// Configure node A with ONLY C as a peer
 		n2.host = hA
-		n2.config.Discovery.BootstrapPeers = []string{bootstrapC}
+		n2.config.Discovery.BootstrapPeers = []string{peerC}
 
-		// Connect A -> B (but C is in the bootstrap list, not B)
+		// Connect A -> B (but C is in the peer list, not B)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := hA.Connect(ctx, peer.AddrInfo{ID: hB.ID(), Addrs: hB.Addrs()}); err != nil {
@@ -302,9 +302,9 @@ func TestHashBootstrapConnections(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		// Assert: hasBootstrapConnections should be false (connected peer is not in bootstrap list)
-		if n2.hasBootstrapConnections() {
-			t.Fatalf("expected hasBootstrapConnections() to be false")
+		// Assert: hasPeerConnections should be false (connected peer is not in peer list)
+		if n2.hasPeerConnections() {
+			t.Fatalf("expected hasPeerConnections() to be false")
 		}
 	})
 

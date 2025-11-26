@@ -27,6 +27,7 @@ The cluster automatically performs health checks before declaring success. Check
 - Node unified gateway ports (6001-6005)
 - IPFS API endpoints
 - Olric cache server
+- Peer connection status
 - Example curl commands
 
 ### Stop Development Environment
@@ -46,23 +47,23 @@ After running `make dev`, test service health using these curl requests:
 Each node is accessible via a single unified gateway port:
 
 ```bash
-# Bootstrap (port 6001)
+# Node-1 (port 6001)
 curl http://node-1.local:6001/health
 curl http://node-1.local:6001/rqlite/http/db/execute -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'
 curl http://node-1.local:6001/cluster/health
 curl http://node-1.local:6001/ipfs/api/v0/version
 
-# Bootstrap2 (port 6002)
+# Node-2 (port 6002)
 curl http://node-2.local:6002/health
 curl http://node-2.local:6002/rqlite/http/db/execute -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'
 
-# Node2 (port 6003)
+# Node-3 (port 6003)
 curl http://node-3.local:6003/health
 
-# Node3 (port 6004)
+# Node-4 (port 6004)
 curl http://node-4.local:6004/health
 
-# Node4 (port 6005)
+# Node-5 (port 6005)
 curl http://node-5.local:6005/health
 ```
 
@@ -111,11 +112,11 @@ curl http://localhost:3320/stats
 ### Unified Gateway Ports
 
 ```
-Bootstrap:   localhost:6001  → /rqlite/http, /rqlite/raft, /cluster, /ipfs/api
-Bootstrap2:  localhost:6002  → Same routes
-Node2:       localhost:6003  → Same routes
-Node3:       localhost:6004  → Same routes
-Node4:       localhost:6005  → Same routes
+Node-1:     localhost:6001  → /rqlite/http, /rqlite/raft, /cluster, /ipfs/api
+Node-2:     localhost:6002  → Same routes
+Node-3:     localhost:6003  → Same routes
+Node-4:     localhost:6004  → Same routes
+Node-5:     localhost:6005  → Same routes
 ```
 
 ### Direct Service Ports (for debugging)
@@ -126,7 +127,7 @@ RQLite Raft:     7001, 7002, 7003, 7004, 7005
 IPFS API:        4501, 4502, 4503, 4504, 4505
 IPFS Swarm:      4101, 4102, 4103, 4104, 4105
 Cluster API:     9094, 9104, 9114, 9124, 9134
-Main Gateway:    6001
+Internal Gateway: 6000
 Olric Cache:     3320
 Anon SOCKS:      9050
 ```
@@ -134,14 +135,14 @@ Anon SOCKS:      9050
 ## Development Commands
 
 ```bash
-# Start full cluster
+# Start full cluster (5 nodes + gateway)
 make dev
 
 # Check service status
 orama dev status
 
 # View logs
-orama dev logs node-1           # Node 1 logs
+orama dev logs node-1           # Node-1 logs
 orama dev logs node-1 --follow  # Follow logs in real-time
 orama dev logs gateway --follow # Gateway logs
 

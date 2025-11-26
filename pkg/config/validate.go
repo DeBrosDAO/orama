@@ -15,7 +15,7 @@ import (
 
 // ValidationError represents a single validation error with context.
 type ValidationError struct {
-	Path    string // e.g., "discovery.bootstrap_peers[0]"
+	Path    string // e.g., "discovery.bootstrap_peers[0]" or "discovery.peers[0]"
 	Message string // e.g., "invalid multiaddr"
 	Hint    string // e.g., "expected /ip{4,6}/.../tcp/<port>/p2p/<peerID>"
 }
@@ -58,14 +58,6 @@ func (c *Config) validateNode() []error {
 			Path:    "node.id",
 			Message: "must not be empty (required for cluster membership)",
 			Hint:    "will be auto-generated if empty, but explicit ID recommended",
-		})
-	}
-
-	// Validate type
-	if nc.Type != "bootstrap" && nc.Type != "node" {
-		errs = append(errs, ValidationError{
-			Path:    "node.type",
-			Message: fmt.Sprintf("must be one of [bootstrap node]; got %q", nc.Type),
 		})
 	}
 
@@ -218,33 +210,15 @@ func (c *Config) validateDatabase() []error {
 		})
 	}
 
-	// Validate rqlite_join_address context-dependently
-	if c.Node.Type == "node" {
-		if dc.RQLiteJoinAddress == "" {
+	// Validate rqlite_join_address format if provided (optional for all nodes)
+	// The first node in a cluster won't have a join address; subsequent nodes will
+	if dc.RQLiteJoinAddress != "" {
+		if err := validateHostPort(dc.RQLiteJoinAddress); err != nil {
 			errs = append(errs, ValidationError{
 				Path:    "database.rqlite_join_address",
-				Message: "required for node type (non-bootstrap)",
+				Message: err.Error(),
+				Hint:    "expected format: host:port",
 			})
-		} else {
-			if err := validateHostPort(dc.RQLiteJoinAddress); err != nil {
-				errs = append(errs, ValidationError{
-					Path:    "database.rqlite_join_address",
-					Message: err.Error(),
-					Hint:    "expected format: host:port",
-				})
-			}
-		}
-	} else if c.Node.Type == "bootstrap" {
-		// Bootstrap nodes can optionally join another bootstrap's RQLite cluster
-		// This allows secondary bootstraps to synchronize with the primary
-		if dc.RQLiteJoinAddress != "" {
-			if err := validateHostPort(dc.RQLiteJoinAddress); err != nil {
-				errs = append(errs, ValidationError{
-					Path:    "database.rqlite_join_address",
-					Message: err.Error(),
-					Hint:    "expected format: host:port",
-				})
-			}
 		}
 	}
 
@@ -297,7 +271,7 @@ func (c *Config) validateDiscovery() []error {
 		})
 	}
 
-	// Validate bootstrap_port
+	// Validate peer discovery port
 	if disc.BootstrapPort < 1 || disc.BootstrapPort > 65535 {
 		errs = append(errs, ValidationError{
 			Path:    "discovery.bootstrap_port",
@@ -305,17 +279,10 @@ func (c *Config) validateDiscovery() []error {
 		})
 	}
 
-	// Validate bootstrap_peers context-dependently
-	if c.Node.Type == "node" {
-		if len(disc.BootstrapPeers) == 0 {
-			errs = append(errs, ValidationError{
-				Path:    "discovery.bootstrap_peers",
-				Message: "required for node type (must not be empty)",
-			})
-		}
-	}
+	// Validate peer addresses (optional - can be empty for first node)
+	// All nodes are unified, so peer addresses are optional
 
-	// Validate each bootstrap peer multiaddr
+	// Validate each peer multiaddr
 	seenPeers := make(map[string]bool)
 	for i, peer := range disc.BootstrapPeers {
 		path := fmt.Sprintf("discovery.bootstrap_peers[%d]", i)
@@ -363,7 +330,7 @@ func (c *Config) validateDiscovery() []error {
 		if seenPeers[peer] {
 			errs = append(errs, ValidationError{
 				Path:    path,
-				Message: "duplicate bootstrap peer",
+				Message: "duplicate peer",
 			})
 		}
 		seenPeers[peer] = true
@@ -486,22 +453,6 @@ func (c *Config) validateLogging() []error {
 
 func (c *Config) validateCrossFields() []error {
 	var errs []error
-
-	// If node.type is invalid, don't run cross-checks
-	if c.Node.Type != "bootstrap" && c.Node.Type != "node" {
-		return errs
-	}
-
-	// Cross-check rqlite_join_address vs node type
-	// Note: Bootstrap nodes can optionally join another bootstrap's cluster
-
-	if c.Node.Type == "node" && c.Database.RQLiteJoinAddress == "" {
-		errs = append(errs, ValidationError{
-			Path:    "database.rqlite_join_address",
-			Message: "required for non-bootstrap node type",
-		})
-	}
-
 	return errs
 }
 

@@ -249,14 +249,11 @@ func createClient() (client.NetworkClient, error) {
 	gatewayURL := getGatewayURL()
 	config.GatewayURL = gatewayURL
 
-	// Try to get bootstrap peers from active environment
-	// For now, we'll use the default bootstrap peers from config
-	// In the future, environments could specify their own bootstrap peers
+	// Try to get peer configuration from active environment
 	env, err := GetActiveEnvironment()
 	if err == nil && env != nil {
 		// Environment loaded successfully - gateway URL already set above
-		// Bootstrap peers could be added to Environment struct in the future
-		_ = env // Use env if we add bootstrap peers to it
+		_ = env // Reserve for future peer configuration
 	}
 
 	// Check for existing credentials using enhanced authentication

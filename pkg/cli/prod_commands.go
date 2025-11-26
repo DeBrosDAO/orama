@@ -49,8 +49,8 @@ func runInteractiveInstaller() {
 	handleProdInstall(args)
 }
 
-// normalizeBootstrapPeers normalizes and validates bootstrap peer multiaddrs
-func normalizeBootstrapPeers(peersStr string) ([]string, error) {
+// normalizePeers normalizes and validates peer multiaddrs
+func normalizePeers(peersStr string) ([]string, error) {
 	if peersStr == "" {
 		return nil, nil
 	}
@@ -139,7 +139,7 @@ func showProdHelp() {
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
 	fmt.Printf("      --branch BRANCH        - Git branch to use (main or nightly)\n")
 	fmt.Printf("      --no-pull              - Skip git clone/pull, use existing source\n")
-	fmt.Printf("  migrate                   - Migrate from old bootstrap/node setup (requires root/sudo)\n")
+	fmt.Printf("  migrate                   - Migrate from old unified setup (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --dry-run              - Show what would be migrated without making changes\n")
 	fmt.Printf("  status                    - Show status of production services\n")
@@ -204,7 +204,7 @@ func handleProdInstall(args []string) {
 	}
 
 	// Normalize and validate peers
-	peers, err := normalizeBootstrapPeers(*peersStr)
+	peers, err := normalizePeers(*peersStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Invalid peers: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   Example: --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...,/ip4/10.0.0.2/tcp/4001/p2p/Qm...\n")
@@ -218,12 +218,12 @@ func handleProdInstall(args []string) {
 	}
 
 	// Validate VPS IP is provided
-	if *vpsIP == "" {
+		if *vpsIP == "" {
 		fmt.Fprintf(os.Stderr, "❌ --vps-ip is required\n")
 		fmt.Fprintf(os.Stderr, "   Usage: sudo orama install --vps-ip <public_ip>\n")
 		fmt.Fprintf(os.Stderr, "   Or run: sudo orama install --interactive\n")
-		os.Exit(1)
-	}
+			os.Exit(1)
+		}
 
 	// Determine if this is the first node (creates new cluster) or joining existing cluster
 	isFirstNode := len(peers) == 0 && *joinAddress == ""
@@ -485,18 +485,18 @@ func handleProdUpgrade(args []string) {
 	domain := ""
 
 	// Helper function to extract multiaddr list from config
-	extractBootstrapPeers := func(configPath string) []string {
+	extractPeers := func(configPath string) []string {
 		var peers []string
 		if data, err := os.ReadFile(configPath); err == nil {
 			configStr := string(data)
-			inBootstrapPeers := false
+			inPeersList := false
 			for _, line := range strings.Split(configStr, "\n") {
 				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "bootstrap_peers:") || strings.HasPrefix(trimmed, "bootstrap peers:") {
-					inBootstrapPeers = true
+				if strings.HasPrefix(trimmed, "bootstrap_peers:") || strings.HasPrefix(trimmed, "peers:") {
+					inPeersList = true
 					continue
 				}
-				if inBootstrapPeers {
+				if inPeersList {
 					if strings.HasPrefix(trimmed, "-") {
 						// Extract multiaddr after the dash
 						parts := strings.SplitN(trimmed, "-", 2)
@@ -508,7 +508,7 @@ func handleProdUpgrade(args []string) {
 							}
 						}
 					} else if trimmed == "" || !strings.HasPrefix(trimmed, "-") {
-						// End of bootstrap_peers list
+						// End of peers list
 						break
 					}
 				}
@@ -522,7 +522,7 @@ func handleProdUpgrade(args []string) {
 	nodeConfigPath := filepath.Join(oramaDir, "configs", "node.yaml")
 
 	// Extract peers from existing node config
-	peers := extractBootstrapPeers(nodeConfigPath)
+	peers := extractPeers(nodeConfigPath)
 
 	// Extract VPS IP and join address from advertise addresses
 	vpsIP := ""
@@ -1370,7 +1370,7 @@ func handleProdUninstall() {
 	fmt.Printf("   To remove all data: rm -rf /home/debros/.orama\n\n")
 }
 
-// handleProdMigrate migrates from old bootstrap/node setup to unified node setup
+// handleProdMigrate migrates from old unified setup to new unified setup
 func handleProdMigrate(args []string) {
 	// Parse flags
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
@@ -1396,17 +1396,14 @@ func handleProdMigrate(args []string) {
 
 	// Check for old-style installations
 	oldDataDirs := []string{
-		filepath.Join(oramaDir, "data", "bootstrap"),
+		filepath.Join(oramaDir, "data", "node-1"),
 		filepath.Join(oramaDir, "data", "node"),
 	}
 
 	oldServices := []string{
-		"debros-ipfs-bootstrap",
-		"debros-ipfs-node",
-		"debros-ipfs-cluster-bootstrap",
-		"debros-ipfs-cluster-node",
-		"debros-node-bootstrap",
-		"debros-node-node",
+		"debros-ipfs",
+		"debros-ipfs-cluster",
+		"debros-node",
 	}
 
 	oldConfigs := []string{
@@ -1466,10 +1463,10 @@ func handleProdMigrate(args []string) {
 	newDataDir := filepath.Join(oramaDir, "data")
 	fmt.Printf("\n  Migrating data directories...\n")
 
-	// Prefer bootstrap data if it exists, otherwise use node data
+	// Prefer node-1 data if it exists, otherwise use node data
 	sourceDir := ""
-	if _, err := os.Stat(filepath.Join(oramaDir, "data", "bootstrap")); err == nil {
-		sourceDir = filepath.Join(oramaDir, "data", "bootstrap")
+	if _, err := os.Stat(filepath.Join(oramaDir, "data", "node-1")); err == nil {
+		sourceDir = filepath.Join(oramaDir, "data", "node-1")
 	} else if _, err := os.Stat(filepath.Join(oramaDir, "data", "node")); err == nil {
 		sourceDir = filepath.Join(oramaDir, "data", "node")
 	}
@@ -1497,15 +1494,15 @@ func handleProdMigrate(args []string) {
 
 	// Migrate config files
 	fmt.Printf("\n  Migrating config files...\n")
-	oldBootstrapConfig := filepath.Join(oramaDir, "configs", "bootstrap.yaml")
+	oldNodeConfig := filepath.Join(oramaDir, "configs", "bootstrap.yaml")
 	newNodeConfig := filepath.Join(oramaDir, "configs", "node.yaml")
-	if _, err := os.Stat(oldBootstrapConfig); err == nil {
+	if _, err := os.Stat(oldNodeConfig); err == nil {
 		if _, err := os.Stat(newNodeConfig); os.IsNotExist(err) {
-			if err := os.Rename(oldBootstrapConfig, newNodeConfig); err == nil {
+			if err := os.Rename(oldNodeConfig, newNodeConfig); err == nil {
 				fmt.Printf("    ✓ Renamed bootstrap.yaml → node.yaml\n")
 			}
 		} else {
-			os.Remove(oldBootstrapConfig)
+			os.Remove(oldNodeConfig)
 			fmt.Printf("    ✓ Removed old bootstrap.yaml (node.yaml already exists)\n")
 		}
 	}

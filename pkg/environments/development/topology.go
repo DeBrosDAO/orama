@@ -4,9 +4,8 @@ import "fmt"
 
 // NodeSpec defines configuration for a single dev environment node
 type NodeSpec struct {
-	Name              string // bootstrap, bootstrap2, node2, node3, node4
-	Role              string // "bootstrap" or "node"
-	ConfigFilename    string // bootstrap.yaml, bootstrap2.yaml, node2.yaml, etc.
+	Name              string // node-1, node-2, node-3, node-4, node-5
+	ConfigFilename    string // node-1.yaml, node-2.yaml, etc.
 	DataDir           string // relative path from .orama root
 	P2PPort           int    // LibP2P listen port
 	IPFSAPIPort       int    // IPFS API port
@@ -17,8 +16,8 @@ type NodeSpec struct {
 	ClusterAPIPort    int    // IPFS Cluster REST API port
 	ClusterPort       int    // IPFS Cluster P2P port
 	UnifiedGatewayPort int   // Unified gateway port (proxies all services)
-	RQLiteJoinTarget  string // which bootstrap RQLite port to join (leave empty for bootstraps that lead)
-	ClusterJoinTarget string // which bootstrap cluster to join (leave empty for bootstrap that leads)
+	RQLiteJoinTarget  string // which node's RQLite Raft port to join (empty for first node)
+	ClusterJoinTarget string // which node's cluster to join (empty for first node)
 }
 
 // Topology defines the complete development environment topology
@@ -35,10 +34,9 @@ func DefaultTopology() *Topology {
 	return &Topology{
 		Nodes: []NodeSpec{
 		{
-			Name:              "bootstrap",
-			Role:              "bootstrap",
-			ConfigFilename:    "bootstrap.yaml",
-			DataDir:           "bootstrap",
+			Name:              "node-1",
+			ConfigFilename:    "node-1.yaml",
+			DataDir:           "node-1",
 			P2PPort:           4001,
 			IPFSAPIPort:       4501,
 			IPFSSwarmPort:     4101,
@@ -48,14 +46,13 @@ func DefaultTopology() *Topology {
 			ClusterAPIPort:    9094,
 			ClusterPort:       9096,
 			UnifiedGatewayPort: 6001,
-			RQLiteJoinTarget:  "",
+			RQLiteJoinTarget:  "",       // First node - creates cluster
 			ClusterJoinTarget: "",
 		},
 		{
-			Name:              "bootstrap2",
-			Role:              "bootstrap",
-			ConfigFilename:    "bootstrap2.yaml",
-			DataDir:           "bootstrap2",
+			Name:              "node-2",
+			ConfigFilename:    "node-2.yaml",
+			DataDir:           "node-2",
 			P2PPort:           4011,
 			IPFSAPIPort:       4511,
 			IPFSSwarmPort:     4111,
@@ -69,10 +66,9 @@ func DefaultTopology() *Topology {
 			ClusterJoinTarget: "localhost:9096",
 		},
 		{
-			Name:              "node2",
-			Role:              "node",
-			ConfigFilename:    "node2.yaml",
-			DataDir:           "node2",
+			Name:              "node-3",
+			ConfigFilename:    "node-3.yaml",
+			DataDir:           "node-3",
 			P2PPort:           4002,
 			IPFSAPIPort:       4502,
 			IPFSSwarmPort:     4102,
@@ -86,10 +82,9 @@ func DefaultTopology() *Topology {
 			ClusterJoinTarget: "localhost:9096",
 		},
 		{
-			Name:              "node3",
-			Role:              "node",
-			ConfigFilename:    "node3.yaml",
-			DataDir:           "node3",
+			Name:              "node-4",
+			ConfigFilename:    "node-4.yaml",
+			DataDir:           "node-4",
 			P2PPort:           4003,
 			IPFSAPIPort:       4503,
 			IPFSSwarmPort:     4103,
@@ -103,10 +98,9 @@ func DefaultTopology() *Topology {
 			ClusterJoinTarget: "localhost:9096",
 		},
 		{
-			Name:              "node4",
-			Role:              "node",
-			ConfigFilename:    "node4.yaml",
-			DataDir:           "node4",
+			Name:              "node-5",
+			ConfigFilename:    "node-5.yaml",
+			DataDir:           "node-5",
 			P2PPort:           4004,
 			IPFSAPIPort:       4504,
 			IPFSSwarmPort:     4104,
@@ -120,7 +114,7 @@ func DefaultTopology() *Topology {
 			ClusterJoinTarget: "localhost:9096",
 		},
 		},
-		GatewayPort:     6001,
+		GatewayPort:     6000,  // Main gateway on 6000 (nodes use 6001-6005)
 		OlricHTTPPort:   3320,
 		OlricMemberPort: 3322,
 		AnonSOCKSPort:   9050,
@@ -181,26 +175,20 @@ func (t *Topology) PortMap() map[int]string {
 	return portMap
 }
 
-// GetBootstrapNodes returns only the bootstrap nodes
-func (t *Topology) GetBootstrapNodes() []NodeSpec {
-	var bootstraps []NodeSpec
-	for _, node := range t.Nodes {
-		if node.Role == "bootstrap" {
-			bootstraps = append(bootstraps, node)
-		}
+// GetFirstNode returns the first node (the one that creates the cluster)
+func (t *Topology) GetFirstNode() *NodeSpec {
+	if len(t.Nodes) > 0 {
+		return &t.Nodes[0]
 	}
-	return bootstraps
+	return nil
 }
 
-// GetRegularNodes returns only the regular (non-bootstrap) nodes
-func (t *Topology) GetRegularNodes() []NodeSpec {
-	var regulars []NodeSpec
-	for _, node := range t.Nodes {
-		if node.Role == "node" {
-			regulars = append(regulars, node)
-		}
+// GetJoiningNodes returns all nodes except the first one (they join the cluster)
+func (t *Topology) GetJoiningNodes() []NodeSpec {
+	if len(t.Nodes) > 1 {
+		return t.Nodes[1:]
 	}
-	return regulars
+	return nil
 }
 
 // GetNodeByName returns a node by its name, or nil if not found

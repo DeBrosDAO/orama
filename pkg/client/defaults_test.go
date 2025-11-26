@@ -10,15 +10,15 @@ import (
 func TestDefaultBootstrapPeersNonEmpty(t *testing.T) {
 	old := os.Getenv("DEBROS_BOOTSTRAP_PEERS")
 	t.Cleanup(func() { os.Setenv("DEBROS_BOOTSTRAP_PEERS", old) })
-	// Set a valid bootstrap peer
+	// Set a valid peer
 	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
 	_ = os.Setenv("DEBROS_BOOTSTRAP_PEERS", validPeer)
 	peers := DefaultBootstrapPeers()
 	if len(peers) == 0 {
-		t.Fatalf("expected non-empty default bootstrap peers")
+		t.Fatalf("expected non-empty default peers")
 	}
 	if peers[0] != validPeer {
-		t.Fatalf("expected bootstrap peer %s, got %s", validPeer, peers[0])
+		t.Fatalf("expected peer %s, got %s", validPeer, peers[0])
 	}
 }
 

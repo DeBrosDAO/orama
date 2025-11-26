@@ -272,7 +272,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 }
 
 // Phase2cInitializeServices initializes service repositories and configurations
-func (ps *ProductionSetup) Phase2cInitializeServices(bootstrapPeers []string, vpsIP string) error {
+func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vpsIP string) error {
 	ps.logf("Phase 2c: Initializing services...")
 
 	// Ensure directories exist (unified structure)
@@ -280,7 +280,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(bootstrapPeers []string, vp
 		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	// Build paths - unified data directory (no bootstrap/node distinction)
+	// Build paths - unified data directory (all nodes equal)
 	dataDir := filepath.Join(ps.oramaDir, "data")
 
 	// Initialize IPFS repo with correct path structure
@@ -297,13 +297,13 @@ func (ps *ProductionSetup) Phase2cInitializeServices(bootstrapPeers []string, vp
 		return fmt.Errorf("failed to get cluster secret: %w", err)
 	}
 
-	// Get cluster peer addresses from bootstrap peers if available
+	// Get cluster peer addresses from peers if available
 	var clusterPeers []string
-	if len(bootstrapPeers) > 0 {
-		// Infer IP from bootstrap peers
-		bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
-		if bootstrapIP != "" {
-			ps.logf("  ℹ️  Will attempt to connect to cluster peers at %s", bootstrapIP)
+	if len(peerAddresses) > 0 {
+		// Infer IP from peers
+		peerIP := inferPeerIP(peerAddresses, vpsIP)
+		if peerIP != "" {
+			ps.logf("  ℹ️  Will attempt to connect to cluster peers at %s", peerIP)
 		}
 	}
 
@@ -343,7 +343,7 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	}
 	ps.logf("  ✓ IPFS swarm key ensured")
 
-	// Node identity (unified - no bootstrap/node distinction)
+	// Node identity (unified architecture)
 	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
 	if err != nil {
 		return fmt.Errorf("failed to ensure node identity: %w", err)
@@ -356,7 +356,7 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
-func (ps *ProductionSetup) Phase4GenerateConfigs(bootstrapPeers []string, vpsIP string, enableHTTPS bool, domain string, joinAddress string) error {
+func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, joinAddress string) error {
 	if ps.IsUpdate() {
 		ps.logf("Phase 4: Updating configurations...")
 		ps.logf("  (Existing configs will be updated to latest format)")
@@ -364,8 +364,8 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(bootstrapPeers []string, vpsIP 
 		ps.logf("Phase 4: Generating configurations...")
 	}
 
-	// Node config (unified - no bootstrap/node distinction)
-	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(bootstrapPeers, vpsIP, joinAddress, domain)
+	// Node config (unified architecture)
+	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain)
 	if err != nil {
 		return fmt.Errorf("failed to generate node config: %w", err)
 	}
@@ -388,14 +388,14 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(bootstrapPeers []string, vpsIP 
 	}
 
 	// If joining existing cluster, also include peer Olric servers
-	if len(bootstrapPeers) > 0 {
-		peerIP := inferBootstrapIP(bootstrapPeers, "")
+	if len(peerAddresses) > 0 {
+		peerIP := inferPeerIP(peerAddresses, "")
 		if peerIP != "" && peerIP != vpsIP {
 			olricServers = append(olricServers, net.JoinHostPort(peerIP, "3320"))
 		}
 	}
 
-	gatewayConfig, err := ps.configGenerator.GenerateGatewayConfig(bootstrapPeers, enableHTTPS, domain, olricServers)
+	gatewayConfig, err := ps.configGenerator.GenerateGatewayConfig(peerAddresses, enableHTTPS, domain, olricServers)
 	if err != nil {
 		return fmt.Errorf("failed to generate gateway config: %w", err)
 	}

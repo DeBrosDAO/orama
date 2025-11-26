@@ -236,13 +236,11 @@ func (n *Node) startConnectionMonitoring() {
 						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses updated during monitoring")
 					}
 
-					// Also try to repair bootstrap peers if this is not a bootstrap node
-					if n.config.Node.Type != "bootstrap" {
-						if success, err := n.clusterConfigManager.RepairBootstrapPeers(); err != nil {
-							n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair bootstrap peers during monitoring", zap.Error(err))
-						} else if success {
-							n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap peer configuration repaired during monitoring")
-						}
+					// Try to repair peer configuration
+					if success, err := n.clusterConfigManager.RepairPeerConfiguration(); err != nil {
+						n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer addresses during monitoring", zap.Error(err))
+					} else if success {
+						n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired during monitoring")
 					}
 				}
 			}

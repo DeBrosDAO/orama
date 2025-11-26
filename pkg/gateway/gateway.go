@@ -115,7 +115,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	logger.ComponentInfo(logging.ComponentClient, "Network client connected",
 		zap.String("namespace", cliCfg.AppName),
-		zap.Int("bootstrap_peer_count", len(cliCfg.BootstrapPeers)),
+		zap.Int("peer_count", len(cliCfg.BootstrapPeers)),
 	)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
@@ -465,10 +465,10 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 		}
 	}
 
-	// Also check bootstrap peers from config
+	// Also check peers from config
 	if cfg := networkClient.Config(); cfg != nil {
-		for _, bootstrapAddr := range cfg.BootstrapPeers {
-			ma, err := multiaddr.NewMultiaddr(bootstrapAddr)
+		for _, peerAddr := range cfg.BootstrapPeers {
+			ma, err := multiaddr.NewMultiaddr(peerAddr)
 			if err != nil {
 				continue
 			}
@@ -514,7 +514,7 @@ type ipfsDiscoveryResult struct {
 }
 
 // discoverIPFSFromNodeConfigs discovers IPFS configuration from node.yaml files
-// Checks bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
+// Checks node-1.yaml through node-5.yaml for IPFS configuration
 func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -524,8 +524,8 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 
 	configDir := filepath.Join(homeDir, ".orama")
 
-	// Try bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
-	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"}
+	// Try all node config files for IPFS settings
+	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"}
 
 	for _, filename := range configFiles {
 		configPath := filepath.Join(configDir, filename)

@@ -158,7 +158,7 @@ type StorageStatus struct {
 type ClientConfig struct {
 	AppName           string        `json:"app_name"`
 	DatabaseName      string        `json:"database_name"`
-	BootstrapPeers    []string      `json:"bootstrap_peers"`
+	BootstrapPeers    []string      `json:"peers"`
 	DatabaseEndpoints []string      `json:"database_endpoints"`
 	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access (e.g., "http://localhost:6001")
 	ConnectTimeout    time.Duration `json:"connect_timeout"`

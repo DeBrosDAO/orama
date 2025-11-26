@@ -8,21 +8,21 @@ import (
 
 // Config represents the main configuration for a network node
 type Config struct {
-	Node        NodeConfig           `yaml:"node"`
-	Database    DatabaseConfig       `yaml:"database"`
-	Discovery   DiscoveryConfig      `yaml:"discovery"`
-	Security    SecurityConfig       `yaml:"security"`
-	Logging     LoggingConfig        `yaml:"logging"`
-	HTTPGateway HTTPGatewayConfig    `yaml:"http_gateway"`
+	Node        NodeConfig        `yaml:"node"`
+	Database    DatabaseConfig    `yaml:"database"`
+	Discovery   DiscoveryConfig   `yaml:"discovery"`
+	Security    SecurityConfig    `yaml:"security"`
+	Logging     LoggingConfig     `yaml:"logging"`
+	HTTPGateway HTTPGatewayConfig `yaml:"http_gateway"`
 }
 
 // NodeConfig contains node-specific configuration
 type NodeConfig struct {
 	ID              string   `yaml:"id"`               // Auto-generated if empty
-	Type            string   `yaml:"type"`             // "bootstrap" or "node"
 	ListenAddresses []string `yaml:"listen_addresses"` // LibP2P listen addresses
 	DataDir         string   `yaml:"data_dir"`         // Data directory
 	MaxConnections  int      `yaml:"max_connections"`  // Maximum peer connections
+	Domain          string   `yaml:"domain"`           // Domain for this node (e.g., node-1.orama.network)
 }
 
 // DatabaseConfig contains database-related configuration
@@ -76,9 +76,9 @@ type IPFSConfig struct {
 
 // DiscoveryConfig contains peer discovery configuration
 type DiscoveryConfig struct {
-	BootstrapPeers    []string      `yaml:"bootstrap_peers"`    // Bootstrap peer addresses
+	BootstrapPeers    []string      `yaml:"bootstrap_peers"`    // Peer addresses to connect to
 	DiscoveryInterval time.Duration `yaml:"discovery_interval"` // Discovery announcement interval
-	BootstrapPort     int           `yaml:"bootstrap_port"`     // Default port for bootstrap nodes
+	BootstrapPort     int           `yaml:"bootstrap_port"`     // Default port for peer discovery
 	HttpAdvAddress    string        `yaml:"http_adv_address"`   // HTTP advertisement address
 	RaftAdvAddress    string        `yaml:"raft_adv_address"`   // Raft advertisement
 	NodeNamespace     string        `yaml:"node_namespace"`     // Namespace for node identifiers
@@ -100,34 +100,34 @@ type LoggingConfig struct {
 
 // HTTPGatewayConfig contains HTTP reverse proxy gateway configuration
 type HTTPGatewayConfig struct {
-	Enabled    bool                   `yaml:"enabled"`      // Enable HTTP gateway
-	ListenAddr string                 `yaml:"listen_addr"`  // Address to listen on (e.g., ":8080")
-	NodeName   string                 `yaml:"node_name"`    // Node name for routing
-	Routes     map[string]RouteConfig `yaml:"routes"`       // Service routes
-	HTTPS      HTTPSConfig            `yaml:"https"`        // HTTPS/TLS configuration
-	SNI        SNIConfig              `yaml:"sni"`          // SNI-based TCP routing configuration
+	Enabled    bool                   `yaml:"enabled"`     // Enable HTTP gateway
+	ListenAddr string                 `yaml:"listen_addr"` // Address to listen on (e.g., ":8080")
+	NodeName   string                 `yaml:"node_name"`   // Node name for routing
+	Routes     map[string]RouteConfig `yaml:"routes"`      // Service routes
+	HTTPS      HTTPSConfig            `yaml:"https"`       // HTTPS/TLS configuration
+	SNI        SNIConfig              `yaml:"sni"`         // SNI-based TCP routing configuration
 }
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway
 type HTTPSConfig struct {
-	Enabled     bool   `yaml:"enabled"`       // Enable HTTPS (port 443)
-	Domain      string `yaml:"domain"`        // Primary domain (e.g., node-123.orama.network)
-	AutoCert    bool   `yaml:"auto_cert"`     // Use Let's Encrypt for automatic certificate
-	CertFile    string `yaml:"cert_file"`     // Path to certificate file (if not using auto_cert)
-	KeyFile     string `yaml:"key_file"`      // Path to key file (if not using auto_cert)
-	CacheDir    string `yaml:"cache_dir"`     // Directory for Let's Encrypt certificate cache
-	HTTPPort    int    `yaml:"http_port"`     // HTTP port for ACME challenge (default: 80)
-	HTTPSPort   int    `yaml:"https_port"`    // HTTPS port (default: 443)
-	Email       string `yaml:"email"`         // Email for Let's Encrypt account
+	Enabled   bool   `yaml:"enabled"`    // Enable HTTPS (port 443)
+	Domain    string `yaml:"domain"`     // Primary domain (e.g., node-123.orama.network)
+	AutoCert  bool   `yaml:"auto_cert"`  // Use Let's Encrypt for automatic certificate
+	CertFile  string `yaml:"cert_file"`  // Path to certificate file (if not using auto_cert)
+	KeyFile   string `yaml:"key_file"`   // Path to key file (if not using auto_cert)
+	CacheDir  string `yaml:"cache_dir"`  // Directory for Let's Encrypt certificate cache
+	HTTPPort  int    `yaml:"http_port"`  // HTTP port for ACME challenge (default: 80)
+	HTTPSPort int    `yaml:"https_port"` // HTTPS port (default: 443)
+	Email     string `yaml:"email"`      // Email for Let's Encrypt account
 }
 
 // SNIConfig contains SNI-based TCP routing configuration for port 7001
 type SNIConfig struct {
-	Enabled    bool              `yaml:"enabled"`      // Enable SNI-based TCP routing
-	ListenAddr string            `yaml:"listen_addr"`  // Address to listen on (e.g., ":7001")
-	Routes     map[string]string `yaml:"routes"`       // SNI hostname -> backend address mapping
-	CertFile   string            `yaml:"cert_file"`    // Path to certificate file
-	KeyFile    string            `yaml:"key_file"`     // Path to key file
+	Enabled    bool              `yaml:"enabled"`     // Enable SNI-based TCP routing
+	ListenAddr string            `yaml:"listen_addr"` // Address to listen on (e.g., ":7001")
+	Routes     map[string]string `yaml:"routes"`      // SNI hostname -> backend address mapping
+	CertFile   string            `yaml:"cert_file"`   // Path to certificate file
+	KeyFile    string            `yaml:"key_file"`    // Path to key file
 }
 
 // RouteConfig defines a single reverse proxy route
@@ -164,7 +164,6 @@ func (c *Config) ParseMultiaddrs() ([]multiaddr.Multiaddr, error) {
 func DefaultConfig() *Config {
 	return &Config{
 		Node: NodeConfig{
-			Type: "node",
 			ListenAddresses: []string{
 				"/ip4/0.0.0.0/tcp/4001", // TCP only - compatible with Anyone proxy/SOCKS5
 			},
@@ -181,7 +180,7 @@ func DefaultConfig() *Config {
 			// RQLite-specific configuration
 			RQLitePort:        5001,
 			RQLiteRaftPort:    7001,
-			RQLiteJoinAddress: "", // Empty for bootstrap node
+			RQLiteJoinAddress: "", // Empty for first node (creates cluster)
 
 			// Dynamic discovery (always enabled)
 			ClusterSyncInterval: 30 * time.Second,

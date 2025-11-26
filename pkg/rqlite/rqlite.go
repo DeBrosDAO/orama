@@ -25,7 +25,7 @@ type RQLiteManager struct {
 	config           *config.DatabaseConfig
 	discoverConfig   *config.DiscoveryConfig
 	dataDir          string
-	nodeType         string // "bootstrap" or "node"
+	nodeType         string // Node type identifier
 	logger           *zap.Logger
 	cmd              *exec.Cmd
 	connection       *gorqlite.Connection
@@ -81,7 +81,7 @@ func (r *RQLiteManager) SetDiscoveryService(service *ClusterDiscoveryService) {
 	r.discoveryService = service
 }
 
-// SetNodeType sets the node type for this RQLite manager ("bootstrap" or "node")
+// SetNodeType sets the node type for this RQLite manager
 func (r *RQLiteManager) SetNodeType(nodeType string) {
 	if nodeType != "" {
 		r.nodeType = nodeType
@@ -120,7 +120,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	// CRITICAL FIX: Ensure peers.json exists with minimum cluster size BEFORE starting RQLite
 	// This prevents split-brain where each node starts as a single-node cluster
 	// We NEVER start as a single-node cluster - we wait indefinitely until minimum cluster size is met
-	// This applies to ALL nodes (bootstrap AND regular nodes with join addresses)
+	// This applies to ALL nodes (with or without join addresses)
 	if r.discoveryService != nil {
 		r.logger.Info("Ensuring peers.json exists with minimum cluster size before RQLite startup",
 			zap.String("policy", "will wait indefinitely - never start as single-node cluster"),
@@ -289,23 +289,23 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 	if nodeType == "" {
 		nodeType = "node"
 	}
-	
+
 	// Create logs directory
 	logsDir := filepath.Join(filepath.Dir(r.dataDir), "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create logs directory at %s: %w", logsDir, err)
 	}
-	
+
 	// Open log file for RQLite output
 	logPath := filepath.Join(logsDir, fmt.Sprintf("rqlite-%s.log", nodeType))
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open RQLite log file at %s: %w", logPath, err)
 	}
-	
+
 	r.logger.Info("RQLite logs will be written to file",
 		zap.String("path", logPath))
-	
+
 	r.cmd.Stdout = logFile
 	r.cmd.Stderr = logFile
 
@@ -464,7 +464,7 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 
 	// All nodes may need time to open the store during recovery
 	// Use consistent timeout for cluster consistency
-	maxAttempts := 180  // 180 seconds (3 minutes) for all nodes
+	maxAttempts := 180 // 180 seconds (3 minutes) for all nodes
 
 	for i := 0; i < maxAttempts; i++ {
 		select {
@@ -517,7 +517,7 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 	return fmt.Errorf("RQLite did not become ready within timeout")
 }
 
-// waitForLeadership waits for RQLite to establish leadership (for bootstrap nodes)
+// GetConnection returns the RQLite connection
 // GetConnection returns the RQLite connection
 func (r *RQLiteManager) GetConnection() *gorqlite.Connection {
 	return r.connection
@@ -708,7 +708,6 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 	return nil
 }
 
-
 // exponentialBackoff calculates exponential backoff duration with jitter
 func (r *RQLiteManager) exponentialBackoff(attempt int, baseDelay time.Duration, maxDelay time.Duration) time.Duration {
 	// Calculate exponential backoff: baseDelay * 2^attempt
@@ -745,7 +744,7 @@ func (r *RQLiteManager) recoverCluster(ctx context.Context, peersJSONPath string
 	}
 
 	// Restart RQLite using launchProcess to ensure all join/backoff logic is applied
-	// This includes: join address handling, join retries, bootstrap-expect, etc.
+	// This includes: join address handling, join retries, expect configuration, etc.
 	r.logger.Info("Restarting RQLite (will auto-recover using peers.json)")
 	if err := r.launchProcess(ctx, rqliteDataDir); err != nil {
 		return fmt.Errorf("failed to restart RQLite process: %w", err)
@@ -863,7 +862,6 @@ func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 	r.logger.Info("Raft state cleared successfully - node will join as fresh follower")
 	return nil
 }
-
 
 // isInSplitBrainState detects if we're in a split-brain scenario where all nodes
 // are followers with no peers (each node thinks it's alone)
@@ -1182,9 +1180,9 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	}
 
 	// CRITICAL FIX: Skip recovery if no peers were discovered (other than ourselves)
-	// Only ourselves in the cluster means this is a fresh bootstrap, not a recovery scenario
+	// Only ourselves in the cluster means this is a fresh cluster, not a recovery scenario
 	if discoveredPeers <= 1 {
-		r.logger.Info("No peers discovered during pre-start discovery window - skipping recovery (fresh bootstrap)",
+		r.logger.Info("No peers discovered during pre-start discovery window - skipping recovery (fresh cluster)",
 			zap.Int("discovered_peers", discoveredPeers))
 		return nil
 	}

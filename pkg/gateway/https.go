@@ -18,10 +18,10 @@ import (
 // HTTPSGateway extends HTTPGateway with HTTPS/TLS support
 type HTTPSGateway struct {
 	*HTTPGateway
-	httpsConfig  *config.HTTPSConfig
-	certManager  *autocert.Manager
-	httpsServer  *http.Server
-	httpServer   *http.Server // For ACME challenge and redirect
+	httpsConfig *config.HTTPSConfig
+	certManager *autocert.Manager
+	httpsServer *http.Server
+	httpServer  *http.Server // For ACME challenge and redirect
 }
 
 // NewHTTPSGateway creates a new HTTPS gateway with Let's Encrypt autocert
@@ -214,4 +214,3 @@ func (g *HTTPSGateway) Stop() error {
 	g.logger.ComponentInfo(logging.ComponentGeneral, "HTTPS Gateway shutdown complete")
 	return nil
 }
-

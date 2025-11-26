@@ -128,7 +128,7 @@ func (hg *HTTPGateway) initializeRoutes() error {
 // registerRouteHandler registers a route handler with the router
 func (hg *HTTPGateway) registerRouteHandler(name string, routeConfig config.RouteConfig, proxy *httputil.ReverseProxy) {
 	pathPrefix := strings.TrimSuffix(routeConfig.PathPrefix, "/")
-	
+
 	// Use Mount instead of Route for wildcard path handling
 	hg.router.Mount(pathPrefix, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		hg.handleProxyRequest(w, req, routeConfig, proxy)
@@ -255,4 +255,3 @@ func isWebSocketRequest(r *http.Request) bool {
 	return r.Header.Get("Connection") == "Upgrade" &&
 		r.Header.Get("Upgrade") == "websocket"
 }
-

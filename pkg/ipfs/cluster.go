@@ -86,9 +86,9 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	// Determine cluster path based on data directory structure
-	// Check if dataDir contains specific node names (e.g., ~/.orama/bootstrap, ~/.orama/bootstrap2, ~/.orama/node2-4)
+	// Check if dataDir contains specific node names (e.g., ~/.orama/node-1, ~/.orama/node-2, etc.)
 	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
-	nodeNames := []string{"bootstrap", "bootstrap2", "node2", "node3", "node4"}
+	nodeNames := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
 	for _, nodeName := range nodeNames {
 		if strings.Contains(dataDir, nodeName) {
 			// Check if this is a direct child
@@ -144,19 +144,22 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 		return fmt.Errorf("failed to parse IPFS API URL: %w", err)
 	}
 
-	// Determine node name
-	nodeName := cm.cfg.Node.Type
-	if nodeName == "node" || nodeName == "bootstrap" {
-		// Try to extract from data dir or ID
-		possibleNames := []string{"bootstrap", "bootstrap2", "node2", "node3", "node4"}
+	// Determine node name from ID or DataDir
+	nodeName := "node-1" // Default fallback
+	possibleNames := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
+	for _, name := range possibleNames {
+		if strings.Contains(cm.cfg.Node.DataDir, name) || strings.Contains(cm.cfg.Node.ID, name) {
+			nodeName = name
+			break
+		}
+	}
+	// If ID contains a node identifier, use it
+	if cm.cfg.Node.ID != "" {
 		for _, name := range possibleNames {
-			if strings.Contains(cm.cfg.Node.DataDir, name) || strings.Contains(cm.cfg.Node.ID, name) {
+			if strings.Contains(cm.cfg.Node.ID, name) {
 				nodeName = name
 				break
 			}
-		}
-		if nodeName == "node" || nodeName == "bootstrap" {
-			nodeName = cm.cfg.Node.Type
 		}
 	}
 
@@ -219,52 +222,52 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 	return nil
 }
 
-// UpdateBootstrapPeers updates peer_addresses and peerstore with bootstrap peer information
-// Returns true if update was successful, false if bootstrap is not available yet (non-fatal)
-func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) (bool, error) {
+// UpdatePeerAddresses updates peer_addresses and peerstore with peer information
+// Returns true if update was successful, false if peer is not available yet (non-fatal)
+func (cm *ClusterConfigManager) UpdatePeerAddresses(peerAPIURL string) (bool, error) {
 	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
 		return false, nil // IPFS not configured
 	}
 
-	// Skip if this is the bootstrap node itself
-	if cm.cfg.Node.Type == "bootstrap" {
+	// Skip if this is the first node (creates the cluster, no join address)
+	if cm.cfg.Database.RQLiteJoinAddress == "" {
 		return false, nil
 	}
 
-	// Query bootstrap cluster API to get peer ID
-	peerID, err := getBootstrapPeerID(bootstrapAPIURL)
+	// Query peer cluster API to get peer ID
+	peerID, err := getPeerID(peerAPIURL)
 	if err != nil {
-		// Non-fatal: bootstrap might not be available yet
-		cm.logger.Debug("Bootstrap peer not available yet, will retry",
-			zap.String("bootstrap_api", bootstrapAPIURL),
+		// Non-fatal: peer might not be available yet
+		cm.logger.Debug("Peer not available yet, will retry",
+			zap.String("peer_api", peerAPIURL),
 			zap.Error(err))
 		return false, nil
 	}
 
 	if peerID == "" {
-		cm.logger.Debug("Bootstrap peer ID not available yet")
+		cm.logger.Debug("Peer ID not available yet")
 		return false, nil
 	}
 
-	// Extract bootstrap host and cluster port from URL
-	bootstrapHost, clusterPort, err := parseBootstrapHostAndPort(bootstrapAPIURL)
+	// Extract peer host and cluster port from URL
+	peerHost, clusterPort, err := parsePeerHostAndPort(peerAPIURL)
 	if err != nil {
-		return false, fmt.Errorf("failed to parse bootstrap cluster API URL: %w", err)
+		return false, fmt.Errorf("failed to parse peer cluster API URL: %w", err)
 	}
 
-	// Bootstrap cluster LibP2P listens on clusterPort + 4
+	// Peer cluster LibP2P listens on clusterPort + 4
 	// (REST API is 9094, LibP2P is 9098 = 9094 + 4)
-	bootstrapClusterPort := clusterPort + 4
+	peerClusterPort := clusterPort + 4
 
 	// Determine IP protocol (ip4 or ip6) based on the host
 	var ipProtocol string
-	if net.ParseIP(bootstrapHost).To4() != nil {
+	if net.ParseIP(peerHost).To4() != nil {
 		ipProtocol = "ip4"
 	} else {
 		ipProtocol = "ip6"
 	}
 
-	bootstrapPeerAddr := fmt.Sprintf("/%s/%s/tcp/%d/p2p/%s", ipProtocol, bootstrapHost, bootstrapClusterPort, peerID)
+	peerAddr := fmt.Sprintf("/%s/%s/tcp/%d/p2p/%s", ipProtocol, peerHost, peerClusterPort, peerID)
 
 	// Load current config
 	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
@@ -284,32 +287,32 @@ func (cm *ClusterConfigManager) UpdateBootstrapPeers(bootstrapAPIURL string) (bo
 	if peerstoreData, err := os.ReadFile(peerstorePath); err == nil {
 		// Only skip update if peerstore contains EXACTLY the correct address and nothing else
 		existingAddrs := strings.Split(strings.TrimSpace(string(peerstoreData)), "\n")
-		if len(existingAddrs) == 1 && strings.TrimSpace(existingAddrs[0]) == bootstrapPeerAddr {
-			cm.logger.Debug("Bootstrap peer address already correct in peerstore", zap.String("addr", bootstrapPeerAddr))
+		if len(existingAddrs) == 1 && strings.TrimSpace(existingAddrs[0]) == peerAddr {
+			cm.logger.Debug("Peer address already correct in peerstore", zap.String("addr", peerAddr))
 			needsUpdate = false
 		}
 	}
 
 	if needsUpdate {
-		// Write ONLY the correct bootstrap peer address, removing any stale entries
-		if err := os.WriteFile(peerstorePath, []byte(bootstrapPeerAddr+"\n"), 0644); err != nil {
+		// Write ONLY the correct peer address, removing any stale entries
+		if err := os.WriteFile(peerstorePath, []byte(peerAddr+"\n"), 0644); err != nil {
 			return false, fmt.Errorf("failed to write peerstore: %w", err)
 		}
-		cm.logger.Info("Updated peerstore with bootstrap peer (cleaned stale entries)",
-			zap.String("addr", bootstrapPeerAddr),
+		cm.logger.Info("Updated peerstore with peer (cleaned stale entries)",
+			zap.String("addr", peerAddr),
 			zap.String("peerstore_path", peerstorePath))
 	}
 
 	// Then sync service.json from peerstore to keep them in sync
-	cfg.Cluster.PeerAddresses = []string{bootstrapPeerAddr}
+	cfg.Cluster.PeerAddresses = []string{peerAddr}
 
 	// Save config
 	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
 		return false, fmt.Errorf("failed to save config: %w", err)
 	}
 
-	cm.logger.Info("Updated bootstrap peer configuration",
-		zap.String("bootstrap_peer_addr", bootstrapPeerAddr),
+	cm.logger.Info("Updated peer configuration",
+		zap.String("peer_addr", peerAddr),
 		zap.String("peerstore_path", peerstorePath))
 
 	return true, nil
@@ -480,52 +483,52 @@ func (cm *ClusterConfigManager) UpdateAllClusterPeers() (bool, error) {
 	return true, nil
 }
 
-// RepairBootstrapPeers automatically discovers and repairs bootstrap peer configuration
-// Tries multiple methods: config-based discovery, bootstrap peer multiaddr, or discovery service
-func (cm *ClusterConfigManager) RepairBootstrapPeers() (bool, error) {
+// RepairPeerConfiguration automatically discovers and repairs peer configuration
+// Tries multiple methods: config-based discovery, peer multiaddr, or discovery service
+func (cm *ClusterConfigManager) RepairPeerConfiguration() (bool, error) {
 	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
 		return false, nil // IPFS not configured
 	}
 
-	// Skip if this is the bootstrap node itself
-	if cm.cfg.Node.Type == "bootstrap" {
+	// Skip if this is the first node (creates the cluster, no join address)
+	if cm.cfg.Database.RQLiteJoinAddress == "" {
 		return false, nil
 	}
 
-	// Method 1: Try to use bootstrap API URL from config if available
-	// Check if we have a bootstrap node's cluster API URL in discovery metadata
-	// For now, we'll infer from bootstrap peers multiaddr
+	// Method 1: Try to use peer API URL from config if available
+	// Check if we have a peer's cluster API URL in discovery metadata
+	// For now, we'll infer from peers multiaddr
 
-	var bootstrapAPIURL string
+	var peerAPIURL string
 
-	// Try to extract from bootstrap peers multiaddr
+	// Try to extract from peers multiaddr
 	if len(cm.cfg.Discovery.BootstrapPeers) > 0 {
 		if ip := extractIPFromMultiaddrForCluster(cm.cfg.Discovery.BootstrapPeers[0]); ip != "" {
 			// Default cluster API port is 9094
-			bootstrapAPIURL = fmt.Sprintf("http://%s:9094", ip)
-			cm.logger.Debug("Inferred bootstrap cluster API from bootstrap peer",
-				zap.String("bootstrap_api", bootstrapAPIURL))
+			peerAPIURL = fmt.Sprintf("http://%s:9094", ip)
+			cm.logger.Debug("Inferred peer cluster API from peer",
+				zap.String("peer_api", peerAPIURL))
 		}
 	}
 
 	// Fallback to localhost if nothing found (for local development)
-	if bootstrapAPIURL == "" {
-		bootstrapAPIURL = "http://localhost:9094"
-		cm.logger.Debug("Using localhost fallback for bootstrap cluster API")
+	if peerAPIURL == "" {
+		peerAPIURL = "http://localhost:9094"
+		cm.logger.Debug("Using localhost fallback for peer cluster API")
 	}
 
-	// Try to update bootstrap peers
-	success, err := cm.UpdateBootstrapPeers(bootstrapAPIURL)
+	// Try to update peers
+	success, err := cm.UpdatePeerAddresses(peerAPIURL)
 	if err != nil {
 		return false, err
 	}
 
 	if success {
-		cm.logger.Info("Successfully repaired bootstrap peer configuration")
+		cm.logger.Info("Successfully repaired peer configuration")
 		return true, nil
 	}
 
-	// If update failed (bootstrap not available), return false but no error
+	// If update failed (peer not available), return false but no error
 	// This allows retries later
 	return false, nil
 }
@@ -817,16 +820,16 @@ func ensureRequiredSection(parent map[string]interface{}, key string, defaults m
 	}
 }
 
-// parseBootstrapHostAndPort extracts host and REST API port from bootstrap API URL
-func parseBootstrapHostAndPort(bootstrapAPIURL string) (host string, restAPIPort int, err error) {
-	u, err := url.Parse(bootstrapAPIURL)
+// parsePeerHostAndPort extracts host and REST API port from peer API URL
+func parsePeerHostAndPort(peerAPIURL string) (host string, restAPIPort int, err error) {
+	u, err := url.Parse(peerAPIURL)
 	if err != nil {
 		return "", 0, err
 	}
 
 	host = u.Hostname()
 	if host == "" {
-		return "", 0, fmt.Errorf("no host in URL: %s", bootstrapAPIURL)
+		return "", 0, fmt.Errorf("no host in URL: %s", peerAPIURL)
 	}
 
 	portStr := u.Port()
@@ -908,8 +911,8 @@ func parseIPFSPort(apiURL string) (int, error) {
 	return port, nil
 }
 
-// getBootstrapPeerID queries the bootstrap cluster API to get the peer ID
-func getBootstrapPeerID(apiURL string) (string, error) {
+// getPeerID queries the cluster API to get the peer ID
+func getPeerID(apiURL string) (string, error) {
 	// Simple HTTP client to query /peers endpoint
 	client := &standardHTTPClient{}
 	resp, err := client.Get(fmt.Sprintf("%s/peers", apiURL))
@@ -918,7 +921,7 @@ func getBootstrapPeerID(apiURL string) (string, error) {
 	}
 
 	// The /peers endpoint returns NDJSON (newline-delimited JSON)
-	// We need to read the first peer object to get the bootstrap peer ID
+	// We need to read the first peer object to get the peer ID
 	dec := json.NewDecoder(bytes.NewReader(resp))
 	var firstPeer struct {
 		ID string `json:"id"`
@@ -1026,15 +1029,15 @@ func (cm *ClusterConfigManager) FixIPFSConfigAddresses() error {
 	}
 
 	// Try to find IPFS repo path
-	// Check common locations: dataDir/ipfs/repo, or dataDir/bootstrap/ipfs/repo, etc.
+	// Check common locations: dataDir/ipfs/repo, dataDir/node-1/ipfs/repo, etc.
 	possiblePaths := []string{
 		filepath.Join(dataDir, "ipfs", "repo"),
-		filepath.Join(dataDir, "bootstrap", "ipfs", "repo"),
-		filepath.Join(dataDir, "node2", "ipfs", "repo"),
-		filepath.Join(dataDir, "node3", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "bootstrap", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "node2", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "node3", "ipfs", "repo"),
+		filepath.Join(dataDir, "node-1", "ipfs", "repo"),
+		filepath.Join(dataDir, "node-2", "ipfs", "repo"),
+		filepath.Join(dataDir, "node-3", "ipfs", "repo"),
+		filepath.Join(filepath.Dir(dataDir), "node-1", "ipfs", "repo"),
+		filepath.Join(filepath.Dir(dataDir), "node-2", "ipfs", "repo"),
+		filepath.Join(filepath.Dir(dataDir), "node-3", "ipfs", "repo"),
 	}
 
 	var ipfsRepoPath string
@@ -1056,7 +1059,7 @@ func (cm *ClusterConfigManager) FixIPFSConfigAddresses() error {
 		return fmt.Errorf("failed to parse IPFS API URL: %w", err)
 	}
 
-	// Determine gateway port (typically API port + 3079, or 8080 for bootstrap, 8081 for node2, etc.)
+	// Determine gateway port (typically API port + 3079, or 8080 for node-1, 8081 for node-2, etc.)
 	gatewayPort := 8080
 	if strings.Contains(dataDir, "node2") {
 		gatewayPort = 8081

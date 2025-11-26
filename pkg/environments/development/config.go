@@ -43,25 +43,27 @@ func (ce *ConfigEnsurer) EnsureAll() error {
 	// Load topology
 	topology := DefaultTopology()
 
-	// Generate identities for all bootstrap nodes and collect multiaddrs
-	bootstrapAddrs := []string{}
-	for _, nodeSpec := range topology.GetBootstrapNodes() {
+	// Generate identities for first two nodes and collect their multiaddrs as peer addresses
+	// All nodes use these addresses for initial peer discovery
+	peerAddrs := []string{}
+	for i := 0; i < 2 && i < len(topology.Nodes); i++ {
+		nodeSpec := topology.Nodes[i]
 		addr, err := ce.ensureNodeIdentity(nodeSpec)
 		if err != nil {
 			return fmt.Errorf("failed to ensure identity for %s: %w", nodeSpec.Name, err)
 		}
-		bootstrapAddrs = append(bootstrapAddrs, addr)
+		peerAddrs = append(peerAddrs, addr)
 	}
 
-	// Ensure configs for all bootstrap and regular nodes
+	// Ensure configs for all nodes
 	for _, nodeSpec := range topology.Nodes {
-		if err := ce.ensureNodeConfig(nodeSpec, bootstrapAddrs); err != nil {
+		if err := ce.ensureNodeConfig(nodeSpec, peerAddrs); err != nil {
 			return fmt.Errorf("failed to ensure config for %s: %w", nodeSpec.Name, err)
 		}
 	}
 
 	// Ensure gateway config
-	if err := ce.ensureGateway(bootstrapAddrs); err != nil {
+	if err := ce.ensureGateway(peerAddrs); err != nil {
 		return fmt.Errorf("failed to ensure gateway: %w", err)
 	}
 
@@ -133,7 +135,7 @@ func (ce *ConfigEnsurer) ensureNodeIdentity(nodeSpec NodeSpec) (string, error) {
 }
 
 // ensureNodeConfig creates or updates a node configuration
-func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, bootstrapAddrs []string) error {
+func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, peerAddrs []string) error {
 	nodeDir := filepath.Join(ce.oramaDir, nodeSpec.DataDir)
 	configPath := filepath.Join(ce.oramaDir, nodeSpec.ConfigFilename)
 
@@ -141,7 +143,7 @@ func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, bootstrapAddrs []st
 		return fmt.Errorf("failed to create node directory: %w", err)
 	}
 
-	// Generate node config (unified - no bootstrap/node distinction)
+	// Generate node config (all nodes are unified)
 	data := templates.NodeConfigData{
 		NodeID:             nodeSpec.Name,
 		P2PPort:            nodeSpec.P2PPort,
@@ -149,7 +151,7 @@ func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, bootstrapAddrs []st
 		RQLiteHTTPPort:     nodeSpec.RQLiteHTTPPort,
 		RQLiteRaftPort:     nodeSpec.RQLiteRaftPort,
 		RQLiteJoinAddress:  nodeSpec.RQLiteJoinTarget,
-		BootstrapPeers:     bootstrapAddrs,
+		BootstrapPeers:     peerAddrs,
 		ClusterAPIPort:     nodeSpec.ClusterAPIPort,
 		IPFSAPIPort:        nodeSpec.IPFSAPIPort,
 		UnifiedGatewayPort: nodeSpec.UnifiedGatewayPort,
@@ -170,19 +172,19 @@ func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, bootstrapAddrs []st
 }
 
 // ensureGateway creates gateway config
-func (ce *ConfigEnsurer) ensureGateway(bootstrapAddrs []string) error {
+func (ce *ConfigEnsurer) ensureGateway(peerAddrs []string) error {
 	configPath := filepath.Join(ce.oramaDir, "gateway.yaml")
 
-	// Get first bootstrap's cluster API port for default
+	// Get first node's cluster API port for default
 	topology := DefaultTopology()
-	firstBootstrap := topology.GetBootstrapNodes()[0]
+	firstNode := topology.GetFirstNode()
 
 	data := templates.GatewayConfigData{
 		ListenPort:     topology.GatewayPort,
-		BootstrapPeers: bootstrapAddrs,
+		BootstrapPeers: peerAddrs,
 		OlricServers:   []string{fmt.Sprintf("127.0.0.1:%d", topology.OlricHTTPPort)},
-		ClusterAPIPort: firstBootstrap.ClusterAPIPort,
-		IPFSAPIPort:    firstBootstrap.IPFSAPIPort,
+		ClusterAPIPort: firstNode.ClusterAPIPort,
+		IPFSAPIPort:    firstNode.IPFSAPIPort,
 	}
 
 	config, err := templates.RenderGatewayConfig(data)

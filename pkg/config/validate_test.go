@@ -5,12 +5,11 @@ import (
 	"time"
 )
 
-// validConfigForType returns a valid config for the given node type
-func validConfigForType(nodeType string) *Config {
+// validConfigForNode returns a valid config
+func validConfigForNode() *Config {
 	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
 	cfg := &Config{
 		Node: NodeConfig{
-			Type:            nodeType,
 			ID:              "test-node-id",
 			ListenAddresses: []string{"/ip4/0.0.0.0/tcp/4001"},
 			DataDir:         ".",
@@ -25,6 +24,7 @@ func validConfigForType(nodeType string) *Config {
 			RQLitePort:        5001,
 			RQLiteRaftPort:    7001,
 			MinClusterSize:    1,
+			RQLiteJoinAddress: "", // Optional - first node creates cluster, others join
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers:    []string{validPeer},
@@ -40,49 +40,7 @@ func validConfigForType(nodeType string) *Config {
 		},
 	}
 
-	// Set rqlite_join_address based on node type
-	if nodeType == "node" {
-		cfg.Database.RQLiteJoinAddress = "localhost:5001"
-		// Node type requires bootstrap peers
-		cfg.Discovery.BootstrapPeers = []string{validPeer}
-	} else {
-		// Bootstrap type: empty join address and peers optional
-		cfg.Database.RQLiteJoinAddress = ""
-		cfg.Discovery.BootstrapPeers = []string{}
-	}
-
 	return cfg
-}
-
-func TestValidateNodeType(t *testing.T) {
-	tests := []struct {
-		name        string
-		nodeType    string
-		shouldError bool
-	}{
-		{"bootstrap", "bootstrap", false},
-		{"node", "node", false},
-		{"invalid", "invalid-type", true},
-		{"empty", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("bootstrap") // Start with valid bootstrap
-			if tt.nodeType == "node" {
-				cfg = validConfigForType("node")
-			} else {
-				cfg.Node.Type = tt.nodeType
-			}
-			errs := cfg.Validate()
-			if tt.shouldError && len(errs) == 0 {
-				t.Errorf("expected error, got none")
-			}
-			if !tt.shouldError && len(errs) > 0 {
-				t.Errorf("unexpected errors: %v", errs)
-			}
-		})
-	}
 }
 
 func TestValidateListenAddresses(t *testing.T) {
@@ -102,7 +60,7 @@ func TestValidateListenAddresses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Node.ListenAddresses = tt.addresses
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -130,7 +88,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Database.ReplicationFactor = tt.replication
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -160,7 +118,7 @@ func TestValidateRQLitePorts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Database.RQLitePort = tt.httpPort
 			cfg.Database.RQLiteRaftPort = tt.raftPort
 			errs := cfg.Validate()
@@ -177,21 +135,18 @@ func TestValidateRQLitePorts(t *testing.T) {
 func TestValidateRQLiteJoinAddress(t *testing.T) {
 	tests := []struct {
 		name        string
-		nodeType    string
 		joinAddr    string
 		shouldError bool
 	}{
-		{"node with join", "node", "localhost:5001", false},
-		{"node without join", "node", "", true},
-		{"bootstrap with join", "bootstrap", "localhost:5001", false},
-		{"bootstrap without join", "bootstrap", "", false},
-		{"invalid join format", "node", "localhost", true},
-		{"invalid join port", "node", "localhost:99999", true},
+		{"node with join", "localhost:5001", false},
+		{"node without join", "", false}, // Join address is optional (first node creates cluster)
+		{"invalid join format", "localhost", true},
+		{"invalid join port", "localhost:99999", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType(tt.nodeType)
+			cfg := validConfigForNode()
 			cfg.Database.RQLiteJoinAddress = tt.joinAddr
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -204,27 +159,24 @@ func TestValidateRQLiteJoinAddress(t *testing.T) {
 	}
 }
 
-func TestValidateBootstrapPeers(t *testing.T) {
+func TestValidatePeerAddresses(t *testing.T) {
 	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
 	tests := []struct {
 		name        string
-		nodeType    string
 		peers       []string
 		shouldError bool
 	}{
-		{"node with peer", "node", []string{validPeer}, false},
-		{"node without peer", "node", []string{}, true},
-		{"bootstrap with peer", "bootstrap", []string{validPeer}, false},
-		{"bootstrap without peer", "bootstrap", []string{}, false},
-		{"invalid multiaddr", "node", []string{"invalid"}, true},
-		{"missing p2p", "node", []string{"/ip4/127.0.0.1/tcp/4001"}, true},
-		{"duplicate peer", "node", []string{validPeer, validPeer}, true},
-		{"invalid port", "node", []string{"/ip4/127.0.0.1/tcp/99999/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"}, true},
+		{"node with peer", []string{validPeer}, false},
+		{"node without peer", []string{}, true}, // All nodes need peer addresses
+		{"invalid multiaddr", []string{"invalid"}, true},
+		{"missing p2p", []string{"/ip4/127.0.0.1/tcp/4001"}, true},
+		{"duplicate peer", []string{validPeer, validPeer}, true},
+		{"invalid port", []string{"/ip4/127.0.0.1/tcp/99999/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType(tt.nodeType)
+			cfg := validConfigForNode()
 			cfg.Discovery.BootstrapPeers = tt.peers
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -253,7 +205,7 @@ func TestValidateLoggingLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Logging.Level = tt.level
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -280,7 +232,7 @@ func TestValidateLoggingFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Logging.Format = tt.format
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -307,7 +259,7 @@ func TestValidateMaxConnections(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Node.MaxConnections = tt.maxConn
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -334,7 +286,7 @@ func TestValidateDiscoveryInterval(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Discovery.DiscoveryInterval = tt.interval
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -347,7 +299,7 @@ func TestValidateDiscoveryInterval(t *testing.T) {
 	}
 }
 
-func TestValidateBootstrapPort(t *testing.T) {
+func TestValidatePeerDiscoveryPort(t *testing.T) {
 	tests := []struct {
 		name        string
 		port        int
@@ -361,7 +313,7 @@ func TestValidateBootstrapPort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfigForType("node")
+			cfg := validConfigForNode()
 			cfg.Discovery.BootstrapPort = tt.port
 			errs := cfg.Validate()
 			if tt.shouldError && len(errs) == 0 {
@@ -378,7 +330,6 @@ func TestValidateCompleteConfig(t *testing.T) {
 	// Test a complete valid config
 	validCfg := &Config{
 		Node: NodeConfig{
-			Type:            "node",
 			ID:              "node1",
 			ListenAddresses: []string{"/ip4/0.0.0.0/tcp/4002"},
 			DataDir:         ".",
