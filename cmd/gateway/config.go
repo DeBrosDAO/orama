@@ -40,11 +40,11 @@ func getEnvBoolDefault(key string, def bool) bool {
 	}
 }
 
-// parseGatewayConfig loads gateway.yaml from ~/.debros exclusively.
+// parseGatewayConfig loads gateway.yaml from ~/.orama exclusively.
 // It accepts an optional --config flag for absolute paths (used by systemd services).
 func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	// Parse --config flag (optional, for systemd services that pass absolute paths)
-	configFlag := flag.String("config", "", "Config file path (absolute path or filename in ~/.debros)")
+	configFlag := flag.String("config", "", "Config file path (absolute path or filename in ~/.orama)")
 	flag.Parse()
 
 	// Determine config path
@@ -63,7 +63,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 			}
 		}
 	} else {
-		// Default behavior: look for gateway.yaml in ~/.debros/data/, ~/.debros/configs/, or ~/.debros/
+		// Default behavior: look for gateway.yaml in ~/.orama/data/, ~/.orama/configs/, or ~/.orama/
 		configPath, err = config.DefaultPath("gateway.yaml")
 		if err != nil {
 			logger.ComponentError(logging.ComponentGeneral, "Failed to determine config path", zap.Error(err))
@@ -157,7 +157,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// Default TLS cache directory if HTTPS is enabled but not specified
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
-			cfg.TLSCacheDir = filepath.Join(homeDir, ".debros", "tls-cache")
+			cfg.TLSCacheDir = filepath.Join(homeDir, ".orama", "tls-cache")
 		}
 	}
 

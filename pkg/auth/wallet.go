@@ -199,7 +199,7 @@ func (as *AuthServer) handleCallback(w http.ResponseWriter, r *http.Request) {
             %s
         </div>
 
-        <p>Your credentials have been saved securely to <code>~/.debros/credentials.json</code></p>
+        <p>Your credentials have been saved securely to <code>~/.orama/credentials.json</code></p>
         <p><strong>You can now close this browser window and return to your terminal.</strong></p>
     </div>
 </body>

@@ -33,7 +33,7 @@ func setup_logger(component logging.Component) (logger *logging.ColoredLogger) {
 
 // parse_flags parses command-line flags and returns them.
 func parse_flags() (configName *string, help *bool) {
-	configName = flag.String("config", "node.yaml", "Config filename in ~/.debros (default: node.yaml)")
+	configName = flag.String("config", "node.yaml", "Config filename in ~/.orama (default: node.yaml)")
 	help = flag.Bool("help", false, "Show help")
 	flag.Parse()
 
@@ -63,7 +63,7 @@ func check_if_should_open_help(help *bool) {
 	}
 }
 
-// select_data_dir validates that we can load the config from ~/.debros
+// select_data_dir validates that we can load the config from ~/.orama
 func select_data_dir_check(configName *string) {
 	logger := setup_logger(logging.ComponentNode)
 
@@ -272,7 +272,7 @@ func main() {
 		// Absolute path passed directly (e.g., from systemd service)
 		configPath = *configName
 	} else {
-		// Relative path - use DefaultPath which checks both ~/.debros/configs/ and ~/.debros/
+		// Relative path - use DefaultPath which checks both ~/.orama/configs/ and ~/.orama/
 		configPath, err = config.DefaultPath(*configName)
 		if err != nil {
 			logger.Error("Failed to determine config path", zap.Error(err))

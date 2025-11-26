@@ -5,6 +5,7 @@ node:
     - "/ip4/0.0.0.0/tcp/{{.P2PPort}}"
   data_dir: "{{.DataDir}}"
   max_connections: 50
+  domain: "{{.Domain}}"
 
 database:
   data_dir: "{{.DataDir}}/rqlite"
@@ -42,3 +43,34 @@ logging:
   level: "info"
   format: "console"
 
+http_gateway:
+  enabled: true
+  listen_addr: ":{{.UnifiedGatewayPort}}"
+  node_name: "{{.NodeID}}"
+  routes:
+    # Node internal services - accessible on unified gateway port
+    rqlite_http:
+      path_prefix: "/rqlite/http"
+      backend_url: "http://localhost:{{.RQLiteHTTPPort}}"
+      timeout: "30s"
+      websocket: false
+    rqlite_raft:
+      path_prefix: "/rqlite/raft"
+      backend_url: "http://localhost:{{.RQLiteRaftPort}}"
+      timeout: "30s"
+      websocket: false
+    ipfs_api:
+      path_prefix: "/ipfs/api"
+      backend_url: "http://localhost:{{.IPFSAPIPort}}"
+      timeout: "60s"
+      websocket: true
+    ipfs_swarm:
+      path_prefix: "/ipfs/swarm"
+      backend_url: "http://localhost:4102"
+      timeout: "30s"
+      websocket: false
+    cluster_api:
+      path_prefix: "/cluster"
+      backend_url: "http://localhost:{{.ClusterAPIPort}}"
+      timeout: "30s"
+      websocket: false

@@ -1,0 +1,19 @@
+Package: orama
+Version: 0.69.20
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: libc6
+Maintainer: DeBros Team <dev@debros.io>
+Description: Orama Network - Distributed P2P Database System
+ Orama is a distributed peer-to-peer network that combines
+ RQLite for distributed SQL, IPFS for content-addressed storage,
+ and LibP2P for peer discovery and communication.
+ .
+ Features:
+  - Distributed SQLite database with Raft consensus
+  - IPFS-based file storage with encryption
+  - LibP2P peer-to-peer networking
+  - Olric distributed cache
+  - Unified HTTP/HTTPS gateway
+

@@ -19,7 +19,7 @@ import (
 
 // ProcessManager manages all dev environment processes
 type ProcessManager struct {
-	debrosDir string
+	oramaDir string
 	pidsDir   string
 	processes map[string]*ManagedProcess
 	mutex     sync.Mutex
@@ -35,12 +35,12 @@ type ManagedProcess struct {
 }
 
 // NewProcessManager creates a new process manager
-func NewProcessManager(debrosDir string, logWriter io.Writer) *ProcessManager {
-	pidsDir := filepath.Join(debrosDir, ".pids")
+func NewProcessManager(oramaDir string, logWriter io.Writer) *ProcessManager {
+	pidsDir := filepath.Join(oramaDir, ".pids")
 	os.MkdirAll(pidsDir, 0755)
 
 	return &ProcessManager{
-		debrosDir: debrosDir,
+		oramaDir: oramaDir,
 		pidsDir:   pidsDir,
 		processes: make(map[string]*ManagedProcess),
 		logWriter: logWriter,
@@ -49,7 +49,8 @@ func NewProcessManager(debrosDir string, logWriter io.Writer) *ProcessManager {
 
 // StartAll starts all development services
 func (pm *ProcessManager) StartAll(ctx context.Context) error {
-	fmt.Fprintf(pm.logWriter, "\n🚀 Starting development environment...\n\n")
+	fmt.Fprintf(pm.logWriter, "\n🚀 Starting development environment...\n")
+	fmt.Fprintf(pm.logWriter, "═══════════════════════════════════════\n\n")
 
 	topology := DefaultTopology()
 
@@ -76,6 +77,8 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		}
 	}
 
+	fmt.Fprintf(pm.logWriter, "\n")
+
 	// Run health checks with retries before declaring success
 	const (
 		healthCheckRetries  = 20
@@ -84,13 +87,43 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 	)
 
 	if !pm.HealthCheckWithRetry(ctx, ipfsNodes, healthCheckRetries, healthCheckInterval, healthCheckTimeout) {
-		fmt.Fprintf(pm.logWriter, "\n❌ Development environment failed health checks - stopping all services\n")
+		fmt.Fprintf(pm.logWriter, "\n❌ Health checks failed - stopping all services\n")
 		pm.StopAll(ctx)
 		return fmt.Errorf("cluster health checks failed - services stopped")
 	}
 
-	fmt.Fprintf(pm.logWriter, "\n✅ Development environment started!\n\n")
+	// Print success and key endpoints
+	pm.printStartupSummary(topology)
 	return nil
+}
+
+// printStartupSummary prints the final startup summary with key endpoints
+func (pm *ProcessManager) printStartupSummary(topology *Topology) {
+	fmt.Fprintf(pm.logWriter, "\n✅ Development environment ready!\n")
+	fmt.Fprintf(pm.logWriter, "═══════════════════════════════════════\n\n")
+
+	fmt.Fprintf(pm.logWriter, "📡 Access your nodes via unified gateway ports:\n\n")
+	for _, node := range topology.Nodes {
+		fmt.Fprintf(pm.logWriter, "  %s:\n", node.Name)
+		fmt.Fprintf(pm.logWriter, "    curl http://localhost:%d/health\n", node.UnifiedGatewayPort)
+		fmt.Fprintf(pm.logWriter, "    curl http://localhost:%d/rqlite/http/db/execute\n", node.UnifiedGatewayPort)
+		fmt.Fprintf(pm.logWriter, "    curl http://localhost:%d/cluster/health\n\n", node.UnifiedGatewayPort)
+	}
+
+	fmt.Fprintf(pm.logWriter, "🌐 Main Gateway:\n")
+	fmt.Fprintf(pm.logWriter, "  curl http://localhost:%d/v1/status\n\n", topology.GatewayPort)
+
+	fmt.Fprintf(pm.logWriter, "📊 Other Services:\n")
+	fmt.Fprintf(pm.logWriter, "  Olric:        http://localhost:%d\n", topology.OlricHTTPPort)
+	fmt.Fprintf(pm.logWriter, "  Anon SOCKS:   127.0.0.1:%d\n\n", topology.AnonSOCKSPort)
+
+	fmt.Fprintf(pm.logWriter, "📝 Useful Commands:\n")
+	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev status  - Check service status\n")
+	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev logs node-1  - View logs\n")
+	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev down    - Stop all services\n\n")
+
+	fmt.Fprintf(pm.logWriter, "📂 Logs: %s/logs\n", pm.oramaDir)
+	fmt.Fprintf(pm.logWriter, "⚙️  Config: %s\n\n", pm.oramaDir)
 }
 
 // StopAll stops all running processes
@@ -204,10 +237,10 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		fmt.Fprintf(pm.logWriter, "  %-25s %s (%s)\n", svc.name, status, portStr)
 	}
 
-	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.debrosDir)
+	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.oramaDir)
 	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node2.yaml", "node3.yaml", "node4.yaml", "gateway.yaml", "olric-config.yaml"}
 	for _, f := range configFiles {
-		path := filepath.Join(pm.debrosDir, f)
+		path := filepath.Join(pm.oramaDir, f)
 		if _, err := os.Stat(path); err == nil {
 			fmt.Fprintf(pm.logWriter, "  ✓ %s\n", f)
 		} else {
@@ -215,7 +248,7 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		}
 	}
 
-	fmt.Fprintf(pm.logWriter, "\nLogs directory: %s/logs\n\n", pm.debrosDir)
+	fmt.Fprintf(pm.logWriter, "\nLogs directory: %s/logs\n\n", pm.oramaDir)
 }
 
 // Helper functions for starting individual services
@@ -226,7 +259,7 @@ func (pm *ProcessManager) buildIPFSNodes(topology *Topology) []ipfsNodeInfo {
 	for _, nodeSpec := range topology.Nodes {
 		nodes = append(nodes, ipfsNodeInfo{
 			name:        nodeSpec.Name,
-			ipfsPath:    filepath.Join(pm.debrosDir, nodeSpec.DataDir, "ipfs/repo"),
+			ipfsPath:    filepath.Join(pm.oramaDir, nodeSpec.DataDir, "ipfs/repo"),
 			apiPort:     nodeSpec.IPFSAPIPort,
 			swarmPort:   nodeSpec.IPFSSwarmPort,
 			gatewayPort: nodeSpec.IPFSGatewayPort,
@@ -240,7 +273,7 @@ func (pm *ProcessManager) buildIPFSNodes(topology *Topology) []ipfsNodeInfo {
 func (pm *ProcessManager) startNodes(ctx context.Context) error {
 	topology := DefaultTopology()
 	for _, nodeSpec := range topology.Nodes {
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("%s.log", nodeSpec.Name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("%s.log", nodeSpec.Name))
 		if err := pm.startNode(nodeSpec.Name, nodeSpec.ConfigFilename, logPath); err != nil {
 			return fmt.Errorf("failed to start %s: %w", nodeSpec.Name, err)
 		}
@@ -485,7 +518,7 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 			}
 
 			// Copy swarm key
-			swarmKeyPath := filepath.Join(pm.debrosDir, "swarm.key")
+			swarmKeyPath := filepath.Join(pm.oramaDir, "swarm.key")
 			if data, err := os.ReadFile(swarmKeyPath); err == nil {
 				os.WriteFile(filepath.Join(nodes[i].ipfsPath, "swarm.key"), data, 0600)
 			}
@@ -505,7 +538,7 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 	// Phase 2: Start all IPFS daemons
 	for i := range nodes {
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("ipfs-%s.pid", nodes[i].name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("ipfs-%s.log", nodes[i].name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("ipfs-%s.log", nodes[i].name))
 
 		cmd := exec.CommandContext(ctx, "ipfs", "daemon", "--enable-pubsub-experiment", "--repo-dir="+nodes[i].ipfsPath)
 		logFile, _ := os.Create(logPath)
@@ -556,7 +589,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 			ipfsPort    int
 		}{
 			nodeSpec.Name,
-			filepath.Join(pm.debrosDir, nodeSpec.DataDir, "ipfs-cluster"),
+			filepath.Join(pm.oramaDir, nodeSpec.DataDir, "ipfs-cluster"),
 			nodeSpec.ClusterAPIPort,
 			nodeSpec.ClusterPort,
 			nodeSpec.IPFSAPIPort,
@@ -573,7 +606,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 	}
 
 	// Read cluster secret to ensure all nodes use the same PSK
-	secretPath := filepath.Join(pm.debrosDir, "cluster-secret")
+	secretPath := filepath.Join(pm.oramaDir, "cluster-secret")
 	clusterSecret, err := os.ReadFile(secretPath)
 	if err != nil {
 		return fmt.Errorf("failed to read cluster secret: %w", err)
@@ -622,7 +655,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 
 		// Start bootstrap cluster service
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("ipfs-cluster-%s.pid", node.name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
 
 		cmd = exec.CommandContext(ctx, "ipfs-cluster-service", "daemon")
 		cmd.Env = append(os.Environ(), fmt.Sprintf("IPFS_CLUSTER_PATH=%s", node.clusterPath))
@@ -696,7 +729,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 
 		// Start follower cluster service with bootstrap flag
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("ipfs-cluster-%s.pid", node.name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
 
 		args := []string{"daemon"}
 		if bootstrapMultiaddr != "" {
@@ -943,8 +976,8 @@ func (pm *ProcessManager) ensureIPFSClusterPorts(clusterPath string, restAPIPort
 
 func (pm *ProcessManager) startOlric(ctx context.Context) error {
 	pidPath := filepath.Join(pm.pidsDir, "olric.pid")
-	logPath := filepath.Join(pm.debrosDir, "logs", "olric.log")
-	configPath := filepath.Join(pm.debrosDir, "olric-config.yaml")
+	logPath := filepath.Join(pm.oramaDir, "logs", "olric.log")
+	configPath := filepath.Join(pm.oramaDir, "olric-config.yaml")
 
 	cmd := exec.CommandContext(ctx, "olric-server")
 	cmd.Env = append(os.Environ(), fmt.Sprintf("OLRIC_SERVER_CONFIG=%s", configPath))
@@ -969,7 +1002,7 @@ func (pm *ProcessManager) startAnon(ctx context.Context) error {
 	}
 
 	pidPath := filepath.Join(pm.pidsDir, "anon.pid")
-	logPath := filepath.Join(pm.debrosDir, "logs", "anon.log")
+	logPath := filepath.Join(pm.oramaDir, "logs", "anon.log")
 
 	cmd := exec.CommandContext(ctx, "npx", "anyone-client")
 	logFile, _ := os.Create(logPath)
@@ -1007,7 +1040,7 @@ func (pm *ProcessManager) startNode(name, configFile, logPath string) error {
 
 func (pm *ProcessManager) startGateway(ctx context.Context) error {
 	pidPath := filepath.Join(pm.pidsDir, "gateway.pid")
-	logPath := filepath.Join(pm.debrosDir, "logs", "gateway.log")
+	logPath := filepath.Join(pm.oramaDir, "logs", "gateway.log")
 
 	cmd := exec.Command("./bin/gateway", "--config", "gateway.yaml")
 	logFile, _ := os.Create(logPath)

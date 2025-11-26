@@ -164,10 +164,13 @@ func (pm *ProcessManager) LibP2PHealthCheck(ctx context.Context) HealthCheckResu
 
 // HealthCheckWithRetry performs a health check with retry logic
 func (pm *ProcessManager) HealthCheckWithRetry(ctx context.Context, nodes []ipfsNodeInfo, retries int, retryInterval time.Duration, timeout time.Duration) bool {
-	fmt.Fprintf(pm.logWriter, "\n⚕️  Validating cluster health...\n")
+	fmt.Fprintf(pm.logWriter, "⚕️  Validating cluster health...")
 
 	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	spinnerIndex := 0
 
 	for attempt := 1; attempt <= retries; attempt++ {
 		// Perform all checks
@@ -175,32 +178,28 @@ func (pm *ProcessManager) HealthCheckWithRetry(ctx context.Context, nodes []ipfs
 		rqliteResult := pm.RQLiteHealthCheck(deadlineCtx)
 		libp2pResult := pm.LibP2PHealthCheck(deadlineCtx)
 
-		// Log results
-		if attempt == 1 || attempt == retries || (attempt%3 == 0) {
-			fmt.Fprintf(pm.logWriter, "  Attempt %d/%d:\n", attempt, retries)
-			pm.logHealthCheckResult(pm.logWriter, "    ", ipfsResult)
-			pm.logHealthCheckResult(pm.logWriter, "    ", rqliteResult)
-			pm.logHealthCheckResult(pm.logWriter, "    ", libp2pResult)
-		}
-
 		// All checks must pass
 		if ipfsResult.Healthy && rqliteResult.Healthy && libp2pResult.Healthy {
-			fmt.Fprintf(pm.logWriter, "\n✓ All health checks passed!\n")
+			fmt.Fprintf(pm.logWriter, "\r✓ Cluster health validated\n")
 			return true
 		}
+
+		// Show spinner progress
+		fmt.Fprintf(pm.logWriter, "\r%s Validating cluster health... (%d/%d)", spinnerFrames[spinnerIndex%len(spinnerFrames)], attempt, retries)
+		spinnerIndex++
 
 		if attempt < retries {
 			select {
 			case <-time.After(retryInterval):
 				continue
 			case <-deadlineCtx.Done():
-				fmt.Fprintf(pm.logWriter, "\n❌ Health check timeout reached\n")
+				fmt.Fprintf(pm.logWriter, "\r❌ Health check timeout reached\n")
 				return false
 			}
 		}
 	}
 
-	fmt.Fprintf(pm.logWriter, "\n❌ Health checks failed after %d attempts\n", retries)
+	fmt.Fprintf(pm.logWriter, "\r❌ Health checks failed - services not ready\n")
 	return false
 }
 

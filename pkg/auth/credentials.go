@@ -34,15 +34,15 @@ func GetCredentialsPath() (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	debrosDir := filepath.Join(homeDir, ".debros")
-	if err := os.MkdirAll(debrosDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create .debros directory: %w", err)
+	oramaDir := filepath.Join(homeDir, ".orama")
+	if err := os.MkdirAll(oramaDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create .orama directory: %w", err)
 	}
 
-	return filepath.Join(debrosDir, "credentials.json"), nil
+	return filepath.Join(oramaDir, "credentials.json"), nil
 }
 
-// LoadCredentials loads credentials from ~/.debros/credentials.json
+// LoadCredentials loads credentials from ~/.orama/credentials.json
 func LoadCredentials() (*CredentialStore, error) {
 	credPath, err := GetCredentialsPath()
 	if err != nil {
@@ -80,7 +80,7 @@ func LoadCredentials() (*CredentialStore, error) {
 	return &store, nil
 }
 
-// SaveCredentials saves credentials to ~/.debros/credentials.json
+// SaveCredentials saves credentials to ~/.orama/credentials.json
 func (store *CredentialStore) SaveCredentials() error {
 	credPath, err := GetCredentialsPath()
 	if err != nil {

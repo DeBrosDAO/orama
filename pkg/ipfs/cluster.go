@@ -86,7 +86,7 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	// Determine cluster path based on data directory structure
-	// Check if dataDir contains specific node names (e.g., ~/.debros/bootstrap, ~/.debros/bootstrap2, ~/.debros/node2-4)
+	// Check if dataDir contains specific node names (e.g., ~/.orama/bootstrap, ~/.orama/bootstrap2, ~/.orama/node2-4)
 	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
 	nodeNames := []string{"bootstrap", "bootstrap2", "node2", "node3", "node4"}
 	for _, nodeName := range nodeNames {
@@ -103,11 +103,11 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 
 	// Load or generate cluster secret
 	secretPath := filepath.Join(dataDir, "..", "cluster-secret")
-	if strings.Contains(dataDir, ".debros") {
-		// Try to find cluster-secret in ~/.debros
+	if strings.Contains(dataDir, ".orama") {
+		// Try to find cluster-secret in ~/.orama
 		home, err := os.UserHomeDir()
 		if err == nil {
-			secretPath = filepath.Join(home, ".debros", "cluster-secret")
+			secretPath = filepath.Join(home, ".orama", "cluster-secret")
 		}
 	}
 

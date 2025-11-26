@@ -50,7 +50,7 @@ func showAuthHelp() {
 	fmt.Printf("  1. Run 'dbn auth login'\n")
 	fmt.Printf("  2. Enter your wallet address when prompted\n")
 	fmt.Printf("  3. Enter your namespace (or press Enter for 'default')\n")
-	fmt.Printf("  4. An API key will be generated and saved to ~/.debros/credentials.json\n\n")
+	fmt.Printf("  4. An API key will be generated and saved to ~/.orama/credentials.json\n\n")
 	fmt.Printf("Note: Authentication uses the currently active environment.\n")
 	fmt.Printf("      Use 'dbn env current' to see your active environment.\n")
 }

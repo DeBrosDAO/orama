@@ -35,7 +35,7 @@ var (
 	cacheMutex       sync.RWMutex
 )
 
-// loadGatewayConfig loads gateway configuration from ~/.debros/gateway.yaml
+// loadGatewayConfig loads gateway configuration from ~/.orama/gateway.yaml
 func loadGatewayConfig() (map[string]interface{}, error) {
 	configPath, err := config.DefaultPath("gateway.yaml")
 	if err != nil {
@@ -55,7 +55,7 @@ func loadGatewayConfig() (map[string]interface{}, error) {
 	return cfg, nil
 }
 
-// loadNodeConfig loads node configuration from ~/.debros/node.yaml or bootstrap.yaml
+// loadNodeConfig loads node configuration from ~/.orama/node.yaml or bootstrap.yaml
 func loadNodeConfig(filename string) (map[string]interface{}, error) {
 	configPath, err := config.DefaultPath(filename)
 	if err != nil {
@@ -143,11 +143,11 @@ func queryAPIKeyFromRQLite() (string, error) {
 
 	// Try bootstrap first, then all nodes
 	dbPaths := []string{
-		filepath.Join(homeDir, ".debros", "bootstrap", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "bootstrap2", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "node2", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "node3", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "node4", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "bootstrap", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "bootstrap2", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node2", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node3", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node4", "rqlite", "db.sqlite"),
 	}
 
 	for _, dbPath := range dbPaths {
@@ -562,7 +562,7 @@ func CleanupDatabaseTable(t *testing.T, tableName string) {
 		return
 	}
 
-	dbPath := filepath.Join(homeDir, ".debros", "bootstrap", "rqlite", "db.sqlite")
+	dbPath := filepath.Join(homeDir, ".orama", "bootstrap", "rqlite", "db.sqlite")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Logf("warning: failed to open database for cleanup: %v", err)

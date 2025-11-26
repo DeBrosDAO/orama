@@ -1,0 +1,18 @@
+#!/bin/bash
+set -e
+
+# Post-installation script for orama package
+
+echo "Orama installed successfully!"
+echo ""
+echo "To set up your node, run:"
+echo "  sudo orama install"
+echo ""
+echo "This will launch the interactive installer."
+echo ""
+echo "For command-line installation:"
+echo "  sudo orama install --vps-ip <your-ip> --domain <your-domain>"
+echo ""
+echo "For help:"
+echo "  orama --help"
+

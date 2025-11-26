@@ -11,34 +11,21 @@ import (
 //go:embed *.yaml *.service
 var templatesFS embed.FS
 
-// BootstrapConfigData holds parameters for bootstrap.yaml rendering
-type BootstrapConfigData struct {
-	NodeID            string
-	P2PPort           int
-	DataDir           string
-	RQLiteHTTPPort    int
-	RQLiteRaftPort    int
-	ClusterAPIPort    int
-	IPFSAPIPort       int      // Default: 4501
-	BootstrapPeers    []string // List of bootstrap peer multiaddrs
-	RQLiteJoinAddress string   // Optional: join address for secondary bootstraps
-	HTTPAdvAddress    string   // Advertised HTTP address (IP:port)
-	RaftAdvAddress    string   // Advertised Raft address (IP:port)
-}
-
-// NodeConfigData holds parameters for node.yaml rendering
+// NodeConfigData holds parameters for node.yaml rendering (unified - no bootstrap/node distinction)
 type NodeConfigData struct {
-	NodeID            string
-	P2PPort           int
-	DataDir           string
-	RQLiteHTTPPort    int
-	RQLiteRaftPort    int
-	RQLiteJoinAddress string
-	BootstrapPeers    []string
-	ClusterAPIPort    int
-	IPFSAPIPort       int    // Default: 4501+
-	HTTPAdvAddress    string // Advertised HTTP address (IP:port)
-	RaftAdvAddress    string // Advertised Raft address (IP:port)
+	NodeID             string
+	P2PPort            int
+	DataDir            string
+	RQLiteHTTPPort     int
+	RQLiteRaftPort     int
+	RQLiteJoinAddress  string   // Optional: join address for joining existing cluster
+	BootstrapPeers     []string // List of peer multiaddrs to connect to
+	ClusterAPIPort     int
+	IPFSAPIPort        int    // Default: 4501
+	HTTPAdvAddress     string // Advertised HTTP address (IP:port)
+	RaftAdvAddress     string // Advertised Raft address (IP:port)
+	UnifiedGatewayPort int    // Unified gateway port for all node services
+	Domain             string // Domain for this node (e.g., node-123.orama.network)
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering
@@ -63,56 +50,37 @@ type OlricConfigData struct {
 
 // SystemdIPFSData holds parameters for systemd IPFS service rendering
 type SystemdIPFSData struct {
-	NodeType     string
 	HomeDir      string
 	IPFSRepoPath string
 	SecretsDir   string
-	DebrosDir    string
+	OramaDir    string
 }
 
 // SystemdIPFSClusterData holds parameters for systemd IPFS Cluster service rendering
 type SystemdIPFSClusterData struct {
-	NodeType    string
 	HomeDir     string
 	ClusterPath string
-	DebrosDir   string
-}
-
-// SystemdRQLiteData holds parameters for systemd RQLite service rendering
-type SystemdRQLiteData struct {
-	NodeType  string
-	HomeDir   string
-	HTTPPort  int
-	RaftPort  int
-	DataDir   string
-	JoinAddr  string
-	DebrosDir string
+	OramaDir   string
 }
 
 // SystemdOlricData holds parameters for systemd Olric service rendering
 type SystemdOlricData struct {
 	HomeDir    string
 	ConfigPath string
-	DebrosDir  string
+	OramaDir  string
 }
 
 // SystemdNodeData holds parameters for systemd Node service rendering
 type SystemdNodeData struct {
-	NodeType   string
 	HomeDir    string
 	ConfigFile string
-	DebrosDir  string
+	OramaDir  string
 }
 
 // SystemdGatewayData holds parameters for systemd Gateway service rendering
 type SystemdGatewayData struct {
 	HomeDir   string
-	DebrosDir string
-}
-
-// RenderBootstrapConfig renders the bootstrap config template with the given data
-func RenderBootstrapConfig(data BootstrapConfigData) (string, error) {
-	return renderTemplate("bootstrap.yaml", data)
+	OramaDir string
 }
 
 // RenderNodeConfig renders the node config template with the given data
@@ -138,11 +106,6 @@ func RenderIPFSService(data SystemdIPFSData) (string, error) {
 // RenderIPFSClusterService renders the IPFS Cluster systemd service template
 func RenderIPFSClusterService(data SystemdIPFSClusterData) (string, error) {
 	return renderTemplate("systemd_ipfs_cluster.service", data)
-}
-
-// RenderRQLiteService renders the RQLite systemd service template
-func RenderRQLiteService(data SystemdRQLiteData) (string, error) {
-	return renderTemplate("systemd_rqlite.service", data)
 }
 
 // RenderOlricService renders the Olric systemd service template

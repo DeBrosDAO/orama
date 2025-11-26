@@ -275,11 +275,11 @@ func (bi *BinaryInstaller) ResolveBinaryPath(binary string, extraPaths ...string
 }
 
 // InstallDeBrosBinaries clones and builds DeBros binaries
-func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome string, skipRepoUpdate bool) error {
+func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, oramaHome string, skipRepoUpdate bool) error {
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "  Building DeBros binaries...\n")
 
-	srcDir := filepath.Join(debrosHome, "src")
-	binDir := filepath.Join(debrosHome, "bin")
+	srcDir := filepath.Join(oramaHome, "src")
+	binDir := filepath.Join(oramaHome, "bin")
 
 	// Ensure directories exist
 	os.MkdirAll(srcDir, 0755)
@@ -331,7 +331,7 @@ func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, debrosHome strin
 	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Building binaries...\n")
 	cmd := exec.Command("make", "build")
 	cmd.Dir = srcDir
-	cmd.Env = append(os.Environ(), "HOME="+debrosHome, "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
+	cmd.Env = append(os.Environ(), "HOME="+oramaHome, "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build: %v\n%s", err, string(output))
 	}
@@ -401,15 +401,15 @@ func (bi *BinaryInstaller) InstallSystemDependencies() error {
 	return nil
 }
 
-// InitializeIPFSRepo initializes an IPFS repository for a node
-func (bi *BinaryInstaller) InitializeIPFSRepo(nodeType, ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int) error {
+// InitializeIPFSRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
+func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 	repoExists := false
 	if _, err := os.Stat(configPath); err == nil {
 		repoExists = true
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    IPFS repo for %s already exists, ensuring configuration...\n", nodeType)
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    IPFS repo already exists, ensuring configuration...\n")
 	} else {
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS repo for %s...\n", nodeType)
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing IPFS repo...\n")
 	}
 
 	if err := os.MkdirAll(ipfsRepoPath, 0755); err != nil {
@@ -507,16 +507,17 @@ func (bi *BinaryInstaller) configureIPFSAddresses(ipfsRepoPath string, apiPort, 
 	}
 
 	// Set Addresses
+	// Bind API and Gateway to localhost only for security
+	// Swarm remains on all interfaces for peer connections (routed via SNI gateway in production)
 	config["Addresses"] = map[string]interface{}{
 		"API": []string{
-			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", apiPort),
+			fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", apiPort),
 		},
 		"Gateway": []string{
-			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", gatewayPort),
+			fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", gatewayPort),
 		},
 		"Swarm": []string{
-			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", swarmPort),
-			fmt.Sprintf("/ip6/::/tcp/%d", swarmPort),
+			fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", swarmPort),
 		},
 	}
 
@@ -533,18 +534,18 @@ func (bi *BinaryInstaller) configureIPFSAddresses(ipfsRepoPath string, apiPort, 
 	return nil
 }
 
-// InitializeIPFSClusterConfig initializes IPFS Cluster configuration
+// InitializeIPFSClusterConfig initializes IPFS Cluster configuration (unified - no bootstrap/node distinction)
 // This runs `ipfs-cluster-service init` to create the service.json configuration file.
 // For existing installations, it ensures the cluster secret is up to date.
-// bootstrapClusterPeers should be in format: ["/ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>"]
-func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret string, ipfsAPIPort int, bootstrapClusterPeers []string) error {
+// clusterPeers should be in format: ["/ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>"]
+func (bi *BinaryInstaller) InitializeIPFSClusterConfig(clusterPath, clusterSecret string, ipfsAPIPort int, clusterPeers []string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	configExists := false
 	if _, err := os.Stat(serviceJSONPath); err == nil {
 		configExists = true
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    IPFS Cluster config for %s already exists, ensuring it's up to date...\n", nodeType)
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    IPFS Cluster config already exists, ensuring it's up to date...\n")
 	} else {
-		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Preparing IPFS Cluster path for %s...\n", nodeType)
+		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Preparing IPFS Cluster path...\n")
 	}
 
 	if err := os.MkdirAll(clusterPath, 0755); err != nil {
@@ -581,7 +582,7 @@ func (bi *BinaryInstaller) InitializeIPFSClusterConfig(nodeType, clusterPath, cl
 	// We do this AFTER init to ensure our secret takes precedence
 	if clusterSecret != "" {
 		fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Updating cluster secret, IPFS port, and peer addresses...\n")
-		if err := bi.updateClusterConfig(clusterPath, clusterSecret, ipfsAPIPort, bootstrapClusterPeers); err != nil {
+		if err := bi.updateClusterConfig(clusterPath, clusterSecret, ipfsAPIPort, clusterPeers); err != nil {
 			return fmt.Errorf("failed to update cluster config: %w", err)
 		}
 
@@ -717,8 +718,8 @@ func (bi *BinaryInstaller) GetClusterPeerMultiaddr(clusterPath string, nodeIP st
 }
 
 // InitializeRQLiteDataDir initializes RQLite data directory
-func (bi *BinaryInstaller) InitializeRQLiteDataDir(nodeType, dataDir string) error {
-	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing RQLite data dir for %s...\n", nodeType)
+func (bi *BinaryInstaller) InitializeRQLiteDataDir(dataDir string) error {
+	fmt.Fprintf(bi.logWriter.(interface{ Write([]byte) (int, error) }), "    Initializing RQLite data dir...\n")
 
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create RQLite data directory: %w", err)

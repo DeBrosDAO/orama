@@ -23,6 +23,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/DeBrosOfficial/network/pkg/encryption"
+	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
@@ -50,6 +51,9 @@ type Node struct {
 
 	// IPFS Cluster config manager
 	clusterConfigManager *ipfs.ClusterConfigManager
+
+	// HTTP reverse proxy gateway
+	httpGateway *gateway.HTTPGateway
 }
 
 // NewNode creates a new network node
@@ -637,6 +641,11 @@ func (n *Node) stopPeerDiscovery() {
 func (n *Node) Stop() error {
 	n.logger.ComponentInfo(logging.ComponentNode, "Stopping network node")
 
+	// Stop HTTP Gateway
+	if n.httpGateway != nil {
+		_ = n.httpGateway.Stop()
+	}
+
 	// Stop cluster discovery
 	if n.clusterDiscovery != nil {
 		n.clusterDiscovery.Stop()
@@ -667,6 +676,43 @@ func (n *Node) Stop() error {
 	return nil
 }
 
+// startHTTPGateway initializes and starts the HTTP reverse proxy gateway
+func (n *Node) startHTTPGateway(ctx context.Context) error {
+	if !n.config.HTTPGateway.Enabled {
+		n.logger.ComponentInfo(logging.ComponentNode, "HTTP Gateway disabled in config")
+		return nil
+	}
+
+	// Create separate logger for unified gateway
+	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", fmt.Sprintf("gateway-%s.log", n.config.HTTPGateway.NodeName))
+	
+	// Ensure logs directory exists
+	logsDir := filepath.Dir(logFile)
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %w", err)
+	}
+
+	httpGatewayLogger, err := logging.NewFileLogger(logging.ComponentGeneral, logFile, false)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP gateway logger: %w", err)
+	}
+
+	// Create and start HTTP gateway with its own logger
+	n.httpGateway, err = gateway.NewHTTPGateway(httpGatewayLogger, &n.config.HTTPGateway)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP gateway: %w", err)
+	}
+
+	// Start gateway in a goroutine (it handles its own lifecycle)
+	go func() {
+		if err := n.httpGateway.Start(ctx); err != nil {
+			n.logger.ComponentError(logging.ComponentNode, "HTTP Gateway error", zap.Error(err))
+		}
+	}()
+
+	return nil
+}
+
 // Starts the network node
 func (n *Node) Start(ctx context.Context) error {
 	n.logger.Info("Starting network node", zap.String("data_dir", n.config.Node.DataDir))
@@ -685,6 +731,12 @@ func (n *Node) Start(ctx context.Context) error {
 	// Create data directory
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Start HTTP Gateway first (doesn't depend on other services)
+	if err := n.startHTTPGateway(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start HTTP Gateway", zap.Error(err))
+		// Don't fail node startup if gateway fails
 	}
 
 	// Start LibP2P host first (needed for cluster discovery)

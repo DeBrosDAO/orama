@@ -5,46 +5,12 @@ import (
 	"testing"
 )
 
-func TestRenderBootstrapConfig(t *testing.T) {
-	data := BootstrapConfigData{
-		NodeID:         "bootstrap",
-		P2PPort:        4001,
-		DataDir:        "/home/debros/.debros/bootstrap",
-		RQLiteHTTPPort: 5001,
-		RQLiteRaftPort: 7001,
-		ClusterAPIPort: 9094,
-		IPFSAPIPort:    5001,
-	}
-
-	result, err := RenderBootstrapConfig(data)
-	if err != nil {
-		t.Fatalf("RenderBootstrapConfig failed: %v", err)
-	}
-
-	// Check for required fields
-	checks := []string{
-		"id: \"bootstrap\"",
-		"type: \"bootstrap\"",
-		"tcp/4001",
-		"rqlite_port: 5001",
-		"rqlite_raft_port: 7001",
-		"cluster_api_url: \"http://localhost:9094\"",
-		"api_url: \"http://localhost:5001\"",
-	}
-
-	for _, check := range checks {
-		if !strings.Contains(result, check) {
-			t.Errorf("Bootstrap config missing: %s", check)
-		}
-	}
-}
-
 func TestRenderNodeConfig(t *testing.T) {
 	bootstrapMultiaddr := "/ip4/127.0.0.1/tcp/4001/p2p/Qm1234567890"
 	data := NodeConfigData{
 		NodeID:            "node2",
 		P2PPort:           4002,
-		DataDir:           "/home/debros/.debros/node2",
+		DataDir:           "/home/debros/.orama/node2",
 		RQLiteHTTPPort:    5002,
 		RQLiteRaftPort:    7002,
 		RQLiteJoinAddress: "localhost:5001",

@@ -10,31 +10,25 @@ import (
 
 // SystemdServiceGenerator generates systemd unit files
 type SystemdServiceGenerator struct {
-	debrosHome string
-	debrosDir  string
+	oramaHome string
+	oramaDir  string
 }
 
 // NewSystemdServiceGenerator creates a new service generator
-func NewSystemdServiceGenerator(debrosHome, debrosDir string) *SystemdServiceGenerator {
+func NewSystemdServiceGenerator(oramaHome, oramaDir string) *SystemdServiceGenerator {
 	return &SystemdServiceGenerator{
-		debrosHome: debrosHome,
-		debrosDir:  debrosDir,
+		oramaHome: oramaHome,
+		oramaDir:  oramaDir,
 	}
 }
 
 // GenerateIPFSService generates the IPFS daemon systemd unit
-func (ssg *SystemdServiceGenerator) GenerateIPFSService(nodeType string, ipfsBinary string) string {
-	var ipfsRepoPath string
-	if nodeType == "bootstrap" {
-		ipfsRepoPath = filepath.Join(ssg.debrosDir, "data", "bootstrap", "ipfs", "repo")
-	} else {
-		ipfsRepoPath = filepath.Join(ssg.debrosDir, "data", "node", "ipfs", "repo")
-	}
-
-	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("ipfs-%s.log", nodeType))
+func (ssg *SystemdServiceGenerator) GenerateIPFSService(ipfsBinary string) string {
+	ipfsRepoPath := filepath.Join(ssg.oramaDir, "data", "ipfs", "repo")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs.log")
 
 	return fmt.Sprintf(`[Unit]
-Description=IPFS Daemon (%[1]s)
+Description=IPFS Daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -42,15 +36,64 @@ Wants=network-online.target
 Type=simple
 User=debros
 Group=debros
-Environment=HOME=%[2]s
-Environment=IPFS_PATH=%[3]s
-ExecStartPre=/bin/bash -c 'if [ -f %[4]s/secrets/swarm.key ] && [ ! -f %[3]s/swarm.key ]; then cp %[4]s/secrets/swarm.key %[3]s/swarm.key && chmod 600 %[3]s/swarm.key; fi'
-ExecStart=%[6]s daemon --enable-pubsub-experiment --repo-dir=%[3]s
+Environment=HOME=%[1]s
+Environment=IPFS_PATH=%[2]s
+ExecStartPre=/bin/bash -c 'if [ -f %[3]s/secrets/swarm.key ] && [ ! -f %[2]s/swarm.key ]; then cp %[3]s/secrets/swarm.key %[2]s/swarm.key && chmod 600 %[2]s/swarm.key; fi'
+ExecStart=%[5]s daemon --enable-pubsub-experiment --repo-dir=%[2]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%[5]s
-StandardError=file:%[5]s
-SyslogIdentifier=ipfs-%[1]s
+StandardOutput=file:%[4]s
+StandardError=file:%[4]s
+SyslogIdentifier=debros-ipfs
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%[3]s
+
+[Install]
+WantedBy=multi-user.target
+`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, logFile, ipfsBinary)
+}
+
+// GenerateIPFSClusterService generates the IPFS Cluster systemd unit
+func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary string) string {
+	clusterPath := filepath.Join(ssg.oramaDir, "data", "ipfs-cluster")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs-cluster.log")
+	
+	// Read cluster secret from file to pass to daemon
+	clusterSecretPath := filepath.Join(ssg.oramaDir, "secrets", "cluster-secret")
+	clusterSecret := ""
+	if data, err := os.ReadFile(clusterSecretPath); err == nil {
+		clusterSecret = strings.TrimSpace(string(data))
+	}
+
+	// Escape the secret for use in bash command (escape single quotes and backslashes)
+	escapedSecret := strings.ReplaceAll(clusterSecret, "'", "'\"'\"'")
+	escapedSecret = strings.ReplaceAll(escapedSecret, "\\", "\\\\")
+	_ = escapedSecret // Used in ExecStartPre
+
+	return fmt.Sprintf(`[Unit]
+Description=IPFS Cluster Service
+After=debros-ipfs.service
+Wants=debros-ipfs.service
+Requires=debros-ipfs.service
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+WorkingDirectory=%[1]s
+Environment=HOME=%[1]s
+Environment=IPFS_CLUSTER_PATH=%[2]s
+Environment=CLUSTER_SECRET=%[6]s
+ExecStartPre=/bin/bash -c 'if [ -f %[7]s ] && [ -f %[2]s/service.json ]; then SECRET=$(cat %[7]s | tr -d "[:space:]"); python3 -c "import json, sys; f=open(\"%[2]s/service.json\", \"r\"); d=json.load(f); f.close(); d.setdefault(\"cluster\", {})[\"secret\"]=\"$SECRET\"; f=open(\"%[2]s/service.json\", \"w\"); json.dump(d, f, indent=2); f.close()" 2>/dev/null || sed -i "s|\"secret\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"secret\": \"$SECRET\"|" %[2]s/service.json; fi'
+ExecStart=%[5]s daemon
+Restart=always
+RestartSec=5
+StandardOutput=file:%[3]s
+StandardError=file:%[3]s
+SyslogIdentifier=debros-ipfs-cluster
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -59,66 +102,22 @@ ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, ipfsRepoPath, ssg.debrosDir, logFile, ipfsBinary)
-}
-
-// GenerateIPFSClusterService generates the IPFS Cluster systemd unit
-func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(nodeType string, clusterBinary string) string {
-	var clusterPath string
-	if nodeType == "bootstrap" {
-		clusterPath = filepath.Join(ssg.debrosDir, "data", "bootstrap", "ipfs-cluster")
-	} else {
-		clusterPath = filepath.Join(ssg.debrosDir, "data", "node", "ipfs-cluster")
-	}
-
-	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", nodeType))
-
-	return fmt.Sprintf(`[Unit]
-Description=IPFS Cluster Service (%[1]s)
-After=debros-ipfs-%[1]s.service
-Wants=debros-ipfs-%[1]s.service
-Requires=debros-ipfs-%[1]s.service
-
-[Service]
-Type=simple
-User=debros
-Group=debros
-WorkingDirectory=%[2]s
-Environment=HOME=%[2]s
-Environment=IPFS_CLUSTER_PATH=%[3]s
-ExecStart=%[6]s daemon
-Restart=always
-RestartSec=5
-StandardOutput=file:%[4]s
-StandardError=file:%[4]s
-SyslogIdentifier=ipfs-cluster-%[1]s
-
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=%[5]s
-
-[Install]
-WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, clusterPath, logFile, ssg.debrosDir, clusterBinary)
+`, ssg.oramaHome, clusterPath, logFile, ssg.oramaDir, clusterBinary, clusterSecret, clusterSecretPath)
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
-func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, rqliteBinary string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
-	var dataDir string
-	if nodeType == "bootstrap" {
-		dataDir = filepath.Join(ssg.debrosDir, "data", "bootstrap", "rqlite")
-	} else {
-		dataDir = filepath.Join(ssg.debrosDir, "data", "node", "rqlite")
-	}
+func (ssg *SystemdServiceGenerator) GenerateRQLiteService(rqliteBinary string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
+	dataDir := filepath.Join(ssg.oramaDir, "data", "rqlite")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "rqlite.log")
 
 	// Use public IP for advertise if provided, otherwise default to localhost
 	if advertiseIP == "" {
 		advertiseIP = "127.0.0.1"
 	}
 
+	// Bind RQLite to localhost only - external access via SNI gateway
 	args := fmt.Sprintf(
-		`-http-addr 0.0.0.0:%d -http-adv-addr %s:%d -raft-adv-addr %s:%d -raft-addr 0.0.0.0:%d`,
+		`-http-addr 127.0.0.1:%d -http-adv-addr %s:%d -raft-adv-addr %s:%d -raft-addr 127.0.0.1:%d`,
 		httpPort, advertiseIP, httpPort, advertiseIP, raftPort, raftPort,
 	)
 
@@ -128,10 +127,8 @@ func (ssg *SystemdServiceGenerator) GenerateRQLiteService(nodeType string, rqlit
 
 	args += fmt.Sprintf(` %s`, dataDir)
 
-	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("rqlite-%s.log", nodeType))
-
 	return fmt.Sprintf(`[Unit]
-Description=RQLite Database (%[1]s)
+Description=RQLite Database
 After=network-online.target
 Wants=network-online.target
 
@@ -139,28 +136,28 @@ Wants=network-online.target
 Type=simple
 User=debros
 Group=debros
-Environment=HOME=%[2]s
-ExecStart=%[6]s %[3]s
+Environment=HOME=%[1]s
+ExecStart=%[5]s %[2]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%[4]s
-StandardError=file:%[4]s
-SyslogIdentifier=rqlite-%[1]s
+StandardOutput=file:%[3]s
+StandardError=file:%[3]s
+SyslogIdentifier=debros-rqlite
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%[5]s
+ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, ssg.debrosHome, args, logFile, ssg.debrosDir, rqliteBinary)
+`, ssg.oramaHome, args, logFile, ssg.oramaDir, rqliteBinary)
 }
 
 // GenerateOlricService generates the Olric systemd unit
 func (ssg *SystemdServiceGenerator) GenerateOlricService(olricBinary string) string {
-	olricConfigPath := filepath.Join(ssg.debrosDir, "configs", "olric", "config.yaml")
-	logFile := filepath.Join(ssg.debrosDir, "logs", "olric.log")
+	olricConfigPath := filepath.Join(ssg.oramaDir, "configs", "olric", "config.yaml")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "olric.log")
 
 	return fmt.Sprintf(`[Unit]
 Description=Olric Cache Server
@@ -187,70 +184,62 @@ ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.debrosHome, olricConfigPath, logFile, ssg.debrosDir, olricBinary)
+`, ssg.oramaHome, olricConfigPath, logFile, ssg.oramaDir, olricBinary)
 }
 
 // GenerateNodeService generates the DeBros Node systemd unit
-func (ssg *SystemdServiceGenerator) GenerateNodeService(nodeType string) string {
-	var configFile string
-	if nodeType == "bootstrap" {
-		configFile = "bootstrap.yaml"
-	} else {
-		configFile = "node.yaml"
-	}
-
-	logFile := filepath.Join(ssg.debrosDir, "logs", fmt.Sprintf("node-%s.log", nodeType))
+func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
+	configFile := "node.yaml"
+	logFile := filepath.Join(ssg.oramaDir, "logs", "node.log")
 
 	return fmt.Sprintf(`[Unit]
-Description=DeBros Network Node (%s)
-After=debros-ipfs-cluster-%s.service
-Wants=debros-ipfs-cluster-%s.service
-Requires=debros-ipfs-cluster-%s.service
+Description=DeBros Network Node
+After=debros-ipfs-cluster.service
+Wants=debros-ipfs-cluster.service
+Requires=debros-ipfs-cluster.service
 
 [Service]
 Type=simple
 User=debros
 Group=debros
-WorkingDirectory=%s
-Environment=HOME=%s
-ExecStart=%s/bin/node --config %s/configs/%s
+WorkingDirectory=%[1]s
+Environment=HOME=%[1]s
+ExecStart=%[1]s/bin/node --config %[2]s/configs/%[3]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%s
-StandardError=file:%s
-SyslogIdentifier=debros-node-%s
+StandardOutput=file:%[4]s
+StandardError=file:%[4]s
+SyslogIdentifier=debros-node
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%s
+ReadWritePaths=%[2]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeType, nodeType, nodeType, nodeType, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, configFile, logFile, logFile, nodeType, ssg.debrosDir)
+`, ssg.oramaHome, ssg.oramaDir, configFile, logFile)
 }
 
 // GenerateGatewayService generates the DeBros Gateway systemd unit
-func (ssg *SystemdServiceGenerator) GenerateGatewayService(nodeType string) string {
-	nodeService := fmt.Sprintf("debros-node-%s.service", nodeType)
-	olricService := "debros-olric.service"
-	logFile := filepath.Join(ssg.debrosDir, "logs", "gateway.log")
+func (ssg *SystemdServiceGenerator) GenerateGatewayService() string {
+	logFile := filepath.Join(ssg.oramaDir, "logs", "gateway.log")
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Gateway
-After=%s %s
-Wants=%s %s
+After=debros-node.service debros-olric.service
+Wants=debros-node.service debros-olric.service
 
 [Service]
 Type=simple
 User=debros
 Group=debros
-WorkingDirectory=%s
-Environment=HOME=%s
-ExecStart=%s/bin/gateway --config %s/data/gateway.yaml
+WorkingDirectory=%[1]s
+Environment=HOME=%[1]s
+ExecStart=%[1]s/bin/gateway --config %[2]s/data/gateway.yaml
 Restart=always
 RestartSec=5
-StandardOutput=file:%s
-StandardError=file:%s
+StandardOutput=file:%[3]s
+StandardError=file:%[3]s
 SyslogIdentifier=debros-gateway
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -259,16 +248,16 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%s
+ReadWritePaths=%[2]s
 
 [Install]
 WantedBy=multi-user.target
-`, nodeService, olricService, nodeService, olricService, ssg.debrosHome, ssg.debrosHome, ssg.debrosHome, ssg.debrosDir, logFile, logFile, ssg.debrosDir)
+`, ssg.oramaHome, ssg.oramaDir, logFile)
 }
 
 // GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit
 func (ssg *SystemdServiceGenerator) GenerateAnyoneClientService() string {
-	logFile := filepath.Join(ssg.debrosDir, "logs", "anyone-client.log")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "anyone-client.log")
 
 	return fmt.Sprintf(`[Unit]
 Description=Anyone Client SOCKS5 Proxy
@@ -295,7 +284,7 @@ ReadWritePaths=%[3]s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.debrosHome, logFile, ssg.debrosDir)
+`, ssg.oramaHome, logFile, ssg.oramaDir)
 }
 
 // SystemdController manages systemd service operations

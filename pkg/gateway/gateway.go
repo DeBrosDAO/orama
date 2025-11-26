@@ -45,7 +45,7 @@ type Config struct {
 	// HTTPS configuration
 	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
 	DomainName  string // Domain name for HTTPS certificate
-	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.debros/tls-cache)
+	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.orama/tls-cache)
 
 	// Olric cache configuration
 	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:3320"]). If empty, defaults to ["localhost:3320"]
@@ -522,7 +522,7 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 		return ipfsDiscoveryResult{}
 	}
 
-	configDir := filepath.Join(homeDir, ".debros")
+	configDir := filepath.Join(homeDir, ".orama")
 
 	// Try bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
 	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"}

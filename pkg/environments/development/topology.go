@@ -7,7 +7,7 @@ type NodeSpec struct {
 	Name              string // bootstrap, bootstrap2, node2, node3, node4
 	Role              string // "bootstrap" or "node"
 	ConfigFilename    string // bootstrap.yaml, bootstrap2.yaml, node2.yaml, etc.
-	DataDir           string // relative path from .debros root
+	DataDir           string // relative path from .orama root
 	P2PPort           int    // LibP2P listen port
 	IPFSAPIPort       int    // IPFS API port
 	IPFSSwarmPort     int    // IPFS Swarm port
@@ -16,6 +16,7 @@ type NodeSpec struct {
 	RQLiteRaftPort    int    // RQLite Raft consensus port
 	ClusterAPIPort    int    // IPFS Cluster REST API port
 	ClusterPort       int    // IPFS Cluster P2P port
+	UnifiedGatewayPort int   // Unified gateway port (proxies all services)
 	RQLiteJoinTarget  string // which bootstrap RQLite port to join (leave empty for bootstraps that lead)
 	ClusterJoinTarget string // which bootstrap cluster to join (leave empty for bootstrap that leads)
 }
@@ -33,86 +34,91 @@ type Topology struct {
 func DefaultTopology() *Topology {
 	return &Topology{
 		Nodes: []NodeSpec{
-			{
-				Name:              "bootstrap",
-				Role:              "bootstrap",
-				ConfigFilename:    "bootstrap.yaml",
-				DataDir:           "bootstrap",
-				P2PPort:           4001,
-				IPFSAPIPort:       4501,
-				IPFSSwarmPort:     4101,
-				IPFSGatewayPort:   7501,
-				RQLiteHTTPPort:    5001,
-				RQLiteRaftPort:    7001,
-				ClusterAPIPort:    9094,
-				ClusterPort:       9096,
-				RQLiteJoinTarget:  "",
-				ClusterJoinTarget: "",
-			},
-			{
-				Name:              "bootstrap2",
-				Role:              "bootstrap",
-				ConfigFilename:    "bootstrap2.yaml",
-				DataDir:           "bootstrap2",
-				P2PPort:           4011,
-				IPFSAPIPort:       4511,
-				IPFSSwarmPort:     4111,
-				IPFSGatewayPort:   7511,
-				RQLiteHTTPPort:    5011,
-				RQLiteRaftPort:    7011,
-				ClusterAPIPort:    9104,
-				ClusterPort:       9106,
-				RQLiteJoinTarget:  "localhost:7001",
-				ClusterJoinTarget: "localhost:9096",
-			},
-			{
-				Name:              "node2",
-				Role:              "node",
-				ConfigFilename:    "node2.yaml",
-				DataDir:           "node2",
-				P2PPort:           4002,
-				IPFSAPIPort:       4502,
-				IPFSSwarmPort:     4102,
-				IPFSGatewayPort:   7502,
-				RQLiteHTTPPort:    5002,
-				RQLiteRaftPort:    7002,
-				ClusterAPIPort:    9114,
-				ClusterPort:       9116,
-				RQLiteJoinTarget:  "localhost:7001",
-				ClusterJoinTarget: "localhost:9096",
-			},
-			{
-				Name:              "node3",
-				Role:              "node",
-				ConfigFilename:    "node3.yaml",
-				DataDir:           "node3",
-				P2PPort:           4003,
-				IPFSAPIPort:       4503,
-				IPFSSwarmPort:     4103,
-				IPFSGatewayPort:   7503,
-				RQLiteHTTPPort:    5003,
-				RQLiteRaftPort:    7003,
-				ClusterAPIPort:    9124,
-				ClusterPort:       9126,
-				RQLiteJoinTarget:  "localhost:7001",
-				ClusterJoinTarget: "localhost:9096",
-			},
-			{
-				Name:              "node4",
-				Role:              "node",
-				ConfigFilename:    "node4.yaml",
-				DataDir:           "node4",
-				P2PPort:           4004,
-				IPFSAPIPort:       4504,
-				IPFSSwarmPort:     4104,
-				IPFSGatewayPort:   7504,
-				RQLiteHTTPPort:    5004,
-				RQLiteRaftPort:    7004,
-				ClusterAPIPort:    9134,
-				ClusterPort:       9136,
-				RQLiteJoinTarget:  "localhost:7001",
-				ClusterJoinTarget: "localhost:9096",
-			},
+		{
+			Name:              "bootstrap",
+			Role:              "bootstrap",
+			ConfigFilename:    "bootstrap.yaml",
+			DataDir:           "bootstrap",
+			P2PPort:           4001,
+			IPFSAPIPort:       4501,
+			IPFSSwarmPort:     4101,
+			IPFSGatewayPort:   7501,
+			RQLiteHTTPPort:    5001,
+			RQLiteRaftPort:    7001,
+			ClusterAPIPort:    9094,
+			ClusterPort:       9096,
+			UnifiedGatewayPort: 6001,
+			RQLiteJoinTarget:  "",
+			ClusterJoinTarget: "",
+		},
+		{
+			Name:              "bootstrap2",
+			Role:              "bootstrap",
+			ConfigFilename:    "bootstrap2.yaml",
+			DataDir:           "bootstrap2",
+			P2PPort:           4011,
+			IPFSAPIPort:       4511,
+			IPFSSwarmPort:     4111,
+			IPFSGatewayPort:   7511,
+			RQLiteHTTPPort:    5011,
+			RQLiteRaftPort:    7011,
+			ClusterAPIPort:    9104,
+			ClusterPort:       9106,
+			UnifiedGatewayPort: 6002,
+			RQLiteJoinTarget:  "localhost:7001",
+			ClusterJoinTarget: "localhost:9096",
+		},
+		{
+			Name:              "node2",
+			Role:              "node",
+			ConfigFilename:    "node2.yaml",
+			DataDir:           "node2",
+			P2PPort:           4002,
+			IPFSAPIPort:       4502,
+			IPFSSwarmPort:     4102,
+			IPFSGatewayPort:   7502,
+			RQLiteHTTPPort:    5002,
+			RQLiteRaftPort:    7002,
+			ClusterAPIPort:    9114,
+			ClusterPort:       9116,
+			UnifiedGatewayPort: 6003,
+			RQLiteJoinTarget:  "localhost:7001",
+			ClusterJoinTarget: "localhost:9096",
+		},
+		{
+			Name:              "node3",
+			Role:              "node",
+			ConfigFilename:    "node3.yaml",
+			DataDir:           "node3",
+			P2PPort:           4003,
+			IPFSAPIPort:       4503,
+			IPFSSwarmPort:     4103,
+			IPFSGatewayPort:   7503,
+			RQLiteHTTPPort:    5003,
+			RQLiteRaftPort:    7003,
+			ClusterAPIPort:    9124,
+			ClusterPort:       9126,
+			UnifiedGatewayPort: 6004,
+			RQLiteJoinTarget:  "localhost:7001",
+			ClusterJoinTarget: "localhost:9096",
+		},
+		{
+			Name:              "node4",
+			Role:              "node",
+			ConfigFilename:    "node4.yaml",
+			DataDir:           "node4",
+			P2PPort:           4004,
+			IPFSAPIPort:       4504,
+			IPFSSwarmPort:     4104,
+			IPFSGatewayPort:   7504,
+			RQLiteHTTPPort:    5004,
+			RQLiteRaftPort:    7004,
+			ClusterAPIPort:    9134,
+			ClusterPort:       9136,
+			UnifiedGatewayPort: 6005,
+			RQLiteJoinTarget:  "localhost:7001",
+			ClusterJoinTarget: "localhost:9096",
+		},
 		},
 		GatewayPort:     6001,
 		OlricHTTPPort:   3320,
@@ -136,6 +142,7 @@ func (t *Topology) AllPorts() []int {
 			node.RQLiteRaftPort,
 			node.ClusterAPIPort,
 			node.ClusterPort,
+			node.UnifiedGatewayPort,
 		)
 	}
 
@@ -163,6 +170,7 @@ func (t *Topology) PortMap() map[int]string {
 		portMap[node.RQLiteRaftPort] = fmt.Sprintf("%s RQLite Raft", node.Name)
 		portMap[node.ClusterAPIPort] = fmt.Sprintf("%s IPFS Cluster API", node.Name)
 		portMap[node.ClusterPort] = fmt.Sprintf("%s IPFS Cluster P2P", node.Name)
+		portMap[node.UnifiedGatewayPort] = fmt.Sprintf("%s Unified Gateway", node.Name)
 	}
 
 	portMap[t.GatewayPort] = "Gateway"

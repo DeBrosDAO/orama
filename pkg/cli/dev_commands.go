@@ -57,13 +57,13 @@ func showDevHelp() {
 func handleDevUp(args []string) {
 	ctx := context.Background()
 
-	// Get home directory and .debros path
+	// Get home directory and .orama path
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
 	// Step 1: Check dependencies
 	fmt.Printf("📋 Checking dependencies...\n\n")
@@ -90,7 +90,7 @@ func handleDevUp(args []string) {
 
 	// Step 3: Ensure configs
 	fmt.Printf("⚙️  Preparing configuration files...\n\n")
-	ensurer := development.NewConfigEnsurer(debrosDir)
+	ensurer := development.NewConfigEnsurer(oramaDir)
 	if err := ensurer.EnsureAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to prepare configs: %v\n", err)
 		os.Exit(1)
@@ -98,7 +98,7 @@ func handleDevUp(args []string) {
 	fmt.Printf("\n")
 
 	// Step 4: Start services
-	pm := development.NewProcessManager(debrosDir, os.Stdout)
+	pm := development.NewProcessManager(oramaDir, os.Stdout)
 	if err := pm.StartAll(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error starting services: %v\n", err)
 		os.Exit(1)
@@ -120,7 +120,7 @@ func handleDevUp(args []string) {
 	fmt.Printf("  dbn dev logs bootstrap   - Bootstrap logs\n")
 	fmt.Printf("  dbn dev logs bootstrap2  - Bootstrap2 logs\n")
 	fmt.Printf("  dbn dev down             - Stop all services\n\n")
-	fmt.Printf("Logs directory: %s/logs\n\n", debrosDir)
+	fmt.Printf("Logs directory: %s/logs\n\n", oramaDir)
 }
 
 func handleDevDown(args []string) {
@@ -129,9 +129,9 @@ func handleDevDown(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
-	pm := development.NewProcessManager(debrosDir, os.Stdout)
+	pm := development.NewProcessManager(oramaDir, os.Stdout)
 	ctx := context.Background()
 
 	if err := pm.StopAll(ctx); err != nil {
@@ -148,9 +148,9 @@ func handleDevStatus(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
-	pm := development.NewProcessManager(debrosDir, os.Stdout)
+	pm := development.NewProcessManager(oramaDir, os.Stdout)
 	ctx := context.Background()
 
 	pm.Status(ctx)
@@ -171,9 +171,9 @@ func handleDevLogs(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
-	logPath := filepath.Join(debrosDir, "logs", fmt.Sprintf("%s.log", component))
+	logPath := filepath.Join(oramaDir, "logs", fmt.Sprintf("%s.log", component))
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "❌ Log file not found: %s\n", logPath)
 		os.Exit(1)

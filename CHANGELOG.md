@@ -13,12 +13,38 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.69.21] - 2025-11-26
+
+### Added
+- Introduced a new interactive TUI wizard for production installation (`sudo orama install`).
+- Added support for APT package repository generation and publishing via GitHub Actions.
+- Added new simplified production CLI commands (`orama install`, `orama upgrade`, `orama status`, etc.) as aliases for the legacy `orama prod` commands.
+- Added support for a unified HTTP reverse proxy gateway within the node process, routing internal services (RQLite, IPFS, Cluster) via a single port.
+- Added support for SNI-based TCP routing for secure access to services like RQLite Raft and IPFS Swarm.
+
+### Changed
+- Renamed the primary CLI binary from `dbn` to `orama` across the entire codebase, documentation, and build system.
+- Migrated the production installation directory structure from `~/.debros` to `~/.orama`.
+- Consolidated production service management into unified systemd units (e.g., `debros-node.service` replaces `debros-node-bootstrap.service` and `debros-node-node.service`).
+- Updated the default IPFS configuration to bind API and Gateway addresses to `127.0.0.1` for enhanced security, relying on the new unified gateway for external access.
+- Updated RQLite service configuration to bind to `127.0.0.1` for HTTP and Raft ports, relying on the new SNI gateway for external cluster communication.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected configuration path resolution logic to correctly check for config files in the new `~/.orama/` directory structure.
+
+
 ## [0.69.20] - 2025-11-22
 
 ### Added
+
 - Added verification step to ensure the IPFS Cluster secret is correctly written after configuration updates.
 
 ### Changed
+
 - Improved reliability of `anyone-client` installation and verification by switching to using `npx` for execution and checks, especially for globally installed scoped packages.
 - Updated the `anyone-client` systemd service to use `npx` for execution and explicitly set the PATH environment variable to ensure the client runs correctly.
 
@@ -27,12 +53,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.19] - 2025-11-22
 
 ### Added
+
 \n
+
 ### Changed
+
 - Updated the installation command for 'anyone-client' to use the correct scoped package name (@anyone-protocol/anyone-client).
 
 ### Deprecated
@@ -40,14 +71,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.18] - 2025-11-22
 
 ### Added
+
 - Integrated `anyone-client` (SOCKS5 proxy) installation and systemd service (`debros-anyone-client.service`).
 - Added port availability checking logic to prevent conflicts when starting services (e.g., `anyone-client` on port 9050).
 
 ### Changed
+
 - Updated system dependencies installation to include `nodejs` and `npm` required for `anyone-client`.
 - Modified Olric configuration generation to bind to the specific VPS IP if provided, otherwise defaults to 0.0.0.0.
 - Improved IPFS Cluster initialization by passing `CLUSTER_SECRET` directly as an environment variable.
@@ -57,17 +92,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.17] - 2025-11-21
 
 ### Added
+
 - Initial implementation of a Push Notification Service for the Gateway, utilizing the Expo API.
 - Detailed documentation for RQLite operations, monitoring, and troubleshooting was added to the README.
 
 ### Changed
+
 - Improved `make stop` and `dbn dev down` commands to ensure all development services are forcefully killed after graceful shutdown attempt.
 - Refactored RQLite startup logic to simplify cluster establishment and remove complex, error-prone leadership/recovery checks, relying on RQLite's built-in join mechanism.
-- RQLite logs are now written to individual log files (e.g., `~/.debros/logs/rqlite-bootstrap.log`) instead of stdout/stderr, improving development environment clarity.
+- RQLite logs are now written to individual log files (e.g., `~/.orama/logs/rqlite-bootstrap.log`) instead of stdout/stderr, improving development environment clarity.
 - Improved peer exchange discovery logging to suppress expected 'protocols not supported' warnings from lightweight clients like the Gateway.
 
 ### Deprecated
@@ -75,17 +114,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.17] - 2025-11-21
 
 ### Added
+
 - Initial implementation of a Push Notification Service for the Gateway, utilizing the Expo API.
 - Detailed documentation for RQLite operations, monitoring, and troubleshooting in the README.
 
 ### Changed
+
 - Improved `make stop` and `dbn dev down` commands to ensure all development services are forcefully killed after graceful shutdown attempt.
 - Refactored RQLite startup logic to simplify cluster establishment and remove complex, error-prone leadership/recovery checks, relying on RQLite's built-in join mechanism.
-- RQLite logs are now written to individual log files (e.g., `~/.debros/logs/rqlite-bootstrap.log`) instead of stdout/stderr, improving development environment clarity.
+- RQLite logs are now written to individual log files (e.g., `~/.orama/logs/rqlite-bootstrap.log`) instead of stdout/stderr, improving development environment clarity.
 - Improved peer exchange discovery logging to suppress expected 'protocols not supported' warnings from lightweight clients like the Gateway.
 
 ### Deprecated
@@ -93,12 +136,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.16] - 2025-11-16
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved the `make stop` command to ensure a more robust and graceful shutdown of development services.
 - Enhanced the `make kill` command and underlying scripts for more reliable force termination of stray development processes.
 - Increased the graceful shutdown timeout for development processes from 500ms to 2 seconds before resorting to force kill.
@@ -108,12 +156,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.15] - 2025-11-16
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved authentication flow to handle wallet addresses case-insensitively during nonce creation and verification.
 
 ### Deprecated
@@ -121,13 +174,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.14] - 2025-11-14
 
 ### Added
+
 - Added support for background reconnection to the Olric cache cluster in the Gateway, improving resilience if the cache is temporarily unavailable.
 
 ### Changed
+
 - Improved the RQLite database client connection handling to ensure connections are properly closed and reused safely.
 - RQLite Manager now updates its advertised addresses if cluster discovery provides more accurate information (e.g., replacing localhost).
 
@@ -136,13 +193,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Removed internal RQLite process management from the development runner, as RQLite is now expected to be managed externally or via Docker.
 
 ## [0.69.13] - 2025-11-14
 
 ### Added
+
 \n
+
 ### Changed
+
 - The Gateway service now waits for the Olric cache service to start before attempting initialization.
 - Improved robustness of Olric cache client initialization with retry logic and exponential backoff.
 
@@ -151,14 +212,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Corrected the default path logic for 'gateway.yaml' to prioritize the production data directory while maintaining fallback to legacy paths.
 
 ## [0.69.12] - 2025-11-14
 
 ### Added
+
 - The `prod install` command now requires the `--cluster-secret` flag for all non-bootstrap nodes to ensure correct IPFS Cluster configuration.
 
 ### Changed
+
 - Updated IPFS configuration to bind API and Gateway addresses to `0.0.0.0` instead of `127.0.0.1` for better network accessibility.
 
 ### Deprecated
@@ -166,13 +230,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.11] - 2025-11-13
 
 ### Added
+
 - Added a new comprehensive shell script (`scripts/test-cluster-health.sh`) for checking the health and replication status of RQLite, IPFS, and IPFS Cluster across production environments.
 
 ### Changed
+
 - Improved RQLite cluster discovery logic to ensure `peers.json` is correctly generated and includes the local node, which is crucial for reliable cluster recovery.
 - Refactored logging across discovery and RQLite components for cleaner, more concise output, especially for routine operations.
 - Updated the installation and upgrade process to correctly configure IPFS Cluster bootstrap peers using the node's public IP, improving cluster formation reliability.
@@ -182,16 +250,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue where RQLite recovery operations (like clearing Raft state) did not correctly force the regeneration of `peers.json`, preventing successful cluster rejoin.
 - Corrected the port calculation logic for IPFS Cluster to ensure the correct LibP2P listen port (9098) is used for bootstrap peer addressing.
 
 ## [0.69.10] - 2025-11-13
 
 ### Added
+
 - Automatic health monitoring and recovery for RQLite cluster split-brain scenarios.
 - RQLite now waits indefinitely for the minimum cluster size to be met before starting, preventing single-node cluster formation.
 
 ### Changed
+
 - Updated default IPFS swarm port from 4001 to 4101 to avoid conflicts with LibP2P.
 
 ### Deprecated
@@ -199,16 +270,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Resolved an issue where RQLite could start as a single-node cluster if peer discovery was slow, by enforcing minimum cluster size before startup.
 - Improved cluster recovery logic to correctly use `bootstrap-expect` for new clusters and ensure proper process restart during recovery.
 
 ## [0.69.9] - 2025-11-12
 
 ### Added
+
 - Added automatic recovery logic for RQLite (database) nodes stuck in a configuration mismatch, which attempts to clear stale Raft state if peers have more recent data.
 - Added logic to discover IPFS Cluster peers directly from the LibP2P host's peerstore, improving peer discovery before the Cluster API is fully operational.
 
 ### Changed
+
 - Improved the IPFS Cluster configuration update process to prioritize writing to the `peerstore` file before updating `service.json`, ensuring the source of truth is updated first.
 
 ### Deprecated
@@ -216,14 +290,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.8] - 2025-11-12
 
 ### Added
+
 - Improved `dbn prod start` to automatically unmask and re-enable services if they were previously masked or disabled.
 - Added automatic discovery and configuration of all IPFS Cluster peers during runtime to improve cluster connectivity.
 
 ### Changed
+
 - Enhanced `dbn prod start` and `dbn prod stop` reliability by adding service state resets, retries, and ensuring services are disabled when stopped.
 - Filtered peer exchange addresses in LibP2P discovery to only include the standard LibP2P port (4001), preventing exposure of internal service ports.
 
@@ -232,13 +310,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Improved IPFS Cluster bootstrap configuration repair logic to automatically infer and update bootstrap peer addresses if the bootstrap node is available.
 
 ## [0.69.7] - 2025-11-12
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved logic for determining Olric server addresses during configuration generation, especially for bootstrap and non-bootstrap nodes.
 - Enhanced IPFS cluster configuration to correctly handle IPv6 addresses when updating bootstrap peers.
 
@@ -247,14 +329,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.6] - 2025-11-12
 
 ### Added
+
 - Improved production service health checks and port availability validation during install, upgrade, start, and restart commands.
 - Added service aliases (node, ipfs, cluster, gateway, olric) to `dbn prod logs` command for easier log viewing.
 
 ### Changed
+
 - Updated node configuration logic to correctly advertise public IP addresses in multiaddrs (for P2P discovery) and RQLite addresses, improving connectivity for nodes behind NAT/firewalls.
 - Enhanced `dbn prod install` and `dbn prod upgrade` to automatically detect and preserve existing VPS IP, domain, and cluster join information.
 - Improved RQLite cluster discovery to automatically replace localhost/loopback addresses with the actual public IP when exchanging metadata between peers.
@@ -266,14 +352,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue where the RQLite process would wait indefinitely for a join target; now uses a 5-minute timeout.
 - Corrected the location of the gateway configuration file reference in the README.
 
 ## [0.69.5] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
+
 - Moved the default location for `gateway.yaml` configuration file from `configs/` to the new `data/` directory for better organization.
 - Updated configuration path logic to search for `gateway.yaml` in the new `data/` directory first.
 
@@ -282,13 +372,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.4] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
-- RQLite database management is now integrated directly into the main node process, removing separate RQLite systemd services (debros-rqlite-*).
+
+- RQLite database management is now integrated directly into the main node process, removing separate RQLite systemd services (debros-rqlite-\*).
 - Improved log file provisioning to only create necessary log files based on the node type being installed (bootstrap or node).
 
 ### Deprecated
@@ -296,26 +391,35 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.3] - 2025-11-11
 
 ### Added
+
 - Added `--ignore-resource-checks` flag to the install command to skip disk, RAM, and CPU prerequisite validation.
 
 ### Changed
+
 \n
+
 ### Deprecated
 
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.2] - 2025-11-11
 
 ### Added
+
 - Added `--no-pull` flag to `dbn prod upgrade` to skip git repository updates and use existing source code.
 
 ### Changed
+
 - Removed deprecated environment management commands (`env`, `devnet`, `testnet`, `local`).
 - Removed deprecated network commands (`health`, `peers`, `status`, `peer-id`, `connect`, `query`, `pubsub`) from the main CLI interface.
 
@@ -324,14 +428,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.1] - 2025-11-11
 
 ### Added
+
 - Added automatic service stopping before binary upgrades during the `prod upgrade` process to ensure a clean update.
 - Added logic to preserve existing configuration settings (like `bootstrap_peers`, `domain`, and `rqlite_join_address`) when regenerating configurations during `prod upgrade`.
 
 ### Changed
+
 - Improved the `prod upgrade` process to be more robust by preserving critical configuration details and gracefully stopping services.
 
 ### Deprecated
@@ -339,15 +447,19 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.69.0] - 2025-11-11
 
 ### Added
+
 - Added comprehensive documentation for setting up HTTPS using a domain name, including configuration steps for both installation and existing setups.
 - Added the `--force` flag to the `install` command for reconfiguring all settings.
 - Added new log targets (`ipfs-cluster`, `rqlite`, `olric`) and improved the `dbn prod logs` command documentation.
 
 ### Changed
+
 - Improved the IPFS Cluster configuration logic to ensure the cluster secret and IPFS API port are correctly synchronized during updates.
 - Refined the directory structure creation process to ensure node-specific data directories are created only when initializing services.
 
@@ -356,13 +468,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.68.1] - 2025-11-11
 
 ### Added
+
 - Pre-create log files during setup to ensure correct permissions for systemd logging.
 
 ### Changed
+
 - Improved binary installation process to handle copying files individually, preventing potential shell wildcard issues.
 - Enhanced ownership fixing logic during installation to ensure all files created by root (especially during service initialization) are correctly owned by the 'debros' user.
 
@@ -371,14 +487,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.68.0] - 2025-11-11
 
 ### Added
+
 - Added comprehensive documentation for production deployment, including installation, upgrade, service management, and troubleshooting.
 - Added new CLI commands (`dbn prod start`, `dbn prod stop`, `dbn prod restart`) for convenient management of production systemd services.
 
 ### Changed
+
 - Updated IPFS configuration during production installation to use port 4501 for the API (to avoid conflicts with RQLite on port 5001) and port 8080 for the Gateway.
 
 ### Deprecated
@@ -386,15 +506,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Ensured that IPFS configuration automatically disables AutoConf when a private swarm key is present during installation and upgrade, preventing startup errors.
 
 ## [0.67.7] - 2025-11-11
 
 ### Added
+
 - Added support for specifying the Git branch (main or nightly) during `prod install` and `prod upgrade`.
 - The chosen branch is now saved and automatically used for future upgrades unless explicitly overridden.
 
 ### Changed
+
 - Updated help messages and examples for production commands to include branch options.
 
 ### Deprecated
@@ -402,12 +525,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.67.6] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
+
 - The binary installer now updates the source repository if it already exists, instead of only cloning it if missing.
 
 ### Deprecated
@@ -415,15 +543,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Resolved an issue where disabling AutoConf in the IPFS repository could leave 'auto' placeholders in the config, causing startup errors.
 
 ## [0.67.5] - 2025-11-11
 
 ### Added
+
 - Added `--restart` option to `dbn prod upgrade` to automatically restart services after upgrade.
 - The gateway now supports an optional `--config` flag to specify the configuration file path.
 
 ### Changed
+
 - Improved `dbn prod upgrade` process to better handle existing installations, including detecting node type and ensuring configurations are updated to the latest format.
 - Configuration loading logic for `node` and `gateway` commands now correctly handles absolute paths passed via command line or systemd.
 
@@ -432,13 +563,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue during production upgrades where IPFS repositories in private swarms might fail to start due to `AutoConf` not being disabled.
 
 ## [0.67.4] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved configuration file loading logic to support absolute paths for config files.
 - Updated IPFS Cluster initialization during setup to run `ipfs-cluster-service init` and automatically configure the cluster secret.
 - IPFS repositories initialized with a private swarm key will now automatically disable AutoConf.
@@ -448,13 +583,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
-- Fixed configuration path resolution to correctly check for config files in both the legacy (`~/.debros/`) and production (`~/.debros/configs/`) directories.
+
+- Fixed configuration path resolution to correctly check for config files in both the legacy (`~/.orama/`) and production (`~/.orama/configs/`) directories.
 
 ## [0.67.3] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved reliability of IPFS (Kubo) installation by switching from a single install script to the official step-by-step download and extraction process.
 - Updated IPFS (Kubo) installation to use version v0.38.2.
 - Enhanced binary installation routines (RQLite, IPFS, Go) to ensure the installed binaries are immediately available in the current process's PATH.
@@ -464,14 +603,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed potential installation failures for RQLite by adding error checking to the binary copy command.
 
 ## [0.67.2] - 2025-11-11
 
 ### Added
+
 - Added a new utility function to reliably resolve the full path of required external binaries (like ipfs, rqlited, etc.).
 
 ### Changed
+
 - Improved service initialization by validating the availability and path of all required external binaries before creating systemd service units.
 - Updated systemd service generation logic to use the resolved, fully-qualified paths for external binaries instead of relying on hardcoded paths.
 
@@ -480,13 +622,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Changed IPFS initialization from a warning to a fatal error if the repo fails to initialize, ensuring setup stops on critical failures.
 
 ## [0.67.1] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved disk space check logic to correctly check the parent directory if the specified path does not exist.
 
 ### Deprecated
@@ -494,15 +640,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue in the installation script where the extracted CLI binary might be named 'dbn' instead of 'network-cli', ensuring successful installation regardless of the extracted filename.
 
 ## [0.67.0] - 2025-11-11
 
 ### Added
+
 - Added support for joining a cluster as a secondary bootstrap node using the new `--bootstrap-join` flag.
 - Added a new flag `--vps-ip` to specify the public IP address for non-bootstrap nodes, which is now required for cluster joining.
 
 ### Changed
+
 - Updated the installation script to correctly download and install the CLI binary from the GitHub release archive.
 - Improved RQLite service configuration to correctly use the public IP address (`--vps-ip`) for advertising its raft and HTTP addresses.
 
@@ -511,15 +660,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue where non-bootstrap nodes could be installed without specifying the required `--vps-ip`.
 
 ## [0.67.0] - 2025-11-11
 
 ### Added
+
 - Added support for joining a cluster as a secondary bootstrap node using the new `--bootstrap-join` flag.
 - Added a new flag `--vps-ip` to specify the public IP address for non-bootstrap nodes, which is now required for cluster joining.
 
 ### Changed
+
 - Updated the installation script to correctly download and install the CLI binary from the GitHub release archive.
 - Improved RQLite service configuration to correctly use the public IP address (`--vps-ip`) for advertising its raft and HTTP addresses.
 
@@ -528,13 +680,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue where non-bootstrap nodes could be installed without specifying the required `--vps-ip`.
 
 ## [0.66.1] - 2025-11-11
 
 ### Added
+
 \n
+
 ### Changed
+
 - Allow bootstrap nodes to optionally define a join address to synchronize with another bootstrap cluster.
 
 ### Deprecated
@@ -542,14 +698,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.66.0] - 2025-11-11
 
 ### Added
+
 - Pre-installation checks for minimum system resources (10GB disk space, 2GB RAM, 2 CPU cores) are now performed during setup.
 - All systemd services (IPFS, RQLite, Olric, Node, Gateway) now log directly to dedicated files in the logs directory instead of using the system journal.
 
 ### Changed
+
 - Improved logging instructions in the setup completion message to reference the new dedicated log files.
 
 ### Deprecated
@@ -557,14 +717,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.65.0] - 2025-11-11
 
 ### Added
+
 - Expanded the local development environment (`dbn dev up`) from 3 nodes to 5 nodes (2 bootstraps and 3 regular nodes) for better testing of cluster resilience and quorum.
 - Added a new `bootstrap2` node configuration and service to the development topology.
 
 ### Changed
+
 - Updated the `dbn dev up` command to configure and start all 5 nodes and associated services (IPFS, RQLite, IPFS Cluster).
 - Modified RQLite and LibP2P health checks in the development environment to require a quorum of 3 out of 5 nodes.
 - Refactored development environment configuration logic using a new `Topology` structure for easier management of node ports and addresses.
@@ -574,13 +738,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Ensured that secondary bootstrap nodes can correctly join the primary RQLite cluster in the development environment.
 
 ## [0.64.1] - 2025-11-10
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved the accuracy of the Raft log index reporting by falling back to reading persisted snapshot metadata from disk if the running RQLite instance is not yet reachable or reports a zero index.
 
 ### Deprecated
@@ -588,16 +756,20 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.64.0] - 2025-11-10
 
 ### Added
+
 - Comprehensive End-to-End (E2E) test suite for Gateway API endpoints (Cache, RQLite, Storage, Network, Auth).
 - New E2E tests for concurrent operations and TTL expiry in the distributed cache.
 - New E2E tests for LibP2P peer connectivity and discovery.
 
 ### Changed
-- Improved Gateway E2E test configuration: automatically discovers Gateway URL and API Key from local `~/.debros` configuration files, removing the need for environment variables.
+
+- Improved Gateway E2E test configuration: automatically discovers Gateway URL and API Key from local `~/.orama` configuration files, removing the need for environment variables.
 - The `/v1/network/peers` endpoint now returns a flattened list of multiaddresses for all connected peers.
 - Improved robustness of Cache API handlers to correctly identify and return 404 (Not Found) errors when keys are missing, even when wrapped by underlying library errors.
 - The RQLite transaction handler now supports the legacy `statements` array format in addition to the `ops` array format for easier use.
@@ -608,13 +780,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Corrected IPFS Add operation to return the actual file size (byte count) instead of the DAG size in the response.
 
 ## [0.63.3] - 2025-11-10
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved RQLite cluster stability by automatically clearing stale Raft state on startup if peers have a higher log index, allowing the node to join cleanly.
 
 ### Deprecated
@@ -622,12 +798,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.63.2] - 2025-11-10
 
 ### Added
+
 \n
+
 ### Changed
+
 - Improved process termination logic in development environments to ensure child processes are also killed.
 - Enhanced the `dev-kill-all.sh` script to reliably kill all processes using development ports, including orphaned processes and their children.
 
@@ -636,12 +817,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.63.1] - 2025-11-10
 
 ### Added
+
 \n
+
 ### Changed
+
 - Increased the default minimum cluster size for database environments from 1 to 3.
 
 ### Deprecated
@@ -649,15 +835,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Prevented unnecessary cluster recovery attempts when a node starts up as the first node (fresh bootstrap).
 
 ## [0.63.0] - 2025-11-10
 
 ### Added
+
 - Added a new `kill` command to the Makefile for forcefully shutting down all development processes.
 - Introduced a new `stop` command in the Makefile for graceful shutdown of development processes.
 
 ### Changed
+
 - The `kill` command now performs a graceful shutdown attempt followed by a force kill of any lingering processes and verifies that development ports are free.
 
 ### Deprecated
@@ -665,13 +854,17 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
+
 ## [0.62.0] - 2025-11-10
 
 ### Added
+
 - The `prod status` command now correctly checks for both 'bootstrap' and 'node' service variants.
 
 ### Changed
+
 - The production installation process now generates secrets (like the cluster secret and peer ID) before initializing services. This ensures all necessary secrets are available when services start.
 - The `prod install` command now displays the actual Peer ID upon completion instead of a placeholder.
 
@@ -680,15 +873,18 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 - Fixed an issue where IPFS Cluster initialization was using a hardcoded configuration file instead of relying on the standard `ipfs-cluster-service init` process.
 
 ## [0.61.0] - 2025-11-10
 
 ### Added
+
 - Introduced a new simplified authentication flow (`dbn auth login`) that allows users to generate an API key directly from a wallet address without signature verification (for development/testing purposes).
 - Added a new `PRODUCTION_INSTALL.md` guide for production deployment using the `dbn prod` command suite.
 
 ### Changed
+
 - Renamed the primary CLI binary from `network-cli` to `dbn` across all configurations, documentation, and source code.
 - Refactored the IPFS configuration logic in the development environment to directly modify the IPFS config file instead of relying on shell commands, improving stability.
 - Improved the IPFS Cluster peer count logic to correctly handle NDJSON streaming responses from the `/peers` endpoint.
@@ -699,6 +895,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Removed
 
 ### Fixed
+
 \n
 
 ## [0.60.1] - 2025-11-09
@@ -1032,7 +1229,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
   - Interactive domain configuration during `dbn setup` command
   - Automatic port availability checking for ports 80 and 443 before enabling HTTPS
   - DNS resolution verification to ensure domain points to the server IP
-  - TLS certificate cache directory management (`~/.debros/tls-cache`)
+  - TLS certificate cache directory management (`~/.orama/tls-cache`)
   - Gateway automatically serves HTTP (port 80) for ACME challenges and HTTPS (port 443) for traffic
   - New gateway config fields: `enable_https`, `domain_name`, `tls_cache_dir`
 - **Domain Validation**: Added domain name validation and DNS verification helpers in setup CLI
@@ -1102,8 +1299,8 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
   - Automatic GitHub Release creation with changelog and artifacts
   - Semantic versioning support with pre-release handling
 - **Environment Configuration**: Multi-environment switching system
-  - Default environments: local (http://localhost:6001), devnet (https://devnet.debros.network), testnet (https://testnet.debros.network)
-  - Stored in `~/.debros/environments.json`
+  - Default environments: local (http://localhost:6001), devnet (https://devnet.orama.network), testnet (https://testnet.orama.network)
+  - Stored in `~/.orama/environments.json`
   - CLI auto-uses active environment for authentication and operations
 - **Comprehensive Documentation**
   - `.cursor/RELEASES.md`: Overview and quick start
@@ -1132,7 +1329,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 - Explicit control over LibP2P listen addresses for better localhost/development support
 - Production/development mode detection for NAT services (disabled for localhost, enabled for production)
 - Process management with .dev/pids directory for background process tracking
-- Centralized logging to ~/.debros/logs/ for all network services
+- Centralized logging to ~/.orama/logs/ for all network services
 
 ### Changed
 
@@ -1182,7 +1379,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Changed
 
 - Updated readme
-- Where we read .yaml files from and where data is saved to ~/.debros
+- Where we read .yaml files from and where data is saved to ~/.orama
 
 ### Deprecated
 
@@ -1311,7 +1508,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 
 ### Changed
 
-- replaced git.debros.io with github.com
+- replaced git.orama.io with github.com
 
 ### Deprecated
 

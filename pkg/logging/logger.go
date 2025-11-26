@@ -179,6 +179,33 @@ func NewDefaultLogger(component Component) (*ColoredLogger, error) {
 	return NewColoredLogger(component, true)
 }
 
+// NewFileLogger creates a logger that writes to a file
+func NewFileLogger(component Component, filePath string, enableColors bool) (*ColoredLogger, error) {
+	// Create encoder
+	encoder := coloredConsoleEncoder(enableColors)
+
+	// Create file writer
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+	}
+
+	// Create core
+	core := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(file),
+		zapcore.DebugLevel,
+	)
+
+	// Create logger with caller information
+	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+
+	return &ColoredLogger{
+		Logger:       logger,
+		enableColors: enableColors,
+	}, nil
+}
+
 // Component-specific logging methods
 func (l *ColoredLogger) ComponentInfo(component Component, msg string, fields ...zap.Field) {
 	if l.enableColors {
