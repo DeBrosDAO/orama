@@ -130,19 +130,19 @@ func TestNormalizePeers(t *testing.T) {
 		},
 		{
 			name:        "single peer",
-			input:       "/ip4/10.0.0.1/tcp/4001/p2p/QmTest123",
+			input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx",
 			expectCount: 1,
 			expectError: false,
 		},
 		{
 			name:        "multiple peers",
-			input:       "/ip4/10.0.0.1/tcp/4001/p2p/QmTest1,/ip4/10.0.0.2/tcp/4001/p2p/QmTest2",
+			input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx,/ip4/10.0.0.2/tcp/4001/p2p/12D3KooWJwUy2VBT9V4VrCYnHddWvQw7TKkWN7PoXRSLTQDrYPj",
 			expectCount: 2,
 			expectError: false,
 		},
 		{
 			name:        "duplicate peers deduplicated",
-			input:       "/ip4/10.0.0.1/tcp/4001/p2p/QmTest1,/ip4/10.0.0.1/tcp/4001/p2p/QmTest1",
+			input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx,/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx",
 			expectCount: 1,
 			expectError: false,
 		},

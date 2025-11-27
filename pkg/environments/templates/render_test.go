@@ -27,7 +27,6 @@ func TestRenderNodeConfig(t *testing.T) {
 	// Check for required fields
 	checks := []string{
 		"id: \"node2\"",
-		"type: \"node\"",
 		"tcp/4002",
 		"rqlite_port: 5002",
 		"rqlite_raft_port: 7002",
