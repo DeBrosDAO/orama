@@ -94,7 +94,7 @@ func inferPeerIP(peers []string, vpsIP string) string {
 }
 
 // GenerateNodeConfig generates node.yaml configuration (unified architecture)
-func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string) (string, error) {
+func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, enableHTTPS bool) (string, error) {
 	// Generate node ID from domain or use default
 	nodeID := "node"
 	if domain != "" {
@@ -106,10 +106,16 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 
 	// Determine advertise addresses - use vpsIP if provided
+	// When HTTPS/SNI is enabled, use domain-based raft address for SNI routing
 	var httpAdvAddr, raftAdvAddr string
 	if vpsIP != "" {
 		httpAdvAddr = net.JoinHostPort(vpsIP, "5001")
-		raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
+		if enableHTTPS && domain != "" {
+			// Use SNI domain for Raft advertisement so other nodes connect via SNI gateway
+			raftAdvAddr = fmt.Sprintf("raft.%s:7001", domain)
+		} else {
+			raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
+		}
 	} else {
 		// Fallback to localhost if no vpsIP
 		httpAdvAddr = "localhost:5001"
@@ -134,21 +140,40 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 	// If no join address and no peers, this is the first node - it will create the cluster
 
+	// TLS/ACME configuration
+	tlsCacheDir := ""
+	httpPort := 80
+	httpsPort := 443
+	if enableHTTPS {
+		tlsCacheDir = filepath.Join(cg.oramaDir, "tls-cache")
+	}
+
 	// Unified data directory (all nodes equal)
+	// When HTTPS/SNI is enabled, use internal port 7002 for RQLite Raft (SNI gateway listens on 7001)
+	raftInternalPort := 7001
+	if enableHTTPS {
+		raftInternalPort = 7002 // Internal port when SNI is enabled
+	}
+
 	data := templates.NodeConfigData{
-		NodeID:             nodeID,
-		P2PPort:            4001,
-		DataDir:            filepath.Join(cg.oramaDir, "data"),
-		RQLiteHTTPPort:     5001,
-		RQLiteRaftPort:     7001,
-		RQLiteJoinAddress:  rqliteJoinAddr,
-		BootstrapPeers:     peerAddresses,
-		ClusterAPIPort:     9094,
-		IPFSAPIPort:        4501,
-		HTTPAdvAddress:     httpAdvAddr,
-		RaftAdvAddress:     raftAdvAddr,
-		UnifiedGatewayPort: 6001,
-		Domain:             domain,
+		NodeID:                 nodeID,
+		P2PPort:                4001,
+		DataDir:                filepath.Join(cg.oramaDir, "data"),
+		RQLiteHTTPPort:         5001,
+		RQLiteRaftPort:         7001,                // External SNI port
+		RQLiteRaftInternalPort: raftInternalPort,    // Internal RQLite binding port
+		RQLiteJoinAddress:      rqliteJoinAddr,
+		BootstrapPeers:         peerAddresses,
+		ClusterAPIPort:         9094,
+		IPFSAPIPort:            4501,
+		HTTPAdvAddress:         httpAdvAddr,
+		RaftAdvAddress:         raftAdvAddr,
+		UnifiedGatewayPort:     6001,
+		Domain:                 domain,
+		EnableHTTPS:            enableHTTPS,
+		TLSCacheDir:            tlsCacheDir,
+		HTTPPort:               httpPort,
+		HTTPSPort:              httpsPort,
 	}
 	return templates.RenderNodeConfig(data)
 }
@@ -216,9 +241,13 @@ func (sg *SecretGenerator) EnsureClusterSecret() (string, error) {
 	secretPath := filepath.Join(sg.oramaDir, "secrets", "cluster-secret")
 	secretDir := filepath.Dir(secretPath)
 
-	// Ensure secrets directory exists
-	if err := os.MkdirAll(secretDir, 0755); err != nil {
+	// Ensure secrets directory exists with restricted permissions (0700)
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	// Ensure directory permissions are correct even if it already existed
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing secret
@@ -277,9 +306,13 @@ func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 	swarmKeyPath := filepath.Join(sg.oramaDir, "secrets", "swarm.key")
 	secretDir := filepath.Dir(swarmKeyPath)
 
-	// Ensure secrets directory exists
-	if err := os.MkdirAll(secretDir, 0755); err != nil {
+	// Ensure secrets directory exists with restricted permissions (0700)
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	// Ensure directory permissions are correct even if it already existed
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing key

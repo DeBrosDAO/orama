@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // RQLiteManager manages an RQLite node instance
@@ -460,7 +461,7 @@ func (r *RQLiteManager) hasExistingState(rqliteDataDir string) bool {
 // For joining nodes in recovery, this may take longer (up to 3 minutes)
 func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := tlsutil.NewHTTPClient(2 * time.Second)
 
 	// All nodes may need time to open the store during recovery
 	// Use consistent timeout for cluster consistency
@@ -471,6 +472,11 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+
+		// Use centralized TLS configuration
+		if client == nil {
+			client = tlsutil.NewHTTPClient(2 * time.Second)
 		}
 
 		resp, err := client.Get(url)
@@ -680,7 +686,7 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 	// Determine the HTTP status URL to probe.
 	// If joinAddress contains a scheme, use it directly. Otherwise treat joinAddress
 	// as host:port (Raft) and probe the standard HTTP API port 5001 on that host.
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := tlsutil.NewHTTPClient(5 * time.Second)
 
 	var statusURL string
 	if strings.HasPrefix(joinAddress, "http://") || strings.HasPrefix(joinAddress, "https://") {

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ProductionSetup orchestrates the entire production deployment
@@ -66,7 +67,7 @@ func SaveBranchPreference(oramaDir, branch string) error {
 
 // NewProductionSetup creates a new production setup orchestrator
 func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool, skipResourceChecks bool) *ProductionSetup {
-	oramaDir := oramaHome + "/.orama"
+	oramaDir := filepath.Join(oramaHome, ".orama")
 	arch, _ := (&ArchitectureDetector{}).Detect()
 
 	// If branch is empty, try to read from stored preference, otherwise default to main
@@ -364,7 +365,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 
 	// Node config (unified architecture)
-	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain)
+	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain, enableHTTPS)
 	if err != nil {
 		return fmt.Errorf("failed to generate node config: %w", err)
 	}
@@ -403,7 +404,8 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 }
 
 // Phase5CreateSystemdServices creates and enables systemd units
-func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
+// enableHTTPS determines the RQLite Raft port (7002 when SNI is enabled, 7001 otherwise)
+func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
 	// Validate all required binaries are available before creating services
@@ -415,7 +417,11 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 	if err != nil {
 		return fmt.Errorf("ipfs-cluster-service binary not available: %w", err)
 	}
-	// Note: rqlited binary is not needed as a separate service - node manages RQLite internally
+	// RQLite binary for separate service
+	rqliteBinary, err := ps.binaryInstaller.ResolveBinaryPath("rqlited", "/usr/local/bin/rqlited", "/usr/bin/rqlited")
+	if err != nil {
+		return fmt.Errorf("rqlited binary not available: %w", err)
+	}
 	olricBinary, err := ps.binaryInstaller.ResolveBinaryPath("olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server")
 	if err != nil {
 		return fmt.Errorf("olric-server binary not available: %w", err)
@@ -435,8 +441,17 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 	}
 	ps.logf("  ✓ IPFS Cluster service created: debros-ipfs-cluster.service")
 
-	// Note: RQLite is managed internally by the node process, not as a separate systemd service
-	ps.logf("  ℹ️  RQLite will be managed by the node process")
+	// RQLite service (join address and advertise IP will be handled by node bootstrap)
+	// When HTTPS/SNI is enabled, RQLite listens on internal port 7002 (SNI gateway handles external 7001)
+	raftPort := 7001
+	if enableHTTPS {
+		raftPort = 7002
+	}
+	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(rqliteBinary, 5001, raftPort, "", "")
+	if err := ps.serviceController.WriteServiceUnit("debros-rqlite.service", rqliteUnit); err != nil {
+		return fmt.Errorf("failed to write RQLite service: %w", err)
+	}
+	ps.logf("  ✓ RQLite service created: debros-rqlite.service")
 
 	// Olric service
 	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
@@ -467,7 +482,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
-	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
+	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-rqlite.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -499,7 +514,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 	}
 
 	// Wait a moment for infrastructure to stabilize
-	exec.Command("sleep", "2").Run()
+	time.Sleep(2 * time.Second)
 
 	// Start IPFS Cluster
 	if err := ps.serviceController.StartService("debros-ipfs-cluster.service"); err != nil {
@@ -508,14 +523,11 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices() error {
 		ps.logf("    - debros-ipfs-cluster.service started")
 	}
 
-	// Start application services
-	appServices := []string{"debros-node.service", "debros-gateway.service"}
-	for _, svc := range appServices {
-		if err := ps.serviceController.StartService(svc); err != nil {
-			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
-		} else {
-			ps.logf("    - %s started", svc)
-		}
+	// Start node service (gateway is embedded in node, no separate service needed)
+	if err := ps.serviceController.StartService("debros-node.service"); err != nil {
+		ps.logf("  ⚠️  Failed to start debros-node.service: %v", err)
+	} else {
+		ps.logf("    - debros-node.service started (with embedded gateway)")
 	}
 
 	ps.logf("  ✓ All services started")
@@ -541,7 +553,7 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
 	ps.logf("  %s/logs/anyone-client.log", ps.oramaDir)
 	ps.logf("\nStart All Services:")
-	ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-client debros-node debros-gateway")
+	ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-rqlite debros-olric debros-anyone-client debros-node")
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")
 	ps.logf("  curl http://localhost:5001/status")

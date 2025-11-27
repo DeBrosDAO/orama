@@ -14,8 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/installer"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -33,6 +35,10 @@ func runInteractiveInstaller() {
 	args = append(args, "--domain", config.Domain)
 	args = append(args, "--branch", config.Branch)
 
+	if config.NoPull {
+		args = append(args, "--no-pull")
+	}
+
 	if !config.IsFirstNode {
 		if config.JoinAddress != "" {
 			args = append(args, "--join", config.JoinAddress)
@@ -47,6 +53,153 @@ func runInteractiveInstaller() {
 
 	// Re-run with collected args
 	handleProdInstall(args)
+}
+
+// showDryRunSummary displays what would be done during installation without making changes
+func showDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress string, isFirstNode bool, oramaDir string) {
+	fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
+	fmt.Printf("DRY RUN - No changes will be made\n")
+	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+
+	fmt.Printf("📋 Installation Summary:\n")
+	fmt.Printf("  VPS IP:        %s\n", vpsIP)
+	fmt.Printf("  Domain:        %s\n", domain)
+	fmt.Printf("  Branch:        %s\n", branch)
+	if isFirstNode {
+		fmt.Printf("  Node Type:     First node (creates new cluster)\n")
+	} else {
+		fmt.Printf("  Node Type:     Joining existing cluster\n")
+		if joinAddress != "" {
+			fmt.Printf("  Join Address:  %s\n", joinAddress)
+		}
+		if len(peers) > 0 {
+			fmt.Printf("  Peers:         %d peer(s)\n", len(peers))
+			for _, peer := range peers {
+				fmt.Printf("                 - %s\n", peer)
+			}
+		}
+	}
+
+	fmt.Printf("\n📁 Directories that would be created:\n")
+	fmt.Printf("  %s/configs/\n", oramaDir)
+	fmt.Printf("  %s/secrets/\n", oramaDir)
+	fmt.Printf("  %s/data/ipfs/repo/\n", oramaDir)
+	fmt.Printf("  %s/data/ipfs-cluster/\n", oramaDir)
+	fmt.Printf("  %s/data/rqlite/\n", oramaDir)
+	fmt.Printf("  %s/logs/\n", oramaDir)
+	fmt.Printf("  %s/tls-cache/\n", oramaDir)
+
+	fmt.Printf("\n🔧 Binaries that would be installed:\n")
+	fmt.Printf("  - Go (if not present)\n")
+	fmt.Printf("  - RQLite 8.43.0\n")
+	fmt.Printf("  - IPFS/Kubo 0.38.2\n")
+	fmt.Printf("  - IPFS Cluster (latest)\n")
+	fmt.Printf("  - Olric 0.7.0\n")
+	fmt.Printf("  - anyone-client (npm)\n")
+	fmt.Printf("  - DeBros binaries (built from %s branch)\n", branch)
+
+	fmt.Printf("\n🔐 Secrets that would be generated:\n")
+	fmt.Printf("  - Cluster secret (64-hex)\n")
+	fmt.Printf("  - IPFS swarm key\n")
+	fmt.Printf("  - Node identity (Ed25519 keypair)\n")
+
+	fmt.Printf("\n📝 Configuration files that would be created:\n")
+	fmt.Printf("  - %s/configs/node.yaml\n", oramaDir)
+	fmt.Printf("  - %s/configs/olric/config.yaml\n", oramaDir)
+
+	fmt.Printf("\n⚙️  Systemd services that would be created:\n")
+	fmt.Printf("  - debros-ipfs.service\n")
+	fmt.Printf("  - debros-ipfs-cluster.service\n")
+	fmt.Printf("  - debros-olric.service\n")
+	fmt.Printf("  - debros-node.service (includes embedded gateway + RQLite)\n")
+	fmt.Printf("  - debros-anyone-client.service\n")
+
+	fmt.Printf("\n🌐 Ports that would be used:\n")
+	fmt.Printf("  External (must be open in firewall):\n")
+	fmt.Printf("    - 80   (HTTP for ACME/Let's Encrypt)\n")
+	fmt.Printf("    - 443  (HTTPS gateway)\n")
+	fmt.Printf("    - 4101 (IPFS swarm)\n")
+	fmt.Printf("    - 7001 (RQLite Raft)\n")
+	fmt.Printf("  Internal (localhost only):\n")
+	fmt.Printf("    - 4501 (IPFS API)\n")
+	fmt.Printf("    - 5001 (RQLite HTTP)\n")
+	fmt.Printf("    - 6001 (Unified gateway)\n")
+	fmt.Printf("    - 8080 (IPFS gateway)\n")
+	fmt.Printf("    - 9050 (Anyone SOCKS5)\n")
+	fmt.Printf("    - 9094 (IPFS Cluster API)\n")
+	fmt.Printf("    - 3320/3322 (Olric)\n")
+
+	fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
+	fmt.Printf("To proceed with installation, run without --dry-run\n")
+	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+}
+
+// validateGeneratedConfig loads and validates the generated node configuration
+func validateGeneratedConfig(oramaDir string) error {
+	configPath := filepath.Join(oramaDir, "configs", "node.yaml")
+
+	// Check if config file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return fmt.Errorf("configuration file not found at %s", configPath)
+	}
+
+	// Load the config file
+	file, err := os.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	var cfg config.Config
+	if err := config.DecodeStrict(file, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Validate the configuration
+	if errs := cfg.Validate(); len(errs) > 0 {
+		var errMsgs []string
+		for _, e := range errs {
+			errMsgs = append(errMsgs, e.Error())
+		}
+		return fmt.Errorf("configuration validation errors:\n  - %s", strings.Join(errMsgs, "\n  - "))
+	}
+
+	return nil
+}
+
+// validateDNSRecord validates that the domain points to the expected IP address
+// Returns nil if DNS is valid, warning message if DNS doesn't match but continues,
+// or error if DNS lookup fails completely
+func validateDNSRecord(domain, expectedIP string) error {
+	if domain == "" {
+		return nil // No domain provided, skip validation
+	}
+
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		// DNS lookup failed - this is a warning, not a fatal error
+		// The user might be setting up DNS after installation
+		fmt.Printf("  ⚠️  DNS lookup failed for %s: %v\n", domain, err)
+		fmt.Printf("     Make sure DNS is configured before enabling HTTPS\n")
+		return nil
+	}
+
+	// Check if any resolved IP matches the expected IP
+	for _, ip := range ips {
+		if ip.String() == expectedIP {
+			fmt.Printf("  ✓ DNS validated: %s → %s\n", domain, expectedIP)
+			return nil
+		}
+	}
+
+	// DNS doesn't point to expected IP - warn but continue
+	resolvedIPs := make([]string, len(ips))
+	for i, ip := range ips {
+		resolvedIPs[i] = ip.String()
+	}
+	fmt.Printf("  ⚠️  DNS mismatch: %s resolves to %v, expected %s\n", domain, resolvedIPs, expectedIP)
+	fmt.Printf("     HTTPS certificate generation may fail until DNS is updated\n")
+	return nil
 }
 
 // normalizePeers normalizes and validates peer multiaddrs
@@ -133,7 +286,9 @@ func showProdHelp() {
 	fmt.Printf("      --join ADDR           - RQLite join address IP:port (for joining cluster)\n")
 	fmt.Printf("      --cluster-secret HEX  - 64-hex cluster secret (required when joining)\n")
 	fmt.Printf("      --branch BRANCH       - Git branch to use (main or nightly, default: main)\n")
+	fmt.Printf("      --no-pull             - Skip git clone/pull, use existing /home/debros/src\n")
 	fmt.Printf("      --ignore-resource-checks - Skip disk/RAM/CPU prerequisite validation\n")
+	fmt.Printf("      --dry-run             - Show what would be done without making changes\n")
 	fmt.Printf("  upgrade                   - Upgrade existing installation (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
@@ -182,6 +337,8 @@ func handleProdInstall(args []string) {
 	branch := fs.String("branch", "main", "Git branch to use (main or nightly)")
 	clusterSecret := fs.String("cluster-secret", "", "Hex-encoded 32-byte cluster secret (for joining existing cluster)")
 	interactive := fs.Bool("interactive", false, "Run interactive TUI installer")
+	dryRun := fs.Bool("dry-run", false, "Show what would be done without making changes")
+	noPull := fs.Bool("no-pull", false, "Skip git clone/pull, use existing /home/debros/src")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -261,12 +418,30 @@ func handleProdInstall(args []string) {
 		fmt.Printf("  ✓ Cluster secret saved\n")
 	}
 
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, *force, *branch, false, *skipResourceChecks)
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, *force, *branch, *noPull, *skipResourceChecks)
+
+	// Inform user if skipping git pull
+	if *noPull {
+		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
+		fmt.Printf("     Using existing repository at /home/debros/src\n")
+	}
 
 	// Check port availability before proceeding
 	if err := ensurePortsAvailable("install", defaultPorts()); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
+	}
+
+	// Validate DNS if domain is provided
+	if *domain != "" {
+		fmt.Printf("\n🌐 Pre-flight DNS validation...\n")
+		validateDNSRecord(*domain, *vpsIP)
+	}
+
+	// Dry-run mode: show what would be done and exit
+	if *dryRun {
+		showDryRunSummary(*vpsIP, *domain, *branch, peers, *joinAddress, isFirstNode, oramaDir)
+		return
 	}
 
 	// Save branch preference for future upgrades
@@ -318,21 +493,26 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
+	// Validate generated configuration
+	fmt.Printf("  Validating generated configuration...\n")
+	if err := validateGeneratedConfig(oramaDir); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Configuration validation failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("  ✓ Configuration validated\n")
+
 	// Phase 5: Create systemd services
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
-	if err := setup.Phase5CreateSystemdServices(); err != nil {
+	if err := setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Service creation failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Give services a moment to fully initialize before verification
-	fmt.Printf("\n⏳ Waiting for services to initialize...\n")
-	time.Sleep(5 * time.Second)
-
-	// Verify all services are running correctly
-	if err := verifyProductionRuntime("prod install"); err != nil {
+	// Verify all services are running correctly with exponential backoff retries
+	fmt.Printf("\n⏳ Verifying services are healthy...\n")
+	if err := verifyProductionRuntimeWithRetry("prod install", 5, 3*time.Second); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		fmt.Fprintf(os.Stderr, "   Installation completed but services are not healthy. Check logs with: dbn prod logs <service>\n")
+		fmt.Fprintf(os.Stderr, "   Installation completed but services are not healthy. Check logs with: orama logs <service>\n")
 		os.Exit(1)
 	}
 
@@ -614,7 +794,7 @@ func handleProdUpgrade(args []string) {
 
 	// Phase 5: Update systemd services
 	fmt.Printf("\n🔧 Phase 5: Updating systemd services...\n")
-	if err := setup.Phase5CreateSystemdServices(); err != nil {
+	if err := setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
 	}
 
@@ -638,13 +818,11 @@ func handleProdUpgrade(args []string) {
 				}
 			}
 			fmt.Printf("   ✓ All services restarted\n")
-			// Give services a moment to fully initialize before verification
-			fmt.Printf("   ⏳ Waiting for services to initialize...\n")
-			time.Sleep(5 * time.Second)
-			// Verify services are healthy after restart
-			if err := verifyProductionRuntime("prod upgrade --restart"); err != nil {
+			// Verify services are healthy after restart with exponential backoff
+			fmt.Printf("   ⏳ Verifying services are healthy...\n")
+			if err := verifyProductionRuntimeWithRetry("prod upgrade --restart", 5, 3*time.Second); err != nil {
 				fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-				fmt.Fprintf(os.Stderr, "   Upgrade completed but services are not healthy. Check logs with: dbn prod logs <service>\n")
+				fmt.Fprintf(os.Stderr, "   Upgrade completed but services are not healthy. Check logs with: orama logs <service>\n")
 				os.Exit(1)
 			}
 			fmt.Printf("   ✅ All services verified healthy\n")
@@ -953,6 +1131,31 @@ func serviceExists(name string) bool {
 	return err == nil
 }
 
+// verifyProductionRuntimeWithRetry verifies services with exponential backoff retries
+func verifyProductionRuntimeWithRetry(action string, maxAttempts int, initialWait time.Duration) error {
+	wait := initialWait
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lastErr = verifyProductionRuntime(action)
+		if lastErr == nil {
+			return nil
+		}
+
+		if attempt < maxAttempts {
+			fmt.Printf("  ⏳ Services not ready (attempt %d/%d), waiting %v...\n", attempt, maxAttempts, wait)
+			time.Sleep(wait)
+			// Exponential backoff with cap at 30 seconds
+			wait = wait * 2
+			if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+		}
+	}
+
+	return lastErr
+}
+
 func verifyProductionRuntime(action string) error {
 	services := getProductionServices()
 	issues := make([]string, 0)
@@ -968,7 +1171,7 @@ func verifyProductionRuntime(action string) error {
 		}
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := tlsutil.NewHTTPClient(3 * time.Second)
 
 	if err := checkHTTP(client, "GET", "http://127.0.0.1:5001/status", "RQLite status"); err == nil {
 	} else if serviceExists("debros-node") {
@@ -986,7 +1189,8 @@ func verifyProductionRuntime(action string) error {
 	}
 
 	if err := checkHTTP(client, "GET", "http://127.0.0.1:6001/health", "Gateway health"); err == nil {
-	} else if serviceExists("debros-gateway") {
+	} else if serviceExists("debros-node") {
+		// Gateway is now embedded in node, check debros-node instead
 		issues = append(issues, err.Error())
 	}
 
@@ -1007,10 +1211,11 @@ func getProductionServices() []string {
 	allServices := []string{
 		"debros-gateway",
 		"debros-node",
+		"debros-rqlite",
 		"debros-olric",
-		// Note: RQLite is managed by node process, not as separate service
 		"debros-ipfs-cluster",
 		"debros-ipfs",
+		"debros-anyone-client",
 	}
 
 	// Filter to only existing services by checking if unit file exists
@@ -1135,31 +1340,13 @@ func handleProdStart() {
 	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
 	time.Sleep(5 * time.Second)
 
-	// Wait for services to actually become active (with retries)
-	maxRetries := 6
-	for i := 0; i < maxRetries; i++ {
-		allActive := true
-		for _, svc := range inactive {
-			active, err := isServiceActive(svc)
-			if err != nil || !active {
-				allActive = false
-				break
-			}
-		}
-		if allActive {
-			break
-		}
-		if i < maxRetries-1 {
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	// Verify all services are healthy
-	if err := verifyProductionRuntime("prod start"); err != nil {
+	// Verify all services are healthy with exponential backoff retries
+	fmt.Printf("  ⏳ Verifying services are healthy...\n")
+	if err := verifyProductionRuntimeWithRetry("prod start", 6, 2*time.Second); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		fmt.Fprintf(os.Stderr, "\n   Services may still be starting. Check status with:\n")
 		fmt.Fprintf(os.Stderr, "   systemctl status debros-*\n")
-		fmt.Fprintf(os.Stderr, "   dbn prod logs <service>\n")
+		fmt.Fprintf(os.Stderr, "   orama logs <service>\n")
 		os.Exit(1)
 	}
 
@@ -1180,6 +1367,13 @@ func handleProdStop() {
 		return
 	}
 
+	// First, disable all services to prevent auto-restart
+	disableArgs := []string{"disable"}
+	disableArgs = append(disableArgs, services...)
+	if err := exec.Command("systemctl", disableArgs...).Run(); err != nil {
+		fmt.Printf("  ⚠️  Warning: Failed to disable some services: %v\n", err)
+	}
+
 	// Stop all services at once using a single systemctl command
 	// This is more efficient and ensures they all stop together
 	stopArgs := []string{"stop"}
@@ -1193,7 +1387,6 @@ func handleProdStop() {
 	time.Sleep(2 * time.Second)
 
 	// Reset failed state for any services that might be in failed state
-	// This helps with services stuck in "activating auto-restart"
 	resetArgs := []string{"reset-failed"}
 	resetArgs = append(resetArgs, services...)
 	exec.Command("systemctl", resetArgs...).Run()
@@ -1201,7 +1394,7 @@ func handleProdStop() {
 	// Wait again after reset-failed
 	time.Sleep(1 * time.Second)
 
-	// Stop again to ensure they're stopped (in case reset-failed caused a restart)
+	// Stop again to ensure they're stopped
 	exec.Command("systemctl", stopArgs...).Run()
 	time.Sleep(1 * time.Second)
 
@@ -1315,12 +1508,9 @@ func handleProdRestart() {
 		}
 	}
 
-	// Give services a moment to fully initialize before verification
-	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
-	time.Sleep(3 * time.Second)
-
-	// Verify all services are healthy
-	if err := verifyProductionRuntime("prod restart"); err != nil {
+	// Verify all services are healthy with exponential backoff retries
+	fmt.Printf("  ⏳ Verifying services are healthy...\n")
+	if err := verifyProductionRuntimeWithRetry("prod restart", 5, 3*time.Second); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
@@ -1350,10 +1540,11 @@ func handleProdUninstall() {
 	services := []string{
 		"debros-gateway",
 		"debros-node",
+		"debros-rqlite",
 		"debros-olric",
-		// Note: RQLite is managed by node process, not as separate service
 		"debros-ipfs-cluster",
 		"debros-ipfs",
+		"debros-anyone-client",
 	}
 
 	fmt.Printf("Stopping services...\n")

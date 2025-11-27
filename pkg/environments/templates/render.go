@@ -13,19 +13,24 @@ var templatesFS embed.FS
 
 // NodeConfigData holds parameters for node.yaml rendering (unified - no bootstrap/node distinction)
 type NodeConfigData struct {
-	NodeID             string
-	P2PPort            int
-	DataDir            string
-	RQLiteHTTPPort     int
-	RQLiteRaftPort     int
-	RQLiteJoinAddress  string   // Optional: join address for joining existing cluster
-	BootstrapPeers     []string // List of peer multiaddrs to connect to
-	ClusterAPIPort     int
-	IPFSAPIPort        int    // Default: 4501
-	HTTPAdvAddress     string // Advertised HTTP address (IP:port)
-	RaftAdvAddress     string // Advertised Raft address (IP:port)
-	UnifiedGatewayPort int    // Unified gateway port for all node services
-	Domain             string // Domain for this node (e.g., node-123.orama.network)
+	NodeID                 string
+	P2PPort                int
+	DataDir                string
+	RQLiteHTTPPort         int
+	RQLiteRaftPort         int // External Raft port for advertisement (7001 for SNI)
+	RQLiteRaftInternalPort int // Internal Raft port for local binding (7002 when SNI enabled)
+	RQLiteJoinAddress      string   // Optional: join address for joining existing cluster
+	BootstrapPeers         []string // List of peer multiaddrs to connect to
+	ClusterAPIPort         int
+	IPFSAPIPort            int    // Default: 4501
+	HTTPAdvAddress         string // Advertised HTTP address (IP:port)
+	RaftAdvAddress         string // Advertised Raft address (IP:port or domain:port for SNI)
+	UnifiedGatewayPort     int    // Unified gateway port for all node services
+	Domain                 string // Domain for this node (e.g., node-123.orama.network)
+	EnableHTTPS            bool   // Enable HTTPS/TLS with ACME
+	TLSCacheDir            string // Directory for ACME certificate cache
+	HTTPPort               int    // HTTP port for ACME challenges (usually 80)
+	HTTPSPort              int    // HTTPS port (usually 443)
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering

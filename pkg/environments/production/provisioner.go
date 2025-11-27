@@ -39,12 +39,20 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		filepath.Join(fp.oramaDir, "backups"),
 		filepath.Join(fp.oramaHome, "bin"),
 		filepath.Join(fp.oramaHome, "src"),
+		filepath.Join(fp.oramaHome, ".npm"),
 	}
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
+	}
+
+	// Remove any stray cluster-secret file from root .orama directory
+	// The correct location is .orama/secrets/cluster-secret
+	strayClusterSecret := filepath.Join(fp.oramaDir, "cluster-secret")
+	if _, err := os.Stat(strayClusterSecret); err == nil {
+		os.Remove(strayClusterSecret)
 	}
 
 	// Create log files with correct permissions so systemd can write to them
@@ -91,6 +99,13 @@ func (fp *FilesystemProvisioner) FixOwnership() error {
 	cmd = exec.Command("chown", "-R", "debros:debros", binDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", binDir, err, string(output))
+	}
+
+	// Fix npm cache directory
+	npmDir := filepath.Join(fp.oramaHome, ".npm")
+	cmd = exec.Command("chown", "-R", "debros:debros", npmDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", npmDir, err, string(output))
 	}
 
 	return nil

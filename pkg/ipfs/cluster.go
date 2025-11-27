@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -328,7 +329,7 @@ func (cm *ClusterConfigManager) UpdateAllClusterPeers() (bool, error) {
 	}
 
 	// Query local cluster API to get all peers
-	client := &standardHTTPClient{}
+	client := newStandardHTTPClient()
 	peersURL := fmt.Sprintf("%s/peers", cm.cfg.Database.IPFS.ClusterAPIURL)
 	resp, err := client.Get(peersURL)
 	if err != nil {
@@ -914,7 +915,7 @@ func parseIPFSPort(apiURL string) (int, error) {
 // getPeerID queries the cluster API to get the peer ID
 func getPeerID(apiURL string) (string, error) {
 	// Simple HTTP client to query /peers endpoint
-	client := &standardHTTPClient{}
+	client := newStandardHTTPClient()
 	resp, err := client.Get(fmt.Sprintf("%s/peers", apiURL))
 	if err != nil {
 		return "", err
@@ -966,11 +967,19 @@ func generateRandomSecret(length int) string {
 	return hex.EncodeToString(bytes)
 }
 
-// standardHTTPClient implements HTTP client using net/http
-type standardHTTPClient struct{}
+// standardHTTPClient implements HTTP client using net/http with centralized TLS configuration
+type standardHTTPClient struct {
+	client *http.Client
+}
+
+func newStandardHTTPClient() *standardHTTPClient {
+	return &standardHTTPClient{
+		client: tlsutil.NewHTTPClient(30 * time.Second),
+	}
+}
 
 func (c *standardHTTPClient) Get(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+	resp, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}

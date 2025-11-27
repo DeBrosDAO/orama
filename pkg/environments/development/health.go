@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // HealthCheckResult represents the result of a health check
@@ -79,7 +81,7 @@ func (pm *ProcessManager) checkRQLiteNode(ctx context.Context, name string, http
 	result := HealthCheckResult{Name: fmt.Sprintf("RQLite-%s", name)}
 
 	urlStr := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := tlsutil.NewHTTPClient(2 * time.Second)
 	resp, err := client.Get(urlStr)
 	if err != nil {
 		result.Details = fmt.Sprintf("connection failed: %v", err)

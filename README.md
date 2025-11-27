@@ -194,7 +194,25 @@ make build
 - Ubuntu 22.04+ or Debian 12+
 - `amd64` or `arm64` architecture
 - 4GB RAM, 50GB SSD, 2 CPU cores
-- Ports 80, 443 (HTTPS), 7001 (TCP/SNI gateway)
+
+### Required Ports
+
+**External (must be open in firewall):**
+
+- **80** - HTTP (ACME/Let's Encrypt certificate challenges)
+- **443** - HTTPS (Main gateway API endpoint)
+- **4101** - IPFS Swarm (peer connections)
+- **7001** - RQLite Raft (cluster consensus)
+
+**Internal (bound to localhost, no firewall needed):**
+
+- 4501 - IPFS API
+- 5001 - RQLite HTTP API
+- 6001 - Unified Gateway
+- 8080 - IPFS Gateway
+- 9050 - Anyone Client SOCKS5 proxy
+- 9094 - IPFS Cluster API
+- 3320/3322 - Olric Cache
 
 ### Installation
 

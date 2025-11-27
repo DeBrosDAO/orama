@@ -279,9 +279,7 @@ func (c *Config) validateDiscovery() []error {
 		})
 	}
 
-	// Validate peer addresses (optional - can be empty for first node)
-	// All nodes are unified, so peer addresses are optional
-
+	// Validate peer addresses (optional - all nodes are unified peers now)
 	// Validate each peer multiaddr
 	seenPeers := make(map[string]bool)
 	for i, peer := range disc.BootstrapPeers {

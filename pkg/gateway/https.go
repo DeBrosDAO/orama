@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
@@ -45,11 +47,30 @@ func NewHTTPSGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfi
 		httpsConfig: &cfg.HTTPS,
 	}
 
-	// Set up Let's Encrypt autocert if enabled
-	if cfg.HTTPS.AutoCert {
+	// Check if using self-signed certificates or Let's Encrypt
+	if cfg.HTTPS.UseSelfSigned || (cfg.HTTPS.CertFile != "" && cfg.HTTPS.KeyFile != "") {
+		// Using self-signed or pre-existing certificates
+		logger.ComponentInfo(logging.ComponentGeneral, "Using self-signed or pre-configured certificates for HTTPS",
+			zap.String("domain", cfg.HTTPS.Domain),
+			zap.String("cert_file", cfg.HTTPS.CertFile),
+			zap.String("key_file", cfg.HTTPS.KeyFile),
+		)
+		// Don't set certManager - will use CertFile/KeyFile from config
+	} else if cfg.HTTPS.AutoCert {
+		// Use Let's Encrypt (existing logic)
 		cacheDir := cfg.HTTPS.CacheDir
 		if cacheDir == "" {
 			cacheDir = "/home/debros/.orama/tls-cache"
+		}
+
+		// Check environment for staging mode
+		directoryURL := "https://acme-v02.api.letsencrypt.org/directory" // Production
+		if os.Getenv("DEBROS_ACME_STAGING") != "" {
+			directoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+			logger.ComponentWarn(logging.ComponentGeneral,
+				"Using Let's Encrypt STAGING - certificates will not be trusted by production clients",
+				zap.String("domain", cfg.HTTPS.Domain),
+			)
 		}
 
 		gateway.certManager = &autocert.Manager{
@@ -57,11 +78,15 @@ func NewHTTPSGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfi
 			HostPolicy: autocert.HostWhitelist(cfg.HTTPS.Domain),
 			Cache:      autocert.DirCache(cacheDir),
 			Email:      cfg.HTTPS.Email,
+			Client: &acme.Client{
+				DirectoryURL: directoryURL,
+			},
 		}
 
 		logger.ComponentInfo(logging.ComponentGeneral, "Let's Encrypt autocert configured",
 			zap.String("domain", cfg.HTTPS.Domain),
 			zap.String("cache_dir", cacheDir),
+			zap.String("acme_environment", map[bool]string{true: "staging", false: "production"}[directoryURL == "https://acme-staging-v02.api.letsencrypt.org/directory"]),
 		)
 	}
 

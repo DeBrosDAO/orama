@@ -167,7 +167,7 @@ func TestValidatePeerAddresses(t *testing.T) {
 		shouldError bool
 	}{
 		{"node with peer", []string{validPeer}, false},
-		{"node without peer", []string{}, true}, // All nodes need peer addresses
+		{"node without peer", []string{}, false}, // All nodes are unified peers - bootstrap peers optional
 		{"invalid multiaddr", []string{"invalid"}, true},
 		{"missing p2p", []string{"/ip4/127.0.0.1/tcp/4001"}, true},
 		{"duplicate peer", []string{validPeer, validPeer}, true},

@@ -13,6 +13,28 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.71.0] - 2025-11-27
+
+### Added
+- Added `certutil` package for managing self-signed CA and node certificates.
+- Added support for SNI-based TCP routing for internal services (RQLite Raft, IPFS, Olric) when HTTPS is enabled.
+- Added `--dry-run`, `--no-pull`, and DNS validation checks to the production installer.
+- Added `tlsutil` package to centralize TLS configuration and support trusted self-signed certificates for internal communication.
+
+### Changed
+- Refactored production installer to use a unified node architecture, removing the separate `debros-gateway` service and embedding the gateway within `debros-node`.
+- Improved service health checks in the CLI with exponential backoff retries for better reliability during startup and upgrades.
+- Updated RQLite to listen on an internal port (7002) when SNI is enabled, allowing the SNI gateway to handle external port 7001.
+- Enhanced systemd service files with stricter security settings (e.g., `ProtectHome=read-only`, `ProtectSystem=strict`).
+- Updated IPFS configuration to bind Swarm to all interfaces (0.0.0.0) for external connectivity.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Fixed an issue where the `anyone-client` installation could fail due to missing NPM cache directories by ensuring proper initialization and ownership.
+
 ## [0.70.0] - 2025-11-26
 
 ### Added

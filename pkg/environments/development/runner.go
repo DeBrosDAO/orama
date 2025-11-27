@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // ProcessManager manages all dev environment processes
@@ -481,7 +483,7 @@ func (pm *ProcessManager) waitIPFSReady(ctx context.Context, node ipfsNodeInfo) 
 
 // ipfsHTTPCall makes an HTTP call to IPFS API
 func (pm *ProcessManager) ipfsHTTPCall(ctx context.Context, urlStr string, method string) error {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := tlsutil.NewHTTPClient(5 * time.Second)
 	req, err := http.NewRequestWithContext(ctx, method, urlStr, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)

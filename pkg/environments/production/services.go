@@ -49,6 +49,12 @@ SyslogIdentifier=debros-ipfs
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[3]s
 
 [Install]
@@ -68,11 +74,6 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary str
 		clusterSecret = strings.TrimSpace(string(data))
 	}
 
-	// Escape the secret for use in bash command (escape single quotes and backslashes)
-	escapedSecret := strings.ReplaceAll(clusterSecret, "'", "'\"'\"'")
-	escapedSecret = strings.ReplaceAll(escapedSecret, "\\", "\\\\")
-	_ = escapedSecret // Used in ExecStartPre
-
 	return fmt.Sprintf(`[Unit]
 Description=IPFS Cluster Service
 After=debros-ipfs.service
@@ -86,9 +87,9 @@ Group=debros
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
-Environment=CLUSTER_SECRET=%[6]s
-ExecStartPre=/bin/bash -c 'if [ -f %[7]s ] && [ -f %[2]s/service.json ]; then SECRET=$(cat %[7]s | tr -d "[:space:]"); python3 -c "import json, sys; f=open(\"%[2]s/service.json\", \"r\"); d=json.load(f); f.close(); d.setdefault(\"cluster\", {})[\"secret\"]=\"$SECRET\"; f=open(\"%[2]s/service.json\", \"w\"); json.dump(d, f, indent=2); f.close()" 2>/dev/null || sed -i "s|\"secret\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"secret\": \"$SECRET\"|" %[2]s/service.json; fi'
-ExecStart=%[5]s daemon
+Environment=CLUSTER_SECRET=%[5]s
+ExecStartPre=/bin/bash -c 'mkdir -p %[2]s && chmod 700 %[2]s'
+ExecStart=%[4]s daemon
 Restart=always
 RestartSec=5
 StandardOutput=file:%[3]s
@@ -98,11 +99,17 @@ SyslogIdentifier=debros-ipfs-cluster
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%[4]s
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=%[1]s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, clusterPath, logFile, ssg.oramaDir, clusterBinary, clusterSecret, clusterSecretPath)
+`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret)
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
@@ -147,6 +154,12 @@ SyslogIdentifier=debros-rqlite
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[4]s
 
 [Install]
@@ -180,6 +193,12 @@ SyslogIdentifier=olric
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[4]s
 
 [Install]
@@ -194,9 +213,9 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Network Node
-After=debros-ipfs-cluster.service
-Wants=debros-ipfs-cluster.service
-Requires=debros-ipfs-cluster.service
+After=debros-ipfs-cluster.service debros-rqlite.service
+Wants=debros-ipfs-cluster.service debros-rqlite.service
+Requires=debros-ipfs-cluster.service debros-rqlite.service
 
 [Service]
 Type=simple
@@ -211,9 +230,17 @@ StandardOutput=file:%[4]s
 StandardError=file:%[4]s
 SyslogIdentifier=debros-node
 
-NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[2]s
 
 [Install]
@@ -245,9 +272,16 @@ SyslogIdentifier=debros-gateway
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
-NoNewPrivileges=yes
+# Note: NoNewPrivileges is omitted because it conflicts with AmbientCapabilities
+# The service needs CAP_NET_BIND_SERVICE to bind to privileged ports (80, 443)
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[2]s
 
 [Install]
@@ -280,6 +314,12 @@ SyslogIdentifier=anyone-client
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[3]s
 
 [Install]

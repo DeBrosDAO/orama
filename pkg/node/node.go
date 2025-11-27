@@ -2,6 +2,9 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	mathrand "math/rand"
 	"net"
@@ -20,6 +23,8 @@ import (
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
@@ -56,6 +61,12 @@ type Node struct {
 	// Full gateway (for API, auth, pubsub, and internal service routing)
 	apiGateway *gateway.Gateway
 	apiGatewayServer *http.Server
+
+	// SNI gateway (for TCP routing of raft, ipfs, olric, etc.)
+	sniGateway *gateway.TCPSNIGateway
+
+	// Shared certificate manager for HTTPS and SNI
+	certManager *autocert.Manager
 }
 
 // NewNode creates a new network node
@@ -646,6 +657,13 @@ func (n *Node) Stop() error {
 		n.apiGateway.Close()
 	}
 
+	// Stop SNI Gateway
+	if n.sniGateway != nil {
+		if err := n.sniGateway.Stop(); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "SNI Gateway stop error", zap.Error(err))
+		}
+	}
+
 	// Stop cluster discovery
 	if n.clusterDiscovery != nil {
 		n.clusterDiscovery.Stop()
@@ -684,7 +702,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 	}
 
 	// Create separate logger for gateway
-	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", fmt.Sprintf("gateway-%s.log", n.config.HTTPGateway.NodeName))
+	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", "gateway.log")
 
 	// Ensure logs directory exists
 	logsDir := filepath.Dir(logFile)
@@ -709,6 +727,10 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		IPFSClusterAPIURL: n.config.HTTPGateway.IPFSClusterAPIURL,
 		IPFSAPIURL:       n.config.HTTPGateway.IPFSAPIURL,
 		IPFSTimeout:      n.config.HTTPGateway.IPFSTimeout,
+		// HTTPS/TLS configuration
+		EnableHTTPS: n.config.HTTPGateway.HTTPS.Enabled,
+		DomainName:  n.config.HTTPGateway.HTTPS.Domain,
+		TLSCacheDir: n.config.HTTPGateway.HTTPS.CacheDir,
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
@@ -718,33 +740,328 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 
 	n.apiGateway = apiGateway
 
+	// Check if HTTPS is enabled and set up certManager BEFORE starting goroutine
+	// This ensures n.certManager is set before SNI gateway initialization checks it
+	var certManager *autocert.Manager
+	var tlsCacheDir string
+	if gwCfg.EnableHTTPS && gwCfg.DomainName != "" {
+		tlsCacheDir = gwCfg.TLSCacheDir
+		if tlsCacheDir == "" {
+			tlsCacheDir = "/home/debros/.orama/tls-cache"
+		}
+
+		// Create TLS configuration with Let's Encrypt autocert
+		// Using STAGING environment to avoid rate limits during development/testing
+		// TODO: Switch to production when ready (remove Client field)
+		certManager = &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(gwCfg.DomainName),
+			Cache:      autocert.DirCache(tlsCacheDir),
+			Email:      fmt.Sprintf("admin@%s", gwCfg.DomainName),
+			Client: &acme.Client{
+				DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
+			},
+		}
+
+		// Store certificate manager for use by SNI gateway
+		n.certManager = certManager
+	}
+
+	// Channel to signal when HTTP server is ready for ACME challenges
+	httpReady := make(chan struct{})
+
 	// Start API Gateway in a goroutine
 	go func() {
-		n.logger.ComponentInfo(logging.ComponentNode, "Starting full API gateway",
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "Starting full API gateway",
 			zap.String("listen_addr", gwCfg.ListenAddr),
 		)
 
-		server := &http.Server{
-			Addr:    gwCfg.ListenAddr,
-			Handler: apiGateway.Routes(),
+		// Check if HTTPS is enabled
+		if gwCfg.EnableHTTPS && gwCfg.DomainName != "" && certManager != nil {
+			// Start HTTPS server with automatic certificate provisioning
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTPS enabled, starting secure gateway",
+				zap.String("domain", gwCfg.DomainName),
+			)
+
+			// Determine HTTPS and HTTP ports
+			httpsPort := 443
+			httpPort := 80
+
+			// Start HTTP server for ACME challenges and redirects
+			// certManager.HTTPHandler() must be the main handler, with a fallback for other requests
+			httpServer := &http.Server{
+				Addr: fmt.Sprintf(":%d", httpPort),
+				Handler: certManager.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					// Fallback for non-ACME requests: redirect to HTTPS
+					target := fmt.Sprintf("https://%s%s", r.Host, r.URL.RequestURI())
+					http.Redirect(w, r, target, http.StatusMovedPermanently)
+				})),
+			}
+
+			// Create HTTP listener first to ensure port 80 is bound before signaling ready
+			httpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", httpPort))
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to bind HTTP listener for ACME", zap.Error(err))
+				close(httpReady) // Signal even on failure so SNI goroutine doesn't hang
+				return
+			}
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP server ready for ACME challenges", zap.Int("port", httpPort))
+
+			// Start HTTP server in background for ACME challenges
+			go func() {
+				if err := httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+					gatewayLogger.ComponentError(logging.ComponentGateway, "HTTP server error", zap.Error(err))
+				}
+			}()
+
+		// Pre-provision the certificate BEFORE starting HTTPS server
+		// This ensures we don't accept HTTPS connections without a valid certificate
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "Pre-provisioning TLS certificate...",
+			zap.String("domain", gwCfg.DomainName),
+		)
+
+		// Use a timeout context for certificate provisioning
+		// If Let's Encrypt is rate-limited or unreachable, don't block forever
+		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer certCancel()
+
+		certReq := &tls.ClientHelloInfo{
+			ServerName: gwCfg.DomainName,
 		}
 
-		n.apiGatewayServer = server
+		// Try to get certificate with timeout
+		certProvisionChan := make(chan error, 1)
+		go func() {
+			_, err := certManager.GetCertificate(certReq)
+			certProvisionChan <- err
+		}()
 
-		// Try to bind listener
-		ln, err := net.Listen("tcp", gwCfg.ListenAddr)
-		if err != nil {
-			n.logger.ComponentError(logging.ComponentNode, "failed to bind API gateway listener", zap.Error(err))
+		var certErr error
+		select {
+		case err := <-certProvisionChan:
+			certErr = err
+		case <-certCtx.Done():
+			certErr = fmt.Errorf("certificate provisioning timeout (Let's Encrypt may be rate-limited or unreachable)")
+		}
+
+		if certErr != nil {
+			gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to provision TLS certificate - HTTPS disabled",
+				zap.String("domain", gwCfg.DomainName),
+				zap.Error(certErr),
+			)
+			// Signal ready for SNI goroutine (even though we're failing)
+			close(httpReady)
+
+			// HTTP server on port 80 is already running, but it's configured to redirect to HTTPS
+			// Replace its handler to serve the gateway directly instead of redirecting
+			httpServer.Handler = apiGateway.Routes()
+			
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP gateway available on port 80 only",
+				zap.String("port", "80"),
+			)
 			return
 		}
 
-		n.logger.ComponentInfo(logging.ComponentNode, "API gateway listener bound", zap.String("listen_addr", ln.Addr().String()))
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "TLS certificate provisioned successfully",
+			zap.String("domain", gwCfg.DomainName),
+		)
 
-		// Serve HTTP
-		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			n.logger.ComponentError(logging.ComponentNode, "API Gateway error", zap.Error(err))
+		// Signal that HTTP server is ready for ACME challenges
+		close(httpReady)
+
+			tlsConfig := &tls.Config{
+				MinVersion:     tls.VersionTLS12,
+				GetCertificate: certManager.GetCertificate,
+			}
+
+			// Start HTTPS server
+			httpsServer := &http.Server{
+				Addr:      fmt.Sprintf(":%d", httpsPort),
+				TLSConfig: tlsConfig,
+				Handler:   apiGateway.Routes(),
+			}
+
+			n.apiGatewayServer = httpsServer
+
+			listener, err := tls.Listen("tcp", fmt.Sprintf(":%d", httpsPort), tlsConfig)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to create TLS listener", zap.Error(err))
+				return
+			}
+
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTPS gateway listener bound",
+				zap.String("domain", gwCfg.DomainName),
+				zap.Int("port", httpsPort),
+			)
+
+			// Serve HTTPS
+			if err := httpsServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "HTTPS Gateway error", zap.Error(err))
+			}
+		} else {
+			// No HTTPS - signal ready immediately (no ACME needed)
+			close(httpReady)
+
+			// Start plain HTTP server
+			server := &http.Server{
+				Addr:    gwCfg.ListenAddr,
+				Handler: apiGateway.Routes(),
+			}
+
+			n.apiGatewayServer = server
+
+			// Try to bind listener
+			ln, err := net.Listen("tcp", gwCfg.ListenAddr)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to bind API gateway listener", zap.Error(err))
+				return
+			}
+
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "API gateway listener bound", zap.String("listen_addr", ln.Addr().String()))
+
+			// Serve HTTP
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "API Gateway error", zap.Error(err))
+			}
 		}
 	}()
+
+	// Initialize and start SNI gateway if HTTPS is enabled and SNI is configured
+	// This runs in a separate goroutine that waits for HTTP server to be ready
+	if n.config.HTTPGateway.SNI.Enabled && n.certManager != nil {
+		go func() {
+			// Wait for HTTP server to be ready for ACME challenges
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "Waiting for HTTP server before SNI initialization...")
+			<-httpReady
+			
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "Initializing SNI gateway",
+				zap.String("listen_addr", n.config.HTTPGateway.SNI.ListenAddr),
+			)
+
+			// Provision the certificate from Let's Encrypt cache
+			// This ensures the certificate file is downloaded and cached
+			domain := n.config.HTTPGateway.HTTPS.Domain
+			if domain != "" {
+				gatewayLogger.ComponentInfo(logging.ComponentGateway, "Provisioning certificate for SNI",
+					zap.String("domain", domain))
+				
+				certReq := &tls.ClientHelloInfo{
+					ServerName: domain,
+				}
+				if tlsCert, err := n.certManager.GetCertificate(certReq); err != nil {
+					gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to provision certificate for SNI", 
+						zap.String("domain", domain), zap.Error(err))
+					return // Can't start SNI without certificate
+				} else {
+					gatewayLogger.ComponentInfo(logging.ComponentGateway, "Certificate provisioned for SNI", 
+						zap.String("domain", domain))
+
+					// Extract certificate to PEM files for SNI gateway
+					// SNI gateway needs standard PEM cert files, not autocert cache format
+					tlsCacheDir := n.config.HTTPGateway.HTTPS.CacheDir
+					if tlsCacheDir == "" {
+						tlsCacheDir = "/home/debros/.orama/tls-cache"
+					}
+
+					certPath := filepath.Join(tlsCacheDir, domain+".crt")
+					keyPath := filepath.Join(tlsCacheDir, domain+".key")
+
+					if err := extractPEMFromTLSCert(tlsCert, certPath, keyPath); err != nil {
+						gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to extract PEM from TLS cert for SNI", 
+							zap.Error(err))
+						return // Can't start SNI without PEM files
+					}
+					gatewayLogger.ComponentInfo(logging.ComponentGateway, "PEM certificates extracted for SNI", 
+						zap.String("cert_path", certPath), zap.String("key_path", keyPath))
+				}
+			} else {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "No domain configured for SNI certificate")
+				return
+			}
+
+			// Create SNI config with certificate files
+			sniCfg := n.config.HTTPGateway.SNI
+
+			// Use the same gateway logger for SNI gateway (writes to gateway.log)
+			sniGateway, err := gateway.NewTCPSNIGateway(gatewayLogger, &sniCfg)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to initialize SNI gateway", zap.Error(err))
+				return
+			}
+
+			n.sniGateway = sniGateway
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "SNI gateway initialized, starting...")
+
+			// Start SNI gateway (this blocks until shutdown)
+			if err := n.sniGateway.Start(ctx); err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "SNI Gateway error", zap.Error(err))
+			}
+		}()
+	}
+
+	return nil
+}
+
+// extractPEMFromTLSCert extracts certificate and private key from tls.Certificate to PEM files
+func extractPEMFromTLSCert(tlsCert *tls.Certificate, certPath, keyPath string) error {
+	if tlsCert == nil || len(tlsCert.Certificate) == 0 {
+		return fmt.Errorf("invalid tls certificate")
+	}
+
+	// Write certificate chain to PEM file
+	certFile, err := os.Create(certPath)
+	if err != nil {
+		return fmt.Errorf("failed to create cert file: %w", err)
+	}
+	defer certFile.Close()
+
+	// Write all certificates in the chain
+	for _, certBytes := range tlsCert.Certificate {
+		if err := pem.Encode(certFile, &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: certBytes,
+		}); err != nil {
+			return fmt.Errorf("failed to encode certificate: %w", err)
+		}
+	}
+
+	// Write private key to PEM file
+	if tlsCert.PrivateKey == nil {
+		return fmt.Errorf("private key is nil")
+	}
+
+	keyFile, err := os.Create(keyPath)
+	if err != nil {
+		return fmt.Errorf("failed to create key file: %w", err)
+	}
+	defer keyFile.Close()
+
+	// Handle different key types
+	var keyBytes []byte
+	switch key := tlsCert.PrivateKey.(type) {
+	case *x509.Certificate:
+		keyBytes, err = x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return fmt.Errorf("failed to marshal private key: %w", err)
+		}
+	default:
+		// Try to marshal as PKCS8
+		keyBytes, err = x509.MarshalPKCS8PrivateKey(tlsCert.PrivateKey)
+		if err != nil {
+			return fmt.Errorf("failed to marshal private key: %w", err)
+		}
+	}
+
+	if err := pem.Encode(keyFile, &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: keyBytes,
+	}); err != nil {
+		return fmt.Errorf("failed to encode private key: %w", err)
+	}
+
+	// Set proper permissions
+	os.Chmod(certPath, 0644)
+	os.Chmod(keyPath, 0600)
 
 	return nil
 }

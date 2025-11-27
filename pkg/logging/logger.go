@@ -54,6 +54,7 @@ const (
 	ComponentClient   Component = "CLIENT"
 	ComponentGeneral  Component = "GENERAL"
 	ComponentAnyone   Component = "ANYONE"
+	ComponentGateway  Component = "GATEWAY"
 )
 
 // getComponentColor returns the color for a specific component
@@ -75,6 +76,8 @@ func getComponentColor(component Component) string {
 		return Yellow
 	case ComponentAnyone:
 		return Cyan
+	case ComponentGateway:
+		return BrightGreen
 	default:
 		return White
 	}

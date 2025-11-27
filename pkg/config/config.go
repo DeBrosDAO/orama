@@ -119,15 +119,16 @@ type HTTPGatewayConfig struct {
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway
 type HTTPSConfig struct {
-	Enabled   bool   `yaml:"enabled"`    // Enable HTTPS (port 443)
-	Domain    string `yaml:"domain"`     // Primary domain (e.g., node-123.orama.network)
-	AutoCert  bool   `yaml:"auto_cert"`  // Use Let's Encrypt for automatic certificate
-	CertFile  string `yaml:"cert_file"`  // Path to certificate file (if not using auto_cert)
-	KeyFile   string `yaml:"key_file"`   // Path to key file (if not using auto_cert)
-	CacheDir  string `yaml:"cache_dir"`  // Directory for Let's Encrypt certificate cache
-	HTTPPort  int    `yaml:"http_port"`  // HTTP port for ACME challenge (default: 80)
-	HTTPSPort int    `yaml:"https_port"` // HTTPS port (default: 443)
-	Email     string `yaml:"email"`      // Email for Let's Encrypt account
+	Enabled        bool   `yaml:"enabled"`         // Enable HTTPS (port 443)
+	Domain         string `yaml:"domain"`          // Primary domain (e.g., node-123.orama.network)
+	AutoCert       bool   `yaml:"auto_cert"`       // Use Let's Encrypt for automatic certificate
+	UseSelfSigned  bool   `yaml:"use_self_signed"` // Use self-signed certificates (pre-generated)
+	CertFile       string `yaml:"cert_file"`       // Path to certificate file (if not using auto_cert)
+	KeyFile        string `yaml:"key_file"`        // Path to key file (if not using auto_cert)
+	CacheDir       string `yaml:"cache_dir"`       // Directory for Let's Encrypt certificate cache
+	HTTPPort       int    `yaml:"http_port"`       // HTTP port for ACME challenge (default: 80)
+	HTTPSPort      int    `yaml:"https_port"`      // HTTPS port (default: 443)
+	Email          string `yaml:"email"`           // Email for Let's Encrypt account
 }
 
 // SNIConfig contains SNI-based TCP routing configuration for port 7001

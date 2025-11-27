@@ -2,26 +2,35 @@
 package installer
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/DeBrosOfficial/network/pkg/certutil"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // InstallerConfig holds the configuration gathered from the TUI
 type InstallerConfig struct {
 	VpsIP         string
 	Domain        string
-	JoinAddress   string
-	Peers         []string
+	PeerDomain    string   // Domain of existing node to join
+	JoinAddress   string   // Auto-populated: raft.{PeerDomain}:7001
+	Peers         []string // Auto-populated: /dns4/{PeerDomain}/tcp/4001/p2p/{PeerID}
 	ClusterSecret string
 	Branch        string
 	IsFirstNode   bool
+	NoPull        bool
 }
 
 // Step represents a step in the installation wizard
@@ -32,9 +41,10 @@ const (
 	StepNodeType
 	StepVpsIP
 	StepDomain
-	StepJoinAddress
+	StepPeerDomain // Domain of existing node to join (replaces StepJoinAddress)
 	StepClusterSecret
 	StepBranch
+	StepNoPull
 	StepConfirm
 	StepInstalling
 	StepDone
@@ -42,15 +52,18 @@ const (
 
 // Model is the bubbletea model for the installer
 type Model struct {
-	step          Step
-	config        InstallerConfig
-	textInput     textinput.Model
-	err           error
-	width         int
-	height        int
-	installing    bool
-	installOutput []string
-	cursor        int // For selection menus
+	step           Step
+	config         InstallerConfig
+	textInput      textinput.Model
+	err            error
+	width          int
+	height         int
+	installing     bool
+	installOutput  []string
+	cursor         int    // For selection menus
+	discovering    bool   // Whether domain discovery is in progress
+	discoveryInfo  string // Info message during discovery
+	discoveredPeer string // Discovered peer ID from domain
 }
 
 // Styles
@@ -120,6 +133,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case installCompleteMsg:
+		m.step = StepDone
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -131,18 +148,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleEnter()
 
 		case "up", "k":
-			if m.step == StepNodeType || m.step == StepBranch {
+		if m.step == StepNodeType || m.step == StepBranch || m.step == StepNoPull {
 				if m.cursor > 0 {
 					m.cursor--
 				}
 			}
 
 		case "down", "j":
-			if m.step == StepNodeType {
-				if m.cursor < 1 {
-					m.cursor++
-				}
-			} else if m.step == StepBranch {
+		if m.step == StepNodeType || m.step == StepBranch || m.step == StepNoPull {
 				if m.cursor < 1 {
 					m.cursor++
 				}
@@ -158,7 +171,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update text input for input steps
-	if m.step == StepVpsIP || m.step == StepDomain || m.step == StepJoinAddress || m.step == StepClusterSecret {
+	if m.step == StepVpsIP || m.step == StepDomain || m.step == StepPeerDomain || m.step == StepClusterSecret {
 		var cmd tea.Cmd
 		m.textInput, cmd = m.textInput.Update(msg)
 		return m, cmd
@@ -197,23 +210,56 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.config.Domain = domain
 		m.err = nil
+
+		// Auto-generate self-signed certificates for this domain
+		m.discovering = true
+		m.discoveryInfo = "Generating SSL certificates for " + domain + "..."
+
+		if err := ensureCertificatesForDomain(domain); err != nil {
+			m.discovering = false
+			m.err = fmt.Errorf("failed to generate certificates: %w", err)
+			return m, nil
+		}
+
+		m.discovering = false
+
 		if m.config.IsFirstNode {
 			m.step = StepBranch
 			m.cursor = 0
 		} else {
-			m.step = StepJoinAddress
+			m.step = StepPeerDomain
 			m.setupStepInput()
 		}
 
-	case StepJoinAddress:
-		addr := strings.TrimSpace(m.textInput.Value())
-		if addr != "" {
-			if err := validateJoinAddress(addr); err != nil {
-				m.err = err
-				return m, nil
-			}
-			m.config.JoinAddress = addr
+	case StepPeerDomain:
+		peerDomain := strings.TrimSpace(m.textInput.Value())
+		if err := validateDomain(peerDomain); err != nil {
+			m.err = err
+			return m, nil
 		}
+
+		// Discover peer info from domain (try HTTPS first, then HTTP)
+		m.discovering = true
+		m.discoveryInfo = "Discovering peer from " + peerDomain + "..."
+
+		peerID, err := discoverPeerFromDomain(peerDomain)
+		m.discovering = false
+
+		if err != nil {
+			m.err = fmt.Errorf("failed to discover peer: %w", err)
+			return m, nil
+		}
+
+		// Store discovered info
+		m.config.PeerDomain = peerDomain
+		m.discoveredPeer = peerID
+
+		// Auto-populate join address and bootstrap peers
+		m.config.JoinAddress = fmt.Sprintf("raft.%s:7001", peerDomain)
+		m.config.Peers = []string{
+			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, peerID),
+		}
+
 		m.err = nil
 		m.step = StepClusterSecret
 		m.setupStepInput()
@@ -235,6 +281,15 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		} else {
 			m.config.Branch = "nightly"
 		}
+		m.cursor = 0 // Reset cursor for next step
+		m.step = StepNoPull
+
+	case StepNoPull:
+		if m.cursor == 0 {
+			m.config.NoPull = false
+		} else {
+			m.config.NoPull = true
+		}
 		m.step = StepConfirm
 
 	case StepConfirm:
@@ -251,6 +306,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 func (m *Model) setupStepInput() {
 	m.textInput.Reset()
 	m.textInput.Focus()
+	m.textInput.EchoMode = textinput.EchoNormal // Reset echo mode
 
 	switch m.step {
 	case StepVpsIP:
@@ -261,8 +317,8 @@ func (m *Model) setupStepInput() {
 		}
 	case StepDomain:
 		m.textInput.Placeholder = "e.g., node-1.orama.network"
-	case StepJoinAddress:
-		m.textInput.Placeholder = "e.g., 203.0.113.1:7001 (or leave empty)"
+	case StepPeerDomain:
+		m.textInput.Placeholder = "e.g., node-123.orama.network"
 	case StepClusterSecret:
 		m.textInput.Placeholder = "64 hex characters"
 		m.textInput.EchoMode = textinput.EchoPassword
@@ -298,12 +354,14 @@ func (m Model) View() string {
 		s.WriteString(m.viewVpsIP())
 	case StepDomain:
 		s.WriteString(m.viewDomain())
-	case StepJoinAddress:
-		s.WriteString(m.viewJoinAddress())
+	case StepPeerDomain:
+		s.WriteString(m.viewPeerDomain())
 	case StepClusterSecret:
 		s.WriteString(m.viewClusterSecret())
 	case StepBranch:
 		s.WriteString(m.viewBranch())
+	case StepNoPull:
+		s.WriteString(m.viewNoPull())
 	case StepConfirm:
 		s.WriteString(m.viewConfirm())
 	case StepInstalling:
@@ -390,19 +448,27 @@ func (m Model) viewDomain() string {
 	return s.String()
 }
 
-func (m Model) viewJoinAddress() string {
+func (m Model) viewPeerDomain() string {
 	var s strings.Builder
-	s.WriteString(titleStyle.Render("Join Address") + "\n\n")
-	s.WriteString("Enter the RQLite address to join (IP:port):\n")
-	s.WriteString(subtitleStyle.Render("Leave empty to auto-detect from peers") + "\n\n")
+	s.WriteString(titleStyle.Render("Existing Node Domain") + "\n\n")
+	s.WriteString("Enter the domain of an existing node to join:\n")
+	s.WriteString(subtitleStyle.Render("The installer will auto-discover peer info via HTTPS/HTTP") + "\n\n")
 	s.WriteString(m.textInput.View())
+
+	if m.discovering {
+		s.WriteString("\n\n" + subtitleStyle.Render("🔍 "+m.discoveryInfo))
+	}
+
+	if m.discoveredPeer != "" && m.err == nil {
+		s.WriteString("\n\n" + successStyle.Render("✓ Discovered peer: "+m.discoveredPeer[:12]+"..."))
+	}
 
 	if m.err != nil {
 		s.WriteString("\n\n" + errorStyle.Render("✗ " + m.err.Error()))
 	}
 
 	s.WriteString("\n\n")
-	s.WriteString(helpStyle.Render("Enter to confirm • Esc to go back"))
+	s.WriteString(helpStyle.Render("Enter to discover & continue • Esc to go back"))
 	return s.String()
 }
 
@@ -441,26 +507,56 @@ func (m Model) viewBranch() string {
 	return s.String()
 }
 
+func (m Model) viewNoPull() string {
+	var s strings.Builder
+	s.WriteString(titleStyle.Render("Git Repository") + "\n\n")
+	s.WriteString("Pull latest changes from repository?\n\n")
+
+	options := []string{"Pull latest (recommended)", "Skip git pull (use existing source)"}
+	for i, opt := range options {
+		if i == m.cursor {
+			s.WriteString(cursorStyle.Render("→ ") + focusedStyle.Render(opt) + "\n")
+		} else {
+			s.WriteString("  " + blurredStyle.Render(opt) + "\n")
+		}
+	}
+
+	s.WriteString("\n")
+	s.WriteString(helpStyle.Render("↑/↓ to select • Enter to confirm • Esc to go back"))
+	return s.String()
+}
+
 func (m Model) viewConfirm() string {
 	var s strings.Builder
 	s.WriteString(titleStyle.Render("Confirm Installation") + "\n\n")
+
+	noPullStr := "Pull latest"
+	if m.config.NoPull {
+		noPullStr = "Skip git pull"
+	}
 
 	config := fmt.Sprintf(
 		"  VPS IP:     %s\n"+
 			"  Domain:     %s\n"+
 			"  Branch:     %s\n"+
+			"  Git Pull:   %s\n"+
 			"  Node Type:  %s\n",
 		m.config.VpsIP,
 		m.config.Domain,
 		m.config.Branch,
+		noPullStr,
 		map[bool]string{true: "First node (new cluster)", false: "Join existing cluster"}[m.config.IsFirstNode],
 	)
 
 	if !m.config.IsFirstNode {
-		if m.config.JoinAddress != "" {
-			config += fmt.Sprintf("  Join Addr:  %s\n", m.config.JoinAddress)
+		config += fmt.Sprintf("  Peer Node:  %s\n", m.config.PeerDomain)
+		config += fmt.Sprintf("  Join Addr:  %s\n", m.config.JoinAddress)
+		if len(m.config.Peers) > 0 {
+			config += fmt.Sprintf("  Bootstrap:  %s...\n", m.config.Peers[0][:40])
 		}
-		config += fmt.Sprintf("  Secret:     %s...\n", m.config.ClusterSecret[:8])
+		if len(m.config.ClusterSecret) >= 8 {
+			config += fmt.Sprintf("  Secret:     %s...\n", m.config.ClusterSecret[:8])
+		}
 	}
 
 	s.WriteString(boxStyle.Render(config))
@@ -521,15 +617,45 @@ func validateDomain(domain string) error {
 	return nil
 }
 
-func validateJoinAddress(addr string) error {
-	if addr == "" {
-		return nil // Optional
-	}
-	_, _, err := net.SplitHostPort(addr)
+// discoverPeerFromDomain queries an existing node to get its peer ID
+// Tries HTTPS first, then falls back to HTTP
+// Respects DEBROS_TRUSTED_TLS_DOMAINS and DEBROS_CA_CERT_PATH environment variables for certificate verification
+func discoverPeerFromDomain(domain string) (string, error) {
+	// Use centralized TLS configuration that respects CA certificates and trusted domains
+	client := tlsutil.NewHTTPClientForDomain(10*time.Second, domain)
+
+	// Try HTTPS first
+	url := fmt.Sprintf("https://%s/v1/network/status", domain)
+	resp, err := client.Get(url)
+
+	// If HTTPS fails, try HTTP
 	if err != nil {
-		return fmt.Errorf("invalid address format (expected IP:port)")
+		// Finally try plain HTTP
+		url = fmt.Sprintf("http://%s/v1/network/status", domain)
+		resp, err = client.Get(url)
+		if err != nil {
+			return "", fmt.Errorf("could not connect to %s (tried HTTPS and HTTP): %w", domain, err)
+		}
 	}
-	return nil
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status from %s: %s", domain, resp.Status)
+	}
+
+	// Parse response
+	var status struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return "", fmt.Errorf("failed to parse response from %s: %w", domain, err)
+	}
+
+	if status.NodeID == "" {
+		return "", fmt.Errorf("no node_id in response from %s", domain)
+	}
+
+	return status.NodeID, nil
 }
 
 func validateClusterSecret(secret string) error {
@@ -540,6 +666,47 @@ func validateClusterSecret(secret string) error {
 	if !secretRegex.MatchString(secret) {
 		return fmt.Errorf("cluster secret must be valid hexadecimal")
 	}
+	return nil
+}
+
+// ensureCertificatesForDomain generates self-signed certificates for the domain
+func ensureCertificatesForDomain(domain string) error {
+	// Get home directory
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Create cert directory
+	certDir := filepath.Join(home, ".orama", "certs")
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		return fmt.Errorf("failed to create cert directory: %w", err)
+	}
+
+	// Create certificate manager
+	cm := certutil.NewCertificateManager(certDir)
+
+	// Ensure CA certificate exists
+	caCertPEM, caKeyPEM, err := cm.EnsureCACertificate()
+	if err != nil {
+		return fmt.Errorf("failed to ensure CA certificate: %w", err)
+	}
+
+	// Ensure node certificate exists for the domain
+	_, _, err = cm.EnsureNodeCertificate(domain, caCertPEM, caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to ensure node certificate: %w", err)
+	}
+
+	// Also create wildcard certificate if domain is not already wildcard
+	if !strings.HasPrefix(domain, "*.") {
+		wildcardDomain := "*." + domain
+		_, _, err = cm.EnsureNodeCertificate(wildcardDomain, caCertPEM, caKeyPEM)
+		if err != nil {
+			return fmt.Errorf("failed to ensure wildcard certificate: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -566,13 +733,14 @@ func Run() (*InstallerConfig, error) {
 		return nil, fmt.Errorf("installer must be run as root (use sudo)")
 	}
 
-	p := tea.NewProgram(NewModel(), tea.WithAltScreen())
+	model := NewModel()
+	p := tea.NewProgram(&model, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, err
 	}
 
-	m := finalModel.(Model)
+	m := finalModel.(*Model)
 	if m.step == StepInstalling || m.step == StepDone {
 		config := m.GetConfig()
 		return &config, nil
