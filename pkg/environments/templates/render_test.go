@@ -29,7 +29,6 @@ func TestRenderNodeConfig(t *testing.T) {
 		"id: \"node2\"",
 		"tcp/4002",
 		"rqlite_port: 5002",
-		"rqlite_raft_port: 7002",
 		"rqlite_join_address: \"localhost:5001\"",
 		bootstrapMultiaddr,
 		"cluster_api_url: \"http://localhost:9104\"",

@@ -128,24 +128,24 @@ func TestNormalizePeers(t *testing.T) {
 			expectCount: 0,
 			expectError: false,
 		},
-		{
-			name:        "single peer",
-			input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx",
-			expectCount: 1,
-			expectError: false,
-		},
-		{
-			name:        "multiple peers",
-			input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx,/ip4/10.0.0.2/tcp/4001/p2p/12D3KooWJwUy2VBT9V4VrCYnHddWvQw7TKkWN7PoXRSLTQDrYPj",
-			expectCount: 2,
-			expectError: false,
-		},
-		{
-			name:        "duplicate peers deduplicated",
-			input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx,/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWKZbRzL9PoGN2T3P5GqDxJQw7QABEbNp3TkYMZJqFgFx",
-			expectCount: 1,
-			expectError: false,
-		},
+	{
+		name:        "single peer",
+		input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj",
+		expectCount: 1,
+		expectError: false,
+	},
+	{
+		name:        "multiple peers",
+		input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj,/ip4/10.0.0.2/tcp/4001/p2p/12D3KooWJzL4SHW3o7sZpzjfEPJzC6Ky7gKvJxY8vQVDR2jHc8F1",
+		expectCount: 2,
+		expectError: false,
+	},
+	{
+		name:        "duplicate peers deduplicated",
+		input:       "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj,/ip4/10.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj",
+		expectCount: 1,
+		expectError: false,
+	},
 		{
 			name:        "invalid multiaddr",
 			input:       "not-a-multiaddr",
