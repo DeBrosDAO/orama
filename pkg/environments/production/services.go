@@ -115,7 +115,6 @@ WantedBy=multi-user.target
 // GenerateRQLiteService generates the RQLite systemd unit
 func (ssg *SystemdServiceGenerator) GenerateRQLiteService(rqliteBinary string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
 	dataDir := filepath.Join(ssg.oramaDir, "data", "rqlite")
-	logFile := filepath.Join(ssg.oramaDir, "logs", "rqlite.log")
 
 	// Use public IP for advertise if provided, otherwise default to localhost
 	if advertiseIP == "" {
@@ -164,7 +163,7 @@ ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, args, logFile, ssg.oramaDir, rqliteBinary)
+`, ssg.oramaHome, args, ssg.oramaDir, rqliteBinary)
 }
 
 // GenerateOlricService generates the Olric systemd unit
@@ -213,9 +212,8 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Network Node
-After=debros-ipfs-cluster.service debros-rqlite.service
-Wants=debros-ipfs-cluster.service debros-rqlite.service
-Requires=debros-ipfs-cluster.service debros-rqlite.service
+After=debros-ipfs-cluster.service debros-olric.service
+Wants=debros-ipfs-cluster.service debros-olric.service
 
 [Service]
 Type=simple

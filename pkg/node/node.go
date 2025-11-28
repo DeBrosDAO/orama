@@ -694,6 +694,28 @@ func (n *Node) Stop() error {
 	return nil
 }
 
+// loadNodePeerIDFromIdentity safely loads the node's peer ID from its identity file
+// This is needed before the host is initialized, so we read directly from the file
+func loadNodePeerIDFromIdentity(dataDir string) string {
+	identityFile := filepath.Join(os.ExpandEnv(dataDir), "identity.key")
+
+	// Expand ~ in path
+	if strings.HasPrefix(identityFile, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		identityFile = filepath.Join(home, identityFile[1:])
+	}
+
+	// Load identity from file
+	if info, err := encryption.LoadIdentity(identityFile); err == nil {
+		return info.PeerID.String()
+	}
+
+	return "" // Return empty string if can't load (gateway will work without it)
+}
+
 // startHTTPGateway initializes and starts the full API gateway with auth, pubsub, and API endpoints
 func (n *Node) startHTTPGateway(ctx context.Context) error {
 	if !n.config.HTTPGateway.Enabled {
@@ -721,6 +743,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		ListenAddr:      n.config.HTTPGateway.ListenAddr,
 		ClientNamespace: n.config.HTTPGateway.ClientNamespace,
 		BootstrapPeers:  n.config.Discovery.BootstrapPeers,
+		NodePeerID:      loadNodePeerIDFromIdentity(n.config.Node.DataDir), // Load the node's actual peer ID from its identity file
 		RQLiteDSN:       n.config.HTTPGateway.RQLiteDSN,
 		OlricServers:    n.config.HTTPGateway.OlricServers,
 		OlricTimeout:    n.config.HTTPGateway.OlricTimeout,
@@ -748,6 +771,18 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		tlsCacheDir = gwCfg.TLSCacheDir
 		if tlsCacheDir == "" {
 			tlsCacheDir = "/home/debros/.orama/tls-cache"
+		}
+
+		// Ensure TLS cache directory exists and is writable
+		if err := os.MkdirAll(tlsCacheDir, 0700); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to create TLS cache directory",
+				zap.String("dir", tlsCacheDir),
+				zap.Error(err),
+			)
+		} else {
+			n.logger.ComponentInfo(logging.ComponentNode, "TLS cache directory ready",
+				zap.String("dir", tlsCacheDir),
+			)
 		}
 
 		// Create TLS configuration with Let's Encrypt autocert
@@ -799,16 +834,25 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			}
 
 			// Create HTTP listener first to ensure port 80 is bound before signaling ready
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "Binding HTTP listener for ACME challenges",
+				zap.Int("port", httpPort),
+			)
 			httpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", httpPort))
 			if err != nil {
 				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to bind HTTP listener for ACME", zap.Error(err))
 				close(httpReady) // Signal even on failure so SNI goroutine doesn't hang
 				return
 			}
-			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP server ready for ACME challenges", zap.Int("port", httpPort))
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP server ready for ACME challenges",
+				zap.Int("port", httpPort),
+				zap.String("tls_cache_dir", tlsCacheDir),
+			)
 
 			// Start HTTP server in background for ACME challenges
 			go func() {
+				gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP server serving ACME challenges",
+					zap.String("addr", httpServer.Addr),
+				)
 				if err := httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
 					gatewayLogger.ComponentError(logging.ComponentGateway, "HTTP server error", zap.Error(err))
 				}
@@ -829,10 +873,23 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			ServerName: gwCfg.DomainName,
 		}
 
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "Initiating certificate request to Let's Encrypt",
+			zap.String("domain", gwCfg.DomainName),
+			zap.String("acme_environment", "staging"),
+		)
+
 		// Try to get certificate with timeout
 		certProvisionChan := make(chan error, 1)
 		go func() {
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "GetCertificate goroutine started")
 			_, err := certManager.GetCertificate(certReq)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "GetCertificate returned error",
+					zap.Error(err),
+				)
+			} else {
+				gatewayLogger.ComponentInfo(logging.ComponentGateway, "GetCertificate succeeded")
+			}
 			certProvisionChan <- err
 		}()
 
@@ -840,14 +897,26 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		select {
 		case err := <-certProvisionChan:
 			certErr = err
+			if certErr != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "Certificate provisioning failed",
+					zap.String("domain", gwCfg.DomainName),
+					zap.Error(certErr),
+				)
+			}
 		case <-certCtx.Done():
 			certErr = fmt.Errorf("certificate provisioning timeout (Let's Encrypt may be rate-limited or unreachable)")
+			gatewayLogger.ComponentError(logging.ComponentGateway, "Certificate provisioning timeout",
+				zap.String("domain", gwCfg.DomainName),
+				zap.Duration("timeout", 30*time.Second),
+				zap.Error(certErr),
+			)
 		}
 
 		if certErr != nil {
 			gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to provision TLS certificate - HTTPS disabled",
 				zap.String("domain", gwCfg.DomainName),
 				zap.Error(certErr),
+				zap.String("http_server_status", "running on port 80 for HTTP fallback"),
 			)
 			// Signal ready for SNI goroutine (even though we're failing)
 			close(httpReady)

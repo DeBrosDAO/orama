@@ -31,6 +31,13 @@ type NodeConfigData struct {
 	TLSCacheDir            string // Directory for ACME certificate cache
 	HTTPPort               int    // HTTP port for ACME challenges (usually 80)
 	HTTPSPort              int    // HTTPS port (usually 443)
+
+	// Node-to-node TLS encryption for RQLite Raft communication
+	// Required when using SNI gateway for Raft traffic routing
+	NodeCert     string // Path to X.509 certificate for node-to-node communication
+	NodeKey      string // Path to X.509 private key for node-to-node communication
+	NodeCACert   string // Path to CA certificate (optional)
+	NodeNoVerify bool   // Skip certificate verification (for self-signed certs)
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering
@@ -48,9 +55,11 @@ type GatewayConfigData struct {
 
 // OlricConfigData holds parameters for olric.yaml rendering
 type OlricConfigData struct {
-	BindAddr       string
-	HTTPPort       int
-	MemberlistPort int
+	ServerBindAddr        string // HTTP API bind address (127.0.0.1 for security)
+	HTTPPort              int
+	MemberlistBindAddr    string // Memberlist bind address (0.0.0.0 for clustering)
+	MemberlistPort        int
+	MemberlistEnvironment string // "local", "lan", or "wan"
 }
 
 // SystemdIPFSData holds parameters for systemd IPFS service rendering

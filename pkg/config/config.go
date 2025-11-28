@@ -38,6 +38,13 @@ type DatabaseConfig struct {
 	RQLiteRaftPort    int    `yaml:"rqlite_raft_port"`    // RQLite Raft consensus port
 	RQLiteJoinAddress string `yaml:"rqlite_join_address"` // Address to join RQLite cluster
 
+	// RQLite node-to-node TLS encryption (for inter-node Raft communication)
+	// See: https://rqlite.io/docs/guides/security/#encrypting-node-to-node-communication
+	NodeCert     string `yaml:"node_cert"`      // Path to X.509 certificate for node-to-node communication
+	NodeKey      string `yaml:"node_key"`       // Path to X.509 private key for node-to-node communication
+	NodeCACert   string `yaml:"node_ca_cert"`   // Path to CA certificate (optional, uses system CA if not set)
+	NodeNoVerify bool   `yaml:"node_no_verify"` // Skip certificate verification (for testing/self-signed certs)
+
 	// Dynamic discovery configuration (always enabled)
 	ClusterSyncInterval time.Duration `yaml:"cluster_sync_interval"` // default: 30s
 	PeerInactivityLimit time.Duration `yaml:"peer_inactivity_limit"` // default: 24h

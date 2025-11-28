@@ -22,15 +22,18 @@ import (
 
 // InstallerConfig holds the configuration gathered from the TUI
 type InstallerConfig struct {
-	VpsIP         string
-	Domain        string
-	PeerDomain    string   // Domain of existing node to join
-	JoinAddress   string   // Auto-populated: raft.{PeerDomain}:7001
-	Peers         []string // Auto-populated: /dns4/{PeerDomain}/tcp/4001/p2p/{PeerID}
-	ClusterSecret string
-	Branch        string
-	IsFirstNode   bool
-	NoPull        bool
+	VpsIP          string
+	Domain         string
+	PeerDomain     string   // Domain of existing node to join
+	JoinAddress    string   // Auto-populated: raft.{PeerDomain}:7001
+	Peers          []string // Auto-populated: /dns4/{PeerDomain}/tcp/4001/p2p/{PeerID}
+	ClusterSecret  string
+	SwarmKeyHex    string   // 64-hex IPFS swarm key (for joining private network)
+	IPFSPeerID     string   // IPFS peer ID (auto-discovered from peer domain)
+	IPFSSwarmAddrs []string // IPFS swarm addresses (auto-discovered from peer domain)
+	Branch         string
+	IsFirstNode    bool
+	NoPull         bool
 }
 
 // Step represents a step in the installation wizard
@@ -43,6 +46,7 @@ const (
 	StepDomain
 	StepPeerDomain // Domain of existing node to join (replaces StepJoinAddress)
 	StepClusterSecret
+	StepSwarmKey // 64-hex swarm key for IPFS private network
 	StepBranch
 	StepNoPull
 	StepConfirm
@@ -171,7 +175,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update text input for input steps
-	if m.step == StepVpsIP || m.step == StepDomain || m.step == StepPeerDomain || m.step == StepClusterSecret {
+	if m.step == StepVpsIP || m.step == StepDomain || m.step == StepPeerDomain || m.step == StepClusterSecret || m.step == StepSwarmKey {
 		var cmd tea.Cmd
 		m.textInput, cmd = m.textInput.Update(msg)
 		return m, cmd
@@ -208,6 +212,18 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
+
+		// Check SNI DNS records for this domain
+		m.discovering = true
+		m.discoveryInfo = "Validating SNI DNS records for " + domain + "..."
+
+		if err := validateSNIDNSRecords(domain); err != nil {
+			m.discovering = false
+			m.err = fmt.Errorf("SNI DNS validation failed: %w", err)
+			return m, nil
+		}
+
+		m.discovering = false
 		m.config.Domain = domain
 		m.err = nil
 
@@ -238,11 +254,21 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Validate SNI DNS records for peer domain
+		m.discovering = true
+		m.discoveryInfo = "Validating SNI DNS records for " + peerDomain + "..."
+
+		if err := validateSNIDNSRecords(peerDomain); err != nil {
+			m.discovering = false
+			m.err = fmt.Errorf("SNI DNS validation failed: %w", err)
+			return m, nil
+		}
+
 		// Discover peer info from domain (try HTTPS first, then HTTP)
 		m.discovering = true
 		m.discoveryInfo = "Discovering peer from " + peerDomain + "..."
 
-		peerID, err := discoverPeerFromDomain(peerDomain)
+		discovery, err := discoverPeerFromDomain(peerDomain)
 		m.discovering = false
 
 		if err != nil {
@@ -252,12 +278,18 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 
 		// Store discovered info
 		m.config.PeerDomain = peerDomain
-		m.discoveredPeer = peerID
+		m.discoveredPeer = discovery.PeerID
 
 		// Auto-populate join address and bootstrap peers
 		m.config.JoinAddress = fmt.Sprintf("raft.%s:7001", peerDomain)
 		m.config.Peers = []string{
-			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, peerID),
+			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, discovery.PeerID),
+		}
+
+		// Store IPFS peer info for Peering.Peers configuration
+		if discovery.IPFSPeerID != "" {
+			m.config.IPFSPeerID = discovery.IPFSPeerID
+			m.config.IPFSSwarmAddrs = discovery.IPFSSwarmAddrs
 		}
 
 		m.err = nil
@@ -271,6 +303,17 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.config.ClusterSecret = secret
+		m.err = nil
+		m.step = StepSwarmKey
+		m.setupStepInput()
+
+	case StepSwarmKey:
+		swarmKey := strings.TrimSpace(m.textInput.Value())
+		if err := validateSwarmKey(swarmKey); err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.config.SwarmKeyHex = swarmKey
 		m.err = nil
 		m.step = StepBranch
 		m.cursor = 0
@@ -322,6 +365,9 @@ func (m *Model) setupStepInput() {
 	case StepClusterSecret:
 		m.textInput.Placeholder = "64 hex characters"
 		m.textInput.EchoMode = textinput.EchoPassword
+	case StepSwarmKey:
+		m.textInput.Placeholder = "64 hex characters"
+		m.textInput.EchoMode = textinput.EchoPassword
 	}
 }
 
@@ -358,6 +404,8 @@ func (m Model) View() string {
 		s.WriteString(m.viewPeerDomain())
 	case StepClusterSecret:
 		s.WriteString(m.viewClusterSecret())
+	case StepSwarmKey:
+		s.WriteString(m.viewSwarmKey())
 	case StepBranch:
 		s.WriteString(m.viewBranch())
 	case StepNoPull:
@@ -488,6 +536,22 @@ func (m Model) viewClusterSecret() string {
 	return s.String()
 }
 
+func (m Model) viewSwarmKey() string {
+	var s strings.Builder
+	s.WriteString(titleStyle.Render("IPFS Swarm Key") + "\n\n")
+	s.WriteString("Enter the swarm key from an existing node:\n")
+	s.WriteString(subtitleStyle.Render("Get it with: cat ~/.orama/secrets/swarm.key | tail -1") + "\n\n")
+	s.WriteString(m.textInput.View())
+
+	if m.err != nil {
+		s.WriteString("\n\n" + errorStyle.Render("✗ " + m.err.Error()))
+	}
+
+	s.WriteString("\n\n")
+	s.WriteString(helpStyle.Render("Enter to confirm • Esc to go back"))
+	return s.String()
+}
+
 func (m Model) viewBranch() string {
 	var s strings.Builder
 	s.WriteString(titleStyle.Render("Release Channel") + "\n\n")
@@ -557,6 +621,12 @@ func (m Model) viewConfirm() string {
 		if len(m.config.ClusterSecret) >= 8 {
 			config += fmt.Sprintf("  Secret:     %s...\n", m.config.ClusterSecret[:8])
 		}
+		if len(m.config.SwarmKeyHex) >= 8 {
+			config += fmt.Sprintf("  Swarm Key:  %s...\n", m.config.SwarmKeyHex[:8])
+		}
+		if m.config.IPFSPeerID != "" {
+			config += fmt.Sprintf("  IPFS Peer:  %s...\n", m.config.IPFSPeerID[:16])
+		}
 	}
 
 	s.WriteString(boxStyle.Render(config))
@@ -617,10 +687,17 @@ func validateDomain(domain string) error {
 	return nil
 }
 
-// discoverPeerFromDomain queries an existing node to get its peer ID
+// DiscoveryResult contains all information discovered from a peer node
+type DiscoveryResult struct {
+	PeerID         string   // LibP2P peer ID
+	IPFSPeerID     string   // IPFS peer ID
+	IPFSSwarmAddrs []string // IPFS swarm addresses
+}
+
+// discoverPeerFromDomain queries an existing node to get its peer ID and IPFS info
 // Tries HTTPS first, then falls back to HTTP
 // Respects DEBROS_TRUSTED_TLS_DOMAINS and DEBROS_CA_CERT_PATH environment variables for certificate verification
-func discoverPeerFromDomain(domain string) (string, error) {
+func discoverPeerFromDomain(domain string) (*DiscoveryResult, error) {
 	// Use centralized TLS configuration that respects CA certificates and trusted domains
 	client := tlsutil.NewHTTPClientForDomain(10*time.Second, domain)
 
@@ -634,28 +711,49 @@ func discoverPeerFromDomain(domain string) (string, error) {
 		url = fmt.Sprintf("http://%s/v1/network/status", domain)
 		resp, err = client.Get(url)
 		if err != nil {
-			return "", fmt.Errorf("could not connect to %s (tried HTTPS and HTTP): %w", domain, err)
+			return nil, fmt.Errorf("could not connect to %s (tried HTTPS and HTTP): %w", domain, err)
 		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status from %s: %s", domain, resp.Status)
+		return nil, fmt.Errorf("unexpected status from %s: %s", domain, resp.Status)
 	}
 
-	// Parse response
+	// Parse response including IPFS info
 	var status struct {
-		NodeID string `json:"node_id"`
+		PeerID string `json:"peer_id"`
+		NodeID string `json:"node_id"` // fallback for backward compatibility
+		IPFS   *struct {
+			PeerID         string   `json:"peer_id"`
+			SwarmAddresses []string `json:"swarm_addresses"`
+		} `json:"ipfs,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return "", fmt.Errorf("failed to parse response from %s: %w", domain, err)
+		return nil, fmt.Errorf("failed to parse response from %s: %w", domain, err)
 	}
 
-	if status.NodeID == "" {
-		return "", fmt.Errorf("no node_id in response from %s", domain)
+	// Use peer_id if available, otherwise fall back to node_id for backward compatibility
+	peerID := status.PeerID
+	if peerID == "" {
+		peerID = status.NodeID
 	}
 
-	return status.NodeID, nil
+	if peerID == "" {
+		return nil, fmt.Errorf("no peer_id or node_id in response from %s", domain)
+	}
+
+	result := &DiscoveryResult{
+		PeerID: peerID,
+	}
+
+	// Include IPFS info if available
+	if status.IPFS != nil {
+		result.IPFSPeerID = status.IPFS.PeerID
+		result.IPFSSwarmAddrs = status.IPFS.SwarmAddresses
+	}
+
+	return result, nil
 }
 
 func validateClusterSecret(secret string) error {
@@ -665,6 +763,17 @@ func validateClusterSecret(secret string) error {
 	secretRegex := regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 	if !secretRegex.MatchString(secret) {
 		return fmt.Errorf("cluster secret must be valid hexadecimal")
+	}
+	return nil
+}
+
+func validateSwarmKey(key string) error {
+	if len(key) != 64 {
+		return fmt.Errorf("swarm key must be 64 hex characters")
+	}
+	keyRegex := regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
+	if !keyRegex.MatchString(key) {
+		return fmt.Errorf("swarm key must be valid hexadecimal")
 	}
 	return nil
 }
@@ -724,6 +833,53 @@ func detectPublicIP() string {
 		}
 	}
 	return ""
+}
+
+// validateSNIDNSRecords checks if the required SNI DNS records exist
+// It tries to resolve the key SNI hostnames for RQLite, IPFS, IPFS Cluster, and Olric
+// All should resolve to the same IP (the node's public IP or domain)
+func validateSNIDNSRecords(domain string) error {
+	// List of SNI services that need DNS records
+	sniServices := []string{
+		fmt.Sprintf("raft.%s", domain),
+		fmt.Sprintf("ipfs.%s", domain),
+		fmt.Sprintf("ipfs-cluster.%s", domain),
+		fmt.Sprintf("olric.%s", domain),
+	}
+
+	// Try to resolve the main domain first to get baseline
+	mainIPs, err := net.LookupHost(domain)
+	if err != nil {
+		return fmt.Errorf("could not resolve main domain %s: %w", domain, err)
+	}
+
+	if len(mainIPs) == 0 {
+		return fmt.Errorf("main domain %s resolved to no IP addresses", domain)
+	}
+
+	// Check each SNI service
+	var unresolvedServices []string
+	for _, service := range sniServices {
+		ips, err := net.LookupHost(service)
+		if err != nil || len(ips) == 0 {
+			unresolvedServices = append(unresolvedServices, service)
+		}
+	}
+
+	if len(unresolvedServices) > 0 {
+		serviceList := strings.Join(unresolvedServices, ", ")
+		return fmt.Errorf(
+			"SNI DNS records not found for: %s\n\n"+
+				"You need to add DNS records (A records or wildcard CNAME) for these services:\n"+
+				"  - They should all resolve to the same IP as %s\n"+
+				"  - Option 1: Add individual A records pointing to %s\n"+
+				"  - Option 2: Add wildcard CNAME: *.%s -> %s\n\n"+
+				"Without these records, multi-node clustering will fail.",
+			serviceList, domain, domain, domain, domain,
+		)
+	}
+
+	return nil
 }
 
 // Run starts the TUI installer and returns the configuration

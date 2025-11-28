@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -57,21 +56,18 @@ func NewHTTPSGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfi
 		)
 		// Don't set certManager - will use CertFile/KeyFile from config
 	} else if cfg.HTTPS.AutoCert {
-		// Use Let's Encrypt (existing logic)
+		// Use Let's Encrypt STAGING (consistent with SNI gateway)
 		cacheDir := cfg.HTTPS.CacheDir
 		if cacheDir == "" {
 			cacheDir = "/home/debros/.orama/tls-cache"
 		}
 
-		// Check environment for staging mode
-		directoryURL := "https://acme-v02.api.letsencrypt.org/directory" // Production
-		if os.Getenv("DEBROS_ACME_STAGING") != "" {
-			directoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
-			logger.ComponentWarn(logging.ComponentGeneral,
-				"Using Let's Encrypt STAGING - certificates will not be trusted by production clients",
-				zap.String("domain", cfg.HTTPS.Domain),
-			)
-		}
+		// Use Let's Encrypt STAGING - provides higher rate limits for testing/development
+		directoryURL := "https://acme-staging-v02.api.letsencrypt.org/directory"
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"Using Let's Encrypt STAGING - certificates will not be trusted by production clients",
+			zap.String("domain", cfg.HTTPS.Domain),
+		)
 
 		gateway.certManager = &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -86,7 +82,7 @@ func NewHTTPSGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfi
 		logger.ComponentInfo(logging.ComponentGeneral, "Let's Encrypt autocert configured",
 			zap.String("domain", cfg.HTTPS.Domain),
 			zap.String("cache_dir", cacheDir),
-			zap.String("acme_environment", map[bool]string{true: "staging", false: "production"}[directoryURL == "https://acme-staging-v02.api.letsencrypt.org/directory"]),
+			zap.String("acme_environment", "staging"),
 		)
 	}
 

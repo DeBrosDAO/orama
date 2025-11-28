@@ -52,7 +52,9 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 	// The correct location is .orama/secrets/cluster-secret
 	strayClusterSecret := filepath.Join(fp.oramaDir, "cluster-secret")
 	if _, err := os.Stat(strayClusterSecret); err == nil {
-		os.Remove(strayClusterSecret)
+		if err := os.Remove(strayClusterSecret); err != nil {
+			return fmt.Errorf("failed to remove stray cluster-secret file: %w", err)
+		}
 	}
 
 	// Create log files with correct permissions so systemd can write to them
@@ -63,7 +65,6 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		"ipfs.log",
 		"ipfs-cluster.log",
 		"node.log",
-		"rqlite.log",
 		"anyone-client.log",
 	}
 

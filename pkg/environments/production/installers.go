@@ -412,8 +412,15 @@ func (bi *BinaryInstaller) InstallSystemDependencies() error {
 	return nil
 }
 
+// IPFSPeerInfo holds IPFS peer information for configuring Peering.Peers
+type IPFSPeerInfo struct {
+	PeerID string
+	Addrs  []string
+}
+
 // InitializeIPFSRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
-func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int) error {
+// If ipfsPeer is provided, configures Peering.Peers for peer discovery in private networks
+func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, ipfsPeer *IPFSPeerInfo) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 	repoExists := false
 	if _, err := os.Stat(configPath); err == nil {
@@ -494,6 +501,14 @@ func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath 
 				return fmt.Errorf("failed while %s: %v\n%s", step.desc, err, string(output))
 			}
 		}
+
+		// Configure Peering.Peers if we have peer info (for private network discovery)
+		if ipfsPeer != nil && ipfsPeer.PeerID != "" && len(ipfsPeer.Addrs) > 0 {
+			fmt.Fprintf(bi.logWriter, "    Configuring Peering.Peers for private network discovery...\n")
+			if err := bi.configureIPFSPeering(ipfsRepoPath, ipfsPeer); err != nil {
+				return fmt.Errorf("failed to configure IPFS peering: %w", err)
+			}
+		}
 	}
 
 	// Fix ownership (best-effort, don't fail if it doesn't work)
@@ -541,6 +556,53 @@ func (bi *BinaryInstaller) configureIPFSAddresses(ipfsRepoPath string, apiPort, 
 	}
 
 	config["Addresses"] = addresses
+
+	// Write config back
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal IPFS config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
+		return fmt.Errorf("failed to write IPFS config: %w", err)
+	}
+
+	return nil
+}
+
+// configureIPFSPeering configures Peering.Peers in the IPFS config for private network discovery
+// This allows nodes in a private swarm to find each other even without bootstrap peers
+func (bi *BinaryInstaller) configureIPFSPeering(ipfsRepoPath string, peer *IPFSPeerInfo) error {
+	configPath := filepath.Join(ipfsRepoPath, "config")
+
+	// Read existing config
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read IPFS config: %w", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse IPFS config: %w", err)
+	}
+
+	// Get existing Peering section or create new one
+	peering, ok := config["Peering"].(map[string]interface{})
+	if !ok {
+		peering = make(map[string]interface{})
+	}
+
+	// Create peer entry
+	peerEntry := map[string]interface{}{
+		"ID":    peer.PeerID,
+		"Addrs": peer.Addrs,
+	}
+
+	// Set Peering.Peers
+	peering["Peers"] = []interface{}{peerEntry}
+	config["Peering"] = peering
+
+	fmt.Fprintf(bi.logWriter, "      Adding peer: %s (%d addresses)\n", peer.PeerID, len(peer.Addrs))
 
 	// Write config back
 	updatedData, err := json.MarshalIndent(config, "", "  ")

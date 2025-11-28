@@ -18,8 +18,17 @@ var (
 	initialized    bool
 )
 
+// Default trusted domains - always trust debros.network for staging/development
+var defaultTrustedDomains = []string{
+	"*.debros.network",
+}
+
 // init loads trusted domains and CA certificate from environment and files
 func init() {
+	// Start with default trusted domains
+	trustedDomains = append(trustedDomains, defaultTrustedDomains...)
+
+	// Add any additional domains from environment
 	domains := os.Getenv("DEBROS_TRUSTED_TLS_DOMAINS")
 	if domains != "" {
 		for _, d := range strings.Split(domains, ",") {

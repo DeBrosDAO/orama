@@ -15,9 +15,14 @@ database:
   rqlite_port: {{.RQLiteHTTPPort}}
   rqlite_raft_port: {{.RQLiteRaftInternalPort}}
   rqlite_join_address: "{{.RQLiteJoinAddress}}"
-  cluster_sync_interval: "30s"
+  {{if .NodeCert}}# Node-to-node TLS encryption for Raft communication (required for SNI gateway routing)
+  node_cert: "{{.NodeCert}}"
+  node_key: "{{.NodeKey}}"
+  {{if .NodeCACert}}node_ca_cert: "{{.NodeCACert}}"
+  {{end}}{{if .NodeNoVerify}}node_no_verify: true
+  {{end}}{{end}}cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
-  min_cluster_size: 3
+  min_cluster_size: 1
   ipfs:
     cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
     api_url: "http://localhost:{{.IPFSAPIPort}}"

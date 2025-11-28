@@ -103,12 +103,17 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	// Load or generate cluster secret
+	// Always use ~/.orama/secrets/cluster-secret (new standard location)
 	secretPath := filepath.Join(dataDir, "..", "cluster-secret")
 	if strings.Contains(dataDir, ".orama") {
-		// Try to find cluster-secret in ~/.orama
+		// Use the secrets directory for proper file organization
 		home, err := os.UserHomeDir()
 		if err == nil {
-			secretPath = filepath.Join(home, ".orama", "cluster-secret")
+			secretsDir := filepath.Join(home, ".orama", "secrets")
+			// Ensure secrets directory exists
+			if err := os.MkdirAll(secretsDir, 0700); err == nil {
+				secretPath = filepath.Join(secretsDir, "cluster-secret")
+			}
 		}
 	}
 

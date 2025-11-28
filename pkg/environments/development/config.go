@@ -178,9 +178,11 @@ func (ce *ConfigEnsurer) ensureOlric() error {
 
 	topology := DefaultTopology()
 	data := templates.OlricConfigData{
-		BindAddr:       "127.0.0.1",
-		HTTPPort:       topology.OlricHTTPPort,
-		MemberlistPort: topology.OlricMemberPort,
+		ServerBindAddr:        "127.0.0.1",
+		HTTPPort:              topology.OlricHTTPPort,
+		MemberlistBindAddr:    "127.0.0.1", // localhost for development
+		MemberlistPort:        topology.OlricMemberPort,
+		MemberlistEnvironment: "local", // development environment
 	}
 
 	config, err := templates.RenderOlricConfig(data)

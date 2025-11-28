@@ -386,6 +386,11 @@ func (g *Gateway) networkStatusHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Override with the node's actual peer ID if available
+	// (the client's embedded host has a different temporary peer ID)
+	if g.nodePeerID != "" {
+		status.PeerID = g.nodePeerID
+	}
 	writeJSON(w, http.StatusOK, status)
 }
 

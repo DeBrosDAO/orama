@@ -175,6 +175,18 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		HTTPPort:               httpPort,
 		HTTPSPort:              httpsPort,
 	}
+
+	// When HTTPS/SNI is enabled, configure RQLite node-to-node TLS encryption
+	// This allows Raft traffic to be routed through the SNI gateway
+	// Uses the same certificates as the SNI gateway (Let's Encrypt or self-signed)
+	if enableHTTPS && domain != "" {
+		data.NodeCert = filepath.Join(tlsCacheDir, domain+".crt")
+		data.NodeKey = filepath.Join(tlsCacheDir, domain+".key")
+		// Skip verification since nodes may have different domain certificates
+		// and we're routing through the SNI gateway which terminates TLS
+		data.NodeNoVerify = true
+	}
+
 	return templates.RenderNodeConfig(data)
 }
 
@@ -200,11 +212,13 @@ func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableH
 }
 
 // GenerateOlricConfig generates Olric configuration
-func (cg *ConfigGenerator) GenerateOlricConfig(bindAddr string, httpPort, memberlistPort int) (string, error) {
+func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string) (string, error) {
 	data := templates.OlricConfigData{
-		BindAddr:       bindAddr,
-		HTTPPort:       httpPort,
-		MemberlistPort: memberlistPort,
+		ServerBindAddr:        serverBindAddr,
+		HTTPPort:              httpPort,
+		MemberlistBindAddr:    memberlistBindAddr,
+		MemberlistPort:        memberlistPort,
+		MemberlistEnvironment: memberlistEnv,
 	}
 	return templates.RenderOlricConfig(data)
 }

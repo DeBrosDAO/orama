@@ -74,9 +74,11 @@ func TestRenderGatewayConfig(t *testing.T) {
 
 func TestRenderOlricConfig(t *testing.T) {
 	data := OlricConfigData{
-		BindAddr:       "127.0.0.1",
-		HTTPPort:       3320,
-		MemberlistPort: 3322,
+		ServerBindAddr:        "127.0.0.1",
+		HTTPPort:              3320,
+		MemberlistBindAddr:    "0.0.0.0",
+		MemberlistPort:        3322,
+		MemberlistEnvironment: "lan",
 	}
 
 	result, err := RenderOlricConfig(data)
@@ -90,6 +92,7 @@ func TestRenderOlricConfig(t *testing.T) {
 		"bindPort: 3320",
 		"memberlist",
 		"bindPort: 3322",
+		"environment: lan",
 	}
 
 	for _, check := range checks {

@@ -241,6 +241,27 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		"-raft-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLiteRaftPort),
 	}
 
+	// Add node-to-node TLS encryption if configured
+	// This enables TLS for Raft inter-node communication, required for SNI gateway routing
+	// See: https://rqlite.io/docs/guides/security/#encrypting-node-to-node-communication
+	if r.config.NodeCert != "" && r.config.NodeKey != "" {
+		r.logger.Info("Enabling node-to-node TLS encryption",
+			zap.String("node_cert", r.config.NodeCert),
+			zap.String("node_key", r.config.NodeKey),
+			zap.String("node_ca_cert", r.config.NodeCACert),
+			zap.Bool("node_no_verify", r.config.NodeNoVerify))
+
+		args = append(args, "-node-cert", r.config.NodeCert)
+		args = append(args, "-node-key", r.config.NodeKey)
+
+		if r.config.NodeCACert != "" {
+			args = append(args, "-node-ca-cert", r.config.NodeCACert)
+		}
+		if r.config.NodeNoVerify {
+			args = append(args, "-node-no-verify")
+		}
+	}
+
 	// All nodes follow the same join logic - either join specified address or start as single-node cluster
 	if r.config.RQLiteJoinAddress != "" {
 		r.logger.Info("Joining RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
@@ -265,7 +286,8 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 
 		// Always add the join parameter in host:port form - let rqlited handle the rest
 		// Add retry parameters to handle slow cluster startup (e.g., during recovery)
-		args = append(args, "-join", joinArg, "-join-attempts", "30", "-join-interval", "10s")
+		// Include -join-as with the raft advertise address so the leader knows which node this is
+		args = append(args, "-join", joinArg, "-join-as", r.discoverConfig.RaftAdvAddress, "-join-attempts", "30", "-join-interval", "10s")
 	} else {
 		r.logger.Info("No join address specified - starting as single-node cluster")
 		// When no join address is provided, rqlited will start as a single-node cluster

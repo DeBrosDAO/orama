@@ -272,7 +272,8 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 }
 
 // Phase2cInitializeServices initializes service repositories and configurations
-func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vpsIP string) error {
+// ipfsPeer can be nil for the first node, or contain peer info for joining nodes
+func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vpsIP string, ipfsPeer *IPFSPeerInfo) error {
 	ps.logf("Phase 2c: Initializing services...")
 
 	// Ensure directories exist (unified structure)
@@ -286,7 +287,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	// Initialize IPFS repo with correct path structure
 	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4101 for swarm (to avoid conflict with LibP2P on 4001)
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), 4501, 8080, 4101); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), 4501, 8080, 4101, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -379,10 +380,17 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	// Gateway configuration is now embedded in each node's config
 	// No separate gateway.yaml needed - each node runs its own embedded gateway
 
-	// Olric config - bind to localhost for security
-	// External access goes through the HTTP gateway
-	olricBindAddr := "127.0.0.1"
-	olricConfig, err := ps.configGenerator.GenerateOlricConfig(olricBindAddr, 3320, 3322)
+	// Olric config:
+	// - HTTP API binds to localhost for security (accessed via gateway)
+	// - Memberlist binds to 0.0.0.0 for cluster communication across nodes
+	// - Environment "lan" for production multi-node clustering
+	olricConfig, err := ps.configGenerator.GenerateOlricConfig(
+		"127.0.0.1", // HTTP API on localhost
+		3320,
+		"0.0.0.0", // Memberlist on all interfaces for clustering
+		3322,
+		"lan", // Production environment
+	)
 	if err != nil {
 		return fmt.Errorf("failed to generate olric config: %w", err)
 	}
@@ -417,11 +425,6 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	if err != nil {
 		return fmt.Errorf("ipfs-cluster-service binary not available: %w", err)
 	}
-	// RQLite binary for separate service
-	rqliteBinary, err := ps.binaryInstaller.ResolveBinaryPath("rqlited", "/usr/local/bin/rqlited", "/usr/bin/rqlited")
-	if err != nil {
-		return fmt.Errorf("rqlited binary not available: %w", err)
-	}
 	olricBinary, err := ps.binaryInstaller.ResolveBinaryPath("olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server")
 	if err != nil {
 		return fmt.Errorf("olric-server binary not available: %w", err)
@@ -441,17 +444,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ IPFS Cluster service created: debros-ipfs-cluster.service")
 
-	// RQLite service (join address and advertise IP will be handled by node bootstrap)
-	// When HTTPS/SNI is enabled, RQLite listens on internal port 7002 (SNI gateway handles external 7001)
-	raftPort := 7001
-	if enableHTTPS {
-		raftPort = 7002
-	}
-	rqliteUnit := ps.serviceGenerator.GenerateRQLiteService(rqliteBinary, 5001, raftPort, "", "")
-	if err := ps.serviceController.WriteServiceUnit("debros-rqlite.service", rqliteUnit); err != nil {
-		return fmt.Errorf("failed to write RQLite service: %w", err)
-	}
-	ps.logf("  ✓ RQLite service created: debros-rqlite.service")
+	// RQLite is managed internally by each node - no separate systemd service needed
 
 	// Olric service
 	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
@@ -482,7 +475,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
-	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-rqlite.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
+	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
+	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -494,7 +488,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Start services in dependency order
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, Olric, Anyone Client) - RQLite is managed by node
+	// Start infrastructure first (IPFS, Olric, Anyone Client) - RQLite is managed internally by each node
 	infraServices := []string{"debros-ipfs.service", "debros-olric.service"}
 	
 	// Check if port 9050 is already in use (e.g., another anyone-client or similar service)
@@ -547,13 +541,12 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("\nLog Files:")
 	ps.logf("  %s/logs/ipfs.log", ps.oramaDir)
 	ps.logf("  %s/logs/ipfs-cluster.log", ps.oramaDir)
-	ps.logf("  %s/logs/rqlite.log", ps.oramaDir)
 	ps.logf("  %s/logs/olric.log", ps.oramaDir)
 	ps.logf("  %s/logs/node.log", ps.oramaDir)
 	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
 	ps.logf("  %s/logs/anyone-client.log", ps.oramaDir)
 	ps.logf("\nStart All Services:")
-	ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-rqlite debros-olric debros-anyone-client debros-node")
+	ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-client debros-node")
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")
 	ps.logf("  curl http://localhost:5001/status")

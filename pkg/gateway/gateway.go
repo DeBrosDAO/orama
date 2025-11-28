@@ -37,6 +37,7 @@ type Config struct {
 	ListenAddr      string
 	ClientNamespace string
 	BootstrapPeers  []string
+	NodePeerID      string // The node's actual peer ID from its identity file
 
 	// Optional DSN for rqlite database/sql driver, e.g. "http://localhost:4001"
 	// If empty, defaults to "http://localhost:4001".
@@ -60,12 +61,13 @@ type Config struct {
 }
 
 type Gateway struct {
-	logger     *logging.ColoredLogger
-	cfg        *Config
-	client     client.NetworkClient
-	startedAt  time.Time
-	signingKey *rsa.PrivateKey
-	keyID      string
+	logger       *logging.ColoredLogger
+	cfg          *Config
+	client       client.NetworkClient
+	nodePeerID   string // The node's actual peer ID from its identity file (overrides client's peer ID)
+	startedAt    time.Time
+	signingKey   *rsa.PrivateKey
+	keyID        string
 
 	// rqlite SQL connection and HTTP ORM gateway
 	sqlDB     *sql.DB
@@ -123,6 +125,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger:           logger,
 		cfg:              cfg,
 		client:           c,
+		nodePeerID:       cfg.NodePeerID,
 		startedAt:        time.Now(),
 		localSubscribers: make(map[string][]*localSubscriber),
 	}
