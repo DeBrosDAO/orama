@@ -115,6 +115,7 @@ WantedBy=multi-user.target
 // GenerateRQLiteService generates the RQLite systemd unit
 func (ssg *SystemdServiceGenerator) GenerateRQLiteService(rqliteBinary string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
 	dataDir := filepath.Join(ssg.oramaDir, "data", "rqlite")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "rqlite.log")
 
 	// Use public IP for advertise if provided, otherwise default to localhost
 	if advertiseIP == "" {
@@ -163,7 +164,7 @@ ReadWritePaths=%[4]s
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, args, ssg.oramaDir, rqliteBinary)
+`, ssg.oramaHome, args, logFile, dataDir, rqliteBinary)
 }
 
 // GenerateOlricService generates the Olric systemd unit

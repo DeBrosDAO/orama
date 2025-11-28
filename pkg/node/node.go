@@ -67,6 +67,10 @@ type Node struct {
 
 	// Shared certificate manager for HTTPS and SNI
 	certManager *autocert.Manager
+
+	// Certificate ready signal - closed when TLS certificates are extracted and ready for use
+	// Used to coordinate RQLite node-to-node TLS startup with certificate provisioning
+	certReady chan struct{}
 }
 
 // NewNode creates a new network node
@@ -127,6 +131,25 @@ func (n *Node) startRQLite(ctx context.Context) error {
 		n.clusterDiscovery.UpdateOwnMetadata()
 
 		n.logger.Info("Cluster discovery service started (waiting for RQLite)")
+	}
+
+	// If node-to-node TLS is configured, wait for certificates to be provisioned
+	// This ensures RQLite can start with TLS when joining through the SNI gateway
+	if n.config.Database.NodeCert != "" && n.config.Database.NodeKey != "" && n.certReady != nil {
+		n.logger.Info("RQLite node TLS configured, waiting for certificates to be provisioned...",
+			zap.String("node_cert", n.config.Database.NodeCert),
+			zap.String("node_key", n.config.Database.NodeKey))
+
+		// Wait for certificate ready signal with timeout
+		certTimeout := 5 * time.Minute
+		select {
+		case <-n.certReady:
+			n.logger.Info("Certificates ready, proceeding with RQLite startup")
+		case <-time.After(certTimeout):
+			return fmt.Errorf("timeout waiting for TLS certificates after %v - ensure HTTPS is configured and ports 80/443 are accessible for ACME challenges", certTimeout)
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for certificates: %w", ctx.Err())
+		}
 	}
 
 	// Start RQLite FIRST before updating metadata
@@ -800,6 +823,10 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 
 		// Store certificate manager for use by SNI gateway
 		n.certManager = certManager
+
+		// Initialize certificate ready channel - will be closed when certs are extracted
+		// This allows RQLite to wait for certificates before starting with node TLS
+		n.certReady = make(chan struct{})
 	}
 
 	// Channel to signal when HTTP server is ready for ACME challenges
@@ -1042,6 +1069,12 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 					}
 					gatewayLogger.ComponentInfo(logging.ComponentGateway, "PEM certificates extracted for SNI", 
 						zap.String("cert_path", certPath), zap.String("key_path", keyPath))
+
+					// Signal that certificates are ready for RQLite node-to-node TLS
+					if n.certReady != nil {
+						close(n.certReady)
+						gatewayLogger.ComponentInfo(logging.ComponentGateway, "Certificate ready signal sent for RQLite node TLS")
+					}
 				}
 			} else {
 				gatewayLogger.ComponentError(logging.ComponentGateway, "No domain configured for SNI certificate")
