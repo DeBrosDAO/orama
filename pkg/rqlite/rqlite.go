@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // RQLiteManager manages an RQLite node instance
@@ -25,7 +26,7 @@ type RQLiteManager struct {
 	config           *config.DatabaseConfig
 	discoverConfig   *config.DiscoveryConfig
 	dataDir          string
-	nodeType         string // "bootstrap" or "node"
+	nodeType         string // Node type identifier
 	logger           *zap.Logger
 	cmd              *exec.Cmd
 	connection       *gorqlite.Connection
@@ -81,7 +82,7 @@ func (r *RQLiteManager) SetDiscoveryService(service *ClusterDiscoveryService) {
 	r.discoveryService = service
 }
 
-// SetNodeType sets the node type for this RQLite manager ("bootstrap" or "node")
+// SetNodeType sets the node type for this RQLite manager
 func (r *RQLiteManager) SetNodeType(nodeType string) {
 	if nodeType != "" {
 		r.nodeType = nodeType
@@ -120,7 +121,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	// CRITICAL FIX: Ensure peers.json exists with minimum cluster size BEFORE starting RQLite
 	// This prevents split-brain where each node starts as a single-node cluster
 	// We NEVER start as a single-node cluster - we wait indefinitely until minimum cluster size is met
-	// This applies to ALL nodes (bootstrap AND regular nodes with join addresses)
+	// This applies to ALL nodes (with or without join addresses)
 	if r.discoveryService != nil {
 		r.logger.Info("Ensuring peers.json exists with minimum cluster size before RQLite startup",
 			zap.String("policy", "will wait indefinitely - never start as single-node cluster"),
@@ -240,6 +241,27 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		"-raft-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLiteRaftPort),
 	}
 
+	// Add node-to-node TLS encryption if configured
+	// This enables TLS for Raft inter-node communication, required for SNI gateway routing
+	// See: https://rqlite.io/docs/guides/security/#encrypting-node-to-node-communication
+	if r.config.NodeCert != "" && r.config.NodeKey != "" {
+		r.logger.Info("Enabling node-to-node TLS encryption",
+			zap.String("node_cert", r.config.NodeCert),
+			zap.String("node_key", r.config.NodeKey),
+			zap.String("node_ca_cert", r.config.NodeCACert),
+			zap.Bool("node_no_verify", r.config.NodeNoVerify))
+
+		args = append(args, "-node-cert", r.config.NodeCert)
+		args = append(args, "-node-key", r.config.NodeKey)
+
+		if r.config.NodeCACert != "" {
+			args = append(args, "-node-ca-cert", r.config.NodeCACert)
+		}
+		if r.config.NodeNoVerify {
+			args = append(args, "-node-no-verify")
+		}
+	}
+
 	// All nodes follow the same join logic - either join specified address or start as single-node cluster
 	if r.config.RQLiteJoinAddress != "" {
 		r.logger.Info("Joining RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
@@ -264,7 +286,8 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 
 		// Always add the join parameter in host:port form - let rqlited handle the rest
 		// Add retry parameters to handle slow cluster startup (e.g., during recovery)
-		args = append(args, "-join", joinArg, "-join-attempts", "30", "-join-interval", "10s")
+		// Include -join-as with the raft advertise address so the leader knows which node this is
+		args = append(args, "-join", joinArg, "-join-as", r.discoverConfig.RaftAdvAddress, "-join-attempts", "30", "-join-interval", "10s")
 	} else {
 		r.logger.Info("No join address specified - starting as single-node cluster")
 		// When no join address is provided, rqlited will start as a single-node cluster
@@ -289,23 +312,23 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 	if nodeType == "" {
 		nodeType = "node"
 	}
-	
+
 	// Create logs directory
 	logsDir := filepath.Join(filepath.Dir(r.dataDir), "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create logs directory at %s: %w", logsDir, err)
 	}
-	
+
 	// Open log file for RQLite output
 	logPath := filepath.Join(logsDir, fmt.Sprintf("rqlite-%s.log", nodeType))
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open RQLite log file at %s: %w", logPath, err)
 	}
-	
+
 	r.logger.Info("RQLite logs will be written to file",
 		zap.String("path", logPath))
-	
+
 	r.cmd.Stdout = logFile
 	r.cmd.Stderr = logFile
 
@@ -460,17 +483,22 @@ func (r *RQLiteManager) hasExistingState(rqliteDataDir string) bool {
 // For joining nodes in recovery, this may take longer (up to 3 minutes)
 func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := tlsutil.NewHTTPClient(2 * time.Second)
 
 	// All nodes may need time to open the store during recovery
 	// Use consistent timeout for cluster consistency
-	maxAttempts := 180  // 180 seconds (3 minutes) for all nodes
+	maxAttempts := 180 // 180 seconds (3 minutes) for all nodes
 
 	for i := 0; i < maxAttempts; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+
+		// Use centralized TLS configuration
+		if client == nil {
+			client = tlsutil.NewHTTPClient(2 * time.Second)
 		}
 
 		resp, err := client.Get(url)
@@ -517,7 +545,7 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 	return fmt.Errorf("RQLite did not become ready within timeout")
 }
 
-// waitForLeadership waits for RQLite to establish leadership (for bootstrap nodes)
+// GetConnection returns the RQLite connection
 // GetConnection returns the RQLite connection
 func (r *RQLiteManager) GetConnection() *gorqlite.Connection {
 	return r.connection
@@ -680,7 +708,7 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 	// Determine the HTTP status URL to probe.
 	// If joinAddress contains a scheme, use it directly. Otherwise treat joinAddress
 	// as host:port (Raft) and probe the standard HTTP API port 5001 on that host.
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := tlsutil.NewHTTPClient(5 * time.Second)
 
 	var statusURL string
 	if strings.HasPrefix(joinAddress, "http://") || strings.HasPrefix(joinAddress, "https://") {
@@ -707,7 +735,6 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 	r.logger.Info("Leader HTTP reachable", zap.String("status_url", statusURL))
 	return nil
 }
-
 
 // exponentialBackoff calculates exponential backoff duration with jitter
 func (r *RQLiteManager) exponentialBackoff(attempt int, baseDelay time.Duration, maxDelay time.Duration) time.Duration {
@@ -745,7 +772,7 @@ func (r *RQLiteManager) recoverCluster(ctx context.Context, peersJSONPath string
 	}
 
 	// Restart RQLite using launchProcess to ensure all join/backoff logic is applied
-	// This includes: join address handling, join retries, bootstrap-expect, etc.
+	// This includes: join address handling, join retries, expect configuration, etc.
 	r.logger.Info("Restarting RQLite (will auto-recover using peers.json)")
 	if err := r.launchProcess(ctx, rqliteDataDir); err != nil {
 		return fmt.Errorf("failed to restart RQLite process: %w", err)
@@ -863,7 +890,6 @@ func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 	r.logger.Info("Raft state cleared successfully - node will join as fresh follower")
 	return nil
 }
-
 
 // isInSplitBrainState detects if we're in a split-brain scenario where all nodes
 // are followers with no peers (each node thinks it's alone)
@@ -1182,9 +1208,9 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	}
 
 	// CRITICAL FIX: Skip recovery if no peers were discovered (other than ourselves)
-	// Only ourselves in the cluster means this is a fresh bootstrap, not a recovery scenario
+	// Only ourselves in the cluster means this is a fresh cluster, not a recovery scenario
 	if discoveredPeers <= 1 {
-		r.logger.Info("No peers discovered during pre-start discovery window - skipping recovery (fresh bootstrap)",
+		r.logger.Info("No peers discovered during pre-start discovery window - skipping recovery (fresh cluster)",
 			zap.Int("discovered_peers", discoveredPeers))
 		return nil
 	}

@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 )
 
-// ConfigDir returns the path to the DeBros config directory (~/.debros).
+// ConfigDir returns the path to the DeBros config directory (~/.orama).
 func ConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to determine home directory: %w", err)
 	}
-	return filepath.Join(home, ".debros"), nil
+	return filepath.Join(home, ".orama"), nil
 }
 
 // EnsureConfigDir creates the config directory if it does not exist.
@@ -28,8 +28,8 @@ func EnsureConfigDir() (string, error) {
 }
 
 // DefaultPath returns the path to the config file for the given component name.
-// component should be e.g., "node.yaml", "bootstrap.yaml", "gateway.yaml"
-// It checks ~/.debros/data/, ~/.debros/configs/, and ~/.debros/ for backward compatibility.
+// component should be e.g., "node.yaml", "gateway.yaml"
+// It checks ~/.orama/data/, ~/.orama/configs/, and ~/.orama/ for backward compatibility.
 // If component is already an absolute path, it returns it as-is.
 func DefaultPath(component string) (string, error) {
 	// If component is already an absolute path, return it directly
@@ -53,13 +53,13 @@ func DefaultPath(component string) (string, error) {
 		gatewayDefault = dataPath
 	}
 
-	// First check in ~/.debros/configs/ (production installer location)
+	// First check in ~/.orama/configs/ (production installer location)
 	configsPath := filepath.Join(dir, "configs", component)
 	if _, err := os.Stat(configsPath); err == nil {
 		return configsPath, nil
 	}
 
-	// Fallback to ~/.debros/ (legacy/development location)
+	// Fallback to ~/.orama/ (legacy/development location)
 	legacyPath := filepath.Join(dir, component)
 	if _, err := os.Stat(legacyPath); err == nil {
 		return legacyPath, nil

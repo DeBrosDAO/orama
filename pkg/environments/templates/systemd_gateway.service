@@ -1,7 +1,7 @@
 [Unit]
 Description=DeBros Gateway
-After=debros-node-node.service
-Wants=debros-node-node.service
+After=debros-node.service
+Wants=debros-node.service
 
 [Service]
 Type=simple
@@ -9,7 +9,7 @@ User=debros
 Group=debros
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
-ExecStart={{.HomeDir}}/bin/gateway --config {{.DebrosDir}}/data/gateway.yaml
+ExecStart={{.HomeDir}}/bin/gateway --config {{.OramaDir}}/data/gateway.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -22,7 +22,7 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths={{.DebrosDir}}
+ReadWritePaths={{.OramaDir}}
 
 [Install]
 WantedBy=multi-user.target

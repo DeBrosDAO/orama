@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
@@ -50,13 +52,14 @@ func showAuthHelp() {
 	fmt.Printf("  1. Run 'dbn auth login'\n")
 	fmt.Printf("  2. Enter your wallet address when prompted\n")
 	fmt.Printf("  3. Enter your namespace (or press Enter for 'default')\n")
-	fmt.Printf("  4. An API key will be generated and saved to ~/.debros/credentials.json\n\n")
+	fmt.Printf("  4. An API key will be generated and saved to ~/.orama/credentials.json\n\n")
 	fmt.Printf("Note: Authentication uses the currently active environment.\n")
 	fmt.Printf("      Use 'dbn env current' to see your active environment.\n")
 }
 
 func handleAuthLogin() {
-	gatewayURL := getGatewayURL()
+	// Prompt for node selection
+	gatewayURL := promptForGatewayURL()
 	fmt.Printf("🔐 Authenticating with gateway at: %s\n", gatewayURL)
 
 	// Use the simple authentication flow
@@ -161,7 +164,55 @@ func handleAuthStatus() {
 	}
 }
 
+// promptForGatewayURL interactively prompts for the gateway URL
+// Allows user to choose between local node or remote node by domain
+func promptForGatewayURL() string {
+	// Check environment variable first (allows override without prompting)
+	if url := os.Getenv("DEBROS_GATEWAY_URL"); url != "" {
+		return url
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Println("\n🌐 Node Connection")
+	fmt.Println("==================")
+	fmt.Println("1. Local node (localhost:6001)")
+	fmt.Println("2. Remote node (enter domain)")
+	fmt.Print("\nSelect option [1/2]: ")
+
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	if choice == "1" || choice == "" {
+		return "http://localhost:6001"
+	}
+
+	if choice != "2" {
+		fmt.Println("⚠️  Invalid option, using localhost")
+		return "http://localhost:6001"
+	}
+
+	fmt.Print("Enter node domain (e.g., node-hk19de.debros.network): ")
+	domain, _ := reader.ReadString('\n')
+	domain = strings.TrimSpace(domain)
+
+	if domain == "" {
+		fmt.Println("⚠️  No domain entered, using localhost")
+		return "http://localhost:6001"
+	}
+
+	// Remove any protocol prefix if user included it
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "http://")
+	// Remove trailing slash
+	domain = strings.TrimSuffix(domain, "/")
+
+	// Use HTTPS for remote domains
+	return fmt.Sprintf("https://%s", domain)
+}
+
 // getGatewayURL returns the gateway URL based on environment or env var
+// Used by other commands that don't need interactive node selection
 func getGatewayURL() string {
 	// Check environment variable first (for backwards compatibility)
 	if url := os.Getenv("DEBROS_GATEWAY_URL"); url != "" {
@@ -174,6 +225,6 @@ func getGatewayURL() string {
 		return env.GatewayURL
 	}
 
-	// Fallback to default
+	// Fallback to default (node-1)
 	return "http://localhost:6001"
 }

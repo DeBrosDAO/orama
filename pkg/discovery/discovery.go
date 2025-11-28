@@ -214,7 +214,7 @@ func (d *Manager) Stop() {
 }
 
 // discoverPeers discovers and connects to new peers using non-DHT strategies:
-//   - Peerstore entries (bootstrap peers added to peerstore by the caller)
+//   - Peerstore entries (peers added to peerstore by the caller)
 //   - Peer exchange: query currently connected peers' peerstore entries
 func (d *Manager) discoverPeers(ctx context.Context, config Config) {
 	connectedPeers := d.host.Network().Peers()
@@ -242,7 +242,7 @@ func (d *Manager) discoverPeers(ctx context.Context, config Config) {
 }
 
 // discoverViaPeerstore attempts to connect to peers found in the host's peerstore.
-// This is useful for bootstrap peers that have been pre-populated into the peerstore.
+// This is useful for peers that have been pre-populated into the peerstore.
 func (d *Manager) discoverViaPeerstore(ctx context.Context, maxConnections int) int {
 	if maxConnections <= 0 {
 		return 0
@@ -271,7 +271,7 @@ func (d *Manager) discoverViaPeerstore(ctx context.Context, maxConnections int) 
 		}
 
 		// Filter peers to only include those with addresses on our port (4001)
-		// This prevents attempting to connect to IPFS (port 4101) or IPFS Cluster (port 9096)
+		// This prevents attempting to connect to IPFS (port 4101) or IPFS Cluster (port 9096/9098)
 		peerInfo := d.host.Peerstore().PeerInfo(pid)
 		hasValidPort := false
 		for _, addr := range peerInfo.Addrs {

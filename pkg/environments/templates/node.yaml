@@ -1,10 +1,10 @@
 node:
   id: "{{.NodeID}}"
-  type: "node"
   listen_addresses:
     - "/ip4/0.0.0.0/tcp/{{.P2PPort}}"
   data_dir: "{{.DataDir}}"
   max_connections: 50
+  domain: "{{.Domain}}"
 
 database:
   data_dir: "{{.DataDir}}/rqlite"
@@ -13,11 +13,16 @@ database:
   max_database_size: 1073741824
   backup_interval: "24h"
   rqlite_port: {{.RQLiteHTTPPort}}
-  rqlite_raft_port: {{.RQLiteRaftPort}}
+  rqlite_raft_port: {{.RQLiteRaftInternalPort}}
   rqlite_join_address: "{{.RQLiteJoinAddress}}"
-  cluster_sync_interval: "30s"
+  {{if .NodeCert}}# Node-to-node TLS encryption for Raft communication (direct RQLite TLS on port 7002)
+  node_cert: "{{.NodeCert}}"
+  node_key: "{{.NodeKey}}"
+  {{if .NodeCACert}}node_ca_cert: "{{.NodeCACert}}"
+  {{end}}{{if .NodeNoVerify}}node_no_verify: true
+  {{end}}{{end}}cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
-  min_cluster_size: 3
+  min_cluster_size: 1
   ipfs:
     cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
     api_url: "http://localhost:{{.IPFSAPIPort}}"
@@ -42,3 +47,42 @@ logging:
   level: "info"
   format: "console"
 
+http_gateway:
+  enabled: true
+  listen_addr: "{{if .EnableHTTPS}}:{{.HTTPSPort}}{{else}}:{{.UnifiedGatewayPort}}{{end}}"
+  node_name: "{{.NodeID}}"
+  
+  {{if .EnableHTTPS}}https:
+    enabled: true
+    domain: "{{.Domain}}"
+    auto_cert: true
+    cache_dir: "{{.TLSCacheDir}}"
+    http_port: {{.HTTPPort}}
+    https_port: {{.HTTPSPort}}
+    email: "admin@{{.Domain}}"
+  {{end}}
+  
+  {{if .EnableHTTPS}}sni:
+    enabled: true
+    listen_addr: ":{{.RQLiteRaftPort}}"
+    cert_file: "{{.TLSCacheDir}}/{{.Domain}}.crt"
+    key_file: "{{.TLSCacheDir}}/{{.Domain}}.key"
+    routes:
+      # Note: Raft traffic bypasses SNI gateway - RQLite uses native TLS on port 7002
+      ipfs.{{.Domain}}: "localhost:4101"
+      ipfs-cluster.{{.Domain}}: "localhost:9098"
+      olric.{{.Domain}}: "localhost:3322"
+  {{end}}
+  
+  # Full gateway configuration (for API, auth, pubsub, and internal service routing)
+  client_namespace: "default"
+  rqlite_dsn: "http://localhost:{{.RQLiteHTTPPort}}"
+  olric_servers:
+    - "127.0.0.1:3320"
+  olric_timeout: "10s"
+  ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
+  ipfs_api_url: "http://localhost:{{.IPFSAPIPort}}"
+  ipfs_timeout: "60s"
+  
+  # Routes for internal service reverse proxy (kept for backwards compatibility but not used by full gateway)
+  routes: {}

@@ -6,12 +6,12 @@ test:
 	go test -v $(TEST)
 
 # Gateway-focused E2E tests assume gateway and nodes are already running
-# Auto-discovers configuration from ~/.debros and queries database for API key
+# Auto-discovers configuration from ~/.orama and queries database for API key
 # No environment variables required
 .PHONY: test-e2e
 test-e2e:
 	@echo "Running comprehensive E2E tests..."
-	@echo "Auto-discovering configuration from ~/.debros..."
+	@echo "Auto-discovering configuration from ~/.orama..."
 	go test -v -tags e2e ./e2e
 
 # Network - Distributed P2P Database System
@@ -19,7 +19,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.69.20
+VERSION := 0.72.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -29,11 +29,11 @@ build: deps
 	@echo "Building network executables (version=$(VERSION))..."
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
-	go build -ldflags "$(LDFLAGS)" -o bin/node ./cmd/node
-	go build -ldflags "$(LDFLAGS)" -o bin/dbn cmd/cli/main.go
+	go build -ldflags "$(LDFLAGS)" -o bin/orama-node ./cmd/node
+	go build -ldflags "$(LDFLAGS)" -o bin/orama cmd/cli/main.go
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
-	@echo "Build complete! Run ./bin/dbn version"
+	@echo "Build complete! Run ./bin/orama version"
 
 # Install git hooks
 install-hooks:
@@ -49,46 +49,42 @@ clean:
 
 # Run bootstrap node (auto-selects identity and data dir)
 run-node:
-	@echo "Starting bootstrap node..."
-	@echo "Config: ~/.debros/bootstrap.yaml"
-	@echo "Generate it with: dbn config init --type bootstrap"
-	go run ./cmd/node --config node.yaml
+	@echo "Starting node..."
+	@echo "Config: ~/.orama/node.yaml"
+	go run ./cmd/orama-node --config node.yaml
 
-# Run second node (regular) - requires join address of bootstrap node
-# Usage: make run-node2 JOINADDR=/ip4/localhost/tcp/5001 HTTP=5002 RAFT=7002 P2P=4002
+# Run second node - requires join address
 run-node2:
-	@echo "Starting regular node (node.yaml)..."
-	@echo "Config: ~/.debros/node.yaml"
-	@echo "Generate it with: dbn config init --type node --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
-	go run ./cmd/node --config node2.yaml
+	@echo "Starting second node..."
+	@echo "Config: ~/.orama/node2.yaml"
+	go run ./cmd/orama-node --config node2.yaml
 
-# Run third node (regular) - requires join address of bootstrap node
-# Usage: make run-node3 JOINADDR=/ip4/localhost/tcp/5001 HTTP=5003 RAFT=7003 P2P=4003
+# Run third node - requires join address
 run-node3:
-	@echo "Starting regular node (node2.yaml)..."
-	@echo "Config: ~/.debros/node2.yaml"
-	@echo "Generate it with: dbn config init --type node --name node2.yaml --join localhost:5001 --bootstrap-peers '<peer_multiaddr>'"
-	go run ./cmd/node --config node3.yaml
+	@echo "Starting third node..."
+	@echo "Config: ~/.orama/node3.yaml"
+	go run ./cmd/orama-node --config node3.yaml
 
 # Run gateway HTTP server
-# Usage examples:
-#   make run-gateway                                   # uses ~/.debros/gateway.yaml
-#   Config generated with: dbn config init --type gateway
 run-gateway:
 	@echo "Starting gateway HTTP server..."
-	@echo "Note: Config must be in ~/.debros/gateway.yaml"
-	@echo "Generate it with: dbn config init --type gateway"
-	go run ./cmd/gateway
+	@echo "Note: Config must be in ~/.orama/data/gateway.yaml"
+	go run ./cmd/orama-gateway
+
+# Setup local domain names for development
+setup-domains:
+	@echo "Setting up local domains..."
+	@sudo bash scripts/setup-local-domains.sh
 
 # Development environment target
-# Uses dbn dev up to start full stack with dependency and port checking
-dev: build
-	@./bin/dbn dev up
+# Uses orama dev up to start full stack with dependency and port checking
+dev: build setup-domains
+	@./bin/orama dev up
 
 # Graceful shutdown of all dev services
 stop:
-	@if [ -f ./bin/dbn ]; then \
-		./bin/dbn dev down || true; \
+	@if [ -f ./bin/orama ]; then \
+		./bin/orama dev down || true; \
 	fi
 	@bash scripts/dev-kill-all.sh
 
@@ -106,20 +102,17 @@ help:
 	@echo "Local Development (Recommended):"
 	@echo "  make dev      - Start full development stack with one command"
 	@echo "                 - Checks dependencies and available ports"
-	@echo "                 - Generates configs (2 bootstraps + 3 nodes + gateway)"
-	@echo "                 - Starts IPFS, RQLite, Olric, all nodes, and gateway"
-	@echo "                 - Validates cluster health (IPFS peers, RQLite, LibP2P)"
-	@echo "                 - Stops all services if health checks fail"
-	@echo "                 - Includes comprehensive logging"
+	@echo "                 - Generates configs and starts all services"
+	@echo "                 - Validates cluster health"
 	@echo "  make stop     - Gracefully stop all development services"
 	@echo "  make kill     - Force kill all development services (use if stop fails)"
 	@echo ""
-	@echo "Development Management (via dbn):"
-	@echo "  ./bin/dbn dev status  - Show status of all dev services"
-	@echo "  ./bin/dbn dev logs <component> [--follow]"
+	@echo "Development Management (via orama):"
+	@echo "  ./bin/orama dev status  - Show status of all dev services"
+	@echo "  ./bin/orama dev logs <component> [--follow]"
 	@echo ""
 	@echo "Individual Node Targets (advanced):"
-	@echo "  run-node      - Start bootstrap node directly"
+	@echo "  run-node      - Start first node directly"
 	@echo "  run-node2     - Start second node directly"
 	@echo "  run-node3     - Start third node directly"
 	@echo "  run-gateway   - Start HTTP gateway directly"

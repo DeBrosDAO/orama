@@ -178,8 +178,13 @@ func extractAPIKey(r *http.Request) string {
 
 // isPublicPath returns true for routes that should be accessible without API key auth
 func isPublicPath(p string) bool {
+	// Allow ACME challenges for Let's Encrypt certificate provisioning
+	if strings.HasPrefix(p, "/.well-known/acme-challenge/") {
+		return true
+	}
+
 	switch p {
-	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/login", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/auth/simple-key":
+	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/login", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/auth/simple-key", "/v1/network/status", "/v1/network/peers":
 		return true
 	default:
 		return false

@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -504,13 +506,98 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 		}
 	}
 
+	// Try to get IPFS peer info (optional - don't fail if unavailable)
+	ipfsInfo := queryIPFSPeerInfo()
+
+	// Try to get IPFS Cluster peer info (optional - don't fail if unavailable)
+	ipfsClusterInfo := queryIPFSClusterPeerInfo()
+
 	return &NetworkStatus{
 		NodeID:       host.ID().String(),
+		PeerID:       host.ID().String(),
 		Connected:    true,
 		PeerCount:    len(connectedPeers),
 		DatabaseSize: dbSize,
 		Uptime:       time.Since(n.client.startTime),
+		IPFS:         ipfsInfo,
+		IPFSCluster:  ipfsClusterInfo,
 	}, nil
+}
+
+// queryIPFSPeerInfo queries the local IPFS API for peer information
+// Returns nil if IPFS is not running or unavailable
+func queryIPFSPeerInfo() *IPFSPeerInfo {
+	// IPFS API typically runs on port 4501 in our setup
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	if err != nil {
+		return nil // IPFS not available
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var result struct {
+		ID        string   `json:"ID"`
+		Addresses []string `json:"Addresses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+
+	// Filter addresses to only include public/routable ones
+	var swarmAddrs []string
+	for _, addr := range result.Addresses {
+		// Skip loopback and private addresses for external discovery
+		if !strings.Contains(addr, "127.0.0.1") && !strings.Contains(addr, "/ip6/::1") {
+			swarmAddrs = append(swarmAddrs, addr)
+		}
+	}
+
+	return &IPFSPeerInfo{
+		PeerID:         result.ID,
+		SwarmAddresses: swarmAddrs,
+	}
+}
+
+// queryIPFSClusterPeerInfo queries the local IPFS Cluster API for peer information
+// Returns nil if IPFS Cluster is not running or unavailable
+func queryIPFSClusterPeerInfo() *IPFSClusterPeerInfo {
+	// IPFS Cluster API typically runs on port 9094 in our setup
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://localhost:9094/id")
+	if err != nil {
+		return nil // IPFS Cluster not available
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var result struct {
+		ID        string   `json:"id"`
+		Addresses []string `json:"addresses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+
+	// Filter addresses to only include public/routable ones for cluster discovery
+	var clusterAddrs []string
+	for _, addr := range result.Addresses {
+		// Skip loopback addresses - only keep routable addresses
+		if !strings.Contains(addr, "127.0.0.1") && !strings.Contains(addr, "/ip6/::1") {
+			clusterAddrs = append(clusterAddrs, addr)
+		}
+	}
+
+	return &IPFSClusterPeerInfo{
+		PeerID:    result.ID,
+		Addresses: clusterAddrs,
+	}
 }
 
 // ConnectToPeer connects to a specific peer

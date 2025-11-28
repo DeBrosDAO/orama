@@ -14,24 +14,24 @@ import (
 
 // ConfigEnsurer handles all config file creation and validation
 type ConfigEnsurer struct {
-	debrosDir string
+	oramaDir string
 }
 
 // NewConfigEnsurer creates a new config ensurer
-func NewConfigEnsurer(debrosDir string) *ConfigEnsurer {
+func NewConfigEnsurer(oramaDir string) *ConfigEnsurer {
 	return &ConfigEnsurer{
-		debrosDir: debrosDir,
+		oramaDir: oramaDir,
 	}
 }
 
 // EnsureAll ensures all necessary config files and secrets exist
 func (ce *ConfigEnsurer) EnsureAll() error {
 	// Create directories
-	if err := os.MkdirAll(ce.debrosDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .debros directory: %w", err)
+	if err := os.MkdirAll(ce.oramaDir, 0755); err != nil {
+		return fmt.Errorf("failed to create .orama directory: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(ce.debrosDir, "logs"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(ce.oramaDir, "logs"), 0755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
@@ -43,27 +43,27 @@ func (ce *ConfigEnsurer) EnsureAll() error {
 	// Load topology
 	topology := DefaultTopology()
 
-	// Generate identities for all bootstrap nodes and collect multiaddrs
-	bootstrapAddrs := []string{}
-	for _, nodeSpec := range topology.GetBootstrapNodes() {
+	// Generate identities for first two nodes and collect their multiaddrs as peer addresses
+	// All nodes use these addresses for initial peer discovery
+	peerAddrs := []string{}
+	for i := 0; i < 2 && i < len(topology.Nodes); i++ {
+		nodeSpec := topology.Nodes[i]
 		addr, err := ce.ensureNodeIdentity(nodeSpec)
 		if err != nil {
 			return fmt.Errorf("failed to ensure identity for %s: %w", nodeSpec.Name, err)
 		}
-		bootstrapAddrs = append(bootstrapAddrs, addr)
+		peerAddrs = append(peerAddrs, addr)
 	}
 
-	// Ensure configs for all bootstrap and regular nodes
+	// Ensure configs for all nodes
 	for _, nodeSpec := range topology.Nodes {
-		if err := ce.ensureNodeConfig(nodeSpec, bootstrapAddrs); err != nil {
+		if err := ce.ensureNodeConfig(nodeSpec, peerAddrs); err != nil {
 			return fmt.Errorf("failed to ensure config for %s: %w", nodeSpec.Name, err)
 		}
 	}
 
-	// Ensure gateway config
-	if err := ce.ensureGateway(bootstrapAddrs); err != nil {
-		return fmt.Errorf("failed to ensure gateway: %w", err)
-	}
+	// Gateway configuration is now embedded in each node's config
+	// No separate gateway.yaml needed anymore
 
 	// Ensure Olric config
 	if err := ce.ensureOlric(); err != nil {
@@ -75,7 +75,7 @@ func (ce *ConfigEnsurer) EnsureAll() error {
 
 // ensureSharedSecrets creates cluster secret and swarm key if they don't exist
 func (ce *ConfigEnsurer) ensureSharedSecrets() error {
-	secretPath := filepath.Join(ce.debrosDir, "cluster-secret")
+	secretPath := filepath.Join(ce.oramaDir, "cluster-secret")
 	if _, err := os.Stat(secretPath); os.IsNotExist(err) {
 		secret := generateRandomHex(64) // 64 hex chars = 32 bytes
 		if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
@@ -84,7 +84,7 @@ func (ce *ConfigEnsurer) ensureSharedSecrets() error {
 		fmt.Printf("✓ Generated cluster secret\n")
 	}
 
-	swarmKeyPath := filepath.Join(ce.debrosDir, "swarm.key")
+	swarmKeyPath := filepath.Join(ce.oramaDir, "swarm.key")
 	if _, err := os.Stat(swarmKeyPath); os.IsNotExist(err) {
 		keyHex := strings.ToUpper(generateRandomHex(64))
 		content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", keyHex)
@@ -99,7 +99,7 @@ func (ce *ConfigEnsurer) ensureSharedSecrets() error {
 
 // ensureNodeIdentity creates or loads a node identity and returns its multiaddr
 func (ce *ConfigEnsurer) ensureNodeIdentity(nodeSpec NodeSpec) (string, error) {
-	nodeDir := filepath.Join(ce.debrosDir, nodeSpec.DataDir)
+	nodeDir := filepath.Join(ce.oramaDir, nodeSpec.DataDir)
 	identityPath := filepath.Join(nodeDir, "identity.key")
 
 	// Create identity if missing
@@ -133,105 +133,56 @@ func (ce *ConfigEnsurer) ensureNodeIdentity(nodeSpec NodeSpec) (string, error) {
 }
 
 // ensureNodeConfig creates or updates a node configuration
-func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, bootstrapAddrs []string) error {
-	nodeDir := filepath.Join(ce.debrosDir, nodeSpec.DataDir)
-	configPath := filepath.Join(ce.debrosDir, nodeSpec.ConfigFilename)
+func (ce *ConfigEnsurer) ensureNodeConfig(nodeSpec NodeSpec, peerAddrs []string) error {
+	nodeDir := filepath.Join(ce.oramaDir, nodeSpec.DataDir)
+	configPath := filepath.Join(ce.oramaDir, nodeSpec.ConfigFilename)
 
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
 		return fmt.Errorf("failed to create node directory: %w", err)
 	}
 
-	if nodeSpec.Role == "bootstrap" {
-		// Generate bootstrap config
-		data := templates.BootstrapConfigData{
-			NodeID:            nodeSpec.Name,
-			P2PPort:           nodeSpec.P2PPort,
-			DataDir:           nodeDir,
-			RQLiteHTTPPort:    nodeSpec.RQLiteHTTPPort,
-			RQLiteRaftPort:    nodeSpec.RQLiteRaftPort,
-			ClusterAPIPort:    nodeSpec.ClusterAPIPort,
-			IPFSAPIPort:       nodeSpec.IPFSAPIPort,
-			BootstrapPeers:    bootstrapAddrs,
-			RQLiteJoinAddress: nodeSpec.RQLiteJoinTarget,
-		}
-
-		config, err := templates.RenderBootstrapConfig(data)
-		if err != nil {
-			return fmt.Errorf("failed to render bootstrap config: %w", err)
-		}
-
-		if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-			return fmt.Errorf("failed to write bootstrap config: %w", err)
-		}
-
-		fmt.Printf("✓ Generated %s.yaml\n", nodeSpec.Name)
-	} else {
-		// Generate regular node config
-		data := templates.NodeConfigData{
-			NodeID:            nodeSpec.Name,
-			P2PPort:           nodeSpec.P2PPort,
-			DataDir:           nodeDir,
-			RQLiteHTTPPort:    nodeSpec.RQLiteHTTPPort,
-			RQLiteRaftPort:    nodeSpec.RQLiteRaftPort,
-			RQLiteJoinAddress: nodeSpec.RQLiteJoinTarget,
-			BootstrapPeers:    bootstrapAddrs,
-			ClusterAPIPort:    nodeSpec.ClusterAPIPort,
-			IPFSAPIPort:       nodeSpec.IPFSAPIPort,
-		}
-
-		config, err := templates.RenderNodeConfig(data)
-		if err != nil {
-			return fmt.Errorf("failed to render node config: %w", err)
-		}
-
-		if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-			return fmt.Errorf("failed to write node config: %w", err)
-		}
-
-		fmt.Printf("✓ Generated %s.yaml\n", nodeSpec.Name)
+	// Generate node config (all nodes are unified)
+	data := templates.NodeConfigData{
+		NodeID:             nodeSpec.Name,
+		P2PPort:            nodeSpec.P2PPort,
+		DataDir:            nodeDir,
+		RQLiteHTTPPort:     nodeSpec.RQLiteHTTPPort,
+		RQLiteRaftPort:     nodeSpec.RQLiteRaftPort,
+		RQLiteJoinAddress:  nodeSpec.RQLiteJoinTarget,
+		BootstrapPeers:     peerAddrs,
+		ClusterAPIPort:     nodeSpec.ClusterAPIPort,
+		IPFSAPIPort:        nodeSpec.IPFSAPIPort,
+		UnifiedGatewayPort: nodeSpec.UnifiedGatewayPort,
 	}
 
-	return nil
-}
-
-// ensureGateway creates gateway config
-func (ce *ConfigEnsurer) ensureGateway(bootstrapAddrs []string) error {
-	configPath := filepath.Join(ce.debrosDir, "gateway.yaml")
-
-	// Get first bootstrap's cluster API port for default
-	topology := DefaultTopology()
-	firstBootstrap := topology.GetBootstrapNodes()[0]
-
-	data := templates.GatewayConfigData{
-		ListenPort:     topology.GatewayPort,
-		BootstrapPeers: bootstrapAddrs,
-		OlricServers:   []string{fmt.Sprintf("127.0.0.1:%d", topology.OlricHTTPPort)},
-		ClusterAPIPort: firstBootstrap.ClusterAPIPort,
-		IPFSAPIPort:    firstBootstrap.IPFSAPIPort,
-	}
-
-	config, err := templates.RenderGatewayConfig(data)
+	config, err := templates.RenderNodeConfig(data)
 	if err != nil {
-		return fmt.Errorf("failed to render gateway config: %w", err)
+		return fmt.Errorf("failed to render node config: %w", err)
 	}
 
 	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-		return fmt.Errorf("failed to write gateway config: %w", err)
+		return fmt.Errorf("failed to write node config: %w", err)
 	}
 
-	fmt.Printf("✓ Generated gateway.yaml\n")
+	fmt.Printf("✓ Generated %s.yaml\n", nodeSpec.Name)
+
 	return nil
 }
 
+// Gateway configuration is now embedded in each node's config
+// ensureGateway is no longer needed - each node runs its own embedded gateway
+
 // ensureOlric creates Olric config
 func (ce *ConfigEnsurer) ensureOlric() error {
-	configPath := filepath.Join(ce.debrosDir, "olric-config.yaml")
+	configPath := filepath.Join(ce.oramaDir, "olric-config.yaml")
 
 	topology := DefaultTopology()
 	data := templates.OlricConfigData{
-		BindAddr:       "127.0.0.1",
-		HTTPPort:       topology.OlricHTTPPort,
-		MemberlistPort: topology.OlricMemberPort,
+		ServerBindAddr:        "127.0.0.1",
+		HTTPPort:              topology.OlricHTTPPort,
+		MemberlistBindAddr:    "127.0.0.1", // localhost for development
+		MemberlistPort:        topology.OlricMemberPort,
+		MemberlistEnvironment: "local", // development environment
 	}
 
 	config, err := templates.RenderOlricConfig(data)

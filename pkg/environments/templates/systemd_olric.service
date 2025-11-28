@@ -19,7 +19,7 @@ SyslogIdentifier=olric
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths={{.DebrosDir}}
+ReadWritePaths={{.OramaDir}}
 
 [Install]
 WantedBy=multi-user.target

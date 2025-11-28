@@ -28,18 +28,18 @@ var DefaultEnvironments = []Environment{
 	{
 		Name:        "local",
 		GatewayURL:  "http://localhost:6001",
-		Description: "Local development environment",
+		Description: "Local development environment (node-1)",
 		IsActive:    true,
 	},
 	{
 		Name:        "devnet",
-		GatewayURL:  "https://devnet.debros.network",
+		GatewayURL:  "https://devnet.orama.network",
 		Description: "Development network (testnet)",
 		IsActive:    false,
 	},
 	{
 		Name:        "testnet",
-		GatewayURL:  "https://testnet.debros.network",
+		GatewayURL:  "https://testnet.orama.network",
 		Description: "Test network (staging)",
 		IsActive:    false,
 	},

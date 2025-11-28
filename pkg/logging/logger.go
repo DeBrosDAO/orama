@@ -54,6 +54,7 @@ const (
 	ComponentClient   Component = "CLIENT"
 	ComponentGeneral  Component = "GENERAL"
 	ComponentAnyone   Component = "ANYONE"
+	ComponentGateway  Component = "GATEWAY"
 )
 
 // getComponentColor returns the color for a specific component
@@ -75,6 +76,8 @@ func getComponentColor(component Component) string {
 		return Yellow
 	case ComponentAnyone:
 		return Cyan
+	case ComponentGateway:
+		return BrightGreen
 	default:
 		return White
 	}
@@ -177,6 +180,33 @@ func NewColoredLogger(component Component, enableColors bool) (*ColoredLogger, e
 // NewDefaultLogger creates a logger with default settings and color auto-detection
 func NewDefaultLogger(component Component) (*ColoredLogger, error) {
 	return NewColoredLogger(component, true)
+}
+
+// NewFileLogger creates a logger that writes to a file
+func NewFileLogger(component Component, filePath string, enableColors bool) (*ColoredLogger, error) {
+	// Create encoder
+	encoder := coloredConsoleEncoder(enableColors)
+
+	// Create file writer
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+	}
+
+	// Create core
+	core := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(file),
+		zapcore.DebugLevel,
+	)
+
+	// Create logger with caller information
+	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+
+	return &ColoredLogger{
+		Logger:       logger,
+		enableColors: enableColors,
+	}, nil
 }
 
 // Component-specific logging methods

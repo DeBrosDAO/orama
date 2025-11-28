@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // PerformSimpleAuthentication performs a simple authentication flow where the user
@@ -91,7 +93,13 @@ func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, err
 	}
 
 	endpoint := gatewayURL + "/v1/auth/simple-key"
-	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+
+	// Extract domain from URL for TLS configuration
+	// This uses tlsutil which handles Let's Encrypt staging certificates for *.debros.network
+	domain := extractDomainFromURL(gatewayURL)
+	client := tlsutil.NewHTTPClientForDomain(30*time.Second, domain)
+
+	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("failed to call gateway: %w", err)
 	}
@@ -113,4 +121,24 @@ func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, err
 	}
 
 	return apiKey, nil
+}
+
+// extractDomainFromURL extracts the domain from a URL
+// Removes protocol (https://, http://), path, and port components
+func extractDomainFromURL(url string) string {
+	// Remove protocol prefixes
+	url = strings.TrimPrefix(url, "https://")
+	url = strings.TrimPrefix(url, "http://")
+
+	// Remove path component
+	if idx := strings.Index(url, "/"); idx != -1 {
+		url = url[:idx]
+	}
+
+	// Remove port component
+	if idx := strings.Index(url, ":"); idx != -1 {
+		url = url[:idx]
+	}
+
+	return url
 }

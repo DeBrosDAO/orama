@@ -195,49 +195,49 @@ func (c *Client) Connect() error {
 	c.pubsub = &pubSubBridge{client: c, adapter: adapter}
 	c.logger.Info("Pubsub bridge created successfully")
 
-	c.logger.Info("Starting bootstrap peer connections...")
+	c.logger.Info("Starting peer connections...")
 
-	// Connect to bootstrap peers FIRST
+	// Connect to peers FIRST
 	ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
 	defer cancel()
 
-	bootstrapPeersConnected := 0
-	for _, bootstrapAddr := range c.config.BootstrapPeers {
-		c.logger.Info("Attempting to connect to bootstrap peer", zap.String("addr", bootstrapAddr))
-		if err := c.connectToBootstrap(ctx, bootstrapAddr); err != nil {
-			c.logger.Warn("Failed to connect to bootstrap peer",
-				zap.String("addr", bootstrapAddr),
+	peersConnected := 0
+	for _, peerAddr := range c.config.BootstrapPeers {
+		c.logger.Info("Attempting to connect to peer", zap.String("addr", peerAddr))
+		if err := c.connectToPeer(ctx, peerAddr); err != nil {
+			c.logger.Warn("Failed to connect to peer",
+				zap.String("addr", peerAddr),
 				zap.Error(err))
 			continue
 		}
-		bootstrapPeersConnected++
-		c.logger.Info("Successfully connected to bootstrap peer", zap.String("addr", bootstrapAddr))
+		peersConnected++
+		c.logger.Info("Successfully connected to peer", zap.String("addr", peerAddr))
 	}
 
-	if bootstrapPeersConnected == 0 {
-		c.logger.Warn("No bootstrap peers connected, continuing anyway")
+	if peersConnected == 0 {
+		c.logger.Warn("No peers connected, continuing anyway")
 	} else {
-		c.logger.Info("Bootstrap peer connections completed", zap.Int("connected_count", bootstrapPeersConnected))
+		c.logger.Info("Peer connections completed", zap.Int("connected_count", peersConnected))
 	}
 
-	c.logger.Info("Adding bootstrap peers to peerstore...")
+	c.logger.Info("Adding peers to peerstore...")
 
-	// Add bootstrap peers to peerstore so we can connect to them later
-	for _, bootstrapAddr := range c.config.BootstrapPeers {
-		if ma, err := multiaddr.NewMultiaddr(bootstrapAddr); err == nil {
+	// Add peers to peerstore so we can connect to them later
+	for _, peerAddr := range c.config.BootstrapPeers {
+		if ma, err := multiaddr.NewMultiaddr(peerAddr); err == nil {
 			if peerInfo, err := peer.AddrInfoFromP2pAddr(ma); err == nil {
 				c.host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, time.Hour*24)
-				c.logger.Debug("Added bootstrap peer to peerstore",
+				c.logger.Debug("Added peer to peerstore",
 					zap.String("peer", peerInfo.ID.String()))
 			}
 		}
 	}
-	c.logger.Info("Bootstrap peers added to peerstore")
+	c.logger.Info("Peers added to peerstore")
 
 	c.logger.Info("Starting connection monitoring...")
 
 	// Client is a lightweight P2P participant - no discovery needed
-	// We only connect to known bootstrap peers and let nodes handle discovery
+	// We only connect to known peers and let nodes handle discovery
 	c.logger.Debug("Client configured as lightweight P2P participant (no discovery)")
 
 	// Start minimal connection monitoring

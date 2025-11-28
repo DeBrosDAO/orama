@@ -20,17 +20,17 @@ import (
 
 // ConfigGenerator manages generation of node, gateway, and service configs
 type ConfigGenerator struct {
-	debrosDir string
+	oramaDir string
 }
 
 // NewConfigGenerator creates a new config generator
-func NewConfigGenerator(debrosDir string) *ConfigGenerator {
+func NewConfigGenerator(oramaDir string) *ConfigGenerator {
 	return &ConfigGenerator{
-		debrosDir: debrosDir,
+		oramaDir: oramaDir,
 	}
 }
 
-// extractIPFromMultiaddr extracts the IP address from a bootstrap peer multiaddr
+// extractIPFromMultiaddr extracts the IP address from a peer multiaddr
 // Supports IP4, IP6, DNS4, DNS6, and DNSADDR protocols
 // Returns the IP address as a string, or empty string if extraction/resolution fails
 func extractIPFromMultiaddr(multiaddrStr string) string {
@@ -76,12 +76,12 @@ func extractIPFromMultiaddr(multiaddrStr string) string {
 	return ""
 }
 
-// inferBootstrapIP extracts the IP address from bootstrap peer multiaddrs
-// Iterates through all bootstrap peers to find a valid IP (supports DNS resolution)
+// inferPeerIP extracts the IP address from peer multiaddrs
+// Iterates through all peers to find a valid IP (supports DNS resolution)
 // Falls back to vpsIP if provided, otherwise returns empty string
-func inferBootstrapIP(bootstrapPeers []string, vpsIP string) string {
-	// Try to extract IP from each bootstrap peer (in order)
-	for _, peer := range bootstrapPeers {
+func inferPeerIP(peers []string, vpsIP string) string {
+	// Try to extract IP from each peer (in order)
+	for _, peer := range peers {
 		if ip := extractIPFromMultiaddr(peer); ip != "" {
 			return ip
 		}
@@ -93,116 +93,125 @@ func inferBootstrapIP(bootstrapPeers []string, vpsIP string) string {
 	return ""
 }
 
-// GenerateNodeConfig generates node.yaml configuration
-func (cg *ConfigGenerator) GenerateNodeConfig(isBootstrap bool, bootstrapPeers []string, vpsIP string, bootstrapJoin string) (string, error) {
-	var nodeID string
-	if isBootstrap {
-		nodeID = "bootstrap"
-	} else {
-		nodeID = "node"
+// GenerateNodeConfig generates node.yaml configuration (unified architecture)
+func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, enableHTTPS bool) (string, error) {
+	// Generate node ID from domain or use default
+	nodeID := "node"
+	if domain != "" {
+		// Extract node identifier from domain (e.g., "node-123" from "node-123.orama.network")
+		parts := strings.Split(domain, ".")
+		if len(parts) > 0 {
+			nodeID = parts[0]
+		}
 	}
 
-	// Determine advertise addresses
-	// For bootstrap: use vpsIP if provided, otherwise localhost
-	// For regular nodes: infer from bootstrap peers or use vpsIP
+	// Determine advertise addresses - use vpsIP if provided
+	// When HTTPS is enabled, RQLite uses native TLS on port 7002 (not SNI gateway)
+	// This avoids conflicts between SNI gateway TLS termination and RQLite's native TLS
 	var httpAdvAddr, raftAdvAddr string
-	if isBootstrap {
-		if vpsIP != "" {
-			httpAdvAddr = net.JoinHostPort(vpsIP, "5001")
-			raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
+	if vpsIP != "" {
+		httpAdvAddr = net.JoinHostPort(vpsIP, "5001")
+		if enableHTTPS {
+			// Use direct IP:7002 for Raft - RQLite handles TLS natively via -node-cert
+			// This bypasses the SNI gateway which would cause TLS termination conflicts
+			raftAdvAddr = net.JoinHostPort(vpsIP, "7002")
 		} else {
-			httpAdvAddr = "localhost:5001"
-			raftAdvAddr = "localhost:7001"
+			raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
 		}
 	} else {
-		// Regular node: infer from bootstrap peers or use vpsIP
-		bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
-		if bootstrapIP != "" {
-			// Use the bootstrap IP for advertise addresses (this node should be reachable at same network)
-			// If vpsIP is provided, use it; otherwise use bootstrap IP
-			if vpsIP != "" {
-				httpAdvAddr = net.JoinHostPort(vpsIP, "5001")
-				raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
-			} else {
-				httpAdvAddr = net.JoinHostPort(bootstrapIP, "5001")
-				raftAdvAddr = net.JoinHostPort(bootstrapIP, "7001")
-			}
-		} else {
-			// Fallback to localhost if nothing can be inferred
-			httpAdvAddr = "localhost:5001"
-			raftAdvAddr = "localhost:7001"
-		}
+		// Fallback to localhost if no vpsIP
+		httpAdvAddr = "localhost:5001"
+		raftAdvAddr = "localhost:7001"
 	}
 
-	if isBootstrap {
-		// Bootstrap node - populate peer list and optional join address
-		data := templates.BootstrapConfigData{
-			NodeID:            nodeID,
-			P2PPort:           4001,
-			DataDir:           filepath.Join(cg.debrosDir, "data", "bootstrap"),
-			RQLiteHTTPPort:    5001,
-			RQLiteRaftPort:    7001,
-			ClusterAPIPort:    9094,
-			IPFSAPIPort:       4501,
-			BootstrapPeers:    bootstrapPeers,
-			RQLiteJoinAddress: bootstrapJoin,
-			HTTPAdvAddress:    httpAdvAddr,
-			RaftAdvAddress:    raftAdvAddr,
-		}
-		return templates.RenderBootstrapConfig(data)
+	// Determine RQLite join address
+	// When HTTPS is enabled, use port 7002 (direct RQLite TLS) instead of 7001 (SNI gateway)
+	joinPort := "7001"
+	if enableHTTPS {
+		joinPort = "7002"
 	}
 
-	// Regular node - infer join address from bootstrap peers
-	// MUST extract from bootstrap_peers - no fallback to vpsIP (would cause self-join)
 	var rqliteJoinAddr string
-	bootstrapIP := inferBootstrapIP(bootstrapPeers, "")
-	if bootstrapIP == "" {
-		// Try to extract from first bootstrap peer directly as fallback
-		if len(bootstrapPeers) > 0 {
-			if extractedIP := extractIPFromMultiaddr(bootstrapPeers[0]); extractedIP != "" {
-				bootstrapIP = extractedIP
+	if joinAddress != "" {
+		// Use explicitly provided join address
+		// If it contains :7001 and HTTPS is enabled, update to :7002
+		if enableHTTPS && strings.Contains(joinAddress, ":7001") {
+			rqliteJoinAddr = strings.Replace(joinAddress, ":7001", ":7002", 1)
+		} else {
+			rqliteJoinAddr = joinAddress
+		}
+	} else if len(peerAddresses) > 0 {
+		// Infer join address from peers
+		peerIP := inferPeerIP(peerAddresses, "")
+		if peerIP != "" {
+			rqliteJoinAddr = net.JoinHostPort(peerIP, joinPort)
+			// Validate that join address doesn't match this node's own raft address (would cause self-join)
+			if rqliteJoinAddr == raftAdvAddr {
+				rqliteJoinAddr = "" // Clear it - this is the first node
 			}
 		}
+	}
+	// If no join address and no peers, this is the first node - it will create the cluster
 
-		// If still no IP, fail - we cannot join without a valid bootstrap address
-		if bootstrapIP == "" {
-			return "", fmt.Errorf("cannot determine RQLite join address: failed to extract IP from bootstrap peers %v (required for non-bootstrap nodes)", bootstrapPeers)
-		}
+	// TLS/ACME configuration
+	tlsCacheDir := ""
+	httpPort := 80
+	httpsPort := 443
+	if enableHTTPS {
+		tlsCacheDir = filepath.Join(cg.oramaDir, "tls-cache")
 	}
 
-	rqliteJoinAddr = net.JoinHostPort(bootstrapIP, "7001")
-
-	// Validate that join address doesn't match this node's own raft address (would cause self-join)
-	if rqliteJoinAddr == raftAdvAddr {
-		return "", fmt.Errorf("invalid configuration: rqlite_join_address (%s) cannot match raft_adv_address (%s) - node cannot join itself", rqliteJoinAddr, raftAdvAddr)
+	// Unified data directory (all nodes equal)
+	// When HTTPS/SNI is enabled, use internal port 7002 for RQLite Raft (SNI gateway listens on 7001)
+	raftInternalPort := 7001
+	if enableHTTPS {
+		raftInternalPort = 7002 // Internal port when SNI is enabled
 	}
 
 	data := templates.NodeConfigData{
-		NodeID:            nodeID,
-		P2PPort:           4001,
-		DataDir:           filepath.Join(cg.debrosDir, "data", "node"),
-		RQLiteHTTPPort:    5001,
-		RQLiteRaftPort:    7001,
-		RQLiteJoinAddress: rqliteJoinAddr,
-		BootstrapPeers:    bootstrapPeers,
-		ClusterAPIPort:    9094,
-		IPFSAPIPort:       4501,
-		HTTPAdvAddress:    httpAdvAddr,
-		RaftAdvAddress:    raftAdvAddr,
+		NodeID:                 nodeID,
+		P2PPort:                4001,
+		DataDir:                filepath.Join(cg.oramaDir, "data"),
+		RQLiteHTTPPort:         5001,
+		RQLiteRaftPort:         7001,                // External SNI port
+		RQLiteRaftInternalPort: raftInternalPort,    // Internal RQLite binding port
+		RQLiteJoinAddress:      rqliteJoinAddr,
+		BootstrapPeers:         peerAddresses,
+		ClusterAPIPort:         9094,
+		IPFSAPIPort:            4501,
+		HTTPAdvAddress:         httpAdvAddr,
+		RaftAdvAddress:         raftAdvAddr,
+		UnifiedGatewayPort:     6001,
+		Domain:                 domain,
+		EnableHTTPS:            enableHTTPS,
+		TLSCacheDir:            tlsCacheDir,
+		HTTPPort:               httpPort,
+		HTTPSPort:              httpsPort,
 	}
+
+	// When HTTPS is enabled, configure RQLite node-to-node TLS encryption
+	// RQLite handles TLS natively on port 7002, bypassing the SNI gateway
+	// This avoids TLS termination conflicts between SNI gateway and RQLite
+	if enableHTTPS && domain != "" {
+		data.NodeCert = filepath.Join(tlsCacheDir, domain+".crt")
+		data.NodeKey = filepath.Join(tlsCacheDir, domain+".key")
+		// Skip verification since nodes may have different domain certificates
+		data.NodeNoVerify = true
+	}
+
 	return templates.RenderNodeConfig(data)
 }
 
 // GenerateGatewayConfig generates gateway.yaml configuration
-func (cg *ConfigGenerator) GenerateGatewayConfig(bootstrapPeers []string, enableHTTPS bool, domain string, olricServers []string) (string, error) {
+func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableHTTPS bool, domain string, olricServers []string) (string, error) {
 	tlsCacheDir := ""
 	if enableHTTPS {
-		tlsCacheDir = filepath.Join(cg.debrosDir, "tls-cache")
+		tlsCacheDir = filepath.Join(cg.oramaDir, "tls-cache")
 	}
 
 	data := templates.GatewayConfigData{
 		ListenPort:     6001,
-		BootstrapPeers: bootstrapPeers,
+		BootstrapPeers: peerAddresses,
 		OlricServers:   olricServers,
 		ClusterAPIPort: 9094,
 		IPFSAPIPort:    4501,
@@ -215,26 +224,26 @@ func (cg *ConfigGenerator) GenerateGatewayConfig(bootstrapPeers []string, enable
 }
 
 // GenerateOlricConfig generates Olric configuration
-func (cg *ConfigGenerator) GenerateOlricConfig(bindAddr string, httpPort, memberlistPort int) (string, error) {
+func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string) (string, error) {
 	data := templates.OlricConfigData{
-		BindAddr:       bindAddr,
-		HTTPPort:       httpPort,
-		MemberlistPort: memberlistPort,
+		ServerBindAddr:        serverBindAddr,
+		HTTPPort:              httpPort,
+		MemberlistBindAddr:    memberlistBindAddr,
+		MemberlistPort:        memberlistPort,
+		MemberlistEnvironment: memberlistEnv,
 	}
 	return templates.RenderOlricConfig(data)
 }
 
 // SecretGenerator manages generation of shared secrets and keys
 type SecretGenerator struct {
-	debrosDir             string
-	clusterSecretOverride string
+	oramaDir string
 }
 
 // NewSecretGenerator creates a new secret generator
-func NewSecretGenerator(debrosDir string, clusterSecretOverride string) *SecretGenerator {
+func NewSecretGenerator(oramaDir string) *SecretGenerator {
 	return &SecretGenerator{
-		debrosDir:             debrosDir,
-		clusterSecretOverride: clusterSecretOverride,
+		oramaDir: oramaDir,
 	}
 }
 
@@ -255,37 +264,16 @@ func ValidateClusterSecret(secret string) error {
 
 // EnsureClusterSecret gets or generates the IPFS Cluster secret
 func (sg *SecretGenerator) EnsureClusterSecret() (string, error) {
-	secretPath := filepath.Join(sg.debrosDir, "secrets", "cluster-secret")
+	secretPath := filepath.Join(sg.oramaDir, "secrets", "cluster-secret")
 	secretDir := filepath.Dir(secretPath)
 
-	// Ensure secrets directory exists
-	if err := os.MkdirAll(secretDir, 0755); err != nil {
+	// Ensure secrets directory exists with restricted permissions (0700)
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-
-	// Use override if provided
-	if sg.clusterSecretOverride != "" {
-		secret := strings.TrimSpace(sg.clusterSecretOverride)
-		if err := ValidateClusterSecret(secret); err != nil {
-			return "", err
-		}
-
-		needsWrite := true
-		if data, err := os.ReadFile(secretPath); err == nil {
-			if strings.TrimSpace(string(data)) == secret {
-				needsWrite = false
-			}
-		}
-
-		if needsWrite {
-			if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
-				return "", fmt.Errorf("failed to save cluster secret override: %w", err)
-			}
-		}
-		if err := ensureSecretFilePermissions(secretPath); err != nil {
-			return "", err
-		}
-		return secret, nil
+	// Ensure directory permissions are correct even if it already existed
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing secret
@@ -341,12 +329,16 @@ func ensureSecretFilePermissions(secretPath string) error {
 
 // EnsureSwarmKey gets or generates the IPFS private swarm key
 func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
-	swarmKeyPath := filepath.Join(sg.debrosDir, "secrets", "swarm.key")
+	swarmKeyPath := filepath.Join(sg.oramaDir, "secrets", "swarm.key")
 	secretDir := filepath.Dir(swarmKeyPath)
 
-	// Ensure secrets directory exists
-	if err := os.MkdirAll(secretDir, 0755); err != nil {
+	// Ensure secrets directory exists with restricted permissions (0700)
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	// Ensure directory permissions are correct even if it already existed
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing key
@@ -373,9 +365,10 @@ func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 	return []byte(content), nil
 }
 
-// EnsureNodeIdentity gets or generates the node's LibP2P identity
-func (sg *SecretGenerator) EnsureNodeIdentity(nodeType string) (peer.ID, error) {
-	keyDir := filepath.Join(sg.debrosDir, "data", nodeType)
+// EnsureNodeIdentity gets or generates the node's LibP2P identity (unified - no bootstrap/node distinction)
+func (sg *SecretGenerator) EnsureNodeIdentity() (peer.ID, error) {
+	// Unified data directory (no bootstrap/node distinction)
+	keyDir := filepath.Join(sg.oramaDir, "data")
 	keyPath := filepath.Join(keyDir, "identity.key")
 
 	// Ensure data directory exists
@@ -419,9 +412,9 @@ func (sg *SecretGenerator) SaveConfig(filename string, content string) error {
 	var configDir string
 	// gateway.yaml goes to data/ directory, other configs go to configs/
 	if filename == "gateway.yaml" {
-		configDir = filepath.Join(sg.debrosDir, "data")
+		configDir = filepath.Join(sg.oramaDir, "data")
 	} else {
-		configDir = filepath.Join(sg.debrosDir, "configs")
+		configDir = filepath.Join(sg.oramaDir, "configs")
 	}
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {

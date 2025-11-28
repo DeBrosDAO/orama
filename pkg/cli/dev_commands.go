@@ -40,30 +40,30 @@ func HandleDevCommand(args []string) {
 
 func showDevHelp() {
 	fmt.Printf("🚀 Development Environment Commands\n\n")
-	fmt.Printf("Usage: dbn dev <subcommand> [options]\n\n")
+	fmt.Printf("Usage: orama dev <subcommand> [options]\n\n")
 	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  up                - Start development environment (2 bootstraps + 3 nodes + gateway)\n")
+	fmt.Printf("  up                - Start development environment (5 nodes + gateway)\n")
 	fmt.Printf("  down              - Stop all development services\n")
 	fmt.Printf("  status            - Show status of running services\n")
 	fmt.Printf("  logs <component>  - Tail logs for a component\n")
 	fmt.Printf("  help              - Show this help\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  dbn dev up\n")
-	fmt.Printf("  dbn dev down\n")
-	fmt.Printf("  dbn dev status\n")
-	fmt.Printf("  dbn dev logs bootstrap --follow\n")
+	fmt.Printf("  orama dev up\n")
+	fmt.Printf("  orama dev down\n")
+	fmt.Printf("  orama dev status\n")
+	fmt.Printf("  orama dev logs node-1 --follow\n")
 }
 
 func handleDevUp(args []string) {
 	ctx := context.Background()
 
-	// Get home directory and .debros path
+	// Get home directory and .orama path
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
 	// Step 1: Check dependencies
 	fmt.Printf("📋 Checking dependencies...\n\n")
@@ -90,7 +90,7 @@ func handleDevUp(args []string) {
 
 	// Step 3: Ensure configs
 	fmt.Printf("⚙️  Preparing configuration files...\n\n")
-	ensurer := development.NewConfigEnsurer(debrosDir)
+	ensurer := development.NewConfigEnsurer(oramaDir)
 	if err := ensurer.EnsureAll(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to prepare configs: %v\n", err)
 		os.Exit(1)
@@ -98,7 +98,7 @@ func handleDevUp(args []string) {
 	fmt.Printf("\n")
 
 	// Step 4: Start services
-	pm := development.NewProcessManager(debrosDir, os.Stdout)
+	pm := development.NewProcessManager(oramaDir, os.Stdout)
 	if err := pm.StartAll(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error starting services: %v\n", err)
 		os.Exit(1)
@@ -108,19 +108,19 @@ func handleDevUp(args []string) {
 	fmt.Printf("🎉 Development environment is running!\n\n")
 	fmt.Printf("Key endpoints:\n")
 	fmt.Printf("  Gateway:              http://localhost:6001\n")
-	fmt.Printf("  Bootstrap IPFS:       http://localhost:4501\n")
-	fmt.Printf("  Bootstrap2 IPFS:      http://localhost:4511\n")
-	fmt.Printf("  Node2 IPFS:           http://localhost:4502\n")
-	fmt.Printf("  Node3 IPFS:           http://localhost:4503\n")
-	fmt.Printf("  Node4 IPFS:           http://localhost:4504\n")
+	fmt.Printf("  Node-1 IPFS:          http://localhost:4501\n")
+	fmt.Printf("  Node-2 IPFS:          http://localhost:4502\n")
+	fmt.Printf("  Node-3 IPFS:          http://localhost:4503\n")
+	fmt.Printf("  Node-4 IPFS:          http://localhost:4504\n")
+	fmt.Printf("  Node-5 IPFS:          http://localhost:4505\n")
 	fmt.Printf("  Anon SOCKS:           127.0.0.1:9050\n")
 	fmt.Printf("  Olric Cache:          http://localhost:3320\n\n")
 	fmt.Printf("Useful commands:\n")
-	fmt.Printf("  dbn dev status           - Show status\n")
-	fmt.Printf("  dbn dev logs bootstrap   - Bootstrap logs\n")
-	fmt.Printf("  dbn dev logs bootstrap2  - Bootstrap2 logs\n")
-	fmt.Printf("  dbn dev down             - Stop all services\n\n")
-	fmt.Printf("Logs directory: %s/logs\n\n", debrosDir)
+	fmt.Printf("  orama dev status       - Show status\n")
+	fmt.Printf("  orama dev logs node-1  - Node-1 logs\n")
+	fmt.Printf("  orama dev logs node-2  - Node-2 logs\n")
+	fmt.Printf("  orama dev down         - Stop all services\n\n")
+	fmt.Printf("Logs directory: %s/logs\n\n", oramaDir)
 }
 
 func handleDevDown(args []string) {
@@ -129,16 +129,16 @@ func handleDevDown(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
-	pm := development.NewProcessManager(debrosDir, os.Stdout)
+	pm := development.NewProcessManager(oramaDir, os.Stdout)
 	ctx := context.Background()
 
 	if err := pm.StopAll(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Error stopping services: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Printf("✅ All services have been stopped\n\n")
 }
 
@@ -148,9 +148,9 @@ func handleDevStatus(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
-	pm := development.NewProcessManager(debrosDir, os.Stdout)
+	pm := development.NewProcessManager(oramaDir, os.Stdout)
 	ctx := context.Background()
 
 	pm.Status(ctx)
@@ -159,7 +159,7 @@ func handleDevStatus(args []string) {
 func handleDevLogs(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: dbn dev logs <component> [--follow]\n")
-		fmt.Fprintf(os.Stderr, "\nComponents: bootstrap, bootstrap2, node2, node3, node4, gateway, ipfs-bootstrap, ipfs-bootstrap2, ipfs-node2, ipfs-node3, ipfs-node4, olric, anon\n")
+		fmt.Fprintf(os.Stderr, "\nComponents: node-1, node-2, node-3, node-4, node-5, gateway, ipfs-node-1, ipfs-node-2, ipfs-node-3, ipfs-node-4, ipfs-node-5, olric, anon\n")
 		os.Exit(1)
 	}
 
@@ -171,9 +171,9 @@ func handleDevLogs(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	debrosDir := filepath.Join(homeDir, ".debros")
+	oramaDir := filepath.Join(homeDir, ".orama")
 
-	logPath := filepath.Join(debrosDir, "logs", fmt.Sprintf("%s.log", component))
+	logPath := filepath.Join(oramaDir, "logs", fmt.Sprintf("%s.log", component))
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "❌ Log file not found: %s\n", logPath)
 		os.Exit(1)

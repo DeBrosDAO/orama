@@ -52,7 +52,7 @@ SPECIFIC_PATTERNS=(
   "ipfs daemon"
   "ipfs-cluster-service daemon"
   "olric-server"
-  "bin/node"
+  "bin/orama-node"
   "bin/gateway"
   "anyone-client"
 )
@@ -75,7 +75,7 @@ for pattern in "${SPECIFIC_PATTERNS[@]}"; do
 done
 
 # Method 3: Kill processes using PID files
-PIDS_DIR="$HOME/.debros/.pids"
+PIDS_DIR="$HOME/.orama/.pids"
 if [[ -d "$PIDS_DIR" ]]; then
   for pidfile in "$PIDS_DIR"/*.pid; do
     if [[ -f "$pidfile" ]]; then

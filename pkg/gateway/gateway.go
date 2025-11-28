@@ -37,6 +37,7 @@ type Config struct {
 	ListenAddr      string
 	ClientNamespace string
 	BootstrapPeers  []string
+	NodePeerID      string // The node's actual peer ID from its identity file
 
 	// Optional DSN for rqlite database/sql driver, e.g. "http://localhost:4001"
 	// If empty, defaults to "http://localhost:4001".
@@ -45,7 +46,7 @@ type Config struct {
 	// HTTPS configuration
 	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
 	DomainName  string // Domain name for HTTPS certificate
-	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.debros/tls-cache)
+	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.orama/tls-cache)
 
 	// Olric cache configuration
 	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:3320"]). If empty, defaults to ["localhost:3320"]
@@ -60,12 +61,13 @@ type Config struct {
 }
 
 type Gateway struct {
-	logger     *logging.ColoredLogger
-	cfg        *Config
-	client     client.NetworkClient
-	startedAt  time.Time
-	signingKey *rsa.PrivateKey
-	keyID      string
+	logger       *logging.ColoredLogger
+	cfg          *Config
+	client       client.NetworkClient
+	nodePeerID   string // The node's actual peer ID from its identity file (overrides client's peer ID)
+	startedAt    time.Time
+	signingKey   *rsa.PrivateKey
+	keyID        string
 
 	// rqlite SQL connection and HTTP ORM gateway
 	sqlDB     *sql.DB
@@ -115,7 +117,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	logger.ComponentInfo(logging.ComponentClient, "Network client connected",
 		zap.String("namespace", cliCfg.AppName),
-		zap.Int("bootstrap_peer_count", len(cliCfg.BootstrapPeers)),
+		zap.Int("peer_count", len(cliCfg.BootstrapPeers)),
 	)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
@@ -123,6 +125,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger:           logger,
 		cfg:              cfg,
 		client:           c,
+		nodePeerID:       cfg.NodePeerID,
 		startedAt:        time.Now(),
 		localSubscribers: make(map[string][]*localSubscriber),
 	}
@@ -465,10 +468,10 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 		}
 	}
 
-	// Also check bootstrap peers from config
+	// Also check peers from config
 	if cfg := networkClient.Config(); cfg != nil {
-		for _, bootstrapAddr := range cfg.BootstrapPeers {
-			ma, err := multiaddr.NewMultiaddr(bootstrapAddr)
+		for _, peerAddr := range cfg.BootstrapPeers {
+			ma, err := multiaddr.NewMultiaddr(peerAddr)
 			if err != nil {
 				continue
 			}
@@ -514,7 +517,7 @@ type ipfsDiscoveryResult struct {
 }
 
 // discoverIPFSFromNodeConfigs discovers IPFS configuration from node.yaml files
-// Checks bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
+// Checks node-1.yaml through node-5.yaml for IPFS configuration
 func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -522,10 +525,10 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 		return ipfsDiscoveryResult{}
 	}
 
-	configDir := filepath.Join(homeDir, ".debros")
+	configDir := filepath.Join(homeDir, ".orama")
 
-	// Try bootstrap.yaml first, then bootstrap2.yaml, node.yaml, node2.yaml, node3.yaml, node4.yaml
-	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"}
+	// Try all node config files for IPFS settings
+	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"}
 
 	for _, filename := range configFiles {
 		configPath := filepath.Join(configDir, filename)

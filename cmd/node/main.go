@@ -33,7 +33,7 @@ func setup_logger(component logging.Component) (logger *logging.ColoredLogger) {
 
 // parse_flags parses command-line flags and returns them.
 func parse_flags() (configName *string, help *bool) {
-	configName = flag.String("config", "node.yaml", "Config filename in ~/.debros (default: node.yaml)")
+	configName = flag.String("config", "node.yaml", "Config filename in ~/.orama (default: node.yaml)")
 	help = flag.Bool("help", false, "Show help")
 	flag.Parse()
 
@@ -63,7 +63,7 @@ func check_if_should_open_help(help *bool) {
 	}
 }
 
-// select_data_dir validates that we can load the config from ~/.debros
+// select_data_dir validates that we can load the config from ~/.orama
 func select_data_dir_check(configName *string) {
 	logger := setup_logger(logging.ComponentNode)
 
@@ -102,8 +102,8 @@ func select_data_dir_check(configName *string) {
 		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
 		fmt.Fprintf(os.Stderr, "Config file not found at %s\n", configPath)
 		fmt.Fprintf(os.Stderr, "\nGenerate it with one of:\n")
-		fmt.Fprintf(os.Stderr, "  dbn config init --type bootstrap\n")
-		fmt.Fprintf(os.Stderr, "  dbn config init --type node --bootstrap-peers '<peer_multiaddr>'\n")
+		fmt.Fprintf(os.Stderr, "  orama config init --type node\n")
+		fmt.Fprintf(os.Stderr, "  orama config init --type node --peers '<peer_multiaddr>'\n")
 		os.Exit(1)
 	}
 }
@@ -135,7 +135,7 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 		}
 	}
 
-	// Save the peer ID to a file for CLI access (especially useful for bootstrap)
+	// Save the peer ID to a file for CLI access
 	peerID := n.GetPeerID()
 	peerInfoFile := filepath.Join(dataDir, "peer.info")
 
@@ -163,7 +163,7 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 		logger.Error("Failed to save peer info: %v", zap.Error(err))
 	} else {
 		logger.Info("Peer info saved to: %s", zap.String("path", peerInfoFile))
-		logger.Info("Bootstrap multiaddr: %s", zap.String("path", peerMultiaddr))
+		logger.Info("Peer multiaddr: %s", zap.String("path", peerMultiaddr))
 	}
 
 	logger.Info("Node started successfully")
@@ -272,7 +272,7 @@ func main() {
 		// Absolute path passed directly (e.g., from systemd service)
 		configPath = *configName
 	} else {
-		// Relative path - use DefaultPath which checks both ~/.debros/configs/ and ~/.debros/
+		// Relative path - use DefaultPath which checks both ~/.orama/configs/ and ~/.orama/
 		configPath, err = config.DefaultPath(*configName)
 		if err != nil {
 			logger.Error("Failed to determine config path", zap.Error(err))
@@ -316,7 +316,7 @@ func main() {
 		zap.Strings("listen_addresses", cfg.Node.ListenAddresses),
 		zap.Int("rqlite_http_port", cfg.Database.RQLitePort),
 		zap.Int("rqlite_raft_port", cfg.Database.RQLiteRaftPort),
-		zap.Strings("bootstrap_peers", cfg.Discovery.BootstrapPeers),
+		zap.Strings("peers", cfg.Discovery.BootstrapPeers),
 		zap.String("rqlite_join_address", cfg.Database.RQLiteJoinAddress),
 		zap.String("data_directory", cfg.Node.DataDir))
 

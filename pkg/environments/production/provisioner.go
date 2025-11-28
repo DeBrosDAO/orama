@@ -10,42 +10,36 @@ import (
 
 // FilesystemProvisioner manages directory creation and permissions
 type FilesystemProvisioner struct {
-	debrosHome string
-	debrosDir  string
+	oramaHome string
+	oramaDir  string
 	logWriter  interface{} // Can be io.Writer for logging
 }
 
 // NewFilesystemProvisioner creates a new provisioner
-func NewFilesystemProvisioner(debrosHome string) *FilesystemProvisioner {
+func NewFilesystemProvisioner(oramaHome string) *FilesystemProvisioner {
 	return &FilesystemProvisioner{
-		debrosHome: debrosHome,
-		debrosDir:  filepath.Join(debrosHome, ".debros"),
+		oramaHome: oramaHome,
+		oramaDir:  filepath.Join(oramaHome, ".orama"),
 	}
 }
 
-// EnsureDirectoryStructure creates all required directories
-// nodeType can be "bootstrap", "node", or "" (empty string means create base directories only)
-func (fp *FilesystemProvisioner) EnsureDirectoryStructure(nodeType string) error {
-	// Base directories that are always needed
+// EnsureDirectoryStructure creates all required directories (unified structure)
+func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
+	// All directories needed for unified node structure
 	dirs := []string{
-		fp.debrosDir,
-		filepath.Join(fp.debrosDir, "configs"),
-		filepath.Join(fp.debrosDir, "secrets"),
-		filepath.Join(fp.debrosDir, "data"),
-		filepath.Join(fp.debrosDir, "logs"),
-		filepath.Join(fp.debrosDir, "tls-cache"),
-		filepath.Join(fp.debrosDir, "backups"),
-		filepath.Join(fp.debrosHome, "bin"),
-		filepath.Join(fp.debrosHome, "src"),
-	}
-
-	// Only create directories for the requested node type
-	if nodeType == "bootstrap" || nodeType == "node" {
-		dirs = append(dirs,
-			filepath.Join(fp.debrosDir, "data", nodeType, "ipfs", "repo"),
-			filepath.Join(fp.debrosDir, "data", nodeType, "ipfs-cluster"),
-			filepath.Join(fp.debrosDir, "data", nodeType, "rqlite"),
-		)
+		fp.oramaDir,
+		filepath.Join(fp.oramaDir, "configs"),
+		filepath.Join(fp.oramaDir, "secrets"),
+		filepath.Join(fp.oramaDir, "data"),
+		filepath.Join(fp.oramaDir, "data", "ipfs", "repo"),
+		filepath.Join(fp.oramaDir, "data", "ipfs-cluster"),
+		filepath.Join(fp.oramaDir, "data", "rqlite"),
+		filepath.Join(fp.oramaDir, "logs"),
+		filepath.Join(fp.oramaDir, "tls-cache"),
+		filepath.Join(fp.oramaDir, "backups"),
+		filepath.Join(fp.oramaHome, "bin"),
+		filepath.Join(fp.oramaHome, "src"),
+		filepath.Join(fp.oramaHome, ".npm"),
 	}
 
 	for _, dir := range dirs {
@@ -54,27 +48,24 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure(nodeType string) error
 		}
 	}
 
+	// Remove any stray cluster-secret file from root .orama directory
+	// The correct location is .orama/secrets/cluster-secret
+	strayClusterSecret := filepath.Join(fp.oramaDir, "cluster-secret")
+	if _, err := os.Stat(strayClusterSecret); err == nil {
+		if err := os.Remove(strayClusterSecret); err != nil {
+			return fmt.Errorf("failed to remove stray cluster-secret file: %w", err)
+		}
+	}
+
 	// Create log files with correct permissions so systemd can write to them
-	// Only create logs for the specific nodeType being installed
-	logsDir := filepath.Join(fp.debrosDir, "logs")
+	logsDir := filepath.Join(fp.oramaDir, "logs")
 	logFiles := []string{
 		"olric.log",
 		"gateway.log",
-	}
-
-	// Add node-type-specific log files only if nodeType is specified
-	if nodeType == "bootstrap" {
-		logFiles = append(logFiles,
-			"ipfs-bootstrap.log",
-			"ipfs-cluster-bootstrap.log",
-			"node-bootstrap.log",
-		)
-	} else if nodeType == "node" {
-		logFiles = append(logFiles,
-			"ipfs-node.log",
-			"ipfs-cluster-node.log",
-			"node-node.log",
-		)
+		"ipfs.log",
+		"ipfs-cluster.log",
+		"node.log",
+		"anyone-client.log",
 	}
 
 	for _, logFile := range logFiles {
@@ -90,25 +81,32 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure(nodeType string) error
 	return nil
 }
 
-// FixOwnership changes ownership of .debros directory to debros user
+// FixOwnership changes ownership of .orama directory to debros user
 func (fp *FilesystemProvisioner) FixOwnership() error {
-	// Fix entire .debros directory recursively (includes all data, configs, logs, etc.)
-	cmd := exec.Command("chown", "-R", "debros:debros", fp.debrosDir)
+	// Fix entire .orama directory recursively (includes all data, configs, logs, etc.)
+	cmd := exec.Command("chown", "-R", "debros:debros", fp.oramaDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.debrosDir, err, string(output))
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.oramaDir, err, string(output))
 	}
 
 	// Also fix home directory ownership
-	cmd = exec.Command("chown", "debros:debros", fp.debrosHome)
+	cmd = exec.Command("chown", "debros:debros", fp.oramaHome)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.debrosHome, err, string(output))
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.oramaHome, err, string(output))
 	}
 
 	// Fix bin directory
-	binDir := filepath.Join(fp.debrosHome, "bin")
+	binDir := filepath.Join(fp.oramaHome, "bin")
 	cmd = exec.Command("chown", "-R", "debros:debros", binDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", binDir, err, string(output))
+	}
+
+	// Fix npm cache directory
+	npmDir := filepath.Join(fp.oramaHome, ".npm")
+	cmd = exec.Command("chown", "-R", "debros:debros", npmDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", npmDir, err, string(output))
 	}
 
 	return nil
@@ -186,20 +184,20 @@ func (up *UserProvisioner) SetupSudoersAccess(invokerUser string) error {
 
 // StateDetector checks for existing production state
 type StateDetector struct {
-	debrosDir string
+	oramaDir string
 }
 
 // NewStateDetector creates a state detector
-func NewStateDetector(debrosDir string) *StateDetector {
+func NewStateDetector(oramaDir string) *StateDetector {
 	return &StateDetector{
-		debrosDir: debrosDir,
+		oramaDir: oramaDir,
 	}
 }
 
 // IsConfigured checks if basic configs exist
 func (sd *StateDetector) IsConfigured() bool {
-	nodeConfig := filepath.Join(sd.debrosDir, "configs", "node.yaml")
-	gatewayConfig := filepath.Join(sd.debrosDir, "configs", "gateway.yaml")
+	nodeConfig := filepath.Join(sd.oramaDir, "configs", "node.yaml")
+	gatewayConfig := filepath.Join(sd.oramaDir, "configs", "gateway.yaml")
 	_, err1 := os.Stat(nodeConfig)
 	_, err2 := os.Stat(gatewayConfig)
 	return err1 == nil || err2 == nil
@@ -207,24 +205,36 @@ func (sd *StateDetector) IsConfigured() bool {
 
 // HasSecrets checks if cluster secret and swarm key exist
 func (sd *StateDetector) HasSecrets() bool {
-	clusterSecret := filepath.Join(sd.debrosDir, "secrets", "cluster-secret")
-	swarmKey := filepath.Join(sd.debrosDir, "secrets", "swarm.key")
+	clusterSecret := filepath.Join(sd.oramaDir, "secrets", "cluster-secret")
+	swarmKey := filepath.Join(sd.oramaDir, "secrets", "swarm.key")
 	_, err1 := os.Stat(clusterSecret)
 	_, err2 := os.Stat(swarmKey)
 	return err1 == nil && err2 == nil
 }
 
-// HasIPFSData checks if IPFS repo is initialized
+// HasIPFSData checks if IPFS repo is initialized (unified path)
 func (sd *StateDetector) HasIPFSData() bool {
-	ipfsRepoPath := filepath.Join(sd.debrosDir, "data", "bootstrap", "ipfs", "repo", "config")
-	_, err := os.Stat(ipfsRepoPath)
+	// Check unified path first
+	ipfsRepoPath := filepath.Join(sd.oramaDir, "data", "ipfs", "repo", "config")
+	if _, err := os.Stat(ipfsRepoPath); err == nil {
+		return true
+	}
+	// Fallback: check legacy bootstrap path for migration
+	legacyPath := filepath.Join(sd.oramaDir, "data", "bootstrap", "ipfs", "repo", "config")
+	_, err := os.Stat(legacyPath)
 	return err == nil
 }
 
-// HasRQLiteData checks if RQLite data exists
+// HasRQLiteData checks if RQLite data exists (unified path)
 func (sd *StateDetector) HasRQLiteData() bool {
-	rqliteDataPath := filepath.Join(sd.debrosDir, "data", "bootstrap", "rqlite")
-	info, err := os.Stat(rqliteDataPath)
+	// Check unified path first
+	rqliteDataPath := filepath.Join(sd.oramaDir, "data", "rqlite")
+	if info, err := os.Stat(rqliteDataPath); err == nil && info.IsDir() {
+		return true
+	}
+	// Fallback: check legacy bootstrap path for migration
+	legacyPath := filepath.Join(sd.oramaDir, "data", "bootstrap", "rqlite")
+	info, err := os.Stat(legacyPath)
 	return err == nil && info.IsDir()
 }
 
