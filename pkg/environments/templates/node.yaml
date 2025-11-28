@@ -15,7 +15,7 @@ database:
   rqlite_port: {{.RQLiteHTTPPort}}
   rqlite_raft_port: {{.RQLiteRaftInternalPort}}
   rqlite_join_address: "{{.RQLiteJoinAddress}}"
-  {{if .NodeCert}}# Node-to-node TLS encryption for Raft communication (required for SNI gateway routing)
+  {{if .NodeCert}}# Node-to-node TLS encryption for Raft communication (direct RQLite TLS on port 7002)
   node_cert: "{{.NodeCert}}"
   node_key: "{{.NodeKey}}"
   {{if .NodeCACert}}node_ca_cert: "{{.NodeCACert}}"
@@ -68,7 +68,7 @@ http_gateway:
     cert_file: "{{.TLSCacheDir}}/{{.Domain}}.crt"
     key_file: "{{.TLSCacheDir}}/{{.Domain}}.key"
     routes:
-      raft.{{.Domain}}: "localhost:{{.RQLiteRaftInternalPort}}"
+      # Note: Raft traffic bypasses SNI gateway - RQLite uses native TLS on port 7002
       ipfs.{{.Domain}}: "localhost:4101"
       ipfs-cluster.{{.Domain}}: "localhost:9096"
       olric.{{.Domain}}: "localhost:3322"

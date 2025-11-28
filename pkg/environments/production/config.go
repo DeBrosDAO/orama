@@ -106,13 +106,15 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 
 	// Determine advertise addresses - use vpsIP if provided
-	// When HTTPS/SNI is enabled, use domain-based raft address for SNI routing
+	// When HTTPS is enabled, RQLite uses native TLS on port 7002 (not SNI gateway)
+	// This avoids conflicts between SNI gateway TLS termination and RQLite's native TLS
 	var httpAdvAddr, raftAdvAddr string
 	if vpsIP != "" {
 		httpAdvAddr = net.JoinHostPort(vpsIP, "5001")
-		if enableHTTPS && domain != "" {
-			// Use SNI domain for Raft advertisement so other nodes connect via SNI gateway
-			raftAdvAddr = fmt.Sprintf("raft.%s:7001", domain)
+		if enableHTTPS {
+			// Use direct IP:7002 for Raft - RQLite handles TLS natively via -node-cert
+			// This bypasses the SNI gateway which would cause TLS termination conflicts
+			raftAdvAddr = net.JoinHostPort(vpsIP, "7002")
 		} else {
 			raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
 		}
@@ -123,15 +125,26 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 
 	// Determine RQLite join address
+	// When HTTPS is enabled, use port 7002 (direct RQLite TLS) instead of 7001 (SNI gateway)
+	joinPort := "7001"
+	if enableHTTPS {
+		joinPort = "7002"
+	}
+
 	var rqliteJoinAddr string
 	if joinAddress != "" {
 		// Use explicitly provided join address
-		rqliteJoinAddr = joinAddress
+		// If it contains :7001 and HTTPS is enabled, update to :7002
+		if enableHTTPS && strings.Contains(joinAddress, ":7001") {
+			rqliteJoinAddr = strings.Replace(joinAddress, ":7001", ":7002", 1)
+		} else {
+			rqliteJoinAddr = joinAddress
+		}
 	} else if len(peerAddresses) > 0 {
 		// Infer join address from peers
 		peerIP := inferPeerIP(peerAddresses, "")
 		if peerIP != "" {
-			rqliteJoinAddr = net.JoinHostPort(peerIP, "7001")
+			rqliteJoinAddr = net.JoinHostPort(peerIP, joinPort)
 			// Validate that join address doesn't match this node's own raft address (would cause self-join)
 			if rqliteJoinAddr == raftAdvAddr {
 				rqliteJoinAddr = "" // Clear it - this is the first node
@@ -176,14 +189,13 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		HTTPSPort:              httpsPort,
 	}
 
-	// When HTTPS/SNI is enabled, configure RQLite node-to-node TLS encryption
-	// This allows Raft traffic to be routed through the SNI gateway
-	// Uses the same certificates as the SNI gateway (Let's Encrypt or self-signed)
+	// When HTTPS is enabled, configure RQLite node-to-node TLS encryption
+	// RQLite handles TLS natively on port 7002, bypassing the SNI gateway
+	// This avoids TLS termination conflicts between SNI gateway and RQLite
 	if enableHTTPS && domain != "" {
 		data.NodeCert = filepath.Join(tlsCacheDir, domain+".crt")
 		data.NodeKey = filepath.Join(tlsCacheDir, domain+".key")
 		// Skip verification since nodes may have different domain certificates
-		// and we're routing through the SNI gateway which terminates TLS
 		data.NodeNoVerify = true
 	}
 

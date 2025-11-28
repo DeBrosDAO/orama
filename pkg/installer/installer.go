@@ -25,7 +25,8 @@ type InstallerConfig struct {
 	VpsIP          string
 	Domain         string
 	PeerDomain     string   // Domain of existing node to join
-	JoinAddress    string   // Auto-populated: raft.{PeerDomain}:7001
+	PeerIP         string   // Resolved IP of peer domain (for Raft join)
+	JoinAddress    string   // Auto-populated: {PeerIP}:7002 (direct RQLite TLS)
 	Peers          []string // Auto-populated: /dns4/{PeerDomain}/tcp/4001/p2p/{PeerID}
 	ClusterSecret  string
 	SwarmKeyHex    string   // 64-hex IPFS swarm key (for joining private network)
@@ -280,8 +281,28 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.config.PeerDomain = peerDomain
 		m.discoveredPeer = discovery.PeerID
 
-		// Auto-populate join address and bootstrap peers
-		m.config.JoinAddress = fmt.Sprintf("raft.%s:7001", peerDomain)
+		// Resolve peer domain to IP for direct RQLite TLS connection
+		// RQLite uses native TLS on port 7002 (not SNI gateway on 7001)
+		peerIPs, err := net.LookupIP(peerDomain)
+		if err != nil || len(peerIPs) == 0 {
+			m.err = fmt.Errorf("failed to resolve peer domain %s to IP: %w", peerDomain, err)
+			return m, nil
+		}
+		// Prefer IPv4
+		var peerIP string
+		for _, ip := range peerIPs {
+			if ip.To4() != nil {
+				peerIP = ip.String()
+				break
+			}
+		}
+		if peerIP == "" {
+			peerIP = peerIPs[0].String()
+		}
+		m.config.PeerIP = peerIP
+
+		// Auto-populate join address (direct RQLite TLS on port 7002) and bootstrap peers
+		m.config.JoinAddress = fmt.Sprintf("%s:7002", peerIP)
 		m.config.Peers = []string{
 			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, discovery.PeerID),
 		}
@@ -836,12 +857,13 @@ func detectPublicIP() string {
 }
 
 // validateSNIDNSRecords checks if the required SNI DNS records exist
-// It tries to resolve the key SNI hostnames for RQLite, IPFS, IPFS Cluster, and Olric
+// It tries to resolve the key SNI hostnames for IPFS, IPFS Cluster, and Olric
+// Note: Raft no longer uses SNI - it uses direct RQLite TLS on port 7002
 // All should resolve to the same IP (the node's public IP or domain)
 func validateSNIDNSRecords(domain string) error {
 	// List of SNI services that need DNS records
+	// Note: raft.domain is NOT included - RQLite uses direct TLS on port 7002
 	sniServices := []string{
-		fmt.Sprintf("raft.%s", domain),
 		fmt.Sprintf("ipfs.%s", domain),
 		fmt.Sprintf("ipfs-cluster.%s", domain),
 		fmt.Sprintf("olric.%s", domain),
