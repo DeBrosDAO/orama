@@ -2,9 +2,13 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	mathrand "math/rand"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,10 +23,13 @@ import (
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/DeBrosOfficial/network/pkg/encryption"
+	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
@@ -40,7 +47,7 @@ type Node struct {
 	clusterDiscovery *database.ClusterDiscoveryService
 
 	// Peer discovery
-	bootstrapCancel context.CancelFunc
+	peerDiscoveryCancel context.CancelFunc
 
 	// PubSub
 	pubsub *pubsub.ClientAdapter
@@ -50,6 +57,20 @@ type Node struct {
 
 	// IPFS Cluster config manager
 	clusterConfigManager *ipfs.ClusterConfigManager
+
+	// Full gateway (for API, auth, pubsub, and internal service routing)
+	apiGateway *gateway.Gateway
+	apiGatewayServer *http.Server
+
+	// SNI gateway (for TCP routing of raft, ipfs, olric, etc.)
+	sniGateway *gateway.TCPSNIGateway
+
+	// Shared certificate manager for HTTPS and SNI
+	certManager *autocert.Manager
+
+	// Certificate ready signal - closed when TLS certificates are extracted and ready for use
+	// Used to coordinate RQLite node-to-node TLS startup with certificate provisioning
+	certReady chan struct{}
 }
 
 // NewNode creates a new network node
@@ -70,24 +91,26 @@ func NewNode(cfg *config.Config) (*Node, error) {
 func (n *Node) startRQLite(ctx context.Context) error {
 	n.logger.Info("Starting RQLite database")
 
+	// Determine node identifier for log filename - use node ID for unique filenames
+	nodeID := n.config.Node.ID
+	if nodeID == "" {
+		// Default to "node" if ID is not set
+		nodeID = "node"
+	}
+
 	// Create RQLite manager
 	n.rqliteManager = database.NewRQLiteManager(&n.config.Database, &n.config.Discovery, n.config.Node.DataDir, n.logger.Logger)
+	n.rqliteManager.SetNodeType(nodeID)
 
 	// Initialize cluster discovery service if LibP2P host is available
 	if n.host != nil && n.discoveryManager != nil {
-		// Determine node type
-		nodeType := "node"
-		if n.config.Node.Type == "bootstrap" {
-			nodeType = "bootstrap"
-		}
-
-		// Create cluster discovery service
+		// Create cluster discovery service (all nodes are unified)
 		n.clusterDiscovery = database.NewClusterDiscoveryService(
 			n.host,
 			n.discoveryManager,
 			n.rqliteManager,
 			n.config.Node.ID,
-			nodeType,
+			"node", // Unified node type
 			n.config.Discovery.RaftAdvAddress,
 			n.config.Discovery.HttpAdvAddress,
 			n.config.Node.DataDir,
@@ -108,6 +131,25 @@ func (n *Node) startRQLite(ctx context.Context) error {
 		n.clusterDiscovery.UpdateOwnMetadata()
 
 		n.logger.Info("Cluster discovery service started (waiting for RQLite)")
+	}
+
+	// If node-to-node TLS is configured, wait for certificates to be provisioned
+	// This ensures RQLite can start with TLS when joining through the SNI gateway
+	if n.config.Database.NodeCert != "" && n.config.Database.NodeKey != "" && n.certReady != nil {
+		n.logger.Info("RQLite node TLS configured, waiting for certificates to be provisioned...",
+			zap.String("node_cert", n.config.Database.NodeCert),
+			zap.String("node_key", n.config.Database.NodeKey))
+
+		// Wait for certificate ready signal with timeout
+		certTimeout := 5 * time.Minute
+		select {
+		case <-n.certReady:
+			n.logger.Info("Certificates ready, proceeding with RQLite startup")
+		case <-time.After(certTimeout):
+			return fmt.Errorf("timeout waiting for TLS certificates after %v - ensure HTTPS is configured and ports 80/443 are accessible for ACME challenges", certTimeout)
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for certificates: %w", ctx.Err())
+		}
 	}
 
 	// Start RQLite FIRST before updating metadata
@@ -132,7 +174,7 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	return nil
 }
 
-// extractIPFromMultiaddr extracts the IP address from a bootstrap peer multiaddr
+// extractIPFromMultiaddr extracts the IP address from a peer multiaddr
 // Supports IP4, IP6, DNS4, DNS6, and DNSADDR protocols
 func extractIPFromMultiaddr(multiaddrStr string) string {
 	ma, err := multiaddr.NewMultiaddr(multiaddrStr)
@@ -177,25 +219,25 @@ func extractIPFromMultiaddr(multiaddrStr string) string {
 	return ""
 }
 
-// bootstrapPeerSource returns a PeerSource that yields peers from BootstrapPeers.
-func bootstrapPeerSource(bootstrapAddrs []string, logger *zap.Logger) func(context.Context, int) <-chan peer.AddrInfo {
+// peerSource returns a PeerSource that yields peers from configured peers.
+func peerSource(peerAddrs []string, logger *zap.Logger) func(context.Context, int) <-chan peer.AddrInfo {
 	return func(ctx context.Context, num int) <-chan peer.AddrInfo {
 		out := make(chan peer.AddrInfo, num)
 		go func() {
 			defer close(out)
 			count := 0
-			for _, s := range bootstrapAddrs {
+			for _, s := range peerAddrs {
 				if count >= num {
 					return
 				}
 				ma, err := multiaddr.NewMultiaddr(s)
 				if err != nil {
-					logger.Debug("invalid bootstrap multiaddr", zap.String("addr", s), zap.Error(err))
+					logger.Debug("invalid peer multiaddr", zap.String("addr", s), zap.Error(err))
 					continue
 				}
 				ai, err := peer.AddrInfoFromP2pAddr(ma)
 				if err != nil {
-					logger.Debug("failed to parse bootstrap peer", zap.String("addr", s), zap.Error(err))
+					logger.Debug("failed to parse peer address", zap.String("addr", s), zap.Error(err))
 					continue
 				}
 				select {
@@ -210,8 +252,8 @@ func bootstrapPeerSource(bootstrapAddrs []string, logger *zap.Logger) func(conte
 	}
 }
 
-// hasBootstrapConnections checks if we're connected to any bootstrap peers
-func (n *Node) hasBootstrapConnections() bool {
+// hasPeerConnections checks if we're connected to any peers
+func (n *Node) hasPeerConnections() bool {
 	if n.host == nil || len(n.config.Discovery.BootstrapPeers) == 0 {
 		return false
 	}
@@ -221,10 +263,10 @@ func (n *Node) hasBootstrapConnections() bool {
 		return false
 	}
 
-	// Parse bootstrap peer IDs
-	bootstrapPeerIDs := make(map[peer.ID]bool)
-	for _, bootstrapAddr := range n.config.Discovery.BootstrapPeers {
-		ma, err := multiaddr.NewMultiaddr(bootstrapAddr)
+	// Parse peer IDs
+	peerIDs := make(map[peer.ID]bool)
+	for _, peerAddr := range n.config.Discovery.BootstrapPeers {
+		ma, err := multiaddr.NewMultiaddr(peerAddr)
 		if err != nil {
 			continue
 		}
@@ -232,12 +274,12 @@ func (n *Node) hasBootstrapConnections() bool {
 		if err != nil {
 			continue
 		}
-		bootstrapPeerIDs[peerInfo.ID] = true
+		peerIDs[peerInfo.ID] = true
 	}
 
-	// Check if any connected peer is a bootstrap peer
+	// Check if any connected peer is in our peer list
 	for _, peerID := range connectedPeers {
-		if bootstrapPeerIDs[peerID] {
+		if peerIDs[peerID] {
 			return true
 		}
 	}
@@ -272,8 +314,8 @@ func addJitter(interval time.Duration) time.Duration {
 	return result
 }
 
-// connectToBootstrapPeer connects to a single bootstrap peer
-func (n *Node) connectToBootstrapPeer(ctx context.Context, addr string) error {
+// connectToPeerAddr connects to a single peer address
+func (n *Node) connectToPeerAddr(ctx context.Context, addr string) error {
 	ma, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
 		return fmt.Errorf("invalid multiaddr: %w", err)
@@ -285,16 +327,16 @@ func (n *Node) connectToBootstrapPeer(ctx context.Context, addr string) error {
 		return fmt.Errorf("failed to extract peer info: %w", err)
 	}
 
-	// Avoid dialing ourselves: if the bootstrap address resolves to our own peer ID, skip.
+	// Avoid dialing ourselves: if the address resolves to our own peer ID, skip.
 	if n.host != nil && peerInfo.ID == n.host.ID() {
-		n.logger.ComponentDebug(logging.ComponentNode, "Skipping bootstrap address because it resolves to self",
+		n.logger.ComponentDebug(logging.ComponentNode, "Skipping peer address because it resolves to self",
 			zap.String("addr", addr),
 			zap.String("peer_id", peerInfo.ID.String()))
 		return nil
 	}
 
 	// Log resolved peer info prior to connect
-	n.logger.ComponentDebug(logging.ComponentNode, "Resolved bootstrap peer",
+	n.logger.ComponentDebug(logging.ComponentNode, "Resolved peer",
 		zap.String("peer_id", peerInfo.ID.String()),
 		zap.String("addr", addr),
 		zap.Int("addr_count", len(peerInfo.Addrs)),
@@ -305,28 +347,28 @@ func (n *Node) connectToBootstrapPeer(ctx context.Context, addr string) error {
 		return fmt.Errorf("failed to connect to peer: %w", err)
 	}
 
-	n.logger.Info("Connected to bootstrap peer",
+	n.logger.Info("Connected to peer",
 		zap.String("peer", peerInfo.ID.String()),
 		zap.String("addr", addr))
 
 	return nil
 }
 
-// connectToBootstrapPeers connects to configured LibP2P bootstrap peers
-func (n *Node) connectToBootstrapPeers(ctx context.Context) error {
+// connectToPeers connects to configured LibP2P peers
+func (n *Node) connectToPeers(ctx context.Context) error {
 	if len(n.config.Discovery.BootstrapPeers) == 0 {
-		n.logger.ComponentDebug(logging.ComponentNode, "No bootstrap peers configured")
+		n.logger.ComponentDebug(logging.ComponentNode, "No peers configured")
 		return nil
 	}
 
-	// Use passed context with a reasonable timeout for bootstrap connections
+	// Use passed context with a reasonable timeout for peer connections
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	for _, bootstrapAddr := range n.config.Discovery.BootstrapPeers {
-		if err := n.connectToBootstrapPeer(connectCtx, bootstrapAddr); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to bootstrap peer",
-				zap.String("addr", bootstrapAddr),
+	for _, peerAddr := range n.config.Discovery.BootstrapPeers {
+		if err := n.connectToPeerAddr(connectCtx, peerAddr); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to peer",
+				zap.String("addr", peerAddr),
 				zap.Error(err))
 			continue
 		}
@@ -385,7 +427,7 @@ func (n *Node) startLibP2P() error {
 			libp2p.EnableRelay(),
 			libp2p.NATPortMap(),
 			libp2p.EnableAutoRelayWithPeerSource(
-				bootstrapPeerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
+				peerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
 			),
 		)
 	}
@@ -411,59 +453,59 @@ func (n *Node) startLibP2P() error {
 	n.pubsub = pubsub.NewClientAdapter(ps, n.config.Discovery.NodeNamespace)
 	n.logger.Info("Initialized pubsub adapter on namespace", zap.String("namespace", n.config.Discovery.NodeNamespace))
 
-	// Log configured bootstrap peers
+	// Log configured peers
 	if len(n.config.Discovery.BootstrapPeers) > 0 {
-		n.logger.ComponentInfo(logging.ComponentNode, "Configured bootstrap peers",
+		n.logger.ComponentInfo(logging.ComponentNode, "Configured peers",
 			zap.Strings("peers", n.config.Discovery.BootstrapPeers))
 	} else {
-		n.logger.ComponentDebug(logging.ComponentNode, "No bootstrap peers configured")
+		n.logger.ComponentDebug(logging.ComponentNode, "No peers configured")
 	}
 
-	// Connect to LibP2P bootstrap peers if configured
-	if err := n.connectToBootstrapPeers(context.Background()); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to bootstrap peers", zap.Error(err))
-		// Don't fail - continue without bootstrap connections
+	// Connect to LibP2P peers if configured
+	if err := n.connectToPeers(context.Background()); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect to peers", zap.Error(err))
+		// Don't fail - continue without peer connections
 	}
 
-	// Start exponential backoff reconnection for bootstrap peers
+	// Start exponential backoff reconnection for peers
 	if len(n.config.Discovery.BootstrapPeers) > 0 {
-		bootstrapCtx, cancel := context.WithCancel(context.Background())
-		n.bootstrapCancel = cancel
+		peerCtx, cancel := context.WithCancel(context.Background())
+		n.peerDiscoveryCancel = cancel
 
 		go func() {
 			interval := 5 * time.Second
 			consecutiveFailures := 0
 
-			n.logger.ComponentInfo(logging.ComponentNode, "Starting bootstrap peer reconnection with exponential backoff",
+			n.logger.ComponentInfo(logging.ComponentNode, "Starting peer reconnection with exponential backoff",
 				zap.Duration("initial_interval", interval),
 				zap.Duration("max_interval", 10*time.Minute))
 
 			for {
 				select {
-				case <-bootstrapCtx.Done():
-					n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap reconnection loop stopped")
+				case <-peerCtx.Done():
+					n.logger.ComponentDebug(logging.ComponentNode, "Peer reconnection loop stopped")
 					return
 				default:
 				}
 
 				// Check if we need to attempt connection
-				if !n.hasBootstrapConnections() {
-					n.logger.ComponentDebug(logging.ComponentNode, "Attempting bootstrap peer connection",
+				if !n.hasPeerConnections() {
+					n.logger.ComponentDebug(logging.ComponentNode, "Attempting peer connection",
 						zap.Duration("current_interval", interval),
 						zap.Int("consecutive_failures", consecutiveFailures))
 
-					if err := n.connectToBootstrapPeers(context.Background()); err != nil {
+					if err := n.connectToPeers(context.Background()); err != nil {
 						consecutiveFailures++
 						// Calculate next backoff interval
 						jitteredInterval := addJitter(interval)
-						n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap connection failed, backing off",
+						n.logger.ComponentDebug(logging.ComponentNode, "Peer connection failed, backing off",
 							zap.Error(err),
 							zap.Duration("next_attempt_in", jitteredInterval),
 							zap.Int("consecutive_failures", consecutiveFailures))
 
 						// Sleep with jitter
 						select {
-						case <-bootstrapCtx.Done():
+						case <-peerCtx.Done():
 							return
 						case <-time.After(jitteredInterval):
 						}
@@ -473,14 +515,14 @@ func (n *Node) startLibP2P() error {
 
 						// Log interval increases occasionally to show progress
 						if consecutiveFailures%5 == 0 {
-							n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap connection still failing",
+							n.logger.ComponentInfo(logging.ComponentNode, "Peer connection still failing",
 								zap.Int("consecutive_failures", consecutiveFailures),
 								zap.Duration("current_interval", interval))
 						}
 					} else {
 						// Success! Reset interval and counters
 						if consecutiveFailures > 0 {
-							n.logger.ComponentInfo(logging.ComponentNode, "Successfully connected to bootstrap peers",
+							n.logger.ComponentInfo(logging.ComponentNode, "Successfully connected to peers",
 								zap.Int("failures_overcome", consecutiveFailures))
 						}
 						interval = 5 * time.Second
@@ -488,15 +530,15 @@ func (n *Node) startLibP2P() error {
 
 						// Wait 30 seconds before checking connection again
 						select {
-						case <-bootstrapCtx.Done():
+						case <-peerCtx.Done():
 							return
 						case <-time.After(30 * time.Second):
 						}
 					}
 				} else {
-					// We have bootstrap connections, just wait and check periodically
+					// We have peer connections, just wait and check periodically
 					select {
-					case <-bootstrapCtx.Done():
+					case <-peerCtx.Done():
 						return
 					case <-time.After(30 * time.Second):
 					}
@@ -505,15 +547,15 @@ func (n *Node) startLibP2P() error {
 		}()
 	}
 
-	// Add bootstrap peers to peerstore for peer exchange
+	// Add peers to peerstore for peer exchange
 	if len(n.config.Discovery.BootstrapPeers) > 0 {
-		n.logger.ComponentInfo(logging.ComponentNode, "Adding bootstrap peers to peerstore")
-		for _, bootstrapAddr := range n.config.Discovery.BootstrapPeers {
-			if ma, err := multiaddr.NewMultiaddr(bootstrapAddr); err == nil {
+		n.logger.ComponentInfo(logging.ComponentNode, "Adding peers to peerstore")
+		for _, peerAddr := range n.config.Discovery.BootstrapPeers {
+			if ma, err := multiaddr.NewMultiaddr(peerAddr); err == nil {
 				if peerInfo, err := peer.AddrInfoFromP2pAddr(ma); err == nil {
 					// Add to peerstore with longer TTL for peer exchange
 					n.host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, time.Hour*24)
-					n.logger.ComponentDebug(logging.ComponentNode, "Added bootstrap peer to peerstore",
+					n.logger.ComponentDebug(logging.ComponentNode, "Added peer to peerstore",
 						zap.String("peer", peerInfo.ID.String()))
 				}
 			}
@@ -626,14 +668,33 @@ func (n *Node) stopPeerDiscovery() {
 func (n *Node) Stop() error {
 	n.logger.ComponentInfo(logging.ComponentNode, "Stopping network node")
 
+	// Stop HTTP Gateway server
+	if n.apiGatewayServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = n.apiGatewayServer.Shutdown(ctx)
+	}
+
+	// Close Gateway client
+	if n.apiGateway != nil {
+		n.apiGateway.Close()
+	}
+
+	// Stop SNI Gateway
+	if n.sniGateway != nil {
+		if err := n.sniGateway.Stop(); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "SNI Gateway stop error", zap.Error(err))
+		}
+	}
+
 	// Stop cluster discovery
 	if n.clusterDiscovery != nil {
 		n.clusterDiscovery.Stop()
 	}
 
-	// Stop bootstrap reconnection loop
-	if n.bootstrapCancel != nil {
-		n.bootstrapCancel()
+	// Stop peer reconnection loop
+	if n.peerDiscoveryCancel != nil {
+		n.peerDiscoveryCancel()
 	}
 
 	// Stop peer discovery
@@ -656,6 +717,457 @@ func (n *Node) Stop() error {
 	return nil
 }
 
+// loadNodePeerIDFromIdentity safely loads the node's peer ID from its identity file
+// This is needed before the host is initialized, so we read directly from the file
+func loadNodePeerIDFromIdentity(dataDir string) string {
+	identityFile := filepath.Join(os.ExpandEnv(dataDir), "identity.key")
+
+	// Expand ~ in path
+	if strings.HasPrefix(identityFile, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		identityFile = filepath.Join(home, identityFile[1:])
+	}
+
+	// Load identity from file
+	if info, err := encryption.LoadIdentity(identityFile); err == nil {
+		return info.PeerID.String()
+	}
+
+	return "" // Return empty string if can't load (gateway will work without it)
+}
+
+// startHTTPGateway initializes and starts the full API gateway with auth, pubsub, and API endpoints
+func (n *Node) startHTTPGateway(ctx context.Context) error {
+	if !n.config.HTTPGateway.Enabled {
+		n.logger.ComponentInfo(logging.ComponentNode, "HTTP Gateway disabled in config")
+		return nil
+	}
+
+	// Create separate logger for gateway
+	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", "gateway.log")
+
+	// Ensure logs directory exists
+	logsDir := filepath.Dir(logFile)
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %w", err)
+	}
+
+	gatewayLogger, err := logging.NewFileLogger(logging.ComponentGeneral, logFile, false)
+	if err != nil {
+		return fmt.Errorf("failed to create gateway logger: %w", err)
+	}
+
+	// Create full API Gateway for auth, pubsub, rqlite, and API endpoints
+	// This replaces both the old reverse proxy gateway and the standalone gateway
+	gwCfg := &gateway.Config{
+		ListenAddr:      n.config.HTTPGateway.ListenAddr,
+		ClientNamespace: n.config.HTTPGateway.ClientNamespace,
+		BootstrapPeers:  n.config.Discovery.BootstrapPeers,
+		NodePeerID:      loadNodePeerIDFromIdentity(n.config.Node.DataDir), // Load the node's actual peer ID from its identity file
+		RQLiteDSN:       n.config.HTTPGateway.RQLiteDSN,
+		OlricServers:    n.config.HTTPGateway.OlricServers,
+		OlricTimeout:    n.config.HTTPGateway.OlricTimeout,
+		IPFSClusterAPIURL: n.config.HTTPGateway.IPFSClusterAPIURL,
+		IPFSAPIURL:       n.config.HTTPGateway.IPFSAPIURL,
+		IPFSTimeout:      n.config.HTTPGateway.IPFSTimeout,
+		// HTTPS/TLS configuration
+		EnableHTTPS: n.config.HTTPGateway.HTTPS.Enabled,
+		DomainName:  n.config.HTTPGateway.HTTPS.Domain,
+		TLSCacheDir: n.config.HTTPGateway.HTTPS.CacheDir,
+	}
+
+	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create full API gateway: %w", err)
+	}
+
+	n.apiGateway = apiGateway
+
+	// Check if HTTPS is enabled and set up certManager BEFORE starting goroutine
+	// This ensures n.certManager is set before SNI gateway initialization checks it
+	var certManager *autocert.Manager
+	var tlsCacheDir string
+	if gwCfg.EnableHTTPS && gwCfg.DomainName != "" {
+		tlsCacheDir = gwCfg.TLSCacheDir
+		if tlsCacheDir == "" {
+			tlsCacheDir = "/home/debros/.orama/tls-cache"
+		}
+
+		// Ensure TLS cache directory exists and is writable
+		if err := os.MkdirAll(tlsCacheDir, 0700); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to create TLS cache directory",
+				zap.String("dir", tlsCacheDir),
+				zap.Error(err),
+			)
+		} else {
+			n.logger.ComponentInfo(logging.ComponentNode, "TLS cache directory ready",
+				zap.String("dir", tlsCacheDir),
+			)
+		}
+
+		// Create TLS configuration with Let's Encrypt autocert
+		// Using STAGING environment to avoid rate limits during development/testing
+		// TODO: Switch to production when ready (remove Client field)
+		certManager = &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(gwCfg.DomainName),
+			Cache:      autocert.DirCache(tlsCacheDir),
+			Email:      fmt.Sprintf("admin@%s", gwCfg.DomainName),
+			Client: &acme.Client{
+				DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
+			},
+		}
+
+		// Store certificate manager for use by SNI gateway
+		n.certManager = certManager
+
+		// Initialize certificate ready channel - will be closed when certs are extracted
+		// This allows RQLite to wait for certificates before starting with node TLS
+		n.certReady = make(chan struct{})
+	}
+
+	// Channel to signal when HTTP server is ready for ACME challenges
+	httpReady := make(chan struct{})
+
+	// Start API Gateway in a goroutine
+	go func() {
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "Starting full API gateway",
+			zap.String("listen_addr", gwCfg.ListenAddr),
+		)
+
+		// Check if HTTPS is enabled
+		if gwCfg.EnableHTTPS && gwCfg.DomainName != "" && certManager != nil {
+			// Start HTTPS server with automatic certificate provisioning
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTPS enabled, starting secure gateway",
+				zap.String("domain", gwCfg.DomainName),
+			)
+
+			// Determine HTTPS and HTTP ports
+			httpsPort := 443
+			httpPort := 80
+
+			// Start HTTP server for ACME challenges and redirects
+			// certManager.HTTPHandler() must be the main handler, with a fallback for other requests
+			httpServer := &http.Server{
+				Addr: fmt.Sprintf(":%d", httpPort),
+				Handler: certManager.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					// Fallback for non-ACME requests: redirect to HTTPS
+					target := fmt.Sprintf("https://%s%s", r.Host, r.URL.RequestURI())
+					http.Redirect(w, r, target, http.StatusMovedPermanently)
+				})),
+			}
+
+			// Create HTTP listener first to ensure port 80 is bound before signaling ready
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "Binding HTTP listener for ACME challenges",
+				zap.Int("port", httpPort),
+			)
+			httpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", httpPort))
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to bind HTTP listener for ACME", zap.Error(err))
+				close(httpReady) // Signal even on failure so SNI goroutine doesn't hang
+				return
+			}
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP server ready for ACME challenges",
+				zap.Int("port", httpPort),
+				zap.String("tls_cache_dir", tlsCacheDir),
+			)
+
+			// Start HTTP server in background for ACME challenges
+			go func() {
+				gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP server serving ACME challenges",
+					zap.String("addr", httpServer.Addr),
+				)
+				if err := httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+					gatewayLogger.ComponentError(logging.ComponentGateway, "HTTP server error", zap.Error(err))
+				}
+			}()
+
+		// Pre-provision the certificate BEFORE starting HTTPS server
+		// This ensures we don't accept HTTPS connections without a valid certificate
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "Pre-provisioning TLS certificate...",
+			zap.String("domain", gwCfg.DomainName),
+		)
+
+		// Use a timeout context for certificate provisioning
+		// If Let's Encrypt is rate-limited or unreachable, don't block forever
+		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer certCancel()
+
+		certReq := &tls.ClientHelloInfo{
+			ServerName: gwCfg.DomainName,
+		}
+
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "Initiating certificate request to Let's Encrypt",
+			zap.String("domain", gwCfg.DomainName),
+			zap.String("acme_environment", "staging"),
+		)
+
+		// Try to get certificate with timeout
+		certProvisionChan := make(chan error, 1)
+		go func() {
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "GetCertificate goroutine started")
+			_, err := certManager.GetCertificate(certReq)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "GetCertificate returned error",
+					zap.Error(err),
+				)
+			} else {
+				gatewayLogger.ComponentInfo(logging.ComponentGateway, "GetCertificate succeeded")
+			}
+			certProvisionChan <- err
+		}()
+
+		var certErr error
+		select {
+		case err := <-certProvisionChan:
+			certErr = err
+			if certErr != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "Certificate provisioning failed",
+					zap.String("domain", gwCfg.DomainName),
+					zap.Error(certErr),
+				)
+			}
+		case <-certCtx.Done():
+			certErr = fmt.Errorf("certificate provisioning timeout (Let's Encrypt may be rate-limited or unreachable)")
+			gatewayLogger.ComponentError(logging.ComponentGateway, "Certificate provisioning timeout",
+				zap.String("domain", gwCfg.DomainName),
+				zap.Duration("timeout", 30*time.Second),
+				zap.Error(certErr),
+			)
+		}
+
+		if certErr != nil {
+			gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to provision TLS certificate - HTTPS disabled",
+				zap.String("domain", gwCfg.DomainName),
+				zap.Error(certErr),
+				zap.String("http_server_status", "running on port 80 for HTTP fallback"),
+			)
+			// Signal ready for SNI goroutine (even though we're failing)
+			close(httpReady)
+
+			// HTTP server on port 80 is already running, but it's configured to redirect to HTTPS
+			// Replace its handler to serve the gateway directly instead of redirecting
+			httpServer.Handler = apiGateway.Routes()
+			
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTP gateway available on port 80 only",
+				zap.String("port", "80"),
+			)
+			return
+		}
+
+		gatewayLogger.ComponentInfo(logging.ComponentGateway, "TLS certificate provisioned successfully",
+			zap.String("domain", gwCfg.DomainName),
+		)
+
+		// Signal that HTTP server is ready for ACME challenges
+		close(httpReady)
+
+			tlsConfig := &tls.Config{
+				MinVersion:     tls.VersionTLS12,
+				GetCertificate: certManager.GetCertificate,
+			}
+
+			// Start HTTPS server
+			httpsServer := &http.Server{
+				Addr:      fmt.Sprintf(":%d", httpsPort),
+				TLSConfig: tlsConfig,
+				Handler:   apiGateway.Routes(),
+			}
+
+			n.apiGatewayServer = httpsServer
+
+			listener, err := tls.Listen("tcp", fmt.Sprintf(":%d", httpsPort), tlsConfig)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to create TLS listener", zap.Error(err))
+				return
+			}
+
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "HTTPS gateway listener bound",
+				zap.String("domain", gwCfg.DomainName),
+				zap.Int("port", httpsPort),
+			)
+
+			// Serve HTTPS
+			if err := httpsServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "HTTPS Gateway error", zap.Error(err))
+			}
+		} else {
+			// No HTTPS - signal ready immediately (no ACME needed)
+			close(httpReady)
+
+			// Start plain HTTP server
+			server := &http.Server{
+				Addr:    gwCfg.ListenAddr,
+				Handler: apiGateway.Routes(),
+			}
+
+			n.apiGatewayServer = server
+
+			// Try to bind listener
+			ln, err := net.Listen("tcp", gwCfg.ListenAddr)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "failed to bind API gateway listener", zap.Error(err))
+				return
+			}
+
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "API gateway listener bound", zap.String("listen_addr", ln.Addr().String()))
+
+			// Serve HTTP
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "API Gateway error", zap.Error(err))
+			}
+		}
+	}()
+
+	// Initialize and start SNI gateway if HTTPS is enabled and SNI is configured
+	// This runs in a separate goroutine that waits for HTTP server to be ready
+	if n.config.HTTPGateway.SNI.Enabled && n.certManager != nil {
+		go func() {
+			// Wait for HTTP server to be ready for ACME challenges
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "Waiting for HTTP server before SNI initialization...")
+			<-httpReady
+			
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "Initializing SNI gateway",
+				zap.String("listen_addr", n.config.HTTPGateway.SNI.ListenAddr),
+			)
+
+			// Provision the certificate from Let's Encrypt cache
+			// This ensures the certificate file is downloaded and cached
+			domain := n.config.HTTPGateway.HTTPS.Domain
+			if domain != "" {
+				gatewayLogger.ComponentInfo(logging.ComponentGateway, "Provisioning certificate for SNI",
+					zap.String("domain", domain))
+				
+				certReq := &tls.ClientHelloInfo{
+					ServerName: domain,
+				}
+				if tlsCert, err := n.certManager.GetCertificate(certReq); err != nil {
+					gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to provision certificate for SNI", 
+						zap.String("domain", domain), zap.Error(err))
+					return // Can't start SNI without certificate
+				} else {
+					gatewayLogger.ComponentInfo(logging.ComponentGateway, "Certificate provisioned for SNI", 
+						zap.String("domain", domain))
+
+					// Extract certificate to PEM files for SNI gateway
+					// SNI gateway needs standard PEM cert files, not autocert cache format
+					tlsCacheDir := n.config.HTTPGateway.HTTPS.CacheDir
+					if tlsCacheDir == "" {
+						tlsCacheDir = "/home/debros/.orama/tls-cache"
+					}
+
+					certPath := filepath.Join(tlsCacheDir, domain+".crt")
+					keyPath := filepath.Join(tlsCacheDir, domain+".key")
+
+					if err := extractPEMFromTLSCert(tlsCert, certPath, keyPath); err != nil {
+						gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to extract PEM from TLS cert for SNI", 
+							zap.Error(err))
+						return // Can't start SNI without PEM files
+					}
+					gatewayLogger.ComponentInfo(logging.ComponentGateway, "PEM certificates extracted for SNI", 
+						zap.String("cert_path", certPath), zap.String("key_path", keyPath))
+
+					// Signal that certificates are ready for RQLite node-to-node TLS
+					if n.certReady != nil {
+						close(n.certReady)
+						gatewayLogger.ComponentInfo(logging.ComponentGateway, "Certificate ready signal sent for RQLite node TLS")
+					}
+				}
+			} else {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "No domain configured for SNI certificate")
+				return
+			}
+
+			// Create SNI config with certificate files
+			sniCfg := n.config.HTTPGateway.SNI
+
+			// Use the same gateway logger for SNI gateway (writes to gateway.log)
+			sniGateway, err := gateway.NewTCPSNIGateway(gatewayLogger, &sniCfg)
+			if err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "Failed to initialize SNI gateway", zap.Error(err))
+				return
+			}
+
+			n.sniGateway = sniGateway
+			gatewayLogger.ComponentInfo(logging.ComponentGateway, "SNI gateway initialized, starting...")
+
+			// Start SNI gateway (this blocks until shutdown)
+			if err := n.sniGateway.Start(ctx); err != nil {
+				gatewayLogger.ComponentError(logging.ComponentGateway, "SNI Gateway error", zap.Error(err))
+			}
+		}()
+	}
+
+	return nil
+}
+
+// extractPEMFromTLSCert extracts certificate and private key from tls.Certificate to PEM files
+func extractPEMFromTLSCert(tlsCert *tls.Certificate, certPath, keyPath string) error {
+	if tlsCert == nil || len(tlsCert.Certificate) == 0 {
+		return fmt.Errorf("invalid tls certificate")
+	}
+
+	// Write certificate chain to PEM file
+	certFile, err := os.Create(certPath)
+	if err != nil {
+		return fmt.Errorf("failed to create cert file: %w", err)
+	}
+	defer certFile.Close()
+
+	// Write all certificates in the chain
+	for _, certBytes := range tlsCert.Certificate {
+		if err := pem.Encode(certFile, &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: certBytes,
+		}); err != nil {
+			return fmt.Errorf("failed to encode certificate: %w", err)
+		}
+	}
+
+	// Write private key to PEM file
+	if tlsCert.PrivateKey == nil {
+		return fmt.Errorf("private key is nil")
+	}
+
+	keyFile, err := os.Create(keyPath)
+	if err != nil {
+		return fmt.Errorf("failed to create key file: %w", err)
+	}
+	defer keyFile.Close()
+
+	// Handle different key types
+	var keyBytes []byte
+	switch key := tlsCert.PrivateKey.(type) {
+	case *x509.Certificate:
+		keyBytes, err = x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return fmt.Errorf("failed to marshal private key: %w", err)
+		}
+	default:
+		// Try to marshal as PKCS8
+		keyBytes, err = x509.MarshalPKCS8PrivateKey(tlsCert.PrivateKey)
+		if err != nil {
+			return fmt.Errorf("failed to marshal private key: %w", err)
+		}
+	}
+
+	if err := pem.Encode(keyFile, &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: keyBytes,
+	}); err != nil {
+		return fmt.Errorf("failed to encode private key: %w", err)
+	}
+
+	// Set proper permissions
+	os.Chmod(certPath, 0644)
+	os.Chmod(keyPath, 0600)
+
+	return nil
+}
+
 // Starts the network node
 func (n *Node) Start(ctx context.Context) error {
 	n.logger.Info("Starting network node", zap.String("data_dir", n.config.Node.DataDir))
@@ -674,6 +1186,12 @@ func (n *Node) Start(ctx context.Context) error {
 	// Create data directory
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Start HTTP Gateway first (doesn't depend on other services)
+	if err := n.startHTTPGateway(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start HTTP Gateway", zap.Error(err))
+		// Don't fail node startup if gateway fails
 	}
 
 	// Start LibP2P host first (needed for cluster discovery)
@@ -732,16 +1250,14 @@ func (n *Node) startIPFSClusterConfig() error {
 		return fmt.Errorf("failed to ensure cluster config: %w", err)
 	}
 
-	// Try to repair bootstrap peer configuration automatically
-	// This will be retried periodically if bootstrap is not available yet
-	if n.config.Node.Type != "bootstrap" {
-		if success, err := cm.RepairBootstrapPeers(); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair bootstrap peers, will retry later", zap.Error(err))
-		} else if success {
-			n.logger.ComponentInfo(logging.ComponentNode, "Bootstrap peer configuration repaired successfully")
-		} else {
-			n.logger.ComponentDebug(logging.ComponentNode, "Bootstrap peer not available yet, will retry periodically")
-		}
+	// Try to repair peer configuration automatically
+	// This will be retried periodically if peer is not available yet
+	if success, err := cm.RepairPeerConfiguration(); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer configuration, will retry later", zap.Error(err))
+	} else if success {
+		n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired successfully")
+	} else {
+		n.logger.ComponentDebug(logging.ComponentNode, "Peer not available yet, will retry periodically")
 	}
 
 	n.logger.ComponentInfo(logging.ComponentNode, "IPFS Cluster configuration initialized")

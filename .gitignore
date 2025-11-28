@@ -75,3 +75,5 @@ data/bootstrap/rqlite/
 configs/
 
 .dev/
+
+.gocache/

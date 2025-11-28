@@ -9,7 +9,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// DefaultBootstrapPeers returns the library's default bootstrap peer multiaddrs.
+// DefaultBootstrapPeers returns the default peer multiaddrs.
 // These can be overridden by environment variables or config.
 func DefaultBootstrapPeers() []string {
 	// Check environment variable first
@@ -48,7 +48,7 @@ func DefaultDatabaseEndpoints() []string {
 		}
 	}
 
-	// Try to derive from bootstrap peers if available
+	// Try to derive from configured peers if available
 	peers := DefaultBootstrapPeers()
 	if len(peers) > 0 {
 		endpoints := make([]string, 0, len(peers))

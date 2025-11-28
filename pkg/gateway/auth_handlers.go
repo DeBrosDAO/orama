@@ -114,9 +114,11 @@ func (g *Gateway) challengeHandler(w http.ResponseWriter, r *http.Request) {
 	nsID := nres.Rows[0][0]
 
 	// Store nonce with 5 minute expiry
+	// Normalize wallet address to lowercase for case-insensitive comparison
+	walletLower := strings.ToLower(strings.TrimSpace(req.Wallet))
 	if _, err := db.Query(internalCtx,
 		"INSERT INTO nonces(namespace_id, wallet, nonce, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+5 minutes'))",
-		nsID, req.Wallet, nonce, req.Purpose,
+		nsID, walletLower, nonce, req.Purpose,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -171,8 +173,10 @@ func (g *Gateway) verifyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	q := "SELECT id FROM nonces WHERE namespace_id = ? AND wallet = ? AND nonce = ? AND used_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) LIMIT 1"
-	nres, err := db.Query(internalCtx, q, nsID, req.Wallet, req.Nonce)
+	// Normalize wallet address to lowercase for case-insensitive comparison
+	walletLower := strings.ToLower(strings.TrimSpace(req.Wallet))
+	q := "SELECT id FROM nonces WHERE namespace_id = ? AND LOWER(wallet) = LOWER(?) AND nonce = ? AND used_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) LIMIT 1"
+	nres, err := db.Query(internalCtx, q, nsID, walletLower, req.Nonce)
 	if err != nil || nres == nil || nres.Count == 0 {
 		writeError(w, http.StatusBadRequest, "invalid or expired nonce")
 		return
@@ -395,8 +399,10 @@ func (g *Gateway) issueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate nonce exists and not used/expired
-	q := "SELECT id FROM nonces WHERE namespace_id = ? AND wallet = ? AND nonce = ? AND used_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) LIMIT 1"
-	nres, err := db.Query(internalCtx, q, nsID, req.Wallet, req.Nonce)
+	// Normalize wallet address to lowercase for case-insensitive comparison
+	walletLower := strings.ToLower(strings.TrimSpace(req.Wallet))
+	q := "SELECT id FROM nonces WHERE namespace_id = ? AND LOWER(wallet) = LOWER(?) AND nonce = ? AND used_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) LIMIT 1"
+	nres, err := db.Query(internalCtx, q, nsID, walletLower, req.Nonce)
 	if err != nil || nres == nil || nres.Count == 0 {
 		writeError(w, http.StatusBadRequest, "invalid or expired nonce")
 		return

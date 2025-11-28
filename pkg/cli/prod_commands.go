@@ -2,11 +2,11 @@ package cli
 
 import (
 	"bufio"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,12 +14,236 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
+	"github.com/DeBrosOfficial/network/pkg/installer"
 	"github.com/multiformats/go-multiaddr"
 )
 
-// normalizeBootstrapPeers normalizes and validates bootstrap peer multiaddrs
-func normalizeBootstrapPeers(peersStr string) ([]string, error) {
+// IPFSPeerInfo holds IPFS peer information for configuring Peering.Peers
+type IPFSPeerInfo struct {
+	PeerID string
+	Addrs  []string
+}
+
+// IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster discovery
+type IPFSClusterPeerInfo struct {
+	PeerID string
+	Addrs  []string
+}
+
+// validateSwarmKey validates that a swarm key is 64 hex characters
+func validateSwarmKey(key string) error {
+	key = strings.TrimSpace(key)
+	if len(key) != 64 {
+		return fmt.Errorf("swarm key must be 64 hex characters (32 bytes), got %d", len(key))
+	}
+	if _, err := hex.DecodeString(key); err != nil {
+		return fmt.Errorf("swarm key must be valid hexadecimal: %w", err)
+	}
+	return nil
+}
+
+// runInteractiveInstaller launches the TUI installer
+func runInteractiveInstaller() {
+	config, err := installer.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+
+	// Convert TUI config to install args and run installation
+	var args []string
+	args = append(args, "--vps-ip", config.VpsIP)
+	args = append(args, "--domain", config.Domain)
+	args = append(args, "--branch", config.Branch)
+
+	if config.NoPull {
+		args = append(args, "--no-pull")
+	}
+
+	if !config.IsFirstNode {
+		if config.JoinAddress != "" {
+			args = append(args, "--join", config.JoinAddress)
+		}
+		if config.ClusterSecret != "" {
+			args = append(args, "--cluster-secret", config.ClusterSecret)
+		}
+		if config.SwarmKeyHex != "" {
+			args = append(args, "--swarm-key", config.SwarmKeyHex)
+		}
+		if len(config.Peers) > 0 {
+			args = append(args, "--peers", strings.Join(config.Peers, ","))
+		}
+		// Pass IPFS peer info for Peering.Peers configuration
+		if config.IPFSPeerID != "" {
+			args = append(args, "--ipfs-peer", config.IPFSPeerID)
+		}
+		if len(config.IPFSSwarmAddrs) > 0 {
+			args = append(args, "--ipfs-addrs", strings.Join(config.IPFSSwarmAddrs, ","))
+		}
+		// Pass IPFS Cluster peer info for cluster peer_addresses configuration
+		if config.IPFSClusterPeerID != "" {
+			args = append(args, "--ipfs-cluster-peer", config.IPFSClusterPeerID)
+		}
+		if len(config.IPFSClusterAddrs) > 0 {
+			args = append(args, "--ipfs-cluster-addrs", strings.Join(config.IPFSClusterAddrs, ","))
+		}
+	}
+
+	// Re-run with collected args
+	handleProdInstall(args)
+}
+
+// showDryRunSummary displays what would be done during installation without making changes
+func showDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress string, isFirstNode bool, oramaDir string) {
+	fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
+	fmt.Printf("DRY RUN - No changes will be made\n")
+	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+
+	fmt.Printf("📋 Installation Summary:\n")
+	fmt.Printf("  VPS IP:        %s\n", vpsIP)
+	fmt.Printf("  Domain:        %s\n", domain)
+	fmt.Printf("  Branch:        %s\n", branch)
+	if isFirstNode {
+		fmt.Printf("  Node Type:     First node (creates new cluster)\n")
+	} else {
+		fmt.Printf("  Node Type:     Joining existing cluster\n")
+		if joinAddress != "" {
+			fmt.Printf("  Join Address:  %s\n", joinAddress)
+		}
+		if len(peers) > 0 {
+			fmt.Printf("  Peers:         %d peer(s)\n", len(peers))
+			for _, peer := range peers {
+				fmt.Printf("                 - %s\n", peer)
+			}
+		}
+	}
+
+	fmt.Printf("\n📁 Directories that would be created:\n")
+	fmt.Printf("  %s/configs/\n", oramaDir)
+	fmt.Printf("  %s/secrets/\n", oramaDir)
+	fmt.Printf("  %s/data/ipfs/repo/\n", oramaDir)
+	fmt.Printf("  %s/data/ipfs-cluster/\n", oramaDir)
+	fmt.Printf("  %s/data/rqlite/\n", oramaDir)
+	fmt.Printf("  %s/logs/\n", oramaDir)
+	fmt.Printf("  %s/tls-cache/\n", oramaDir)
+
+	fmt.Printf("\n🔧 Binaries that would be installed:\n")
+	fmt.Printf("  - Go (if not present)\n")
+	fmt.Printf("  - RQLite 8.43.0\n")
+	fmt.Printf("  - IPFS/Kubo 0.38.2\n")
+	fmt.Printf("  - IPFS Cluster (latest)\n")
+	fmt.Printf("  - Olric 0.7.0\n")
+	fmt.Printf("  - anyone-client (npm)\n")
+	fmt.Printf("  - DeBros binaries (built from %s branch)\n", branch)
+
+	fmt.Printf("\n🔐 Secrets that would be generated:\n")
+	fmt.Printf("  - Cluster secret (64-hex)\n")
+	fmt.Printf("  - IPFS swarm key\n")
+	fmt.Printf("  - Node identity (Ed25519 keypair)\n")
+
+	fmt.Printf("\n📝 Configuration files that would be created:\n")
+	fmt.Printf("  - %s/configs/node.yaml\n", oramaDir)
+	fmt.Printf("  - %s/configs/olric/config.yaml\n", oramaDir)
+
+	fmt.Printf("\n⚙️  Systemd services that would be created:\n")
+	fmt.Printf("  - debros-ipfs.service\n")
+	fmt.Printf("  - debros-ipfs-cluster.service\n")
+	fmt.Printf("  - debros-olric.service\n")
+	fmt.Printf("  - debros-node.service (includes embedded gateway + RQLite)\n")
+	fmt.Printf("  - debros-anyone-client.service\n")
+
+	fmt.Printf("\n🌐 Ports that would be used:\n")
+	fmt.Printf("  External (must be open in firewall):\n")
+	fmt.Printf("    - 80   (HTTP for ACME/Let's Encrypt)\n")
+	fmt.Printf("    - 443  (HTTPS gateway)\n")
+	fmt.Printf("    - 4101 (IPFS swarm)\n")
+	fmt.Printf("    - 7001 (RQLite Raft)\n")
+	fmt.Printf("  Internal (localhost only):\n")
+	fmt.Printf("    - 4501 (IPFS API)\n")
+	fmt.Printf("    - 5001 (RQLite HTTP)\n")
+	fmt.Printf("    - 6001 (Unified gateway)\n")
+	fmt.Printf("    - 8080 (IPFS gateway)\n")
+	fmt.Printf("    - 9050 (Anyone SOCKS5)\n")
+	fmt.Printf("    - 9094 (IPFS Cluster API)\n")
+	fmt.Printf("    - 3320/3322 (Olric)\n")
+
+	fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
+	fmt.Printf("To proceed with installation, run without --dry-run\n")
+	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+}
+
+// validateGeneratedConfig loads and validates the generated node configuration
+func validateGeneratedConfig(oramaDir string) error {
+	configPath := filepath.Join(oramaDir, "configs", "node.yaml")
+
+	// Check if config file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return fmt.Errorf("configuration file not found at %s", configPath)
+	}
+
+	// Load the config file
+	file, err := os.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	var cfg config.Config
+	if err := config.DecodeStrict(file, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Validate the configuration
+	if errs := cfg.Validate(); len(errs) > 0 {
+		var errMsgs []string
+		for _, e := range errs {
+			errMsgs = append(errMsgs, e.Error())
+		}
+		return fmt.Errorf("configuration validation errors:\n  - %s", strings.Join(errMsgs, "\n  - "))
+	}
+
+	return nil
+}
+
+// validateDNSRecord validates that the domain points to the expected IP address
+// Returns nil if DNS is valid, warning message if DNS doesn't match but continues,
+// or error if DNS lookup fails completely
+func validateDNSRecord(domain, expectedIP string) error {
+	if domain == "" {
+		return nil // No domain provided, skip validation
+	}
+
+	ips, err := net.LookupIP(domain)
+	if err != nil {
+		// DNS lookup failed - this is a warning, not a fatal error
+		// The user might be setting up DNS after installation
+		fmt.Printf("  ⚠️  DNS lookup failed for %s: %v\n", domain, err)
+		fmt.Printf("     Make sure DNS is configured before enabling HTTPS\n")
+		return nil
+	}
+
+	// Check if any resolved IP matches the expected IP
+	for _, ip := range ips {
+		if ip.String() == expectedIP {
+			fmt.Printf("  ✓ DNS validated: %s → %s\n", domain, expectedIP)
+			return nil
+		}
+	}
+
+	// DNS doesn't point to expected IP - warn but continue
+	resolvedIPs := make([]string, len(ips))
+	for i, ip := range ips {
+		resolvedIPs[i] = ip.String()
+	}
+	fmt.Printf("  ⚠️  DNS mismatch: %s resolves to %v, expected %s\n", domain, resolvedIPs, expectedIP)
+	fmt.Printf("     HTTPS certificate generation may fail until DNS is updated\n")
+	return nil
+}
+
+// normalizePeers normalizes and validates peer multiaddrs
+func normalizePeers(peersStr string) ([]string, error) {
 	if peersStr == "" {
 		return nil, nil
 	}
@@ -65,6 +289,8 @@ func HandleProdCommand(args []string) {
 		handleProdInstall(subargs)
 	case "upgrade":
 		handleProdUpgrade(subargs)
+	case "migrate":
+		handleProdMigrate(subargs)
 	case "status":
 		handleProdStatus()
 	case "start":
@@ -88,24 +314,34 @@ func HandleProdCommand(args []string) {
 
 func showProdHelp() {
 	fmt.Printf("Production Environment Commands\n\n")
-	fmt.Printf("Usage: dbn prod <subcommand> [options]\n\n")
+	fmt.Printf("Usage: orama <subcommand> [options]\n\n")
 	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  install                   - Full production bootstrap (requires root/sudo)\n")
+	fmt.Printf("  install                   - Install production node (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
+	fmt.Printf("      --interactive         - Launch interactive TUI wizard\n")
 	fmt.Printf("      --force               - Reconfigure all settings\n")
-	fmt.Printf("      --bootstrap           - Install as bootstrap node\n")
-	fmt.Printf("      --vps-ip IP           - VPS public IP address (required for non-bootstrap)\n")
-	fmt.Printf("      --peers ADDRS         - Comma-separated bootstrap peer multiaddrs (required for non-bootstrap)\n")
-	fmt.Printf("      --cluster-secret HEX  - 64-hex cluster secret (required for non-bootstrap)\n")
-	fmt.Printf("      --bootstrap-join ADDR - Bootstrap raft join address (for secondary bootstrap)\n")
-	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (optional)\n")
+	fmt.Printf("      --vps-ip IP           - VPS public IP address (required)\n")
+	fmt.Printf("      --domain DOMAIN       - Domain for this node (e.g., node-1.orama.network)\n")
+	fmt.Printf("      --peers ADDRS         - Comma-separated peer multiaddrs (for joining cluster)\n")
+	fmt.Printf("      --join ADDR           - RQLite join address IP:port (for joining cluster)\n")
+	fmt.Printf("      --cluster-secret HEX  - 64-hex cluster secret (required when joining)\n")
+	fmt.Printf("      --swarm-key HEX       - 64-hex IPFS swarm key (required when joining)\n")
+	fmt.Printf("      --ipfs-peer ID        - IPFS peer ID to connect to (auto-discovered)\n")
+	fmt.Printf("      --ipfs-addrs ADDRS    - IPFS swarm addresses (auto-discovered)\n")
+	fmt.Printf("      --ipfs-cluster-peer ID - IPFS Cluster peer ID (auto-discovered)\n")
+	fmt.Printf("      --ipfs-cluster-addrs ADDRS - IPFS Cluster addresses (auto-discovered)\n")
 	fmt.Printf("      --branch BRANCH       - Git branch to use (main or nightly, default: main)\n")
+	fmt.Printf("      --no-pull             - Skip git clone/pull, use existing /home/debros/src\n")
 	fmt.Printf("      --ignore-resource-checks - Skip disk/RAM/CPU prerequisite validation\n")
+	fmt.Printf("      --dry-run             - Show what would be done without making changes\n")
 	fmt.Printf("  upgrade                   - Upgrade existing installation (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --restart              - Automatically restart services after upgrade\n")
-	fmt.Printf("      --branch BRANCH        - Git branch to use (main or nightly, uses saved preference if not specified)\n")
-	fmt.Printf("      --no-pull              - Skip git clone/pull, use existing /home/debros/src\n")
+	fmt.Printf("      --branch BRANCH        - Git branch to use (main or nightly)\n")
+	fmt.Printf("      --no-pull              - Skip git clone/pull, use existing source\n")
+	fmt.Printf("  migrate                   - Migrate from old unified setup (requires root/sudo)\n")
+	fmt.Printf("    Options:\n")
+	fmt.Printf("      --dry-run              - Show what would be migrated without making changes\n")
 	fmt.Printf("  status                    - Show status of production services\n")
 	fmt.Printf("  start                     - Start all production services (requires root/sudo)\n")
 	fmt.Printf("  stop                      - Stop all production services (requires root/sudo)\n")
@@ -116,27 +352,20 @@ func showProdHelp() {
 	fmt.Printf("      --follow              - Follow logs in real-time\n")
 	fmt.Printf("  uninstall                 - Remove production services (requires root/sudo)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  # Bootstrap node (main branch)\n")
-	fmt.Printf("  sudo dbn prod install --bootstrap\n\n")
-	fmt.Printf("  # Bootstrap node (nightly branch)\n")
-	fmt.Printf("  sudo dbn prod install --bootstrap --branch nightly\n\n")
+	fmt.Printf("  # First node (creates new cluster)\n")
+	fmt.Printf("  sudo orama install --vps-ip 203.0.113.1 --domain node-1.orama.network\n\n")
 	fmt.Printf("  # Join existing cluster\n")
-	fmt.Printf("  sudo dbn prod install --vps-ip 10.0.0.2 --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...\n\n")
-	fmt.Printf("  # Secondary bootstrap joining existing cluster\n")
-	fmt.Printf("  sudo dbn prod install --bootstrap --vps-ip 10.0.0.2 --bootstrap-join 10.0.0.1:7001 --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...\n\n")
-	fmt.Printf("  # Upgrade using saved branch preference\n")
-	fmt.Printf("  sudo dbn prod upgrade --restart\n\n")
-	fmt.Printf("  # Upgrade and switch to nightly branch\n")
-	fmt.Printf("  sudo dbn prod upgrade --restart --branch nightly\n\n")
-	fmt.Printf("  # Upgrade without pulling latest code (use existing /home/debros/src)\n")
-	fmt.Printf("  sudo dbn prod upgrade --restart --no-pull\n\n")
+	fmt.Printf("  sudo orama install --vps-ip 203.0.113.2 --domain node-2.orama.network \\\n")
+	fmt.Printf("    --peers /ip4/203.0.113.1/tcp/4001/p2p/12D3KooW... \\\n")
+	fmt.Printf("    --cluster-secret <64-hex-secret> --swarm-key <64-hex-swarm-key>\n\n")
+	fmt.Printf("  # Upgrade\n")
+	fmt.Printf("  sudo orama upgrade --restart\n\n")
 	fmt.Printf("  # Service management\n")
-	fmt.Printf("  sudo dbn prod start\n")
-	fmt.Printf("  sudo dbn prod stop\n")
-	fmt.Printf("  sudo dbn prod restart\n\n")
-	fmt.Printf("  dbn prod status\n")
-	fmt.Printf("  dbn prod logs node --follow\n")
-	fmt.Printf("  dbn prod logs gateway --follow\n")
+	fmt.Printf("  sudo orama start\n")
+	fmt.Printf("  sudo orama stop\n")
+	fmt.Printf("  sudo orama restart\n\n")
+	fmt.Printf("  orama status\n")
+	fmt.Printf("  orama logs node --follow\n")
 }
 
 func handleProdInstall(args []string) {
@@ -145,14 +374,21 @@ func handleProdInstall(args []string) {
 	fs.SetOutput(os.Stderr)
 
 	force := fs.Bool("force", false, "Reconfigure all settings")
-	isBootstrap := fs.Bool("bootstrap", false, "Install as bootstrap node")
 	skipResourceChecks := fs.Bool("ignore-resource-checks", false, "Skip disk/RAM/CPU prerequisite validation")
-	vpsIP := fs.String("vps-ip", "", "VPS public IP address (required for non-bootstrap)")
-	domain := fs.String("domain", "", "Domain for HTTPS (optional)")
-	peersStr := fs.String("peers", "", "Comma-separated bootstrap peer multiaddrs (required for non-bootstrap)")
-	bootstrapJoin := fs.String("bootstrap-join", "", "Bootstrap raft join address (for secondary bootstrap)")
+	vpsIP := fs.String("vps-ip", "", "VPS public IP address")
+	domain := fs.String("domain", "", "Domain for this node (e.g., node-123.orama.network)")
+	peersStr := fs.String("peers", "", "Comma-separated peer multiaddrs to connect to")
+	joinAddress := fs.String("join", "", "RQLite join address (IP:port) to join existing cluster")
 	branch := fs.String("branch", "main", "Git branch to use (main or nightly)")
-	clusterSecret := fs.String("cluster-secret", "", "Hex-encoded 32-byte cluster secret (required for non-bootstrap nodes)")
+	clusterSecret := fs.String("cluster-secret", "", "Hex-encoded 32-byte cluster secret (for joining existing cluster)")
+	swarmKey := fs.String("swarm-key", "", "64-hex IPFS swarm key (for joining existing private network)")
+	ipfsPeerID := fs.String("ipfs-peer", "", "IPFS peer ID to connect to (auto-discovered from peer domain)")
+	ipfsAddrs := fs.String("ipfs-addrs", "", "Comma-separated IPFS swarm addresses (auto-discovered from peer domain)")
+	ipfsClusterPeerID := fs.String("ipfs-cluster-peer", "", "IPFS Cluster peer ID to connect to (auto-discovered from peer domain)")
+	ipfsClusterAddrs := fs.String("ipfs-cluster-addrs", "", "Comma-separated IPFS Cluster addresses (auto-discovered from peer domain)")
+	interactive := fs.Bool("interactive", false, "Run interactive TUI installer")
+	dryRun := fs.Bool("dry-run", false, "Show what would be done without making changes")
+	noPull := fs.Bool("no-pull", false, "Skip git clone/pull, use existing /home/debros/src")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -162,16 +398,22 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
+	// Launch TUI installer if --interactive flag or no required args provided
+	if *interactive || (*vpsIP == "" && len(args) == 0) {
+		runInteractiveInstaller()
+		return
+	}
+
 	// Validate branch
 	if *branch != "main" && *branch != "nightly" {
 		fmt.Fprintf(os.Stderr, "❌ Invalid branch: %s (must be 'main' or 'nightly')\n", *branch)
 		os.Exit(1)
 	}
 
-	// Normalize and validate bootstrap peers
-	bootstrapPeers, err := normalizeBootstrapPeers(*peersStr)
+	// Normalize and validate peers
+	peers, err := normalizePeers(*peersStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Invalid bootstrap peers: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Invalid peers: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   Example: --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...,/ip4/10.0.0.2/tcp/4001/p2p/Qm...\n")
 		os.Exit(1)
 	}
@@ -182,62 +424,128 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
-	// Validate bootstrap node requirements
-	if *isBootstrap {
+	// Validate VPS IP is provided
 		if *vpsIP == "" {
-			fmt.Fprintf(os.Stderr, "❌ --vps-ip is required for bootstrap nodes\n")
-			fmt.Fprintf(os.Stderr, "   Bootstrap nodes must advertise a public IP address for other nodes to connect\n")
-			fmt.Fprintf(os.Stderr, "   Usage: sudo dbn prod install --bootstrap --vps-ip <public_ip>\n")
-			fmt.Fprintf(os.Stderr, "   Example: sudo dbn prod install --bootstrap --vps-ip 203.0.113.1\n")
+		fmt.Fprintf(os.Stderr, "❌ --vps-ip is required\n")
+		fmt.Fprintf(os.Stderr, "   Usage: sudo orama install --vps-ip <public_ip>\n")
+		fmt.Fprintf(os.Stderr, "   Or run: sudo orama install --interactive\n")
 			os.Exit(1)
 		}
-		// Validate secondary bootstrap requirements
-		if *bootstrapJoin == "" {
-			fmt.Fprintf(os.Stderr, "⚠️  Warning: Primary bootstrap node detected (--bootstrap without --bootstrap-join)\n")
-			fmt.Fprintf(os.Stderr, "   This node will form a new cluster. To join existing cluster as secondary bootstrap:\n")
-			fmt.Fprintf(os.Stderr, "   sudo dbn prod install --bootstrap --vps-ip %s --bootstrap-join <bootstrap_ip>:7001 --peers <multiaddr>\n", *vpsIP)
-		}
-	}
 
-	// Validate non-bootstrap node requirements
-	if !*isBootstrap {
-		if *vpsIP == "" {
-			fmt.Fprintf(os.Stderr, "❌ --vps-ip is required for non-bootstrap nodes\n")
-			fmt.Fprintf(os.Stderr, "   Usage: sudo dbn prod install --vps-ip <public_ip> --peers <multiaddr>\n")
-			os.Exit(1)
-		}
-		if len(bootstrapPeers) == 0 {
-			fmt.Fprintf(os.Stderr, "❌ --peers is required for non-bootstrap nodes\n")
-			fmt.Fprintf(os.Stderr, "   Usage: sudo dbn prod install --vps-ip <public_ip> --peers <multiaddr>\n")
-			fmt.Fprintf(os.Stderr, "   Example: --peers /ip4/10.0.0.1/tcp/4001/p2p/Qm...\n")
-			os.Exit(1)
-		}
+	// Determine if this is the first node (creates new cluster) or joining existing cluster
+	isFirstNode := len(peers) == 0 && *joinAddress == ""
+	if isFirstNode {
+		fmt.Printf("ℹ️  First node detected - will create new cluster\n")
+	} else {
+		fmt.Printf("ℹ️  Joining existing cluster\n")
+		// Cluster secret is required when joining
 		if *clusterSecret == "" {
-			fmt.Fprintf(os.Stderr, "❌ --cluster-secret is required for non-bootstrap nodes\n")
-			fmt.Fprintf(os.Stderr, "   Provide the 64-hex secret from the bootstrap node (cat ~/.debros/secrets/cluster-secret)\n")
+			fmt.Fprintf(os.Stderr, "❌ --cluster-secret is required when joining an existing cluster\n")
+			fmt.Fprintf(os.Stderr, "   Provide the 64-hex secret from an existing node (cat ~/.orama/secrets/cluster-secret)\n")
 			os.Exit(1)
 		}
-	}
-
-	if *clusterSecret != "" {
 		if err := production.ValidateClusterSecret(*clusterSecret); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Invalid --cluster-secret: %v\n", err)
 			os.Exit(1)
 		}
+		// Swarm key is required when joining
+		if *swarmKey == "" {
+			fmt.Fprintf(os.Stderr, "❌ --swarm-key is required when joining an existing cluster\n")
+			fmt.Fprintf(os.Stderr, "   Provide the 64-hex swarm key from an existing node:\n")
+			fmt.Fprintf(os.Stderr, "   cat ~/.orama/secrets/swarm.key | tail -1\n")
+			os.Exit(1)
+		}
+		if err := validateSwarmKey(*swarmKey); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Invalid --swarm-key: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	debrosHome := "/home/debros"
-	debrosDir := debrosHome + "/.debros"
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, *force, *branch, false, *skipResourceChecks, *clusterSecret)
+	oramaHome := "/home/debros"
+	oramaDir := oramaHome + "/.orama"
+
+	// If cluster secret was provided, save it to secrets directory before setup
+	if *clusterSecret != "" {
+		secretsDir := filepath.Join(oramaDir, "secrets")
+		if err := os.MkdirAll(secretsDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to create secrets directory: %v\n", err)
+			os.Exit(1)
+		}
+		secretPath := filepath.Join(secretsDir, "cluster-secret")
+		if err := os.WriteFile(secretPath, []byte(*clusterSecret), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to save cluster secret: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  ✓ Cluster secret saved\n")
+	}
+
+	// If swarm key was provided, save it to secrets directory in full format
+	if *swarmKey != "" {
+		secretsDir := filepath.Join(oramaDir, "secrets")
+		if err := os.MkdirAll(secretsDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to create secrets directory: %v\n", err)
+			os.Exit(1)
+		}
+		// Convert 64-hex key to full swarm.key format
+		swarmKeyContent := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", strings.ToUpper(*swarmKey))
+		swarmKeyPath := filepath.Join(secretsDir, "swarm.key")
+		if err := os.WriteFile(swarmKeyPath, []byte(swarmKeyContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to save swarm key: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  ✓ Swarm key saved\n")
+	}
+
+	// Store IPFS peer info for later use in IPFS configuration
+	var ipfsPeerInfo *IPFSPeerInfo
+	if *ipfsPeerID != "" && *ipfsAddrs != "" {
+		ipfsPeerInfo = &IPFSPeerInfo{
+			PeerID: *ipfsPeerID,
+			Addrs:  strings.Split(*ipfsAddrs, ","),
+		}
+	}
+
+	// Store IPFS Cluster peer info for cluster peer discovery
+	var ipfsClusterPeerInfo *IPFSClusterPeerInfo
+	if *ipfsClusterPeerID != "" {
+		var addrs []string
+		if *ipfsClusterAddrs != "" {
+			addrs = strings.Split(*ipfsClusterAddrs, ",")
+		}
+		ipfsClusterPeerInfo = &IPFSClusterPeerInfo{
+			PeerID: *ipfsClusterPeerID,
+			Addrs:  addrs,
+		}
+	}
+
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, *force, *branch, *noPull, *skipResourceChecks)
+
+	// Inform user if skipping git pull
+	if *noPull {
+		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
+		fmt.Printf("     Using existing repository at /home/debros/src\n")
+	}
 
 	// Check port availability before proceeding
-	if err := ensurePortsAvailable("prod install", defaultPorts()); err != nil {
+	if err := ensurePortsAvailable("install", defaultPorts()); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 
+	// Validate DNS if domain is provided
+	if *domain != "" {
+		fmt.Printf("\n🌐 Pre-flight DNS validation...\n")
+		validateDNSRecord(*domain, *vpsIP)
+	}
+
+	// Dry-run mode: show what would be done and exit
+	if *dryRun {
+		showDryRunSummary(*vpsIP, *domain, *branch, peers, *joinAddress, isFirstNode, oramaDir)
+		return
+	}
+
 	// Save branch preference for future upgrades
-	if err := production.SaveBranchPreference(debrosDir, *branch); err != nil {
+	if err := production.SaveBranchPreference(oramaDir, *branch); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save branch preference: %v\n", err)
 	}
 
@@ -262,56 +570,90 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
-	// Determine node type early
-	nodeType := "node"
-	if *isBootstrap {
-		nodeType = "bootstrap"
-	}
-
 	// Phase 3: Generate secrets FIRST (before service initialization)
 	// This ensures cluster secret and swarm key exist before repos are seeded
 	fmt.Printf("\n🔐 Phase 3: Generating secrets...\n")
-	if err := setup.Phase3GenerateSecrets(*isBootstrap); err != nil {
+	if err := setup.Phase3GenerateSecrets(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Secret generation failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Phase 2c: Initialize services (after secrets are in place)
-	fmt.Printf("\nPhase 2c: Initializing services...\n")
-	if err := setup.Phase2cInitializeServices(nodeType, bootstrapPeers, *vpsIP); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
+	// Phase 4: Generate configs (BEFORE service initialization)
+	// This ensures node.yaml exists before services try to access it
+	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
+	enableHTTPS := *domain != ""
+	if err := setup.Phase4GenerateConfigs(peers, *vpsIP, enableHTTPS, *domain, *joinAddress); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Configuration generation failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Phase 4: Generate configs
-	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
-	enableHTTPS := *domain != ""
-	if err := setup.Phase4GenerateConfigs(*isBootstrap, bootstrapPeers, *vpsIP, enableHTTPS, *domain, *bootstrapJoin); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Configuration generation failed: %v\n", err)
+	// Validate generated configuration
+	fmt.Printf("  Validating generated configuration...\n")
+	if err := validateGeneratedConfig(oramaDir); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Configuration validation failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("  ✓ Configuration validated\n")
+
+	// Phase 2c: Initialize services (after config is in place)
+	fmt.Printf("\nPhase 2c: Initializing services...\n")
+	var prodIPFSPeer *production.IPFSPeerInfo
+	if ipfsPeerInfo != nil {
+		prodIPFSPeer = &production.IPFSPeerInfo{
+			PeerID: ipfsPeerInfo.PeerID,
+			Addrs:  ipfsPeerInfo.Addrs,
+		}
+	}
+	var prodIPFSClusterPeer *production.IPFSClusterPeerInfo
+	if ipfsClusterPeerInfo != nil {
+		prodIPFSClusterPeer = &production.IPFSClusterPeerInfo{
+			PeerID: ipfsClusterPeerInfo.PeerID,
+			Addrs:  ipfsClusterPeerInfo.Addrs,
+		}
+	}
+	if err := setup.Phase2cInitializeServices(peers, *vpsIP, prodIPFSPeer, prodIPFSClusterPeer); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Phase 5: Create systemd services
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
-	if err := setup.Phase5CreateSystemdServices(nodeType, *vpsIP); err != nil {
+	if err := setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Service creation failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Give services a moment to fully initialize before verification
-	fmt.Printf("\n⏳ Waiting for services to initialize...\n")
-	time.Sleep(5 * time.Second)
-
-	// Verify all services are running correctly
-	if err := verifyProductionRuntime("prod install"); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		fmt.Fprintf(os.Stderr, "   Installation completed but services are not healthy. Check logs with: dbn prod logs <service>\n")
 		os.Exit(1)
 	}
 
 	// Log completion with actual peer ID
 	setup.LogSetupComplete(setup.NodePeerID)
-	fmt.Printf("✅ Production installation complete and healthy!\n\n")
+	fmt.Printf("✅ Production installation complete!\n\n")
+
+	// For first node, print important secrets and identifiers
+	if isFirstNode {
+		fmt.Printf("📋 Save these for joining future nodes:\n\n")
+
+		// Print cluster secret
+		clusterSecretPath := filepath.Join(oramaDir, "secrets", "cluster-secret")
+		if clusterSecretData, err := os.ReadFile(clusterSecretPath); err == nil {
+			fmt.Printf("  Cluster Secret (--cluster-secret):\n")
+			fmt.Printf("    %s\n\n", string(clusterSecretData))
+		}
+
+		// Print swarm key
+		swarmKeyPath := filepath.Join(oramaDir, "secrets", "swarm.key")
+		if swarmKeyData, err := os.ReadFile(swarmKeyPath); err == nil {
+			swarmKeyContent := strings.TrimSpace(string(swarmKeyData))
+			lines := strings.Split(swarmKeyContent, "\n")
+			if len(lines) >= 3 {
+				// Extract just the hex part (last line)
+				fmt.Printf("  IPFS Swarm Key (--swarm-key, last line only):\n")
+				fmt.Printf("    %s\n\n", lines[len(lines)-1])
+			}
+		}
+
+		// Print peer ID
+		fmt.Printf("  Node Peer ID:\n")
+		fmt.Printf("    %s\n\n", setup.NodePeerID)
+	}
 }
 
 func handleProdUpgrade(args []string) {
@@ -357,30 +699,30 @@ func handleProdUpgrade(args []string) {
 		os.Exit(1)
 	}
 
-	debrosHome := "/home/debros"
-	debrosDir := debrosHome + "/.debros"
+	oramaHome := "/home/debros"
+	oramaDir := oramaHome + "/.orama"
 	fmt.Printf("🔄 Upgrading production installation...\n")
 	fmt.Printf("  This will preserve existing configurations and data\n")
 	fmt.Printf("  Configurations will be updated to latest format\n\n")
 
-	setup := production.NewProductionSetup(debrosHome, os.Stdout, *force, *branch, *noPull, false, "")
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, *force, *branch, *noPull, false)
 
 	// Log if --no-pull is enabled
 	if *noPull {
 		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
-		fmt.Printf("     Using existing repository at %s/src\n", debrosHome)
+		fmt.Printf("     Using existing repository at %s/src\n", oramaHome)
 	}
 
 	// If branch was explicitly provided, save it for future upgrades
 	if *branch != "" {
-		if err := production.SaveBranchPreference(debrosDir, *branch); err != nil {
+		if err := production.SaveBranchPreference(oramaDir, *branch); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save branch preference: %v\n", err)
 		} else {
 			fmt.Printf("  Using branch: %s (saved for future upgrades)\n", *branch)
 		}
 	} else {
 		// Show which branch is being used (read from saved preference)
-		currentBranch := production.ReadBranchPreference(debrosDir)
+		currentBranch := production.ReadBranchPreference(oramaDir)
 		fmt.Printf("  Using branch: %s (from saved preference)\n", currentBranch)
 	}
 
@@ -404,12 +746,9 @@ func handleProdUpgrade(args []string) {
 		serviceController := production.NewSystemdController()
 		services := []string{
 			"debros-gateway.service",
-			"debros-node-bootstrap.service",
-			"debros-node-node.service",
-			"debros-ipfs-cluster-bootstrap.service",
-			"debros-ipfs-cluster-node.service",
-			"debros-ipfs-bootstrap.service",
-			"debros-ipfs-node.service",
+			"debros-node.service",
+			"debros-ipfs-cluster.service",
+			"debros-ipfs.service",
 			// Note: RQLite is managed by node process, not as separate service
 			"debros-olric.service",
 		}
@@ -440,30 +779,17 @@ func handleProdUpgrade(args []string) {
 		os.Exit(1)
 	}
 
-	// Detect node type from existing installation
-	nodeType := "node"
+	// Detect existing installation
 	if setup.IsUpdate() {
-		// Check if bootstrap config exists
-		bootstrapConfig := filepath.Join("/home/debros/.debros", "configs", "bootstrap.yaml")
-		if _, err := os.Stat(bootstrapConfig); err == nil {
-			nodeType = "bootstrap"
-		} else {
-			// Check data directory structure
-			bootstrapDataPath := filepath.Join("/home/debros/.debros", "data", "bootstrap")
-			if _, err := os.Stat(bootstrapDataPath); err == nil {
-				nodeType = "bootstrap"
-			}
-		}
-		fmt.Printf("  Detected node type: %s\n", nodeType)
+		fmt.Printf("  Detected existing installation\n")
 	} else {
 		fmt.Printf("  ⚠️  No existing installation detected, treating as fresh install\n")
-		fmt.Printf("  Use 'dbn prod install --bootstrap' for fresh bootstrap installation\n")
-		nodeType = "bootstrap" // Default for upgrade if nothing exists
+		fmt.Printf("  Use 'orama install' for fresh installation\n")
 	}
 
 	// Phase 3: Ensure secrets exist (preserves existing secrets)
 	fmt.Printf("\n🔐 Phase 3: Ensuring secrets...\n")
-	if err := setup.Phase3GenerateSecrets(nodeType == "bootstrap"); err != nil {
+	if err := setup.Phase3GenerateSecrets(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Secret generation failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -472,21 +798,20 @@ func handleProdUpgrade(args []string) {
 	// Preserve existing config settings (bootstrap_peers, domain, join_address, etc.)
 	enableHTTPS := false
 	domain := ""
-	bootstrapJoin := ""
 
 	// Helper function to extract multiaddr list from config
-	extractBootstrapPeers := func(configPath string) []string {
+	extractPeers := func(configPath string) []string {
 		var peers []string
 		if data, err := os.ReadFile(configPath); err == nil {
 			configStr := string(data)
-			inBootstrapPeers := false
+			inPeersList := false
 			for _, line := range strings.Split(configStr, "\n") {
 				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "bootstrap_peers:") || strings.HasPrefix(trimmed, "bootstrap peers:") {
-					inBootstrapPeers = true
+				if strings.HasPrefix(trimmed, "bootstrap_peers:") || strings.HasPrefix(trimmed, "peers:") {
+					inPeersList = true
 					continue
 				}
-				if inBootstrapPeers {
+				if inPeersList {
 					if strings.HasPrefix(trimmed, "-") {
 						// Extract multiaddr after the dash
 						parts := strings.SplitN(trimmed, "-", 2)
@@ -498,7 +823,7 @@ func handleProdUpgrade(args []string) {
 							}
 						}
 					} else if trimmed == "" || !strings.HasPrefix(trimmed, "-") {
-						// End of bootstrap_peers list
+						// End of peers list
 						break
 					}
 				}
@@ -507,18 +832,16 @@ func handleProdUpgrade(args []string) {
 		return peers
 	}
 
-	// Read existing node config to preserve bootstrap_peers and join_address
-	nodeConfigFile := "bootstrap.yaml"
-	if nodeType == "node" {
-		nodeConfigFile = "node.yaml"
-	}
-	nodeConfigPath := filepath.Join(debrosDir, "configs", nodeConfigFile)
+	// Read existing node config to preserve settings
+	// Unified config file name (no bootstrap/node distinction)
+	nodeConfigPath := filepath.Join(oramaDir, "configs", "node.yaml")
 
-	// Extract bootstrap peers from existing node config
-	bootstrapPeers := extractBootstrapPeers(nodeConfigPath)
+	// Extract peers from existing node config
+	peers := extractPeers(nodeConfigPath)
 
-	// Extract VPS IP from advertise addresses and bootstrap join address
+	// Extract VPS IP and join address from advertise addresses
 	vpsIP := ""
+	joinAddress := ""
 	if data, err := os.ReadFile(nodeConfigPath); err == nil {
 		configStr := string(data)
 		for _, line := range strings.Split(configStr, "\n") {
@@ -534,19 +857,19 @@ func handleProdUpgrade(args []string) {
 						// Extract IP from address (format: "IP:PORT" or "[IPv6]:PORT")
 						if host, _, err := net.SplitHostPort(addr); err == nil && host != "" && host != "localhost" {
 							vpsIP = host
-							// Continue loop to also check for bootstrap join address
+							// Continue loop to also check for join address
 						}
 					}
 				}
 			}
-			// Extract bootstrap join address if it's a bootstrap node
-			if nodeType == "bootstrap" && strings.HasPrefix(trimmed, "rqlite_join_address:") {
+			// Extract join address
+			if strings.HasPrefix(trimmed, "rqlite_join_address:") {
 				parts := strings.SplitN(trimmed, ":", 2)
 				if len(parts) > 1 {
-					bootstrapJoin = strings.TrimSpace(parts[1])
-					bootstrapJoin = strings.Trim(bootstrapJoin, "\"'")
-					if bootstrapJoin == "null" || bootstrapJoin == "" {
-						bootstrapJoin = ""
+					joinAddress = strings.TrimSpace(parts[1])
+					joinAddress = strings.Trim(joinAddress, "\"'")
+					if joinAddress == "null" || joinAddress == "" {
+						joinAddress = ""
 					}
 				}
 			}
@@ -554,7 +877,7 @@ func handleProdUpgrade(args []string) {
 	}
 
 	// Read existing gateway config to preserve domain and HTTPS settings
-	gatewayConfigPath := filepath.Join(debrosDir, "configs", "gateway.yaml")
+	gatewayConfigPath := filepath.Join(oramaDir, "configs", "gateway.yaml")
 	if data, err := os.ReadFile(gatewayConfigPath); err == nil {
 		configStr := string(data)
 		if strings.Contains(configStr, "domain:") {
@@ -578,8 +901,8 @@ func handleProdUpgrade(args []string) {
 	}
 
 	fmt.Printf("  Preserving existing configuration:\n")
-	if len(bootstrapPeers) > 0 {
-		fmt.Printf("    - Bootstrap peers: %d peer(s) preserved\n", len(bootstrapPeers))
+	if len(peers) > 0 {
+		fmt.Printf("    - Peers: %d peer(s) preserved\n", len(peers))
 	}
 	if vpsIP != "" {
 		fmt.Printf("    - VPS IP: %s\n", vpsIP)
@@ -587,26 +910,30 @@ func handleProdUpgrade(args []string) {
 	if domain != "" {
 		fmt.Printf("    - Domain: %s\n", domain)
 	}
-	if bootstrapJoin != "" {
-		fmt.Printf("    - Bootstrap join address: %s\n", bootstrapJoin)
+	if joinAddress != "" {
+		fmt.Printf("    - Join address: %s\n", joinAddress)
 	}
 
-	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
-	// Now that we have bootstrap peers and VPS IP, we can properly configure IPFS Cluster
-	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
-	if err := setup.Phase2cInitializeServices(nodeType, bootstrapPeers, vpsIP); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := setup.Phase4GenerateConfigs(nodeType == "bootstrap", bootstrapPeers, vpsIP, enableHTTPS, domain, bootstrapJoin); err != nil {
+	// Phase 4: Generate configs (BEFORE service initialization)
+	// This ensures node.yaml exists before services try to access it
+	if err := setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, joinAddress); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Config generation warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   Existing configs preserved\n")
 	}
 
+	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
+	// Now that we have peers and VPS IP, we can properly configure IPFS Cluster
+	// Note: IPFS peer info is nil for upgrades - peering is only configured during initial install
+	// Note: IPFS Cluster peer info is also nil for upgrades - peer_addresses is only configured during initial install
+	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
+	if err := setup.Phase2cInitializeServices(peers, vpsIP, nil, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Phase 5: Update systemd services
 	fmt.Printf("\n🔧 Phase 5: Updating systemd services...\n")
-	if err := setup.Phase5CreateSystemdServices(nodeType, ""); err != nil {
+	if err := setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
 	}
 
@@ -630,16 +957,6 @@ func handleProdUpgrade(args []string) {
 				}
 			}
 			fmt.Printf("   ✓ All services restarted\n")
-			// Give services a moment to fully initialize before verification
-			fmt.Printf("   ⏳ Waiting for services to initialize...\n")
-			time.Sleep(5 * time.Second)
-			// Verify services are healthy after restart
-			if err := verifyProductionRuntime("prod upgrade --restart"); err != nil {
-				fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-				fmt.Fprintf(os.Stderr, "   Upgrade completed but services are not healthy. Check logs with: dbn prod logs <service>\n")
-				os.Exit(1)
-			}
-			fmt.Printf("   ✅ All services verified healthy\n")
 		}
 	} else {
 		fmt.Printf("   To apply changes, restart services:\n")
@@ -652,29 +969,23 @@ func handleProdUpgrade(args []string) {
 func handleProdStatus() {
 	fmt.Printf("Production Environment Status\n\n")
 
-	// Check for all possible service names (bootstrap and node variants)
+	// Unified service names (no bootstrap/node distinction)
 	serviceNames := []string{
-		"debros-ipfs-bootstrap",
-		"debros-ipfs-node",
-		"debros-ipfs-cluster-bootstrap",
-		"debros-ipfs-cluster-node",
+		"debros-ipfs",
+		"debros-ipfs-cluster",
 		// Note: RQLite is managed by node process, not as separate service
 		"debros-olric",
-		"debros-node-bootstrap",
-		"debros-node-node",
+		"debros-node",
 		"debros-gateway",
 	}
 
 	// Friendly descriptions
 	descriptions := map[string]string{
-		"debros-ipfs-bootstrap":         "IPFS Daemon (Bootstrap)",
-		"debros-ipfs-node":              "IPFS Daemon (Node)",
-		"debros-ipfs-cluster-bootstrap": "IPFS Cluster (Bootstrap)",
-		"debros-ipfs-cluster-node":      "IPFS Cluster (Node)",
-		"debros-olric":                  "Olric Cache Server",
-		"debros-node-bootstrap":         "DeBros Node (Bootstrap) - includes RQLite",
-		"debros-node-node":              "DeBros Node (Node) - includes RQLite",
-		"debros-gateway":                "DeBros Gateway",
+		"debros-ipfs":         "IPFS Daemon",
+		"debros-ipfs-cluster": "IPFS Cluster",
+		"debros-olric":        "Olric Cache Server",
+		"debros-node":         "DeBros Node (includes RQLite)",
+		"debros-gateway":      "DeBros Gateway",
 	}
 
 	fmt.Printf("Services:\n")
@@ -695,11 +1006,11 @@ func handleProdStatus() {
 	}
 
 	fmt.Printf("\nDirectories:\n")
-	debrosDir := "/home/debros/.debros"
-	if _, err := os.Stat(debrosDir); err == nil {
-		fmt.Printf("  ✅ %s exists\n", debrosDir)
+	oramaDir := "/home/debros/.orama"
+	if _, err := os.Stat(oramaDir); err == nil {
+		fmt.Printf("  ✅ %s exists\n", oramaDir)
 	} else {
-		fmt.Printf("  ❌ %s not found\n", debrosDir)
+		fmt.Printf("  ❌ %s not found\n", oramaDir)
 	}
 
 	fmt.Printf("\nView logs with: dbn prod logs <service>\n")
@@ -707,15 +1018,15 @@ func handleProdStatus() {
 
 // resolveServiceName resolves service aliases to actual systemd service names
 func resolveServiceName(alias string) ([]string, error) {
-	// Service alias mapping
+	// Service alias mapping (unified - no bootstrap/node distinction)
 	aliases := map[string][]string{
-		"node":         {"debros-node-bootstrap", "debros-node-node"},
-		"ipfs":         {"debros-ipfs-bootstrap", "debros-ipfs-node"},
-		"cluster":      {"debros-ipfs-cluster-bootstrap", "debros-ipfs-cluster-node"},
-		"ipfs-cluster": {"debros-ipfs-cluster-bootstrap", "debros-ipfs-cluster-node"},
+		"node":         {"debros-node"},
+		"ipfs":         {"debros-ipfs"},
+		"cluster":      {"debros-ipfs-cluster"},
+		"ipfs-cluster": {"debros-ipfs-cluster"},
 		"gateway":      {"debros-gateway"},
 		"olric":        {"debros-olric"},
-		"rqlite":       {"debros-node-bootstrap", "debros-node-node"}, // RQLite logs are in node logs
+		"rqlite":       {"debros-node"}, // RQLite logs are in node logs
 	}
 
 	// Check if it's an alias
@@ -757,7 +1068,7 @@ func handleProdLogs(args []string) {
 		fmt.Fprintf(os.Stderr, "\nService aliases:\n")
 		fmt.Fprintf(os.Stderr, "  node, ipfs, cluster, gateway, olric\n")
 		fmt.Fprintf(os.Stderr, "\nOr use full service name:\n")
-		fmt.Fprintf(os.Stderr, "  debros-node-bootstrap, debros-gateway, etc.\n")
+		fmt.Fprintf(os.Stderr, "  debros-node, debros-gateway, etc.\n")
 		os.Exit(1)
 	}
 
@@ -772,7 +1083,7 @@ func handleProdLogs(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		fmt.Fprintf(os.Stderr, "\nAvailable service aliases: node, ipfs, cluster, gateway, olric\n")
-		fmt.Fprintf(os.Stderr, "Or use full service name like: debros-node-bootstrap\n")
+		fmt.Fprintf(os.Stderr, "Or use full service name like: debros-node\n")
 		os.Exit(1)
 	}
 
@@ -836,14 +1147,11 @@ type portSpec struct {
 }
 
 var servicePorts = map[string][]portSpec{
-	"debros-gateway":                {{"Gateway API", 6001}},
-	"debros-olric":                  {{"Olric HTTP", 3320}, {"Olric Memberlist", 3322}},
-	"debros-node-bootstrap":         {{"RQLite HTTP", 5001}, {"RQLite Raft", 7001}, {"IPFS Cluster API", 9094}},
-	"debros-node-node":              {{"RQLite HTTP", 5001}, {"RQLite Raft", 7001}, {"IPFS Cluster API", 9094}},
-	"debros-ipfs-bootstrap":         {{"IPFS API", 4501}, {"IPFS Gateway", 8080}, {"IPFS Swarm", 4001}},
-	"debros-ipfs-node":              {{"IPFS API", 4501}, {"IPFS Gateway", 8080}, {"IPFS Swarm", 4001}},
-	"debros-ipfs-cluster-bootstrap": {{"IPFS Cluster API", 9094}},
-	"debros-ipfs-cluster-node":      {{"IPFS Cluster API", 9094}},
+	"debros-gateway":      {{"Gateway API", 6001}},
+	"debros-olric":        {{"Olric HTTP", 3320}, {"Olric Memberlist", 3322}},
+	"debros-node":         {{"RQLite HTTP", 5001}, {"RQLite Raft", 7001}},
+	"debros-ipfs":         {{"IPFS API", 4501}, {"IPFS Gateway", 8080}, {"IPFS Swarm", 4101}},
+	"debros-ipfs-cluster": {{"IPFS Cluster API", 9094}},
 }
 
 // defaultPorts is used for fresh installs/upgrades before unit files exist.
@@ -932,89 +1240,16 @@ func ensurePortsAvailable(action string, ports []portSpec) error {
 	return nil
 }
 
-func checkHTTP(client *http.Client, method, url, label string) error {
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		return fmt.Errorf("%s check failed: %w", label, err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s check failed: %w", label, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s returned HTTP %d", label, resp.StatusCode)
-	}
-	return nil
-}
-
-func serviceExists(name string) bool {
-	unitPath := filepath.Join("/etc/systemd/system", name+".service")
-	_, err := os.Stat(unitPath)
-	return err == nil
-}
-
-func verifyProductionRuntime(action string) error {
-	services := getProductionServices()
-	issues := make([]string, 0)
-
-	for _, svc := range services {
-		active, err := isServiceActive(svc)
-		if err != nil {
-			issues = append(issues, fmt.Sprintf("%s status unknown (%v)", svc, err))
-			continue
-		}
-		if !active {
-			issues = append(issues, fmt.Sprintf("%s is inactive", svc))
-		}
-	}
-
-	client := &http.Client{Timeout: 3 * time.Second}
-
-	if err := checkHTTP(client, "GET", "http://127.0.0.1:5001/status", "RQLite status"); err == nil {
-	} else if serviceExists("debros-node-bootstrap") || serviceExists("debros-node-node") {
-		issues = append(issues, err.Error())
-	}
-
-	if err := checkHTTP(client, "POST", "http://127.0.0.1:4501/api/v0/version", "IPFS API"); err == nil {
-	} else if serviceExists("debros-ipfs-bootstrap") || serviceExists("debros-ipfs-node") {
-		issues = append(issues, err.Error())
-	}
-
-	if err := checkHTTP(client, "GET", "http://127.0.0.1:9094/health", "IPFS Cluster"); err == nil {
-	} else if serviceExists("debros-ipfs-cluster-bootstrap") || serviceExists("debros-ipfs-cluster-node") {
-		issues = append(issues, err.Error())
-	}
-
-	if err := checkHTTP(client, "GET", "http://127.0.0.1:6001/health", "Gateway health"); err == nil {
-	} else if serviceExists("debros-gateway") {
-		issues = append(issues, err.Error())
-	}
-
-	if err := checkHTTP(client, "GET", "http://127.0.0.1:3320/ping", "Olric ping"); err == nil {
-	} else if serviceExists("debros-olric") {
-		issues = append(issues, err.Error())
-	}
-
-	if len(issues) > 0 {
-		return fmt.Errorf("%s verification failed:\n  - %s", action, strings.Join(issues, "\n  - "))
-	}
-	return nil
-}
-
 // getProductionServices returns a list of all DeBros production service names that exist
 func getProductionServices() []string {
-	// All possible service names (both bootstrap and node variants)
+	// Unified service names (no bootstrap/node distinction)
 	allServices := []string{
 		"debros-gateway",
-		"debros-node-node",
-		"debros-node-bootstrap",
+		"debros-node",
 		"debros-olric",
-		// Note: RQLite is managed by node process, not as separate service
-		"debros-ipfs-cluster-bootstrap",
-		"debros-ipfs-cluster-node",
-		"debros-ipfs-bootstrap",
-		"debros-ipfs-node",
+		"debros-ipfs-cluster",
+		"debros-ipfs",
+		"debros-anyone-client",
 	}
 
 	// Filter to only existing services by checking if unit file exists
@@ -1139,35 +1374,7 @@ func handleProdStart() {
 	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
 	time.Sleep(5 * time.Second)
 
-	// Wait for services to actually become active (with retries)
-	maxRetries := 6
-	for i := 0; i < maxRetries; i++ {
-		allActive := true
-		for _, svc := range inactive {
-			active, err := isServiceActive(svc)
-			if err != nil || !active {
-				allActive = false
-				break
-			}
-		}
-		if allActive {
-			break
-		}
-		if i < maxRetries-1 {
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	// Verify all services are healthy
-	if err := verifyProductionRuntime("prod start"); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		fmt.Fprintf(os.Stderr, "\n   Services may still be starting. Check status with:\n")
-		fmt.Fprintf(os.Stderr, "   systemctl status debros-*\n")
-		fmt.Fprintf(os.Stderr, "   dbn prod logs <service>\n")
-		os.Exit(1)
-	}
-
-	fmt.Printf("\n✅ All services started and healthy\n")
+	fmt.Printf("\n✅ All services started\n")
 }
 
 func handleProdStop() {
@@ -1184,6 +1391,13 @@ func handleProdStop() {
 		return
 	}
 
+	// First, disable all services to prevent auto-restart
+	disableArgs := []string{"disable"}
+	disableArgs = append(disableArgs, services...)
+	if err := exec.Command("systemctl", disableArgs...).Run(); err != nil {
+		fmt.Printf("  ⚠️  Warning: Failed to disable some services: %v\n", err)
+	}
+
 	// Stop all services at once using a single systemctl command
 	// This is more efficient and ensures they all stop together
 	stopArgs := []string{"stop"}
@@ -1197,7 +1411,6 @@ func handleProdStop() {
 	time.Sleep(2 * time.Second)
 
 	// Reset failed state for any services that might be in failed state
-	// This helps with services stuck in "activating auto-restart"
 	resetArgs := []string{"reset-failed"}
 	resetArgs = append(resetArgs, services...)
 	exec.Command("systemctl", resetArgs...).Run()
@@ -1205,7 +1418,7 @@ func handleProdStop() {
 	// Wait again after reset-failed
 	time.Sleep(1 * time.Second)
 
-	// Stop again to ensure they're stopped (in case reset-failed caused a restart)
+	// Stop again to ensure they're stopped
 	exec.Command("systemctl", stopArgs...).Run()
 	time.Sleep(1 * time.Second)
 
@@ -1319,17 +1532,7 @@ func handleProdRestart() {
 		}
 	}
 
-	// Give services a moment to fully initialize before verification
-	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
-	time.Sleep(3 * time.Second)
-
-	// Verify all services are healthy
-	if err := verifyProductionRuntime("prod restart"); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("\n✅ All services restarted and healthy\n")
+	fmt.Printf("\n✅ All services restarted\n")
 }
 
 func handleProdUninstall() {
@@ -1339,7 +1542,7 @@ func handleProdUninstall() {
 	}
 
 	fmt.Printf("⚠️  This will stop and remove all DeBros production services\n")
-	fmt.Printf("⚠️  Configuration and data will be preserved in /home/debros/.debros\n\n")
+	fmt.Printf("⚠️  Configuration and data will be preserved in /home/debros/.orama\n\n")
 	fmt.Printf("Continue? (yes/no): ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -1353,14 +1556,11 @@ func handleProdUninstall() {
 
 	services := []string{
 		"debros-gateway",
-		"debros-node-node",
-		"debros-node-bootstrap",
+		"debros-node",
 		"debros-olric",
-		// Note: RQLite is managed by node process, not as separate service
-		"debros-ipfs-cluster-bootstrap",
-		"debros-ipfs-cluster-node",
-		"debros-ipfs-bootstrap",
-		"debros-ipfs-node",
+		"debros-ipfs-cluster",
+		"debros-ipfs",
+		"debros-anyone-client",
 	}
 
 	fmt.Printf("Stopping services...\n")
@@ -1373,6 +1573,159 @@ func handleProdUninstall() {
 
 	exec.Command("systemctl", "daemon-reload").Run()
 	fmt.Printf("✅ Services uninstalled\n")
-	fmt.Printf("   Configuration and data preserved in /home/debros/.debros\n")
-	fmt.Printf("   To remove all data: rm -rf /home/debros/.debros\n\n")
+	fmt.Printf("   Configuration and data preserved in /home/debros/.orama\n")
+	fmt.Printf("   To remove all data: rm -rf /home/debros/.orama\n\n")
+}
+
+// handleProdMigrate migrates from old unified setup to new unified setup
+func handleProdMigrate(args []string) {
+	// Parse flags
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dryRun := fs.Bool("dry-run", false, "Show what would be migrated without making changes")
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "❌ Failed to parse flags: %v\n", err)
+		os.Exit(1)
+	}
+
+	if os.Geteuid() != 0 && !*dryRun {
+		fmt.Fprintf(os.Stderr, "❌ Migration must be run as root (use sudo)\n")
+		os.Exit(1)
+	}
+
+	oramaDir := "/home/debros/.orama"
+
+	fmt.Printf("🔄 Checking for installations to migrate...\n\n")
+
+	// Check for old-style installations
+	oldDataDirs := []string{
+		filepath.Join(oramaDir, "data", "node-1"),
+		filepath.Join(oramaDir, "data", "node"),
+	}
+
+	oldServices := []string{
+		"debros-ipfs",
+		"debros-ipfs-cluster",
+		"debros-node",
+	}
+
+	oldConfigs := []string{
+		filepath.Join(oramaDir, "configs", "bootstrap.yaml"),
+	}
+
+	// Check what needs to be migrated
+	var needsMigration bool
+
+	fmt.Printf("Checking data directories:\n")
+	for _, dir := range oldDataDirs {
+		if _, err := os.Stat(dir); err == nil {
+			fmt.Printf("  ⚠️  Found old directory: %s\n", dir)
+			needsMigration = true
+		}
+	}
+
+	fmt.Printf("\nChecking services:\n")
+	for _, svc := range oldServices {
+		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+		if _, err := os.Stat(unitPath); err == nil {
+			fmt.Printf("  ⚠️  Found old service: %s\n", svc)
+			needsMigration = true
+		}
+	}
+
+	fmt.Printf("\nChecking configs:\n")
+	for _, cfg := range oldConfigs {
+		if _, err := os.Stat(cfg); err == nil {
+			fmt.Printf("  ⚠️  Found old config: %s\n", cfg)
+			needsMigration = true
+		}
+	}
+
+	if !needsMigration {
+		fmt.Printf("\n✅ No migration needed - installation already uses unified structure\n")
+		return
+	}
+
+	if *dryRun {
+		fmt.Printf("\n📋 Dry run - no changes made\n")
+		fmt.Printf("   Run without --dry-run to perform migration\n")
+		return
+	}
+
+	fmt.Printf("\n🔄 Starting migration...\n")
+
+	// Stop old services first
+	fmt.Printf("\n  Stopping old services...\n")
+	for _, svc := range oldServices {
+		if err := exec.Command("systemctl", "stop", svc).Run(); err == nil {
+			fmt.Printf("    ✓ Stopped %s\n", svc)
+		}
+	}
+
+	// Migrate data directories
+	newDataDir := filepath.Join(oramaDir, "data")
+	fmt.Printf("\n  Migrating data directories...\n")
+
+	// Prefer node-1 data if it exists, otherwise use node data
+	sourceDir := ""
+	if _, err := os.Stat(filepath.Join(oramaDir, "data", "node-1")); err == nil {
+		sourceDir = filepath.Join(oramaDir, "data", "node-1")
+	} else if _, err := os.Stat(filepath.Join(oramaDir, "data", "node")); err == nil {
+		sourceDir = filepath.Join(oramaDir, "data", "node")
+	}
+
+	if sourceDir != "" {
+		// Move contents to unified data directory
+		entries, _ := os.ReadDir(sourceDir)
+		for _, entry := range entries {
+			src := filepath.Join(sourceDir, entry.Name())
+			dst := filepath.Join(newDataDir, entry.Name())
+			if _, err := os.Stat(dst); os.IsNotExist(err) {
+				if err := os.Rename(src, dst); err == nil {
+					fmt.Printf("    ✓ Moved %s → %s\n", src, dst)
+				}
+			}
+		}
+	}
+
+	// Remove old data directories
+	for _, dir := range oldDataDirs {
+		if err := os.RemoveAll(dir); err == nil {
+			fmt.Printf("    ✓ Removed %s\n", dir)
+		}
+	}
+
+	// Migrate config files
+	fmt.Printf("\n  Migrating config files...\n")
+	oldNodeConfig := filepath.Join(oramaDir, "configs", "bootstrap.yaml")
+	newNodeConfig := filepath.Join(oramaDir, "configs", "node.yaml")
+	if _, err := os.Stat(oldNodeConfig); err == nil {
+		if _, err := os.Stat(newNodeConfig); os.IsNotExist(err) {
+			if err := os.Rename(oldNodeConfig, newNodeConfig); err == nil {
+				fmt.Printf("    ✓ Renamed bootstrap.yaml → node.yaml\n")
+			}
+		} else {
+			os.Remove(oldNodeConfig)
+			fmt.Printf("    ✓ Removed old bootstrap.yaml (node.yaml already exists)\n")
+		}
+	}
+
+	// Remove old services
+	fmt.Printf("\n  Removing old service files...\n")
+	for _, svc := range oldServices {
+		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+		if err := os.Remove(unitPath); err == nil {
+			fmt.Printf("    ✓ Removed %s\n", unitPath)
+		}
+	}
+
+	// Reload systemd
+	exec.Command("systemctl", "daemon-reload").Run()
+
+	fmt.Printf("\n✅ Migration complete!\n")
+	fmt.Printf("   Run 'sudo orama upgrade --restart' to regenerate services with new names\n\n")
 }

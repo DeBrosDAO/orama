@@ -17,7 +17,8 @@ import (
 // Cache HTTP handlers for Olric distributed cache
 
 func (g *Gateway) cacheHealthHandler(w http.ResponseWriter, r *http.Request) {
-	if g.olricClient == nil {
+	client := g.getOlricClient()
+	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
@@ -25,7 +26,7 @@ func (g *Gateway) cacheHealthHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	err := g.olricClient.Health(ctx)
+	err := client.Health(ctx)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("cache health check failed: %v", err))
 		return
@@ -38,7 +39,8 @@ func (g *Gateway) cacheHealthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
-	if g.olricClient == nil {
+	client := g.getOlricClient()
+	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
@@ -66,8 +68,8 @@ func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	client := g.olricClient.GetClient()
-	dm, err := client.NewDMap(req.DMap)
+	olricCluster := client.GetClient()
+	dm, err := olricCluster.NewDMap(req.DMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return
@@ -142,7 +144,8 @@ func decodeValueFromOlric(gr *olriclib.GetResponse) (any, error) {
 }
 
 func (g *Gateway) cacheMultiGetHandler(w http.ResponseWriter, r *http.Request) {
-	if g.olricClient == nil {
+	client := g.getOlricClient()
+	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
@@ -175,8 +178,8 @@ func (g *Gateway) cacheMultiGetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	client := g.olricClient.GetClient()
-	dm, err := client.NewDMap(req.DMap)
+	olricCluster := client.GetClient()
+	dm, err := olricCluster.NewDMap(req.DMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return
@@ -220,7 +223,8 @@ func (g *Gateway) cacheMultiGetHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) cachePutHandler(w http.ResponseWriter, r *http.Request) {
-	if g.olricClient == nil {
+	client := g.getOlricClient()
+	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
@@ -255,8 +259,8 @@ func (g *Gateway) cachePutHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	client := g.olricClient.GetClient()
-	dm, err := client.NewDMap(req.DMap)
+	olricCluster := client.GetClient()
+	dm, err := olricCluster.NewDMap(req.DMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return
@@ -337,7 +341,8 @@ func (g *Gateway) cachePutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) cacheDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	if g.olricClient == nil {
+	client := g.getOlricClient()
+	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
@@ -365,8 +370,8 @@ func (g *Gateway) cacheDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	client := g.olricClient.GetClient()
-	dm, err := client.NewDMap(req.DMap)
+	olricCluster := client.GetClient()
+	dm, err := olricCluster.NewDMap(req.DMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return
@@ -395,7 +400,8 @@ func (g *Gateway) cacheDeleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) cacheScanHandler(w http.ResponseWriter, r *http.Request) {
-	if g.olricClient == nil {
+	client := g.getOlricClient()
+	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
@@ -423,8 +429,8 @@ func (g *Gateway) cacheScanHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	client := g.olricClient.GetClient()
-	dm, err := client.NewDMap(req.DMap)
+	olricCluster := client.GetClient()
+	dm, err := olricCluster.NewDMap(req.DMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return

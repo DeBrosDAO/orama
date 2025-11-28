@@ -15,11 +15,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // ProcessManager manages all dev environment processes
 type ProcessManager struct {
-	debrosDir string
+	oramaDir string
 	pidsDir   string
 	processes map[string]*ManagedProcess
 	mutex     sync.Mutex
@@ -35,12 +37,12 @@ type ManagedProcess struct {
 }
 
 // NewProcessManager creates a new process manager
-func NewProcessManager(debrosDir string, logWriter io.Writer) *ProcessManager {
-	pidsDir := filepath.Join(debrosDir, ".pids")
+func NewProcessManager(oramaDir string, logWriter io.Writer) *ProcessManager {
+	pidsDir := filepath.Join(oramaDir, ".pids")
 	os.MkdirAll(pidsDir, 0755)
 
 	return &ProcessManager{
-		debrosDir: debrosDir,
+		oramaDir: oramaDir,
 		pidsDir:   pidsDir,
 		processes: make(map[string]*ManagedProcess),
 		logWriter: logWriter,
@@ -49,7 +51,8 @@ func NewProcessManager(debrosDir string, logWriter io.Writer) *ProcessManager {
 
 // StartAll starts all development services
 func (pm *ProcessManager) StartAll(ctx context.Context) error {
-	fmt.Fprintf(pm.logWriter, "\n🚀 Starting development environment...\n\n")
+	fmt.Fprintf(pm.logWriter, "\n🚀 Starting development environment...\n")
+	fmt.Fprintf(pm.logWriter, "═══════════════════════════════════════\n\n")
 
 	topology := DefaultTopology()
 
@@ -62,12 +65,11 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		fn   func(context.Context) error
 	}{
 		{"IPFS", pm.startIPFS},
-		{"RQLite", pm.startRQLite},
 		{"IPFS Cluster", pm.startIPFSCluster},
 		{"Olric", pm.startOlric},
 		{"Anon", pm.startAnon},
 		{"Nodes (Network)", pm.startNodes},
-		{"Gateway", pm.startGateway},
+		// Gateway is now per-node (embedded in each node) - no separate main gateway needed
 	}
 
 	for _, svc := range services {
@@ -77,6 +79,8 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		}
 	}
 
+	fmt.Fprintf(pm.logWriter, "\n")
+
 	// Run health checks with retries before declaring success
 	const (
 		healthCheckRetries  = 20
@@ -85,18 +89,48 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 	)
 
 	if !pm.HealthCheckWithRetry(ctx, ipfsNodes, healthCheckRetries, healthCheckInterval, healthCheckTimeout) {
-		fmt.Fprintf(pm.logWriter, "\n❌ Development environment failed health checks - stopping all services\n")
+		fmt.Fprintf(pm.logWriter, "\n❌ Health checks failed - stopping all services\n")
 		pm.StopAll(ctx)
 		return fmt.Errorf("cluster health checks failed - services stopped")
 	}
 
-	fmt.Fprintf(pm.logWriter, "\n✅ Development environment started!\n\n")
+	// Print success and key endpoints
+	pm.printStartupSummary(topology)
 	return nil
+}
+
+// printStartupSummary prints the final startup summary with key endpoints
+func (pm *ProcessManager) printStartupSummary(topology *Topology) {
+	fmt.Fprintf(pm.logWriter, "\n✅ Development environment ready!\n")
+	fmt.Fprintf(pm.logWriter, "═══════════════════════════════════════\n\n")
+
+	fmt.Fprintf(pm.logWriter, "📡 Access your nodes via unified gateway ports:\n\n")
+	for _, node := range topology.Nodes {
+		fmt.Fprintf(pm.logWriter, "  %s:\n", node.Name)
+		fmt.Fprintf(pm.logWriter, "    curl http://localhost:%d/health\n", node.UnifiedGatewayPort)
+		fmt.Fprintf(pm.logWriter, "    curl http://localhost:%d/rqlite/http/db/execute\n", node.UnifiedGatewayPort)
+		fmt.Fprintf(pm.logWriter, "    curl http://localhost:%d/cluster/health\n\n", node.UnifiedGatewayPort)
+	}
+
+	fmt.Fprintf(pm.logWriter, "🌐 Main Gateway:\n")
+	fmt.Fprintf(pm.logWriter, "  curl http://localhost:%d/v1/status\n\n", topology.GatewayPort)
+
+	fmt.Fprintf(pm.logWriter, "📊 Other Services:\n")
+	fmt.Fprintf(pm.logWriter, "  Olric:        http://localhost:%d\n", topology.OlricHTTPPort)
+	fmt.Fprintf(pm.logWriter, "  Anon SOCKS:   127.0.0.1:%d\n\n", topology.AnonSOCKSPort)
+
+	fmt.Fprintf(pm.logWriter, "📝 Useful Commands:\n")
+	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev status  - Check service status\n")
+	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev logs node-1  - View logs\n")
+	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev down    - Stop all services\n\n")
+
+	fmt.Fprintf(pm.logWriter, "📂 Logs: %s/logs\n", pm.oramaDir)
+	fmt.Fprintf(pm.logWriter, "⚙️  Config: %s\n\n", pm.oramaDir)
 }
 
 // StopAll stops all running processes
 func (pm *ProcessManager) StopAll(ctx context.Context) error {
-	fmt.Fprintf(pm.logWriter, "\n🛑 Stopping development environment...\n")
+	fmt.Fprintf(pm.logWriter, "\n🛑 Stopping development environment...\n\n")
 
 	topology := DefaultTopology()
 	var services []string
@@ -113,19 +147,26 @@ func (pm *ProcessManager) StopAll(ctx context.Context) error {
 	}
 	for i := len(topology.Nodes) - 1; i >= 0; i-- {
 		node := topology.Nodes[i]
-		services = append(services, fmt.Sprintf("rqlite-%s", node.Name))
-	}
-	for i := len(topology.Nodes) - 1; i >= 0; i-- {
-		node := topology.Nodes[i]
 		services = append(services, fmt.Sprintf("ipfs-%s", node.Name))
 	}
 	services = append(services, "olric", "anon")
 
+	fmt.Fprintf(pm.logWriter, "Stopping %d services...\n\n", len(services))
+	
+	// Stop all processes sequentially (in dependency order) and wait for each
+	stoppedCount := 0
 	for _, svc := range services {
-		pm.stopProcess(svc)
+		if err := pm.stopProcess(svc); err != nil {
+			fmt.Fprintf(pm.logWriter, "⚠️  Error stopping %s: %v\n", svc, err)
+		} else {
+			stoppedCount++
+		}
+		
+		// Show progress
+		fmt.Fprintf(pm.logWriter, "  [%d/%d] stopped\n", stoppedCount, len(services))
 	}
 
-	fmt.Fprintf(pm.logWriter, "✓ All services stopped\n\n")
+	fmt.Fprintf(pm.logWriter, "\n✅ All %d services have been stopped\n\n", stoppedCount)
 	return nil
 }
 
@@ -149,13 +190,6 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		}{
 			fmt.Sprintf("%s IPFS", node.Name),
 			[]int{node.IPFSAPIPort, node.IPFSSwarmPort},
-		})
-		services = append(services, struct {
-			name  string
-			ports []int
-		}{
-			fmt.Sprintf("%s RQLite", node.Name),
-			[]int{node.RQLiteHTTPPort, node.RQLiteRaftPort},
 		})
 		services = append(services, struct {
 			name  string
@@ -205,10 +239,10 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		fmt.Fprintf(pm.logWriter, "  %-25s %s (%s)\n", svc.name, status, portStr)
 	}
 
-	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.debrosDir)
-	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node2.yaml", "node3.yaml", "node4.yaml", "gateway.yaml", "olric-config.yaml"}
+	fmt.Fprintf(pm.logWriter, "\nConfiguration files in %s:\n", pm.oramaDir)
+	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml", "olric-config.yaml"}
 	for _, f := range configFiles {
-		path := filepath.Join(pm.debrosDir, f)
+		path := filepath.Join(pm.oramaDir, f)
 		if _, err := os.Stat(path); err == nil {
 			fmt.Fprintf(pm.logWriter, "  ✓ %s\n", f)
 		} else {
@@ -216,7 +250,7 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		}
 	}
 
-	fmt.Fprintf(pm.logWriter, "\nLogs directory: %s/logs\n\n", pm.debrosDir)
+	fmt.Fprintf(pm.logWriter, "\nLogs directory: %s/logs\n\n", pm.oramaDir)
 }
 
 // Helper functions for starting individual services
@@ -227,7 +261,7 @@ func (pm *ProcessManager) buildIPFSNodes(topology *Topology) []ipfsNodeInfo {
 	for _, nodeSpec := range topology.Nodes {
 		nodes = append(nodes, ipfsNodeInfo{
 			name:        nodeSpec.Name,
-			ipfsPath:    filepath.Join(pm.debrosDir, nodeSpec.DataDir, "ipfs/repo"),
+			ipfsPath:    filepath.Join(pm.oramaDir, nodeSpec.DataDir, "ipfs/repo"),
 			apiPort:     nodeSpec.IPFSAPIPort,
 			swarmPort:   nodeSpec.IPFSSwarmPort,
 			gatewayPort: nodeSpec.IPFSGatewayPort,
@@ -237,11 +271,11 @@ func (pm *ProcessManager) buildIPFSNodes(topology *Topology) []ipfsNodeInfo {
 	return nodes
 }
 
-// startNodes starts all network nodes (bootstraps and regular)
+// startNodes starts all network nodes
 func (pm *ProcessManager) startNodes(ctx context.Context) error {
 	topology := DefaultTopology()
 	for _, nodeSpec := range topology.Nodes {
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("%s.log", nodeSpec.Name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("%s.log", nodeSpec.Name))
 		if err := pm.startNode(nodeSpec.Name, nodeSpec.ConfigFilename, logPath); err != nil {
 			return fmt.Errorf("failed to start %s: %w", nodeSpec.Name, err)
 		}
@@ -449,7 +483,7 @@ func (pm *ProcessManager) waitIPFSReady(ctx context.Context, node ipfsNodeInfo) 
 
 // ipfsHTTPCall makes an HTTP call to IPFS API
 func (pm *ProcessManager) ipfsHTTPCall(ctx context.Context, urlStr string, method string) error {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := tlsutil.NewHTTPClient(5 * time.Second)
 	req, err := http.NewRequestWithContext(ctx, method, urlStr, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -486,7 +520,7 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 			}
 
 			// Copy swarm key
-			swarmKeyPath := filepath.Join(pm.debrosDir, "swarm.key")
+			swarmKeyPath := filepath.Join(pm.oramaDir, "swarm.key")
 			if data, err := os.ReadFile(swarmKeyPath); err == nil {
 				os.WriteFile(filepath.Join(nodes[i].ipfsPath, "swarm.key"), data, 0600)
 			}
@@ -506,7 +540,7 @@ func (pm *ProcessManager) startIPFS(ctx context.Context) error {
 	// Phase 2: Start all IPFS daemons
 	for i := range nodes {
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("ipfs-%s.pid", nodes[i].name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("ipfs-%s.log", nodes[i].name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("ipfs-%s.log", nodes[i].name))
 
 		cmd := exec.CommandContext(ctx, "ipfs", "daemon", "--enable-pubsub-experiment", "--repo-dir="+nodes[i].ipfsPath)
 		logFile, _ := os.Create(logPath)
@@ -557,7 +591,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 			ipfsPort    int
 		}{
 			nodeSpec.Name,
-			filepath.Join(pm.debrosDir, nodeSpec.DataDir, "ipfs-cluster"),
+			filepath.Join(pm.oramaDir, nodeSpec.DataDir, "ipfs-cluster"),
 			nodeSpec.ClusterAPIPort,
 			nodeSpec.ClusterPort,
 			nodeSpec.IPFSAPIPort,
@@ -574,7 +608,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 	}
 
 	// Read cluster secret to ensure all nodes use the same PSK
-	secretPath := filepath.Join(pm.debrosDir, "cluster-secret")
+	secretPath := filepath.Join(pm.oramaDir, "cluster-secret")
 	clusterSecret, err := os.ReadFile(secretPath)
 	if err != nil {
 		return fmt.Errorf("failed to read cluster secret: %w", err)
@@ -623,7 +657,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 
 		// Start bootstrap cluster service
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("ipfs-cluster-%s.pid", node.name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
 
 		cmd = exec.CommandContext(ctx, "ipfs-cluster-service", "daemon")
 		cmd.Env = append(os.Environ(), fmt.Sprintf("IPFS_CLUSTER_PATH=%s", node.clusterPath))
@@ -697,7 +731,7 @@ func (pm *ProcessManager) startIPFSCluster(ctx context.Context) error {
 
 		// Start follower cluster service with bootstrap flag
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("ipfs-cluster-%s.pid", node.name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
+		logPath := filepath.Join(pm.oramaDir, "logs", fmt.Sprintf("ipfs-cluster-%s.log", node.name))
 
 		args := []string{"daemon"}
 		if bootstrapMultiaddr != "" {
@@ -942,76 +976,10 @@ func (pm *ProcessManager) ensureIPFSClusterPorts(clusterPath string, restAPIPort
 	return nil
 }
 
-func (pm *ProcessManager) startRQLite(ctx context.Context) error {
-	topology := DefaultTopology()
-	var nodes []struct {
-		name     string
-		dataDir  string
-		httpPort int
-		raftPort int
-		joinAddr string
-	}
-
-	for _, nodeSpec := range topology.Nodes {
-		nodes = append(nodes, struct {
-			name     string
-			dataDir  string
-			httpPort int
-			raftPort int
-			joinAddr string
-		}{
-			nodeSpec.Name,
-			filepath.Join(pm.debrosDir, nodeSpec.DataDir, "rqlite"),
-			nodeSpec.RQLiteHTTPPort,
-			nodeSpec.RQLiteRaftPort,
-			nodeSpec.RQLiteJoinTarget,
-		})
-	}
-
-	for _, node := range nodes {
-		os.MkdirAll(node.dataDir, 0755)
-
-		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("rqlite-%s.pid", node.name))
-		logPath := filepath.Join(pm.debrosDir, "logs", fmt.Sprintf("rqlite-%s.log", node.name))
-
-		var args []string
-		args = append(args, fmt.Sprintf("-http-addr=0.0.0.0:%d", node.httpPort))
-		args = append(args, fmt.Sprintf("-http-adv-addr=localhost:%d", node.httpPort))
-		args = append(args, fmt.Sprintf("-raft-addr=0.0.0.0:%d", node.raftPort))
-		args = append(args, fmt.Sprintf("-raft-adv-addr=localhost:%d", node.raftPort))
-		if node.joinAddr != "" {
-			args = append(args, "-join", node.joinAddr, "-join-attempts", "30", "-join-interval", "10s")
-		}
-		args = append(args, node.dataDir)
-		cmd := exec.CommandContext(ctx, "rqlited", args...)
-
-		logFile, _ := os.Create(logPath)
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("failed to start rqlite-%s: %w", node.name, err)
-		}
-
-		os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
-		pm.processes[fmt.Sprintf("rqlite-%s", node.name)] = &ManagedProcess{
-			Name:      fmt.Sprintf("rqlite-%s", node.name),
-			PID:       cmd.Process.Pid,
-			StartTime: time.Now(),
-			LogPath:   logPath,
-		}
-
-		fmt.Fprintf(pm.logWriter, "✓ RQLite (%s) started (PID: %d, HTTP: %d, Raft: %d)\n", node.name, cmd.Process.Pid, node.httpPort, node.raftPort)
-	}
-
-	time.Sleep(2 * time.Second)
-	return nil
-}
-
 func (pm *ProcessManager) startOlric(ctx context.Context) error {
 	pidPath := filepath.Join(pm.pidsDir, "olric.pid")
-	logPath := filepath.Join(pm.debrosDir, "logs", "olric.log")
-	configPath := filepath.Join(pm.debrosDir, "olric-config.yaml")
+	logPath := filepath.Join(pm.oramaDir, "logs", "olric.log")
+	configPath := filepath.Join(pm.oramaDir, "olric-config.yaml")
 
 	cmd := exec.CommandContext(ctx, "olric-server")
 	cmd.Env = append(os.Environ(), fmt.Sprintf("OLRIC_SERVER_CONFIG=%s", configPath))
@@ -1036,7 +1004,7 @@ func (pm *ProcessManager) startAnon(ctx context.Context) error {
 	}
 
 	pidPath := filepath.Join(pm.pidsDir, "anon.pid")
-	logPath := filepath.Join(pm.debrosDir, "logs", "anon.log")
+	logPath := filepath.Join(pm.oramaDir, "logs", "anon.log")
 
 	cmd := exec.CommandContext(ctx, "npx", "anyone-client")
 	logFile, _ := os.Create(logPath)
@@ -1056,7 +1024,7 @@ func (pm *ProcessManager) startAnon(ctx context.Context) error {
 
 func (pm *ProcessManager) startNode(name, configFile, logPath string) error {
 	pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("%s.pid", name))
-	cmd := exec.Command("./bin/node", "--config", configFile)
+	cmd := exec.Command("./bin/orama-node", "--config", configFile)
 	logFile, _ := os.Create(logPath)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -1074,7 +1042,7 @@ func (pm *ProcessManager) startNode(name, configFile, logPath string) error {
 
 func (pm *ProcessManager) startGateway(ctx context.Context) error {
 	pidPath := filepath.Join(pm.pidsDir, "gateway.pid")
-	logPath := filepath.Join(pm.debrosDir, "logs", "gateway.log")
+	logPath := filepath.Join(pm.oramaDir, "logs", "gateway.log")
 
 	cmd := exec.Command("./bin/gateway", "--config", "gateway.yaml")
 	logFile, _ := os.Create(logPath)
@@ -1105,34 +1073,56 @@ func (pm *ProcessManager) stopProcess(name string) error {
 		return nil
 	}
 
+	// Check if process exists before trying to kill
+	if !checkProcessRunning(pid) {
+		os.Remove(pidPath)
+		fmt.Fprintf(pm.logWriter, "✓ %s (not running)\n", name)
+		return nil
+	}
+
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		os.Remove(pidPath)
 		return nil
 	}
 
-	// Try graceful shutdown first
+	// Try graceful shutdown first (SIGTERM)
 	proc.Signal(os.Interrupt)
 
-	// Wait a bit for graceful shutdown
-	time.Sleep(500 * time.Millisecond)
+	// Wait up to 2 seconds for graceful shutdown
+	gracefulShutdown := false
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if !checkProcessRunning(pid) {
+			gracefulShutdown = true
+			break
+		}
+	}
 
-	// Check if process is still running
-	if checkProcessRunning(pid) {
-		// Force kill if still running
+	// Force kill if still running after graceful attempt
+	if !gracefulShutdown && checkProcessRunning(pid) {
 		proc.Signal(os.Kill)
 		time.Sleep(200 * time.Millisecond)
 
-		// Also kill any child processes (platform-specific)
+		// Kill any child processes (platform-specific)
 		if runtime.GOOS != "windows" {
-			// Use pkill to kill children on Unix-like systems
 			exec.Command("pkill", "-9", "-P", fmt.Sprintf("%d", pid)).Run()
+		}
+
+		// Final force kill attempt if somehow still alive
+		if checkProcessRunning(pid) {
+			exec.Command("kill", "-9", fmt.Sprintf("%d", pid)).Run()
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
 	os.Remove(pidPath)
 
-	fmt.Fprintf(pm.logWriter, "✓ %s stopped\n", name)
+	if gracefulShutdown {
+		fmt.Fprintf(pm.logWriter, "✓ %s stopped gracefully\n", name)
+	} else {
+		fmt.Fprintf(pm.logWriter, "✓ %s stopped (forced)\n", name)
+	}
 	return nil
 }
 

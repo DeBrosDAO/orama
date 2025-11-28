@@ -35,7 +35,7 @@ var (
 	cacheMutex       sync.RWMutex
 )
 
-// loadGatewayConfig loads gateway configuration from ~/.debros/gateway.yaml
+// loadGatewayConfig loads gateway configuration from ~/.orama/gateway.yaml
 func loadGatewayConfig() (map[string]interface{}, error) {
 	configPath, err := config.DefaultPath("gateway.yaml")
 	if err != nil {
@@ -55,7 +55,7 @@ func loadGatewayConfig() (map[string]interface{}, error) {
 	return cfg, nil
 }
 
-// loadNodeConfig loads node configuration from ~/.debros/node.yaml or bootstrap.yaml
+// loadNodeConfig loads node configuration from ~/.orama/node-*.yaml
 func loadNodeConfig(filename string) (map[string]interface{}, error) {
 	configPath, err := config.DefaultPath(filename)
 	if err != nil {
@@ -111,8 +111,8 @@ func GetRQLiteNodes() []string {
 	}
 	cacheMutex.RUnlock()
 
-	// Try bootstrap.yaml first, then all node variants
-	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
+	// Try all node config files
+	for _, cfgFile := range []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -141,13 +141,13 @@ func queryAPIKeyFromRQLite() (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Try bootstrap first, then all nodes
+	// Try all node data directories
 	dbPaths := []string{
-		filepath.Join(homeDir, ".debros", "bootstrap", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "bootstrap2", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "node2", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "node3", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".debros", "node4", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "data", "node-1", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "data", "node-2", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "data", "node-3", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "data", "node-4", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "data", "node-5", "rqlite", "db.sqlite"),
 	}
 
 	for _, dbPath := range dbPaths {
@@ -221,7 +221,7 @@ func GetBootstrapPeers() []string {
 	}
 	cacheMutex.RUnlock()
 
-	configFiles := []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"}
+	configFiles := []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"}
 	seen := make(map[string]struct{})
 	var peers []string
 
@@ -272,7 +272,7 @@ func GetIPFSClusterURL() string {
 	cacheMutex.RUnlock()
 
 	// Try to load from node config
-	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
+	for _, cfgFile := range []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -304,7 +304,7 @@ func GetIPFSAPIURL() string {
 	cacheMutex.RUnlock()
 
 	// Try to load from node config
-	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
+	for _, cfgFile := range []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -329,7 +329,7 @@ func GetIPFSAPIURL() string {
 // GetClientNamespace returns the test client namespace from config
 func GetClientNamespace() string {
 	// Try to load from node config
-	for _, cfgFile := range []string{"bootstrap.yaml", "bootstrap2.yaml", "node.yaml", "node2.yaml", "node3.yaml", "node4.yaml"} {
+	for _, cfgFile := range []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"} {
 		nodeCfg, err := loadNodeConfig(cfgFile)
 		if err != nil {
 			continue
@@ -562,7 +562,7 @@ func CleanupDatabaseTable(t *testing.T, tableName string) {
 		return
 	}
 
-	dbPath := filepath.Join(homeDir, ".debros", "bootstrap", "rqlite", "db.sqlite")
+	dbPath := filepath.Join(homeDir, ".orama", "data", "node-1", "rqlite", "db.sqlite")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Logf("warning: failed to open database for cleanup: %v", err)

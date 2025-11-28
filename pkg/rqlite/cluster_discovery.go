@@ -433,7 +433,7 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 
 	for _, peer := range c.knownPeers {
 		// CRITICAL FIX: Include ALL peers (including self) in peers.json
-		// When using bootstrap-expect with recovery, RQLite needs the complete
+		// When using expect configuration with recovery, RQLite needs the complete
 		// expected cluster configuration to properly form consensus.
 		// The peers.json file is used by RQLite's recovery mechanism to know
 		// what the full cluster membership should be, including the local node.
@@ -584,25 +584,34 @@ func (c *ClusterDiscoveryService) HasRecentPeersJSON() bool {
 	return time.Since(c.lastUpdate) < 5*time.Minute
 }
 
-// FindJoinTargets discovers join targets via LibP2P, prioritizing bootstrap nodes
+// FindJoinTargets discovers join targets via LibP2P
 func (c *ClusterDiscoveryService) FindJoinTargets() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	targets := []string{}
 
-	// Prioritize bootstrap nodes
+	// All nodes are equal - prioritize by Raft log index (more advanced = better)
+	type nodeWithIndex struct {
+		address  string
+		logIndex uint64
+	}
+	var nodes []nodeWithIndex
 	for _, peer := range c.knownPeers {
-		if peer.NodeType == "bootstrap" {
-			targets = append(targets, peer.RaftAddress)
+		nodes = append(nodes, nodeWithIndex{peer.RaftAddress, peer.RaftLogIndex})
+	}
+
+	// Sort by log index descending (higher log index = more up-to-date)
+	for i := 0; i < len(nodes)-1; i++ {
+		for j := i + 1; j < len(nodes); j++ {
+			if nodes[j].logIndex > nodes[i].logIndex {
+				nodes[i], nodes[j] = nodes[j], nodes[i]
+			}
 		}
 	}
 
-	// Add other nodes as fallback
-	for _, peer := range c.knownPeers {
-		if peer.NodeType != "bootstrap" {
-			targets = append(targets, peer.RaftAddress)
-		}
+	for _, n := range nodes {
+		targets = append(targets, n.address)
 	}
 
 	return targets
@@ -633,11 +642,7 @@ func (c *ClusterDiscoveryService) WaitForDiscoverySettling(ctx context.Context) 
 
 // TriggerSync manually triggers a cluster membership sync
 func (c *ClusterDiscoveryService) TriggerSync() {
-	// For bootstrap nodes, wait a bit for peer discovery to stabilize
-	if c.nodeType == "bootstrap" {
-		time.Sleep(5 * time.Second)
-	}
-
+	// All nodes use the same discovery timing for consistency
 	c.updateClusterMembership()
 }
 
@@ -809,6 +814,11 @@ func (c *ClusterDiscoveryService) adjustSelfAdvertisedAddresses(meta *discovery.
 	c.raftAddress = meta.RaftAddress
 	c.httpAddress = meta.HTTPAddress
 	c.mu.Unlock()
+
+	if c.rqliteManager != nil {
+		c.rqliteManager.UpdateAdvertisedAddresses(meta.RaftAddress, meta.HTTPAddress)
+	}
+
 	return true
 }
 

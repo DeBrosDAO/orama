@@ -3,44 +3,44 @@ package production
 import (
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ProductionSetup orchestrates the entire production deployment
 type ProductionSetup struct {
-	osInfo                *OSInfo
-	arch                  string
-	debrosHome            string
-	debrosDir             string
-	logWriter             io.Writer
-	forceReconfigure      bool
-	skipOptionalDeps      bool
-	skipResourceChecks    bool
-	clusterSecretOverride string
-	privChecker           *PrivilegeChecker
-	osDetector            *OSDetector
-	archDetector          *ArchitectureDetector
-	resourceChecker       *ResourceChecker
-	fsProvisioner         *FilesystemProvisioner
-	userProvisioner       *UserProvisioner
-	stateDetector         *StateDetector
-	configGenerator       *ConfigGenerator
-	secretGenerator       *SecretGenerator
-	serviceGenerator      *SystemdServiceGenerator
-	serviceController     *SystemdController
-	binaryInstaller       *BinaryInstaller
-	branch                string
-	skipRepoUpdate        bool
-	NodePeerID            string // Captured during Phase3 for later display
+	osInfo             *OSInfo
+	arch               string
+	oramaHome         string
+	oramaDir          string
+	logWriter          io.Writer
+	forceReconfigure   bool
+	skipOptionalDeps   bool
+	skipResourceChecks bool
+	privChecker        *PrivilegeChecker
+	osDetector         *OSDetector
+	archDetector       *ArchitectureDetector
+	resourceChecker    *ResourceChecker
+	portChecker        *PortChecker
+	fsProvisioner      *FilesystemProvisioner
+	userProvisioner    *UserProvisioner
+	stateDetector      *StateDetector
+	configGenerator    *ConfigGenerator
+	secretGenerator    *SecretGenerator
+	serviceGenerator   *SystemdServiceGenerator
+	serviceController  *SystemdController
+	binaryInstaller    *BinaryInstaller
+	branch             string
+	skipRepoUpdate     bool
+	NodePeerID         string // Captured during Phase3 for later display
 }
 
 // ReadBranchPreference reads the stored branch preference from disk
-func ReadBranchPreference(debrosDir string) string {
-	branchFile := filepath.Join(debrosDir, ".branch")
+func ReadBranchPreference(oramaDir string) string {
+	branchFile := filepath.Join(oramaDir, ".branch")
 	data, err := os.ReadFile(branchFile)
 	if err != nil {
 		return "main" // Default to main if file doesn't exist
@@ -53,9 +53,9 @@ func ReadBranchPreference(debrosDir string) string {
 }
 
 // SaveBranchPreference saves the branch preference to disk
-func SaveBranchPreference(debrosDir, branch string) error {
-	branchFile := filepath.Join(debrosDir, ".branch")
-	if err := os.MkdirAll(debrosDir, 0755); err != nil {
+func SaveBranchPreference(oramaDir, branch string) error {
+	branchFile := filepath.Join(oramaDir, ".branch")
+	if err := os.MkdirAll(oramaDir, 0755); err != nil {
 		return fmt.Errorf("failed to create debros directory: %w", err)
 	}
 	if err := os.WriteFile(branchFile, []byte(branch), 0644); err != nil {
@@ -66,38 +66,37 @@ func SaveBranchPreference(debrosDir, branch string) error {
 }
 
 // NewProductionSetup creates a new production setup orchestrator
-func NewProductionSetup(debrosHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool, skipResourceChecks bool, clusterSecretOverride string) *ProductionSetup {
-	debrosDir := debrosHome + "/.debros"
+func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool, skipResourceChecks bool) *ProductionSetup {
+	oramaDir := filepath.Join(oramaHome, ".orama")
 	arch, _ := (&ArchitectureDetector{}).Detect()
-	normalizedSecret := strings.TrimSpace(strings.ToLower(clusterSecretOverride))
 
 	// If branch is empty, try to read from stored preference, otherwise default to main
 	if branch == "" {
-		branch = ReadBranchPreference(debrosDir)
+		branch = ReadBranchPreference(oramaDir)
 	}
 
 	return &ProductionSetup{
-		debrosHome:            debrosHome,
-		debrosDir:             debrosDir,
-		logWriter:             logWriter,
-		forceReconfigure:      forceReconfigure,
-		arch:                  arch,
-		branch:                branch,
-		skipRepoUpdate:        skipRepoUpdate,
-		skipResourceChecks:    skipResourceChecks,
-		clusterSecretOverride: normalizedSecret,
-		privChecker:           &PrivilegeChecker{},
-		osDetector:            &OSDetector{},
-		archDetector:          &ArchitectureDetector{},
-		resourceChecker:       NewResourceChecker(),
-		fsProvisioner:         NewFilesystemProvisioner(debrosHome),
-		userProvisioner:       NewUserProvisioner("debros", debrosHome, "/bin/bash"),
-		stateDetector:         NewStateDetector(debrosDir),
-		configGenerator:       NewConfigGenerator(debrosDir),
-		secretGenerator:       NewSecretGenerator(debrosDir, normalizedSecret),
-		serviceGenerator:      NewSystemdServiceGenerator(debrosHome, debrosDir),
-		serviceController:     NewSystemdController(),
-		binaryInstaller:       NewBinaryInstaller(arch, logWriter),
+		oramaHome:         oramaHome,
+		oramaDir:          oramaDir,
+		logWriter:          logWriter,
+		forceReconfigure:   forceReconfigure,
+		arch:               arch,
+		branch:             branch,
+		skipRepoUpdate:     skipRepoUpdate,
+		skipResourceChecks: skipResourceChecks,
+		privChecker:        &PrivilegeChecker{},
+		osDetector:         &OSDetector{},
+		archDetector:       &ArchitectureDetector{},
+		resourceChecker:    NewResourceChecker(),
+		portChecker:        NewPortChecker(),
+		fsProvisioner:      NewFilesystemProvisioner(oramaHome),
+		userProvisioner:    NewUserProvisioner("debros", oramaHome, "/bin/bash"),
+		stateDetector:      NewStateDetector(oramaDir),
+		configGenerator:    NewConfigGenerator(oramaDir),
+		secretGenerator:    NewSecretGenerator(oramaDir),
+		serviceGenerator:   NewSystemdServiceGenerator(oramaHome, oramaDir),
+		serviceController:  NewSystemdController(),
+		binaryInstaller:    NewBinaryInstaller(arch, logWriter),
 	}
 }
 
@@ -166,7 +165,7 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	if ps.skipResourceChecks {
 		ps.logf("  ⚠️  Skipping system resource checks (disk, RAM, CPU) due to --ignore-resource-checks flag")
 	} else {
-		if err := ps.resourceChecker.CheckDiskSpace(ps.debrosHome); err != nil {
+		if err := ps.resourceChecker.CheckDiskSpace(ps.oramaHome); err != nil {
 			ps.logf("  ❌ %v", err)
 			return err
 		}
@@ -212,8 +211,8 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 		}
 	}
 
-	// Create directory structure (base directories only - node-specific dirs created in Phase2c)
-	if err := ps.fsProvisioner.EnsureDirectoryStructure(""); err != nil {
+	// Create directory structure (unified structure)
+	if err := ps.fsProvisioner.EnsureDirectoryStructure(); err != nil {
 		return fmt.Errorf("failed to create directory structure: %w", err)
 	}
 	ps.logf("  ✓ Directory structure created")
@@ -258,8 +257,13 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  Olric install warning: %v", err)
 	}
 
+	// Install anyone-client for SOCKS5 proxy
+	if err := ps.binaryInstaller.InstallAnyoneClient(); err != nil {
+		ps.logf("  ⚠️  anyone-client install warning: %v", err)
+	}
+
 	// Install DeBros binaries
-	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.debrosHome, ps.skipRepoUpdate); err != nil {
+	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.oramaHome, ps.skipRepoUpdate); err != nil {
 		return fmt.Errorf("failed to install DeBros binaries: %w", err)
 	}
 
@@ -268,21 +272,23 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 }
 
 // Phase2cInitializeServices initializes service repositories and configurations
-func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string, bootstrapPeers []string, vpsIP string) error {
+// ipfsPeer can be nil for the first node, or contain peer info for joining nodes
+// ipfsClusterPeer can be nil for the first node, or contain IPFS Cluster peer info for joining nodes
+func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vpsIP string, ipfsPeer *IPFSPeerInfo, ipfsClusterPeer *IPFSClusterPeerInfo) error {
 	ps.logf("Phase 2c: Initializing services...")
 
-	// Ensure node-specific directories exist
-	if err := ps.fsProvisioner.EnsureDirectoryStructure(nodeType); err != nil {
-		return fmt.Errorf("failed to create node-specific directories: %w", err)
+	// Ensure directories exist (unified structure)
+	if err := ps.fsProvisioner.EnsureDirectoryStructure(); err != nil {
+		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	// Build paths with nodeType awareness to match systemd unit definitions
-	dataDir := filepath.Join(ps.debrosDir, "data", nodeType)
+	// Build paths - unified data directory (all nodes equal)
+	dataDir := filepath.Join(ps.oramaDir, "data")
 
 	// Initialize IPFS repo with correct path structure
 	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4101 for swarm (to avoid conflict with LibP2P on 4001)
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(nodeType, ipfsRepoPath, filepath.Join(ps.debrosDir, "secrets", "swarm.key"), 4501, 8080, 4101); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), 4501, 8080, 4101, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -293,39 +299,38 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string, bootstrapP
 		return fmt.Errorf("failed to get cluster secret: %w", err)
 	}
 
-	// Get bootstrap cluster peer addresses for non-bootstrap nodes
-	var bootstrapClusterPeers []string
-	if nodeType != "bootstrap" && len(bootstrapPeers) > 0 {
-		// Try to read bootstrap cluster peer ID and construct multiaddress
-		bootstrapClusterPath := filepath.Join(ps.debrosDir, "data", "bootstrap", "ipfs-cluster")
-
-		// Infer bootstrap IP from bootstrap peers
-		bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
-		if bootstrapIP != "" {
-			// Check if bootstrap cluster identity exists
-			if _, err := os.Stat(filepath.Join(bootstrapClusterPath, "identity.json")); err == nil {
-				// Bootstrap cluster is initialized, get its multiaddress
-				if clusterMultiaddr, err := ps.binaryInstaller.GetClusterPeerMultiaddr(bootstrapClusterPath, bootstrapIP); err == nil {
-					bootstrapClusterPeers = []string{clusterMultiaddr}
-					ps.logf("  ℹ️  Configured IPFS Cluster to connect to bootstrap: %s", clusterMultiaddr)
-				} else {
-					ps.logf("  ⚠️  Could not read bootstrap cluster peer ID: %v", err)
-					ps.logf("  ⚠️  IPFS Cluster will rely on mDNS discovery (may not work across internet)")
+	// Get cluster peer addresses from IPFS Cluster peer info if available
+	var clusterPeers []string
+	if ipfsClusterPeer != nil && ipfsClusterPeer.PeerID != "" {
+		// Construct cluster peer multiaddress using the discovered peer ID
+		// Format: /ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>
+		peerIP := inferPeerIP(peerAddresses, vpsIP)
+		if peerIP != "" {
+			// Construct the bootstrap multiaddress for IPFS Cluster
+			// Note: IPFS Cluster listens on port 9098 for cluster communication
+			clusterBootstrapAddr := fmt.Sprintf("/ip4/%s/tcp/9098/p2p/%s", peerIP, ipfsClusterPeer.PeerID)
+			clusterPeers = []string{clusterBootstrapAddr}
+			ps.logf("  ℹ️  IPFS Cluster will connect to peer: %s", clusterBootstrapAddr)
+		} else if len(ipfsClusterPeer.Addrs) > 0 {
+			// Fallback: use the addresses from discovery (if they include peer ID)
+			for _, addr := range ipfsClusterPeer.Addrs {
+				if strings.Contains(addr, ipfsClusterPeer.PeerID) {
+					clusterPeers = append(clusterPeers, addr)
 				}
-			} else {
-				ps.logf("  ℹ️  Bootstrap cluster not yet initialized, peer_addresses will be empty")
-				ps.logf("  ℹ️  IPFS Cluster will rely on mDNS discovery (may not work across internet)")
+			}
+			if len(clusterPeers) > 0 {
+				ps.logf("  ℹ️  IPFS Cluster will connect to discovered peers: %v", clusterPeers)
 			}
 		}
 	}
 
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(nodeType, clusterPath, clusterSecret, 4501, bootstrapClusterPeers); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(clusterPath, clusterSecret, 4501, clusterPeers); err != nil {
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
 	// Initialize RQLite data directory
 	rqliteDataDir := filepath.Join(dataDir, "rqlite")
-	if err := ps.binaryInstaller.InitializeRQLiteDataDir(nodeType, rqliteDataDir); err != nil {
+	if err := ps.binaryInstaller.InitializeRQLiteDataDir(rqliteDataDir); err != nil {
 		ps.logf("  ⚠️  RQLite initialization warning: %v", err)
 	}
 
@@ -340,7 +345,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(nodeType string, bootstrapP
 }
 
 // Phase3GenerateSecrets generates shared secrets and keys
-func (ps *ProductionSetup) Phase3GenerateSecrets(isBootstrap bool) error {
+func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	ps.logf("Phase 3: Generating secrets...")
 
 	// Cluster secret
@@ -355,13 +360,8 @@ func (ps *ProductionSetup) Phase3GenerateSecrets(isBootstrap bool) error {
 	}
 	ps.logf("  ✓ IPFS swarm key ensured")
 
-	// Node identity
-	nodeType := "node"
-	if isBootstrap {
-		nodeType = "bootstrap"
-	}
-
-	peerID, err := ps.secretGenerator.EnsureNodeIdentity(nodeType)
+	// Node identity (unified architecture)
+	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
 	if err != nil {
 		return fmt.Errorf("failed to ensure node identity: %w", err)
 	}
@@ -373,7 +373,7 @@ func (ps *ProductionSetup) Phase3GenerateSecrets(isBootstrap bool) error {
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
-func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeers []string, vpsIP string, enableHTTPS bool, domain string, bootstrapJoin string) error {
+func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, joinAddress string) error {
 	if ps.IsUpdate() {
 		ps.logf("Phase 4: Updating configurations...")
 		ps.logf("  (Existing configs will be updated to latest format)")
@@ -381,73 +381,38 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 		ps.logf("Phase 4: Generating configurations...")
 	}
 
-	// Node config
-	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(isBootstrap, bootstrapPeers, vpsIP, bootstrapJoin)
+	// Node config (unified architecture)
+	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain, enableHTTPS)
 	if err != nil {
 		return fmt.Errorf("failed to generate node config: %w", err)
 	}
 
-	var configFile string
-	if isBootstrap {
-		configFile = "bootstrap.yaml"
-	} else {
-		configFile = "node.yaml"
-	}
-
+	configFile := "node.yaml"
 	if err := ps.secretGenerator.SaveConfig(configFile, nodeConfig); err != nil {
 		return fmt.Errorf("failed to save node config: %w", err)
 	}
 	ps.logf("  ✓ Node config generated: %s", configFile)
 
-	// Determine Olric servers for gateway config
-	// Olric will bind to 0.0.0.0 (all interfaces) but gateway needs specific addresses
-	var olricServers []string
+	// Gateway configuration is now embedded in each node's config
+	// No separate gateway.yaml needed - each node runs its own embedded gateway
 
-	if isBootstrap {
-		// Bootstrap node: gateway should connect to vpsIP if provided, otherwise localhost
-		if vpsIP != "" {
-			olricServers = []string{net.JoinHostPort(vpsIP, "3320")}
-		} else {
-			olricServers = []string{"127.0.0.1:3320"}
-		}
-	} else {
-		// Non-bootstrap node: include bootstrap server and local server
-		olricServers = []string{"127.0.0.1:3320"} // Default to localhost for single-node
-		if len(bootstrapPeers) > 0 {
-			// Try to infer Olric servers from bootstrap peers
-			bootstrapIP := inferBootstrapIP(bootstrapPeers, vpsIP)
-			if bootstrapIP != "" {
-				// Add bootstrap Olric server (use net.JoinHostPort for IPv6 support)
-				olricServers = []string{net.JoinHostPort(bootstrapIP, "3320")}
-				// Add local Olric server too
-				if vpsIP != "" {
-					olricServers = append(olricServers, net.JoinHostPort(vpsIP, "3320"))
-				} else {
-					olricServers = append(olricServers, "127.0.0.1:3320")
-				}
-			}
-		}
-	}
-
-	gatewayConfig, err := ps.configGenerator.GenerateGatewayConfig(bootstrapPeers, enableHTTPS, domain, olricServers)
-	if err != nil {
-		return fmt.Errorf("failed to generate gateway config: %w", err)
-	}
-
-	if err := ps.secretGenerator.SaveConfig("gateway.yaml", gatewayConfig); err != nil {
-		return fmt.Errorf("failed to save gateway config: %w", err)
-	}
-	ps.logf("  ✓ Gateway config generated")
-
-	// Olric config - bind to 0.0.0.0 to listen on all interfaces
-	// Gateway will connect using the specific address from olricServers list above
-	olricConfig, err := ps.configGenerator.GenerateOlricConfig("0.0.0.0", 3320, 3322)
+	// Olric config:
+	// - HTTP API binds to localhost for security (accessed via gateway)
+	// - Memberlist binds to 0.0.0.0 for cluster communication across nodes
+	// - Environment "lan" for production multi-node clustering
+	olricConfig, err := ps.configGenerator.GenerateOlricConfig(
+		"127.0.0.1", // HTTP API on localhost
+		3320,
+		"0.0.0.0", // Memberlist on all interfaces for clustering
+		3322,
+		"lan", // Production environment
+	)
 	if err != nil {
 		return fmt.Errorf("failed to generate olric config: %w", err)
 	}
 
 	// Create olric config directory
-	olricConfigDir := ps.debrosDir + "/configs/olric"
+	olricConfigDir := ps.oramaDir + "/configs/olric"
 	if err := os.MkdirAll(olricConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create olric config directory: %w", err)
 	}
@@ -463,7 +428,8 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(isBootstrap bool, bootstrapPeer
 }
 
 // Phase5CreateSystemdServices creates and enables systemd units
-func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP string) error {
+// enableHTTPS determines the RQLite Raft port (7002 when SNI is enabled, 7001 otherwise)
+func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
 	// Validate all required binaries are available before creating services
@@ -475,30 +441,26 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	if err != nil {
 		return fmt.Errorf("ipfs-cluster-service binary not available: %w", err)
 	}
-	// Note: rqlited binary is not needed as a separate service - node manages RQLite internally
 	olricBinary, err := ps.binaryInstaller.ResolveBinaryPath("olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server")
 	if err != nil {
 		return fmt.Errorf("olric-server binary not available: %w", err)
 	}
 
-	// IPFS service
-	ipfsUnit := ps.serviceGenerator.GenerateIPFSService(nodeType, ipfsBinary)
-	unitName := fmt.Sprintf("debros-ipfs-%s.service", nodeType)
-	if err := ps.serviceController.WriteServiceUnit(unitName, ipfsUnit); err != nil {
+	// IPFS service (unified - no bootstrap/node distinction)
+	ipfsUnit := ps.serviceGenerator.GenerateIPFSService(ipfsBinary)
+	if err := ps.serviceController.WriteServiceUnit("debros-ipfs.service", ipfsUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS service: %w", err)
 	}
-	ps.logf("  ✓ IPFS service created: %s", unitName)
+	ps.logf("  ✓ IPFS service created: debros-ipfs.service")
 
 	// IPFS Cluster service
-	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(nodeType, clusterBinary)
-	clusterUnitName := fmt.Sprintf("debros-ipfs-cluster-%s.service", nodeType)
-	if err := ps.serviceController.WriteServiceUnit(clusterUnitName, clusterUnit); err != nil {
+	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
+	if err := ps.serviceController.WriteServiceUnit("debros-ipfs-cluster.service", clusterUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS Cluster service: %w", err)
 	}
-	ps.logf("  ✓ IPFS Cluster service created: %s", clusterUnitName)
+	ps.logf("  ✓ IPFS Cluster service created: debros-ipfs-cluster.service")
 
-	// Note: RQLite is managed internally by the node process, not as a separate systemd service
-	ps.logf("  ℹ️  RQLite will be managed by the node process")
+	// RQLite is managed internally by each node - no separate systemd service needed
 
 	// Olric service
 	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
@@ -507,20 +469,19 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 	ps.logf("  ✓ Olric service created")
 
-	// Node service
-	nodeUnit := ps.serviceGenerator.GenerateNodeService(nodeType)
-	nodeUnitName := fmt.Sprintf("debros-node-%s.service", nodeType)
-	if err := ps.serviceController.WriteServiceUnit(nodeUnitName, nodeUnit); err != nil {
+	// Node service (unified - includes embedded gateway)
+	nodeUnit := ps.serviceGenerator.GenerateNodeService()
+	if err := ps.serviceController.WriteServiceUnit("debros-node.service", nodeUnit); err != nil {
 		return fmt.Errorf("failed to write Node service: %w", err)
 	}
-	ps.logf("  ✓ Node service created: %s", nodeUnitName)
+	ps.logf("  ✓ Node service created: debros-node.service (with embedded gateway)")
 
-	// Gateway service (optional, only on specific nodes)
-	gatewayUnit := ps.serviceGenerator.GenerateGatewayService(nodeType)
-	if err := ps.serviceController.WriteServiceUnit("debros-gateway.service", gatewayUnit); err != nil {
-		return fmt.Errorf("failed to write Gateway service: %w", err)
+	// Anyone Client service (SOCKS5 proxy)
+	anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
+	if err := ps.serviceController.WriteServiceUnit("debros-anyone-client.service", anyoneUnit); err != nil {
+		return fmt.Errorf("failed to write Anyone Client service: %w", err)
 	}
-	ps.logf("  ✓ Gateway service created")
+	ps.logf("  ✓ Anyone Client service created")
 
 	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
@@ -528,8 +489,10 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable services (RQLite is managed by node, not as separate service)
-	services := []string{unitName, clusterUnitName, "debros-olric.service", nodeUnitName, "debros-gateway.service"}
+	// Enable services (unified names - no bootstrap/node distinction)
+	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
+	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
+	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -541,8 +504,17 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	// Start services in dependency order
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, Olric) - RQLite is managed by node
-	infraServices := []string{unitName, "debros-olric.service"}
+	// Start infrastructure first (IPFS, Olric, Anyone Client) - RQLite is managed internally by each node
+	infraServices := []string{"debros-ipfs.service", "debros-olric.service"}
+	
+	// Check if port 9050 is already in use (e.g., another anyone-client or similar service)
+	if ps.portChecker.IsPortInUse(9050) {
+		ps.logf("  ℹ️  Port 9050 is already in use (anyone-client or similar service running)")
+		ps.logf("  ℹ️  Skipping debros-anyone-client startup - using existing service")
+	} else {
+		infraServices = append(infraServices, "debros-anyone-client.service")
+	}
+	
 	for _, svc := range infraServices {
 		if err := ps.serviceController.StartService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
@@ -552,23 +524,20 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(nodeType string, vpsIP st
 	}
 
 	// Wait a moment for infrastructure to stabilize
-	exec.Command("sleep", "2").Run()
+	time.Sleep(2 * time.Second)
 
 	// Start IPFS Cluster
-	if err := ps.serviceController.StartService(clusterUnitName); err != nil {
-		ps.logf("  ⚠️  Failed to start %s: %v", clusterUnitName, err)
+	if err := ps.serviceController.StartService("debros-ipfs-cluster.service"); err != nil {
+		ps.logf("  ⚠️  Failed to start debros-ipfs-cluster.service: %v", err)
 	} else {
-		ps.logf("    - %s started", clusterUnitName)
+		ps.logf("    - debros-ipfs-cluster.service started")
 	}
 
-	// Start application services
-	appServices := []string{nodeUnitName, "debros-gateway.service"}
-	for _, svc := range appServices {
-		if err := ps.serviceController.StartService(svc); err != nil {
-			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
-		} else {
-			ps.logf("    - %s started", svc)
-		}
+	// Start node service (gateway is embedded in node, no separate service needed)
+	if err := ps.serviceController.StartService("debros-node.service"); err != nil {
+		ps.logf("  ⚠️  Failed to start debros-node.service: %v", err)
+	} else {
+		ps.logf("    - debros-node.service started (with embedded gateway)")
 	}
 
 	ps.logf("  ✓ All services started")
@@ -582,19 +551,20 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf(strings.Repeat("=", 70))
 	ps.logf("\nNode Peer ID: %s", peerID)
 	ps.logf("\nService Management:")
-	ps.logf("  systemctl status debros-ipfs-bootstrap")
-	ps.logf("  journalctl -u debros-node-bootstrap -f")
-	ps.logf("  tail -f %s/logs/node-bootstrap.log", ps.debrosDir)
+	ps.logf("  systemctl status debros-ipfs")
+	ps.logf("  journalctl -u debros-node -f")
+	ps.logf("  tail -f %s/logs/node.log", ps.oramaDir)
 	ps.logf("\nLog Files:")
-	ps.logf("  %s/logs/ipfs-bootstrap.log", ps.debrosDir)
-	ps.logf("  %s/logs/ipfs-cluster-bootstrap.log", ps.debrosDir)
-	ps.logf("  %s/logs/rqlite-bootstrap.log", ps.debrosDir)
-	ps.logf("  %s/logs/olric.log", ps.debrosDir)
-	ps.logf("  %s/logs/node-bootstrap.log", ps.debrosDir)
-	ps.logf("  %s/logs/gateway.log", ps.debrosDir)
+	ps.logf("  %s/logs/ipfs.log", ps.oramaDir)
+	ps.logf("  %s/logs/ipfs-cluster.log", ps.oramaDir)
+	ps.logf("  %s/logs/olric.log", ps.oramaDir)
+	ps.logf("  %s/logs/node.log", ps.oramaDir)
+	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
+	ps.logf("  %s/logs/anyone-client.log", ps.oramaDir)
 	ps.logf("\nStart All Services:")
-	ps.logf("  systemctl start debros-ipfs-bootstrap debros-ipfs-cluster-bootstrap debros-olric debros-node-bootstrap debros-gateway")
+	ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-client debros-node")
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")
-	ps.logf("  curl http://localhost:5001/status\n")
+	ps.logf("  curl http://localhost:5001/status")
+	ps.logf("  # Anyone Client SOCKS5 proxy on localhost:9050\n")
 }

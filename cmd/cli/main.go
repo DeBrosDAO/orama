@@ -34,7 +34,7 @@ func main() {
 
 	switch command {
 	case "version":
-		fmt.Printf("dbn %s", version)
+		fmt.Printf("orama %s", version)
 		if commit != "" {
 			fmt.Printf(" (commit %s)", commit)
 		}
@@ -48,9 +48,29 @@ func main() {
 	case "dev":
 		cli.HandleDevCommand(args)
 
-	// Production environment commands
+	// Production environment commands (legacy with 'prod' prefix)
 	case "prod":
 		cli.HandleProdCommand(args)
+
+	// Direct production commands (new simplified interface)
+	case "install":
+		cli.HandleProdCommand(append([]string{"install"}, args...))
+	case "upgrade":
+		cli.HandleProdCommand(append([]string{"upgrade"}, args...))
+	case "migrate":
+		cli.HandleProdCommand(append([]string{"migrate"}, args...))
+	case "status":
+		cli.HandleProdCommand(append([]string{"status"}, args...))
+	case "start":
+		cli.HandleProdCommand(append([]string{"start"}, args...))
+	case "stop":
+		cli.HandleProdCommand(append([]string{"stop"}, args...))
+	case "restart":
+		cli.HandleProdCommand(append([]string{"restart"}, args...))
+	case "logs":
+		cli.HandleProdCommand(append([]string{"logs"}, args...))
+	case "uninstall":
+		cli.HandleProdCommand(append([]string{"uninstall"}, args...))
 
 	// Authentication commands
 	case "auth":
@@ -85,8 +105,8 @@ func parseGlobalFlags(args []string) {
 }
 
 func showHelp() {
-	fmt.Printf("Network CLI - Distributed P2P Network Management Tool\n\n")
-	fmt.Printf("Usage: dbn <command> [args...]\n\n")
+	fmt.Printf("Orama CLI - Distributed P2P Network Management Tool\n\n")
+	fmt.Printf("Usage: orama <command> [args...]\n\n")
 
 	fmt.Printf("💻 Local Development:\n")
 	fmt.Printf("  dev up                        - Start full local dev environment\n")
@@ -96,15 +116,14 @@ func showHelp() {
 	fmt.Printf("  dev help                      - Show dev command help\n\n")
 
 	fmt.Printf("🚀 Production Deployment:\n")
-	fmt.Printf("  prod install [--bootstrap]    - Full production bootstrap (requires root/sudo)\n")
-	fmt.Printf("  prod upgrade                  - Upgrade existing installation\n")
-	fmt.Printf("  prod status                   - Show production service status\n")
-	fmt.Printf("  prod start                    - Start all production services (requires root/sudo)\n")
-	fmt.Printf("  prod stop                     - Stop all production services (requires root/sudo)\n")
-	fmt.Printf("  prod restart                  - Restart all production services (requires root/sudo)\n")
-	fmt.Printf("  prod logs <service>           - View production service logs\n")
-	fmt.Printf("  prod uninstall                - Remove production services (requires root/sudo)\n")
-	fmt.Printf("  prod help                     - Show prod command help\n\n")
+	fmt.Printf("  install                       - Install production node (requires root/sudo)\n")
+	fmt.Printf("  upgrade                       - Upgrade existing installation\n")
+	fmt.Printf("  status                        - Show production service status\n")
+	fmt.Printf("  start                         - Start all production services (requires root/sudo)\n")
+	fmt.Printf("  stop                          - Stop all production services (requires root/sudo)\n")
+	fmt.Printf("  restart                       - Restart all production services (requires root/sudo)\n")
+	fmt.Printf("  logs <service>                - View production service logs\n")
+	fmt.Printf("  uninstall                     - Remove production services (requires root/sudo)\n\n")
 
 	fmt.Printf("🔐 Authentication:\n")
 	fmt.Printf("  auth login                    - Authenticate with wallet\n")
@@ -119,16 +138,14 @@ func showHelp() {
 	fmt.Printf("  --help, -h                    - Show this help message\n\n")
 
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  # Authenticate\n")
-	fmt.Printf("  dbn auth login\n\n")
+	fmt.Printf("  # First node (creates new cluster)\n")
+	fmt.Printf("  sudo orama install --vps-ip 203.0.113.1 --domain node-1.orama.network\n\n")
 
-	fmt.Printf("  # Start local dev environment\n")
-	fmt.Printf("  dbn dev up\n")
-	fmt.Printf("  dbn dev status\n\n")
+	fmt.Printf("  # Join existing cluster\n")
+	fmt.Printf("  sudo orama install --vps-ip 203.0.113.2 --domain node-2.orama.network \\\n")
+	fmt.Printf("    --peers /ip4/203.0.113.1/tcp/4001/p2p/12D3KooW... --cluster-secret <hex>\n\n")
 
-	fmt.Printf("  # Production deployment (requires root/sudo)\n")
-	fmt.Printf("  sudo dbn prod install --bootstrap\n")
-	fmt.Printf("  sudo dbn prod upgrade\n")
-	fmt.Printf("  dbn prod status\n")
-	fmt.Printf("  dbn prod logs node --follow\n")
+	fmt.Printf("  # Service management\n")
+	fmt.Printf("  orama status\n")
+	fmt.Printf("  orama logs node --follow\n")
 }

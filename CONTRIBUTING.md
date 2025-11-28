@@ -27,14 +27,14 @@ make deps
 Useful CLI commands:
 
 ```bash
-./bin/dbn health
-./bin/dbn peers
-./bin/dbn status
+./bin/orama health
+./bin/orama peers
+./bin/orama status
 ````
 
 ## Versioning
 
-- The CLI reports its version via `dbn version`.
+- The CLI reports its version via `orama version`.
 - Releases are tagged (e.g., `v0.18.0-beta`) and published via GoReleaser.
 
 ## Pull Requests
