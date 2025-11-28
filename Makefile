@@ -19,7 +19,7 @@ test-e2e:
 
 .PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
 
-VERSION := 0.71.0
+VERSION := 0.72.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -29,7 +29,7 @@ build: deps
 	@echo "Building network executables (version=$(VERSION))..."
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
-	go build -ldflags "$(LDFLAGS)" -o bin/node ./cmd/node
+	go build -ldflags "$(LDFLAGS)" -o bin/orama-node ./cmd/node
 	go build -ldflags "$(LDFLAGS)" -o bin/orama cmd/cli/main.go
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
@@ -51,25 +51,25 @@ clean:
 run-node:
 	@echo "Starting node..."
 	@echo "Config: ~/.orama/node.yaml"
-	go run ./cmd/node --config node.yaml
+	go run ./cmd/orama-node --config node.yaml
 
 # Run second node - requires join address
 run-node2:
 	@echo "Starting second node..."
 	@echo "Config: ~/.orama/node2.yaml"
-	go run ./cmd/node --config node2.yaml
+	go run ./cmd/orama-node --config node2.yaml
 
 # Run third node - requires join address
 run-node3:
 	@echo "Starting third node..."
 	@echo "Config: ~/.orama/node3.yaml"
-	go run ./cmd/node --config node3.yaml
+	go run ./cmd/orama-node --config node3.yaml
 
 # Run gateway HTTP server
 run-gateway:
 	@echo "Starting gateway HTTP server..."
 	@echo "Note: Config must be in ~/.orama/data/gateway.yaml"
-	go run ./cmd/gateway
+	go run ./cmd/orama-gateway
 
 # Setup local domain names for development
 setup-domains:

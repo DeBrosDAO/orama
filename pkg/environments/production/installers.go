@@ -388,6 +388,17 @@ func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, oramaHome string
 		fmt.Fprintf(bi.logWriter, "    ⚠️  Warning: failed to chown bin directory: %v\n", err)
 	}
 
+	// Grant CAP_NET_BIND_SERVICE to orama-node to allow binding to ports 80/443 without root
+	nodeBinary := filepath.Join(binDir, "orama-node")
+	if _, err := os.Stat(nodeBinary); err == nil {
+		if err := exec.Command("setcap", "cap_net_bind_service=+ep", nodeBinary).Run(); err != nil {
+			fmt.Fprintf(bi.logWriter, "    ⚠️  Warning: failed to setcap on orama-node: %v\n", err)
+			fmt.Fprintf(bi.logWriter, "    ⚠️  Gateway may not be able to bind to port 80/443\n")
+		} else {
+			fmt.Fprintf(bi.logWriter, "    ✓ Set CAP_NET_BIND_SERVICE on orama-node\n")
+		}
+	}
+
 	fmt.Fprintf(bi.logWriter, "  ✓ DeBros binaries installed\n")
 	return nil
 }
@@ -416,6 +427,12 @@ func (bi *BinaryInstaller) InstallSystemDependencies() error {
 type IPFSPeerInfo struct {
 	PeerID string
 	Addrs  []string
+}
+
+// IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster peer discovery
+type IPFSClusterPeerInfo struct {
+	PeerID string   // Cluster peer ID (different from IPFS peer ID)
+	Addrs  []string // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
 }
 
 // InitializeIPFSRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
@@ -702,9 +719,12 @@ func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsA
 		return fmt.Errorf("failed to parse service.json: %w", err)
 	}
 
-	// Update cluster secret and peer addresses
+	// Update cluster secret, listen_multiaddress, and peer addresses
 	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
 		cluster["secret"] = secret
+		// Set consistent listen_multiaddress - port 9098 for cluster LibP2P communication
+		// This MUST match the port used in GetClusterPeerMultiaddr() and peer_addresses
+		cluster["listen_multiaddress"] = []interface{}{"/ip4/0.0.0.0/tcp/9098"}
 		// Configure peer addresses for cluster discovery
 		// This allows nodes to find and connect to each other
 		if len(bootstrapClusterPeers) > 0 {
@@ -712,7 +732,8 @@ func (bi *BinaryInstaller) updateClusterConfig(clusterPath, secret string, ipfsA
 		}
 	} else {
 		clusterConfig := map[string]interface{}{
-			"secret": secret,
+			"secret":              secret,
+			"listen_multiaddress": []interface{}{"/ip4/0.0.0.0/tcp/9098"},
 		}
 		if len(bootstrapClusterPeers) > 0 {
 			clusterConfig["peer_addresses"] = bootstrapClusterPeers
@@ -821,7 +842,8 @@ func (bi *BinaryInstaller) InitializeRQLiteDataDir(dataDir string) error {
 // InstallAnyoneClient installs the anyone-client npm package globally
 func (bi *BinaryInstaller) InstallAnyoneClient() error {
 	// Check if anyone-client is already available via npx (more reliable for scoped packages)
-	if cmd := exec.Command("npx", "--yes", "@anyone-protocol/anyone-client", "--version"); cmd.Run() == nil {
+	// Note: the CLI binary is "anyone-client", not the full scoped package name
+	if cmd := exec.Command("npx", "anyone-client", "--help"); cmd.Run() == nil {
 		fmt.Fprintf(bi.logWriter, "  ✓ anyone-client already installed\n")
 		return nil
 	}
@@ -873,8 +895,18 @@ func (bi *BinaryInstaller) InstallAnyoneClient() error {
 		return fmt.Errorf("failed to install anyone-client: %w\n%s", err, string(output))
 	}
 
-	// Verify installation - try npx first (most reliable for scoped packages)
-	verifyCmd := exec.Command("npx", "--yes", "@anyone-protocol/anyone-client", "--version")
+	// Create terms-agreement file to bypass interactive prompt when running as a service
+	termsFile := filepath.Join(debrosHome, "terms-agreement")
+	if err := os.WriteFile(termsFile, []byte("agreed"), 0644); err != nil {
+		fmt.Fprintf(bi.logWriter, "    ⚠️  Warning: failed to create terms-agreement: %v\n", err)
+	} else {
+		if err := exec.Command("chown", "debros:debros", termsFile).Run(); err != nil {
+			fmt.Fprintf(bi.logWriter, "    ⚠️  Warning: failed to chown terms-agreement: %v\n", err)
+		}
+	}
+
+	// Verify installation - try npx with the correct CLI name (anyone-client, not full scoped package name)
+	verifyCmd := exec.Command("npx", "anyone-client", "--help")
 	if err := verifyCmd.Run(); err != nil {
 		// Fallback: check if binary exists in common locations
 		possiblePaths := []string{

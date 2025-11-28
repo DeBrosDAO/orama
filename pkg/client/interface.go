@@ -114,19 +114,26 @@ type PeerInfo struct {
 
 // NetworkStatus contains overall network status
 type NetworkStatus struct {
-	NodeID       string        `json:"node_id"`
-	PeerID       string        `json:"peer_id"`
-	Connected    bool          `json:"connected"`
-	PeerCount    int           `json:"peer_count"`
-	DatabaseSize int64         `json:"database_size"`
-	Uptime       time.Duration `json:"uptime"`
-	IPFS         *IPFSPeerInfo `json:"ipfs,omitempty"`
+	NodeID       string               `json:"node_id"`
+	PeerID       string               `json:"peer_id"`
+	Connected    bool                 `json:"connected"`
+	PeerCount    int                  `json:"peer_count"`
+	DatabaseSize int64                `json:"database_size"`
+	Uptime       time.Duration        `json:"uptime"`
+	IPFS         *IPFSPeerInfo        `json:"ipfs,omitempty"`
+	IPFSCluster  *IPFSClusterPeerInfo `json:"ipfs_cluster,omitempty"`
 }
 
 // IPFSPeerInfo contains IPFS peer information for discovery
 type IPFSPeerInfo struct {
 	PeerID         string   `json:"peer_id"`
 	SwarmAddresses []string `json:"swarm_addresses"`
+}
+
+// IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster discovery
+type IPFSClusterPeerInfo struct {
+	PeerID    string   `json:"peer_id"`    // Cluster peer ID (different from IPFS peer ID)
+	Addresses []string `json:"addresses"`  // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
 }
 
 // HealthStatus contains health check information

@@ -273,7 +273,8 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 
 // Phase2cInitializeServices initializes service repositories and configurations
 // ipfsPeer can be nil for the first node, or contain peer info for joining nodes
-func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vpsIP string, ipfsPeer *IPFSPeerInfo) error {
+// ipfsClusterPeer can be nil for the first node, or contain IPFS Cluster peer info for joining nodes
+func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vpsIP string, ipfsPeer *IPFSPeerInfo, ipfsClusterPeer *IPFSClusterPeerInfo) error {
 	ps.logf("Phase 2c: Initializing services...")
 
 	// Ensure directories exist (unified structure)
@@ -298,13 +299,28 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		return fmt.Errorf("failed to get cluster secret: %w", err)
 	}
 
-	// Get cluster peer addresses from peers if available
+	// Get cluster peer addresses from IPFS Cluster peer info if available
 	var clusterPeers []string
-	if len(peerAddresses) > 0 {
-		// Infer IP from peers
+	if ipfsClusterPeer != nil && ipfsClusterPeer.PeerID != "" {
+		// Construct cluster peer multiaddress using the discovered peer ID
+		// Format: /ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>
 		peerIP := inferPeerIP(peerAddresses, vpsIP)
 		if peerIP != "" {
-			ps.logf("  ℹ️  Will attempt to connect to cluster peers at %s", peerIP)
+			// Construct the bootstrap multiaddress for IPFS Cluster
+			// Note: IPFS Cluster listens on port 9098 for cluster communication
+			clusterBootstrapAddr := fmt.Sprintf("/ip4/%s/tcp/9098/p2p/%s", peerIP, ipfsClusterPeer.PeerID)
+			clusterPeers = []string{clusterBootstrapAddr}
+			ps.logf("  ℹ️  IPFS Cluster will connect to peer: %s", clusterBootstrapAddr)
+		} else if len(ipfsClusterPeer.Addrs) > 0 {
+			// Fallback: use the addresses from discovery (if they include peer ID)
+			for _, addr := range ipfsClusterPeer.Addrs {
+				if strings.Contains(addr, ipfsClusterPeer.PeerID) {
+					clusterPeers = append(clusterPeers, addr)
+				}
+			}
+			if len(clusterPeers) > 0 {
+				ps.logf("  ℹ️  IPFS Cluster will connect to discovered peers: %v", clusterPeers)
+			}
 		}
 	}
 

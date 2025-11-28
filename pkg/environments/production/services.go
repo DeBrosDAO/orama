@@ -42,8 +42,8 @@ ExecStartPre=/bin/bash -c 'if [ -f %[3]s/secrets/swarm.key ] && [ ! -f %[2]s/swa
 ExecStart=%[5]s daemon --enable-pubsub-experiment --repo-dir=%[2]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%[4]s
-StandardError=file:%[4]s
+StandardOutput=append:%[4]s
+StandardError=append:%[4]s
 SyslogIdentifier=debros-ipfs
 
 NoNewPrivileges=yes
@@ -92,8 +92,8 @@ ExecStartPre=/bin/bash -c 'mkdir -p %[2]s && chmod 700 %[2]s'
 ExecStart=%[4]s daemon
 Restart=always
 RestartSec=5
-StandardOutput=file:%[3]s
-StandardError=file:%[3]s
+StandardOutput=append:%[3]s
+StandardError=append:%[3]s
 SyslogIdentifier=debros-ipfs-cluster
 
 NoNewPrivileges=yes
@@ -147,8 +147,8 @@ Environment=HOME=%[1]s
 ExecStart=%[5]s %[2]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%[3]s
-StandardError=file:%[3]s
+StandardOutput=append:%[3]s
+StandardError=append:%[3]s
 SyslogIdentifier=debros-rqlite
 
 NoNewPrivileges=yes
@@ -186,8 +186,8 @@ Environment=OLRIC_SERVER_CONFIG=%[2]s
 ExecStart=%[5]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%[3]s
-StandardError=file:%[3]s
+StandardOutput=append:%[3]s
+StandardError=append:%[3]s
 SyslogIdentifier=olric
 
 NoNewPrivileges=yes
@@ -210,6 +210,8 @@ WantedBy=multi-user.target
 func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 	configFile := "node.yaml"
 	logFile := filepath.Join(ssg.oramaDir, "logs", "node.log")
+	// Note: systemd StandardOutput/StandardError paths should not contain substitution variables
+	// Use absolute paths directly as they will be resolved by systemd at runtime
 
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Network Node
@@ -222,11 +224,11 @@ User=debros
 Group=debros
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
-ExecStart=%[1]s/bin/node --config %[2]s/configs/%[3]s
+ExecStart=%[1]s/bin/orama-node --config %[2]s/configs/%[3]s
 Restart=always
 RestartSec=5
-StandardOutput=file:%[4]s
-StandardError=file:%[4]s
+StandardOutput=append:%[4]s
+StandardError=append:%[4]s
 SyslogIdentifier=debros-node
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -264,8 +266,8 @@ Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/gateway --config %[2]s/data/gateway.yaml
 Restart=always
 RestartSec=5
-StandardOutput=file:%[3]s
-StandardError=file:%[3]s
+StandardOutput=append:%[3]s
+StandardError=append:%[3]s
 SyslogIdentifier=debros-gateway
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -303,17 +305,18 @@ User=debros
 Group=debros
 Environment=HOME=%[1]s
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/lib/node_modules/.bin
-ExecStart=/usr/bin/npx --yes @anyone-protocol/anyone-client
+WorkingDirectory=%[1]s
+ExecStart=/usr/bin/npx anyone-client
 Restart=always
 RestartSec=5
-StandardOutput=file:%[2]s
-StandardError=file:%[2]s
+StandardOutput=append:%[2]s
+StandardError=append:%[2]s
 SyslogIdentifier=anyone-client
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=no
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

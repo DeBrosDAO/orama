@@ -10,7 +10,7 @@ User=debros
 Group=debros
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
-ExecStart={{.HomeDir}}/bin/node --config {{.OramaDir}}/configs/{{.ConfigFile}}
+ExecStart={{.HomeDir}}/bin/orama-node --config {{.OramaDir}}/configs/{{.ConfigFile}}
 Restart=always
 RestartSec=5
 StandardOutput=journal

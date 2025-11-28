@@ -32,9 +32,12 @@ type InstallerConfig struct {
 	SwarmKeyHex    string   // 64-hex IPFS swarm key (for joining private network)
 	IPFSPeerID     string   // IPFS peer ID (auto-discovered from peer domain)
 	IPFSSwarmAddrs []string // IPFS swarm addresses (auto-discovered from peer domain)
-	Branch         string
-	IsFirstNode    bool
-	NoPull         bool
+	// IPFS Cluster peer info for cluster discovery
+	IPFSClusterPeerID string   // IPFS Cluster peer ID (auto-discovered from peer domain)
+	IPFSClusterAddrs  []string // IPFS Cluster addresses (auto-discovered from peer domain)
+	Branch            string
+	IsFirstNode       bool
+	NoPull            bool
 }
 
 // Step represents a step in the installation wizard
@@ -69,6 +72,7 @@ type Model struct {
 	discovering    bool   // Whether domain discovery is in progress
 	discoveryInfo  string // Info message during discovery
 	discoveredPeer string // Discovered peer ID from domain
+	sniWarning     string // Warning about missing SNI DNS records (non-blocking)
 }
 
 // Styles
@@ -214,14 +218,13 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Check SNI DNS records for this domain
+		// Check SNI DNS records for this domain (non-blocking warning)
 		m.discovering = true
-		m.discoveryInfo = "Validating SNI DNS records for " + domain + "..."
+		m.discoveryInfo = "Checking SNI DNS records for " + domain + "..."
 
-		if err := validateSNIDNSRecords(domain); err != nil {
-			m.discovering = false
-			m.err = fmt.Errorf("SNI DNS validation failed: %w", err)
-			return m, nil
+		if warning := validateSNIDNSRecords(domain); warning != "" {
+			// Log warning but continue - SNI DNS is optional for single-node setups
+			m.sniWarning = warning
 		}
 
 		m.discovering = false
@@ -255,14 +258,13 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Validate SNI DNS records for peer domain
+		// Check SNI DNS records for peer domain (non-blocking warning)
 		m.discovering = true
-		m.discoveryInfo = "Validating SNI DNS records for " + peerDomain + "..."
+		m.discoveryInfo = "Checking SNI DNS records for " + peerDomain + "..."
 
-		if err := validateSNIDNSRecords(peerDomain); err != nil {
-			m.discovering = false
-			m.err = fmt.Errorf("SNI DNS validation failed: %w", err)
-			return m, nil
+		if warning := validateSNIDNSRecords(peerDomain); warning != "" {
+			// Log warning but continue - peer might have different DNS setup
+			m.sniWarning = warning
 		}
 
 		// Discover peer info from domain (try HTTPS first, then HTTP)
@@ -311,6 +313,12 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		if discovery.IPFSPeerID != "" {
 			m.config.IPFSPeerID = discovery.IPFSPeerID
 			m.config.IPFSSwarmAddrs = discovery.IPFSSwarmAddrs
+		}
+
+		// Store IPFS Cluster peer info for cluster peer_addresses configuration
+		if discovery.IPFSClusterPeerID != "" {
+			m.config.IPFSClusterPeerID = discovery.IPFSClusterPeerID
+			m.config.IPFSClusterAddrs = discovery.IPFSClusterAddrs
 		}
 
 		m.err = nil
@@ -651,6 +659,13 @@ func (m Model) viewConfirm() string {
 	}
 
 	s.WriteString(boxStyle.Render(config))
+
+	// Show SNI DNS warning if present
+	if m.sniWarning != "" {
+		s.WriteString("\n\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).Render(m.sniWarning))
+	}
+
 	s.WriteString("\n\n")
 	s.WriteString(helpStyle.Render("Press Enter to install • Esc to go back"))
 	return s.String()
@@ -713,6 +728,9 @@ type DiscoveryResult struct {
 	PeerID         string   // LibP2P peer ID
 	IPFSPeerID     string   // IPFS peer ID
 	IPFSSwarmAddrs []string // IPFS swarm addresses
+	// IPFS Cluster info for cluster peer discovery
+	IPFSClusterPeerID string   // IPFS Cluster peer ID
+	IPFSClusterAddrs  []string // IPFS Cluster multiaddresses
 }
 
 // discoverPeerFromDomain queries an existing node to get its peer ID and IPFS info
@@ -741,7 +759,7 @@ func discoverPeerFromDomain(domain string) (*DiscoveryResult, error) {
 		return nil, fmt.Errorf("unexpected status from %s: %s", domain, resp.Status)
 	}
 
-	// Parse response including IPFS info
+	// Parse response including IPFS and IPFS Cluster info
 	var status struct {
 		PeerID string `json:"peer_id"`
 		NodeID string `json:"node_id"` // fallback for backward compatibility
@@ -749,6 +767,10 @@ func discoverPeerFromDomain(domain string) (*DiscoveryResult, error) {
 			PeerID         string   `json:"peer_id"`
 			SwarmAddresses []string `json:"swarm_addresses"`
 		} `json:"ipfs,omitempty"`
+		IPFSCluster *struct {
+			PeerID    string   `json:"peer_id"`
+			Addresses []string `json:"addresses"`
+		} `json:"ipfs_cluster,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return nil, fmt.Errorf("failed to parse response from %s: %w", domain, err)
@@ -772,6 +794,12 @@ func discoverPeerFromDomain(domain string) (*DiscoveryResult, error) {
 	if status.IPFS != nil {
 		result.IPFSPeerID = status.IPFS.PeerID
 		result.IPFSSwarmAddrs = status.IPFS.SwarmAddresses
+	}
+
+	// Include IPFS Cluster info if available
+	if status.IPFSCluster != nil {
+		result.IPFSClusterPeerID = status.IPFSCluster.PeerID
+		result.IPFSClusterAddrs = status.IPFSCluster.Addresses
 	}
 
 	return result, nil
@@ -860,7 +888,8 @@ func detectPublicIP() string {
 // It tries to resolve the key SNI hostnames for IPFS, IPFS Cluster, and Olric
 // Note: Raft no longer uses SNI - it uses direct RQLite TLS on port 7002
 // All should resolve to the same IP (the node's public IP or domain)
-func validateSNIDNSRecords(domain string) error {
+// Returns a warning string if records are missing (empty string if all OK)
+func validateSNIDNSRecords(domain string) string {
 	// List of SNI services that need DNS records
 	// Note: raft.domain is NOT included - RQLite uses direct TLS on port 7002
 	sniServices := []string{
@@ -872,11 +901,12 @@ func validateSNIDNSRecords(domain string) error {
 	// Try to resolve the main domain first to get baseline
 	mainIPs, err := net.LookupHost(domain)
 	if err != nil {
-		return fmt.Errorf("could not resolve main domain %s: %w", domain, err)
+		// Main domain doesn't resolve - this is just a warning now
+		return fmt.Sprintf("Warning: could not resolve main domain %s: %v", domain, err)
 	}
 
 	if len(mainIPs) == 0 {
-		return fmt.Errorf("main domain %s resolved to no IP addresses", domain)
+		return fmt.Sprintf("Warning: main domain %s resolved to no IP addresses", domain)
 	}
 
 	// Check each SNI service
@@ -890,18 +920,15 @@ func validateSNIDNSRecords(domain string) error {
 
 	if len(unresolvedServices) > 0 {
 		serviceList := strings.Join(unresolvedServices, ", ")
-		return fmt.Errorf(
-			"SNI DNS records not found for: %s\n\n"+
-				"You need to add DNS records (A records or wildcard CNAME) for these services:\n"+
-				"  - They should all resolve to the same IP as %s\n"+
-				"  - Option 1: Add individual A records pointing to %s\n"+
-				"  - Option 2: Add wildcard CNAME: *.%s -> %s\n\n"+
-				"Without these records, multi-node clustering will fail.",
-			serviceList, domain, domain, domain, domain,
+		return fmt.Sprintf(
+			"⚠️  SNI DNS records not found for: %s\n"+
+				"   For multi-node clustering, add wildcard CNAME: *.%s -> %s\n"+
+				"   (Continuing anyway - single-node setup will work)",
+			serviceList, domain, domain,
 		)
 	}
 
-	return nil
+	return ""
 }
 
 // Run starts the TUI installer and returns the configuration

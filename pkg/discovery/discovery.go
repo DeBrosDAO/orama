@@ -271,7 +271,7 @@ func (d *Manager) discoverViaPeerstore(ctx context.Context, maxConnections int) 
 		}
 
 		// Filter peers to only include those with addresses on our port (4001)
-		// This prevents attempting to connect to IPFS (port 4101) or IPFS Cluster (port 9096)
+		// This prevents attempting to connect to IPFS (port 4101) or IPFS Cluster (port 9096/9098)
 		peerInfo := d.host.Peerstore().PeerInfo(pid)
 		hasValidPort := false
 		for _, addr := range peerInfo.Addrs {

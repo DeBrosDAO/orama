@@ -13,6 +13,28 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.72.0] - 2025-11-28
+
+### Added
+- Interactive prompt for selecting local or remote gateway URL during CLI login.
+- Support for discovering and configuring IPFS Cluster peers during installation and runtime via the gateway status endpoint.
+- New CLI flags (`--ipfs-cluster-peer`, `--ipfs-cluster-addrs`) added to the `prod install` command for cluster discovery.
+
+### Changed
+- Renamed the main network node executable from `node` to `orama-node` and the gateway executable to `orama-gateway`.
+- Improved the `auth login` flow to use a TLS-aware HTTP client, supporting Let's Encrypt staging certificates for remote gateways.
+- Updated the production installer to set `CAP_NET_BIND_SERVICE` on `orama-node` to allow binding to privileged ports (80/443) without root.
+- Updated the production installer to configure IPFS Cluster to listen on port 9098 for consistent multi-node communication.
+- Refactored the `prod install` process to generate configurations before initializing services, ensuring configuration files are present.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected the IPFS Cluster API port used in `node.yaml` template from 9096 to 9098 to match the cluster's LibP2P port.
+- Fixed the `anyone-client` systemd service configuration to use the correct binary name and allow writing to the home directory.
+
 ## [0.71.0] - 2025-11-27
 
 ### Added

@@ -26,6 +26,12 @@ type IPFSPeerInfo struct {
 	Addrs  []string
 }
 
+// IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster discovery
+type IPFSClusterPeerInfo struct {
+	PeerID string
+	Addrs  []string
+}
+
 // validateSwarmKey validates that a swarm key is 64 hex characters
 func validateSwarmKey(key string) error {
 	key = strings.TrimSpace(key)
@@ -75,6 +81,13 @@ func runInteractiveInstaller() {
 		}
 		if len(config.IPFSSwarmAddrs) > 0 {
 			args = append(args, "--ipfs-addrs", strings.Join(config.IPFSSwarmAddrs, ","))
+		}
+		// Pass IPFS Cluster peer info for cluster peer_addresses configuration
+		if config.IPFSClusterPeerID != "" {
+			args = append(args, "--ipfs-cluster-peer", config.IPFSClusterPeerID)
+		}
+		if len(config.IPFSClusterAddrs) > 0 {
+			args = append(args, "--ipfs-cluster-addrs", strings.Join(config.IPFSClusterAddrs, ","))
 		}
 	}
 
@@ -315,6 +328,8 @@ func showProdHelp() {
 	fmt.Printf("      --swarm-key HEX       - 64-hex IPFS swarm key (required when joining)\n")
 	fmt.Printf("      --ipfs-peer ID        - IPFS peer ID to connect to (auto-discovered)\n")
 	fmt.Printf("      --ipfs-addrs ADDRS    - IPFS swarm addresses (auto-discovered)\n")
+	fmt.Printf("      --ipfs-cluster-peer ID - IPFS Cluster peer ID (auto-discovered)\n")
+	fmt.Printf("      --ipfs-cluster-addrs ADDRS - IPFS Cluster addresses (auto-discovered)\n")
 	fmt.Printf("      --branch BRANCH       - Git branch to use (main or nightly, default: main)\n")
 	fmt.Printf("      --no-pull             - Skip git clone/pull, use existing /home/debros/src\n")
 	fmt.Printf("      --ignore-resource-checks - Skip disk/RAM/CPU prerequisite validation\n")
@@ -369,6 +384,8 @@ func handleProdInstall(args []string) {
 	swarmKey := fs.String("swarm-key", "", "64-hex IPFS swarm key (for joining existing private network)")
 	ipfsPeerID := fs.String("ipfs-peer", "", "IPFS peer ID to connect to (auto-discovered from peer domain)")
 	ipfsAddrs := fs.String("ipfs-addrs", "", "Comma-separated IPFS swarm addresses (auto-discovered from peer domain)")
+	ipfsClusterPeerID := fs.String("ipfs-cluster-peer", "", "IPFS Cluster peer ID to connect to (auto-discovered from peer domain)")
+	ipfsClusterAddrs := fs.String("ipfs-cluster-addrs", "", "Comma-separated IPFS Cluster addresses (auto-discovered from peer domain)")
 	interactive := fs.Bool("interactive", false, "Run interactive TUI installer")
 	dryRun := fs.Bool("dry-run", false, "Show what would be done without making changes")
 	noPull := fs.Bool("no-pull", false, "Skip git clone/pull, use existing /home/debros/src")
@@ -488,6 +505,19 @@ func handleProdInstall(args []string) {
 		}
 	}
 
+	// Store IPFS Cluster peer info for cluster peer discovery
+	var ipfsClusterPeerInfo *IPFSClusterPeerInfo
+	if *ipfsClusterPeerID != "" {
+		var addrs []string
+		if *ipfsClusterAddrs != "" {
+			addrs = strings.Split(*ipfsClusterAddrs, ",")
+		}
+		ipfsClusterPeerInfo = &IPFSClusterPeerInfo{
+			PeerID: *ipfsClusterPeerID,
+			Addrs:  addrs,
+		}
+	}
+
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, *force, *branch, *noPull, *skipResourceChecks)
 
 	// Inform user if skipping git pull
@@ -548,21 +578,8 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 
-	// Phase 2c: Initialize services (after secrets are in place)
-	fmt.Printf("\nPhase 2c: Initializing services...\n")
-	var prodIPFSPeer *production.IPFSPeerInfo
-	if ipfsPeerInfo != nil {
-		prodIPFSPeer = &production.IPFSPeerInfo{
-			PeerID: ipfsPeerInfo.PeerID,
-			Addrs:  ipfsPeerInfo.Addrs,
-		}
-	}
-	if err := setup.Phase2cInitializeServices(peers, *vpsIP, prodIPFSPeer); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Phase 4: Generate configs
+	// Phase 4: Generate configs (BEFORE service initialization)
+	// This ensures node.yaml exists before services try to access it
 	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
 	enableHTTPS := *domain != ""
 	if err := setup.Phase4GenerateConfigs(peers, *vpsIP, enableHTTPS, *domain, *joinAddress); err != nil {
@@ -577,6 +594,27 @@ func handleProdInstall(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("  ✓ Configuration validated\n")
+
+	// Phase 2c: Initialize services (after config is in place)
+	fmt.Printf("\nPhase 2c: Initializing services...\n")
+	var prodIPFSPeer *production.IPFSPeerInfo
+	if ipfsPeerInfo != nil {
+		prodIPFSPeer = &production.IPFSPeerInfo{
+			PeerID: ipfsPeerInfo.PeerID,
+			Addrs:  ipfsPeerInfo.Addrs,
+		}
+	}
+	var prodIPFSClusterPeer *production.IPFSClusterPeerInfo
+	if ipfsClusterPeerInfo != nil {
+		prodIPFSClusterPeer = &production.IPFSClusterPeerInfo{
+			PeerID: ipfsClusterPeerInfo.PeerID,
+			Addrs:  ipfsClusterPeerInfo.Addrs,
+		}
+	}
+	if err := setup.Phase2cInitializeServices(peers, *vpsIP, prodIPFSPeer, prodIPFSClusterPeer); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Phase 5: Create systemd services
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
@@ -876,18 +914,21 @@ func handleProdUpgrade(args []string) {
 		fmt.Printf("    - Join address: %s\n", joinAddress)
 	}
 
-	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
-	// Now that we have peers and VPS IP, we can properly configure IPFS Cluster
-	// Note: IPFS peer info is nil for upgrades - peering is only configured during initial install
-	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
-	if err := setup.Phase2cInitializeServices(peers, vpsIP, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
-		os.Exit(1)
-	}
-
+	// Phase 4: Generate configs (BEFORE service initialization)
+	// This ensures node.yaml exists before services try to access it
 	if err := setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, joinAddress); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Config generation warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   Existing configs preserved\n")
+	}
+
+	// Phase 2c: Ensure services are properly initialized (fixes existing repos)
+	// Now that we have peers and VPS IP, we can properly configure IPFS Cluster
+	// Note: IPFS peer info is nil for upgrades - peering is only configured during initial install
+	// Note: IPFS Cluster peer info is also nil for upgrades - peer_addresses is only configured during initial install
+	fmt.Printf("\nPhase 2c: Ensuring services are properly initialized...\n")
+	if err := setup.Phase2cInitializeServices(peers, vpsIP, nil, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Service initialization failed: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Phase 5: Update systemd services

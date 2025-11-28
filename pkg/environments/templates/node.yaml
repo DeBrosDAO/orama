@@ -70,7 +70,7 @@ http_gateway:
     routes:
       # Note: Raft traffic bypasses SNI gateway - RQLite uses native TLS on port 7002
       ipfs.{{.Domain}}: "localhost:4101"
-      ipfs-cluster.{{.Domain}}: "localhost:9096"
+      ipfs-cluster.{{.Domain}}: "localhost:9098"
       olric.{{.Domain}}: "localhost:3322"
   {{end}}
   

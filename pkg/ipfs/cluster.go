@@ -490,21 +490,30 @@ func (cm *ClusterConfigManager) UpdateAllClusterPeers() (bool, error) {
 }
 
 // RepairPeerConfiguration automatically discovers and repairs peer configuration
-// Tries multiple methods: config-based discovery, peer multiaddr, or discovery service
+// Tries multiple methods: gateway /v1/network/status, config-based discovery, peer multiaddr
 func (cm *ClusterConfigManager) RepairPeerConfiguration() (bool, error) {
 	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
 		return false, nil // IPFS not configured
 	}
 
-	// Skip if this is the first node (creates the cluster, no join address)
+	// Method 1: Try to discover cluster peers via /v1/network/status endpoint
+	// This is the most reliable method as it uses the HTTPS gateway
+	if len(cm.cfg.Discovery.BootstrapPeers) > 0 {
+		success, err := cm.DiscoverClusterPeersFromGateway()
+		if err != nil {
+			cm.logger.Debug("Gateway discovery failed, trying direct API", zap.Error(err))
+		} else if success {
+			cm.logger.Info("Successfully discovered cluster peers from gateway")
+			return true, nil
+		}
+	}
+
+	// Skip direct API method if this is the first node (creates the cluster, no join address)
 	if cm.cfg.Database.RQLiteJoinAddress == "" {
 		return false, nil
 	}
 
-	// Method 1: Try to use peer API URL from config if available
-	// Check if we have a peer's cluster API URL in discovery metadata
-	// For now, we'll infer from peers multiaddr
-
+	// Method 2: Try direct cluster API (fallback)
 	var peerAPIURL string
 
 	// Try to extract from peers multiaddr
@@ -530,13 +539,169 @@ func (cm *ClusterConfigManager) RepairPeerConfiguration() (bool, error) {
 	}
 
 	if success {
-		cm.logger.Info("Successfully repaired peer configuration")
+		cm.logger.Info("Successfully repaired peer configuration via direct API")
 		return true, nil
 	}
 
 	// If update failed (peer not available), return false but no error
 	// This allows retries later
 	return false, nil
+}
+
+// DiscoverClusterPeersFromGateway queries bootstrap peers' /v1/network/status endpoint
+// to discover IPFS Cluster peer information and updates the local service.json
+func (cm *ClusterConfigManager) DiscoverClusterPeersFromGateway() (bool, error) {
+	if len(cm.cfg.Discovery.BootstrapPeers) == 0 {
+		cm.logger.Debug("No bootstrap peers configured, skipping gateway discovery")
+		return false, nil
+	}
+
+	var discoveredPeers []string
+	seenPeers := make(map[string]bool)
+
+	for _, peerAddr := range cm.cfg.Discovery.BootstrapPeers {
+		// Extract domain or IP from multiaddr
+		domain := extractDomainFromMultiaddr(peerAddr)
+		if domain == "" {
+			continue
+		}
+
+		// Query /v1/network/status endpoint
+		statusURL := fmt.Sprintf("https://%s/v1/network/status", domain)
+		cm.logger.Debug("Querying peer network status", zap.String("url", statusURL))
+
+		// Use TLS-aware HTTP client (handles staging certs for *.debros.network)
+		client := tlsutil.NewHTTPClientForDomain(10*time.Second, domain)
+		resp, err := client.Get(statusURL)
+		if err != nil {
+			// Try HTTP fallback
+			statusURL = fmt.Sprintf("http://%s/v1/network/status", domain)
+			resp, err = client.Get(statusURL)
+			if err != nil {
+				cm.logger.Debug("Failed to query peer status", zap.String("domain", domain), zap.Error(err))
+				continue
+			}
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			cm.logger.Debug("Peer returned non-OK status", zap.String("domain", domain), zap.Int("status", resp.StatusCode))
+			continue
+		}
+
+		// Parse response
+		var status struct {
+			IPFSCluster *struct {
+				PeerID    string   `json:"peer_id"`
+				Addresses []string `json:"addresses"`
+			} `json:"ipfs_cluster"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+			cm.logger.Debug("Failed to decode peer status", zap.String("domain", domain), zap.Error(err))
+			continue
+		}
+
+		if status.IPFSCluster == nil || status.IPFSCluster.PeerID == "" {
+			cm.logger.Debug("Peer has no IPFS Cluster info", zap.String("domain", domain))
+			continue
+		}
+
+		// Extract IP from domain or addresses
+		peerIP := extractIPFromMultiaddrForCluster(peerAddr)
+		if peerIP == "" {
+			// Try to resolve domain
+			ips, err := net.LookupIP(domain)
+			if err == nil && len(ips) > 0 {
+				for _, ip := range ips {
+					if ip.To4() != nil {
+						peerIP = ip.String()
+						break
+					}
+				}
+			}
+		}
+
+		if peerIP == "" {
+			cm.logger.Debug("Could not determine peer IP", zap.String("domain", domain))
+			continue
+		}
+
+		// Construct cluster multiaddr
+		// IPFS Cluster listens on port 9098 (REST API port 9094 + 4)
+		clusterAddr := fmt.Sprintf("/ip4/%s/tcp/9098/p2p/%s", peerIP, status.IPFSCluster.PeerID)
+		if !seenPeers[clusterAddr] {
+			discoveredPeers = append(discoveredPeers, clusterAddr)
+			seenPeers[clusterAddr] = true
+			cm.logger.Info("Discovered cluster peer from gateway",
+				zap.String("domain", domain),
+				zap.String("peer_id", status.IPFSCluster.PeerID),
+				zap.String("cluster_addr", clusterAddr))
+		}
+	}
+
+	if len(discoveredPeers) == 0 {
+		cm.logger.Debug("No cluster peers discovered from gateway")
+		return false, nil
+	}
+
+	// Load current config
+	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
+	cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Update peerstore file
+	peerstorePath := filepath.Join(cm.clusterPath, "peerstore")
+	peerstoreContent := strings.Join(discoveredPeers, "\n") + "\n"
+	if err := os.WriteFile(peerstorePath, []byte(peerstoreContent), 0644); err != nil {
+		cm.logger.Warn("Failed to update peerstore file", zap.Error(err))
+	}
+
+	// Update peer_addresses in config
+	cfg.Cluster.PeerAddresses = discoveredPeers
+
+	// Save config
+	if err := cm.saveConfig(serviceJSONPath, cfg); err != nil {
+		return false, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	cm.logger.Info("Updated cluster peer addresses from gateway discovery",
+		zap.Int("peer_count", len(discoveredPeers)),
+		zap.Strings("peer_addresses", discoveredPeers))
+
+	return true, nil
+}
+
+// extractDomainFromMultiaddr extracts domain or IP from a multiaddr string
+// Handles formats like /dns4/domain/tcp/port/p2p/id or /ip4/ip/tcp/port/p2p/id
+func extractDomainFromMultiaddr(multiaddrStr string) string {
+	ma, err := multiaddr.NewMultiaddr(multiaddrStr)
+	if err != nil {
+		return ""
+	}
+
+	// Try DNS4 first (domain name)
+	if domain, err := ma.ValueForProtocol(multiaddr.P_DNS4); err == nil && domain != "" {
+		return domain
+	}
+
+	// Try DNS6
+	if domain, err := ma.ValueForProtocol(multiaddr.P_DNS6); err == nil && domain != "" {
+		return domain
+	}
+
+	// Try IP4
+	if ip, err := ma.ValueForProtocol(multiaddr.P_IP4); err == nil && ip != "" {
+		return ip
+	}
+
+	// Try IP6
+	if ip, err := ma.ValueForProtocol(multiaddr.P_IP6); err == nil && ip != "" {
+		return ip
+	}
+
+	return ""
 }
 
 // DiscoverClusterPeersFromLibP2P loads IPFS cluster peer addresses from the peerstore file.

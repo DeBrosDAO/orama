@@ -1024,7 +1024,7 @@ func (pm *ProcessManager) startAnon(ctx context.Context) error {
 
 func (pm *ProcessManager) startNode(name, configFile, logPath string) error {
 	pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("%s.pid", name))
-	cmd := exec.Command("./bin/node", "--config", configFile)
+	cmd := exec.Command("./bin/orama-node", "--config", configFile)
 	logFile, _ := os.Create(logPath)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

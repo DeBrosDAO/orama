@@ -52,7 +52,7 @@ SPECIFIC_PATTERNS=(
   "ipfs daemon"
   "ipfs-cluster-service daemon"
   "olric-server"
-  "bin/node"
+  "bin/orama-node"
   "bin/gateway"
   "anyone-client"
 )
