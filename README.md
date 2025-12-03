@@ -1,4 +1,4 @@
-# DeBros Network - Distributed P2P Database System
+# Orama Network - Distributed P2P Database System
 
 A decentralized peer-to-peer data platform built in Go. Combines distributed SQL (RQLite), pub/sub messaging, and resilient peer discovery so applications can share state without central infrastructure.
 
