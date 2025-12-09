@@ -2,14 +2,6 @@
 
 A decentralized peer-to-peer data platform built in Go. Combines distributed SQL (RQLite), pub/sub messaging, and resilient peer discovery so applications can share state without central infrastructure.
 
-## Features
-
-- **Distributed SQL** - RQLite with Raft consensus
-- **Pub/Sub Messaging** - Topic-based with automatic cleanup
-- **Namespace Isolation** - Multi-tenant support
-- **Secure Transport** - LibP2P + Noise/TLS encryption
-- **Unified Gateway** - Single port access to all node services
-
 ## Quick Start
 
 ### Local Development
@@ -22,18 +14,12 @@ make build
 make dev
 ```
 
-The cluster automatically performs health checks before declaring success. Check the output for:
-
-- Node unified gateway ports (6001-6005)
-- IPFS API endpoints
-- Olric cache server
-- Peer connection status
-- Example curl commands
+The cluster automatically performs health checks before declaring success.
 
 ### Stop Development Environment
 
 ```bash
-make down
+make stop
 ```
 
 ## Testing Services
@@ -49,13 +35,9 @@ Each node is accessible via a single unified gateway port:
 ```bash
 # Node-1 (port 6001)
 curl http://node-1.local:6001/health
-curl http://node-1.local:6001/rqlite/http/db/execute -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'
-curl http://node-1.local:6001/cluster/health
-curl http://node-1.local:6001/ipfs/api/v0/version
 
 # Node-2 (port 6002)
 curl http://node-2.local:6002/health
-curl http://node-2.local:6002/rqlite/http/db/execute -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'
 
 # Node-3 (port 6003)
 curl http://node-3.local:6003/health
@@ -65,46 +47,6 @@ curl http://node-4.local:6004/health
 
 # Node-5 (port 6005)
 curl http://node-5.local:6005/health
-```
-
-### Main Gateway
-
-The main gateway provides `/v1/*` routes for RQLite, pub/sub, and storage:
-
-```bash
-# Gateway health
-curl http://node-1.local:6001/health
-
-# Gateway status
-curl http://node-1.local:6001/v1/status
-
-# Network peers
-curl http://node-1.local:6001/v1/network/status
-
-# Database query
-curl http://node-1.local:6001/v1/rqlite/query \
-  -H "Content-Type: application/json" \
-  -d '{"sql":"SELECT 1"}'
-
-# Pub/Sub topics
-curl http://node-1.local:6001/v1/pubsub/topics
-```
-
-### Direct Service Access (Debugging)
-
-Direct access to individual service ports without unified gateway:
-
-```bash
-# RQLite HTTP (each node on its own port)
-curl http://localhost:5001/db/execute -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'  # Bootstrap
-curl http://localhost:5002/db/execute -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'  # Node2
-
-# IPFS API
-curl http://localhost:4501/api/v0/version  # Bootstrap IPFS
-curl http://localhost:4502/api/v0/version  # Node2 IPFS
-
-# Olric Cache
-curl http://localhost:3320/stats
 ```
 
 ## Network Architecture
@@ -147,7 +89,7 @@ orama dev logs node-1 --follow  # Follow logs in real-time
 orama dev logs gateway --follow # Gateway logs
 
 # Stop all services
-orama dev down
+orama stop
 
 # Build binaries
 make build
@@ -222,16 +164,7 @@ echo "deb https://debrosficial.github.io/network/apt stable main" | sudo tee /et
 
 sudo apt update && sudo apt install orama
 
-# Interactive installation (recommended)
-sudo orama install
-
-# Or with flags - First node (creates new cluster)
-sudo orama install --vps-ip <public_ip> --domain node-1.example.com
-
-# Joining existing cluster
-sudo orama install --vps-ip <public_ip> --domain node-2.example.com \
-  --peers /ip4/<first_node_ip>/tcp/4001/p2p/<peer_id> \
-  --cluster-secret <64-hex-secret>
+sudo orama install --interactive
 ```
 
 ### Service Management
@@ -255,7 +188,7 @@ orama logs ipfs --follow
 
 ```bash
 # Upgrade to latest version
-sudo orama upgrade --restart [--branch nightly]
+sudo orama upgrade --interactive
 ```
 
 ## Configuration
