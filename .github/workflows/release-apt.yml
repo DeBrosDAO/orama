@@ -58,7 +58,8 @@ jobs:
           mkdir -p build/usr/local/bin
           go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama cmd/cli/main.go
           go build -ldflags "$LDFLAGS" -o build/usr/local/bin/debros-node cmd/node/main.go
-          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/debros-gateway cmd/gateway/main.go
+          # Build the entire gateway package so helper files (e.g., config parsing) are included
+          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/debros-gateway ./cmd/gateway
 
       - name: Create Debian package structure
         run: |

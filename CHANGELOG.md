@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.72.1] - 2025-12-09
+
+### Added
+\n
+### Changed
+- Cleaned up the README by removing outdated feature lists and complex examples, focusing on the Quick Start guide.
+- Updated development configuration to correctly set advertised addresses for RQLite, improving internal cluster communication.
+- Simplified the build process for the `debros-gateway` binary in the Debian release workflow.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.72.0] - 2025-11-28
 
 ### Added
