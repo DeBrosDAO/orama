@@ -13,6 +13,27 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.73.0] - 2025-12-29
+
+### Added
+- Implemented the core Serverless Functions Engine, allowing users to deploy and execute WASM-based functions (e.g., Go compiled with TinyGo).
+- Added new database migration (004) to support serverless functions, including tables for functions, secrets, cron triggers, database triggers, pubsub triggers, timers, jobs, and invocation logs.
+- Added new API endpoints for managing and invoking serverless functions (`/v1/functions`, `/v1/invoke`, `/v1/functions/{name}/invoke`, `/v1/functions/{name}/ws`).
+- Introduced `WSPubSubClient` for E2E testing of WebSocket PubSub functionality.
+- Added examples and a build script for creating WASM serverless functions (Echo, Hello, Counter).
+
+### Changed
+- Updated Go version requirement from 1.23.8 to 1.24.0 in `go.mod`.
+- Refactored RQLite client to improve data type handling and conversion, especially for `sql.Null*` types and number parsing.
+- Improved RQLite cluster discovery logic to safely handle new nodes joining an existing cluster without clearing existing Raft state unless necessary (log index 0).
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected an issue in the `install` command where dry-run summaries were missing newlines.
+
 ## [0.72.1] - 2025-12-09
 
 ### Added

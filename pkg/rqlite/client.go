@@ -595,9 +595,18 @@ func setReflectValue(field reflect.Value, raw any) error {
 		switch v := raw.(type) {
 		case int64:
 			field.SetInt(v)
+		case float64:
+			// RQLite/JSON returns numbers as float64
+			field.SetInt(int64(v))
+		case int:
+			field.SetInt(int64(v))
 		case []byte:
 			var n int64
 			fmt.Sscan(string(v), &n)
+			field.SetInt(n)
+		case string:
+			var n int64
+			fmt.Sscan(v, &n)
 			field.SetInt(n)
 		default:
 			return fmt.Errorf("cannot convert %T to int", raw)
@@ -609,9 +618,21 @@ func setReflectValue(field reflect.Value, raw any) error {
 				v = 0
 			}
 			field.SetUint(uint64(v))
+		case float64:
+			// RQLite/JSON returns numbers as float64
+			if v < 0 {
+				v = 0
+			}
+			field.SetUint(uint64(v))
+		case uint64:
+			field.SetUint(v)
 		case []byte:
 			var n uint64
 			fmt.Sscan(string(v), &n)
+			field.SetUint(n)
+		case string:
+			var n uint64
+			fmt.Sscan(v, &n)
 			field.SetUint(n)
 		default:
 			return fmt.Errorf("cannot convert %T to uint", raw)
@@ -628,17 +649,84 @@ func setReflectValue(field reflect.Value, raw any) error {
 			return fmt.Errorf("cannot convert %T to float", raw)
 		}
 	case reflect.Struct:
-		// Support time.Time; extend as needed.
+		// Support time.Time
 		if field.Type() == reflect.TypeOf(time.Time{}) {
 			switch v := raw.(type) {
 			case time.Time:
 				field.Set(reflect.ValueOf(v))
+			case string:
+				// Try RFC3339
+				if tt, err := time.Parse(time.RFC3339, v); err == nil {
+					field.Set(reflect.ValueOf(tt))
+				}
 			case []byte:
 				// Try RFC3339
 				if tt, err := time.Parse(time.RFC3339, string(v)); err == nil {
 					field.Set(reflect.ValueOf(tt))
 				}
 			}
+			return nil
+		}
+		// Support sql.NullString
+		if field.Type() == reflect.TypeOf(sql.NullString{}) {
+			ns := sql.NullString{}
+			switch v := raw.(type) {
+			case string:
+				ns.String = v
+				ns.Valid = true
+			case []byte:
+				ns.String = string(v)
+				ns.Valid = true
+			}
+			field.Set(reflect.ValueOf(ns))
+			return nil
+		}
+		// Support sql.NullInt64
+		if field.Type() == reflect.TypeOf(sql.NullInt64{}) {
+			ni := sql.NullInt64{}
+			switch v := raw.(type) {
+			case int64:
+				ni.Int64 = v
+				ni.Valid = true
+			case float64:
+				ni.Int64 = int64(v)
+				ni.Valid = true
+			case int:
+				ni.Int64 = int64(v)
+				ni.Valid = true
+			}
+			field.Set(reflect.ValueOf(ni))
+			return nil
+		}
+		// Support sql.NullBool
+		if field.Type() == reflect.TypeOf(sql.NullBool{}) {
+			nb := sql.NullBool{}
+			switch v := raw.(type) {
+			case bool:
+				nb.Bool = v
+				nb.Valid = true
+			case int64:
+				nb.Bool = v != 0
+				nb.Valid = true
+			case float64:
+				nb.Bool = v != 0
+				nb.Valid = true
+			}
+			field.Set(reflect.ValueOf(nb))
+			return nil
+		}
+		// Support sql.NullFloat64
+		if field.Type() == reflect.TypeOf(sql.NullFloat64{}) {
+			nf := sql.NullFloat64{}
+			switch v := raw.(type) {
+			case float64:
+				nf.Float64 = v
+				nf.Valid = true
+			case int64:
+				nf.Float64 = float64(v)
+				nf.Valid = true
+			}
+			field.Set(reflect.ValueOf(nf))
 			return nil
 		}
 		fallthrough

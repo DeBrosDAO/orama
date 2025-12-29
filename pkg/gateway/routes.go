@@ -63,5 +63,10 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/storage/get/", g.storageGetHandler)
 	mux.HandleFunc("/v1/storage/unpin/", g.storageUnpinHandler)
 
+	// serverless functions (if enabled)
+	if g.serverlessHandlers != nil {
+		g.serverlessHandlers.RegisterRoutes(mux)
+	}
+
 	return g.withMiddleware(mux)
 }

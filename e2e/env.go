@@ -6,13 +6,16 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
+	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v2"
@@ -135,14 +139,26 @@ func GetRQLiteNodes() []string {
 
 // queryAPIKeyFromRQLite queries the SQLite database directly for an API key
 func queryAPIKeyFromRQLite() (string, error) {
-	// Build database path from bootstrap/node config
+	// 1. Check environment variable first
+	if envKey := os.Getenv("DEBROS_API_KEY"); envKey != "" {
+		return envKey, nil
+	}
+
+	// 2. Build database path from bootstrap/node config
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Try all node data directories
+	// Try all node data directories (both production and development paths)
 	dbPaths := []string{
+		// Development paths (~/.orama/node-x/...)
+		filepath.Join(homeDir, ".orama", "node-1", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node-2", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node-3", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node-4", "rqlite", "db.sqlite"),
+		filepath.Join(homeDir, ".orama", "node-5", "rqlite", "db.sqlite"),
+		// Production paths (~/.orama/data/node-x/...)
 		filepath.Join(homeDir, ".orama", "data", "node-1", "rqlite", "db.sqlite"),
 		filepath.Join(homeDir, ".orama", "data", "node-2", "rqlite", "db.sqlite"),
 		filepath.Join(homeDir, ".orama", "data", "node-3", "rqlite", "db.sqlite"),
@@ -642,5 +658,239 @@ func CleanupCacheEntry(t *testing.T, dmapName, key string) {
 
 	if status != http.StatusOK && status != http.StatusNoContent && status != http.StatusNotFound {
 		t.Logf("warning: delete cache entry returned status %d", status)
+	}
+}
+
+// ============================================================================
+// WebSocket PubSub Client for E2E Tests
+// ============================================================================
+
+// WSPubSubClient is a WebSocket-based PubSub client that connects to the gateway
+type WSPubSubClient struct {
+	t        *testing.T
+	conn     *websocket.Conn
+	topic    string
+	handlers []func(topic string, data []byte) error
+	msgChan  chan []byte
+	doneChan chan struct{}
+	mu       sync.RWMutex
+	writeMu  sync.Mutex // Protects concurrent writes to WebSocket
+	closed   bool
+}
+
+// WSPubSubMessage represents a message received from the gateway
+type WSPubSubMessage struct {
+	Data      string `json:"data"`      // base64 encoded
+	Timestamp int64  `json:"timestamp"` // unix milliseconds
+	Topic     string `json:"topic"`
+}
+
+// NewWSPubSubClient creates a new WebSocket PubSub client connected to a topic
+func NewWSPubSubClient(t *testing.T, topic string) (*WSPubSubClient, error) {
+	t.Helper()
+
+	// Build WebSocket URL
+	gatewayURL := GetGatewayURL()
+	wsURL := strings.Replace(gatewayURL, "http://", "ws://", 1)
+	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
+
+	u, err := url.Parse(wsURL + "/v1/pubsub/ws")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse WebSocket URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("topic", topic)
+	u.RawQuery = q.Encode()
+
+	// Set up headers with authentication
+	headers := http.Header{}
+	if apiKey := GetAPIKey(); apiKey != "" {
+		headers.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	// Connect to WebSocket
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+
+	conn, resp, err := dialer.Dial(u.String(), headers)
+	if err != nil {
+		if resp != nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("websocket dial failed (status %d): %w - body: %s", resp.StatusCode, err, string(body))
+		}
+		return nil, fmt.Errorf("websocket dial failed: %w", err)
+	}
+
+	client := &WSPubSubClient{
+		t:        t,
+		conn:     conn,
+		topic:    topic,
+		handlers: make([]func(topic string, data []byte) error, 0),
+		msgChan:  make(chan []byte, 128),
+		doneChan: make(chan struct{}),
+	}
+
+	// Start reader goroutine
+	go client.readLoop()
+
+	return client, nil
+}
+
+// readLoop reads messages from the WebSocket and dispatches to handlers
+func (c *WSPubSubClient) readLoop() {
+	defer close(c.doneChan)
+
+	for {
+		_, message, err := c.conn.ReadMessage()
+		if err != nil {
+			c.mu.RLock()
+			closed := c.closed
+			c.mu.RUnlock()
+			if !closed {
+				// Only log if not intentionally closed
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					c.t.Logf("websocket read error: %v", err)
+				}
+			}
+			return
+		}
+
+		// Parse the message envelope
+		var msg WSPubSubMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			c.t.Logf("failed to unmarshal message: %v", err)
+			continue
+		}
+
+		// Decode base64 data
+		data, err := base64.StdEncoding.DecodeString(msg.Data)
+		if err != nil {
+			c.t.Logf("failed to decode base64 data: %v", err)
+			continue
+		}
+
+		// Send to message channel
+		select {
+		case c.msgChan <- data:
+		default:
+			c.t.Logf("message channel full, dropping message")
+		}
+
+		// Dispatch to handlers
+		c.mu.RLock()
+		handlers := make([]func(topic string, data []byte) error, len(c.handlers))
+		copy(handlers, c.handlers)
+		c.mu.RUnlock()
+
+		for _, handler := range handlers {
+			if err := handler(msg.Topic, data); err != nil {
+				c.t.Logf("handler error: %v", err)
+			}
+		}
+	}
+}
+
+// Subscribe adds a message handler
+func (c *WSPubSubClient) Subscribe(handler func(topic string, data []byte) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.handlers = append(c.handlers, handler)
+}
+
+// Publish sends a message to the topic
+func (c *WSPubSubClient) Publish(data []byte) error {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+
+	if closed {
+		return fmt.Errorf("client is closed")
+	}
+
+	// Protect concurrent writes to WebSocket
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	return c.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// ReceiveWithTimeout waits for a message with timeout
+func (c *WSPubSubClient) ReceiveWithTimeout(timeout time.Duration) ([]byte, error) {
+	select {
+	case msg := <-c.msgChan:
+		return msg, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("timeout waiting for message")
+	case <-c.doneChan:
+		return nil, fmt.Errorf("connection closed")
+	}
+}
+
+// Close closes the WebSocket connection
+func (c *WSPubSubClient) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	c.mu.Unlock()
+
+	// Send close message
+	_ = c.conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+
+	// Close connection
+	return c.conn.Close()
+}
+
+// Topic returns the topic this client is subscribed to
+func (c *WSPubSubClient) Topic() string {
+	return c.topic
+}
+
+// WSPubSubClientPair represents a publisher and subscriber pair for testing
+type WSPubSubClientPair struct {
+	Publisher  *WSPubSubClient
+	Subscriber *WSPubSubClient
+	Topic      string
+}
+
+// NewWSPubSubClientPair creates a publisher and subscriber pair for a topic
+func NewWSPubSubClientPair(t *testing.T, topic string) (*WSPubSubClientPair, error) {
+	t.Helper()
+
+	// Create subscriber first
+	sub, err := NewWSPubSubClient(t, topic)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create subscriber: %w", err)
+	}
+
+	// Small delay to ensure subscriber is registered
+	time.Sleep(100 * time.Millisecond)
+
+	// Create publisher
+	pub, err := NewWSPubSubClient(t, topic)
+	if err != nil {
+		sub.Close()
+		return nil, fmt.Errorf("failed to create publisher: %w", err)
+	}
+
+	return &WSPubSubClientPair{
+		Publisher:  pub,
+		Subscriber: sub,
+		Topic:      topic,
+	}, nil
+}
+
+// Close closes both publisher and subscriber
+func (p *WSPubSubClientPair) Close() {
+	if p.Publisher != nil {
+		p.Publisher.Close()
+	}
+	if p.Subscriber != nil {
+		p.Subscriber.Close()
 	}
 }

@@ -1061,61 +1061,72 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 		}
 	}
 
-	// Step 4: Clear our Raft state if peers have more recent data
+	// Step 4: Only clear Raft state if this is a completely new node
+	// CRITICAL: Do NOT clear state for nodes that have existing data
+	// Raft will handle catch-up automatically via log replication or snapshot installation
 	ourIndex := r.getRaftLogIndex()
-	if maxPeerIndex > ourIndex || (maxPeerIndex == 0 && ourIndex == 0) {
-		r.logger.Info("Clearing Raft state to allow clean cluster join",
+
+	// Only clear state for truly new nodes (log index 0) joining an existing cluster
+	// This is the only safe automatic recovery - all other cases should let Raft handle it
+	isNewNode := ourIndex == 0 && maxPeerIndex > 0
+
+	if !isNewNode {
+		r.logger.Info("Split-brain recovery: node has existing data, letting Raft handle catch-up",
 			zap.Uint64("our_index", ourIndex),
-			zap.Uint64("peer_max_index", maxPeerIndex))
-
-		if err := r.clearRaftState(rqliteDataDir); err != nil {
-			return fmt.Errorf("failed to clear Raft state: %w", err)
-		}
-
-		// Step 5: Refresh peer metadata and force write peers.json
-		// We trigger peer exchange again to ensure we have the absolute latest metadata
-		// after clearing state, then force write peers.json regardless of changes
-		r.logger.Info("Refreshing peer metadata after clearing raft state")
-		r.discoveryService.TriggerPeerExchange(ctx)
-		time.Sleep(1 * time.Second) // Brief wait for peer exchange to complete
-
-		r.logger.Info("Force writing peers.json with all discovered peers")
-		// We use ForceWritePeersJSON instead of TriggerSync because TriggerSync
-		// only writes if membership changed, but after clearing state we need
-		// to write regardless of changes
-		if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
-			return fmt.Errorf("failed to force write peers.json: %w", err)
-		}
-
-		// Verify peers.json was created
-		peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
-		if _, err := os.Stat(peersPath); err != nil {
-			return fmt.Errorf("peers.json not created after force write: %w", err)
-		}
-
-		r.logger.Info("peers.json verified after force write",
-			zap.String("peers_path", peersPath))
-
-		// Step 6: Restart RQLite to pick up new peers.json
-		r.logger.Info("Restarting RQLite to apply new cluster configuration")
-		if err := r.recoverCluster(ctx, peersPath); err != nil {
-			return fmt.Errorf("failed to restart RQLite: %w", err)
-		}
-
-		// Step 7: Wait for cluster to form (waitForReadyAndConnect already handled readiness)
-		r.logger.Info("Waiting for cluster to stabilize after recovery...")
-		time.Sleep(5 * time.Second)
-
-		// Verify recovery succeeded
-		if r.isInSplitBrainState() {
-			return fmt.Errorf("still in split-brain after recovery attempt")
-		}
-
-		r.logger.Info("Split-brain recovery completed successfully")
+			zap.Uint64("peer_max_index", maxPeerIndex),
+			zap.String("action", "skipping state clear - Raft will sync automatically"))
 		return nil
 	}
 
-	return fmt.Errorf("cannot recover: we have more recent data than peers")
+	r.logger.Info("Split-brain recovery: new node joining cluster - clearing state",
+		zap.Uint64("our_index", ourIndex),
+		zap.Uint64("peer_max_index", maxPeerIndex))
+
+	if err := r.clearRaftState(rqliteDataDir); err != nil {
+		return fmt.Errorf("failed to clear Raft state: %w", err)
+	}
+
+	// Step 5: Refresh peer metadata and force write peers.json
+	// We trigger peer exchange again to ensure we have the absolute latest metadata
+	// after clearing state, then force write peers.json regardless of changes
+	r.logger.Info("Refreshing peer metadata after clearing raft state")
+	r.discoveryService.TriggerPeerExchange(ctx)
+	time.Sleep(1 * time.Second) // Brief wait for peer exchange to complete
+
+	r.logger.Info("Force writing peers.json with all discovered peers")
+	// We use ForceWritePeersJSON instead of TriggerSync because TriggerSync
+	// only writes if membership changed, but after clearing state we need
+	// to write regardless of changes
+	if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+		return fmt.Errorf("failed to force write peers.json: %w", err)
+	}
+
+	// Verify peers.json was created
+	peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
+	if _, err := os.Stat(peersPath); err != nil {
+		return fmt.Errorf("peers.json not created after force write: %w", err)
+	}
+
+	r.logger.Info("peers.json verified after force write",
+		zap.String("peers_path", peersPath))
+
+	// Step 6: Restart RQLite to pick up new peers.json
+	r.logger.Info("Restarting RQLite to apply new cluster configuration")
+	if err := r.recoverCluster(ctx, peersPath); err != nil {
+		return fmt.Errorf("failed to restart RQLite: %w", err)
+	}
+
+	// Step 7: Wait for cluster to form (waitForReadyAndConnect already handled readiness)
+	r.logger.Info("Waiting for cluster to stabilize after recovery...")
+	time.Sleep(5 * time.Second)
+
+	// Verify recovery succeeded
+	if r.isInSplitBrainState() {
+		return fmt.Errorf("still in split-brain after recovery attempt")
+	}
+
+	r.logger.Info("Split-brain recovery completed successfully")
+	return nil
 }
 
 // isSafeToClearState verifies we can safely clear Raft state
@@ -1216,11 +1227,16 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	}
 
 	// AUTOMATIC RECOVERY: Check if we have stale Raft state that conflicts with cluster
-	// If we have existing state but peers have higher log indexes, clear our state to allow clean join
+	// Only clear state if we are a NEW node joining an EXISTING cluster with higher log indexes
+	// CRITICAL FIX: Do NOT clear state if our log index is the same or similar to peers
+	// This prevents data loss during normal cluster restarts
 	allPeers := r.discoveryService.GetAllPeers()
 	hasExistingState := r.hasExistingRaftState(rqliteDataDir)
 
 	if hasExistingState {
+		// Get our own log index from persisted snapshots
+		ourLogIndex := r.getRaftLogIndex()
+
 		// Find the highest log index among other peers (excluding ourselves)
 		maxPeerIndex := uint64(0)
 		for _, peer := range allPeers {
@@ -1233,25 +1249,43 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 			}
 		}
 
-		// If peers have meaningful log history (> 0) and we have stale state, clear it
-		// This handles the case where we're starting with old state but the cluster has moved on
-		if maxPeerIndex > 0 {
-			r.logger.Warn("Detected stale Raft state - clearing to allow clean cluster join",
+		r.logger.Info("Comparing local state with cluster state",
+			zap.Uint64("our_log_index", ourLogIndex),
+			zap.Uint64("peer_max_log_index", maxPeerIndex),
+			zap.String("data_dir", rqliteDataDir))
+
+		// CRITICAL FIX: Only clear state if this is a COMPLETELY NEW node joining an existing cluster
+		// - New node: our log index is 0, but peers have data (log index > 0)
+		// - For all other cases: let Raft handle catch-up via log replication or snapshot installation
+		//
+		// WHY THIS IS SAFE:
+		// - Raft protocol automatically catches up nodes that are behind via AppendEntries
+		// - If a node is too far behind, the leader will send a snapshot
+		// - We should NEVER clear state for nodes that have existing data, even if they're behind
+		// - This prevents data loss during cluster restarts and rolling upgrades
+		isNewNodeJoiningCluster := ourLogIndex == 0 && maxPeerIndex > 0
+
+		if isNewNodeJoiningCluster {
+			r.logger.Warn("New node joining existing cluster - clearing local state to allow clean join",
+				zap.Uint64("our_log_index", ourLogIndex),
 				zap.Uint64("peer_max_log_index", maxPeerIndex),
 				zap.String("data_dir", rqliteDataDir))
 
 			if err := r.clearRaftState(rqliteDataDir); err != nil {
 				r.logger.Error("Failed to clear Raft state", zap.Error(err))
-				// Continue anyway - rqlite might still be able to recover
 			} else {
-				// Force write peers.json after clearing stale state
+				// Force write peers.json after clearing state
 				if r.discoveryService != nil {
-					r.logger.Info("Force writing peers.json after clearing stale Raft state")
+					r.logger.Info("Force writing peers.json after clearing local state")
 					if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
-						r.logger.Error("Failed to force write peers.json after clearing stale state", zap.Error(err))
+						r.logger.Error("Failed to force write peers.json after clearing state", zap.Error(err))
 					}
 				}
 			}
+		} else {
+			r.logger.Info("Preserving Raft state - node will catch up via Raft protocol",
+				zap.Uint64("our_log_index", ourLogIndex),
+				zap.Uint64("peer_max_log_index", maxPeerIndex))
 		}
 	}
 

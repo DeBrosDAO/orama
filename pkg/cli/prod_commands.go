@@ -97,9 +97,9 @@ func runInteractiveInstaller() {
 
 // showDryRunSummary displays what would be done during installation without making changes
 func showDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress string, isFirstNode bool, oramaDir string) {
-	fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
+	fmt.Print("\n" + strings.Repeat("=", 70) + "\n")
 	fmt.Printf("DRY RUN - No changes will be made\n")
-	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+	fmt.Print(strings.Repeat("=", 70) + "\n\n")
 
 	fmt.Printf("📋 Installation Summary:\n")
 	fmt.Printf("  VPS IP:        %s\n", vpsIP)
@@ -169,9 +169,9 @@ func showDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("    - 9094 (IPFS Cluster API)\n")
 	fmt.Printf("    - 3320/3322 (Olric)\n")
 
-	fmt.Printf("\n" + strings.Repeat("=", 70) + "\n")
+	fmt.Print("\n" + strings.Repeat("=", 70) + "\n")
 	fmt.Printf("To proceed with installation, run without --dry-run\n")
-	fmt.Printf(strings.Repeat("=", 70) + "\n\n")
+	fmt.Print(strings.Repeat("=", 70) + "\n\n")
 }
 
 // validateGeneratedConfig loads and validates the generated node configuration
@@ -425,12 +425,12 @@ func handleProdInstall(args []string) {
 	}
 
 	// Validate VPS IP is provided
-		if *vpsIP == "" {
+	if *vpsIP == "" {
 		fmt.Fprintf(os.Stderr, "❌ --vps-ip is required\n")
 		fmt.Fprintf(os.Stderr, "   Usage: sudo orama install --vps-ip <public_ip>\n")
 		fmt.Fprintf(os.Stderr, "   Or run: sudo orama install --interactive\n")
-			os.Exit(1)
-		}
+		os.Exit(1)
+	}
 
 	// Determine if this is the first node (creates new cluster) or joining existing cluster
 	isFirstNode := len(peers) == 0 && *joinAddress == ""
@@ -1109,7 +1109,7 @@ func handleProdLogs(args []string) {
 		} else {
 			for i, svc := range serviceNames {
 				if i > 0 {
-					fmt.Printf("\n" + strings.Repeat("=", 70) + "\n\n")
+					fmt.Print("\n" + strings.Repeat("=", 70) + "\n\n")
 				}
 				fmt.Printf("📋 Logs for %s:\n\n", svc)
 				cmd := exec.Command("journalctl", "-u", svc, "-n", "50")

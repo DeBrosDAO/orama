@@ -20,7 +20,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/multiformats/go-multiaddr"
+	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 
 	_ "github.com/rqlite/gorqlite/stdlib"
@@ -84,6 +86,13 @@ type Gateway struct {
 	// Local pub/sub bypass for same-gateway subscribers
 	localSubscribers map[string][]*localSubscriber // topic+namespace -> subscribers
 	mu               sync.RWMutex
+
+	// Serverless function engine
+	serverlessEngine   *serverless.Engine
+	serverlessRegistry *serverless.Registry
+	serverlessInvoker  *serverless.Invoker
+	serverlessWSMgr    *serverless.WSManager
+	serverlessHandlers *ServerlessHandlers
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -298,6 +307,78 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	gw.cfg.IPFSReplicationFactor = ipfsReplicationFactor
 	gw.cfg.IPFSEnableEncryption = ipfsEnableEncryption
 
+	// Initialize serverless function engine
+	logger.ComponentInfo(logging.ComponentGeneral, "Initializing serverless function engine...")
+	if gw.ormClient != nil && gw.ipfsClient != nil {
+		// Create serverless registry (stores functions in RQLite + IPFS)
+		registryCfg := serverless.RegistryConfig{
+			IPFSAPIURL: ipfsAPIURL,
+		}
+		registry := serverless.NewRegistry(gw.ormClient, gw.ipfsClient, registryCfg, logger.Logger)
+		gw.serverlessRegistry = registry
+
+		// Create WebSocket manager for function streaming
+		gw.serverlessWSMgr = serverless.NewWSManager(logger.Logger)
+
+		// Get underlying Olric client if available
+		var olricClient olriclib.Client
+		if oc := gw.getOlricClient(); oc != nil {
+			olricClient = oc.UnderlyingClient()
+		}
+
+		// Create host functions provider (allows functions to call Orama services)
+		// Note: pubsub and secrets are nil for now - can be added later
+		hostFuncsCfg := serverless.HostFunctionsConfig{
+			IPFSAPIURL:  ipfsAPIURL,
+			HTTPTimeout: 30 * time.Second,
+		}
+		hostFuncs := serverless.NewHostFunctions(
+			gw.ormClient,
+			olricClient,
+			gw.ipfsClient,
+			nil, // pubsub adapter - TODO: integrate with gateway pubsub
+			gw.serverlessWSMgr,
+			nil, // secrets manager - TODO: implement
+			hostFuncsCfg,
+			logger.Logger,
+		)
+
+		// Create WASM engine configuration
+		engineCfg := serverless.DefaultConfig()
+		engineCfg.DefaultMemoryLimitMB = 128
+		engineCfg.MaxMemoryLimitMB = 256
+		engineCfg.DefaultTimeoutSeconds = 30
+		engineCfg.MaxTimeoutSeconds = 60
+		engineCfg.ModuleCacheSize = 100
+
+		// Create WASM engine
+		engine, engineErr := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger)
+		if engineErr != nil {
+			logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize serverless engine; functions disabled", zap.Error(engineErr))
+		} else {
+			gw.serverlessEngine = engine
+
+			// Create invoker
+			gw.serverlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
+
+			// Create HTTP handlers
+			gw.serverlessHandlers = NewServerlessHandlers(
+				gw.serverlessInvoker,
+				registry,
+				gw.serverlessWSMgr,
+				logger.Logger,
+			)
+
+			logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
+				zap.Int("default_memory_mb", engineCfg.DefaultMemoryLimitMB),
+				zap.Int("default_timeout_sec", engineCfg.DefaultTimeoutSeconds),
+				zap.Int("module_cache_size", engineCfg.ModuleCacheSize),
+			)
+		}
+	} else {
+		logger.ComponentWarn(logging.ComponentGeneral, "serverless engine requires RQLite and IPFS; functions disabled")
+	}
+
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed, returning...")
 	return gw, nil
 }
@@ -309,6 +390,14 @@ func (g *Gateway) withInternalAuth(ctx context.Context) context.Context {
 
 // Close disconnects the gateway client
 func (g *Gateway) Close() {
+	// Close serverless engine first
+	if g.serverlessEngine != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := g.serverlessEngine.Close(ctx); err != nil {
+			g.logger.ComponentWarn(logging.ComponentGeneral, "error during serverless engine close", zap.Error(err))
+		}
+		cancel()
+	}
 	if g.client != nil {
 		if err := g.client.Disconnect(); err != nil {
 			g.logger.ComponentWarn(logging.ComponentClient, "error during client disconnect", zap.Error(err))
