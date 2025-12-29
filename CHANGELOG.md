@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
-## [0.73.0] - 2025-12-29
+## [0.80.0] - 2025-12-29
 
 ### Added
 - Implemented the core Serverless Functions Engine, allowing users to deploy and execute WASM-based functions (e.g., Go compiled with TinyGo).
