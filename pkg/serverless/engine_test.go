@@ -105,9 +105,60 @@ func TestEngine_Precompile(t *testing.T) {
 }
 
 func TestEngine_Timeout(t *testing.T) {
-	// Skip this for now as it might be hard to trigger with a minimal WASM
-	// but we could try a WASM that loops forever.
-	t.Skip("Hard to trigger timeout with minimal WASM")
+	logger := zap.NewNop()
+	registry := NewMockRegistry()
+	hostServices := NewMockHostServices()
+	engine, _ := NewEngine(nil, registry, hostServices, logger)
+	defer engine.Close(context.Background())
+
+	wasmBytes := []byte{
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+		0x03, 0x02, 0x01, 0x00,
+		0x07, 0x0a, 0x01, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00, 0x00,
+		0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+	}
+
+	fn, _ := registry.Get(context.Background(), "test", "timeout", 0)
+	if fn == nil {
+		_ = registry.Register(context.Background(), &FunctionDefinition{Name: "timeout", Namespace: "test"}, wasmBytes)
+		fn, _ = registry.Get(context.Background(), "test", "timeout", 0)
+	}
+	fn.TimeoutSeconds = 1
+
+	// Test with already canceled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := engine.Execute(ctx, fn, nil, nil)
+	if err == nil {
+		t.Error("expected error for canceled context, got nil")
+	}
+}
+
+func TestEngine_MemoryLimit(t *testing.T) {
+	logger := zap.NewNop()
+	registry := NewMockRegistry()
+	hostServices := NewMockHostServices()
+	engine, _ := NewEngine(nil, registry, hostServices, logger)
+	defer engine.Close(context.Background())
+
+	wasmBytes := []byte{
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+		0x03, 0x02, 0x01, 0x00,
+		0x07, 0x0a, 0x01, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00, 0x00,
+		0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+	}
+
+	_ = registry.Register(context.Background(), &FunctionDefinition{Name: "memory", Namespace: "test", MemoryLimitMB: 1, TimeoutSeconds: 5}, wasmBytes)
+	fn, _ := registry.Get(context.Background(), "test", "memory", 0)
+
+	// This should pass because the minimal WASM doesn't use much memory
+	_, err := engine.Execute(context.Background(), fn, nil, nil)
+	if err != nil {
+		t.Errorf("expected success for minimal WASM within memory limit, got error: %v", err)
+	}
 }
 
 func TestEngine_RealWASM(t *testing.T) {

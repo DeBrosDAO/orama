@@ -44,19 +44,19 @@ type InvocationLogger interface {
 
 // InvocationRecord represents a logged invocation.
 type InvocationRecord struct {
-	ID            string           `json:"id"`
-	FunctionID    string           `json:"function_id"`
-	RequestID     string           `json:"request_id"`
-	TriggerType   TriggerType      `json:"trigger_type"`
-	CallerWallet  string           `json:"caller_wallet,omitempty"`
-	InputSize     int              `json:"input_size"`
-	OutputSize    int              `json:"output_size"`
-	StartedAt     time.Time        `json:"started_at"`
-	CompletedAt   time.Time        `json:"completed_at"`
-	DurationMS    int64            `json:"duration_ms"`
-	Status        InvocationStatus `json:"status"`
-	ErrorMessage  string           `json:"error_message,omitempty"`
-	MemoryUsedMB  float64          `json:"memory_used_mb"`
+	ID           string           `json:"id"`
+	FunctionID   string           `json:"function_id"`
+	RequestID    string           `json:"request_id"`
+	TriggerType  TriggerType      `json:"trigger_type"`
+	CallerWallet string           `json:"caller_wallet,omitempty"`
+	InputSize    int              `json:"input_size"`
+	OutputSize   int              `json:"output_size"`
+	StartedAt    time.Time        `json:"started_at"`
+	CompletedAt  time.Time        `json:"completed_at"`
+	DurationMS   int64            `json:"duration_ms"`
+	Status       InvocationStatus `json:"status"`
+	ErrorMessage string           `json:"error_message,omitempty"`
+	MemoryUsedMB float64          `json:"memory_used_mb"`
 }
 
 // RateLimiter checks if a request should be rate limited.
@@ -455,4 +455,3 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 		e.logger.Warn("Failed to log invocation", zap.Error(logErr))
 	}
 }
-
