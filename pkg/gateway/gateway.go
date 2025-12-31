@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/multiformats/go-multiaddr"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -68,8 +70,6 @@ type Gateway struct {
 	client       client.NetworkClient
 	nodePeerID   string // The node's actual peer ID from its identity file (overrides client's peer ID)
 	startedAt    time.Time
-	signingKey   *rsa.PrivateKey
-	keyID        string
 
 	// rqlite SQL connection and HTTP ORM gateway
 	sqlDB     *sql.DB
@@ -93,6 +93,9 @@ type Gateway struct {
 	serverlessInvoker  *serverless.Invoker
 	serverlessWSMgr    *serverless.WSManager
 	serverlessHandlers *ServerlessHandlers
+
+	// Authentication service
+	authService *auth.Service
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -137,16 +140,6 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		nodePeerID:       cfg.NodePeerID,
 		startedAt:        time.Now(),
 		localSubscribers: make(map[string][]*localSubscriber),
-	}
-
-	logger.ComponentInfo(logging.ComponentGeneral, "Generating RSA signing key...")
-	// Generate local RSA signing key for JWKS/JWT (ephemeral for now)
-	if key, err := rsa.GenerateKey(rand.Reader, 2048); err == nil {
-		gw.signingKey = key
-		gw.keyID = "gw-" + strconv.FormatInt(time.Now().Unix(), 10)
-		logger.ComponentInfo(logging.ComponentGeneral, "RSA key generated successfully")
-	} else {
-		logger.ComponentWarn(logging.ComponentGeneral, "failed to generate RSA key; jwks will be empty", zap.Error(err))
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")
@@ -362,14 +355,28 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.serverlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
 
 			// Create HTTP handlers
-			gw.serverlessHandlers = NewServerlessHandlers(
-				gw.serverlessInvoker,
-				registry,
-				gw.serverlessWSMgr,
-				logger.Logger,
-			)
+	gw.serverlessHandlers = NewServerlessHandlers(
+		gw.serverlessInvoker,
+		registry,
+		gw.serverlessWSMgr,
+		logger.Logger,
+	)
 
-			logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
+	// Initialize auth service
+	// For now using ephemeral key, can be loaded from config later
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	authService, err := auth.NewService(logger, c, string(keyPEM), cfg.ClientNamespace)
+	if err != nil {
+		logger.ComponentError(logging.ComponentGeneral, "failed to initialize auth service", zap.Error(err))
+	} else {
+		gw.authService = authService
+	}
+
+	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
 				zap.Int("default_memory_mb", engineCfg.DefaultMemoryLimitMB),
 				zap.Int("default_timeout_sec", engineCfg.DefaultTimeoutSeconds),
 				zap.Int("module_cache_size", engineCfg.ModuleCacheSize),

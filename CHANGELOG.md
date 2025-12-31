@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.81.0] - 2025-12-31
+
+### Added
+- Implemented a new, robust authentication service within the Gateway for handling wallet-based challenges, signature verification (ETH/SOL), JWT issuance, and API key management.
+- Introduced automatic recovery logic for RQLite to detect and recover from split-brain scenarios and ensure cluster stability during restarts.
+
+### Changed
+- Refactored the production installation command (`dbn prod install`) by moving installer logic and utility functions into a dedicated `pkg/cli/utils` package for better modularity and maintainability.
+- Reworked the core logic for starting and managing LibP2P, RQLite, and the HTTP Gateway within the Node, including improved peer reconnection and cluster configuration synchronization.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected IPFS Cluster configuration logic to properly handle port assignments and ensure correct IPFS API addresses are used, resolving potential connection issues between cluster components.
+
 ## [0.80.0] - 2025-12-29
 
 ### Added

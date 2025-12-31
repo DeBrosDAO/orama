@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -74,7 +75,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			if strings.HasPrefix(lower, "bearer ") {
 				tok := strings.TrimSpace(auth[len("Bearer "):])
 				if strings.Count(tok, ".") == 2 {
-					if claims, err := g.parseAndVerifyJWT(tok); err == nil {
+					if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 						// Attach JWT claims and namespace to context
 						ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
@@ -235,7 +236,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		apiKeyFallback := ""
 
 		if v := ctx.Value(ctxKeyJWT); v != nil {
-			if claims, ok := v.(*jwtClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
+			if claims, ok := v.(*auth.JWTClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
 				// Determine subject type.
 				// If subject looks like an API key (e.g., ak_<random>:<namespace>),
 				// treat it as an API key owner; otherwise assume a wallet subject.

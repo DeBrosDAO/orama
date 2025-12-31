@@ -14,8 +14,8 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/status", g.statusHandler)
 
 	// auth endpoints
-	mux.HandleFunc("/v1/auth/jwks", g.jwksHandler)
-	mux.HandleFunc("/.well-known/jwks.json", g.jwksHandler)
+	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
+	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)
 	mux.HandleFunc("/v1/auth/login", g.loginPageHandler)
 	mux.HandleFunc("/v1/auth/challenge", g.challengeHandler)
 	mux.HandleFunc("/v1/auth/verify", g.verifyHandler)

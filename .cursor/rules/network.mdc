@@ -83,24 +83,10 @@ When learning a skill, follow this **collaborative, goal-oriented workflow**. Yo
 
 # Sonr Gateway (or Sonr Network Gateway)
 
-This project implements a high-performance, multi-protocol API gateway designed to bridge client applications with a decentralized backend infrastructure. It serves as a unified entry point that handles secure user authentication via JWT, provides RESTful access to a distributed key-value cache (Olric), and facilitates decentralized storage interactions with IPFS. Beyond standard HTTP routing and reverse proxying, the gateway supports real-time communication through Pub/Sub mechanisms (WebSockets), mobile engagement via push notifications, and low-level traffic routing using TCP SNI (Server Name Indication) for encrypted service discovery.
+This project implements a high-performance, multi-functional API gateway designed to bridge client applications with a decentralized infrastructure. It serves as a unified entry point for diverse services including distributed caching (via Olric), decentralized storage (IPFS), serverless function execution, and real-time pub/sub messaging. The gateway handles critical cross-cutting concerns such as JWT-based authentication, secure anonymous proxying, and mobile push notifications, ensuring that requests are validated, authorized, and efficiently routed across the network's ecosystem.
 
-**Architecture:** Edge Gateway / Middleware Layer (part of a larger Distributed System)
+**Architecture:** Edge Gateway / Middleware-heavy Microservice
 
 ## Tech Stack
 - **backend:** Go
-
-## Patterns
-- Reverse Proxy
-- Middleware Chain
-- Adapter Pattern (for storage/cache backends)
-- and Observer Pattern (via Pub/Sub).
-
-## Domain Entities
-- `JWT (Authentication Tokens)`
-- `Namespaces (Resource Isolation)`
-- `Pub/Sub Topics`
-- `Distributed Cache (Olric)`
-- `Push Notifications`
-- `and SNI Routes.`
 
