@@ -26,27 +26,25 @@ make stop
 
 After running `make dev`, test service health using these curl requests:
 
-> **Note:** Local domains (node-1.local, etc.) require running `sudo make setup-domains` first. Alternatively, use `localhost` with port numbers.
-
 ### Node Unified Gateways
 
 Each node is accessible via a single unified gateway port:
 
 ```bash
 # Node-1 (port 6001)
-curl http://node-1.local:6001/health
+curl http://localhost:6001/health
 
 # Node-2 (port 6002)
-curl http://node-2.local:6002/health
+curl http://localhost:6002/health
 
 # Node-3 (port 6003)
-curl http://node-3.local:6003/health
+curl http://localhost:6003/health
 
 # Node-4 (port 6004)
-curl http://node-4.local:6004/health
+curl http://localhost:6004/health
 
 # Node-5 (port 6005)
-curl http://node-5.local:6005/health
+curl http://localhost:6005/health
 ```
 
 ## Network Architecture

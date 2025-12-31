@@ -208,6 +208,11 @@ func (h *ServerlessHandlers) deployFunction(w http.ResponseWriter, r *http.Reque
 			def.Name = r.FormValue("name")
 		}
 
+		// Get namespace from form if not in metadata
+		if def.Namespace == "" {
+			def.Namespace = r.FormValue("namespace")
+		}
+
 		// Get WASM file
 		file, _, err := r.FormFile("wasm")
 		if err != nil {
@@ -578,7 +583,7 @@ func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
 		return ns
 	}
 
-	return ""
+	return "default"
 }
 
 // getWalletFromRequest extracts wallet address from JWT

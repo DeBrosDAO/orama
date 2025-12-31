@@ -570,9 +570,13 @@ func (g *HTTPGateway) handleDropTable(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
-	stmt := "DROP TABLE IF EXISTS " + tbl
+	stmt := "DROP TABLE " + tbl
 	if _, err := g.Client.Exec(ctx, stmt); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		if strings.Contains(err.Error(), "no such table") {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})

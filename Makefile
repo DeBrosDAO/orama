@@ -71,14 +71,9 @@ run-gateway:
 	@echo "Note: Config must be in ~/.orama/data/gateway.yaml"
 	go run ./cmd/orama-gateway
 
-# Setup local domain names for development
-setup-domains:
-	@echo "Setting up local domains..."
-	@sudo bash scripts/setup-local-domains.sh
-
 # Development environment target
 # Uses orama dev up to start full stack with dependency and port checking
-dev: build setup-domains
+dev: build
 	@./bin/orama dev up
 
 # Graceful shutdown of all dev services

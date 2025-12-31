@@ -228,7 +228,12 @@ func (g *Gateway) storageStatusHandler(w http.ResponseWriter, r *http.Request) {
 	status, err := g.ipfsClient.PinStatus(ctx, path)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "failed to get pin status", zap.Error(err), zap.String("cid", path))
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get status: %v", err))
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "404") || strings.Contains(errStr, "invalid") {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("pin not found: %s", path))
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get status: %v", err))
+		}
 		return
 	}
 
@@ -283,7 +288,8 @@ func (g *Gateway) storageGetHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "failed to get content from IPFS", zap.Error(err), zap.String("cid", path))
 		// Check if error indicates content not found (404)
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "status 404") {
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "404") || strings.Contains(errStr, "invalid") {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("content not found: %s", path))
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get content: %v", err))
