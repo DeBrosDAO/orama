@@ -3,6 +3,7 @@ package serverless
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -13,6 +14,13 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"go.uber.org/zap"
 )
+
+// contextAwareHostServices is an internal interface for services that need to know about
+// the current invocation context.
+type contextAwareHostServices interface {
+	SetInvocationContext(invCtx *InvocationContext)
+	ClearContext()
+}
 
 // Ensure Engine implements FunctionExecutor interface.
 var _ FunctionExecutor = (*Engine)(nil)
@@ -109,6 +117,11 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 	// Apply options
 	for _, opt := range opts {
 		opt(engine)
+	}
+
+	// Register host functions
+	if err := engine.registerHostModule(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to register host module: %w", err)
 	}
 
 	return engine, nil
@@ -303,6 +316,12 @@ func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero
 
 // executeModule instantiates and runs a WASM module.
 func (e *Engine) executeModule(ctx context.Context, compiled wazero.CompiledModule, fn *Function, input []byte, invCtx *InvocationContext) ([]byte, error) {
+	// Set invocation context for host functions if the service supports it
+	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
+		hf.SetInvocationContext(invCtx)
+		defer hf.ClearContext()
+	}
+
 	// Create buffers for stdin/stdout (WASI uses these for I/O)
 	stdin := bytes.NewReader(input)
 	stdout := new(bytes.Buffer)
@@ -454,4 +473,176 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 	if logErr := e.invocationLogger.Log(ctx, record); logErr != nil {
 		e.logger.Warn("Failed to log invocation", zap.Error(logErr))
 	}
+}
+
+// registerHostModule registers the Orama host functions with the wazero runtime.
+func (e *Engine) registerHostModule(ctx context.Context) error {
+	// Register under both "env" and "host" to support different import styles
+	// The user requested "env" in instructions but "host" in expected result.
+	for _, moduleName := range []string{"env", "host"} {
+		_, err := e.runtime.NewHostModuleBuilder(moduleName).
+			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
+			NewFunctionBuilder().WithFunc(e.hGetRequestID).Export("get_request_id").
+			NewFunctionBuilder().WithFunc(e.hGetEnv).Export("get_env").
+			NewFunctionBuilder().WithFunc(e.hGetSecret).Export("get_secret").
+			NewFunctionBuilder().WithFunc(e.hDBQuery).Export("db_query").
+			NewFunctionBuilder().WithFunc(e.hDBExecute).Export("db_execute").
+			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
+			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
+			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
+			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
+			Instantiate(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) hGetCallerWallet(ctx context.Context, mod api.Module) uint64 {
+	wallet := e.hostServices.GetCallerWallet(ctx)
+	return e.writeToGuest(ctx, mod, []byte(wallet))
+}
+
+func (e *Engine) hGetRequestID(ctx context.Context, mod api.Module) uint64 {
+	rid := e.hostServices.GetRequestID(ctx)
+	return e.writeToGuest(ctx, mod, []byte(rid))
+}
+
+func (e *Engine) hGetEnv(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
+	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	val, _ := e.hostServices.GetEnv(ctx, string(key))
+	return e.writeToGuest(ctx, mod, []byte(val))
+}
+
+func (e *Engine) hGetSecret(ctx context.Context, mod api.Module, namePtr, nameLen uint32) uint64 {
+	name, ok := mod.Memory().Read(namePtr, nameLen)
+	if !ok {
+		return 0
+	}
+	val, err := e.hostServices.GetSecret(ctx, string(name))
+	if err != nil {
+		return 0
+	}
+	return e.writeToGuest(ctx, mod, []byte(val))
+}
+
+func (e *Engine) hDBQuery(ctx context.Context, mod api.Module, queryPtr, queryLen, argsPtr, argsLen uint32) uint64 {
+	query, ok := mod.Memory().Read(queryPtr, queryLen)
+	if !ok {
+		return 0
+	}
+
+	var args []interface{}
+	if argsLen > 0 {
+		argsData, ok := mod.Memory().Read(argsPtr, argsLen)
+		if !ok {
+			return 0
+		}
+		if err := json.Unmarshal(argsData, &args); err != nil {
+			e.logger.Error("failed to unmarshal db_query arguments", zap.Error(err))
+			return 0
+		}
+	}
+
+	results, err := e.hostServices.DBQuery(ctx, string(query), args)
+	if err != nil {
+		e.logger.Error("host function db_query failed", zap.Error(err), zap.String("query", string(query)))
+		return 0
+	}
+	return e.writeToGuest(ctx, mod, results)
+}
+
+func (e *Engine) hDBExecute(ctx context.Context, mod api.Module, queryPtr, queryLen, argsPtr, argsLen uint32) uint32 {
+	query, ok := mod.Memory().Read(queryPtr, queryLen)
+	if !ok {
+		return 0
+	}
+
+	var args []interface{}
+	if argsLen > 0 {
+		argsData, ok := mod.Memory().Read(argsPtr, argsLen)
+		if !ok {
+			return 0
+		}
+		if err := json.Unmarshal(argsData, &args); err != nil {
+			e.logger.Error("failed to unmarshal db_execute arguments", zap.Error(err))
+			return 0
+		}
+	}
+
+	affected, err := e.hostServices.DBExecute(ctx, string(query), args)
+	if err != nil {
+		e.logger.Error("host function db_execute failed", zap.Error(err), zap.String("query", string(query)))
+		return 0
+	}
+	return uint32(affected)
+}
+
+func (e *Engine) hCacheGet(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
+	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	val, err := e.hostServices.CacheGet(ctx, string(key))
+	if err != nil {
+		return 0
+	}
+	return e.writeToGuest(ctx, mod, val)
+}
+
+func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32, ttl int64) {
+	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	if !ok {
+		return
+	}
+	val, ok := mod.Memory().Read(valPtr, valLen)
+	if !ok {
+		return
+	}
+	_ = e.hostServices.CacheSet(ctx, string(key), val, ttl)
+}
+
+func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {
+	msg, ok := mod.Memory().Read(ptr, size)
+	if ok {
+		e.hostServices.LogInfo(ctx, string(msg))
+	}
+}
+
+func (e *Engine) hLogError(ctx context.Context, mod api.Module, ptr, size uint32) {
+	msg, ok := mod.Memory().Read(ptr, size)
+	if ok {
+		e.hostServices.LogError(ctx, string(msg))
+	}
+}
+
+func (e *Engine) writeToGuest(ctx context.Context, mod api.Module, data []byte) uint64 {
+	if len(data) == 0 {
+		return 0
+	}
+	// Try to find a non-conflicting allocator first, fallback to malloc
+	malloc := mod.ExportedFunction("orama_alloc")
+	if malloc == nil {
+		malloc = mod.ExportedFunction("malloc")
+	}
+
+	if malloc == nil {
+		e.logger.Warn("WASM module missing malloc/orama_alloc export, cannot return string/bytes to guest")
+		return 0
+	}
+	results, err := malloc.Call(ctx, uint64(len(data)))
+	if err != nil {
+		e.logger.Error("failed to call malloc in WASM module", zap.Error(err))
+		return 0
+	}
+	ptr := uint32(results[0])
+	if !mod.Memory().Write(ptr, data) {
+		e.logger.Error("failed to write to WASM memory")
+		return 0
+	}
+	return (uint64(ptr) << 32) | uint64(len(data))
 }

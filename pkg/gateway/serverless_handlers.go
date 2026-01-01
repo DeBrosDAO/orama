@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -578,7 +579,14 @@ func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
 		return ns
 	}
 
-	// Try to extract from JWT (if authentication middleware has set it)
+	// Try context (set by auth middleware)
+	if v := r.Context().Value(ctxKeyNamespaceOverride); v != nil {
+		if ns, ok := v.(string); ok && ns != "" {
+			return ns
+		}
+	}
+
+	// Try header as fallback
 	if ns := r.Header.Get("X-Namespace"); ns != "" {
 		return ns
 	}
@@ -588,9 +596,29 @@ func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
 
 // getWalletFromRequest extracts wallet address from JWT
 func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
+	// 1. Try X-Wallet header (legacy/direct bypass)
 	if wallet := r.Header.Get("X-Wallet"); wallet != "" {
 		return wallet
 	}
+
+	// 2. Try JWT claims from context
+	if v := r.Context().Value(ctxKeyJWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			subj := strings.TrimSpace(claims.Sub)
+			// Ensure it's not an API key (standard Orama logic)
+			if !strings.HasPrefix(strings.ToLower(subj), "ak_") && !strings.Contains(subj, ":") {
+				return subj
+			}
+		}
+	}
+
+	// 3. Fallback to API key identity (namespace)
+	if v := r.Context().Value(ctxKeyNamespaceOverride); v != nil {
+		if ns, ok := v.(string); ok && ns != "" {
+			return ns
+		}
+	}
+
 	return ""
 }
 

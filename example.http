@@ -1,0 +1,158 @@
+### Orama Network Gateway API Examples
+# This file is designed for the VS Code "REST Client" extension.
+# It demonstrates the core capabilities of the DeBros Network Gateway.
+
+@baseUrl = http://localhost:6001
+@apiKey = ak_X32jj2fiin8zzv0hmBKTC5b5:default
+@contentType = application/json
+
+############################################################
+### 1. SYSTEM & HEALTH
+############################################################
+
+# @name HealthCheck
+GET {{baseUrl}}/v1/health
+X-API-Key: {{apiKey}}
+
+###
+
+# @name SystemStatus
+# Returns the full status of the gateway and connected services
+GET {{baseUrl}}/v1/status
+X-API-Key: {{apiKey}}
+
+###
+
+# @name NetworkStatus
+# Returns the P2P network status and PeerID
+GET {{baseUrl}}/v1/network/status
+X-API-Key: {{apiKey}}
+
+
+############################################################
+### 2. DISTRIBUTED CACHE (OLRIC)
+############################################################
+
+# @name CachePut
+# Stores a value in the distributed cache (DMap)
+POST {{baseUrl}}/v1/cache/put
+X-API-Key: {{apiKey}}
+Content-Type: {{contentType}}
+
+{
+    "dmap": "demo-cache",
+    "key": "video-demo",
+    "value": "Hello from REST Client!"
+}
+
+###
+
+# @name CacheGet
+# Retrieves a value from the distributed cache
+POST {{baseUrl}}/v1/cache/get
+X-API-Key: {{apiKey}}
+Content-Type: {{contentType}}
+
+{
+    "dmap": "demo-cache",
+    "key": "video-demo"
+}
+
+###
+
+# @name CacheScan
+# Scans for keys in a specific DMap
+POST {{baseUrl}}/v1/cache/scan
+X-API-Key: {{apiKey}}
+Content-Type: {{contentType}}
+
+{
+    "dmap": "demo-cache"
+}
+
+
+############################################################
+### 3. DECENTRALIZED STORAGE (IPFS)
+############################################################
+
+# @name StorageUpload
+# Uploads a file to IPFS (Multipart)
+POST {{baseUrl}}/v1/storage/upload
+X-API-Key: {{apiKey}}
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="demo.txt"
+Content-Type: text/plain
+
+This is a demonstration of decentralized storage on the Sonr Network.
+--boundary--
+
+###
+
+# @name StorageStatus
+# Check the pinning status and replication of a CID
+# Replace {cid} with the CID returned from the upload above
+@demoCid = bafkreid76y6x6v2n5o4n6n5o4n6n5o4n6n5o4n6n5o4
+GET {{baseUrl}}/v1/storage/status/{{demoCid}}
+X-API-Key: {{apiKey}}
+
+###
+
+# @name StorageDownload
+# Retrieve content directly from IPFS via the gateway
+GET {{baseUrl}}/v1/storage/get/{{demoCid}}
+X-API-Key: {{apiKey}}
+
+
+############################################################
+### 4. REAL-TIME PUB/SUB
+############################################################
+
+# @name ListTopics
+# Lists all active topics in the current namespace
+GET {{baseUrl}}/v1/pubsub/topics
+X-API-Key: {{apiKey}}
+
+###
+
+# @name PublishMessage
+# Publishes a base64 encoded message to a topic
+POST {{baseUrl}}/v1/pubsub/publish
+X-API-Key: {{apiKey}}
+Content-Type: {{contentType}}
+
+{
+    "topic": "network-updates",
+    "data_base64": "U29uciBOZXR3b3JrIGlzIGF3ZXNvbWUh" 
+}
+
+
+############################################################
+### 5. SERVERLESS FUNCTIONS
+############################################################
+
+# @name ListFunctions
+# Lists all deployed serverless functions
+GET {{baseUrl}}/v1/functions
+X-API-Key: {{apiKey}}
+
+###
+
+# @name InvokeFunction
+# Invokes a deployed function by name
+# Path: /v1/invoke/{namespace}/{functionName}
+POST {{baseUrl}}/v1/invoke/default/hello
+X-API-Key: {{apiKey}}
+Content-Type: {{contentType}}
+
+{
+    "name": "Developer"
+}
+
+###
+
+# @name WhoAmI
+# Validates the API Key and returns caller identity
+GET {{baseUrl}}/v1/auth/whoami
+X-API-Key: {{apiKey}}

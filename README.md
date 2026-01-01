@@ -127,6 +127,54 @@ make build
 ./bin/orama auth logout
 ```
 
+## Serverless Functions (WASM)
+
+Orama supports high-performance serverless function execution using WebAssembly (WASM). Functions are isolated, secure, and can interact with network services like the distributed cache.
+
+### 1. Build Functions
+
+Functions must be compiled to WASM. We recommend using [TinyGo](https://tinygo.org/).
+
+```bash
+# Build example functions to examples/functions/bin/
+./examples/functions/build.sh
+```
+
+### 2. Deployment
+
+Deploy your compiled `.wasm` file to the network via the Gateway.
+
+```bash
+# Deploy a function
+curl -X POST http://localhost:6001/v1/functions \
+  -H "Authorization: Bearer <your_api_key>" \
+  -F "name=hello-world" \
+  -F "namespace=default" \
+  -F "wasm=@./examples/functions/bin/hello.wasm"
+```
+
+### 3. Invocation
+
+Trigger your function with a JSON payload. The function receives the payload via `stdin` and returns its response via `stdout`.
+
+```bash
+# Invoke via HTTP
+curl -X POST http://localhost:6001/v1/functions/hello-world/invoke \
+  -H "Authorization: Bearer <your_api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Developer"}'
+```
+
+### 4. Management
+
+```bash
+# List all functions in a namespace
+curl http://localhost:6001/v1/functions?namespace=default
+
+# Delete a function
+curl -X DELETE http://localhost:6001/v1/functions/hello-world?namespace=default
+```
+
 ## Production Deployment
 
 ### Prerequisites
@@ -260,6 +308,11 @@ sudo orama install
 - `POST /v1/pubsub/publish` - Publish message
 - `GET /v1/pubsub/topics` - List topics
 - `GET /v1/pubsub/ws?topic=<name>` - WebSocket subscribe
+- `POST /v1/functions` - Deploy function (multipart/form-data)
+- `POST /v1/functions/{name}/invoke` - Invoke function
+- `GET /v1/functions` - List functions
+- `DELETE /v1/functions/{name}` - Delete function
+- `GET /v1/functions/{name}/logs` - Get function logs
 
 See `openapi/gateway.yaml` for complete API specification.
 
