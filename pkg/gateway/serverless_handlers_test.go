@@ -16,8 +16,8 @@ type mockFunctionRegistry struct {
 	functions []*serverless.Function
 }
 
-func (m *mockFunctionRegistry) Register(ctx context.Context, fn *serverless.FunctionDefinition, wasmBytes []byte) error {
-	return nil
+func (m *mockFunctionRegistry) Register(ctx context.Context, fn *serverless.FunctionDefinition, wasmBytes []byte) (*serverless.Function, error) {
+	return nil, nil
 }
 
 func (m *mockFunctionRegistry) Get(ctx context.Context, namespace, name string, version int) (*serverless.Function, error) {
@@ -34,6 +34,10 @@ func (m *mockFunctionRegistry) Delete(ctx context.Context, namespace, name strin
 
 func (m *mockFunctionRegistry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error) {
 	return []byte("wasm"), nil
+}
+
+func (m *mockFunctionRegistry) GetLogs(ctx context.Context, namespace, name string, limit int) ([]serverless.LogEntry, error) {
+	return []serverless.LogEntry{}, nil
 }
 
 func TestServerlessHandlers_ListFunctions(t *testing.T) {
