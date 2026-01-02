@@ -15,9 +15,10 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
-	olriclib "github.com/olric-data/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
+	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
 
@@ -76,7 +77,7 @@ func NewHostFunctions(
 		pubsub:      pubsubAdapter,
 		wsManager:   wsManager,
 		secrets:     secrets,
-		httpClient:  &http.Client{Timeout: httpTimeout},
+		httpClient:  tlsutil.NewHTTPClient(httpTimeout),
 		logger:      logger,
 		logs:        make([]LogEntry, 0),
 	}
@@ -328,7 +329,12 @@ func (h *HostFunctions) HTTPFetch(ctx context.Context, method, url string, heade
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
-		return nil, &HostFunctionError{Function: "http_fetch", Cause: fmt.Errorf("failed to create request: %w", err)}
+		h.logger.Error("http_fetch request creation error", zap.Error(err), zap.String("url", url))
+		errorResp := map[string]interface{}{
+			"error":  "failed to create request: " + err.Error(),
+			"status": 0,
+		}
+		return json.Marshal(errorResp)
 	}
 
 	for key, value := range headers {
@@ -337,13 +343,23 @@ func (h *HostFunctions) HTTPFetch(ctx context.Context, method, url string, heade
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return nil, &HostFunctionError{Function: "http_fetch", Cause: err}
+		h.logger.Error("http_fetch transport error", zap.Error(err), zap.String("url", url))
+		errorResp := map[string]interface{}{
+			"error":  err.Error(),
+			"status": 0, // Transport error
+		}
+		return json.Marshal(errorResp)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &HostFunctionError{Function: "http_fetch", Cause: fmt.Errorf("failed to read response: %w", err)}
+		h.logger.Error("http_fetch response read error", zap.Error(err), zap.String("url", url))
+		errorResp := map[string]interface{}{
+			"error":  "failed to read response: " + err.Error(),
+			"status": resp.StatusCode,
+		}
+		return json.Marshal(errorResp)
 	}
 
 	// Encode response with status code
@@ -638,4 +654,3 @@ func (s *DBSecretsManager) decrypt(ciphertext []byte) ([]byte, error) {
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
-

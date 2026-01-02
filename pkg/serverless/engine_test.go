@@ -39,7 +39,7 @@ func TestEngine_Execute(t *testing.T) {
 		TimeoutSeconds: 5,
 	}
 
-	err = registry.Register(context.Background(), fnDef, wasmBytes)
+	_, err = registry.Register(context.Background(), fnDef, wasmBytes)
 	if err != nil {
 		t.Fatalf("failed to register function: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestEngine_Timeout(t *testing.T) {
 
 	fn, _ := registry.Get(context.Background(), "test", "timeout", 0)
 	if fn == nil {
-		_ = registry.Register(context.Background(), &FunctionDefinition{Name: "timeout", Namespace: "test"}, wasmBytes)
+		_, _ = registry.Register(context.Background(), &FunctionDefinition{Name: "timeout", Namespace: "test"}, wasmBytes)
 		fn, _ = registry.Get(context.Background(), "test", "timeout", 0)
 	}
 	fn.TimeoutSeconds = 1
@@ -151,7 +151,7 @@ func TestEngine_MemoryLimit(t *testing.T) {
 		0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
 	}
 
-	_ = registry.Register(context.Background(), &FunctionDefinition{Name: "memory", Namespace: "test", MemoryLimitMB: 1, TimeoutSeconds: 5}, wasmBytes)
+	_, _ = registry.Register(context.Background(), &FunctionDefinition{Name: "memory", Namespace: "test", MemoryLimitMB: 1, TimeoutSeconds: 5}, wasmBytes)
 	fn, _ := registry.Get(context.Background(), "test", "memory", 0)
 
 	// This should pass because the minimal WASM doesn't use much memory
@@ -183,7 +183,7 @@ func TestEngine_RealWASM(t *testing.T) {
 		Namespace:      "examples",
 		TimeoutSeconds: 10,
 	}
-	_ = registry.Register(context.Background(), fnDef, wasmBytes)
+	_, _ = registry.Register(context.Background(), fnDef, wasmBytes)
 	fn, _ := registry.Get(context.Background(), "examples", "hello", 0)
 
 	output, err := engine.Execute(context.Background(), fn, []byte(`{"name": "Tester"}`), nil)

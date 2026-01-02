@@ -28,22 +28,26 @@ func NewMockRegistry() *MockRegistry {
 	}
 }
 
-func (m *MockRegistry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) error {
+func (m *MockRegistry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := fn.Namespace + "/" + fn.Name
 	wasmCID := "cid-" + id
+	oldFn := m.functions[id]
 	m.functions[id] = &Function{
-		ID:             id,
-		Name:           fn.Name,
-		Namespace:      fn.Namespace,
-		WASMCID:        wasmCID,
-		MemoryLimitMB:  fn.MemoryLimitMB,
-		TimeoutSeconds: fn.TimeoutSeconds,
-		Status:         FunctionStatusActive,
+		ID:                id,
+		Name:              fn.Name,
+		Namespace:         fn.Namespace,
+		WASMCID:           wasmCID,
+		MemoryLimitMB:     fn.MemoryLimitMB,
+		TimeoutSeconds:    fn.TimeoutSeconds,
+		IsPublic:          fn.IsPublic,
+		RetryCount:        fn.RetryCount,
+		RetryDelaySeconds: fn.RetryDelaySeconds,
+		Status:            FunctionStatusActive,
 	}
 	m.wasm[wasmCID] = wasmBytes
-	return nil
+	return oldFn, nil
 }
 
 func (m *MockRegistry) Get(ctx context.Context, namespace, name string, version int) (*Function, error) {
@@ -83,6 +87,10 @@ func (m *MockRegistry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte
 		return nil, ErrFunctionNotFound
 	}
 	return data, nil
+}
+
+func (m *MockRegistry) GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error) {
+	return []LogEntry{}, nil
 }
 
 // MockHostServices is a mock implementation of HostServices

@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS functions (
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by      TEXT NOT NULL,
-    UNIQUE(namespace, name, version)
+    UNIQUE(namespace, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_functions_namespace ON functions(namespace);

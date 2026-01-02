@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -14,17 +15,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// Ensure Registry implements FunctionRegistry interface.
+// Ensure Registry implements FunctionRegistry and InvocationLogger interfaces.
 var _ FunctionRegistry = (*Registry)(nil)
+var _ InvocationLogger = (*Registry)(nil)
 
 // Registry manages function metadata in RQLite and bytecode in IPFS.
 // It implements the FunctionRegistry interface.
 type Registry struct {
-	db          rqlite.Client
-	ipfs        ipfs.IPFSClient
-	ipfsAPIURL  string
-	logger      *zap.Logger
-	tableName   string
+	db         rqlite.Client
+	ipfs       ipfs.IPFSClient
+	ipfsAPIURL string
+	logger     *zap.Logger
+	tableName  string
 }
 
 // RegistryConfig holds configuration for the Registry.
@@ -43,35 +45,34 @@ func NewRegistry(db rqlite.Client, ipfsClient ipfs.IPFSClient, cfg RegistryConfi
 	}
 }
 
-// Register deploys a new function or creates a new version.
-func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) error {
+// Register deploys a new function or updates an existing one.
+func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error) {
 	if fn == nil {
-		return &ValidationError{Field: "definition", Message: "cannot be nil"}
+		return nil, &ValidationError{Field: "definition", Message: "cannot be nil"}
 	}
+	fn.Name = strings.TrimSpace(fn.Name)
+	fn.Namespace = strings.TrimSpace(fn.Namespace)
+
 	if fn.Name == "" {
-		return &ValidationError{Field: "name", Message: "cannot be empty"}
+		return nil, &ValidationError{Field: "name", Message: "cannot be empty"}
 	}
 	if fn.Namespace == "" {
-		return &ValidationError{Field: "namespace", Message: "cannot be empty"}
+		return nil, &ValidationError{Field: "namespace", Message: "cannot be empty"}
 	}
 	if len(wasmBytes) == 0 {
-		return &ValidationError{Field: "wasmBytes", Message: "cannot be empty"}
+		return nil, &ValidationError{Field: "wasmBytes", Message: "cannot be empty"}
+	}
+
+	// Check if function already exists (regardless of status) to get old metadata for invalidation
+	oldFn, err := r.getByNameInternal(ctx, fn.Namespace, fn.Name)
+	if err != nil && err != ErrFunctionNotFound {
+		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
 	// Upload WASM to IPFS
 	wasmCID, err := r.uploadWASM(ctx, wasmBytes, fn.Name)
 	if err != nil {
-		return &DeployError{FunctionName: fn.Name, Cause: err}
-	}
-
-	// Determine version (auto-increment if not specified)
-	version := fn.Version
-	if version == 0 {
-		latestVersion, err := r.getLatestVersion(ctx, fn.Namespace, fn.Name)
-		if err != nil && err != ErrFunctionNotFound {
-			return &DeployError{FunctionName: fn.Name, Cause: err}
-		}
-		version = latestVersion + 1
+		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
 	// Apply defaults
@@ -88,48 +89,59 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 		retryDelay = 5
 	}
 
-	// Generate ID
+	now := time.Now()
 	id := uuid.New().String()
+	version := 1
 
-	// Insert function record
+	if oldFn != nil {
+		// Use existing ID and increment version
+		id = oldFn.ID
+		version = oldFn.Version + 1
+	}
+
+	// Use INSERT OR REPLACE to ensure we never hit UNIQUE constraint failures on (namespace, name).
+	// This handles both new registrations and overwriting existing (even inactive) functions.
 	query := `
-		INSERT INTO functions (
+		INSERT OR REPLACE INTO functions (
 			id, name, namespace, version, wasm_cid, 
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	now := time.Now()
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
 		memoryLimit, timeout, fn.IsPublic,
 		fn.RetryCount, retryDelay, fn.DLQTopic,
-		string(FunctionStatusActive), now, now, fn.Namespace, // created_by = namespace for now
+		string(FunctionStatusActive), now, now, fn.Namespace,
 	)
 	if err != nil {
-		return &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to insert function: %w", err)}
+		return nil, &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to register function: %w", err)}
 	}
 
-	// Insert environment variables
+	// Save environment variables
 	if err := r.saveEnvVars(ctx, id, fn.EnvVars); err != nil {
-		return &DeployError{FunctionName: fn.Name, Cause: err}
+		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
 	r.logger.Info("Function registered",
 		zap.String("id", id),
 		zap.String("name", fn.Name),
 		zap.String("namespace", fn.Namespace),
-		zap.Int("version", version),
 		zap.String("wasm_cid", wasmCID),
+		zap.Int("version", version),
+		zap.Bool("updated", oldFn != nil),
 	)
 
-	return nil
+	return oldFn, nil
 }
 
 // Get retrieves a function by name and optional version.
 // If version is 0, returns the latest version.
 func (r *Registry) Get(ctx context.Context, namespace, name string, version int) (*Function, error) {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+
 	var query string
 	var args []interface{}
 
@@ -208,6 +220,9 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 
 // Delete removes a function. If version is 0, removes all versions.
 func (r *Registry) Delete(ctx context.Context, namespace, name string, version int) error {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+
 	var query string
 	var args []interface{}
 
@@ -327,6 +342,88 @@ func (r *Registry) ListVersions(ctx context.Context, namespace, name string) ([]
 	return functions, nil
 }
 
+// Log records a function invocation and its logs to the database.
+func (r *Registry) Log(ctx context.Context, inv *InvocationRecord) error {
+	if inv == nil {
+		return nil
+	}
+
+	// Insert invocation record
+	invQuery := `
+		INSERT INTO function_invocations (
+			id, function_id, request_id, trigger_type, caller_wallet,
+			input_size, output_size, started_at, completed_at,
+			duration_ms, status, error_message, memory_used_mb
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := r.db.Exec(ctx, invQuery,
+		inv.ID, inv.FunctionID, inv.RequestID, string(inv.TriggerType), inv.CallerWallet,
+		inv.InputSize, inv.OutputSize, inv.StartedAt, inv.CompletedAt,
+		inv.DurationMS, string(inv.Status), inv.ErrorMessage, inv.MemoryUsedMB,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert invocation record: %w", err)
+	}
+
+	// Insert logs if any
+	if len(inv.Logs) > 0 {
+		for _, entry := range inv.Logs {
+			logID := uuid.New().String()
+			logQuery := `
+				INSERT INTO function_logs (
+					id, function_id, invocation_id, level, message, timestamp
+				) VALUES (?, ?, ?, ?, ?, ?)
+			`
+			_, err := r.db.Exec(ctx, logQuery,
+				logID, inv.FunctionID, inv.ID, entry.Level, entry.Message, entry.Timestamp,
+			)
+			if err != nil {
+				r.logger.Warn("Failed to insert function log", zap.Error(err))
+				// Continue with other logs
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetLogs retrieves logs for a function.
+func (r *Registry) GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT l.level, l.message, l.timestamp
+		FROM function_logs l
+		JOIN functions f ON l.function_id = f.id
+		WHERE f.namespace = ? AND f.name = ?
+		ORDER BY l.timestamp DESC
+		LIMIT ?
+	`
+
+	var results []struct {
+		Level     string    `db:"level"`
+		Message   string    `db:"message"`
+		Timestamp time.Time `db:"timestamp"`
+	}
+
+	if err := r.db.Query(ctx, &results, query, namespace, name, limit); err != nil {
+		return nil, fmt.Errorf("failed to query logs: %w", err)
+	}
+
+	logs := make([]LogEntry, len(results))
+	for i, res := range results {
+		logs[i] = LogEntry{
+			Level:     res.Level,
+			Message:   res.Message,
+			Timestamp: res.Timestamp,
+		}
+	}
+
+	return logs, nil
+}
+
 // -----------------------------------------------------------------------------
 // Private helpers
 // -----------------------------------------------------------------------------
@@ -362,8 +459,42 @@ func (r *Registry) getLatestVersion(ctx context.Context, namespace, name string)
 	return int(maxVersion.Int64), nil
 }
 
+// getByNameInternal retrieves a function by name regardless of status.
+func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string) (*Function, error) {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+
+	query := `
+		SELECT id, name, namespace, version, wasm_cid, source_cid,
+			memory_limit_mb, timeout_seconds, is_public,
+			retry_count, retry_delay_seconds, dlq_topic,
+			status, created_at, updated_at, created_by
+		FROM functions
+		WHERE namespace = ? AND name = ?
+		ORDER BY version DESC
+		LIMIT 1
+	`
+
+	var functions []functionRow
+	if err := r.db.Query(ctx, &functions, query, namespace, name); err != nil {
+		return nil, fmt.Errorf("failed to query function: %w", err)
+	}
+
+	if len(functions) == 0 {
+		return nil, ErrFunctionNotFound
+	}
+
+	return r.rowToFunction(&functions[0]), nil
+}
+
 // saveEnvVars saves environment variables for a function.
 func (r *Registry) saveEnvVars(ctx context.Context, functionID string, envVars map[string]string) error {
+	// Clear existing env vars first
+	deleteQuery := `DELETE FROM function_env_vars WHERE function_id = ?`
+	if _, err := r.db.Exec(ctx, deleteQuery, functionID); err != nil {
+		return fmt.Errorf("failed to clear existing env vars: %w", err)
+	}
+
 	if len(envVars) == 0 {
 		return nil
 	}
@@ -428,4 +559,3 @@ type envVarRow struct {
 	Key   string `db:"key"`
 	Value string `db:"value"`
 }
-

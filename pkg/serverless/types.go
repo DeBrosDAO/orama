@@ -68,7 +68,8 @@ const (
 // Responsible for CRUD operations on function definitions.
 type FunctionRegistry interface {
 	// Register deploys a new function or updates an existing one.
-	Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) error
+	// Returns the old function definition if it was updated, or nil if it was a new registration.
+	Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error)
 
 	// Get retrieves a function by name and optional version.
 	// If version is 0, returns the latest version.
@@ -82,6 +83,9 @@ type FunctionRegistry interface {
 
 	// GetWASMBytes retrieves the compiled WASM bytecode for a function.
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
+
+	// GetLogs retrieves logs for a function.
+	GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error)
 }
 
 // FunctionExecutor handles the actual execution of WASM functions.

@@ -17,12 +17,12 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
-	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/multiformats/go-multiaddr"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -65,11 +65,11 @@ type Config struct {
 }
 
 type Gateway struct {
-	logger       *logging.ColoredLogger
-	cfg          *Config
-	client       client.NetworkClient
-	nodePeerID   string // The node's actual peer ID from its identity file (overrides client's peer ID)
-	startedAt    time.Time
+	logger     *logging.ColoredLogger
+	cfg        *Config
+	client     client.NetworkClient
+	nodePeerID string // The node's actual peer ID from its identity file (overrides client's peer ID)
+	startedAt  time.Time
 
 	// rqlite SQL connection and HTTP ORM gateway
 	sqlDB     *sql.DB
@@ -345,7 +345,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		engineCfg.ModuleCacheSize = 100
 
 		// Create WASM engine
-		engine, engineErr := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger)
+		engine, engineErr := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger, serverless.WithInvocationLogger(registry))
 		if engineErr != nil {
 			logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize serverless engine; functions disabled", zap.Error(engineErr))
 		} else {
@@ -355,28 +355,28 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.serverlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
 
 			// Create HTTP handlers
-	gw.serverlessHandlers = NewServerlessHandlers(
-		gw.serverlessInvoker,
-		registry,
-		gw.serverlessWSMgr,
-		logger.Logger,
-	)
+			gw.serverlessHandlers = NewServerlessHandlers(
+				gw.serverlessInvoker,
+				registry,
+				gw.serverlessWSMgr,
+				logger.Logger,
+			)
 
-	// Initialize auth service
-	// For now using ephemeral key, can be loaded from config later
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-	authService, err := auth.NewService(logger, c, string(keyPEM), cfg.ClientNamespace)
-	if err != nil {
-		logger.ComponentError(logging.ComponentGeneral, "failed to initialize auth service", zap.Error(err))
-	} else {
-		gw.authService = authService
-	}
+			// Initialize auth service
+			// For now using ephemeral key, can be loaded from config later
+			key, _ := rsa.GenerateKey(rand.Reader, 2048)
+			keyPEM := pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(key),
+			})
+			authService, err := auth.NewService(logger, c, string(keyPEM), cfg.ClientNamespace)
+			if err != nil {
+				logger.ComponentError(logging.ComponentGeneral, "failed to initialize auth service", zap.Error(err))
+			} else {
+				gw.authService = authService
+			}
 
-	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
+			logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
 				zap.Int("default_memory_mb", engineCfg.DefaultMemoryLimitMB),
 				zap.Int("default_timeout_sec", engineCfg.DefaultTimeoutSeconds),
 				zap.Int("module_cache_size", engineCfg.ModuleCacheSize),

@@ -63,11 +63,8 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Allow public endpoints without auth
-		if isPublicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
+
+		isPublic := isPublicPath(r.URL.Path)
 
 		// 1) Try JWT Bearer first if Authorization looks like one
 		if auth := r.Header.Get("Authorization"); auth != "" {
@@ -92,6 +89,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		// 2) Fallback to API key (validate against DB)
 		key := extractAPIKey(r)
 		if key == "" {
+			if isPublic {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\", charset=\"UTF-8\"")
 			writeError(w, http.StatusUnauthorized, "missing API key")
 			return
@@ -105,6 +106,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
 		res, err := db.Query(internalCtx, q, key)
 		if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+			if isPublic {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
@@ -119,6 +124,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			ns = strings.TrimSpace(ns)
 		}
 		if ns == "" {
+			if isPublic {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
@@ -181,6 +190,11 @@ func extractAPIKey(r *http.Request) string {
 func isPublicPath(p string) bool {
 	// Allow ACME challenges for Let's Encrypt certificate provisioning
 	if strings.HasPrefix(p, "/.well-known/acme-challenge/") {
+		return true
+	}
+
+	// Serverless invocation is public (authorization is handled within the invoker)
+	if strings.HasPrefix(p, "/v1/invoke/") || (strings.HasPrefix(p, "/v1/functions/") && strings.HasSuffix(p, "/invoke")) {
 		return true
 	}
 
@@ -323,6 +337,9 @@ func requiresNamespaceOwnership(p string) bool {
 		return true
 	}
 	if strings.HasPrefix(p, "/v1/proxy/") {
+		return true
+	}
+	if strings.HasPrefix(p, "/v1/functions") {
 		return true
 	}
 	return false

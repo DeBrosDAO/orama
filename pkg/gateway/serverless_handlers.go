@@ -214,6 +214,23 @@ func (h *ServerlessHandlers) deployFunction(w http.ResponseWriter, r *http.Reque
 			def.Namespace = r.FormValue("namespace")
 		}
 
+		// Get other configuration fields from form
+		if v := r.FormValue("is_public"); v != "" {
+			def.IsPublic, _ = strconv.ParseBool(v)
+		}
+		if v := r.FormValue("memory_limit_mb"); v != "" {
+			def.MemoryLimitMB, _ = strconv.Atoi(v)
+		}
+		if v := r.FormValue("timeout_seconds"); v != "" {
+			def.TimeoutSeconds, _ = strconv.Atoi(v)
+		}
+		if v := r.FormValue("retry_count"); v != "" {
+			def.RetryCount, _ = strconv.Atoi(v)
+		}
+		if v := r.FormValue("retry_delay_seconds"); v != "" {
+			def.RetryDelaySeconds, _ = strconv.Atoi(v)
+		}
+
 		// Get WASM file
 		file, _, err := r.FormFile("wasm")
 		if err != nil {
@@ -269,13 +286,23 @@ func (h *ServerlessHandlers) deployFunction(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	if err := h.registry.Register(ctx, &def, wasmBytes); err != nil {
+	oldFn, err := h.registry.Register(ctx, &def, wasmBytes)
+	if err != nil {
 		h.logger.Error("Failed to deploy function",
 			zap.String("name", def.Name),
 			zap.Error(err),
 		)
 		writeError(w, http.StatusInternalServerError, "Failed to deploy: "+err.Error())
 		return
+	}
+
+	// Invalidate cache for the old version to ensure the new one is loaded
+	if oldFn != nil {
+		h.invoker.InvalidateCache(oldFn.WASMCID)
+		h.logger.Debug("Invalidated function cache",
+			zap.String("name", def.Name),
+			zap.String("old_wasm_cid", oldFn.WASMCID),
+		)
 	}
 
 	h.logger.Info("Function deployed",
@@ -410,6 +437,8 @@ func (h *ServerlessHandlers) invokeFunction(w http.ResponseWriter, r *http.Reque
 			statusCode = http.StatusNotFound
 		} else if serverless.IsResourceExhausted(err) {
 			statusCode = http.StatusTooManyRequests
+		} else if serverless.IsUnauthorized(err) {
+			statusCode = http.StatusUnauthorized
 		}
 
 		writeJSON(w, statusCode, map[string]interface{}{
@@ -565,25 +594,57 @@ func (h *ServerlessHandlers) listVersions(w http.ResponseWriter, r *http.Request
 
 // getFunctionLogs handles GET /v1/functions/{name}/logs
 func (h *ServerlessHandlers) getFunctionLogs(w http.ResponseWriter, r *http.Request, name string) {
-	// TODO: Implement log retrieval from function_logs table
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = h.getNamespaceFromRequest(r)
+	}
+
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "namespace required")
+		return
+	}
+
+	limit := 100
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil {
+			limit = l
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	logs, err := h.registry.GetLogs(ctx, namespace, name, limit)
+	if err != nil {
+		h.logger.Error("Failed to get function logs",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "Failed to get logs")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"logs":    []interface{}{},
-		"message": "Log retrieval not yet implemented",
+		"name":      name,
+		"namespace": namespace,
+		"logs":      logs,
+		"count":     len(logs),
 	})
 }
 
 // getNamespaceFromRequest extracts namespace from JWT or query param
 func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
-	// Try query param first
-	if ns := r.URL.Query().Get("namespace"); ns != "" {
-		return ns
-	}
-
-	// Try context (set by auth middleware)
+	// Try context first (set by auth middleware) - most secure
 	if v := r.Context().Value(ctxKeyNamespaceOverride); v != nil {
 		if ns, ok := v.(string); ok && ns != "" {
 			return ns
 		}
+	}
+
+	// Try query param as fallback (e.g. for public access or admin)
+	if ns := r.URL.Query().Get("namespace"); ns != "" {
+		return ns
 	}
 
 	// Try header as fallback

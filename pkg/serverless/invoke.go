@@ -76,6 +76,17 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		}, err
 	}
 
+	// Check authorization
+	authorized, err := i.CanInvoke(ctx, req.Namespace, req.FunctionName, req.CallerWallet)
+	if err != nil || !authorized {
+		return &InvokeResponse{
+			RequestID:  requestID,
+			Status:     InvocationStatusError,
+			Error:      "unauthorized",
+			DurationMS: time.Since(startTime).Milliseconds(),
+		}, ErrUnauthorized
+	}
+
 	// Get environment variables
 	envVars, err := i.getEnvVars(ctx, fn.ID)
 	if err != nil {
@@ -157,6 +168,11 @@ func (i *Invoker) InvokeByID(ctx context.Context, functionID string, input []byt
 
 	response.Status = InvocationStatusSuccess
 	return response, nil
+}
+
+// InvalidateCache removes a compiled module from the engine's cache.
+func (i *Invoker) InvalidateCache(wasmCID string) {
+	i.engine.Invalidate(wasmCID)
 }
 
 // executeWithRetry executes a function with retry logic and DLQ.
@@ -434,4 +450,3 @@ func (i *Invoker) ValidateInput(input []byte, maxSize int) error {
 	}
 	return nil
 }
-

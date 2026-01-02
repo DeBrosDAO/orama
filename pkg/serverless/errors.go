@@ -163,10 +163,10 @@ func (e *ValidationError) Error() string {
 
 // RetryableError wraps an error that should be retried.
 type RetryableError struct {
-	Cause       error
-	RetryAfter  int // Suggested retry delay in seconds
-	MaxRetries  int // Maximum number of retries remaining
-	CurrentTry  int // Current attempt number
+	Cause      error
+	RetryAfter int // Suggested retry delay in seconds
+	MaxRetries int // Maximum number of retries remaining
+	CurrentTry int // Current attempt number
 }
 
 func (e *RetryableError) Error() string {
@@ -194,6 +194,11 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrWSClientNotFound)
 }
 
+// IsUnauthorized checks if an error indicates a lack of authorization.
+func IsUnauthorized(err error) bool {
+	return errors.Is(err, ErrUnauthorized)
+}
+
 // IsResourceExhausted checks if an error indicates resource exhaustion.
 func IsResourceExhausted(err error) bool {
 	return errors.Is(err, ErrRateLimited) ||
@@ -209,4 +214,3 @@ func IsServiceUnavailable(err error) bool {
 		errors.Is(err, ErrDatabaseUnavailable) ||
 		errors.Is(err, ErrCacheUnavailable)
 }
-

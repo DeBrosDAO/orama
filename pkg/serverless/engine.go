@@ -65,6 +65,7 @@ type InvocationRecord struct {
 	Status       InvocationStatus `json:"status"`
 	ErrorMessage string           `json:"error_message,omitempty"`
 	MemoryUsedMB float64          `json:"memory_used_mb"`
+	Logs         []LogEntry       `json:"logs,omitempty"`
 }
 
 // RateLimiter checks if a request should be rate limited.
@@ -470,6 +471,11 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 		record.ErrorMessage = err.Error()
 	}
 
+	// Collect logs from host services if supported
+	if hf, ok := e.hostServices.(interface{ GetLogs() []LogEntry }); ok {
+		record.Logs = hf.GetLogs()
+	}
+
 	if logErr := e.invocationLogger.Log(ctx, record); logErr != nil {
 		e.logger.Warn("Failed to log invocation", zap.Error(logErr))
 	}
@@ -489,6 +495,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hDBExecute).Export("db_execute").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
+			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -604,6 +611,39 @@ func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, 
 		return
 	}
 	_ = e.hostServices.CacheSet(ctx, string(key), val, ttl)
+}
+
+func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
+	method, ok := mod.Memory().Read(methodPtr, methodLen)
+	if !ok {
+		return 0
+	}
+	u, ok := mod.Memory().Read(urlPtr, urlLen)
+	if !ok {
+		return 0
+	}
+	var headers map[string]string
+	if headersLen > 0 {
+		headersData, ok := mod.Memory().Read(headersPtr, headersLen)
+		if !ok {
+			return 0
+		}
+		if err := json.Unmarshal(headersData, &headers); err != nil {
+			e.logger.Error("failed to unmarshal http_fetch headers", zap.Error(err))
+			return 0
+		}
+	}
+	body, ok := mod.Memory().Read(bodyPtr, bodyLen)
+	if !ok {
+		return 0
+	}
+
+	resp, err := e.hostServices.HTTPFetch(ctx, string(method), string(u), headers, body)
+	if err != nil {
+		e.logger.Error("host function http_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		return 0
+	}
+	return e.writeToGuest(ctx, mod, resp)
 }
 
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {
