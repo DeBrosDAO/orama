@@ -738,6 +738,65 @@ func NewWSPubSubClient(t *testing.T, topic string) (*WSPubSubClient, error) {
 	return client, nil
 }
 
+// NewWSPubSubPresenceClient creates a new WebSocket PubSub client with presence parameters
+func NewWSPubSubPresenceClient(t *testing.T, topic, memberID string, meta map[string]interface{}) (*WSPubSubClient, error) {
+	t.Helper()
+
+	// Build WebSocket URL
+	gatewayURL := GetGatewayURL()
+	wsURL := strings.Replace(gatewayURL, "http://", "ws://", 1)
+	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
+
+	u, err := url.Parse(wsURL + "/v1/pubsub/ws")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse WebSocket URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("topic", topic)
+	q.Set("presence", "true")
+	q.Set("member_id", memberID)
+	if meta != nil {
+		metaJSON, _ := json.Marshal(meta)
+		q.Set("member_meta", string(metaJSON))
+	}
+	u.RawQuery = q.Encode()
+
+	// Set up headers with authentication
+	headers := http.Header{}
+	if apiKey := GetAPIKey(); apiKey != "" {
+		headers.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	// Connect to WebSocket
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+
+	conn, resp, err := dialer.Dial(u.String(), headers)
+	if err != nil {
+		if resp != nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("websocket dial failed (status %d): %w - body: %s", resp.StatusCode, err, string(body))
+		}
+		return nil, fmt.Errorf("websocket dial failed: %w", err)
+	}
+
+	client := &WSPubSubClient{
+		t:        t,
+		conn:     conn,
+		topic:    topic,
+		handlers: make([]func(topic string, data []byte) error, 0),
+		msgChan:  make(chan []byte, 128),
+		doneChan: make(chan struct{}),
+	}
+
+	// Start reader goroutine
+	go client.readLoop()
+
+	return client, nil
+}
+
 // readLoop reads messages from the WebSocket and dispatches to handlers
 func (c *WSPubSubClient) readLoop() {
 	defer close(c.doneChan)

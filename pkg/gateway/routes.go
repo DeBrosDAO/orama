@@ -44,6 +44,7 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/pubsub/ws", g.pubsubWebsocketHandler)
 	mux.HandleFunc("/v1/pubsub/publish", g.pubsubPublishHandler)
 	mux.HandleFunc("/v1/pubsub/topics", g.pubsubTopicsHandler)
+	mux.HandleFunc("/v1/pubsub/presence", g.pubsubPresenceHandler)
 
 	// anon proxy (authenticated users only)
 	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)

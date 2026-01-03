@@ -12,7 +12,7 @@ import (
 
 // ProcessManager manages all dev environment processes
 type ProcessManager struct {
-	oramaDir string
+	oramaDir  string
 	pidsDir   string
 	processes map[string]*ManagedProcess
 	mutex     sync.Mutex
@@ -33,7 +33,7 @@ func NewProcessManager(oramaDir string, logWriter io.Writer) *ProcessManager {
 	os.MkdirAll(pidsDir, 0755)
 
 	return &ProcessManager{
-		oramaDir: oramaDir,
+		oramaDir:  oramaDir,
 		pidsDir:   pidsDir,
 		processes: make(map[string]*ManagedProcess),
 		logWriter: logWriter,
@@ -60,6 +60,7 @@ func (pm *ProcessManager) StartAll(ctx context.Context) error {
 		{"Olric", pm.startOlric},
 		{"Anon", pm.startAnon},
 		{"Nodes (Network)", pm.startNodes},
+		{"Rqlite MCP", pm.startMCP},
 	}
 
 	for _, svc := range services {
@@ -109,10 +110,10 @@ func (pm *ProcessManager) StopAll(ctx context.Context) error {
 		node := topology.Nodes[i]
 		services = append(services, fmt.Sprintf("ipfs-%s", node.Name))
 	}
-	services = append(services, "olric", "anon")
+	services = append(services, "olric", "anon", "rqlite-mcp")
 
 	fmt.Fprintf(pm.logWriter, "Stopping %d services...\n\n", len(services))
-	
+
 	stoppedCount := 0
 	for _, svc := range services {
 		if err := pm.stopProcess(svc); err != nil {
@@ -176,6 +177,10 @@ func (pm *ProcessManager) Status(ctx context.Context) {
 		name  string
 		ports []int
 	}{"Anon SOCKS", []int{topology.AnonSOCKSPort}})
+	services = append(services, struct {
+		name  string
+		ports []int
+	}{"Rqlite MCP", []int{topology.MCPPort}})
 
 	for _, svc := range services {
 		pidPath := filepath.Join(pm.pidsDir, fmt.Sprintf("%s.pid", svc.name))

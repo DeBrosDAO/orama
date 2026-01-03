@@ -85,7 +85,9 @@ type Gateway struct {
 
 	// Local pub/sub bypass for same-gateway subscribers
 	localSubscribers map[string][]*localSubscriber // topic+namespace -> subscribers
+	presenceMembers  map[string][]PresenceMember   // topicKey -> members
 	mu               sync.RWMutex
+	presenceMu       sync.RWMutex
 
 	// Serverless function engine
 	serverlessEngine   *serverless.Engine
@@ -102,6 +104,14 @@ type Gateway struct {
 type localSubscriber struct {
 	msgChan   chan []byte
 	namespace string
+}
+
+// PresenceMember represents a member in a topic's presence list
+type PresenceMember struct {
+	MemberID string                 `json:"member_id"`
+	JoinedAt int64                  `json:"joined_at"` // Unix timestamp
+	Meta     map[string]interface{} `json:"meta,omitempty"`
+	ConnID   string                 `json:"-"` // Internal: for tracking which connection
 }
 
 // New creates and initializes a new Gateway instance
@@ -140,6 +150,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		nodePeerID:       cfg.NodePeerID,
 		startedAt:        time.Now(),
 		localSubscribers: make(map[string][]*localSubscriber),
+		presenceMembers:  make(map[string][]PresenceMember),
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")

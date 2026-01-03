@@ -13,6 +13,21 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.82.0] - 2026-01-03
+
+### Added
+- Added PubSub Presence feature, allowing clients to track members connected to a topic via WebSocket.
+- Added a new tool, `rqlite-mcp`, which implements the Model Communication Protocol (MCP) for Rqlite, enabling AI models to interact with the database using tools.
+
+### Changed
+- Updated the development environment to include and manage the new `rqlite-mcp` service.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
 ## [0.81.0] - 2025-12-31
 
 ### Added

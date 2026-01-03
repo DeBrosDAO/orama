@@ -29,7 +29,8 @@ func (pm *ProcessManager) printStartupSummary(topology *Topology) {
 
 	fmt.Fprintf(pm.logWriter, "📊 Other Services:\n")
 	fmt.Fprintf(pm.logWriter, "  Olric:        http://localhost:%d\n", topology.OlricHTTPPort)
-	fmt.Fprintf(pm.logWriter, "  Anon SOCKS:   127.0.0.1:%d\n\n", topology.AnonSOCKSPort)
+	fmt.Fprintf(pm.logWriter, "  Anon SOCKS:   127.0.0.1:%d\n", topology.AnonSOCKSPort)
+	fmt.Fprintf(pm.logWriter, "  Rqlite MCP:   http://localhost:%d/sse\n\n", topology.MCPPort)
 
 	fmt.Fprintf(pm.logWriter, "📝 Useful Commands:\n")
 	fmt.Fprintf(pm.logWriter, "  ./bin/orama dev status  - Check service status\n")
@@ -192,6 +193,31 @@ func (pm *ProcessManager) startAnon(ctx context.Context) error {
 	return nil
 }
 
+func (pm *ProcessManager) startMCP(ctx context.Context) error {
+	topology := DefaultTopology()
+	pidPath := filepath.Join(pm.pidsDir, "rqlite-mcp.pid")
+	logPath := filepath.Join(pm.oramaDir, "logs", "rqlite-mcp.log")
+
+	cmd := exec.CommandContext(ctx, "./bin/rqlite-mcp")
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("MCP_PORT=%d", topology.MCPPort),
+		fmt.Sprintf("RQLITE_URL=http://localhost:%d", topology.Nodes[0].RQLiteHTTPPort),
+	)
+	logFile, _ := os.Create(logPath)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(pm.logWriter, "  ⚠️  Failed to start Rqlite MCP: %v\n", err)
+		return nil
+	}
+
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
+	fmt.Fprintf(pm.logWriter, "✓ Rqlite MCP started (PID: %d, port: %d)\n", cmd.Process.Pid, topology.MCPPort)
+
+	return nil
+}
+
 func (pm *ProcessManager) startNodes(ctx context.Context) error {
 	topology := DefaultTopology()
 	for _, nodeSpec := range topology.Nodes {
@@ -203,4 +229,3 @@ func (pm *ProcessManager) startNodes(ctx context.Context) error {
 	}
 	return nil
 }
-
