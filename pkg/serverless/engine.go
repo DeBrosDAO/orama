@@ -496,6 +496,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
+			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -644,6 +645,25 @@ func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, meth
 		return 0
 	}
 	return e.writeToGuest(ctx, mod, resp)
+}
+
+func (e *Engine) hPubSubPublish(ctx context.Context, mod api.Module, topicPtr, topicLen, dataPtr, dataLen uint32) uint32 {
+	topic, ok := mod.Memory().Read(topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+
+	data, ok := mod.Memory().Read(dataPtr, dataLen)
+	if !ok {
+		return 0
+	}
+
+	err := e.hostServices.PubSubPublish(ctx, string(topic), data)
+	if err != nil {
+		e.logger.Error("host function pubsub_publish failed", zap.Error(err), zap.String("topic", string(topic)))
+		return 0
+	}
+	return 1 // Success
 }
 
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {

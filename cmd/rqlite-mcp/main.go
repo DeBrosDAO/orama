@@ -74,7 +74,8 @@ func (s *MCPServer) handleRequest(req JSONRPCRequest) JSONRPCResponse {
 	resp.JSONRPC = "2.0"
 	resp.ID = req.ID
 
-	log.Printf("Received method: %s", req.Method)
+	// Debug logging disabled to prevent excessive disk writes
+	// log.Printf("Received method: %s", req.Method)
 
 	switch req.Method {
 	case "initialize":
@@ -94,7 +95,7 @@ func (s *MCPServer) handleRequest(req JSONRPCRequest) JSONRPCResponse {
 		return JSONRPCResponse{}
 
 	case "tools/list":
-		log.Printf("Listing tools")
+		// Debug logging disabled to prevent excessive disk writes
 		tools := []Tool{
 			{
 				Name:        "list_tables",
@@ -144,7 +145,7 @@ func (s *MCPServer) handleRequest(req JSONRPCRequest) JSONRPCResponse {
 		resp.Result = s.handleToolCall(callReq)
 
 	default:
-		log.Printf("Unknown method: %s", req.Method)
+		// Debug logging disabled to prevent excessive disk writes
 		resp.Error = &ResponseError{Code: -32601, Message: "Method not found"}
 	}
 
@@ -152,7 +153,8 @@ func (s *MCPServer) handleRequest(req JSONRPCRequest) JSONRPCResponse {
 }
 
 func (s *MCPServer) handleToolCall(req CallToolRequest) CallToolResult {
-	log.Printf("Tool call: %s", req.Name)
+	// Debug logging disabled to prevent excessive disk writes
+	// log.Printf("Tool call: %s", req.Name)
 
 	switch req.Name {
 	case "list_tables":
@@ -179,7 +181,7 @@ func (s *MCPServer) handleToolCall(req CallToolRequest) CallToolResult {
 		if err := json.Unmarshal(req.Arguments, &args); err != nil {
 			return errorResult(fmt.Sprintf("Invalid arguments: %v", err))
 		}
-		log.Printf("Executing query: %s", args.SQL)
+		// Debug logging disabled to prevent excessive disk writes
 		rows, err := s.conn.QueryOne(args.SQL)
 		if err != nil {
 			return errorResult(fmt.Sprintf("Query error: %v", err))
@@ -215,7 +217,7 @@ func (s *MCPServer) handleToolCall(req CallToolRequest) CallToolResult {
 		if err := json.Unmarshal(req.Arguments, &args); err != nil {
 			return errorResult(fmt.Sprintf("Invalid arguments: %v", err))
 		}
-		log.Printf("Executing statement: %s", args.SQL)
+		// Debug logging disabled to prevent excessive disk writes
 		res, err := s.conn.WriteOne(args.SQL)
 		if err != nil {
 			return errorResult(fmt.Sprintf("Execution error: %v", err))
@@ -292,7 +294,7 @@ func main() {
 
 		var req JSONRPCRequest
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			log.Printf("Failed to parse request: %v", err)
+			// Debug logging disabled to prevent excessive disk writes
 			continue
 		}
 
@@ -305,7 +307,7 @@ func main() {
 
 		respData, err := json.Marshal(resp)
 		if err != nil {
-			log.Printf("Failed to marshal response: %v", err)
+			// Debug logging disabled to prevent excessive disk writes
 			continue
 		}
 
@@ -313,6 +315,6 @@ func main() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("Scanner error: %v", err)
+		// Debug logging disabled to prevent excessive disk writes
 	}
 }

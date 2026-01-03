@@ -21,6 +21,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/multiformats/go-multiaddr"
@@ -331,7 +332,19 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		}
 
 		// Create host functions provider (allows functions to call Orama services)
-		// Note: pubsub and secrets are nil for now - can be added later
+		// Get pubsub adapter from client for serverless functions
+		var pubsubAdapter *pubsub.ClientAdapter
+		if gw.client != nil {
+			if concreteClient, ok := gw.client.(*client.Client); ok {
+				pubsubAdapter = concreteClient.PubSubAdapter()
+				if pubsubAdapter != nil {
+					logger.ComponentInfo(logging.ComponentGeneral, "pubsub adapter available for serverless functions")
+				} else {
+					logger.ComponentWarn(logging.ComponentGeneral, "pubsub adapter is nil - serverless pubsub will be unavailable")
+				}
+			}
+		}
+
 		hostFuncsCfg := serverless.HostFunctionsConfig{
 			IPFSAPIURL:  ipfsAPIURL,
 			HTTPTimeout: 30 * time.Second,
@@ -340,7 +353,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.ormClient,
 			olricClient,
 			gw.ipfsClient,
-			nil, // pubsub adapter - TODO: integrate with gateway pubsub
+			pubsubAdapter, // pubsub adapter for serverless functions
 			gw.serverlessWSMgr,
 			nil, // secrets manager - TODO: implement
 			hostFuncsCfg,
