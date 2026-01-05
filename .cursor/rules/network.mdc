@@ -81,11 +81,11 @@ When learning a skill, follow this **collaborative, goal-oriented workflow**. Yo
 1. **For questions:** Use `network_ask_question` or `network_search_code` to understand the codebase.
 ---
 
-# Sonr Gateway (or Sonr Network Gateway)
+# DeBros Network Gateway
 
-This project implements a high-performance, multi-functional API gateway designed to bridge client applications with a decentralized infrastructure. It serves as a unified entry point for diverse services including distributed caching (via Olric), decentralized storage (IPFS), serverless function execution, and real-time pub/sub messaging. The gateway handles critical cross-cutting concerns such as JWT-based authentication, secure anonymous proxying, and mobile push notifications, ensuring that requests are validated, authorized, and efficiently routed across the network's ecosystem.
+This project is a high-performance, edge-focused API gateway and reverse proxy designed to bridge decentralized web services with standard HTTP clients. It serves as a comprehensive middleware layer that facilitates wallet-based authentication, distributed caching via Olric, IPFS storage interaction, and serverless execution of WebAssembly (Wasm) functions. Additionally, it provides specialized utility services such as push notifications and an anonymizing proxy, ensuring secure and monitored communication between users and decentralized infrastructure.
 
-**Architecture:** Edge Gateway / Middleware-heavy Microservice
+**Architecture:** API Gateway / Edge Middleware
 
 ## Tech Stack
 - **backend:** Go
