@@ -329,6 +329,18 @@ func (c *Client) getAppNamespace() string {
 	return c.config.AppName
 }
 
+// PubSubAdapter returns the underlying pubsub.ClientAdapter for direct use by serverless functions.
+// This bypasses the authentication checks used by PubSub() since serverless functions
+// are already authenticated via the gateway.
+func (c *Client) PubSubAdapter() *pubsub.ClientAdapter {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.pubsub == nil {
+		return nil
+	}
+	return c.pubsub.adapter
+}
+
 // requireAccess enforces that credentials are present and that any context-based namespace overrides match
 func (c *Client) requireAccess(ctx context.Context) error {
 	// Allow internal system operations to bypass authentication

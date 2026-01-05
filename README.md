@@ -26,27 +26,25 @@ make stop
 
 After running `make dev`, test service health using these curl requests:
 
-> **Note:** Local domains (node-1.local, etc.) require running `sudo make setup-domains` first. Alternatively, use `localhost` with port numbers.
-
 ### Node Unified Gateways
 
 Each node is accessible via a single unified gateway port:
 
 ```bash
 # Node-1 (port 6001)
-curl http://node-1.local:6001/health
+curl http://localhost:6001/health
 
 # Node-2 (port 6002)
-curl http://node-2.local:6002/health
+curl http://localhost:6002/health
 
 # Node-3 (port 6003)
-curl http://node-3.local:6003/health
+curl http://localhost:6003/health
 
 # Node-4 (port 6004)
-curl http://node-4.local:6004/health
+curl http://localhost:6004/health
 
 # Node-5 (port 6005)
-curl http://node-5.local:6005/health
+curl http://localhost:6005/health
 ```
 
 ## Network Architecture
@@ -127,6 +125,54 @@ make build
 ./bin/orama auth login
 ./bin/orama auth status
 ./bin/orama auth logout
+```
+
+## Serverless Functions (WASM)
+
+Orama supports high-performance serverless function execution using WebAssembly (WASM). Functions are isolated, secure, and can interact with network services like the distributed cache.
+
+### 1. Build Functions
+
+Functions must be compiled to WASM. We recommend using [TinyGo](https://tinygo.org/).
+
+```bash
+# Build example functions to examples/functions/bin/
+./examples/functions/build.sh
+```
+
+### 2. Deployment
+
+Deploy your compiled `.wasm` file to the network via the Gateway.
+
+```bash
+# Deploy a function
+curl -X POST http://localhost:6001/v1/functions \
+  -H "Authorization: Bearer <your_api_key>" \
+  -F "name=hello-world" \
+  -F "namespace=default" \
+  -F "wasm=@./examples/functions/bin/hello.wasm"
+```
+
+### 3. Invocation
+
+Trigger your function with a JSON payload. The function receives the payload via `stdin` and returns its response via `stdout`.
+
+```bash
+# Invoke via HTTP
+curl -X POST http://localhost:6001/v1/functions/hello-world/invoke \
+  -H "Authorization: Bearer <your_api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Developer"}'
+```
+
+### 4. Management
+
+```bash
+# List all functions in a namespace
+curl http://localhost:6001/v1/functions?namespace=default
+
+# Delete a function
+curl -X DELETE http://localhost:6001/v1/functions/hello-world?namespace=default
 ```
 
 ## Production Deployment
@@ -262,6 +308,11 @@ sudo orama install
 - `POST /v1/pubsub/publish` - Publish message
 - `GET /v1/pubsub/topics` - List topics
 - `GET /v1/pubsub/ws?topic=<name>` - WebSocket subscribe
+- `POST /v1/functions` - Deploy function (multipart/form-data)
+- `POST /v1/functions/{name}/invoke` - Invoke function
+- `GET /v1/functions` - List functions
+- `DELETE /v1/functions/{name}` - Delete function
+- `GET /v1/functions/{name}/logs` - Get function logs
 
 See `openapi/gateway.yaml` for complete API specification.
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -62,11 +63,8 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Allow public endpoints without auth
-		if isPublicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
+
+		isPublic := isPublicPath(r.URL.Path)
 
 		// 1) Try JWT Bearer first if Authorization looks like one
 		if auth := r.Header.Get("Authorization"); auth != "" {
@@ -74,7 +72,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			if strings.HasPrefix(lower, "bearer ") {
 				tok := strings.TrimSpace(auth[len("Bearer "):])
 				if strings.Count(tok, ".") == 2 {
-					if claims, err := g.parseAndVerifyJWT(tok); err == nil {
+					if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 						// Attach JWT claims and namespace to context
 						ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
@@ -91,6 +89,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		// 2) Fallback to API key (validate against DB)
 		key := extractAPIKey(r)
 		if key == "" {
+			if isPublic {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\", charset=\"UTF-8\"")
 			writeError(w, http.StatusUnauthorized, "missing API key")
 			return
@@ -104,6 +106,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
 		res, err := db.Query(internalCtx, q, key)
 		if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+			if isPublic {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
@@ -118,6 +124,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			ns = strings.TrimSpace(ns)
 		}
 		if ns == "" {
+			if isPublic {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
@@ -183,6 +193,11 @@ func isPublicPath(p string) bool {
 		return true
 	}
 
+	// Serverless invocation is public (authorization is handled within the invoker)
+	if strings.HasPrefix(p, "/v1/invoke/") || (strings.HasPrefix(p, "/v1/functions/") && strings.HasSuffix(p, "/invoke")) {
+		return true
+	}
+
 	switch p {
 	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/login", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/auth/simple-key", "/v1/network/status", "/v1/network/peers":
 		return true
@@ -235,7 +250,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		apiKeyFallback := ""
 
 		if v := ctx.Value(ctxKeyJWT); v != nil {
-			if claims, ok := v.(*jwtClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
+			if claims, ok := v.(*auth.JWTClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
 				// Determine subject type.
 				// If subject looks like an API key (e.g., ak_<random>:<namespace>),
 				// treat it as an API key owner; otherwise assume a wallet subject.
@@ -322,6 +337,9 @@ func requiresNamespaceOwnership(p string) bool {
 		return true
 	}
 	if strings.HasPrefix(p, "/v1/proxy/") {
+		return true
+	}
+	if strings.HasPrefix(p, "/v1/functions") {
 		return true
 	}
 	return false

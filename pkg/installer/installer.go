@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/DeBrosOfficial/network/pkg/certutil"
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
@@ -338,7 +339,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	case StepSwarmKey:
 		swarmKey := strings.TrimSpace(m.textInput.Value())
-		if err := validateSwarmKey(swarmKey); err != nil {
+		if err := config.ValidateSwarmKey(swarmKey); err != nil {
 			m.err = err
 			return m, nil
 		}
@@ -812,17 +813,6 @@ func validateClusterSecret(secret string) error {
 	secretRegex := regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 	if !secretRegex.MatchString(secret) {
 		return fmt.Errorf("cluster secret must be valid hexadecimal")
-	}
-	return nil
-}
-
-func validateSwarmKey(key string) error {
-	if len(key) != 64 {
-		return fmt.Errorf("swarm key must be 64 hex characters")
-	}
-	keyRegex := regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
-	if !keyRegex.MatchString(key) {
-		return fmt.Errorf("swarm key must be valid hexadecimal")
 	}
 	return nil
 }

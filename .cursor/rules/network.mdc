@@ -1,0 +1,92 @@
+---
+alwaysApply: true
+---
+
+# AI Instructions
+
+You have access to the **network** MCP (Model Context Protocol) server for this project. This MCP provides deep, pre-analyzed context about the codebase that is far more accurate than default file searching.
+
+## IMPORTANT: Always Use MCP First
+
+**Before making any code changes or answering questions about this codebase, ALWAYS consult the MCP tools first.**
+
+The MCP has pre-indexed the entire codebase with semantic understanding, embeddings, and structural analysis. While you can use your own file search capabilities, the MCP provides much better context because:
+- It understands code semantics, not just text matching
+- It has pre-analyzed the architecture, patterns, and relationships
+- It can answer questions about intent and purpose, not just content
+
+## Available MCP Tools
+
+### Code Understanding
+- `network_ask_question` - Ask natural language questions about the codebase. Use this for "how does X work?", "where is Y implemented?", "what does Z do?" questions. The MCP will search relevant code and provide informed answers.
+- `network_search_code` - Semantic code search. Find code by meaning, not just text. Great for finding implementations, patterns, or related functionality.
+- `network_get_architecture` - Get the full project architecture overview including tech stack, design patterns, domain entities, and API endpoints.
+- `network_get_file_summary` - Get a detailed summary of what a specific file does, its purpose, exports, and responsibilities.
+- `network_find_function` - Find a specific function or method definition by name across the codebase.
+- `network_list_functions` - List all functions defined in a specific file.
+
+### Skills (Learned Procedures)
+Skills are reusable procedures that the agent has learned about this specific project (e.g., "how to deploy", "how to run tests", "how to add a new API endpoint").
+
+- `network_list_skills` - List all learned skills for this project.
+- `network_get_skill` - Get detailed information about a specific skill including its step-by-step procedure.
+- `network_execute_skill` - Get the procedure for a learned skill so you can execute it step by step. Returns prerequisites, warnings, and commands to run.
+- `network_learn_skill` - Teach the agent a new skill. The agent will explore, discover, and memorize how to perform this task.
+- `network_get_learning_status` - Check the status of an ongoing skill learning session.
+- `network_answer_question` - Answer a question that the learning agent asked during skill learning.
+- `network_cancel_learning` - Cancel an active learning session.
+- `network_forget_skill` - Delete a learned skill.
+- `network_update_skill` - Update a learned skill with corrections or new information (e.g., 'Use .env.prod instead of .env', 'Add step to backup database first', 'The port should be 3000 not 8080').
+
+#### Skill Learning Workflow (IMPORTANT)
+
+When learning a skill, follow this **collaborative, goal-oriented workflow**. You (Cursor) are the executor, the MCP agent provides guidance:
+
+**Goal-Oriented Learning**: The agent identifies specific GOALS (pieces of information to gather) and tracks progress by goal completion, not by iterations.
+
+1. **Start Learning**: Call `learn_skill` with name and detailed description
+2. **Monitor Progress**: Call `get_learning_status` to check progress
+3. **Handle Status Responses**:
+   - `active` → Learning in progress, check again in a few seconds
+   - `waiting_input` → The agent has a question. Read it and call `answer_question` with your response
+   - `waiting_execution` → **IMPORTANT**: The agent needs you to run a command!
+     - Read the `pendingExecution.command` from the response
+     - **Execute the command yourself** using your terminal access
+     - Call `answer_question` with the command output
+   - `completed` → Skill learned successfully!
+   - `failed` → Check errors and try again
+4. **Repeat** steps 2-3 until status is `completed`
+
+**Key Insight**: The MCP agent runs on the server and cannot SSH to remote servers directly. When it needs remote access, it generates the SSH command for YOU to execute. You have terminal access - use it!
+
+**User Override Commands**: If the agent gets stuck, you can include these keywords in your answer:
+- `COMPLETE` or `SKIP` - Skip to synthesis phase and generate the skill from current data
+- `PHASE:synthesizing` - Force transition to drafting phase
+- `GOAL:goal_id=value` - Directly provide a goal's value (e.g., `GOAL:cluster_secret=abc123`)
+- `I have provided X` - Tell the agent it already has certain information
+
+**Example for `waiting_execution`**:
+```
+// Status response shows:
+// pendingExecution: { command: "ssh root@192.168.1.1 'ls -la /home/user/.orama'" }
+// 
+// You should:
+// 1. Run the command in your terminal
+// 2. Get the output
+// 3. Call answer_question with the output
+```
+
+## Recommended Workflow
+
+1. **For questions:** Use `network_ask_question` or `network_search_code` to understand the codebase.
+---
+
+# DeBros Network Gateway
+
+This project is a high-performance, edge-focused API gateway and reverse proxy designed to bridge decentralized web services with standard HTTP clients. It serves as a comprehensive middleware layer that facilitates wallet-based authentication, distributed caching via Olric, IPFS storage interaction, and serverless execution of WebAssembly (Wasm) functions. Additionally, it provides specialized utility services such as push notifications and an anonymizing proxy, ensuring secure and monitored communication between users and decentralized infrastructure.
+
+**Architecture:** API Gateway / Edge Middleware
+
+## Tech Stack
+- **backend:** Go
+

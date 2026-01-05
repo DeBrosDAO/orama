@@ -4,20 +4,20 @@ import "fmt"
 
 // NodeSpec defines configuration for a single dev environment node
 type NodeSpec struct {
-	Name              string // node-1, node-2, node-3, node-4, node-5
-	ConfigFilename    string // node-1.yaml, node-2.yaml, etc.
-	DataDir           string // relative path from .orama root
-	P2PPort           int    // LibP2P listen port
-	IPFSAPIPort       int    // IPFS API port
-	IPFSSwarmPort     int    // IPFS Swarm port
-	IPFSGatewayPort   int    // IPFS HTTP Gateway port
-	RQLiteHTTPPort    int    // RQLite HTTP API port
-	RQLiteRaftPort    int    // RQLite Raft consensus port
-	ClusterAPIPort    int    // IPFS Cluster REST API port
-	ClusterPort       int    // IPFS Cluster P2P port
-	UnifiedGatewayPort int   // Unified gateway port (proxies all services)
-	RQLiteJoinTarget  string // which node's RQLite Raft port to join (empty for first node)
-	ClusterJoinTarget string // which node's cluster to join (empty for first node)
+	Name               string // node-1, node-2, node-3, node-4, node-5
+	ConfigFilename     string // node-1.yaml, node-2.yaml, etc.
+	DataDir            string // relative path from .orama root
+	P2PPort            int    // LibP2P listen port
+	IPFSAPIPort        int    // IPFS API port
+	IPFSSwarmPort      int    // IPFS Swarm port
+	IPFSGatewayPort    int    // IPFS HTTP Gateway port
+	RQLiteHTTPPort     int    // RQLite HTTP API port
+	RQLiteRaftPort     int    // RQLite Raft consensus port
+	ClusterAPIPort     int    // IPFS Cluster REST API port
+	ClusterPort        int    // IPFS Cluster P2P port
+	UnifiedGatewayPort int    // Unified gateway port (proxies all services)
+	RQLiteJoinTarget   string // which node's RQLite Raft port to join (empty for first node)
+	ClusterJoinTarget  string // which node's cluster to join (empty for first node)
 }
 
 // Topology defines the complete development environment topology
@@ -27,97 +27,99 @@ type Topology struct {
 	OlricHTTPPort   int
 	OlricMemberPort int
 	AnonSOCKSPort   int
+	MCPPort         int
 }
 
 // DefaultTopology returns the default five-node dev environment topology
 func DefaultTopology() *Topology {
 	return &Topology{
 		Nodes: []NodeSpec{
-		{
-			Name:              "node-1",
-			ConfigFilename:    "node-1.yaml",
-			DataDir:           "node-1",
-			P2PPort:           4001,
-			IPFSAPIPort:       4501,
-			IPFSSwarmPort:     4101,
-			IPFSGatewayPort:   7501,
-			RQLiteHTTPPort:    5001,
-			RQLiteRaftPort:    7001,
-			ClusterAPIPort:    9094,
-			ClusterPort:       9096,
-			UnifiedGatewayPort: 6001,
-			RQLiteJoinTarget:  "",       // First node - creates cluster
-			ClusterJoinTarget: "",
+			{
+				Name:               "node-1",
+				ConfigFilename:     "node-1.yaml",
+				DataDir:            "node-1",
+				P2PPort:            4001,
+				IPFSAPIPort:        4501,
+				IPFSSwarmPort:      4101,
+				IPFSGatewayPort:    7501,
+				RQLiteHTTPPort:     5001,
+				RQLiteRaftPort:     7001,
+				ClusterAPIPort:     9094,
+				ClusterPort:        9096,
+				UnifiedGatewayPort: 6001,
+				RQLiteJoinTarget:   "", // First node - creates cluster
+				ClusterJoinTarget:  "",
+			},
+			{
+				Name:               "node-2",
+				ConfigFilename:     "node-2.yaml",
+				DataDir:            "node-2",
+				P2PPort:            4011,
+				IPFSAPIPort:        4511,
+				IPFSSwarmPort:      4111,
+				IPFSGatewayPort:    7511,
+				RQLiteHTTPPort:     5011,
+				RQLiteRaftPort:     7011,
+				ClusterAPIPort:     9104,
+				ClusterPort:        9106,
+				UnifiedGatewayPort: 6002,
+				RQLiteJoinTarget:   "localhost:7001",
+				ClusterJoinTarget:  "localhost:9096",
+			},
+			{
+				Name:               "node-3",
+				ConfigFilename:     "node-3.yaml",
+				DataDir:            "node-3",
+				P2PPort:            4002,
+				IPFSAPIPort:        4502,
+				IPFSSwarmPort:      4102,
+				IPFSGatewayPort:    7502,
+				RQLiteHTTPPort:     5002,
+				RQLiteRaftPort:     7002,
+				ClusterAPIPort:     9114,
+				ClusterPort:        9116,
+				UnifiedGatewayPort: 6003,
+				RQLiteJoinTarget:   "localhost:7001",
+				ClusterJoinTarget:  "localhost:9096",
+			},
+			{
+				Name:               "node-4",
+				ConfigFilename:     "node-4.yaml",
+				DataDir:            "node-4",
+				P2PPort:            4003,
+				IPFSAPIPort:        4503,
+				IPFSSwarmPort:      4103,
+				IPFSGatewayPort:    7503,
+				RQLiteHTTPPort:     5003,
+				RQLiteRaftPort:     7003,
+				ClusterAPIPort:     9124,
+				ClusterPort:        9126,
+				UnifiedGatewayPort: 6004,
+				RQLiteJoinTarget:   "localhost:7001",
+				ClusterJoinTarget:  "localhost:9096",
+			},
+			{
+				Name:               "node-5",
+				ConfigFilename:     "node-5.yaml",
+				DataDir:            "node-5",
+				P2PPort:            4004,
+				IPFSAPIPort:        4504,
+				IPFSSwarmPort:      4104,
+				IPFSGatewayPort:    7504,
+				RQLiteHTTPPort:     5004,
+				RQLiteRaftPort:     7004,
+				ClusterAPIPort:     9134,
+				ClusterPort:        9136,
+				UnifiedGatewayPort: 6005,
+				RQLiteJoinTarget:   "localhost:7001",
+				ClusterJoinTarget:  "localhost:9096",
+			},
 		},
-		{
-			Name:              "node-2",
-			ConfigFilename:    "node-2.yaml",
-			DataDir:           "node-2",
-			P2PPort:           4011,
-			IPFSAPIPort:       4511,
-			IPFSSwarmPort:     4111,
-			IPFSGatewayPort:   7511,
-			RQLiteHTTPPort:    5011,
-			RQLiteRaftPort:    7011,
-			ClusterAPIPort:    9104,
-			ClusterPort:       9106,
-			UnifiedGatewayPort: 6002,
-			RQLiteJoinTarget:  "localhost:7001",
-			ClusterJoinTarget: "localhost:9096",
-		},
-		{
-			Name:              "node-3",
-			ConfigFilename:    "node-3.yaml",
-			DataDir:           "node-3",
-			P2PPort:           4002,
-			IPFSAPIPort:       4502,
-			IPFSSwarmPort:     4102,
-			IPFSGatewayPort:   7502,
-			RQLiteHTTPPort:    5002,
-			RQLiteRaftPort:    7002,
-			ClusterAPIPort:    9114,
-			ClusterPort:       9116,
-			UnifiedGatewayPort: 6003,
-			RQLiteJoinTarget:  "localhost:7001",
-			ClusterJoinTarget: "localhost:9096",
-		},
-		{
-			Name:              "node-4",
-			ConfigFilename:    "node-4.yaml",
-			DataDir:           "node-4",
-			P2PPort:           4003,
-			IPFSAPIPort:       4503,
-			IPFSSwarmPort:     4103,
-			IPFSGatewayPort:   7503,
-			RQLiteHTTPPort:    5003,
-			RQLiteRaftPort:    7003,
-			ClusterAPIPort:    9124,
-			ClusterPort:       9126,
-			UnifiedGatewayPort: 6004,
-			RQLiteJoinTarget:  "localhost:7001",
-			ClusterJoinTarget: "localhost:9096",
-		},
-		{
-			Name:              "node-5",
-			ConfigFilename:    "node-5.yaml",
-			DataDir:           "node-5",
-			P2PPort:           4004,
-			IPFSAPIPort:       4504,
-			IPFSSwarmPort:     4104,
-			IPFSGatewayPort:   7504,
-			RQLiteHTTPPort:    5004,
-			RQLiteRaftPort:    7004,
-			ClusterAPIPort:    9134,
-			ClusterPort:       9136,
-			UnifiedGatewayPort: 6005,
-			RQLiteJoinTarget:  "localhost:7001",
-			ClusterJoinTarget: "localhost:9096",
-		},
-		},
-		GatewayPort:     6000,  // Main gateway on 6000 (nodes use 6001-6005)
+		GatewayPort:     6000, // Main gateway on 6000 (nodes use 6001-6005)
 		OlricHTTPPort:   3320,
 		OlricMemberPort: 3322,
 		AnonSOCKSPort:   9050,
+		MCPPort:         5825,
 	}
 }
 

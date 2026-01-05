@@ -49,6 +49,13 @@ func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 	}, nil
 }
 
+// UnderlyingClient returns the underlying olriclib.Client for advanced usage.
+// This is useful when you need to pass the client to other packages that expect
+// the raw olric client interface.
+func (c *Client) UnderlyingClient() olriclib.Client {
+	return c.client
+}
+
 // Health checks if the Olric client is healthy
 func (c *Client) Health(ctx context.Context) error {
 	// Create a DMap to test connectivity

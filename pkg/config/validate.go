@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -584,4 +585,16 @@ func extractTCPPort(multiaddrStr string) string {
 		}
 	}
 	return ""
+}
+
+// ValidateSwarmKey validates that a swarm key is 64 hex characters
+func ValidateSwarmKey(key string) error {
+	key = strings.TrimSpace(key)
+	if len(key) != 64 {
+		return fmt.Errorf("swarm key must be 64 hex characters (32 bytes), got %d", len(key))
+	}
+	if _, err := hex.DecodeString(key); err != nil {
+		return fmt.Errorf("swarm key must be valid hexadecimal: %w", err)
+	}
+	return nil
 }

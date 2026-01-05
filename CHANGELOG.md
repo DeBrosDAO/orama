@@ -13,6 +13,59 @@ The format is based on [Keep a Changelog][keepachangelog] and adheres to [Semant
 ### Deprecated
 
 ### Fixed
+## [0.82.0] - 2026-01-03
+
+### Added
+- Added PubSub Presence feature, allowing clients to track members connected to a topic via WebSocket.
+- Added a new tool, `rqlite-mcp`, which implements the Model Communication Protocol (MCP) for Rqlite, enabling AI models to interact with the database using tools.
+
+### Changed
+- Updated the development environment to include and manage the new `rqlite-mcp` service.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+\n
+## [0.81.0] - 2025-12-31
+
+### Added
+- Implemented a new, robust authentication service within the Gateway for handling wallet-based challenges, signature verification (ETH/SOL), JWT issuance, and API key management.
+- Introduced automatic recovery logic for RQLite to detect and recover from split-brain scenarios and ensure cluster stability during restarts.
+
+### Changed
+- Refactored the production installation command (`dbn prod install`) by moving installer logic and utility functions into a dedicated `pkg/cli/utils` package for better modularity and maintainability.
+- Reworked the core logic for starting and managing LibP2P, RQLite, and the HTTP Gateway within the Node, including improved peer reconnection and cluster configuration synchronization.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected IPFS Cluster configuration logic to properly handle port assignments and ensure correct IPFS API addresses are used, resolving potential connection issues between cluster components.
+
+## [0.80.0] - 2025-12-29
+
+### Added
+- Implemented the core Serverless Functions Engine, allowing users to deploy and execute WASM-based functions (e.g., Go compiled with TinyGo).
+- Added new database migration (004) to support serverless functions, including tables for functions, secrets, cron triggers, database triggers, pubsub triggers, timers, jobs, and invocation logs.
+- Added new API endpoints for managing and invoking serverless functions (`/v1/functions`, `/v1/invoke`, `/v1/functions/{name}/invoke`, `/v1/functions/{name}/ws`).
+- Introduced `WSPubSubClient` for E2E testing of WebSocket PubSub functionality.
+- Added examples and a build script for creating WASM serverless functions (Echo, Hello, Counter).
+
+### Changed
+- Updated Go version requirement from 1.23.8 to 1.24.0 in `go.mod`.
+- Refactored RQLite client to improve data type handling and conversion, especially for `sql.Null*` types and number parsing.
+- Improved RQLite cluster discovery logic to safely handle new nodes joining an existing cluster without clearing existing Raft state unless necessary (log index 0).
+
+### Deprecated
+
+### Removed
+
+### Fixed
+- Corrected an issue in the `install` command where dry-run summaries were missing newlines.
+
 ## [0.72.1] - 2025-12-09
 
 ### Added

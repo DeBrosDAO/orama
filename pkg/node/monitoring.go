@@ -220,9 +220,9 @@ func (n *Node) startConnectionMonitoring() {
 				// First try to discover from LibP2P connections (works even if cluster peers aren't connected yet)
 				// This runs every minute to discover peers automatically via LibP2P discovery
 				if time.Now().Unix()%60 == 0 {
-					if success, err := n.clusterConfigManager.DiscoverClusterPeersFromLibP2P(n.host); err != nil {
+					if err := n.clusterConfigManager.DiscoverClusterPeersFromLibP2P(n.host); err != nil {
 						n.logger.ComponentWarn(logging.ComponentNode, "Failed to discover cluster peers from LibP2P", zap.Error(err))
-					} else if success {
+					} else {
 						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses discovered from LibP2P")
 					}
 				}
@@ -230,16 +230,16 @@ func (n *Node) startConnectionMonitoring() {
 				// Also try to update from cluster API (works once peers are connected)
 				// Update all cluster peers every 2 minutes to discover new peers
 				if time.Now().Unix()%120 == 0 {
-					if success, err := n.clusterConfigManager.UpdateAllClusterPeers(); err != nil {
+					if err := n.clusterConfigManager.UpdateAllClusterPeers(); err != nil {
 						n.logger.ComponentWarn(logging.ComponentNode, "Failed to update cluster peers during monitoring", zap.Error(err))
-					} else if success {
+					} else {
 						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses updated during monitoring")
 					}
 
 					// Try to repair peer configuration
-					if success, err := n.clusterConfigManager.RepairPeerConfiguration(); err != nil {
+					if err := n.clusterConfigManager.RepairPeerConfiguration(); err != nil {
 						n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer addresses during monitoring", zap.Error(err))
-					} else if success {
+					} else {
 						n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired during monitoring")
 					}
 				}

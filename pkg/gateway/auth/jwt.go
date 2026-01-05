@@ -1,4 +1,4 @@
-package gateway
+package auth
 
 import (
 	"crypto"
@@ -13,13 +13,13 @@ import (
 	"time"
 )
 
-func (g *Gateway) jwksHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) JWKSHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if g.signingKey == nil {
+	if s.signingKey == nil {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
 		return
 	}
-	pub := g.signingKey.Public().(*rsa.PublicKey)
+	pub := s.signingKey.Public().(*rsa.PublicKey)
 	n := pub.N.Bytes()
 	// Encode exponent as big-endian bytes
 	eVal := pub.E
@@ -35,7 +35,7 @@ func (g *Gateway) jwksHandler(w http.ResponseWriter, r *http.Request) {
 		"kty": "RSA",
 		"use": "sig",
 		"alg": "RS256",
-		"kid": g.keyID,
+		"kid": s.keyID,
 		"n":   base64.RawURLEncoding.EncodeToString(n),
 		"e":   base64.RawURLEncoding.EncodeToString(eb),
 	}
@@ -49,7 +49,7 @@ type jwtHeader struct {
 	Kid string `json:"kid"`
 }
 
-type jwtClaims struct {
+type JWTClaims struct {
 	Iss       string `json:"iss"`
 	Sub       string `json:"sub"`
 	Aud       string `json:"aud"`
@@ -59,9 +59,9 @@ type jwtClaims struct {
 	Namespace string `json:"namespace"`
 }
 
-// parseAndVerifyJWT verifies an RS256 JWT created by this gateway and returns claims
-func (g *Gateway) parseAndVerifyJWT(token string) (*jwtClaims, error) {
-	if g.signingKey == nil {
+// ParseAndVerifyJWT verifies an RS256 JWT created by this gateway and returns claims
+func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
+	if s.signingKey == nil {
 		return nil, errors.New("signing key unavailable")
 	}
 	parts := strings.Split(token, ".")
@@ -90,12 +90,12 @@ func (g *Gateway) parseAndVerifyJWT(token string) (*jwtClaims, error) {
 	// Verify signature
 	signingInput := parts[0] + "." + parts[1]
 	sum := sha256.Sum256([]byte(signingInput))
-	pub := g.signingKey.Public().(*rsa.PublicKey)
+	pub := s.signingKey.Public().(*rsa.PublicKey)
 	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sb); err != nil {
 		return nil, errors.New("invalid signature")
 	}
 	// Parse claims
-	var claims jwtClaims
+	var claims JWTClaims
 	if err := json.Unmarshal(pb, &claims); err != nil {
 		return nil, errors.New("invalid claims json")
 	}
@@ -122,14 +122,14 @@ func (g *Gateway) parseAndVerifyJWT(token string) (*jwtClaims, error) {
 	return &claims, nil
 }
 
-func (g *Gateway) generateJWT(ns, subject string, ttl time.Duration) (string, int64, error) {
-	if g.signingKey == nil {
+func (s *Service) GenerateJWT(ns, subject string, ttl time.Duration) (string, int64, error) {
+	if s.signingKey == nil {
 		return "", 0, errors.New("signing key unavailable")
 	}
 	header := map[string]string{
 		"alg": "RS256",
 		"typ": "JWT",
-		"kid": g.keyID,
+		"kid": s.keyID,
 	}
 	hb, _ := json.Marshal(header)
 	now := time.Now().UTC()
@@ -148,7 +148,7 @@ func (g *Gateway) generateJWT(ns, subject string, ttl time.Duration) (string, in
 	pb64 := base64.RawURLEncoding.EncodeToString(pb)
 	signingInput := hb64 + "." + pb64
 	sum := sha256.Sum256([]byte(signingInput))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, g.signingKey, crypto.SHA256, sum[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, s.signingKey, crypto.SHA256, sum[:])
 	if err != nil {
 		return "", 0, err
 	}

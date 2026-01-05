@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/gorilla/websocket"
@@ -51,6 +52,22 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "missing 'topic'")
 		return
 	}
+
+	// Presence handling
+	enablePresence := r.URL.Query().Get("presence") == "true"
+	memberID := r.URL.Query().Get("member_id")
+	memberMetaStr := r.URL.Query().Get("member_meta")
+	var memberMeta map[string]interface{}
+	if memberMetaStr != "" {
+		_ = json.Unmarshal([]byte(memberMetaStr), &memberMeta)
+	}
+
+	if enablePresence && memberID == "" {
+		g.logger.ComponentWarn("gateway", "pubsub ws: presence enabled but missing member_id")
+		writeError(w, http.StatusBadRequest, "missing 'member_id' for presence")
+		return
+	}
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		g.logger.ComponentWarn("gateway", "pubsub ws: upgrade failed")
@@ -73,6 +90,36 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 	subscriberCount := len(g.localSubscribers[topicKey])
 	g.mu.Unlock()
 
+	connID := uuid.New().String()
+	if enablePresence {
+		member := PresenceMember{
+			MemberID: memberID,
+			JoinedAt: time.Now().Unix(),
+			Meta:     memberMeta,
+			ConnID:   connID,
+		}
+
+		g.presenceMu.Lock()
+		g.presenceMembers[topicKey] = append(g.presenceMembers[topicKey], member)
+		g.presenceMu.Unlock()
+
+		// Broadcast join event
+		joinEvent := map[string]interface{}{
+			"type":      "presence.join",
+			"member_id": memberID,
+			"meta":      memberMeta,
+			"timestamp": member.JoinedAt,
+		}
+		eventData, _ := json.Marshal(joinEvent)
+		// Use a background context for the broadcast to ensure it finishes even if the connection closes immediately
+		broadcastCtx := pubsub.WithNamespace(client.WithInternalAuth(context.Background()), ns)
+		_ = g.client.PubSub().Publish(broadcastCtx, topic, eventData)
+
+		g.logger.ComponentInfo("gateway", "pubsub ws: member joined presence",
+			zap.String("topic", topic),
+			zap.String("member_id", memberID))
+	}
+
 	g.logger.ComponentInfo("gateway", "pubsub ws: registered local subscriber",
 		zap.String("topic", topic),
 		zap.String("namespace", ns),
@@ -93,6 +140,36 @@ func (g *Gateway) pubsubWebsocketHandler(w http.ResponseWriter, r *http.Request)
 			delete(g.localSubscribers, topicKey)
 		}
 		g.mu.Unlock()
+
+		if enablePresence {
+			g.presenceMu.Lock()
+			members := g.presenceMembers[topicKey]
+			for i, m := range members {
+				if m.ConnID == connID {
+					g.presenceMembers[topicKey] = append(members[:i], members[i+1:]...)
+					break
+				}
+			}
+			if len(g.presenceMembers[topicKey]) == 0 {
+				delete(g.presenceMembers, topicKey)
+			}
+			g.presenceMu.Unlock()
+
+			// Broadcast leave event
+			leaveEvent := map[string]interface{}{
+				"type":      "presence.leave",
+				"member_id": memberID,
+				"timestamp": time.Now().Unix(),
+			}
+			eventData, _ := json.Marshal(leaveEvent)
+			broadcastCtx := pubsub.WithNamespace(client.WithInternalAuth(context.Background()), ns)
+			_ = g.client.PubSub().Publish(broadcastCtx, topic, eventData)
+
+			g.logger.ComponentInfo("gateway", "pubsub ws: member left presence",
+				zap.String("topic", topic),
+				zap.String("member_id", memberID))
+		}
+
 		g.logger.ComponentInfo("gateway", "pubsub ws: unregistered local subscriber",
 			zap.String("topic", topic),
 			zap.Int("remaining_subscribers", remainingCount))
@@ -348,4 +425,45 @@ func namespacePrefix(ns string) string {
 
 func namespacedTopic(ns, topic string) string {
 	return namespacePrefix(ns) + topic
+}
+
+// pubsubPresenceHandler handles GET /v1/pubsub/presence?topic=mytopic
+func (g *Gateway) pubsubPresenceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ns := resolveNamespaceFromRequest(r)
+	if ns == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	topic := r.URL.Query().Get("topic")
+	if topic == "" {
+		writeError(w, http.StatusBadRequest, "missing 'topic'")
+		return
+	}
+
+	topicKey := fmt.Sprintf("%s.%s", ns, topic)
+
+	g.presenceMu.RLock()
+	members, ok := g.presenceMembers[topicKey]
+	g.presenceMu.RUnlock()
+
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"topic":   topic,
+			"members": []PresenceMember{},
+			"count":   0,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"topic":   topic,
+		"members": members,
+		"count":   len(members),
+	})
 }

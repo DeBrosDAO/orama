@@ -78,7 +78,7 @@ func (dc *DependencyChecker) CheckAll() ([]string, error) {
 
 	errMsg := fmt.Sprintf("Missing %d required dependencies:\n%s\n\nInstall them with:\n%s",
 		len(missing), strings.Join(missing, ", "), strings.Join(hints, "\n"))
-	return missing, fmt.Errorf(errMsg)
+	return missing, fmt.Errorf("%s", errMsg)
 }
 
 // PortChecker validates that required ports are available
@@ -113,7 +113,7 @@ func (pc *PortChecker) CheckAll() ([]int, error) {
 
 	errMsg := fmt.Sprintf("The following ports are unavailable: %v\n\nFree them or stop conflicting services and try again",
 		unavailable)
-	return unavailable, fmt.Errorf(errMsg)
+	return unavailable, fmt.Errorf("%s", errMsg)
 }
 
 // isPortAvailable checks if a TCP port is available for binding

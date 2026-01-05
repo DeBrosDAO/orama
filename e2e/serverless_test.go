@@ -1,0 +1,123 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestServerless_DeployAndInvoke(t *testing.T) {
+	SkipIfMissingGateway(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	wasmPath := "../examples/functions/bin/hello.wasm"
+	if _, err := os.Stat(wasmPath); os.IsNotExist(err) {
+		t.Skip("hello.wasm not found")
+	}
+
+	wasmBytes, err := os.ReadFile(wasmPath)
+	if err != nil {
+		t.Fatalf("failed to read hello.wasm: %v", err)
+	}
+
+	funcName := "e2e-hello"
+	namespace := "default"
+
+	// 1. Deploy function
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Add metadata
+	_ = writer.WriteField("name", funcName)
+	_ = writer.WriteField("namespace", namespace)
+
+	// Add WASM file
+	part, err := writer.CreateFormFile("wasm", funcName+".wasm")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	part.Write(wasmBytes)
+	writer.Close()
+
+	deployReq, _ := http.NewRequestWithContext(ctx, "POST", GetGatewayURL()+"/v1/functions", &buf)
+	deployReq.Header.Set("Content-Type", writer.FormDataContentType())
+
+	if apiKey := GetAPIKey(); apiKey != "" {
+		deployReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := NewHTTPClient(1 * time.Minute)
+	resp, err := client.Do(deployReq)
+	if err != nil {
+		t.Fatalf("deploy request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("deploy failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// 2. Invoke function
+	invokePayload := []byte(`{"name": "E2E Tester"}`)
+	invokeReq, _ := http.NewRequestWithContext(ctx, "POST", GetGatewayURL()+"/v1/functions/"+funcName+"/invoke", bytes.NewReader(invokePayload))
+	invokeReq.Header.Set("Content-Type", "application/json")
+
+	if apiKey := GetAPIKey(); apiKey != "" {
+		invokeReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err = client.Do(invokeReq)
+	if err != nil {
+		t.Fatalf("invoke request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("invoke failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	output, _ := io.ReadAll(resp.Body)
+	expected := "Hello, E2E Tester!"
+	if !bytes.Contains(output, []byte(expected)) {
+		t.Errorf("output %q does not contain %q", string(output), expected)
+	}
+
+	// 3. List functions
+	listReq, _ := http.NewRequestWithContext(ctx, "GET", GetGatewayURL()+"/v1/functions?namespace="+namespace, nil)
+	if apiKey := GetAPIKey(); apiKey != "" {
+		listReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err = client.Do(listReq)
+	if err != nil {
+		t.Fatalf("list request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list failed with status %d", resp.StatusCode)
+	}
+
+	// 4. Delete function
+	deleteReq, _ := http.NewRequestWithContext(ctx, "DELETE", GetGatewayURL()+"/v1/functions/"+funcName+"?namespace="+namespace, nil)
+	if apiKey := GetAPIKey(); apiKey != "" {
+		deleteReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err = client.Do(deleteReq)
+	if err != nil {
+		t.Fatalf("delete request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("delete failed with status %d", resp.StatusCode)
+	}
+}

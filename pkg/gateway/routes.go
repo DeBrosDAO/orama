@@ -14,8 +14,8 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/status", g.statusHandler)
 
 	// auth endpoints
-	mux.HandleFunc("/v1/auth/jwks", g.jwksHandler)
-	mux.HandleFunc("/.well-known/jwks.json", g.jwksHandler)
+	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
+	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)
 	mux.HandleFunc("/v1/auth/login", g.loginPageHandler)
 	mux.HandleFunc("/v1/auth/challenge", g.challengeHandler)
 	mux.HandleFunc("/v1/auth/verify", g.verifyHandler)
@@ -44,6 +44,7 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/pubsub/ws", g.pubsubWebsocketHandler)
 	mux.HandleFunc("/v1/pubsub/publish", g.pubsubPublishHandler)
 	mux.HandleFunc("/v1/pubsub/topics", g.pubsubTopicsHandler)
+	mux.HandleFunc("/v1/pubsub/presence", g.pubsubPresenceHandler)
 
 	// anon proxy (authenticated users only)
 	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)
@@ -62,6 +63,11 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/storage/status/", g.storageStatusHandler)
 	mux.HandleFunc("/v1/storage/get/", g.storageGetHandler)
 	mux.HandleFunc("/v1/storage/unpin/", g.storageUnpinHandler)
+
+	// serverless functions (if enabled)
+	if g.serverlessHandlers != nil {
+		g.serverlessHandlers.RegisterRoutes(mux)
+	}
 
 	return g.withMiddleware(mux)
 }
