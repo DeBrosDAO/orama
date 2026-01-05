@@ -216,6 +216,37 @@ func (h *HostFunctions) CacheDelete(ctx context.Context, key string) error {
 	return nil
 }
 
+// CacheIncr atomically increments a numeric value in cache by 1 and returns the new value.
+// If the key doesn't exist, it is initialized to 0 before incrementing.
+// Returns an error if the value exists but is not numeric.
+func (h *HostFunctions) CacheIncr(ctx context.Context, key string) (int64, error) {
+	return h.CacheIncrBy(ctx, key, 1)
+}
+
+// CacheIncrBy atomically increments a numeric value by delta and returns the new value.
+// If the key doesn't exist, it is initialized to 0 before incrementing.
+// Returns an error if the value exists but is not numeric.
+func (h *HostFunctions) CacheIncrBy(ctx context.Context, key string, delta int64) (int64, error) {
+	if h.cacheClient == nil {
+		return 0, &HostFunctionError{Function: "cache_incr_by", Cause: ErrCacheUnavailable}
+	}
+
+	dm, err := h.cacheClient.NewDMap(cacheDMapName)
+	if err != nil {
+		return 0, &HostFunctionError{Function: "cache_incr_by", Cause: fmt.Errorf("failed to get DMap: %w", err)}
+	}
+
+	// Olric's Incr method atomically increments a numeric value
+	// It initializes the key to 0 if it doesn't exist, then increments by delta
+	// Note: Olric's Incr takes int (not int64) and returns int
+	newValue, err := dm.Incr(ctx, key, int(delta))
+	if err != nil {
+		return 0, &HostFunctionError{Function: "cache_incr_by", Cause: fmt.Errorf("failed to increment: %w", err)}
+	}
+
+	return int64(newValue), nil
+}
+
 // -----------------------------------------------------------------------------
 // Storage Operations
 // -----------------------------------------------------------------------------

@@ -495,6 +495,8 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hDBExecute).Export("db_execute").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
+			NewFunctionBuilder().WithFunc(e.hCacheIncr).Export("cache_incr").
+			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
@@ -612,6 +614,32 @@ func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, 
 		return
 	}
 	_ = e.hostServices.CacheSet(ctx, string(key), val, ttl)
+}
+
+func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) int64 {
+	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	val, err := e.hostServices.CacheIncr(ctx, string(key))
+	if err != nil {
+		e.logger.Error("host function cache_incr failed", zap.Error(err), zap.String("key", string(key)))
+		return 0
+	}
+	return val
+}
+
+func (e *Engine) hCacheIncrBy(ctx context.Context, mod api.Module, keyPtr, keyLen uint32, delta int64) int64 {
+	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	val, err := e.hostServices.CacheIncrBy(ctx, string(key), delta)
+	if err != nil {
+		e.logger.Error("host function cache_incr_by failed", zap.Error(err), zap.String("key", string(key)), zap.Int64("delta", delta))
+		return 0
+	}
+	return val
 }
 
 func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {

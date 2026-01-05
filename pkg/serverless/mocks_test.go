@@ -375,6 +375,35 @@ func (m *MockDMap) Delete(ctx context.Context, key string) (bool, error) {
 	return ok, nil
 }
 
+func (m *MockDMap) Incr(ctx context.Context, key string, delta int64) (int64, error) {
+	var currentValue int64
+	
+	// Get current value if it exists
+	if val, ok := m.data[key]; ok {
+		// Try to parse as int64
+		var err error
+		currentValue, err = parseInt64FromBytes(val)
+		if err != nil {
+			return 0, fmt.Errorf("value is not numeric")
+		}
+	}
+	
+	// Increment
+	newValue := currentValue + delta
+	
+	// Store the new value
+	m.data[key] = []byte(fmt.Sprintf("%d", newValue))
+	
+	return newValue, nil
+}
+
+// parseInt64FromBytes parses an int64 from byte slice
+func parseInt64FromBytes(data []byte) (int64, error) {
+	var val int64
+	_, err := fmt.Sscanf(string(data), "%d", &val)
+	return val, err
+}
+
 type MockGetResponse struct {
 	val []byte
 }

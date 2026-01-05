@@ -328,6 +328,8 @@ type HostServices interface {
 	CacheGet(ctx context.Context, key string) ([]byte, error)
 	CacheSet(ctx context.Context, key string, value []byte, ttlSeconds int64) error
 	CacheDelete(ctx context.Context, key string) error
+	CacheIncr(ctx context.Context, key string) (int64, error)
+	CacheIncrBy(ctx context.Context, key string, delta int64) (int64, error)
 
 	// Storage operations
 	StoragePut(ctx context.Context, data []byte) (string, error)
