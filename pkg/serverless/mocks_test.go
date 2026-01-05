@@ -136,6 +136,28 @@ func (m *MockHostServices) CacheDelete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (m *MockHostServices) CacheIncr(ctx context.Context, key string) (int64, error) {
+	return m.CacheIncrBy(ctx, key, 1)
+}
+
+func (m *MockHostServices) CacheIncrBy(ctx context.Context, key string, delta int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var currentValue int64
+	if val, ok := m.cache[key]; ok {
+		var err error
+		currentValue, err = parseInt64FromBytes(val)
+		if err != nil {
+			return 0, fmt.Errorf("value is not numeric")
+		}
+	}
+
+	newValue := currentValue + delta
+	m.cache[key] = []byte(fmt.Sprintf("%d", newValue))
+	return newValue, nil
+}
+
 func (m *MockHostServices) StoragePut(ctx context.Context, data []byte) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -377,7 +399,7 @@ func (m *MockDMap) Delete(ctx context.Context, key string) (bool, error) {
 
 func (m *MockDMap) Incr(ctx context.Context, key string, delta int64) (int64, error) {
 	var currentValue int64
-	
+
 	// Get current value if it exists
 	if val, ok := m.data[key]; ok {
 		// Try to parse as int64
@@ -387,13 +409,13 @@ func (m *MockDMap) Incr(ctx context.Context, key string, delta int64) (int64, er
 			return 0, fmt.Errorf("value is not numeric")
 		}
 	}
-	
+
 	// Increment
 	newValue := currentValue + delta
-	
+
 	// Store the new value
 	m.data[key] = []byte(fmt.Sprintf("%d", newValue))
-	
+
 	return newValue, nil
 }
 
