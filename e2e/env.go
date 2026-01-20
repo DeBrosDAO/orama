@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -87,6 +88,14 @@ func GetGatewayURL() string {
 		return gatewayURLCache
 	}
 	cacheMutex.RUnlock()
+
+	// Check environment variable first
+	if envURL := os.Getenv("GATEWAY_URL"); envURL != "" {
+		cacheMutex.Lock()
+		gatewayURLCache = envURL
+		cacheMutex.Unlock()
+		return envURL
+	}
 
 	// Try to load from gateway config
 	gwCfg, err := loadGatewayConfig()
@@ -379,7 +388,7 @@ func SkipIfMissingGateway(t *testing.T) {
 		return
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := NewHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		t.Skip("Gateway not accessible; tests skipped")
 		return
@@ -394,7 +403,7 @@ func IsGatewayReady(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := NewHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		return false
 	}
@@ -407,7 +416,11 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &http.Client{Timeout: timeout}
+	// Skip TLS verification for testing against self-signed certificates
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 // HTTPRequest is a helper for making authenticated HTTP requests

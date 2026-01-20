@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
@@ -105,20 +107,34 @@ func newTestGatewayWithIPFS(t *testing.T, ipfsClient ipfs.IPFSClient) *Gateway {
 
 	if ipfsClient != nil {
 		gw.ipfsClient = ipfsClient
+		// Initialize storage handlers with the IPFS client
+		gw.storageHandlers = storage.New(ipfsClient, logger, storage.Config{
+			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+			IPFSAPIURL:            cfg.IPFSAPIURL,
+		})
 	}
 
 	return gw
 }
 
 func TestStorageUploadHandler_MissingIPFSClient(t *testing.T) {
-	gw := newTestGatewayWithIPFS(t, nil)
+	logger, err := logging.NewColoredLogger(logging.ComponentGeneral, true)
+	if err != nil {
+		t.Fatalf("Failed to create logger: %v", err)
+	}
+
+	// Create storage handlers with nil IPFS client
+	handlers := storage.New(nil, logger, storage.Config{
+		IPFSReplicationFactor: 3,
+		IPFSAPIURL:            "http://localhost:5001",
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", nil)
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	handlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
@@ -129,11 +145,11 @@ func TestStorageUploadHandler_MethodNotAllowed(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, &mockIPFSClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/upload", nil)
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	gw.storageHandlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
@@ -146,7 +162,7 @@ func TestStorageUploadHandler_MissingNamespace(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", nil)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	gw.storageHandlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, w.Code)
@@ -183,17 +199,17 @@ func TestStorageUploadHandler_MultipartUpload(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	gw.storageHandlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var resp StorageUploadResponse
+	var resp storage.StorageUploadResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -231,7 +247,7 @@ func TestStorageUploadHandler_JSONUpload(t *testing.T) {
 
 	gw := newTestGatewayWithIPFS(t, mockClient)
 
-	reqBody := StorageUploadRequest{
+	reqBody := storage.StorageUploadRequest{
 		Name: expectedName,
 		Data: base64Data,
 	}
@@ -239,17 +255,17 @@ func TestStorageUploadHandler_JSONUpload(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	gw.storageHandlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var resp StorageUploadResponse
+	var resp storage.StorageUploadResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -262,7 +278,7 @@ func TestStorageUploadHandler_JSONUpload(t *testing.T) {
 func TestStorageUploadHandler_InvalidBase64(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, &mockIPFSClient{})
 
-	reqBody := StorageUploadRequest{
+	reqBody := storage.StorageUploadRequest{
 		Name: "test.txt",
 		Data: "invalid base64!!!",
 	}
@@ -270,11 +286,11 @@ func TestStorageUploadHandler_InvalidBase64(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	gw.storageHandlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
@@ -298,11 +314,11 @@ func TestStorageUploadHandler_IPFSError(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageUploadHandler(w, req)
+	gw.storageHandlers.UploadHandler(w, req)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, w.Code)
@@ -327,7 +343,7 @@ func TestStoragePinHandler_Success(t *testing.T) {
 
 	gw := newTestGatewayWithIPFS(t, mockClient)
 
-	reqBody := StoragePinRequest{
+	reqBody := storage.StoragePinRequest{
 		Cid:  expectedCID,
 		Name: expectedName,
 	}
@@ -336,13 +352,13 @@ func TestStoragePinHandler_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/pin", bytes.NewReader(bodyBytes))
 	w := httptest.NewRecorder()
 
-	gw.storagePinHandler(w, req)
+	gw.storageHandlers.PinHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var resp StoragePinResponse
+	var resp storage.StoragePinResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -358,13 +374,13 @@ func TestStoragePinHandler_Success(t *testing.T) {
 func TestStoragePinHandler_MissingCID(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, &mockIPFSClient{})
 
-	reqBody := StoragePinRequest{}
+	reqBody := storage.StoragePinRequest{}
 	bodyBytes, _ := json.Marshal(reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/pin", bytes.NewReader(bodyBytes))
 	w := httptest.NewRecorder()
 
-	gw.storagePinHandler(w, req)
+	gw.storageHandlers.PinHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
@@ -392,13 +408,13 @@ func TestStorageStatusHandler_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/status/"+expectedCID, nil)
 	w := httptest.NewRecorder()
 
-	gw.storageStatusHandler(w, req)
+	gw.storageHandlers.StatusHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
-	var resp StorageStatusResponse
+	var resp storage.StorageStatusResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -420,7 +436,7 @@ func TestStorageStatusHandler_MissingCID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/status/", nil)
 	w := httptest.NewRecorder()
 
-	gw.storageStatusHandler(w, req)
+	gw.storageHandlers.StatusHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
@@ -443,11 +459,11 @@ func TestStorageGetHandler_Success(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, mockClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/get/"+expectedCID, nil)
-	ctx := context.WithValue(req.Context(), ctxKeyNamespaceOverride, "test-ns")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	gw.storageGetHandler(w, req)
+	gw.storageHandlers.DownloadHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
@@ -468,7 +484,7 @@ func TestStorageGetHandler_MissingNamespace(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/get/QmTest123", nil)
 	w := httptest.NewRecorder()
 
-	gw.storageGetHandler(w, req)
+	gw.storageHandlers.DownloadHandler(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, w.Code)
@@ -492,7 +508,7 @@ func TestStorageUnpinHandler_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/"+expectedCID, nil)
 	w := httptest.NewRecorder()
 
-	gw.storageUnpinHandler(w, req)
+	gw.storageHandlers.UnpinHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
@@ -514,49 +530,13 @@ func TestStorageUnpinHandler_MissingCID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/", nil)
 	w := httptest.NewRecorder()
 
-	gw.storageUnpinHandler(w, req)
+	gw.storageHandlers.UnpinHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
 	}
 }
 
-// Test helper functions
-
-func TestBase64Decode(t *testing.T) {
-	testData := []byte("test data")
-	encoded := base64.StdEncoding.EncodeToString(testData)
-
-	decoded, err := base64Decode(encoded)
-	if err != nil {
-		t.Fatalf("Failed to decode: %v", err)
-	}
-
-	if string(decoded) != string(testData) {
-		t.Errorf("Expected %s, got %s", string(testData), string(decoded))
-	}
-
-	// Test invalid base64
-	_, err = base64Decode("invalid!!!")
-	if err == nil {
-		t.Error("Expected error for invalid base64")
-	}
-}
-
-func TestGetNamespaceFromContext(t *testing.T) {
-	gw := newTestGatewayWithIPFS(t, nil)
-
-	// Test with namespace in context
-	ctx := context.WithValue(context.Background(), ctxKeyNamespaceOverride, "test-ns")
-	ns := gw.getNamespaceFromContext(ctx)
-	if ns != "test-ns" {
-		t.Errorf("Expected 'test-ns', got %s", ns)
-	}
-
-	// Test without namespace
-	ctx2 := context.Background()
-	ns2 := gw.getNamespaceFromContext(ctx2)
-	if ns2 != "" {
-		t.Errorf("Expected empty namespace, got %s", ns2)
-	}
-}
+// Helper function tests removed - base64Decode and getNamespaceFromContext
+// are now private methods in the storage package and are tested indirectly
+// through the handler tests.

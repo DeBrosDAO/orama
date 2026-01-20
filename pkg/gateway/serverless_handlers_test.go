@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -49,12 +50,12 @@ func TestServerlessHandlers_ListFunctions(t *testing.T) {
 		},
 	}
 
-	h := NewServerlessHandlers(nil, registry, nil, logger)
+	h := serverlesshandlers.NewServerlessHandlers(nil, registry, nil, logger)
 
 	req, _ := http.NewRequest("GET", "/v1/functions?namespace=ns1", nil)
 	rr := httptest.NewRecorder()
 
-	h.handleFunctions(rr, req)
+	h.ListFunctions(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d", rr.Code)
@@ -72,7 +73,7 @@ func TestServerlessHandlers_DeployFunction(t *testing.T) {
 	logger := zap.NewNop()
 	registry := &mockFunctionRegistry{}
 
-	h := NewServerlessHandlers(nil, registry, nil, logger)
+	h := serverlesshandlers.NewServerlessHandlers(nil, registry, nil, logger)
 
 	// Test JSON deploy (which is partially supported according to code)
 	// Should be 400 because WASM is missing or base64 not supported
@@ -80,7 +81,7 @@ func TestServerlessHandlers_DeployFunction(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/v1/functions", bytes.NewBufferString(`{"name": "test"}`))
 	req.Header.Set("Content-Type", "application/json")
 
-	h.handleFunctions(writer, req)
+	h.DeployFunction(writer, req)
 
 	if writer.Code != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", writer.Code)

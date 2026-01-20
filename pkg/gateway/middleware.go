@@ -15,14 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// context keys for request-scoped auth metadata (private to package)
-type contextKey string
-
-const (
-	ctxKeyAPIKey            contextKey = "api_key"
-	ctxKeyJWT               contextKey = "jwt_claims"
-	ctxKeyNamespaceOverride contextKey = "namespace_override"
-)
+// Note: context keys (ctxKeyAPIKey, ctxKeyJWT, CtxKeyNamespaceOverride) are now defined in context.go
 
 // withMiddleware adds CORS and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
@@ -76,7 +69,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 						// Attach JWT claims and namespace to context
 						ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
-							ctx = context.WithValue(ctx, ctxKeyNamespaceOverride, ns)
+							ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -135,7 +128,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 
 		// Attach auth metadata to context for downstream use
 		reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
-		reqCtx = context.WithValue(reqCtx, ctxKeyNamespaceOverride, ns)
+		reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, ns)
 		next.ServeHTTP(w, r.WithContext(reqCtx))
 	})
 }
@@ -231,7 +224,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// Determine namespace from context
 		ctx := r.Context()
 		ns := ""
-		if v := ctx.Value(ctxKeyNamespaceOverride); v != nil {
+		if v := ctx.Value(CtxKeyNamespaceOverride); v != nil {
 			if s, ok := v.(string); ok {
 				ns = strings.TrimSpace(s)
 			}

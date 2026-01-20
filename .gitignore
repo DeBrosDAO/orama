@@ -77,3 +77,7 @@ configs/
 .dev/
 
 .gocache/
+
+.claude/
+.mcp.json
+.cursor/
