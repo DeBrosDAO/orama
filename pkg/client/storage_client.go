@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -215,31 +214,12 @@ func (s *StorageClientImpl) Unpin(ctx context.Context, cid string) error {
 	return nil
 }
 
-// getGatewayURL returns the gateway URL from config, defaulting to localhost:6001
+// getGatewayURL returns the gateway URL from config
 func (s *StorageClientImpl) getGatewayURL() string {
-	cfg := s.client.Config()
-	if cfg != nil && cfg.GatewayURL != "" {
-		return strings.TrimSuffix(cfg.GatewayURL, "/")
-	}
-	return "http://localhost:6001"
+	return getGatewayURL(s.client)
 }
 
 // addAuthHeaders adds authentication headers to the request
 func (s *StorageClientImpl) addAuthHeaders(req *http.Request) {
-	cfg := s.client.Config()
-	if cfg == nil {
-		return
-	}
-
-	// Prefer JWT if available
-	if cfg.JWT != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.JWT)
-		return
-	}
-
-	// Fallback to API key
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-		req.Header.Set("X-API-Key", cfg.APIKey)
-	}
+	addAuthHeaders(req, s.client)
 }

@@ -1,6 +1,19 @@
-# DeBros Network - Distributed P2P Database System
+# Orama Network - Distributed P2P Platform
 
-A decentralized peer-to-peer data platform built in Go. Combines distributed SQL (RQLite), pub/sub messaging, and resilient peer discovery so applications can share state without central infrastructure.
+A high-performance API Gateway and distributed platform built in Go. Provides a unified HTTP/HTTPS API for distributed SQL (RQLite), distributed caching (Olric), decentralized storage (IPFS), pub/sub messaging, and serverless WebAssembly execution.
+
+**Architecture:** Modular Gateway / Edge Proxy following SOLID principles
+
+## Features
+
+- **🔐 Authentication** - Wallet signatures, API keys, JWT tokens
+- **💾 Storage** - IPFS-based decentralized file storage with encryption
+- **⚡ Cache** - Distributed cache with Olric (in-memory key-value)
+- **🗄️ Database** - RQLite distributed SQL with Raft consensus
+- **📡 Pub/Sub** - Real-time messaging via LibP2P and WebSocket
+- **⚙️ Serverless** - WebAssembly function execution with host functions
+- **🌐 HTTP Gateway** - Unified REST API with automatic HTTPS (Let's Encrypt)
+- **📦 Client SDK** - Type-safe Go SDK for all services
 
 ## Quick Start
 
@@ -316,9 +329,51 @@ sudo orama install
 
 See `openapi/gateway.yaml` for complete API specification.
 
+## Documentation
+
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - System architecture and design patterns
+- **[Client SDK](docs/CLIENT_SDK.md)** - Go SDK documentation and examples
+- **[Gateway API](docs/GATEWAY_API.md)** - Complete HTTP API reference
+- **[Security Deployment](docs/SECURITY_DEPLOYMENT_GUIDE.md)** - Production security hardening
+
 ## Resources
 
 - [RQLite Documentation](https://rqlite.io/docs/)
+- [IPFS Documentation](https://docs.ipfs.tech/)
 - [LibP2P Documentation](https://docs.libp2p.io/)
+- [WebAssembly](https://webassembly.org/)
 - [GitHub Repository](https://github.com/DeBrosOfficial/network)
 - [Issue Tracker](https://github.com/DeBrosOfficial/network/issues)
+
+## Project Structure
+
+```
+network/
+├── cmd/              # Binary entry points
+│   ├── cli/         # CLI tool
+│   ├── gateway/     # HTTP Gateway
+│   ├── node/        # P2P Node
+│   └── rqlite-mcp/  # RQLite MCP server
+├── pkg/              # Core packages
+│   ├── gateway/     # Gateway implementation
+│   │   └── handlers/ # HTTP handlers by domain
+│   ├── client/      # Go SDK
+│   ├── serverless/  # WASM engine
+│   ├── rqlite/      # Database ORM
+│   ├── contracts/   # Interface definitions
+│   ├── httputil/    # HTTP utilities
+│   └── errors/      # Error handling
+├── docs/            # Documentation
+├── e2e/             # End-to-end tests
+└── examples/        # Example code
+```
+
+## Contributing
+
+Contributions are welcome! This project follows:
+- **SOLID Principles** - Single responsibility, open/closed, etc.
+- **DRY Principle** - Don't repeat yourself
+- **Clean Architecture** - Clear separation of concerns
+- **Test Coverage** - Unit and E2E tests required
+
+See our architecture docs for design patterns and guidelines.

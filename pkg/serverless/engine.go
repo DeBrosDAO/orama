@@ -1,11 +1,8 @@
 package serverless
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +10,9 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"go.uber.org/zap"
+
+	"github.com/DeBrosOfficial/network/pkg/serverless/cache"
+	"github.com/DeBrosOfficial/network/pkg/serverless/execution"
 )
 
 // contextAwareHostServices is an internal interface for services that need to know about
@@ -34,9 +34,12 @@ type Engine struct {
 	hostServices HostServices
 	logger       *zap.Logger
 
-	// Module cache: wasmCID -> compiled module
-	moduleCache   map[string]wazero.CompiledModule
-	moduleCacheMu sync.RWMutex
+	// Module cache
+	moduleCache *cache.ModuleCache
+
+	// Execution components
+	executor  *execution.Executor
+	lifecycle *execution.ModuleLifecycle
 
 	// Invocation logger for metrics/debugging
 	invocationLogger InvocationLogger
@@ -112,7 +115,9 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 		registry:     registry,
 		hostServices: hostServices,
 		logger:       logger,
-		moduleCache:  make(map[string]wazero.CompiledModule),
+		moduleCache:  cache.NewModuleCache(cfg.ModuleCacheSize, logger),
+		executor:     execution.NewExecutor(runtime, logger),
+		lifecycle:    execution.NewModuleLifecycle(runtime, logger),
 	}
 
 	// Apply options
@@ -133,16 +138,8 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	if fn == nil {
 		return nil, &ValidationError{Field: "function", Message: "cannot be nil"}
 	}
-	if invCtx == nil {
-		invCtx = &InvocationContext{
-			RequestID:    uuid.New().String(),
-			FunctionID:   fn.ID,
-			FunctionName: fn.Name,
-			Namespace:    fn.Namespace,
-			TriggerType:  TriggerTypeHTTP,
-		}
-	}
 
+	invCtx = EnsureInvocationContext(invCtx, fn)
 	startTime := time.Now()
 
 	// Check rate limit
@@ -156,11 +153,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	}
 
 	// Create timeout context
-	timeout := time.Duration(fn.TimeoutSeconds) * time.Second
-	if timeout > time.Duration(e.config.MaxTimeoutSeconds)*time.Second {
-		timeout = time.Duration(e.config.MaxTimeoutSeconds) * time.Second
-	}
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	execCtx, cancel := CreateTimeoutContext(ctx, fn, e.config.MaxTimeoutSeconds)
 	defer cancel()
 
 	// Get compiled module (from cache or compile)
@@ -170,8 +163,13 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
 
-	// Execute the module
-	output, err := e.executeModule(execCtx, module, fn, input, invCtx)
+	// Execute the module with context setters
+	var contextSetter, contextClearer func()
+	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
+		contextSetter = func() { hf.SetInvocationContext(invCtx) }
+		contextClearer = func() { hf.ClearContext() }
+	}
+	output, err := e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
 	if err != nil {
 		status := InvocationStatusError
 		if execCtx.Err() == context.DeadlineExceeded {
@@ -196,62 +194,31 @@ func (e *Engine) Precompile(ctx context.Context, wasmCID string, wasmBytes []byt
 	}
 
 	// Check if already cached
-	e.moduleCacheMu.RLock()
-	_, exists := e.moduleCache[wasmCID]
-	e.moduleCacheMu.RUnlock()
-	if exists {
+	if e.moduleCache.Has(wasmCID) {
 		return nil
 	}
 
 	// Compile the module
-	compiled, err := e.runtime.CompileModule(ctx, wasmBytes)
+	compiled, err := e.lifecycle.CompileModule(ctx, wasmCID, wasmBytes)
 	if err != nil {
-		return &DeployError{FunctionName: wasmCID, Cause: fmt.Errorf("failed to compile WASM: %w", err)}
+		return &DeployError{FunctionName: wasmCID, Cause: err}
 	}
 
 	// Cache the compiled module
-	e.moduleCacheMu.Lock()
-	defer e.moduleCacheMu.Unlock()
-
-	// Evict oldest if cache is full
-	if len(e.moduleCache) >= e.config.ModuleCacheSize {
-		e.evictOldestModule()
-	}
-
-	e.moduleCache[wasmCID] = compiled
-
-	e.logger.Debug("Module precompiled and cached",
-		zap.String("wasm_cid", wasmCID),
-		zap.Int("cache_size", len(e.moduleCache)),
-	)
+	e.moduleCache.Set(wasmCID, compiled)
 
 	return nil
 }
 
 // Invalidate removes a compiled module from the cache.
 func (e *Engine) Invalidate(wasmCID string) {
-	e.moduleCacheMu.Lock()
-	defer e.moduleCacheMu.Unlock()
-
-	if module, exists := e.moduleCache[wasmCID]; exists {
-		_ = module.Close(context.Background())
-		delete(e.moduleCache, wasmCID)
-		e.logger.Debug("Module invalidated from cache", zap.String("wasm_cid", wasmCID))
-	}
+	e.moduleCache.Delete(context.Background(), wasmCID)
 }
 
 // Close shuts down the engine and releases resources.
 func (e *Engine) Close(ctx context.Context) error {
-	e.moduleCacheMu.Lock()
-	defer e.moduleCacheMu.Unlock()
-
 	// Close all cached modules
-	for cid, module := range e.moduleCache {
-		if err := module.Close(ctx); err != nil {
-			e.logger.Warn("Failed to close cached module", zap.String("cid", cid), zap.Error(err))
-		}
-	}
-	e.moduleCache = make(map[string]wazero.CompiledModule)
+	e.moduleCache.Clear(ctx)
 
 	// Close the runtime
 	return e.runtime.Close(ctx)
@@ -259,9 +226,7 @@ func (e *Engine) Close(ctx context.Context) error {
 
 // GetCacheStats returns cache statistics.
 func (e *Engine) GetCacheStats() (size int, capacity int) {
-	e.moduleCacheMu.RLock()
-	defer e.moduleCacheMu.RUnlock()
-	return len(e.moduleCache), e.config.ModuleCacheSize
+	return e.moduleCache.GetStats()
 }
 
 // -----------------------------------------------------------------------------
@@ -270,181 +235,21 @@ func (e *Engine) GetCacheStats() (size int, capacity int) {
 
 // getOrCompileModule retrieves a compiled module from cache or compiles it.
 func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero.CompiledModule, error) {
-	// Check cache first
-	e.moduleCacheMu.RLock()
-	if module, exists := e.moduleCache[wasmCID]; exists {
-		e.moduleCacheMu.RUnlock()
-		return module, nil
-	}
-	e.moduleCacheMu.RUnlock()
-
-	// Fetch WASM bytes from registry
-	wasmBytes, err := e.registry.GetWASMBytes(ctx, wasmCID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch WASM: %w", err)
-	}
-
-	// Compile the module
-	compiled, err := e.runtime.CompileModule(ctx, wasmBytes)
-	if err != nil {
-		return nil, ErrCompilationFailed
-	}
-
-	// Cache the compiled module
-	e.moduleCacheMu.Lock()
-	defer e.moduleCacheMu.Unlock()
-
-	// Double-check (another goroutine might have added it)
-	if existingModule, exists := e.moduleCache[wasmCID]; exists {
-		_ = compiled.Close(ctx) // Discard our compilation
-		return existingModule, nil
-	}
-
-	// Evict if cache is full
-	if len(e.moduleCache) >= e.config.ModuleCacheSize {
-		e.evictOldestModule()
-	}
-
-	e.moduleCache[wasmCID] = compiled
-
-	e.logger.Debug("Module compiled and cached",
-		zap.String("wasm_cid", wasmCID),
-		zap.Int("cache_size", len(e.moduleCache)),
-	)
-
-	return compiled, nil
-}
-
-// executeModule instantiates and runs a WASM module.
-func (e *Engine) executeModule(ctx context.Context, compiled wazero.CompiledModule, fn *Function, input []byte, invCtx *InvocationContext) ([]byte, error) {
-	// Set invocation context for host functions if the service supports it
-	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-		hf.SetInvocationContext(invCtx)
-		defer hf.ClearContext()
-	}
-
-	// Create buffers for stdin/stdout (WASI uses these for I/O)
-	stdin := bytes.NewReader(input)
-	stdout := new(bytes.Buffer)
-	stderr := new(bytes.Buffer)
-
-	// Create module configuration with WASI stdio
-	moduleConfig := wazero.NewModuleConfig().
-		WithName(fn.Name).
-		WithStdin(stdin).
-		WithStdout(stdout).
-		WithStderr(stderr).
-		WithArgs(fn.Name) // argv[0] is the program name
-
-	// Instantiate and run the module (WASI _start will be called automatically)
-	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
-	if err != nil {
-		// Check if stderr has any output
-		if stderr.Len() > 0 {
-			e.logger.Warn("WASM stderr output", zap.String("stderr", stderr.String()))
-		}
-		return nil, fmt.Errorf("failed to instantiate module: %w", err)
-	}
-	defer instance.Close(ctx)
-
-	// For WASI modules, the output is already in stdout buffer
-	// The _start function was called during instantiation
-	output := stdout.Bytes()
-
-	// Log stderr if any
-	if stderr.Len() > 0 {
-		e.logger.Debug("WASM stderr", zap.String("stderr", stderr.String()))
-	}
-
-	return output, nil
-}
-
-// callHandleFunction calls the main 'handle' export in the WASM module.
-func (e *Engine) callHandleFunction(ctx context.Context, instance api.Module, input []byte, invCtx *InvocationContext) ([]byte, error) {
-	// Get the 'handle' function export
-	handleFn := instance.ExportedFunction("handle")
-	if handleFn == nil {
-		return nil, fmt.Errorf("WASM module does not export 'handle' function")
-	}
-
-	// Get memory export
-	memory := instance.ExportedMemory("memory")
-	if memory == nil {
-		return nil, fmt.Errorf("WASM module does not export 'memory'")
-	}
-
-	// Get malloc/free exports for memory management
-	mallocFn := instance.ExportedFunction("malloc")
-	freeFn := instance.ExportedFunction("free")
-
-	var inputPtr uint32
-	var inputLen = uint32(len(input))
-
-	if mallocFn != nil && len(input) > 0 {
-		// Allocate memory for input
-		results, err := mallocFn.Call(ctx, uint64(inputLen))
+	return e.moduleCache.GetOrCompute(wasmCID, func() (wazero.CompiledModule, error) {
+		// Fetch WASM bytes from registry
+		wasmBytes, err := e.registry.GetWASMBytes(ctx, wasmCID)
 		if err != nil {
-			return nil, fmt.Errorf("malloc failed: %w", err)
-		}
-		inputPtr = uint32(results[0])
-
-		// Write input to memory
-		if !memory.Write(inputPtr, input) {
-			return nil, fmt.Errorf("failed to write input to WASM memory")
+			return nil, fmt.Errorf("failed to fetch WASM: %w", err)
 		}
 
-		// Defer free if available
-		if freeFn != nil {
-			defer func() {
-				_, _ = freeFn.Call(ctx, uint64(inputPtr))
-			}()
+		// Compile the module
+		compiled, err := e.lifecycle.CompileModule(ctx, wasmCID, wasmBytes)
+		if err != nil {
+			return nil, ErrCompilationFailed
 		}
-	}
 
-	// Call handle(input_ptr, input_len)
-	// Returns: output_ptr (packed with length in upper 32 bits)
-	results, err := handleFn.Call(ctx, uint64(inputPtr), uint64(inputLen))
-	if err != nil {
-		return nil, fmt.Errorf("handle function error: %w", err)
-	}
-
-	if len(results) == 0 {
-		return nil, nil // No output
-	}
-
-	// Parse result - assume format: lower 32 bits = ptr, upper 32 bits = len
-	result := results[0]
-	outputPtr := uint32(result & 0xFFFFFFFF)
-	outputLen := uint32(result >> 32)
-
-	if outputLen == 0 {
-		return nil, nil
-	}
-
-	// Read output from memory
-	output, ok := memory.Read(outputPtr, outputLen)
-	if !ok {
-		return nil, fmt.Errorf("failed to read output from WASM memory")
-	}
-
-	// Make a copy (memory will be freed)
-	outputCopy := make([]byte, len(output))
-	copy(outputCopy, output)
-
-	return outputCopy, nil
-}
-
-// evictOldestModule removes the oldest module from cache.
-// Must be called with moduleCacheMu held.
-func (e *Engine) evictOldestModule() {
-	// Simple LRU: just remove the first one we find
-	// In production, you'd want proper LRU tracking
-	for cid, module := range e.moduleCache {
-		_ = module.Close(context.Background())
-		delete(e.moduleCache, cid)
-		e.logger.Debug("Evicted module from cache", zap.String("wasm_cid", cid))
-		break
-	}
+		return compiled, nil
+	})
 }
 
 // logInvocation logs an invocation record.
@@ -484,7 +289,6 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 // registerHostModule registers the Orama host functions with the wazero runtime.
 func (e *Engine) registerHostModule(ctx context.Context) error {
 	// Register under both "env" and "host" to support different import styles
-	// The user requested "env" in instructions but "host" in expected result.
 	for _, moduleName := range []string{"env", "host"} {
 		_, err := e.runtime.NewHostModuleBuilder(moduleName).
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
@@ -509,27 +313,31 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 	return nil
 }
 
+// -----------------------------------------------------------------------------
+// Host function implementations (delegate to executor for memory operations)
+// -----------------------------------------------------------------------------
+
 func (e *Engine) hGetCallerWallet(ctx context.Context, mod api.Module) uint64 {
 	wallet := e.hostServices.GetCallerWallet(ctx)
-	return e.writeToGuest(ctx, mod, []byte(wallet))
+	return e.executor.WriteToGuest(ctx, mod, []byte(wallet))
 }
 
 func (e *Engine) hGetRequestID(ctx context.Context, mod api.Module) uint64 {
 	rid := e.hostServices.GetRequestID(ctx)
-	return e.writeToGuest(ctx, mod, []byte(rid))
+	return e.executor.WriteToGuest(ctx, mod, []byte(rid))
 }
 
 func (e *Engine) hGetEnv(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
-	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
 	if !ok {
 		return 0
 	}
 	val, _ := e.hostServices.GetEnv(ctx, string(key))
-	return e.writeToGuest(ctx, mod, []byte(val))
+	return e.executor.WriteToGuest(ctx, mod, []byte(val))
 }
 
 func (e *Engine) hGetSecret(ctx context.Context, mod api.Module, namePtr, nameLen uint32) uint64 {
-	name, ok := mod.Memory().Read(namePtr, nameLen)
+	name, ok := e.executor.ReadFromGuest(mod, namePtr, nameLen)
 	if !ok {
 		return 0
 	}
@@ -537,22 +345,18 @@ func (e *Engine) hGetSecret(ctx context.Context, mod api.Module, namePtr, nameLe
 	if err != nil {
 		return 0
 	}
-	return e.writeToGuest(ctx, mod, []byte(val))
+	return e.executor.WriteToGuest(ctx, mod, []byte(val))
 }
 
 func (e *Engine) hDBQuery(ctx context.Context, mod api.Module, queryPtr, queryLen, argsPtr, argsLen uint32) uint64 {
-	query, ok := mod.Memory().Read(queryPtr, queryLen)
+	query, ok := e.executor.ReadFromGuest(mod, queryPtr, queryLen)
 	if !ok {
 		return 0
 	}
 
 	var args []interface{}
 	if argsLen > 0 {
-		argsData, ok := mod.Memory().Read(argsPtr, argsLen)
-		if !ok {
-			return 0
-		}
-		if err := json.Unmarshal(argsData, &args); err != nil {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, argsPtr, argsLen, &args); err != nil {
 			e.logger.Error("failed to unmarshal db_query arguments", zap.Error(err))
 			return 0
 		}
@@ -563,22 +367,18 @@ func (e *Engine) hDBQuery(ctx context.Context, mod api.Module, queryPtr, queryLe
 		e.logger.Error("host function db_query failed", zap.Error(err), zap.String("query", string(query)))
 		return 0
 	}
-	return e.writeToGuest(ctx, mod, results)
+	return e.executor.WriteToGuest(ctx, mod, results)
 }
 
 func (e *Engine) hDBExecute(ctx context.Context, mod api.Module, queryPtr, queryLen, argsPtr, argsLen uint32) uint32 {
-	query, ok := mod.Memory().Read(queryPtr, queryLen)
+	query, ok := e.executor.ReadFromGuest(mod, queryPtr, queryLen)
 	if !ok {
 		return 0
 	}
 
 	var args []interface{}
 	if argsLen > 0 {
-		argsData, ok := mod.Memory().Read(argsPtr, argsLen)
-		if !ok {
-			return 0
-		}
-		if err := json.Unmarshal(argsData, &args); err != nil {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, argsPtr, argsLen, &args); err != nil {
 			e.logger.Error("failed to unmarshal db_execute arguments", zap.Error(err))
 			return 0
 		}
@@ -593,7 +393,7 @@ func (e *Engine) hDBExecute(ctx context.Context, mod api.Module, queryPtr, query
 }
 
 func (e *Engine) hCacheGet(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
-	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
 	if !ok {
 		return 0
 	}
@@ -601,15 +401,15 @@ func (e *Engine) hCacheGet(ctx context.Context, mod api.Module, keyPtr, keyLen u
 	if err != nil {
 		return 0
 	}
-	return e.writeToGuest(ctx, mod, val)
+	return e.executor.WriteToGuest(ctx, mod, val)
 }
 
 func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32, ttl int64) {
-	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
 	if !ok {
 		return
 	}
-	val, ok := mod.Memory().Read(valPtr, valLen)
+	val, ok := e.executor.ReadFromGuest(mod, valPtr, valLen)
 	if !ok {
 		return
 	}
@@ -617,7 +417,7 @@ func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, 
 }
 
 func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) int64 {
-	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
 	if !ok {
 		return 0
 	}
@@ -630,7 +430,7 @@ func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen 
 }
 
 func (e *Engine) hCacheIncrBy(ctx context.Context, mod api.Module, keyPtr, keyLen uint32, delta int64) int64 {
-	key, ok := mod.Memory().Read(keyPtr, keyLen)
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
 	if !ok {
 		return 0
 	}
@@ -643,26 +443,24 @@ func (e *Engine) hCacheIncrBy(ctx context.Context, mod api.Module, keyPtr, keyLe
 }
 
 func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
-	method, ok := mod.Memory().Read(methodPtr, methodLen)
+	method, ok := e.executor.ReadFromGuest(mod, methodPtr, methodLen)
 	if !ok {
 		return 0
 	}
-	u, ok := mod.Memory().Read(urlPtr, urlLen)
+	u, ok := e.executor.ReadFromGuest(mod, urlPtr, urlLen)
 	if !ok {
 		return 0
 	}
+
 	var headers map[string]string
 	if headersLen > 0 {
-		headersData, ok := mod.Memory().Read(headersPtr, headersLen)
-		if !ok {
-			return 0
-		}
-		if err := json.Unmarshal(headersData, &headers); err != nil {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, headersPtr, headersLen, &headers); err != nil {
 			e.logger.Error("failed to unmarshal http_fetch headers", zap.Error(err))
 			return 0
 		}
 	}
-	body, ok := mod.Memory().Read(bodyPtr, bodyLen)
+
+	body, ok := e.executor.ReadFromGuest(mod, bodyPtr, bodyLen)
 	if !ok {
 		return 0
 	}
@@ -672,16 +470,16 @@ func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, meth
 		e.logger.Error("host function http_fetch failed", zap.Error(err), zap.String("url", string(u)))
 		return 0
 	}
-	return e.writeToGuest(ctx, mod, resp)
+	return e.executor.WriteToGuest(ctx, mod, resp)
 }
 
 func (e *Engine) hPubSubPublish(ctx context.Context, mod api.Module, topicPtr, topicLen, dataPtr, dataLen uint32) uint32 {
-	topic, ok := mod.Memory().Read(topicPtr, topicLen)
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
 	if !ok {
 		return 0
 	}
 
-	data, ok := mod.Memory().Read(dataPtr, dataLen)
+	data, ok := e.executor.ReadFromGuest(mod, dataPtr, dataLen)
 	if !ok {
 		return 0
 	}
@@ -695,42 +493,15 @@ func (e *Engine) hPubSubPublish(ctx context.Context, mod api.Module, topicPtr, t
 }
 
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {
-	msg, ok := mod.Memory().Read(ptr, size)
+	msg, ok := e.executor.ReadFromGuest(mod, ptr, size)
 	if ok {
 		e.hostServices.LogInfo(ctx, string(msg))
 	}
 }
 
 func (e *Engine) hLogError(ctx context.Context, mod api.Module, ptr, size uint32) {
-	msg, ok := mod.Memory().Read(ptr, size)
+	msg, ok := e.executor.ReadFromGuest(mod, ptr, size)
 	if ok {
 		e.hostServices.LogError(ctx, string(msg))
 	}
-}
-
-func (e *Engine) writeToGuest(ctx context.Context, mod api.Module, data []byte) uint64 {
-	if len(data) == 0 {
-		return 0
-	}
-	// Try to find a non-conflicting allocator first, fallback to malloc
-	malloc := mod.ExportedFunction("orama_alloc")
-	if malloc == nil {
-		malloc = mod.ExportedFunction("malloc")
-	}
-
-	if malloc == nil {
-		e.logger.Warn("WASM module missing malloc/orama_alloc export, cannot return string/bytes to guest")
-		return 0
-	}
-	results, err := malloc.Call(ctx, uint64(len(data)))
-	if err != nil {
-		e.logger.Error("failed to call malloc in WASM module", zap.Error(err))
-		return 0
-	}
-	ptr := uint32(results[0])
-	if !mod.Memory().Write(ptr, data) {
-		e.logger.Error("failed to write to WASM memory")
-		return 0
-	}
-	return (uint64(ptr) << 32) | uint64(len(data))
 }

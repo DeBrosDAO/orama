@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"go.uber.org/zap"
@@ -18,20 +19,13 @@ func TestCacheHealthHandler(t *testing.T) {
 	// Create a test logger
 	logger, _ := logging.NewDefaultLogger(logging.ComponentGeneral)
 
-	// Create gateway without Olric client (should return service unavailable)
-	cfg := &Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "test",
-	}
-	gw := &Gateway{
-		logger: logger,
-		cfg:    cfg,
-	}
+	// Create cache handlers without Olric client (should return service unavailable)
+	handlers := cache.NewCacheHandlers(logger, nil)
 
 	req := httptest.NewRequest("GET", "/v1/cache/health", nil)
 	w := httptest.NewRecorder()
 
-	gw.cacheHealthHandler(w, req)
+	handlers.HealthHandler(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
@@ -50,14 +44,7 @@ func TestCacheHealthHandler(t *testing.T) {
 func TestCacheGetHandler_MissingClient(t *testing.T) {
 	logger, _ := logging.NewDefaultLogger(logging.ComponentGeneral)
 
-	cfg := &Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "test",
-	}
-	gw := &Gateway{
-		logger: logger,
-		cfg:    cfg,
-	}
+	handlers := cache.NewCacheHandlers(logger, nil)
 
 	reqBody := map[string]string{
 		"dmap": "test-dmap",
@@ -67,7 +54,7 @@ func TestCacheGetHandler_MissingClient(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/cache/get", bytes.NewReader(bodyBytes))
 	w := httptest.NewRecorder()
 
-	gw.cacheGetHandler(w, req)
+	handlers.GetHandler(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
@@ -77,20 +64,12 @@ func TestCacheGetHandler_MissingClient(t *testing.T) {
 func TestCacheGetHandler_InvalidBody(t *testing.T) {
 	logger, _ := logging.NewDefaultLogger(logging.ComponentGeneral)
 
-	cfg := &Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "test",
-	}
-	gw := &Gateway{
-		logger:      logger,
-		cfg:         cfg,
-		olricClient: &olric.Client{}, // Mock client
-	}
+	handlers := cache.NewCacheHandlers(logger, &olric.Client{}) // Mock client
 
 	req := httptest.NewRequest("POST", "/v1/cache/get", bytes.NewReader([]byte("invalid json")))
 	w := httptest.NewRecorder()
 
-	gw.cacheGetHandler(w, req)
+	handlers.GetHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
@@ -100,15 +79,7 @@ func TestCacheGetHandler_InvalidBody(t *testing.T) {
 func TestCachePutHandler_MissingFields(t *testing.T) {
 	logger, _ := logging.NewDefaultLogger(logging.ComponentGeneral)
 
-	cfg := &Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "test",
-	}
-	gw := &Gateway{
-		logger:      logger,
-		cfg:         cfg,
-		olricClient: &olric.Client{},
-	}
+	handlers := cache.NewCacheHandlers(logger, &olric.Client{})
 
 	// Test missing dmap
 	reqBody := map[string]string{
@@ -118,7 +89,7 @@ func TestCachePutHandler_MissingFields(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/cache/put", bytes.NewReader(bodyBytes))
 	w := httptest.NewRecorder()
 
-	gw.cachePutHandler(w, req)
+	handlers.SetHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
@@ -132,7 +103,7 @@ func TestCachePutHandler_MissingFields(t *testing.T) {
 	req = httptest.NewRequest("POST", "/v1/cache/put", bytes.NewReader(bodyBytes))
 	w = httptest.NewRecorder()
 
-	gw.cachePutHandler(w, req)
+	handlers.SetHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
@@ -142,20 +113,12 @@ func TestCachePutHandler_MissingFields(t *testing.T) {
 func TestCacheDeleteHandler_WrongMethod(t *testing.T) {
 	logger, _ := logging.NewDefaultLogger(logging.ComponentGeneral)
 
-	cfg := &Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "test",
-	}
-	gw := &Gateway{
-		logger:      logger,
-		cfg:         cfg,
-		olricClient: &olric.Client{},
-	}
+	handlers := cache.NewCacheHandlers(logger, &olric.Client{})
 
 	req := httptest.NewRequest("GET", "/v1/cache/delete", nil)
 	w := httptest.NewRecorder()
 
-	gw.cacheDeleteHandler(w, req)
+	handlers.DeleteHandler(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
@@ -165,20 +128,12 @@ func TestCacheDeleteHandler_WrongMethod(t *testing.T) {
 func TestCacheScanHandler_InvalidBody(t *testing.T) {
 	logger, _ := logging.NewDefaultLogger(logging.ComponentGeneral)
 
-	cfg := &Config{
-		ListenAddr:      ":6001",
-		ClientNamespace: "test",
-	}
-	gw := &Gateway{
-		logger:      logger,
-		cfg:         cfg,
-		olricClient: &olric.Client{},
-	}
+	handlers := cache.NewCacheHandlers(logger, &olric.Client{})
 
 	req := httptest.NewRequest("POST", "/v1/cache/scan", bytes.NewReader([]byte("invalid")))
 	w := httptest.NewRecorder()
 
-	gw.cacheScanHandler(w, req)
+	handlers.ScanHandler(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
