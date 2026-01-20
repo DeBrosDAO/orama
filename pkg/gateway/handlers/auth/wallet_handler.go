@@ -19,14 +19,14 @@ func (h *Handlers) WhoamiHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Determine namespace (may be overridden by auth layer)
 	ns := h.defaultNS
-	if v := ctx.Value(contextKey(CtxKeyNamespaceOverride)); v != nil {
+	if v := ctx.Value(CtxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok && s != "" {
 			ns = s
 		}
 	}
 
 	// Prefer JWT if present
-	if v := ctx.Value(contextKey(CtxKeyJWT)); v != nil {
+	if v := ctx.Value(CtxKeyJWT); v != nil {
 		if claims, ok := v.(*authsvc.JWTClaims); ok && claims != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"authenticated": true,
@@ -45,7 +45,7 @@ func (h *Handlers) WhoamiHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fallback: API key identity
 	var key string
-	if v := ctx.Value(contextKey(CtxKeyAPIKey)); v != nil {
+	if v := ctx.Value(CtxKeyAPIKey); v != nil {
 		if s, ok := v.(string); ok {
 			key = s
 		}

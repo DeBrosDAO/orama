@@ -139,7 +139,7 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var subject string
 	if req.All {
-		if v := ctx.Value(contextKey(CtxKeyJWT)); v != nil {
+		if v := ctx.Value(CtxKeyJWT); v != nil {
 			if claims, ok := v.(*authsvc.JWTClaims); ok && claims != nil {
 				subject = strings.TrimSpace(claims.Sub)
 			}

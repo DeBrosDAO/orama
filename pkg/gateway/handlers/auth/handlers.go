@@ -8,18 +8,15 @@ import (
 	"database/sql"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
-// contextKey is the type for context keys
-type contextKey string
-
-// Context keys for request-scoped auth metadata
-// These are exported so they can be used by the gateway middleware
+// Use shared context keys from ctxkeys package to ensure consistency with middleware
 const (
-	CtxKeyAPIKey            contextKey = "api_key"
-	CtxKeyJWT               contextKey = "jwt_claims"
-	CtxKeyNamespaceOverride contextKey = "namespace_override"
+	CtxKeyAPIKey            = ctxkeys.APIKey
+	CtxKeyJWT               = ctxkeys.JWT
+	CtxKeyNamespaceOverride = ctxkeys.NamespaceOverride
 )
 
 // NetworkClient defines the minimal network client interface needed by auth handlers
