@@ -100,10 +100,9 @@ func (p *RQLitePlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dn
 // isOurZone checks if the query is for one of our configured zones
 func (p *RQLitePlugin) isOurZone(qname string) bool {
 	for _, zone := range p.zones {
-		if plugin.Name(zone).Matches(qname) == "" {
-			return false
+		if plugin.Name(zone).Matches(qname) {
+			return true
 		}
-		return true
 	}
 	return false
 }

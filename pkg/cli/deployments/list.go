@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
