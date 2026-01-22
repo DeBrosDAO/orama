@@ -358,6 +358,8 @@ func TestStoragePinHandler_Success(t *testing.T) {
 	bodyBytes, _ := json.Marshal(reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/pin", bytes.NewReader(bodyBytes))
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
+	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	gw.storageHandlers.PinHandler(w, req)
@@ -514,6 +516,8 @@ func TestStorageUnpinHandler_Success(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, mockClient)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/"+expectedCID, nil)
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")
+	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	gw.storageHandlers.UnpinHandler(w, req)

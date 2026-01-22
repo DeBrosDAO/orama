@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -218,7 +219,7 @@ func TestCreateDatabase_Success(t *testing.T) {
 	bodyBytes, _ := json.Marshal(reqBody)
 
 	req := httptest.NewRequest("POST", "/v1/db/sqlite/create", bytes.NewReader(bodyBytes))
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -299,7 +300,7 @@ func TestCreateDatabase_DuplicateName(t *testing.T) {
 	bodyBytes, _ := json.Marshal(reqBody)
 
 	req := httptest.NewRequest("POST", "/v1/db/sqlite/create", bytes.NewReader(bodyBytes))
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -337,7 +338,7 @@ func TestCreateDatabase_InvalidName(t *testing.T) {
 		bodyBytes, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest("POST", "/v1/db/sqlite/create", bytes.NewReader(bodyBytes))
-		ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+		ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 		req = req.WithContext(ctx)
 
 		rr := httptest.NewRecorder()
@@ -365,7 +366,7 @@ func TestListDatabases(t *testing.T) {
 	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop())
 
 	req := httptest.NewRequest("GET", "/v1/db/sqlite/list", nil)
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -459,7 +460,7 @@ func TestBackupDatabase(t *testing.T) {
 	bodyBytes, _ := json.Marshal(reqBody)
 
 	req := httptest.NewRequest("POST", "/v1/db/sqlite/backup", bytes.NewReader(bodyBytes))
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()

@@ -1,7 +1,9 @@
 package deployments
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"io"
@@ -13,23 +15,41 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
 )
+
+// createMinimalTarball creates a minimal valid .tar.gz file for testing
+func createMinimalTarball(t *testing.T) *bytes.Buffer {
+	buf := &bytes.Buffer{}
+	gzw := gzip.NewWriter(buf)
+	tw := tar.NewWriter(gzw)
+
+	// Add a simple index.html file
+	content := []byte("<html><body>Test</body></html>")
+	header := &tar.Header{
+		Name: "index.html",
+		Mode: 0644,
+		Size: int64(len(content)),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatalf("Failed to write tar header: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("Failed to write tar content: %v", err)
+	}
+
+	tw.Close()
+	gzw.Close()
+	return buf
+}
 
 // TestStaticHandler_Upload tests uploading a static site tarball to IPFS
 func TestStaticHandler_Upload(t *testing.T) {
 	// Create mock IPFS client
 	mockIPFS := &mockIPFSClient{
-		AddFunc: func(ctx context.Context, r io.Reader, filename string) (*ipfs.AddResponse, error) {
-			// Verify we're receiving data
-			data, err := io.ReadAll(r)
-			if err != nil {
-				t.Errorf("Failed to read upload data: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("Expected non-empty upload data")
-			}
+		AddDirectoryFunc: func(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
 			return &ipfs.AddResponse{Cid: "QmTestCID123456789"}, nil
 		},
 	}
@@ -77,6 +97,9 @@ func TestStaticHandler_Upload(t *testing.T) {
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
+	// Create a valid minimal tarball
+	tarballBuf := createMinimalTarball(t)
+
 	// Create multipart form with tarball
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -92,14 +115,14 @@ func TestStaticHandler_Upload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create form file: %v", err)
 	}
-	part.Write([]byte("fake tarball data"))
+	part.Write(tarballBuf.Bytes())
 
 	writer.Close()
 
 	// Create request
 	req := httptest.NewRequest("POST", "/v1/deployments/static/upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	// Create response recorder
@@ -144,7 +167,7 @@ func TestStaticHandler_Upload_InvalidTarball(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/deployments/static/upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -378,7 +401,7 @@ func TestListHandler_AllDeployments(t *testing.T) {
 	handler := NewListHandler(service, zap.NewNop())
 
 	req := httptest.NewRequest("GET", "/v1/deployments/list", nil)
-	ctx := context.WithValue(req.Context(), "namespace", "test-namespace")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
