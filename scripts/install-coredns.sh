@@ -124,7 +124,7 @@ log_info "  sudo systemctl status coredns"
 log_info "  sudo journalctl -u coredns -f"
 echo
 log_info "To test DNS:"
-log_info "  dig @localhost test.debros.network"
+log_info "  dig @localhost test.orama.network"
 
 # Cleanup
 rm -f /tmp/coredns.tgz

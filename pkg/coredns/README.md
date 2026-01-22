@@ -8,7 +8,7 @@ The plugin provides:
 - **Dynamic DNS Records**: Queries RQLite for DNS records in real-time
 - **Caching**: In-memory cache to reduce database load
 - **Health Monitoring**: Periodic health checks of RQLite connection
-- **Wildcard Support**: Handles wildcard DNS patterns (e.g., `*.node-xyz.debros.network`)
+- **Wildcard Support**: Handles wildcard DNS patterns (e.g., `*.node-xyz.orama.network`)
 
 ## Building CoreDNS with RQLite Plugin
 
@@ -146,7 +146,7 @@ sudo systemctl start coredns
 The Corefile at `/etc/coredns/Corefile` configures CoreDNS behavior:
 
 ```corefile
-debros.network {
+orama.network {
     rqlite {
         dsn http://localhost:5001    # RQLite HTTP endpoint
         refresh 10s                   # Health check interval
@@ -196,7 +196,7 @@ curl -XPOST 'http://localhost:5001/db/execute' \
   -H 'Content-Type: application/json' \
   -d '[
     ["INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
-     "test.debros.network.", "A", "1.2.3.4", 300, "test", "system", true]
+     "test.orama.network.", "A", "1.2.3.4", 300, "test", "system", true]
   ]'
 ```
 
@@ -204,14 +204,14 @@ curl -XPOST 'http://localhost:5001/db/execute' \
 
 ```bash
 # Query local CoreDNS
-dig @localhost test.debros.network
+dig @localhost test.orama.network
 
 # Expected output:
 # ;; ANSWER SECTION:
-# test.debros.network. 300 IN A 1.2.3.4
+# test.orama.network. 300 IN A 1.2.3.4
 
 # Query from remote machine
-dig @<node-ip> test.debros.network
+dig @<node-ip> test.orama.network
 ```
 
 ### 3. Test Wildcard
@@ -222,12 +222,12 @@ curl -XPOST 'http://localhost:5001/db/execute' \
   -H 'Content-Type: application/json' \
   -d '[
     ["INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
-     "*.node-abc123.debros.network.", "A", "1.2.3.4", 300, "test", "system", true]
+     "*.node-abc123.orama.network.", "A", "1.2.3.4", 300, "test", "system", true]
   ]'
 
 # Test wildcard resolution
-dig @localhost app1.node-abc123.debros.network
-dig @localhost app2.node-abc123.debros.network
+dig @localhost app1.node-abc123.orama.network
+dig @localhost app2.node-abc123.orama.network
 ```
 
 ### 4. Check Health
@@ -295,7 +295,7 @@ sudo ufw status | grep 5001
 sudo netstat -tulpn | grep :53
 
 # 2. Test local query
-dig @127.0.0.1 test.debros.network
+dig @127.0.0.1 test.orama.network
 
 # 3. Check logs for errors
 sudo journalctl -u coredns --since "5 minutes ago"
@@ -327,38 +327,38 @@ Install CoreDNS on all 4 nameserver nodes (ns1-ns4).
 
 ### 2. Configure Registrar
 
-At your domain registrar, set NS records for `debros.network`:
+At your domain registrar, set NS records for `orama.network`:
 
 ```
-debros.network.  IN  NS  ns1.debros.network.
-debros.network.  IN  NS  ns2.debros.network.
-debros.network.  IN  NS  ns3.debros.network.
-debros.network.  IN  NS  ns4.debros.network.
+orama.network.  IN  NS  ns1.orama.network.
+orama.network.  IN  NS  ns2.orama.network.
+orama.network.  IN  NS  ns3.orama.network.
+orama.network.  IN  NS  ns4.orama.network.
 ```
 
 Add glue records:
 
 ```
-ns1.debros.network.  IN  A  <node-1-ip>
-ns2.debros.network.  IN  A  <node-2-ip>
-ns3.debros.network.  IN  A  <node-3-ip>
-ns4.debros.network.  IN  A  <node-4-ip>
+ns1.orama.network.  IN  A  <node-1-ip>
+ns2.orama.network.  IN  A  <node-2-ip>
+ns3.orama.network.  IN  A  <node-3-ip>
+ns4.orama.network.  IN  A  <node-4-ip>
 ```
 
 ### 3. Verify Propagation
 
 ```bash
 # Check NS records
-dig NS debros.network
+dig NS orama.network
 
 # Check from public DNS
-dig @8.8.8.8 test.debros.network
+dig @8.8.8.8 test.orama.network
 
 # Check from all nameservers
-dig @ns1.debros.network test.debros.network
-dig @ns2.debros.network test.debros.network
-dig @ns3.debros.network test.debros.network
-dig @ns4.debros.network test.debros.network
+dig @ns1.orama.network test.orama.network
+dig @ns2.orama.network test.orama.network
+dig @ns3.orama.network test.orama.network
+dig @ns4.orama.network test.orama.network
 ```
 
 ### 4. Monitor

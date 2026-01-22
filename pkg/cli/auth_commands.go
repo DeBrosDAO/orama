@@ -192,7 +192,7 @@ func promptForGatewayURL() string {
 		return "http://localhost:6001"
 	}
 
-	fmt.Print("Enter node domain (e.g., node-hk19de.debros.network): ")
+	fmt.Print("Enter node domain (e.g., node-hk19de.orama.network): ")
 	domain, _ := reader.ReadString('\n')
 	domain = strings.TrimSpace(domain)
 

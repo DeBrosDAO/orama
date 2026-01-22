@@ -95,7 +95,7 @@ func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, err
 	endpoint := gatewayURL + "/v1/auth/simple-key"
 
 	// Extract domain from URL for TLS configuration
-	// This uses tlsutil which handles Let's Encrypt staging certificates for *.debros.network
+	// This uses tlsutil which handles Let's Encrypt staging certificates for *.orama.network
 	domain := extractDomainFromURL(gatewayURL)
 	client := tlsutil.NewHTTPClientForDomain(30*time.Second, domain)
 

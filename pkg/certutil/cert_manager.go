@@ -179,11 +179,11 @@ func (cm *CertificateManager) generateNodeCertificate(hostname string, caCertPEM
 		DNSNames:    []string{hostname},
 	}
 
-	// Add wildcard support if hostname contains *.debros.network
-	if hostname == "*.debros.network" {
-		template.DNSNames = []string{"*.debros.network", "debros.network"}
-	} else if hostname == "debros.network" {
-		template.DNSNames = []string{"*.debros.network", "debros.network"}
+	// Add wildcard support if hostname contains *.orama.network
+	if hostname == "*.orama.network" {
+		template.DNSNames = []string{"*.orama.network", "orama.network"}
+	} else if hostname == "orama.network" {
+		template.DNSNames = []string{"*.orama.network", "orama.network"}
 	}
 
 	// Try to parse as IP address for IP-based certificates
@@ -254,4 +254,3 @@ func (cm *CertificateManager) parseCACertificate(caCertPEM, caKeyPEM []byte) (*x
 func LoadTLSCertificate(certPEM, keyPEM []byte) (tls.Certificate, error) {
 	return tls.X509KeyPair(certPEM, keyPEM)
 }
-

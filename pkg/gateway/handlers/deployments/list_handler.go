@@ -29,18 +29,18 @@ func (h *ListHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	namespace := ctx.Value("namespace").(string)
 
 	type deploymentRow struct {
-		ID          string    `db:"id"`
-		Namespace   string    `db:"namespace"`
-		Name        string    `db:"name"`
-		Type        string    `db:"type"`
-		Version     int       `db:"version"`
-		Status      string    `db:"status"`
-		ContentCID  string    `db:"content_cid"`
-		HomeNodeID  string    `db:"home_node_id"`
-		Port        int       `db:"port"`
-		Subdomain   string    `db:"subdomain"`
-		CreatedAt   time.Time `db:"created_at"`
-		UpdatedAt   time.Time `db:"updated_at"`
+		ID         string    `db:"id"`
+		Namespace  string    `db:"namespace"`
+		Name       string    `db:"name"`
+		Type       string    `db:"type"`
+		Version    int       `db:"version"`
+		Status     string    `db:"status"`
+		ContentCID string    `db:"content_cid"`
+		HomeNodeID string    `db:"home_node_id"`
+		Port       int       `db:"port"`
+		Subdomain  string    `db:"subdomain"`
+		CreatedAt  time.Time `db:"created_at"`
+		UpdatedAt  time.Time `db:"updated_at"`
 	}
 
 	var rows []deploymentRow
@@ -61,10 +61,10 @@ func (h *ListHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	deployments := make([]map[string]interface{}, len(rows))
 	for i, row := range rows {
 		urls := []string{
-			"https://" + row.Name + "." + row.HomeNodeID + ".debros.network",
+			"https://" + row.Name + "." + row.HomeNodeID + ".orama.network",
 		}
 		if row.Subdomain != "" {
-			urls = append(urls, "https://"+row.Subdomain+".debros.network")
+			urls = append(urls, "https://"+row.Subdomain+".orama.network")
 		}
 
 		deployments[i] = map[string]interface{}{

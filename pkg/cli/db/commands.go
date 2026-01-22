@@ -439,7 +439,7 @@ func getAPIURL() string {
 	if url := os.Getenv("ORAMA_API_URL"); url != "" {
 		return url
 	}
-	return "https://gateway.debros.network"
+	return "https://gateway.orama.network"
 }
 
 func getAuthToken() (string, error) {

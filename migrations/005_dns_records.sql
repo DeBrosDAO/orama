@@ -6,7 +6,7 @@ BEGIN;
 -- DNS records table for dynamic DNS management
 CREATE TABLE IF NOT EXISTS dns_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fqdn TEXT NOT NULL UNIQUE,              -- Fully qualified domain name (e.g., myapp.node-7prvNa.debros.network)
+    fqdn TEXT NOT NULL UNIQUE,              -- Fully qualified domain name (e.g., myapp.node-7prvNa.orama.network)
     record_type TEXT NOT NULL DEFAULT 'A',  -- DNS record type: A, AAAA, CNAME, TXT
     value TEXT NOT NULL,                    -- IP address or target value
     ttl INTEGER NOT NULL DEFAULT 300,       -- Time to live in seconds
@@ -53,17 +53,17 @@ CREATE TABLE IF NOT EXISTS reserved_domains (
 
 -- Seed reserved domains
 INSERT INTO reserved_domains (domain, reason) VALUES
-    ('api.debros.network', 'API gateway endpoint'),
-    ('www.debros.network', 'Marketing website'),
-    ('admin.debros.network', 'Admin panel'),
-    ('ns1.debros.network', 'Nameserver 1'),
-    ('ns2.debros.network', 'Nameserver 2'),
-    ('ns3.debros.network', 'Nameserver 3'),
-    ('ns4.debros.network', 'Nameserver 4'),
-    ('mail.debros.network', 'Email service'),
-    ('cdn.debros.network', 'Content delivery'),
-    ('docs.debros.network', 'Documentation'),
-    ('status.debros.network', 'Status page')
+    ('api.orama.network', 'API gateway endpoint'),
+    ('www.orama.network', 'Marketing website'),
+    ('admin.orama.network', 'Admin panel'),
+    ('ns1.orama.network', 'Nameserver 1'),
+    ('ns2.orama.network', 'Nameserver 2'),
+    ('ns3.orama.network', 'Nameserver 3'),
+    ('ns4.orama.network', 'Nameserver 4'),
+    ('mail.orama.network', 'Email service'),
+    ('cdn.orama.network', 'Content delivery'),
+    ('docs.orama.network', 'Documentation'),
+    ('status.orama.network', 'Status page')
 ON CONFLICT(domain) DO NOTHING;
 
 -- Mark migration as applied

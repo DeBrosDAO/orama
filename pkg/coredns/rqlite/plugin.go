@@ -2,7 +2,6 @@ package rqlite
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/coredns/coredns/plugin"
@@ -13,11 +12,11 @@ import (
 
 // RQLitePlugin implements the CoreDNS plugin interface
 type RQLitePlugin struct {
-	Next   plugin.Handler
-	logger *zap.Logger
+	Next    plugin.Handler
+	logger  *zap.Logger
 	backend *Backend
-	cache  *Cache
-	zones  []string
+	cache   *Cache
+	zones   []string
 }
 
 // Name returns the plugin name
@@ -110,7 +109,7 @@ func (p *RQLitePlugin) isOurZone(qname string) bool {
 }
 
 // getWildcardName extracts the wildcard pattern for a given name
-// e.g., myapp.node-7prvNa.debros.network -> *.node-7prvNa.debros.network
+// e.g., myapp.node-7prvNa.orama.network -> *.node-7prvNa.orama.network
 func (p *RQLitePlugin) getWildcardName(qname string) string {
 	labels := dns.SplitDomainName(qname)
 	if len(labels) < 3 {

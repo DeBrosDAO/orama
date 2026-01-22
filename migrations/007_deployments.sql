@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS deployment_domains (
     id TEXT PRIMARY KEY,                    -- UUID
     deployment_id TEXT NOT NULL,
     namespace TEXT NOT NULL,
-    domain TEXT NOT NULL UNIQUE,            -- Full domain (e.g., myapp.debros.network or custom)
+    domain TEXT NOT NULL UNIQUE,            -- Full domain (e.g., myapp.orama.network or custom)
     routing_type TEXT NOT NULL DEFAULT 'balanced', -- 'balanced' or 'node_specific'
     node_id TEXT,                           -- For node_specific routing
     is_custom BOOLEAN DEFAULT FALSE,        -- True for user's own domain

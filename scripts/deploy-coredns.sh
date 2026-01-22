@@ -32,7 +32,7 @@ for i in "${!NODES[@]}"; do
     node="${NODES[$i]}"
     node_num=$((i + 1))
 
-    echo "[$node_num/4] Deploying to ns${node_num}.debros.network ($node)..."
+    echo "[$node_num/4] Deploying to ns${node_num}.orama.network ($node)..."
 
     # Copy binary
     echo "  → Copying binary..."
@@ -59,9 +59,9 @@ for i in "${!NODES[@]}"; do
     # Check status
     echo "  → Checking status..."
     if ssh "debros@$node" "sudo systemctl is-active --quiet coredns"; then
-        echo "  ✅ CoreDNS running on ns${node_num}.debros.network"
+        echo "  ✅ CoreDNS running on ns${node_num}.orama.network"
     else
-        echo "  ❌ CoreDNS failed to start on ns${node_num}.debros.network"
+        echo "  ❌ CoreDNS failed to start on ns${node_num}.orama.network"
         echo "  Check logs: ssh debros@$node sudo journalctl -u coredns -n 50"
     fi
 
@@ -71,14 +71,14 @@ done
 echo "✅ Deployment complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Test DNS resolution: dig @${NODES[0]} test.debros.network"
+echo "  1. Test DNS resolution: dig @${NODES[0]} test.orama.network"
 echo "  2. Update registrar NS records (ONLY after testing):"
-echo "     NS    debros.network.    ns1.debros.network."
-echo "     NS    debros.network.    ns2.debros.network."
-echo "     NS    debros.network.    ns3.debros.network."
-echo "     NS    debros.network.    ns4.debros.network."
-echo "     A     ns1.debros.network. ${NODES[0]}"
-echo "     A     ns2.debros.network. ${NODES[1]}"
-echo "     A     ns3.debros.network. ${NODES[2]}"
-echo "     A     ns4.debros.network. ${NODES[3]}"
+echo "     NS    orama.network.    ns1.orama.network."
+echo "     NS    orama.network.    ns2.orama.network."
+echo "     NS    orama.network.    ns3.orama.network."
+echo "     NS    orama.network.    ns4.orama.network."
+echo "     A     ns1.orama.network. ${NODES[0]}"
+echo "     A     ns2.orama.network. ${NODES[1]}"
+echo "     A     ns3.orama.network. ${NODES[2]}"
+echo "     A     ns4.orama.network. ${NODES[3]}"
 echo ""

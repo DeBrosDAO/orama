@@ -179,14 +179,14 @@ func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *de
 	}
 
 	// Create node-specific record
-	nodeFQDN := fmt.Sprintf("%s.%s.debros.network.", deployment.Name, deployment.HomeNodeID)
+	nodeFQDN := fmt.Sprintf("%s.%s.orama.network.", deployment.Name, deployment.HomeNodeID)
 	if err := s.createDNSRecord(ctx, nodeFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 		s.logger.Error("Failed to create node-specific DNS record", zap.Error(err))
 	}
 
 	// Create load-balanced record if subdomain is set
 	if deployment.Subdomain != "" {
-		lbFQDN := fmt.Sprintf("%s.debros.network.", deployment.Subdomain)
+		lbFQDN := fmt.Sprintf("%s.orama.network.", deployment.Subdomain)
 		if err := s.createDNSRecord(ctx, lbFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 			s.logger.Error("Failed to create load-balanced DNS record", zap.Error(err))
 		}
@@ -231,11 +231,11 @@ func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (strin
 // BuildDeploymentURLs builds all URLs for a deployment
 func (s *DeploymentService) BuildDeploymentURLs(deployment *deployments.Deployment) []string {
 	urls := []string{
-		fmt.Sprintf("https://%s.%s.debros.network", deployment.Name, deployment.HomeNodeID),
+		fmt.Sprintf("https://%s.%s.orama.network", deployment.Name, deployment.HomeNodeID),
 	}
 
 	if deployment.Subdomain != "" {
-		urls = append(urls, fmt.Sprintf("https://%s.debros.network", deployment.Subdomain))
+		urls = append(urls, fmt.Sprintf("https://%s.orama.network", deployment.Subdomain))
 	}
 
 	return urls

@@ -62,8 +62,8 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check if domain is reserved
-	if strings.HasSuffix(domain, ".debros.network") {
-		http.Error(w, "Cannot use .debros.network domains as custom domains", http.StatusBadRequest)
+	if strings.HasSuffix(domain, ".orama.network") {
+		http.Error(w, "Cannot use .orama.network domains as custom domains", http.StatusBadRequest)
 		return
 	}
 
@@ -165,8 +165,8 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 	// Get domain record
 	type domainRow struct {
-		DeploymentID      string `db:"deployment_id"`
-		VerificationToken string `db:"verification_token"`
+		DeploymentID       string `db:"deployment_id"`
+		VerificationToken  string `db:"verification_token"`
 		VerificationStatus string `db:"verification_status"`
 	}
 
@@ -258,9 +258,9 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 
 	// Query domains
 	type domainRow struct {
-		Domain             string    `db:"domain"`
-		VerificationStatus string    `db:"verification_status"`
-		CreatedAt          time.Time `db:"created_at"`
+		Domain             string     `db:"domain"`
+		VerificationStatus string     `db:"verification_status"`
+		CreatedAt          time.Time  `db:"created_at"`
 		VerifiedAt         *time.Time `db:"verified_at"`
 	}
 

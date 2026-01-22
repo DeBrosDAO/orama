@@ -439,8 +439,8 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.Split(r.Host, ":")[0] // Strip port
 
-		// Only process .debros.network domains
-		if !strings.HasSuffix(host, ".debros.network") {
+		// Only process .orama.network domains
+		if !strings.HasSuffix(host, ".orama.network") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -497,7 +497,7 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status
 		FROM deployments d
 		LEFT JOIN deployment_domains dd ON d.id = dd.deployment_id
-		WHERE (d.name || '.node-' || d.home_node_id || '.debros.network' = ? 
+		WHERE (d.name || '.node-' || d.home_node_id || '.orama.network' = ? 
 		       OR dd.domain = ? AND dd.verification_status = 'verified')
 		AND d.status = 'active'
 		LIMIT 1
