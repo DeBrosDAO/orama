@@ -283,6 +283,7 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 
 	ipfsCfg := ipfs.Config{
 		ClusterAPIURL: ipfsClusterURL,
+		IPFSAPIURL:    ipfsAPIURL,
 		Timeout:       ipfsTimeout,
 	}
 

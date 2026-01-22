@@ -459,9 +459,13 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 
 		// Try to find deployment by domain
 		deployment, err := g.getDeploymentByDomain(r.Context(), host)
-		if err != nil || deployment == nil {
-			// Not a deployment domain, continue to normal routing
-			next.ServeHTTP(w, r)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if deployment == nil {
+			// Domain matches .orama.network but no deployment found
+			http.NotFound(w, r)
 			return
 		}
 

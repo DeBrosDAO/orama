@@ -1,12 +1,14 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +31,11 @@ type QueryResponse struct {
 // QueryDatabase executes a SQL query on a namespace database
 func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
+	if !ok || namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var req QueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -179,7 +185,8 @@ func (h *SQLiteHandler) updateDatabaseSize(namespace, databaseName, filePath str
 	}
 
 	query := `UPDATE namespace_sqlite_databases SET size_bytes = ? WHERE namespace = ? AND database_name = ?`
-	_, err = h.db.Exec(nil, query, stat.Size(), namespace, databaseName)
+	ctx := context.Background()
+	_, err = h.db.Exec(ctx, query, stat.Size(), namespace, databaseName)
 	if err != nil {
 		h.logger.Error("Failed to update database size", zap.Error(err))
 	}
@@ -199,7 +206,11 @@ type DatabaseInfo struct {
 // ListDatabases lists all databases for a namespace
 func (h *SQLiteHandler) ListDatabases(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
+	if !ok || namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var databases []DatabaseInfo
 	query := `

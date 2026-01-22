@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
 )
@@ -30,7 +31,11 @@ func NewBackupHandler(sqliteHandler *SQLiteHandler, ipfsClient ipfs.IPFSClient, 
 // BackupDatabase backs up a database to IPFS
 func (h *BackupHandler) BackupDatabase(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
+	if !ok || namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DatabaseName string `json:"database_name"`
@@ -137,7 +142,11 @@ func (h *BackupHandler) recordBackup(ctx context.Context, dbID, cid string) {
 // ListBackups lists all backups for a database
 func (h *BackupHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
+	if !ok || namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	databaseName := r.URL.Query().Get("database_name")
 	if databaseName == "" {

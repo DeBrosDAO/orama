@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -27,18 +28,31 @@ type SQLiteHandler struct {
 
 // NewSQLiteHandler creates a new SQLite handler
 func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeManager, logger *zap.Logger) *SQLiteHandler {
+	// Use user's home directory for cross-platform compatibility
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		logger.Error("Failed to get user home directory", zap.Error(err))
+		homeDir = os.Getenv("HOME")
+	}
+
+	basePath := filepath.Join(homeDir, ".orama", "sqlite")
+
 	return &SQLiteHandler{
 		db:              db,
 		homeNodeManager: homeNodeManager,
 		logger:          logger,
-		basePath:        "/home/debros/.orama/data/sqlite",
+		basePath:        basePath,
 	}
 }
 
 // CreateDatabase creates a new SQLite database for a namespace
 func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
+	if !ok || namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DatabaseName string `json:"database_name"`

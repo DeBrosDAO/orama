@@ -43,16 +43,20 @@ func PerformSimpleAuthentication(gatewayURL string) (*Credentials, error) {
 		return nil, fmt.Errorf("invalid wallet address format")
 	}
 
-	// Read namespace (optional)
-	fmt.Print("Enter namespace (press Enter for 'default'): ")
-	nsInput, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read namespace: %w", err)
-	}
+	// Read namespace (required)
+	var namespace string
+	for {
+		fmt.Print("Enter namespace (required): ")
+		nsInput, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("failed to read namespace: %w", err)
+		}
 
-	namespace := strings.TrimSpace(nsInput)
-	if namespace == "" {
-		namespace = "default"
+		namespace = strings.TrimSpace(nsInput)
+		if namespace != "" {
+			break
+		}
+		fmt.Println("⚠️  Namespace cannot be empty. Please enter a namespace.")
 	}
 
 	fmt.Printf("\n✅ Wallet: %s\n", wallet)
