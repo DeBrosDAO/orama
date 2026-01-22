@@ -1,11 +1,14 @@
 package deployments
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -88,8 +91,23 @@ func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Re
 		zap.Int64("size", header.Size),
 	)
 
-	// Upload to IPFS
-	addResp, err := h.ipfsClient.Add(ctx, file, header.Filename)
+	// Extract tarball to temporary directory
+	tmpDir, err := os.MkdirTemp("", "static-deploy-*")
+	if err != nil {
+		h.logger.Error("Failed to create temp directory", zap.Error(err))
+		http.Error(w, "Failed to process tarball", http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := extractTarball(file, tmpDir); err != nil {
+		h.logger.Error("Failed to extract tarball", zap.Error(err))
+		http.Error(w, "Failed to extract tarball", http.StatusInternalServerError)
+		return
+	}
+
+	// Upload extracted directory to IPFS
+	addResp, err := h.ipfsClient.AddDirectory(ctx, tmpDir)
 	if err != nil {
 		h.logger.Error("Failed to upload to IPFS", zap.Error(err))
 		http.Error(w, "Failed to upload content", http.StatusInternalServerError)
@@ -232,3 +250,61 @@ func detectContentType(filename string) string {
 
 	return "application/octet-stream"
 }
+
+// extractTarball extracts a .tar.gz file to the specified directory
+func extractTarball(reader io.Reader, destDir string) error {
+	gzr, err := gzip.NewReader(reader)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %w", err)
+		}
+
+		// Build target path
+		target := filepath.Join(destDir, header.Name)
+
+		// Prevent path traversal - clean both paths before comparing
+		cleanDest := filepath.Clean(destDir) + string(os.PathSeparator)
+		cleanTarget := filepath.Clean(target)
+		if !strings.HasPrefix(cleanTarget, cleanDest) && cleanTarget != filepath.Clean(destDir) {
+			return fmt.Errorf("invalid file path in tarball: %s", header.Name)
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return fmt.Errorf("failed to create directory: %w", err)
+			}
+		case tar.TypeReg:
+			// Create parent directory if needed
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return fmt.Errorf("failed to create parent directory: %w", err)
+			}
+
+			// Create file
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+			if err != nil {
+				return fmt.Errorf("failed to create file: %w", err)
+			}
+
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return fmt.Errorf("failed to write file: %w", err)
+			}
+			f.Close()
+		}
+	}
+
+	return nil
+}
+

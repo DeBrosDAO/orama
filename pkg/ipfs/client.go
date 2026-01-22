@@ -10,6 +10,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 // IPFSClient defines the interface for IPFS operations
 type IPFSClient interface {
 	Add(ctx context.Context, reader io.Reader, name string) (*AddResponse, error)
+	AddDirectory(ctx context.Context, dirPath string) (*AddResponse, error)
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
@@ -234,6 +237,104 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 	last.Size = originalSize
 
 	return &last, nil
+}
+
+// AddDirectory adds all files in a directory to IPFS and returns the root directory CID
+func (c *Client) AddDirectory(ctx context.Context, dirPath string) (*AddResponse, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Walk directory and add all files to multipart request
+	var totalSize int64
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Get relative path
+		relPath, err := filepath.Rel(dirPath, path)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %w", err)
+		}
+
+		// Read file
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", path, err)
+		}
+
+		totalSize += int64(len(data))
+
+		// Add file to multipart
+		part, err := writer.CreateFormFile("file", relPath)
+		if err != nil {
+			return fmt.Errorf("failed to create form file: %w", err)
+		}
+
+		if _, err := part.Write(data); err != nil {
+			return fmt.Errorf("failed to write file data: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	// Add with wrap-in-directory to create a root directory node
+	apiURL := c.apiURL + "/add?wrap-in-directory=true"
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create add request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("add request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("add failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read NDJSON responses - the last one will be the root directory
+	dec := json.NewDecoder(resp.Body)
+	var last AddResponse
+
+	for {
+		var chunk AddResponse
+		if err := dec.Decode(&chunk); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("failed to decode add response: %w", err)
+		}
+		last = chunk
+	}
+
+	if last.Cid == "" {
+		return nil, fmt.Errorf("no CID returned from IPFS")
+	}
+
+	return &AddResponse{
+		Cid:  last.Cid,
+		Size: totalSize,
+	}, nil
 }
 
 // Pin pins a CID with specified replication factor

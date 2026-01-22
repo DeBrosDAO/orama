@@ -32,6 +32,11 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 	// Wait for deployment to be active
 	time.Sleep(2 * time.Second)
 
+	// Get deployment details for debugging
+	deployment := GetDeployment(t, env, deploymentID)
+	t.Logf("Deployment created: ID=%s, CID=%s, Name=%s, Status=%s",
+		deploymentID, deployment["content_cid"], deployment["name"], deployment["status"])
+
 	t.Run("Standard domain resolves", func(t *testing.T) {
 		// Domain format: {deploymentName}.orama.network
 		domain := fmt.Sprintf("%s.orama.network", deploymentName)
