@@ -76,6 +76,16 @@ func main() {
 	case "auth":
 		cli.HandleAuthCommand(args)
 
+	// Deployment commands
+	case "deploy":
+		cli.HandleDeployCommand(args)
+	case "deployments":
+		cli.HandleDeploymentsCommand(args)
+
+	// Database commands
+	case "db":
+		cli.HandleDBCommand(args)
+
 	// Help
 	case "help", "--help", "-h":
 		showHelp()
@@ -132,18 +142,50 @@ func showHelp() {
 	fmt.Printf("  auth status                   - Show detailed auth info\n")
 	fmt.Printf("  auth help                     - Show auth command help\n\n")
 
+	fmt.Printf("📦 Deployments:\n")
+	fmt.Printf("  deploy static <path>          - Deploy a static site (React, Vue, etc.)\n")
+	fmt.Printf("  deploy nextjs <path>          - Deploy a Next.js application\n")
+	fmt.Printf("  deploy go <path>              - Deploy a Go backend\n")
+	fmt.Printf("  deploy nodejs <path>          - Deploy a Node.js backend\n")
+	fmt.Printf("  deployments list              - List all deployments\n")
+	fmt.Printf("  deployments get <name>        - Get deployment details\n")
+	fmt.Printf("  deployments logs <name>       - View deployment logs\n")
+	fmt.Printf("  deployments delete <name>     - Delete a deployment\n")
+	fmt.Printf("  deployments rollback <name>   - Rollback to previous version\n\n")
+
+	fmt.Printf("🗄️  Databases:\n")
+	fmt.Printf("  db create <name>              - Create a SQLite database\n")
+	fmt.Printf("  db query <name> \"<sql>\"       - Execute SQL query\n")
+	fmt.Printf("  db list                       - List all databases\n")
+	fmt.Printf("  db backup <name>              - Backup database to IPFS\n")
+	fmt.Printf("  db backups <name>             - List database backups\n\n")
+
 	fmt.Printf("Global Flags:\n")
 	fmt.Printf("  -f, --format <format>         - Output format: table, json (default: table)\n")
 	fmt.Printf("  -t, --timeout <duration>      - Operation timeout (default: 30s)\n")
 	fmt.Printf("  --help, -h                    - Show this help message\n\n")
 
 	fmt.Printf("Examples:\n")
+	fmt.Printf("  # Deploy a React app\n")
+	fmt.Printf("  cd my-react-app && npm run build\n")
+	fmt.Printf("  orama deploy static ./dist --name my-app\n\n")
+
+	fmt.Printf("  # Deploy a Next.js app with SSR\n")
+	fmt.Printf("  cd my-nextjs-app && npm run build\n")
+	fmt.Printf("  orama deploy nextjs . --name my-nextjs --ssr\n\n")
+
+	fmt.Printf("  # Create and use a database\n")
+	fmt.Printf("  orama db create my-db\n")
+	fmt.Printf("  orama db query my-db \"CREATE TABLE users (id INT, name TEXT)\"\n")
+	fmt.Printf("  orama db query my-db \"INSERT INTO users VALUES (1, 'Alice')\"\n\n")
+
+	fmt.Printf("  # Manage deployments\n")
+	fmt.Printf("  orama deployments list\n")
+	fmt.Printf("  orama deployments get my-app\n")
+	fmt.Printf("  orama deployments logs my-app --follow\n\n")
+
 	fmt.Printf("  # First node (creates new cluster)\n")
 	fmt.Printf("  sudo orama install --vps-ip 203.0.113.1 --domain node-1.orama.network\n\n")
-
-	fmt.Printf("  # Join existing cluster\n")
-	fmt.Printf("  sudo orama install --vps-ip 203.0.113.2 --domain node-2.orama.network \\\n")
-	fmt.Printf("    --peers /ip4/203.0.113.1/tcp/4001/p2p/12D3KooW... --cluster-secret <hex>\n\n")
 
 	fmt.Printf("  # Service management\n")
 	fmt.Printf("  orama status\n")

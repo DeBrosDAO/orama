@@ -9,11 +9,95 @@ A high-performance API Gateway and distributed platform built in Go. Provides a 
 - **🔐 Authentication** - Wallet signatures, API keys, JWT tokens
 - **💾 Storage** - IPFS-based decentralized file storage with encryption
 - **⚡ Cache** - Distributed cache with Olric (in-memory key-value)
-- **🗄️ Database** - RQLite distributed SQL with Raft consensus
+- **🗄️ Database** - RQLite distributed SQL with Raft consensus + Per-namespace SQLite databases
 - **📡 Pub/Sub** - Real-time messaging via LibP2P and WebSocket
 - **⚙️ Serverless** - WebAssembly function execution with host functions
 - **🌐 HTTP Gateway** - Unified REST API with automatic HTTPS (Let's Encrypt)
 - **📦 Client SDK** - Type-safe Go SDK for all services
+- **🚀 App Deployments** - Deploy React, Next.js, Go, Node.js apps with automatic domains
+- **🗄️ SQLite Databases** - Per-namespace isolated databases with IPFS backups
+
+## Application Deployments
+
+Deploy full-stack applications with automatic domain assignment and namespace isolation.
+
+### Deploy a React App
+
+```bash
+# Build your app
+cd my-react-app
+npm run build
+
+# Deploy to Orama Network
+orama deploy static ./dist --name my-app
+
+# Your app is now live at: https://my-app.orama.network
+```
+
+### Deploy Next.js with SSR
+
+```bash
+cd my-nextjs-app
+npm run build
+orama deploy nextjs . --name my-nextjs --ssr
+
+# Live at: https://my-nextjs.orama.network
+```
+
+### Deploy Go Backend
+
+```bash
+# Build for Linux
+GOOS=linux GOARCH=amd64 go build -o api main.go
+
+# Deploy
+orama deploy go ./api --name my-api
+
+# API live at: https://my-api.orama.network
+```
+
+### Create SQLite Database
+
+```bash
+# Create database
+orama db create my-database
+
+# Create schema
+orama db query my-database "CREATE TABLE users (id INT, name TEXT)"
+
+# Insert data
+orama db query my-database "INSERT INTO users VALUES (1, 'Alice')"
+
+# Query data
+orama db query my-database "SELECT * FROM users"
+
+# Backup to IPFS
+orama db backup my-database
+```
+
+### Full-Stack Example
+
+Deploy a complete app with React frontend, Go backend, and SQLite database:
+
+```bash
+# 1. Create database
+orama db create myapp-db
+orama db query myapp-db "CREATE TABLE users (id INT PRIMARY KEY, name TEXT)"
+
+# 2. Deploy Go backend (connects to database)
+GOOS=linux GOARCH=amd64 go build -o api main.go
+orama deploy go ./api --name myapp-api
+
+# 3. Deploy React frontend (calls backend API)
+cd frontend && npm run build
+orama deploy static ./dist --name myapp
+
+# Access:
+# Frontend: https://myapp.orama.network
+# Backend: https://myapp-api.orama.network
+```
+
+**📖 Full Guide**: See [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) for complete documentation, examples, and best practices.
 
 ## Quick Start
 
@@ -108,36 +192,63 @@ make build
 
 ## CLI Commands
 
+### Authentication
+
+```bash
+orama auth login            # Authenticate with wallet
+orama auth status           # Check authentication
+orama auth logout           # Clear credentials
+```
+
+### Application Deployments
+
+```bash
+# Deploy applications
+orama deploy static <path> --name myapp      # React, Vue, static sites
+orama deploy nextjs <path> --name myapp --ssr # Next.js with SSR
+orama deploy go <path> --name myapp          # Go binaries
+orama deploy nodejs <path> --name myapp      # Node.js apps
+
+# Manage deployments
+orama deployments list                        # List all deployments
+orama deployments get <name>                  # Get deployment details
+orama deployments logs <name> --follow        # View logs
+orama deployments delete <name>               # Delete deployment
+orama deployments rollback <name> --version 1 # Rollback to version
+```
+
+### SQLite Databases
+
+```bash
+orama db create <name>                   # Create database
+orama db query <name> "SELECT * FROM t"  # Execute SQL query
+orama db list                            # List all databases
+orama db backup <name>                   # Backup to IPFS
+orama db backups <name>                  # List backups
+```
+
 ### Network Status
 
 ```bash
-./bin/orama health          # Cluster health check
-./bin/orama peers           # List connected peers
-./bin/orama status          # Network status
+orama health                # Cluster health check
+orama peers                 # List connected peers
+orama status                # Network status
 ```
 
-### Database Operations
+### RQLite Operations
 
 ```bash
-./bin/orama query "SELECT * FROM users"
-./bin/orama query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
-./bin/orama transaction --file ops.json
+orama query "SELECT * FROM users"
+orama query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
+orama transaction --file ops.json
 ```
 
 ### Pub/Sub
 
 ```bash
-./bin/orama pubsub publish <topic> <message>
-./bin/orama pubsub subscribe <topic> 30s
-./bin/orama pubsub topics
-```
-
-### Authentication
-
-```bash
-./bin/orama auth login
-./bin/orama auth status
-./bin/orama auth logout
+orama pubsub publish <topic> <message>
+orama pubsub subscribe <topic> 30s
+orama pubsub topics
 ```
 
 ## Serverless Functions (WASM)
@@ -331,10 +442,12 @@ See `openapi/gateway.yaml` for complete API specification.
 
 ## Documentation
 
+- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)** - Deploy React, Next.js, Go apps and manage databases
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - System architecture and design patterns
 - **[Client SDK](docs/CLIENT_SDK.md)** - Go SDK documentation and examples
 - **[Gateway API](docs/GATEWAY_API.md)** - Complete HTTP API reference
 - **[Security Deployment](docs/SECURITY_DEPLOYMENT_GUIDE.md)** - Production security hardening
+- **[Testing Plan](docs/TESTING_PLAN.md)** - Comprehensive testing strategy and implementation
 
 ## Resources
 
