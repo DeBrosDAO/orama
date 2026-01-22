@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -19,9 +21,13 @@ import (
 
 // withMiddleware adds CORS and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging (outermost) -> CORS -> auth -> handler
-	// Add authorization layer after auth to enforce namespace ownership
-	return g.loggingMiddleware(g.corsMiddleware(g.authMiddleware(g.authorizationMiddleware(next))))
+	// Order: logging (outermost) -> CORS -> domain routing -> auth -> handler
+	// Domain routing must come BEFORE auth to handle deployment domains without auth
+	return g.loggingMiddleware(
+		g.corsMiddleware(
+			g.domainRoutingMiddleware(
+				g.authMiddleware(
+					g.authorizationMiddleware(next)))))
 }
 
 // loggingMiddleware logs basic request info and duration
@@ -425,4 +431,184 @@ func getClientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// domainRoutingMiddleware handles requests to deployment domains
+// This must come BEFORE auth middleware so deployment domains work without API keys
+func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := strings.Split(r.Host, ":")[0] // Strip port
+
+		// Only process .debros.network domains
+		if !strings.HasSuffix(host, ".debros.network") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip API paths (they should use JWT/API key auth)
+		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check if deployment handlers are available
+		if g.deploymentService == nil || g.staticHandler == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Try to find deployment by domain
+		deployment, err := g.getDeploymentByDomain(r.Context(), host)
+		if err != nil || deployment == nil {
+			// Not a deployment domain, continue to normal routing
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Inject deployment context
+		ctx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, deployment.Namespace)
+		ctx = context.WithValue(ctx, "deployment", deployment)
+
+		// Route based on deployment type
+		if deployment.Port == 0 {
+			// Static deployment - serve from IPFS
+			g.staticHandler.HandleServe(w, r.WithContext(ctx), deployment)
+		} else {
+			// Dynamic deployment - proxy to local port
+			g.proxyToDynamicDeployment(w, r.WithContext(ctx), deployment)
+		}
+	})
+}
+
+// getDeploymentByDomain looks up a deployment by its domain
+func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*deployments.Deployment, error) {
+	if g.deploymentService == nil {
+		return nil, nil
+	}
+
+	// Strip trailing dot if present
+	domain = strings.TrimSuffix(domain, ".")
+
+	// Query deployment by domain (node-specific subdomain or custom domain)
+	db := g.client.Database()
+	internalCtx := client.WithInternalAuth(ctx)
+
+	query := `
+		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status
+		FROM deployments d
+		LEFT JOIN deployment_domains dd ON d.id = dd.deployment_id
+		WHERE (d.name || '.node-' || d.home_node_id || '.debros.network' = ? 
+		       OR dd.domain = ? AND dd.verification_status = 'verified')
+		AND d.status = 'active'
+		LIMIT 1
+	`
+
+	result, err := db.Query(internalCtx, query, domain, domain)
+	if err != nil || result.Count == 0 {
+		return nil, err
+	}
+
+	if len(result.Rows) == 0 {
+		return nil, nil
+	}
+
+	row := result.Rows[0]
+	if len(row) < 7 {
+		return nil, nil
+	}
+
+	// Create deployment object
+	deployment := &deployments.Deployment{
+		ID:         getString(row[0]),
+		Namespace:  getString(row[1]),
+		Name:       getString(row[2]),
+		Type:       deployments.DeploymentType(getString(row[3])),
+		Port:       getInt(row[4]),
+		ContentCID: getString(row[5]),
+		Status:     deployments.DeploymentStatus(getString(row[6])),
+	}
+
+	return deployment, nil
+}
+
+// proxyToDynamicDeployment proxies requests to a dynamic deployment's local port
+func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment) {
+	if deployment.Port == 0 {
+		http.Error(w, "Deployment has no assigned port", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Create a simple reverse proxy
+	target := "http://localhost:" + strconv.Itoa(deployment.Port)
+
+	// Set proxy headers
+	r.Header.Set("X-Forwarded-For", getClientIP(r))
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Host", r.Host)
+
+	// Create a new request to the backend
+	backendURL := target + r.URL.Path
+	if r.URL.RawQuery != "" {
+		backendURL += "?" + r.URL.RawQuery
+	}
+
+	proxyReq, err := http.NewRequest(r.Method, backendURL, r.Body)
+	if err != nil {
+		http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers
+	for key, values := range r.Header {
+		for _, value := range values {
+			proxyReq.Header.Add(key, value)
+		}
+	}
+
+	// Execute proxy request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(proxyReq)
+	if err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral, "proxy request failed",
+			zap.String("target", target),
+			zap.Error(err),
+		)
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Write status code and body
+	w.WriteHeader(resp.StatusCode)
+	if _, err := w.(io.Writer).Write([]byte{}); err == nil {
+		io.Copy(w, resp.Body)
+	}
+}
+
+// Helper functions for type conversion
+func getString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func getInt(v interface{}) int {
+	if i, ok := v.(int); ok {
+		return i
+	}
+	if i, ok := v.(int64); ok {
+		return int(i)
+	}
+	if f, ok := v.(float64); ok {
+		return int(f)
+	}
+	return 0
 }

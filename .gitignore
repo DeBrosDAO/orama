@@ -81,3 +81,6 @@ configs/
 .claude/
 .mcp.json
 .cursor/
+
+# Remote node credentials
+scripts/remote-nodes.conf

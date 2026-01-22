@@ -1,0 +1,8 @@
+# Remote node configuration
+# Format: node_number|user@host|password
+# Copy this file to remote-nodes.conf and fill in your credentials
+
+1|ubuntu@51.83.128.181|your_password_here
+2|root@194.61.28.7|your_password_here
+3|root@83.171.248.66|your_password_here
+4|root@62.72.44.87|your_password_here

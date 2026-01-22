@@ -79,5 +79,40 @@ func (g *Gateway) Routes() http.Handler {
 		g.serverlessHandlers.RegisterRoutes(mux)
 	}
 
+	// deployment endpoints
+	if g.deploymentService != nil {
+		// Static deployments
+		mux.HandleFunc("/v1/deployments/static/upload", g.staticHandler.HandleUpload)
+		mux.HandleFunc("/v1/deployments/static/update", g.updateHandler.HandleUpdate)
+
+		// Next.js deployments
+		mux.HandleFunc("/v1/deployments/nextjs/upload", g.nextjsHandler.HandleUpload)
+		mux.HandleFunc("/v1/deployments/nextjs/update", g.updateHandler.HandleUpdate)
+
+		// Deployment management
+		mux.HandleFunc("/v1/deployments/list", g.listHandler.HandleList)
+		mux.HandleFunc("/v1/deployments/get", g.listHandler.HandleGet)
+		mux.HandleFunc("/v1/deployments/delete", g.listHandler.HandleDelete)
+		mux.HandleFunc("/v1/deployments/rollback", g.rollbackHandler.HandleRollback)
+		mux.HandleFunc("/v1/deployments/versions", g.rollbackHandler.HandleListVersions)
+		mux.HandleFunc("/v1/deployments/logs", g.logsHandler.HandleLogs)
+		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
+
+		// Custom domains
+		mux.HandleFunc("/v1/deployments/domains/add", g.domainHandler.HandleAddDomain)
+		mux.HandleFunc("/v1/deployments/domains/verify", g.domainHandler.HandleVerifyDomain)
+		mux.HandleFunc("/v1/deployments/domains/list", g.domainHandler.HandleListDomains)
+		mux.HandleFunc("/v1/deployments/domains/remove", g.domainHandler.HandleRemoveDomain)
+	}
+
+	// SQLite database endpoints
+	if g.sqliteHandler != nil {
+		mux.HandleFunc("/v1/db/sqlite/create", g.sqliteHandler.CreateDatabase)
+		mux.HandleFunc("/v1/db/sqlite/query", g.sqliteHandler.QueryDatabase)
+		mux.HandleFunc("/v1/db/sqlite/list", g.sqliteHandler.ListDatabases)
+		mux.HandleFunc("/v1/db/sqlite/backup", g.sqliteBackupHandler.BackupDatabase)
+		mux.HandleFunc("/v1/db/sqlite/backups", g.sqliteBackupHandler.ListBackups)
+	}
+
 	return g.withMiddleware(mux)
 }

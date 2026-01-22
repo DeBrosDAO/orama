@@ -8,21 +8,29 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/health"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
+	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 )
 
@@ -65,6 +73,22 @@ type Gateway struct {
 	// Authentication service
 	authService  *auth.Service
 	authHandlers *authhandlers.Handlers
+
+	// Deployment system
+	deploymentService    *deploymentshandlers.DeploymentService
+	staticHandler        *deploymentshandlers.StaticDeploymentHandler
+	nextjsHandler        *deploymentshandlers.NextJSHandler
+	listHandler          *deploymentshandlers.ListHandler
+	updateHandler        *deploymentshandlers.UpdateHandler
+	rollbackHandler      *deploymentshandlers.RollbackHandler
+	logsHandler          *deploymentshandlers.LogsHandler
+	domainHandler        *deploymentshandlers.DomainHandler
+	sqliteHandler        *sqlitehandlers.SQLiteHandler
+	sqliteBackupHandler  *sqlitehandlers.BackupHandler
+	portAllocator        *deployments.PortAllocator
+	homeNodeManager      *deployments.HomeNodeManager
+	processManager       *process.Manager
+	healthChecker        *health.HealthChecker
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -110,6 +134,45 @@ func (a *authDatabaseAdapter) Query(ctx context.Context, sql string, args ...int
 		Count: int(result.Count),
 		Rows:  convertedRows,
 	}, nil
+}
+
+// deploymentDatabaseAdapter adapts rqlite.Client to database.Database
+type deploymentDatabaseAdapter struct {
+	client rqlite.Client
+}
+
+func (a *deploymentDatabaseAdapter) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	return a.client.Query(ctx, dest, query, args...)
+}
+
+func (a *deploymentDatabaseAdapter) QueryOne(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	// Query expects a slice, so we need to query into a slice and check length
+	// Get the type of dest and create a slice of that type
+	destType := reflect.TypeOf(dest).Elem()
+	sliceType := reflect.SliceOf(destType)
+	slice := reflect.New(sliceType).Interface()
+
+	// Execute query into slice
+	if err := a.client.Query(ctx, slice, query, args...); err != nil {
+		return err
+	}
+
+	// Check that we got exactly one result
+	sliceVal := reflect.ValueOf(slice).Elem()
+	if sliceVal.Len() == 0 {
+		return fmt.Errorf("no rows found")
+	}
+	if sliceVal.Len() > 1 {
+		return fmt.Errorf("expected 1 row, got %d", sliceVal.Len())
+	}
+
+	// Copy the first element to dest
+	reflect.ValueOf(dest).Elem().Set(sliceVal.Index(0))
+	return nil
+}
+
+func (a *deploymentDatabaseAdapter) Exec(ctx context.Context, query string, args ...interface{}) (interface{}, error) {
+	return a.client.Exec(ctx, query, args...)
 }
 
 // New creates and initializes a new Gateway instance.
@@ -170,6 +233,88 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.ClientNamespace,
 			gw.withInternalAuth,
 		)
+	}
+
+	// Initialize deployment system
+	if deps.ORMClient != nil && deps.IPFSClient != nil {
+		// Convert rqlite.Client to database.Database interface for health checker
+		dbAdapter := &deploymentDatabaseAdapter{client: deps.ORMClient}
+
+		// Create deployment service components
+		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
+		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
+		gw.processManager = process.NewManager(logger.Logger)
+
+		// Create deployment service
+		gw.deploymentService = deploymentshandlers.NewDeploymentService(
+			deps.ORMClient,
+			gw.homeNodeManager,
+			gw.portAllocator,
+			logger.Logger,
+		)
+
+		// Create deployment handlers
+		gw.staticHandler = deploymentshandlers.NewStaticDeploymentHandler(
+			gw.deploymentService,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
+		gw.nextjsHandler = deploymentshandlers.NewNextJSHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
+		gw.listHandler = deploymentshandlers.NewListHandler(
+			gw.deploymentService,
+			logger.Logger,
+		)
+
+		gw.updateHandler = deploymentshandlers.NewUpdateHandler(
+			gw.deploymentService,
+			gw.staticHandler,
+			gw.nextjsHandler,
+			gw.processManager,
+			logger.Logger,
+		)
+
+		gw.rollbackHandler = deploymentshandlers.NewRollbackHandler(
+			gw.deploymentService,
+			gw.updateHandler,
+			logger.Logger,
+		)
+
+		gw.logsHandler = deploymentshandlers.NewLogsHandler(
+			gw.deploymentService,
+			gw.processManager,
+			logger.Logger,
+		)
+
+		gw.domainHandler = deploymentshandlers.NewDomainHandler(
+			gw.deploymentService,
+			logger.Logger,
+		)
+
+		// SQLite handlers
+		gw.sqliteHandler = sqlitehandlers.NewSQLiteHandler(
+			deps.ORMClient,
+			gw.homeNodeManager,
+			logger.Logger,
+		)
+
+		gw.sqliteBackupHandler = sqlitehandlers.NewBackupHandler(
+			gw.sqliteHandler,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
+		// Start health checker
+		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger)
+		go gw.healthChecker.Start(context.Background())
+
+		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
 	}
 
 	// Start background Olric reconnection if initial connection failed
