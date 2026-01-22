@@ -240,6 +240,11 @@ func (m *MockIPFSClient) Add(ctx context.Context, reader io.Reader, filename str
 	return &ipfs.AddResponse{Cid: cid, Name: filename}, nil
 }
 
+func (m *MockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
+	cid := "cid-dir-" + dirPath
+	return &ipfs.AddResponse{Cid: cid, Name: dirPath}, nil
+}
+
 func (m *MockIPFSClient) Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error) {
 	return &ipfs.PinResponse{Cid: cid, Name: name}, nil
 }

@@ -12,14 +12,15 @@ import (
 
 // mockIPFSClient implements a mock IPFS client for testing
 type mockIPFSClient struct {
-	AddFunc       func(ctx context.Context, r io.Reader, filename string) (*ipfs.AddResponse, error)
-	GetFunc       func(ctx context.Context, path, ipfsAPIURL string) (io.ReadCloser, error)
-	PinFunc       func(ctx context.Context, cid, name string, replicationFactor int) (*ipfs.PinResponse, error)
-	PinStatusFunc func(ctx context.Context, cid string) (*ipfs.PinStatus, error)
-	UnpinFunc     func(ctx context.Context, cid string) error
-	HealthFunc    func(ctx context.Context) error
-	GetPeerFunc   func(ctx context.Context) (int, error)
-	CloseFunc     func(ctx context.Context) error
+	AddFunc          func(ctx context.Context, r io.Reader, filename string) (*ipfs.AddResponse, error)
+	AddDirectoryFunc func(ctx context.Context, dirPath string) (*ipfs.AddResponse, error)
+	GetFunc          func(ctx context.Context, path, ipfsAPIURL string) (io.ReadCloser, error)
+	PinFunc          func(ctx context.Context, cid, name string, replicationFactor int) (*ipfs.PinResponse, error)
+	PinStatusFunc    func(ctx context.Context, cid string) (*ipfs.PinStatus, error)
+	UnpinFunc        func(ctx context.Context, cid string) error
+	HealthFunc       func(ctx context.Context) error
+	GetPeerFunc      func(ctx context.Context) (int, error)
+	CloseFunc        func(ctx context.Context) error
 }
 
 func (m *mockIPFSClient) Add(ctx context.Context, r io.Reader, filename string) (*ipfs.AddResponse, error) {
@@ -27,6 +28,13 @@ func (m *mockIPFSClient) Add(ctx context.Context, r io.Reader, filename string) 
 		return m.AddFunc(ctx, r, filename)
 	}
 	return &ipfs.AddResponse{Cid: "QmTestCID123456789"}, nil
+}
+
+func (m *mockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
+	if m.AddDirectoryFunc != nil {
+		return m.AddDirectoryFunc(ctx, dirPath)
+	}
+	return &ipfs.AddResponse{Cid: "QmTestDirCID123456789"}, nil
 }
 
 func (m *mockIPFSClient) Get(ctx context.Context, cid, ipfsAPIURL string) (io.ReadCloser, error) {

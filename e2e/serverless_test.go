@@ -30,7 +30,11 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 	}
 
 	funcName := "e2e-hello"
-	namespace := "default"
+	// Use namespace from environment or default to test namespace
+	namespace := os.Getenv("ORAMA_NAMESPACE")
+	if namespace == "" {
+		namespace = "default-test-ns" // Match the namespace from LoadTestEnv()
+	}
 
 	// 1. Deploy function
 	var buf bytes.Buffer
@@ -39,6 +43,7 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 	// Add metadata
 	_ = writer.WriteField("name", funcName)
 	_ = writer.WriteField("namespace", namespace)
+	_ = writer.WriteField("is_public", "true") // Make function public for E2E test
 
 	// Add WASM file
 	part, err := writer.CreateFormFile("wasm", funcName+".wasm")
@@ -69,7 +74,7 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 
 	// 2. Invoke function
 	invokePayload := []byte(`{"name": "E2E Tester"}`)
-	invokeReq, _ := http.NewRequestWithContext(ctx, "POST", GetGatewayURL()+"/v1/functions/"+funcName+"/invoke", bytes.NewReader(invokePayload))
+	invokeReq, _ := http.NewRequestWithContext(ctx, "POST", GetGatewayURL()+"/v1/functions/"+funcName+"/invoke?namespace="+namespace, bytes.NewReader(invokePayload))
 	invokeReq.Header.Set("Content-Type", "application/json")
 
 	if apiKey := GetAPIKey(); apiKey != "" {

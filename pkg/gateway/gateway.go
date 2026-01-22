@@ -220,7 +220,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.storageHandlers = storage.New(deps.IPFSClient, logger, storage.Config{
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
-		})
+		}, deps.ORMClient)
 	}
 
 	if deps.AuthService != nil {

@@ -323,7 +323,14 @@ func TestStorage_PinUnpin(t *testing.T) {
 		t.Fatalf("failed to decode upload response: %v", err)
 	}
 
-	cid := uploadResult["cid"].(string)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	cid, ok := uploadResult["cid"].(string)
+	if !ok || cid == "" {
+		t.Fatalf("no CID in upload response: %v", uploadResult)
+	}
 
 	// Pin the file
 	pinReq := &HTTPRequest{

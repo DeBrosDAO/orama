@@ -21,6 +21,7 @@ import (
 // mockIPFSClient is a mock implementation of ipfs.IPFSClient for testing
 type mockIPFSClient struct {
 	addFunc          func(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
+	addDirectoryFunc func(ctx context.Context, dirPath string) (*ipfs.AddResponse, error)
 	pinFunc          func(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
 	pinStatusFunc    func(ctx context.Context, cid string) (*ipfs.PinStatus, error)
 	getFunc          func(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
@@ -33,6 +34,13 @@ func (m *mockIPFSClient) Add(ctx context.Context, reader io.Reader, name string)
 		return m.addFunc(ctx, reader, name)
 	}
 	return &ipfs.AddResponse{Cid: "QmTest123", Name: name, Size: 100}, nil
+}
+
+func (m *mockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
+	if m.addDirectoryFunc != nil {
+		return m.addDirectoryFunc(ctx, dirPath)
+	}
+	return &ipfs.AddResponse{Cid: "QmTestDir123", Name: dirPath, Size: 1000}, nil
 }
 
 func (m *mockIPFSClient) Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error) {
@@ -111,7 +119,7 @@ func newTestGatewayWithIPFS(t *testing.T, ipfsClient ipfs.IPFSClient) *Gateway {
 		gw.storageHandlers = storage.New(ipfsClient, logger, storage.Config{
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
-		})
+		}, nil) // nil db client for tests
 	}
 
 	return gw
@@ -127,7 +135,7 @@ func TestStorageUploadHandler_MissingIPFSClient(t *testing.T) {
 	handlers := storage.New(nil, logger, storage.Config{
 		IPFSReplicationFactor: 3,
 		IPFSAPIURL:            "http://localhost:5001",
-	})
+	}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", nil)
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")

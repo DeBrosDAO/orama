@@ -106,6 +106,15 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record ownership in database for namespace isolation
+	// Use wallet or API key as uploaded_by identifier
+	uploadedBy := namespace // Could be enhanced to track wallet address if available
+	if err := h.recordCIDOwnership(ctx, addResp.Cid, namespace, addResp.Name, uploadedBy, addResp.Size); err != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "failed to record CID ownership (non-fatal)",
+			zap.Error(err), zap.String("cid", addResp.Cid), zap.String("namespace", namespace))
+		// Don't fail the upload - this is just for tracking
+	}
+
 	// Return response immediately - don't block on pinning
 	response := StorageUploadResponse{
 		Cid:  addResp.Cid,
@@ -115,7 +124,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Pin asynchronously in background if requested
 	if shouldPin {
-		go h.pinAsync(addResp.Cid, name, replicationFactor)
+		go h.pinAsync(addResp.Cid, name, replicationFactor, namespace)
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, response)
@@ -123,13 +132,15 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 // pinAsync pins a CID asynchronously in the background with retry logic.
 // It retries once if the first attempt fails, then gives up.
-func (h *Handlers) pinAsync(cid, name string, replicationFactor int) {
+func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace string) {
 	ctx := context.Background()
 
 	// First attempt
 	_, err := h.ipfsClient.Pin(ctx, cid, name, replicationFactor)
 	if err == nil {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded", zap.String("cid", cid))
+		// Update pin status in database
+		h.updatePinStatus(ctx, cid, namespace, true)
 		return
 	}
 
@@ -146,6 +157,8 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int) {
 			zap.Error(err), zap.String("cid", cid))
 	} else {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
+		// Update pin status in database
+		h.updatePinStatus(ctx, cid, namespace, true)
 	}
 }
 

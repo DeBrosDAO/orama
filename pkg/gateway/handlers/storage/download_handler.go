@@ -38,13 +38,29 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
+	// Check if namespace owns this CID (namespace isolation)
+	hasAccess, err := h.checkCIDOwnership(ctx, path, namespace)
+	if err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
+			zap.Error(err), zap.String("cid", path), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		return
+	}
+	if !hasAccess {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "namespace attempted to access CID they don't own",
+			zap.String("cid", path), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusForbidden, "access denied: CID not owned by namespace")
+		return
+	}
+
 	// Get IPFS API URL from config
 	ipfsAPIURL := h.config.IPFSAPIURL
 	if ipfsAPIURL == "" {
 		ipfsAPIURL = "http://localhost:5001"
 	}
 
-	ctx := r.Context()
 	reader, err := h.ipfsClient.Get(ctx, path, ipfsAPIURL)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to get content from IPFS",

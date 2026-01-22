@@ -981,19 +981,71 @@ type E2ETestEnv struct {
 }
 
 // LoadTestEnv loads the test environment from environment variables
+// If ORAMA_API_KEY is not set, it creates a fresh API key for the default test namespace
 func LoadTestEnv() (*E2ETestEnv, error) {
 	gatewayURL := os.Getenv("ORAMA_GATEWAY_URL")
 	if gatewayURL == "" {
 		gatewayURL = GetGatewayURL()
 	}
 
+	// Check if API key is provided via environment variable
 	apiKey := os.Getenv("ORAMA_API_KEY")
-	if apiKey == "" {
-		apiKey = GetAPIKey()
-	}
-
 	namespace := os.Getenv("ORAMA_NAMESPACE")
-	if namespace == "" {
+
+	// If no API key provided, create a fresh one for a default test namespace
+	if apiKey == "" {
+		if namespace == "" {
+			namespace = "default-test-ns"
+		}
+
+		// Generate a unique wallet address for this namespace
+		wallet := fmt.Sprintf("0x%x", []byte(namespace+fmt.Sprintf("%d", time.Now().UnixNano())))
+		if len(wallet) < 42 {
+			wallet = wallet + strings.Repeat("0", 42-len(wallet))
+		}
+		if len(wallet) > 42 {
+			wallet = wallet[:42]
+		}
+
+		// Create an API key for this namespace via the simple-key endpoint
+		reqBody := map[string]string{
+			"wallet":    wallet,
+			"namespace": namespace,
+		}
+		bodyBytes, _ := json.Marshal(reqBody)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL+"/v1/auth/simple-key", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create API key request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := NewHTTPClient(10 * time.Second)
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create API key: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("API key creation failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		var apiKeyResp map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&apiKeyResp); err != nil {
+			return nil, fmt.Errorf("failed to decode API key response: %w", err)
+		}
+
+		var ok bool
+		apiKey, ok = apiKeyResp["api_key"].(string)
+		if !ok || apiKey == "" {
+			return nil, fmt.Errorf("API key not found in response")
+		}
+	} else if namespace == "" {
 		namespace = GetClientNamespace()
 	}
 
