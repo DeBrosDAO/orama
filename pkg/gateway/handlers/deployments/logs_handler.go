@@ -32,7 +32,11 @@ func NewLogsHandler(service *DeploymentService, processManager *process.Manager,
 // HandleLogs streams deployment logs
 func (h *LogsHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 	name := r.URL.Query().Get("name")
 
 	if name == "" {
@@ -113,7 +117,11 @@ func (h *LogsHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 // HandleGetEvents gets deployment events
 func (h *LogsHandler) HandleGetEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 	name := r.URL.Query().Get("name")
 
 	if name == "" {

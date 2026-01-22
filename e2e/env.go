@@ -1075,7 +1075,15 @@ func CreateTestDeployment(t *testing.T, env *E2ETestEnv, name, tarballPath strin
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	return result["id"].(string)
+	// Try both "id" and "deployment_id" field names
+	if id, ok := result["deployment_id"].(string); ok {
+		return id
+	}
+	if id, ok := result["id"].(string); ok {
+		return id
+	}
+	t.Fatalf("deployment response missing id field: %+v", result)
+	return ""
 }
 
 // DeleteDeployment deletes a deployment by ID

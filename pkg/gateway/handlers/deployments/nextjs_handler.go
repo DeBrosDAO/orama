@@ -46,7 +46,11 @@ func NewNextJSHandler(
 // HandleUpload handles Next.js deployment upload
 func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	// Parse multipart form
 	if err := r.ParseMultipartForm(200 << 20); err != nil { // 200MB max

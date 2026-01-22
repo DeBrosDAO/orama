@@ -169,6 +169,76 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name s
 	}, nil
 }
 
+// GetDeploymentByID retrieves a deployment by namespace and ID
+func (s *DeploymentService) GetDeploymentByID(ctx context.Context, namespace, id string) (*deployments.Deployment, error) {
+	type deploymentRow struct {
+		ID                  string    `db:"id"`
+		Namespace           string    `db:"namespace"`
+		Name                string    `db:"name"`
+		Type                string    `db:"type"`
+		Version             int       `db:"version"`
+		Status              string    `db:"status"`
+		ContentCID          string    `db:"content_cid"`
+		BuildCID            string    `db:"build_cid"`
+		HomeNodeID          string    `db:"home_node_id"`
+		Port                int       `db:"port"`
+		Subdomain           string    `db:"subdomain"`
+		Environment         string    `db:"environment"`
+		MemoryLimitMB       int       `db:"memory_limit_mb"`
+		CPULimitPercent     int       `db:"cpu_limit_percent"`
+		DiskLimitMB         int       `db:"disk_limit_mb"`
+		HealthCheckPath     string    `db:"health_check_path"`
+		HealthCheckInterval int       `db:"health_check_interval"`
+		RestartPolicy       string    `db:"restart_policy"`
+		MaxRestartCount     int       `db:"max_restart_count"`
+		CreatedAt           time.Time `db:"created_at"`
+		UpdatedAt           time.Time `db:"updated_at"`
+		DeployedBy          string    `db:"deployed_by"`
+	}
+
+	var rows []deploymentRow
+	query := `SELECT * FROM deployments WHERE namespace = ? AND id = ? LIMIT 1`
+	err := s.db.Query(ctx, &rows, query, namespace, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deployment: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil, deployments.ErrDeploymentNotFound
+	}
+
+	row := rows[0]
+	var env map[string]string
+	if err := json.Unmarshal([]byte(row.Environment), &env); err != nil {
+		env = make(map[string]string)
+	}
+
+	return &deployments.Deployment{
+		ID:                  row.ID,
+		Namespace:           row.Namespace,
+		Name:                row.Name,
+		Type:                deployments.DeploymentType(row.Type),
+		Version:             row.Version,
+		Status:              deployments.DeploymentStatus(row.Status),
+		ContentCID:          row.ContentCID,
+		BuildCID:            row.BuildCID,
+		HomeNodeID:          row.HomeNodeID,
+		Port:                row.Port,
+		Subdomain:           row.Subdomain,
+		Environment:         env,
+		MemoryLimitMB:       row.MemoryLimitMB,
+		CPULimitPercent:     row.CPULimitPercent,
+		DiskLimitMB:         row.DiskLimitMB,
+		HealthCheckPath:     row.HealthCheckPath,
+		HealthCheckInterval: row.HealthCheckInterval,
+		RestartPolicy:       deployments.RestartPolicy(row.RestartPolicy),
+		MaxRestartCount:     row.MaxRestartCount,
+		CreatedAt:           row.CreatedAt,
+		UpdatedAt:           row.UpdatedAt,
+		DeployedBy:          row.DeployedBy,
+	}, nil
+}
+
 // CreateDNSRecords creates DNS records for a deployment
 func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *deployments.Deployment) error {
 	// Get node IP

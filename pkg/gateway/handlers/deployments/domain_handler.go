@@ -32,7 +32,11 @@ func NewDomainHandler(service *DeploymentService, logger *zap.Logger) *DomainHan
 // HandleAddDomain adds a custom domain to a deployment
 func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		DeploymentName string `json:"deployment_name"`
@@ -145,7 +149,11 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 // HandleVerifyDomain verifies domain ownership via TXT record
 func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		Domain string `json:"domain"`
@@ -241,7 +249,11 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 // HandleListDomains lists all domains for a deployment
 func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 	deploymentName := r.URL.Query().Get("deployment_name")
 
 	if deploymentName == "" {
@@ -304,7 +316,11 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 // HandleRemoveDomain removes a custom domain
 func (h *DomainHandler) HandleRemoveDomain(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 	domain := r.URL.Query().Get("domain")
 
 	if domain == "" {

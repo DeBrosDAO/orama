@@ -497,13 +497,15 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status
 		FROM deployments d
 		LEFT JOIN deployment_domains dd ON d.id = dd.deployment_id
-		WHERE (d.name || '.node-' || d.home_node_id || '.orama.network' = ? 
+		WHERE (d.name || '.' || d.home_node_id || '.orama.network' = ?
+		       OR d.name || '.node-' || d.home_node_id || '.orama.network' = ?
+		       OR d.name || '.orama.network' = ?
 		       OR dd.domain = ? AND dd.verification_status = 'verified')
 		AND d.status = 'active'
 		LIMIT 1
 	`
 
-	result, err := db.Query(internalCtx, query, domain, domain)
+	result, err := db.Query(internalCtx, query, domain, domain, domain, domain)
 	if err != nil || result.Count == 0 {
 		return nil, err
 	}

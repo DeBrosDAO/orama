@@ -30,7 +30,11 @@ func NewRollbackHandler(service *DeploymentService, updateHandler *UpdateHandler
 // HandleRollback handles deployment rollback
 func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	var req struct {
 		Name    string `json:"name"`
@@ -317,7 +321,11 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 // HandleListVersions lists all versions of a deployment
 func (h *RollbackHandler) HandleListVersions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 	name := r.URL.Query().Get("name")
 
 	if name == "" {

@@ -26,7 +26,11 @@ func NewListHandler(service *DeploymentService, logger *zap.Logger) *ListHandler
 // HandleList lists all deployments for a namespace
 func (h *ListHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	type deploymentRow struct {
 		ID         string    `db:"id"`
@@ -97,15 +101,29 @@ func (h *ListHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 // HandleGet gets a specific deployment
 func (h *ListHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
-	name := r.URL.Query().Get("name")
-
-	if name == "" {
-		http.Error(w, "name query parameter is required", http.StatusBadRequest)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
 		return
 	}
 
-	deployment, err := h.service.GetDeployment(ctx, namespace, name)
+	// Support both 'name' and 'id' query parameters
+	name := r.URL.Query().Get("name")
+	id := r.URL.Query().Get("id")
+
+	if name == "" && id == "" {
+		http.Error(w, "name or id query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	var deployment *deployments.Deployment
+	var err error
+
+	if id != "" {
+		deployment, err = h.service.GetDeploymentByID(ctx, namespace, id)
+	} else {
+		deployment, err = h.service.GetDeployment(ctx, namespace, name)
+	}
 	if err != nil {
 		if err == deployments.ErrDeploymentNotFound {
 			http.Error(w, "Deployment not found", http.StatusNotFound)
@@ -150,21 +168,36 @@ func (h *ListHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 // HandleDelete deletes a deployment
 func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
-	name := r.URL.Query().Get("name")
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
-	if name == "" {
-		http.Error(w, "name query parameter is required", http.StatusBadRequest)
+	// Support both 'name' and 'id' query parameters
+	name := r.URL.Query().Get("name")
+	id := r.URL.Query().Get("id")
+
+	if name == "" && id == "" {
+		http.Error(w, "name or id query parameter is required", http.StatusBadRequest)
 		return
 	}
 
 	h.logger.Info("Deleting deployment",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
+		zap.String("id", id),
 	)
 
 	// Get deployment
-	deployment, err := h.service.GetDeployment(ctx, namespace, name)
+	var deployment *deployments.Deployment
+	var err error
+
+	if id != "" {
+		deployment, err = h.service.GetDeploymentByID(ctx, namespace, id)
+	} else {
+		deployment, err = h.service.GetDeployment(ctx, namespace, name)
+	}
 	if err != nil {
 		if err == deployments.ErrDeploymentNotFound {
 			http.Error(w, "Deployment not found", http.StatusNotFound)

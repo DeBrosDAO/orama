@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,10 +11,20 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// getNamespaceFromContext extracts the namespace from the request context
+// Returns empty string if namespace is not found
+func getNamespaceFromContext(ctx context.Context) string {
+	if ns, ok := ctx.Value(ctxkeys.NamespaceOverride).(string); ok {
+		return ns
+	}
+	return ""
+}
 
 // StaticDeploymentHandler handles static site deployments
 type StaticDeploymentHandler struct {
@@ -34,7 +45,13 @@ func NewStaticDeploymentHandler(service *DeploymentService, ipfsClient ipfs.IPFS
 // HandleUpload handles static site upload and deployment
 func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	namespace := ctx.Value("namespace").(string)
+
+	// Get namespace from context (set by auth middleware)
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	// Parse multipart form
 	if err := r.ParseMultipartForm(100 << 20); err != nil { // 100MB max
