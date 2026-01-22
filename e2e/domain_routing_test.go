@@ -145,7 +145,7 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 
 		// Test deployment 2
 		resp2 := TestDeploymentWithHostHeader(t, env, domain2, "/")
-		defer resp2.Close()
+		defer resp2.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp2.StatusCode, "Deployment 2 should serve")
 

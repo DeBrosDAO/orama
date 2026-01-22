@@ -113,6 +113,15 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	// Register this node in dns_nodes table for deployment routing
+	if err := n.registerDNSNode(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to register DNS node", zap.Error(err))
+		// Don't fail startup if DNS registration fails, it will retry on heartbeat
+	} else {
+		// Start DNS heartbeat to keep node status fresh
+		n.startDNSHeartbeat(ctx)
+	}
+
 	// Get listen addresses for logging
 	var listenAddrs []string
 	if n.host != nil {

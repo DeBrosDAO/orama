@@ -500,7 +500,7 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 		WHERE (d.name || '.' || d.home_node_id || '.orama.network' = ?
 		       OR d.name || '.node-' || d.home_node_id || '.orama.network' = ?
 		       OR d.name || '.orama.network' = ?
-		       OR dd.domain = ? AND dd.verification_status = 'verified')
+		       OR dd.domain = ? AND dd.verified_at IS NOT NULL)
 		AND d.status = 'active'
 		LIMIT 1
 	`

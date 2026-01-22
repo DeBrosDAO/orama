@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -177,7 +178,13 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 		return nil, fmt.Errorf("failed to close writer: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.apiURL+"/add", &buf)
+	// Add query parameters for tarball extraction
+	apiURL := c.apiURL + "/add"
+	if strings.HasSuffix(strings.ToLower(name), ".tar.gz") || strings.HasSuffix(strings.ToLower(name), ".tgz") {
+		apiURL += "?extract=true"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &buf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create add request: %w", err)
 	}
