@@ -232,6 +232,17 @@ func TestRQLite_ConcurrentInserts(t *testing.T) {
 	defer cancel()
 
 	table := GenerateTableName()
+
+	// Cleanup table after test
+	defer func() {
+		dropReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": table},
+		}
+		dropReq.Do(context.Background())
+	}()
+
 	schema := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER)",
 		table,
@@ -320,6 +331,17 @@ func TestRQLite_LargeBatchTransaction(t *testing.T) {
 	defer cancel()
 
 	table := GenerateTableName()
+
+	// Cleanup table after test
+	defer func() {
+		dropReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": table},
+		}
+		dropReq.Do(context.Background())
+	}()
+
 	schema := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)",
 		table,

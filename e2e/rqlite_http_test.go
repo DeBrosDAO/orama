@@ -17,6 +17,17 @@ func TestRQLite_CreateTable(t *testing.T) {
 	defer cancel()
 
 	table := GenerateTableName()
+
+	// Cleanup table after test
+	defer func() {
+		dropReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": table},
+		}
+		dropReq.Do(context.Background())
+	}()
+
 	schema := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
 		table,
@@ -47,6 +58,17 @@ func TestRQLite_InsertQuery(t *testing.T) {
 	defer cancel()
 
 	table := GenerateTableName()
+
+	// Cleanup table after test
+	defer func() {
+		dropReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": table},
+		}
+		dropReq.Do(context.Background())
+	}()
+
 	schema := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)",
 		table,
@@ -245,6 +267,17 @@ func TestRQLite_LargeTransaction(t *testing.T) {
 	defer cancel()
 
 	table := GenerateTableName()
+
+	// Cleanup table after test
+	defer func() {
+		dropReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": table},
+		}
+		dropReq.Do(context.Background())
+	}()
+
 	schema := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER)",
 		table,
@@ -319,6 +352,23 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 
 	orgsTable := GenerateTableName()
 	usersTable := GenerateTableName()
+
+	// Cleanup tables after test
+	defer func() {
+		dropUsersReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": usersTable},
+		}
+		dropUsersReq.Do(context.Background())
+
+		dropOrgsReq := &HTTPRequest{
+			Method: http.MethodPost,
+			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			Body:   map[string]interface{}{"table": orgsTable},
+		}
+		dropOrgsReq.Do(context.Background())
+	}()
 
 	// Create base tables
 	createOrgsReq := &HTTPRequest{
