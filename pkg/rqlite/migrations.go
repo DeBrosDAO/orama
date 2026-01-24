@@ -422,21 +422,93 @@ func splitSQLStatements(in string) []string {
 	return out
 }
 
-// Optional helper to load embedded migrations if you later decide to embed.
-// Keep for future use; currently unused.
-func readDirFS(fsys fs.FS, root string) ([]string, error) {
-	var files []string
-	err := fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(strings.ToLower(d.Name()), ".sql") {
-			files = append(files, path)
-		}
+// ApplyEmbeddedMigrations applies migrations from an embedded filesystem.
+// This is the preferred method as it doesn't depend on filesystem paths.
+func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger *zap.Logger) error {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	if err := ensureMigrationsTable(ctx, db); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+
+	files, err := readMigrationFilesFromFS(fsys)
+	if err != nil {
+		return fmt.Errorf("read embedded migration files: %w", err)
+	}
+	if len(files) == 0 {
+		logger.Info("No embedded migrations found")
 		return nil
-	})
-	return files, err
+	}
+
+	applied, err := loadAppliedVersions(ctx, db)
+	if err != nil {
+		return fmt.Errorf("load applied versions: %w", err)
+	}
+
+	for _, mf := range files {
+		if applied[mf.Version] {
+			logger.Debug("Migration already applied; skipping", zap.Int("version", mf.Version), zap.String("name", mf.Name))
+			continue
+		}
+
+		sqlBytes, err := fs.ReadFile(fsys, mf.Path)
+		if err != nil {
+			return fmt.Errorf("read embedded migration %s: %w", mf.Path, err)
+		}
+
+		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name))
+		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
+		}
+
+		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
+			return fmt.Errorf("record migration %d: %w", mf.Version, err)
+		}
+		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
+	}
+
+	return nil
+}
+
+// ApplyEmbeddedMigrations is a convenience helper bound to RQLiteManager.
+func (r *RQLiteManager) ApplyEmbeddedMigrations(ctx context.Context, fsys fs.FS) error {
+	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+	if err != nil {
+		return fmt.Errorf("open rqlite db: %w", err)
+	}
+	defer db.Close()
+
+	return ApplyEmbeddedMigrations(ctx, db, fsys, r.logger)
+}
+
+// readMigrationFilesFromFS reads migration files from an embedded filesystem.
+func readMigrationFilesFromFS(fsys fs.FS) ([]migrationFile, error) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, err
+	}
+
+	var out []migrationFile
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".sql") {
+			continue
+		}
+		ver, ok := parseVersionPrefix(name)
+		if !ok {
+			continue
+		}
+		out = append(out, migrationFile{
+			Version: ver,
+			Name:    name,
+			Path:    name, // In embedded FS, path is just the filename
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Version < out[j].Version })
+	return out, nil
 }

@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/rqlite/gorqlite"
 	"go.uber.org/zap"
@@ -73,8 +74,14 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		return err
 	}
 
-	migrationsDir, _ := r.resolveMigrationsDir()
-	_ = r.ApplyMigrations(ctx, migrationsDir)
+	// Apply embedded migrations - these are compiled into the binary
+	if err := r.ApplyEmbeddedMigrations(ctx, migrations.FS); err != nil {
+		r.logger.Error("Failed to apply embedded migrations", zap.Error(err))
+		// Don't fail startup - migrations may have already been applied by another node
+		// or we may be joining an existing cluster
+	} else {
+		r.logger.Info("Database migrations applied successfully")
+	}
 
 	return nil
 }

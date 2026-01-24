@@ -33,7 +33,7 @@ func NewDeploymentService(
 		homeNodeManager: homeNodeManager,
 		portAllocator:   portAllocator,
 		logger:          logger,
-		baseDomain:      "orama.network", // default
+		baseDomain:      "dbrs.space", // default
 	}
 }
 
@@ -47,9 +47,24 @@ func (s *DeploymentService) SetBaseDomain(domain string) {
 // BaseDomain returns the configured base domain
 func (s *DeploymentService) BaseDomain() string {
 	if s.baseDomain == "" {
-		return "orama.network"
+		return "dbrs.space"
 	}
 	return s.baseDomain
+}
+
+// GetShortNodeID extracts a short node ID from a full peer ID for domain naming.
+// e.g., "12D3KooWGqyuQR8N..." -> "node-GqyuQR"
+// If the ID is already short (starts with "node-"), returns it as-is.
+func GetShortNodeID(peerID string) string {
+	// If already a short ID, return as-is
+	if len(peerID) < 20 {
+		return peerID
+	}
+	// Skip "12D3KooW" prefix (8 chars) and take next 6 chars
+	if len(peerID) > 14 {
+		return "node-" + peerID[8:14]
+	}
+	return "node-" + peerID[:6]
 }
 
 // CreateDeployment creates a new deployment
@@ -273,24 +288,31 @@ func (s *DeploymentService) UpdateDeploymentStatus(ctx context.Context, deployme
 
 // CreateDNSRecords creates DNS records for a deployment
 func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *deployments.Deployment) error {
-	// Get node IP
+	// Get node IP using the full node ID
 	nodeIP, err := s.getNodeIP(ctx, deployment.HomeNodeID)
 	if err != nil {
 		s.logger.Error("Failed to get node IP", zap.Error(err))
 		return err
 	}
 
-	// Create node-specific record
-	nodeFQDN := fmt.Sprintf("%s.%s.%s.", deployment.Name, deployment.HomeNodeID, s.BaseDomain())
+	// Use short node ID for the domain (e.g., node-kv4la8 instead of full peer ID)
+	shortNodeID := GetShortNodeID(deployment.HomeNodeID)
+
+	// Create node-specific record: {name}.node-{shortID}.{baseDomain}
+	nodeFQDN := fmt.Sprintf("%s.%s.%s.", deployment.Name, shortNodeID, s.BaseDomain())
 	if err := s.createDNSRecord(ctx, nodeFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 		s.logger.Error("Failed to create node-specific DNS record", zap.Error(err))
+	} else {
+		s.logger.Info("Created node-specific DNS record", zap.String("fqdn", nodeFQDN), zap.String("ip", nodeIP))
 	}
 
-	// Create load-balanced record if subdomain is set
+	// Create load-balanced record if subdomain is set: {subdomain}.{baseDomain}
 	if deployment.Subdomain != "" {
 		lbFQDN := fmt.Sprintf("%s.%s.", deployment.Subdomain, s.BaseDomain())
 		if err := s.createDNSRecord(ctx, lbFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 			s.logger.Error("Failed to create load-balanced DNS record", zap.Error(err))
+		} else {
+			s.logger.Info("Created load-balanced DNS record", zap.String("fqdn", lbFQDN), zap.String("ip", nodeIP))
 		}
 	}
 
@@ -310,30 +332,47 @@ func (s *DeploymentService) createDNSRecord(ctx context.Context, fqdn, recordTyp
 	return err
 }
 
-// getNodeIP retrieves the IP address for a node
+// getNodeIP retrieves the IP address for a node.
+// It tries to find the node by full peer ID first, then by short node ID.
 func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (string, error) {
 	type nodeRow struct {
 		IPAddress string `db:"ip_address"`
 	}
 
 	var rows []nodeRow
+
+	// Try full node ID first
 	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := s.db.Query(ctx, &rows, query, nodeID)
 	if err != nil {
 		return "", err
 	}
 
-	if len(rows) == 0 {
-		return "", fmt.Errorf("node not found: %s", nodeID)
+	// If found, return it
+	if len(rows) > 0 {
+		return rows[0].IPAddress, nil
 	}
 
-	return rows[0].IPAddress, nil
+	// Try with short node ID if the original was a full peer ID
+	shortID := GetShortNodeID(nodeID)
+	if shortID != nodeID {
+		err = s.db.Query(ctx, &rows, query, shortID)
+		if err != nil {
+			return "", err
+		}
+		if len(rows) > 0 {
+			return rows[0].IPAddress, nil
+		}
+	}
+
+	return "", fmt.Errorf("node not found: %s (tried: %s, %s)", nodeID, nodeID, shortID)
 }
 
 // BuildDeploymentURLs builds all URLs for a deployment
 func (s *DeploymentService) BuildDeploymentURLs(deployment *deployments.Deployment) []string {
+	shortNodeID := GetShortNodeID(deployment.HomeNodeID)
 	urls := []string{
-		fmt.Sprintf("https://%s.%s.%s", deployment.Name, deployment.HomeNodeID, s.BaseDomain()),
+		fmt.Sprintf("https://%s.%s.%s", deployment.Name, shortNodeID, s.BaseDomain()),
 	}
 
 	if deployment.Subdomain != "" {

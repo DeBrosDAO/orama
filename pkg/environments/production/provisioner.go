@@ -182,6 +182,48 @@ func (up *UserProvisioner) SetupSudoersAccess(invokerUser string) error {
 	return nil
 }
 
+// SetupDeploymentSudoers configures the debros user with permissions needed for
+// managing user deployments via systemd services.
+func (up *UserProvisioner) SetupDeploymentSudoers() error {
+	sudoersFile := "/etc/sudoers.d/debros-deployments"
+
+	// Check if already configured
+	if _, err := os.Stat(sudoersFile); err == nil {
+		return nil // Already configured
+	}
+
+	sudoersContent := `# DeBros Network - Deployment Management Permissions
+# Allows debros user to manage systemd services for user deployments
+
+# Systemd service management for orama-deploy-* services
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl start orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl status orama-deploy-*
+
+# Service file management (tee to write, rm to remove)
+debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/orama-deploy-*.service
+debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-deploy-*.service
+`
+
+	// Write sudoers rule
+	if err := os.WriteFile(sudoersFile, []byte(sudoersContent), 0440); err != nil {
+		return fmt.Errorf("failed to create deployment sudoers rule: %w", err)
+	}
+
+	// Validate sudoers file
+	cmd := exec.Command("visudo", "-c", "-f", sudoersFile)
+	if err := cmd.Run(); err != nil {
+		os.Remove(sudoersFile) // Clean up on validation failure
+		return fmt.Errorf("deployment sudoers rule validation failed: %w", err)
+	}
+
+	return nil
+}
+
 // StateDetector checks for existing production state
 type StateDetector struct {
 	oramaDir string

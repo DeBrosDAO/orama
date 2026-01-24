@@ -211,6 +211,13 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 		}
 	}
 
+	// Set up deployment sudoers (allows debros user to manage orama-deploy-* services)
+	if err := ps.userProvisioner.SetupDeploymentSudoers(); err != nil {
+		ps.logf("  ⚠️  Failed to setup deployment sudoers: %v", err)
+	} else {
+		ps.logf("  ✓ Deployment sudoers configured")
+	}
+
 	// Create directory structure (unified structure)
 	if err := ps.fsProvisioner.EnsureDirectoryStructure(); err != nil {
 		return fmt.Errorf("failed to create directory structure: %w", err)

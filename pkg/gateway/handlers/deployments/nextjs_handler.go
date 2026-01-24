@@ -110,8 +110,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create DNS records
-	go h.service.CreateDNSRecords(ctx, deployment)
+	// Create DNS records (use background context since HTTP context will be cancelled)
+	go h.service.CreateDNSRecords(context.Background(), deployment)
 
 	// Build response
 	urls := h.service.BuildDeploymentURLs(deployment)
@@ -186,6 +186,12 @@ func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomai
 	}
 
 	deployment.Status = deployments.DeploymentStatusActive
+
+	// Update status in database
+	if err := h.service.UpdateDeploymentStatus(ctx, deployment.ID, deployment.Status); err != nil {
+		h.logger.Warn("Failed to update deployment status", zap.Error(err))
+	}
+
 	return deployment, nil
 }
 

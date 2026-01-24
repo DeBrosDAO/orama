@@ -154,8 +154,8 @@ func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Create DNS records
-	go h.service.CreateDNSRecords(ctx, deployment)
+	// Create DNS records (use background context since HTTP context will be cancelled)
+	go h.service.CreateDNSRecords(context.Background(), deployment)
 
 	// Build URLs
 	urls := h.service.BuildDeploymentURLs(deployment)

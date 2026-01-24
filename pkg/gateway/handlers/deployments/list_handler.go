@@ -65,8 +65,9 @@ func (h *ListHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	baseDomain := h.service.BaseDomain()
 	deployments := make([]map[string]interface{}, len(rows))
 	for i, row := range rows {
+		shortNodeID := GetShortNodeID(row.HomeNodeID)
 		urls := []string{
-			"https://" + row.Name + "." + row.HomeNodeID + "." + baseDomain,
+			"https://" + row.Name + "." + shortNodeID + "." + baseDomain,
 		}
 		if row.Subdomain != "" {
 			urls = append(urls, "https://"+row.Subdomain+"."+baseDomain)

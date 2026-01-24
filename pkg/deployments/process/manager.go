@@ -237,7 +237,8 @@ WantedBy=multi-user.target
 func (m *Manager) getStartCommand(deployment *deployments.Deployment, workDir string) string {
 	switch deployment.Type {
 	case deployments.DeploymentTypeNextJS:
-		return "/usr/bin/node server.js"
+		// Next.js standalone output places server at .next/standalone/server.js
+		return "/usr/bin/node .next/standalone/server.js"
 	case deployments.DeploymentTypeNodeJSBackend:
 		// Check if ENTRY_POINT is set in environment
 		if entryPoint, ok := deployment.Environment["ENTRY_POINT"]; ok {

@@ -19,7 +19,7 @@ type Config struct {
 	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.orama/tls-cache)
 
 	// Domain routing configuration
-	BaseDomain string // Base domain for deployment routing (e.g., "dbrs.space"). Defaults to "orama.network"
+	BaseDomain string // Base domain for deployment routing. Set via node config http_gateway.base_domain. Defaults to "dbrs.space"
 
 	// Data directory configuration
 	DataDir string // Base directory for node-local data (SQLite databases, deployments). Defaults to ~/.orama

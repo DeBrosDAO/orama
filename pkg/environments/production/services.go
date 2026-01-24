@@ -231,18 +231,13 @@ StandardOutput=append:%[4]s
 StandardError=append:%[4]s
 SyslogIdentifier=debros-node
 
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-
 PrivateTmp=yes
-ProtectSystem=strict
 ProtectHome=read-only
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[2]s
+ReadWritePaths=%[2]s /etc/systemd/system
 
 [Install]
 WantedBy=multi-user.target

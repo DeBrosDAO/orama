@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -198,7 +199,7 @@ func isPublicPath(p string) bool {
 	}
 
 	switch p {
-	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/login", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/auth/simple-key", "/v1/network/status", "/v1/network/peers":
+	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/login", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/auth/simple-key", "/v1/network/status", "/v1/network/peers", "/v1/internal/tls/check":
 		return true
 	default:
 		return false
@@ -491,6 +492,10 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 }
 
 // getDeploymentByDomain looks up a deployment by its domain
+// Supports formats like:
+//   - {name}.node-{shortID}.{baseDomain} (e.g., myapp.node-kv4la8.dbrs.space)
+//   - {name}.{baseDomain} (e.g., myapp.dbrs.space for load-balanced/custom subdomain)
+//   - custom domains via deployment_domains table
 func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*deployments.Deployment, error) {
 	if g.deploymentService == nil {
 		return nil, nil
@@ -499,64 +504,138 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 	// Strip trailing dot if present
 	domain = strings.TrimSuffix(domain, ".")
 
-	// Get base domain from config (default to orama.network)
-	baseDomain := "orama.network"
+	// Get base domain from config (default to dbrs.space)
+	baseDomain := "dbrs.space"
 	if g.cfg != nil && g.cfg.BaseDomain != "" {
 		baseDomain = g.cfg.BaseDomain
 	}
 
-	// Query deployment by domain (node-specific subdomain or custom domain)
+	// Query deployment by domain
+	// We need to match:
+	// 1. {name}.node-{shortID}.{baseDomain} - extract shortID and find deployment where
+	//    'node-' || substr(home_node_id, 9, 6) matches the node part
+	// 2. {subdomain}.{baseDomain} - match by subdomain field
+	// 3. Custom verified domain from deployment_domains table
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(ctx)
 
+	// First, try to parse the domain to extract deployment name and node ID
+	// Format: {name}.node-{shortID}.{baseDomain}
+	suffix := "." + baseDomain
+	if strings.HasSuffix(domain, suffix) {
+		subdomain := strings.TrimSuffix(domain, suffix)
+		parts := strings.Split(subdomain, ".")
+
+		// If we have 2 parts and second starts with "node-", it's a node-specific domain
+		if len(parts) == 2 && strings.HasPrefix(parts[1], "node-") {
+			deploymentName := parts[0]
+			shortNodeID := parts[1] // e.g., "node-kv4la8"
+
+			// Query by name and matching short node ID
+			// Short ID is derived from peer ID: 'node-' + chars 9-14 of home_node_id
+			query := `
+				SELECT id, namespace, name, type, port, content_cid, status, home_node_id
+				FROM deployments
+				WHERE name = ?
+				AND ('node-' || substr(home_node_id, 9, 6) = ? OR home_node_id = ?)
+				AND status = 'active'
+				LIMIT 1
+			`
+			result, err := db.Query(internalCtx, query, deploymentName, shortNodeID, shortNodeID)
+			if err == nil && len(result.Rows) > 0 {
+				row := result.Rows[0]
+				return &deployments.Deployment{
+					ID:         getString(row[0]),
+					Namespace:  getString(row[1]),
+					Name:       getString(row[2]),
+					Type:       deployments.DeploymentType(getString(row[3])),
+					Port:       getInt(row[4]),
+					ContentCID: getString(row[5]),
+					Status:     deployments.DeploymentStatus(getString(row[6])),
+					HomeNodeID: getString(row[7]),
+				}, nil
+			}
+		}
+
+		// Single subdomain: match by subdomain field (e.g., myapp.dbrs.space)
+		if len(parts) == 1 {
+			query := `
+				SELECT id, namespace, name, type, port, content_cid, status, home_node_id
+				FROM deployments
+				WHERE subdomain = ?
+				AND status = 'active'
+				LIMIT 1
+			`
+			result, err := db.Query(internalCtx, query, parts[0])
+			if err == nil && len(result.Rows) > 0 {
+				row := result.Rows[0]
+				return &deployments.Deployment{
+					ID:         getString(row[0]),
+					Namespace:  getString(row[1]),
+					Name:       getString(row[2]),
+					Type:       deployments.DeploymentType(getString(row[3])),
+					Port:       getInt(row[4]),
+					ContentCID: getString(row[5]),
+					Status:     deployments.DeploymentStatus(getString(row[6])),
+					HomeNodeID: getString(row[7]),
+				}, nil
+			}
+		}
+	}
+
+	// Try custom domain from deployment_domains table
 	query := `
-		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status
+		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status, d.home_node_id
 		FROM deployments d
-		LEFT JOIN deployment_domains dd ON d.id = dd.deployment_id
-		WHERE (d.name || '.' || d.home_node_id || '.' || ? = ?
-		       OR d.name || '.node-' || d.home_node_id || '.' || ? = ?
-		       OR d.name || '.' || ? = ?
-		       OR dd.domain = ? AND dd.verified_at IS NOT NULL)
+		JOIN deployment_domains dd ON d.id = dd.deployment_id
+		WHERE dd.domain = ? AND dd.verified_at IS NOT NULL
 		AND d.status = 'active'
 		LIMIT 1
 	`
-
-	result, err := db.Query(internalCtx, query, baseDomain, domain, baseDomain, domain, baseDomain, domain, domain)
-	if err != nil || result.Count == 0 {
-		return nil, err
+	result, err := db.Query(internalCtx, query, domain)
+	if err == nil && len(result.Rows) > 0 {
+		row := result.Rows[0]
+		return &deployments.Deployment{
+			ID:         getString(row[0]),
+			Namespace:  getString(row[1]),
+			Name:       getString(row[2]),
+			Type:       deployments.DeploymentType(getString(row[3])),
+			Port:       getInt(row[4]),
+			ContentCID: getString(row[5]),
+			Status:     deployments.DeploymentStatus(getString(row[6])),
+			HomeNodeID: getString(row[7]),
+		}, nil
 	}
 
-	if len(result.Rows) == 0 {
-		return nil, nil
-	}
-
-	row := result.Rows[0]
-	if len(row) < 7 {
-		return nil, nil
-	}
-
-	// Create deployment object
-	deployment := &deployments.Deployment{
-		ID:         getString(row[0]),
-		Namespace:  getString(row[1]),
-		Name:       getString(row[2]),
-		Type:       deployments.DeploymentType(getString(row[3])),
-		Port:       getInt(row[4]),
-		ContentCID: getString(row[5]),
-		Status:     deployments.DeploymentStatus(getString(row[6])),
-	}
-
-	return deployment, nil
+	return nil, nil
 }
 
 // proxyToDynamicDeployment proxies requests to a dynamic deployment's local port
+// If the deployment is on a different node, it forwards the request to that node
 func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment) {
 	if deployment.Port == 0 {
 		http.Error(w, "Deployment has no assigned port", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Create a simple reverse proxy
+	// Check if request was already forwarded by another node (loop prevention)
+	proxyNode := r.Header.Get("X-Orama-Proxy-Node")
+
+	// Check if this deployment is on the current node
+	if g.nodePeerID != "" && deployment.HomeNodeID != "" &&
+		deployment.HomeNodeID != g.nodePeerID && proxyNode == "" {
+		// Need to proxy to home node
+		if g.proxyCrossNode(w, r, deployment) {
+			return // Request was proxied successfully
+		}
+		// Fall through if cross-node proxy failed - try local anyway
+		g.logger.Warn("Cross-node proxy failed, attempting local fallback",
+			zap.String("deployment", deployment.Name),
+			zap.String("home_node", deployment.HomeNodeID),
+		)
+	}
+
+	// Create a simple reverse proxy to localhost
 	target := "http://localhost:" + strconv.Itoa(deployment.Port)
 
 	// Set proxy headers
@@ -584,8 +663,8 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Execute proxy request
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(proxyReq)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "proxy request failed",
 			zap.String("target", target),
@@ -608,6 +687,94 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 	if _, err := w.(io.Writer).Write([]byte{}); err == nil {
 		io.Copy(w, resp.Body)
 	}
+}
+
+// proxyCrossNode forwards a request to the home node of a deployment
+// Returns true if the request was successfully forwarded, false otherwise
+func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment) bool {
+	// Get home node IP from dns_nodes table
+	db := g.client.Database()
+	internalCtx := client.WithInternalAuth(r.Context())
+
+	query := "SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1"
+	result, err := db.Query(internalCtx, query, deployment.HomeNodeID)
+	if err != nil || result == nil || len(result.Rows) == 0 {
+		g.logger.Warn("Failed to get home node IP",
+			zap.String("home_node_id", deployment.HomeNodeID),
+			zap.Error(err))
+		return false
+	}
+
+	homeIP := getString(result.Rows[0][0])
+	if homeIP == "" {
+		g.logger.Warn("Home node IP is empty", zap.String("home_node_id", deployment.HomeNodeID))
+		return false
+	}
+
+	g.logger.Info("Proxying request to home node",
+		zap.String("deployment", deployment.Name),
+		zap.String("home_node_id", deployment.HomeNodeID),
+		zap.String("home_ip", homeIP),
+		zap.String("current_node", g.nodePeerID),
+	)
+
+	// Proxy to home node via HTTPS
+	// Use the original Host header so the home node's TLS works correctly
+	targetURL := "https://" + homeIP + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	if err != nil {
+		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
+		return false
+	}
+
+	// Copy headers and set Host header to original host
+	for key, values := range r.Header {
+		for _, value := range values {
+			proxyReq.Header.Add(key, value)
+		}
+	}
+	proxyReq.Host = r.Host // Keep original host for TLS SNI
+	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
+	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID) // Prevent loops
+
+	// Skip TLS verification since we're connecting by IP with a Host header
+	// The home node has the correct certificate for the domain
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName:         r.Host, // Use original host for SNI
+			},
+		},
+	}
+
+	resp, err := httpClient.Do(proxyReq)
+	if err != nil {
+		g.logger.Error("Cross-node proxy request failed",
+			zap.String("target_ip", homeIP),
+			zap.String("host", r.Host),
+			zap.Error(err))
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Write status code and body
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+
+	return true
 }
 
 // Helper functions for type conversion
