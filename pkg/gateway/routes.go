@@ -89,6 +89,16 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/deployments/nextjs/upload", g.nextjsHandler.HandleUpload)
 		mux.HandleFunc("/v1/deployments/nextjs/update", g.updateHandler.HandleUpdate)
 
+		// Go backend deployments
+		if g.goHandler != nil {
+			mux.HandleFunc("/v1/deployments/go/upload", g.goHandler.HandleUpload)
+		}
+
+		// Node.js backend deployments
+		if g.nodejsHandler != nil {
+			mux.HandleFunc("/v1/deployments/nodejs/upload", g.nodejsHandler.HandleUpload)
+		}
+
 		// Deployment management
 		mux.HandleFunc("/v1/deployments/list", g.listHandler.HandleList)
 		mux.HandleFunc("/v1/deployments/get", g.listHandler.HandleGet)

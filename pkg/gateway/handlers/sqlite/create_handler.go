@@ -24,24 +24,33 @@ type SQLiteHandler struct {
 	homeNodeManager *deployments.HomeNodeManager
 	logger          *zap.Logger
 	basePath        string
+	currentNodeID   string // The node's peer ID for affinity checks
 }
 
 // NewSQLiteHandler creates a new SQLite handler
-func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeManager, logger *zap.Logger) *SQLiteHandler {
-	// Use user's home directory for cross-platform compatibility
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		logger.Error("Failed to get user home directory", zap.Error(err))
-		homeDir = os.Getenv("HOME")
-	}
+// dataDir: Base directory for node-local data (if empty, defaults to ~/.orama)
+// nodeID: The node's peer ID for affinity checks (can be empty for single-node setups)
+func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeManager, logger *zap.Logger, dataDir string, nodeID string) *SQLiteHandler {
+	var basePath string
 
-	basePath := filepath.Join(homeDir, ".orama", "sqlite")
+	if dataDir != "" {
+		basePath = filepath.Join(dataDir, "sqlite")
+	} else {
+		// Use user's home directory for cross-platform compatibility
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			logger.Error("Failed to get user home directory", zap.Error(err))
+			homeDir = os.Getenv("HOME")
+		}
+		basePath = filepath.Join(homeDir, ".orama", "sqlite")
+	}
 
 	return &SQLiteHandler{
 		db:              db,
 		homeNodeManager: homeNodeManager,
 		logger:          logger,
 		basePath:        basePath,
+		currentNodeID:   nodeID,
 	}
 }
 

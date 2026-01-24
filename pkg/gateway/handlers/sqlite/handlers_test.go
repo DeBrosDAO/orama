@@ -210,7 +210,7 @@ func TestCreateDatabase_Success(t *testing.T) {
 	portAlloc := deployments.NewPortAllocator(mockDB, zap.NewNop())
 	homeNodeMgr := deployments.NewHomeNodeManager(mockDB, portAlloc, zap.NewNop())
 
-	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop())
+	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), "", "")
 	handler.basePath = tmpDir
 
 	reqBody := map[string]string{
@@ -291,7 +291,7 @@ func TestCreateDatabase_DuplicateName(t *testing.T) {
 	portAlloc := deployments.NewPortAllocator(mockDB, zap.NewNop())
 	homeNodeMgr := deployments.NewHomeNodeManager(mockDB, portAlloc, zap.NewNop())
 
-	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop())
+	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), "", "")
 	handler.basePath = tmpDir
 
 	reqBody := map[string]string{
@@ -320,7 +320,7 @@ func TestCreateDatabase_InvalidName(t *testing.T) {
 	portAlloc := deployments.NewPortAllocator(mockDB, zap.NewNop())
 	homeNodeMgr := deployments.NewHomeNodeManager(mockDB, portAlloc, zap.NewNop())
 
-	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop())
+	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), "", "")
 	handler.basePath = tmpDir
 
 	invalidNames := []string{
@@ -363,7 +363,7 @@ func TestListDatabases(t *testing.T) {
 	portAlloc := deployments.NewPortAllocator(mockDB, zap.NewNop())
 	homeNodeMgr := deployments.NewHomeNodeManager(mockDB, portAlloc, zap.NewNop())
 
-	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop())
+	handler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), "", "")
 
 	req := httptest.NewRequest("GET", "/v1/db/sqlite/list", nil)
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
@@ -450,7 +450,7 @@ func TestBackupDatabase(t *testing.T) {
 	portAlloc := deployments.NewPortAllocator(mockDB, zap.NewNop())
 	homeNodeMgr := deployments.NewHomeNodeManager(mockDB, portAlloc, zap.NewNop())
 
-	sqliteHandler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop())
+	sqliteHandler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), "", "")
 
 	backupHandler := NewBackupHandler(sqliteHandler, mockIPFS, zap.NewNop())
 

@@ -78,6 +78,8 @@ type Gateway struct {
 	deploymentService    *deploymentshandlers.DeploymentService
 	staticHandler        *deploymentshandlers.StaticDeploymentHandler
 	nextjsHandler        *deploymentshandlers.NextJSHandler
+	goHandler            *deploymentshandlers.GoHandler
+	nodejsHandler        *deploymentshandlers.NodeJSHandler
 	listHandler          *deploymentshandlers.ListHandler
 	updateHandler        *deploymentshandlers.UpdateHandler
 	rollbackHandler      *deploymentshandlers.RollbackHandler
@@ -271,6 +273,20 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			logger.Logger,
 		)
 
+		gw.goHandler = deploymentshandlers.NewGoHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
+		gw.nodejsHandler = deploymentshandlers.NewNodeJSHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
 		gw.listHandler = deploymentshandlers.NewListHandler(
 			gw.deploymentService,
 			logger.Logger,
@@ -306,6 +322,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			deps.ORMClient,
 			gw.homeNodeManager,
 			logger.Logger,
+			cfg.DataDir,
+			cfg.NodePeerID,
 		)
 
 		gw.sqliteBackupHandler = sqlitehandlers.NewBackupHandler(

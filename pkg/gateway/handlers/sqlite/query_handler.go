@@ -60,11 +60,30 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check node affinity - ensure we're on the correct node for this database
+	homeNodeID, _ := dbMeta["home_node_id"].(string)
+	if h.currentNodeID != "" && homeNodeID != "" && homeNodeID != h.currentNodeID {
+		// This request hit the wrong node - the database lives on a different node
+		w.Header().Set("X-Orama-Home-Node", homeNodeID)
+		h.logger.Warn("Database query hit wrong node",
+			zap.String("database", req.DatabaseName),
+			zap.String("home_node", homeNodeID),
+			zap.String("current_node", h.currentNodeID),
+		)
+		http.Error(w, "Database is on a different node. Use node-specific URL or wait for routing implementation.", http.StatusMisdirectedRequest)
+		return
+	}
+
 	filePath := dbMeta["file_path"].(string)
 
 	// Check if database file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		http.Error(w, "Database file not found", http.StatusNotFound)
+		h.logger.Error("Database file not found on filesystem",
+			zap.String("path", filePath),
+			zap.String("namespace", namespace),
+			zap.String("database", req.DatabaseName),
+		)
+		http.Error(w, "Database file not found on this node", http.StatusNotFound)
 		return
 	}
 

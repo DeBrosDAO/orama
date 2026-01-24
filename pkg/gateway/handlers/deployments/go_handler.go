@@ -19,8 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// NextJSHandler handles Next.js deployments
-type NextJSHandler struct {
+// GoHandler handles Go backend deployments
+type GoHandler struct {
 	service        *DeploymentService
 	processManager *process.Manager
 	ipfsClient     ipfs.IPFSClient
@@ -28,14 +28,14 @@ type NextJSHandler struct {
 	baseDeployPath string
 }
 
-// NewNextJSHandler creates a new Next.js deployment handler
-func NewNextJSHandler(
+// NewGoHandler creates a new Go deployment handler
+func NewGoHandler(
 	service *DeploymentService,
 	processManager *process.Manager,
 	ipfsClient ipfs.IPFSClient,
 	logger *zap.Logger,
-) *NextJSHandler {
-	return &NextJSHandler{
+) *GoHandler {
+	return &GoHandler{
 		service:        service,
 		processManager: processManager,
 		ipfsClient:     ipfsClient,
@@ -44,8 +44,8 @@ func NewNextJSHandler(
 	}
 }
 
-// HandleUpload handles Next.js deployment upload
-func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
+// HandleUpload handles Go backend deployment upload
+func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -53,8 +53,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form
-	if err := r.ParseMultipartForm(200 << 20); err != nil { // 200MB max
+	// Parse multipart form (100MB max for Go binaries)
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
 		http.Error(w, "Failed to parse form", http.StatusBadRequest)
 		return
 	}
@@ -62,11 +62,15 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Get metadata
 	name := r.FormValue("name")
 	subdomain := r.FormValue("subdomain")
-	sseMode := r.FormValue("ssr") == "true"
+	healthCheckPath := r.FormValue("health_check_path")
 
 	if name == "" {
 		http.Error(w, "Deployment name is required", http.StatusBadRequest)
 		return
+	}
+
+	if healthCheckPath == "" {
+		healthCheckPath = "/health"
 	}
 
 	// Get tarball file
@@ -77,14 +81,14 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	h.logger.Info("Deploying Next.js application",
+	h.logger.Info("Deploying Go backend",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
 		zap.String("filename", header.Filename),
-		zap.Bool("ssr", sseMode),
+		zap.Int64("size", header.Size),
 	)
 
-	// Upload to IPFS
+	// Upload to IPFS for versioning
 	addResp, err := h.ipfsClient.Add(ctx, file, header.Filename)
 	if err != nil {
 		h.logger.Error("Failed to upload to IPFS", zap.Error(err))
@@ -94,18 +98,10 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	cid := addResp.Cid
 
-	var deployment *deployments.Deployment
-
-	if sseMode {
-		// SSR mode - extract and run as process
-		deployment, err = h.deploySSR(ctx, namespace, name, subdomain, cid)
-	} else {
-		// Static export mode
-		deployment, err = h.deployStatic(ctx, namespace, name, subdomain, cid)
-	}
-
+	// Deploy the Go backend
+	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath)
 	if err != nil {
-		h.logger.Error("Failed to deploy Next.js", zap.Error(err))
+		h.logger.Error("Failed to deploy Go backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -134,8 +130,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// deploySSR deploys Next.js in SSR mode
-func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomain, cid string) (*deployments.Deployment, error) {
+// deploy deploys a Go backend
+func (h *GoHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string) (*deployments.Deployment, error) {
 	// Create deployment directory
 	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
@@ -147,20 +143,36 @@ func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomai
 		return nil, fmt.Errorf("failed to extract deployment: %w", err)
 	}
 
+	// Find the executable binary
+	binaryPath, err := h.findBinary(deployPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find binary: %w", err)
+	}
+
+	// Ensure binary is executable
+	if err := os.Chmod(binaryPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to make binary executable: %w", err)
+	}
+
+	h.logger.Info("Found Go binary",
+		zap.String("path", binaryPath),
+		zap.String("deployment", name),
+	)
+
 	// Create deployment record
 	deployment := &deployments.Deployment{
 		ID:                  uuid.New().String(),
 		Namespace:           namespace,
 		Name:                name,
-		Type:                deployments.DeploymentTypeNextJS,
+		Type:                deployments.DeploymentTypeGoBackend,
 		Version:             1,
 		Status:              deployments.DeploymentStatusDeploying,
 		ContentCID:          cid,
 		Subdomain:           subdomain,
 		Environment:         make(map[string]string),
-		MemoryLimitMB:       512,
+		MemoryLimitMB:       256,
 		CPULimitPercent:     100,
-		HealthCheckPath:     "/api/health",
+		HealthCheckPath:     healthCheckPath,
 		HealthCheckInterval: 30,
 		RestartPolicy:       deployments.RestartPolicyAlways,
 		MaxRestartCount:     10,
@@ -177,44 +189,24 @@ func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomai
 	// Start the process
 	if err := h.processManager.Start(ctx, deployment, deployPath); err != nil {
 		deployment.Status = deployments.DeploymentStatusFailed
+		h.service.UpdateDeploymentStatus(ctx, deployment.ID, deployments.DeploymentStatusFailed)
 		return deployment, fmt.Errorf("failed to start process: %w", err)
 	}
 
 	// Wait for healthy
 	if err := h.processManager.WaitForHealthy(ctx, deployment, 60*time.Second); err != nil {
 		h.logger.Warn("Deployment did not become healthy", zap.Error(err))
+		// Don't fail - the service might still be starting
 	}
 
 	deployment.Status = deployments.DeploymentStatusActive
-	return deployment, nil
-}
-
-// deployStatic deploys Next.js static export
-func (h *NextJSHandler) deployStatic(ctx context.Context, namespace, name, subdomain, cid string) (*deployments.Deployment, error) {
-	deployment := &deployments.Deployment{
-		ID:          uuid.New().String(),
-		Namespace:   namespace,
-		Name:        name,
-		Type:        deployments.DeploymentTypeNextJSStatic,
-		Version:     1,
-		Status:      deployments.DeploymentStatusActive,
-		ContentCID:  cid,
-		Subdomain:   subdomain,
-		Environment: make(map[string]string),
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-		DeployedBy:  namespace,
-	}
-
-	if err := h.service.CreateDeployment(ctx, deployment); err != nil {
-		return nil, err
-	}
+	h.service.UpdateDeploymentStatus(ctx, deployment.ID, deployments.DeploymentStatusActive)
 
 	return deployment, nil
 }
 
 // extractFromIPFS extracts a tarball from IPFS to a directory
-func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath string) error {
+func (h *GoHandler) extractFromIPFS(ctx context.Context, cid, destPath string) error {
 	// Get tarball from IPFS
 	reader, err := h.ipfsClient.Get(ctx, "/ipfs/"+cid, "")
 	if err != nil {
@@ -223,7 +215,7 @@ func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	defer reader.Close()
 
 	// Create temporary file
-	tmpFile, err := os.CreateTemp("", "nextjs-*.tar.gz")
+	tmpFile, err := os.CreateTemp("", "go-deploy-*.tar.gz")
 	if err != nil {
 		return err
 	}
@@ -238,31 +230,76 @@ func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	tmpFile.Close()
 
 	// Extract tarball
-	cmd := fmt.Sprintf("tar -xzf %s -C %s", tmpFile.Name(), destPath)
-	if err := h.execCommand(cmd); err != nil {
+	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", destPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		h.logger.Error("Failed to extract tarball",
+			zap.String("output", string(output)),
+			zap.Error(err),
+		)
 		return fmt.Errorf("failed to extract tarball: %w", err)
 	}
 
 	return nil
 }
 
-// execCommand executes a shell command
-func (h *NextJSHandler) execCommand(cmd string) error {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return fmt.Errorf("empty command")
+// findBinary finds the Go binary in the deployment directory
+func (h *GoHandler) findBinary(deployPath string) (string, error) {
+	// First, look for a binary named "app" (conventional)
+	appPath := filepath.Join(deployPath, "app")
+	if info, err := os.Stat(appPath); err == nil && !info.IsDir() {
+		return appPath, nil
 	}
 
-	c := exec.Command(parts[0], parts[1:]...)
-	output, err := c.CombinedOutput()
+	// Look for any executable in the directory
+	entries, err := os.ReadDir(deployPath)
 	if err != nil {
-		h.logger.Error("Command execution failed",
-			zap.String("command", cmd),
-			zap.String("output", string(output)),
-			zap.Error(err),
-		)
-		return fmt.Errorf("command failed: %s: %w", string(output), err)
+		return "", fmt.Errorf("failed to read deployment directory: %w", err)
 	}
 
-	return nil
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		filePath := filepath.Join(deployPath, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		// Check if it's executable
+		if info.Mode()&0111 != 0 {
+			// Skip common non-binary files
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			if ext == ".sh" || ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".yaml" || ext == ".yml" {
+				continue
+			}
+
+			// Check if it's an ELF binary (Linux executable)
+			if h.isELFBinary(filePath) {
+				return filePath, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no executable binary found in deployment. Expected 'app' binary or ELF executable")
+}
+
+// isELFBinary checks if a file is an ELF binary
+func (h *GoHandler) isELFBinary(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	// Read first 4 bytes (ELF magic number)
+	magic := make([]byte, 4)
+	if _, err := f.Read(magic); err != nil {
+		return false
+	}
+
+	// ELF magic: 0x7f 'E' 'L' 'F'
+	return magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F'
 }

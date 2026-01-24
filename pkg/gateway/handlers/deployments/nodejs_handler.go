@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -19,8 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// NextJSHandler handles Next.js deployments
-type NextJSHandler struct {
+// NodeJSHandler handles Node.js backend deployments
+type NodeJSHandler struct {
 	service        *DeploymentService
 	processManager *process.Manager
 	ipfsClient     ipfs.IPFSClient
@@ -28,14 +27,14 @@ type NextJSHandler struct {
 	baseDeployPath string
 }
 
-// NewNextJSHandler creates a new Next.js deployment handler
-func NewNextJSHandler(
+// NewNodeJSHandler creates a new Node.js deployment handler
+func NewNodeJSHandler(
 	service *DeploymentService,
 	processManager *process.Manager,
 	ipfsClient ipfs.IPFSClient,
 	logger *zap.Logger,
-) *NextJSHandler {
-	return &NextJSHandler{
+) *NodeJSHandler {
+	return &NodeJSHandler{
 		service:        service,
 		processManager: processManager,
 		ipfsClient:     ipfsClient,
@@ -44,8 +43,8 @@ func NewNextJSHandler(
 	}
 }
 
-// HandleUpload handles Next.js deployment upload
-func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
+// HandleUpload handles Node.js backend deployment upload
+func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -53,8 +52,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form
-	if err := r.ParseMultipartForm(200 << 20); err != nil { // 200MB max
+	// Parse multipart form (200MB max for Node.js with node_modules)
+	if err := r.ParseMultipartForm(200 << 20); err != nil {
 		http.Error(w, "Failed to parse form", http.StatusBadRequest)
 		return
 	}
@@ -62,11 +61,16 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Get metadata
 	name := r.FormValue("name")
 	subdomain := r.FormValue("subdomain")
-	sseMode := r.FormValue("ssr") == "true"
+	healthCheckPath := r.FormValue("health_check_path")
+	skipInstall := r.FormValue("skip_install") == "true"
 
 	if name == "" {
 		http.Error(w, "Deployment name is required", http.StatusBadRequest)
 		return
+	}
+
+	if healthCheckPath == "" {
+		healthCheckPath = "/health"
 	}
 
 	// Get tarball file
@@ -77,14 +81,15 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	h.logger.Info("Deploying Next.js application",
+	h.logger.Info("Deploying Node.js backend",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
 		zap.String("filename", header.Filename),
-		zap.Bool("ssr", sseMode),
+		zap.Int64("size", header.Size),
+		zap.Bool("skip_install", skipInstall),
 	)
 
-	// Upload to IPFS
+	// Upload to IPFS for versioning
 	addResp, err := h.ipfsClient.Add(ctx, file, header.Filename)
 	if err != nil {
 		h.logger.Error("Failed to upload to IPFS", zap.Error(err))
@@ -94,18 +99,10 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	cid := addResp.Cid
 
-	var deployment *deployments.Deployment
-
-	if sseMode {
-		// SSR mode - extract and run as process
-		deployment, err = h.deploySSR(ctx, namespace, name, subdomain, cid)
-	} else {
-		// Static export mode
-		deployment, err = h.deployStatic(ctx, namespace, name, subdomain, cid)
-	}
-
+	// Deploy the Node.js backend
+	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, skipInstall)
 	if err != nil {
-		h.logger.Error("Failed to deploy Next.js", zap.Error(err))
+		h.logger.Error("Failed to deploy Node.js backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -134,8 +131,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// deploySSR deploys Next.js in SSR mode
-func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomain, cid string) (*deployments.Deployment, error) {
+// deploy deploys a Node.js backend
+func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, skipInstall bool) (*deployments.Deployment, error) {
 	// Create deployment directory
 	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
@@ -147,20 +144,52 @@ func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomai
 		return nil, fmt.Errorf("failed to extract deployment: %w", err)
 	}
 
+	// Check for package.json
+	packageJSONPath := filepath.Join(deployPath, "package.json")
+	if _, err := os.Stat(packageJSONPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("package.json not found in deployment")
+	}
+
+	// Install dependencies if needed
+	nodeModulesPath := filepath.Join(deployPath, "node_modules")
+	if !skipInstall {
+		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			h.logger.Info("Installing npm dependencies", zap.String("deployment", name))
+			if err := h.npmInstall(deployPath); err != nil {
+				return nil, fmt.Errorf("failed to install dependencies: %w", err)
+			}
+		}
+	}
+
+	// Parse package.json to determine entry point
+	entryPoint, err := h.determineEntryPoint(deployPath)
+	if err != nil {
+		h.logger.Warn("Failed to determine entry point, using default",
+			zap.Error(err),
+			zap.String("default", "index.js"),
+		)
+		entryPoint = "index.js"
+	}
+
+	h.logger.Info("Node.js deployment configured",
+		zap.String("entry_point", entryPoint),
+		zap.String("deployment", name),
+	)
+
 	// Create deployment record
 	deployment := &deployments.Deployment{
 		ID:                  uuid.New().String(),
 		Namespace:           namespace,
 		Name:                name,
-		Type:                deployments.DeploymentTypeNextJS,
+		Type:                deployments.DeploymentTypeNodeJSBackend,
 		Version:             1,
 		Status:              deployments.DeploymentStatusDeploying,
 		ContentCID:          cid,
 		Subdomain:           subdomain,
-		Environment:         make(map[string]string),
+		Environment:         map[string]string{"ENTRY_POINT": entryPoint},
 		MemoryLimitMB:       512,
 		CPULimitPercent:     100,
-		HealthCheckPath:     "/api/health",
+		HealthCheckPath:     healthCheckPath,
 		HealthCheckInterval: 30,
 		RestartPolicy:       deployments.RestartPolicyAlways,
 		MaxRestartCount:     10,
@@ -177,44 +206,24 @@ func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomai
 	// Start the process
 	if err := h.processManager.Start(ctx, deployment, deployPath); err != nil {
 		deployment.Status = deployments.DeploymentStatusFailed
+		h.service.UpdateDeploymentStatus(ctx, deployment.ID, deployments.DeploymentStatusFailed)
 		return deployment, fmt.Errorf("failed to start process: %w", err)
 	}
 
 	// Wait for healthy
-	if err := h.processManager.WaitForHealthy(ctx, deployment, 60*time.Second); err != nil {
+	if err := h.processManager.WaitForHealthy(ctx, deployment, 90*time.Second); err != nil {
 		h.logger.Warn("Deployment did not become healthy", zap.Error(err))
+		// Don't fail - the service might still be starting
 	}
 
 	deployment.Status = deployments.DeploymentStatusActive
-	return deployment, nil
-}
-
-// deployStatic deploys Next.js static export
-func (h *NextJSHandler) deployStatic(ctx context.Context, namespace, name, subdomain, cid string) (*deployments.Deployment, error) {
-	deployment := &deployments.Deployment{
-		ID:          uuid.New().String(),
-		Namespace:   namespace,
-		Name:        name,
-		Type:        deployments.DeploymentTypeNextJSStatic,
-		Version:     1,
-		Status:      deployments.DeploymentStatusActive,
-		ContentCID:  cid,
-		Subdomain:   subdomain,
-		Environment: make(map[string]string),
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-		DeployedBy:  namespace,
-	}
-
-	if err := h.service.CreateDeployment(ctx, deployment); err != nil {
-		return nil, err
-	}
+	h.service.UpdateDeploymentStatus(ctx, deployment.ID, deployments.DeploymentStatusActive)
 
 	return deployment, nil
 }
 
 // extractFromIPFS extracts a tarball from IPFS to a directory
-func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath string) error {
+func (h *NodeJSHandler) extractFromIPFS(ctx context.Context, cid, destPath string) error {
 	// Get tarball from IPFS
 	reader, err := h.ipfsClient.Get(ctx, "/ipfs/"+cid, "")
 	if err != nil {
@@ -223,7 +232,7 @@ func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	defer reader.Close()
 
 	// Create temporary file
-	tmpFile, err := os.CreateTemp("", "nextjs-*.tar.gz")
+	tmpFile, err := os.CreateTemp("", "nodejs-deploy-*.tar.gz")
 	if err != nil {
 		return err
 	}
@@ -238,31 +247,69 @@ func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	tmpFile.Close()
 
 	// Extract tarball
-	cmd := fmt.Sprintf("tar -xzf %s -C %s", tmpFile.Name(), destPath)
-	if err := h.execCommand(cmd); err != nil {
+	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", destPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		h.logger.Error("Failed to extract tarball",
+			zap.String("output", string(output)),
+			zap.Error(err),
+		)
 		return fmt.Errorf("failed to extract tarball: %w", err)
 	}
 
 	return nil
 }
 
-// execCommand executes a shell command
-func (h *NextJSHandler) execCommand(cmd string) error {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return fmt.Errorf("empty command")
-	}
+// npmInstall runs npm install --production in the deployment directory
+func (h *NodeJSHandler) npmInstall(deployPath string) error {
+	cmd := exec.Command("npm", "install", "--production")
+	cmd.Dir = deployPath
+	cmd.Env = append(os.Environ(), "NODE_ENV=production")
 
-	c := exec.Command(parts[0], parts[1:]...)
-	output, err := c.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		h.logger.Error("Command execution failed",
-			zap.String("command", cmd),
+		h.logger.Error("npm install failed",
 			zap.String("output", string(output)),
 			zap.Error(err),
 		)
-		return fmt.Errorf("command failed: %s: %w", string(output), err)
+		return fmt.Errorf("npm install failed: %w", err)
 	}
 
 	return nil
+}
+
+// determineEntryPoint reads package.json to find the entry point
+func (h *NodeJSHandler) determineEntryPoint(deployPath string) (string, error) {
+	packageJSONPath := filepath.Join(deployPath, "package.json")
+	data, err := os.ReadFile(packageJSONPath)
+	if err != nil {
+		return "", err
+	}
+
+	var pkg struct {
+		Main    string            `json:"main"`
+		Scripts map[string]string `json:"scripts"`
+	}
+
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", err
+	}
+
+	// Check if there's a start script
+	if startScript, ok := pkg.Scripts["start"]; ok {
+		// If start script uses node, extract the file
+		if len(startScript) > 5 && startScript[:5] == "node " {
+			return startScript[5:], nil
+		}
+		// Otherwise, we'll use npm start
+		return "npm:start", nil
+	}
+
+	// Use main field if specified
+	if pkg.Main != "" {
+		return pkg.Main, nil
+	}
+
+	// Default to index.js
+	return "index.js", nil
 }

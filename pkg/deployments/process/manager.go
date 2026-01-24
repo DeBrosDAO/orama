@@ -1,9 +1,9 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -83,9 +83,10 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 		m.logger.Warn("Failed to disable service", zap.Error(err))
 	}
 
-	// Remove service file
+	// Remove service file using sudo
 	serviceFile := filepath.Join("/etc/systemd/system", serviceName+".service")
-	if err := os.Remove(serviceFile); err != nil && !os.IsNotExist(err) {
+	cmd := exec.Command("sudo", "rm", "-f", serviceFile)
+	if err := cmd.Run(); err != nil {
 		m.logger.Warn("Failed to remove service file", zap.Error(err))
 	}
 
@@ -174,11 +175,10 @@ RestartSec=5s
 MemoryLimit={{.MemoryLimitMB}}M
 CPUQuota={{.CPULimitPercent}}%
 
-# Security
-NoNewPrivileges=true
+# Security - minimal restrictions for deployments in home directory
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
+ProtectSystem=full
+ProtectHome=read-only
 ReadWritePaths={{.WorkDir}}
 
 StandardOutput=journal
@@ -216,13 +216,21 @@ WantedBy=multi-user.target
 		CPULimitPercent: deployment.CPULimitPercent,
 	}
 
-	file, err := os.Create(serviceFile)
-	if err != nil {
+	// Execute template to buffer
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
 		return err
 	}
-	defer file.Close()
 
-	return t.Execute(file, data)
+	// Use sudo tee to write to systemd directory (debros user needs sudo access)
+	cmd := exec.Command("sudo", "tee", serviceFile)
+	cmd.Stdin = &buf
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to write service file: %s: %w", string(output), err)
+	}
+
+	return nil
 }
 
 // getStartCommand determines the start command for a deployment
@@ -231,6 +239,13 @@ func (m *Manager) getStartCommand(deployment *deployments.Deployment, workDir st
 	case deployments.DeploymentTypeNextJS:
 		return "/usr/bin/node server.js"
 	case deployments.DeploymentTypeNodeJSBackend:
+		// Check if ENTRY_POINT is set in environment
+		if entryPoint, ok := deployment.Environment["ENTRY_POINT"]; ok {
+			if entryPoint == "npm:start" {
+				return "/usr/bin/npm start"
+			}
+			return "/usr/bin/node " + entryPoint
+		}
 		return "/usr/bin/node index.js"
 	case deployments.DeploymentTypeGoBackend:
 		return filepath.Join(workDir, "app")
@@ -261,34 +276,34 @@ func (m *Manager) getServiceName(deployment *deployments.Deployment) string {
 	return fmt.Sprintf("orama-deploy-%s-%s", namespace, name)
 }
 
-// systemd helper methods
+// systemd helper methods (use sudo for non-root execution)
 func (m *Manager) systemdReload() error {
-	cmd := exec.Command("systemctl", "daemon-reload")
+	cmd := exec.Command("sudo", "systemctl", "daemon-reload")
 	return cmd.Run()
 }
 
 func (m *Manager) systemdEnable(serviceName string) error {
-	cmd := exec.Command("systemctl", "enable", serviceName)
+	cmd := exec.Command("sudo", "systemctl", "enable", serviceName)
 	return cmd.Run()
 }
 
 func (m *Manager) systemdDisable(serviceName string) error {
-	cmd := exec.Command("systemctl", "disable", serviceName)
+	cmd := exec.Command("sudo", "systemctl", "disable", serviceName)
 	return cmd.Run()
 }
 
 func (m *Manager) systemdStart(serviceName string) error {
-	cmd := exec.Command("systemctl", "start", serviceName)
+	cmd := exec.Command("sudo", "systemctl", "start", serviceName)
 	return cmd.Run()
 }
 
 func (m *Manager) systemdStop(serviceName string) error {
-	cmd := exec.Command("systemctl", "stop", serviceName)
+	cmd := exec.Command("sudo", "systemctl", "stop", serviceName)
 	return cmd.Run()
 }
 
 func (m *Manager) systemdRestart(serviceName string) error {
-	cmd := exec.Command("systemctl", "restart", serviceName)
+	cmd := exec.Command("sudo", "systemctl", "restart", serviceName)
 	return cmd.Run()
 }
 

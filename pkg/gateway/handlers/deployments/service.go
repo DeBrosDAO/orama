@@ -256,6 +256,21 @@ func (s *DeploymentService) GetDeploymentByID(ctx context.Context, namespace, id
 	}, nil
 }
 
+// UpdateDeploymentStatus updates the status of a deployment
+func (s *DeploymentService) UpdateDeploymentStatus(ctx context.Context, deploymentID string, status deployments.DeploymentStatus) error {
+	query := `UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?`
+	_, err := s.db.Exec(ctx, query, status, time.Now(), deploymentID)
+	if err != nil {
+		s.logger.Error("Failed to update deployment status",
+			zap.String("deployment_id", deploymentID),
+			zap.String("status", string(status)),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to update deployment status: %w", err)
+	}
+	return nil
+}
+
 // CreateDNSRecords creates DNS records for a deployment
 func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *deployments.Deployment) error {
 	// Get node IP
