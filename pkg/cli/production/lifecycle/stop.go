@@ -107,6 +107,6 @@ func HandleStop() {
 		fmt.Fprintf(os.Stderr, "   If services are still restarting, they may need manual intervention\n")
 	} else {
 		fmt.Printf("\n✅ All services stopped and disabled (will not auto-start on boot)\n")
-		fmt.Printf("   Use 'dbn prod start' to start and re-enable services\n")
+		fmt.Printf("   Use 'orama prod start' to start and re-enable services\n")
 	}
 }

@@ -1,6 +1,6 @@
 # GoReleaser Configuration for DeBros Network
-# Builds and releases the dbn binary for multiple platforms
-# Other binaries (node, gateway, identity) are installed via: dbn setup
+# Builds and releases the orama binary for multiple platforms
+# Other binaries (node, gateway, identity) are installed via: orama setup
 
 project_name: debros-network
 
@@ -8,10 +8,10 @@ env:
   - GO111MODULE=on
 
 builds:
-  # dbn binary - only build the CLI
-  - id: dbn
+  # orama binary - only build the CLI
+  - id: orama
     main: ./cmd/cli
-    binary: dbn
+    binary: orama
     goos:
       - linux
       - darwin
@@ -26,7 +26,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  # Tar.gz archives for dbn
+  # Tar.gz archives for orama
   - id: binaries
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

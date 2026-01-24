@@ -24,6 +24,10 @@ func HandleEnvCommand(args []string) {
 		handleEnvSwitch(subargs)
 	case "enable":
 		handleEnvEnable(subargs)
+	case "add":
+		handleEnvAdd(subargs)
+	case "remove":
+		handleEnvRemove(subargs)
 	case "help":
 		showEnvHelp()
 	default:
@@ -35,7 +39,7 @@ func HandleEnvCommand(args []string) {
 
 func showEnvHelp() {
 	fmt.Printf("🌍 Environment Management Commands\n\n")
-	fmt.Printf("Usage: dbn env <subcommand>\n\n")
+	fmt.Printf("Usage: orama env <subcommand>\n\n")
 	fmt.Printf("Subcommands:\n")
 	fmt.Printf("  list       - List all available environments\n")
 	fmt.Printf("  current    - Show current active environment\n")
@@ -46,12 +50,12 @@ func showEnvHelp() {
 	fmt.Printf("  devnet     - Development network (https://devnet.orama.network)\n")
 	fmt.Printf("  testnet    - Test network (https://testnet.orama.network)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  dbn env list\n")
-	fmt.Printf("  dbn env current\n")
-	fmt.Printf("  dbn env switch devnet\n")
-	fmt.Printf("  dbn env enable testnet\n")
-	fmt.Printf("  dbn devnet enable      # Shorthand for switch to devnet\n")
-	fmt.Printf("  dbn testnet enable     # Shorthand for switch to testnet\n")
+	fmt.Printf("  orama env list\n")
+	fmt.Printf("  orama env current\n")
+	fmt.Printf("  orama env switch devnet\n")
+	fmt.Printf("  orama env enable testnet\n")
+	fmt.Printf("  orama devnet enable      # Shorthand for switch to devnet\n")
+	fmt.Printf("  orama testnet enable     # Shorthand for switch to testnet\n")
 }
 
 func handleEnvList() {
@@ -99,7 +103,7 @@ func handleEnvCurrent() {
 
 func handleEnvSwitch(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: dbn env switch <environment>\n")
+		fmt.Fprintf(os.Stderr, "Usage: orama env switch <environment>\n")
 		fmt.Fprintf(os.Stderr, "Available: local, devnet, testnet\n")
 		os.Exit(1)
 	}
@@ -139,4 +143,109 @@ func handleEnvSwitch(args []string) {
 func handleEnvEnable(args []string) {
 	// 'enable' is just an alias for 'switch'
 	handleEnvSwitch(args)
+}
+
+func handleEnvAdd(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: orama env add <name> <gateway_url> [description]\n")
+		fmt.Fprintf(os.Stderr, "Example: orama env add production http://dbrs.space \"Production network\"\n")
+		os.Exit(1)
+	}
+
+	name := args[0]
+	gatewayURL := args[1]
+	description := ""
+	if len(args) > 2 {
+		description = args[2]
+	}
+
+	// Initialize environments if needed
+	if err := InitializeEnvironments(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to initialize environments: %v\n", err)
+		os.Exit(1)
+	}
+
+	envConfig, err := LoadEnvironmentConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load environment config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Check if environment already exists
+	for _, env := range envConfig.Environments {
+		if env.Name == name {
+			fmt.Fprintf(os.Stderr, "❌ Environment '%s' already exists\n", name)
+			os.Exit(1)
+		}
+	}
+
+	// Add new environment
+	envConfig.Environments = append(envConfig.Environments, Environment{
+		Name:        name,
+		GatewayURL:  gatewayURL,
+		Description: description,
+		IsActive:    false,
+	})
+
+	if err := SaveEnvironmentConfig(envConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to save environment config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Added environment: %s\n", name)
+	fmt.Printf("   Gateway URL: %s\n", gatewayURL)
+	if description != "" {
+		fmt.Printf("   Description: %s\n", description)
+	}
+}
+
+func handleEnvRemove(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: orama env remove <name>\n")
+		os.Exit(1)
+	}
+
+	name := args[0]
+
+	// Don't allow removing 'local'
+	if name == "local" {
+		fmt.Fprintf(os.Stderr, "❌ Cannot remove the 'local' environment\n")
+		os.Exit(1)
+	}
+
+	envConfig, err := LoadEnvironmentConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load environment config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Find and remove environment
+	found := false
+	newEnvs := make([]Environment, 0, len(envConfig.Environments))
+	for _, env := range envConfig.Environments {
+		if env.Name == name {
+			found = true
+			continue
+		}
+		newEnvs = append(newEnvs, env)
+	}
+
+	if !found {
+		fmt.Fprintf(os.Stderr, "❌ Environment '%s' not found\n", name)
+		os.Exit(1)
+	}
+
+	envConfig.Environments = newEnvs
+
+	// If we removed the active environment, switch to local
+	if envConfig.ActiveEnvironment == name {
+		envConfig.ActiveEnvironment = "local"
+	}
+
+	if err := SaveEnvironmentConfig(envConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to save environment config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Removed environment: %s\n", name)
 }

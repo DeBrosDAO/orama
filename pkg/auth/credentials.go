@@ -165,15 +165,57 @@ func (creds *Credentials) UpdateLastUsed() {
 	creds.LastUsedAt = time.Now()
 }
 
-// GetDefaultGatewayURL returns the default gateway URL from environment or fallback
+// GetDefaultGatewayURL returns the default gateway URL from environment config, env vars, or fallback
 func GetDefaultGatewayURL() string {
+	// Check environment variables first (for backwards compatibility)
 	if envURL := os.Getenv("DEBROS_GATEWAY_URL"); envURL != "" {
 		return envURL
 	}
 	if envURL := os.Getenv("DEBROS_GATEWAY"); envURL != "" {
 		return envURL
 	}
+
+	// Try to read from environment config file
+	if gwURL := getGatewayFromEnvConfig(); gwURL != "" {
+		return gwURL
+	}
+
 	return "http://localhost:6001"
+}
+
+// getGatewayFromEnvConfig reads the active environment's gateway URL from the config file
+func getGatewayFromEnvConfig() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	envConfigPath := filepath.Join(homeDir, ".orama", "environments.json")
+	data, err := os.ReadFile(envConfigPath)
+	if err != nil {
+		return ""
+	}
+
+	var config struct {
+		Environments []struct {
+			Name       string `json:"name"`
+			GatewayURL string `json:"gateway_url"`
+		} `json:"environments"`
+		ActiveEnvironment string `json:"active_environment"`
+	}
+
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ""
+	}
+
+	// Find the active environment
+	for _, env := range config.Environments {
+		if env.Name == config.ActiveEnvironment {
+			return env.GatewayURL
+		}
+	}
+
+	return ""
 }
 
 // HasValidCredentials checks if there are valid credentials for the default gateway

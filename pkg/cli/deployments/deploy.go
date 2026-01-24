@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/spf13/cobra"
 )
 
@@ -383,17 +384,35 @@ func printDeploymentInfo(resp map[string]interface{}) {
 }
 
 func getAPIURL() string {
-	// TODO: Read from config file
+	// Check environment variable first
 	if url := os.Getenv("ORAMA_API_URL"); url != "" {
 		return url
 	}
-	return "https://gateway.orama.network"
+	// Get from active environment config
+	return auth.GetDefaultGatewayURL()
 }
 
 func getAuthToken() (string, error) {
-	// TODO: Read from config file
+	// Check environment variable first
 	if token := os.Getenv("ORAMA_TOKEN"); token != "" {
 		return token, nil
 	}
-	return "", fmt.Errorf("no authentication token found. Set ORAMA_TOKEN environment variable")
+
+	// Try to get from enhanced credentials store
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		return "", fmt.Errorf("failed to load credentials: %w", err)
+	}
+
+	gatewayURL := auth.GetDefaultGatewayURL()
+	creds := store.GetDefaultCredential(gatewayURL)
+	if creds == nil {
+		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
+	}
+
+	if !creds.IsValid() {
+		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
+	}
+
+	return creds.APIKey, nil
 }

@@ -11,16 +11,16 @@ import (
 
 // Validator validates install command inputs
 type Validator struct {
-	flags     *Flags
-	oramaDir  string
+	flags       *Flags
+	oramaDir    string
 	isFirstNode bool
 }
 
 // NewValidator creates a new validator
 func NewValidator(flags *Flags, oramaDir string) *Validator {
 	return &Validator{
-		flags:     flags,
-		oramaDir:  oramaDir,
+		flags:       flags,
+		oramaDir:    oramaDir,
 		isFirstNode: flags.JoinAddress == "",
 	}
 }
@@ -28,7 +28,7 @@ func NewValidator(flags *Flags, oramaDir string) *Validator {
 // ValidateFlags validates required flags
 func (v *Validator) ValidateFlags() error {
 	if v.flags.VpsIP == "" && !v.flags.DryRun {
-		return fmt.Errorf("--vps-ip is required for installation\nExample: dbn prod install --vps-ip 1.2.3.4")
+		return fmt.Errorf("--vps-ip is required for installation\nExample: orama prod install --vps-ip 1.2.3.4")
 	}
 	return nil
 }

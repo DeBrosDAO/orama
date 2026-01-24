@@ -86,6 +86,10 @@ func main() {
 	case "db":
 		cli.HandleDBCommand(args)
 
+	// Environment management
+	case "env":
+		cli.HandleEnvCommand(args)
+
 	// Help
 	case "help", "--help", "-h":
 		showHelp()
@@ -159,6 +163,11 @@ func showHelp() {
 	fmt.Printf("  db list                       - List all databases\n")
 	fmt.Printf("  db backup <name>              - Backup database to IPFS\n")
 	fmt.Printf("  db backups <name>             - List database backups\n\n")
+
+	fmt.Printf("🌍 Environments:\n")
+	fmt.Printf("  env list                      - List all environments\n")
+	fmt.Printf("  env current                   - Show current environment\n")
+	fmt.Printf("  env switch <name>             - Switch to environment\n\n")
 
 	fmt.Printf("Global Flags:\n")
 	fmt.Printf("  -f, --format <format>         - Output format: table, json (default: table)\n")

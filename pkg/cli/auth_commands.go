@@ -26,6 +26,10 @@ func HandleAuthCommand(args []string) {
 		handleAuthWhoami()
 	case "status":
 		handleAuthStatus()
+	case "list":
+		handleAuthList()
+	case "switch":
+		handleAuthSwitch()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown auth command: %s\n", subcommand)
 		showAuthHelp()
@@ -35,42 +39,106 @@ func HandleAuthCommand(args []string) {
 
 func showAuthHelp() {
 	fmt.Printf("🔐 Authentication Commands\n\n")
-	fmt.Printf("Usage: dbn auth <subcommand>\n\n")
+	fmt.Printf("Usage: orama auth <subcommand>\n\n")
 	fmt.Printf("Subcommands:\n")
 	fmt.Printf("  login      - Authenticate by providing your wallet address\n")
 	fmt.Printf("  logout     - Clear stored credentials\n")
 	fmt.Printf("  whoami     - Show current authentication status\n")
-	fmt.Printf("  status     - Show detailed authentication info\n\n")
+	fmt.Printf("  status     - Show detailed authentication info\n")
+	fmt.Printf("  list       - List all stored credentials for current environment\n")
+	fmt.Printf("  switch     - Switch between stored credentials\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  dbn auth login          # Enter wallet address interactively\n")
-	fmt.Printf("  dbn auth whoami         # Check who you're logged in as\n")
-	fmt.Printf("  dbn auth status         # View detailed authentication info\n")
-	fmt.Printf("  dbn auth logout         # Clear all stored credentials\n\n")
+	fmt.Printf("  orama auth login          # Enter wallet address interactively\n")
+	fmt.Printf("  orama auth whoami         # Check who you're logged in as\n")
+	fmt.Printf("  orama auth status         # View detailed authentication info\n")
+	fmt.Printf("  orama auth logout         # Clear all stored credentials\n\n")
 	fmt.Printf("Environment Variables:\n")
 	fmt.Printf("  DEBROS_GATEWAY_URL - Gateway URL (overrides environment config)\n\n")
 	fmt.Printf("Authentication Flow:\n")
-	fmt.Printf("  1. Run 'dbn auth login'\n")
+	fmt.Printf("  1. Run 'orama auth login'\n")
 	fmt.Printf("  2. Enter your wallet address when prompted\n")
 	fmt.Printf("  3. Enter your namespace (or press Enter for 'default')\n")
 	fmt.Printf("  4. An API key will be generated and saved to ~/.orama/credentials.json\n\n")
 	fmt.Printf("Note: Authentication uses the currently active environment.\n")
-	fmt.Printf("      Use 'dbn env current' to see your active environment.\n")
+	fmt.Printf("      Use 'orama env current' to see your active environment.\n")
 }
 
 func handleAuthLogin() {
-	// Prompt for node selection
-	gatewayURL := promptForGatewayURL()
-	fmt.Printf("🔐 Authenticating with gateway at: %s\n", gatewayURL)
+	// Get gateway URL from active environment
+	gatewayURL := getGatewayURL()
 
-	// Use the simple authentication flow
+	// Show active environment
+	env, err := GetActiveEnvironment()
+	if err == nil {
+		fmt.Printf("🌍 Environment: %s\n", env.Name)
+	}
+	fmt.Printf("🔐 Authenticating with gateway at: %s\n\n", gatewayURL)
+
+	// Load enhanced credential store
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Check if we already have credentials for this gateway
+	gwCreds := store.Gateways[gatewayURL]
+	if gwCreds != nil && len(gwCreds.Credentials) > 0 {
+		// Show existing credentials and offer choice
+		choice, credIndex, err := store.DisplayCredentialMenu(gatewayURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Menu selection failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		switch choice {
+		case auth.AuthChoiceUseCredential:
+			selectedCreds := gwCreds.Credentials[credIndex]
+			store.SetDefaultCredential(gatewayURL, credIndex)
+			selectedCreds.UpdateLastUsed()
+			if err := store.Save(); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Failed to save credentials: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("✅ Switched to wallet: %s\n", selectedCreds.Wallet)
+			fmt.Printf("🏢 Namespace: %s\n", selectedCreds.Namespace)
+			return
+
+		case auth.AuthChoiceLogout:
+			store.ClearAllCredentials()
+			if err := store.Save(); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Failed to clear credentials: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("✅ All credentials cleared")
+			return
+
+		case auth.AuthChoiceExit:
+			fmt.Println("Exiting...")
+			return
+
+		case auth.AuthChoiceAddCredential:
+			// Fall through to add new credential
+		}
+	}
+
+	// Perform simple authentication to add a new credential
 	creds, err := auth.PerformSimpleAuthentication(gatewayURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Save credentials to file
-	if err := auth.SaveCredentialsForDefaultGateway(creds); err != nil {
+	// Add to enhanced store
+	store.AddCredential(gatewayURL, creds)
+
+	// Set as default
+	gwCreds = store.Gateways[gatewayURL]
+	if gwCreds != nil {
+		store.SetDefaultCredential(gatewayURL, len(gwCreds.Credentials)-1)
+	}
+
+	if err := store.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to save credentials: %v\n", err)
 		os.Exit(1)
 	}
@@ -92,17 +160,17 @@ func handleAuthLogout() {
 }
 
 func handleAuthWhoami() {
-	store, err := auth.LoadCredentials()
+	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
 		os.Exit(1)
 	}
 
 	gatewayURL := getGatewayURL()
-	creds, exists := store.GetCredentialsForGateway(gatewayURL)
+	creds := store.GetDefaultCredential(gatewayURL)
 
-	if !exists || !creds.IsValid() {
-		fmt.Println("❌ Not authenticated - run 'dbn auth login' to authenticate")
+	if creds == nil || !creds.IsValid() {
+		fmt.Println("❌ Not authenticated - run 'orama auth login' to authenticate")
 		os.Exit(1)
 	}
 
@@ -122,14 +190,14 @@ func handleAuthWhoami() {
 }
 
 func handleAuthStatus() {
-	store, err := auth.LoadCredentials()
+	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
 		os.Exit(1)
 	}
 
 	gatewayURL := getGatewayURL()
-	creds, exists := store.GetCredentialsForGateway(gatewayURL)
+	creds := store.GetDefaultCredential(gatewayURL)
 
 	// Show active environment
 	env, err := GetActiveEnvironment()
@@ -140,7 +208,7 @@ func handleAuthStatus() {
 	fmt.Println("🔐 Authentication Status")
 	fmt.Printf("  Gateway URL: %s\n", gatewayURL)
 
-	if !exists || creds == nil {
+	if creds == nil {
 		fmt.Println("  Status:     ❌ Not authenticated")
 		return
 	}
@@ -227,4 +295,109 @@ func getGatewayURL() string {
 
 	// Fallback to default (node-1)
 	return "http://localhost:6001"
+}
+
+func handleAuthList() {
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	gatewayURL := getGatewayURL()
+
+	// Show active environment
+	env, err := GetActiveEnvironment()
+	if err == nil {
+		fmt.Printf("🌍 Environment: %s\n", env.Name)
+	}
+	fmt.Printf("🔗 Gateway: %s\n\n", gatewayURL)
+
+	gwCreds := store.Gateways[gatewayURL]
+	if gwCreds == nil || len(gwCreds.Credentials) == 0 {
+		fmt.Println("No credentials stored for this environment.")
+		fmt.Println("Run 'orama auth login' to authenticate.")
+		return
+	}
+
+	fmt.Printf("🔐 Stored Credentials (%d):\n\n", len(gwCreds.Credentials))
+	for i, creds := range gwCreds.Credentials {
+		defaultMark := ""
+		if i == gwCreds.DefaultIndex {
+			defaultMark = " ← active"
+		}
+
+		statusEmoji := "✅"
+		statusText := "valid"
+		if !creds.IsValid() {
+			statusEmoji = "❌"
+			statusText = "expired"
+		}
+
+		fmt.Printf("  %d. %s Wallet: %s%s\n", i+1, statusEmoji, creds.Wallet, defaultMark)
+		fmt.Printf("     Namespace: %s | Status: %s\n", creds.Namespace, statusText)
+		if creds.Plan != "" {
+			fmt.Printf("     Plan: %s\n", creds.Plan)
+		}
+		if !creds.IssuedAt.IsZero() {
+			fmt.Printf("     Issued: %s\n", creds.IssuedAt.Format("2006-01-02 15:04:05"))
+		}
+		fmt.Println()
+	}
+}
+
+func handleAuthSwitch() {
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	gatewayURL := getGatewayURL()
+
+	gwCreds := store.Gateways[gatewayURL]
+	if gwCreds == nil || len(gwCreds.Credentials) == 0 {
+		fmt.Println("No credentials stored for this environment.")
+		fmt.Println("Run 'orama auth login' to authenticate first.")
+		os.Exit(1)
+	}
+
+	if len(gwCreds.Credentials) == 1 {
+		fmt.Println("Only one credential stored. Nothing to switch to.")
+		return
+	}
+
+	// Display menu
+	choice, credIndex, err := store.DisplayCredentialMenu(gatewayURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Menu selection failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	switch choice {
+	case auth.AuthChoiceUseCredential:
+		selectedCreds := gwCreds.Credentials[credIndex]
+		store.SetDefaultCredential(gatewayURL, credIndex)
+		selectedCreds.UpdateLastUsed()
+		if err := store.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to save credentials: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Switched to wallet: %s\n", selectedCreds.Wallet)
+		fmt.Printf("🏢 Namespace: %s\n", selectedCreds.Namespace)
+
+	case auth.AuthChoiceAddCredential:
+		fmt.Println("Use 'orama auth login' to add a new credential.")
+
+	case auth.AuthChoiceLogout:
+		store.ClearAllCredentials()
+		if err := store.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to clear credentials: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ All credentials cleared")
+
+	case auth.AuthChoiceExit:
+		fmt.Println("Cancelled.")
+	}
 }
