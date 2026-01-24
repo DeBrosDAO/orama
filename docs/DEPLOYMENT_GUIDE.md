@@ -117,15 +117,36 @@ orama deploy static ./dist --name my-react-app --update
 
 Deploy Next.js apps with full SSR (Server-Side Rendering) support.
 
+### Prerequisites
+
+> ⚠️ **IMPORTANT**: Your `next.config.js` MUST have `output: 'standalone'` for SSR deployments.
+
+```js
+// next.config.js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: 'standalone',  // REQUIRED for SSR deployments
+}
+
+module.exports = nextConfig
+```
+
+This setting makes Next.js create a standalone build in `.next/standalone/` that can run without `node_modules`.
+
 ### Next.js with SSR
 
 ```bash
-# 1. Build your Next.js app
+# 1. Ensure next.config.js has output: 'standalone'
+
+# 2. Build your Next.js app
 cd my-nextjs-app
 npm run build
 
-# 2. Deploy with SSR enabled
-orama deploy nextjs . --name my-nextjs --ssr
+# 3. Create tarball (must include .next and public directories)
+tar -czvf nextjs.tar.gz .next public package.json next.config.js
+
+# 4. Deploy with SSR enabled
+orama deploy nextjs ./nextjs.tar.gz --name my-nextjs --ssr
 
 # Output:
 # 📦 Creating tarball from .
@@ -175,15 +196,25 @@ orama deploy static ./out --name my-nextjs-static
 
 Deploy compiled Go binaries for high-performance APIs.
 
+### Prerequisites
+
+> ⚠️ **IMPORTANT**: Your Go application MUST:
+> 1. Be compiled for Linux: `GOOS=linux GOARCH=amd64`
+> 2. Listen on the port from `PORT` environment variable
+> 3. Implement a `/health` endpoint that returns HTTP 200 when ready
+
 ### Go REST API Example
 
 ```bash
 # 1. Build your Go binary for Linux (if on Mac/Windows)
 cd my-go-api
-GOOS=linux GOARCH=amd64 go build -o api main.go
+GOOS=linux GOARCH=amd64 go build -o app main.go  # Name it 'app' for auto-detection
 
-# 2. Deploy the binary
-orama deploy go ./api --name my-api
+# 2. Create tarball
+tar -czvf api.tar.gz app
+
+# 3. Deploy the binary
+orama deploy go ./api.tar.gz --name my-api
 
 # Output:
 # 📦 Creating tarball from ./api...
@@ -240,15 +271,27 @@ func main() {
 ### Important Notes
 
 - **Environment Variables**: The `PORT` environment variable is automatically set to your allocated port
-- **Health Endpoint**: Recommended to implement `/health` for monitoring
-- **Binary Requirements**: Must be Linux-compatible (GOOS=linux GOARCH=amd64)
+- **Health Endpoint**: **REQUIRED** - Must implement `/health` that returns HTTP 200 when ready
+- **Binary Requirements**: Must be Linux amd64 (`GOOS=linux GOARCH=amd64`)
+- **Binary Naming**: Name your binary `app` for automatic detection, or any ELF executable will work
 - **Systemd Managed**: Runs as a systemd service with auto-restart on failure
+- **Port Range**: Allocated ports are in the range 10100-19999
 
 ---
 
 ## Deploying Node.js Backends
 
 Deploy Node.js/Express/TypeScript backends.
+
+### Prerequisites
+
+> ⚠️ **IMPORTANT**: Your Node.js application MUST:
+> 1. Listen on the port from `PORT` environment variable
+> 2. Implement a `/health` endpoint that returns HTTP 200 when ready
+> 3. Have a valid `package.json` with either:
+>    - A `start` script (runs via `npm start`), OR
+>    - A `main` field pointing to entry file (runs via `node {main}`), OR
+>    - An `index.js` file (default fallback)
 
 ### Express API Example
 
@@ -257,8 +300,11 @@ Deploy Node.js/Express/TypeScript backends.
 cd my-node-api
 npm run build
 
-# 2. Deploy (must include node_modules or use a bundler)
-orama deploy nodejs ./dist --name my-node-api
+# 2. Create tarball (include package.json, your code, and optionally node_modules)
+tar -czvf api.tar.gz dist package.json package-lock.json
+
+# 3. Deploy
+orama deploy nodejs ./api.tar.gz --name my-node-api
 
 # Output:
 # 📦 Creating tarball from ./dist...
@@ -296,6 +342,17 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
 ```
+
+### Important Notes
+
+- **Environment Variables**: The `PORT` environment variable is automatically set to your allocated port
+- **Health Endpoint**: **REQUIRED** - Must implement `/health` that returns HTTP 200 when ready
+- **Dependencies**: If `node_modules` is not included, `npm install --production` runs automatically
+- **Start Command Detection**:
+  1. If `package.json` has `scripts.start` → runs `npm start`
+  2. Else if `package.json` has `main` field → runs `node {main}`
+  3. Else → runs `node index.js`
+- **Systemd Managed**: Runs as a systemd service with auto-restart on failure
 
 ---
 
@@ -395,20 +452,56 @@ Example: my-react-app.orama.network
 For direct access to a specific node:
 
 ```
-Format: {deployment-name}.{node-id}.orama.network
-Example: my-react-app.node-7prvNa.orama.network
+Format: {deployment-name}.node-{shortID}.orama.network
+Example: my-react-app.node-LL1Qvu.orama.network
 ```
+
+The `shortID` is derived from the node's peer ID (characters 9-14 of the full peer ID).
+For example: `12D3KooWLL1QvumH...` → `LL1Qvu`
 
 ### DNS Resolution Flow
 
 1. **Client**: Browser requests `my-react-app.orama.network`
 2. **DNS**: CoreDNS server queries RQLite for DNS record
-3. **Record**: Returns IP address of a gateway node
+3. **Record**: Returns IP address of a gateway node (round-robin across all nodes)
 4. **Gateway**: Receives request with `Host: my-react-app.orama.network` header
 5. **Routing**: Domain routing middleware looks up deployment by domain
-6. **Response**:
+6. **Cross-Node Proxy**: If deployment is on a different node, request is forwarded
+7. **Response**:
    - **Static**: Serves content from IPFS
    - **Dynamic**: Reverse proxies to the app's local port
+
+### Cross-Node Routing
+
+DNS uses round-robin, so requests may hit any node in the cluster. If a deployment is hosted on a different node than the one receiving the request, the gateway automatically proxies the request to the correct home node.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Request Flow Example                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Client                                                          │
+│    │                                                             │
+│    ▼                                                             │
+│  DNS (round-robin) ───► Node-2 (141.227.165.154)                │
+│                            │                                     │
+│                            ▼                                     │
+│                    Check: Is deployment here?                    │
+│                            │                                     │
+│                    No ─────┴───► Cross-node proxy                │
+│                                       │                          │
+│                                       ▼                          │
+│                              Node-1 (141.227.165.168)            │
+│                              (Home node for deployment)          │
+│                                       │                          │
+│                                       ▼                          │
+│                              localhost:10100                     │
+│                              (Deployment process)                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+This is **transparent to users** - your app works regardless of which node handles the initial request.
 
 ### Custom Domains (Future Feature)
 

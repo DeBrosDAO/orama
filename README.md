@@ -38,6 +38,8 @@ orama deploy static ./dist --name my-app
 
 ```bash
 cd my-nextjs-app
+
+# Ensure next.config.js has: output: 'standalone'
 npm run build
 orama deploy nextjs . --name my-nextjs --ssr
 
@@ -47,11 +49,11 @@ orama deploy nextjs . --name my-nextjs --ssr
 ### Deploy Go Backend
 
 ```bash
-# Build for Linux
-GOOS=linux GOARCH=amd64 go build -o api main.go
+# Build for Linux (name binary 'app' for auto-detection)
+GOOS=linux GOARCH=amd64 go build -o app main.go
 
-# Deploy
-orama deploy go ./api --name my-api
+# Deploy (must implement /health endpoint)
+orama deploy go ./app --name my-api
 
 # API live at: https://my-api.orama.network
 ```
@@ -204,10 +206,10 @@ orama auth logout           # Clear credentials
 
 ```bash
 # Deploy applications
-orama deploy static <path> --name myapp      # React, Vue, static sites
-orama deploy nextjs <path> --name myapp --ssr # Next.js with SSR
-orama deploy go <path> --name myapp          # Go binaries
-orama deploy nodejs <path> --name myapp      # Node.js apps
+orama deploy static <path> --name myapp       # React, Vue, static sites
+orama deploy nextjs <path> --name myapp --ssr # Next.js with SSR (requires output: 'standalone')
+orama deploy go <path> --name myapp           # Go binaries (must have /health endpoint)
+orama deploy nodejs <path> --name myapp       # Node.js apps (must have /health endpoint)
 
 # Manage deployments
 orama deployments list                        # List all deployments
