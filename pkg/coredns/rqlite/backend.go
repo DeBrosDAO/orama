@@ -142,9 +142,64 @@ func (b *Backend) parseValue(recordType, value string) (interface{}, error) {
 	case "TXT":
 		return []string{value}, nil
 
+	case "NS":
+		return dns.Fqdn(value), nil
+
+	case "SOA":
+		// SOA format: "mname rname serial refresh retry expire minimum"
+		// Example: "ns1.dbrs.space. admin.dbrs.space. 2026012401 3600 1800 604800 300"
+		return b.parseSOA(value)
+
 	default:
 		return nil, fmt.Errorf("unsupported record type: %s", recordType)
 	}
+}
+
+// parseSOA parses a SOA record value string
+// Format: "mname rname serial refresh retry expire minimum"
+func (b *Backend) parseSOA(value string) (*dns.SOA, error) {
+	parts := strings.Fields(value)
+	if len(parts) < 7 {
+		return nil, fmt.Errorf("invalid SOA format, expected 7 fields: %s", value)
+	}
+
+	serial, err := parseUint32(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("invalid SOA serial: %w", err)
+	}
+	refresh, err := parseUint32(parts[3])
+	if err != nil {
+		return nil, fmt.Errorf("invalid SOA refresh: %w", err)
+	}
+	retry, err := parseUint32(parts[4])
+	if err != nil {
+		return nil, fmt.Errorf("invalid SOA retry: %w", err)
+	}
+	expire, err := parseUint32(parts[5])
+	if err != nil {
+		return nil, fmt.Errorf("invalid SOA expire: %w", err)
+	}
+	minttl, err := parseUint32(parts[6])
+	if err != nil {
+		return nil, fmt.Errorf("invalid SOA minimum: %w", err)
+	}
+
+	return &dns.SOA{
+		Ns:      dns.Fqdn(parts[0]),
+		Mbox:    dns.Fqdn(parts[1]),
+		Serial:  serial,
+		Refresh: refresh,
+		Retry:   retry,
+		Expire:  expire,
+		Minttl:  minttl,
+	}, nil
+}
+
+// parseUint32 parses a string to uint32
+func parseUint32(s string) (uint32, error) {
+	var val uint32
+	_, err := fmt.Sscanf(s, "%d", &val)
+	return val, err
 }
 
 // ping tests the RQLite connection
@@ -205,6 +260,10 @@ func qTypeToString(qtype uint16) string {
 		return "CNAME"
 	case dns.TypeTXT:
 		return "TXT"
+	case dns.TypeNS:
+		return "NS"
+	case dns.TypeSOA:
+		return "SOA"
 	default:
 		return dns.TypeToString[qtype]
 	}
@@ -221,6 +280,10 @@ func stringToQType(s string) uint16 {
 		return dns.TypeCNAME
 	case "TXT":
 		return dns.TypeTXT
+	case "NS":
+		return dns.TypeNS
+	case "SOA":
+		return dns.TypeSOA
 	default:
 		return 0
 	}

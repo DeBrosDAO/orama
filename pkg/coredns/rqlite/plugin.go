@@ -150,6 +150,15 @@ func (p *RQLitePlugin) buildRR(qname string, record *DNSRecord) dns.RR {
 			Hdr: header,
 			Txt: record.ParsedValue.([]string),
 		}
+	case dns.TypeNS:
+		return &dns.NS{
+			Hdr: header,
+			Ns:  record.ParsedValue.(string),
+		}
+	case dns.TypeSOA:
+		soa := record.ParsedValue.(*dns.SOA)
+		soa.Hdr = header
+		return soa
 	default:
 		p.logger.Warn("Unsupported record type",
 			zap.Uint16("type", record.Type),

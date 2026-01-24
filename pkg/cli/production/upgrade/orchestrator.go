@@ -341,6 +341,18 @@ func (o *Orchestrator) restartServices() error {
 
 	// Restart services to apply changes - use getProductionServices to only restart existing services
 	services := utils.GetProductionServices()
+
+	// If this is a nameserver, also restart CoreDNS and Caddy
+	if o.setup.IsNameserver() {
+		nameserverServices := []string{"coredns", "caddy"}
+		for _, svc := range nameserverServices {
+			unitPath := filepath.Join("/etc/systemd/system", svc+".service")
+			if _, err := os.Stat(unitPath); err == nil {
+				services = append(services, svc)
+			}
+		}
+	}
+
 	if len(services) == 0 {
 		fmt.Printf("   ⚠️  No services found to restart\n")
 	} else {

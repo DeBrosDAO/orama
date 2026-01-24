@@ -324,7 +324,10 @@ func (s *DeploymentService) createDNSRecord(ctx context.Context, fqdn, recordTyp
 	query := `
 		INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, deployment_id, is_active, created_at, updated_at, created_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(fqdn) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		ON CONFLICT(fqdn, record_type, value) DO UPDATE SET
+			deployment_id = excluded.deployment_id,
+			updated_at = excluded.updated_at,
+			is_active = TRUE
 	`
 
 	now := time.Now()

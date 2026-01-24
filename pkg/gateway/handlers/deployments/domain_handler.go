@@ -457,15 +457,18 @@ func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentI
 
 	// Create DNS A record
 	dnsQuery := `
-		INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, deployment_id, node_id, created_by, created_at)
-		VALUES (?, 'A', ?, 300, ?, ?, ?, 'system', ?)
-		ON CONFLICT(fqdn) DO UPDATE SET value = ?, updated_at = ?
+		INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, deployment_id, node_id, created_by, created_at, updated_at)
+		VALUES (?, 'A', ?, 300, ?, ?, ?, 'system', ?, ?)
+		ON CONFLICT(fqdn, record_type, value) DO UPDATE SET
+			deployment_id = excluded.deployment_id,
+			node_id = excluded.node_id,
+			updated_at = excluded.updated_at
 	`
 
 	fqdn := domain + "."
 	now := time.Now()
 
-	_, err = h.service.db.Exec(ctx, dnsQuery, fqdn, nodeIP, "", deploymentID, homeNodeID, now, nodeIP, now)
+	_, err = h.service.db.Exec(ctx, dnsQuery, fqdn, nodeIP, "", deploymentID, homeNodeID, now, now)
 	if err != nil {
 		h.logger.Error("Failed to create DNS record", zap.Error(err))
 		return

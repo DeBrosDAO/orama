@@ -1,11 +1,15 @@
 package installers
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -191,23 +195,26 @@ func (ci *CoreDNSInstaller) Install() error {
 	return nil
 }
 
-// Configure creates CoreDNS configuration files
+// Configure creates CoreDNS configuration files and seeds static DNS records into RQLite
 func (ci *CoreDNSInstaller) Configure(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
 	configDir := "/etc/coredns"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	// Create Corefile
-	corefile := ci.generateCorefile(domain, rqliteDSN, configDir)
+	// Create Corefile (uses only RQLite plugin)
+	corefile := ci.generateCorefile(domain, rqliteDSN)
 	if err := os.WriteFile(filepath.Join(configDir, "Corefile"), []byte(corefile), 0644); err != nil {
 		return fmt.Errorf("failed to write Corefile: %w", err)
 	}
 
-	// Create zone file
-	zonefile := ci.generateZoneFile(domain, ns1IP, ns2IP, ns3IP)
-	if err := os.WriteFile(filepath.Join(configDir, "db."+domain), []byte(zonefile), 0644); err != nil {
-		return fmt.Errorf("failed to write zone file: %w", err)
+	// Seed static DNS records into RQLite
+	fmt.Fprintf(ci.logWriter, "  Seeding static DNS records into RQLite...\n")
+	if err := ci.seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+		// Don't fail on seed errors - RQLite might not be up yet
+		fmt.Fprintf(ci.logWriter, "  ⚠️  Could not seed DNS records (RQLite may not be ready): %v\n", err)
+	} else {
+		fmt.Fprintf(ci.logWriter, "  ✓ Static DNS records seeded\n")
 	}
 
 	return nil
@@ -263,23 +270,20 @@ rqlite:rqlite
 `
 }
 
-// generateCorefile creates the CoreDNS configuration
-func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN, configDir string) string {
+// generateCorefile creates the CoreDNS configuration (RQLite only)
+func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
 	return fmt.Sprintf(`# CoreDNS configuration for %s
-# Uses RQLite for dynamic DNS records (deployments, ACME challenges)
-# Falls back to static zone file for base records (SOA, NS)
+# Uses RQLite for ALL DNS records (static + dynamic)
+# Static records (SOA, NS, A) are seeded into RQLite during installation
 
 %s {
-    # First try RQLite for dynamic records (TXT for ACME, A for deployments)
+    # RQLite handles all records: SOA, NS, A, TXT (ACME), etc.
     rqlite {
         dsn %s
         refresh 5s
         ttl 60
         cache_size 10000
     }
-
-    # Fall back to static zone file for SOA/NS records
-    file %s/db.%s
 
     # Enable logging and error reporting
     log
@@ -293,44 +297,95 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN, configDir string
     cache 300
     errors
 }
-`, domain, domain, rqliteDSN, configDir, domain)
+`, domain, domain, rqliteDSN)
 }
 
-// generateZoneFile creates the static DNS zone file
-func (ci *CoreDNSInstaller) generateZoneFile(domain, ns1IP, ns2IP, ns3IP string) string {
-	return fmt.Sprintf(`$ORIGIN %s.
-$TTL 300
+// seedStaticRecords inserts static zone records into RQLite
+func (ci *CoreDNSInstaller) seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP string) error {
+	// Generate serial based on current date
+	serial := fmt.Sprintf("%d", time.Now().Unix())
 
-@       IN      SOA     ns1.%s. admin.%s. (
-                        2024012401 ; Serial
-                        3600       ; Refresh
-                        1800       ; Retry
-                        604800     ; Expire
-                        300 )      ; Negative TTL
+	// SOA record format: "mname rname serial refresh retry expire minimum"
+	soaValue := fmt.Sprintf("ns1.%s. admin.%s. %s 3600 1800 604800 300", domain, domain, serial)
 
-; Nameservers
-@       IN      NS      ns1.%s.
-@       IN      NS      ns2.%s.
-@       IN      NS      ns3.%s.
+	// Define all static records
+	records := []struct {
+		fqdn       string
+		recordType string
+		value      string
+		ttl        int
+	}{
+		// SOA record
+		{domain + ".", "SOA", soaValue, 300},
 
-; Nameserver A records
-ns1     IN      A       %s
-ns2     IN      A       %s
-ns3     IN      A       %s
+		// NS records
+		{domain + ".", "NS", "ns1." + domain + ".", 300},
+		{domain + ".", "NS", "ns2." + domain + ".", 300},
+		{domain + ".", "NS", "ns3." + domain + ".", 300},
 
-; Root domain points to all nodes (round-robin)
-@       IN      A       %s
-@       IN      A       %s
-@       IN      A       %s
+		// Nameserver A records (glue)
+		{"ns1." + domain + ".", "A", ns1IP, 300},
+		{"ns2." + domain + ".", "A", ns2IP, 300},
+		{"ns3." + domain + ".", "A", ns3IP, 300},
 
-; Wildcard fallback (RQLite records take precedence for specific subdomains)
-*       IN      A       %s
-*       IN      A       %s
-*       IN      A       %s
-`, domain, domain, domain, domain, domain, domain,
-		ns1IP, ns2IP, ns3IP,
-		ns1IP, ns2IP, ns3IP,
-		ns1IP, ns2IP, ns3IP)
+		// Root domain A records (round-robin)
+		{domain + ".", "A", ns1IP, 300},
+		{domain + ".", "A", ns2IP, 300},
+		{domain + ".", "A", ns3IP, 300},
+
+		// Wildcard A records (round-robin)
+		{"*." + domain + ".", "A", ns1IP, 300},
+		{"*." + domain + ".", "A", ns2IP, 300},
+		{"*." + domain + ".", "A", ns3IP, 300},
+	}
+
+	// Build SQL statements
+	var statements []string
+	for _, r := range records {
+		// Use INSERT OR REPLACE to handle updates
+		stmt := fmt.Sprintf(
+			`INSERT OR REPLACE INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by) VALUES ('%s', '%s', '%s', %d, 'system', 'system')`,
+			r.fqdn, r.recordType, r.value, r.ttl,
+		)
+		statements = append(statements, stmt)
+	}
+
+	// Execute via RQLite HTTP API
+	return ci.executeRQLiteStatements(rqliteDSN, statements)
+}
+
+// executeRQLiteStatements executes SQL statements via RQLite HTTP API
+func (ci *CoreDNSInstaller) executeRQLiteStatements(rqliteDSN string, statements []string) error {
+	// RQLite execute endpoint
+	executeURL := rqliteDSN + "/db/execute?pretty&timings"
+
+	// Build request body
+	body, err := json.Marshal(statements)
+	if err != nil {
+		return fmt.Errorf("failed to marshal statements: %w", err)
+	}
+
+	// Create request
+	req, err := http.NewRequest("POST", executeURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Execute with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("RQLite returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
 
 // containsLine checks if a string contains a specific line
