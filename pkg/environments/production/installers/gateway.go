@@ -39,7 +39,77 @@ func (gi *GatewayInstaller) Configure() error {
 	return nil
 }
 
-// InstallDeBrosBinaries clones and builds DeBros binaries
+// downloadSourceZIP downloads source code as ZIP from GitHub
+// This is simpler and more reliable than git clone with shallow clones
+func (gi *GatewayInstaller) downloadSourceZIP(branch string, srcDir string) error {
+	// GitHub archive URL format
+	zipURL := fmt.Sprintf("https://github.com/DeBrosOfficial/network/archive/refs/heads/%s.zip", branch)
+	zipPath := "/tmp/network-source.zip"
+	extractDir := "/tmp/network-extract"
+
+	// Clean up any previous download artifacts
+	os.RemoveAll(zipPath)
+	os.RemoveAll(extractDir)
+
+	// Download ZIP
+	fmt.Fprintf(gi.logWriter, "    Downloading source (branch: %s)...\n", branch)
+	if err := DownloadFile(zipURL, zipPath); err != nil {
+		return fmt.Errorf("failed to download source from %s: %w", zipURL, err)
+	}
+
+	// Create extraction directory
+	if err := os.MkdirAll(extractDir, 0755); err != nil {
+		return fmt.Errorf("failed to create extraction directory: %w", err)
+	}
+
+	// Extract ZIP
+	fmt.Fprintf(gi.logWriter, "    Extracting source...\n")
+	extractCmd := exec.Command("unzip", "-q", "-o", zipPath, "-d", extractDir)
+	if output, err := extractCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to extract source: %w\n%s", err, string(output))
+	}
+
+	// GitHub extracts to network-{branch}/ directory
+	extractedDir := filepath.Join(extractDir, fmt.Sprintf("network-%s", branch))
+
+	// Verify extracted directory exists
+	if _, err := os.Stat(extractedDir); os.IsNotExist(err) {
+		// Try alternative naming (GitHub may sanitize branch names)
+		entries, _ := os.ReadDir(extractDir)
+		if len(entries) == 1 && entries[0].IsDir() {
+			extractedDir = filepath.Join(extractDir, entries[0].Name())
+		} else {
+			return fmt.Errorf("extracted directory not found at %s", extractedDir)
+		}
+	}
+
+	// Remove existing source directory
+	os.RemoveAll(srcDir)
+
+	// Move extracted content to source directory
+	if err := os.Rename(extractedDir, srcDir); err != nil {
+		// Cross-filesystem fallback: copy instead of rename
+		fmt.Fprintf(gi.logWriter, "    Moving source (cross-filesystem copy)...\n")
+		copyCmd := exec.Command("cp", "-r", extractedDir, srcDir)
+		if output, err := copyCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to move source: %w\n%s", err, string(output))
+		}
+	}
+
+	// Cleanup temp files
+	os.RemoveAll(zipPath)
+	os.RemoveAll(extractDir)
+
+	// Fix ownership
+	if err := exec.Command("chown", "-R", "debros:debros", srcDir).Run(); err != nil {
+		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown source directory: %v\n", err)
+	}
+
+	fmt.Fprintf(gi.logWriter, "    ✓ Source downloaded\n")
+	return nil
+}
+
+// InstallDeBrosBinaries downloads and builds DeBros binaries
 func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome string, skipRepoUpdate bool) error {
 	fmt.Fprintf(gi.logWriter, "  Building DeBros binaries...\n")
 
@@ -54,45 +124,23 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome strin
 		return fmt.Errorf("failed to create bin directory %s: %w", binDir, err)
 	}
 
-	// Check if source directory has content (either git repo or pre-existing source)
+	// Check if source directory has content
 	hasSourceContent := false
 	if entries, err := os.ReadDir(srcDir); err == nil && len(entries) > 0 {
 		hasSourceContent = true
 	}
 
-	// Check if git repository is already initialized
-	isGitRepo := false
-	if _, err := os.Stat(filepath.Join(srcDir, ".git")); err == nil {
-		isGitRepo = true
-	}
-
-	// Handle repository update/clone based on skipRepoUpdate flag
+	// Handle repository update/download based on skipRepoUpdate flag
 	if skipRepoUpdate {
-		fmt.Fprintf(gi.logWriter, "    Skipping repo clone/pull (--no-pull flag)\n")
+		fmt.Fprintf(gi.logWriter, "    Skipping source download (--no-pull flag)\n")
 		if !hasSourceContent {
-			return fmt.Errorf("cannot skip pull: source directory is empty at %s (need to populate it first)", srcDir)
+			return fmt.Errorf("cannot skip download: source directory is empty at %s (need to populate it first)", srcDir)
 		}
-		fmt.Fprintf(gi.logWriter, "    Using existing source at %s (skipping git operations)\n", srcDir)
-		// Skip to build step - don't execute any git commands
+		fmt.Fprintf(gi.logWriter, "    Using existing source at %s\n", srcDir)
 	} else {
-		// Clone repository if not present, otherwise update it
-		if !isGitRepo {
-			fmt.Fprintf(gi.logWriter, "    Cloning repository...\n")
-			cmd := exec.Command("git", "clone", "--branch", branch, "--depth", "1", "https://github.com/DeBrosOfficial/network.git", srcDir)
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed to clone repository: %w", err)
-			}
-		} else {
-			fmt.Fprintf(gi.logWriter, "    Updating repository to latest changes...\n")
-			if output, err := exec.Command("git", "-C", srcDir, "fetch", "origin", branch).CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to fetch repository updates: %v\n%s", err, string(output))
-			}
-			if output, err := exec.Command("git", "-C", srcDir, "reset", "--hard", "origin/"+branch).CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to reset repository: %v\n%s", err, string(output))
-			}
-			if output, err := exec.Command("git", "-C", srcDir, "clean", "-fd").CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to clean repository: %v\n%s", err, string(output))
-			}
+		// Download source as ZIP from GitHub (simpler than git, no shallow clone issues)
+		if err := gi.downloadSourceZIP(branch, srcDir); err != nil {
+			return err
 		}
 	}
 
@@ -210,8 +258,8 @@ func (gi *GatewayInstaller) InstallSystemDependencies() error {
 		fmt.Fprintf(gi.logWriter, "    Warning: apt update failed\n")
 	}
 
-	// Install dependencies including Node.js for anyone-client
-	cmd = exec.Command("apt-get", "install", "-y", "curl", "git", "make", "build-essential", "wget", "nodejs", "npm")
+	// Install dependencies including Node.js for anyone-client and unzip for source downloads
+	cmd = exec.Command("apt-get", "install", "-y", "curl", "make", "build-essential", "wget", "unzip", "nodejs", "npm")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install dependencies: %w", err)
 	}

@@ -25,7 +25,24 @@ type Orchestrator struct {
 func NewOrchestrator(flags *Flags) *Orchestrator {
 	oramaHome := "/home/debros"
 	oramaDir := oramaHome + "/.orama"
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, false)
+
+	// Load existing preferences
+	prefs := production.LoadPreferences(oramaDir)
+
+	// Use saved branch if not specified
+	branch := flags.Branch
+	if branch == "" {
+		branch = prefs.Branch
+	}
+
+	// Use saved nameserver preference if not explicitly specified
+	isNameserver := prefs.Nameserver
+	if flags.Nameserver != nil {
+		isNameserver = *flags.Nameserver
+	}
+
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, false)
+	setup.SetNameserver(isNameserver)
 
 	return &Orchestrator{
 		oramaHome: oramaHome,
@@ -132,31 +149,50 @@ func (o *Orchestrator) Execute() error {
 }
 
 func (o *Orchestrator) handleBranchPreferences() error {
-	// If branch was explicitly provided, save it for future upgrades
+	// Load current preferences
+	prefs := production.LoadPreferences(o.oramaDir)
+	prefsChanged := false
+
+	// If branch was explicitly provided, update it
 	if o.flags.Branch != "" {
-		if err := production.SaveBranchPreference(o.oramaDir, o.flags.Branch); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save branch preference: %v\n", err)
-		} else {
-			fmt.Printf("  Using branch: %s (saved for future upgrades)\n", o.flags.Branch)
-		}
+		prefs.Branch = o.flags.Branch
+		prefsChanged = true
+		fmt.Printf("  Using branch: %s (saved for future upgrades)\n", o.flags.Branch)
 	} else {
-		// Show which branch is being used (read from saved preference)
-		currentBranch := production.ReadBranchPreference(o.oramaDir)
-		fmt.Printf("  Using branch: %s (from saved preference)\n", currentBranch)
+		fmt.Printf("  Using branch: %s (from saved preference)\n", prefs.Branch)
+	}
+
+	// If nameserver was explicitly provided, update it
+	if o.flags.Nameserver != nil {
+		prefs.Nameserver = *o.flags.Nameserver
+		prefsChanged = true
+	}
+	if o.setup.IsNameserver() {
+		fmt.Printf("  Nameserver mode: enabled (CoreDNS + Caddy)\n")
+	}
+
+	// Save preferences if anything changed
+	if prefsChanged {
+		if err := production.SavePreferences(o.oramaDir, prefs); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)
+		}
 	}
 	return nil
 }
 
 func (o *Orchestrator) stopServices() error {
-	fmt.Printf("\n⏹️  Stopping services before upgrade...\n")
+	fmt.Printf("\n⏹️  Stopping all services before upgrade...\n")
 	serviceController := production.NewSystemdController()
+	// Stop services in reverse dependency order
 	services := []string{
-		"debros-gateway.service",
-		"debros-node.service",
-		"debros-ipfs-cluster.service",
-		"debros-ipfs.service",
-		// Note: RQLite is managed by node process, not as separate service
-		"debros-olric.service",
+		"caddy.service",              // Depends on node
+		"coredns.service",            // Depends on node
+		"debros-gateway.service",     // Legacy
+		"debros-node.service",        // Depends on cluster, olric
+		"debros-ipfs-cluster.service", // Depends on IPFS
+		"debros-ipfs.service",        // Base IPFS
+		"debros-olric.service",       // Independent
+		"debros-anyone-client.service", // Independent
 	}
 	for _, svc := range services {
 		unitPath := filepath.Join("/etc/systemd/system", svc)
@@ -169,7 +205,7 @@ func (o *Orchestrator) stopServices() error {
 		}
 	}
 	// Give services time to shut down gracefully
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Second)
 	return nil
 }
 

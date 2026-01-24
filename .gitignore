@@ -84,3 +84,5 @@ configs/
 
 # Remote node credentials
 scripts/remote-nodes.conf
+
+orama-cli-linux

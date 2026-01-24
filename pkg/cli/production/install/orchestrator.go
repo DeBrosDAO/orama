@@ -32,6 +32,7 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	}
 
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, flags.SkipChecks)
+	setup.SetNameserver(flags.Nameserver)
 	validator := NewValidator(flags, oramaDir)
 
 	return &Orchestrator{
@@ -68,9 +69,16 @@ func (o *Orchestrator) Execute() error {
 		return err
 	}
 
-	// Save branch preference for future upgrades
-	if err := production.SaveBranchPreference(o.oramaDir, o.flags.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save branch preference: %v\n", err)
+	// Save preferences for future upgrades (branch + nameserver)
+	prefs := &production.NodePreferences{
+		Branch:     o.flags.Branch,
+		Nameserver: o.flags.Nameserver,
+	}
+	if err := production.SavePreferences(o.oramaDir, prefs); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)
+	}
+	if o.flags.Nameserver {
+		fmt.Printf("  ℹ️  This node will be a nameserver (CoreDNS + Caddy)\n")
 	}
 
 	// Phase 1: Check prerequisites
