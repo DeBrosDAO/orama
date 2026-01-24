@@ -324,6 +324,61 @@ WantedBy=multi-user.target
 `, ssg.oramaHome, logFile, ssg.oramaDir)
 }
 
+// GenerateCoreDNSService generates the CoreDNS systemd unit
+func (ssg *SystemdServiceGenerator) GenerateCoreDNSService() string {
+	return `[Unit]
+Description=CoreDNS DNS Server with RQLite backend
+Documentation=https://coredns.io
+After=network-online.target debros-node.service
+Wants=network-online.target debros-node.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/coredns -conf /etc/coredns/Corefile
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=coredns
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+`
+}
+
+// GenerateCaddyService generates the Caddy systemd unit for SSL/TLS
+func (ssg *SystemdServiceGenerator) GenerateCaddyService() string {
+	return `[Unit]
+Description=Caddy HTTP/2 Server
+Documentation=https://caddyserver.com/docs/
+After=network-online.target debros-node.service coredns.service
+Wants=network-online.target
+Requires=debros-node.service
+
+[Service]
+Type=simple
+User=caddy
+Group=caddy
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+LimitNPROC=512
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=caddy
+
+[Install]
+WantedBy=multi-user.target
+`
+}
+
 // SystemdController manages systemd service operations
 type SystemdController struct {
 	systemdDir string

@@ -269,9 +269,19 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  anyone-client install warning: %v", err)
 	}
 
-	// Install DeBros binaries
+	// Install DeBros binaries (must be done before CoreDNS since we need the RQLite plugin source)
 	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.oramaHome, ps.skipRepoUpdate); err != nil {
 		return fmt.Errorf("failed to install DeBros binaries: %w", err)
+	}
+
+	// Install CoreDNS with RQLite plugin (for dynamic DNS records and ACME challenges)
+	if err := ps.binaryInstaller.InstallCoreDNS(); err != nil {
+		ps.logf("  ⚠️  CoreDNS install warning: %v", err)
+	}
+
+	// Install Caddy with orama DNS module (for SSL certificate management)
+	if err := ps.binaryInstaller.InstallCaddy(); err != nil {
+		ps.logf("  ⚠️  Caddy install warning: %v", err)
 	}
 
 	ps.logf("  ✓ All binaries installed")
@@ -431,6 +441,39 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	exec.Command("chown", "debros:debros", olricConfigPath).Run()
 	ps.logf("  ✓ Olric config generated")
 
+	// Configure CoreDNS (if domain is provided)
+	if domain != "" {
+		// Get node IPs from peer addresses or use the VPS IP for all
+		ns1IP := vpsIP
+		ns2IP := vpsIP
+		ns3IP := vpsIP
+		if len(peerAddresses) >= 1 && peerAddresses[0] != "" {
+			ns1IP = peerAddresses[0]
+		}
+		if len(peerAddresses) >= 2 && peerAddresses[1] != "" {
+			ns2IP = peerAddresses[1]
+		}
+		if len(peerAddresses) >= 3 && peerAddresses[2] != "" {
+			ns3IP = peerAddresses[2]
+		}
+
+		rqliteDSN := "http://localhost:5001"
+		if err := ps.binaryInstaller.ConfigureCoreDNS(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+			ps.logf("  ⚠️  CoreDNS config warning: %v", err)
+		} else {
+			ps.logf("  ✓ CoreDNS config generated")
+		}
+
+		// Configure Caddy
+		email := "admin@" + domain
+		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
+		if err := ps.binaryInstaller.ConfigureCaddy(domain, email, acmeEndpoint); err != nil {
+			ps.logf("  ⚠️  Caddy config warning: %v", err)
+		} else {
+			ps.logf("  ✓ Caddy config generated")
+		}
+	}
+
 	return nil
 }
 
@@ -490,6 +533,31 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Anyone Client service created")
 
+	// CoreDNS service (for dynamic DNS with RQLite)
+	if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
+		corednsUnit := ps.serviceGenerator.GenerateCoreDNSService()
+		if err := ps.serviceController.WriteServiceUnit("coredns.service", corednsUnit); err != nil {
+			ps.logf("  ⚠️  Failed to write CoreDNS service: %v", err)
+		} else {
+			ps.logf("  ✓ CoreDNS service created")
+		}
+	}
+
+	// Caddy service (for SSL/TLS with DNS-01 ACME challenges)
+	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
+		// Create caddy user if it doesn't exist
+		exec.Command("useradd", "-r", "-s", "/sbin/nologin", "caddy").Run()
+		exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
+		exec.Command("chown", "caddy:caddy", "/var/lib/caddy").Run()
+
+		caddyUnit := ps.serviceGenerator.GenerateCaddyService()
+		if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
+			ps.logf("  ⚠️  Failed to write Caddy service: %v", err)
+		} else {
+			ps.logf("  ✓ Caddy service created")
+		}
+	}
+
 	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %w", err)
@@ -500,6 +568,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
 	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
 	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
+
+	// Add CoreDNS and Caddy if installed
+	if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
+		services = append(services, "coredns.service")
+	}
+	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
+		services = append(services, "caddy.service")
+	}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)

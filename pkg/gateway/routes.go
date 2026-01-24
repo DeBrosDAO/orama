@@ -18,6 +18,10 @@ func (g *Gateway) Routes() http.Handler {
 	// TLS check endpoint for Caddy on-demand TLS
 	mux.HandleFunc("/v1/internal/tls/check", g.tlsCheckHandler)
 
+	// ACME DNS-01 challenge endpoints (for Caddy httpreq DNS provider)
+	mux.HandleFunc("/v1/internal/acme/present", g.acmePresentHandler)
+	mux.HandleFunc("/v1/internal/acme/cleanup", g.acmeCleanupHandler)
+
 	// auth endpoints
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)

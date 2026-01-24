@@ -12,6 +12,7 @@ import (
 type BinaryInstaller struct {
 	arch      string
 	logWriter io.Writer
+	oramaHome string
 
 	// Embedded installers
 	rqlite      *installers.RQLiteInstaller
@@ -19,18 +20,24 @@ type BinaryInstaller struct {
 	ipfsCluster *installers.IPFSClusterInstaller
 	olric       *installers.OlricInstaller
 	gateway     *installers.GatewayInstaller
+	coredns     *installers.CoreDNSInstaller
+	caddy       *installers.CaddyInstaller
 }
 
 // NewBinaryInstaller creates a new binary installer
 func NewBinaryInstaller(arch string, logWriter io.Writer) *BinaryInstaller {
+	oramaHome := "/home/debros"
 	return &BinaryInstaller{
 		arch:        arch,
 		logWriter:   logWriter,
+		oramaHome:   oramaHome,
 		rqlite:      installers.NewRQLiteInstaller(arch, logWriter),
 		ipfs:        installers.NewIPFSInstaller(arch, logWriter),
 		ipfsCluster: installers.NewIPFSClusterInstaller(arch, logWriter),
 		olric:       installers.NewOlricInstaller(arch, logWriter),
 		gateway:     installers.NewGatewayInstaller(arch, logWriter),
+		coredns:     installers.NewCoreDNSInstaller(arch, logWriter, oramaHome),
+		caddy:       installers.NewCaddyInstaller(arch, logWriter, oramaHome),
 	}
 }
 
@@ -108,6 +115,26 @@ func (bi *BinaryInstaller) InitializeRQLiteDataDir(dataDir string) error {
 // InstallAnyoneClient installs the anyone-client npm package globally
 func (bi *BinaryInstaller) InstallAnyoneClient() error {
 	return bi.gateway.InstallAnyoneClient()
+}
+
+// InstallCoreDNS builds and installs CoreDNS with the custom RQLite plugin
+func (bi *BinaryInstaller) InstallCoreDNS() error {
+	return bi.coredns.Install()
+}
+
+// ConfigureCoreDNS creates CoreDNS configuration files
+func (bi *BinaryInstaller) ConfigureCoreDNS(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	return bi.coredns.Configure(domain, rqliteDSN, ns1IP, ns2IP, ns3IP)
+}
+
+// InstallCaddy builds and installs Caddy with the custom orama DNS module
+func (bi *BinaryInstaller) InstallCaddy() error {
+	return bi.caddy.Install()
+}
+
+// ConfigureCaddy creates Caddy configuration files
+func (bi *BinaryInstaller) ConfigureCaddy(domain string, email string, acmeEndpoint string) error {
+	return bi.caddy.Configure(domain, email, acmeEndpoint)
 }
 
 // Mock system commands for testing (if needed)

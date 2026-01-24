@@ -330,12 +330,29 @@ curl -X DELETE http://localhost:6001/v1/functions/hello-world?namespace=default
 
 ### Installation
 
+**macOS (Homebrew):**
+
 ```bash
-# Install via APT
-echo "deb https://debrosficial.github.io/network/apt stable main" | sudo tee /etc/apt/sources.list.d/debros.list
+brew install DeBrosOfficial/tap/orama
+```
 
-sudo apt update && sudo apt install orama
+**Linux (Debian/Ubuntu):**
 
+```bash
+# Download and install the latest .deb package
+curl -sL https://github.com/DeBrosOfficial/network/releases/latest/download/orama_$(curl -s https://api.github.com/repos/DeBrosOfficial/network/releases/latest | grep tag_name | cut -d '"' -f 4 | tr -d 'v')_linux_amd64.deb -o orama.deb
+sudo dpkg -i orama.deb
+```
+
+**From Source:**
+
+```bash
+go install github.com/DeBrosOfficial/network/cmd/cli@latest
+```
+
+**Setup (after installation):**
+
+```bash
 sudo orama install --interactive
 ```
 
