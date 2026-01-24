@@ -62,13 +62,14 @@ func (h *ListHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	baseDomain := h.service.BaseDomain()
 	deployments := make([]map[string]interface{}, len(rows))
 	for i, row := range rows {
 		urls := []string{
-			"https://" + row.Name + "." + row.HomeNodeID + ".orama.network",
+			"https://" + row.Name + "." + row.HomeNodeID + "." + baseDomain,
 		}
 		if row.Subdomain != "" {
-			urls = append(urls, "https://"+row.Subdomain+".orama.network")
+			urls = append(urls, "https://"+row.Subdomain+"."+baseDomain)
 		}
 
 		deployments[i] = map[string]interface{}{

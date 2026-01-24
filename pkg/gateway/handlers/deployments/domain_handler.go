@@ -65,9 +65,10 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check if domain is reserved
-	if strings.HasSuffix(domain, ".orama.network") {
-		http.Error(w, "Cannot use .orama.network domains as custom domains", http.StatusBadRequest)
+	// Check if domain is reserved (using configured base domain)
+	baseDomain := h.service.BaseDomain()
+	if strings.HasSuffix(domain, "."+baseDomain) {
+		http.Error(w, fmt.Sprintf("Cannot use .%s domains as custom domains", baseDomain), http.StatusBadRequest)
 		return
 	}
 

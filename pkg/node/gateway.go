@@ -33,19 +33,20 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 	}
 
 	gwCfg := &gateway.Config{
-		ListenAddr:      n.config.HTTPGateway.ListenAddr,
-		ClientNamespace: n.config.HTTPGateway.ClientNamespace,
-		BootstrapPeers:  n.config.Discovery.BootstrapPeers,
-		NodePeerID:      loadNodePeerIDFromIdentity(n.config.Node.DataDir),
-		RQLiteDSN:       n.config.HTTPGateway.RQLiteDSN,
-		OlricServers:    n.config.HTTPGateway.OlricServers,
-		OlricTimeout:    n.config.HTTPGateway.OlricTimeout,
+		ListenAddr:        n.config.HTTPGateway.ListenAddr,
+		ClientNamespace:   n.config.HTTPGateway.ClientNamespace,
+		BootstrapPeers:    n.config.Discovery.BootstrapPeers,
+		NodePeerID:        loadNodePeerIDFromIdentity(n.config.Node.DataDir),
+		RQLiteDSN:         n.config.HTTPGateway.RQLiteDSN,
+		OlricServers:      n.config.HTTPGateway.OlricServers,
+		OlricTimeout:      n.config.HTTPGateway.OlricTimeout,
 		IPFSClusterAPIURL: n.config.HTTPGateway.IPFSClusterAPIURL,
-		IPFSAPIURL:       n.config.HTTPGateway.IPFSAPIURL,
-		IPFSTimeout:      n.config.HTTPGateway.IPFSTimeout,
-		EnableHTTPS:     n.config.HTTPGateway.HTTPS.Enabled,
-		DomainName:      n.config.HTTPGateway.HTTPS.Domain,
-		TLSCacheDir:     n.config.HTTPGateway.HTTPS.CacheDir,
+		IPFSAPIURL:        n.config.HTTPGateway.IPFSAPIURL,
+		IPFSTimeout:       n.config.HTTPGateway.IPFSTimeout,
+		EnableHTTPS:       n.config.HTTPGateway.HTTPS.Enabled,
+		DomainName:        n.config.HTTPGateway.HTTPS.Domain,
+		TLSCacheDir:       n.config.HTTPGateway.HTTPS.CacheDir,
+		BaseDomain:        n.config.HTTPGateway.BaseDomain,
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)

@@ -439,8 +439,14 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.Split(r.Host, ":")[0] // Strip port
 
-		// Only process .orama.network domains
-		if !strings.HasSuffix(host, ".orama.network") {
+		// Get base domain from config (default to orama.network)
+		baseDomain := "orama.network"
+		if g.cfg != nil && g.cfg.BaseDomain != "" {
+			baseDomain = g.cfg.BaseDomain
+		}
+
+		// Only process base domain and its subdomains
+		if !strings.HasSuffix(host, "."+baseDomain) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -493,6 +499,12 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 	// Strip trailing dot if present
 	domain = strings.TrimSuffix(domain, ".")
 
+	// Get base domain from config (default to orama.network)
+	baseDomain := "orama.network"
+	if g.cfg != nil && g.cfg.BaseDomain != "" {
+		baseDomain = g.cfg.BaseDomain
+	}
+
 	// Query deployment by domain (node-specific subdomain or custom domain)
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(ctx)
@@ -501,15 +513,15 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status
 		FROM deployments d
 		LEFT JOIN deployment_domains dd ON d.id = dd.deployment_id
-		WHERE (d.name || '.' || d.home_node_id || '.orama.network' = ?
-		       OR d.name || '.node-' || d.home_node_id || '.orama.network' = ?
-		       OR d.name || '.orama.network' = ?
+		WHERE (d.name || '.' || d.home_node_id || '.' || ? = ?
+		       OR d.name || '.node-' || d.home_node_id || '.' || ? = ?
+		       OR d.name || '.' || ? = ?
 		       OR dd.domain = ? AND dd.verified_at IS NOT NULL)
 		AND d.status = 'active'
 		LIMIT 1
 	`
 
-	result, err := db.Query(internalCtx, query, domain, domain, domain, domain)
+	result, err := db.Query(internalCtx, query, baseDomain, domain, baseDomain, domain, baseDomain, domain, domain)
 	if err != nil || result.Count == 0 {
 		return nil, err
 	}

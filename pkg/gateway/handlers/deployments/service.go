@@ -18,6 +18,7 @@ type DeploymentService struct {
 	homeNodeManager *deployments.HomeNodeManager
 	portAllocator   *deployments.PortAllocator
 	logger          *zap.Logger
+	baseDomain      string // Base domain for deployments (e.g., "dbrs.space")
 }
 
 // NewDeploymentService creates a new deployment service
@@ -32,7 +33,23 @@ func NewDeploymentService(
 		homeNodeManager: homeNodeManager,
 		portAllocator:   portAllocator,
 		logger:          logger,
+		baseDomain:      "orama.network", // default
 	}
+}
+
+// SetBaseDomain sets the base domain for deployments
+func (s *DeploymentService) SetBaseDomain(domain string) {
+	if domain != "" {
+		s.baseDomain = domain
+	}
+}
+
+// BaseDomain returns the configured base domain
+func (s *DeploymentService) BaseDomain() string {
+	if s.baseDomain == "" {
+		return "orama.network"
+	}
+	return s.baseDomain
 }
 
 // CreateDeployment creates a new deployment
@@ -249,14 +266,14 @@ func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *de
 	}
 
 	// Create node-specific record
-	nodeFQDN := fmt.Sprintf("%s.%s.orama.network.", deployment.Name, deployment.HomeNodeID)
+	nodeFQDN := fmt.Sprintf("%s.%s.%s.", deployment.Name, deployment.HomeNodeID, s.BaseDomain())
 	if err := s.createDNSRecord(ctx, nodeFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 		s.logger.Error("Failed to create node-specific DNS record", zap.Error(err))
 	}
 
 	// Create load-balanced record if subdomain is set
 	if deployment.Subdomain != "" {
-		lbFQDN := fmt.Sprintf("%s.orama.network.", deployment.Subdomain)
+		lbFQDN := fmt.Sprintf("%s.%s.", deployment.Subdomain, s.BaseDomain())
 		if err := s.createDNSRecord(ctx, lbFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 			s.logger.Error("Failed to create load-balanced DNS record", zap.Error(err))
 		}
@@ -301,11 +318,11 @@ func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (strin
 // BuildDeploymentURLs builds all URLs for a deployment
 func (s *DeploymentService) BuildDeploymentURLs(deployment *deployments.Deployment) []string {
 	urls := []string{
-		fmt.Sprintf("https://%s.%s.orama.network", deployment.Name, deployment.HomeNodeID),
+		fmt.Sprintf("https://%s.%s.%s", deployment.Name, deployment.HomeNodeID, s.BaseDomain()),
 	}
 
 	if deployment.Subdomain != "" {
-		urls = append(urls, fmt.Sprintf("https://%s.orama.network", deployment.Subdomain))
+		urls = append(urls, fmt.Sprintf("https://%s.%s", deployment.Subdomain, s.BaseDomain()))
 	}
 
 	return urls

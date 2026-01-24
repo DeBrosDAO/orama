@@ -252,6 +252,10 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.portAllocator,
 			logger.Logger,
 		)
+		// Set base domain from config
+		if gw.cfg.BaseDomain != "" {
+			gw.deploymentService.SetBaseDomain(gw.cfg.BaseDomain)
+		}
 
 		// Create deployment handlers
 		gw.staticHandler = deploymentshandlers.NewStaticDeploymentHandler(
