@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -14,15 +17,25 @@ import (
 	"go.uber.org/zap"
 )
 
-// Manager manages deployment processes via systemd
+// Manager manages deployment processes via systemd (Linux) or direct process spawning (macOS/other)
 type Manager struct {
-	logger *zap.Logger
+	logger    *zap.Logger
+	useSystemd bool
+
+	// For non-systemd mode: track running processes
+	processes   map[string]*exec.Cmd
+	processesMu sync.RWMutex
 }
 
 // NewManager creates a new process manager
 func NewManager(logger *zap.Logger) *Manager {
+	// Use systemd only on Linux
+	useSystemd := runtime.GOOS == "linux"
+
 	return &Manager{
-		logger: logger,
+		logger:     logger,
+		useSystemd: useSystemd,
+		processes:  make(map[string]*exec.Cmd),
 	}
 }
 
@@ -34,7 +47,12 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 		zap.String("deployment", deployment.Name),
 		zap.String("namespace", deployment.Namespace),
 		zap.String("service", serviceName),
+		zap.Bool("systemd", m.useSystemd),
 	)
+
+	if !m.useSystemd {
+		return m.startDirect(ctx, deployment, workDir)
+	}
 
 	// Create systemd service file
 	if err := m.createSystemdService(deployment, workDir); err != nil {
@@ -64,6 +82,78 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 	return nil
 }
 
+// startDirect starts a process directly without systemd (for macOS/local dev)
+func (m *Manager) startDirect(ctx context.Context, deployment *deployments.Deployment, workDir string) error {
+	serviceName := m.getServiceName(deployment)
+	startCmd := m.getStartCommand(deployment, workDir)
+
+	// Parse command
+	parts := strings.Fields(startCmd)
+	if len(parts) == 0 {
+		return fmt.Errorf("empty start command")
+	}
+
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Dir = workDir
+
+	// Set environment
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%d", deployment.Port))
+	for key, value := range deployment.Environment {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Create log file for output
+	logDir := filepath.Join(os.Getenv("HOME"), ".orama", "logs", "deployments")
+	os.MkdirAll(logDir, 0755)
+	logFile, err := os.OpenFile(
+		filepath.Join(logDir, serviceName+".log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0644,
+	)
+	if err != nil {
+		m.logger.Warn("Failed to create log file", zap.Error(err))
+	} else {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
+
+	// Start process
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start process: %w", err)
+	}
+
+	// Track process
+	m.processesMu.Lock()
+	m.processes[serviceName] = cmd
+	m.processesMu.Unlock()
+
+	// Monitor process in background
+	go func() {
+		err := cmd.Wait()
+		m.processesMu.Lock()
+		delete(m.processes, serviceName)
+		m.processesMu.Unlock()
+		if err != nil {
+			m.logger.Warn("Process exited with error",
+				zap.String("service", serviceName),
+				zap.Error(err),
+			)
+		}
+		if logFile != nil {
+			logFile.Close()
+		}
+	}()
+
+	m.logger.Info("Deployment process started (direct)",
+		zap.String("deployment", deployment.Name),
+		zap.String("service", serviceName),
+		zap.Int("pid", cmd.Process.Pid),
+	)
+
+	return nil
+}
+
 // Stop stops a deployment process
 func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) error {
 	serviceName := m.getServiceName(deployment)
@@ -72,6 +162,10 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 		zap.String("deployment", deployment.Name),
 		zap.String("service", serviceName),
 	)
+
+	if !m.useSystemd {
+		return m.stopDirect(serviceName)
+	}
 
 	// Stop service
 	if err := m.systemdStop(serviceName); err != nil {
@@ -96,6 +190,25 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	return nil
 }
 
+// stopDirect stops a directly spawned process
+func (m *Manager) stopDirect(serviceName string) error {
+	m.processesMu.Lock()
+	cmd, exists := m.processes[serviceName]
+	m.processesMu.Unlock()
+
+	if !exists || cmd.Process == nil {
+		return nil // Already stopped
+	}
+
+	// Send SIGTERM
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		// Try SIGKILL if SIGTERM fails
+		cmd.Process.Kill()
+	}
+
+	return nil
+}
+
 // Restart restarts a deployment process
 func (m *Manager) Restart(ctx context.Context, deployment *deployments.Deployment) error {
 	serviceName := m.getServiceName(deployment)
@@ -105,12 +218,31 @@ func (m *Manager) Restart(ctx context.Context, deployment *deployments.Deploymen
 		zap.String("service", serviceName),
 	)
 
+	if !m.useSystemd {
+		// For direct mode, stop and start
+		m.stopDirect(serviceName)
+		// Note: Would need workDir to restart, which we don't have here
+		// For now, just log a warning
+		m.logger.Warn("Restart not fully supported in direct mode")
+		return nil
+	}
+
 	return m.systemdRestart(serviceName)
 }
 
 // Status gets the status of a deployment process
 func (m *Manager) Status(ctx context.Context, deployment *deployments.Deployment) (string, error) {
 	serviceName := m.getServiceName(deployment)
+
+	if !m.useSystemd {
+		m.processesMu.RLock()
+		_, exists := m.processes[serviceName]
+		m.processesMu.RUnlock()
+		if exists {
+			return "active", nil
+		}
+		return "inactive", nil
+	}
 
 	cmd := exec.CommandContext(ctx, "systemctl", "is-active", serviceName)
 	output, err := cmd.Output()
@@ -124,6 +256,24 @@ func (m *Manager) Status(ctx context.Context, deployment *deployments.Deployment
 // GetLogs retrieves logs for a deployment
 func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deployment, lines int, follow bool) ([]byte, error) {
 	serviceName := m.getServiceName(deployment)
+
+	if !m.useSystemd {
+		// Read from log file in direct mode
+		logFile := filepath.Join(os.Getenv("HOME"), ".orama", "logs", "deployments", serviceName+".log")
+		data, err := os.ReadFile(logFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read log file: %w", err)
+		}
+		// Return last N lines if specified
+		if lines > 0 {
+			logLines := strings.Split(string(data), "\n")
+			if len(logLines) > lines {
+				logLines = logLines[len(logLines)-lines:]
+			}
+			return []byte(strings.Join(logLines, "\n")), nil
+		}
+		return data, nil
+	}
 
 	args := []string{"-u", serviceName, "--no-pager"}
 	if lines > 0 {
@@ -235,19 +385,27 @@ WantedBy=multi-user.target
 
 // getStartCommand determines the start command for a deployment
 func (m *Manager) getStartCommand(deployment *deployments.Deployment, workDir string) string {
+	// For systemd (Linux), use full paths. For direct mode, use PATH resolution.
+	nodePath := "node"
+	npmPath := "npm"
+	if m.useSystemd {
+		nodePath = "/usr/bin/node"
+		npmPath = "/usr/bin/npm"
+	}
+
 	switch deployment.Type {
 	case deployments.DeploymentTypeNextJS:
 		// Next.js standalone output places server at .next/standalone/server.js
-		return "/usr/bin/node .next/standalone/server.js"
+		return nodePath + " .next/standalone/server.js"
 	case deployments.DeploymentTypeNodeJSBackend:
 		// Check if ENTRY_POINT is set in environment
 		if entryPoint, ok := deployment.Environment["ENTRY_POINT"]; ok {
 			if entryPoint == "npm:start" {
-				return "/usr/bin/npm start"
+				return npmPath + " start"
 			}
-			return "/usr/bin/node " + entryPoint
+			return nodePath + " " + entryPoint
 		}
-		return "/usr/bin/node index.js"
+		return nodePath + " index.js"
 	case deployments.DeploymentTypeGoBackend:
 		return filepath.Join(workDir, "app")
 	default:
