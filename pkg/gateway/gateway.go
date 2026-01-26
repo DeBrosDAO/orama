@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"time"
@@ -270,11 +271,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			logger.Logger,
 		)
 
+		// Determine base deploy path from config
+		baseDeployPath := filepath.Join(cfg.DataDir, "deployments")
+		if cfg.DataDir == "" {
+			baseDeployPath = "" // Let handlers use default
+		}
+
 		gw.nextjsHandler = deploymentshandlers.NewNextJSHandler(
 			gw.deploymentService,
 			gw.processManager,
 			deps.IPFSClient,
 			logger.Logger,
+			baseDeployPath,
 		)
 
 		gw.goHandler = deploymentshandlers.NewGoHandler(
@@ -282,6 +290,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.processManager,
 			deps.IPFSClient,
 			logger.Logger,
+			baseDeployPath,
 		)
 
 		gw.nodejsHandler = deploymentshandlers.NewNodeJSHandler(
@@ -289,6 +298,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.processManager,
 			deps.IPFSClient,
 			logger.Logger,
+			baseDeployPath,
 		)
 
 		gw.listHandler = deploymentshandlers.NewListHandler(

@@ -34,13 +34,17 @@ func NewGoHandler(
 	processManager *process.Manager,
 	ipfsClient ipfs.IPFSClient,
 	logger *zap.Logger,
+	baseDeployPath string,
 ) *GoHandler {
+	if baseDeployPath == "" {
+		baseDeployPath = filepath.Join(os.Getenv("HOME"), ".orama", "deployments")
+	}
 	return &GoHandler{
 		service:        service,
 		processManager: processManager,
 		ipfsClient:     ipfsClient,
 		logger:         logger,
-		baseDeployPath: "/home/debros/.orama/deployments",
+		baseDeployPath: baseDeployPath,
 	}
 }
 

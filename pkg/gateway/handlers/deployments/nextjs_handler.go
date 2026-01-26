@@ -34,13 +34,17 @@ func NewNextJSHandler(
 	processManager *process.Manager,
 	ipfsClient ipfs.IPFSClient,
 	logger *zap.Logger,
+	baseDeployPath string,
 ) *NextJSHandler {
+	if baseDeployPath == "" {
+		baseDeployPath = filepath.Join(os.Getenv("HOME"), ".orama", "deployments")
+	}
 	return &NextJSHandler{
 		service:        service,
 		processManager: processManager,
 		ipfsClient:     ipfsClient,
 		logger:         logger,
-		baseDeployPath: "/home/debros/.orama/deployments",
+		baseDeployPath: baseDeployPath,
 	}
 }
 

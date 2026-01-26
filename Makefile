@@ -8,10 +8,45 @@ test:
 # Gateway-focused E2E tests assume gateway and nodes are already running
 # Auto-discovers configuration from ~/.orama and queries database for API key
 # No environment variables required
-.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick
+.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick test-e2e-local test-e2e-prod
+
+# Check if gateway is running (helper)
+.PHONY: check-gateway
+check-gateway:
+	@if ! curl -sf http://localhost:6001/v1/health > /dev/null 2>&1; then \
+		echo "❌ Gateway not running on localhost:6001"; \
+		echo ""; \
+		echo "To run tests locally:"; \
+		echo "  1. Start the dev environment: make dev"; \
+		echo "  2. Wait for all services to start (~30 seconds)"; \
+		echo "  3. Run tests: make test-e2e-local"; \
+		echo ""; \
+		echo "To run tests against production:"; \
+		echo "  ORAMA_GATEWAY_URL=http://VPS-IP:6001 make test-e2e"; \
+		exit 1; \
+	fi
+	@echo "✅ Gateway is running"
+
+# Local E2E tests - checks gateway first
+test-e2e-local: check-gateway
+	@echo "Running E2E tests against local dev environment..."
+	go test -v -tags e2e -timeout 30m ./e2e/...
+
+# Production E2E tests - requires ORAMA_GATEWAY_URL to be set
+test-e2e-prod:
+	@if [ -z "$$ORAMA_GATEWAY_URL" ]; then \
+		echo "❌ ORAMA_GATEWAY_URL not set"; \
+		echo "Usage: ORAMA_GATEWAY_URL=http://VPS-IP:6001 make test-e2e-prod"; \
+		exit 1; \
+	fi
+	@echo "Running E2E tests against $$ORAMA_GATEWAY_URL..."
+	go test -v -tags e2e -timeout 30m ./e2e/...
+
+# Generic e2e target (works with both local and production)
 test-e2e:
 	@echo "Running comprehensive E2E tests..."
 	@echo "Auto-discovering configuration from ~/.orama..."
+	@echo "Tip: Use 'make test-e2e-local' for local or 'make test-e2e-prod' for production"
 	go test -v -tags e2e -timeout 30m ./e2e/...
 
 test-e2e-deployments:
@@ -109,7 +144,7 @@ help:
 	@echo "Available targets:"
 	@echo "  build         - Build all executables"
 	@echo "  clean         - Clean build artifacts"
-	@echo "  test          - Run tests"
+	@echo "  test          - Run unit tests"
 	@echo ""
 	@echo "Local Development (Recommended):"
 	@echo "  make dev      - Start full development stack with one command"
@@ -118,6 +153,15 @@ help:
 	@echo "                 - Validates cluster health"
 	@echo "  make stop     - Gracefully stop all development services"
 	@echo "  make kill     - Force kill all development services (use if stop fails)"
+	@echo ""
+	@echo "E2E Testing:"
+	@echo "  make test-e2e-local   - Run E2E tests against local dev (checks gateway first)"
+	@echo "  make test-e2e-prod    - Run E2E tests against production (needs ORAMA_GATEWAY_URL)"
+	@echo "  make test-e2e-quick   - Quick smoke tests (static deploys, health checks)"
+	@echo "  make test-e2e         - Generic E2E tests (auto-discovers config)"
+	@echo ""
+	@echo "  Example production test:"
+	@echo "    ORAMA_GATEWAY_URL=http://141.227.165.168:6001 make test-e2e-prod"
 	@echo ""
 	@echo "Development Management (via orama):"
 	@echo "  ./bin/orama dev status  - Show status of all dev services"
