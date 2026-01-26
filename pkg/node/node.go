@@ -18,7 +18,6 @@ import (
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/host"
 	"go.uber.org/zap"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 // Node represents a network node with RQLite database
@@ -44,17 +43,8 @@ type Node struct {
 	clusterConfigManager *ipfs.ClusterConfigManager
 
 	// Full gateway (for API, auth, pubsub, and internal service routing)
-	apiGateway *gateway.Gateway
+	apiGateway       *gateway.Gateway
 	apiGatewayServer *http.Server
-
-	// SNI gateway (for TCP routing of raft, ipfs, olric, etc.)
-	sniGateway *gateway.TCPSNIGateway
-
-	// Shared certificate manager for HTTPS and SNI
-	certManager *autocert.Manager
-
-	// Certificate ready signal - closed when TLS certificates are extracted and ready for use
-	certReady chan struct{}
 }
 
 // NewNode creates a new network node
@@ -154,13 +144,6 @@ func (n *Node) Stop() error {
 	// Close Gateway client
 	if n.apiGateway != nil {
 		n.apiGateway.Close()
-	}
-
-	// Stop SNI Gateway
-	if n.sniGateway != nil {
-		if err := n.sniGateway.Stop(); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "SNI Gateway stop error", zap.Error(err))
-		}
 	}
 
 	// Stop cluster discovery

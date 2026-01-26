@@ -54,12 +54,19 @@ func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeMan
 	}
 }
 
+// writeCreateError writes an error response as JSON for consistency
+func writeCreateError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
 // CreateDatabase creates a new SQLite database for a namespace
 func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
 	if !ok || namespace == "" {
-		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		writeCreateError(w, http.StatusUnauthorized, "Namespace not found in context")
 		return
 	}
 
@@ -68,18 +75,18 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeCreateError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.DatabaseName == "" {
-		http.Error(w, "database_name is required", http.StatusBadRequest)
+		writeCreateError(w, http.StatusBadRequest, "database_name is required")
 		return
 	}
 
 	// Validate database name (alphanumeric, underscore, hyphen only)
 	if !isValidDatabaseName(req.DatabaseName) {
-		http.Error(w, "Invalid database name. Use only alphanumeric characters, underscores, and hyphens", http.StatusBadRequest)
+		writeCreateError(w, http.StatusBadRequest, "Invalid database name. Use only alphanumeric characters, underscores, and hyphens")
 		return
 	}
 
@@ -88,18 +95,26 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 		zap.String("database", req.DatabaseName),
 	)
 
-	// Assign home node for namespace
-	homeNodeID, err := h.homeNodeManager.AssignHomeNode(ctx, namespace)
-	if err != nil {
-		h.logger.Error("Failed to assign home node", zap.Error(err))
-		http.Error(w, "Failed to assign home node", http.StatusInternalServerError)
-		return
+	// For SQLite databases, the home node is ALWAYS the current node
+	// because the database file is stored locally on this node's filesystem.
+	// This is different from deployments which can be load-balanced across nodes.
+	homeNodeID := h.currentNodeID
+	if homeNodeID == "" {
+		// Fallback: if node ID not configured, try to get from HomeNodeManager
+		// This provides backward compatibility for single-node setups
+		var err error
+		homeNodeID, err = h.homeNodeManager.AssignHomeNode(ctx, namespace)
+		if err != nil {
+			h.logger.Error("Failed to assign home node", zap.Error(err))
+			writeCreateError(w, http.StatusInternalServerError, "Failed to assign home node")
+			return
+		}
 	}
 
 	// Check if database already exists
 	existing, err := h.getDatabaseRecord(ctx, namespace, req.DatabaseName)
 	if err == nil && existing != nil {
-		http.Error(w, "Database already exists", http.StatusConflict)
+		writeCreateError(w, http.StatusConflict, "Database already exists")
 		return
 	}
 
@@ -110,7 +125,7 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	// Create directory if needed
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		h.logger.Error("Failed to create directory", zap.Error(err))
-		http.Error(w, "Failed to create database directory", http.StatusInternalServerError)
+		writeCreateError(w, http.StatusInternalServerError, "Failed to create database directory")
 		return
 	}
 
@@ -118,7 +133,7 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	sqliteDB, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		h.logger.Error("Failed to create SQLite database", zap.Error(err))
-		http.Error(w, "Failed to create database", http.StatusInternalServerError)
+		writeCreateError(w, http.StatusInternalServerError, "Failed to create database")
 		return
 	}
 
@@ -141,7 +156,7 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("Failed to record database", zap.Error(err))
 		os.Remove(dbPath) // Cleanup
-		http.Error(w, "Failed to record database", http.StatusInternalServerError)
+		writeCreateError(w, http.StatusInternalServerError, "Failed to record database")
 		return
 	}
 

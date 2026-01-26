@@ -73,6 +73,15 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		healthCheckPath = "/health"
 	}
 
+	// Parse environment variables (form fields starting with "env_")
+	envVars := make(map[string]string)
+	for key, values := range r.MultipartForm.Value {
+		if strings.HasPrefix(key, "env_") && len(values) > 0 {
+			envName := strings.TrimPrefix(key, "env_")
+			envVars[envName] = values[0]
+		}
+	}
+
 	// Get tarball file
 	file, header, err := r.FormFile("tarball")
 	if err != nil {
@@ -99,7 +108,7 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	cid := addResp.Cid
 
 	// Deploy the Go backend
-	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath)
+	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, envVars)
 	if err != nil {
 		h.logger.Error("Failed to deploy Go backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -131,7 +140,7 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // deploy deploys a Go backend
-func (h *GoHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string) (*deployments.Deployment, error) {
+func (h *GoHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, envVars map[string]string) (*deployments.Deployment, error) {
 	// Create deployment directory
 	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
@@ -169,7 +178,7 @@ func (h *GoHandler) deploy(ctx context.Context, namespace, name, subdomain, cid,
 		Status:              deployments.DeploymentStatusDeploying,
 		ContentCID:          cid,
 		Subdomain:           subdomain,
-		Environment:         make(map[string]string),
+		Environment:         envVars,
 		MemoryLimitMB:       256,
 		CPULimitPercent:     100,
 		HealthCheckPath:     healthCheckPath,

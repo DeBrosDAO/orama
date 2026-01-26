@@ -89,7 +89,13 @@ func GetGatewayURL() string {
 	}
 	cacheMutex.RUnlock()
 
-	// Check environment variable first
+	// Check environment variables first (ORAMA_GATEWAY_URL takes precedence)
+	if envURL := os.Getenv("ORAMA_GATEWAY_URL"); envURL != "" {
+		cacheMutex.Lock()
+		gatewayURLCache = envURL
+		cacheMutex.Unlock()
+		return envURL
+	}
 	if envURL := os.Getenv("GATEWAY_URL"); envURL != "" {
 		cacheMutex.Lock()
 		gatewayURLCache = envURL
@@ -153,7 +159,16 @@ func queryAPIKeyFromRQLite() (string, error) {
 		return envKey, nil
 	}
 
-	// 2. Build database path from bootstrap/node config
+	// 2. If ORAMA_GATEWAY_URL is set (production mode), query the remote RQLite HTTP API
+	if gatewayURL := os.Getenv("ORAMA_GATEWAY_URL"); gatewayURL != "" {
+		apiKey, err := queryAPIKeyFromRemoteRQLite(gatewayURL)
+		if err == nil && apiKey != "" {
+			return apiKey, nil
+		}
+		// Fall through to local database check if remote fails
+	}
+
+	// 3. Build database path from bootstrap/node config (for local development)
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
@@ -208,6 +223,60 @@ func queryAPIKeyFromRQLite() (string, error) {
 	}
 
 	return "", fmt.Errorf("failed to retrieve API key from any SQLite database")
+}
+
+// queryAPIKeyFromRemoteRQLite queries the remote RQLite HTTP API for an API key
+func queryAPIKeyFromRemoteRQLite(gatewayURL string) (string, error) {
+	// Parse the gateway URL to extract the host
+	parsed, err := url.Parse(gatewayURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse gateway URL: %w", err)
+	}
+
+	// RQLite HTTP API runs on port 5001 (not the gateway port 6001)
+	rqliteURL := fmt.Sprintf("http://%s:5001/db/query", parsed.Hostname())
+
+	// Create request body
+	reqBody := `["SELECT key FROM api_keys LIMIT 1"]`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rqliteURL, strings.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to query rqlite: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("rqlite returned status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var result struct {
+		Results []struct {
+			Columns []string        `json:"columns"`
+			Values  [][]interface{} `json:"values"`
+		} `json:"results"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(result.Results) > 0 && len(result.Results[0].Values) > 0 && len(result.Results[0].Values[0]) > 0 {
+		if apiKey, ok := result.Results[0].Values[0][0].(string); ok && apiKey != "" {
+			return apiKey, nil
+		}
+	}
+
+	return "", fmt.Errorf("no API key found in rqlite")
 }
 
 // GetAPIKey returns the gateway API key from rqlite or cache

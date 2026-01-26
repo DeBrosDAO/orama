@@ -28,35 +28,42 @@ type QueryResponse struct {
 	Error        string      `json:"error,omitempty"`
 }
 
+// writeJSONError writes an error response as JSON for consistency
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(QueryResponse{Error: message})
+}
+
 // QueryDatabase executes a SQL query on a namespace database
 func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	namespace, ok := ctx.Value(ctxkeys.NamespaceOverride).(string)
 	if !ok || namespace == "" {
-		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		writeJSONError(w, http.StatusUnauthorized, "Namespace not found in context")
 		return
 	}
 
 	var req QueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.DatabaseName == "" {
-		http.Error(w, "database_name is required", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "database_name is required")
 		return
 	}
 
 	if req.Query == "" {
-		http.Error(w, "query is required", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "query is required")
 		return
 	}
 
 	// Get database metadata
 	dbMeta, err := h.getDatabaseRecord(ctx, namespace, req.DatabaseName)
 	if err != nil {
-		http.Error(w, "Database not found", http.StatusNotFound)
+		writeJSONError(w, http.StatusNotFound, "Database not found")
 		return
 	}
 
@@ -70,7 +77,7 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 			zap.String("home_node", homeNodeID),
 			zap.String("current_node", h.currentNodeID),
 		)
-		http.Error(w, "Database is on a different node. Use node-specific URL or wait for routing implementation.", http.StatusMisdirectedRequest)
+		writeJSONError(w, http.StatusMisdirectedRequest, "Database is on a different node. Use node-specific URL or wait for routing implementation.")
 		return
 	}
 
@@ -83,7 +90,7 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 			zap.String("namespace", namespace),
 			zap.String("database", req.DatabaseName),
 		)
-		http.Error(w, "Database file not found on this node", http.StatusNotFound)
+		writeJSONError(w, http.StatusNotFound, "Database file not found on this node")
 		return
 	}
 
@@ -91,7 +98,7 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	db, err := sql.Open("sqlite3", filePath)
 	if err != nil {
 		h.logger.Error("Failed to open database", zap.Error(err))
-		http.Error(w, "Failed to open database", http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to open database")
 		return
 	}
 	defer db.Close()

@@ -107,7 +107,10 @@ func (o *Orchestrator) Execute() error {
 
 	// Phase 4: Generate configs (BEFORE service initialization)
 	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
-	enableHTTPS := o.flags.Domain != ""
+	// Internal gateway always runs HTTP on port 6001
+	// When using Caddy (nameserver mode), Caddy handles external HTTPS and proxies to internal gateway
+	// When not using Caddy, the gateway runs HTTP-only (use a reverse proxy for HTTPS)
+	enableHTTPS := false
 	if err := o.setup.Phase4GenerateConfigs(o.peers, o.flags.VpsIP, enableHTTPS, o.flags.Domain, o.flags.BaseDomain, o.flags.JoinAddress); err != nil {
 		return fmt.Errorf("configuration generation failed: %w", err)
 	}

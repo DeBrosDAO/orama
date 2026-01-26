@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -713,9 +712,9 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 		zap.String("current_node", g.nodePeerID),
 	)
 
-	// Proxy to home node via HTTPS
-	// Use the original Host header so the home node's TLS works correctly
-	targetURL := "https://" + homeIP + r.URL.Path
+	// Proxy to home node via internal HTTP port (6001)
+	// This is node-to-node internal communication - no TLS needed
+	targetURL := "http://" + homeIP + ":6001" + r.URL.Path
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
 	}
@@ -726,26 +725,19 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 		return false
 	}
 
-	// Copy headers and set Host header to original host
+	// Copy headers and set Host header to original domain for routing
 	for key, values := range r.Header {
 		for _, value := range values {
 			proxyReq.Header.Add(key, value)
 		}
 	}
-	proxyReq.Host = r.Host // Keep original host for TLS SNI
+	proxyReq.Host = r.Host // Keep original host for domain routing on target node
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID) // Prevent loops
 
-	// Skip TLS verification since we're connecting by IP with a Host header
-	// The home node has the correct certificate for the domain
+	// Simple HTTP client for internal node-to-node communication
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-				ServerName:         r.Host, // Use original host for SNI
-			},
-		},
 	}
 
 	resp, err := httpClient.Do(proxyReq)

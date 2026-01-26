@@ -213,6 +213,11 @@ func createNextJSDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath
 	body.WriteString("Content-Disposition: form-data; name=\"name\"\r\n\r\n")
 	body.WriteString(name + "\r\n")
 
+	// Write ssr field (enable SSR mode)
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"ssr\"\r\n\r\n")
+	body.WriteString("true\r\n")
+
 	// Write tarball file
 	body.WriteString("--" + boundary + "\r\n")
 	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
@@ -230,7 +235,9 @@ func createNextJSDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath
 	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	req.Header.Set("Authorization", "Bearer "+env.APIKey)
 
-	resp, err := env.HTTPClient.Do(req)
+	// Use a longer timeout for large Next.js uploads (can be 50MB+)
+	uploadClient := e2e.NewHTTPClient(5 * time.Minute)
+	resp, err := uploadClient.Do(req)
 	if err != nil {
 		t.Fatalf("failed to execute request: %v", err)
 	}

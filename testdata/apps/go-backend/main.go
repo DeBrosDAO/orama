@@ -59,13 +59,16 @@ func executeSQL(query string, args ...interface{}) ([]map[string]interface{}, er
 	}
 
 	// Build the query with parameters
+	// Gateway expects: database_name, query (not sql), params
 	reqBody := map[string]interface{}{
-		"sql":    query,
-		"params": args,
+		"database_name": databaseName,
+		"query":         query,
+		"params":        args,
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
 
-	url := fmt.Sprintf("%s/v1/db/%s/query", gatewayURL, databaseName)
+	// Gateway endpoint is /v1/db/sqlite/query (not /v1/db/{name}/query)
+	url := fmt.Sprintf("%s/v1/db/sqlite/query", gatewayURL)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return nil, err
@@ -87,15 +90,34 @@ func executeSQL(query string, args ...interface{}) ([]map[string]interface{}, er
 		return nil, fmt.Errorf("database error: %s", string(body))
 	}
 
+	// Gateway returns: columns []string, rows [][]interface{}
+	// We need to convert rows to []map[string]interface{}
 	var result struct {
-		Rows    []map[string]interface{} `json:"rows"`
-		Columns []string                 `json:"columns"`
+		Rows    [][]interface{} `json:"rows"`
+		Columns []string        `json:"columns"`
+		Error   string          `json:"error,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	return result.Rows, nil
+	if result.Error != "" {
+		return nil, fmt.Errorf("query error: %s", result.Error)
+	}
+
+	// Convert [][]interface{} to []map[string]interface{}
+	rows := make([]map[string]interface{}, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		rowMap := make(map[string]interface{})
+		for i, col := range result.Columns {
+			if i < len(row) {
+				rowMap[col] = row[i]
+			}
+		}
+		rows = append(rows, rowMap)
+	}
+
+	return rows, nil
 }
 
 // initDatabase creates the users table if it doesn't exist

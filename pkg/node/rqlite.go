@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
-	"go.uber.org/zap"
-	"time"
 )
 
 // startRQLite initializes and starts the RQLite database
@@ -53,25 +51,6 @@ func (n *Node) startRQLite(ctx context.Context) error {
 		n.clusterDiscovery.UpdateOwnMetadata()
 
 		n.logger.Info("Cluster discovery service started (waiting for RQLite)")
-	}
-
-	// If node-to-node TLS is configured, wait for certificates to be provisioned
-	// This ensures RQLite can start with TLS when joining through the SNI gateway
-	if n.config.Database.NodeCert != "" && n.config.Database.NodeKey != "" && n.certReady != nil {
-		n.logger.Info("RQLite node TLS configured, waiting for certificates to be provisioned...",
-			zap.String("node_cert", n.config.Database.NodeCert),
-			zap.String("node_key", n.config.Database.NodeKey))
-
-		// Wait for certificate ready signal with timeout
-		certTimeout := 5 * time.Minute
-		select {
-		case <-n.certReady:
-			n.logger.Info("Certificates ready, proceeding with RQLite startup")
-		case <-time.After(certTimeout):
-			return fmt.Errorf("timeout waiting for TLS certificates after %v - ensure HTTPS is configured and ports 80/443 are accessible for ACME challenges", certTimeout)
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for certificates: %w", ctx.Err())
-		}
 	}
 
 	// Start RQLite FIRST before updating metadata

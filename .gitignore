@@ -89,3 +89,5 @@ configs/
 scripts/remote-nodes.conf
 
 orama-cli-linux
+
+rnd/

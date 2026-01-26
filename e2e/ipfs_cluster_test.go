@@ -13,7 +13,12 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 )
 
+// Note: These tests connect directly to IPFS Cluster API (localhost:9094)
+// and IPFS API (localhost:4501). They are for local development only.
+// For production testing, use storage_http_test.go which uses gateway endpoints.
+
 func TestIPFSCluster_Health(t *testing.T) {
+	SkipIfProduction(t) // Direct IPFS connection not available in production
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -35,6 +40,7 @@ func TestIPFSCluster_Health(t *testing.T) {
 }
 
 func TestIPFSCluster_GetPeerCount(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -62,6 +68,7 @@ func TestIPFSCluster_GetPeerCount(t *testing.T) {
 }
 
 func TestIPFSCluster_AddFile(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -94,6 +101,7 @@ func TestIPFSCluster_AddFile(t *testing.T) {
 }
 
 func TestIPFSCluster_PinFile(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -131,6 +139,7 @@ func TestIPFSCluster_PinFile(t *testing.T) {
 }
 
 func TestIPFSCluster_PinStatus(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -188,6 +197,7 @@ func TestIPFSCluster_PinStatus(t *testing.T) {
 }
 
 func TestIPFSCluster_UnpinFile(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -226,6 +236,7 @@ func TestIPFSCluster_UnpinFile(t *testing.T) {
 }
 
 func TestIPFSCluster_GetFile(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -272,6 +283,7 @@ func TestIPFSCluster_GetFile(t *testing.T) {
 }
 
 func TestIPFSCluster_LargeFile(t *testing.T) {
+	SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -305,6 +317,7 @@ func TestIPFSCluster_LargeFile(t *testing.T) {
 }
 
 func TestIPFSCluster_ReplicationFactor(t *testing.T) {
+	SkipIfProduction(t) // Direct IPFS connection not available in production
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -352,6 +365,7 @@ func TestIPFSCluster_ReplicationFactor(t *testing.T) {
 }
 
 func TestIPFSCluster_MultipleFiles(t *testing.T) {
+	SkipIfProduction(t) // Direct IPFS connection not available in production
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

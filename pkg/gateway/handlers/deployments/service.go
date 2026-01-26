@@ -19,6 +19,7 @@ type DeploymentService struct {
 	portAllocator   *deployments.PortAllocator
 	logger          *zap.Logger
 	baseDomain      string // Base domain for deployments (e.g., "dbrs.space")
+	nodePeerID      string // Current node's peer ID (deployments run on this node)
 }
 
 // NewDeploymentService creates a new deployment service
@@ -42,6 +43,12 @@ func (s *DeploymentService) SetBaseDomain(domain string) {
 	if domain != "" {
 		s.baseDomain = domain
 	}
+}
+
+// SetNodePeerID sets the current node's peer ID
+// Deployments will always run on this node (no cross-node routing for deployment creation)
+func (s *DeploymentService) SetNodePeerID(peerID string) {
+	s.nodePeerID = peerID
 }
 
 // BaseDomain returns the configured base domain
@@ -69,8 +76,13 @@ func GetShortNodeID(peerID string) string {
 
 // CreateDeployment creates a new deployment
 func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *deployments.Deployment) error {
-	// Assign home node if not already assigned
-	if deployment.HomeNodeID == "" {
+	// Always use current node's peer ID for home node
+	// Deployments run on the node that receives the creation request
+	// This ensures port allocation matches where the service actually runs
+	if s.nodePeerID != "" {
+		deployment.HomeNodeID = s.nodePeerID
+	} else if deployment.HomeNodeID == "" {
+		// Fallback to home node manager if no node peer ID configured
 		homeNodeID, err := s.homeNodeManager.AssignHomeNode(ctx, deployment.Namespace)
 		if err != nil {
 			return fmt.Errorf("failed to assign home node: %w", err)

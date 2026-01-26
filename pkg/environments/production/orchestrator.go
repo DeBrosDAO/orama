@@ -668,18 +668,32 @@ func (ps *ProductionSetup) SeedDNSRecords(baseDomain, vpsIP string, peerAddresse
 
 	ps.logf("Seeding DNS records...")
 
-	// Get node IPs from peer addresses or use the VPS IP for all
+	// Get node IPs from peer addresses (multiaddrs) or use the VPS IP for all
+	// Peer addresses are multiaddrs like /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...
+	// We need to extract just the IP from them
 	ns1IP := vpsIP
 	ns2IP := vpsIP
 	ns3IP := vpsIP
-	if len(peerAddresses) >= 1 && peerAddresses[0] != "" {
-		ns1IP = peerAddresses[0]
+
+	// Extract IPs from multiaddrs
+	var extractedIPs []string
+	for _, peer := range peerAddresses {
+		if peer != "" {
+			if ip := extractIPFromMultiaddr(peer); ip != "" {
+				extractedIPs = append(extractedIPs, ip)
+			}
+		}
 	}
-	if len(peerAddresses) >= 2 && peerAddresses[1] != "" {
-		ns2IP = peerAddresses[1]
+
+	// Assign extracted IPs to nameservers
+	if len(extractedIPs) >= 1 {
+		ns1IP = extractedIPs[0]
 	}
-	if len(peerAddresses) >= 3 && peerAddresses[2] != "" {
-		ns3IP = peerAddresses[2]
+	if len(extractedIPs) >= 2 {
+		ns2IP = extractedIPs[1]
+	}
+	if len(extractedIPs) >= 3 {
+		ns3IP = extractedIPs[2]
 	}
 
 	rqliteDSN := "http://localhost:5001"

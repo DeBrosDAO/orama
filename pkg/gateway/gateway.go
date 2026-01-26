@@ -258,6 +258,10 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		if gw.cfg.BaseDomain != "" {
 			gw.deploymentService.SetBaseDomain(gw.cfg.BaseDomain)
 		}
+		// Set node peer ID so deployments run on the node that receives the request
+		if gw.cfg.NodePeerID != "" {
+			gw.deploymentService.SetNodePeerID(gw.cfg.NodePeerID)
+		}
 
 		// Create deployment handlers
 		gw.staticHandler = deploymentshandlers.NewStaticDeploymentHandler(

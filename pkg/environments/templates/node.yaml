@@ -49,7 +49,7 @@ logging:
 
 http_gateway:
   enabled: true
-  listen_addr: "{{if .EnableHTTPS}}:{{.HTTPSPort}}{{else}}:{{.UnifiedGatewayPort}}{{end}}"
+  listen_addr: ":{{.UnifiedGatewayPort}}"
   node_name: "{{.NodeID}}"
   base_domain: "{{.BaseDomain}}"
   
@@ -63,17 +63,8 @@ http_gateway:
     email: "admin@{{.Domain}}"
   {{end}}
   
-  {{if .EnableHTTPS}}sni:
-    enabled: true
-    listen_addr: ":{{.RQLiteRaftPort}}"
-    cert_file: "{{.TLSCacheDir}}/{{.Domain}}.crt"
-    key_file: "{{.TLSCacheDir}}/{{.Domain}}.key"
-    routes:
-      # Note: Raft traffic bypasses SNI gateway - RQLite uses native TLS on port 7002
-      ipfs.{{.Domain}}: "localhost:4101"
-      ipfs-cluster.{{.Domain}}: "localhost:9098"
-      olric.{{.Domain}}: "localhost:3322"
-  {{end}}
+  # SNI gateway disabled - Caddy handles TLS termination for external traffic
+  # Internal service-to-service communication uses plain TCP
   
   # Full gateway configuration (for API, auth, pubsub, and internal service routing)
   client_namespace: "default"
