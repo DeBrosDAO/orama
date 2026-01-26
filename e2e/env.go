@@ -973,23 +973,45 @@ func (p *WSPubSubClientPair) Close() {
 
 // E2ETestEnv holds the environment configuration for deployment E2E tests
 type E2ETestEnv struct {
-	GatewayURL   string
-	APIKey       string
-	Namespace    string
-	HTTPClient   *http.Client
-	SkipCleanup  bool
+	GatewayURL  string
+	APIKey      string
+	Namespace   string
+	BaseDomain  string       // Domain for deployment routing (e.g., "dbrs.space")
+	Config      *E2EConfig   // Full E2E configuration (for production tests)
+	HTTPClient  *http.Client
+	SkipCleanup bool
 }
 
-// LoadTestEnv loads the test environment from environment variables
+// BuildDeploymentDomain returns the full domain for a deployment name
+// Format: {name}.{baseDomain} (e.g., "myapp.dbrs.space")
+func (env *E2ETestEnv) BuildDeploymentDomain(deploymentName string) string {
+	return fmt.Sprintf("%s.%s", deploymentName, env.BaseDomain)
+}
+
+// LoadTestEnv loads the test environment from environment variables and config file
 // If ORAMA_API_KEY is not set, it creates a fresh API key for the default test namespace
 func LoadTestEnv() (*E2ETestEnv, error) {
+	// Load E2E config (for base_domain and production settings)
+	cfg, err := LoadE2EConfig()
+	if err != nil {
+		// If config loading fails in production mode, that's an error
+		if IsProductionMode() {
+			return nil, fmt.Errorf("failed to load e2e config: %w", err)
+		}
+		// For local mode, use defaults
+		cfg = DefaultConfig()
+	}
+
 	gatewayURL := os.Getenv("ORAMA_GATEWAY_URL")
 	if gatewayURL == "" {
 		gatewayURL = GetGatewayURL()
 	}
 
-	// Check if API key is provided via environment variable
+	// Check if API key is provided via environment variable or config
 	apiKey := os.Getenv("ORAMA_API_KEY")
+	if apiKey == "" && cfg.APIKey != "" {
+		apiKey = cfg.APIKey
+	}
 	namespace := os.Getenv("ORAMA_NAMESPACE")
 
 	// If no API key provided, create a fresh one for a default test namespace
@@ -1055,6 +1077,8 @@ func LoadTestEnv() (*E2ETestEnv, error) {
 		GatewayURL:  gatewayURL,
 		APIKey:      apiKey,
 		Namespace:   namespace,
+		BaseDomain:  cfg.BaseDomain,
+		Config:      cfg,
 		HTTPClient:  NewHTTPClient(30 * time.Second),
 		SkipCleanup: skipCleanup,
 	}, nil
@@ -1063,6 +1087,12 @@ func LoadTestEnv() (*E2ETestEnv, error) {
 // LoadTestEnvWithNamespace loads test environment with a specific namespace
 // It creates a new API key for the specified namespace to ensure proper isolation
 func LoadTestEnvWithNamespace(namespace string) (*E2ETestEnv, error) {
+	// Load E2E config (for base_domain and production settings)
+	cfg, err := LoadE2EConfig()
+	if err != nil {
+		cfg = DefaultConfig()
+	}
+
 	gatewayURL := os.Getenv("ORAMA_GATEWAY_URL")
 	if gatewayURL == "" {
 		gatewayURL = GetGatewayURL()
@@ -1122,6 +1152,8 @@ func LoadTestEnvWithNamespace(namespace string) (*E2ETestEnv, error) {
 		GatewayURL:  gatewayURL,
 		APIKey:      apiKey,
 		Namespace:   namespace,
+		BaseDomain:  cfg.BaseDomain,
+		Config:      cfg,
 		HTTPClient:  NewHTTPClient(30 * time.Second),
 		SkipCleanup: skipCleanup,
 	}, nil

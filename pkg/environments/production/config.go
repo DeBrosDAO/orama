@@ -134,9 +134,13 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	var rqliteJoinAddr string
 	if joinAddress != "" {
 		// Use explicitly provided join address
-		// If it contains :7001 and HTTPS is enabled, update to :7002
+		// Adjust port based on HTTPS mode:
+		// - HTTPS enabled: use port 7002 (direct RQLite TLS, bypassing SNI gateway)
+		// - HTTPS disabled: use port 7001 (standard RQLite Raft port)
 		if enableHTTPS && strings.Contains(joinAddress, ":7001") {
 			rqliteJoinAddr = strings.Replace(joinAddress, ":7001", ":7002", 1)
+		} else if !enableHTTPS && strings.Contains(joinAddress, ":7002") {
+			rqliteJoinAddr = strings.Replace(joinAddress, ":7002", ":7001", 1)
 		} else {
 			rqliteJoinAddr = joinAddress
 		}

@@ -197,8 +197,9 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.config.PeerIP = peerIP
 
-		// Auto-populate join address (direct RQLite TLS on port 7002) and bootstrap peers
-		m.config.JoinAddress = fmt.Sprintf("%s:7002", peerIP)
+		// Auto-populate join address using port 7001 (standard RQLite Raft port)
+		// config.go will adjust to 7002 if HTTPS/SNI is enabled
+		m.config.JoinAddress = fmt.Sprintf("%s:7001", peerIP)
 		m.config.Peers = []string{
 			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, disc.PeerID),
 		}

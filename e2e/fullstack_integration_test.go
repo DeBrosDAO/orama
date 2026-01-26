@@ -129,7 +129,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 			return
 		}
 
-		backendDomain := fmt.Sprintf("%s.orama.network", backendName)
+		backendDomain := env.BuildDeploymentDomain(backendName)
 
 		// Test health endpoint
 		resp := TestDeploymentWithHostHeader(t, env, backendDomain, "/health")
@@ -262,7 +262,7 @@ func TestFullStack_StaticSite_SQLite(t *testing.T) {
 	})
 
 	t.Run("Test frontend serving and database interaction", func(t *testing.T) {
-		frontendDomain := fmt.Sprintf("%s.orama.network", frontendName)
+		frontendDomain := env.BuildDeploymentDomain(frontendName)
 
 		// Test frontend
 		resp := TestDeploymentWithHostHeader(t, env, frontendDomain, "/")

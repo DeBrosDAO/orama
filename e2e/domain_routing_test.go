@@ -38,8 +38,8 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 		deploymentID, deployment["content_cid"], deployment["name"], deployment["status"])
 
 	t.Run("Standard domain resolves", func(t *testing.T) {
-		// Domain format: {deploymentName}.orama.network
-		domain := fmt.Sprintf("%s.orama.network", deploymentName)
+		// Domain format: {deploymentName}.{baseDomain}
+		domain := env.BuildDeploymentDomain(deploymentName)
 
 		resp := TestDeploymentWithHostHeader(t, env, domain, "/")
 		defer resp.Body.Close()
@@ -69,7 +69,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 
 	t.Run("API paths bypass domain routing", func(t *testing.T) {
 		// /v1/* paths should bypass domain routing and use API key auth
-		domain := fmt.Sprintf("%s.orama.network", deploymentName)
+		domain := env.BuildDeploymentDomain(deploymentName)
 
 		req, _ := http.NewRequest("GET", env.GatewayURL+"/v1/deployments/list", nil)
 		req.Host = domain
@@ -94,7 +94,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 	})
 
 	t.Run("Well-known paths bypass domain routing", func(t *testing.T) {
-		domain := fmt.Sprintf("%s.orama.network", deploymentName)
+		domain := env.BuildDeploymentDomain(deploymentName)
 
 		// /.well-known/ paths should bypass (used for ACME challenges, etc.)
 		resp := TestDeploymentWithHostHeader(t, env, domain, "/.well-known/acme-challenge/test")
@@ -139,8 +139,8 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	t.Run("Each deployment routes independently", func(t *testing.T) {
-		domain1 := fmt.Sprintf("%s.orama.network", deployment1Name)
-		domain2 := fmt.Sprintf("%s.orama.network", deployment2Name)
+		domain1 := env.BuildDeploymentDomain(deployment1Name)
+		domain2 := env.BuildDeploymentDomain(deployment2Name)
 
 		// Test deployment 1
 		resp1 := TestDeploymentWithHostHeader(t, env, domain1, "/")
@@ -161,7 +161,7 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 
 	t.Run("Wrong domain returns 404", func(t *testing.T) {
 		// Request with non-existent deployment subdomain
-		fakeDeploymentDomain := fmt.Sprintf("nonexistent-deployment-%d.orama.network", time.Now().Unix())
+		fakeDeploymentDomain := env.BuildDeploymentDomain(fmt.Sprintf("nonexistent-deployment-%d", time.Now().Unix()))
 
 		resp := TestDeploymentWithHostHeader(t, env, fakeDeploymentDomain, "/")
 		defer resp.Body.Close()
@@ -189,7 +189,7 @@ func TestDomainRouting_ContentTypes(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	domain := fmt.Sprintf("%s.orama.network", deploymentName)
+	domain := env.BuildDeploymentDomain(deploymentName)
 
 	contentTypeTests := []struct {
 		path        string
@@ -234,7 +234,7 @@ func TestDomainRouting_SPAFallback(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	domain := fmt.Sprintf("%s.orama.network", deploymentName)
+	domain := env.BuildDeploymentDomain(deploymentName)
 
 	t.Run("Unknown paths fall back to index.html", func(t *testing.T) {
 		unknownPaths := []string{
@@ -258,5 +258,87 @@ func TestDomainRouting_SPAFallback(t *testing.T) {
 		}
 
 		t.Logf("✓ SPA fallback routing verified for %d paths", len(unknownPaths))
+	})
+}
+
+// TestDeployment_DomainFormat verifies that deployment URLs use the correct format:
+// - CORRECT: {name}.{baseDomain} (e.g., "myapp.dbrs.space")
+// - WRONG: {name}.node-{shortID}.{baseDomain} (should NOT exist)
+func TestDeployment_DomainFormat(t *testing.T) {
+	env, err := LoadTestEnv()
+	require.NoError(t, err, "Failed to load test environment")
+
+	deploymentName := fmt.Sprintf("format-test-%d", time.Now().Unix())
+	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+
+	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+	defer func() {
+		if !env.SkipCleanup {
+			DeleteDeployment(t, env, deploymentID)
+		}
+	}()
+
+	// Wait for deployment
+	time.Sleep(2 * time.Second)
+
+	t.Run("Deployment URL has correct format", func(t *testing.T) {
+		deployment := GetDeployment(t, env, deploymentID)
+
+		// Get the deployment URLs
+		urls, ok := deployment["urls"].([]interface{})
+		if !ok || len(urls) == 0 {
+			// Fall back to single url field
+			if url, ok := deployment["url"].(string); ok && url != "" {
+				urls = []interface{}{url}
+			}
+		}
+
+		expectedDomain := env.BuildDeploymentDomain(deploymentName)
+		t.Logf("Expected domain format: %s", expectedDomain)
+		t.Logf("Deployment URLs: %v", urls)
+
+		foundCorrectFormat := false
+		for _, u := range urls {
+			urlStr, ok := u.(string)
+			if !ok {
+				continue
+			}
+
+			// URL should contain the simple format: {name}.{baseDomain}
+			if assert.Contains(t, urlStr, expectedDomain,
+				"URL should contain %s", expectedDomain) {
+				foundCorrectFormat = true
+			}
+
+			// URL should NOT contain node identifier pattern
+			assert.NotContains(t, urlStr, ".node-",
+				"URL should NOT have node identifier (got: %s)", urlStr)
+		}
+
+		if len(urls) > 0 {
+			assert.True(t, foundCorrectFormat, "Should find URL with correct domain format")
+		}
+
+		t.Logf("✓ Domain format verification passed")
+		t.Logf("   - Expected: %s", expectedDomain)
+	})
+
+	t.Run("Domain resolves via Host header", func(t *testing.T) {
+		// Test that the simple domain format works
+		domain := env.BuildDeploymentDomain(deploymentName)
+
+		resp := TestDeploymentWithHostHeader(t, env, domain, "/")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"Domain %s should resolve successfully", domain)
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		assert.Contains(t, string(body), "<div id=\"root\">",
+			"Should serve deployment content")
+
+		t.Logf("✓ Domain %s resolves correctly", domain)
 	})
 }
