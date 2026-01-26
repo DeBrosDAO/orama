@@ -336,12 +336,12 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	var clusterPeers []string
 	if ipfsClusterPeer != nil && ipfsClusterPeer.PeerID != "" {
 		// Construct cluster peer multiaddress using the discovered peer ID
-		// Format: /ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>
+		// Format: /ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>
 		peerIP := inferPeerIP(peerAddresses, vpsIP)
 		if peerIP != "" {
 			// Construct the bootstrap multiaddress for IPFS Cluster
-			// Note: IPFS Cluster listens on port 9098 for cluster communication
-			clusterBootstrapAddr := fmt.Sprintf("/ip4/%s/tcp/9098/p2p/%s", peerIP, ipfsClusterPeer.PeerID)
+			// Note: IPFS Cluster listens on port 9100 for cluster communication
+			clusterBootstrapAddr := fmt.Sprintf("/ip4/%s/tcp/9100/p2p/%s", peerIP, ipfsClusterPeer.PeerID)
 			clusterPeers = []string{clusterBootstrapAddr}
 			ps.logf("  ℹ️  IPFS Cluster will connect to peer: %s", clusterBootstrapAddr)
 		} else if len(ipfsClusterPeer.Addrs) > 0 {

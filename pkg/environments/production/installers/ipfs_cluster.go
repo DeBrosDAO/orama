@@ -61,7 +61,7 @@ func (ici *IPFSClusterInstaller) Configure() error {
 // InitializeConfig initializes IPFS Cluster configuration (unified - no bootstrap/node distinction)
 // This runs `ipfs-cluster-service init` to create the service.json configuration file.
 // For existing installations, it ensures the cluster secret is up to date.
-// clusterPeers should be in format: ["/ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>"]
+// clusterPeers should be in format: ["/ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>"]
 func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret string, ipfsAPIPort int, clusterPeers []string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	configExists := false
@@ -146,18 +146,22 @@ func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAP
 	// Update cluster secret, listen_multiaddress, and peer addresses
 	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
 		cluster["secret"] = secret
-		// Set consistent listen_multiaddress - port 9098 for cluster LibP2P communication
+		// Set consistent listen_multiaddress - port 9100 for cluster LibP2P communication
 		// This MUST match the port used in GetClusterPeerMultiaddr() and peer_addresses
-		cluster["listen_multiaddress"] = []interface{}{"/ip4/0.0.0.0/tcp/9098"}
+		cluster["listen_multiaddress"] = []interface{}{"/ip4/0.0.0.0/tcp/9100"}
 		// Configure peer addresses for cluster discovery
 		// This allows nodes to find and connect to each other
+		// Merge new peers with existing peers (preserves manually configured peers)
 		if len(bootstrapClusterPeers) > 0 {
-			cluster["peer_addresses"] = bootstrapClusterPeers
+			existingPeers := ici.extractExistingPeers(cluster)
+			mergedPeers := ici.mergePeerAddresses(existingPeers, bootstrapClusterPeers)
+			cluster["peer_addresses"] = mergedPeers
 		}
+		// If no new peers provided, preserve existing peer_addresses (don't overwrite)
 	} else {
 		clusterConfig := map[string]interface{}{
 			"secret":              secret,
-			"listen_multiaddress": []interface{}{"/ip4/0.0.0.0/tcp/9098"},
+			"listen_multiaddress": []interface{}{"/ip4/0.0.0.0/tcp/9100"},
 		}
 		if len(bootstrapClusterPeers) > 0 {
 			clusterConfig["peer_addresses"] = bootstrapClusterPeers
@@ -193,6 +197,43 @@ func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAP
 	return nil
 }
 
+// extractExistingPeers extracts existing peer addresses from cluster config
+func (ici *IPFSClusterInstaller) extractExistingPeers(cluster map[string]interface{}) []string {
+	var peers []string
+	if peerAddrs, ok := cluster["peer_addresses"].([]interface{}); ok {
+		for _, addr := range peerAddrs {
+			if addrStr, ok := addr.(string); ok && addrStr != "" {
+				peers = append(peers, addrStr)
+			}
+		}
+	}
+	return peers
+}
+
+// mergePeerAddresses merges existing and new peer addresses, removing duplicates
+func (ici *IPFSClusterInstaller) mergePeerAddresses(existing, new []string) []string {
+	seen := make(map[string]bool)
+	var merged []string
+
+	// Add existing peers first
+	for _, peer := range existing {
+		if !seen[peer] {
+			seen[peer] = true
+			merged = append(merged, peer)
+		}
+	}
+
+	// Add new peers (if not already present)
+	for _, peer := range new {
+		if !seen[peer] {
+			seen[peer] = true
+			merged = append(merged, peer)
+		}
+	}
+
+	return merged
+}
+
 // verifySecret verifies that the secret in service.json matches the expected value
 func (ici *IPFSClusterInstaller) verifySecret(clusterPath, expectedSecret string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
@@ -221,7 +262,7 @@ func (ici *IPFSClusterInstaller) verifySecret(clusterPath, expectedSecret string
 }
 
 // GetClusterPeerMultiaddr reads the IPFS Cluster peer ID and returns its multiaddress
-// Returns format: /ip4/<ip>/tcp/9098/p2p/<cluster-peer-id>
+// Returns format: /ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>
 func (ici *IPFSClusterInstaller) GetClusterPeerMultiaddr(clusterPath string, nodeIP string) (string, error) {
 	identityPath := filepath.Join(clusterPath, "identity.json")
 
@@ -243,9 +284,9 @@ func (ici *IPFSClusterInstaller) GetClusterPeerMultiaddr(clusterPath string, nod
 		return "", fmt.Errorf("peer ID not found in identity.json")
 	}
 
-	// Construct multiaddress: /ip4/<ip>/tcp/9098/p2p/<peer-id>
-	// Port 9098 is the default cluster listen port
-	multiaddr := fmt.Sprintf("/ip4/%s/tcp/9098/p2p/%s", nodeIP, peerID)
+	// Construct multiaddress: /ip4/<ip>/tcp/9100/p2p/<peer-id>
+	// Port 9100 is the cluster listen port for libp2p communication
+	multiaddr := fmt.Sprintf("/ip4/%s/tcp/9100/p2p/%s", nodeIP, peerID)
 	return multiaddr, nil
 }
 
