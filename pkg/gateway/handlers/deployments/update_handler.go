@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -268,13 +269,11 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	return existing, nil
 }
 
-// Helper functions (simplified - in production use os package)
+// Helper functions for filesystem operations
 func renameDirectory(old, new string) error {
-	// os.Rename(old, new)
-	return nil
+	return os.Rename(old, new)
 }
 
 func removeDirectory(path string) error {
-	// os.RemoveAll(path)
-	return nil
+	return os.RemoveAll(path)
 }

@@ -8,11 +8,27 @@ test:
 # Gateway-focused E2E tests assume gateway and nodes are already running
 # Auto-discovers configuration from ~/.orama and queries database for API key
 # No environment variables required
-.PHONY: test-e2e
+.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick
 test-e2e:
 	@echo "Running comprehensive E2E tests..."
 	@echo "Auto-discovering configuration from ~/.orama..."
-	go test -v -tags e2e ./e2e
+	go test -v -tags e2e -timeout 30m ./e2e/...
+
+test-e2e-deployments:
+	@echo "Running deployment E2E tests..."
+	go test -v -tags e2e -timeout 15m ./e2e/deployments/...
+
+test-e2e-fullstack:
+	@echo "Running fullstack E2E tests..."
+	go test -v -tags e2e -timeout 20m -run "TestFullStack" ./e2e/...
+
+test-e2e-https:
+	@echo "Running HTTPS/external access E2E tests..."
+	go test -v -tags e2e -timeout 10m -run "TestHTTPS" ./e2e/...
+
+test-e2e-quick:
+	@echo "Running quick E2E smoke tests..."
+	go test -v -tags e2e -timeout 5m -run "TestStatic|TestHealth" ./e2e/...
 
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks

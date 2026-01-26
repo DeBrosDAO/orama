@@ -195,7 +195,7 @@ func (ci *CoreDNSInstaller) Install() error {
 	return nil
 }
 
-// Configure creates CoreDNS configuration files and seeds static DNS records into RQLite
+// Configure creates CoreDNS configuration files and attempts to seed static DNS records
 func (ci *CoreDNSInstaller) Configure(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
 	configDir := "/etc/coredns"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -208,15 +208,27 @@ func (ci *CoreDNSInstaller) Configure(domain string, rqliteDSN string, ns1IP, ns
 		return fmt.Errorf("failed to write Corefile: %w", err)
 	}
 
-	// Seed static DNS records into RQLite
+	// Attempt to seed static DNS records into RQLite
+	// This may fail if RQLite is not running yet - that's OK, SeedDNS can be called later
 	fmt.Fprintf(ci.logWriter, "  Seeding static DNS records into RQLite...\n")
 	if err := ci.seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
 		// Don't fail on seed errors - RQLite might not be up yet
 		fmt.Fprintf(ci.logWriter, "  ⚠️  Could not seed DNS records (RQLite may not be ready): %v\n", err)
+		fmt.Fprintf(ci.logWriter, "     DNS records will be seeded after services start\n")
 	} else {
 		fmt.Fprintf(ci.logWriter, "  ✓ Static DNS records seeded\n")
 	}
 
+	return nil
+}
+
+// SeedDNS seeds static DNS records into RQLite. Call this after RQLite is running.
+func (ci *CoreDNSInstaller) SeedDNS(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	fmt.Fprintf(ci.logWriter, "  Seeding static DNS records into RQLite...\n")
+	if err := ci.seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+		return err
+	}
+	fmt.Fprintf(ci.logWriter, "  ✓ Static DNS records seeded\n")
 	return nil
 }
 
@@ -343,8 +355,9 @@ func (ci *CoreDNSInstaller) seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, n
 	var statements []string
 	for _, r := range records {
 		// Use INSERT OR REPLACE to handle updates
+		// IMPORTANT: Must set is_active = TRUE for CoreDNS to find the records
 		stmt := fmt.Sprintf(
-			`INSERT OR REPLACE INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by) VALUES ('%s', '%s', '%s', %d, 'system', 'system')`,
+			`INSERT OR REPLACE INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s', '%s', '%s', %d, 'system', 'system', TRUE, datetime('now'), datetime('now'))`,
 			r.fqdn, r.recordType, r.value, r.ttl,
 		)
 		statements = append(statements, stmt)

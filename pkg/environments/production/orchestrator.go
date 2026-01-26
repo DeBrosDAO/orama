@@ -406,7 +406,7 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
-func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, joinAddress string) error {
+func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, baseDomain string, joinAddress string) error {
 	if ps.IsUpdate() {
 		ps.logf("Phase 4: Updating configurations...")
 		ps.logf("  (Existing configs will be updated to latest format)")
@@ -415,7 +415,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 
 	// Node config (unified architecture)
-	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain, enableHTTPS)
+	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain, baseDomain, enableHTTPS)
 	if err != nil {
 		return fmt.Errorf("failed to generate node config: %w", err)
 	}
@@ -457,8 +457,13 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	exec.Command("chown", "debros:debros", olricConfigPath).Run()
 	ps.logf("  ✓ Olric config generated")
 
-	// Configure CoreDNS (if domain is provided)
-	if domain != "" {
+	// Configure CoreDNS (if baseDomain is provided - this is the zone name)
+	// CoreDNS uses baseDomain (e.g., "dbrs.space") as the authoritative zone
+	dnsZone := baseDomain
+	if dnsZone == "" {
+		dnsZone = domain // Fall back to node domain if baseDomain not set
+	}
+	if dnsZone != "" {
 		// Get node IPs from peer addresses or use the VPS IP for all
 		ns1IP := vpsIP
 		ns2IP := vpsIP
@@ -474,16 +479,20 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 		}
 
 		rqliteDSN := "http://localhost:5001"
-		if err := ps.binaryInstaller.ConfigureCoreDNS(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+		if err := ps.binaryInstaller.ConfigureCoreDNS(dnsZone, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
 			ps.logf("  ⚠️  CoreDNS config warning: %v", err)
 		} else {
-			ps.logf("  ✓ CoreDNS config generated")
+			ps.logf("  ✓ CoreDNS config generated (zone: %s)", dnsZone)
 		}
 
-		// Configure Caddy
-		email := "admin@" + domain
+		// Configure Caddy (uses baseDomain for admin email if node domain not set)
+		caddyDomain := domain
+		if caddyDomain == "" {
+			caddyDomain = baseDomain
+		}
+		email := "admin@" + caddyDomain
 		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
-		if err := ps.binaryInstaller.ConfigureCaddy(domain, email, acmeEndpoint); err != nil {
+		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint); err != nil {
 			ps.logf("  ⚠️  Caddy config warning: %v", err)
 		} else {
 			ps.logf("  ✓ Caddy config generated")
@@ -645,6 +654,39 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 
 	ps.logf("  ✓ All services started")
+	return nil
+}
+
+// SeedDNSRecords seeds DNS records into RQLite after services are running
+func (ps *ProductionSetup) SeedDNSRecords(baseDomain, vpsIP string, peerAddresses []string) error {
+	if !ps.isNameserver {
+		return nil // Skip for non-nameserver nodes
+	}
+	if baseDomain == "" {
+		return nil // Skip if no domain configured
+	}
+
+	ps.logf("Seeding DNS records...")
+
+	// Get node IPs from peer addresses or use the VPS IP for all
+	ns1IP := vpsIP
+	ns2IP := vpsIP
+	ns3IP := vpsIP
+	if len(peerAddresses) >= 1 && peerAddresses[0] != "" {
+		ns1IP = peerAddresses[0]
+	}
+	if len(peerAddresses) >= 2 && peerAddresses[1] != "" {
+		ns2IP = peerAddresses[1]
+	}
+	if len(peerAddresses) >= 3 && peerAddresses[2] != "" {
+		ns3IP = peerAddresses[2]
+	}
+
+	rqliteDSN := "http://localhost:5001"
+	if err := ps.binaryInstaller.SeedDNS(baseDomain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+		return fmt.Errorf("failed to seed DNS records: %w", err)
+	}
+
 	return nil
 }
 

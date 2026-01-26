@@ -127,6 +127,11 @@ func (bi *BinaryInstaller) ConfigureCoreDNS(domain string, rqliteDSN string, ns1
 	return bi.coredns.Configure(domain, rqliteDSN, ns1IP, ns2IP, ns3IP)
 }
 
+// SeedDNS seeds static DNS records into RQLite. Call after RQLite is running.
+func (bi *BinaryInstaller) SeedDNS(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	return bi.coredns.SeedDNS(domain, rqliteDSN, ns1IP, ns2IP, ns3IP)
+}
+
 // InstallCaddy builds and installs Caddy with the custom orama DNS module
 func (bi *BinaryInstaller) InstallCaddy() error {
 	return bi.caddy.Install()

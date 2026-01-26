@@ -1146,10 +1146,9 @@ func CreateTestDeployment(t *testing.T, env *E2ETestEnv, name, tarballPath strin
 	body.WriteString("Content-Disposition: form-data; name=\"name\"\r\n\r\n")
 	body.WriteString(name + "\r\n")
 
-	// Write subdomain field
-	body.WriteString("--" + boundary + "\r\n")
-	body.WriteString("Content-Disposition: form-data; name=\"subdomain\"\r\n\r\n")
-	body.WriteString(name + "\r\n")
+	// NOTE: We intentionally do NOT send subdomain field
+	// This ensures only node-specific domains are created: {name}.node-{id}.domain
+	// Subdomain should only be sent if explicitly requested for custom domains
 
 	// Write tarball file
 	body.WriteString("--" + boundary + "\r\n")

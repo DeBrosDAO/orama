@@ -51,6 +51,7 @@ http_gateway:
   enabled: true
   listen_addr: "{{if .EnableHTTPS}}:{{.HTTPSPort}}{{else}}:{{.UnifiedGatewayPort}}{{end}}"
   node_name: "{{.NodeID}}"
+  base_domain: "{{.BaseDomain}}"
   
   {{if .EnableHTTPS}}https:
     enabled: true

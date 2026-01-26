@@ -27,6 +27,7 @@ type NodeConfigData struct {
 	RaftAdvAddress         string // Advertised Raft address (IP:port or domain:port for SNI)
 	UnifiedGatewayPort     int    // Unified gateway port for all node services
 	Domain                 string // Domain for this node (e.g., node-123.orama.network)
+	BaseDomain             string // Base domain for deployment routing (e.g., dbrs.space)
 	EnableHTTPS            bool   // Enable HTTPS/TLS with ACME
 	TLSCacheDir            string // Directory for ACME certificate cache
 	HTTPPort               int    // HTTP port for ACME challenges (usually 80)

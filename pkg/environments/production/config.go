@@ -94,7 +94,7 @@ func inferPeerIP(peers []string, vpsIP string) string {
 }
 
 // GenerateNodeConfig generates node.yaml configuration (unified architecture)
-func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, enableHTTPS bool) (string, error) {
+func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, baseDomain string, enableHTTPS bool) (string, error) {
 	// Generate node ID from domain or use default
 	nodeID := "node"
 	if domain != "" {
@@ -183,6 +183,7 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		RaftAdvAddress:         raftAdvAddr,
 		UnifiedGatewayPort:     6001,
 		Domain:                 domain,
+		BaseDomain:             baseDomain,
 		EnableHTTPS:            enableHTTPS,
 		TLSCacheDir:            tlsCacheDir,
 		HTTPPort:               httpPort,

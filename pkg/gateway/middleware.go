@@ -440,8 +440,8 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.Split(r.Host, ":")[0] // Strip port
 
-		// Get base domain from config (default to orama.network)
-		baseDomain := "orama.network"
+		// Get base domain from config (default to dbrs.space)
+		baseDomain := "dbrs.space"
 		if g.cfg != nil && g.cfg.BaseDomain != "" {
 			baseDomain = g.cfg.BaseDomain
 		}
@@ -493,8 +493,8 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 
 // getDeploymentByDomain looks up a deployment by its domain
 // Supports formats like:
-//   - {name}.node-{shortID}.{baseDomain} (e.g., myapp.node-kv4la8.dbrs.space)
-//   - {name}.{baseDomain} (e.g., myapp.dbrs.space for load-balanced/custom subdomain)
+//   - {name}.{baseDomain} (e.g., myapp.dbrs.space) - primary format
+//   - {name}.node-{shortID}.{baseDomain} (legacy format for backwards compatibility)
 //   - custom domains via deployment_domains table
 func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*deployments.Deployment, error) {
 	if g.deploymentService == nil {
@@ -510,38 +510,28 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 		baseDomain = g.cfg.BaseDomain
 	}
 
-	// Query deployment by domain
-	// We need to match:
-	// 1. {name}.node-{shortID}.{baseDomain} - extract shortID and find deployment where
-	//    'node-' || substr(home_node_id, 9, 6) matches the node part
-	// 2. {subdomain}.{baseDomain} - match by subdomain field
-	// 3. Custom verified domain from deployment_domains table
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(ctx)
 
-	// First, try to parse the domain to extract deployment name and node ID
-	// Format: {name}.node-{shortID}.{baseDomain}
+	// Parse domain to extract deployment name
 	suffix := "." + baseDomain
 	if strings.HasSuffix(domain, suffix) {
 		subdomain := strings.TrimSuffix(domain, suffix)
 		parts := strings.Split(subdomain, ".")
 
-		// If we have 2 parts and second starts with "node-", it's a node-specific domain
-		if len(parts) == 2 && strings.HasPrefix(parts[1], "node-") {
+		// Primary format: {name}.{baseDomain} (e.g., myapp.dbrs.space)
+		if len(parts) == 1 {
 			deploymentName := parts[0]
-			shortNodeID := parts[1] // e.g., "node-kv4la8"
 
-			// Query by name and matching short node ID
-			// Short ID is derived from peer ID: 'node-' + chars 9-14 of home_node_id
+			// Query by name
 			query := `
 				SELECT id, namespace, name, type, port, content_cid, status, home_node_id
 				FROM deployments
 				WHERE name = ?
-				AND ('node-' || substr(home_node_id, 9, 6) = ? OR home_node_id = ?)
 				AND status = 'active'
 				LIMIT 1
 			`
-			result, err := db.Query(internalCtx, query, deploymentName, shortNodeID, shortNodeID)
+			result, err := db.Query(internalCtx, query, deploymentName)
 			if err == nil && len(result.Rows) > 0 {
 				row := result.Rows[0]
 				return &deployments.Deployment{
@@ -557,16 +547,21 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 			}
 		}
 
-		// Single subdomain: match by subdomain field (e.g., myapp.dbrs.space)
-		if len(parts) == 1 {
+		// Legacy format: {name}.node-{shortID}.{baseDomain} (backwards compatibility)
+		if len(parts) == 2 && strings.HasPrefix(parts[1], "node-") {
+			deploymentName := parts[0]
+			shortNodeID := parts[1] // e.g., "node-kv4la8"
+
+			// Query by name and matching short node ID
 			query := `
 				SELECT id, namespace, name, type, port, content_cid, status, home_node_id
 				FROM deployments
-				WHERE subdomain = ?
+				WHERE name = ?
+				AND ('node-' || substr(home_node_id, 9, 6) = ? OR home_node_id = ?)
 				AND status = 'active'
 				LIMIT 1
 			`
-			result, err := db.Query(internalCtx, query, parts[0])
+			result, err := db.Query(internalCtx, query, deploymentName, shortNodeID, shortNodeID)
 			if err == nil && len(result.Rows) > 0 {
 				row := result.Rows[0]
 				return &deployments.Deployment{

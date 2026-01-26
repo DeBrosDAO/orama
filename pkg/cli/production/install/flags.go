@@ -10,6 +10,7 @@ import (
 type Flags struct {
 	VpsIP         string
 	Domain        string
+	BaseDomain    string // Base domain for deployment routing (e.g., "dbrs.space")
 	Branch        string
 	NoPull        bool
 	Force         bool
@@ -37,6 +38,7 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	fs.StringVar(&flags.VpsIP, "vps-ip", "", "Public IP of this VPS (required)")
 	fs.StringVar(&flags.Domain, "domain", "", "Domain name for HTTPS (optional, e.g. gateway.example.com)")
+	fs.StringVar(&flags.BaseDomain, "base-domain", "", "Base domain for deployment routing (e.g., dbrs.space)")
 	fs.StringVar(&flags.Branch, "branch", "main", "Git branch to use (main or nightly)")
 	fs.BoolVar(&flags.NoPull, "no-pull", false, "Skip git clone/pull, use existing repository in /home/debros/src")
 	fs.BoolVar(&flags.Force, "force", false, "Force reconfiguration even if already installed")

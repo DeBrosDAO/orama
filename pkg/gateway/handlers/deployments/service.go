@@ -295,25 +295,13 @@ func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *de
 		return err
 	}
 
-	// Use short node ID for the domain (e.g., node-kv4la8 instead of full peer ID)
-	shortNodeID := GetShortNodeID(deployment.HomeNodeID)
-
-	// Create node-specific record: {name}.node-{shortID}.{baseDomain}
-	nodeFQDN := fmt.Sprintf("%s.%s.%s.", deployment.Name, shortNodeID, s.BaseDomain())
-	if err := s.createDNSRecord(ctx, nodeFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
-		s.logger.Error("Failed to create node-specific DNS record", zap.Error(err))
+	// Create deployment record: {name}.{baseDomain}
+	// Any node can receive the request and proxy to the home node if needed
+	fqdn := fmt.Sprintf("%s.%s.", deployment.Name, s.BaseDomain())
+	if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
+		s.logger.Error("Failed to create DNS record", zap.Error(err))
 	} else {
-		s.logger.Info("Created node-specific DNS record", zap.String("fqdn", nodeFQDN), zap.String("ip", nodeIP))
-	}
-
-	// Create load-balanced record if subdomain is set: {subdomain}.{baseDomain}
-	if deployment.Subdomain != "" {
-		lbFQDN := fmt.Sprintf("%s.%s.", deployment.Subdomain, s.BaseDomain())
-		if err := s.createDNSRecord(ctx, lbFQDN, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
-			s.logger.Error("Failed to create load-balanced DNS record", zap.Error(err))
-		} else {
-			s.logger.Info("Created load-balanced DNS record", zap.String("fqdn", lbFQDN), zap.String("ip", nodeIP))
-		}
+		s.logger.Info("Created DNS record", zap.String("fqdn", fqdn), zap.String("ip", nodeIP))
 	}
 
 	return nil
@@ -373,16 +361,10 @@ func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (strin
 
 // BuildDeploymentURLs builds all URLs for a deployment
 func (s *DeploymentService) BuildDeploymentURLs(deployment *deployments.Deployment) []string {
-	shortNodeID := GetShortNodeID(deployment.HomeNodeID)
-	urls := []string{
-		fmt.Sprintf("https://%s.%s.%s", deployment.Name, shortNodeID, s.BaseDomain()),
+	// Simple URL format: {name}.{baseDomain}
+	return []string{
+		fmt.Sprintf("https://%s.%s", deployment.Name, s.BaseDomain()),
 	}
-
-	if deployment.Subdomain != "" {
-		urls = append(urls, fmt.Sprintf("https://%s.%s", deployment.Subdomain, s.BaseDomain()))
-	}
-
-	return urls
 }
 
 // recordHistory records deployment history

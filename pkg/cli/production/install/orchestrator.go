@@ -108,7 +108,7 @@ func (o *Orchestrator) Execute() error {
 	// Phase 4: Generate configs (BEFORE service initialization)
 	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
 	enableHTTPS := o.flags.Domain != ""
-	if err := o.setup.Phase4GenerateConfigs(o.peers, o.flags.VpsIP, enableHTTPS, o.flags.Domain, o.flags.JoinAddress); err != nil {
+	if err := o.setup.Phase4GenerateConfigs(o.peers, o.flags.VpsIP, enableHTTPS, o.flags.Domain, o.flags.BaseDomain, o.flags.JoinAddress); err != nil {
 		return fmt.Errorf("configuration generation failed: %w", err)
 	}
 

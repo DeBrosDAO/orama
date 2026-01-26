@@ -47,7 +47,8 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 
 	// Parse zone arguments
 	for c.Next() {
-		zones = append(zones, c.Val())
+		// Note: c.Val() returns the plugin name "rqlite", not the zone
+		// Get zones from remaining args or server block keys
 		zones = append(zones, plugin.OriginsFromArgsOrServerBlock(c.RemainingArgs(), c.ServerBlockKeys)...)
 
 		// Parse plugin configuration block

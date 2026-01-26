@@ -128,7 +128,7 @@ func (o *Orchestrator) Execute() error {
 
 	// Phase 5: Update systemd services
 	fmt.Printf("\n🔧 Phase 5: Updating systemd services...\n")
-	enableHTTPS, _ := o.extractGatewayConfig()
+	enableHTTPS, _, _ := o.extractGatewayConfig()
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
 	}
@@ -278,7 +278,7 @@ func (o *Orchestrator) extractNetworkConfig() (vpsIP, joinAddress string) {
 	return vpsIP, joinAddress
 }
 
-func (o *Orchestrator) extractGatewayConfig() (enableHTTPS bool, domain string) {
+func (o *Orchestrator) extractGatewayConfig() (enableHTTPS bool, domain string, baseDomain string) {
 	gatewayConfigPath := filepath.Join(o.oramaDir, "configs", "gateway.yaml")
 	if data, err := os.ReadFile(gatewayConfigPath); err == nil {
 		configStr := string(data)
@@ -301,13 +301,34 @@ func (o *Orchestrator) extractGatewayConfig() (enableHTTPS bool, domain string) 
 			}
 		}
 	}
-	return enableHTTPS, domain
+
+	// Also check node.yaml for base_domain
+	nodeConfigPath := filepath.Join(o.oramaDir, "configs", "node.yaml")
+	if data, err := os.ReadFile(nodeConfigPath); err == nil {
+		configStr := string(data)
+		for _, line := range strings.Split(configStr, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "base_domain:") {
+				parts := strings.SplitN(trimmed, ":", 2)
+				if len(parts) > 1 {
+					baseDomain = strings.TrimSpace(parts[1])
+					baseDomain = strings.Trim(baseDomain, "\"'")
+					if baseDomain == "null" || baseDomain == "" {
+						baseDomain = ""
+					}
+				}
+				break
+			}
+		}
+	}
+
+	return enableHTTPS, domain, baseDomain
 }
 
 func (o *Orchestrator) regenerateConfigs() error {
 	peers := o.extractPeers()
 	vpsIP, joinAddress := o.extractNetworkConfig()
-	enableHTTPS, domain := o.extractGatewayConfig()
+	enableHTTPS, domain, baseDomain := o.extractGatewayConfig()
 
 	fmt.Printf("  Preserving existing configuration:\n")
 	if len(peers) > 0 {
@@ -319,12 +340,15 @@ func (o *Orchestrator) regenerateConfigs() error {
 	if domain != "" {
 		fmt.Printf("    - Domain: %s\n", domain)
 	}
+	if baseDomain != "" {
+		fmt.Printf("    - Base domain: %s\n", baseDomain)
+	}
 	if joinAddress != "" {
 		fmt.Printf("    - Join address: %s\n", joinAddress)
 	}
 
 	// Phase 4: Generate configs
-	if err := o.setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, joinAddress); err != nil {
+	if err := o.setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, baseDomain, joinAddress); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Config generation warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   Existing configs preserved\n")
 	}
@@ -364,6 +388,24 @@ func (o *Orchestrator) restartServices() error {
 			}
 		}
 		fmt.Printf("   ✓ All services restarted\n")
+	}
+
+	// Seed DNS records after services are running (RQLite must be up)
+	if o.setup.IsNameserver() {
+		fmt.Printf("   Seeding DNS records...\n")
+		// Wait for RQLite to fully start - it takes about 10 seconds to initialize
+		fmt.Printf("   Waiting for RQLite to start (10s)...\n")
+		time.Sleep(10 * time.Second)
+
+		_, _, baseDomain := o.extractGatewayConfig()
+		peers := o.extractPeers()
+		vpsIP, _ := o.extractNetworkConfig()
+
+		if err := o.setup.SeedDNSRecords(baseDomain, vpsIP, peers); err != nil {
+			fmt.Fprintf(os.Stderr, "   ⚠️  Warning: Failed to seed DNS records: %v\n", err)
+		} else {
+			fmt.Printf("   ✓ DNS records seeded\n")
+		}
 	}
 
 	return nil

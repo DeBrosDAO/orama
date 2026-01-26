@@ -457,11 +457,12 @@ func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentI
 
 	// Create DNS A record
 	dnsQuery := `
-		INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, deployment_id, node_id, created_by, created_at, updated_at)
-		VALUES (?, 'A', ?, 300, ?, ?, ?, 'system', ?, ?)
+		INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, deployment_id, node_id, created_by, is_active, created_at, updated_at)
+		VALUES (?, 'A', ?, 300, ?, ?, ?, 'system', TRUE, ?, ?)
 		ON CONFLICT(fqdn, record_type, value) DO UPDATE SET
 			deployment_id = excluded.deployment_id,
 			node_id = excluded.node_id,
+			is_active = TRUE,
 			updated_at = excluded.updated_at
 	`
 
