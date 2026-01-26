@@ -89,29 +89,36 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	if sseMode {
 		// SSR mode - upload tarball to IPFS, then extract on server
-		addResp, err := h.ipfsClient.Add(ctx, file, header.Filename)
-		if err != nil {
-			h.logger.Error("Failed to upload to IPFS", zap.Error(err))
+		addResp, addErr := h.ipfsClient.Add(ctx, file, header.Filename)
+		if addErr != nil {
+			h.logger.Error("Failed to upload to IPFS", zap.Error(addErr))
 			http.Error(w, "Failed to upload content", http.StatusInternalServerError)
 			return
 		}
 		cid = addResp.Cid
-		deployment, err = h.deploySSR(ctx, namespace, name, subdomain, cid)
-	} else {
-		// Static export mode - extract tarball first, then upload directory to IPFS
-		cid, err = h.uploadStaticContent(ctx, file)
-		if err != nil {
-			h.logger.Error("Failed to process static content", zap.Error(err))
-			http.Error(w, "Failed to process content: "+err.Error(), http.StatusInternalServerError)
+		var deployErr error
+		deployment, deployErr = h.deploySSR(ctx, namespace, name, subdomain, cid)
+		if deployErr != nil {
+			h.logger.Error("Failed to deploy Next.js", zap.Error(deployErr))
+			http.Error(w, deployErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		deployment, err = h.deployStatic(ctx, namespace, name, subdomain, cid)
-	}
-
-	if err != nil {
-		h.logger.Error("Failed to deploy Next.js", zap.Error(err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	} else {
+		// Static export mode - extract tarball first, then upload directory to IPFS
+		var uploadErr error
+		cid, uploadErr = h.uploadStaticContent(ctx, file)
+		if uploadErr != nil {
+			h.logger.Error("Failed to process static content", zap.Error(uploadErr))
+			http.Error(w, "Failed to process content: "+uploadErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		var deployErr error
+		deployment, deployErr = h.deployStatic(ctx, namespace, name, subdomain, cid)
+		if deployErr != nil {
+			h.logger.Error("Failed to deploy Next.js", zap.Error(deployErr))
+			http.Error(w, deployErr.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Create DNS records (use background context since HTTP context will be cancelled)
