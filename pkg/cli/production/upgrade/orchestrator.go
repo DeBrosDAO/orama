@@ -44,6 +44,20 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, false)
 	setup.SetNameserver(isNameserver)
 
+	// Configure Anyone relay if enabled
+	if flags.AnyoneRelay {
+		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
+			Enabled:  true,
+			Exit:     flags.AnyoneExit,
+			Migrate:  flags.AnyoneMigrate,
+			Nickname: flags.AnyoneNickname,
+			Contact:  flags.AnyoneContact,
+			Wallet:   flags.AnyoneWallet,
+			ORPort:   flags.AnyoneORPort,
+			MyFamily: flags.AnyoneFamily,
+		})
+	}
+
 	return &Orchestrator{
 		oramaHome: oramaHome,
 		oramaDir:  oramaDir,
@@ -192,7 +206,8 @@ func (o *Orchestrator) stopServices() error {
 		"debros-ipfs-cluster.service", // Depends on IPFS
 		"debros-ipfs.service",        // Base IPFS
 		"debros-olric.service",       // Independent
-		"debros-anyone-client.service", // Independent
+		"debros-anyone-client.service", // Client mode
+		"debros-anyone-relay.service",  // Relay mode
 	}
 	for _, svc := range services {
 		unitPath := filepath.Join("/etc/systemd/system", svc)

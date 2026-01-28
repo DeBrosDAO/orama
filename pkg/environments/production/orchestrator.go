@@ -8,7 +8,21 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/environments/production/installers"
 )
+
+// AnyoneRelayConfig holds configuration for Anyone relay mode
+type AnyoneRelayConfig struct {
+	Enabled  bool   // Whether to run as relay operator
+	Exit     bool   // Whether to run as exit relay
+	Migrate  bool   // Whether to migrate existing installation
+	Nickname string // Relay nickname (1-19 alphanumeric)
+	Contact  string // Contact info (email or @telegram)
+	Wallet   string // Ethereum wallet for rewards
+	ORPort   int    // ORPort for relay (default 9001)
+	MyFamily string // Comma-separated fingerprints of other relays (for multi-relay operators)
+}
 
 // ProductionSetup orchestrates the entire production deployment
 type ProductionSetup struct {
@@ -21,6 +35,7 @@ type ProductionSetup struct {
 	skipOptionalDeps   bool
 	skipResourceChecks bool
 	isNameserver       bool   // Whether this node is a nameserver (runs CoreDNS + Caddy)
+	anyoneRelayConfig  *AnyoneRelayConfig // Configuration for Anyone relay mode
 	privChecker        *PrivilegeChecker
 	osDetector         *OSDetector
 	archDetector       *ArchitectureDetector
@@ -121,6 +136,16 @@ func (ps *ProductionSetup) SetNameserver(isNameserver bool) {
 // IsNameserver returns whether this node is configured as a nameserver
 func (ps *ProductionSetup) IsNameserver() bool {
 	return ps.isNameserver
+}
+
+// SetAnyoneRelayConfig sets the Anyone relay configuration
+func (ps *ProductionSetup) SetAnyoneRelayConfig(config *AnyoneRelayConfig) {
+	ps.anyoneRelayConfig = config
+}
+
+// IsAnyoneRelay returns whether this node is configured as an Anyone relay operator
+func (ps *ProductionSetup) IsAnyoneRelay() bool {
+	return ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.Enabled
 }
 
 // Phase1CheckPrerequisites performs initial environment validation
@@ -275,9 +300,47 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  Olric install warning: %v", err)
 	}
 
-	// Install anyone-client for SOCKS5 proxy
-	if err := ps.binaryInstaller.InstallAnyoneClient(); err != nil {
-		ps.logf("  ⚠️  anyone-client install warning: %v", err)
+	// Install Anyone (client or relay based on configuration)
+	if ps.IsAnyoneRelay() {
+		ps.logf("  Installing Anyone relay (operator mode)...")
+		relayConfig := installers.AnyoneRelayConfig{
+			Nickname:  ps.anyoneRelayConfig.Nickname,
+			Contact:   ps.anyoneRelayConfig.Contact,
+			Wallet:    ps.anyoneRelayConfig.Wallet,
+			ORPort:    ps.anyoneRelayConfig.ORPort,
+			ExitRelay: ps.anyoneRelayConfig.Exit,
+			Migrate:   ps.anyoneRelayConfig.Migrate,
+			MyFamily:  ps.anyoneRelayConfig.MyFamily,
+		}
+		relayInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, relayConfig)
+
+		// Check for existing installation if migration is requested
+		if relayConfig.Migrate {
+			existing, err := installers.DetectExistingAnyoneInstallation()
+			if err != nil {
+				ps.logf("  ⚠️  Failed to detect existing installation: %v", err)
+			} else if existing != nil {
+				backupDir := filepath.Join(ps.oramaDir, "backups")
+				if err := relayInstaller.MigrateExistingInstallation(existing, backupDir); err != nil {
+					ps.logf("  ⚠️  Migration warning: %v", err)
+				}
+			}
+		}
+
+		// Install the relay
+		if err := relayInstaller.Install(); err != nil {
+			ps.logf("  ⚠️  Anyone relay install warning: %v", err)
+		}
+
+		// Configure the relay
+		if err := relayInstaller.Configure(); err != nil {
+			ps.logf("  ⚠️  Anyone relay config warning: %v", err)
+		}
+	} else {
+		// Install anyone-client for SOCKS5 proxy (default client mode)
+		if err := ps.binaryInstaller.InstallAnyoneClient(); err != nil {
+			ps.logf("  ⚠️  anyone-client install warning: %v", err)
+		}
 	}
 
 	// Install DeBros binaries (must be done before CoreDNS since we need the RQLite plugin source)
@@ -551,12 +614,20 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Node service created: debros-node.service (with embedded gateway)")
 
-	// Anyone Client service (SOCKS5 proxy)
-	anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
-	if err := ps.serviceController.WriteServiceUnit("debros-anyone-client.service", anyoneUnit); err != nil {
-		return fmt.Errorf("failed to write Anyone Client service: %w", err)
+	// Anyone service (Client or Relay based on configuration)
+	if ps.IsAnyoneRelay() {
+		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
+		if err := ps.serviceController.WriteServiceUnit("debros-anyone-relay.service", anyoneUnit); err != nil {
+			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
+		}
+		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
+	} else {
+		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
+		if err := ps.serviceController.WriteServiceUnit("debros-anyone-client.service", anyoneUnit); err != nil {
+			return fmt.Errorf("failed to write Anyone Client service: %w", err)
+		}
+		ps.logf("  ✓ Anyone Client service created")
 	}
-	ps.logf("  ✓ Anyone Client service created")
 
 	// CoreDNS and Caddy services (only for nameserver nodes)
 	if ps.isNameserver {
@@ -595,7 +666,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
 	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service", "debros-anyone-client.service"}
+	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service"}
+
+	// Add appropriate Anyone service based on mode
+	if ps.IsAnyoneRelay() {
+		services = append(services, "debros-anyone-relay.service")
+	} else {
+		services = append(services, "debros-anyone-client.service")
+	}
 
 	// Add CoreDNS and Caddy only for nameserver nodes
 	if ps.isNameserver {
@@ -617,15 +695,30 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Start services in dependency order
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, Olric, Anyone Client) - RQLite is managed internally by each node
+	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
 	infraServices := []string{"debros-ipfs.service", "debros-olric.service"}
-	
-	// Check if port 9050 is already in use (e.g., another anyone-client or similar service)
-	if ps.portChecker.IsPortInUse(9050) {
-		ps.logf("  ℹ️  Port 9050 is already in use (anyone-client or similar service running)")
-		ps.logf("  ℹ️  Skipping debros-anyone-client startup - using existing service")
+
+	// Add appropriate Anyone service based on mode
+	if ps.IsAnyoneRelay() {
+		// For relay mode, check if ORPort is already in use
+		orPort := 9001
+		if ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.ORPort > 0 {
+			orPort = ps.anyoneRelayConfig.ORPort
+		}
+		if ps.portChecker.IsPortInUse(orPort) {
+			ps.logf("  ℹ️  ORPort %d is already in use (existing anon relay running)", orPort)
+			ps.logf("  ℹ️  Skipping debros-anyone-relay startup - using existing service")
+		} else {
+			infraServices = append(infraServices, "debros-anyone-relay.service")
+		}
 	} else {
-		infraServices = append(infraServices, "debros-anyone-client.service")
+		// For client mode, check if SOCKS port 9050 is already in use
+		if ps.portChecker.IsPortInUse(9050) {
+			ps.logf("  ℹ️  Port 9050 is already in use (anyone-client or similar service running)")
+			ps.logf("  ℹ️  Skipping debros-anyone-client startup - using existing service")
+		} else {
+			infraServices = append(infraServices, "debros-anyone-client.service")
+		}
 	}
 	
 	for _, svc := range infraServices {
@@ -720,11 +813,27 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/olric.log", ps.oramaDir)
 	ps.logf("  %s/logs/node.log", ps.oramaDir)
 	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
-	ps.logf("  %s/logs/anyone-client.log", ps.oramaDir)
-	ps.logf("\nStart All Services:")
-	ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-client debros-node")
+
+	// Anyone mode-specific logs and commands
+	if ps.IsAnyoneRelay() {
+		ps.logf("  /var/log/anon/notices.log (Anyone Relay)")
+		ps.logf("\nStart All Services:")
+		ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-node")
+		ps.logf("\nAnyone Relay Operator:")
+		ps.logf("  ORPort: %d", ps.anyoneRelayConfig.ORPort)
+		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
+		ps.logf("  Config: /etc/anon/anonrc")
+		ps.logf("  Register at: https://dashboard.anyone.io")
+		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
+	} else {
+		ps.logf("  %s/logs/anyone-client.log", ps.oramaDir)
+		ps.logf("\nStart All Services:")
+		ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-client debros-node")
+		ps.logf("\nAnyone Client:")
+		ps.logf("  # SOCKS5 proxy on localhost:9050")
+	}
+
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")
-	ps.logf("  curl http://localhost:5001/status")
-	ps.logf("  # Anyone Client SOCKS5 proxy on localhost:9050\n")
+	ps.logf("  curl http://localhost:5001/status\n")
 }

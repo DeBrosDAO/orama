@@ -13,6 +13,16 @@ type Flags struct {
 	NoPull          bool
 	Branch          string
 	Nameserver      *bool  // Pointer so we can detect if explicitly set vs default
+
+	// Anyone relay operator flags
+	AnyoneRelay    bool
+	AnyoneExit     bool
+	AnyoneMigrate  bool
+	AnyoneNickname string
+	AnyoneContact  string
+	AnyoneWallet   string
+	AnyoneORPort   int
+	AnyoneFamily   string
 }
 
 // ParseFlags parses upgrade command flags
@@ -29,6 +39,16 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	// Nameserver flag - use pointer to detect if explicitly set
 	nameserver := fs.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
+
+	// Anyone relay operator flags
+	fs.BoolVar(&flags.AnyoneRelay, "anyone-relay", false, "Run as Anyone relay operator (earn rewards)")
+	fs.BoolVar(&flags.AnyoneExit, "anyone-exit", false, "Run as exit relay (requires --anyone-relay, legal implications)")
+	fs.BoolVar(&flags.AnyoneMigrate, "anyone-migrate", false, "Migrate existing Anyone installation into Orama Network")
+	fs.StringVar(&flags.AnyoneNickname, "anyone-nickname", "", "Relay nickname (1-19 alphanumeric chars)")
+	fs.StringVar(&flags.AnyoneContact, "anyone-contact", "", "Contact info (email or @telegram)")
+	fs.StringVar(&flags.AnyoneWallet, "anyone-wallet", "", "Ethereum wallet address for rewards")
+	fs.IntVar(&flags.AnyoneORPort, "anyone-orport", 9001, "ORPort for relay (default 9001)")
+	fs.StringVar(&flags.AnyoneFamily, "anyone-family", "", "Comma-separated fingerprints of other relays you operate")
 
 	// Support legacy flags for backwards compatibility
 	nightly := fs.Bool("nightly", false, "Use nightly branch (deprecated, use --branch nightly)")

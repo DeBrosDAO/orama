@@ -17,8 +17,23 @@ type IPFSClusterPeerInfo struct {
 	Addrs  []string
 }
 
+// AnyoneRelayDryRunInfo contains Anyone relay info for dry-run summary
+type AnyoneRelayDryRunInfo struct {
+	Enabled  bool
+	Exit     bool
+	Nickname string
+	Contact  string
+	Wallet   string
+	ORPort   int
+}
+
 // ShowDryRunSummary displays what would be done during installation without making changes
 func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress string, isFirstNode bool, oramaDir string) {
+	ShowDryRunSummaryWithRelay(vpsIP, domain, branch, peers, joinAddress, isFirstNode, oramaDir, nil)
+}
+
+// ShowDryRunSummaryWithRelay displays what would be done during installation with optional relay info
+func ShowDryRunSummaryWithRelay(vpsIP, domain, branch string, peers []string, joinAddress string, isFirstNode bool, oramaDir string, relayInfo *AnyoneRelayDryRunInfo) {
 	fmt.Print("\n" + strings.Repeat("=", 70) + "\n")
 	fmt.Printf("DRY RUN - No changes will be made\n")
 	fmt.Print(strings.Repeat("=", 70) + "\n\n")
@@ -57,7 +72,11 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("  - IPFS/Kubo 0.38.2\n")
 	fmt.Printf("  - IPFS Cluster (latest)\n")
 	fmt.Printf("  - Olric 0.7.0\n")
-	fmt.Printf("  - anyone-client (npm)\n")
+	if relayInfo != nil && relayInfo.Enabled {
+		fmt.Printf("  - anon (relay binary via apt)\n")
+	} else {
+		fmt.Printf("  - anyone-client (npm)\n")
+	}
 	fmt.Printf("  - DeBros binaries (built from %s branch)\n", branch)
 
 	fmt.Printf("\n🔐 Secrets that would be generated:\n")
@@ -74,7 +93,11 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("  - debros-ipfs-cluster.service\n")
 	fmt.Printf("  - debros-olric.service\n")
 	fmt.Printf("  - debros-node.service (includes embedded gateway + RQLite)\n")
-	fmt.Printf("  - debros-anyone-client.service\n")
+	if relayInfo != nil && relayInfo.Enabled {
+		fmt.Printf("  - debros-anyone-relay.service (relay operator mode)\n")
+	} else {
+		fmt.Printf("  - debros-anyone-client.service\n")
+	}
 
 	fmt.Printf("\n🌐 Ports that would be used:\n")
 	fmt.Printf("  External (must be open in firewall):\n")
@@ -82,6 +105,9 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("    - 443  (HTTPS gateway)\n")
 	fmt.Printf("    - 4101 (IPFS swarm)\n")
 	fmt.Printf("    - 7001 (RQLite Raft)\n")
+	if relayInfo != nil && relayInfo.Enabled {
+		fmt.Printf("    - %d  (Anyone ORPort - relay traffic)\n", relayInfo.ORPort)
+	}
 	fmt.Printf("  Internal (localhost only):\n")
 	fmt.Printf("    - 4501 (IPFS API)\n")
 	fmt.Printf("    - 5001 (RQLite HTTP)\n")
@@ -90,6 +116,23 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("    - 9050 (Anyone SOCKS5)\n")
 	fmt.Printf("    - 9094 (IPFS Cluster API)\n")
 	fmt.Printf("    - 3320/3322 (Olric)\n")
+
+	// Show relay-specific configuration
+	if relayInfo != nil && relayInfo.Enabled {
+		fmt.Printf("\n🔗 Anyone Relay Configuration:\n")
+		fmt.Printf("  Mode:     Relay Operator\n")
+		fmt.Printf("  Nickname: %s\n", relayInfo.Nickname)
+		fmt.Printf("  Contact:  %s\n", relayInfo.Contact)
+		fmt.Printf("  Wallet:   %s\n", relayInfo.Wallet)
+		fmt.Printf("  ORPort:   %d\n", relayInfo.ORPort)
+		if relayInfo.Exit {
+			fmt.Printf("  Exit:     Yes (legal implications apply)\n")
+		} else {
+			fmt.Printf("  Exit:     No (non-exit relay)\n")
+		}
+		fmt.Printf("\n  ⚠️  IMPORTANT: You need 100 $ANYONE tokens in wallet to receive rewards\n")
+		fmt.Printf("  Register at: https://dashboard.anyone.io\n")
+	}
 
 	fmt.Print("\n" + strings.Repeat("=", 70) + "\n")
 	fmt.Printf("To proceed with installation, run without --dry-run\n")

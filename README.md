@@ -324,9 +324,55 @@ curl -X DELETE http://localhost:6001/v1/functions/hello-world?namespace=default
 - 5001 - RQLite HTTP API
 - 6001 - Unified Gateway
 - 8080 - IPFS Gateway
-- 9050 - Anyone Client SOCKS5 proxy
+- 9050 - Anyone SOCKS5 proxy
 - 9094 - IPFS Cluster API
 - 3320/3322 - Olric Cache
+
+**Anyone Relay Mode (optional, for earning rewards):**
+
+- 9001 - Anyone ORPort (relay traffic, must be open externally)
+
+### Anyone Network Integration
+
+Orama Network integrates with the [Anyone Protocol](https://anyone.io) for anonymous routing. By default, nodes run as **clients** (consuming the network). Optionally, you can run as a **relay operator** to earn rewards.
+
+**Client Mode (Default):**
+- Routes traffic through Anyone network for anonymity
+- SOCKS5 proxy on localhost:9050
+- No rewards, just consumes network
+
+**Relay Mode (Earn Rewards):**
+- Provide bandwidth to the Anyone network
+- Earn $ANYONE tokens as a relay operator
+- Requires 100 $ANYONE tokens in your wallet
+- Requires ORPort (9001) open to the internet
+
+```bash
+# Install as relay operator (earn rewards)
+sudo orama install --vps-ip <IP> --domain <domain> \
+  --anyone-relay \
+  --anyone-nickname "MyRelay" \
+  --anyone-contact "operator@email.com" \
+  --anyone-wallet "0x1234...abcd"
+
+# With exit relay (legal implications apply)
+sudo orama install --vps-ip <IP> --domain <domain> \
+  --anyone-relay \
+  --anyone-exit \
+  --anyone-nickname "MyExitRelay" \
+  --anyone-contact "operator@email.com" \
+  --anyone-wallet "0x1234...abcd"
+
+# Migrate existing Anyone installation
+sudo orama install --vps-ip <IP> --domain <domain> \
+  --anyone-relay \
+  --anyone-migrate \
+  --anyone-nickname "MyRelay" \
+  --anyone-contact "operator@email.com" \
+  --anyone-wallet "0x1234...abcd"
+```
+
+**Important:** After installation, register your relay at [dashboard.anyone.io](https://dashboard.anyone.io) to start earning rewards.
 
 ### Installation
 

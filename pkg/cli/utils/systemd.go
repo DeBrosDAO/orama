@@ -160,6 +160,7 @@ func GetProductionServices() []string {
 		"debros-ipfs-cluster",
 		"debros-ipfs",
 		"debros-anyone-client",
+		"debros-anyone-relay",
 	}
 
 	// Filter to only existing services by checking if unit file exists

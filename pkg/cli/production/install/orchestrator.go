@@ -33,6 +33,21 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, flags.SkipChecks)
 	setup.SetNameserver(flags.Nameserver)
+
+	// Configure Anyone relay if enabled
+	if flags.AnyoneRelay {
+		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
+			Enabled:  true,
+			Exit:     flags.AnyoneExit,
+			Migrate:  flags.AnyoneMigrate,
+			Nickname: flags.AnyoneNickname,
+			Contact:  flags.AnyoneContact,
+			Wallet:   flags.AnyoneWallet,
+			ORPort:   flags.AnyoneORPort,
+			MyFamily: flags.AnyoneFamily,
+		})
+	}
+
 	validator := NewValidator(flags, oramaDir)
 
 	return &Orchestrator{
@@ -60,7 +75,18 @@ func (o *Orchestrator) Execute() error {
 
 	// Dry-run mode: show what would be done and exit
 	if o.flags.DryRun {
-		utils.ShowDryRunSummary(o.flags.VpsIP, o.flags.Domain, o.flags.Branch, o.peers, o.flags.JoinAddress, o.validator.IsFirstNode(), o.oramaDir)
+		var relayInfo *utils.AnyoneRelayDryRunInfo
+		if o.flags.AnyoneRelay {
+			relayInfo = &utils.AnyoneRelayDryRunInfo{
+				Enabled:  true,
+				Exit:     o.flags.AnyoneExit,
+				Nickname: o.flags.AnyoneNickname,
+				Contact:  o.flags.AnyoneContact,
+				Wallet:   o.flags.AnyoneWallet,
+				ORPort:   o.flags.AnyoneORPort,
+			}
+		}
+		utils.ShowDryRunSummaryWithRelay(o.flags.VpsIP, o.flags.Domain, o.flags.Branch, o.peers, o.flags.JoinAddress, o.validator.IsFirstNode(), o.oramaDir, relayInfo)
 		return nil
 	}
 

@@ -52,6 +52,13 @@ The system follows a clean, layered architecture with clear separation of concer
         │                 │         │              │
         │  Port 9094      │         │   In-Process │
         └─────────────────┘         └──────────────┘
+
+        ┌─────────────────┐
+        │     Anyone      │
+        │  (Anonymity)    │
+        │                 │
+        │  Port 9050      │
+        └─────────────────┘
 ```
 
 ## Core Components
@@ -226,7 +233,38 @@ pkg/config/
     └── gateway.go
 ```
 
-### 6. Shared Utilities
+### 6. Anyone Integration (`pkg/anyoneproxy/`)
+
+Integration with the Anyone Protocol for anonymous routing.
+
+**Modes:**
+
+| Mode | Purpose | Port | Rewards |
+|------|---------|------|---------|
+| Client | Route traffic anonymously | 9050 (SOCKS5) | No |
+| Relay | Provide bandwidth to network | 9001 (ORPort) + 9050 | Yes ($ANYONE) |
+
+**Key Files:**
+- `pkg/anyoneproxy/socks.go` - SOCKS5 proxy client interface
+- `pkg/gateway/anon_proxy_handler.go` - Anonymous proxy API endpoint
+- `pkg/environments/production/installers/anyone_relay.go` - Relay installation
+
+**Features:**
+- Smart routing (bypasses proxy for local/private addresses)
+- Automatic detection of existing Anyone installations
+- Migration support for existing relay operators
+- Exit relay mode with legal warnings
+
+**API Endpoint:**
+- `POST /v1/proxy/anon` - Route HTTP requests through Anyone network
+
+**Relay Requirements:**
+- Linux OS (Debian/Ubuntu)
+- 100 $ANYONE tokens in wallet
+- ORPort accessible from internet
+- Registration at dashboard.anyone.io
+
+### 7. Shared Utilities
 
 **HTTP Utilities (`pkg/httputil/`):**
 - Request parsing and validation
