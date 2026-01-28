@@ -8,7 +8,9 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -92,6 +94,9 @@ type Gateway struct {
 	homeNodeManager      *deployments.HomeNodeManager
 	processManager       *process.Manager
 	healthChecker        *health.HealthChecker
+
+	// Cluster provisioning for namespace clusters
+	clusterProvisioner authhandlers.ClusterProvisioner
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -378,6 +383,20 @@ func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscribe
 	return nil
 }
 
+// SetClusterProvisioner sets the cluster provisioner for namespace cluster management.
+// This enables automatic RQLite/Olric/Gateway cluster provisioning when new namespaces are created.
+func (g *Gateway) SetClusterProvisioner(cp authhandlers.ClusterProvisioner) {
+	g.clusterProvisioner = cp
+	if g.authHandlers != nil {
+		g.authHandlers.SetClusterProvisioner(cp)
+	}
+}
+
+// GetORMClient returns the RQLite ORM client for external use (e.g., by ClusterManager)
+func (g *Gateway) GetORMClient() rqlite.Client {
+	return g.ormClient
+}
+
 // setOlricClient atomically sets the Olric client and reinitializes cache handlers.
 func (g *Gateway) setOlricClient(client *olric.Client) {
 	g.olricMu.Lock()
@@ -425,5 +444,35 @@ func (g *Gateway) startOlricReconnectLoop(cfg olric.Config) {
 			}
 		}
 	}()
+}
+
+// namespaceClusterStatusHandler handles GET /v1/namespace/status?id={cluster_id}
+// This endpoint is public (no API key required) to allow polling during provisioning.
+func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	clusterID := r.URL.Query().Get("id")
+	if clusterID == "" {
+		writeError(w, http.StatusBadRequest, "cluster_id parameter required")
+		return
+	}
+
+	if g.clusterProvisioner == nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster provisioning not enabled")
+		return
+	}
+
+	status, err := g.clusterProvisioner.GetClusterStatusByID(r.Context(), clusterID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(status)
 }
 

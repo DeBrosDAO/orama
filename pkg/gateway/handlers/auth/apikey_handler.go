@@ -141,7 +141,59 @@ func (h *Handlers) SimpleAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey, err := h.authService.GetOrCreateAPIKey(r.Context(), req.Wallet, req.Namespace)
+	// Check if namespace cluster provisioning is needed (for non-default namespaces)
+	namespace := strings.TrimSpace(req.Namespace)
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	ctx := r.Context()
+	if h.clusterProvisioner != nil && namespace != "default" {
+		clusterID, status, needsProvisioning, err := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
+		if err != nil {
+			// Log but don't fail - cluster provisioning is optional
+			_ = err
+		} else if needsProvisioning {
+			// Trigger provisioning for new namespace
+			nsID, _ := h.resolveNamespace(ctx, namespace)
+			nsIDInt := 0
+			if id, ok := nsID.(int); ok {
+				nsIDInt = id
+			} else if id, ok := nsID.(int64); ok {
+				nsIDInt = int(id)
+			} else if id, ok := nsID.(float64); ok {
+				nsIDInt = int(id)
+			}
+
+			newClusterID, pollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
+			if provErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
+				return
+			}
+
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"status":                 "provisioning",
+				"cluster_id":             newClusterID,
+				"poll_url":               pollURL,
+				"estimated_time_seconds": 60,
+				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
+			})
+			return
+		} else if status == "provisioning" {
+			// Already provisioning, return poll URL
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"status":                 "provisioning",
+				"cluster_id":             clusterID,
+				"poll_url":               "/v1/namespace/status?id=" + clusterID,
+				"estimated_time_seconds": 60,
+				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
+			})
+			return
+		}
+		// If status is "ready" or "default", proceed with API key generation
+	}
+
+	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

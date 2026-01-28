@@ -82,14 +82,60 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 
 // tryAllocatePortBlock attempts to allocate a port block (single attempt)
 func (npa *NamespacePortAllocator) tryAllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string) (*PortBlock, error) {
-	// Query all allocated port blocks on this node
+	// In dev environments where all nodes share the same IP, we need to track
+	// allocations by IP address to avoid port conflicts. First get this node's IP.
+	var nodeInfos []struct {
+		IPAddress string `db:"ip_address"`
+	}
+	nodeQuery := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	if err := npa.db.Query(ctx, &nodeInfos, nodeQuery, nodeID); err != nil || len(nodeInfos) == 0 {
+		// Fallback: if we can't get the IP, allocate per node_id only
+		npa.logger.Debug("Could not get node IP, falling back to node_id-only allocation",
+			zap.String("node_id", nodeID),
+		)
+	}
+
+	// Query all allocated port blocks. If nodes share the same IP, we need to
+	// check allocations by IP address to prevent port conflicts.
 	type portRow struct {
 		PortStart int `db:"port_start"`
 	}
 
 	var allocatedBlocks []portRow
-	query := `SELECT port_start FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
-	err := npa.db.Query(ctx, &allocatedBlocks, query, nodeID)
+	var query string
+	var err error
+
+	if len(nodeInfos) > 0 && nodeInfos[0].IPAddress != "" {
+		// Check if other nodes share this IP - if so, allocate globally by IP
+		var sameIPCount []struct {
+			Count int `db:"count"`
+		}
+		countQuery := `SELECT COUNT(DISTINCT id) as count FROM dns_nodes WHERE ip_address = ?`
+		if err := npa.db.Query(ctx, &sameIPCount, countQuery, nodeInfos[0].IPAddress); err == nil && len(sameIPCount) > 0 && sameIPCount[0].Count > 1 {
+			// Multiple nodes share this IP (dev environment) - allocate globally
+			query = `
+				SELECT npa.port_start
+				FROM namespace_port_allocations npa
+				JOIN dns_nodes dn ON npa.node_id = dn.id
+				WHERE dn.ip_address = ?
+				ORDER BY npa.port_start ASC
+			`
+			err = npa.db.Query(ctx, &allocatedBlocks, query, nodeInfos[0].IPAddress)
+			npa.logger.Debug("Multiple nodes share IP, allocating globally",
+				zap.String("ip_address", nodeInfos[0].IPAddress),
+				zap.Int("same_ip_nodes", sameIPCount[0].Count),
+			)
+		} else {
+			// Single node per IP (production) - allocate per node
+			query = `SELECT port_start FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
+			err = npa.db.Query(ctx, &allocatedBlocks, query, nodeID)
+		}
+	} else {
+		// No IP info - allocate per node_id
+		query = `SELECT port_start FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
+		err = npa.db.Query(ctx, &allocatedBlocks, query, nodeID)
+	}
+
 	if err != nil {
 		return nil, &ClusterError{
 			Message: "failed to query allocated ports",

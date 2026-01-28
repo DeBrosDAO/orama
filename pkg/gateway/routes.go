@@ -45,6 +45,9 @@ func (g *Gateway) Routes() http.Handler {
 		g.ormHTTP.RegisterRoutes(mux)
 	}
 
+	// namespace cluster status (public endpoint for polling during provisioning)
+	mux.HandleFunc("/v1/namespace/status", g.namespaceClusterStatusHandler)
+
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
 	mux.HandleFunc("/v1/network/peers", g.networkPeersHandler)

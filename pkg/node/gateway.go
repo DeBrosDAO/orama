@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/namespace"
 	"go.uber.org/zap"
 )
 
@@ -51,6 +52,20 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		return err
 	}
 	n.apiGateway = apiGateway
+
+	// Wire up ClusterManager for per-namespace cluster provisioning
+	if ormClient := apiGateway.GetORMClient(); ormClient != nil {
+		baseDataDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "data", "namespaces")
+		clusterCfg := namespace.ClusterManagerConfig{
+			BaseDomain:  n.config.HTTPGateway.BaseDomain,
+			BaseDataDir: baseDataDir,
+		}
+		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
+		apiGateway.SetClusterProvisioner(clusterManager)
+		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
+			zap.String("base_domain", clusterCfg.BaseDomain),
+			zap.String("base_data_dir", baseDataDir))
+	}
 
 	go func() {
 		server := &http.Server{

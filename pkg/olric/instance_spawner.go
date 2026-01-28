@@ -3,7 +3,7 @@ package olric
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -382,12 +381,10 @@ func (is *InstanceSpawner) HealthCheck(ctx context.Context, ns, nodeID string) (
 
 // waitForInstanceReady waits for the Olric instance to be ready
 func (is *InstanceSpawner) waitForInstanceReady(ctx context.Context, instance *OlricInstance) error {
-	client := tlsutil.NewHTTPClient(2 * time.Second)
+	// Olric doesn't have a standard /ready endpoint, so we check if the process
+	// is running and the memberlist port is accepting connections
 
-	// Olric health check endpoint
-	url := fmt.Sprintf("http://localhost:%d/ready", instance.HTTPPort)
-
-	maxAttempts := 120 // 2 minutes
+	maxAttempts := 30 // 30 seconds
 	for i := 0; i < maxAttempts; i++ {
 		select {
 		case <-ctx.Done():
@@ -395,18 +392,34 @@ func (is *InstanceSpawner) waitForInstanceReady(ctx context.Context, instance *O
 		case <-time.After(1 * time.Second):
 		}
 
-		resp, err := client.Get(url)
+		// Check if the process is still running
+		if instance.cmd != nil && instance.cmd.ProcessState != nil && instance.cmd.ProcessState.Exited() {
+			return fmt.Errorf("Olric process exited unexpectedly")
+		}
+
+		// Try to connect to the memberlist port to verify it's accepting connections
+		// Use the advertise address since Olric may bind to a specific IP
+		addr := fmt.Sprintf("%s:%d", instance.AdvertiseAddr, instance.MemberlistPort)
+		if instance.AdvertiseAddr == "" {
+			addr = fmt.Sprintf("localhost:%d", instance.MemberlistPort)
+		}
+
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err != nil {
+			instance.logger.Debug("Waiting for Olric memberlist",
+				zap.Int("attempt", i+1),
+				zap.String("addr", addr),
+				zap.Error(err),
+			)
 			continue
 		}
-		resp.Body.Close()
+		conn.Close()
 
-		if resp.StatusCode == http.StatusOK {
-			instance.logger.Debug("Olric instance ready",
-				zap.Int("attempts", i+1),
-			)
-			return nil
-		}
+		instance.logger.Debug("Olric instance ready",
+			zap.Int("attempts", i+1),
+			zap.String("addr", addr),
+		)
+		return nil
 	}
 
 	return fmt.Errorf("Olric did not become ready within timeout")
@@ -453,23 +466,20 @@ func (is *InstanceSpawner) monitorInstance(instance *OlricInstance) {
 	}
 }
 
-// IsHealthy checks if the Olric instance is healthy
+// IsHealthy checks if the Olric instance is healthy by verifying the memberlist port is accepting connections
 func (oi *OlricInstance) IsHealthy(ctx context.Context) (bool, error) {
-	url := fmt.Sprintf("http://localhost:%d/ready", oi.HTTPPort)
-	client := tlsutil.NewHTTPClient(5 * time.Second)
+	// Olric doesn't have a standard /ready HTTP endpoint, so we check memberlist connectivity
+	addr := fmt.Sprintf("%s:%d", oi.AdvertiseAddr, oi.MemberlistPort)
+	if oi.AdvertiseAddr == "" || oi.AdvertiseAddr == "0.0.0.0" {
+		addr = fmt.Sprintf("localhost:%d", oi.MemberlistPort)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		return false, err
 	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	return resp.StatusCode == http.StatusOK, nil
+	conn.Close()
+	return true, nil
 }
 
 // DSN returns the connection address for this Olric instance

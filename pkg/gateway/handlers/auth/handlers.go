@@ -43,6 +43,9 @@ type ClusterProvisioner interface {
 	// ProvisionNamespaceCluster triggers provisioning for a new namespace
 	// Returns: (clusterID, pollURL, error)
 	ProvisionNamespaceCluster(ctx context.Context, namespaceID int, namespaceName, wallet string) (string, string, error)
+	// GetClusterStatusByID returns the full status of a cluster by ID
+	// Returns a map[string]interface{} with cluster status fields
+	GetClusterStatusByID(ctx context.Context, clusterID string) (interface{}, error)
 }
 
 // Handlers holds dependencies for authentication HTTP handlers

@@ -83,14 +83,22 @@ type InstanceConfig struct {
 }
 
 // GatewayYAMLConfig represents the gateway YAML configuration structure
+// This must match the yamlCfg struct in cmd/gateway/config.go exactly
+// because the gateway uses strict YAML decoding that rejects unknown fields
 type GatewayYAMLConfig struct {
-	ListenAddr      string   `yaml:"listen_addr"`
-	ClientNamespace string   `yaml:"client_namespace"`
-	RQLiteDSN       string   `yaml:"rqlite_dsn"`
-	OlricServers    []string `yaml:"olric_servers"`
-	BaseDomain      string   `yaml:"base_domain"`
-	NodePeerID      string   `yaml:"node_peer_id"`
-	DataDir         string   `yaml:"data_dir"`
+	ListenAddr            string   `yaml:"listen_addr"`
+	ClientNamespace       string   `yaml:"client_namespace"`
+	RQLiteDSN             string   `yaml:"rqlite_dsn"`
+	BootstrapPeers        []string `yaml:"bootstrap_peers,omitempty"`
+	EnableHTTPS           bool     `yaml:"enable_https,omitempty"`
+	DomainName            string   `yaml:"domain_name,omitempty"`
+	TLSCacheDir           string   `yaml:"tls_cache_dir,omitempty"`
+	OlricServers          []string `yaml:"olric_servers"`
+	OlricTimeout          string   `yaml:"olric_timeout,omitempty"`
+	IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url,omitempty"`
+	IPFSAPIURL            string   `yaml:"ipfs_api_url,omitempty"`
+	IPFSTimeout           string   `yaml:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor int      `yaml:"ipfs_replication_factor,omitempty"`
 }
 
 // NewInstanceSpawner creates a new Gateway instance spawner
@@ -163,8 +171,36 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		zap.Strings("olric_servers", cfg.OlricServers),
 	)
 
-	// Find the gateway binary (should be in same directory as the current process or PATH)
-	gatewayBinary := "gateway"
+	// Find the gateway binary - look in common locations
+	var gatewayBinary string
+	possiblePaths := []string{
+		"./bin/gateway",                    // Development build
+		"/usr/local/bin/orama-gateway",     // System-wide install
+		"/opt/orama/bin/gateway",           // Package install
+	}
+
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			gatewayBinary = path
+			break
+		}
+	}
+
+	// Also check PATH
+	if gatewayBinary == "" {
+		if path, err := exec.LookPath("orama-gateway"); err == nil {
+			gatewayBinary = path
+		}
+	}
+
+	if gatewayBinary == "" {
+		return nil, &InstanceError{
+			Message: "gateway binary not found (checked ./bin/gateway, /usr/local/bin/orama-gateway, /opt/orama/bin/gateway, PATH)",
+			Cause:   nil,
+		}
+	}
+
+	instance.logger.Info("Found gateway binary", zap.String("path", gatewayBinary))
 
 	// Create command
 	cmd := exec.CommandContext(ctx, gatewayBinary, "--config", configPath)
@@ -237,9 +273,8 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		ClientNamespace: cfg.Namespace,
 		RQLiteDSN:       cfg.RQLiteDSN,
 		OlricServers:    cfg.OlricServers,
-		BaseDomain:      cfg.BaseDomain,
-		NodePeerID:      cfg.NodePeerID,
-		DataDir:         dataDir,
+		// Note: DomainName is used for HTTPS/TLS, not needed for namespace gateways in dev mode
+		DomainName: cfg.BaseDomain,
 	}
 
 	data, err := yaml.Marshal(gatewayCfg)

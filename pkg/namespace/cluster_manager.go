@@ -4,656 +4,838 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
-	rqliteClient "github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-// ClusterManager orchestrates namespace cluster provisioning and lifecycle management.
-// It coordinates the creation and teardown of RQLite, Olric, and Gateway instances
-// for each namespace's dedicated cluster.
-type ClusterManager struct {
-	db              rqliteClient.Client
-	portAllocator   *NamespacePortAllocator
-	nodeSelector    *ClusterNodeSelector
-	rqliteSpawner   *rqlite.InstanceSpawner
-	olricSpawner    *olric.InstanceSpawner
-	gatewaySpawner  *gateway.InstanceSpawner
-	dnsManager      *DNSRecordManager
-	baseDomain      string
-	baseDataDir     string // Base directory for namespace data (e.g., ~/.orama/data/namespaces)
-	logger          *zap.Logger
+// ClusterManagerConfig contains configuration for the cluster manager
+type ClusterManagerConfig struct {
+	BaseDomain  string // Base domain for namespace gateways (e.g., "devnet-orama.network")
+	BaseDataDir string // Base directory for namespace data (e.g., "~/.orama/data/namespaces")
 }
 
-// ClusterManagerConfig holds configuration for the ClusterManager
-type ClusterManagerConfig struct {
-	BaseDomain  string // e.g., "devnet-orama.network"
-	BaseDataDir string // e.g., "~/.orama/data/namespaces"
+// ClusterManager orchestrates namespace cluster provisioning and lifecycle
+type ClusterManager struct {
+	db             rqlite.Client
+	portAllocator  *NamespacePortAllocator
+	nodeSelector   *ClusterNodeSelector
+	rqliteSpawner  *rqlite.InstanceSpawner
+	olricSpawner   *olric.InstanceSpawner
+	gatewaySpawner *gateway.InstanceSpawner
+	logger         *zap.Logger
+	baseDomain     string
+	baseDataDir    string
+
+	// Track provisioning operations
+	provisioningMu sync.RWMutex
+	provisioning   map[string]bool // namespace -> in progress
 }
 
 // NewClusterManager creates a new cluster manager
 func NewClusterManager(
-	db rqliteClient.Client,
+	db rqlite.Client,
 	cfg ClusterManagerConfig,
 	logger *zap.Logger,
 ) *ClusterManager {
+	// Create internal components
 	portAllocator := NewNamespacePortAllocator(db, logger)
+	nodeSelector := NewClusterNodeSelector(db, portAllocator, logger)
+	rqliteSpawner := rqlite.NewInstanceSpawner(cfg.BaseDataDir, logger)
+	olricSpawner := olric.NewInstanceSpawner(cfg.BaseDataDir, logger)
+	gatewaySpawner := gateway.NewInstanceSpawner(cfg.BaseDataDir, logger)
 
 	return &ClusterManager{
 		db:             db,
 		portAllocator:  portAllocator,
-		nodeSelector:   NewClusterNodeSelector(db, portAllocator, logger),
-		rqliteSpawner:  rqlite.NewInstanceSpawner(cfg.BaseDataDir, logger),
-		olricSpawner:   olric.NewInstanceSpawner(cfg.BaseDataDir, logger),
-		gatewaySpawner: gateway.NewInstanceSpawner(cfg.BaseDataDir, logger),
-		dnsManager:     NewDNSRecordManager(db, cfg.BaseDomain, logger),
+		nodeSelector:   nodeSelector,
+		rqliteSpawner:  rqliteSpawner,
+		olricSpawner:   olricSpawner,
+		gatewaySpawner: gatewaySpawner,
 		baseDomain:     cfg.BaseDomain,
 		baseDataDir:    cfg.BaseDataDir,
 		logger:         logger.With(zap.String("component", "cluster-manager")),
+		provisioning:   make(map[string]bool),
 	}
 }
 
-// ProvisionCluster provisions a complete namespace cluster (RQLite + Olric + Gateway).
-// This is an asynchronous operation that returns immediately with a cluster ID.
-// Use GetClusterStatus to poll for completion.
-func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int, namespaceName, provisionedBy string) (*NamespaceCluster, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	// Check if cluster already exists
-	existing, err := cm.GetClusterByNamespaceID(ctx, namespaceID)
-	if err == nil && existing != nil {
-		if existing.Status == ClusterStatusReady {
-			return existing, nil
-		}
-		if existing.Status == ClusterStatusProvisioning {
-			return existing, nil // Already provisioning
-		}
-		// If failed or deprovisioning, allow re-provisioning
+// NewClusterManagerWithComponents creates a cluster manager with custom components (useful for testing)
+func NewClusterManagerWithComponents(
+	db rqlite.Client,
+	portAllocator *NamespacePortAllocator,
+	nodeSelector *ClusterNodeSelector,
+	rqliteSpawner *rqlite.InstanceSpawner,
+	olricSpawner *olric.InstanceSpawner,
+	gatewaySpawner *gateway.InstanceSpawner,
+	cfg ClusterManagerConfig,
+	logger *zap.Logger,
+) *ClusterManager {
+	return &ClusterManager{
+		db:             db,
+		portAllocator:  portAllocator,
+		nodeSelector:   nodeSelector,
+		rqliteSpawner:  rqliteSpawner,
+		olricSpawner:   olricSpawner,
+		gatewaySpawner: gatewaySpawner,
+		baseDomain:     cfg.BaseDomain,
+		baseDataDir:    cfg.BaseDataDir,
+		logger:         logger.With(zap.String("component", "cluster-manager")),
+		provisioning:   make(map[string]bool),
 	}
+}
+
+// ProvisionCluster provisions a new 3-node cluster for a namespace
+// This is an async operation - returns immediately with cluster ID for polling
+func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int, namespaceName, provisionedBy string) (*NamespaceCluster, error) {
+	// Check if already provisioning
+	cm.provisioningMu.Lock()
+	if cm.provisioning[namespaceName] {
+		cm.provisioningMu.Unlock()
+		return nil, fmt.Errorf("namespace %s is already being provisioned", namespaceName)
+	}
+	cm.provisioning[namespaceName] = true
+	cm.provisioningMu.Unlock()
+
+	defer func() {
+		cm.provisioningMu.Lock()
+		delete(cm.provisioning, namespaceName)
+		cm.provisioningMu.Unlock()
+	}()
+
+	cm.logger.Info("Starting cluster provisioning",
+		zap.String("namespace", namespaceName),
+		zap.Int("namespace_id", namespaceID),
+		zap.String("provisioned_by", provisionedBy),
+	)
 
 	// Create cluster record
-	clusterID := uuid.New().String()
 	cluster := &NamespaceCluster{
-		ID:               clusterID,
+		ID:               uuid.New().String(),
 		NamespaceID:      namespaceID,
 		NamespaceName:    namespaceName,
 		Status:           ClusterStatusProvisioning,
-		RQLiteNodeCount:  DefaultRQLiteNodeCount,
-		OlricNodeCount:   DefaultOlricNodeCount,
-		GatewayNodeCount: DefaultGatewayNodeCount,
+		RQLiteNodeCount:  3,
+		OlricNodeCount:   3,
+		GatewayNodeCount: 3,
 		ProvisionedBy:    provisionedBy,
 		ProvisionedAt:    time.Now(),
 	}
 
 	// Insert cluster record
-	insertQuery := `
+	if err := cm.insertCluster(ctx, cluster); err != nil {
+		return nil, fmt.Errorf("failed to insert cluster record: %w", err)
+	}
+
+	// Log event
+	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
+
+	// Select 3 nodes for the cluster
+	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, 3)
+	if err != nil {
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		return nil, fmt.Errorf("failed to select nodes: %w", err)
+	}
+
+	nodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeIDs[i] = n.NodeID
+	}
+	cm.logEvent(ctx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{"nodes": nodeIDs})
+
+	// Allocate ports on each node
+	portBlocks := make([]*PortBlock, len(nodes))
+	for i, node := range nodes {
+		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
+		if err != nil {
+			// Rollback previous allocations
+			for j := 0; j < i; j++ {
+				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
+			}
+			cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+			return nil, fmt.Errorf("failed to allocate ports on node %s: %w", node.NodeID, err)
+		}
+		portBlocks[i] = block
+		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID, 
+			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
+	}
+
+	// Start RQLite instances (leader first, then followers)
+	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
+	if err != nil {
+		cm.rollbackProvisioning(ctx, cluster, portBlocks, nil, nil)
+		return nil, fmt.Errorf("failed to start RQLite cluster: %w", err)
+	}
+
+	// Start Olric instances
+	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
+	if err != nil {
+		cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, nil)
+		return nil, fmt.Errorf("failed to start Olric cluster: %w", err)
+	}
+
+	// Start Gateway instances (optional - may not be available in dev mode)
+	_, err = cm.startGatewayCluster(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
+	if err != nil {
+		// Check if this is a "binary not found" error - if so, continue without gateways
+		if strings.Contains(err.Error(), "gateway binary not found") {
+			cm.logger.Warn("Skipping namespace gateway spawning (binary not available)",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.Error(err),
+			)
+			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
+		} else {
+			cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, olricInstances)
+			return nil, fmt.Errorf("failed to start Gateway cluster: %w", err)
+		}
+	}
+
+	// Create DNS records for namespace gateway
+	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
+		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
+		// Don't fail provisioning for DNS errors
+	}
+
+	// Update cluster status to ready
+	now := time.Now()
+	cluster.Status = ClusterStatusReady
+	cluster.ReadyAt = &now
+	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
+
+	cm.logger.Info("Cluster provisioning completed",
+		zap.String("cluster_id", cluster.ID),
+		zap.String("namespace", namespaceName),
+	)
+
+	return cluster, nil
+}
+
+// startRQLiteCluster starts RQLite instances on all nodes
+func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*rqlite.Instance, error) {
+	instances := make([]*rqlite.Instance, len(nodes))
+
+	// Start leader first (node 0)
+	leaderCfg := rqlite.InstanceConfig{
+		Namespace:      cluster.NamespaceName,
+		NodeID:         nodes[0].NodeID,
+		HTTPPort:       portBlocks[0].RQLiteHTTPPort,
+		RaftPort:       portBlocks[0].RQLiteRaftPort,
+		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].IPAddress, portBlocks[0].RQLiteHTTPPort),
+		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].IPAddress, portBlocks[0].RQLiteRaftPort),
+		IsLeader:       true,
+	}
+
+	leaderInstance, err := cm.rqliteSpawner.SpawnInstance(ctx, leaderCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start RQLite leader: %w", err)
+	}
+	instances[0] = leaderInstance
+
+	cm.logEvent(ctx, cluster.ID, EventRQLiteStarted, nodes[0].NodeID, "RQLite leader started", nil)
+	cm.logEvent(ctx, cluster.ID, EventRQLiteLeaderElected, nodes[0].NodeID, "RQLite leader elected", nil)
+
+	// Record leader node
+	if err := cm.insertClusterNode(ctx, cluster.ID, nodes[0].NodeID, NodeRoleRQLiteLeader, portBlocks[0]); err != nil {
+		cm.logger.Warn("Failed to record cluster node", zap.Error(err))
+	}
+
+	// Start followers
+	// Note: RQLite's -join flag requires the Raft address, not the HTTP address
+	leaderRaftAddr := leaderCfg.RaftAdvAddress
+	for i := 1; i < len(nodes); i++ {
+		followerCfg := rqlite.InstanceConfig{
+			Namespace:      cluster.NamespaceName,
+			NodeID:         nodes[i].NodeID,
+			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
+			RaftPort:       portBlocks[i].RQLiteRaftPort,
+			HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[i].IPAddress, portBlocks[i].RQLiteHTTPPort),
+			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].IPAddress, portBlocks[i].RQLiteRaftPort),
+			JoinAddresses:  []string{leaderRaftAddr},
+			IsLeader:       false,
+		}
+
+		followerInstance, err := cm.rqliteSpawner.SpawnInstance(ctx, followerCfg)
+		if err != nil {
+			// Stop previously started instances
+			for j := 0; j < i; j++ {
+				cm.rqliteSpawner.StopInstance(ctx, instances[j])
+			}
+			return nil, fmt.Errorf("failed to start RQLite follower on node %s: %w", nodes[i].NodeID, err)
+		}
+		instances[i] = followerInstance
+
+		cm.logEvent(ctx, cluster.ID, EventRQLiteStarted, nodes[i].NodeID, "RQLite follower started", nil)
+		cm.logEvent(ctx, cluster.ID, EventRQLiteJoined, nodes[i].NodeID, "RQLite follower joined cluster", nil)
+
+		if err := cm.insertClusterNode(ctx, cluster.ID, nodes[i].NodeID, NodeRoleRQLiteFollower, portBlocks[i]); err != nil {
+			cm.logger.Warn("Failed to record cluster node", zap.Error(err))
+		}
+	}
+
+	return instances, nil
+}
+
+// startOlricCluster starts Olric instances on all nodes
+func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*olric.OlricInstance, error) {
+	instances := make([]*olric.OlricInstance, len(nodes))
+
+	// Build peer addresses (all nodes)
+	peerAddresses := make([]string, len(nodes))
+	for i, node := range nodes {
+		peerAddresses[i] = fmt.Sprintf("%s:%d", node.IPAddress, portBlocks[i].OlricMemberlistPort)
+	}
+
+	// Start all Olric instances
+	for i, node := range nodes {
+		cfg := olric.InstanceConfig{
+			Namespace:      cluster.NamespaceName,
+			NodeID:         node.NodeID,
+			HTTPPort:       portBlocks[i].OlricHTTPPort,
+			MemberlistPort: portBlocks[i].OlricMemberlistPort,
+			BindAddr:       "0.0.0.0",
+			AdvertiseAddr:  node.IPAddress,
+			PeerAddresses:  peerAddresses,
+		}
+
+		instance, err := cm.olricSpawner.SpawnInstance(ctx, cfg)
+		if err != nil {
+			// Stop previously started instances
+			for j := 0; j < i; j++ {
+				cm.olricSpawner.StopInstance(ctx, cluster.NamespaceName, nodes[j].NodeID)
+			}
+			return nil, fmt.Errorf("failed to start Olric on node %s: %w", node.NodeID, err)
+		}
+		instances[i] = instance
+
+		cm.logEvent(ctx, cluster.ID, EventOlricStarted, node.NodeID, "Olric instance started", nil)
+		cm.logEvent(ctx, cluster.ID, EventOlricJoined, node.NodeID, "Olric instance joined memberlist", nil)
+
+		if err := cm.insertClusterNode(ctx, cluster.ID, node.NodeID, NodeRoleOlric, portBlocks[i]); err != nil {
+			cm.logger.Warn("Failed to record cluster node", zap.Error(err))
+		}
+	}
+
+	return instances, nil
+}
+
+// startGatewayCluster starts Gateway instances on all nodes
+func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) ([]*gateway.GatewayInstance, error) {
+	instances := make([]*gateway.GatewayInstance, len(nodes))
+
+	// Build Olric server addresses
+	olricServers := make([]string, len(olricInstances))
+	for i, inst := range olricInstances {
+		olricServers[i] = inst.DSN()
+	}
+
+	// Start all Gateway instances
+	for i, node := range nodes {
+		// Connect to local RQLite instance
+		rqliteDSN := fmt.Sprintf("http://localhost:%d", portBlocks[i].RQLiteHTTPPort)
+
+		cfg := gateway.InstanceConfig{
+			Namespace:    cluster.NamespaceName,
+			NodeID:       node.NodeID,
+			HTTPPort:     portBlocks[i].GatewayHTTPPort,
+			BaseDomain:   cm.baseDomain,
+			RQLiteDSN:    rqliteDSN,
+			OlricServers: olricServers,
+		}
+
+		instance, err := cm.gatewaySpawner.SpawnInstance(ctx, cfg)
+		if err != nil {
+			// Stop previously started instances
+			for j := 0; j < i; j++ {
+				cm.gatewaySpawner.StopInstance(ctx, cluster.NamespaceName, nodes[j].NodeID)
+			}
+			return nil, fmt.Errorf("failed to start Gateway on node %s: %w", node.NodeID, err)
+		}
+		instances[i] = instance
+
+		cm.logEvent(ctx, cluster.ID, EventGatewayStarted, node.NodeID, "Gateway instance started", nil)
+
+		if err := cm.insertClusterNode(ctx, cluster.ID, node.NodeID, NodeRoleGateway, portBlocks[i]); err != nil {
+			cm.logger.Warn("Failed to record cluster node", zap.Error(err))
+		}
+	}
+
+	return instances, nil
+}
+
+// createDNSRecords creates DNS records for the namespace gateway
+func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
+	// Create A records for ns-{namespace}.{baseDomain} pointing to all 3 nodes
+	fqdn := fmt.Sprintf("ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+
+	for i, node := range nodes {
+		query := `
+			INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by)
+			VALUES (?, 'A', ?, 300, ?, 'system')
+		`
+		_, err := cm.db.Exec(ctx, query, fqdn, node.IPAddress, cluster.NamespaceName)
+		if err != nil {
+			cm.logger.Warn("Failed to create DNS record",
+				zap.String("fqdn", fqdn),
+				zap.String("ip", node.IPAddress),
+				zap.Error(err),
+			)
+		} else {
+			cm.logger.Info("Created DNS A record",
+				zap.String("fqdn", fqdn),
+				zap.String("ip", node.IPAddress),
+				zap.Int("gateway_port", portBlocks[i].GatewayHTTPPort),
+			)
+		}
+	}
+
+	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s", fqdn), nil)
+	return nil
+}
+
+// rollbackProvisioning cleans up a failed provisioning attempt
+func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) {
+	cm.logger.Info("Rolling back failed provisioning", zap.String("cluster_id", cluster.ID))
+
+	// Stop Gateway instances
+	cm.gatewaySpawner.StopAllInstances(ctx, cluster.NamespaceName)
+
+	// Stop Olric instances
+	if olricInstances != nil {
+		cm.olricSpawner.StopAllInstances(ctx, cluster.NamespaceName)
+	}
+
+	// Stop RQLite instances
+	if rqliteInstances != nil {
+		for _, inst := range rqliteInstances {
+			if inst != nil {
+				cm.rqliteSpawner.StopInstance(ctx, inst)
+			}
+		}
+	}
+
+	// Deallocate ports
+	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
+
+	// Update cluster status
+	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
+}
+
+// DeprovisionCluster tears down a namespace cluster
+func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID int64) error {
+	cluster, err := cm.GetClusterByNamespaceID(ctx, namespaceID)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster: %w", err)
+	}
+
+	if cluster == nil {
+		return nil // No cluster to deprovision
+	}
+
+	cm.logger.Info("Starting cluster deprovisioning",
+		zap.String("cluster_id", cluster.ID),
+		zap.String("namespace", cluster.NamespaceName),
+	)
+
+	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
+	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
+
+	// Stop all services
+	cm.gatewaySpawner.StopAllInstances(ctx, cluster.NamespaceName)
+	cm.olricSpawner.StopAllInstances(ctx, cluster.NamespaceName)
+	// Note: RQLite instances need to be stopped individually based on stored PIDs
+
+	// Deallocate all ports
+	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
+
+	// Delete DNS records
+	query := `DELETE FROM dns_records WHERE namespace = ?`
+	cm.db.Exec(ctx, query, cluster.NamespaceName)
+
+	// Delete cluster record
+	query = `DELETE FROM namespace_clusters WHERE id = ?`
+	cm.db.Exec(ctx, query, cluster.ID)
+
+	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
+
+	cm.logger.Info("Cluster deprovisioning completed", zap.String("cluster_id", cluster.ID))
+
+	return nil
+}
+
+// GetClusterStatus returns the current status of a namespace cluster
+func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string) (*ClusterProvisioningStatus, error) {
+	cluster, err := cm.GetCluster(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+
+	status := &ClusterProvisioningStatus{
+		Status:    cluster.Status,
+		ClusterID: cluster.ID,
+	}
+
+	// Check individual service status
+	// TODO: Actually check each service's health
+	if cluster.Status == ClusterStatusReady {
+		status.RQLiteReady = true
+		status.OlricReady = true
+		status.GatewayReady = true
+		status.DNSReady = true
+	}
+
+	// Get node list
+	nodes, err := cm.getClusterNodes(ctx, clusterID)
+	if err == nil {
+		for _, node := range nodes {
+			status.Nodes = append(status.Nodes, node.NodeID)
+		}
+	}
+
+	if cluster.ErrorMessage != "" {
+		status.Error = cluster.ErrorMessage
+	}
+
+	return status, nil
+}
+
+// GetCluster retrieves a cluster by ID
+func (cm *ClusterManager) GetCluster(ctx context.Context, clusterID string) (*NamespaceCluster, error) {
+	var clusters []NamespaceCluster
+	query := `SELECT * FROM namespace_clusters WHERE id = ?`
+	if err := cm.db.Query(ctx, &clusters, query, clusterID); err != nil {
+		return nil, err
+	}
+	if len(clusters) == 0 {
+		return nil, nil
+	}
+	return &clusters[0], nil
+}
+
+// GetClusterByNamespaceID retrieves a cluster by namespace ID
+func (cm *ClusterManager) GetClusterByNamespaceID(ctx context.Context, namespaceID int64) (*NamespaceCluster, error) {
+	var clusters []NamespaceCluster
+	query := `SELECT * FROM namespace_clusters WHERE namespace_id = ?`
+	if err := cm.db.Query(ctx, &clusters, query, namespaceID); err != nil {
+		return nil, err
+	}
+	if len(clusters) == 0 {
+		return nil, nil
+	}
+	return &clusters[0], nil
+}
+
+// GetClusterByNamespace retrieves a cluster by namespace name
+func (cm *ClusterManager) GetClusterByNamespace(ctx context.Context, namespaceName string) (*NamespaceCluster, error) {
+	var clusters []NamespaceCluster
+	query := `SELECT * FROM namespace_clusters WHERE namespace_name = ?`
+	if err := cm.db.Query(ctx, &clusters, query, namespaceName); err != nil {
+		return nil, err
+	}
+	if len(clusters) == 0 {
+		return nil, nil
+	}
+	return &clusters[0], nil
+}
+
+// Database helper methods
+
+func (cm *ClusterManager) insertCluster(ctx context.Context, cluster *NamespaceCluster) error {
+	query := `
 		INSERT INTO namespace_clusters (
 			id, namespace_id, namespace_name, status,
 			rqlite_node_count, olric_node_count, gateway_node_count,
 			provisioned_by, provisioned_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err = cm.db.Exec(internalCtx, insertQuery,
-		cluster.ID,
-		cluster.NamespaceID,
-		cluster.NamespaceName,
-		string(cluster.Status),
-		cluster.RQLiteNodeCount,
-		cluster.OlricNodeCount,
-		cluster.GatewayNodeCount,
-		cluster.ProvisionedBy,
-		cluster.ProvisionedAt,
+	_, err := cm.db.Exec(ctx, query,
+		cluster.ID, cluster.NamespaceID, cluster.NamespaceName, cluster.Status,
+		cluster.RQLiteNodeCount, cluster.OlricNodeCount, cluster.GatewayNodeCount,
+		cluster.ProvisionedBy, cluster.ProvisionedAt,
 	)
-	if err != nil {
-		return nil, &ClusterError{
-			Message: "failed to create cluster record",
-			Cause:   err,
-		}
-	}
-
-	// Log provisioning started event
-	cm.logEvent(internalCtx, clusterID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
-
-	// Start async provisioning
-	go cm.doProvisioning(context.Background(), cluster)
-
-	return cluster, nil
+	return err
 }
 
-// doProvisioning performs the actual cluster provisioning asynchronously
-func (cm *ClusterManager) doProvisioning(ctx context.Context, cluster *NamespaceCluster) {
-	internalCtx := client.WithInternalAuth(ctx)
+func (cm *ClusterManager) updateClusterStatus(ctx context.Context, clusterID string, status ClusterStatus, errorMsg string) error {
+	var query string
+	var args []interface{}
 
-	cm.logger.Info("Starting cluster provisioning",
-		zap.String("cluster_id", cluster.ID),
-		zap.String("namespace", cluster.NamespaceName),
-	)
-
-	// Step 1: Select nodes for the cluster
-	selectedNodes, err := cm.nodeSelector.SelectNodesForCluster(internalCtx, DefaultRQLiteNodeCount)
-	if err != nil {
-		cm.failCluster(internalCtx, cluster.ID, "Failed to select nodes: "+err.Error())
-		return
+	if status == ClusterStatusReady {
+		query = `UPDATE namespace_clusters SET status = ?, ready_at = ?, error_message = '' WHERE id = ?`
+		args = []interface{}{status, time.Now(), clusterID}
+	} else {
+		query = `UPDATE namespace_clusters SET status = ?, error_message = ? WHERE id = ?`
+		args = []interface{}{status, errorMsg, clusterID}
 	}
 
-	nodeIDs := make([]string, len(selectedNodes))
-	for i, n := range selectedNodes {
-		nodeIDs[i] = n.NodeID
-	}
-	cm.logEvent(internalCtx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{
-		"node_ids": nodeIDs,
-	})
+	_, err := cm.db.Exec(ctx, query, args...)
+	return err
+}
 
-	// Step 2: Allocate port blocks on each node
-	portBlocks := make([]*PortBlock, len(selectedNodes))
-	for i, node := range selectedNodes {
-		block, err := cm.portAllocator.AllocatePortBlock(internalCtx, node.NodeID, cluster.ID)
-		if err != nil {
-			cm.failCluster(internalCtx, cluster.ID, fmt.Sprintf("Failed to allocate ports on node %s: %v", node.NodeID, err))
-			// Cleanup already allocated ports
-			for j := 0; j < i; j++ {
-				_ = cm.portAllocator.DeallocatePortBlock(internalCtx, cluster.ID, selectedNodes[j].NodeID)
-			}
-			return
-		}
-		portBlocks[i] = block
-		cm.logEvent(internalCtx, cluster.ID, EventPortsAllocated, node.NodeID,
-			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
-	}
-
-	// Step 3: Start RQLite instances
-	// First node is the leader, others join it
-	rqliteInstances := make([]*rqlite.RQLiteInstance, len(selectedNodes))
-
-	// Start leader first
-	leaderNode := selectedNodes[0]
-	leaderPorts := portBlocks[0]
-	leaderConfig := rqlite.InstanceConfig{
-		Namespace:      cluster.NamespaceName,
-		NodeID:         leaderNode.NodeID,
-		HTTPPort:       leaderPorts.RQLiteHTTPPort,
-		RaftPort:       leaderPorts.RQLiteRaftPort,
-		HTTPAdvAddress: fmt.Sprintf("%s:%d", leaderNode.IPAddress, leaderPorts.RQLiteHTTPPort),
-		RaftAdvAddress: fmt.Sprintf("%s:%d", leaderNode.IPAddress, leaderPorts.RQLiteRaftPort),
-		IsLeader:       true,
-	}
-
-	leaderInstance, err := cm.rqliteSpawner.SpawnInstance(internalCtx, leaderConfig)
-	if err != nil {
-		cm.failCluster(internalCtx, cluster.ID, fmt.Sprintf("Failed to start RQLite leader: %v", err))
-		cm.cleanupOnFailure(internalCtx, cluster.ID, selectedNodes, portBlocks)
-		return
-	}
-	rqliteInstances[0] = leaderInstance
-	cm.logEvent(internalCtx, cluster.ID, EventRQLiteStarted, leaderNode.NodeID, "RQLite leader started", nil)
-
-	// Create cluster node record for leader
-	cm.createClusterNodeRecord(internalCtx, cluster.ID, leaderNode.NodeID, NodeRoleRQLiteLeader, leaderPorts, leaderInstance.PID)
-
-	// Start followers and join them to leader
-	leaderJoinAddr := leaderInstance.AdvertisedDSN()
-	for i := 1; i < len(selectedNodes); i++ {
-		node := selectedNodes[i]
-		ports := portBlocks[i]
-		followerConfig := rqlite.InstanceConfig{
-			Namespace:      cluster.NamespaceName,
-			NodeID:         node.NodeID,
-			HTTPPort:       ports.RQLiteHTTPPort,
-			RaftPort:       ports.RQLiteRaftPort,
-			HTTPAdvAddress: fmt.Sprintf("%s:%d", node.IPAddress, ports.RQLiteHTTPPort),
-			RaftAdvAddress: fmt.Sprintf("%s:%d", node.IPAddress, ports.RQLiteRaftPort),
-			JoinAddresses:  []string{leaderJoinAddr},
-			IsLeader:       false,
-		}
-
-		followerInstance, err := cm.rqliteSpawner.SpawnInstance(internalCtx, followerConfig)
-		if err != nil {
-			cm.failCluster(internalCtx, cluster.ID, fmt.Sprintf("Failed to start RQLite follower on node %s: %v", node.NodeID, err))
-			cm.cleanupOnFailure(internalCtx, cluster.ID, selectedNodes, portBlocks)
-			return
-		}
-		rqliteInstances[i] = followerInstance
-		cm.logEvent(internalCtx, cluster.ID, EventRQLiteJoined, node.NodeID, "RQLite follower joined cluster", nil)
-		cm.createClusterNodeRecord(internalCtx, cluster.ID, node.NodeID, NodeRoleRQLiteFollower, ports, followerInstance.PID)
-	}
-
-	cm.logEvent(internalCtx, cluster.ID, EventRQLiteLeaderElected, leaderNode.NodeID, "RQLite cluster formed", nil)
-
-	// Step 4: Start Olric instances
-	// Collect all memberlist addresses for peer discovery
-	olricPeers := make([]string, len(selectedNodes))
-	for i, node := range selectedNodes {
-		olricPeers[i] = fmt.Sprintf("%s:%d", node.IPAddress, portBlocks[i].OlricMemberlistPort)
-	}
-
-	for i, node := range selectedNodes {
-		ports := portBlocks[i]
-		olricConfig := olric.InstanceConfig{
-			Namespace:      cluster.NamespaceName,
-			NodeID:         node.NodeID,
-			HTTPPort:       ports.OlricHTTPPort,
-			MemberlistPort: ports.OlricMemberlistPort,
-			BindAddr:       "0.0.0.0",
-			AdvertiseAddr:  node.IPAddress,
-			PeerAddresses:  olricPeers,
-		}
-
-		_, err := cm.olricSpawner.SpawnInstance(internalCtx, olricConfig)
-		if err != nil {
-			cm.failCluster(internalCtx, cluster.ID, fmt.Sprintf("Failed to start Olric on node %s: %v", node.NodeID, err))
-			cm.cleanupOnFailure(internalCtx, cluster.ID, selectedNodes, portBlocks)
-			return
-		}
-		cm.logEvent(internalCtx, cluster.ID, EventOlricStarted, node.NodeID, "Olric instance started", nil)
-
-		// Update cluster node record with Olric role
-		cm.updateClusterNodeOlricStatus(internalCtx, cluster.ID, node.NodeID)
-	}
-
-	cm.logEvent(internalCtx, cluster.ID, EventOlricJoined, "", "Olric cluster formed", nil)
-
-	// Step 5: Start Gateway instances
-	// Build Olric server list for gateway config
-	olricServers := make([]string, len(selectedNodes))
-	for i, node := range selectedNodes {
-		olricServers[i] = fmt.Sprintf("%s:%d", node.IPAddress, portBlocks[i].OlricHTTPPort)
-	}
-
-	for i, node := range selectedNodes {
-		ports := portBlocks[i]
-		gatewayConfig := gateway.InstanceConfig{
-			Namespace:    cluster.NamespaceName,
-			NodeID:       node.NodeID,
-			HTTPPort:     ports.GatewayHTTPPort,
-			BaseDomain:   cm.baseDomain,
-			RQLiteDSN:    fmt.Sprintf("http://%s:%d", node.IPAddress, ports.RQLiteHTTPPort),
-			OlricServers: olricServers,
-			NodePeerID:   node.NodeID, // Use node ID as peer ID
-			DataDir:      cm.baseDataDir,
-		}
-
-		_, err := cm.gatewaySpawner.SpawnInstance(internalCtx, gatewayConfig)
-		if err != nil {
-			cm.failCluster(internalCtx, cluster.ID, fmt.Sprintf("Failed to start Gateway on node %s: %v", node.NodeID, err))
-			cm.cleanupOnFailure(internalCtx, cluster.ID, selectedNodes, portBlocks)
-			return
-		}
-		cm.logEvent(internalCtx, cluster.ID, EventGatewayStarted, node.NodeID, "Gateway instance started", nil)
-
-		// Update cluster node record with Gateway role
-		cm.updateClusterNodeGatewayStatus(internalCtx, cluster.ID, node.NodeID)
-	}
-
-	// Step 6: Create DNS records for namespace gateway
-	nodeIPs := make([]string, len(selectedNodes))
-	for i, node := range selectedNodes {
-		nodeIPs[i] = node.IPAddress
-	}
-
-	if err := cm.dnsManager.CreateNamespaceRecords(internalCtx, cluster.NamespaceName, nodeIPs); err != nil {
-		cm.failCluster(internalCtx, cluster.ID, fmt.Sprintf("Failed to create DNS records: %v", err))
-		cm.cleanupOnFailure(internalCtx, cluster.ID, selectedNodes, portBlocks)
-		return
-	}
-	cm.logEvent(internalCtx, cluster.ID, EventDNSCreated, "", "DNS records created", map[string]interface{}{
-		"domain":   fmt.Sprintf("ns-%s.%s", cluster.NamespaceName, cm.baseDomain),
-		"node_ips": nodeIPs,
-	})
-
-	// Mark cluster as ready
+func (cm *ClusterManager) insertClusterNode(ctx context.Context, clusterID, nodeID string, role NodeRole, portBlock *PortBlock) error {
+	query := `
+		INSERT INTO namespace_cluster_nodes (
+			id, namespace_cluster_id, node_id, role, status,
+			rqlite_http_port, rqlite_raft_port,
+			olric_http_port, olric_memberlist_port,
+			gateway_http_port, created_at, updated_at
+		) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
+	`
 	now := time.Now()
-	updateQuery := `UPDATE namespace_clusters SET status = ?, ready_at = ? WHERE id = ?`
-	_, err = cm.db.Exec(internalCtx, updateQuery, string(ClusterStatusReady), now, cluster.ID)
-	if err != nil {
-		cm.logger.Error("Failed to update cluster status to ready",
-			zap.String("cluster_id", cluster.ID),
-			zap.Error(err),
-		)
-	}
-
-	cm.logEvent(internalCtx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
-
-	cm.logger.Info("Cluster provisioning completed",
-		zap.String("cluster_id", cluster.ID),
-		zap.String("namespace", cluster.NamespaceName),
+	_, err := cm.db.Exec(ctx, query,
+		uuid.New().String(), clusterID, nodeID, role,
+		portBlock.RQLiteHTTPPort, portBlock.RQLiteRaftPort,
+		portBlock.OlricHTTPPort, portBlock.OlricMemberlistPort,
+		portBlock.GatewayHTTPPort, now, now,
 	)
+	return err
 }
 
-// DeprovisionCluster tears down all services for a namespace cluster
-func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, clusterID string) error {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	// Get cluster info
-	cluster, err := cm.GetCluster(ctx, clusterID)
-	if err != nil {
-		return err
-	}
-
-	cm.logger.Info("Starting cluster deprovisioning",
-		zap.String("cluster_id", clusterID),
-		zap.String("namespace", cluster.NamespaceName),
-	)
-
-	// Update status to deprovisioning
-	updateQuery := `UPDATE namespace_clusters SET status = ? WHERE id = ?`
-	_, _ = cm.db.Exec(internalCtx, updateQuery, string(ClusterStatusDeprovisioning), clusterID)
-	cm.logEvent(internalCtx, clusterID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
-
-	// Stop all gateway instances
-	if err := cm.gatewaySpawner.StopAllInstances(ctx, cluster.NamespaceName); err != nil {
-		cm.logger.Warn("Error stopping gateway instances", zap.Error(err))
-	}
-
-	// Stop all olric instances
-	if err := cm.olricSpawner.StopAllInstances(ctx, cluster.NamespaceName); err != nil {
-		cm.logger.Warn("Error stopping olric instances", zap.Error(err))
-	}
-
-	// Stop all rqlite instances
-	if err := cm.rqliteSpawner.StopAllInstances(ctx, cluster.NamespaceName); err != nil {
-		cm.logger.Warn("Error stopping rqlite instances", zap.Error(err))
-	}
-
-	// Delete DNS records
-	if err := cm.dnsManager.DeleteNamespaceRecords(ctx, cluster.NamespaceName); err != nil {
-		cm.logger.Warn("Error deleting DNS records", zap.Error(err))
-	}
-
-	// Deallocate all ports
-	if err := cm.portAllocator.DeallocateAllPortBlocks(ctx, clusterID); err != nil {
-		cm.logger.Warn("Error deallocating ports", zap.Error(err))
-	}
-
-	// Delete cluster node records
-	deleteNodesQuery := `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`
-	_, _ = cm.db.Exec(internalCtx, deleteNodesQuery, clusterID)
-
-	// Delete cluster record
-	deleteClusterQuery := `DELETE FROM namespace_clusters WHERE id = ?`
-	_, err = cm.db.Exec(internalCtx, deleteClusterQuery, clusterID)
-	if err != nil {
-		return &ClusterError{
-			Message: "failed to delete cluster record",
-			Cause:   err,
-		}
-	}
-
-	cm.logEvent(internalCtx, clusterID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
-
-	cm.logger.Info("Cluster deprovisioning completed",
-		zap.String("cluster_id", clusterID),
-		zap.String("namespace", cluster.NamespaceName),
-	)
-
-	return nil
-}
-
-// GetCluster retrieves a cluster by ID
-func (cm *ClusterManager) GetCluster(ctx context.Context, clusterID string) (*NamespaceCluster, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	var clusters []NamespaceCluster
-	query := `SELECT * FROM namespace_clusters WHERE id = ? LIMIT 1`
-	err := cm.db.Query(internalCtx, &clusters, query, clusterID)
-	if err != nil {
-		return nil, &ClusterError{
-			Message: "failed to query cluster",
-			Cause:   err,
-		}
-	}
-
-	if len(clusters) == 0 {
-		return nil, ErrClusterNotFound
-	}
-
-	return &clusters[0], nil
-}
-
-// GetClusterByNamespaceID retrieves a cluster by namespace ID
-func (cm *ClusterManager) GetClusterByNamespaceID(ctx context.Context, namespaceID int) (*NamespaceCluster, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	var clusters []NamespaceCluster
-	query := `SELECT * FROM namespace_clusters WHERE namespace_id = ? LIMIT 1`
-	err := cm.db.Query(internalCtx, &clusters, query, namespaceID)
-	if err != nil {
-		return nil, &ClusterError{
-			Message: "failed to query cluster",
-			Cause:   err,
-		}
-	}
-
-	if len(clusters) == 0 {
-		return nil, ErrClusterNotFound
-	}
-
-	return &clusters[0], nil
-}
-
-// GetClusterByNamespaceName retrieves a cluster by namespace name
-func (cm *ClusterManager) GetClusterByNamespaceName(ctx context.Context, namespaceName string) (*NamespaceCluster, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	var clusters []NamespaceCluster
-	query := `SELECT * FROM namespace_clusters WHERE namespace_name = ? LIMIT 1`
-	err := cm.db.Query(internalCtx, &clusters, query, namespaceName)
-	if err != nil {
-		return nil, &ClusterError{
-			Message: "failed to query cluster",
-			Cause:   err,
-		}
-	}
-
-	if len(clusters) == 0 {
-		return nil, ErrClusterNotFound
-	}
-
-	return &clusters[0], nil
-}
-
-// GetClusterStatus returns the detailed provisioning status of a cluster
-func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string) (*ClusterProvisioningStatus, error) {
-	cluster, err := cm.GetCluster(ctx, clusterID)
-	if err != nil {
+func (cm *ClusterManager) getClusterNodes(ctx context.Context, clusterID string) ([]ClusterNode, error) {
+	var nodes []ClusterNode
+	query := `SELECT * FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`
+	if err := cm.db.Query(ctx, &nodes, query, clusterID); err != nil {
 		return nil, err
 	}
+	return nodes, nil
+}
 
-	// Get cluster nodes
-	internalCtx := client.WithInternalAuth(ctx)
-	var nodes []ClusterNode
-	nodesQuery := `SELECT * FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`
-	_ = cm.db.Query(internalCtx, &nodes, nodesQuery, clusterID)
-
-	// Determine component readiness
-	rqliteReady := false
-	olricReady := false
-	gatewayReady := false
-
-	rqliteCount := 0
-	olricCount := 0
-	gatewayCount := 0
-
-	for _, node := range nodes {
-		if node.Status == NodeStatusRunning {
-			switch node.Role {
-			case NodeRoleRQLiteLeader, NodeRoleRQLiteFollower:
-				rqliteCount++
-			case NodeRoleOlric:
-				olricCount++
-			case NodeRoleGateway:
-				gatewayCount++
-			}
+func (cm *ClusterManager) logEvent(ctx context.Context, clusterID string, eventType EventType, nodeID, message string, metadata map[string]interface{}) {
+	metadataJSON := ""
+	if metadata != nil {
+		if data, err := json.Marshal(metadata); err == nil {
+			metadataJSON = string(data)
 		}
 	}
 
-	// Consider ready if we have the expected number of each type
-	rqliteReady = rqliteCount >= cluster.RQLiteNodeCount
-	olricReady = olricCount >= cluster.OlricNodeCount
-	gatewayReady = gatewayCount >= cluster.GatewayNodeCount
+	query := `
+		INSERT INTO namespace_cluster_events (id, namespace_cluster_id, event_type, node_id, message, metadata, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := cm.db.Exec(ctx, query, uuid.New().String(), clusterID, eventType, nodeID, message, metadataJSON, time.Now())
+	if err != nil {
+		cm.logger.Warn("Failed to log cluster event", zap.Error(err))
+	}
+}
 
-	// DNS is ready if cluster status is ready
-	dnsReady := cluster.Status == ClusterStatusReady
+// ClusterProvisioner interface implementation
+
+// CheckNamespaceCluster checks if a namespace has a cluster and returns its status.
+// Returns: (clusterID, status, needsProvisioning, error)
+// - If the namespace is "default", returns ("", "default", false, nil) as it uses the global cluster
+// - If a cluster exists and is ready/provisioning, returns (clusterID, status, false, nil)
+// - If no cluster exists or cluster failed, returns ("", "", true, nil) to indicate provisioning is needed
+func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceName string) (string, string, bool, error) {
+	// Default namespace uses the global cluster, no per-namespace cluster needed
+	if namespaceName == "default" || namespaceName == "" {
+		return "", "default", false, nil
+	}
+
+	cluster, err := cm.GetClusterByNamespace(ctx, namespaceName)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	if cluster == nil {
+		// No cluster exists, provisioning is needed
+		return "", "", true, nil
+	}
+
+	// If the cluster failed, delete the old record and trigger re-provisioning
+	if cluster.Status == ClusterStatusFailed {
+		cm.logger.Info("Found failed cluster, will re-provision",
+			zap.String("namespace", namespaceName),
+			zap.String("cluster_id", cluster.ID),
+		)
+		// Delete the failed cluster record
+		query := `DELETE FROM namespace_clusters WHERE id = ?`
+		cm.db.Exec(ctx, query, cluster.ID)
+		// Also clean up any port allocations
+		cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
+		return "", "", true, nil
+	}
+
+	// Return current status
+	return cluster.ID, string(cluster.Status), false, nil
+}
+
+// ProvisionNamespaceCluster triggers provisioning for a new namespace cluster.
+// Returns: (clusterID, pollURL, error)
+// This starts an async provisioning process and returns immediately with the cluster ID
+// and a URL to poll for status updates.
+func (cm *ClusterManager) ProvisionNamespaceCluster(ctx context.Context, namespaceID int, namespaceName, wallet string) (string, string, error) {
+	// Check if already provisioning
+	cm.provisioningMu.Lock()
+	if cm.provisioning[namespaceName] {
+		cm.provisioningMu.Unlock()
+		// Return existing cluster ID if found
+		cluster, _ := cm.GetClusterByNamespace(ctx, namespaceName)
+		if cluster != nil {
+			return cluster.ID, "/v1/namespace/status?id=" + cluster.ID, nil
+		}
+		return "", "", fmt.Errorf("namespace %s is already being provisioned", namespaceName)
+	}
+	cm.provisioning[namespaceName] = true
+	cm.provisioningMu.Unlock()
+
+	// Create cluster record synchronously to get the ID
+	cluster := &NamespaceCluster{
+		ID:               uuid.New().String(),
+		NamespaceID:      namespaceID,
+		NamespaceName:    namespaceName,
+		Status:           ClusterStatusProvisioning,
+		RQLiteNodeCount:  3,
+		OlricNodeCount:   3,
+		GatewayNodeCount: 3,
+		ProvisionedBy:    wallet,
+		ProvisionedAt:    time.Now(),
+	}
+
+	// Insert cluster record
+	if err := cm.insertCluster(ctx, cluster); err != nil {
+		cm.provisioningMu.Lock()
+		delete(cm.provisioning, namespaceName)
+		cm.provisioningMu.Unlock()
+		return "", "", fmt.Errorf("failed to insert cluster record: %w", err)
+	}
+
+	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
+
+	// Start actual provisioning in background goroutine
+	go cm.provisionClusterAsync(cluster, namespaceID, namespaceName, wallet)
+
+	pollURL := "/v1/namespace/status?id=" + cluster.ID
+	return cluster.ID, pollURL, nil
+}
+
+// provisionClusterAsync performs the actual cluster provisioning in the background
+func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, namespaceID int, namespaceName, provisionedBy string) {
+	defer func() {
+		cm.provisioningMu.Lock()
+		delete(cm.provisioning, namespaceName)
+		cm.provisioningMu.Unlock()
+	}()
+
+	ctx := context.Background()
+
+	cm.logger.Info("Starting async cluster provisioning",
+		zap.String("cluster_id", cluster.ID),
+		zap.String("namespace", namespaceName),
+		zap.Int("namespace_id", namespaceID),
+		zap.String("provisioned_by", provisionedBy),
+	)
+
+	// Select 3 nodes for the cluster
+	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, 3)
+	if err != nil {
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logger.Error("Failed to select nodes for cluster", zap.Error(err))
+		return
+	}
 
 	nodeIDs := make([]string, len(nodes))
 	for i, n := range nodes {
 		nodeIDs[i] = n.NodeID
 	}
+	cm.logEvent(ctx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{"nodes": nodeIDs})
 
-	status := &ClusterProvisioningStatus{
-		ClusterID:    cluster.ID,
-		Namespace:    cluster.NamespaceName,
-		Status:       cluster.Status,
-		Nodes:        nodeIDs,
-		RQLiteReady:  rqliteReady,
-		OlricReady:   olricReady,
-		GatewayReady: gatewayReady,
-		DNSReady:     dnsReady,
-		Error:        cluster.ErrorMessage,
-		CreatedAt:    cluster.ProvisionedAt,
-		ReadyAt:      cluster.ReadyAt,
+	// Allocate ports on each node
+	portBlocks := make([]*PortBlock, len(nodes))
+	for i, node := range nodes {
+		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
+		if err != nil {
+			// Rollback previous allocations
+			for j := 0; j < i; j++ {
+				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
+			}
+			cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+			cm.logger.Error("Failed to allocate ports", zap.Error(err))
+			return
+		}
+		portBlocks[i] = block
+		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID,
+			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	return status, nil
-}
+	// Start RQLite instances (leader first, then followers)
+	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
+	if err != nil {
+		cm.rollbackProvisioning(ctx, cluster, portBlocks, nil, nil)
+		cm.logger.Error("Failed to start RQLite cluster", zap.Error(err))
+		return
+	}
 
-// failCluster marks a cluster as failed with an error message
-func (cm *ClusterManager) failCluster(ctx context.Context, clusterID, errorMsg string) {
-	cm.logger.Error("Cluster provisioning failed",
-		zap.String("cluster_id", clusterID),
-		zap.String("error", errorMsg),
-	)
+	// Start Olric instances
+	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
+	if err != nil {
+		cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, nil)
+		cm.logger.Error("Failed to start Olric cluster", zap.Error(err))
+		return
+	}
 
-	updateQuery := `UPDATE namespace_clusters SET status = ?, error_message = ?, retry_count = retry_count + 1 WHERE id = ?`
-	_, _ = cm.db.Exec(ctx, updateQuery, string(ClusterStatusFailed), errorMsg, clusterID)
-
-	cm.logEvent(ctx, clusterID, EventClusterFailed, "", errorMsg, nil)
-}
-
-// cleanupOnFailure cleans up partial resources after a provisioning failure
-func (cm *ClusterManager) cleanupOnFailure(ctx context.Context, clusterID string, nodes []NodeCapacity, portBlocks []*PortBlock) {
-	// Get namespace name from first port block
-	var namespaceName string
-	if len(portBlocks) > 0 {
-		// Query to get namespace name from cluster
-		var clusters []NamespaceCluster
-		query := `SELECT namespace_name FROM namespace_clusters WHERE id = ? LIMIT 1`
-		if err := cm.db.Query(ctx, &clusters, query, clusterID); err == nil && len(clusters) > 0 {
-			namespaceName = clusters[0].NamespaceName
+	// Start Gateway instances (optional - may not be available in dev mode)
+	_, err = cm.startGatewayCluster(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
+	if err != nil {
+		// Check if this is a "binary not found" error - if so, continue without gateways
+		if strings.Contains(err.Error(), "gateway binary not found") {
+			cm.logger.Warn("Skipping namespace gateway spawning (binary not available)",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.Error(err),
+			)
+			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
+		} else {
+			cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, olricInstances)
+			cm.logger.Error("Failed to start Gateway cluster", zap.Error(err))
+			return
 		}
 	}
 
-	if namespaceName != "" {
-		// Stop any started instances
-		_ = cm.gatewaySpawner.StopAllInstances(ctx, namespaceName)
-		_ = cm.olricSpawner.StopAllInstances(ctx, namespaceName)
-		_ = cm.rqliteSpawner.StopAllInstances(ctx, namespaceName)
+	// Create DNS records for namespace gateway
+	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
+		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
+		// Don't fail provisioning for DNS errors
 	}
 
-	// Deallocate ports
-	for _, node := range nodes {
-		_ = cm.portAllocator.DeallocatePortBlock(ctx, clusterID, node.NodeID)
-	}
-
-	// Delete cluster node records
-	deleteQuery := `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`
-	_, _ = cm.db.Exec(ctx, deleteQuery, clusterID)
-}
-
-// logEvent logs a cluster lifecycle event
-func (cm *ClusterManager) logEvent(ctx context.Context, clusterID string, eventType EventType, nodeID, message string, metadata map[string]interface{}) {
-	eventID := uuid.New().String()
-
-	var metadataJSON string
-	if metadata != nil {
-		data, _ := json.Marshal(metadata)
-		metadataJSON = string(data)
-	}
-
-	insertQuery := `
-		INSERT INTO namespace_cluster_events (id, namespace_cluster_id, event_type, node_id, message, metadata, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`
-	_, _ = cm.db.Exec(ctx, insertQuery, eventID, clusterID, string(eventType), nodeID, message, metadataJSON, time.Now())
-
-	cm.logger.Debug("Cluster event logged",
-		zap.String("cluster_id", clusterID),
-		zap.String("event_type", string(eventType)),
-		zap.String("node_id", nodeID),
-		zap.String("message", message),
-	)
-}
-
-// createClusterNodeRecord creates a record for a node in the cluster
-func (cm *ClusterManager) createClusterNodeRecord(ctx context.Context, clusterID, nodeID string, role NodeRole, ports *PortBlock, pid int) {
-	recordID := uuid.New().String()
+	// Update cluster status to ready
 	now := time.Now()
+	cluster.Status = ClusterStatusReady
+	cluster.ReadyAt = &now
+	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
 
-	insertQuery := `
-		INSERT INTO namespace_cluster_nodes (
-			id, namespace_cluster_id, node_id, role,
-			rqlite_http_port, rqlite_raft_port, olric_http_port, olric_memberlist_port, gateway_http_port,
-			status, process_pid, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-	_, _ = cm.db.Exec(ctx, insertQuery,
-		recordID,
-		clusterID,
-		nodeID,
-		string(role),
-		ports.RQLiteHTTPPort,
-		ports.RQLiteRaftPort,
-		ports.OlricHTTPPort,
-		ports.OlricMemberlistPort,
-		ports.GatewayHTTPPort,
-		string(NodeStatusRunning),
-		pid,
-		now,
-		now,
+	cm.logger.Info("Cluster provisioning completed",
+		zap.String("cluster_id", cluster.ID),
+		zap.String("namespace", namespaceName),
 	)
 }
 
-// updateClusterNodeOlricStatus updates a node record to indicate Olric is running
-func (cm *ClusterManager) updateClusterNodeOlricStatus(ctx context.Context, clusterID, nodeID string) {
-	// Check if Olric role record exists
-	var existing []ClusterNode
-	checkQuery := `SELECT id FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ? AND role = ?`
-	_ = cm.db.Query(ctx, &existing, checkQuery, clusterID, nodeID, string(NodeRoleOlric))
-
-	if len(existing) == 0 {
-		// Create new record for Olric role
-		recordID := uuid.New().String()
-		now := time.Now()
-		insertQuery := `
-			INSERT INTO namespace_cluster_nodes (
-				id, namespace_cluster_id, node_id, role, status, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?)
-		`
-		_, _ = cm.db.Exec(ctx, insertQuery, recordID, clusterID, nodeID, string(NodeRoleOlric), string(NodeStatusRunning), now, now)
+// GetClusterStatusByID returns the full status of a cluster by ID.
+// This method is part of the ClusterProvisioner interface used by the gateway.
+// It returns a generic struct that matches the interface definition in auth/handlers.go.
+func (cm *ClusterManager) GetClusterStatusByID(ctx context.Context, clusterID string) (interface{}, error) {
+	status, err := cm.GetClusterStatus(ctx, clusterID)
+	if err != nil {
+		return nil, err
 	}
-}
 
-// updateClusterNodeGatewayStatus updates a node record to indicate Gateway is running
-func (cm *ClusterManager) updateClusterNodeGatewayStatus(ctx context.Context, clusterID, nodeID string) {
-	// Check if Gateway role record exists
-	var existing []ClusterNode
-	checkQuery := `SELECT id FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ? AND role = ?`
-	_ = cm.db.Query(ctx, &existing, checkQuery, clusterID, nodeID, string(NodeRoleGateway))
-
-	if len(existing) == 0 {
-		// Create new record for Gateway role
-		recordID := uuid.New().String()
-		now := time.Now()
-		insertQuery := `
-			INSERT INTO namespace_cluster_nodes (
-				id, namespace_cluster_id, node_id, role, status, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?)
-		`
-		_, _ = cm.db.Exec(ctx, insertQuery, recordID, clusterID, nodeID, string(NodeRoleGateway), string(NodeStatusRunning), now, now)
-	}
+	// Return as a map to avoid import cycles with the interface type
+	return map[string]interface{}{
+		"cluster_id":    status.ClusterID,
+		"namespace":     status.Namespace,
+		"status":        string(status.Status),
+		"nodes":         status.Nodes,
+		"rqlite_ready":  status.RQLiteReady,
+		"olric_ready":   status.OlricReady,
+		"gateway_ready": status.GatewayReady,
+		"dns_ready":     status.DNSReady,
+		"error":         status.Error,
+	}, nil
 }

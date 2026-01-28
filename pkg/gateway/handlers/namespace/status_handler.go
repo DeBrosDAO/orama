@@ -103,8 +103,7 @@ func (h *StatusHandler) HandleByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	cluster, err := h.clusterManager.GetClusterByNamespaceName(ctx, namespace)
+	cluster, err := h.clusterManager.GetClusterByNamespace(r.Context(), namespace)
 	if err != nil {
 		h.logger.Debug("Cluster not found for namespace",
 			zap.String("namespace", namespace),
@@ -114,7 +113,7 @@ func (h *StatusHandler) HandleByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := h.clusterManager.GetClusterStatus(ctx, cluster.ID)
+	status, err := h.clusterManager.GetClusterStatus(r.Context(), cluster.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get cluster status")
 		return
@@ -172,8 +171,6 @@ func (h *StatusHandler) HandleProvision(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "cannot provision the default namespace")
 		return
 	}
-
-	ctx := r.Context()
 
 	// Check if namespace exists
 	// For now, we assume the namespace ID is passed or we look it up
