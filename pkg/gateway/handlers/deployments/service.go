@@ -143,10 +143,10 @@ func (s *DeploymentService) generateSubdomain(ctx context.Context, name, namespa
 // subdomainExists checks if a subdomain is already registered globally
 func (s *DeploymentService) subdomainExists(ctx context.Context, subdomain string) (bool, error) {
 	type existsRow struct {
-		Exists int `db:"exists"`
+		Found int `db:"found"`
 	}
 	var rows []existsRow
-	query := `SELECT 1 as exists FROM global_deployment_subdomains WHERE subdomain = ? LIMIT 1`
+	query := `SELECT 1 as found FROM global_deployment_subdomains WHERE subdomain = ? LIMIT 1`
 	err := s.db.Query(ctx, &rows, query, subdomain)
 	if err != nil {
 		return false, err

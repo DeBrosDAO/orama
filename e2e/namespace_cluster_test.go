@@ -69,6 +69,7 @@ func TestNamespaceCluster_StatusPolling(t *testing.T) {
 	t.Run("Status endpoint returns valid response", func(t *testing.T) {
 		// Test with a non-existent cluster ID (should return 404)
 		req, _ := http.NewRequest("GET", env.GatewayURL+"/v1/namespace/status?id=non-existent-id", nil)
+		req.Header.Set("Authorization", "Bearer "+env.APIKey)
 
 		resp, err := env.HTTPClient.Do(req)
 		require.NoError(t, err, "Should execute request")
@@ -168,8 +169,8 @@ func TestDeployment_RandomSubdomain(t *testing.T) {
 
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
 
-	// Create a deployment
-	deploymentName := "subdomain-test"
+	// Create a deployment with unique name
+	deploymentName := fmt.Sprintf("subdomain-test-%d", time.Now().UnixNano())
 	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
 		if !env.SkipCleanup {

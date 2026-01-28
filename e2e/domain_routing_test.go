@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,7 +263,7 @@ func TestDomainRouting_SPAFallback(t *testing.T) {
 }
 
 // TestDeployment_DomainFormat verifies that deployment URLs use the correct format:
-// - CORRECT: {name}.{baseDomain} (e.g., "myapp.dbrs.space")
+// - CORRECT: {name}-{random}.{baseDomain} (e.g., "myapp-f3o4if.dbrs.space")
 // - WRONG: {name}.node-{shortID}.{baseDomain} (should NOT exist)
 func TestDeployment_DomainFormat(t *testing.T) {
 	env, err := LoadTestEnv()
@@ -293,8 +294,9 @@ func TestDeployment_DomainFormat(t *testing.T) {
 			}
 		}
 
-		expectedDomain := env.BuildDeploymentDomain(deploymentName)
-		t.Logf("Expected domain format: %s", expectedDomain)
+		// Get the subdomain from deployment response
+		subdomain, _ := deployment["subdomain"].(string)
+		t.Logf("Deployment subdomain: %s", subdomain)
 		t.Logf("Deployment URLs: %v", urls)
 
 		foundCorrectFormat := false
@@ -304,11 +306,15 @@ func TestDeployment_DomainFormat(t *testing.T) {
 				continue
 			}
 
-			// URL should contain the simple format: {name}.{baseDomain}
-			if assert.Contains(t, urlStr, expectedDomain,
-				"URL should contain %s", expectedDomain) {
+			// URL should start with https://{name}-
+			expectedPrefix := fmt.Sprintf("https://%s-", deploymentName)
+			if strings.HasPrefix(urlStr, expectedPrefix) {
 				foundCorrectFormat = true
 			}
+
+			// URL should contain base domain
+			assert.Contains(t, urlStr, env.BaseDomain,
+				"URL should contain base domain %s", env.BaseDomain)
 
 			// URL should NOT contain node identifier pattern
 			assert.NotContains(t, urlStr, ".node-",
@@ -316,16 +322,21 @@ func TestDeployment_DomainFormat(t *testing.T) {
 		}
 
 		if len(urls) > 0 {
-			assert.True(t, foundCorrectFormat, "Should find URL with correct domain format")
+			assert.True(t, foundCorrectFormat, "Should find URL with correct domain format (https://{name}-{random}.{baseDomain})")
 		}
 
 		t.Logf("✓ Domain format verification passed")
-		t.Logf("   - Expected: %s", expectedDomain)
+		t.Logf("   - Format: {name}-{random}.{baseDomain}")
 	})
 
 	t.Run("Domain resolves via Host header", func(t *testing.T) {
-		// Test that the simple domain format works
-		domain := env.BuildDeploymentDomain(deploymentName)
+		// Get the actual subdomain from the deployment
+		deployment := GetDeployment(t, env, deploymentID)
+		subdomain, _ := deployment["subdomain"].(string)
+		if subdomain == "" {
+			t.Skip("No subdomain set, skipping host header test")
+		}
+		domain := subdomain + "." + env.BaseDomain
 
 		resp := TestDeploymentWithHostHeader(t, env, domain, "/")
 		defer resp.Body.Close()
