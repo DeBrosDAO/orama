@@ -2,14 +2,23 @@ package deployments
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+)
+
+const (
+	// subdomainSuffixLength is the length of the random suffix for deployment subdomains
+	subdomainSuffixLength = 6
+	// subdomainSuffixChars are the allowed characters for the random suffix (lowercase alphanumeric)
+	subdomainSuffixChars = "abcdefghijklmnopqrstuvwxyz0123456789"
 )
 
 // DeploymentService manages deployment operations
@@ -74,6 +83,87 @@ func GetShortNodeID(peerID string) string {
 	return "node-" + peerID[:6]
 }
 
+// generateRandomSuffix generates a random alphanumeric suffix for subdomains
+func generateRandomSuffix(length int) string {
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based if crypto/rand fails
+		return fmt.Sprintf("%06x", time.Now().UnixNano()%0xffffff)
+	}
+	for i := range b {
+		b[i] = subdomainSuffixChars[int(b[i])%len(subdomainSuffixChars)]
+	}
+	return string(b)
+}
+
+// generateSubdomain generates a unique subdomain for a deployment
+// Format: {name}-{random} (e.g., "myapp-f3o4if")
+func (s *DeploymentService) generateSubdomain(ctx context.Context, name, namespace, deploymentID string) (string, error) {
+	// Sanitize name for subdomain (lowercase, alphanumeric and hyphens only)
+	sanitizedName := strings.ToLower(name)
+	sanitizedName = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, sanitizedName)
+	// Remove consecutive hyphens and trim
+	for strings.Contains(sanitizedName, "--") {
+		sanitizedName = strings.ReplaceAll(sanitizedName, "--", "-")
+	}
+	sanitizedName = strings.Trim(sanitizedName, "-")
+
+	// Try to generate a unique subdomain (max 10 attempts)
+	for i := 0; i < 10; i++ {
+		suffix := generateRandomSuffix(subdomainSuffixLength)
+		subdomain := fmt.Sprintf("%s-%s", sanitizedName, suffix)
+
+		// Check if subdomain is already taken globally
+		exists, err := s.subdomainExists(ctx, subdomain)
+		if err != nil {
+			return "", fmt.Errorf("failed to check subdomain: %w", err)
+		}
+		if !exists {
+			// Register the subdomain globally
+			if err := s.registerSubdomain(ctx, subdomain, namespace, deploymentID); err != nil {
+				// If registration fails (race condition), try again
+				s.logger.Warn("Failed to register subdomain, retrying",
+					zap.String("subdomain", subdomain),
+					zap.Error(err),
+				)
+				continue
+			}
+			return subdomain, nil
+		}
+	}
+
+	return "", fmt.Errorf("failed to generate unique subdomain after 10 attempts")
+}
+
+// subdomainExists checks if a subdomain is already registered globally
+func (s *DeploymentService) subdomainExists(ctx context.Context, subdomain string) (bool, error) {
+	type existsRow struct {
+		Exists int `db:"exists"`
+	}
+	var rows []existsRow
+	query := `SELECT 1 as exists FROM global_deployment_subdomains WHERE subdomain = ? LIMIT 1`
+	err := s.db.Query(ctx, &rows, query, subdomain)
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0, nil
+}
+
+// registerSubdomain registers a subdomain in the global registry
+func (s *DeploymentService) registerSubdomain(ctx context.Context, subdomain, namespace, deploymentID string) error {
+	query := `
+		INSERT INTO global_deployment_subdomains (subdomain, namespace, deployment_id, created_at)
+		VALUES (?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(ctx, query, subdomain, namespace, deploymentID, time.Now())
+	return err
+}
+
 // CreateDeployment creates a new deployment
 func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *deployments.Deployment) error {
 	// Always use current node's peer ID for home node
@@ -88,6 +178,16 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 			return fmt.Errorf("failed to assign home node: %w", err)
 		}
 		deployment.HomeNodeID = homeNodeID
+	}
+
+	// Generate unique subdomain with random suffix if not already set
+	// Format: {name}-{random} (e.g., "myapp-f3o4if")
+	if deployment.Subdomain == "" {
+		subdomain, err := s.generateSubdomain(ctx, deployment.Name, deployment.Namespace, deployment.ID)
+		if err != nil {
+			return fmt.Errorf("failed to generate subdomain: %w", err)
+		}
+		deployment.Subdomain = subdomain
 	}
 
 	// Allocate port for dynamic deployments
@@ -307,13 +407,24 @@ func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *de
 		return err
 	}
 
-	// Create deployment record: {name}.{baseDomain}
+	// Use subdomain if set, otherwise fall back to name
+	// New format: {name}-{random}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space)
+	dnsName := deployment.Subdomain
+	if dnsName == "" {
+		dnsName = deployment.Name
+	}
+
+	// Create deployment record: {subdomain}.{baseDomain}
 	// Any node can receive the request and proxy to the home node if needed
-	fqdn := fmt.Sprintf("%s.%s.", deployment.Name, s.BaseDomain())
+	fqdn := fmt.Sprintf("%s.%s.", dnsName, s.BaseDomain())
 	if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
 		s.logger.Error("Failed to create DNS record", zap.Error(err))
 	} else {
-		s.logger.Info("Created DNS record", zap.String("fqdn", fqdn), zap.String("ip", nodeIP))
+		s.logger.Info("Created DNS record",
+			zap.String("fqdn", fqdn),
+			zap.String("ip", nodeIP),
+			zap.String("subdomain", dnsName),
+		)
 	}
 
 	return nil
@@ -373,9 +484,14 @@ func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (strin
 
 // BuildDeploymentURLs builds all URLs for a deployment
 func (s *DeploymentService) BuildDeploymentURLs(deployment *deployments.Deployment) []string {
-	// Simple URL format: {name}.{baseDomain}
+	// Use subdomain if set, otherwise fall back to name
+	// New format: {name}-{random}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space)
+	dnsName := deployment.Subdomain
+	if dnsName == "" {
+		dnsName = deployment.Name
+	}
 	return []string{
-		fmt.Sprintf("https://%s.%s", deployment.Name, s.BaseDomain()),
+		fmt.Sprintf("https://%s.%s", dnsName, s.BaseDomain()),
 	}
 }
 

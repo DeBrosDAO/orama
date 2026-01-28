@@ -35,13 +35,24 @@ type QueryResult struct {
 	Rows  []interface{} `json:"rows"`
 }
 
+// ClusterProvisioner defines the interface for namespace cluster provisioning
+type ClusterProvisioner interface {
+	// CheckNamespaceCluster checks if a namespace has a cluster and returns its status
+	// Returns: (clusterID, status, needsProvisioning, error)
+	CheckNamespaceCluster(ctx context.Context, namespaceName string) (string, string, bool, error)
+	// ProvisionNamespaceCluster triggers provisioning for a new namespace
+	// Returns: (clusterID, pollURL, error)
+	ProvisionNamespaceCluster(ctx context.Context, namespaceID int, namespaceName, wallet string) (string, string, error)
+}
+
 // Handlers holds dependencies for authentication HTTP handlers
 type Handlers struct {
-	logger         *logging.ColoredLogger
-	authService    *authsvc.Service
-	netClient      NetworkClient
-	defaultNS      string
-	internalAuthFn func(context.Context) context.Context
+	logger             *logging.ColoredLogger
+	authService        *authsvc.Service
+	netClient          NetworkClient
+	defaultNS          string
+	internalAuthFn     func(context.Context) context.Context
+	clusterProvisioner ClusterProvisioner // Optional: for namespace cluster provisioning
 }
 
 // NewHandlers creates a new authentication handlers instance
@@ -59,6 +70,11 @@ func NewHandlers(
 		defaultNS:      defaultNamespace,
 		internalAuthFn: internalAuthFn,
 	}
+}
+
+// SetClusterProvisioner sets the cluster provisioner for namespace cluster management
+func (h *Handlers) SetClusterProvisioner(cp ClusterProvisioner) {
+	h.clusterProvisioner = cp
 }
 
 // markNonceUsed marks a nonce as used in the database

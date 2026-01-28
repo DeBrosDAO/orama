@@ -207,6 +207,9 @@ func isPublicPath(p string) bool {
 
 // authorizationMiddleware enforces that the authenticated actor owns the namespace
 // for certain protected paths (e.g., apps CRUD and storage APIs).
+// Also enforces cross-namespace access control:
+// - "default" namespace: accessible by any valid API key
+// - Other namespaces: API key must belong to that specific namespace
 func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip for public/OPTIONS paths only
@@ -221,7 +224,40 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Only enforce for specific resource paths
+		// Exempt namespace status endpoint
+		if strings.HasPrefix(r.URL.Path, "/v1/namespace/status") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Cross-namespace access control for namespace gateways
+		// The gateway's ClientNamespace determines which namespace this gateway serves
+		gatewayNamespace := "default"
+		if g.cfg != nil && g.cfg.ClientNamespace != "" {
+			gatewayNamespace = strings.TrimSpace(g.cfg.ClientNamespace)
+		}
+
+		// Get user's namespace from context (derived from API key/JWT)
+		userNamespace := ""
+		if v := r.Context().Value(CtxKeyNamespaceOverride); v != nil {
+			if s, ok := v.(string); ok {
+				userNamespace = strings.TrimSpace(s)
+			}
+		}
+
+		// For non-default namespace gateways, the API key must belong to this namespace
+		// This enforces physical isolation: alice's gateway only accepts alice's API keys
+		if gatewayNamespace != "default" && userNamespace != "" && userNamespace != gatewayNamespace {
+			g.logger.ComponentWarn(logging.ComponentGeneral, "cross-namespace access denied",
+				zap.String("user_namespace", userNamespace),
+				zap.String("gateway_namespace", gatewayNamespace),
+				zap.String("path", r.URL.Path),
+			)
+			writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
+			return
+		}
+
+		// Only enforce ownership for specific resource paths
 		if !requiresNamespaceOwnership(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
@@ -433,8 +469,14 @@ func getClientIP(r *http.Request) string {
 	return host
 }
 
-// domainRoutingMiddleware handles requests to deployment domains
+// domainRoutingMiddleware handles requests to deployment domains and namespace gateways
 // This must come BEFORE auth middleware so deployment domains work without API keys
+//
+// Domain routing patterns:
+// - ns-{namespace}.{baseDomain} -> Namespace gateway (proxy to namespace cluster)
+// - {name}-{random}.{baseDomain} -> Deployment domain
+// - {name}.{baseDomain} -> Deployment domain (legacy)
+// - {name}.node-xxx.{baseDomain} -> Legacy format (deprecated, returns 404 for new deployments)
 func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.Split(r.Host, ":")[0] // Strip port
@@ -446,7 +488,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Only process base domain and its subdomains
-		if !strings.HasSuffix(host, "."+baseDomain) {
+		if !strings.HasSuffix(host, "."+baseDomain) && host != baseDomain {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -455,6 +497,18 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// Check for namespace gateway domain: ns-{namespace}.{baseDomain}
+		suffix := "." + baseDomain
+		if strings.HasSuffix(host, suffix) {
+			subdomain := strings.TrimSuffix(host, suffix)
+			if strings.HasPrefix(subdomain, "ns-") {
+				// This is a namespace gateway request
+				namespaceName := strings.TrimPrefix(subdomain, "ns-")
+				g.handleNamespaceGatewayRequest(w, r, namespaceName)
+				return
+			}
 		}
 
 		// Check if deployment handlers are available
@@ -470,7 +524,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if deployment == nil {
-			// Domain matches .orama.network but no deployment found
+			// Domain matches .{baseDomain} but no deployment found
 			http.NotFound(w, r)
 			return
 		}
@@ -490,9 +544,112 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// handleNamespaceGatewayRequest proxies requests to a namespace's dedicated gateway cluster
+// This enables physical isolation where each namespace has its own RQLite, Olric, and Gateway
+func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
+	// Look up namespace cluster gateway IPs from DNS records
+	db := g.client.Database()
+	internalCtx := client.WithInternalAuth(r.Context())
+
+	baseDomain := "dbrs.space"
+	if g.cfg != nil && g.cfg.BaseDomain != "" {
+		baseDomain = g.cfg.BaseDomain
+	}
+
+	// Query DNS records for the namespace gateway
+	fqdn := "ns-" + namespaceName + "." + baseDomain + "."
+	query := `SELECT value FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND is_active = TRUE ORDER BY RANDOM() LIMIT 1`
+	result, err := db.Query(internalCtx, query, fqdn)
+	if err != nil || result == nil || len(result.Rows) == 0 {
+		// No gateway found for this namespace
+		g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
+			zap.String("namespace", namespaceName),
+			zap.String("fqdn", fqdn),
+		)
+		http.Error(w, "Namespace gateway not found", http.StatusNotFound)
+		return
+	}
+
+	gatewayIP := getString(result.Rows[0][0])
+	if gatewayIP == "" {
+		http.Error(w, "Namespace gateway not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get the gateway port from namespace_port_allocations
+	// Gateway HTTP port is port_start + 4
+	portQuery := `
+		SELECT npa.gateway_http_port
+		FROM namespace_port_allocations npa
+		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
+		WHERE nc.namespace_name = ?
+		LIMIT 1
+	`
+	portResult, err := db.Query(internalCtx, portQuery, namespaceName)
+	gatewayPort := 10004 // Default to first namespace's gateway port
+	if err == nil && portResult != nil && len(portResult.Rows) > 0 {
+		if p := getInt(portResult.Rows[0][0]); p > 0 {
+			gatewayPort = p
+		}
+	}
+
+	// Proxy request to the namespace gateway
+	targetURL := "http://" + gatewayIP + ":" + strconv.Itoa(gatewayPort) + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	if err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
+			zap.String("namespace", namespaceName),
+			zap.Error(err),
+		)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers
+	for key, values := range r.Header {
+		for _, value := range values {
+			proxyReq.Header.Add(key, value)
+		}
+	}
+	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
+	proxyReq.Header.Set("X-Forwarded-Proto", "https")
+	proxyReq.Header.Set("X-Forwarded-Host", r.Host)
+	proxyReq.Header.Set("X-Original-Host", r.Host)
+
+	// Execute proxy request
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(proxyReq)
+	if err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral, "namespace gateway proxy request failed",
+			zap.String("namespace", namespaceName),
+			zap.String("target", gatewayIP),
+			zap.Error(err),
+		)
+		http.Error(w, "Namespace gateway unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Write status code and body
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
 // getDeploymentByDomain looks up a deployment by its domain
 // Supports formats like:
-//   - {name}.{baseDomain} (e.g., myapp.dbrs.space) - primary format
+//   - {name}-{random}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space) - new format with random suffix
+//   - {name}.{baseDomain} (e.g., myapp.dbrs.space) - legacy format (backwards compatibility)
 //   - {name}.node-{shortID}.{baseDomain} (legacy format for backwards compatibility)
 //   - custom domains via deployment_domains table
 func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*deployments.Deployment, error) {
@@ -512,25 +669,28 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(ctx)
 
-	// Parse domain to extract deployment name
+	// Parse domain to extract deployment subdomain/name
 	suffix := "." + baseDomain
 	if strings.HasSuffix(domain, suffix) {
 		subdomain := strings.TrimSuffix(domain, suffix)
 		parts := strings.Split(subdomain, ".")
 
-		// Primary format: {name}.{baseDomain} (e.g., myapp.dbrs.space)
+		// Primary format: {subdomain}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space)
+		// The subdomain can be either:
+		// - {name}-{random} (new format)
+		// - {name} (legacy format)
 		if len(parts) == 1 {
-			deploymentName := parts[0]
+			subdomainOrName := parts[0]
 
-			// Query by name
+			// First, try to find by subdomain (new format: name-random)
 			query := `
-				SELECT id, namespace, name, type, port, content_cid, status, home_node_id
+				SELECT id, namespace, name, type, port, content_cid, status, home_node_id, subdomain
 				FROM deployments
-				WHERE name = ?
+				WHERE subdomain = ?
 				AND status = 'active'
 				LIMIT 1
 			`
-			result, err := db.Query(internalCtx, query, deploymentName)
+			result, err := db.Query(internalCtx, query, subdomainOrName)
 			if err == nil && len(result.Rows) > 0 {
 				row := result.Rows[0]
 				return &deployments.Deployment{
@@ -542,6 +702,31 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 					ContentCID: getString(row[5]),
 					Status:     deployments.DeploymentStatus(getString(row[6])),
 					HomeNodeID: getString(row[7]),
+					Subdomain:  getString(row[8]),
+				}, nil
+			}
+
+			// Fallback: try by name for legacy deployments (without random suffix)
+			query = `
+				SELECT id, namespace, name, type, port, content_cid, status, home_node_id, subdomain
+				FROM deployments
+				WHERE name = ?
+				AND status = 'active'
+				LIMIT 1
+			`
+			result, err = db.Query(internalCtx, query, subdomainOrName)
+			if err == nil && len(result.Rows) > 0 {
+				row := result.Rows[0]
+				return &deployments.Deployment{
+					ID:         getString(row[0]),
+					Namespace:  getString(row[1]),
+					Name:       getString(row[2]),
+					Type:       deployments.DeploymentType(getString(row[3])),
+					Port:       getInt(row[4]),
+					ContentCID: getString(row[5]),
+					Status:     deployments.DeploymentStatus(getString(row[6])),
+					HomeNodeID: getString(row[7]),
+					Subdomain:  getString(row[8]),
 				}, nil
 			}
 		}

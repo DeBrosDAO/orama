@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,11 @@ type Orchestrator struct {
 func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	oramaHome := "/home/debros"
 	oramaDir := oramaHome + "/.orama"
+
+	// Prompt for base domain if not provided via flag
+	if flags.BaseDomain == "" {
+		flags.BaseDomain = promptForBaseDomain()
+	}
 
 	// Normalize peers
 	peers, err := utils.NormalizePeers(flags.PeersStr)
@@ -226,4 +232,53 @@ func (o *Orchestrator) printFirstNodeSecrets() {
 	// Print peer ID
 	fmt.Printf("  Node Peer ID:\n")
 	fmt.Printf("    %s\n\n", o.setup.NodePeerID)
+}
+
+// promptForBaseDomain interactively prompts the user to select a network environment
+// Returns the selected base domain for deployment routing
+func promptForBaseDomain() string {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Println("\n🌐 Network Environment Selection")
+	fmt.Println("=================================")
+	fmt.Println("Select the network environment for this node:")
+	fmt.Println()
+	fmt.Println("  1. devnet-orama.network   (Development - for testing)")
+	fmt.Println("  2. testnet-orama.network  (Testnet - pre-production)")
+	fmt.Println("  3. mainnet-orama.network  (Mainnet - production)")
+	fmt.Println("  4. Custom domain...")
+	fmt.Println()
+	fmt.Print("Select option [1-4] (default: 1): ")
+
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	switch choice {
+	case "", "1":
+		fmt.Println("✓ Selected: devnet-orama.network")
+		return "devnet-orama.network"
+	case "2":
+		fmt.Println("✓ Selected: testnet-orama.network")
+		return "testnet-orama.network"
+	case "3":
+		fmt.Println("✓ Selected: mainnet-orama.network")
+		return "mainnet-orama.network"
+	case "4":
+		fmt.Print("Enter custom base domain (e.g., example.com): ")
+		customDomain, _ := reader.ReadString('\n')
+		customDomain = strings.TrimSpace(customDomain)
+		if customDomain == "" {
+			fmt.Println("⚠️  No domain entered, using devnet-orama.network")
+			return "devnet-orama.network"
+		}
+		// Remove any protocol prefix if user included it
+		customDomain = strings.TrimPrefix(customDomain, "https://")
+		customDomain = strings.TrimPrefix(customDomain, "http://")
+		customDomain = strings.TrimSuffix(customDomain, "/")
+		fmt.Printf("✓ Selected: %s\n", customDomain)
+		return customDomain
+	default:
+		fmt.Println("⚠️  Invalid option, using devnet-orama.network")
+		return "devnet-orama.network"
+	}
 }
