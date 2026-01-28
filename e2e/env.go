@@ -40,6 +40,73 @@ var (
 	cacheMutex       sync.RWMutex
 )
 
+// createAPIKeyWithProvisioning creates an API key for a namespace, handling async provisioning
+// For non-default namespaces, this may trigger cluster provisioning and wait for it to complete.
+func createAPIKeyWithProvisioning(gatewayURL, wallet, namespace string, timeout time.Duration) (string, error) {
+	httpClient := NewHTTPClient(10 * time.Second)
+
+	makeRequest := func() (*http.Response, []byte, error) {
+		reqBody := map[string]string{
+			"wallet":    wallet,
+			"namespace": namespace,
+		}
+		bodyBytes, _ := json.Marshal(reqBody)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL+"/v1/auth/simple-key", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("request failed: %w", err)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, respBody, nil
+	}
+
+	startTime := time.Now()
+	for {
+		if time.Since(startTime) > timeout {
+			return "", fmt.Errorf("timeout waiting for namespace provisioning")
+		}
+
+		resp, respBody, err := makeRequest()
+		if err != nil {
+			return "", err
+		}
+
+		// If we got 200, extract the API key
+		if resp.StatusCode == http.StatusOK {
+			var apiKeyResp map[string]interface{}
+			if err := json.Unmarshal(respBody, &apiKeyResp); err != nil {
+				return "", fmt.Errorf("failed to decode API key response: %w", err)
+			}
+			apiKey, ok := apiKeyResp["api_key"].(string)
+			if !ok || apiKey == "" {
+				return "", fmt.Errorf("API key not found in response")
+			}
+			return apiKey, nil
+		}
+
+		// If we got 202 Accepted, provisioning is in progress
+		if resp.StatusCode == http.StatusAccepted {
+			// Wait and retry - the cluster is being provisioned
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// Any other status is an error
+		return "", fmt.Errorf("API key creation failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+}
+
 // loadGatewayConfig loads gateway configuration from ~/.orama/gateway.yaml
 func loadGatewayConfig() (map[string]interface{}, error) {
 	configPath, err := config.DefaultPath("gateway.yaml")
@@ -1098,43 +1165,11 @@ func LoadTestEnv() (*E2ETestEnv, error) {
 			wallet = wallet[:42]
 		}
 
-		// Create an API key for this namespace via the simple-key endpoint
-		reqBody := map[string]string{
-			"wallet":    wallet,
-			"namespace": namespace,
-		}
-		bodyBytes, _ := json.Marshal(reqBody)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL+"/v1/auth/simple-key", bytes.NewReader(bodyBytes))
+		// Create an API key for this namespace (handles async provisioning for non-default namespaces)
+		var err error
+		apiKey, err = createAPIKeyWithProvisioning(gatewayURL, wallet, namespace, 2*time.Minute)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create API key request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		client := NewHTTPClient(10 * time.Second)
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create API key: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("API key creation failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-		}
-
-		var apiKeyResp map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&apiKeyResp); err != nil {
-			return nil, fmt.Errorf("failed to decode API key response: %w", err)
-		}
-
-		var ok bool
-		apiKey, ok = apiKeyResp["api_key"].(string)
-		if !ok || apiKey == "" {
-			return nil, fmt.Errorf("API key not found in response")
+			return nil, fmt.Errorf("failed to create API key for namespace %s: %w", namespace, err)
 		}
 	} else if namespace == "" {
 		namespace = GetClientNamespace()
@@ -1179,42 +1214,10 @@ func LoadTestEnvWithNamespace(namespace string) (*E2ETestEnv, error) {
 		wallet = wallet[:42]
 	}
 
-	// Create an API key for this namespace via the simple-key endpoint
-	reqBody := map[string]string{
-		"wallet":    wallet,
-		"namespace": namespace,
-	}
-	bodyBytes, _ := json.Marshal(reqBody)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL+"/v1/auth/simple-key", bytes.NewReader(bodyBytes))
+	// Create an API key for this namespace (handles async provisioning for non-default namespaces)
+	apiKey, err := createAPIKeyWithProvisioning(gatewayURL, wallet, namespace, 2*time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create API key request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := NewHTTPClient(10 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create API key: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API key creation failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var apiKeyResp map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&apiKeyResp); err != nil {
-		return nil, fmt.Errorf("failed to decode API key response: %w", err)
-	}
-
-	apiKey, ok := apiKeyResp["api_key"].(string)
-	if !ok || apiKey == "" {
-		return nil, fmt.Errorf("API key not found in response")
+		return nil, fmt.Errorf("failed to create API key for namespace %s: %w", namespace, err)
 	}
 
 	return &E2ETestEnv{
