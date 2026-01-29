@@ -120,6 +120,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeProxy(g.rollbackHandler.HandleRollback))
 		mux.HandleFunc("/v1/deployments/versions", g.rollbackHandler.HandleListVersions)
 		mux.HandleFunc("/v1/deployments/logs", g.withHomeNodeProxy(g.logsHandler.HandleLogs))
+		mux.HandleFunc("/v1/deployments/stats", g.withHomeNodeProxy(g.statsHandler.HandleStats))
 		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
 
 		// Custom domains

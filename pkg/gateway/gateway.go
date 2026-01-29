@@ -87,6 +87,7 @@ type Gateway struct {
 	updateHandler        *deploymentshandlers.UpdateHandler
 	rollbackHandler      *deploymentshandlers.RollbackHandler
 	logsHandler          *deploymentshandlers.LogsHandler
+	statsHandler         *deploymentshandlers.StatsHandler
 	domainHandler        *deploymentshandlers.DomainHandler
 	sqliteHandler        *sqlitehandlers.SQLiteHandler
 	sqliteBackupHandler  *sqlitehandlers.BackupHandler
@@ -332,6 +333,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.deploymentService,
 			gw.processManager,
 			logger.Logger,
+		)
+
+		gw.statsHandler = deploymentshandlers.NewStatsHandler(
+			gw.deploymentService,
+			gw.processManager,
+			logger.Logger,
+			baseDeployPath,
 		)
 
 		gw.domainHandler = deploymentshandlers.NewDomainHandler(

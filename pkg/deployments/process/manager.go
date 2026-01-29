@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -485,4 +486,167 @@ func (m *Manager) WaitForHealthy(ctx context.Context, deployment *deployments.De
 	}
 
 	return fmt.Errorf("deployment did not become healthy within %v", timeout)
+}
+
+// DeploymentStats holds on-demand resource usage for a deployment process
+type DeploymentStats struct {
+	PID        int     `json:"pid"`
+	CPUPercent float64 `json:"cpu_percent"`
+	MemoryRSS  int64   `json:"memory_rss_bytes"`
+	DiskBytes  int64   `json:"disk_bytes"`
+	UptimeSecs float64 `json:"uptime_seconds"`
+}
+
+// GetStats returns on-demand resource usage stats for a deployment.
+// deployPath is the directory on disk for disk usage calculation.
+func (m *Manager) GetStats(ctx context.Context, deployment *deployments.Deployment, deployPath string) (*DeploymentStats, error) {
+	stats := &DeploymentStats{}
+
+	// Disk usage (works on all platforms)
+	if deployPath != "" {
+		stats.DiskBytes = dirSize(deployPath)
+	}
+
+	if !m.useSystemd {
+		// Direct mode (macOS) — only disk, no /proc
+		serviceName := m.getServiceName(deployment)
+		m.processesMu.RLock()
+		cmd, exists := m.processes[serviceName]
+		m.processesMu.RUnlock()
+		if exists && cmd.Process != nil {
+			stats.PID = cmd.Process.Pid
+		}
+		return stats, nil
+	}
+
+	// Systemd mode (Linux) — get PID, CPU, RAM, uptime
+	serviceName := m.getServiceName(deployment)
+
+	// Get MainPID and ActiveEnterTimestamp
+	cmd := exec.CommandContext(ctx, "systemctl", "show", serviceName,
+		"--property=MainPID,ActiveEnterTimestamp")
+	output, err := cmd.Output()
+	if err != nil {
+		return stats, fmt.Errorf("systemctl show failed: %w", err)
+	}
+
+	props := parseSystemctlShow(string(output))
+	pid, _ := strconv.Atoi(props["MainPID"])
+	stats.PID = pid
+
+	if pid <= 0 {
+		return stats, nil // Process not running
+	}
+
+	// Uptime from ActiveEnterTimestamp
+	if ts := props["ActiveEnterTimestamp"]; ts != "" {
+		// Format: "Mon 2026-01-29 10:00:00 UTC"
+		if t, err := parseSystemdTimestamp(ts); err == nil {
+			stats.UptimeSecs = time.Since(t).Seconds()
+		}
+	}
+
+	// Memory RSS from /proc/[pid]/status
+	stats.MemoryRSS = readProcMemoryRSS(pid)
+
+	// CPU % — sample /proc/[pid]/stat twice with 1s gap
+	stats.CPUPercent = sampleCPUPercent(pid)
+
+	return stats, nil
+}
+
+// parseSystemctlShow parses "Key=Value\n" output into a map
+func parseSystemctlShow(output string) map[string]string {
+	props := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if idx := strings.IndexByte(line, '='); idx > 0 {
+			props[line[:idx]] = strings.TrimSpace(line[idx+1:])
+		}
+	}
+	return props
+}
+
+// parseSystemdTimestamp parses systemd timestamp like "Mon 2026-01-29 10:00:00 UTC"
+func parseSystemdTimestamp(ts string) (time.Time, error) {
+	// Try common systemd formats
+	for _, layout := range []string{
+		"Mon 2006-01-02 15:04:05 MST",
+		"2006-01-02 15:04:05 MST",
+	} {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse timestamp: %s", ts)
+}
+
+// readProcMemoryRSS reads VmRSS from /proc/[pid]/status (Linux only)
+func readProcMemoryRSS(pid int) int64 {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, _ := strconv.ParseInt(fields[1], 10, 64)
+				return kb * 1024 // Convert KB to bytes
+			}
+		}
+	}
+	return 0
+}
+
+// sampleCPUPercent reads /proc/[pid]/stat twice with a 1s gap to compute CPU %
+func sampleCPUPercent(pid int) float64 {
+	readCPUTicks := func() (utime, stime int64, ok bool) {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			return 0, 0, false
+		}
+		// Fields after the comm (in parens): state(3), ppid(4), ... utime(14), stime(15)
+		// Find closing paren to skip comm field which may contain spaces
+		closeParen := strings.LastIndexByte(string(data), ')')
+		if closeParen < 0 {
+			return 0, 0, false
+		}
+		fields := strings.Fields(string(data)[closeParen+2:])
+		if len(fields) < 13 {
+			return 0, 0, false
+		}
+		u, _ := strconv.ParseInt(fields[11], 10, 64) // utime is field 14, index 11 after paren
+		s, _ := strconv.ParseInt(fields[12], 10, 64) // stime is field 15, index 12 after paren
+		return u, s, true
+	}
+
+	u1, s1, ok1 := readCPUTicks()
+	if !ok1 {
+		return 0
+	}
+	time.Sleep(1 * time.Second)
+	u2, s2, ok2 := readCPUTicks()
+	if !ok2 {
+		return 0
+	}
+
+	// Clock ticks per second (usually 100 on Linux)
+	clkTck := 100.0
+	totalDelta := float64((u2 + s2) - (u1 + s1))
+	cpuPct := (totalDelta / clkTck) * 100.0
+
+	return cpuPct
+}
+
+// dirSize calculates total size of a directory
+func dirSize(path string) int64 {
+	var size int64
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		size += info.Size()
+		return nil
+	})
+	return size
 }

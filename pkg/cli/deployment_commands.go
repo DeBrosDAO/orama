@@ -33,6 +33,7 @@ func HandleDeploymentsCommand(args []string) {
 	deploymentsCmd.AddCommand(deployments.DeleteCmd)
 	deploymentsCmd.AddCommand(deployments.RollbackCmd)
 	deploymentsCmd.AddCommand(deployments.LogsCmd)
+	deploymentsCmd.AddCommand(deployments.StatsCmd)
 
 	deploymentsCmd.SetArgs(args)
 
