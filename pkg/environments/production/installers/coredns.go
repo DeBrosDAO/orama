@@ -300,7 +300,8 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
     # Enable logging and error reporting
     log
     errors
-    cache 60
+    # NOTE: No cache here — the rqlite plugin has its own cache.
+    # CoreDNS cache would cache NXDOMAIN and break ACME DNS-01 challenges.
 }
 
 # Forward all other queries to upstream DNS
