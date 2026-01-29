@@ -1,6 +1,6 @@
-//go:build e2e
+//go:build e2e && production
 
-package deployments_test
+package production
 
 import (
 	"crypto/tls"
@@ -24,7 +24,7 @@ import (
 // This test requires:
 // - Orama deployed on a VPS with a real domain
 // - DNS properly configured
-// - Run with: go test -v -tags e2e -run TestHTTPS ./e2e/deployments/...
+// - Run with: go test -v -tags "e2e production" -run TestHTTPS ./e2e/production/...
 func TestHTTPS_ExternalAccess(t *testing.T) {
 	// Skip if not configured for external testing
 	externalURL := os.Getenv("ORAMA_EXTERNAL_URL")
@@ -170,4 +170,35 @@ func TestHTTPS_DomainFormat(t *testing.T) {
 			t.Logf("Deployment URL: %s", deploymentURL)
 		}
 	})
+}
+
+func extractNodeURL(t *testing.T, deployment map[string]interface{}) string {
+	t.Helper()
+
+	if urls, ok := deployment["urls"].([]interface{}); ok && len(urls) > 0 {
+		if url, ok := urls[0].(string); ok {
+			return url
+		}
+	}
+
+	if urls, ok := deployment["urls"].(map[string]interface{}); ok {
+		if url, ok := urls["node"].(string); ok {
+			return url
+		}
+	}
+
+	return ""
+}
+
+func extractDomain(url string) string {
+	domain := url
+	if len(url) > 8 && url[:8] == "https://" {
+		domain = url[8:]
+	} else if len(url) > 7 && url[:7] == "http://" {
+		domain = url[7:]
+	}
+	if len(domain) > 0 && domain[len(domain)-1] == '/' {
+		domain = domain[:len(domain)-1]
+	}
+	return domain
 }

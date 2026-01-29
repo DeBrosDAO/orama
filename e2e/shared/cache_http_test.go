@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"context"
@@ -8,17 +8,19 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 func TestCache_Health(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/cache/health",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/health",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -31,7 +33,7 @@ func TestCache_Health(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -45,19 +47,19 @@ func TestCache_Health(t *testing.T) {
 }
 
 func TestCache_PutGet(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "test-key"
 	value := "test-value"
 
 	// Put value
-	putReq := &HTTPRequest{
+	putReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/put",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 		Body: map[string]interface{}{
 			"dmap":  dmap,
 			"key":   key,
@@ -75,9 +77,9 @@ func TestCache_PutGet(t *testing.T) {
 	}
 
 	// Get value
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  key,
@@ -94,7 +96,7 @@ func TestCache_PutGet(t *testing.T) {
 	}
 
 	var getResp map[string]interface{}
-	if err := DecodeJSON(body, &getResp); err != nil {
+	if err := e2e.DecodeJSON(body, &getResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -104,12 +106,12 @@ func TestCache_PutGet(t *testing.T) {
 }
 
 func TestCache_PutGetJSON(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "json-key"
 	jsonValue := map[string]interface{}{
 		"name": "John",
@@ -118,9 +120,9 @@ func TestCache_PutGetJSON(t *testing.T) {
 	}
 
 	// Put JSON value
-	putReq := &HTTPRequest{
+	putReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/put",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 		Body: map[string]interface{}{
 			"dmap":  dmap,
 			"key":   key,
@@ -138,9 +140,9 @@ func TestCache_PutGetJSON(t *testing.T) {
 	}
 
 	// Get JSON value
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  key,
@@ -157,7 +159,7 @@ func TestCache_PutGetJSON(t *testing.T) {
 	}
 
 	var getResp map[string]interface{}
-	if err := DecodeJSON(body, &getResp); err != nil {
+	if err := e2e.DecodeJSON(body, &getResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -171,19 +173,19 @@ func TestCache_PutGetJSON(t *testing.T) {
 }
 
 func TestCache_Delete(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "delete-key"
 	value := "delete-value"
 
 	// Put value
-	putReq := &HTTPRequest{
+	putReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/put",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 		Body: map[string]interface{}{
 			"dmap":  dmap,
 			"key":   key,
@@ -197,9 +199,9 @@ func TestCache_Delete(t *testing.T) {
 	}
 
 	// Delete value
-	deleteReq := &HTTPRequest{
+	deleteReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/delete",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/delete",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  key,
@@ -216,9 +218,9 @@ func TestCache_Delete(t *testing.T) {
 	}
 
 	// Verify deletion
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  key,
@@ -233,19 +235,19 @@ func TestCache_Delete(t *testing.T) {
 }
 
 func TestCache_TTL(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "ttl-key"
 	value := "ttl-value"
 
 	// Put value with TTL
-	putReq := &HTTPRequest{
+	putReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/put",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 		Body: map[string]interface{}{
 			"dmap":  dmap,
 			"key":   key,
@@ -264,9 +266,9 @@ func TestCache_TTL(t *testing.T) {
 	}
 
 	// Verify value exists
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  key,
@@ -279,7 +281,7 @@ func TestCache_TTL(t *testing.T) {
 	}
 
 	// Wait for TTL expiry (2 seconds + buffer)
-	Delay(2500)
+	e2e.Delay(2500)
 
 	// Verify value is expired
 	_, status, err = getReq.Do(ctx)
@@ -289,19 +291,19 @@ func TestCache_TTL(t *testing.T) {
 }
 
 func TestCache_Scan(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 
 	// Put multiple keys
 	keys := []string{"user-1", "user-2", "session-1", "session-2"}
 	for _, key := range keys {
-		putReq := &HTTPRequest{
+		putReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/cache/put",
+			URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 			Body: map[string]interface{}{
 				"dmap":  dmap,
 				"key":   key,
@@ -316,9 +318,9 @@ func TestCache_Scan(t *testing.T) {
 	}
 
 	// Scan all keys
-	scanReq := &HTTPRequest{
+	scanReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/scan",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/scan",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 		},
@@ -334,7 +336,7 @@ func TestCache_Scan(t *testing.T) {
 	}
 
 	var scanResp map[string]interface{}
-	if err := DecodeJSON(body, &scanResp); err != nil {
+	if err := e2e.DecodeJSON(body, &scanResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -345,19 +347,19 @@ func TestCache_Scan(t *testing.T) {
 }
 
 func TestCache_ScanWithRegex(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 
 	// Put keys with different patterns
 	keys := []string{"user-1", "user-2", "session-1", "session-2"}
 	for _, key := range keys {
-		putReq := &HTTPRequest{
+		putReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/cache/put",
+			URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 			Body: map[string]interface{}{
 				"dmap":  dmap,
 				"key":   key,
@@ -372,9 +374,9 @@ func TestCache_ScanWithRegex(t *testing.T) {
 	}
 
 	// Scan with regex pattern
-	scanReq := &HTTPRequest{
+	scanReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/scan",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/scan",
 		Body: map[string]interface{}{
 			"dmap":    dmap,
 			"pattern": "^user-",
@@ -391,7 +393,7 @@ func TestCache_ScanWithRegex(t *testing.T) {
 	}
 
 	var scanResp map[string]interface{}
-	if err := DecodeJSON(body, &scanResp); err != nil {
+	if err := e2e.DecodeJSON(body, &scanResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -402,19 +404,19 @@ func TestCache_ScanWithRegex(t *testing.T) {
 }
 
 func TestCache_MultiGet(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	keys := []string{"key-1", "key-2", "key-3"}
 
 	// Put values
 	for i, key := range keys {
-		putReq := &HTTPRequest{
+		putReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/cache/put",
+			URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 			Body: map[string]interface{}{
 				"dmap":  dmap,
 				"key":   key,
@@ -429,9 +431,9 @@ func TestCache_MultiGet(t *testing.T) {
 	}
 
 	// Multi-get
-	multiGetReq := &HTTPRequest{
+	multiGetReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/mget",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/mget",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"keys": keys,
@@ -448,7 +450,7 @@ func TestCache_MultiGet(t *testing.T) {
 	}
 
 	var mgetResp map[string]interface{}
-	if err := DecodeJSON(body, &mgetResp); err != nil {
+	if err := e2e.DecodeJSON(body, &mgetResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -459,14 +461,14 @@ func TestCache_MultiGet(t *testing.T) {
 }
 
 func TestCache_MissingDMap(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": "",
 			"key":  "any-key",
@@ -484,16 +486,16 @@ func TestCache_MissingDMap(t *testing.T) {
 }
 
 func TestCache_MissingKey(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  "non-existent-key",

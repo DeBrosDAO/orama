@@ -1,23 +1,25 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"context"
 	"net/http"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 func TestNetwork_Health(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/health",
+		URL:      e2e.GetGatewayURL() + "/v1/health",
 		SkipAuth: true,
 	}
 
@@ -31,7 +33,7 @@ func TestNetwork_Health(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -41,14 +43,14 @@ func TestNetwork_Health(t *testing.T) {
 }
 
 func TestNetwork_Status(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/status",
+		URL:    e2e.GetGatewayURL() + "/v1/network/status",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -61,7 +63,7 @@ func TestNetwork_Status(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -75,14 +77,14 @@ func TestNetwork_Status(t *testing.T) {
 }
 
 func TestNetwork_Peers(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/peers",
+		URL:    e2e.GetGatewayURL() + "/v1/network/peers",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -95,7 +97,7 @@ func TestNetwork_Peers(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -105,14 +107,14 @@ func TestNetwork_Peers(t *testing.T) {
 }
 
 func TestNetwork_ProxyAnonSuccess(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/proxy/anon",
+		URL:    e2e.GetGatewayURL() + "/v1/proxy/anon",
 		Body: map[string]interface{}{
 			"url":     "https://httpbin.org/get",
 			"method":  "GET",
@@ -130,7 +132,7 @@ func TestNetwork_ProxyAnonSuccess(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -144,14 +146,14 @@ func TestNetwork_ProxyAnonSuccess(t *testing.T) {
 }
 
 func TestNetwork_ProxyAnonBadURL(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/proxy/anon",
+		URL:    e2e.GetGatewayURL() + "/v1/proxy/anon",
 		Body: map[string]interface{}{
 			"url":    "http://localhost:1/nonexistent",
 			"method": "GET",
@@ -165,14 +167,14 @@ func TestNetwork_ProxyAnonBadURL(t *testing.T) {
 }
 
 func TestNetwork_ProxyAnonPostRequest(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/proxy/anon",
+		URL:    e2e.GetGatewayURL() + "/v1/proxy/anon",
 		Body: map[string]interface{}{
 			"url":     "https://httpbin.org/post",
 			"method":  "POST",
@@ -191,7 +193,7 @@ func TestNetwork_ProxyAnonPostRequest(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -206,9 +208,9 @@ func TestNetwork_Unauthorized(t *testing.T) {
 	defer cancel()
 
 	// Create request without auth
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/network/status",
+		URL:      e2e.GetGatewayURL() + "/v1/network/status",
 		SkipAuth: true,
 	}
 

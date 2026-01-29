@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package integration_test
 
 import (
 	"context"
@@ -10,16 +10,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/e2e"
 )
 
 // TestCache_ConcurrentWrites tests concurrent cache writes
 func TestCache_ConcurrentWrites(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	numGoroutines := 10
 	var wg sync.WaitGroup
 	var errorCount int32
@@ -32,9 +34,9 @@ func TestCache_ConcurrentWrites(t *testing.T) {
 			key := fmt.Sprintf("key-%d", idx)
 			value := fmt.Sprintf("value-%d", idx)
 
-			putReq := &HTTPRequest{
+			putReq := &e2e.HTTPRequest{
 				Method: http.MethodPost,
-				URL:    GetGatewayURL() + "/v1/cache/put",
+				URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 				Body: map[string]interface{}{
 					"dmap":  dmap,
 					"key":   key,
@@ -56,9 +58,9 @@ func TestCache_ConcurrentWrites(t *testing.T) {
 	}
 
 	// Verify all values exist
-	scanReq := &HTTPRequest{
+	scanReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/scan",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/scan",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 		},
@@ -70,7 +72,7 @@ func TestCache_ConcurrentWrites(t *testing.T) {
 	}
 
 	var scanResp map[string]interface{}
-	if err := DecodeJSON(body, &scanResp); err != nil {
+	if err := e2e.DecodeJSON(body, &scanResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -82,19 +84,19 @@ func TestCache_ConcurrentWrites(t *testing.T) {
 
 // TestCache_ConcurrentReads tests concurrent cache reads
 func TestCache_ConcurrentReads(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "shared-key"
 	value := "shared-value"
 
 	// Put value first
-	putReq := &HTTPRequest{
+	putReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/put",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 		Body: map[string]interface{}{
 			"dmap":  dmap,
 			"key":   key,
@@ -117,9 +119,9 @@ func TestCache_ConcurrentReads(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			getReq := &HTTPRequest{
+			getReq := &e2e.HTTPRequest{
 				Method: http.MethodPost,
-				URL:    GetGatewayURL() + "/v1/cache/get",
+				URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 				Body: map[string]interface{}{
 					"dmap": dmap,
 					"key":  key,
@@ -133,7 +135,7 @@ func TestCache_ConcurrentReads(t *testing.T) {
 			}
 
 			var getResp map[string]interface{}
-			if err := DecodeJSON(body, &getResp); err != nil {
+			if err := e2e.DecodeJSON(body, &getResp); err != nil {
 				atomic.AddInt32(&errorCount, 1)
 				return
 			}
@@ -153,12 +155,12 @@ func TestCache_ConcurrentReads(t *testing.T) {
 
 // TestCache_ConcurrentDeleteAndWrite tests concurrent delete and write
 func TestCache_ConcurrentDeleteAndWrite(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	var wg sync.WaitGroup
 	var errorCount int32
 
@@ -174,9 +176,9 @@ func TestCache_ConcurrentDeleteAndWrite(t *testing.T) {
 			key := fmt.Sprintf("key-%d", idx)
 			value := fmt.Sprintf("value-%d", idx)
 
-			putReq := &HTTPRequest{
+			putReq := &e2e.HTTPRequest{
 				Method: http.MethodPost,
-				URL:    GetGatewayURL() + "/v1/cache/put",
+				URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 				Body: map[string]interface{}{
 					"dmap":  dmap,
 					"key":   key,
@@ -201,9 +203,9 @@ func TestCache_ConcurrentDeleteAndWrite(t *testing.T) {
 
 			key := fmt.Sprintf("key-%d", idx)
 
-			deleteReq := &HTTPRequest{
+			deleteReq := &e2e.HTTPRequest{
 				Method: http.MethodPost,
-				URL:    GetGatewayURL() + "/v1/cache/delete",
+				URL:    e2e.GetGatewayURL() + "/v1/cache/delete",
 				Body: map[string]interface{}{
 					"dmap": dmap,
 					"key":  key,
@@ -226,18 +228,18 @@ func TestCache_ConcurrentDeleteAndWrite(t *testing.T) {
 
 // TestRQLite_ConcurrentInserts tests concurrent database inserts
 func TestRQLite_ConcurrentInserts(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup table after test
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
@@ -249,9 +251,9 @@ func TestRQLite_ConcurrentInserts(t *testing.T) {
 	)
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": schema,
 		},
@@ -272,9 +274,9 @@ func TestRQLite_ConcurrentInserts(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 
-			txReq := &HTTPRequest{
+			txReq := &e2e.HTTPRequest{
 				Method: http.MethodPost,
-				URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+				URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 				Body: map[string]interface{}{
 					"statements": []string{
 						fmt.Sprintf("INSERT INTO %s(value) VALUES (%d)", table, idx),
@@ -296,9 +298,9 @@ func TestRQLite_ConcurrentInserts(t *testing.T) {
 	}
 
 	// Verify count
-	queryReq := &HTTPRequest{
+	queryReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/query",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 		Body: map[string]interface{}{
 			"sql": fmt.Sprintf("SELECT COUNT(*) as count FROM %s", table),
 		},
@@ -310,7 +312,7 @@ func TestRQLite_ConcurrentInserts(t *testing.T) {
 	}
 
 	var countResp map[string]interface{}
-	if err := DecodeJSON(body, &countResp); err != nil {
+	if err := e2e.DecodeJSON(body, &countResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -325,18 +327,18 @@ func TestRQLite_ConcurrentInserts(t *testing.T) {
 
 // TestRQLite_LargeBatchTransaction tests a large transaction with many statements
 func TestRQLite_LargeBatchTransaction(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup table after test
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
@@ -348,9 +350,9 @@ func TestRQLite_LargeBatchTransaction(t *testing.T) {
 	)
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": schema,
 		},
@@ -370,9 +372,9 @@ func TestRQLite_LargeBatchTransaction(t *testing.T) {
 		})
 	}
 
-	txReq := &HTTPRequest{
+	txReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 		Body: map[string]interface{}{
 			"ops": ops,
 		},
@@ -384,9 +386,9 @@ func TestRQLite_LargeBatchTransaction(t *testing.T) {
 	}
 
 	// Verify count
-	queryReq := &HTTPRequest{
+	queryReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/query",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 		Body: map[string]interface{}{
 			"sql": fmt.Sprintf("SELECT COUNT(*) as count FROM %s", table),
 		},
@@ -398,7 +400,7 @@ func TestRQLite_LargeBatchTransaction(t *testing.T) {
 	}
 
 	var countResp map[string]interface{}
-	if err := DecodeJSON(body, &countResp); err != nil {
+	if err := e2e.DecodeJSON(body, &countResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -412,19 +414,19 @@ func TestRQLite_LargeBatchTransaction(t *testing.T) {
 
 // TestCache_TTLExpiryWithSleep tests TTL expiry with a controlled sleep
 func TestCache_TTLExpiryWithSleep(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "ttl-expiry-key"
 	value := "ttl-expiry-value"
 
 	// Put value with 2 second TTL
-	putReq := &HTTPRequest{
+	putReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/put",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 		Body: map[string]interface{}{
 			"dmap":  dmap,
 			"key":   key,
@@ -439,9 +441,9 @@ func TestCache_TTLExpiryWithSleep(t *testing.T) {
 	}
 
 	// Verify exists immediately
-	getReq := &HTTPRequest{
+	getReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/cache/get",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 		Body: map[string]interface{}{
 			"dmap": dmap,
 			"key":  key,
@@ -454,7 +456,7 @@ func TestCache_TTLExpiryWithSleep(t *testing.T) {
 	}
 
 	// Sleep for TTL duration + buffer
-	Delay(2500)
+	e2e.Delay(2500)
 
 	// Try to get after TTL expires
 	_, status, err = getReq.Do(ctx)
@@ -465,21 +467,21 @@ func TestCache_TTLExpiryWithSleep(t *testing.T) {
 
 // TestCache_ConcurrentWriteAndDelete tests concurrent writes and deletes on same key
 func TestCache_ConcurrentWriteAndDelete(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dmap := GenerateDMapName()
+	dmap := e2e.GenerateDMapName()
 	key := "contested-key"
 
 	// Alternate between writes and deletes
 	numIterations := 5
 	for i := 0; i < numIterations; i++ {
 		// Write
-		putReq := &HTTPRequest{
+		putReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/cache/put",
+			URL:    e2e.GetGatewayURL() + "/v1/cache/put",
 			Body: map[string]interface{}{
 				"dmap":  dmap,
 				"key":   key,
@@ -493,9 +495,9 @@ func TestCache_ConcurrentWriteAndDelete(t *testing.T) {
 		}
 
 		// Read
-		getReq := &HTTPRequest{
+		getReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/cache/get",
+			URL:    e2e.GetGatewayURL() + "/v1/cache/get",
 			Body: map[string]interface{}{
 				"dmap": dmap,
 				"key":  key,
@@ -508,9 +510,9 @@ func TestCache_ConcurrentWriteAndDelete(t *testing.T) {
 		}
 
 		// Delete
-		deleteReq := &HTTPRequest{
+		deleteReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/cache/delete",
+			URL:    e2e.GetGatewayURL() + "/v1/cache/delete",
 			Body: map[string]interface{}{
 				"dmap": dmap,
 				"key":  key,

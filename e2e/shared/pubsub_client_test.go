@@ -1,40 +1,42 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 // TestPubSub_SubscribePublish tests basic pub/sub functionality via WebSocket
 func TestPubSub_SubscribePublish(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 	message := "test-message-from-publisher"
 
 	// Create subscriber first
-	subscriber, err := NewWSPubSubClient(t, topic)
+	subscriber, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	defer subscriber.Close()
 
 	// Give subscriber time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish message
 	if err := publisher.Publish([]byte(message)); err != nil {
@@ -54,37 +56,37 @@ func TestPubSub_SubscribePublish(t *testing.T) {
 
 // TestPubSub_MultipleSubscribers tests that multiple subscribers receive the same message
 func TestPubSub_MultipleSubscribers(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 	message1 := "message-1"
 	message2 := "message-2"
 
 	// Create two subscribers
-	sub1, err := NewWSPubSubClient(t, topic)
+	sub1, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber1: %v", err)
 	}
 	defer sub1.Close()
 
-	sub2, err := NewWSPubSubClient(t, topic)
+	sub2, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber2: %v", err)
 	}
 	defer sub2.Close()
 
 	// Give subscribers time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish first message
 	if err := publisher.Publish([]byte(message1)); err != nil {
@@ -133,30 +135,30 @@ func TestPubSub_MultipleSubscribers(t *testing.T) {
 
 // TestPubSub_Deduplication tests that multiple identical messages are all received
 func TestPubSub_Deduplication(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 	message := "duplicate-test-message"
 
 	// Create subscriber
-	subscriber, err := NewWSPubSubClient(t, topic)
+	subscriber, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	defer subscriber.Close()
 
 	// Give subscriber time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish the same message multiple times
 	for i := 0; i < 3; i++ {
@@ -164,7 +166,7 @@ func TestPubSub_Deduplication(t *testing.T) {
 			t.Fatalf("publish %d failed: %v", i, err)
 		}
 		// Small delay between publishes
-		Delay(50)
+		e2e.Delay(50)
 	}
 
 	// Receive messages - should get all (no dedup filter)
@@ -185,30 +187,30 @@ func TestPubSub_Deduplication(t *testing.T) {
 
 // TestPubSub_ConcurrentPublish tests concurrent message publishing
 func TestPubSub_ConcurrentPublish(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 	numMessages := 10
 
 	// Create subscriber
-	subscriber, err := NewWSPubSubClient(t, topic)
+	subscriber, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	defer subscriber.Close()
 
 	// Give subscriber time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish multiple messages concurrently
 	var wg sync.WaitGroup
@@ -241,45 +243,45 @@ func TestPubSub_ConcurrentPublish(t *testing.T) {
 
 // TestPubSub_TopicIsolation tests that messages are isolated to their topics
 func TestPubSub_TopicIsolation(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic1 := GenerateTopic()
-	topic2 := GenerateTopic()
+	topic1 := e2e.GenerateTopic()
+	topic2 := e2e.GenerateTopic()
 	msg1 := "message-on-topic1"
 	msg2 := "message-on-topic2"
 
 	// Create subscriber for topic1
-	sub1, err := NewWSPubSubClient(t, topic1)
+	sub1, err := e2e.NewWSPubSubClient(t, topic1)
 	if err != nil {
 		t.Fatalf("failed to create subscriber1: %v", err)
 	}
 	defer sub1.Close()
 
 	// Create subscriber for topic2
-	sub2, err := NewWSPubSubClient(t, topic2)
+	sub2, err := e2e.NewWSPubSubClient(t, topic2)
 	if err != nil {
 		t.Fatalf("failed to create subscriber2: %v", err)
 	}
 	defer sub2.Close()
 
 	// Give subscribers time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publishers
-	pub1, err := NewWSPubSubClient(t, topic1)
+	pub1, err := e2e.NewWSPubSubClient(t, topic1)
 	if err != nil {
 		t.Fatalf("failed to create publisher1: %v", err)
 	}
 	defer pub1.Close()
 
-	pub2, err := NewWSPubSubClient(t, topic2)
+	pub2, err := e2e.NewWSPubSubClient(t, topic2)
 	if err != nil {
 		t.Fatalf("failed to create publisher2: %v", err)
 	}
 	defer pub2.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish to topic2 first
 	if err := pub2.Publish([]byte(msg2)); err != nil {
@@ -312,29 +314,29 @@ func TestPubSub_TopicIsolation(t *testing.T) {
 
 // TestPubSub_EmptyMessage tests sending and receiving empty messages
 func TestPubSub_EmptyMessage(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 
 	// Create subscriber
-	subscriber, err := NewWSPubSubClient(t, topic)
+	subscriber, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	defer subscriber.Close()
 
 	// Give subscriber time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish empty message
 	if err := publisher.Publish([]byte("")); err != nil {
@@ -354,9 +356,9 @@ func TestPubSub_EmptyMessage(t *testing.T) {
 
 // TestPubSub_LargeMessage tests sending and receiving large messages
 func TestPubSub_LargeMessage(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 
 	// Create a large message (100KB)
 	largeMessage := make([]byte, 100*1024)
@@ -365,24 +367,24 @@ func TestPubSub_LargeMessage(t *testing.T) {
 	}
 
 	// Create subscriber
-	subscriber, err := NewWSPubSubClient(t, topic)
+	subscriber, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	defer subscriber.Close()
 
 	// Give subscriber time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish large message
 	if err := publisher.Publish(largeMessage); err != nil {
@@ -409,30 +411,30 @@ func TestPubSub_LargeMessage(t *testing.T) {
 
 // TestPubSub_RapidPublish tests rapid message publishing
 func TestPubSub_RapidPublish(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 	numMessages := 50
 
 	// Create subscriber
-	subscriber, err := NewWSPubSubClient(t, topic)
+	subscriber, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	defer subscriber.Close()
 
 	// Give subscriber time to register
-	Delay(200)
+	e2e.Delay(200)
 
 	// Create publisher
-	publisher, err := NewWSPubSubClient(t, topic)
+	publisher, err := e2e.NewWSPubSubClient(t, topic)
 	if err != nil {
 		t.Fatalf("failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Give connections time to stabilize
-	Delay(200)
+	e2e.Delay(200)
 
 	// Publish messages rapidly
 	for i := 0; i < numMessages; i++ {

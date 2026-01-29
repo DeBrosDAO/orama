@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package cluster_test
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 )
 
@@ -18,13 +19,13 @@ import (
 // For production testing, use storage_http_test.go which uses gateway endpoints.
 
 func TestIPFSCluster_Health(t *testing.T) {
-	SkipIfProduction(t) // Direct IPFS connection not available in production
+	e2e.SkipIfProduction(t) // Direct IPFS connection not available in production
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       10 * time.Second,
 	}
 
@@ -40,13 +41,13 @@ func TestIPFSCluster_Health(t *testing.T) {
 }
 
 func TestIPFSCluster_GetPeerCount(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       10 * time.Second,
 	}
 
@@ -68,13 +69,13 @@ func TestIPFSCluster_GetPeerCount(t *testing.T) {
 }
 
 func TestIPFSCluster_AddFile(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 
@@ -101,13 +102,13 @@ func TestIPFSCluster_AddFile(t *testing.T) {
 }
 
 func TestIPFSCluster_PinFile(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 
@@ -139,13 +140,13 @@ func TestIPFSCluster_PinFile(t *testing.T) {
 }
 
 func TestIPFSCluster_PinStatus(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 
@@ -173,7 +174,7 @@ func TestIPFSCluster_PinStatus(t *testing.T) {
 	}
 
 	// Give pin time to propagate
-	Delay(1000)
+	e2e.Delay(1000)
 
 	// Get status
 	status, err := client.PinStatus(ctx, cid)
@@ -197,13 +198,13 @@ func TestIPFSCluster_PinStatus(t *testing.T) {
 }
 
 func TestIPFSCluster_UnpinFile(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 
@@ -236,13 +237,13 @@ func TestIPFSCluster_UnpinFile(t *testing.T) {
 }
 
 func TestIPFSCluster_GetFile(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 
@@ -261,10 +262,10 @@ func TestIPFSCluster_GetFile(t *testing.T) {
 	cid := addResult.Cid
 
 	// Give time for propagation
-	Delay(1000)
+	e2e.Delay(1000)
 
 	// Get file
-	rc, err := client.Get(ctx, cid, GetIPFSAPIURL())
+	rc, err := client.Get(ctx, cid, e2e.GetIPFSAPIURL())
 	if err != nil {
 		t.Fatalf("get file failed: %v", err)
 	}
@@ -283,13 +284,13 @@ func TestIPFSCluster_GetFile(t *testing.T) {
 }
 
 func TestIPFSCluster_LargeFile(t *testing.T) {
-	SkipIfProduction(t)
+	e2e.SkipIfProduction(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       60 * time.Second,
 	}
 
@@ -317,13 +318,13 @@ func TestIPFSCluster_LargeFile(t *testing.T) {
 }
 
 func TestIPFSCluster_ReplicationFactor(t *testing.T) {
-	SkipIfProduction(t) // Direct IPFS connection not available in production
+	e2e.SkipIfProduction(t) // Direct IPFS connection not available in production
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 
@@ -353,7 +354,7 @@ func TestIPFSCluster_ReplicationFactor(t *testing.T) {
 	}
 
 	// Give time for replication
-	Delay(2000)
+	e2e.Delay(2000)
 
 	// Check status
 	status, err := client.PinStatus(ctx, cid)
@@ -365,13 +366,13 @@ func TestIPFSCluster_ReplicationFactor(t *testing.T) {
 }
 
 func TestIPFSCluster_MultipleFiles(t *testing.T) {
-	SkipIfProduction(t) // Direct IPFS connection not available in production
+	e2e.SkipIfProduction(t) // Direct IPFS connection not available in production
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	logger := NewTestLogger(t)
+	logger := e2e.NewTestLogger(t)
 	cfg := ipfs.Config{
-		ClusterAPIURL: GetIPFSClusterURL(),
+		ClusterAPIURL: e2e.GetIPFSClusterURL(),
 		Timeout:       30 * time.Second,
 	}
 

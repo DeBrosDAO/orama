@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"bytes"
@@ -11,10 +11,12 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 func TestServerless_DeployAndInvoke(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -53,14 +55,14 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 	part.Write(wasmBytes)
 	writer.Close()
 
-	deployReq, _ := http.NewRequestWithContext(ctx, "POST", GetGatewayURL()+"/v1/functions", &buf)
+	deployReq, _ := http.NewRequestWithContext(ctx, "POST", e2e.GetGatewayURL()+"/v1/functions", &buf)
 	deployReq.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		deployReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(1 * time.Minute)
+	client := e2e.NewHTTPClient(1 * time.Minute)
 	resp, err := client.Do(deployReq)
 	if err != nil {
 		t.Fatalf("deploy request failed: %v", err)
@@ -74,10 +76,10 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 
 	// 2. Invoke function
 	invokePayload := []byte(`{"name": "E2E Tester"}`)
-	invokeReq, _ := http.NewRequestWithContext(ctx, "POST", GetGatewayURL()+"/v1/functions/"+funcName+"/invoke?namespace="+namespace, bytes.NewReader(invokePayload))
+	invokeReq, _ := http.NewRequestWithContext(ctx, "POST", e2e.GetGatewayURL()+"/v1/functions/"+funcName+"/invoke?namespace="+namespace, bytes.NewReader(invokePayload))
 	invokeReq.Header.Set("Content-Type", "application/json")
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		invokeReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
@@ -99,8 +101,8 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 	}
 
 	// 3. List functions
-	listReq, _ := http.NewRequestWithContext(ctx, "GET", GetGatewayURL()+"/v1/functions?namespace="+namespace, nil)
-	if apiKey := GetAPIKey(); apiKey != "" {
+	listReq, _ := http.NewRequestWithContext(ctx, "GET", e2e.GetGatewayURL()+"/v1/functions?namespace="+namespace, nil)
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		listReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err = client.Do(listReq)
@@ -113,8 +115,8 @@ func TestServerless_DeployAndInvoke(t *testing.T) {
 	}
 
 	// 4. Delete function
-	deleteReq, _ := http.NewRequestWithContext(ctx, "DELETE", GetGatewayURL()+"/v1/functions/"+funcName+"?namespace="+namespace, nil)
-	if apiKey := GetAPIKey(); apiKey != "" {
+	deleteReq, _ := http.NewRequestWithContext(ctx, "DELETE", e2e.GetGatewayURL()+"/v1/functions/"+funcName+"?namespace="+namespace, nil)
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		deleteReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err = client.Do(deleteReq)

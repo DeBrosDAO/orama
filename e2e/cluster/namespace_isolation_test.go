@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package cluster_test
 
 import (
 	"bytes"
@@ -12,35 +12,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNamespaceIsolation_Deployments(t *testing.T) {
 	// Setup two test environments with different namespaces
-	envA, err := LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Failed to create namespace A environment")
 
-	envB, err := LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Failed to create namespace B environment")
 
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
 
 	// Create deployment in namespace-a
 	deploymentNameA := "test-app-ns-a"
-	deploymentIDA := CreateTestDeployment(t, envA, deploymentNameA, tarballPath)
+	deploymentIDA := e2e.CreateTestDeployment(t, envA, deploymentNameA, tarballPath)
 	defer func() {
 		if !envA.SkipCleanup {
-			DeleteDeployment(t, envA, deploymentIDA)
+			e2e.DeleteDeployment(t, envA, deploymentIDA)
 		}
 	}()
 
 	// Create deployment in namespace-b
 	deploymentNameB := "test-app-ns-b"
-	deploymentIDB := CreateTestDeployment(t, envB, deploymentNameB, tarballPath)
+	deploymentIDB := e2e.CreateTestDeployment(t, envB, deploymentNameB, tarballPath)
 	defer func() {
 		if !envB.SkipCleanup {
-			DeleteDeployment(t, envB, deploymentIDB)
+			e2e.DeleteDeployment(t, envB, deploymentIDB)
 		}
 	}()
 
@@ -112,27 +113,27 @@ func TestNamespaceIsolation_Deployments(t *testing.T) {
 }
 
 func TestNamespaceIsolation_SQLiteDatabases(t *testing.T) {
-	envA, err := LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Should create test environment for namespace-a")
 
-	envB, err := LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Should create test environment for namespace-b")
 
 	// Create database in namespace-a
 	dbNameA := "users-db-a"
-	CreateSQLiteDB(t, envA, dbNameA)
+	e2e.CreateSQLiteDB(t, envA, dbNameA)
 	defer func() {
 		if !envA.SkipCleanup {
-			DeleteSQLiteDB(t, envA, dbNameA)
+			e2e.DeleteSQLiteDB(t, envA, dbNameA)
 		}
 	}()
 
 	// Create database in namespace-b
 	dbNameB := "users-db-b"
-	CreateSQLiteDB(t, envB, dbNameB)
+	e2e.CreateSQLiteDB(t, envB, dbNameB)
 	defer func() {
 		if !envB.SkipCleanup {
-			DeleteSQLiteDB(t, envB, dbNameB)
+			e2e.DeleteSQLiteDB(t, envB, dbNameB)
 		}
 	}()
 
@@ -201,17 +202,17 @@ func TestNamespaceIsolation_SQLiteDatabases(t *testing.T) {
 }
 
 func TestNamespaceIsolation_IPFSContent(t *testing.T) {
-	envA, err := LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Should create test environment for namespace-a")
 
-	envB, err := LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Should create test environment for namespace-b")
 
 	// Upload file in namespace-a
-	cidA := UploadTestFile(t, envA, "test-file-a.txt", "Content from namespace A")
+	cidA := e2e.UploadTestFile(t, envA, "test-file-a.txt", "Content from namespace A")
 	defer func() {
 		if !envA.SkipCleanup {
-			UnpinFile(t, envA, cidA)
+			e2e.UnpinFile(t, envA, cidA)
 		}
 	}()
 
@@ -273,10 +274,10 @@ func TestNamespaceIsolation_IPFSContent(t *testing.T) {
 }
 
 func TestNamespaceIsolation_OlricCache(t *testing.T) {
-	envA, err := LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Should create test environment for namespace-a")
 
-	envB, err := LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
+	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Should create test environment for namespace-b")
 
 	dmap := "test-cache"

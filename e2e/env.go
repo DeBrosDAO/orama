@@ -1536,6 +1536,81 @@ func TestDeploymentWithHostHeader(t *testing.T, env *E2ETestEnv, host, path stri
 	return resp
 }
 
+// PutToOlric stores a key-value pair in Olric via the gateway HTTP API
+func PutToOlric(gatewayURL, apiKey, dmap, key, value string) error {
+	reqBody := map[string]interface{}{
+		"dmap":  dmap,
+		"key":   key,
+		"value": value,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", gatewayURL+"/v1/cache/put", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("put failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// GetFromOlric retrieves a value from Olric via the gateway HTTP API
+func GetFromOlric(gatewayURL, apiKey, dmap, key string) (string, error) {
+	reqBody := map[string]interface{}{
+		"dmap": dmap,
+		"key":  key,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", gatewayURL+"/v1/cache/get", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("key not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("get failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", err
+	}
+
+	if value, ok := result["value"].(string); ok {
+		return value, nil
+	}
+	if value, ok := result["value"]; ok {
+		return fmt.Sprintf("%v", value), nil
+	}
+	return "", fmt.Errorf("value not found in response")
+}
+
 // WaitForHealthy waits for a deployment to become healthy
 func WaitForHealthy(t *testing.T, env *E2ETestEnv, deploymentID string, timeout time.Duration) bool {
 	t.Helper()

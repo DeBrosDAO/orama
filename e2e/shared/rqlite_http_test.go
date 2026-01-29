@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"context"
@@ -8,21 +8,23 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 func TestRQLite_CreateTable(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup table after test
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
@@ -33,9 +35,9 @@ func TestRQLite_CreateTable(t *testing.T) {
 		table,
 	)
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": schema,
 		},
@@ -52,18 +54,18 @@ func TestRQLite_CreateTable(t *testing.T) {
 }
 
 func TestRQLite_InsertQuery(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup table after test
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
@@ -75,9 +77,9 @@ func TestRQLite_InsertQuery(t *testing.T) {
 	)
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": schema,
 		},
@@ -89,9 +91,9 @@ func TestRQLite_InsertQuery(t *testing.T) {
 	}
 
 	// Insert rows
-	insertReq := &HTTPRequest{
+	insertReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 		Body: map[string]interface{}{
 			"statements": []string{
 				fmt.Sprintf("INSERT INTO %s(name) VALUES ('alice')", table),
@@ -106,9 +108,9 @@ func TestRQLite_InsertQuery(t *testing.T) {
 	}
 
 	// Query rows
-	queryReq := &HTTPRequest{
+	queryReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/query",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 		Body: map[string]interface{}{
 			"sql": fmt.Sprintf("SELECT name FROM %s ORDER BY id", table),
 		},
@@ -124,7 +126,7 @@ func TestRQLite_InsertQuery(t *testing.T) {
 	}
 
 	var queryResp map[string]interface{}
-	if err := DecodeJSON(body, &queryResp); err != nil {
+	if err := e2e.DecodeJSON(body, &queryResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -134,21 +136,21 @@ func TestRQLite_InsertQuery(t *testing.T) {
 }
 
 func TestRQLite_DropTable(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 	schema := fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, note TEXT)",
 		table,
 	)
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": schema,
 		},
@@ -160,9 +162,9 @@ func TestRQLite_DropTable(t *testing.T) {
 	}
 
 	// Drop table
-	dropReq := &HTTPRequest{
+	dropReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 		Body: map[string]interface{}{
 			"table": table,
 		},
@@ -178,9 +180,9 @@ func TestRQLite_DropTable(t *testing.T) {
 	}
 
 	// Verify table doesn't exist via schema
-	schemaReq := &HTTPRequest{
+	schemaReq := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/rqlite/schema",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/schema",
 	}
 
 	body, status, err := schemaReq.Do(ctx)
@@ -190,7 +192,7 @@ func TestRQLite_DropTable(t *testing.T) {
 	}
 
 	var schemaResp map[string]interface{}
-	if err := DecodeJSON(body, &schemaResp); err != nil {
+	if err := e2e.DecodeJSON(body, &schemaResp); err != nil {
 		t.Logf("warning: failed to decode schema response: %v", err)
 		return
 	}
@@ -206,14 +208,14 @@ func TestRQLite_DropTable(t *testing.T) {
 }
 
 func TestRQLite_Schema(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/rqlite/schema",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/schema",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -226,7 +228,7 @@ func TestRQLite_Schema(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -236,14 +238,14 @@ func TestRQLite_Schema(t *testing.T) {
 }
 
 func TestRQLite_MalformedSQL(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/query",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 		Body: map[string]interface{}{
 			"sql": "SELECT * FROM nonexistent_table WHERE invalid syntax",
 		},
@@ -261,18 +263,18 @@ func TestRQLite_MalformedSQL(t *testing.T) {
 }
 
 func TestRQLite_LargeTransaction(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup table after test
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
@@ -284,9 +286,9 @@ func TestRQLite_LargeTransaction(t *testing.T) {
 	)
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": schema,
 		},
@@ -303,9 +305,9 @@ func TestRQLite_LargeTransaction(t *testing.T) {
 		statements = append(statements, fmt.Sprintf("INSERT INTO %s(value) VALUES (%d)", table, i))
 	}
 
-	txReq := &HTTPRequest{
+	txReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 		Body: map[string]interface{}{
 			"statements": statements,
 		},
@@ -317,9 +319,9 @@ func TestRQLite_LargeTransaction(t *testing.T) {
 	}
 
 	// Verify all rows were inserted
-	queryReq := &HTTPRequest{
+	queryReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/query",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 		Body: map[string]interface{}{
 			"sql": fmt.Sprintf("SELECT COUNT(*) as count FROM %s", table),
 		},
@@ -331,7 +333,7 @@ func TestRQLite_LargeTransaction(t *testing.T) {
 	}
 
 	var countResp map[string]interface{}
-	if err := DecodeJSON(body, &countResp); err != nil {
+	if err := e2e.DecodeJSON(body, &countResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -345,35 +347,35 @@ func TestRQLite_LargeTransaction(t *testing.T) {
 }
 
 func TestRQLite_ForeignKeyMigration(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	orgsTable := GenerateTableName()
-	usersTable := GenerateTableName()
+	orgsTable := e2e.GenerateTableName()
+	usersTable := e2e.GenerateTableName()
 
 	// Cleanup tables after test
 	defer func() {
-		dropUsersReq := &HTTPRequest{
+		dropUsersReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": usersTable},
 		}
 		dropUsersReq.Do(context.Background())
 
-		dropOrgsReq := &HTTPRequest{
+		dropOrgsReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": orgsTable},
 		}
 		dropOrgsReq.Do(context.Background())
 	}()
 
 	// Create base tables
-	createOrgsReq := &HTTPRequest{
+	createOrgsReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": fmt.Sprintf(
 				"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, name TEXT)",
@@ -387,9 +389,9 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 		t.Fatalf("create orgs table failed: status %d, err %v", status, err)
 	}
 
-	createUsersReq := &HTTPRequest{
+	createUsersReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": fmt.Sprintf(
 				"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, name TEXT, org_id INTEGER, age TEXT)",
@@ -404,9 +406,9 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 	}
 
 	// Seed data
-	seedReq := &HTTPRequest{
+	seedReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 		Body: map[string]interface{}{
 			"statements": []string{
 				fmt.Sprintf("INSERT INTO %s(id,name) VALUES (1,'org')", orgsTable),
@@ -421,9 +423,9 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 	}
 
 	// Migrate: change age type and add FK
-	migrationReq := &HTTPRequest{
+	migrationReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 		Body: map[string]interface{}{
 			"statements": []string{
 				fmt.Sprintf(
@@ -446,9 +448,9 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 	}
 
 	// Verify data is intact
-	queryReq := &HTTPRequest{
+	queryReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/query",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 		Body: map[string]interface{}{
 			"sql": fmt.Sprintf("SELECT name, org_id, age FROM %s", usersTable),
 		},
@@ -460,7 +462,7 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 	}
 
 	var queryResp map[string]interface{}
-	if err := DecodeJSON(body, &queryResp); err != nil {
+	if err := e2e.DecodeJSON(body, &queryResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -470,14 +472,14 @@ func TestRQLite_ForeignKeyMigration(t *testing.T) {
 }
 
 func TestRQLite_DropNonexistentTable(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	dropReq := &HTTPRequest{
+	dropReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 		Body: map[string]interface{}{
 			"table": "nonexistent_table_xyz_" + fmt.Sprintf("%d", time.Now().UnixNano()),
 		},

@@ -8,7 +8,7 @@ test:
 # Gateway-focused E2E tests assume gateway and nodes are already running
 # Auto-discovers configuration from ~/.orama and queries database for API key
 # No environment variables required
-.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick test-e2e-local test-e2e-prod
+.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick test-e2e-local test-e2e-prod test-e2e-shared test-e2e-cluster test-e2e-integration test-e2e-production
 
 # Check if gateway is running (helper)
 .PHONY: check-gateway
@@ -32,15 +32,15 @@ test-e2e-local: check-gateway
 	@echo "Running E2E tests against local dev environment..."
 	go test -v -tags e2e -timeout 30m ./e2e/...
 
-# Production E2E tests - requires ORAMA_GATEWAY_URL to be set
+# Production E2E tests - includes production-only tests
 test-e2e-prod:
 	@if [ -z "$$ORAMA_GATEWAY_URL" ]; then \
 		echo "❌ ORAMA_GATEWAY_URL not set"; \
 		echo "Usage: ORAMA_GATEWAY_URL=http://VPS-IP:6001 make test-e2e-prod"; \
 		exit 1; \
 	fi
-	@echo "Running E2E tests against $$ORAMA_GATEWAY_URL..."
-	go test -v -tags e2e -timeout 30m ./e2e/...
+	@echo "Running E2E tests (including production-only) against $$ORAMA_GATEWAY_URL..."
+	go test -v -tags "e2e production" -timeout 30m ./e2e/...
 
 # Generic e2e target (works with both local and production)
 test-e2e:
@@ -60,6 +60,22 @@ test-e2e-fullstack:
 test-e2e-https:
 	@echo "Running HTTPS/external access E2E tests..."
 	go test -v -tags e2e -timeout 10m -run "TestHTTPS" ./e2e/...
+
+test-e2e-shared:
+	@echo "Running shared E2E tests..."
+	go test -v -tags e2e -timeout 10m ./e2e/shared/...
+
+test-e2e-cluster:
+	@echo "Running cluster E2E tests..."
+	go test -v -tags e2e -timeout 15m ./e2e/cluster/...
+
+test-e2e-integration:
+	@echo "Running integration E2E tests..."
+	go test -v -tags e2e -timeout 20m ./e2e/integration/...
+
+test-e2e-production:
+	@echo "Running production-only E2E tests..."
+	go test -v -tags "e2e production" -timeout 15m ./e2e/production/...
 
 test-e2e-quick:
 	@echo "Running quick E2E smoke tests..."
@@ -155,10 +171,15 @@ help:
 	@echo "  make kill     - Force kill all development services (use if stop fails)"
 	@echo ""
 	@echo "E2E Testing:"
-	@echo "  make test-e2e-local   - Run E2E tests against local dev (checks gateway first)"
-	@echo "  make test-e2e-prod    - Run E2E tests against production (needs ORAMA_GATEWAY_URL)"
-	@echo "  make test-e2e-quick   - Quick smoke tests (static deploys, health checks)"
-	@echo "  make test-e2e         - Generic E2E tests (auto-discovers config)"
+	@echo "  make test-e2e-local       - Run E2E tests against local dev (checks gateway first)"
+	@echo "  make test-e2e-prod        - Run all E2E tests incl. production-only (needs ORAMA_GATEWAY_URL)"
+	@echo "  make test-e2e-shared      - Run shared E2E tests (cache, storage, pubsub, auth)"
+	@echo "  make test-e2e-cluster     - Run cluster E2E tests (libp2p, olric, rqlite, namespace)"
+	@echo "  make test-e2e-integration - Run integration E2E tests (fullstack, persistence, concurrency)"
+	@echo "  make test-e2e-deployments - Run deployment E2E tests"
+	@echo "  make test-e2e-production  - Run production-only E2E tests (DNS, HTTPS, cross-node)"
+	@echo "  make test-e2e-quick       - Quick smoke tests (static deploys, health checks)"
+	@echo "  make test-e2e             - Generic E2E tests (auto-discovers config)"
 	@echo ""
 	@echo "  Example production test:"
 	@echo "    ORAMA_GATEWAY_URL=http://141.227.165.168:6001 make test-e2e-prod"

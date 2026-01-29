@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 	"unicode"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,10 +25,10 @@ func TestAuth_MissingAPIKey(t *testing.T) {
 	defer cancel()
 
 	// Request protected endpoint without auth headers
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/cache/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/cache/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -42,12 +44,12 @@ func TestAuth_InvalidAPIKey(t *testing.T) {
 	defer cancel()
 
 	// Request with invalid API key
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/cache/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/cache/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
 	req.Header.Set("Authorization", "Bearer invalid-key-xyz-123456789")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -63,9 +65,9 @@ func TestAuth_CacheWithoutAuth(t *testing.T) {
 	defer cancel()
 
 	// Request cache endpoint without auth
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/cache/health",
+		URL:      e2e.GetGatewayURL() + "/v1/cache/health",
 		SkipAuth: true,
 	}
 
@@ -83,9 +85,9 @@ func TestAuth_StorageWithoutAuth(t *testing.T) {
 	defer cancel()
 
 	// Request storage endpoint without auth
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/storage/status/QmTest",
+		URL:      e2e.GetGatewayURL() + "/v1/storage/status/QmTest",
 		SkipAuth: true,
 	}
 
@@ -103,9 +105,9 @@ func TestAuth_RQLiteWithoutAuth(t *testing.T) {
 	defer cancel()
 
 	// Request rqlite endpoint without auth
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/rqlite/schema",
+		URL:      e2e.GetGatewayURL() + "/v1/rqlite/schema",
 		SkipAuth: true,
 	}
 
@@ -123,12 +125,12 @@ func TestAuth_MalformedBearerToken(t *testing.T) {
 	defer cancel()
 
 	// Request with malformed bearer token (missing "Bearer " prefix)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/cache/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/cache/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
 	req.Header.Set("Authorization", "invalid-token-format-no-bearer")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -144,12 +146,12 @@ func TestAuth_ExpiredJWT(t *testing.T) {
 	defer cancel()
 
 	// Test with a clearly invalid JWT structure
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/cache/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/cache/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
 	req.Header.Set("Authorization", "Bearer expired.jwt.token.invalid")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -165,12 +167,12 @@ func TestAuth_EmptyBearerToken(t *testing.T) {
 	defer cancel()
 
 	// Request with empty bearer token
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/cache/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/cache/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
 	req.Header.Set("Authorization", "Bearer ")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -182,7 +184,7 @@ func TestAuth_EmptyBearerToken(t *testing.T) {
 }
 
 func TestAuth_DuplicateAuthHeaders(t *testing.T) {
-	if GetAPIKey() == "" {
+	if e2e.GetAPIKey() == "" {
 		t.Skip("No API key configured")
 	}
 
@@ -190,12 +192,12 @@ func TestAuth_DuplicateAuthHeaders(t *testing.T) {
 	defer cancel()
 
 	// Request with both valid API key in Authorization header
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/cache/health",
+		URL:    e2e.GetGatewayURL() + "/v1/cache/health",
 		Headers: map[string]string{
-			"Authorization": "Bearer " + GetAPIKey(),
-			"X-API-Key":     GetAPIKey(),
+			"Authorization": "Bearer " + e2e.GetAPIKey(),
+			"X-API-Key":     e2e.GetAPIKey(),
 		},
 	}
 
@@ -209,7 +211,7 @@ func TestAuth_DuplicateAuthHeaders(t *testing.T) {
 }
 
 func TestAuth_CaseSensitiveAPIKey(t *testing.T) {
-	apiKey := GetAPIKey()
+	apiKey := e2e.GetAPIKey()
 	if apiKey == "" {
 		t.Skip("No API key configured")
 	}
@@ -236,12 +238,12 @@ func TestAuth_CaseSensitiveAPIKey(t *testing.T) {
 		t.Skip("API key has no letters to change case")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/cache/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/cache/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
 	req.Header.Set("Authorization", "Bearer "+incorrectKey)
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -257,10 +259,10 @@ func TestAuth_HealthEndpointNoAuth(t *testing.T) {
 	defer cancel()
 
 	// Health endpoint at /v1/health should NOT require auth
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/health", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -276,10 +278,10 @@ func TestAuth_StatusEndpointNoAuth(t *testing.T) {
 	defer cancel()
 
 	// Status endpoint at /v1/status should NOT require auth
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/status", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/status", nil)
 	require.NoError(t, err, "FAIL: Could not create request")
 
-	client := NewHTTPClient(30 * time.Second)
+	client := e2e.NewHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	require.NoError(t, err, "FAIL: Request failed")
 	defer resp.Body.Close()
@@ -295,9 +297,9 @@ func TestAuth_DeploymentsWithoutAuth(t *testing.T) {
 	defer cancel()
 
 	// Request deployments endpoint without auth
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/deployments/list",
+		URL:      e2e.GetGatewayURL() + "/v1/deployments/list",
 		SkipAuth: true,
 	}
 
@@ -315,9 +317,9 @@ func TestAuth_SQLiteWithoutAuth(t *testing.T) {
 	defer cancel()
 
 	// Request SQLite endpoint without auth
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method:   http.MethodGet,
-		URL:      GetGatewayURL() + "/v1/db/sqlite/list",
+		URL:      e2e.GetGatewayURL() + "/v1/db/sqlite/list",
 		SkipAuth: true,
 	}
 

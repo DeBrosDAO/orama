@@ -1,17 +1,17 @@
 //go:build e2e
 
-package e2e
+package cluster_test
 
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,86 +31,10 @@ func getOlricNodeAddresses() []string {
 	}
 }
 
-// putToOlric stores a key-value pair in Olric via HTTP API
-func putToOlric(gatewayURL, apiKey, dmap, key, value string) error {
-	reqBody := map[string]interface{}{
-		"dmap":  dmap,
-		"key":   key,
-		"value": value,
-	}
-	bodyBytes, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", gatewayURL+"/v1/cache/put", strings.NewReader(string(bodyBytes)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("put failed with status %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-// getFromOlric retrieves a value from Olric via HTTP API
-func getFromOlric(gatewayURL, apiKey, dmap, key string) (string, error) {
-	reqBody := map[string]interface{}{
-		"dmap": dmap,
-		"key":  key,
-	}
-	bodyBytes, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", gatewayURL+"/v1/cache/get", strings.NewReader(string(bodyBytes)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("key not found")
-	}
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("get failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", err
-	}
-
-	if value, ok := result["value"].(string); ok {
-		return value, nil
-	}
-	// Value might be in a different format
-	if value, ok := result["value"]; ok {
-		return fmt.Sprintf("%v", value), nil
-	}
-	return "", fmt.Errorf("value not found in response")
-}
-
 // TestOlric_BasicDistribution verifies cache operations work across the cluster.
 func TestOlric_BasicDistribution(t *testing.T) {
 	// Note: Not using SkipIfMissingGateway() since LoadTestEnv() creates its own API key
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 	require.NotEmpty(t, env.APIKey, "FAIL: No API key available")
 
@@ -121,11 +45,11 @@ func TestOlric_BasicDistribution(t *testing.T) {
 		value := fmt.Sprintf("value_%d", time.Now().UnixNano())
 
 		// Put
-		err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+		err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 		require.NoError(t, err, "FAIL: Could not put value to cache")
 
 		// Get
-		retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.NoError(t, err, "FAIL: Could not get value from cache")
 		require.Equal(t, value, retrieved, "FAIL: Retrieved value doesn't match")
 
@@ -140,7 +64,7 @@ func TestOlric_BasicDistribution(t *testing.T) {
 			value := fmt.Sprintf("dist_value_%d", i)
 			keys[key] = value
 
-			err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+			err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 			require.NoError(t, err, "FAIL: Could not put key %s", key)
 		}
 
@@ -148,7 +72,7 @@ func TestOlric_BasicDistribution(t *testing.T) {
 
 		// Verify all keys are retrievable
 		for key, expectedValue := range keys {
-			retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+			retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 			require.NoError(t, err, "FAIL: Could not get key %s", key)
 			require.Equal(t, expectedValue, retrieved, "FAIL: Value mismatch for key %s", key)
 		}
@@ -159,7 +83,7 @@ func TestOlric_BasicDistribution(t *testing.T) {
 
 // TestOlric_ConcurrentAccess verifies cache handles concurrent operations correctly.
 func TestOlric_ConcurrentAccess(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 
 	dmap := fmt.Sprintf("concurrent_test_%d", time.Now().UnixNano())
@@ -172,7 +96,7 @@ func TestOlric_ConcurrentAccess(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			go func(idx int) {
 				value := fmt.Sprintf("concurrent_value_%d", idx)
-				err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+				err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 				done <- err
 			}(i)
 		}
@@ -188,7 +112,7 @@ func TestOlric_ConcurrentAccess(t *testing.T) {
 		require.Empty(t, errors, "FAIL: %d concurrent writes failed: %v", len(errors), errors)
 
 		// The key should have ONE of the values (last write wins)
-		retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.NoError(t, err, "FAIL: Could not get key after concurrent writes")
 		require.Contains(t, retrieved, "concurrent_value_", "FAIL: Value doesn't match expected pattern")
 
@@ -200,7 +124,7 @@ func TestOlric_ConcurrentAccess(t *testing.T) {
 		initialValue := "initial_value"
 
 		// Set initial value
-		err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, initialValue)
+		err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, initialValue)
 		require.NoError(t, err, "FAIL: Could not set initial value")
 
 		// Launch concurrent readers and writers
@@ -209,7 +133,7 @@ func TestOlric_ConcurrentAccess(t *testing.T) {
 		// 10 readers
 		for i := 0; i < 10; i++ {
 			go func() {
-				_, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+				_, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 				done <- err
 			}()
 		}
@@ -218,7 +142,7 @@ func TestOlric_ConcurrentAccess(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			go func(idx int) {
 				value := fmt.Sprintf("updated_value_%d", idx)
-				err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+				err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 				done <- err
 			}(i)
 		}
@@ -247,7 +171,7 @@ func TestOlric_NamespaceClusterCache(t *testing.T) {
 	// Create a new namespace
 	namespace := fmt.Sprintf("cache-test-%d", time.Now().UnixNano())
 
-	env, err := LoadTestEnvWithNamespace(namespace)
+	env, err := e2e.LoadTestEnvWithNamespace(namespace)
 	require.NoError(t, err, "FAIL: Could not create namespace for cache test")
 	require.NotEmpty(t, env.APIKey, "FAIL: No API key")
 
@@ -260,11 +184,11 @@ func TestOlric_NamespaceClusterCache(t *testing.T) {
 		value := fmt.Sprintf("ns_value_%d", time.Now().UnixNano())
 
 		// Put using namespace API key
-		err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+		err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 		require.NoError(t, err, "FAIL: Could not put value in namespace cache")
 
 		// Get
-		retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.NoError(t, err, "FAIL: Could not get value from namespace cache")
 		require.Equal(t, value, retrieved, "FAIL: Value mismatch in namespace cache")
 
@@ -298,7 +222,7 @@ func TestOlric_NamespaceClusterCache(t *testing.T) {
 
 // TestOlric_DataConsistency verifies data remains consistent across operations.
 func TestOlric_DataConsistency(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 
 	dmap := fmt.Sprintf("consistency_test_%d", time.Now().UnixNano())
@@ -309,12 +233,12 @@ func TestOlric_DataConsistency(t *testing.T) {
 		// Write multiple times
 		for i := 1; i <= 5; i++ {
 			value := fmt.Sprintf("version_%d", i)
-			err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+			err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 			require.NoError(t, err, "FAIL: Could not update key to version %d", i)
 		}
 
 		// Final read should return latest version
-		retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.NoError(t, err, "FAIL: Could not read final value")
 		require.Equal(t, "version_5", retrieved, "FAIL: Latest version not preserved")
 
@@ -326,11 +250,11 @@ func TestOlric_DataConsistency(t *testing.T) {
 		value := "to_be_deleted"
 
 		// Put
-		err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+		err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 		require.NoError(t, err, "FAIL: Could not put value")
 
 		// Verify it exists
-		retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.NoError(t, err, "FAIL: Could not get value before delete")
 		require.Equal(t, value, retrieved)
 
@@ -351,7 +275,7 @@ func TestOlric_DataConsistency(t *testing.T) {
 			"FAIL: Delete returned unexpected status %d", resp.StatusCode)
 
 		// Verify key is gone
-		_, err = getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		_, err = e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.Error(t, err, "FAIL: Key should not exist after delete")
 		require.Contains(t, err.Error(), "not found", "FAIL: Expected 'not found' error")
 
@@ -365,7 +289,7 @@ func TestOlric_DataConsistency(t *testing.T) {
 func TestOlric_TTLExpiration(t *testing.T) {
 	t.Skip("TTL support not yet implemented in cache handler - see set_handler.go lines 88-98")
 
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 
 	dmap := fmt.Sprintf("ttl_test_%d", time.Now().UnixNano())
@@ -396,7 +320,7 @@ func TestOlric_TTLExpiration(t *testing.T) {
 			"FAIL: Put returned status %d", resp.StatusCode)
 
 		// Verify key exists immediately
-		retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.NoError(t, err, "FAIL: Could not get key immediately after put")
 		require.Equal(t, value, retrieved)
 		t.Logf("  Key exists immediately after put")
@@ -405,7 +329,7 @@ func TestOlric_TTLExpiration(t *testing.T) {
 		time.Sleep(time.Duration(ttlSeconds+2) * time.Second)
 
 		// Key should be gone
-		_, err = getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+		_, err = e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 		require.Error(t, err, "FAIL: Key should have expired after %d seconds", ttlSeconds)
 		require.Contains(t, err.Error(), "not found", "FAIL: Expected 'not found' error after TTL")
 

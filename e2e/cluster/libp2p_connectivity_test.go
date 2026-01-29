@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package cluster_test
 
 import (
 	"context"
@@ -8,25 +8,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/e2e"
 )
 
 func TestLibP2P_PeerConnectivity(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create and connect client
-	c := NewNetworkClient(t)
+	c := e2e.NewNetworkClient(t)
 	if err := c.Connect(); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
 	defer c.Disconnect()
 
 	// Verify peer connectivity through the gateway
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/peers",
+		URL:    e2e.GetGatewayURL() + "/v1/network/peers",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -39,7 +41,7 @@ func TestLibP2P_PeerConnectivity(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -50,30 +52,30 @@ func TestLibP2P_PeerConnectivity(t *testing.T) {
 }
 
 func TestLibP2P_BootstrapPeers(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bootstrapPeers := GetBootstrapPeers()
+	bootstrapPeers := e2e.GetBootstrapPeers()
 	if len(bootstrapPeers) == 0 {
 		t.Skipf("E2E_BOOTSTRAP_PEERS not set; skipping")
 	}
 
 	// Create client with bootstrap peers explicitly set
-	c := NewNetworkClient(t)
+	c := e2e.NewNetworkClient(t)
 	if err := c.Connect(); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
 	defer c.Disconnect()
 
 	// Give peer discovery time
-	Delay(2000)
+	e2e.Delay(2000)
 
 	// Verify we're connected (check via gateway status)
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/status",
+		URL:    e2e.GetGatewayURL() + "/v1/network/status",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -86,7 +88,7 @@ func TestLibP2P_BootstrapPeers(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -96,15 +98,15 @@ func TestLibP2P_BootstrapPeers(t *testing.T) {
 }
 
 func TestLibP2P_MultipleClientConnections(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create multiple clients
-	c1 := NewNetworkClient(t)
-	c2 := NewNetworkClient(t)
-	c3 := NewNetworkClient(t)
+	c1 := e2e.NewNetworkClient(t)
+	c2 := e2e.NewNetworkClient(t)
+	c3 := e2e.NewNetworkClient(t)
 
 	if err := c1.Connect(); err != nil {
 		t.Fatalf("c1 connect failed: %v", err)
@@ -122,12 +124,12 @@ func TestLibP2P_MultipleClientConnections(t *testing.T) {
 	defer c3.Disconnect()
 
 	// Give peer discovery time
-	Delay(2000)
+	e2e.Delay(2000)
 
 	// Verify gateway sees multiple peers
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/peers",
+		URL:    e2e.GetGatewayURL() + "/v1/network/peers",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -140,7 +142,7 @@ func TestLibP2P_MultipleClientConnections(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -151,12 +153,12 @@ func TestLibP2P_MultipleClientConnections(t *testing.T) {
 }
 
 func TestLibP2P_ReconnectAfterDisconnect(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	c := NewNetworkClient(t)
+	c := e2e.NewNetworkClient(t)
 
 	// Connect
 	if err := c.Connect(); err != nil {
@@ -164,9 +166,9 @@ func TestLibP2P_ReconnectAfterDisconnect(t *testing.T) {
 	}
 
 	// Verify connected via gateway
-	req1 := &HTTPRequest{
+	req1 := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/status",
+		URL:    e2e.GetGatewayURL() + "/v1/network/status",
 	}
 
 	_, status1, err := req1.Do(ctx)
@@ -180,7 +182,7 @@ func TestLibP2P_ReconnectAfterDisconnect(t *testing.T) {
 	}
 
 	// Give time for disconnect to propagate
-	Delay(500)
+	e2e.Delay(500)
 
 	// Reconnect
 	if err := c.Connect(); err != nil {
@@ -189,9 +191,9 @@ func TestLibP2P_ReconnectAfterDisconnect(t *testing.T) {
 	defer c.Disconnect()
 
 	// Verify connected via gateway again
-	req2 := &HTTPRequest{
+	req2 := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/status",
+		URL:    e2e.GetGatewayURL() + "/v1/network/status",
 	}
 
 	_, status2, err := req2.Do(ctx)
@@ -201,25 +203,25 @@ func TestLibP2P_ReconnectAfterDisconnect(t *testing.T) {
 }
 
 func TestLibP2P_PeerDiscovery(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create client
-	c := NewNetworkClient(t)
+	c := e2e.NewNetworkClient(t)
 	if err := c.Connect(); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
 	defer c.Disconnect()
 
 	// Give peer discovery time
-	Delay(3000)
+	e2e.Delay(3000)
 
 	// Get peer list
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/peers",
+		URL:    e2e.GetGatewayURL() + "/v1/network/peers",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -232,7 +234,7 @@ func TestLibP2P_PeerDiscovery(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -251,22 +253,22 @@ func TestLibP2P_PeerDiscovery(t *testing.T) {
 }
 
 func TestLibP2P_PeerAddressFormat(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create client
-	c := NewNetworkClient(t)
+	c := e2e.NewNetworkClient(t)
 	if err := c.Connect(); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
 	defer c.Disconnect()
 
 	// Get peer list
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/network/peers",
+		URL:    e2e.GetGatewayURL() + "/v1/network/peers",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -279,7 +281,7 @@ func TestLibP2P_PeerAddressFormat(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 

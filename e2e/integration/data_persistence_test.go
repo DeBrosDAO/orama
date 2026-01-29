@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package integration_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +24,7 @@ import (
 
 // TestRQLite_DataPersistence verifies that RQLite data is persisted through the gateway.
 func TestRQLite_DataPersistence(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -32,18 +33,18 @@ func TestRQLite_DataPersistence(t *testing.T) {
 
 	// Cleanup
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": tableName},
 		}
 		dropReq.Do(context.Background())
 	}()
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": fmt.Sprintf(
 				"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, value TEXT, version INTEGER)",
@@ -65,9 +66,9 @@ func TestRQLite_DataPersistence(t *testing.T) {
 				fmt.Sprintf("INSERT INTO %s (value, version) VALUES ('item_%d', %d)", tableName, i, i))
 		}
 
-		insertReq := &HTTPRequest{
+		insertReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body:   map[string]interface{}{"statements": statements},
 		}
 
@@ -76,9 +77,9 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Insert returned status %d", status)
 
 		// Verify all data exists
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName),
 			},
@@ -89,7 +90,7 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Count query returned status %d", status)
 
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		if rows, ok := queryResp["rows"].([]interface{}); ok && len(rows) > 0 {
 			row := rows[0].([]interface{})
@@ -98,9 +99,9 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		}
 
 		// Update data
-		updateReq := &HTTPRequest{
+		updateReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body: map[string]interface{}{
 				"statements": []string{
 					fmt.Sprintf("UPDATE %s SET version = version + 100 WHERE version <= 5", tableName),
@@ -113,9 +114,9 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Update returned status %d", status)
 
 		// Verify updates persisted
-		queryUpdatedReq := &HTTPRequest{
+		queryUpdatedReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE version > 100", tableName),
 			},
@@ -125,7 +126,7 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		require.NoError(t, err, "FAIL: Could not count updated rows")
 		require.Equal(t, http.StatusOK, status, "FAIL: Count updated query returned status %d", status)
 
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 		if rows, ok := queryResp["rows"].([]interface{}); ok && len(rows) > 0 {
 			row := rows[0].([]interface{})
 			count := int(row[0].(float64))
@@ -137,9 +138,9 @@ func TestRQLite_DataPersistence(t *testing.T) {
 
 	t.Run("Deletes_are_persisted", func(t *testing.T) {
 		// Delete some rows
-		deleteReq := &HTTPRequest{
+		deleteReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body: map[string]interface{}{
 				"statements": []string{
 					fmt.Sprintf("DELETE FROM %s WHERE version > 100", tableName),
@@ -152,9 +153,9 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Delete returned status %d", status)
 
 		// Verify deletes persisted
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName),
 			},
@@ -165,7 +166,7 @@ func TestRQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Count query returned status %d", status)
 
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		if rows, ok := queryResp["rows"].([]interface{}); ok && len(rows) > 0 {
 			row := rows[0].([]interface{})
@@ -213,7 +214,7 @@ func TestRQLite_DataFilesExist(t *testing.T) {
 // TestOlric_DataPersistence verifies Olric cache data persistence.
 // Note: Olric is an in-memory cache, so this tests data survival during runtime.
 func TestOlric_DataPersistence(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 
 	dmap := fmt.Sprintf("persist_cache_%d", time.Now().UnixNano())
@@ -226,17 +227,17 @@ func TestOlric_DataPersistence(t *testing.T) {
 			value := fmt.Sprintf("persist_value_%d", i)
 			keys[key] = value
 
-			err := putToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
+			err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, key, value)
 			require.NoError(t, err, "FAIL: Could not put key %s", key)
 		}
 
 		// Perform other operations
-		err := putToOlric(env.GatewayURL, env.APIKey, dmap, "other_key", "other_value")
+		err := e2e.PutToOlric(env.GatewayURL, env.APIKey, dmap, "other_key", "other_value")
 		require.NoError(t, err, "FAIL: Could not put other key")
 
 		// Verify original keys still exist
 		for key, expectedValue := range keys {
-			retrieved, err := getFromOlric(env.GatewayURL, env.APIKey, dmap, key)
+			retrieved, err := e2e.GetFromOlric(env.GatewayURL, env.APIKey, dmap, key)
 			require.NoError(t, err, "FAIL: Key %s not found after other operations", key)
 			require.Equal(t, expectedValue, retrieved, "FAIL: Value mismatch for key %s", key)
 		}
@@ -249,7 +250,7 @@ func TestOlric_DataPersistence(t *testing.T) {
 func TestNamespaceCluster_DataPersistence(t *testing.T) {
 	// Create namespace
 	namespace := fmt.Sprintf("persist-ns-%d", time.Now().UnixNano())
-	env, err := LoadTestEnvWithNamespace(namespace)
+	env, err := e2e.LoadTestEnvWithNamespace(namespace)
 	require.NoError(t, err, "FAIL: Could not create namespace")
 
 	t.Logf("Created namespace: %s", namespace)
@@ -261,7 +262,7 @@ func TestNamespaceCluster_DataPersistence(t *testing.T) {
 		// Create data via gateway API
 		tableName := fmt.Sprintf("ns_data_%d", time.Now().UnixNano())
 
-		req := &HTTPRequest{
+		req := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/rqlite/create-table",
 			Headers: map[string]string{
@@ -278,7 +279,7 @@ func TestNamespaceCluster_DataPersistence(t *testing.T) {
 			"FAIL: Create table returned status %d", status)
 
 		// Insert data
-		insertReq := &HTTPRequest{
+		insertReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/rqlite/transaction",
 			Headers: map[string]string{
@@ -296,7 +297,7 @@ func TestNamespaceCluster_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Insert returned status %d", status)
 
 		// Verify data exists
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/rqlite/query",
 			Headers: map[string]string{
@@ -323,7 +324,7 @@ func TestNamespaceCluster_DataPersistence(t *testing.T) {
 // TestIPFS_DataPersistence verifies IPFS content is persisted and pinned.
 // Note: Detailed IPFS tests are in storage_http_test.go. This test uses the helper from env.go.
 func TestIPFS_DataPersistence(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -332,12 +333,12 @@ func TestIPFS_DataPersistence(t *testing.T) {
 	t.Run("Uploaded_content_persists", func(t *testing.T) {
 		// Use helper function to upload content via multipart form
 		content := fmt.Sprintf("persistent content %d", time.Now().UnixNano())
-		cid := UploadTestFile(t, env, "persist_test.txt", content)
+		cid := e2e.UploadTestFile(t, env, "persist_test.txt", content)
 		require.NotEmpty(t, cid, "FAIL: No CID returned from upload")
 		t.Logf("  Uploaded content with CID: %s", cid)
 
 		// Verify content can be retrieved
-		getReq := &HTTPRequest{
+		getReq := &e2e.HTTPRequest{
 			Method: http.MethodGet,
 			URL:    env.GatewayURL + "/v1/storage/get/" + cid,
 			Headers: map[string]string{
@@ -357,7 +358,7 @@ func TestIPFS_DataPersistence(t *testing.T) {
 
 // TestSQLite_DataPersistence verifies per-deployment SQLite databases persist.
 func TestSQLite_DataPersistence(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "FAIL: Could not load test environment")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -367,7 +368,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 
 	t.Run("SQLite_database_persists", func(t *testing.T) {
 		// Create database
-		createReq := &HTTPRequest{
+		createReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/db/sqlite/create",
 			Headers: map[string]string{
@@ -385,7 +386,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 		t.Logf("  Created SQLite database: %s", dbName)
 
 		// Create table and insert data
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/db/sqlite/query",
 			Headers: map[string]string{
@@ -402,7 +403,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Create table returned status %d", status)
 
 		// Insert data
-		insertReq := &HTTPRequest{
+		insertReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/db/sqlite/query",
 			Headers: map[string]string{
@@ -419,7 +420,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Insert returned status %d", status)
 
 		// Verify data persists
-		selectReq := &HTTPRequest{
+		selectReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
 			URL:    env.GatewayURL + "/v1/db/sqlite/query",
 			Headers: map[string]string{
@@ -442,7 +443,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 
 	t.Run("SQLite_database_listed", func(t *testing.T) {
 		// List databases to verify it was persisted
-		listReq := &HTTPRequest{
+		listReq := &e2e.HTTPRequest{
 			Method: http.MethodGet,
 			URL:    env.GatewayURL + "/v1/db/sqlite/list",
 			Headers: map[string]string{

@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package integration_test
 
 import (
 	"bytes"
@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestFullStack_GoAPI_SQLite(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	appName := fmt.Sprintf("fullstack-app-%d", time.Now().Unix())
@@ -29,15 +30,15 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 	defer func() {
 		if !env.SkipCleanup {
 			if backendID != "" {
-				DeleteDeployment(t, env, backendID)
+				e2e.DeleteDeployment(t, env, backendID)
 			}
-			DeleteSQLiteDB(t, env, dbName)
+			e2e.DeleteSQLiteDB(t, env, dbName)
 		}
 	}()
 
 	// Step 1: Create SQLite database
 	t.Run("Create SQLite database", func(t *testing.T) {
-		CreateSQLiteDB(t, env, dbName)
+		e2e.CreateSQLiteDB(t, env, dbName)
 
 		// Create users table
 		query := `CREATE TABLE users (
@@ -46,11 +47,11 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 			email TEXT UNIQUE NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`
-		ExecuteSQLQuery(t, env, dbName, query)
+		e2e.ExecuteSQLQuery(t, env, dbName, query)
 
 		// Insert test data
 		insertQuery := `INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')`
-		result := ExecuteSQLQuery(t, env, dbName, insertQuery)
+		result := e2e.ExecuteSQLQuery(t, env, dbName, insertQuery)
 
 		assert.NotNil(t, result, "Should execute INSERT successfully")
 		t.Logf("✓ Database created with users table")
@@ -64,7 +65,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 
 		// Note: In a real implementation, we would pass DATABASE_NAME env var
 		// For now, we just test the deployment mechanism
-		backendID = CreateTestDeployment(t, env, backendName, tarballPath)
+		backendID = e2e.CreateTestDeployment(t, env, backendName, tarballPath)
 
 		assert.NotEmpty(t, backendID, "Backend deployment ID should not be empty")
 		t.Logf("✓ Go backend deployed: %s", backendName)
@@ -77,10 +78,10 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 	t.Run("Test database CRUD operations", func(t *testing.T) {
 		// INSERT
 		insertQuery := `INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com')`
-		ExecuteSQLQuery(t, env, dbName, insertQuery)
+		e2e.ExecuteSQLQuery(t, env, dbName, insertQuery)
 
 		// SELECT
-		users := QuerySQLite(t, env, dbName, "SELECT * FROM users ORDER BY id")
+		users := e2e.QuerySQLite(t, env, dbName, "SELECT * FROM users ORDER BY id")
 		require.GreaterOrEqual(t, len(users), 2, "Should have at least 2 users")
 
 		assert.Equal(t, "Alice", users[0]["name"], "First user should be Alice")
@@ -91,14 +92,14 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 
 		// UPDATE
 		updateQuery := `UPDATE users SET email = 'alice.new@example.com' WHERE name = 'Alice'`
-		result := ExecuteSQLQuery(t, env, dbName, updateQuery)
+		result := e2e.ExecuteSQLQuery(t, env, dbName, updateQuery)
 
 		rowsAffected, ok := result["rows_affected"].(float64)
 		require.True(t, ok, "Should have rows_affected")
 		assert.Equal(t, float64(1), rowsAffected, "Should update 1 row")
 
 		// Verify update
-		updated := QuerySQLite(t, env, dbName, "SELECT email FROM users WHERE name = 'Alice'")
+		updated := e2e.QuerySQLite(t, env, dbName, "SELECT email FROM users WHERE name = 'Alice'")
 		require.Len(t, updated, 1, "Should find Alice")
 		assert.Equal(t, "alice.new@example.com", updated[0]["email"], "Email should be updated")
 
@@ -106,14 +107,14 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 
 		// DELETE
 		deleteQuery := `DELETE FROM users WHERE name = 'Bob'`
-		result = ExecuteSQLQuery(t, env, dbName, deleteQuery)
+		result = e2e.ExecuteSQLQuery(t, env, dbName, deleteQuery)
 
 		rowsAffected, ok = result["rows_affected"].(float64)
 		require.True(t, ok, "Should have rows_affected")
 		assert.Equal(t, float64(1), rowsAffected, "Should delete 1 row")
 
 		// Verify deletion
-		remaining := QuerySQLite(t, env, dbName, "SELECT * FROM users")
+		remaining := e2e.QuerySQLite(t, env, dbName, "SELECT * FROM users")
 		assert.Equal(t, 1, len(remaining), "Should have 1 user remaining")
 
 		t.Logf("✓ DELETE operation verified")
@@ -121,7 +122,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 
 	// Step 4: Test backend API endpoints (if deployment is active)
 	t.Run("Test backend API endpoints", func(t *testing.T) {
-		deployment := GetDeployment(t, env, backendID)
+		deployment := e2e.GetDeployment(t, env, backendID)
 
 		status, ok := deployment["status"].(string)
 		if !ok || status != "active" {
@@ -132,7 +133,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 		backendDomain := env.BuildDeploymentDomain(backendName)
 
 		// Test health endpoint
-		resp := TestDeploymentWithHostHeader(t, env, backendDomain, "/health")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, backendDomain, "/health")
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
@@ -149,7 +150,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 		}
 
 		// Test users API endpoint
-		resp2 := TestDeploymentWithHostHeader(t, env, backendDomain, "/api/users")
+		resp2 := e2e.TestDeploymentWithHostHeader(t, env, backendDomain, "/api/users")
 		defer resp2.Body.Close()
 
 		if resp2.StatusCode == http.StatusOK {
@@ -205,7 +206,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 
 		for i := 0; i < 5; i++ {
 			go func(idx int) {
-				users := QuerySQLite(t, env, dbName, "SELECT * FROM users")
+				users := e2e.QuerySQLite(t, env, dbName, "SELECT * FROM users")
 				assert.GreaterOrEqual(t, len(users), 0, "Should query successfully")
 				done <- true
 			}(i)
@@ -226,7 +227,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 }
 
 func TestFullStack_StaticSite_SQLite(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	appName := fmt.Sprintf("fullstack-static-%d", time.Now().Unix())
@@ -238,21 +239,21 @@ func TestFullStack_StaticSite_SQLite(t *testing.T) {
 	defer func() {
 		if !env.SkipCleanup {
 			if frontendID != "" {
-				DeleteDeployment(t, env, frontendID)
+				e2e.DeleteDeployment(t, env, frontendID)
 			}
-			DeleteSQLiteDB(t, env, dbName)
+			e2e.DeleteSQLiteDB(t, env, dbName)
 		}
 	}()
 
 	t.Run("Deploy static site and create database", func(t *testing.T) {
 		// Create database
-		CreateSQLiteDB(t, env, dbName)
-		ExecuteSQLQuery(t, env, dbName, "CREATE TABLE page_views (id INTEGER PRIMARY KEY, page TEXT, count INTEGER)")
-		ExecuteSQLQuery(t, env, dbName, "INSERT INTO page_views (page, count) VALUES ('home', 0)")
+		e2e.CreateSQLiteDB(t, env, dbName)
+		e2e.ExecuteSQLQuery(t, env, dbName, "CREATE TABLE page_views (id INTEGER PRIMARY KEY, page TEXT, count INTEGER)")
+		e2e.ExecuteSQLQuery(t, env, dbName, "INSERT INTO page_views (page, count) VALUES ('home', 0)")
 
 		// Deploy frontend
 		tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
-		frontendID = CreateTestDeployment(t, env, frontendName, tarballPath)
+		frontendID = e2e.CreateTestDeployment(t, env, frontendName, tarballPath)
 
 		assert.NotEmpty(t, frontendID, "Frontend deployment should succeed")
 		t.Logf("✓ Static site deployed with SQLite backend")
@@ -265,7 +266,7 @@ func TestFullStack_StaticSite_SQLite(t *testing.T) {
 		frontendDomain := env.BuildDeploymentDomain(frontendName)
 
 		// Test frontend
-		resp := TestDeploymentWithHostHeader(t, env, frontendDomain, "/")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, frontendDomain, "/")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Frontend should serve")
@@ -274,10 +275,10 @@ func TestFullStack_StaticSite_SQLite(t *testing.T) {
 		assert.Contains(t, string(body), "<div id=\"root\">", "Should contain React app")
 
 		// Simulate page view tracking
-		ExecuteSQLQuery(t, env, dbName, "UPDATE page_views SET count = count + 1 WHERE page = 'home'")
+		e2e.ExecuteSQLQuery(t, env, dbName, "UPDATE page_views SET count = count + 1 WHERE page = 'home'")
 
 		// Verify count
-		views := QuerySQLite(t, env, dbName, "SELECT count FROM page_views WHERE page = 'home'")
+		views := e2e.QuerySQLite(t, env, dbName, "SELECT count FROM page_views WHERE page = 'home'")
 		require.Len(t, views, 1, "Should have page view record")
 
 		count, ok := views[0]["count"].(float64)

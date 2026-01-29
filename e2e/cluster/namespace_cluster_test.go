@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package cluster_test
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +31,7 @@ func TestNamespaceCluster_FullProvisioning(t *testing.T) {
 	// Generate unique namespace name
 	newNamespace := fmt.Sprintf("e2e-cluster-%d", time.Now().UnixNano())
 
-	env, err := LoadTestEnvWithNamespace(newNamespace)
+	env, err := e2e.LoadTestEnvWithNamespace(newNamespace)
 	require.NoError(t, err, "FATAL: Failed to create test environment for namespace %s", newNamespace)
 	require.NotEmpty(t, env.APIKey, "FATAL: No API key received - namespace provisioning failed")
 
@@ -70,7 +71,7 @@ func TestNamespaceCluster_FullProvisioning(t *testing.T) {
 		}
 
 		deploymentName := fmt.Sprintf("cluster-test-%d", time.Now().Unix())
-		deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+		deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 		require.NotEmpty(t, deploymentID, "FAIL: Deployment creation failed on namespace cluster")
 
 		t.Logf("Created deployment %s (ID: %s) on namespace %s", deploymentName, deploymentID, newNamespace)
@@ -78,7 +79,7 @@ func TestNamespaceCluster_FullProvisioning(t *testing.T) {
 		// Cleanup
 		defer func() {
 			if !env.SkipCleanup {
-				DeleteDeployment(t, env, deploymentID)
+				e2e.DeleteDeployment(t, env, deploymentID)
 			}
 		}()
 
@@ -246,7 +247,7 @@ func TestNamespaceCluster_ProvisioningCreatesProcesses(t *testing.T) {
 	t.Logf("Ports in use before provisioning: %v", portsBefore)
 
 	// Create namespace
-	env, err := LoadTestEnvWithNamespace(newNamespace)
+	env, err := e2e.LoadTestEnvWithNamespace(newNamespace)
 	require.NoError(t, err, "FATAL: Failed to create namespace")
 	require.NotEmpty(t, env.APIKey, "FATAL: No API key - provisioning failed")
 
@@ -330,7 +331,7 @@ func TestNamespaceCluster_ProvisioningCreatesProcesses(t *testing.T) {
 
 // TestNamespaceCluster_StatusEndpoint tests the /v1/namespace/status endpoint
 func TestNamespaceCluster_StatusEndpoint(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	t.Run("Status endpoint returns 404 for non-existent cluster", func(t *testing.T) {
@@ -351,10 +352,10 @@ func TestNamespaceCluster_CrossNamespaceAccess(t *testing.T) {
 	nsA := fmt.Sprintf("ns-a-%d", time.Now().Unix())
 	nsB := fmt.Sprintf("ns-b-%d", time.Now().Unix())
 
-	envA, err := LoadTestEnvWithNamespace(nsA)
+	envA, err := e2e.LoadTestEnvWithNamespace(nsA)
 	require.NoError(t, err, "FAIL: Cannot create namespace A")
 
-	envB, err := LoadTestEnvWithNamespace(nsB)
+	envB, err := e2e.LoadTestEnvWithNamespace(nsB)
 	require.NoError(t, err, "FAIL: Cannot create namespace B")
 
 	// Verify both namespaces have different API keys
@@ -392,7 +393,7 @@ func TestNamespaceCluster_CrossNamespaceAccess(t *testing.T) {
 
 // TestDeployment_SubdomainFormat tests deployment subdomain format
 func TestDeployment_SubdomainFormat(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
@@ -401,12 +402,12 @@ func TestDeployment_SubdomainFormat(t *testing.T) {
 	}
 
 	deploymentName := fmt.Sprintf("subdomain-test-%d", time.Now().UnixNano())
-	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	require.NotEmpty(t, deploymentID, "FAIL: Deployment creation failed")
 
 	defer func() {
 		if !env.SkipCleanup {
-			DeleteDeployment(t, env, deploymentID)
+			e2e.DeleteDeployment(t, env, deploymentID)
 		}
 	}()
 

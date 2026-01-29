@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 // uploadFile is a helper to upload a file to storage
@@ -34,7 +36,7 @@ func uploadFile(t *testing.T, ctx context.Context, content []byte, filename stri
 	}
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
@@ -42,13 +44,13 @@ func uploadFile(t *testing.T, ctx context.Context, content []byte, filename stri
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	// Add auth headers
-	if jwt := GetJWT(); jwt != "" {
+	if jwt := e2e.GetJWT(); jwt != "" {
 		req.Header.Set("Authorization", "Bearer "+jwt)
-	} else if apiKey := GetAPIKey(); apiKey != "" {
+	} else if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload request failed: %v", err)
@@ -60,28 +62,20 @@ func uploadFile(t *testing.T, ctx context.Context, content []byte, filename stri
 		t.Fatalf("upload failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	result, err := DecodeJSONFromReader(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		t.Fatalf("failed to read upload response: %v", err)
+	}
+	var result map[string]interface{}
+	if err := e2e.DecodeJSON(body, &result); err != nil {
 		t.Fatalf("failed to decode upload response: %v", err)
 	}
 
 	return result["cid"].(string)
 }
 
-// DecodeJSON is a helper to decode JSON from io.ReadCloser
-func DecodeJSONFromReader(rc io.ReadCloser) (map[string]interface{}, error) {
-	defer rc.Close()
-	body, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, err
-	}
-	var result map[string]interface{}
-	err = DecodeJSON(body, &result)
-	return result, err
-}
-
 func TestStorage_UploadText(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -107,18 +101,18 @@ func TestStorage_UploadText(t *testing.T) {
 	}
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload request failed: %v", err)
@@ -132,7 +126,7 @@ func TestStorage_UploadText(t *testing.T) {
 
 	var result map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
-	if err := DecodeJSON(body, &result); err != nil {
+	if err := e2e.DecodeJSON(body, &result); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -150,7 +144,7 @@ func TestStorage_UploadText(t *testing.T) {
 }
 
 func TestStorage_UploadBinary(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -177,18 +171,18 @@ func TestStorage_UploadBinary(t *testing.T) {
 	}
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload request failed: %v", err)
@@ -202,7 +196,7 @@ func TestStorage_UploadBinary(t *testing.T) {
 
 	var result map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
-	if err := DecodeJSON(body, &result); err != nil {
+	if err := e2e.DecodeJSON(body, &result); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -212,7 +206,7 @@ func TestStorage_UploadBinary(t *testing.T) {
 }
 
 func TestStorage_UploadLarge(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -239,18 +233,18 @@ func TestStorage_UploadLarge(t *testing.T) {
 	}
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload request failed: %v", err)
@@ -264,7 +258,7 @@ func TestStorage_UploadLarge(t *testing.T) {
 
 	var result map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
-	if err := DecodeJSON(body, &result); err != nil {
+	if err := e2e.DecodeJSON(body, &result); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -274,7 +268,7 @@ func TestStorage_UploadLarge(t *testing.T) {
 }
 
 func TestStorage_PinUnpin(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -299,18 +293,18 @@ func TestStorage_PinUnpin(t *testing.T) {
 	}
 
 	// Create upload request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload failed: %v", err)
@@ -319,7 +313,7 @@ func TestStorage_PinUnpin(t *testing.T) {
 
 	var uploadResult map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
-	if err := DecodeJSON(body, &uploadResult); err != nil {
+	if err := e2e.DecodeJSON(body, &uploadResult); err != nil {
 		t.Fatalf("failed to decode upload response: %v", err)
 	}
 
@@ -333,9 +327,9 @@ func TestStorage_PinUnpin(t *testing.T) {
 	}
 
 	// Pin the file
-	pinReq := &HTTPRequest{
+	pinReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/storage/pin",
+		URL:    e2e.GetGatewayURL() + "/v1/storage/pin",
 		Body: map[string]interface{}{
 			"cid":  cid,
 			"name": "pinned-file",
@@ -352,7 +346,7 @@ func TestStorage_PinUnpin(t *testing.T) {
 	}
 
 	var pinResult map[string]interface{}
-	if err := DecodeJSON(body2, &pinResult); err != nil {
+	if err := e2e.DecodeJSON(body2, &pinResult); err != nil {
 		t.Fatalf("failed to decode pin response: %v", err)
 	}
 
@@ -361,9 +355,9 @@ func TestStorage_PinUnpin(t *testing.T) {
 	}
 
 	// Unpin the file
-	unpinReq := &HTTPRequest{
+	unpinReq := &e2e.HTTPRequest{
 		Method: http.MethodDelete,
-		URL:    GetGatewayURL() + "/v1/storage/unpin/" + cid,
+		URL:    e2e.GetGatewayURL() + "/v1/storage/unpin/" + cid,
 	}
 
 	body3, status, err := unpinReq.Do(ctx)
@@ -377,7 +371,7 @@ func TestStorage_PinUnpin(t *testing.T) {
 }
 
 func TestStorage_Status(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -402,18 +396,18 @@ func TestStorage_Status(t *testing.T) {
 	}
 
 	// Create upload request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload failed: %v", err)
@@ -422,16 +416,16 @@ func TestStorage_Status(t *testing.T) {
 
 	var uploadResult map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
-	if err := DecodeJSON(body, &uploadResult); err != nil {
+	if err := e2e.DecodeJSON(body, &uploadResult); err != nil {
 		t.Fatalf("failed to decode upload response: %v", err)
 	}
 
 	cid := uploadResult["cid"].(string)
 
 	// Get status
-	statusReq := &HTTPRequest{
+	statusReq := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/storage/status/" + cid,
+		URL:    e2e.GetGatewayURL() + "/v1/storage/status/" + cid,
 	}
 
 	statusBody, status, err := statusReq.Do(ctx)
@@ -444,7 +438,7 @@ func TestStorage_Status(t *testing.T) {
 	}
 
 	var statusResult map[string]interface{}
-	if err := DecodeJSON(statusBody, &statusResult); err != nil {
+	if err := e2e.DecodeJSON(statusBody, &statusResult); err != nil {
 		t.Fatalf("failed to decode status response: %v", err)
 	}
 
@@ -454,14 +448,14 @@ func TestStorage_Status(t *testing.T) {
 }
 
 func TestStorage_InvalidCID(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	statusReq := &HTTPRequest{
+	statusReq := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/storage/status/QmInvalidCID123456789",
+		URL:    e2e.GetGatewayURL() + "/v1/storage/status/QmInvalidCID123456789",
 	}
 
 	_, status, err := statusReq.Do(ctx)
@@ -475,7 +469,7 @@ func TestStorage_InvalidCID(t *testing.T) {
 }
 
 func TestStorage_GetByteRange(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -500,18 +494,18 @@ func TestStorage_GetByteRange(t *testing.T) {
 	}
 
 	// Create upload request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GetGatewayURL()+"/v1/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e2e.GetGatewayURL()+"/v1/storage/upload", &buf)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := NewHTTPClient(5 * time.Minute)
+	client := e2e.NewHTTPClient(5 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("upload failed: %v", err)
@@ -520,19 +514,19 @@ func TestStorage_GetByteRange(t *testing.T) {
 
 	var uploadResult map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
-	if err := DecodeJSON(body, &uploadResult); err != nil {
+	if err := e2e.DecodeJSON(body, &uploadResult); err != nil {
 		t.Fatalf("failed to decode upload response: %v", err)
 	}
 
 	cid := uploadResult["cid"].(string)
 
 	// Get full content
-	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, GetGatewayURL()+"/v1/storage/get/"+cid, nil)
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, e2e.GetGatewayURL()+"/v1/storage/get/"+cid, nil)
 	if err != nil {
 		t.Fatalf("failed to create get request: %v", err)
 	}
 
-	if apiKey := GetAPIKey(); apiKey != "" {
+	if apiKey := e2e.GetAPIKey(); apiKey != "" {
 		getReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 

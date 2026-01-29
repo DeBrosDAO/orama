@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package shared_test
 
 import (
 	"context"
@@ -9,17 +9,19 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	e2e "github.com/DeBrosOfficial/network/e2e"
 )
 
 func TestPubSub_Presence(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
-	topic := GenerateTopic()
+	topic := e2e.GenerateTopic()
 	memberID := "user123"
 	memberMeta := map[string]interface{}{"name": "Alice"}
 
 	// 1. Subscribe with presence
-	client1, err := NewWSPubSubPresenceClient(t, topic, memberID, memberMeta)
+	client1, err := e2e.NewWSPubSubPresenceClient(t, topic, memberID, memberMeta)
 	if err != nil {
 		t.Fatalf("failed to create presence client: %v", err)
 	}
@@ -48,9 +50,9 @@ func TestPubSub_Presence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    fmt.Sprintf("%s/v1/pubsub/presence?topic=%s", GetGatewayURL(), topic),
+		URL:    fmt.Sprintf("%s/v1/pubsub/presence?topic=%s", e2e.GetGatewayURL(), topic),
 	}
 
 	body, status, err := req.Do(ctx)
@@ -63,7 +65,7 @@ func TestPubSub_Presence(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	if err := DecodeJSON(body, &resp); err != nil {
+	if err := e2e.DecodeJSON(body, &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -83,7 +85,7 @@ func TestPubSub_Presence(t *testing.T) {
 
 	// 3. Subscribe second member
 	memberID2 := "user456"
-	client2, err := NewWSPubSubPresenceClient(t, topic, memberID2, nil)
+	client2, err := e2e.NewWSPubSubPresenceClient(t, topic, memberID2, nil)
 	if err != nil {
 		t.Fatalf("failed to create second presence client: %v", err)
 	}
@@ -119,4 +121,3 @@ func TestPubSub_Presence(t *testing.T) {
 		t.Fatalf("expected presence.leave for %s, got %v for %v", memberID2, event["type"], event["member_id"])
 	}
 }
-

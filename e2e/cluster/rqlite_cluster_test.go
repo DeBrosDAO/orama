@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package cluster_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,15 +22,15 @@ import (
 
 // TestRQLite_ClusterHealth verifies the RQLite cluster is healthy and operational.
 func TestRQLite_ClusterHealth(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Check RQLite schema endpoint (proves cluster is reachable)
-	req := &HTTPRequest{
+	req := &e2e.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    GetGatewayURL() + "/v1/rqlite/schema",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/schema",
 	}
 
 	body, status, err := req.Do(ctx)
@@ -37,7 +38,7 @@ func TestRQLite_ClusterHealth(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "FAIL: RQLite schema endpoint returned %d: %s", status, string(body))
 
 	var schemaResp map[string]interface{}
-	err = DecodeJSON(body, &schemaResp)
+	err = e2e.DecodeJSON(body, &schemaResp)
 	require.NoError(t, err, "FAIL: Could not decode RQLite schema response")
 
 	// Schema endpoint should return tables array
@@ -49,27 +50,27 @@ func TestRQLite_ClusterHealth(t *testing.T) {
 
 // TestRQLite_WriteReadConsistency verifies data written can be read back consistently.
 func TestRQLite_WriteReadConsistency(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
 	}()
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": fmt.Sprintf(
 				"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, value TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
@@ -88,9 +89,9 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 		uniqueValue := fmt.Sprintf("test_value_%d", time.Now().UnixNano())
 
 		// Insert
-		insertReq := &HTTPRequest{
+		insertReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body: map[string]interface{}{
 				"statements": []string{
 					fmt.Sprintf("INSERT INTO %s (value) VALUES ('%s')", table, uniqueValue),
@@ -103,9 +104,9 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Insert returned status %d", status)
 
 		// Read back
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT value FROM %s WHERE value = '%s'", table, uniqueValue),
 			},
@@ -116,7 +117,7 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Query returned status %d", status)
 
 		var queryResp map[string]interface{}
-		err = DecodeJSON(body, &queryResp)
+		err = e2e.DecodeJSON(body, &queryResp)
 		require.NoError(t, err, "FAIL: Could not decode query response")
 
 		// Verify we got our value back
@@ -135,9 +136,9 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 				fmt.Sprintf("INSERT INTO %s (value) VALUES ('batch_%d')", table, i))
 		}
 
-		insertReq := &HTTPRequest{
+		insertReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body: map[string]interface{}{
 				"statements": statements,
 			},
@@ -148,9 +149,9 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Batch insert returned status %d", status)
 
 		// Count all batch rows
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT COUNT(*) as cnt FROM %s WHERE value LIKE 'batch_%%'", table),
 			},
@@ -161,7 +162,7 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Count query returned status %d", status)
 
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		if rows, ok := queryResp["rows"].([]interface{}); ok && len(rows) > 0 {
 			row := rows[0].([]interface{})
@@ -175,27 +176,27 @@ func TestRQLite_WriteReadConsistency(t *testing.T) {
 
 // TestRQLite_TransactionAtomicity verifies transactions are atomic.
 func TestRQLite_TransactionAtomicity(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
 	}()
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": fmt.Sprintf(
 				"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, value TEXT UNIQUE)",
@@ -210,9 +211,9 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 		"FAIL: Create table returned status %d", status)
 
 	t.Run("Successful_transaction_commits_all", func(t *testing.T) {
-		txReq := &HTTPRequest{
+		txReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body: map[string]interface{}{
 				"statements": []string{
 					fmt.Sprintf("INSERT INTO %s (value) VALUES ('tx_val_1')", table),
@@ -227,9 +228,9 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Transaction returned status %d", status)
 
 		// Verify all 3 rows exist
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE value LIKE 'tx_val_%%'", table),
 			},
@@ -237,7 +238,7 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 
 		body, _, _ := queryReq.Do(ctx)
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		if rows, ok := queryResp["rows"].([]interface{}); ok && len(rows) > 0 {
 			row := rows[0].([]interface{})
@@ -250,9 +251,9 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 
 	t.Run("Updates_preserve_consistency", func(t *testing.T) {
 		// Update a value
-		updateReq := &HTTPRequest{
+		updateReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 			Body: map[string]interface{}{
 				"statements": []string{
 					fmt.Sprintf("UPDATE %s SET value = 'tx_val_1_updated' WHERE value = 'tx_val_1'", table),
@@ -265,9 +266,9 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Update returned status %d", status)
 
 		// Verify update took effect
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT value FROM %s WHERE value = 'tx_val_1_updated'", table),
 			},
@@ -275,7 +276,7 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 
 		body, _, _ := queryReq.Do(ctx)
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		count, _ := queryResp["count"].(float64)
 		require.Equal(t, float64(1), count, "FAIL: Update didn't take effect")
@@ -286,27 +287,27 @@ func TestRQLite_TransactionAtomicity(t *testing.T) {
 
 // TestRQLite_ConcurrentWrites verifies the cluster handles concurrent writes correctly.
 func TestRQLite_ConcurrentWrites(t *testing.T) {
-	SkipIfMissingGateway(t)
+	e2e.SkipIfMissingGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/drop-table",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/drop-table",
 			Body:   map[string]interface{}{"table": table},
 		}
 		dropReq.Do(context.Background())
 	}()
 
 	// Create table
-	createReq := &HTTPRequest{
+	createReq := &e2e.HTTPRequest{
 		Method: http.MethodPost,
-		URL:    GetGatewayURL() + "/v1/rqlite/create-table",
+		URL:    e2e.GetGatewayURL() + "/v1/rqlite/create-table",
 		Body: map[string]interface{}{
 			"schema": fmt.Sprintf(
 				"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, worker INTEGER, seq INTEGER)",
@@ -333,9 +334,9 @@ func TestRQLite_ConcurrentWrites(t *testing.T) {
 			go func(workerID int) {
 				defer wg.Done()
 				for i := 0; i < insertsPerWorker; i++ {
-					insertReq := &HTTPRequest{
+					insertReq := &e2e.HTTPRequest{
 						Method: http.MethodPost,
-						URL:    GetGatewayURL() + "/v1/rqlite/transaction",
+						URL:    e2e.GetGatewayURL() + "/v1/rqlite/transaction",
 						Body: map[string]interface{}{
 							"statements": []string{
 								fmt.Sprintf("INSERT INTO %s (worker, seq) VALUES (%d, %d)", table, workerID, i),
@@ -367,9 +368,9 @@ func TestRQLite_ConcurrentWrites(t *testing.T) {
 		require.Empty(t, errors, "FAIL: %d concurrent inserts failed: %v", len(errors), errors)
 
 		// Verify total count
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method: http.MethodPost,
-			URL:    GetGatewayURL() + "/v1/rqlite/query",
+			URL:    e2e.GetGatewayURL() + "/v1/rqlite/query",
 			Body: map[string]interface{}{
 				"sql": fmt.Sprintf("SELECT COUNT(*) FROM %s", table),
 			},
@@ -377,7 +378,7 @@ func TestRQLite_ConcurrentWrites(t *testing.T) {
 
 		body, _, _ := queryReq.Do(ctx)
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		if rows, ok := queryResp["rows"].([]interface{}); ok && len(rows) > 0 {
 			row := rows[0].([]interface{})
@@ -395,7 +396,7 @@ func TestRQLite_NamespaceClusterOperations(t *testing.T) {
 	// Create a new namespace
 	namespace := fmt.Sprintf("rqlite-test-%d", time.Now().UnixNano())
 
-	env, err := LoadTestEnvWithNamespace(namespace)
+	env, err := e2e.LoadTestEnvWithNamespace(namespace)
 	require.NoError(t, err, "FAIL: Could not create namespace for RQLite test")
 	require.NotEmpty(t, env.APIKey, "FAIL: No API key - namespace provisioning failed")
 
@@ -404,11 +405,11 @@ func TestRQLite_NamespaceClusterOperations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	table := GenerateTableName()
+	table := e2e.GenerateTableName()
 
 	// Cleanup
 	defer func() {
-		dropReq := &HTTPRequest{
+		dropReq := &e2e.HTTPRequest{
 			Method:  http.MethodPost,
 			URL:     env.GatewayURL + "/v1/rqlite/drop-table",
 			Body:    map[string]interface{}{"table": table},
@@ -419,7 +420,7 @@ func TestRQLite_NamespaceClusterOperations(t *testing.T) {
 
 	t.Run("Namespace_RQLite_create_insert_query", func(t *testing.T) {
 		// Create table in namespace cluster
-		createReq := &HTTPRequest{
+		createReq := &e2e.HTTPRequest{
 			Method:  http.MethodPost,
 			URL:     env.GatewayURL + "/v1/rqlite/create-table",
 			Headers: map[string]string{"Authorization": "Bearer " + env.APIKey},
@@ -438,7 +439,7 @@ func TestRQLite_NamespaceClusterOperations(t *testing.T) {
 
 		// Insert data
 		uniqueValue := fmt.Sprintf("ns_value_%d", time.Now().UnixNano())
-		insertReq := &HTTPRequest{
+		insertReq := &e2e.HTTPRequest{
 			Method:  http.MethodPost,
 			URL:     env.GatewayURL + "/v1/rqlite/transaction",
 			Headers: map[string]string{"Authorization": "Bearer " + env.APIKey},
@@ -454,7 +455,7 @@ func TestRQLite_NamespaceClusterOperations(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Insert returned status %d", status)
 
 		// Query data
-		queryReq := &HTTPRequest{
+		queryReq := &e2e.HTTPRequest{
 			Method:  http.MethodPost,
 			URL:     env.GatewayURL + "/v1/rqlite/query",
 			Headers: map[string]string{"Authorization": "Bearer " + env.APIKey},
@@ -468,7 +469,7 @@ func TestRQLite_NamespaceClusterOperations(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "FAIL: Query returned status %d", status)
 
 		var queryResp map[string]interface{}
-		DecodeJSON(body, &queryResp)
+		e2e.DecodeJSON(body, &queryResp)
 
 		count, _ := queryResp["count"].(float64)
 		require.Equal(t, float64(1), count, "FAIL: Data not found in namespace cluster")

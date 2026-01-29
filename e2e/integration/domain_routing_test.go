@@ -1,6 +1,6 @@
 //go:build e2e
 
-package e2e
+package integration_test
 
 import (
 	"encoding/json"
@@ -12,21 +12,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDomainRouting_BasicRouting(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-routing-%d", time.Now().Unix())
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
 
-	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
 		if !env.SkipCleanup {
-			DeleteDeployment(t, env, deploymentID)
+			e2e.DeleteDeployment(t, env, deploymentID)
 		}
 	}()
 
@@ -34,7 +35,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Get deployment details for debugging
-	deployment := GetDeployment(t, env, deploymentID)
+	deployment := e2e.GetDeployment(t, env, deploymentID)
 	t.Logf("Deployment created: ID=%s, CID=%s, Name=%s, Status=%s",
 		deploymentID, deployment["content_cid"], deployment["name"], deployment["status"])
 
@@ -42,7 +43,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 		// Domain format: {deploymentName}.{baseDomain}
 		domain := env.BuildDeploymentDomain(deploymentName)
 
-		resp := TestDeploymentWithHostHeader(t, env, domain, "/")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Should return 200 OK")
@@ -58,7 +59,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 
 	t.Run("Non-debros domain passes through", func(t *testing.T) {
 		// Request with non-debros domain should not route to deployment
-		resp := TestDeploymentWithHostHeader(t, env, "example.com", "/")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, "example.com", "/")
 		defer resp.Body.Close()
 
 		// Should either return 404 or pass to default handler
@@ -98,7 +99,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 		domain := env.BuildDeploymentDomain(deploymentName)
 
 		// /.well-known/ paths should bypass (used for ACME challenges, etc.)
-		resp := TestDeploymentWithHostHeader(t, env, domain, "/.well-known/acme-challenge/test")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/.well-known/acme-challenge/test")
 		defer resp.Body.Close()
 
 		// Should not serve deployment content
@@ -117,7 +118,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 }
 
 func TestDomainRouting_MultipleDeployments(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
@@ -126,14 +127,14 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 	deployment1Name := fmt.Sprintf("test-multi-1-%d", time.Now().Unix())
 	deployment2Name := fmt.Sprintf("test-multi-2-%d", time.Now().Unix())
 
-	deployment1ID := CreateTestDeployment(t, env, deployment1Name, tarballPath)
+	deployment1ID := e2e.CreateTestDeployment(t, env, deployment1Name, tarballPath)
 	time.Sleep(1 * time.Second)
-	deployment2ID := CreateTestDeployment(t, env, deployment2Name, tarballPath)
+	deployment2ID := e2e.CreateTestDeployment(t, env, deployment2Name, tarballPath)
 
 	defer func() {
 		if !env.SkipCleanup {
-			DeleteDeployment(t, env, deployment1ID)
-			DeleteDeployment(t, env, deployment2ID)
+			e2e.DeleteDeployment(t, env, deployment1ID)
+			e2e.DeleteDeployment(t, env, deployment2ID)
 		}
 	}()
 
@@ -144,13 +145,13 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 		domain2 := env.BuildDeploymentDomain(deployment2Name)
 
 		// Test deployment 1
-		resp1 := TestDeploymentWithHostHeader(t, env, domain1, "/")
+		resp1 := e2e.TestDeploymentWithHostHeader(t, env, domain1, "/")
 		defer resp1.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp1.StatusCode, "Deployment 1 should serve")
 
 		// Test deployment 2
-		resp2 := TestDeploymentWithHostHeader(t, env, domain2, "/")
+		resp2 := e2e.TestDeploymentWithHostHeader(t, env, domain2, "/")
 		defer resp2.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp2.StatusCode, "Deployment 2 should serve")
@@ -164,7 +165,7 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 		// Request with non-existent deployment subdomain
 		fakeDeploymentDomain := env.BuildDeploymentDomain(fmt.Sprintf("nonexistent-deployment-%d", time.Now().Unix()))
 
-		resp := TestDeploymentWithHostHeader(t, env, fakeDeploymentDomain, "/")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, fakeDeploymentDomain, "/")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
@@ -175,16 +176,16 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 }
 
 func TestDomainRouting_ContentTypes(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-content-types-%d", time.Now().Unix())
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
 
-	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
 		if !env.SkipCleanup {
-			DeleteDeployment(t, env, deploymentID)
+			e2e.DeleteDeployment(t, env, deploymentID)
 		}
 	}()
 
@@ -203,7 +204,7 @@ func TestDomainRouting_ContentTypes(t *testing.T) {
 
 	for _, test := range contentTypeTests {
 		t.Run(test.description, func(t *testing.T) {
-			resp := TestDeploymentWithHostHeader(t, env, domain, test.path)
+			resp := e2e.TestDeploymentWithHostHeader(t, env, domain, test.path)
 			defer resp.Body.Close()
 
 			if resp.StatusCode == http.StatusOK {
@@ -220,16 +221,16 @@ func TestDomainRouting_ContentTypes(t *testing.T) {
 }
 
 func TestDomainRouting_SPAFallback(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-spa-%d", time.Now().Unix())
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
 
-	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
 		if !env.SkipCleanup {
-			DeleteDeployment(t, env, deploymentID)
+			e2e.DeleteDeployment(t, env, deploymentID)
 		}
 	}()
 
@@ -246,7 +247,7 @@ func TestDomainRouting_SPAFallback(t *testing.T) {
 		}
 
 		for _, path := range unknownPaths {
-			resp := TestDeploymentWithHostHeader(t, env, domain, path)
+			resp := e2e.TestDeploymentWithHostHeader(t, env, domain, path)
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
@@ -266,16 +267,16 @@ func TestDomainRouting_SPAFallback(t *testing.T) {
 // - CORRECT: {name}-{random}.{baseDomain} (e.g., "myapp-f3o4if.dbrs.space")
 // - WRONG: {name}.node-{shortID}.{baseDomain} (should NOT exist)
 func TestDeployment_DomainFormat(t *testing.T) {
-	env, err := LoadTestEnv()
+	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("format-test-%d", time.Now().Unix())
 	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
 
-	deploymentID := CreateTestDeployment(t, env, deploymentName, tarballPath)
+	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
 		if !env.SkipCleanup {
-			DeleteDeployment(t, env, deploymentID)
+			e2e.DeleteDeployment(t, env, deploymentID)
 		}
 	}()
 
@@ -283,7 +284,7 @@ func TestDeployment_DomainFormat(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	t.Run("Deployment URL has correct format", func(t *testing.T) {
-		deployment := GetDeployment(t, env, deploymentID)
+		deployment := e2e.GetDeployment(t, env, deploymentID)
 
 		// Get the deployment URLs
 		urls, ok := deployment["urls"].([]interface{})
@@ -331,14 +332,14 @@ func TestDeployment_DomainFormat(t *testing.T) {
 
 	t.Run("Domain resolves via Host header", func(t *testing.T) {
 		// Get the actual subdomain from the deployment
-		deployment := GetDeployment(t, env, deploymentID)
+		deployment := e2e.GetDeployment(t, env, deploymentID)
 		subdomain, _ := deployment["subdomain"].(string)
 		if subdomain == "" {
 			t.Skip("No subdomain set, skipping host header test")
 		}
 		domain := subdomain + "." + env.BaseDomain
 
-		resp := TestDeploymentWithHostHeader(t, env, domain, "/")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
