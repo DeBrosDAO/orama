@@ -114,7 +114,7 @@ func deployStatic(cmd *cobra.Command, args []string) error {
 
 	endpoint := "/v1/deployments/static/upload"
 	if deployUpdate {
-		endpoint = "/v1/deployments/static/update"
+		endpoint = "/v1/deployments/static/update?name=" + deployName
 	}
 
 	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
@@ -202,7 +202,7 @@ func deployNextJS(cmd *cobra.Command, args []string) error {
 
 	endpoint := "/v1/deployments/nextjs/upload"
 	if deployUpdate {
-		endpoint = "/v1/deployments/nextjs/update"
+		endpoint = "/v1/deployments/nextjs/update?name=" + deployName
 	}
 
 	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
@@ -258,7 +258,7 @@ func deployGo(cmd *cobra.Command, args []string) error {
 
 	endpoint := "/v1/deployments/go/upload"
 	if deployUpdate {
-		endpoint = "/v1/deployments/go/update"
+		endpoint = "/v1/deployments/go/update?name=" + deployName
 	}
 
 	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
@@ -313,7 +313,7 @@ func deployNodeJS(cmd *cobra.Command, args []string) error {
 
 	endpoint := "/v1/deployments/nodejs/upload"
 	if deployUpdate {
-		endpoint = "/v1/deployments/nodejs/update"
+		endpoint = "/v1/deployments/nodejs/update?name=" + deployName
 	}
 
 	resp, err := uploadDeployment(endpoint, tarball, map[string]string{

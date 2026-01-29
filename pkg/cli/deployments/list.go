@@ -276,7 +276,7 @@ func rollbackDeployment(cmd *cobra.Command, args []string) error {
 	}
 
 	apiURL := getAPIURL()
-	url := apiURL + "/v1/deployments/rollback"
+	url := apiURL + "/v1/deployments/rollback?name=" + name
 
 	payload := map[string]interface{}{
 		"name":    name,

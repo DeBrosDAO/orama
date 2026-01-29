@@ -196,6 +196,9 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 
 	// Extract to staging directory
 	stagingPath := fmt.Sprintf("%s.new", h.nextjsHandler.baseDeployPath+"/"+existing.Namespace+"/"+existing.Name)
+	if err := os.MkdirAll(stagingPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create staging directory: %w", err)
+	}
 	if err := h.nextjsHandler.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		return nil, fmt.Errorf("failed to extract new build: %w", err)
 	}

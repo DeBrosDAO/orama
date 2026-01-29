@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -236,6 +237,9 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 	stagingPath := deployPath + ".rollback"
 
 	// Extract historical version
+	if err := os.MkdirAll(stagingPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create staging directory: %w", err)
+	}
 	if err := h.updateHandler.nextjsHandler.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		return nil, fmt.Errorf("failed to extract historical version: %w", err)
 	}

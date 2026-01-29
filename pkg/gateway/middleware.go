@@ -926,7 +926,7 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 
 	// Simple HTTP client for internal node-to-node communication
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 120 * time.Second,
 	}
 
 	resp, err := httpClient.Do(proxyReq)

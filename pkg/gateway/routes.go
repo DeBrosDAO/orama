@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"net/http"
+
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 )
 
 // Routes returns the http.Handler with all routes and middleware configured
@@ -93,29 +95,31 @@ func (g *Gateway) Routes() http.Handler {
 	if g.deploymentService != nil {
 		// Static deployments
 		mux.HandleFunc("/v1/deployments/static/upload", g.staticHandler.HandleUpload)
-		mux.HandleFunc("/v1/deployments/static/update", g.updateHandler.HandleUpdate)
+		mux.HandleFunc("/v1/deployments/static/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
 
 		// Next.js deployments
 		mux.HandleFunc("/v1/deployments/nextjs/upload", g.nextjsHandler.HandleUpload)
-		mux.HandleFunc("/v1/deployments/nextjs/update", g.updateHandler.HandleUpdate)
+		mux.HandleFunc("/v1/deployments/nextjs/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
 
 		// Go backend deployments
 		if g.goHandler != nil {
 			mux.HandleFunc("/v1/deployments/go/upload", g.goHandler.HandleUpload)
+			mux.HandleFunc("/v1/deployments/go/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
 		}
 
 		// Node.js backend deployments
 		if g.nodejsHandler != nil {
 			mux.HandleFunc("/v1/deployments/nodejs/upload", g.nodejsHandler.HandleUpload)
+			mux.HandleFunc("/v1/deployments/nodejs/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
 		}
 
 		// Deployment management
 		mux.HandleFunc("/v1/deployments/list", g.listHandler.HandleList)
 		mux.HandleFunc("/v1/deployments/get", g.listHandler.HandleGet)
-		mux.HandleFunc("/v1/deployments/delete", g.listHandler.HandleDelete)
-		mux.HandleFunc("/v1/deployments/rollback", g.rollbackHandler.HandleRollback)
+		mux.HandleFunc("/v1/deployments/delete", g.withHomeNodeProxy(g.listHandler.HandleDelete))
+		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeProxy(g.rollbackHandler.HandleRollback))
 		mux.HandleFunc("/v1/deployments/versions", g.rollbackHandler.HandleListVersions)
-		mux.HandleFunc("/v1/deployments/logs", g.logsHandler.HandleLogs)
+		mux.HandleFunc("/v1/deployments/logs", g.withHomeNodeProxy(g.logsHandler.HandleLogs))
 		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
 
 		// Custom domains
@@ -135,4 +139,39 @@ func (g *Gateway) Routes() http.Handler {
 	}
 
 	return g.withMiddleware(mux)
+}
+
+// withHomeNodeProxy wraps a deployment handler to proxy requests to the home node
+// if the current node is not the home node for the deployment.
+func (g *Gateway) withHomeNodeProxy(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Already proxied — prevent loops
+		if r.Header.Get("X-Orama-Proxy-Node") != "" {
+			handler(w, r)
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			handler(w, r)
+			return
+		}
+		ctx := r.Context()
+		namespace, _ := ctx.Value(ctxkeys.NamespaceOverride).(string)
+		if namespace == "" {
+			handler(w, r)
+			return
+		}
+		deployment, err := g.deploymentService.GetDeployment(ctx, namespace, name)
+		if err != nil {
+			handler(w, r) // let handler return proper error
+			return
+		}
+		if g.nodePeerID != "" && deployment.HomeNodeID != "" &&
+			deployment.HomeNodeID != g.nodePeerID {
+			if g.proxyCrossNode(w, r, deployment) {
+				return
+			}
+		}
+		handler(w, r)
+	}
 }
