@@ -82,6 +82,30 @@ type Deployment struct {
 	DeployedBy string    `json:"deployed_by"`
 }
 
+// ReplicaStatus represents the status of a deployment replica on a node
+type ReplicaStatus string
+
+const (
+	ReplicaStatusPending  ReplicaStatus = "pending"
+	ReplicaStatusActive   ReplicaStatus = "active"
+	ReplicaStatusFailed   ReplicaStatus = "failed"
+	ReplicaStatusRemoving ReplicaStatus = "removing"
+)
+
+// DefaultReplicaCount is the default number of replicas per deployment
+const DefaultReplicaCount = 2
+
+// Replica represents a deployment replica on a specific node
+type Replica struct {
+	DeploymentID string        `json:"deployment_id"`
+	NodeID       string        `json:"node_id"`
+	Port         int           `json:"port"`
+	Status       ReplicaStatus `json:"status"`
+	IsPrimary    bool          `json:"is_primary"`
+	CreatedAt    time.Time     `json:"created_at"`
+	UpdatedAt    time.Time     `json:"updated_at"`
+}
+
 // PortAllocation represents an allocated port on a specific node
 type PortAllocation struct {
 	NodeID       string    `json:"node_id"`

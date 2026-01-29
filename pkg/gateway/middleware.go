@@ -197,6 +197,11 @@ func isPublicPath(p string) bool {
 		return true
 	}
 
+	// Internal replica coordination endpoints (auth handled by replica handler)
+	if strings.HasPrefix(p, "/v1/internal/deployments/replica/") {
+		return true
+	}
+
 	switch p {
 	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/login", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/auth/simple-key", "/v1/network/status", "/v1/network/peers", "/v1/internal/tls/check", "/v1/internal/acme/present", "/v1/internal/acme/cleanup":
 		return true
@@ -794,7 +799,9 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 }
 
 // proxyToDynamicDeployment proxies requests to a dynamic deployment's local port
-// If the deployment is on a different node, it forwards the request to that node
+// If the deployment is on a different node, it forwards the request to that node.
+// With replica support, it first checks if the current node is a replica and can
+// serve the request locally using the replica's port.
 func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment) {
 	if deployment.Port == 0 {
 		http.Error(w, "Deployment has no assigned port", http.StatusServiceUnavailable)
@@ -804,12 +811,28 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 	// Check if request was already forwarded by another node (loop prevention)
 	proxyNode := r.Header.Get("X-Orama-Proxy-Node")
 
-	// Check if this deployment is on the current node
+	// Check if this deployment is on the current node (primary)
 	if g.nodePeerID != "" && deployment.HomeNodeID != "" &&
 		deployment.HomeNodeID != g.nodePeerID && proxyNode == "" {
-		// Need to proxy to home node
-		if g.proxyCrossNode(w, r, deployment) {
-			return // Request was proxied successfully
+
+		// Check if this node is a replica and can serve locally
+		if g.replicaManager != nil {
+			replicaPort, err := g.replicaManager.GetReplicaPort(r.Context(), deployment.ID, g.nodePeerID)
+			if err == nil && replicaPort > 0 {
+				// This node is a replica — serve locally using the replica's port
+				g.logger.Debug("Serving from local replica",
+					zap.String("deployment", deployment.Name),
+					zap.Int("replica_port", replicaPort),
+				)
+				deployment.Port = replicaPort
+				// Fall through to local proxy below
+				goto serveLocal
+			}
+		}
+
+		// Not a replica on this node — proxy to a healthy replica node
+		if g.proxyCrossNodeWithReplicas(w, r, deployment) {
+			return
 		}
 		// Fall through if cross-node proxy failed - try local anyway
 		g.logger.Warn("Cross-node proxy failed, attempting local fallback",
@@ -817,6 +840,8 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 			zap.String("home_node", deployment.HomeNodeID),
 		)
 	}
+
+serveLocal:
 
 	// Create a simple reverse proxy to localhost
 	target := "http://localhost:" + strconv.Itoa(deployment.Port)
@@ -947,6 +972,99 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 	}
 
 	// Write status code and body
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+
+	return true
+}
+
+// proxyCrossNodeWithReplicas tries to proxy a request to any healthy replica node.
+// It first tries the primary (home node), then falls back to other replicas.
+// Returns true if the request was successfully proxied.
+func (g *Gateway) proxyCrossNodeWithReplicas(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment) bool {
+	if g.replicaManager == nil {
+		// No replica manager — fall back to original single-node proxy
+		return g.proxyCrossNode(w, r, deployment)
+	}
+
+	// Get all active replica nodes
+	replicaNodes, err := g.replicaManager.GetActiveReplicaNodes(r.Context(), deployment.ID)
+	if err != nil || len(replicaNodes) == 0 {
+		// Fall back to original home node proxy
+		return g.proxyCrossNode(w, r, deployment)
+	}
+
+	// Try each replica node (primary first if present)
+	for _, nodeID := range replicaNodes {
+		if nodeID == g.nodePeerID {
+			continue // Skip self
+		}
+
+		nodeIP, err := g.replicaManager.GetNodeIP(r.Context(), nodeID)
+		if err != nil {
+			g.logger.Warn("Failed to get replica node IP",
+				zap.String("node_id", nodeID),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		// Proxy using the same logic as proxyCrossNode
+		proxyDeployment := *deployment
+		proxyDeployment.HomeNodeID = nodeID
+		if g.proxyCrossNodeToIP(w, r, &proxyDeployment, nodeIP) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// proxyCrossNodeToIP forwards a request to a specific node IP.
+// This is a variant of proxyCrossNode that takes a resolved IP directly.
+func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment, nodeIP string) bool {
+	g.logger.Info("Proxying request to replica node",
+		zap.String("deployment", deployment.Name),
+		zap.String("node_id", deployment.HomeNodeID),
+		zap.String("node_ip", nodeIP),
+	)
+
+	targetURL := "http://" + nodeIP + ":6001" + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	if err != nil {
+		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
+		return false
+	}
+
+	for key, values := range r.Header {
+		for _, value := range values {
+			proxyReq.Header.Add(key, value)
+		}
+	}
+	proxyReq.Host = r.Host
+	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
+	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
+
+	httpClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err := httpClient.Do(proxyReq)
+	if err != nil {
+		g.logger.Warn("Replica proxy request failed",
+			zap.String("target_ip", nodeIP),
+			zap.Error(err),
+		)
+		return false
+	}
+	defer resp.Body.Close()
+
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 

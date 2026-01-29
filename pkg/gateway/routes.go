@@ -123,6 +123,14 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/deployments/stats", g.withHomeNodeProxy(g.statsHandler.HandleStats))
 		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
 
+		// Internal replica coordination endpoints
+		if g.replicaHandler != nil {
+			mux.HandleFunc("/v1/internal/deployments/replica/setup", g.replicaHandler.HandleSetup)
+			mux.HandleFunc("/v1/internal/deployments/replica/update", g.replicaHandler.HandleUpdate)
+			mux.HandleFunc("/v1/internal/deployments/replica/rollback", g.replicaHandler.HandleRollback)
+			mux.HandleFunc("/v1/internal/deployments/replica/teardown", g.replicaHandler.HandleTeardown)
+		}
+
 		// Custom domains
 		mux.HandleFunc("/v1/deployments/domains/add", g.domainHandler.HandleAddDomain)
 		mux.HandleFunc("/v1/deployments/domains/verify", g.domainHandler.HandleVerifyDomain)

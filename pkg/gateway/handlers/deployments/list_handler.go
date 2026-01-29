@@ -219,6 +219,9 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 0. Fan out teardown to replica nodes (before local cleanup so replicas can stop processes)
+	h.service.FanOutToReplicas(ctx, deployment, "/v1/internal/deployments/replica/teardown", nil)
+
 	// 1. Stop systemd service
 	if err := h.processManager.Stop(ctx, deployment); err != nil {
 		h.logger.Warn("Failed to stop deployment service (may not exist)", zap.Error(err), zap.String("name", deployment.Name))

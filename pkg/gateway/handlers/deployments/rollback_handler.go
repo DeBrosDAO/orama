@@ -112,6 +112,11 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Fan out rollback to replica nodes
+	h.service.FanOutToReplicas(ctx, rolled, "/v1/internal/deployments/replica/rollback", map[string]interface{}{
+		"new_version": rolled.Version,
+	})
+
 	// Return response
 	resp := map[string]interface{}{
 		"deployment_id":    rolled.ID,

@@ -101,6 +101,11 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fan out update to replica nodes
+	h.service.FanOutToReplicas(ctx, updated, "/v1/internal/deployments/replica/update", map[string]interface{}{
+		"new_version": updated.Version,
+	})
+
 	// Return response
 	resp := map[string]interface{}{
 		"deployment_id":  updated.ID,

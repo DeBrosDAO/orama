@@ -1,10 +1,12 @@
 package deployments
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -26,6 +28,7 @@ type DeploymentService struct {
 	db              rqlite.Client
 	homeNodeManager *deployments.HomeNodeManager
 	portAllocator   *deployments.PortAllocator
+	replicaManager  *deployments.ReplicaManager
 	logger          *zap.Logger
 	baseDomain      string // Base domain for deployments (e.g., "dbrs.space")
 	nodePeerID      string // Current node's peer ID (deployments run on this node)
@@ -36,12 +39,14 @@ func NewDeploymentService(
 	db rqlite.Client,
 	homeNodeManager *deployments.HomeNodeManager,
 	portAllocator *deployments.PortAllocator,
+	replicaManager *deployments.ReplicaManager,
 	logger *zap.Logger,
 ) *DeploymentService {
 	return &DeploymentService{
 		db:              db,
 		homeNodeManager: homeNodeManager,
 		portAllocator:   portAllocator,
+		replicaManager:  replicaManager,
 		logger:          logger,
 		baseDomain:      "dbrs.space", // default
 	}
@@ -231,6 +236,11 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 	// Record in history
 	s.recordHistory(ctx, deployment, "deployed")
 
+	// Create replica records
+	if s.replicaManager != nil {
+		s.createDeploymentReplicas(ctx, deployment)
+	}
+
 	s.logger.Info("Deployment created",
 		zap.String("id", deployment.ID),
 		zap.String("namespace", deployment.Namespace),
@@ -241,6 +251,157 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 	)
 
 	return nil
+}
+
+// createDeploymentReplicas creates replica records for a deployment.
+// The primary replica is always the current node. A secondary replica is
+// selected from available nodes using capacity scoring.
+func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deployment *deployments.Deployment) {
+	primaryNodeID := deployment.HomeNodeID
+
+	// Register the primary replica
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, primaryNodeID, deployment.Port, true); err != nil {
+		s.logger.Error("Failed to create primary replica record",
+			zap.String("deployment_id", deployment.ID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// Select a secondary node
+	secondaryNodes, err := s.replicaManager.SelectReplicaNodes(ctx, primaryNodeID, deployments.DefaultReplicaCount-1)
+	if err != nil {
+		s.logger.Warn("Failed to select secondary replica nodes",
+			zap.String("deployment_id", deployment.ID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	if len(secondaryNodes) == 0 {
+		s.logger.Warn("No secondary nodes available for replica, running with single replica",
+			zap.String("deployment_id", deployment.ID),
+		)
+		return
+	}
+
+	for _, nodeID := range secondaryNodes {
+		isStatic := deployment.Type == deployments.DeploymentTypeStatic ||
+			deployment.Type == deployments.DeploymentTypeNextJSStatic ||
+			deployment.Type == deployments.DeploymentTypeGoWASM
+
+		if isStatic {
+			// Static deployments: content is in IPFS, no process to start
+			if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false); err != nil {
+				s.logger.Error("Failed to create static replica",
+					zap.String("deployment_id", deployment.ID),
+					zap.String("node_id", nodeID),
+					zap.Error(err),
+				)
+			}
+		} else {
+			// Dynamic deployments: fan out to the secondary node to set up the process
+			go s.setupDynamicReplica(ctx, deployment, nodeID)
+		}
+	}
+}
+
+// setupDynamicReplica calls the secondary node's internal API to set up a deployment replica.
+func (s *DeploymentService) setupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
+	nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
+	if err != nil {
+		s.logger.Error("Failed to get node IP for replica setup",
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// Create the replica record in pending status
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false); err != nil {
+		s.logger.Error("Failed to create pending replica record",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// Call the internal API on the target node
+	envJSON, _ := json.Marshal(deployment.Environment)
+
+	payload := map[string]interface{}{
+		"deployment_id":        deployment.ID,
+		"namespace":            deployment.Namespace,
+		"name":                 deployment.Name,
+		"type":                 deployment.Type,
+		"content_cid":          deployment.ContentCID,
+		"build_cid":            deployment.BuildCID,
+		"environment":          string(envJSON),
+		"health_check_path":    deployment.HealthCheckPath,
+		"memory_limit_mb":      deployment.MemoryLimitMB,
+		"cpu_limit_percent":    deployment.CPULimitPercent,
+		"restart_policy":       deployment.RestartPolicy,
+		"max_restart_count":    deployment.MaxRestartCount,
+	}
+
+	resp, err := s.callInternalAPI(nodeIP, "/v1/internal/deployments/replica/setup", payload)
+	if err != nil {
+		s.logger.Error("Failed to set up dynamic replica on remote node",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.String("node_ip", nodeIP),
+			zap.Error(err),
+		)
+		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		return
+	}
+
+	// Update replica with allocated port
+	if port, ok := resp["port"].(float64); ok && port > 0 {
+		s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false)
+	}
+
+	s.logger.Info("Dynamic replica set up on remote node",
+		zap.String("deployment_id", deployment.ID),
+		zap.String("node_id", nodeID),
+	)
+}
+
+// callInternalAPI makes an HTTP POST to a node's internal API.
+func (s *DeploymentService) callInternalAPI(nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error) {
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	url := fmt.Sprintf("http://%s:6001%s", nodeIP, path)
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Orama-Internal-Auth", "replica-coordination")
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return result, fmt.Errorf("remote node returned status %d", resp.StatusCode)
+	}
+
+	return result, nil
 }
 
 // GetDeployment retrieves a deployment by namespace and name
@@ -515,5 +676,67 @@ func (s *DeploymentService) recordHistory(ctx context.Context, deployment *deplo
 
 	if err != nil {
 		s.logger.Error("Failed to record history", zap.Error(err))
+	}
+}
+
+// FanOutToReplicas sends an internal API call to all non-local replica nodes
+// for a given deployment. The path should be the internal API endpoint
+// (e.g., "/v1/internal/deployments/replica/update"). Errors are logged but
+// do not fail the operation — replicas are updated on a best-effort basis.
+func (s *DeploymentService) FanOutToReplicas(ctx context.Context, deployment *deployments.Deployment, path string, extraPayload map[string]interface{}) {
+	if s.replicaManager == nil {
+		return
+	}
+
+	replicaNodes, err := s.replicaManager.GetActiveReplicaNodes(ctx, deployment.ID)
+	if err != nil {
+		s.logger.Warn("Failed to get replica nodes for fan-out",
+			zap.String("deployment_id", deployment.ID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	payload := map[string]interface{}{
+		"deployment_id": deployment.ID,
+		"namespace":     deployment.Namespace,
+		"name":          deployment.Name,
+		"type":          deployment.Type,
+		"content_cid":   deployment.ContentCID,
+		"build_cid":     deployment.BuildCID,
+	}
+	for k, v := range extraPayload {
+		payload[k] = v
+	}
+
+	for _, nodeID := range replicaNodes {
+		if nodeID == s.nodePeerID {
+			continue // Skip self
+		}
+
+		nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
+		if err != nil {
+			s.logger.Warn("Failed to get IP for replica node",
+				zap.String("node_id", nodeID),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		go func(ip, nid string) {
+			_, err := s.callInternalAPI(ip, path, payload)
+			if err != nil {
+				s.logger.Error("Replica fan-out failed",
+					zap.String("node_id", nid),
+					zap.String("path", path),
+					zap.Error(err),
+				)
+			} else {
+				s.logger.Info("Replica fan-out succeeded",
+					zap.String("node_id", nid),
+					zap.String("path", path),
+				)
+			}
+		}(nodeIP, nodeID)
 	}
 }

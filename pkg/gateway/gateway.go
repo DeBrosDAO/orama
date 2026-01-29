@@ -91,8 +91,10 @@ type Gateway struct {
 	domainHandler        *deploymentshandlers.DomainHandler
 	sqliteHandler        *sqlitehandlers.SQLiteHandler
 	sqliteBackupHandler  *sqlitehandlers.BackupHandler
+	replicaHandler       *deploymentshandlers.ReplicaHandler
 	portAllocator        *deployments.PortAllocator
 	homeNodeManager      *deployments.HomeNodeManager
+	replicaManager       *deployments.ReplicaManager
 	processManager       *process.Manager
 	healthChecker        *health.HealthChecker
 
@@ -252,6 +254,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// Create deployment service components
 		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
 		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
+		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
 		gw.processManager = process.NewManager(logger.Logger)
 
 		// Create deployment service
@@ -259,6 +262,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			deps.ORMClient,
 			gw.homeNodeManager,
 			gw.portAllocator,
+			gw.replicaManager,
 			logger.Logger,
 		)
 		// Set base domain from config
@@ -327,6 +331,14 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.deploymentService,
 			gw.updateHandler,
 			logger.Logger,
+		)
+
+		gw.replicaHandler = deploymentshandlers.NewReplicaHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
 		)
 
 		gw.logsHandler = deploymentshandlers.NewLogsHandler(
