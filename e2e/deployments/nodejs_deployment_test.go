@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,29 +102,36 @@ func TestNodeJSDeployment_FullFlow(t *testing.T) {
 func createNodeJSDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath string) string {
 	t.Helper()
 
-	file, err := os.Open(tarballPath)
+	var fileData []byte
+
+	info, err := os.Stat(tarballPath)
 	if err != nil {
-		// Try alternate path
-		altPath := filepath.Join("testdata/apps/nodejs-backend.tar.gz")
-		file, err = os.Open(altPath)
+		t.Fatalf("Failed to stat tarball path: %v", err)
 	}
-	require.NoError(t, err, "Failed to open tarball: %s", tarballPath)
-	defer file.Close()
+
+	if info.IsDir() {
+		// Create tarball from directory
+		tarData, err := exec.Command("tar", "-czf", "-", "-C", tarballPath, ".").Output()
+		require.NoError(t, err, "Failed to create tarball from %s", tarballPath)
+		fileData = tarData
+	} else {
+		file, err := os.Open(tarballPath)
+		require.NoError(t, err, "Failed to open tarball: %s", tarballPath)
+		defer file.Close()
+		fileData, _ = io.ReadAll(file)
+	}
 
 	body := &bytes.Buffer{}
 	boundary := "----WebKitFormBoundary7MA4YWxkTrZu0gW"
 
-	// Write name field
 	body.WriteString("--" + boundary + "\r\n")
 	body.WriteString("Content-Disposition: form-data; name=\"name\"\r\n\r\n")
 	body.WriteString(name + "\r\n")
 
-	// Write tarball file
 	body.WriteString("--" + boundary + "\r\n")
 	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
 	body.WriteString("Content-Type: application/gzip\r\n\r\n")
 
-	fileData, _ := io.ReadAll(file)
 	body.Write(fileData)
 	body.WriteString("\r\n--" + boundary + "--\r\n")
 

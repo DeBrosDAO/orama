@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -147,6 +148,90 @@ func loadNodeConfig(filename string) (map[string]interface{}, error) {
 	return cfg, nil
 }
 
+// loadActiveEnvironment reads ~/.orama/environments.json and returns the active environment's gateway URL.
+func loadActiveEnvironment() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	data, err := os.ReadFile(filepath.Join(homeDir, ".orama", "environments.json"))
+	if err != nil {
+		return "", err
+	}
+
+	var envConfig struct {
+		Environments []struct {
+			Name       string `json:"name"`
+			GatewayURL string `json:"gateway_url"`
+		} `json:"environments"`
+		ActiveEnvironment string `json:"active_environment"`
+	}
+	if err := json.Unmarshal(data, &envConfig); err != nil {
+		return "", err
+	}
+
+	for _, env := range envConfig.Environments {
+		if env.Name == envConfig.ActiveEnvironment {
+			return env.GatewayURL, nil
+		}
+	}
+
+	return "", fmt.Errorf("active environment %q not found", envConfig.ActiveEnvironment)
+}
+
+// loadCredentialAPIKey reads ~/.orama/credentials.json and returns the API key for the given gateway URL.
+func loadCredentialAPIKey(gatewayURL string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	data, err := os.ReadFile(filepath.Join(homeDir, ".orama", "credentials.json"))
+	if err != nil {
+		return "", err
+	}
+
+	// credentials.json v2 format: gateways -> url -> credentials[] array
+	var store struct {
+		Gateways map[string]json.RawMessage `json:"gateways"`
+	}
+	if err := json.Unmarshal(data, &store); err != nil {
+		return "", err
+	}
+
+	raw, ok := store.Gateways[gatewayURL]
+	if !ok {
+		return "", fmt.Errorf("no credentials for gateway %s", gatewayURL)
+	}
+
+	// Try v2 format: { "credentials": [...], "default_index": 0 }
+	var v2 struct {
+		Credentials []struct {
+			APIKey    string `json:"api_key"`
+			Namespace string `json:"namespace"`
+		} `json:"credentials"`
+		DefaultIndex int `json:"default_index"`
+	}
+	if err := json.Unmarshal(raw, &v2); err == nil && len(v2.Credentials) > 0 {
+		idx := v2.DefaultIndex
+		if idx >= len(v2.Credentials) {
+			idx = 0
+		}
+		return v2.Credentials[idx].APIKey, nil
+	}
+
+	// Try v1 format: direct Credentials object { "api_key": "..." }
+	var v1 struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(raw, &v1); err == nil && v1.APIKey != "" {
+		return v1.APIKey, nil
+	}
+
+	return "", fmt.Errorf("no API key found in credentials for %s", gatewayURL)
+}
+
 // GetGatewayURL returns the gateway base URL from config
 func GetGatewayURL() string {
 	cacheMutex.RLock()
@@ -164,6 +249,14 @@ func GetGatewayURL() string {
 		return envURL
 	}
 	if envURL := os.Getenv("GATEWAY_URL"); envURL != "" {
+		cacheMutex.Lock()
+		gatewayURLCache = envURL
+		cacheMutex.Unlock()
+		return envURL
+	}
+
+	// Try to load from orama active environment (~/.orama/environments.json)
+	if envURL, err := loadActiveEnvironment(); err == nil && envURL != "" {
 		cacheMutex.Lock()
 		gatewayURLCache = envURL
 		cacheMutex.Unlock()
@@ -346,7 +439,7 @@ func queryAPIKeyFromRemoteRQLite(gatewayURL string) (string, error) {
 	return "", fmt.Errorf("no API key found in rqlite")
 }
 
-// GetAPIKey returns the gateway API key from rqlite or cache
+// GetAPIKey returns the gateway API key from credentials.json, env vars, or rqlite
 func GetAPIKey() string {
 	cacheMutex.RLock()
 	if apiKeyCache != "" {
@@ -355,7 +448,24 @@ func GetAPIKey() string {
 	}
 	cacheMutex.RUnlock()
 
-	// Query rqlite for API key
+	// 1. Check env var
+	if envKey := os.Getenv("DEBROS_API_KEY"); envKey != "" {
+		cacheMutex.Lock()
+		apiKeyCache = envKey
+		cacheMutex.Unlock()
+		return envKey
+	}
+
+	// 2. Try credentials.json for the active gateway
+	gatewayURL := GetGatewayURL()
+	if apiKey, err := loadCredentialAPIKey(gatewayURL); err == nil && apiKey != "" {
+		cacheMutex.Lock()
+		apiKeyCache = apiKey
+		cacheMutex.Unlock()
+		return apiKey
+	}
+
+	// 3. Fall back to querying rqlite directly
 	apiKey, err := queryAPIKeyFromRQLite()
 	if err != nil {
 		return ""
@@ -1143,14 +1253,17 @@ func LoadTestEnv() (*E2ETestEnv, error) {
 		gatewayURL = GetGatewayURL()
 	}
 
-	// Check if API key is provided via environment variable or config
+	// Check if API key is provided via environment variable, config, or credentials.json
 	apiKey := os.Getenv("ORAMA_API_KEY")
 	if apiKey == "" && cfg.APIKey != "" {
 		apiKey = cfg.APIKey
 	}
+	if apiKey == "" {
+		apiKey = GetAPIKey() // Reads from credentials.json or rqlite
+	}
 	namespace := os.Getenv("ORAMA_NAMESPACE")
 
-	// If no API key provided, create a fresh one for a default test namespace
+	// If still no API key, create a fresh one for a default test namespace
 	if apiKey == "" {
 		if namespace == "" {
 			namespace = "default-test-ns"
@@ -1231,15 +1344,42 @@ func LoadTestEnvWithNamespace(namespace string) (*E2ETestEnv, error) {
 	}, nil
 }
 
-// CreateTestDeployment creates a test deployment and returns its ID
+// tarballFromDir creates a .tar.gz in memory from a directory.
+func tarballFromDir(dirPath string) ([]byte, error) {
+	var buf bytes.Buffer
+	cmd := exec.Command("tar", "-czf", "-", "-C", dirPath, ".")
+	cmd.Stdout = &buf
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("tar failed: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// CreateTestDeployment creates a test deployment and returns its ID.
+// tarballPath can be a .tar.gz file or a directory (which will be tarred automatically).
 func CreateTestDeployment(t *testing.T, env *E2ETestEnv, name, tarballPath string) string {
 	t.Helper()
 
-	file, err := os.Open(tarballPath)
+	var fileData []byte
+
+	info, err := os.Stat(tarballPath)
 	if err != nil {
-		t.Fatalf("failed to open tarball: %v", err)
+		t.Fatalf("failed to stat tarball path: %v", err)
 	}
-	defer file.Close()
+
+	if info.IsDir() {
+		// Create tarball from directory
+		fileData, err = tarballFromDir(tarballPath)
+		if err != nil {
+			t.Fatalf("failed to create tarball from dir: %v", err)
+		}
+	} else {
+		fileData, err = os.ReadFile(tarballPath)
+		if err != nil {
+			t.Fatalf("failed to read tarball: %v", err)
+		}
+	}
 
 	// Create multipart form
 	body := &bytes.Buffer{}
@@ -1259,7 +1399,6 @@ func CreateTestDeployment(t *testing.T, env *E2ETestEnv, name, tarballPath strin
 	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
 	body.WriteString("Content-Type: application/gzip\r\n\r\n")
 
-	fileData, _ := io.ReadAll(file)
 	body.Write(fileData)
 	body.WriteString("\r\n--" + boundary + "--\r\n")
 
