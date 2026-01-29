@@ -874,10 +874,18 @@ serveLocal:
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
-		g.logger.ComponentError(logging.ComponentGeneral, "proxy request failed",
+		g.logger.ComponentError(logging.ComponentGeneral, "local proxy request failed",
 			zap.String("target", target),
 			zap.Error(err),
 		)
+
+		// Local process is down — try other replica nodes before giving up
+		if g.replicaManager != nil {
+			if g.proxyCrossNodeWithReplicas(w, r, deployment) {
+				return
+			}
+		}
+
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -1049,7 +1057,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
 
-	httpClient := &http.Client{Timeout: 120 * time.Second}
+	httpClient := &http.Client{Timeout: 5 * time.Second}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		g.logger.Warn("Replica proxy request failed",
@@ -1059,6 +1067,15 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 		return false
 	}
 	defer resp.Body.Close()
+
+	// If the remote node returned a gateway error, try the next replica
+	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
+		g.logger.Warn("Replica returned gateway error, trying next",
+			zap.String("target_ip", nodeIP),
+			zap.Int("status", resp.StatusCode),
+		)
+		return false
+	}
 
 	for key, values := range resp.Header {
 		for _, value := range values {

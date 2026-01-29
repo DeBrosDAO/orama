@@ -366,6 +366,22 @@ func (s *DeploymentService) setupDynamicReplica(ctx context.Context, deployment 
 		zap.String("deployment_id", deployment.ID),
 		zap.String("node_id", nodeID),
 	)
+
+	// Create DNS record for the replica node (after successful setup)
+	dnsName := deployment.Subdomain
+	if dnsName == "" {
+		dnsName = deployment.Name
+	}
+	fqdn := fmt.Sprintf("%s.%s.", dnsName, s.BaseDomain())
+	if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
+		s.logger.Error("Failed to create DNS record for replica", zap.String("node_id", nodeID), zap.Error(err))
+	} else {
+		s.logger.Info("Created DNS record for replica",
+			zap.String("fqdn", fqdn),
+			zap.String("ip", nodeIP),
+			zap.String("node_id", nodeID),
+		)
+	}
 }
 
 // callInternalAPI makes an HTTP POST to a node's internal API.
@@ -559,33 +575,44 @@ func (s *DeploymentService) UpdateDeploymentStatus(ctx context.Context, deployme
 	return nil
 }
 
-// CreateDNSRecords creates DNS records for a deployment
+// CreateDNSRecords creates DNS records for a deployment.
+// Creates A records for the home node and all replica nodes for round-robin DNS.
 func (s *DeploymentService) CreateDNSRecords(ctx context.Context, deployment *deployments.Deployment) error {
-	// Get node IP using the full node ID
-	nodeIP, err := s.getNodeIP(ctx, deployment.HomeNodeID)
-	if err != nil {
-		s.logger.Error("Failed to get node IP", zap.Error(err))
-		return err
-	}
-
 	// Use subdomain if set, otherwise fall back to name
-	// New format: {name}-{random}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space)
 	dnsName := deployment.Subdomain
 	if dnsName == "" {
 		dnsName = deployment.Name
 	}
-
-	// Create deployment record: {subdomain}.{baseDomain}
-	// Any node can receive the request and proxy to the home node if needed
 	fqdn := fmt.Sprintf("%s.%s.", dnsName, s.BaseDomain())
-	if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
-		s.logger.Error("Failed to create DNS record", zap.Error(err))
-	} else {
-		s.logger.Info("Created DNS record",
-			zap.String("fqdn", fqdn),
-			zap.String("ip", nodeIP),
-			zap.String("subdomain", dnsName),
-		)
+
+	// Collect all node IDs that should have DNS records (home node + replicas)
+	nodeIDs := []string{deployment.HomeNodeID}
+	if s.replicaManager != nil {
+		replicaNodes, err := s.replicaManager.GetActiveReplicaNodes(ctx, deployment.ID)
+		if err == nil {
+			for _, nodeID := range replicaNodes {
+				if nodeID != deployment.HomeNodeID {
+					nodeIDs = append(nodeIDs, nodeID)
+				}
+			}
+		}
+	}
+
+	for _, nodeID := range nodeIDs {
+		nodeIP, err := s.getNodeIP(ctx, nodeID)
+		if err != nil {
+			s.logger.Error("Failed to get node IP for DNS record", zap.String("node_id", nodeID), zap.Error(err))
+			continue
+		}
+		if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
+			s.logger.Error("Failed to create DNS record", zap.String("node_id", nodeID), zap.Error(err))
+		} else {
+			s.logger.Info("Created DNS record",
+				zap.String("fqdn", fqdn),
+				zap.String("ip", nodeIP),
+				zap.String("node_id", nodeID),
+			)
+		}
 	}
 
 	return nil
