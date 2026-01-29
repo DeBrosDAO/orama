@@ -387,7 +387,7 @@ Description=Caddy HTTP/2 Server
 Documentation=https://caddyserver.com/docs/
 After=network-online.target debros-node.service coredns.service
 Wants=network-online.target
-Requires=debros-node.service
+Wants=debros-node.service
 
 [Service]
 Type=simple

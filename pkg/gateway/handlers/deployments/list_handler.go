@@ -3,23 +3,33 @@ package deployments
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
 )
 
 // ListHandler handles listing deployments
 type ListHandler struct {
-	service *DeploymentService
-	logger  *zap.Logger
+	service        *DeploymentService
+	processManager *process.Manager
+	ipfsClient     ipfs.IPFSClient
+	logger         *zap.Logger
+	baseDeployPath string
 }
 
 // NewListHandler creates a new list handler
-func NewListHandler(service *DeploymentService, logger *zap.Logger) *ListHandler {
+func NewListHandler(service *DeploymentService, processManager *process.Manager, ipfsClient ipfs.IPFSClient, logger *zap.Logger, baseDeployPath string) *ListHandler {
 	return &ListHandler{
-		service: service,
-		logger:  logger,
+		service:        service,
+		processManager: processManager,
+		ipfsClient:     ipfsClient,
+		logger:         logger,
+		baseDeployPath: baseDeployPath,
 	}
 }
 
@@ -209,18 +219,42 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete deployment record
+	// 1. Stop systemd service
+	if err := h.processManager.Stop(ctx, deployment); err != nil {
+		h.logger.Warn("Failed to stop deployment service (may not exist)", zap.Error(err), zap.String("name", deployment.Name))
+	}
+
+	// 2. Remove deployment files from disk
+	if h.baseDeployPath != "" {
+		deployDir := filepath.Join(h.baseDeployPath, deployment.Namespace, deployment.Name)
+		if err := os.RemoveAll(deployDir); err != nil {
+			h.logger.Warn("Failed to remove deployment files", zap.Error(err), zap.String("path", deployDir))
+		}
+	}
+
+	// 3. Unpin IPFS content
+	if deployment.ContentCID != "" {
+		if err := h.ipfsClient.Unpin(ctx, deployment.ContentCID); err != nil {
+			h.logger.Warn("Failed to unpin IPFS content", zap.Error(err), zap.String("cid", deployment.ContentCID))
+		}
+	}
+
+	// 4. Delete subdomain registry
+	subdomainQuery := `DELETE FROM global_deployment_subdomains WHERE deployment_id = ?`
+	_, _ = h.service.db.Exec(ctx, subdomainQuery, deployment.ID)
+
+	// 5. Delete DNS records
+	dnsQuery := `DELETE FROM dns_records WHERE deployment_id = ?`
+	_, _ = h.service.db.Exec(ctx, dnsQuery, deployment.ID)
+
+	// 6. Delete deployment record
 	query := `DELETE FROM deployments WHERE namespace = ? AND name = ?`
-	_, err = h.service.db.Exec(ctx, query, namespace, name)
+	_, err = h.service.db.Exec(ctx, query, namespace, deployment.Name)
 	if err != nil {
 		h.logger.Error("Failed to delete deployment", zap.Error(err))
 		http.Error(w, "Failed to delete deployment", http.StatusInternalServerError)
 		return
 	}
-
-	// Delete DNS records
-	query = `DELETE FROM dns_records WHERE deployment_id = ?`
-	_, _ = h.service.db.Exec(ctx, query, deployment.ID)
 
 	h.logger.Info("Deployment deleted",
 		zap.String("id", deployment.ID),

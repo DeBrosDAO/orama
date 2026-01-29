@@ -308,7 +308,10 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 		gw.listHandler = deploymentshandlers.NewListHandler(
 			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
 			logger.Logger,
+			baseDeployPath,
 		)
 
 		gw.updateHandler = deploymentshandlers.NewUpdateHandler(
