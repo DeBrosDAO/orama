@@ -33,7 +33,7 @@ var DefaultEnvironments = []Environment{
 	},
 	{
 		Name:        "production",
-		GatewayURL:  "http://dbrs.space",
+		GatewayURL:  "https://dbrs.space",
 		Description: "Production network (dbrs.space)",
 		IsActive:    false,
 	},
