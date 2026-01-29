@@ -181,6 +181,30 @@ func (ari *AnyoneRelayInstaller) Install() error {
 	os.Remove(installScript)
 
 	fmt.Fprintf(ari.logWriter, "  ✓ Anyone relay binary installed\n")
+
+	// Install nyx for relay monitoring (connects to ControlPort 9051)
+	if err := ari.installNyx(); err != nil {
+		fmt.Fprintf(ari.logWriter, "  ⚠️  nyx install warning: %v\n", err)
+	}
+
+	return nil
+}
+
+// installNyx installs the nyx relay monitor tool
+func (ari *AnyoneRelayInstaller) installNyx() error {
+	// Check if already installed
+	if _, err := exec.LookPath("nyx"); err == nil {
+		fmt.Fprintf(ari.logWriter, "  ✓ nyx already installed\n")
+		return nil
+	}
+
+	fmt.Fprintf(ari.logWriter, "  Installing nyx (relay monitor)...\n")
+	cmd := exec.Command("apt-get", "install", "-y", "nyx")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to install nyx: %w\n%s", err, string(output))
+	}
+
+	fmt.Fprintf(ari.logWriter, "  ✓ nyx installed (use 'nyx' to monitor relay on ControlPort 9051)\n")
 	return nil
 }
 

@@ -336,11 +336,6 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		if err := relayInstaller.Configure(); err != nil {
 			ps.logf("  ⚠️  Anyone relay config warning: %v", err)
 		}
-	} else {
-		// Install anyone-client for SOCKS5 proxy (default client mode)
-		if err := ps.binaryInstaller.InstallAnyoneClient(); err != nil {
-			ps.logf("  ⚠️  anyone-client install warning: %v", err)
-		}
 	}
 
 	// Install DeBros binaries (must be done before CoreDNS since we need the RQLite plugin source)
@@ -614,19 +609,13 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Node service created: debros-node.service (with embedded gateway)")
 
-	// Anyone service (Client or Relay based on configuration)
+	// Anyone Relay service (only created when --anyone-relay flag is used)
 	if ps.IsAnyoneRelay() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
 		if err := ps.serviceController.WriteServiceUnit("debros-anyone-relay.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
 		}
 		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
-	} else {
-		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
-		if err := ps.serviceController.WriteServiceUnit("debros-anyone-client.service", anyoneUnit); err != nil {
-			return fmt.Errorf("failed to write Anyone Client service: %w", err)
-		}
-		ps.logf("  ✓ Anyone Client service created")
 	}
 
 	// CoreDNS and Caddy services (only for nameserver nodes)
@@ -668,11 +657,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
 	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service"}
 
-	// Add appropriate Anyone service based on mode
+	// Add Anyone Relay service if configured
 	if ps.IsAnyoneRelay() {
 		services = append(services, "debros-anyone-relay.service")
-	} else {
-		services = append(services, "debros-anyone-client.service")
 	}
 
 	// Add CoreDNS and Caddy only for nameserver nodes
@@ -698,9 +685,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
 	infraServices := []string{"debros-ipfs.service", "debros-olric.service"}
 
-	// Add appropriate Anyone service based on mode
+	// Add Anyone Relay service if configured
 	if ps.IsAnyoneRelay() {
-		// For relay mode, check if ORPort is already in use
 		orPort := 9001
 		if ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.ORPort > 0 {
 			orPort = ps.anyoneRelayConfig.ORPort
@@ -710,14 +696,6 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			ps.logf("  ℹ️  Skipping debros-anyone-relay startup - using existing service")
 		} else {
 			infraServices = append(infraServices, "debros-anyone-relay.service")
-		}
-	} else {
-		// For client mode, check if SOCKS port 9050 is already in use
-		if ps.portChecker.IsPortInUse(9050) {
-			ps.logf("  ℹ️  Port 9050 is already in use (anyone-client or similar service running)")
-			ps.logf("  ℹ️  Skipping debros-anyone-client startup - using existing service")
-		} else {
-			infraServices = append(infraServices, "debros-anyone-client.service")
 		}
 	}
 	
@@ -826,11 +804,8 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 		ps.logf("  Register at: https://dashboard.anyone.io")
 		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
 	} else {
-		ps.logf("  %s/logs/anyone-client.log", ps.oramaDir)
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-client debros-node")
-		ps.logf("\nAnyone Client:")
-		ps.logf("  # SOCKS5 proxy on localhost:9050")
+		ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-node")
 	}
 
 	ps.logf("\nVerify Installation:")
