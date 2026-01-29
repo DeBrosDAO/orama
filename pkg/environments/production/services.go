@@ -66,7 +66,7 @@ WantedBy=multi-user.target
 func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary string) string {
 	clusterPath := filepath.Join(ssg.oramaDir, "data", "ipfs-cluster")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs-cluster.log")
-	
+
 	// Read cluster secret from file to pass to daemon
 	clusterSecretPath := filepath.Join(ssg.oramaDir, "secrets", "cluster-secret")
 	clusterSecret := ""
@@ -89,6 +89,7 @@ Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
 Environment=CLUSTER_SECRET=%[5]s
 ExecStartPre=/bin/bash -c 'mkdir -p %[2]s && chmod 700 %[2]s'
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:4501/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'
 ExecStart=%[4]s daemon
 Restart=always
 RestartSec=5

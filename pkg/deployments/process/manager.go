@@ -395,8 +395,8 @@ func (m *Manager) getStartCommand(deployment *deployments.Deployment, workDir st
 
 	switch deployment.Type {
 	case deployments.DeploymentTypeNextJS:
-		// Next.js standalone output places server at .next/standalone/server.js
-		return nodePath + " .next/standalone/server.js"
+		// CLI tarballs the standalone output directly, so server.js is at the root
+		return nodePath + " server.js"
 	case deployments.DeploymentTypeNodeJSBackend:
 		// Check if ENTRY_POINT is set in environment
 		if entryPoint, ok := deployment.Environment["ENTRY_POINT"]; ok {

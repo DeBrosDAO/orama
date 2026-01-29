@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -94,6 +95,14 @@ func init() {
 func deployStatic(cmd *cobra.Command, args []string) error {
 	sourcePath := args[0]
 
+	// Warn if source looks like it needs building
+	if _, err := os.Stat(filepath.Join(sourcePath, "package.json")); err == nil {
+		if _, err := os.Stat(filepath.Join(sourcePath, "index.html")); os.IsNotExist(err) {
+			fmt.Printf("⚠️  Warning: %s has package.json but no index.html. You may need to build first.\n", sourcePath)
+			fmt.Printf("   Try: cd %s && npm run build, then deploy the output directory (e.g. dist/ or out/)\n\n", sourcePath)
+		}
+	}
+
 	fmt.Printf("📦 Creating tarball from %s...\n", sourcePath)
 	tarball, err := createTarball(sourcePath)
 	if err != nil {
@@ -123,10 +132,67 @@ func deployStatic(cmd *cobra.Command, args []string) error {
 }
 
 func deployNextJS(cmd *cobra.Command, args []string) error {
-	sourcePath := args[0]
+	sourcePath, err := filepath.Abs(args[0])
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
 
-	fmt.Printf("📦 Creating tarball from %s...\n", sourcePath)
-	tarball, err := createTarball(sourcePath)
+	// Verify it's a Next.js project
+	if _, err := os.Stat(filepath.Join(sourcePath, "package.json")); os.IsNotExist(err) {
+		return fmt.Errorf("no package.json found in %s", sourcePath)
+	}
+
+	// Step 1: Install dependencies if needed
+	if _, err := os.Stat(filepath.Join(sourcePath, "node_modules")); os.IsNotExist(err) {
+		fmt.Printf("📦 Installing dependencies...\n")
+		if err := runBuildCommand(sourcePath, "npm", "install"); err != nil {
+			return fmt.Errorf("npm install failed: %w", err)
+		}
+	}
+
+	// Step 2: Build
+	fmt.Printf("🔨 Building Next.js application...\n")
+	if err := runBuildCommand(sourcePath, "npm", "run", "build"); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	var tarball string
+	if deploySSR {
+		// SSR: tarball the standalone output
+		standalonePath := filepath.Join(sourcePath, ".next", "standalone")
+		if _, err := os.Stat(standalonePath); os.IsNotExist(err) {
+			return fmt.Errorf(".next/standalone/ not found. Ensure next.config.js has output: 'standalone'")
+		}
+
+		// Copy static assets into standalone
+		staticSrc := filepath.Join(sourcePath, ".next", "static")
+		staticDst := filepath.Join(standalonePath, ".next", "static")
+		if _, err := os.Stat(staticSrc); err == nil {
+			if err := copyDir(staticSrc, staticDst); err != nil {
+				return fmt.Errorf("failed to copy static assets: %w", err)
+			}
+		}
+
+		// Copy public directory if it exists
+		publicSrc := filepath.Join(sourcePath, "public")
+		publicDst := filepath.Join(standalonePath, "public")
+		if _, err := os.Stat(publicSrc); err == nil {
+			if err := copyDir(publicSrc, publicDst); err != nil {
+				return fmt.Errorf("failed to copy public directory: %w", err)
+			}
+		}
+
+		fmt.Printf("📦 Creating tarball from standalone output...\n")
+		tarball, err = createTarballAll(standalonePath)
+	} else {
+		// Static export: tarball the out/ directory
+		outPath := filepath.Join(sourcePath, "out")
+		if _, err := os.Stat(outPath); os.IsNotExist(err) {
+			return fmt.Errorf("out/ directory not found. For static export, ensure next.config.js has output: 'export'")
+		}
+		fmt.Printf("📦 Creating tarball from static export...\n")
+		tarball, err = createTarball(outPath)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create tarball: %w", err)
 	}
@@ -159,10 +225,30 @@ func deployNextJS(cmd *cobra.Command, args []string) error {
 }
 
 func deployGo(cmd *cobra.Command, args []string) error {
-	sourcePath := args[0]
+	sourcePath, err := filepath.Abs(args[0])
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
 
-	fmt.Printf("📦 Creating tarball from %s...\n", sourcePath)
-	tarball, err := createTarball(sourcePath)
+	// Verify it's a Go project
+	if _, err := os.Stat(filepath.Join(sourcePath, "go.mod")); os.IsNotExist(err) {
+		return fmt.Errorf("no go.mod found in %s", sourcePath)
+	}
+
+	// Cross-compile for Linux amd64 (production VPS target)
+	fmt.Printf("🔨 Building Go binary (linux/amd64)...\n")
+	buildCmd := exec.Command("go", "build", "-o", "app", ".")
+	buildCmd.Dir = sourcePath
+	buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("go build failed: %w", err)
+	}
+	defer os.Remove(filepath.Join(sourcePath, "app")) // Clean up after tarball
+
+	fmt.Printf("📦 Creating tarball...\n")
+	tarball, err := createTarballFiles(sourcePath, []string{"app"})
 	if err != nil {
 		return fmt.Errorf("failed to create tarball: %w", err)
 	}
@@ -190,9 +276,33 @@ func deployGo(cmd *cobra.Command, args []string) error {
 }
 
 func deployNodeJS(cmd *cobra.Command, args []string) error {
-	sourcePath := args[0]
+	sourcePath, err := filepath.Abs(args[0])
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
 
-	fmt.Printf("📦 Creating tarball from %s...\n", sourcePath)
+	// Verify it's a Node.js project
+	if _, err := os.Stat(filepath.Join(sourcePath, "package.json")); os.IsNotExist(err) {
+		return fmt.Errorf("no package.json found in %s", sourcePath)
+	}
+
+	// Install dependencies if needed
+	if _, err := os.Stat(filepath.Join(sourcePath, "node_modules")); os.IsNotExist(err) {
+		fmt.Printf("📦 Installing dependencies...\n")
+		if err := runBuildCommand(sourcePath, "npm", "install", "--production"); err != nil {
+			return fmt.Errorf("npm install failed: %w", err)
+		}
+	}
+
+	// Run build script if it exists
+	if hasBuildScript(sourcePath) {
+		fmt.Printf("🔨 Building...\n")
+		if err := runBuildCommand(sourcePath, "npm", "run", "build"); err != nil {
+			return fmt.Errorf("build failed: %w", err)
+		}
+	}
+
+	fmt.Printf("📦 Creating tarball...\n")
 	tarball, err := createTarball(sourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to create tarball: %w", err)
@@ -220,7 +330,115 @@ func deployNodeJS(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runBuildCommand runs a command in the given directory with stdout/stderr streaming
+func runBuildCommand(dir string, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// hasBuildScript checks if package.json has a "build" script
+func hasBuildScript(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg map[string]interface{}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	scripts, ok := pkg["scripts"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	_, ok = scripts["build"]
+	return ok
+}
+
+// copyDir recursively copies a directory
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		dstPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dstPath, data, info.Mode())
+	})
+}
+
+// createTarballFiles creates a tarball containing only specific files from a directory
+func createTarballFiles(baseDir string, files []string) (string, error) {
+	tmpFile, err := os.CreateTemp("", "orama-deploy-*.tar.gz")
+	if err != nil {
+		return "", err
+	}
+	defer tmpFile.Close()
+
+	gzWriter := gzip.NewWriter(tmpFile)
+	defer gzWriter.Close()
+
+	tarWriter := tar.NewWriter(gzWriter)
+	defer tarWriter.Close()
+
+	for _, f := range files {
+		fullPath := filepath.Join(baseDir, f)
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			return "", fmt.Errorf("file %s not found: %w", f, err)
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return "", err
+		}
+		header.Name = f
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return "", err
+		}
+
+		if !info.IsDir() {
+			file, err := os.Open(fullPath)
+			if err != nil {
+				return "", err
+			}
+			_, err = io.Copy(tarWriter, file)
+			file.Close()
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
+	return tmpFile.Name(), nil
+}
+
 func createTarball(sourcePath string) (string, error) {
+	return createTarballWithOptions(sourcePath, true)
+}
+
+// createTarballAll creates a tarball including node_modules and hidden dirs (for standalone output)
+func createTarballAll(sourcePath string) (string, error) {
+	return createTarballWithOptions(sourcePath, false)
+}
+
+func createTarballWithOptions(sourcePath string, skipNodeModules bool) (string, error) {
 	// Create temp file
 	tmpFile, err := os.CreateTemp("", "orama-deploy-*.tar.gz")
 	if err != nil {
@@ -242,15 +460,17 @@ func createTarball(sourcePath string) (string, error) {
 			return err
 		}
 
-		// Skip hidden files and node_modules
-		if strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
-			if info.IsDir() {
+		// Skip hidden files and node_modules (unless disabled)
+		if skipNodeModules {
+			if strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info.Name() == "node_modules" {
 				return filepath.SkipDir
 			}
-			return nil
-		}
-		if info.Name() == "node_modules" {
-			return filepath.SkipDir
 		}
 
 		// Create tar header
