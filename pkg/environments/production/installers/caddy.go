@@ -379,7 +379,7 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint string) 
     reverse_proxy localhost:6001
 }
 
-:443 {
+%s {
     tls {
         dns orama {
             endpoint %s
@@ -391,5 +391,5 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint string) 
 :80 {
     reverse_proxy localhost:6001
 }
-`, email, domain, acmeEndpoint, acmeEndpoint)
+`, email, domain, acmeEndpoint, domain, acmeEndpoint)
 }

@@ -51,13 +51,11 @@ func (g *Gateway) acmePresentHandler(w http.ResponseWriter, r *http.Request) {
 	db := g.client.Database()
 	ctx := client.WithInternalAuth(r.Context())
 
-	// First, delete any existing ACME challenge for this FQDN (in case of retry)
-	deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'TXT' AND namespace = 'acme'`
-	_, _ = db.Query(ctx, deleteQuery, fqdn)
-
-	// Insert new TXT record
+	// Insert new TXT record (multiple nodes may have concurrent challenges for the same FQDN)
+	// ON CONFLICT DO NOTHING: the UNIQUE(fqdn, record_type, value) constraint prevents duplicates
 	insertQuery := `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, is_active, created_at, updated_at, created_by)
-		VALUES (?, 'TXT', ?, 60, 'acme', TRUE, datetime('now'), datetime('now'), 'system')`
+		VALUES (?, 'TXT', ?, 60, 'acme', TRUE, datetime('now'), datetime('now'), 'system')
+		ON CONFLICT(fqdn, record_type, value) DO NOTHING`
 
 	_, err := db.Query(ctx, insertQuery, fqdn, req.Value)
 	if err != nil {
@@ -109,8 +107,9 @@ func (g *Gateway) acmeCleanupHandler(w http.ResponseWriter, r *http.Request) {
 	db := g.client.Database()
 	ctx := client.WithInternalAuth(r.Context())
 
-	deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'TXT' AND namespace = 'acme'`
-	_, err := db.Query(ctx, deleteQuery, fqdn)
+	// Only delete this node's specific challenge value, not all ACME TXT records for this FQDN
+	deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'TXT' AND namespace = 'acme' AND value = ?`
+	_, err := db.Query(ctx, deleteQuery, fqdn, req.Value)
 	if err != nil {
 		g.logger.Error("Failed to delete ACME TXT record", zap.Error(err))
 		http.Error(w, "Failed to delete DNS record", http.StatusInternalServerError)
