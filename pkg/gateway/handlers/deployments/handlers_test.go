@@ -398,7 +398,7 @@ func TestListHandler_AllDeployments(t *testing.T) {
 		portAllocator:   portAlloc,
 		logger:          zap.NewNop(),
 	}
-	handler := NewListHandler(service, zap.NewNop())
+	handler := NewListHandler(service, nil, nil, zap.NewNop(), "")
 
 	req := httptest.NewRequest("GET", "/v1/deployments/list", nil)
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
