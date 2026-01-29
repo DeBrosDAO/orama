@@ -325,10 +325,25 @@ func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 		return nil, fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
-	// Try to read existing key
+	// Try to read existing key — validate and auto-fix if corrupted (e.g. double headers)
 	if data, err := os.ReadFile(swarmKeyPath); err == nil {
-		if strings.Contains(string(data), "/key/swarm/psk/1.0.0/") {
-			return data, nil
+		content := string(data)
+		if strings.Contains(content, "/key/swarm/psk/1.0.0/") {
+			// Extract hex and rebuild clean file
+			lines := strings.Split(strings.TrimSpace(content), "\n")
+			hexKey := ""
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := strings.TrimSpace(lines[i])
+				if line != "" && !strings.HasPrefix(line, "/") {
+					hexKey = line
+					break
+				}
+			}
+			clean := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", hexKey)
+			if clean != content {
+				_ = os.WriteFile(swarmKeyPath, []byte(clean), 0600)
+			}
+			return []byte(clean), nil
 		}
 	}
 

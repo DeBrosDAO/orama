@@ -29,8 +29,8 @@ func NewSwarmKey() *SwarmKey {
 func (s *SwarmKey) View() string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("IPFS Swarm Key") + "\n\n")
-	sb.WriteString("Enter the swarm key from an existing node:\n")
-	sb.WriteString(subtitleStyle.Render("Get it with: cat ~/.orama/secrets/swarm.key | tail -1") + "\n\n")
+	sb.WriteString("Enter the hex key from an existing node (last line of swarm.key):\n")
+	sb.WriteString(subtitleStyle.Render("Get it with: tail -1 ~/.orama/secrets/swarm.key") + "\n\n")
 	sb.WriteString(s.Input.View())
 
 	if s.Error != nil {

@@ -59,7 +59,7 @@ func ParseFlags(args []string) (*Flags, error) {
 	// Cluster join flags
 	fs.StringVar(&flags.JoinAddress, "join", "", "Join an existing cluster (e.g. 1.2.3.4:7001)")
 	fs.StringVar(&flags.ClusterSecret, "cluster-secret", "", "Cluster secret for IPFS Cluster (required if joining)")
-	fs.StringVar(&flags.SwarmKey, "swarm-key", "", "IPFS Swarm key (required if joining)")
+	fs.StringVar(&flags.SwarmKey, "swarm-key", "", "IPFS Swarm key hex (64 chars, last line of swarm.key)")
 	fs.StringVar(&flags.PeersStr, "peers", "", "Comma-separated list of bootstrap peer multiaddrs")
 
 	// IPFS/Cluster specific info for Peering configuration

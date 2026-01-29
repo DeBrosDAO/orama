@@ -167,9 +167,26 @@ func ExtractTCPPort(multiaddrStr string) string {
 	return ""
 }
 
+// ExtractSwarmKeyHex extracts just the 64-char hex portion from a swarm key input.
+// Handles both raw hex ("ABCD...") and full file content ("/key/swarm/psk/1.0.0/\n/base16/\nABCD...\n").
+func ExtractSwarmKeyHex(input string) string {
+	input = strings.TrimSpace(input)
+	// If it contains the swarm key header, extract the last non-empty line (the hex)
+	if strings.Contains(input, "/key/swarm/") || strings.Contains(input, "/base16/") {
+		lines := strings.Split(input, "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line != "" && !strings.HasPrefix(line, "/") {
+				return line
+			}
+		}
+	}
+	return input
+}
+
 // ValidateSwarmKey validates that a swarm key is 64 hex characters.
 func ValidateSwarmKey(key string) error {
-	key = strings.TrimSpace(key)
+	key = ExtractSwarmKeyHex(key)
 	if len(key) != 64 {
 		return fmt.Errorf("swarm key must be 64 hex characters (32 bytes), got %d", len(key))
 	}

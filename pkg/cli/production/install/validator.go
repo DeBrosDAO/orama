@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+	"github.com/DeBrosOfficial/network/pkg/config/validate"
 	"github.com/DeBrosOfficial/network/pkg/environments/production/installers"
 )
 
@@ -99,8 +100,9 @@ func (v *Validator) SaveSecrets() error {
 		if err := os.MkdirAll(secretsDir, 0755); err != nil {
 			return fmt.Errorf("failed to create secrets directory: %w", err)
 		}
-		// Convert 64-hex key to full swarm.key format
-		swarmKeyContent := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", strings.ToUpper(v.flags.SwarmKey))
+		// Extract hex only (strips headers if user passed full file content)
+		hexKey := strings.ToUpper(validate.ExtractSwarmKeyHex(v.flags.SwarmKey))
+		swarmKeyContent := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", hexKey)
 		swarmKeyPath := filepath.Join(secretsDir, "swarm.key")
 		if err := os.WriteFile(swarmKeyPath, []byte(swarmKeyContent), 0600); err != nil {
 			return fmt.Errorf("failed to save swarm key: %w", err)
