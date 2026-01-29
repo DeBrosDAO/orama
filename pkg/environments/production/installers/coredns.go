@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -313,137 +312,61 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
 `, domain, domain, rqliteDSN)
 }
 
-// seedStaticRecords inserts static zone records into RQLite
+// seedStaticRecords inserts static zone records into RQLite (non-destructive)
+// Each node only adds its own IP to the round-robin. SOA and NS records are upserted idempotently.
 func (ci *CoreDNSInstaller) seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP string) error {
-	// First, check if nameserver A records already exist with different IPs
-	// If so, we should preserve them instead of overwriting with potentially wrong IPs
-	existingNSIPs, err := ci.getExistingNameserverIPs(domain, rqliteDSN)
-	if err == nil && len(existingNSIPs) == 3 {
-		// Check if they have at least 2 different IPs (properly configured cluster)
-		uniqueIPs := make(map[string]bool)
-		for _, ip := range existingNSIPs {
-			uniqueIPs[ip] = true
-		}
-		if len(uniqueIPs) >= 2 {
-			// Nameserver records are already properly configured, use existing IPs
-			fmt.Fprintf(ci.logWriter, "    Using existing nameserver IPs from database\n")
-			ns1IP = existingNSIPs[0]
-			ns2IP = existingNSIPs[1]
-			ns3IP = existingNSIPs[2]
-		}
-	}
-
 	// Generate serial based on current date
 	serial := fmt.Sprintf("%d", time.Now().Unix())
 
 	// SOA record format: "mname rname serial refresh retry expire minimum"
 	soaValue := fmt.Sprintf("ns1.%s. admin.%s. %s 3600 1800 604800 300", domain, domain, serial)
 
-	// First, delete existing system records to avoid duplicates
-	// We only delete system records, not deployment-created records
-	deleteStatements := []string{
-		fmt.Sprintf(`DELETE FROM dns_records WHERE namespace = 'system' AND fqdn = '%s.' AND record_type IN ('SOA', 'NS', 'A')`, domain),
-		fmt.Sprintf(`DELETE FROM dns_records WHERE namespace = 'system' AND fqdn = '*.%s.' AND record_type = 'A'`, domain),
-		fmt.Sprintf(`DELETE FROM dns_records WHERE namespace = 'system' AND fqdn LIKE 'ns%%.%s.' AND record_type = 'A'`, domain),
-	}
-
-	if err := ci.executeRQLiteStatements(rqliteDSN, deleteStatements); err != nil {
-		return fmt.Errorf("failed to clean up old records: %w", err)
-	}
-
-	// Define all static records
-	records := []struct {
-		fqdn       string
-		recordType string
-		value      string
-		ttl        int
-	}{
-		// SOA record
-		{domain + ".", "SOA", soaValue, 300},
-
-		// NS records
-		{domain + ".", "NS", "ns1." + domain + ".", 300},
-		{domain + ".", "NS", "ns2." + domain + ".", 300},
-		{domain + ".", "NS", "ns3." + domain + ".", 300},
-
-		// Nameserver A records (glue)
-		{"ns1." + domain + ".", "A", ns1IP, 300},
-		{"ns2." + domain + ".", "A", ns2IP, 300},
-		{"ns3." + domain + ".", "A", ns3IP, 300},
-
-		// Root domain A records (round-robin)
-		{domain + ".", "A", ns1IP, 300},
-		{domain + ".", "A", ns2IP, 300},
-		{domain + ".", "A", ns3IP, 300},
-
-		// Wildcard A records (round-robin)
-		{"*." + domain + ".", "A", ns1IP, 300},
-		{"*." + domain + ".", "A", ns2IP, 300},
-		{"*." + domain + ".", "A", ns3IP, 300},
-	}
-
-	// Build SQL statements
 	var statements []string
-	for _, r := range records {
-		// IMPORTANT: Must set is_active = TRUE for CoreDNS to find the records
-		stmt := fmt.Sprintf(
-			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s', '%s', '%s', %d, 'system', 'system', TRUE, datetime('now'), datetime('now'))`,
-			r.fqdn, r.recordType, r.value, r.ttl,
-		)
-		statements = append(statements, stmt)
+
+	// SOA record — delete old and insert new (serial changes each time, so value differs)
+	statements = append(statements, fmt.Sprintf(
+		`DELETE FROM dns_records WHERE fqdn = '%s.' AND record_type = 'SOA' AND namespace = 'system'`,
+		domain,
+	))
+	statements = append(statements, fmt.Sprintf(
+		`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s.', 'SOA', '%s', 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))`,
+		domain, soaValue,
+	))
+
+	// NS records — idempotent insert
+	for i := 1; i <= 3; i++ {
+		statements = append(statements, fmt.Sprintf(
+			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s.', 'NS', 'ns%d.%s.', 300, 'system', 'system', TRUE, datetime('now'), datetime('now')) ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+			domain, i, domain,
+		))
+	}
+
+	// NOTE: Nameserver glue A records (ns1/ns2/ns3) are NOT seeded here.
+	// They are managed by each node's claimNameserverSlot() on the heartbeat loop,
+	// which correctly maps each NS hostname to exactly one node's IP.
+
+	// Round-robin A records — each unique IP is added once (no duplicates due to UNIQUE constraint)
+	uniqueIPs := make(map[string]bool)
+	for _, ip := range []string{ns1IP, ns2IP, ns3IP} {
+		if !uniqueIPs[ip] {
+			uniqueIPs[ip] = true
+			// Root domain A record
+			statements = append(statements, fmt.Sprintf(
+				`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s.', 'A', '%s', 300, 'system', 'system', TRUE, datetime('now'), datetime('now')) ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+				domain, ip,
+			))
+			// Wildcard A record
+			statements = append(statements, fmt.Sprintf(
+				`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('*.%s.', 'A', '%s', 300, 'system', 'system', TRUE, datetime('now'), datetime('now')) ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+				domain, ip,
+			))
+		}
 	}
 
 	// Execute via RQLite HTTP API
 	return ci.executeRQLiteStatements(rqliteDSN, statements)
 }
 
-// getExistingNameserverIPs queries RQLite for existing ns1, ns2, ns3 A record IPs
-func (ci *CoreDNSInstaller) getExistingNameserverIPs(domain, rqliteDSN string) ([]string, error) {
-	// Build query - use url.QueryEscape to properly encode the SQL
-	query := fmt.Sprintf("SELECT fqdn, value FROM dns_records WHERE fqdn LIKE 'ns_.%s.' AND record_type = 'A' AND is_active = TRUE ORDER BY fqdn", domain)
-	queryURL := fmt.Sprintf("%s/db/query?q=%s", rqliteDSN, url.QueryEscape(query))
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(queryURL)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("query failed with status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Results []struct {
-			Values [][]interface{} `json:"values"`
-		} `json:"results"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	if len(result.Results) == 0 || result.Results[0].Values == nil || len(result.Results[0].Values) < 3 {
-		return nil, fmt.Errorf("not enough nameserver records found")
-	}
-
-	// Extract IPs for ns1, ns2, ns3 (ordered by fqdn)
-	ips := make([]string, 0, 3)
-	for _, row := range result.Results[0].Values {
-		if len(row) >= 2 {
-			if ip, ok := row[1].(string); ok {
-				ips = append(ips, ip)
-			}
-		}
-	}
-
-	if len(ips) != 3 {
-		return nil, fmt.Errorf("expected 3 nameserver IPs, got %d", len(ips))
-	}
-
-	return ips, nil
-}
 
 // rqliteResult represents the response from RQLite execute endpoint
 type rqliteResult struct {

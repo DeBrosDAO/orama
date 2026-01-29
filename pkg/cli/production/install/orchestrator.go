@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
@@ -165,6 +166,18 @@ func (o *Orchestrator) Execute() error {
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		return fmt.Errorf("service creation failed: %w", err)
+	}
+
+	// Seed DNS records after services are running (RQLite must be up)
+	if o.flags.Nameserver && o.flags.BaseDomain != "" {
+		fmt.Printf("\n🌐 Phase 6: Seeding DNS records...\n")
+		fmt.Printf("  Waiting for RQLite to start (10s)...\n")
+		time.Sleep(10 * time.Second)
+		if err := o.setup.SeedDNSRecords(o.flags.BaseDomain, o.flags.VpsIP, o.peers); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠️  Warning: Failed to seed DNS records: %v\n", err)
+		} else {
+			fmt.Printf("  ✓ DNS records seeded\n")
+		}
 	}
 
 	// Log completion with actual peer ID

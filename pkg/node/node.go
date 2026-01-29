@@ -110,6 +110,11 @@ func (n *Node) Start(ctx context.Context) error {
 	} else {
 		// Start DNS heartbeat to keep node status fresh
 		n.startDNSHeartbeat(ctx)
+
+		// Ensure base DNS records exist for this node (self-healing)
+		if err := n.ensureBaseDNSRecords(ctx); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure base DNS records", zap.Error(err))
+		}
 	}
 
 	// Get listen addresses for logging
