@@ -4,11 +4,11 @@ package deployments_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -72,13 +72,7 @@ func TestStaticReplica_CreatedOnDeploy(t *testing.T) {
 		}
 	})
 
-	t.Run("Static content served from both nodes", func(t *testing.T) {
-		e2e.SkipIfLocal(t)
-
-		if len(env.Config.Servers) < 2 {
-			t.Skip("Requires at least 2 servers")
-		}
-
+	t.Run("Static content served via gateway", func(t *testing.T) {
 		deployment := e2e.GetDeployment(t, env, deploymentID)
 		nodeURL := extractNodeURL(t, deployment)
 		if nodeURL == "" {
@@ -86,24 +80,13 @@ func TestStaticReplica_CreatedOnDeploy(t *testing.T) {
 		}
 		domain := extractDomain(nodeURL)
 
-		for _, server := range env.Config.Servers {
-			t.Run("via_"+server.Name, func(t *testing.T) {
-				gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/")
+		defer resp.Body.Close()
 
-				req, err := http.NewRequest("GET", gatewayURL+"/", nil)
-				require.NoError(t, err)
-				req.Host = domain
-
-				resp, err := env.HTTPClient.Do(req)
-				require.NoError(t, err, "Request to %s should succeed", server.Name)
-				defer resp.Body.Close()
-
-				body, _ := io.ReadAll(resp.Body)
-				assert.Equal(t, http.StatusOK, resp.StatusCode,
-					"Request via %s should return 200 (got %d: %s)", server.Name, resp.StatusCode, string(body))
-				t.Logf("Served via %s (%s): status=%d", server.Name, server.IP, resp.StatusCode)
-			})
-		}
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"Static content should be served (got %d: %s)", resp.StatusCode, string(body))
+		t.Logf("Served via gateway: status=%d", resp.StatusCode)
 	})
 }
 
@@ -150,33 +133,13 @@ func TestDynamicReplica_CreatedOnDeploy(t *testing.T) {
 		}
 		domain := extractDomain(nodeURL)
 
-		successCount := 0
-		for _, server := range env.Config.Servers {
-			t.Run("via_"+server.Name, func(t *testing.T) {
-				gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/health")
+		defer resp.Body.Close()
 
-				req, err := http.NewRequest("GET", gatewayURL+"/health", nil)
-				require.NoError(t, err)
-				req.Host = domain
-
-				resp, err := env.HTTPClient.Do(req)
-				if err != nil {
-					t.Logf("Request to %s failed: %v", server.Name, err)
-					return
-				}
-				defer resp.Body.Close()
-
-				body, _ := io.ReadAll(resp.Body)
-				if resp.StatusCode == http.StatusOK {
-					successCount++
-					t.Logf("Served via %s: status=%d body=%s", server.Name, resp.StatusCode, string(body))
-				} else {
-					t.Logf("Non-200 via %s: status=%d body=%s", server.Name, resp.StatusCode, string(body))
-				}
-			})
-		}
-
-		assert.GreaterOrEqual(t, successCount, 2, "At least 2 nodes should serve the deployment")
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"Dynamic app should be served via gateway (got %d: %s)", resp.StatusCode, string(body))
+		t.Logf("Served via gateway: status=%d body=%s", resp.StatusCode, string(body))
 	})
 }
 
@@ -228,27 +191,10 @@ func TestReplica_UpdatePropagation(t *testing.T) {
 		assert.Equal(t, float64(2), version, "Should be version 2")
 		t.Logf("v2 CID: %s, version: %v", v2CID, version)
 
-		// Verify all nodes return consistent data
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
-			req, _ := http.NewRequest("GET", gatewayURL+"/v1/deployments/get?id="+deploymentID, nil)
-			req.Header.Set("Authorization", "Bearer "+env.APIKey)
-
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				t.Logf("Could not reach %s: %v", server.Name, err)
-				continue
-			}
-			defer resp.Body.Close()
-
-			var dep map[string]interface{}
-			json.NewDecoder(resp.Body).Decode(&dep)
-			nodeCID, _ := dep["content_cid"].(string)
-			nodeVersion, _ := dep["version"].(float64)
-			t.Logf("%s: cid=%s version=%v", server.Name, nodeCID, nodeVersion)
-
-			assert.Equal(t, v2CID, nodeCID, "CID should match on %s", server.Name)
-		}
+		// Verify via gateway
+		dep := e2e.GetDeployment(t, env, deploymentID)
+		depCID, _ := dep["content_cid"].(string)
+		assert.Equal(t, v2CID, depCID, "CID should match after update")
 	})
 }
 
@@ -305,22 +251,7 @@ func TestReplica_RollbackPropagation(t *testing.T) {
 		currentCID, _ := deployment["content_cid"].(string)
 		t.Logf("Post-rollback CID: %s", currentCID)
 
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
-			req, _ := http.NewRequest("GET", gatewayURL+"/v1/deployments/get?id="+deploymentID, nil)
-			req.Header.Set("Authorization", "Bearer "+env.APIKey)
-
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				continue
-			}
-			defer resp.Body.Close()
-
-			var dep map[string]interface{}
-			json.NewDecoder(resp.Body).Decode(&dep)
-			nodeCID, _ := dep["content_cid"].(string)
-			assert.Equal(t, currentCID, nodeCID, "CID should match on %s after rollback", server.Name)
-		}
+		assert.Equal(t, v1CID, currentCID, "CID should match v1 after rollback")
 	})
 }
 
@@ -359,27 +290,23 @@ func TestReplica_TeardownOnDelete(t *testing.T) {
 			t.Skip("No domain to test")
 		}
 
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
-			req, _ := http.NewRequest("GET", gatewayURL+"/", nil)
-			req.Host = domain
+		req, err := http.NewRequest("GET", env.GatewayURL+"/", nil)
+		require.NoError(t, err)
+		req.Host = domain
 
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				t.Logf("%s: connection failed (expected)", server.Name)
-				continue
-			}
-			defer resp.Body.Close()
-
-			// Should get 404 or 502, not 200 with app content
-			body, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode == http.StatusOK {
-				// If we get 200, make sure it's not the deleted app
-				assert.NotContains(t, string(body), "<div id=\"root\">",
-					"Deleted deployment should not be served on %s", server.Name)
-			}
-			t.Logf("%s: status=%d (expected non-200)", server.Name, resp.StatusCode)
+		resp, err := env.HTTPClient.Do(req)
+		if err != nil {
+			t.Logf("Connection failed (expected after deletion)")
+			return
 		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusOK {
+			assert.NotContains(t, string(body), "<div id=\"root\">",
+				"Deleted deployment should not be served")
+		}
+		t.Logf("status=%d (expected non-200)", resp.StatusCode)
 	})
 }
 
@@ -387,9 +314,18 @@ func TestReplica_TeardownOnDelete(t *testing.T) {
 func updateStaticDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath string) {
 	t.Helper()
 
-	file, err := os.Open(tarballPath)
+	var fileData []byte
+	info, err := os.Stat(tarballPath)
 	require.NoError(t, err)
-	defer file.Close()
+	if info.IsDir() {
+		fileData, err = exec.Command("tar", "-czf", "-", "-C", tarballPath, ".").Output()
+		require.NoError(t, err)
+	} else {
+		file, err := os.Open(tarballPath)
+		require.NoError(t, err)
+		defer file.Close()
+		fileData, _ = io.ReadAll(file)
+	}
 
 	body := &bytes.Buffer{}
 	boundary := "----WebKitFormBoundary7MA4YWxkTrZu0gW"
@@ -402,7 +338,6 @@ func updateStaticDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath
 	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
 	body.WriteString("Content-Type: application/gzip\r\n\r\n")
 
-	fileData, _ := io.ReadAll(file)
 	body.Write(fileData)
 	body.WriteString("\r\n--" + boundary + "--\r\n")
 

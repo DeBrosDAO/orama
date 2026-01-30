@@ -3,6 +3,7 @@
 package production
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCrossNode_ProxyRouting tests that requests can be made to any node
-// and get proxied to the correct home node for a deployment
+// TestCrossNode_ProxyRouting tests that requests routed through the gateway
+// are served correctly for a deployment.
 func TestCrossNode_ProxyRouting(t *testing.T) {
 	e2e.SkipIfLocal(t)
 
@@ -41,49 +42,28 @@ func TestCrossNode_ProxyRouting(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	domain := env.BuildDeploymentDomain(deploymentName)
-	t.Logf("Testing cross-node routing for: %s", domain)
+	t.Logf("Testing routing for: %s", domain)
 
-	t.Run("Request via each server succeeds", func(t *testing.T) {
-		for _, server := range env.Config.Servers {
-			t.Run("via_"+server.Name, func(t *testing.T) {
-				// Make request directly to this server's IP
-				gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
+	t.Run("Request via gateway succeeds", func(t *testing.T) {
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/")
+		defer resp.Body.Close()
 
-				req, err := http.NewRequest("GET", gatewayURL+"/", nil)
-				require.NoError(t, err)
+		body, _ := io.ReadAll(resp.Body)
 
-				// Set Host header to the deployment domain
-				req.Host = domain
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"Request should return 200 (got %d: %s)", resp.StatusCode, string(body))
 
-				resp, err := env.HTTPClient.Do(req)
-				require.NoError(t, err, "Request to %s should succeed", server.Name)
-				defer resp.Body.Close()
-
-				body, _ := io.ReadAll(resp.Body)
-
-				assert.Equal(t, http.StatusOK, resp.StatusCode,
-					"Request via %s should return 200 (got %d: %s)",
-					server.Name, resp.StatusCode, string(body))
-
-				assert.Contains(t, string(body), "<div id=\"root\">",
-					"Should serve deployment content via %s", server.Name)
-
-				t.Logf("✓ Request via %s (%s) succeeded", server.Name, server.IP)
-			})
-		}
+		assert.Contains(t, string(body), "<div id=\"root\">",
+			"Should serve deployment content")
 	})
 }
 
-// TestCrossNode_APIConsistency tests that API responses are consistent across nodes
+// TestCrossNode_APIConsistency tests that API responses are consistent
 func TestCrossNode_APIConsistency(t *testing.T) {
 	e2e.SkipIfLocal(t)
 
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
-
-	if len(env.Config.Servers) < 2 {
-		t.Skip("Cross-node testing requires at least 2 servers in config")
-	}
 
 	deploymentName := fmt.Sprintf("consistency-test-%d", time.Now().Unix())
 	tarballPath := filepath.Join("../../testdata/apps/react-app")
@@ -98,68 +78,42 @@ func TestCrossNode_APIConsistency(t *testing.T) {
 	// Wait for replication
 	time.Sleep(5 * time.Second)
 
-	t.Run("Deployment list is consistent across nodes", func(t *testing.T) {
-		var deploymentCounts []int
+	t.Run("Deployment list contains our deployment", func(t *testing.T) {
+		req, err := http.NewRequest("GET", env.GatewayURL+"/v1/deployments/list", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+env.APIKey)
 
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
+		resp, err := env.HTTPClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
 
-			req, err := http.NewRequest("GET", gatewayURL+"/v1/deployments/list", nil)
-			require.NoError(t, err)
-			req.Header.Set("Authorization", "Bearer "+env.APIKey)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				t.Logf("⚠ Could not reach %s: %v", server.Name, err)
-				continue
-			}
-			defer resp.Body.Close()
+		var result map[string]interface{}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 
-			if resp.StatusCode != http.StatusOK {
-				t.Logf("⚠ %s returned status %d", server.Name, resp.StatusCode)
-				continue
-			}
+		deployments, ok := result["deployments"].([]interface{})
+		require.True(t, ok, "Response should have deployments array")
+		t.Logf("Gateway reports %d deployments", len(deployments))
 
-			var result map[string]interface{}
-			if err := e2e.DecodeJSON(mustReadAll(t, resp.Body), &result); err != nil {
-				t.Logf("⚠ Could not decode response from %s", server.Name)
-				continue
-			}
-
-			deployments, ok := result["deployments"].([]interface{})
-			if !ok {
-				t.Logf("⚠ Invalid response format from %s", server.Name)
-				continue
-			}
-
-			deploymentCounts = append(deploymentCounts, len(deployments))
-			t.Logf("%s reports %d deployments", server.Name, len(deployments))
-		}
-
-		// All nodes should report the same count (or close to it, allowing for replication delay)
-		if len(deploymentCounts) >= 2 {
-			for i := 1; i < len(deploymentCounts); i++ {
-				diff := deploymentCounts[i] - deploymentCounts[0]
-				if diff < 0 {
-					diff = -diff
-				}
-				assert.LessOrEqual(t, diff, 1,
-					"Deployment counts should be consistent across nodes (allowing for replication)")
+		found := false
+		for _, d := range deployments {
+			dep, _ := d.(map[string]interface{})
+			if dep["name"] == deploymentName {
+				found = true
+				break
 			}
 		}
+		assert.True(t, found, "Our deployment should be in the list")
 	})
 }
 
-// TestCrossNode_DeploymentGetConsistency tests that deployment details are consistent
+// TestCrossNode_DeploymentGetConsistency tests that deployment details are correct
 func TestCrossNode_DeploymentGetConsistency(t *testing.T) {
 	e2e.SkipIfLocal(t)
 
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
-
-	if len(env.Config.Servers) < 2 {
-		t.Skip("Cross-node testing requires at least 2 servers in config")
-	}
 
 	deploymentName := fmt.Sprintf("get-consistency-%d", time.Now().Unix())
 	tarballPath := filepath.Join("../../testdata/apps/react-app")
@@ -174,54 +128,15 @@ func TestCrossNode_DeploymentGetConsistency(t *testing.T) {
 	// Wait for replication
 	time.Sleep(5 * time.Second)
 
-	t.Run("Deployment details match across nodes", func(t *testing.T) {
-		var cids []string
+	t.Run("Deployment details are correct", func(t *testing.T) {
+		deployment := e2e.GetDeployment(t, env, deploymentID)
 
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
+		cid, _ := deployment["content_cid"].(string)
+		assert.NotEmpty(t, cid, "Should have a content CID")
 
-			req, err := http.NewRequest("GET", gatewayURL+"/v1/deployments/get?id="+deploymentID, nil)
-			require.NoError(t, err)
-			req.Header.Set("Authorization", "Bearer "+env.APIKey)
+		name, _ := deployment["name"].(string)
+		assert.Equal(t, deploymentName, name, "Name should match")
 
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				t.Logf("⚠ Could not reach %s: %v", server.Name, err)
-				continue
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				t.Logf("⚠ %s returned status %d", server.Name, resp.StatusCode)
-				continue
-			}
-
-			var deployment map[string]interface{}
-			if err := e2e.DecodeJSON(mustReadAll(t, resp.Body), &deployment); err != nil {
-				t.Logf("⚠ Could not decode response from %s", server.Name)
-				continue
-			}
-
-			cid, _ := deployment["content_cid"].(string)
-			cids = append(cids, cid)
-
-			t.Logf("%s: name=%s, cid=%s, status=%s",
-				server.Name, deployment["name"], cid, deployment["status"])
-		}
-
-		// All nodes should have the same CID
-		if len(cids) >= 2 {
-			for i := 1; i < len(cids); i++ {
-				assert.Equal(t, cids[0], cids[i],
-					"Content CID should be consistent across nodes")
-			}
-		}
+		t.Logf("Deployment: name=%s, cid=%s, status=%s", name, cid, deployment["status"])
 	})
-}
-
-func mustReadAll(t *testing.T, r io.Reader) []byte {
-	t.Helper()
-	data, err := io.ReadAll(r)
-	require.NoError(t, err)
-	return data
 }

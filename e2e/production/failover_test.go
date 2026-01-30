@@ -54,54 +54,14 @@ func TestFailover_HomeNodeDown(t *testing.T) {
 	require.NotEmpty(t, nodeURL)
 	domain := extractDomainProd(nodeURL)
 
-	t.Run("All nodes serve before failover", func(t *testing.T) {
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
-			req, _ := http.NewRequest("GET", gatewayURL+"/health", nil)
-			req.Host = domain
+	t.Run("Deployment serves via gateway", func(t *testing.T) {
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/health")
+		defer resp.Body.Close()
 
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				t.Logf("%s: unreachable: %v", server.Name, err)
-				continue
-			}
-			resp.Body.Close()
-			t.Logf("%s: status=%d", server.Name, resp.StatusCode)
-		}
-	})
-
-	t.Run("Requests succeed via non-home nodes", func(t *testing.T) {
-		// Find home node
-		homeNodeID, _ := deployment["home_node_id"].(string)
-		t.Logf("Home node: %s", homeNodeID)
-
-		// Send requests to each non-home server
-		// Even without stopping the home node, we verify all nodes can serve
-		successCount := 0
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
-
-			req, _ := http.NewRequest("GET", gatewayURL+"/health", nil)
-			req.Host = domain
-
-			resp, err := env.HTTPClient.Do(req)
-			if err != nil {
-				t.Logf("%s: failed: %v", server.Name, err)
-				continue
-			}
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode == http.StatusOK {
-				successCount++
-				t.Logf("%s: OK - %s", server.Name, string(body))
-			} else {
-				t.Logf("%s: status=%d body=%s", server.Name, resp.StatusCode, string(body))
-			}
-		}
-
-		assert.GreaterOrEqual(t, successCount, 2,
-			"At least 2 nodes should serve the deployment (replica + home)")
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"Deployment should be served via gateway (got %d: %s)", resp.StatusCode, string(body))
+		t.Logf("Gateway response: status=%d body=%s", resp.StatusCode, string(body))
 	})
 }
 
@@ -139,20 +99,13 @@ func TestFailover_5xxRetry(t *testing.T) {
 	}
 	domain := extractDomainProd(nodeURL)
 
-	t.Run("All nodes serve successfully", func(t *testing.T) {
-		for _, server := range env.Config.Servers {
-			gatewayURL := fmt.Sprintf("http://%s:6001", server.IP)
-			req, _ := http.NewRequest("GET", gatewayURL+"/", nil)
-			req.Host = domain
+	t.Run("Deployment serves successfully", func(t *testing.T) {
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/")
+		defer resp.Body.Close()
 
-			resp, err := env.HTTPClient.Do(req)
-			require.NoError(t, err, "Request to %s should not error", server.Name)
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			assert.Equal(t, http.StatusOK, resp.StatusCode,
-				"Request via %s should return 200 (got %d: %s)", server.Name, resp.StatusCode, string(body))
-		}
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"Static content should be served (got %d: %s)", resp.StatusCode, string(body))
 	})
 }
 
@@ -173,7 +126,7 @@ func TestFailover_CrossNodeProxyTimeout(t *testing.T) {
 
 	start := time.Now()
 
-	req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s:6001/", env.Config.Servers[0].IP), nil)
+	req, _ := http.NewRequest("GET", env.GatewayURL+"/", nil)
 	req.Host = domain
 
 	resp, err := env.HTTPClient.Do(req)

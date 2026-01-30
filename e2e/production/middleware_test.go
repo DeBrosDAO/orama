@@ -24,7 +24,7 @@ func TestMiddleware_NonExistentDeployment(t *testing.T) {
 
 	domain := fmt.Sprintf("does-not-exist-%d.%s", time.Now().Unix(), env.BaseDomain)
 
-	req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s:6001/", env.Config.Servers[0].IP), nil)
+	req, _ := http.NewRequest("GET", env.GatewayURL+"/", nil)
 	req.Host = domain
 
 	start := time.Now()
@@ -56,11 +56,9 @@ func TestMiddleware_InternalAPIAuthRejection(t *testing.T) {
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 
-	serverIP := env.Config.Servers[0].IP
-
 	t.Run("No auth header rejected", func(t *testing.T) {
 		req, _ := http.NewRequest("POST",
-			fmt.Sprintf("http://%s:6001/v1/internal/deployments/replica/setup", serverIP), nil)
+			env.GatewayURL+"/v1/internal/deployments/replica/setup", nil)
 
 		resp, err := env.HTTPClient.Do(req)
 		require.NoError(t, err)
@@ -73,7 +71,7 @@ func TestMiddleware_InternalAPIAuthRejection(t *testing.T) {
 
 	t.Run("Wrong auth header rejected", func(t *testing.T) {
 		req, _ := http.NewRequest("POST",
-			fmt.Sprintf("http://%s:6001/v1/internal/deployments/replica/setup", serverIP), nil)
+			env.GatewayURL+"/v1/internal/deployments/replica/setup", nil)
 		req.Header.Set("X-Orama-Internal-Auth", "wrong-token")
 
 		resp, err := env.HTTPClient.Do(req)
@@ -86,7 +84,7 @@ func TestMiddleware_InternalAPIAuthRejection(t *testing.T) {
 
 	t.Run("Regular API key does not grant internal access", func(t *testing.T) {
 		req, _ := http.NewRequest("POST",
-			fmt.Sprintf("http://%s:6001/v1/internal/deployments/replica/setup", serverIP), nil)
+			env.GatewayURL+"/v1/internal/deployments/replica/setup", nil)
 		req.Header.Set("Authorization", "Bearer "+env.APIKey)
 
 		resp, err := env.HTTPClient.Do(req)

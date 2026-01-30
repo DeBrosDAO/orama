@@ -375,7 +375,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 				"Authorization": "Bearer " + env.APIKey,
 			},
 			Body: map[string]interface{}{
-				"name": dbName,
+				"database_name": dbName,
 			},
 		}
 
@@ -393,8 +393,8 @@ func TestSQLite_DataPersistence(t *testing.T) {
 				"Authorization": "Bearer " + env.APIKey,
 			},
 			Body: map[string]interface{}{
-				"database": dbName,
-				"sql":      "CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, data TEXT)",
+				"database_name": dbName,
+				"query":      "CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, data TEXT)",
 			},
 		}
 
@@ -410,8 +410,8 @@ func TestSQLite_DataPersistence(t *testing.T) {
 				"Authorization": "Bearer " + env.APIKey,
 			},
 			Body: map[string]interface{}{
-				"database": dbName,
-				"sql":      "INSERT INTO test_table (data) VALUES ('persistent_data')",
+				"database_name": dbName,
+				"query":      "INSERT INTO test_table (data) VALUES ('persistent_data')",
 			},
 		}
 
@@ -427,8 +427,8 @@ func TestSQLite_DataPersistence(t *testing.T) {
 				"Authorization": "Bearer " + env.APIKey,
 			},
 			Body: map[string]interface{}{
-				"database": dbName,
-				"sql":      "SELECT data FROM test_table",
+				"database_name": dbName,
+				"query":      "SELECT data FROM test_table",
 			},
 		}
 

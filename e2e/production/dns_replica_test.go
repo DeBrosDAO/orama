@@ -125,7 +125,7 @@ func TestDNS_CleanupOnDelete(t *testing.T) {
 		}
 		domain := extractDomainProd(nodeURL)
 
-		req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s:6001/", env.Config.Servers[0].IP), nil)
+		req, _ := http.NewRequest("GET", env.GatewayURL+"/", nil)
 		req.Host = domain
 
 		resp, err := env.HTTPClient.Do(req)

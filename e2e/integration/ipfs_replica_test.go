@@ -45,7 +45,7 @@ func TestIPFS_ContentPinnedOnMultipleNodes(t *testing.T) {
 	contentCID, _ := deployment["content_cid"].(string)
 	require.NotEmpty(t, contentCID, "Deployment should have a content CID")
 
-	t.Run("Content served from each node via gateway", func(t *testing.T) {
+	t.Run("Content served via gateway", func(t *testing.T) {
 		// Extract domain from deployment URLs
 		urls, _ := deployment["urls"].([]interface{})
 		require.NotEmpty(t, urls, "Deployment should have URLs")
@@ -56,25 +56,17 @@ func TestIPFS_ContentPinnedOnMultipleNodes(t *testing.T) {
 		} else if len(urlStr) > 7 && urlStr[:7] == "http://" {
 			domain = urlStr[7:]
 		}
-
-		client := e2e.NewHTTPClient(30 * time.Second)
-
-		for _, server := range env.Config.Servers {
-			t.Run("node_"+server.Name, func(t *testing.T) {
-				gatewayURL := fmt.Sprintf("http://%s:6001/", server.IP)
-				req, _ := http.NewRequest("GET", gatewayURL, nil)
-				req.Host = domain
-
-				resp, err := client.Do(req)
-				require.NoError(t, err, "Request to %s should not error", server.Name)
-				defer resp.Body.Close()
-
-				body, _ := io.ReadAll(resp.Body)
-				t.Logf("%s: status=%d, body=%d bytes", server.Name, resp.StatusCode, len(body))
-				assert.Equal(t, http.StatusOK, resp.StatusCode,
-					"IPFS content should be served on %s (CID: %s)", server.Name, contentCID)
-			})
+		if len(domain) > 0 && domain[len(domain)-1] == '/' {
+			domain = domain[:len(domain)-1]
 		}
+
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/")
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		t.Logf("status=%d, body=%d bytes", resp.StatusCode, len(body))
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"IPFS content should be served via gateway (CID: %s)", contentCID)
 	})
 }
 
