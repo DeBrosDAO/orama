@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestDeploymentRollback_FullFlow(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("rollback-test-%d", time.Now().Unix())
-	tarballPathV1 := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPathV1 := filepath.Join("../../testdata/apps/react-app")
 	var deploymentID string
 
 	// Cleanup after test
@@ -120,9 +121,18 @@ func TestDeploymentRollback_FullFlow(t *testing.T) {
 func updateDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath string) {
 	t.Helper()
 
-	file, err := os.Open(tarballPath)
-	require.NoError(t, err, "Failed to open tarball")
-	defer file.Close()
+	var fileData []byte
+	info, err := os.Stat(tarballPath)
+	require.NoError(t, err)
+	if info.IsDir() {
+		fileData, err = exec.Command("tar", "-czf", "-", "-C", tarballPath, ".").Output()
+		require.NoError(t, err)
+	} else {
+		file, err := os.Open(tarballPath)
+		require.NoError(t, err, "Failed to open tarball")
+		defer file.Close()
+		fileData, _ = io.ReadAll(file)
+	}
 
 	// Create multipart form
 	body := &bytes.Buffer{}
@@ -138,7 +148,6 @@ func updateDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath strin
 	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
 	body.WriteString("Content-Type: application/gzip\r\n\r\n")
 
-	fileData, _ := io.ReadAll(file)
 	body.Write(fileData)
 	body.WriteString("\r\n--" + boundary + "--\r\n")
 

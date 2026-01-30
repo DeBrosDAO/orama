@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func TestGoBackendWithSQLite(t *testing.T) {
 
 	deploymentName := fmt.Sprintf("go-sqlite-test-%d", time.Now().Unix())
 	dbName := fmt.Sprintf("test-db-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/apps/go-backend.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/go-api")
 	var deploymentID string
 
 	// Cleanup after test
@@ -82,11 +83,11 @@ func TestGoBackendWithSQLite(t *testing.T) {
 		var health map[string]interface{}
 		require.NoError(t, json.Unmarshal(body, &health))
 
-		assert.Equal(t, "healthy", health["status"])
+		assert.Contains(t, []string{"healthy", "ok"}, health["status"])
 		t.Logf("Health response: %+v", health)
 	})
 
-	t.Run("POST /api/users - create user", func(t *testing.T) {
+	t.Run("POST /api/notes - create note", func(t *testing.T) {
 		deployment := e2e.GetDeployment(t, env, deploymentID)
 		nodeURL := extractNodeURL(t, deployment)
 		if nodeURL == "" {
@@ -95,14 +96,13 @@ func TestGoBackendWithSQLite(t *testing.T) {
 
 		domain := extractDomain(nodeURL)
 
-		// Create a test user
-		userData := map[string]string{
-			"name":  "Test User",
-			"email": "test@example.com",
+		noteData := map[string]string{
+			"title":   "Test Note",
+			"content": "This is a test note",
 		}
-		body, _ := json.Marshal(userData)
+		body, _ := json.Marshal(noteData)
 
-		req, err := http.NewRequest("POST", env.GatewayURL+"/api/users", bytes.NewBuffer(body))
+		req, err := http.NewRequest("POST", env.GatewayURL+"/api/notes", bytes.NewBuffer(body))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		req.Host = domain
@@ -111,20 +111,17 @@ func TestGoBackendWithSQLite(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusCreated, resp.StatusCode, "Should create user successfully")
+		assert.Equal(t, http.StatusCreated, resp.StatusCode, "Should create note successfully")
 
-		var result map[string]interface{}
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+		var note map[string]interface{}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&note))
 
-		assert.True(t, result["success"].(bool), "Success should be true")
-		user := result["user"].(map[string]interface{})
-		assert.Equal(t, "Test User", user["name"])
-		assert.Equal(t, "test@example.com", user["email"])
-
-		t.Logf("Created user: %+v", user)
+		assert.Equal(t, "Test Note", note["title"])
+		assert.Equal(t, "This is a test note", note["content"])
+		t.Logf("Created note: %+v", note)
 	})
 
-	t.Run("GET /api/users - list users", func(t *testing.T) {
+	t.Run("GET /api/notes - list notes", func(t *testing.T) {
 		deployment := e2e.GetDeployment(t, env, deploymentID)
 		nodeURL := extractNodeURL(t, deployment)
 		if nodeURL == "" {
@@ -132,35 +129,28 @@ func TestGoBackendWithSQLite(t *testing.T) {
 		}
 
 		domain := extractDomain(nodeURL)
-		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/api/users")
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/api/notes")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-		var result map[string]interface{}
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+		var notes []map[string]interface{}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&notes))
 
-		users := result["users"].([]interface{})
-		total := int(result["total"].(float64))
+		assert.GreaterOrEqual(t, len(notes), 1, "Should have at least one note")
 
-		assert.GreaterOrEqual(t, total, 1, "Should have at least one user")
-
-		// Find our test user
 		found := false
-		for _, u := range users {
-			user := u.(map[string]interface{})
-			if user["email"] == "test@example.com" {
+		for _, note := range notes {
+			if note["title"] == "Test Note" {
 				found = true
-				assert.Equal(t, "Test User", user["name"])
 				break
 			}
 		}
-		assert.True(t, found, "Test user should be in the list")
-
-		t.Logf("Users response: total=%d", total)
+		assert.True(t, found, "Test note should be in the list")
+		t.Logf("Notes count: %d", len(notes))
 	})
 
-	t.Run("DELETE /api/users - delete user", func(t *testing.T) {
+	t.Run("DELETE /api/notes - delete note", func(t *testing.T) {
 		deployment := e2e.GetDeployment(t, env, deploymentID)
 		nodeURL := extractNodeURL(t, deployment)
 		if nodeURL == "" {
@@ -169,26 +159,23 @@ func TestGoBackendWithSQLite(t *testing.T) {
 
 		domain := extractDomain(nodeURL)
 
-		// First get the user ID
-		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/api/users")
+		// First get the note ID
+		resp := e2e.TestDeploymentWithHostHeader(t, env, domain, "/api/notes")
 		defer resp.Body.Close()
 
-		var result map[string]interface{}
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+		var notes []map[string]interface{}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&notes))
 
-		users := result["users"].([]interface{})
-		var userID int
-		for _, u := range users {
-			user := u.(map[string]interface{})
-			if user["email"] == "test@example.com" {
-				userID = int(user["id"].(float64))
+		var noteID int
+		for _, note := range notes {
+			if note["title"] == "Test Note" {
+				noteID = int(note["id"].(float64))
 				break
 			}
 		}
-		require.NotZero(t, userID, "Should find test user ID")
+		require.NotZero(t, noteID, "Should find test note ID")
 
-		// Delete the user
-		req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/users?id=%d", env.GatewayURL, userID), nil)
+		req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/notes/%d", env.GatewayURL, noteID), nil)
 		require.NoError(t, err)
 		req.Host = domain
 
@@ -196,9 +183,8 @@ func TestGoBackendWithSQLite(t *testing.T) {
 		require.NoError(t, err)
 		defer deleteResp.Body.Close()
 
-		assert.Equal(t, http.StatusOK, deleteResp.StatusCode, "Should delete user successfully")
-
-		t.Logf("Deleted user ID: %d", userID)
+		assert.Equal(t, http.StatusOK, deleteResp.StatusCode, "Should delete note successfully")
+		t.Logf("Deleted note ID: %d", noteID)
 	})
 }
 
@@ -206,11 +192,39 @@ func TestGoBackendWithSQLite(t *testing.T) {
 func createGoDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath string, envVars map[string]string) string {
 	t.Helper()
 
-	file, err := os.Open(tarballPath)
+	var fileData []byte
+	info, err := os.Stat(tarballPath)
 	if err != nil {
-		t.Fatalf("failed to open tarball: %v", err)
+		t.Fatalf("failed to stat tarball path: %v", err)
 	}
-	defer file.Close()
+	if info.IsDir() {
+		// Build Go binary for linux/amd64, then tar it
+		tmpDir, err := os.MkdirTemp("", "go-deploy-*")
+		if err != nil {
+			t.Fatalf("failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		binaryPath := filepath.Join(tmpDir, "app")
+		buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
+		buildCmd.Dir = tarballPath
+		buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to build Go app: %v\n%s", err, string(out))
+		}
+
+		fileData, err = exec.Command("tar", "-czf", "-", "-C", tmpDir, ".").Output()
+		if err != nil {
+			t.Fatalf("failed to create tarball: %v", err)
+		}
+	} else {
+		file, err := os.Open(tarballPath)
+		if err != nil {
+			t.Fatalf("failed to open tarball: %v", err)
+		}
+		defer file.Close()
+		fileData, _ = io.ReadAll(file)
+	}
 
 	// Create multipart form
 	body := &bytes.Buffer{}
@@ -233,7 +247,6 @@ func createGoDeployment(t *testing.T, env *e2e.E2ETestEnv, name, tarballPath str
 	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
 	body.WriteString("Content-Type: application/gzip\r\n\r\n")
 
-	fileData, _ := io.ReadAll(file)
 	body.Write(fileData)
 	body.WriteString("\r\n--" + boundary + "--\r\n")
 

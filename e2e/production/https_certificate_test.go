@@ -24,7 +24,7 @@ func TestHTTPS_CertificateValid(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("https-test-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {

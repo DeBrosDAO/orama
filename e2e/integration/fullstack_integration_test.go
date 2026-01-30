@@ -61,7 +61,7 @@ func TestFullStack_GoAPI_SQLite(t *testing.T) {
 	// Note: For now we test the Go backend deployment without actual DB connection
 	// as that requires environment variable injection during deployment
 	t.Run("Deploy Go backend", func(t *testing.T) {
-		tarballPath := filepath.Join("../testdata/tarballs/go-backend.tar.gz")
+		tarballPath := filepath.Join("../../testdata/apps/go-api")
 
 		// Note: In a real implementation, we would pass DATABASE_NAME env var
 		// For now, we just test the deployment mechanism
@@ -252,7 +252,7 @@ func TestFullStack_StaticSite_SQLite(t *testing.T) {
 		e2e.ExecuteSQLQuery(t, env, dbName, "INSERT INTO page_views (page, count) VALUES ('home', 0)")
 
 		// Deploy frontend
-		tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+		tarballPath := filepath.Join("../../testdata/apps/react-app")
 		frontendID = e2e.CreateTestDeployment(t, env, frontendName, tarballPath)
 
 		assert.NotEmpty(t, frontendID, "Frontend deployment should succeed")

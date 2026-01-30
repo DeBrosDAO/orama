@@ -65,7 +65,7 @@ func TestNamespaceCluster_FullProvisioning(t *testing.T) {
 
 	// Verify we can use the namespace for deployments
 	t.Run("Deployments work on namespace", func(t *testing.T) {
-		tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+		tarballPath := filepath.Join("../../testdata/apps/react-app")
 		if _, err := os.Stat(tarballPath); os.IsNotExist(err) {
 			t.Skip("Test tarball not found - skipping deployment test")
 		}
@@ -396,7 +396,7 @@ func TestDeployment_SubdomainFormat(t *testing.T) {
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 	if _, err := os.Stat(tarballPath); os.IsNotExist(err) {
 		t.Skip("Test tarball not found")
 	}

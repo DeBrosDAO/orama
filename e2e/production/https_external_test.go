@@ -36,7 +36,7 @@ func TestHTTPS_ExternalAccess(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("https-test-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 	var deploymentID string
 
 	// Cleanup after test
@@ -141,7 +141,7 @@ func TestHTTPS_DomainFormat(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("domain-test-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 	var deploymentID string
 
 	// Cleanup after test

@@ -20,7 +20,7 @@ func TestStaticDeployment_FullFlow(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-static-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 	var deploymentID string
 
 	// Cleanup after test

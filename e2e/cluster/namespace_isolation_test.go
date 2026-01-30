@@ -25,7 +25,7 @@ func TestNamespaceIsolation_Deployments(t *testing.T) {
 	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Failed to create namespace B environment")
 
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	// Create deployment in namespace-a
 	deploymentNameA := "test-app-ns-a"

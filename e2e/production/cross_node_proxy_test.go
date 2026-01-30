@@ -28,7 +28,7 @@ func TestCrossNode_ProxyRouting(t *testing.T) {
 	}
 
 	deploymentName := fmt.Sprintf("proxy-test-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
@@ -86,7 +86,7 @@ func TestCrossNode_APIConsistency(t *testing.T) {
 	}
 
 	deploymentName := fmt.Sprintf("consistency-test-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
@@ -162,7 +162,7 @@ func TestCrossNode_DeploymentGetConsistency(t *testing.T) {
 	}
 
 	deploymentName := fmt.Sprintf("get-consistency-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {

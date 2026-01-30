@@ -22,7 +22,7 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-routing-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
@@ -121,7 +121,7 @@ func TestDomainRouting_MultipleDeployments(t *testing.T) {
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	// Create multiple deployments
 	deployment1Name := fmt.Sprintf("test-multi-1-%d", time.Now().Unix())
@@ -180,7 +180,7 @@ func TestDomainRouting_ContentTypes(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-content-types-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
@@ -225,7 +225,7 @@ func TestDomainRouting_SPAFallback(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("test-spa-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
@@ -271,7 +271,7 @@ func TestDeployment_DomainFormat(t *testing.T) {
 	require.NoError(t, err, "Failed to load test environment")
 
 	deploymentName := fmt.Sprintf("format-test-%d", time.Now().Unix())
-	tarballPath := filepath.Join("../testdata/tarballs/react-vite.tar.gz")
+	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	deploymentID := e2e.CreateTestDeployment(t, env, deploymentName, tarballPath)
 	defer func() {
