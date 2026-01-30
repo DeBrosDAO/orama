@@ -74,6 +74,9 @@ on:github.com/coredns/caddy/onevent
 sign:sign
 view:view
 
+# Response Rate Limiting (DNS amplification protection)
+rrl:rrl
+
 # Custom RQLite plugin
 rqlite:github.com/DeBrosOfficial/network/pkg/coredns/rqlite
 EOF

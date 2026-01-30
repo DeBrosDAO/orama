@@ -38,6 +38,13 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 	}
 
 	requiredRemotePeers := r.config.MinClusterSize - 1
+
+	// Genesis node (single-node cluster) doesn't need to wait for peers
+	if requiredRemotePeers <= 0 {
+		r.logger.Info("Genesis node, skipping peer discovery wait")
+		return nil
+	}
+
 	_ = r.discoveryService.TriggerPeerExchange(ctx)
 
 	checkInterval := 2 * time.Second

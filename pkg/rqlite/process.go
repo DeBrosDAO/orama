@@ -17,8 +17,55 @@ import (
 	"go.uber.org/zap"
 )
 
+// killOrphanedRQLite kills any orphaned rqlited process still holding the port.
+// This can happen when the parent node process crashes and rqlited keeps running.
+func (r *RQLiteManager) killOrphanedRQLite() {
+	// Check if port is already in use by querying the status endpoint
+	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return // Port not in use, nothing to clean up
+	}
+	resp.Body.Close()
+
+	// Port is in use — find and kill the orphaned process
+	r.logger.Warn("Found orphaned rqlited process on port, killing it",
+		zap.Int("port", r.config.RQLitePort))
+
+	// Use fuser to find and kill the process holding the port
+	cmd := exec.Command("fuser", "-k", fmt.Sprintf("%d/tcp", r.config.RQLitePort))
+	if err := cmd.Run(); err != nil {
+		r.logger.Warn("fuser failed, trying lsof", zap.Error(err))
+		// Fallback: use lsof
+		out, err := exec.Command("lsof", "-ti", fmt.Sprintf(":%d", r.config.RQLitePort)).Output()
+		if err == nil {
+			for _, pidStr := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if pidStr != "" {
+					killCmd := exec.Command("kill", "-9", pidStr)
+					killCmd.Run()
+				}
+			}
+		}
+	}
+
+	// Wait for port to be released
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		resp, err := client.Get(url)
+		if err != nil {
+			return // Port released
+		}
+		resp.Body.Close()
+	}
+	r.logger.Warn("Could not release port from orphaned process")
+}
+
 // launchProcess starts the RQLite process with appropriate arguments
 func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string) error {
+	// Kill any orphaned rqlited from a previous crash
+	r.killOrphanedRQLite()
+
 	// Build RQLite command
 	args := []string{
 		"-http-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLitePort),
@@ -180,20 +227,29 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 
 // waitForSQLAvailable waits until a simple query succeeds
 func (r *RQLiteManager) waitForSQLAvailable(ctx context.Context) error {
+	r.logger.Info("Waiting for SQL to become available...")
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	attempts := 0
 	for {
 		select {
 		case <-ctx.Done():
+			r.logger.Error("waitForSQLAvailable timed out", zap.Int("attempts", attempts))
 			return ctx.Err()
 		case <-ticker.C:
+			attempts++
 			if r.connection == nil {
+				r.logger.Warn("connection is nil in waitForSQLAvailable")
 				continue
 			}
 			_, err := r.connection.QueryOne("SELECT 1")
 			if err == nil {
+				r.logger.Info("SQL is available", zap.Int("attempts", attempts))
 				return nil
+			}
+			if attempts <= 5 || attempts%10 == 0 {
+				r.logger.Debug("SQL not yet available", zap.Int("attempt", attempts), zap.Error(err))
 			}
 		}
 	}

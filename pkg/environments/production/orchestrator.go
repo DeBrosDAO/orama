@@ -254,6 +254,13 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 		ps.logf("  ✓ Deployment sudoers configured")
 	}
 
+	// Set up WireGuard sudoers (allows debros user to manage WG peers)
+	if err := ps.userProvisioner.SetupWireGuardSudoers(); err != nil {
+		ps.logf("  ⚠️  Failed to setup wireguard sudoers: %v", err)
+	} else {
+		ps.logf("  ✓ WireGuard sudoers configured")
+	}
+
 	// Create directory structure (unified structure)
 	if err := ps.fsProvisioner.EnsureDirectoryStructure(); err != nil {
 		return fmt.Errorf("failed to create directory structure: %w", err)
@@ -724,6 +731,25 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("    - debros-node.service started (with embedded gateway)")
 	}
 
+	// Start CoreDNS and Caddy (nameserver nodes only)
+	// Caddy depends on debros-node.service (gateway on :6001), so start after node
+	if ps.isNameserver {
+		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
+			if err := ps.serviceController.StartService("coredns.service"); err != nil {
+				ps.logf("  ⚠️  Failed to start coredns.service: %v", err)
+			} else {
+				ps.logf("    - coredns.service started")
+			}
+		}
+		if _, err := os.Stat("/usr/bin/caddy"); err == nil {
+			if err := ps.serviceController.StartService("caddy.service"); err != nil {
+				ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
+			} else {
+				ps.logf("    - caddy.service started")
+			}
+		}
+	}
+
 	ps.logf("  ✓ All services started")
 	return nil
 }
@@ -772,6 +798,96 @@ func (ps *ProductionSetup) SeedDNSRecords(baseDomain, vpsIP string, peerAddresse
 		return fmt.Errorf("failed to seed DNS records: %w", err)
 	}
 
+	return nil
+}
+
+// Phase6SetupWireGuard installs WireGuard and generates keys for this node.
+// For the first node, it self-assigns 10.0.0.1. For joining nodes, the peer
+// exchange happens via HTTPS in the install CLI orchestrator.
+func (ps *ProductionSetup) Phase6SetupWireGuard(isFirstNode bool) (privateKey, publicKey string, err error) {
+	ps.logf("Phase 6a: Setting up WireGuard...")
+
+	wp := NewWireGuardProvisioner(WireGuardConfig{})
+
+	// Install WireGuard package
+	if err := wp.Install(); err != nil {
+		return "", "", fmt.Errorf("failed to install wireguard: %w", err)
+	}
+	ps.logf("  ✓ WireGuard installed")
+
+	// Generate keypair
+	privKey, pubKey, err := GenerateKeyPair()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate WG keys: %w", err)
+	}
+	ps.logf("  ✓ WireGuard keypair generated")
+
+	if isFirstNode {
+		// First node: self-assign 10.0.0.1, no peers yet
+		wp.config = WireGuardConfig{
+			PrivateKey: privKey,
+			PrivateIP:  "10.0.0.1",
+			ListenPort: 51820,
+		}
+		if err := wp.WriteConfig(); err != nil {
+			return "", "", fmt.Errorf("failed to write WG config: %w", err)
+		}
+		if err := wp.Enable(); err != nil {
+			return "", "", fmt.Errorf("failed to enable WG: %w", err)
+		}
+		ps.logf("  ✓ WireGuard enabled (first node: 10.0.0.1)")
+	}
+
+	return privKey, pubKey, nil
+}
+
+// Phase6bSetupFirewall sets up UFW firewall rules
+func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
+	if skipFirewall {
+		ps.logf("Phase 6b: Skipping firewall setup (--skip-firewall)")
+		return nil
+	}
+
+	ps.logf("Phase 6b: Setting up UFW firewall...")
+
+	anyoneORPort := 0
+	if ps.IsAnyoneRelay() && ps.anyoneRelayConfig != nil {
+		anyoneORPort = ps.anyoneRelayConfig.ORPort
+	}
+
+	fp := NewFirewallProvisioner(FirewallConfig{
+		SSHPort:       22,
+		IsNameserver:  ps.isNameserver,
+		AnyoneORPort:  anyoneORPort,
+		WireGuardPort: 51820,
+	})
+
+	if err := fp.Setup(); err != nil {
+		return fmt.Errorf("firewall setup failed: %w", err)
+	}
+
+	ps.logf("  ✓ UFW firewall configured and enabled")
+	return nil
+}
+
+// EnableWireGuardWithPeers writes WG config with assigned IP and peers, then enables it.
+// Called by joining nodes after peer exchange.
+func (ps *ProductionSetup) EnableWireGuardWithPeers(privateKey, assignedIP string, peers []WireGuardPeer) error {
+	wp := NewWireGuardProvisioner(WireGuardConfig{
+		PrivateKey: privateKey,
+		PrivateIP:  assignedIP,
+		ListenPort: 51820,
+		Peers:      peers,
+	})
+
+	if err := wp.WriteConfig(); err != nil {
+		return fmt.Errorf("failed to write WG config: %w", err)
+	}
+	if err := wp.Enable(); err != nil {
+		return fmt.Errorf("failed to enable WG: %w", err)
+	}
+
+	ps.logf("  ✓ WireGuard enabled (IP: %s, peers: %d)", assignedIP, len(peers))
 	return nil
 }
 

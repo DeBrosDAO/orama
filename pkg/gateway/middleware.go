@@ -19,15 +19,32 @@ import (
 
 // Note: context keys (ctxKeyAPIKey, ctxKeyJWT, CtxKeyNamespaceOverride) are now defined in context.go
 
-// withMiddleware adds CORS and logging middleware
+// withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging (outermost) -> CORS -> domain routing -> auth -> handler
-	// Domain routing must come BEFORE auth to handle deployment domains without auth
+	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> handler
 	return g.loggingMiddleware(
-		g.corsMiddleware(
-			g.domainRoutingMiddleware(
-				g.authMiddleware(
-					g.authorizationMiddleware(next)))))
+		g.securityHeadersMiddleware(
+			g.rateLimitMiddleware(
+				g.corsMiddleware(
+					g.domainRoutingMiddleware(
+						g.authMiddleware(
+							g.authorizationMiddleware(next)))))))
+}
+
+// securityHeadersMiddleware adds standard security headers to all responses
+func (g *Gateway) securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "0")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// HSTS only when behind TLS (Caddy)
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // loggingMiddleware logs basic request info and duration
@@ -199,6 +216,16 @@ func isPublicPath(p string) bool {
 
 	// Internal replica coordination endpoints (auth handled by replica handler)
 	if strings.HasPrefix(p, "/v1/internal/deployments/replica/") {
+		return true
+	}
+
+	// WireGuard peer exchange (auth handled by cluster secret in handler)
+	if strings.HasPrefix(p, "/v1/internal/wg/") {
+		return true
+	}
+
+	// Node join endpoint (auth handled by invite token in handler)
+	if p == "/v1/internal/join" {
 		return true
 	}
 
@@ -912,7 +939,7 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(r.Context())
 
-	query := "SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1"
+	query := "SELECT COALESCE(internal_ip, ip_address) FROM dns_nodes WHERE id = ? LIMIT 1"
 	result, err := db.Query(internalCtx, query, deployment.HomeNodeID)
 	if err != nil || result == nil || len(result.Rows) == 0 {
 		g.logger.Warn("Failed to get home node IP",

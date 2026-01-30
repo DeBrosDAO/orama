@@ -53,6 +53,8 @@ func main() {
 		cli.HandleProdCommand(args)
 
 	// Direct production commands (new simplified interface)
+	case "invite":
+		cli.HandleProdCommand(append([]string{"invite"}, args...))
 	case "install":
 		cli.HandleProdCommand(append([]string{"install"}, args...))
 	case "upgrade":

@@ -34,4 +34,7 @@ type Config struct {
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 	IPFSEnableEncryption  bool          // Enable client-side encryption before upload (default: true, discovered from node configs)
+
+	// WireGuard mesh configuration
+	ClusterSecret string // Cluster secret for authenticating internal WireGuard peer exchange
 }

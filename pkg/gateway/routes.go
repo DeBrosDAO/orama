@@ -24,6 +24,18 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/internal/acme/present", g.acmePresentHandler)
 	mux.HandleFunc("/v1/internal/acme/cleanup", g.acmeCleanupHandler)
 
+	// WireGuard peer exchange (internal, cluster-secret auth)
+	if g.wireguardHandler != nil {
+		mux.HandleFunc("/v1/internal/wg/peer", g.wireguardHandler.HandleRegisterPeer)
+		mux.HandleFunc("/v1/internal/wg/peers", g.wireguardHandler.HandleListPeers)
+		mux.HandleFunc("/v1/internal/wg/peer/remove", g.wireguardHandler.HandleRemovePeer)
+	}
+
+	// Node join endpoint (token-authenticated, no middleware auth needed)
+	if g.joinHandler != nil {
+		mux.HandleFunc("/v1/internal/join", g.joinHandler.HandleJoin)
+	}
+
 	// auth endpoints
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)

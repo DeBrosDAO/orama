@@ -33,6 +33,15 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		return err
 	}
 
+	// DataDir in node config is ~/.orama/data; the orama dir is the parent
+	oramaDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..")
+
+	// Read cluster secret for WireGuard peer exchange auth
+	clusterSecret := ""
+	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "cluster-secret")); err == nil {
+		clusterSecret = string(secretBytes)
+	}
+
 	gwCfg := &gateway.Config{
 		ListenAddr:        n.config.HTTPGateway.ListenAddr,
 		ClientNamespace:   n.config.HTTPGateway.ClientNamespace,
@@ -45,6 +54,8 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		IPFSAPIURL:        n.config.HTTPGateway.IPFSAPIURL,
 		IPFSTimeout:       n.config.HTTPGateway.IPFSTimeout,
 		BaseDomain:        n.config.HTTPGateway.BaseDomain,
+		DataDir:           oramaDir,
+		ClusterSecret:     clusterSecret,
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)

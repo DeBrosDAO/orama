@@ -226,8 +226,8 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		NodeID:         nodes[0].NodeID,
 		HTTPPort:       portBlocks[0].RQLiteHTTPPort,
 		RaftPort:       portBlocks[0].RQLiteRaftPort,
-		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].IPAddress, portBlocks[0].RQLiteHTTPPort),
-		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].IPAddress, portBlocks[0].RQLiteRaftPort),
+		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort),
+		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort),
 		IsLeader:       true,
 	}
 
@@ -254,8 +254,8 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 			NodeID:         nodes[i].NodeID,
 			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
 			RaftPort:       portBlocks[i].RQLiteRaftPort,
-			HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[i].IPAddress, portBlocks[i].RQLiteHTTPPort),
-			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].IPAddress, portBlocks[i].RQLiteRaftPort),
+			HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteHTTPPort),
+			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteRaftPort),
 			JoinAddresses:  []string{leaderRaftAddr},
 			IsLeader:       false,
 		}
@@ -288,7 +288,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 	// Build peer addresses (all nodes)
 	peerAddresses := make([]string, len(nodes))
 	for i, node := range nodes {
-		peerAddresses[i] = fmt.Sprintf("%s:%d", node.IPAddress, portBlocks[i].OlricMemberlistPort)
+		peerAddresses[i] = fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].OlricMemberlistPort)
 	}
 
 	// Start all Olric instances
@@ -299,7 +299,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			HTTPPort:       portBlocks[i].OlricHTTPPort,
 			MemberlistPort: portBlocks[i].OlricMemberlistPort,
 			BindAddr:       "0.0.0.0",
-			AdvertiseAddr:  node.IPAddress,
+			AdvertiseAddr:  node.InternalIP,
 			PeerAddresses:  peerAddresses,
 		}
 

@@ -103,6 +103,9 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	// Sync WireGuard peers from RQLite (if WG is active on this node)
+	n.startWireGuardSyncLoop(ctx)
+
 	// Register this node in dns_nodes table for deployment routing
 	if err := n.registerDNSNode(ctx); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to register DNS node", zap.Error(err))

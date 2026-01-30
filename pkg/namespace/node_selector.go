@@ -23,6 +23,7 @@ type ClusterNodeSelector struct {
 type NodeCapacity struct {
 	NodeID                   string  `json:"node_id"`
 	IPAddress                string  `json:"ip_address"`
+	InternalIP               string  `json:"internal_ip"` // WireGuard IP for inter-node communication
 	DeploymentCount          int     `json:"deployment_count"`
 	AllocatedPorts           int     `json:"allocated_ports"`
 	AvailablePorts           int     `json:"available_ports"`
@@ -59,7 +60,7 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 	// Filter nodes that have capacity for namespace instances
 	eligibleNodes := make([]NodeCapacity, 0)
 	for _, node := range activeNodes {
-		capacity, err := cns.getNodeCapacity(internalCtx, node.NodeID, node.IPAddress)
+		capacity, err := cns.getNodeCapacity(internalCtx, node.NodeID, node.IPAddress, node.InternalIP)
 		if err != nil {
 			cns.logger.Warn("Failed to get node capacity, skipping",
 				zap.String("node_id", node.NodeID),
@@ -117,8 +118,9 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 
 // nodeInfo is used for querying active nodes
 type nodeInfo struct {
-	NodeID    string `db:"id"`
-	IPAddress string `db:"ip_address"`
+	NodeID     string `db:"id"`
+	IPAddress  string `db:"ip_address"`
+	InternalIP string `db:"internal_ip"`
 }
 
 // getActiveNodes retrieves all active nodes from dns_nodes table
@@ -128,7 +130,7 @@ func (cns *ClusterNodeSelector) getActiveNodes(ctx context.Context) ([]nodeInfo,
 
 	var results []nodeInfo
 	query := `
-		SELECT id, ip_address FROM dns_nodes
+		SELECT id, ip_address, COALESCE(internal_ip, ip_address) as internal_ip FROM dns_nodes
 		WHERE status = 'active' AND last_seen > ?
 		ORDER BY id
 	`
@@ -148,7 +150,7 @@ func (cns *ClusterNodeSelector) getActiveNodes(ctx context.Context) ([]nodeInfo,
 }
 
 // getNodeCapacity calculates capacity metrics for a single node
-func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipAddress string) (*NodeCapacity, error) {
+func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipAddress, internalIP string) (*NodeCapacity, error) {
 	// Get deployment count
 	deploymentCount, err := cns.getDeploymentCount(ctx, nodeID)
 	if err != nil {
@@ -209,6 +211,7 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 	capacity := &NodeCapacity{
 		NodeID:                  nodeID,
 		IPAddress:               ipAddress,
+		InternalIP:              internalIP,
 		DeploymentCount:         deploymentCount,
 		AllocatedPorts:          allocatedPorts,
 		AvailablePorts:          availablePorts,
@@ -365,7 +368,7 @@ func (cns *ClusterNodeSelector) GetNodeByID(ctx context.Context, nodeID string) 
 	internalCtx := client.WithInternalAuth(ctx)
 
 	var results []nodeInfo
-	query := `SELECT id, ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	query := `SELECT id, ip_address, COALESCE(internal_ip, ip_address) as internal_ip FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := cns.db.Query(internalCtx, &results, query, nodeID)
 	if err != nil {
 		return nil, &ClusterError{

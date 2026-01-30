@@ -26,6 +26,8 @@ import (
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
+	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -97,6 +99,15 @@ type Gateway struct {
 	replicaManager       *deployments.ReplicaManager
 	processManager       *process.Manager
 	healthChecker        *health.HealthChecker
+
+	// Rate limiter
+	rateLimiter *RateLimiter
+
+	// WireGuard peer exchange
+	wireguardHandler *wireguardhandlers.Handler
+
+	// Node join handler
+	joinHandler *joinhandlers.Handler
 
 	// Cluster provisioning for namespace clusters
 	clusterProvisioner authhandlers.ClusterProvisioner
@@ -244,6 +255,16 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.ClientNamespace,
 			gw.withInternalAuth,
 		)
+	}
+
+	// Initialize rate limiter (300 req/min, burst 50)
+	gw.rateLimiter = NewRateLimiter(300, 50)
+	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	// Initialize WireGuard peer exchange handler
+	if deps.ORMClient != nil {
+		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
+		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 	}
 
 	// Initialize deployment system

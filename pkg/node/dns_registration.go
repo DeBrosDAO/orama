@@ -29,8 +29,11 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 		ipAddress = "127.0.0.1"
 	}
 
-	// Get internal IP (same as external for now, or could use private network IP)
+	// Get internal IP from WireGuard interface (for cross-node communication over VPN)
 	internalIP := ipAddress
+	if wgIP, err := n.getWireGuardIP(); err == nil && wgIP != "" {
+		internalIP = wgIP
+	}
 
 	// Determine region (defaulting to "local" for now, could be from cloud metadata in future)
 	region := "local"
@@ -295,6 +298,24 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 			zap.String("ip", ip),
 		)
 	}
+}
+
+// getWireGuardIP returns the IPv4 address assigned to the wg0 interface, if any
+func (n *Node) getWireGuardIP() (string, error) {
+	iface, err := net.InterfaceByName("wg0")
+	if err != nil {
+		return "", err
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return "", err
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil {
+			return ipnet.IP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no IPv4 address on wg0")
 }
 
 // getNodeIPAddress attempts to determine the node's external IP address

@@ -22,7 +22,7 @@ check-gateway:
 		echo "  3. Run tests: make test-e2e-local"; \
 		echo ""; \
 		echo "To run tests against production:"; \
-		echo "  ORAMA_GATEWAY_URL=http://VPS-IP:6001 make test-e2e"; \
+		echo "  ORAMA_GATEWAY_URL=https://dbrs.space make test-e2e"; \
 		exit 1; \
 	fi
 	@echo "✅ Gateway is running"
@@ -36,7 +36,7 @@ test-e2e-local: check-gateway
 test-e2e-prod:
 	@if [ -z "$$ORAMA_GATEWAY_URL" ]; then \
 		echo "❌ ORAMA_GATEWAY_URL not set"; \
-		echo "Usage: ORAMA_GATEWAY_URL=http://VPS-IP:6001 make test-e2e-prod"; \
+		echo "Usage: ORAMA_GATEWAY_URL=https://dbrs.space make test-e2e-prod"; \
 		exit 1; \
 	fi
 	@echo "Running E2E tests (including production-only) against $$ORAMA_GATEWAY_URL..."
@@ -182,7 +182,7 @@ help:
 	@echo "  make test-e2e             - Generic E2E tests (auto-discovers config)"
 	@echo ""
 	@echo "  Example production test:"
-	@echo "    ORAMA_GATEWAY_URL=http://141.227.165.168:6001 make test-e2e-prod"
+	@echo "    ORAMA_GATEWAY_URL=https://dbrs.space make test-e2e-prod"
 	@echo ""
 	@echo "Development Management (via orama):"
 	@echo "  ./bin/orama dev status  - Show status of all dev services"

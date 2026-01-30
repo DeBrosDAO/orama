@@ -17,16 +17,20 @@ type Flags struct {
 	DryRun        bool
 	SkipChecks    bool
 	Nameserver    bool   // Make this node a nameserver (runs CoreDNS + Caddy)
-	JoinAddress   string
-	ClusterSecret string
-	SwarmKey      string
-	PeersStr      string
+	JoinAddress   string // HTTPS URL of existing node (e.g., https://node1.dbrs.space)
+	Token         string // Invite token for joining (from orama invite)
+	ClusterSecret string // Deprecated: use --token instead
+	SwarmKey      string // Deprecated: use --token instead
+	PeersStr      string // Deprecated: use --token instead
 
 	// IPFS/Cluster specific info for Peering configuration
 	IPFSPeerID        string
 	IPFSAddrs         string
 	IPFSClusterPeerID string
 	IPFSClusterAddrs  string
+
+	// Security flags
+	SkipFirewall bool // Skip UFW firewall setup (for users who manage their own firewall)
 
 	// Anyone relay operator flags
 	AnyoneRelay    bool   // Run as relay operator instead of client
@@ -57,9 +61,10 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.BoolVar(&flags.Nameserver, "nameserver", false, "Make this node a nameserver (runs CoreDNS + Caddy)")
 
 	// Cluster join flags
-	fs.StringVar(&flags.JoinAddress, "join", "", "Join an existing cluster (e.g. 1.2.3.4:7001)")
-	fs.StringVar(&flags.ClusterSecret, "cluster-secret", "", "Cluster secret for IPFS Cluster (required if joining)")
-	fs.StringVar(&flags.SwarmKey, "swarm-key", "", "IPFS Swarm key hex (64 chars, last line of swarm.key)")
+	fs.StringVar(&flags.JoinAddress, "join", "", "Join existing cluster via HTTPS URL (e.g. https://node1.dbrs.space)")
+	fs.StringVar(&flags.Token, "token", "", "Invite token for joining (from orama invite on existing node)")
+	fs.StringVar(&flags.ClusterSecret, "cluster-secret", "", "Deprecated: use --token instead")
+	fs.StringVar(&flags.SwarmKey, "swarm-key", "", "Deprecated: use --token instead")
 	fs.StringVar(&flags.PeersStr, "peers", "", "Comma-separated list of bootstrap peer multiaddrs")
 
 	// IPFS/Cluster specific info for Peering configuration
@@ -67,6 +72,9 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.StringVar(&flags.IPFSAddrs, "ipfs-addrs", "", "Comma-separated multiaddrs of existing IPFS node")
 	fs.StringVar(&flags.IPFSClusterPeerID, "ipfs-cluster-peer", "", "Peer ID of existing IPFS Cluster node")
 	fs.StringVar(&flags.IPFSClusterAddrs, "ipfs-cluster-addrs", "", "Comma-separated multiaddrs of existing IPFS Cluster node")
+
+	// Security flags
+	fs.BoolVar(&flags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
 
 	// Anyone relay operator flags
 	fs.BoolVar(&flags.AnyoneRelay, "anyone-relay", false, "Run as Anyone relay operator (earn rewards)")

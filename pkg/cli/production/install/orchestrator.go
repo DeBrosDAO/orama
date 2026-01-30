@@ -2,14 +2,20 @@ package install
 
 import (
 	"bufio"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
+	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
 )
 
 // Orchestrator manages the install process
@@ -97,9 +103,11 @@ func (o *Orchestrator) Execute() error {
 		return nil
 	}
 
-	// Save secrets before installation
-	if err := o.validator.SaveSecrets(); err != nil {
-		return err
+	// Save secrets before installation (only for genesis; join flow gets secrets from response)
+	if !o.isJoiningNode() {
+		if err := o.validator.SaveSecrets(); err != nil {
+			return err
+		}
 	}
 
 	// Save preferences for future upgrades (branch + nameserver)
@@ -132,33 +140,56 @@ func (o *Orchestrator) Execute() error {
 		return fmt.Errorf("binary installation failed: %w", err)
 	}
 
-	// Phase 3: Generate secrets FIRST (before service initialization)
+	// Branch: genesis node vs joining node
+	if o.isJoiningNode() {
+		return o.executeJoinFlow()
+	}
+	return o.executeGenesisFlow()
+}
+
+// isJoiningNode returns true if --join and --token are both set
+func (o *Orchestrator) isJoiningNode() bool {
+	return o.flags.JoinAddress != "" && o.flags.Token != ""
+}
+
+// executeGenesisFlow runs the install for the first node in a new cluster
+func (o *Orchestrator) executeGenesisFlow() error {
+	// Phase 3: Generate secrets locally
 	fmt.Printf("\n🔐 Phase 3: Generating secrets...\n")
 	if err := o.setup.Phase3GenerateSecrets(); err != nil {
 		return fmt.Errorf("secret generation failed: %w", err)
 	}
 
-	// Phase 4: Generate configs (BEFORE service initialization)
+	// Phase 6a: WireGuard — self-assign 10.0.0.1
+	fmt.Printf("\n🔒 Phase 6a: Setting up WireGuard mesh VPN...\n")
+	if _, _, err := o.setup.Phase6SetupWireGuard(true); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠️  Warning: WireGuard setup failed: %v\n", err)
+	} else {
+		fmt.Printf("  ✓ WireGuard configured (10.0.0.1)\n")
+	}
+
+	// Phase 6b: UFW firewall
+	fmt.Printf("\n🛡️  Phase 6b: Setting up UFW firewall...\n")
+	if err := o.setup.Phase6bSetupFirewall(o.flags.SkipFirewall); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠️  Warning: Firewall setup failed: %v\n", err)
+	}
+
+	// Phase 4: Generate configs using WG IP (10.0.0.1) as advertise address
+	// All inter-node communication uses WireGuard IPs, not public IPs
 	fmt.Printf("\n⚙️  Phase 4: Generating configurations...\n")
-	// Internal gateway always runs HTTP on port 6001
-	// When using Caddy (nameserver mode), Caddy handles external HTTPS and proxies to internal gateway
-	// When not using Caddy, the gateway runs HTTP-only (use a reverse proxy for HTTPS)
 	enableHTTPS := false
-	if err := o.setup.Phase4GenerateConfigs(o.peers, o.flags.VpsIP, enableHTTPS, o.flags.Domain, o.flags.BaseDomain, o.flags.JoinAddress); err != nil {
+	genesisWGIP := "10.0.0.1"
+	if err := o.setup.Phase4GenerateConfigs(o.peers, genesisWGIP, enableHTTPS, o.flags.Domain, o.flags.BaseDomain, ""); err != nil {
 		return fmt.Errorf("configuration generation failed: %w", err)
 	}
 
-	// Validate generated configuration
 	if err := o.validator.ValidateGeneratedConfig(); err != nil {
 		return err
 	}
 
-	// Phase 2c: Initialize services (after config is in place)
+	// Phase 2c: Initialize services (use WG IP for IPFS Cluster peer discovery)
 	fmt.Printf("\nPhase 2c: Initializing services...\n")
-	ipfsPeerInfo := o.buildIPFSPeerInfo()
-	ipfsClusterPeerInfo := o.buildIPFSClusterPeerInfo()
-
-	if err := o.setup.Phase2cInitializeServices(o.peers, o.flags.VpsIP, ipfsPeerInfo, ipfsClusterPeerInfo); err != nil {
+	if err := o.setup.Phase2cInitializeServices(o.peers, genesisWGIP, nil, nil); err != nil {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
@@ -168,9 +199,9 @@ func (o *Orchestrator) Execute() error {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
-	// Seed DNS records after services are running (RQLite must be up)
+	// Phase 7: Seed DNS records
 	if o.flags.Nameserver && o.flags.BaseDomain != "" {
-		fmt.Printf("\n🌐 Phase 6: Seeding DNS records...\n")
+		fmt.Printf("\n🌐 Phase 7: Seeding DNS records...\n")
 		fmt.Printf("  Waiting for RQLite to start (10s)...\n")
 		time.Sleep(10 * time.Second)
 		if err := o.setup.SeedDNSRecords(o.flags.BaseDomain, o.flags.VpsIP, o.peers); err != nil {
@@ -180,16 +211,204 @@ func (o *Orchestrator) Execute() error {
 		}
 	}
 
-	// Log completion with actual peer ID
 	o.setup.LogSetupComplete(o.setup.NodePeerID)
 	fmt.Printf("✅ Production installation complete!\n\n")
+	o.printFirstNodeSecrets()
+	return nil
+}
 
-	// For first node, print important secrets and identifiers
-	if o.validator.IsFirstNode() {
-		o.printFirstNodeSecrets()
+// executeJoinFlow runs the install for a node joining an existing cluster via invite token
+func (o *Orchestrator) executeJoinFlow() error {
+	// Step 1: Generate WG keypair
+	fmt.Printf("\n🔑 Generating WireGuard keypair...\n")
+	privKey, pubKey, err := production.GenerateKeyPair()
+	if err != nil {
+		return fmt.Errorf("failed to generate WG keypair: %w", err)
+	}
+	fmt.Printf("  ✓ WireGuard keypair generated\n")
+
+	// Step 2: Call join endpoint on existing node
+	fmt.Printf("\n🤝 Requesting cluster join from %s...\n", o.flags.JoinAddress)
+	joinResp, err := o.callJoinEndpoint(pubKey)
+	if err != nil {
+		return fmt.Errorf("join request failed: %w", err)
+	}
+	fmt.Printf("  ✓ Join approved — assigned WG IP: %s\n", joinResp.WGIP)
+	fmt.Printf("  ✓ Received %d WG peers\n", len(joinResp.WGPeers))
+
+	// Step 3: Configure WireGuard with assigned IP and peers
+	fmt.Printf("\n🔒 Configuring WireGuard tunnel...\n")
+	var wgPeers []production.WireGuardPeer
+	for _, p := range joinResp.WGPeers {
+		wgPeers = append(wgPeers, production.WireGuardPeer{
+			PublicKey: p.PublicKey,
+			Endpoint:  p.Endpoint,
+			AllowedIP: p.AllowedIP,
+		})
+	}
+	// Install WG package first
+	wp := production.NewWireGuardProvisioner(production.WireGuardConfig{})
+	if err := wp.Install(); err != nil {
+		return fmt.Errorf("failed to install wireguard: %w", err)
+	}
+	if err := o.setup.EnableWireGuardWithPeers(privKey, joinResp.WGIP, wgPeers); err != nil {
+		return fmt.Errorf("failed to enable WireGuard: %w", err)
+	}
+
+	// Step 4: Verify WG tunnel
+	fmt.Printf("\n🔍 Verifying WireGuard tunnel...\n")
+	if err := o.verifyWGTunnel(joinResp.WGPeers); err != nil {
+		return fmt.Errorf("WireGuard tunnel verification failed: %w", err)
+	}
+	fmt.Printf("  ✓ WireGuard tunnel established\n")
+
+	// Step 5: UFW firewall
+	fmt.Printf("\n🛡️  Setting up UFW firewall...\n")
+	if err := o.setup.Phase6bSetupFirewall(o.flags.SkipFirewall); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠️  Warning: Firewall setup failed: %v\n", err)
+	}
+
+	// Step 6: Save secrets from join response
+	fmt.Printf("\n🔐 Saving cluster secrets...\n")
+	if err := o.saveSecretsFromJoinResponse(joinResp); err != nil {
+		return fmt.Errorf("failed to save secrets: %w", err)
+	}
+	fmt.Printf("  ✓ Secrets saved\n")
+
+	// Step 7: Generate configs using WG IP as advertise address
+	// All inter-node communication uses WireGuard IPs, not public IPs
+	fmt.Printf("\n⚙️  Generating configurations...\n")
+	enableHTTPS := false
+	rqliteJoin := joinResp.RQLiteJoinAddress
+	if err := o.setup.Phase4GenerateConfigs(joinResp.BootstrapPeers, joinResp.WGIP, enableHTTPS, o.flags.Domain, joinResp.BaseDomain, rqliteJoin); err != nil {
+		return fmt.Errorf("configuration generation failed: %w", err)
+	}
+
+	if err := o.validator.ValidateGeneratedConfig(); err != nil {
+		return err
+	}
+
+	// Step 8: Initialize services with IPFS peer info from join response
+	fmt.Printf("\nInitializing services...\n")
+	var ipfsPeerInfo *production.IPFSPeerInfo
+	if joinResp.IPFSPeer.ID != "" {
+		ipfsPeerInfo = &production.IPFSPeerInfo{
+			PeerID: joinResp.IPFSPeer.ID,
+			Addrs:  joinResp.IPFSPeer.Addrs,
+		}
+	}
+	var ipfsClusterPeerInfo *production.IPFSClusterPeerInfo
+	if joinResp.IPFSClusterPeer.ID != "" {
+		ipfsClusterPeerInfo = &production.IPFSClusterPeerInfo{
+			PeerID: joinResp.IPFSClusterPeer.ID,
+			Addrs:  joinResp.IPFSClusterPeer.Addrs,
+		}
+	}
+
+	if err := o.setup.Phase2cInitializeServices(joinResp.BootstrapPeers, joinResp.WGIP, ipfsPeerInfo, ipfsClusterPeerInfo); err != nil {
+		return fmt.Errorf("service initialization failed: %w", err)
+	}
+
+	// Step 9: Create systemd services
+	fmt.Printf("\n🔧 Creating systemd services...\n")
+	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
+		return fmt.Errorf("service creation failed: %w", err)
+	}
+
+	o.setup.LogSetupComplete(o.setup.NodePeerID)
+	fmt.Printf("✅ Production installation complete! Joined cluster via %s\n\n", o.flags.JoinAddress)
+	return nil
+}
+
+// callJoinEndpoint sends the join request to the existing node's HTTPS endpoint
+func (o *Orchestrator) callJoinEndpoint(wgPubKey string) (*joinhandlers.JoinResponse, error) {
+	reqBody := joinhandlers.JoinRequest{
+		Token:       o.flags.Token,
+		WGPublicKey: wgPubKey,
+		PublicIP:    o.flags.VpsIP,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := strings.TrimRight(o.flags.JoinAddress, "/") + "/v1/internal/join"
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // Self-signed certs during initial setup
+			},
+		},
+	}
+
+	resp, err := client.Post(url, "application/json", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to contact %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("join rejected (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var joinResp joinhandlers.JoinResponse
+	if err := json.Unmarshal(respBody, &joinResp); err != nil {
+		return nil, fmt.Errorf("failed to parse join response: %w", err)
+	}
+
+	return &joinResp, nil
+}
+
+// saveSecretsFromJoinResponse writes cluster secrets received from the join endpoint to disk
+func (o *Orchestrator) saveSecretsFromJoinResponse(resp *joinhandlers.JoinResponse) error {
+	secretsDir := filepath.Join(o.oramaDir, "secrets")
+	if err := os.MkdirAll(secretsDir, 0700); err != nil {
+		return fmt.Errorf("failed to create secrets dir: %w", err)
+	}
+
+	// Write cluster secret
+	if resp.ClusterSecret != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "cluster-secret"), []byte(resp.ClusterSecret), 0600); err != nil {
+			return fmt.Errorf("failed to write cluster-secret: %w", err)
+		}
+	}
+
+	// Write swarm key
+	if resp.SwarmKey != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "swarm.key"), []byte(resp.SwarmKey), 0600); err != nil {
+			return fmt.Errorf("failed to write swarm.key: %w", err)
+		}
 	}
 
 	return nil
+}
+
+// verifyWGTunnel pings a WG peer to verify the tunnel is working
+func (o *Orchestrator) verifyWGTunnel(peers []joinhandlers.WGPeerInfo) error {
+	if len(peers) == 0 {
+		return fmt.Errorf("no WG peers to verify")
+	}
+
+	// Extract the IP from the first peer's AllowedIP (e.g. "10.0.0.1/32" -> "10.0.0.1")
+	targetIP := strings.TrimSuffix(peers[0].AllowedIP, "/32")
+
+	// Retry ping for up to 30 seconds
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("ping", "-c", "1", "-W", "2", targetIP)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("could not reach %s via WireGuard after 30s", targetIP)
 }
 
 func (o *Orchestrator) buildIPFSPeerInfo() *production.IPFSPeerInfo {

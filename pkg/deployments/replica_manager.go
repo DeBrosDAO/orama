@@ -259,7 +259,7 @@ func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string,
 	}
 
 	var rows []nodeRow
-	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	query := `SELECT COALESCE(internal_ip, ip_address) AS ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := rm.db.Query(internalCtx, &rows, query, nodeID)
 	if err != nil {
 		return "", err

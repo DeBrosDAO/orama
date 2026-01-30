@@ -95,14 +95,74 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 
 ### CLI Flags Reference
 
+#### `orama install`
+
 | Flag | Description |
 |------|-------------|
-| `--branch <branch>` | Git branch to pull from (production deployment) |
-| `--no-pull` | Skip git pull, use existing `/home/debros/src` (dev deployment) |
+| `--vps-ip <ip>` | VPS public IP address (required) |
+| `--domain <domain>` | Domain for HTTPS certificates |
+| `--base-domain <domain>` | Base domain for deployment routing (e.g., dbrs.space) |
+| `--nameserver` | Configure this node as a nameserver (CoreDNS + Caddy) |
+| `--join <url>` | Join existing cluster via HTTPS URL (e.g., `https://node1.dbrs.space`) |
+| `--token <token>` | Invite token for joining (from `orama invite` on existing node) |
+| `--branch <branch>` | Git branch to use (default: main) |
+| `--no-pull` | Skip git clone/pull, use existing `/home/debros/src` |
+| `--force` | Force reconfiguration even if already installed |
+| `--skip-firewall` | Skip UFW firewall setup |
+| `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
+
+#### `orama invite`
+
+| Flag | Description |
+|------|-------------|
+| `--expiry <duration>` | Token expiry duration (default: 1h) |
+
+#### `orama upgrade`
+
+| Flag | Description |
+|------|-------------|
+| `--branch <branch>` | Git branch to pull from |
+| `--no-pull` | Skip git pull, use existing source |
 | `--restart` | Restart all services after upgrade |
-| `--nameserver` | Configure this node as a nameserver (install only) |
-| `--domain <domain>` | Domain for HTTPS certificates (install only) |
-| `--vps-ip <ip>` | VPS public IP address (install only) |
+
+### Node Join Flow
+
+```bash
+# 1. Genesis node (first node, creates cluster)
+sudo orama install --vps-ip 1.2.3.4 --domain node1.dbrs.space \
+    --base-domain dbrs.space --nameserver
+
+# 2. On genesis node, generate an invite
+orama invite
+# Output: sudo orama install --join https://node1.dbrs.space --token <TOKEN> --vps-ip <IP>
+
+# 3. On the new node, run the printed command
+sudo orama install --join https://node1.dbrs.space --token abc123... \
+    --vps-ip 5.6.7.8 --nameserver
+```
+
+The join flow establishes a WireGuard VPN tunnel before starting cluster services.
+All inter-node communication (RQLite, IPFS, Olric) uses WireGuard IPs (10.0.0.x).
+No cluster ports are ever exposed publicly.
+
+#### DNS Prerequisite
+
+The `--join` URL should use the HTTPS domain of the genesis node (e.g., `https://node1.dbrs.space`).
+For this to work, the domain registrar for `dbrs.space` must have NS records pointing to the genesis
+node's IP so that `node1.dbrs.space` resolves publicly.
+
+**If DNS is not yet configured**, you can use the genesis node's public IP with HTTP as a fallback:
+
+```bash
+sudo orama install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123... --nameserver
+```
+
+This works because Caddy's `:80` block proxies all HTTP traffic to the gateway. However, once DNS
+is properly configured, always use the HTTPS domain URL.
+
+**Important:** Never use `http://<ip>:6001` — port 6001 is the internal gateway and is blocked by
+UFW from external access. The join request goes through Caddy on port 80 (HTTP) or 443 (HTTPS),
+which proxies to the gateway internally.
 
 ## Debugging Production Issues
 

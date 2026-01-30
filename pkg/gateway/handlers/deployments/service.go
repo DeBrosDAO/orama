@@ -643,8 +643,8 @@ func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (strin
 
 	var rows []nodeRow
 
-	// Try full node ID first
-	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	// Try full node ID first (prefer internal/WG IP for cross-node communication)
+	query := `SELECT COALESCE(internal_ip, ip_address) AS ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := s.db.Query(ctx, &rows, query, nodeID)
 	if err != nil {
 		return "", err

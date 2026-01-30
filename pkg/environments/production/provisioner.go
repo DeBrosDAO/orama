@@ -224,6 +224,34 @@ debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-deploy-*.service
 	return nil
 }
 
+// SetupWireGuardSudoers configures the debros user with permissions to manage WireGuard
+func (up *UserProvisioner) SetupWireGuardSudoers() error {
+	sudoersFile := "/etc/sudoers.d/debros-wireguard"
+
+	sudoersContent := `# DeBros Network - WireGuard Management Permissions
+# Allows debros user to manage WireGuard peers
+
+debros ALL=(ALL) NOPASSWD: /usr/bin/wg set wg0 *
+debros ALL=(ALL) NOPASSWD: /usr/bin/wg show wg0
+debros ALL=(ALL) NOPASSWD: /usr/bin/wg showconf wg0
+debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wireguard/wg0.conf
+`
+
+	// Write sudoers rule (always overwrite to ensure latest)
+	if err := os.WriteFile(sudoersFile, []byte(sudoersContent), 0440); err != nil {
+		return fmt.Errorf("failed to create wireguard sudoers rule: %w", err)
+	}
+
+	// Validate sudoers file
+	cmd := exec.Command("visudo", "-c", "-f", sudoersFile)
+	if err := cmd.Run(); err != nil {
+		os.Remove(sudoersFile)
+		return fmt.Errorf("wireguard sudoers rule validation failed: %w", err)
+	}
+
+	return nil
+}
+
 // StateDetector checks for existing production state
 type StateDetector struct {
 	oramaDir string

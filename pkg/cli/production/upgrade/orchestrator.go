@@ -147,6 +147,12 @@ func (o *Orchestrator) Execute() error {
 		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
 	}
 
+	// Re-apply UFW firewall rules (idempotent)
+	fmt.Printf("\n🛡️  Re-applying firewall rules...\n")
+	if err := o.setup.Phase6bSetupFirewall(false); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠️  Warning: Firewall re-apply failed: %v\n", err)
+	}
+
 	fmt.Printf("\n✅ Upgrade complete!\n")
 
 	// Restart services if requested
@@ -317,12 +323,24 @@ func (o *Orchestrator) extractGatewayConfig() (enableHTTPS bool, domain string, 
 		}
 	}
 
-	// Also check node.yaml for base_domain
+	// Also check node.yaml for domain and base_domain
 	nodeConfigPath := filepath.Join(o.oramaDir, "configs", "node.yaml")
 	if data, err := os.ReadFile(nodeConfigPath); err == nil {
 		configStr := string(data)
 		for _, line := range strings.Split(configStr, "\n") {
 			trimmed := strings.TrimSpace(line)
+			// Extract domain from node.yaml (under node: section) if not already found
+			if domain == "" && strings.HasPrefix(trimmed, "domain:") && !strings.HasPrefix(trimmed, "domain_") {
+				parts := strings.SplitN(trimmed, ":", 2)
+				if len(parts) > 1 {
+					d := strings.TrimSpace(parts[1])
+					d = strings.Trim(d, "\"'")
+					if d != "" && d != "null" {
+						domain = d
+						enableHTTPS = true
+					}
+				}
+			}
 			if strings.HasPrefix(trimmed, "base_domain:") {
 				parts := strings.SplitN(trimmed, ":", 2)
 				if len(parts) > 1 {
@@ -332,7 +350,6 @@ func (o *Orchestrator) extractGatewayConfig() (enableHTTPS bool, domain string, 
 						baseDomain = ""
 					}
 				}
-				break
 			}
 		}
 	}

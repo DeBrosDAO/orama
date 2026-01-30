@@ -170,9 +170,9 @@ func TestNamespaceCluster_OlricHealth(t *testing.T) {
 func TestNamespaceCluster_GatewayHealth(t *testing.T) {
 	// Check if gateway binary exists
 	gatewayBinaryPaths := []string{
-		"./bin/gateway",
-		"../bin/gateway",
-		"/usr/local/bin/orama-gateway",
+		"./bin/orama",
+		"../bin/orama",
+		"/usr/local/bin/orama",
 	}
 
 	var gatewayBinaryExists bool
