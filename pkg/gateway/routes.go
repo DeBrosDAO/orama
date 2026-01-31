@@ -36,6 +36,11 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/internal/join", g.joinHandler.HandleJoin)
 	}
 
+	// Namespace instance spawn/stop (internal, handler does its own auth)
+	if g.spawnHandler != nil {
+		mux.Handle("/v1/internal/namespace/spawn", g.spawnHandler)
+	}
+
 	// auth endpoints
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)

@@ -111,6 +111,9 @@ type Gateway struct {
 
 	// Cluster provisioning for namespace clusters
 	clusterProvisioner authhandlers.ClusterProvisioner
+
+	// Namespace instance spawn handler (for distributed provisioning)
+	spawnHandler http.Handler
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -434,6 +437,11 @@ func (g *Gateway) SetClusterProvisioner(cp authhandlers.ClusterProvisioner) {
 	if g.authHandlers != nil {
 		g.authHandlers.SetClusterProvisioner(cp)
 	}
+}
+
+// SetSpawnHandler sets the handler for internal namespace spawn/stop requests.
+func (g *Gateway) SetSpawnHandler(h http.Handler) {
+	g.spawnHandler = h
 }
 
 // GetORMClient returns the RQLite ORM client for external use (e.g., by ClusterManager)

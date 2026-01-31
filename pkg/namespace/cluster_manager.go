@@ -1,9 +1,12 @@
 package namespace
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +35,9 @@ type ClusterManager struct {
 	logger         *zap.Logger
 	baseDomain     string
 	baseDataDir    string
+
+	// Local node identity for distributed spawning
+	localNodeID string
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -88,6 +94,12 @@ func NewClusterManagerWithComponents(
 		logger:         logger.With(zap.String("component", "cluster-manager")),
 		provisioning:   make(map[string]bool),
 	}
+}
+
+// SetLocalNodeID sets this node's peer ID for local/remote dispatch during provisioning
+func (cm *ClusterManager) SetLocalNodeID(id string) {
+	cm.localNodeID = id
+	cm.logger.Info("Local node ID set for distributed provisioning", zap.String("local_node_id", id))
 }
 
 // ProvisionCluster provisions a new 3-node cluster for a namespace
@@ -168,14 +180,14 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Start RQLite instances (leader first, then followers)
 	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, portBlocks, nil, nil)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, nil, nil)
 		return nil, fmt.Errorf("failed to start RQLite cluster: %w", err)
 	}
 
 	// Start Olric instances
 	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, nil)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, nil)
 		return nil, fmt.Errorf("failed to start Olric cluster: %w", err)
 	}
 
@@ -190,7 +202,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 			)
 			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
 		} else {
-			cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, olricInstances)
+			cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
 			return nil, fmt.Errorf("failed to start Gateway cluster: %w", err)
 		}
 	}
@@ -216,7 +228,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	return cluster, nil
 }
 
-// startRQLiteCluster starts RQLite instances on all nodes
+// startRQLiteCluster starts RQLite instances on all nodes (locally or remotely)
 func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*rqlite.Instance, error) {
 	instances := make([]*rqlite.Instance, len(nodes))
 
@@ -231,7 +243,15 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		IsLeader:       true,
 	}
 
-	leaderInstance, err := cm.rqliteSpawner.SpawnInstance(ctx, leaderCfg)
+	var leaderInstance *rqlite.Instance
+	var err error
+	if nodes[0].NodeID == cm.localNodeID {
+		cm.logger.Info("Spawning RQLite leader locally", zap.String("node", nodes[0].NodeID))
+		leaderInstance, err = cm.rqliteSpawner.SpawnInstance(ctx, leaderCfg)
+	} else {
+		cm.logger.Info("Spawning RQLite leader remotely", zap.String("node", nodes[0].NodeID), zap.String("ip", nodes[0].InternalIP))
+		leaderInstance, err = cm.spawnRQLiteRemote(ctx, nodes[0].InternalIP, leaderCfg)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to start RQLite leader: %w", err)
 	}
@@ -240,13 +260,11 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 	cm.logEvent(ctx, cluster.ID, EventRQLiteStarted, nodes[0].NodeID, "RQLite leader started", nil)
 	cm.logEvent(ctx, cluster.ID, EventRQLiteLeaderElected, nodes[0].NodeID, "RQLite leader elected", nil)
 
-	// Record leader node
 	if err := cm.insertClusterNode(ctx, cluster.ID, nodes[0].NodeID, NodeRoleRQLiteLeader, portBlocks[0]); err != nil {
 		cm.logger.Warn("Failed to record cluster node", zap.Error(err))
 	}
 
 	// Start followers
-	// Note: RQLite's -join flag requires the Raft address, not the HTTP address
 	leaderRaftAddr := leaderCfg.RaftAdvAddress
 	for i := 1; i < len(nodes); i++ {
 		followerCfg := rqlite.InstanceConfig{
@@ -260,11 +278,18 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 			IsLeader:       false,
 		}
 
-		followerInstance, err := cm.rqliteSpawner.SpawnInstance(ctx, followerCfg)
+		var followerInstance *rqlite.Instance
+		if nodes[i].NodeID == cm.localNodeID {
+			cm.logger.Info("Spawning RQLite follower locally", zap.String("node", nodes[i].NodeID))
+			followerInstance, err = cm.rqliteSpawner.SpawnInstance(ctx, followerCfg)
+		} else {
+			cm.logger.Info("Spawning RQLite follower remotely", zap.String("node", nodes[i].NodeID), zap.String("ip", nodes[i].InternalIP))
+			followerInstance, err = cm.spawnRQLiteRemote(ctx, nodes[i].InternalIP, followerCfg)
+		}
 		if err != nil {
 			// Stop previously started instances
 			for j := 0; j < i; j++ {
-				cm.rqliteSpawner.StopInstance(ctx, instances[j])
+				cm.stopRQLiteOnNode(ctx, nodes[j].NodeID, nodes[j].InternalIP, cluster.NamespaceName, instances[j])
 			}
 			return nil, fmt.Errorf("failed to start RQLite follower on node %s: %w", nodes[i].NodeID, err)
 		}
@@ -281,7 +306,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 	return instances, nil
 }
 
-// startOlricCluster starts Olric instances on all nodes
+// startOlricCluster starts Olric instances on all nodes (locally or remotely)
 func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*olric.OlricInstance, error) {
 	instances := make([]*olric.OlricInstance, len(nodes))
 
@@ -298,16 +323,24 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			NodeID:         node.NodeID,
 			HTTPPort:       portBlocks[i].OlricHTTPPort,
 			MemberlistPort: portBlocks[i].OlricMemberlistPort,
-			BindAddr:       node.InternalIP,
-			AdvertiseAddr:  node.InternalIP,
+			BindAddr:       node.InternalIP,   // Bind to node's WG IP (0.0.0.0 resolves to IPv6 on some hosts)
+			AdvertiseAddr:  node.InternalIP,   // Advertise WG IP to peers
 			PeerAddresses:  peerAddresses,
 		}
 
-		instance, err := cm.olricSpawner.SpawnInstance(ctx, cfg)
+		var instance *olric.OlricInstance
+		var err error
+		if node.NodeID == cm.localNodeID {
+			cm.logger.Info("Spawning Olric locally", zap.String("node", node.NodeID))
+			instance, err = cm.olricSpawner.SpawnInstance(ctx, cfg)
+		} else {
+			cm.logger.Info("Spawning Olric remotely", zap.String("node", node.NodeID), zap.String("ip", node.InternalIP))
+			instance, err = cm.spawnOlricRemote(ctx, node.InternalIP, cfg)
+		}
 		if err != nil {
 			// Stop previously started instances
 			for j := 0; j < i; j++ {
-				cm.olricSpawner.StopInstance(ctx, cluster.NamespaceName, nodes[j].NodeID)
+				cm.stopOlricOnNode(ctx, nodes[j].NodeID, nodes[j].InternalIP, cluster.NamespaceName)
 			}
 			return nil, fmt.Errorf("failed to start Olric on node %s: %w", node.NodeID, err)
 		}
@@ -368,6 +401,125 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 	return instances, nil
 }
 
+// spawnRQLiteRemote sends a spawn-rqlite request to a remote node
+func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, cfg rqlite.InstanceConfig) (*rqlite.Instance, error) {
+	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
+		"action":              "spawn-rqlite",
+		"namespace":           cfg.Namespace,
+		"node_id":             cfg.NodeID,
+		"rqlite_http_port":    cfg.HTTPPort,
+		"rqlite_raft_port":    cfg.RaftPort,
+		"rqlite_http_adv_addr": cfg.HTTPAdvAddress,
+		"rqlite_raft_adv_addr": cfg.RaftAdvAddress,
+		"rqlite_join_addrs":   cfg.JoinAddresses,
+		"rqlite_is_leader":    cfg.IsLeader,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &rqlite.Instance{PID: resp.PID}, nil
+}
+
+// spawnOlricRemote sends a spawn-olric request to a remote node
+func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, cfg olric.InstanceConfig) (*olric.OlricInstance, error) {
+	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
+		"action":               "spawn-olric",
+		"namespace":            cfg.Namespace,
+		"node_id":              cfg.NodeID,
+		"olric_http_port":      cfg.HTTPPort,
+		"olric_memberlist_port": cfg.MemberlistPort,
+		"olric_bind_addr":      cfg.BindAddr,
+		"olric_advertise_addr": cfg.AdvertiseAddr,
+		"olric_peer_addresses": cfg.PeerAddresses,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &olric.OlricInstance{PID: resp.PID}, nil
+}
+
+// spawnResponse represents the JSON response from a spawn request
+type spawnResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	PID     int    `json:"pid,omitempty"`
+}
+
+// sendSpawnRequest sends a spawn/stop request to a remote node's spawn endpoint
+func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error) {
+	url := fmt.Sprintf("http://%s:6001/v1/internal/namespace/spawn", nodeIP)
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal spawn request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send spawn request to %s: %w", nodeIP, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response from %s: %w", nodeIP, err)
+	}
+
+	var spawnResp spawnResponse
+	if err := json.Unmarshal(respBody, &spawnResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response from %s: %w", nodeIP, err)
+	}
+
+	if !spawnResp.Success {
+		return nil, fmt.Errorf("spawn request failed on %s: %s", nodeIP, spawnResp.Error)
+	}
+
+	return &spawnResp, nil
+}
+
+// stopRQLiteOnNode stops a RQLite instance on a node (local or remote)
+func (cm *ClusterManager) stopRQLiteOnNode(ctx context.Context, nodeID, nodeIP, namespace string, inst *rqlite.Instance) {
+	if nodeID == cm.localNodeID {
+		if inst != nil {
+			cm.rqliteSpawner.StopInstance(ctx, inst)
+		}
+	} else {
+		cm.sendStopRequest(ctx, nodeIP, "stop-rqlite", namespace, nodeID)
+	}
+}
+
+// stopOlricOnNode stops an Olric instance on a node (local or remote)
+func (cm *ClusterManager) stopOlricOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
+	if nodeID == cm.localNodeID {
+		cm.olricSpawner.StopInstance(ctx, namespace, nodeID)
+	} else {
+		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID)
+	}
+}
+
+// sendStopRequest sends a stop request to a remote node
+func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) {
+	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
+		"action":    action,
+		"namespace": namespace,
+		"node_id":   nodeID,
+	})
+	if err != nil {
+		cm.logger.Warn("Failed to send stop request to remote node",
+			zap.String("node_ip", nodeIP),
+			zap.String("action", action),
+			zap.Error(err),
+		)
+	}
+}
+
 // createDNSRecords creates DNS records for the namespace gateway
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	// Create A records for ns-{namespace}.{baseDomain} pointing to all 3 nodes
@@ -399,22 +551,24 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 }
 
 // rollbackProvisioning cleans up a failed provisioning attempt
-func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) {
+func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) {
 	cm.logger.Info("Rolling back failed provisioning", zap.String("cluster_id", cluster.ID))
 
-	// Stop Gateway instances
+	// Stop Gateway instances (local only for now)
 	cm.gatewaySpawner.StopAllInstances(ctx, cluster.NamespaceName)
 
-	// Stop Olric instances
-	if olricInstances != nil {
-		cm.olricSpawner.StopAllInstances(ctx, cluster.NamespaceName)
+	// Stop Olric instances on each node
+	if olricInstances != nil && nodes != nil {
+		for _, node := range nodes {
+			cm.stopOlricOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
+		}
 	}
 
-	// Stop RQLite instances
-	if rqliteInstances != nil {
-		for _, inst := range rqliteInstances {
-			if inst != nil {
-				cm.rqliteSpawner.StopInstance(ctx, inst)
+	// Stop RQLite instances on each node
+	if rqliteInstances != nil && nodes != nil {
+		for i, inst := range rqliteInstances {
+			if inst != nil && i < len(nodes) {
+				cm.stopRQLiteOnNode(ctx, nodes[i].NodeID, nodes[i].InternalIP, cluster.NamespaceName, inst)
 			}
 		}
 	}
@@ -768,7 +922,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	// Start RQLite instances (leader first, then followers)
 	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, portBlocks, nil, nil)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, nil, nil)
 		cm.logger.Error("Failed to start RQLite cluster", zap.Error(err))
 		return
 	}
@@ -776,7 +930,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	// Start Olric instances
 	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, nil)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, nil)
 		cm.logger.Error("Failed to start Olric cluster", zap.Error(err))
 		return
 	}
@@ -792,7 +946,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 			)
 			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
 		} else {
-			cm.rollbackProvisioning(ctx, cluster, portBlocks, rqliteInstances, olricInstances)
+			cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
 			cm.logger.Error("Failed to start Gateway cluster", zap.Error(err))
 			return
 		}

@@ -17,9 +17,9 @@ const (
 // CaddyInstaller handles Caddy installation with custom DNS module
 type CaddyInstaller struct {
 	*BaseInstaller
-	version    string
-	oramaHome  string
-	dnsModule  string // Path to the orama DNS module source
+	version       string
+	oramaHome     string
+	dnsModule     string // Path to the orama DNS module source
 }
 
 // NewCaddyInstaller creates a new Caddy installer
@@ -371,10 +371,15 @@ require (
 // If baseDomain is provided and different from domain, Caddy also serves
 // the base domain and its wildcard (e.g., *.dbrs.space alongside *.node1.dbrs.space).
 func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDomain string) string {
+	// Primary: Let's Encrypt via ACME DNS-01 challenge
+	// Fallback: Caddy's internal CA (self-signed, trust root on clients)
 	tlsBlock := fmt.Sprintf(`    tls {
-        dns orama {
-            endpoint %s
+        issuer acme {
+            dns orama {
+                endpoint %s
+            }
         }
+        issuer internal
     }`, acmeEndpoint)
 
 	var sb strings.Builder

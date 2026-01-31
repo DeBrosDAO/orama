@@ -171,7 +171,11 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome strin
 		return fmt.Errorf("source bin directory is empty - build may have failed")
 	}
 
-	// Copy each binary individually to avoid wildcard expansion issues
+	// Copy each binary individually to avoid wildcard expansion issues.
+	// We remove the destination first to avoid "text file busy" errors when
+	// overwriting a binary that is currently executing (e.g., the orama CLI
+	// running this upgrade). On Linux, removing a running binary is safe —
+	// the kernel keeps the inode alive until the process exits.
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -184,6 +188,9 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome strin
 		if err != nil {
 			return fmt.Errorf("failed to read binary %s: %w", entry.Name(), err)
 		}
+
+		// Remove existing binary first to avoid "text file busy" on running executables
+		_ = os.Remove(dstPath)
 
 		// Write destination file
 		if err := os.WriteFile(dstPath, data, 0755); err != nil {

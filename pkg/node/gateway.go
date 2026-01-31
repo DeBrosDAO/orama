@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
+	namespacehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/namespace"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/namespace"
+	olricpkg "github.com/DeBrosOfficial/network/pkg/olric"
+	rqlitepkg "github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
 
@@ -72,7 +75,15 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			BaseDataDir: baseDataDir,
 		}
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
+		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)
 		apiGateway.SetClusterProvisioner(clusterManager)
+
+		// Wire spawn handler for distributed namespace instance spawning
+		rqliteSpawner := rqlitepkg.NewInstanceSpawner(baseDataDir, n.logger.Logger)
+		olricSpawner := olricpkg.NewInstanceSpawner(baseDataDir, n.logger.Logger)
+		spawnHandler := namespacehandlers.NewSpawnHandler(rqliteSpawner, olricSpawner, n.logger.Logger)
+		apiGateway.SetSpawnHandler(spawnHandler)
+
 		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
 			zap.String("base_domain", clusterCfg.BaseDomain),
 			zap.String("base_data_dir", baseDataDir))
