@@ -403,10 +403,14 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) ([]*gateway.GatewayInstance, error) {
 	instances := make([]*gateway.GatewayInstance, len(nodes))
 
-	// Build Olric server addresses
+	// Build Olric server addresses — use WireGuard IPs for remote instances
 	olricServers := make([]string, len(olricInstances))
 	for i, inst := range olricInstances {
-		olricServers[i] = inst.DSN()
+		if nodes[i].NodeID == cm.localNodeID {
+			olricServers[i] = inst.DSN() // localhost for local
+		} else {
+			olricServers[i] = inst.AdvertisedDSN() // WireGuard IP for remote
+		}
 	}
 
 	// Start all Gateway instances
@@ -477,7 +481,13 @@ func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, c
 	if err != nil {
 		return nil, err
 	}
-	return &olric.OlricInstance{PID: resp.PID}, nil
+	return &olric.OlricInstance{
+		PID:            resp.PID,
+		HTTPPort:       cfg.HTTPPort,
+		MemberlistPort: cfg.MemberlistPort,
+		BindAddr:       cfg.BindAddr,
+		AdvertiseAddr:  cfg.AdvertiseAddr,
+	}, nil
 }
 
 // spawnResponse represents the JSON response from a spawn request
