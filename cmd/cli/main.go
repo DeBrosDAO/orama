@@ -88,6 +88,10 @@ func main() {
 	case "db":
 		cli.HandleDBCommand(args)
 
+	// Namespace management
+	case "namespace":
+		cli.HandleNamespaceCommand(args)
+
 	// Environment management
 	case "env":
 		cli.HandleEnvCommand(args)
@@ -165,6 +169,9 @@ func showHelp() {
 	fmt.Printf("  db list                       - List all databases\n")
 	fmt.Printf("  db backup <name>              - Backup database to IPFS\n")
 	fmt.Printf("  db backups <name>             - List database backups\n\n")
+
+	fmt.Printf("🏢 Namespaces:\n")
+	fmt.Printf("  namespace delete              - Delete current namespace and all resources\n\n")
 
 	fmt.Printf("🌍 Environments:\n")
 	fmt.Printf("  env list                      - List all environments\n")

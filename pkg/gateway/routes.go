@@ -67,6 +67,11 @@ func (g *Gateway) Routes() http.Handler {
 	// namespace cluster status (public endpoint for polling during provisioning)
 	mux.HandleFunc("/v1/namespace/status", g.namespaceClusterStatusHandler)
 
+	// namespace delete (authenticated — goes through auth middleware)
+	if g.namespaceDeleteHandler != nil {
+		mux.Handle("/v1/namespace/delete", g.namespaceDeleteHandler)
+	}
+
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
 	mux.HandleFunc("/v1/network/peers", g.networkPeersHandler)

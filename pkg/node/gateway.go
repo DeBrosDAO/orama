@@ -84,6 +84,10 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		spawnHandler := namespacehandlers.NewSpawnHandler(rqliteSpawner, olricSpawner, n.logger.Logger)
 		apiGateway.SetSpawnHandler(spawnHandler)
 
+		// Wire namespace delete handler
+		deleteHandler := namespacehandlers.NewDeleteHandler(clusterManager, ormClient, n.logger.Logger)
+		apiGateway.SetNamespaceDeleteHandler(deleteHandler)
+
 		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
 			zap.String("base_domain", clusterCfg.BaseDomain),
 			zap.String("base_data_dir", baseDataDir))
