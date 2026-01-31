@@ -306,51 +306,93 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 	return instances, nil
 }
 
-// startOlricCluster starts Olric instances on all nodes (locally or remotely)
+// startOlricCluster starts Olric instances on all nodes concurrently.
+// Olric uses memberlist for peer discovery — all peers must be reachable at roughly
+// the same time. Sequential spawning fails because early instances exhaust their
+// retry budget before later instances start. By spawning all concurrently, all
+// memberlist ports open within seconds of each other, allowing discovery to succeed.
 func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*olric.OlricInstance, error) {
 	instances := make([]*olric.OlricInstance, len(nodes))
+	errs := make([]error, len(nodes))
 
-	// Build peer addresses (all nodes)
-	peerAddresses := make([]string, len(nodes))
+	// Build configs for all nodes upfront
+	configs := make([]olric.InstanceConfig, len(nodes))
 	for i, node := range nodes {
-		peerAddresses[i] = fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].OlricMemberlistPort)
-	}
-
-	// Start all Olric instances
-	for i, node := range nodes {
-		cfg := olric.InstanceConfig{
+		var peers []string
+		for j, peerNode := range nodes {
+			if j != i {
+				peers = append(peers, fmt.Sprintf("%s:%d", peerNode.InternalIP, portBlocks[j].OlricMemberlistPort))
+			}
+		}
+		configs[i] = olric.InstanceConfig{
 			Namespace:      cluster.NamespaceName,
 			NodeID:         node.NodeID,
 			HTTPPort:       portBlocks[i].OlricHTTPPort,
 			MemberlistPort: portBlocks[i].OlricMemberlistPort,
-			BindAddr:       node.InternalIP,   // Bind to node's WG IP (0.0.0.0 resolves to IPv6 on some hosts)
+			BindAddr:       node.InternalIP,   // Bind to WG IP directly (0.0.0.0 resolves to IPv6 on some hosts)
 			AdvertiseAddr:  node.InternalIP,   // Advertise WG IP to peers
-			PeerAddresses:  peerAddresses,
+			PeerAddresses:  peers,
 		}
+	}
 
-		var instance *olric.OlricInstance
-		var err error
-		if node.NodeID == cm.localNodeID {
-			cm.logger.Info("Spawning Olric locally", zap.String("node", node.NodeID))
-			instance, err = cm.olricSpawner.SpawnInstance(ctx, cfg)
-		} else {
-			cm.logger.Info("Spawning Olric remotely", zap.String("node", node.NodeID), zap.String("ip", node.InternalIP))
-			instance, err = cm.spawnOlricRemote(ctx, node.InternalIP, cfg)
-		}
-		if err != nil {
-			// Stop previously started instances
-			for j := 0; j < i; j++ {
-				cm.stopOlricOnNode(ctx, nodes[j].NodeID, nodes[j].InternalIP, cluster.NamespaceName)
+	// Spawn all instances concurrently
+	var wg sync.WaitGroup
+	for i, node := range nodes {
+		wg.Add(1)
+		go func(idx int, n NodeCapacity) {
+			defer wg.Done()
+			if n.NodeID == cm.localNodeID {
+				cm.logger.Info("Spawning Olric locally", zap.String("node", n.NodeID))
+				instances[idx], errs[idx] = cm.olricSpawner.SpawnInstance(ctx, configs[idx])
+			} else {
+				cm.logger.Info("Spawning Olric remotely", zap.String("node", n.NodeID), zap.String("ip", n.InternalIP))
+				instances[idx], errs[idx] = cm.spawnOlricRemote(ctx, n.InternalIP, configs[idx])
 			}
-			return nil, fmt.Errorf("failed to start Olric on node %s: %w", node.NodeID, err)
-		}
-		instances[i] = instance
+		}(i, node)
+	}
+	wg.Wait()
 
+	// Check for errors — if any failed, stop all and return
+	for i, err := range errs {
+		if err != nil {
+			cm.logger.Error("Olric spawn failed", zap.String("node", nodes[i].NodeID), zap.Error(err))
+			// Stop any that succeeded
+			for j := range nodes {
+				if errs[j] == nil {
+					cm.stopOlricOnNode(ctx, nodes[j].NodeID, nodes[j].InternalIP, cluster.NamespaceName)
+				}
+			}
+			return nil, fmt.Errorf("failed to start Olric on node %s: %w", nodes[i].NodeID, err)
+		}
+	}
+
+	// All instances started — give memberlist time to converge.
+	// Olric's memberlist retries peer joins every ~1s for ~10 attempts.
+	// Since all instances are now up, they should discover each other quickly.
+	cm.logger.Info("All Olric instances started, waiting for memberlist convergence",
+		zap.Int("node_count", len(nodes)),
+	)
+	time.Sleep(5 * time.Second)
+
+	// Log events and record cluster nodes
+	for i, node := range nodes {
 		cm.logEvent(ctx, cluster.ID, EventOlricStarted, node.NodeID, "Olric instance started", nil)
 		cm.logEvent(ctx, cluster.ID, EventOlricJoined, node.NodeID, "Olric instance joined memberlist", nil)
 
 		if err := cm.insertClusterNode(ctx, cluster.ID, node.NodeID, NodeRoleOlric, portBlocks[i]); err != nil {
 			cm.logger.Warn("Failed to record cluster node", zap.Error(err))
+		}
+	}
+
+	// Verify at least the local instance is still healthy after convergence
+	for i, node := range nodes {
+		if node.NodeID == cm.localNodeID && instances[i] != nil {
+			healthy, err := instances[i].IsHealthy(ctx)
+			if !healthy {
+				cm.logger.Warn("Local Olric instance unhealthy after convergence wait", zap.Error(err))
+			} else {
+				cm.logger.Info("Local Olric instance healthy after convergence")
+			}
 		}
 	}
 

@@ -318,8 +318,16 @@ func setReflectValue(field reflect.Value, raw any) error {
 			return nil
 		}
 		fallthrough
+	case reflect.Ptr:
+		// Handle pointer types (e.g. *time.Time, *string, *int)
+		// nil raw is already handled above (leaves zero/nil pointer)
+		elem := reflect.New(field.Type().Elem())
+		if err := setReflectValue(elem.Elem(), raw); err != nil {
+			return err
+		}
+		field.Set(elem)
+		return nil
 	default:
-		// Not supported yet
 		return fmt.Errorf("unsupported dest field kind: %s", field.Kind())
 	}
 	return nil

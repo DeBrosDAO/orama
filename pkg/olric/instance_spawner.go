@@ -54,32 +54,34 @@ type InstanceSpawner struct {
 
 // OlricInstance represents a running Olric instance for a namespace
 type OlricInstance struct {
-	Namespace        string
-	NodeID           string
-	HTTPPort         int
-	MemberlistPort   int
-	BindAddr         string
-	AdvertiseAddr    string
-	PeerAddresses    []string // Memberlist peer addresses for cluster discovery
-	ConfigPath       string
-	DataDir          string
-	PID              int
-	Status           InstanceNodeStatus
-	StartedAt        time.Time
-	LastHealthCheck  time.Time
-	cmd              *exec.Cmd
-	logger           *zap.Logger
+	Namespace      string
+	NodeID         string
+	HTTPPort       int
+	MemberlistPort int
+	BindAddr       string
+	AdvertiseAddr  string
+	PeerAddresses  []string // Memberlist peer addresses for cluster discovery
+	ConfigPath     string
+	DataDir        string
+	PID            int
+	Status         InstanceNodeStatus
+	StartedAt      time.Time
+	LastHealthCheck time.Time
+	cmd            *exec.Cmd
+	logFile        *os.File     // kept open for process lifetime
+	waitDone       chan struct{} // closed when cmd.Wait() completes
+	logger         *zap.Logger
 }
 
 // InstanceConfig holds configuration for spawning an Olric instance
 type InstanceConfig struct {
-	Namespace       string   // Namespace name (e.g., "alice")
-	NodeID          string   // Physical node ID
-	HTTPPort        int      // HTTP API port
-	MemberlistPort  int      // Memberlist gossip port
-	BindAddr        string   // Address to bind (e.g., "0.0.0.0")
-	AdvertiseAddr   string   // Address to advertise (e.g., "192.168.1.10")
-	PeerAddresses   []string // Memberlist peer addresses for initial cluster join
+	Namespace      string   // Namespace name (e.g., "alice")
+	NodeID         string   // Physical node ID
+	HTTPPort       int      // HTTP API port
+	MemberlistPort int      // Memberlist gossip port
+	BindAddr       string   // Address to bind (e.g., "0.0.0.0")
+	AdvertiseAddr  string   // Address to advertise (e.g., "192.168.1.10")
+	PeerAddresses  []string // Memberlist peer addresses for initial cluster join
 }
 
 // OlricConfig represents the Olric YAML configuration structure
@@ -117,19 +119,21 @@ func instanceKey(namespace, nodeID string) string {
 }
 
 // SpawnInstance starts a new Olric instance for a namespace on a specific node.
-// Returns the instance info or an error if spawning fails.
+// The process is decoupled from the caller's context — it runs independently until
+// explicitly stopped. Only returns an error if the process fails to start or the
+// memberlist port doesn't open within the timeout.
+// Note: The memberlist port opening does NOT mean the cluster has formed — peers may
+// still be joining. Use WaitForProcessRunning() after spawning all instances to verify.
 func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig) (*OlricInstance, error) {
 	key := instanceKey(cfg.Namespace, cfg.NodeID)
 
 	is.mu.Lock()
 	if existing, ok := is.instances[key]; ok {
-		is.mu.Unlock()
-		// Instance already exists, return it if running
-		if existing.Status == InstanceStatusRunning {
+		if existing.Status == InstanceStatusRunning || existing.Status == InstanceStatusStarting {
+			is.mu.Unlock()
 			return existing, nil
 		}
-		// Otherwise, remove it and start fresh
-		is.mu.Lock()
+		// Remove stale instance
 		delete(is.instances, key)
 	}
 	is.mu.Unlock()
@@ -165,6 +169,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		ConfigPath:     configPath,
 		DataDir:        dataDir,
 		Status:         InstanceStatusStarting,
+		waitDone:       make(chan struct{}),
 		logger:         is.logger.With(zap.String("namespace", cfg.Namespace), zap.String("node_id", cfg.NodeID)),
 	}
 
@@ -174,12 +179,14 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		zap.Strings("peers", cfg.PeerAddresses),
 	)
 
-	// Create command with config environment variable
-	cmd := exec.CommandContext(ctx, "olric-server")
+	// Use exec.Command (NOT exec.CommandContext) so the process is NOT killed
+	// when the HTTP request context or provisioning context is cancelled.
+	// The process lives until explicitly stopped via StopInstance().
+	cmd := exec.Command("olric-server")
 	cmd.Env = append(os.Environ(), fmt.Sprintf("OLRIC_SERVER_CONFIG=%s", configPath))
 	instance.cmd = cmd
 
-	// Setup logging
+	// Setup logging — keep the file open for the process lifetime
 	logPath := filepath.Join(logsDir, fmt.Sprintf("olric-%s.log", cfg.NodeID))
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -188,6 +195,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 			Cause:   err,
 		}
 	}
+	instance.logFile = logFile
 
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -201,18 +209,26 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		}
 	}
 
-	logFile.Close()
-
 	instance.PID = cmd.Process.Pid
 	instance.StartedAt = time.Now()
+
+	// Reap the child process in a background goroutine to prevent zombies.
+	// This goroutine closes the log file and signals via waitDone when the process exits.
+	go func() {
+		_ = cmd.Wait()
+		logFile.Close()
+		close(instance.waitDone)
+	}()
 
 	// Store instance
 	is.mu.Lock()
 	is.instances[key] = instance
 	is.mu.Unlock()
 
-	// Wait for instance to be ready
-	if err := is.waitForInstanceReady(ctx, instance); err != nil {
+	// Wait for the memberlist port to accept TCP connections.
+	// This confirms the process started and Olric initialized its network layer.
+	// It does NOT guarantee peers have joined — that happens asynchronously.
+	if err := is.waitForPortReady(ctx, instance); err != nil {
 		// Kill the process on failure
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
@@ -295,20 +311,17 @@ func (is *InstanceSpawner) StopInstance(ctx context.Context, ns, nodeID string) 
 			_ = instance.cmd.Process.Kill()
 		}
 
-		// Wait for process to exit with timeout
-		done := make(chan error, 1)
-		go func() {
-			done <- instance.cmd.Wait()
-		}()
-
+		// Wait for process to exit via the reaper goroutine
 		select {
-		case <-done:
+		case <-instance.waitDone:
 			instance.logger.Info("Olric instance stopped gracefully")
 		case <-time.After(10 * time.Second):
 			instance.logger.Warn("Olric instance did not stop gracefully, killing")
 			_ = instance.cmd.Process.Kill()
+			<-instance.waitDone // wait for reaper to finish
 		case <-ctx.Done():
 			_ = instance.cmd.Process.Kill()
+			<-instance.waitDone
 			return ctx.Err()
 		}
 	}
@@ -379,29 +392,27 @@ func (is *InstanceSpawner) HealthCheck(ctx context.Context, ns, nodeID string) (
 	return healthy, err
 }
 
-// waitForInstanceReady waits for the Olric instance to be ready
-func (is *InstanceSpawner) waitForInstanceReady(ctx context.Context, instance *OlricInstance) error {
-	// Olric doesn't have a standard /ready endpoint, so we check if the process
-	// is running and the memberlist port is accepting connections
+// waitForPortReady waits for the Olric memberlist port to accept TCP connections.
+// This is a lightweight check — it confirms the process started but does NOT
+// guarantee that peers have joined the cluster.
+func (is *InstanceSpawner) waitForPortReady(ctx context.Context, instance *OlricInstance) error {
+	// Use BindAddr for the health check — this is the address the process actually listens on.
+	// AdvertiseAddr may differ from BindAddr (e.g., 0.0.0.0 resolves to IPv6 on some hosts).
+	checkAddr := instance.BindAddr
+	if checkAddr == "" || checkAddr == "0.0.0.0" {
+		checkAddr = "localhost"
+	}
+	addr := fmt.Sprintf("%s:%d", checkAddr, instance.MemberlistPort)
 
-	maxAttempts := 30 // 30 seconds
+	maxAttempts := 30
 	for i := 0; i < maxAttempts; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-instance.waitDone:
+			// Process exited before becoming ready
+			return fmt.Errorf("Olric process exited unexpectedly (pid %d)", instance.PID)
 		case <-time.After(1 * time.Second):
-		}
-
-		// Check if the process is still running
-		if instance.cmd != nil && instance.cmd.ProcessState != nil && instance.cmd.ProcessState.Exited() {
-			return fmt.Errorf("Olric process exited unexpectedly")
-		}
-
-		// Try to connect to the memberlist port to verify it's accepting connections
-		// Use the advertise address since Olric may bind to a specific IP
-		addr := fmt.Sprintf("%s:%d", instance.AdvertiseAddr, instance.MemberlistPort)
-		if instance.AdvertiseAddr == "" {
-			addr = fmt.Sprintf("localhost:%d", instance.MemberlistPort)
 		}
 
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -415,7 +426,7 @@ func (is *InstanceSpawner) waitForInstanceReady(ctx context.Context, instance *O
 		}
 		conn.Close()
 
-		instance.logger.Debug("Olric instance ready",
+		instance.logger.Debug("Olric memberlist port ready",
 			zap.Int("attempts", i+1),
 			zap.String("addr", addr),
 		)
@@ -430,14 +441,27 @@ func (is *InstanceSpawner) monitorInstance(instance *OlricInstance) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-instance.waitDone:
+			// Process exited — update status and stop monitoring
+			is.mu.Lock()
+			key := instanceKey(instance.Namespace, instance.NodeID)
+			if _, exists := is.instances[key]; exists {
+				instance.Status = InstanceStatusStopped
+				instance.logger.Warn("Olric instance process exited unexpectedly")
+			}
+			is.mu.Unlock()
+			return
+		case <-ticker.C:
+		}
+
 		is.mu.RLock()
 		key := instanceKey(instance.Namespace, instance.NodeID)
 		_, exists := is.instances[key]
 		is.mu.RUnlock()
 
 		if !exists {
-			// Instance was removed
 			return
 		}
 
@@ -454,21 +478,18 @@ func (is *InstanceSpawner) monitorInstance(instance *OlricInstance) {
 			instance.logger.Warn("Olric instance health check failed")
 		}
 		is.mu.Unlock()
-
-		// Check if process is still running
-		if instance.cmd != nil && instance.cmd.ProcessState != nil && instance.cmd.ProcessState.Exited() {
-			is.mu.Lock()
-			instance.Status = InstanceStatusStopped
-			is.mu.Unlock()
-			instance.logger.Warn("Olric instance process exited unexpectedly")
-			return
-		}
 	}
 }
 
 // IsHealthy checks if the Olric instance is healthy by verifying the memberlist port is accepting connections
 func (oi *OlricInstance) IsHealthy(ctx context.Context) (bool, error) {
-	// Olric doesn't have a standard /ready HTTP endpoint, so we check memberlist connectivity
+	// Check if process has exited first
+	select {
+	case <-oi.waitDone:
+		return false, fmt.Errorf("process has exited")
+	default:
+	}
+
 	addr := fmt.Sprintf("%s:%d", oi.AdvertiseAddr, oi.MemberlistPort)
 	if oi.AdvertiseAddr == "" || oi.AdvertiseAddr == "0.0.0.0" {
 		addr = fmt.Sprintf("localhost:%d", oi.MemberlistPort)

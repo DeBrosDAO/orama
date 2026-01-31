@@ -1,6 +1,7 @@
 package namespace
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -90,7 +91,9 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		zap.String("node_id", req.NodeID),
 	)
 
-	ctx := r.Context()
+	// Use a background context for spawn operations so processes outlive the HTTP request.
+	// Stop operations can use request context since they're short-lived.
+	ctx := context.Background()
 
 	switch req.Action {
 	case "spawn-rqlite":
