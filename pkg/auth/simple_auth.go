@@ -16,20 +16,22 @@ import (
 
 // PerformSimpleAuthentication performs a simple authentication flow where the user
 // provides a wallet address and receives an API key without signature verification
-func PerformSimpleAuthentication(gatewayURL string) (*Credentials, error) {
+func PerformSimpleAuthentication(gatewayURL, wallet, namespace string) (*Credentials, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\n🔐 Simple Wallet Authentication")
 	fmt.Println("================================")
 
-	// Read wallet address
-	fmt.Print("Enter your wallet address (0x...): ")
-	walletInput, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read wallet address: %w", err)
+	// Read wallet address (skip prompt if provided via flag)
+	if wallet == "" {
+		fmt.Print("Enter your wallet address (0x...): ")
+		walletInput, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("failed to read wallet address: %w", err)
+		}
+		wallet = strings.TrimSpace(walletInput)
 	}
 
-	wallet := strings.TrimSpace(walletInput)
 	if wallet == "" {
 		return nil, fmt.Errorf("wallet address cannot be empty")
 	}
@@ -43,20 +45,21 @@ func PerformSimpleAuthentication(gatewayURL string) (*Credentials, error) {
 		return nil, fmt.Errorf("invalid wallet address format")
 	}
 
-	// Read namespace (required)
-	var namespace string
-	for {
-		fmt.Print("Enter namespace (required): ")
-		nsInput, err := reader.ReadString('\n')
-		if err != nil {
-			return nil, fmt.Errorf("failed to read namespace: %w", err)
-		}
+	// Read namespace (skip prompt if provided via flag)
+	if namespace == "" {
+		for {
+			fmt.Print("Enter namespace (required): ")
+			nsInput, err := reader.ReadString('\n')
+			if err != nil {
+				return nil, fmt.Errorf("failed to read namespace: %w", err)
+			}
 
-		namespace = strings.TrimSpace(nsInput)
-		if namespace != "" {
-			break
+			namespace = strings.TrimSpace(nsInput)
+			if namespace != "" {
+				break
+			}
+			fmt.Println("⚠️  Namespace cannot be empty. Please enter a namespace.")
 		}
-		fmt.Println("⚠️  Namespace cannot be empty. Please enter a namespace.")
 	}
 
 	fmt.Printf("\n✅ Wallet: %s\n", wallet)

@@ -298,7 +298,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			NodeID:         node.NodeID,
 			HTTPPort:       portBlocks[i].OlricHTTPPort,
 			MemberlistPort: portBlocks[i].OlricMemberlistPort,
-			BindAddr:       "0.0.0.0",
+			BindAddr:       node.InternalIP,
 			AdvertiseAddr:  node.InternalIP,
 			PeerAddresses:  peerAddresses,
 		}

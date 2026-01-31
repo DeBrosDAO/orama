@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -19,7 +20,12 @@ func HandleAuthCommand(args []string) {
 	subcommand := args[0]
 	switch subcommand {
 	case "login":
-		handleAuthLogin()
+		var wallet, namespace string
+		fs := flag.NewFlagSet("auth login", flag.ExitOnError)
+		fs.StringVar(&wallet, "wallet", "", "Wallet address (0x...)")
+		fs.StringVar(&namespace, "namespace", "", "Namespace name")
+		_ = fs.Parse(args[1:])
+		handleAuthLogin(wallet, namespace)
 	case "logout":
 		handleAuthLogout()
 	case "whoami":
@@ -49,6 +55,7 @@ func showAuthHelp() {
 	fmt.Printf("  switch     - Switch between stored credentials\n\n")
 	fmt.Printf("Examples:\n")
 	fmt.Printf("  orama auth login          # Enter wallet address interactively\n")
+	fmt.Printf("  orama auth login --wallet 0x... --namespace myns  # Non-interactive\n")
 	fmt.Printf("  orama auth whoami         # Check who you're logged in as\n")
 	fmt.Printf("  orama auth status         # View detailed authentication info\n")
 	fmt.Printf("  orama auth logout         # Clear all stored credentials\n\n")
@@ -63,7 +70,7 @@ func showAuthHelp() {
 	fmt.Printf("      Use 'orama env current' to see your active environment.\n")
 }
 
-func handleAuthLogin() {
+func handleAuthLogin(wallet, namespace string) {
 	// Get gateway URL from active environment
 	gatewayURL := getGatewayURL()
 
@@ -123,7 +130,7 @@ func handleAuthLogin() {
 	}
 
 	// Perform simple authentication to add a new credential
-	creds, err := auth.PerformSimpleAuthentication(gatewayURL)
+	creds, err := auth.PerformSimpleAuthentication(gatewayURL, wallet, namespace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
 		os.Exit(1)
