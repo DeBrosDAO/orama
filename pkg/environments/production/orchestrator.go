@@ -557,7 +557,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 		}
 		email := "admin@" + caddyDomain
 		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
-		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint); err != nil {
+		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint, baseDomain); err != nil {
 			ps.logf("  ⚠️  Caddy config warning: %v", err)
 		} else {
 			ps.logf("  ✓ Caddy config generated")
@@ -686,7 +686,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 
-	// Start services in dependency order
+	// Restart services in dependency order (restart instead of start ensures
+	// services pick up new configs even if already running from a previous install)
 	ps.logf("  Starting services...")
 
 	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
@@ -705,9 +706,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			infraServices = append(infraServices, "debros-anyone-relay.service")
 		}
 	}
-	
+
 	for _, svc := range infraServices {
-		if err := ps.serviceController.StartService(svc); err != nil {
+		if err := ps.serviceController.RestartService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
 		} else {
 			ps.logf("    - %s started", svc)
@@ -718,14 +719,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	time.Sleep(2 * time.Second)
 
 	// Start IPFS Cluster
-	if err := ps.serviceController.StartService("debros-ipfs-cluster.service"); err != nil {
+	if err := ps.serviceController.RestartService("debros-ipfs-cluster.service"); err != nil {
 		ps.logf("  ⚠️  Failed to start debros-ipfs-cluster.service: %v", err)
 	} else {
 		ps.logf("    - debros-ipfs-cluster.service started")
 	}
 
 	// Start node service (gateway is embedded in node, no separate service needed)
-	if err := ps.serviceController.StartService("debros-node.service"); err != nil {
+	if err := ps.serviceController.RestartService("debros-node.service"); err != nil {
 		ps.logf("  ⚠️  Failed to start debros-node.service: %v", err)
 	} else {
 		ps.logf("    - debros-node.service started (with embedded gateway)")
@@ -735,14 +736,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Caddy depends on debros-node.service (gateway on :6001), so start after node
 	if ps.isNameserver {
 		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			if err := ps.serviceController.StartService("coredns.service"); err != nil {
+			if err := ps.serviceController.RestartService("coredns.service"); err != nil {
 				ps.logf("  ⚠️  Failed to start coredns.service: %v", err)
 			} else {
 				ps.logf("    - coredns.service started")
 			}
 		}
 		if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-			if err := ps.serviceController.StartService("caddy.service"); err != nil {
+			if err := ps.serviceController.RestartService("caddy.service"); err != nil {
 				ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
 			} else {
 				ps.logf("    - caddy.service started")

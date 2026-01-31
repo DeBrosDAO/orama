@@ -216,8 +216,9 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 
 	return fmt.Sprintf(`[Unit]
 Description=DeBros Network Node
-After=debros-ipfs-cluster.service debros-olric.service
+After=debros-ipfs-cluster.service debros-olric.service wg-quick@wg0.service
 Wants=debros-ipfs-cluster.service debros-olric.service
+Requires=wg-quick@wg0.service
 
 [Service]
 Type=simple

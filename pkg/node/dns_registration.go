@@ -118,12 +118,15 @@ func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
 // ensureBaseDNSRecords ensures this node's IP is present in the base DNS records.
 // This provides self-healing: if records are missing (fresh install, DB reset),
 // the node recreates them on startup. Each node only manages its own IP entries.
+//
+// Records are created for BOTH the base domain (dbrs.space) and the node domain
+// (node1.dbrs.space). The base domain records enable round-robin load balancing
+// across all nodes. The node domain records enable direct node access.
 func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
-	domain := n.config.Node.Domain
-	if domain == "" {
-		domain = n.config.HTTPGateway.BaseDomain
-	}
-	if domain == "" {
+	baseDomain := n.config.HTTPGateway.BaseDomain
+	nodeDomain := n.config.Node.Domain
+
+	if baseDomain == "" && nodeDomain == "" {
 		return nil // No domain configured, skip
 	}
 
@@ -132,22 +135,32 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		return fmt.Errorf("failed to determine node IP: %w", err)
 	}
 
-	// Ensure trailing dot for FQDN format (as CoreDNS expects)
-	fqdn := domain + "."
-	wildcardFQDN := "*." + domain + "."
-
 	db := n.rqliteAdapter.GetSQLDB()
+
+	// Build list of A records to ensure
+	var records []struct {
+		fqdn  string
+		value string
+	}
+
+	// Base domain records (e.g., dbrs.space, *.dbrs.space) — for round-robin across all nodes
+	if baseDomain != "" {
+		records = append(records,
+			struct{ fqdn, value string }{baseDomain + ".", ipAddress},
+			struct{ fqdn, value string }{"*." + baseDomain + ".", ipAddress},
+		)
+	}
+
+	// Node-specific records (e.g., node1.dbrs.space, *.node1.dbrs.space) — for direct node access
+	if nodeDomain != "" && nodeDomain != baseDomain {
+		records = append(records,
+			struct{ fqdn, value string }{nodeDomain + ".", ipAddress},
+			struct{ fqdn, value string }{"*." + nodeDomain + ".", ipAddress},
+		)
+	}
 
 	// Insert root A record and wildcard A record for this node's IP
 	// ON CONFLICT DO NOTHING avoids duplicates (UNIQUE on fqdn, record_type, value)
-	records := []struct {
-		fqdn  string
-		value string
-	}{
-		{fqdn, ipAddress},
-		{wildcardFQDN, ipAddress},
-	}
-
 	for _, r := range records {
 		query := `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
 			VALUES (?, 'A', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
@@ -158,10 +171,62 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		}
 	}
 
-	// Claim an NS slot if available (ns1, ns2, or ns3)
-	n.claimNameserverSlot(ctx, domain, ipAddress)
+	// Ensure SOA and NS records exist for the base domain (self-healing)
+	if baseDomain != "" {
+		n.ensureSOAAndNSRecords(ctx, baseDomain)
+	}
+
+	// Claim an NS slot for the base domain (ns1/ns2/ns3)
+	if baseDomain != "" {
+		n.claimNameserverSlot(ctx, baseDomain, ipAddress)
+	}
 
 	return nil
+}
+
+// ensureSOAAndNSRecords creates SOA and NS records for the base domain if they don't exist.
+// These are normally seeded during install Phase 7, but if that fails (e.g. migrations
+// not yet run), the heartbeat self-heals them here.
+func (n *Node) ensureSOAAndNSRecords(ctx context.Context, baseDomain string) {
+	db := n.rqliteAdapter.GetSQLDB()
+	fqdn := baseDomain + "."
+
+	// Check if SOA exists
+	var count int
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dns_records WHERE fqdn = ? AND record_type = 'SOA'`, fqdn,
+	).Scan(&count)
+	if err != nil || count > 0 {
+		return // SOA exists or query failed, skip
+	}
+
+	n.logger.ComponentInfo(logging.ComponentNode, "SOA/NS records missing, self-healing",
+		zap.String("domain", baseDomain))
+
+	// Create SOA record
+	soaValue := fmt.Sprintf("ns1.%s. admin.%s. %d 3600 1800 604800 300",
+		baseDomain, baseDomain, time.Now().Unix())
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
+		VALUES (?, 'SOA', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
+		ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+		fqdn, soaValue,
+	); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to create SOA record", zap.Error(err))
+	}
+
+	// Create NS records (ns1, ns2, ns3)
+	for i := 1; i <= 3; i++ {
+		nsValue := fmt.Sprintf("ns%d.%s.", i, baseDomain)
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
+			VALUES (?, 'NS', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
+			ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+			fqdn, nsValue,
+		); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to create NS record", zap.Error(err))
+		}
+	}
 }
 
 // claimNameserverSlot attempts to claim an available NS hostname (ns1/ns2/ns3) for this node.
@@ -236,11 +301,11 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		return
 	}
 
-	domain := n.config.Node.Domain
-	if domain == "" {
-		domain = n.config.HTTPGateway.BaseDomain
+	baseDomain := n.config.HTTPGateway.BaseDomain
+	if baseDomain == "" {
+		baseDomain = n.config.Node.Domain
 	}
-	if domain == "" {
+	if baseDomain == "" {
 		return
 	}
 
@@ -255,8 +320,12 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 	}
 	defer rows.Close()
 
-	fqdn := domain + "."
-	wildcardFQDN := "*." + domain + "."
+	// Build all FQDNs to clean: base domain + node domain
+	var fqdnsToClean []string
+	fqdnsToClean = append(fqdnsToClean, baseDomain+".", "*."+baseDomain+".")
+	if n.config.Node.Domain != "" && n.config.Node.Domain != baseDomain {
+		fqdnsToClean = append(fqdnsToClean, n.config.Node.Domain+".", "*."+n.config.Node.Domain+".")
+	}
 
 	for rows.Next() {
 		var nodeID, ip string
@@ -270,7 +339,7 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		}
 
 		// Remove the dead node's A records from round-robin
-		for _, f := range []string{fqdn, wildcardFQDN} {
+		for _, f := range fqdnsToClean {
 			if _, err := db.ExecContext(ctx, `DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = 'system'`, f, ip); err != nil {
 				n.logger.ComponentWarn(logging.ComponentNode, "Failed to remove stale DNS record",
 					zap.String("fqdn", f), zap.String("ip", ip), zap.Error(err))
@@ -284,7 +353,7 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 
 		// Remove glue records for this node's IP (ns1.domain., ns2.domain., ns3.domain.)
 		for _, ns := range []string{"ns1", "ns2", "ns3"} {
-			nsFQDN := ns + "." + domain + "."
+			nsFQDN := ns + "." + baseDomain + "."
 			if _, err := db.ExecContext(ctx,
 				`DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = 'system'`,
 				nsFQDN, ip,

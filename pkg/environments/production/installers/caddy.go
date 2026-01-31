@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -158,15 +159,17 @@ func (ci *CaddyInstaller) Install() error {
 	return nil
 }
 
-// Configure creates Caddy configuration files
-func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint string) error {
+// Configure creates Caddy configuration files.
+// baseDomain is optional — if provided (and different from domain), Caddy will also
+// serve traffic for the base domain and its wildcard (e.g., *.dbrs.space).
+func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint string, baseDomain string) error {
 	configDir := "/etc/caddy"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Create Caddyfile
-	caddyfile := ci.generateCaddyfile(domain, email, acmeEndpoint)
+	caddyfile := ci.generateCaddyfile(domain, email, acmeEndpoint, baseDomain)
 	if err := os.WriteFile(filepath.Join(configDir, "Caddyfile"), []byte(caddyfile), 0644); err != nil {
 		return fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
@@ -364,32 +367,31 @@ require (
 `
 }
 
-// generateCaddyfile creates the Caddyfile configuration
-func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint string) string {
-	return fmt.Sprintf(`{
-    email %s
-}
-
-*.%s {
-    tls {
+// generateCaddyfile creates the Caddyfile configuration.
+// If baseDomain is provided and different from domain, Caddy also serves
+// the base domain and its wildcard (e.g., *.dbrs.space alongside *.node1.dbrs.space).
+func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDomain string) string {
+	tlsBlock := fmt.Sprintf(`    tls {
         dns orama {
             endpoint %s
         }
-    }
-    reverse_proxy localhost:6001
-}
+    }`, acmeEndpoint)
 
-%s {
-    tls {
-        dns orama {
-            endpoint %s
-        }
-    }
-    reverse_proxy localhost:6001
-}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("{\n    email %s\n}\n", email))
 
-:80 {
-    reverse_proxy localhost:6001
-}
-`, email, domain, acmeEndpoint, domain, acmeEndpoint)
+	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
+	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))
+	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))
+
+	// Base domain blocks (e.g., dbrs.space, *.dbrs.space) — for app routing
+	if baseDomain != "" && baseDomain != domain {
+		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", baseDomain, tlsBlock))
+		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:6001\n}\n", baseDomain, tlsBlock))
+	}
+
+	// HTTP fallback (handles plain HTTP and ACME challenges)
+	sb.WriteString("\n:80 {\n    reverse_proxy localhost:6001\n}\n")
+
+	return sb.String()
 }

@@ -138,8 +138,8 @@ func (bi *BinaryInstaller) InstallCaddy() error {
 }
 
 // ConfigureCaddy creates Caddy configuration files
-func (bi *BinaryInstaller) ConfigureCaddy(domain string, email string, acmeEndpoint string) error {
-	return bi.caddy.Configure(domain, email, acmeEndpoint)
+func (bi *BinaryInstaller) ConfigureCaddy(domain string, email string, acmeEndpoint string, baseDomain string) error {
+	return bi.caddy.Configure(domain, email, acmeEndpoint, baseDomain)
 }
 
 // Mock system commands for testing (if needed)

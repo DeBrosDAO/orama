@@ -157,8 +157,11 @@ func (wp *WireGuardProvisioner) Enable() error {
 		return fmt.Errorf("failed to enable wg-quick@wg0: %w\n%s", err, string(output))
 	}
 
-	// Start now
-	cmd = exec.Command("systemctl", "start", "wg-quick@wg0")
+	// Use restart instead of start. wg-quick@wg0 is a oneshot service with
+	// RemainAfterExit=yes, so "systemctl start" is a no-op if the service is
+	// already in "active (exited)" state (e.g. from a previous install that
+	// wasn't fully cleaned). "restart" always re-runs the ExecStart command.
+	cmd = exec.Command("systemctl", "restart", "wg-quick@wg0")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to start wg-quick@wg0: %w\n%s", err, string(output))
 	}

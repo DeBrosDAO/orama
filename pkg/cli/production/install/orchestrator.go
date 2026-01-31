@@ -199,15 +199,24 @@ func (o *Orchestrator) executeGenesisFlow() error {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
-	// Phase 7: Seed DNS records
+	// Phase 7: Seed DNS records (with retry — migrations may still be running)
 	if o.flags.Nameserver && o.flags.BaseDomain != "" {
 		fmt.Printf("\n🌐 Phase 7: Seeding DNS records...\n")
-		fmt.Printf("  Waiting for RQLite to start (10s)...\n")
-		time.Sleep(10 * time.Second)
-		if err := o.setup.SeedDNSRecords(o.flags.BaseDomain, o.flags.VpsIP, o.peers); err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠️  Warning: Failed to seed DNS records: %v\n", err)
-		} else {
-			fmt.Printf("  ✓ DNS records seeded\n")
+		var seedErr error
+		for attempt := 1; attempt <= 6; attempt++ {
+			waitSec := 5 * attempt
+			fmt.Printf("  Waiting for RQLite + migrations (%ds, attempt %d/6)...\n", waitSec, attempt)
+			time.Sleep(time.Duration(waitSec) * time.Second)
+			seedErr = o.setup.SeedDNSRecords(o.flags.BaseDomain, o.flags.VpsIP, o.peers)
+			if seedErr == nil {
+				fmt.Printf("  ✓ DNS records seeded\n")
+				break
+			}
+			fmt.Fprintf(os.Stderr, "  ⚠️  Attempt %d failed: %v\n", attempt, seedErr)
+		}
+		if seedErr != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠️  Warning: DNS seeding failed after all attempts.\n")
+			fmt.Fprintf(os.Stderr, "     Records will self-heal via node heartbeat once running.\n")
 		}
 	}
 
