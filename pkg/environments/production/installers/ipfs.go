@@ -259,6 +259,34 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 
 	config["Addresses"] = addresses
 
+	// Clear Swarm.AddrFilters — the server profile blocks private IPs (10.0.0.0/8, 172.16.0.0/12, etc.)
+	// which prevents IPFS from connecting over our WireGuard mesh (10.0.0.x)
+	swarm, ok := config["Swarm"].(map[string]interface{})
+	if !ok {
+		swarm = make(map[string]interface{})
+	}
+	swarm["AddrFilters"] = []interface{}{}
+	// Disable Websocket transport (not supported in private networks)
+	transports, _ := swarm["Transports"].(map[string]interface{})
+	if transports == nil {
+		transports = make(map[string]interface{})
+	}
+	network, _ := transports["Network"].(map[string]interface{})
+	if network == nil {
+		network = make(map[string]interface{})
+	}
+	network["Websocket"] = false
+	transports["Network"] = network
+	swarm["Transports"] = transports
+	config["Swarm"] = swarm
+
+	// Disable AutoTLS (incompatible with private networks)
+	autoTLS := map[string]interface{}{"Enabled": false}
+	config["AutoTLS"] = autoTLS
+
+	// Use DHT routing (Routing.Type=auto is incompatible with private networks)
+	config["Routing"] = map[string]interface{}{"Type": "dht"}
+
 	// Write config back
 	updatedData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

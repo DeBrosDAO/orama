@@ -225,7 +225,7 @@ func EnsurePortsAvailable(action string, ports []PortSpec) error {
 		msg += "  - Old IPFS:         sudo systemctl stop ipfs\n"
 		msg += "  - systemd-resolved: already handled by installer (port 53)\n"
 		msg += "  - Other services:   sudo kill <PID> or sudo systemctl stop <service>"
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
