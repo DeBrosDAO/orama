@@ -110,12 +110,26 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
 | `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
+| `--anyone-relay` | Install and configure an Anyone relay on this node |
+| `--anyone-migrate` | Migrate existing Anyone relay installation (preserves keys/fingerprint) |
+| `--anyone-nickname <name>` | Relay nickname (required for relay mode) |
+| `--anyone-wallet <addr>` | Ethereum wallet for relay rewards (required for relay mode) |
+| `--anyone-contact <info>` | Contact info for relay (required for relay mode) |
+| `--anyone-family <fps>` | Comma-separated fingerprints of related relays (MyFamily) |
+| `--anyone-orport <port>` | ORPort for relay (default: 9001) |
+| `--anyone-exit` | Configure as an exit relay (default: non-exit) |
 
 #### `orama invite`
 
 | Flag | Description |
 |------|-------------|
-| `--expiry <duration>` | Token expiry duration (default: 1h) |
+| `--expiry <duration>` | Token expiry duration (default: 1h, e.g. `--expiry 24h`) |
+
+**Important notes about invite tokens:**
+
+- **Tokens are single-use.** Once a node consumes a token during the join handshake, it cannot be reused. Generate a separate token for each node you want to join.
+- **Expiry is checked in UTC.** RQLite uses `datetime('now')` which is always UTC. If your local timezone differs, account for the offset when choosing expiry durations.
+- **Use longer expiry for multi-node deployments.** When deploying multiple nodes, use `--expiry 24h` to avoid tokens expiring mid-deployment.
 
 #### `orama upgrade`
 
@@ -163,6 +177,38 @@ is properly configured, always use the HTTPS domain URL.
 **Important:** Never use `http://<ip>:6001` — port 6001 is the internal gateway and is blocked by
 UFW from external access. The join request goes through Caddy on port 80 (HTTP) or 443 (HTTPS),
 which proxies to the gateway internally.
+
+## Pre-Install Checklist
+
+Before running `orama install` on a VPS, ensure:
+
+1. **Stop Docker if running.** Docker commonly binds ports 4001 and 8080 which conflict with IPFS. The installer checks for port conflicts and shows which process is using each port, but it's easier to stop Docker first:
+   ```bash
+   sudo systemctl stop docker docker.socket
+   sudo systemctl disable docker docker.socket
+   ```
+
+2. **Stop any existing IPFS instance.**
+   ```bash
+   sudo systemctl stop ipfs
+   ```
+
+3. **Ensure `make` is installed.** Required for building CoreDNS and Caddy from source:
+   ```bash
+   sudo apt-get install -y make
+   ```
+
+4. **Stop any service on port 53** (for nameserver nodes). The installer handles `systemd-resolved` automatically, but other DNS services (like `bind9` or `dnsmasq`) must be stopped manually.
+
+## Recovering from Failed Joins
+
+If a node partially joins the cluster (registers in RQLite's Raft but then fails or gets cleaned), the remaining cluster can lose quorum permanently. This happens because RQLite thinks there are N voters but only N-1 are reachable.
+
+**Symptoms:** RQLite stuck in "Candidate" state, no leader elected, all writes fail.
+
+**Solution:** Do a full clean reinstall of all affected nodes. Use [CLEAN_NODE.md](CLEAN_NODE.md) to reset each node, then reinstall starting from the genesis node.
+
+**Prevention:** Always ensure a joining node can complete the full installation before it joins. The installer validates port availability upfront to catch conflicts early.
 
 ## Debugging Production Issues
 
