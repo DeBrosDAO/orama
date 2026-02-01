@@ -20,7 +20,7 @@ import (
 
 // ClusterManagerConfig contains configuration for the cluster manager
 type ClusterManagerConfig struct {
-	BaseDomain  string // Base domain for namespace gateways (e.g., "devnet-orama.network")
+	BaseDomain  string // Base domain for namespace gateways (e.g., "orama-devnet.network")
 	BaseDataDir string // Base directory for namespace data (e.g., "~/.orama/data/namespaces")
 }
 

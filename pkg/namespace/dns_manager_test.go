@@ -14,9 +14,9 @@ func TestDNSRecordManager_FQDNFormat(t *testing.T) {
 		baseDomain string
 		expected   string
 	}{
-		{"alice", "devnet-orama.network", "ns-alice.devnet-orama.network."},
-		{"bob", "testnet-orama.network", "ns-bob.testnet-orama.network."},
-		{"my-namespace", "mainnet-orama.network", "ns-my-namespace.mainnet-orama.network."},
+		{"alice", "orama-devnet.network", "ns-alice.orama-devnet.network."},
+		{"bob", "orama-testnet.network", "ns-bob.orama-testnet.network."},
+		{"my-namespace", "orama-mainnet.network", "ns-my-namespace.orama-mainnet.network."},
 		{"test123", "example.com", "ns-test123.example.com."},
 	}
 
@@ -37,8 +37,8 @@ func TestDNSRecordManager_WildcardFQDNFormat(t *testing.T) {
 		baseDomain string
 		expected   string
 	}{
-		{"alice", "devnet-orama.network", "*.ns-alice.devnet-orama.network."},
-		{"bob", "testnet-orama.network", "*.ns-bob.testnet-orama.network."},
+		{"alice", "orama-devnet.network", "*.ns-alice.orama-devnet.network."},
+		{"bob", "orama-testnet.network", "*.ns-bob.orama-testnet.network."},
 	}
 
 	for _, tt := range tests {
@@ -54,7 +54,7 @@ func TestDNSRecordManager_WildcardFQDNFormat(t *testing.T) {
 func TestNewDNSRecordManager(t *testing.T) {
 	mockDB := newMockRQLiteClient()
 	logger := zap.NewNop()
-	baseDomain := "devnet-orama.network"
+	baseDomain := "orama-devnet.network"
 
 	manager := NewDNSRecordManager(mockDB, baseDomain, logger)
 
@@ -88,9 +88,9 @@ func TestDNSRecordTTL(t *testing.T) {
 func TestDNSRecordManager_MultipleDomainFormats(t *testing.T) {
 	// Test support for different domain formats
 	baseDomains := []string{
-		"devnet-orama.network",
-		"testnet-orama.network",
-		"mainnet-orama.network",
+		"orama-devnet.network",
+		"orama-testnet.network",
+		"orama-mainnet.network",
 		"custom.example.com",
 		"subdomain.custom.example.com",
 	}
@@ -203,7 +203,7 @@ func TestDNSRecordManager_FQDNWithTrailingDot(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"ns-alice.devnet-orama.network", "ns-alice.devnet-orama.network."},
+		{"ns-alice.orama-devnet.network", "ns-alice.orama-devnet.network."},
 	}
 
 	for _, tt := range tests {

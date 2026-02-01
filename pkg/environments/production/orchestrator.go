@@ -504,7 +504,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 		olricSeedPeers = olricPeers[0]
 	}
 	olricConfig, err := ps.configGenerator.GenerateOlricConfig(
-		"127.0.0.1", // HTTP API on localhost
+		vpsIP, // HTTP API on WG IP (unique per node, avoids memberlist name conflict)
 		3320,
 		vpsIP, // Memberlist on WG IP for clustering
 		3322,

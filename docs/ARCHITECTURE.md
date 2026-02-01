@@ -452,15 +452,16 @@ make test-e2e  # Run E2E tests
 
 ```bash
 # First node (genesis — creates cluster)
-sudo orama install --vps-ip <IP> --domain node1.example.com --nameserver
+# Nameserver nodes use the base domain as --domain
+sudo orama install --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 
 # On the genesis node, generate an invite for a new node
 orama invite
-# Outputs: sudo orama install --join https://node1.example.com --token <TOKEN> --vps-ip <NEW_IP>
+# Outputs: sudo orama install --join https://example.com --token <TOKEN> --vps-ip <NEW_IP>
 
-# Additional nodes (join via invite token over HTTPS)
-sudo orama install --join https://node1.example.com --token <TOKEN> \
-    --vps-ip <IP> --nameserver
+# Additional nameserver nodes (join via invite token over HTTPS)
+sudo orama install --join https://example.com --token <TOKEN> \
+    --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 ```
 
 **Security:** Nodes join via single-use invite tokens over HTTPS. A WireGuard VPN tunnel
