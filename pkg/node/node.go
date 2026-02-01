@@ -106,6 +106,9 @@ func (n *Node) Start(ctx context.Context) error {
 	// Sync WireGuard peers from RQLite (if WG is active on this node)
 	n.startWireGuardSyncLoop(ctx)
 
+	// Sync IPFS swarm connections with all cluster peers
+	n.startIPFSSwarmSyncLoop(ctx)
+
 	// Register this node in dns_nodes table for deployment routing
 	if err := n.registerDNSNode(ctx); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to register DNS node", zap.Error(err))

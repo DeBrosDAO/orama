@@ -2,8 +2,10 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os/exec"
 	"strings"
 	"time"
@@ -156,17 +158,39 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 		nodeID = fmt.Sprintf("node-%s", wgIP)
 	}
 
+	// Query local IPFS peer ID
+	ipfsPeerID := queryLocalIPFSPeerID()
+
 	db := n.rqliteAdapter.GetSQLDB()
 	_, err = db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port) VALUES (?, ?, ?, ?, ?)",
-		nodeID, wgIP, localPubKey, publicIP, 51820)
+		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id) VALUES (?, ?, ?, ?, ?, ?)",
+		nodeID, wgIP, localPubKey, publicIP, 51820, ipfsPeerID)
 	if err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to self-register WG peer", zap.Error(err))
 	} else {
 		n.logger.ComponentInfo(logging.ComponentNode, "WireGuard self-registered",
 			zap.String("wg_ip", wgIP),
-			zap.String("public_key", localPubKey[:8]+"..."))
+			zap.String("public_key", localPubKey[:8]+"..."),
+			zap.String("ipfs_peer_id", ipfsPeerID))
 	}
+}
+
+// queryLocalIPFSPeerID queries the local IPFS daemon for its peer ID
+func queryLocalIPFSPeerID() string {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		ID string `json:"ID"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ""
+	}
+	return result.ID
 }
 
 // startWireGuardSyncLoop runs syncWireGuardPeers periodically
