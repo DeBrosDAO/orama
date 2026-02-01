@@ -70,6 +70,45 @@ sudo mv /tmp/orama /usr/local/bin/orama && sudo chmod +x /usr/local/bin/orama
 sudo orama upgrade --no-pull --restart
 ```
 
+### Development Deployment with Pre-Built Binaries (Fastest)
+
+Cross-compile everything locally and skip all Go compilation on the VPS. This is significantly faster because your local machine compiles much faster than the VPS.
+
+```bash
+# 1. Cross-compile all binaries for Linux (DeBros + Olric + CoreDNS + Caddy)
+make build-linux-all
+# Outputs everything to bin-linux/
+
+# 2. Generate a source archive (still needed for configs, templates, etc.)
+./scripts/generate-source-archive.sh
+
+# 3. Copy everything to the VPS
+sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/orama ubuntu@<ip>:/tmp/orama
+sshpass -p '<password>' scp -o StrictHostKeyChecking=no /tmp/network-source.tar.gz ubuntu@<ip>:/tmp/
+
+# 4. On the VPS: extract source, install CLI, and copy pre-built binaries
+ssh ubuntu@<ip>
+sudo rm -rf /home/debros/src && sudo mkdir -p /home/debros/src
+sudo tar xzf /tmp/network-source.tar.gz -C /home/debros/src
+sudo chown -R debros:debros /home/debros/src
+sudo mv /tmp/orama /usr/local/bin/orama && sudo chmod +x /usr/local/bin/orama
+
+# 5. Copy pre-built binaries to their expected locations
+# (from your local machine)
+sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/orama-node bin-linux/gateway bin-linux/identity bin-linux/rqlite-mcp bin-linux/olric-server ubuntu@<ip>:/home/debros/bin/
+sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/coredns ubuntu@<ip>:/usr/local/bin/coredns
+sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/caddy ubuntu@<ip>:/usr/bin/caddy
+
+# 6. Install/upgrade with --pre-built (skips ALL Go compilation on VPS)
+sudo orama install --no-pull --pre-built --vps-ip <ip> ...
+# or
+sudo orama upgrade --no-pull --pre-built --restart
+```
+
+**What `--pre-built` skips:** Go installation, `make build`, Olric `go install`, CoreDNS build, Caddy/xcaddy build.
+
+**What `--pre-built` still runs:** apt dependencies, RQLite/IPFS/IPFS Cluster downloads (pre-built binary downloads, fast), Anyone relay setup, config generation, systemd service creation.
+
 ### Production Deployment (Via Git)
 
 For production releases — pulls source from GitHub on the VPS.
@@ -107,6 +146,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--token <token>` | Invite token for joining (from `orama invite` on existing node) |
 | `--branch <branch>` | Git branch to use (default: main) |
 | `--no-pull` | Skip git clone/pull, use existing `/home/debros/src` |
+| `--pre-built` | Skip all Go compilation, use pre-built binaries already on disk (see above) |
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
 | `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
@@ -137,6 +177,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 |------|-------------|
 | `--branch <branch>` | Git branch to pull from |
 | `--no-pull` | Skip git pull, use existing source |
+| `--pre-built` | Skip all Go compilation, use pre-built binaries already on disk |
 | `--restart` | Restart all services after upgrade |
 
 ### Node Join Flow

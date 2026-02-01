@@ -41,7 +41,7 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 		isNameserver = *flags.Nameserver
 	}
 
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, false)
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, false, flags.PreBuilt)
 	setup.SetNameserver(isNameserver)
 
 	// Configure Anyone relay if enabled
@@ -76,6 +76,12 @@ func (o *Orchestrator) Execute() error {
 	if o.flags.NoPull {
 		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
 		fmt.Printf("     Using existing repository at %s/src\n", o.oramaHome)
+	}
+
+	// Log if --pre-built is enabled
+	if o.flags.PreBuilt {
+		fmt.Printf("  ⚠️  --pre-built flag enabled: Skipping all Go compilation\n")
+		fmt.Printf("     Using pre-built binaries from %s/bin and /usr/local/bin\n", o.oramaHome)
 	}
 
 	// Handle branch preferences

@@ -16,6 +16,7 @@ type Flags struct {
 	Force         bool
 	DryRun        bool
 	SkipChecks    bool
+	PreBuilt      bool   // Skip building binaries, use pre-built binaries already on disk
 	Nameserver    bool   // Make this node a nameserver (runs CoreDNS + Caddy)
 	JoinAddress   string // HTTPS URL of existing node (e.g., https://node1.dbrs.space)
 	Token         string // Invite token for joining (from orama invite)
@@ -58,6 +59,7 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.BoolVar(&flags.Force, "force", false, "Force reconfiguration even if already installed")
 	fs.BoolVar(&flags.DryRun, "dry-run", false, "Show what would be done without making changes")
 	fs.BoolVar(&flags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
+	fs.BoolVar(&flags.PreBuilt, "pre-built", false, "Skip building binaries on VPS, use pre-built binaries already in /home/debros/bin and /usr/local/bin")
 	fs.BoolVar(&flags.Nameserver, "nameserver", false, "Make this node a nameserver (runs CoreDNS + Caddy)")
 
 	// Cluster join flags
