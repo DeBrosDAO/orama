@@ -103,6 +103,66 @@ build: deps
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	@echo "Build complete! Run ./bin/orama version"
 
+# Cross-compile all binaries for Linux (used with --pre-built flag on VPS)
+# Builds: DeBros binaries + Olric + CoreDNS (with rqlite plugin) + Caddy (with orama DNS module)
+build-linux: deps
+	@echo "Cross-compiling all binaries for linux/amd64 (version=$(VERSION))..."
+	@mkdir -p bin-linux
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin-linux/identity ./cmd/identity
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin-linux/orama-node ./cmd/node
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin-linux/orama cmd/cli/main.go
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin-linux/rqlite-mcp ./cmd/rqlite-mcp
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin-linux/gateway ./cmd/gateway
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin-linux/orama-cli ./cmd/cli
+	@echo "Installing Olric for linux/amd64..."
+	GOOS=linux GOARCH=amd64 GOBIN=$(CURDIR)/bin-linux go install github.com/olric-data/olric/cmd/olric-server@v0.7.0
+	@echo "✓ All Linux binaries built in bin-linux/"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Build CoreDNS:  make build-linux-coredns"
+	@echo "  2. Build Caddy:    make build-linux-caddy"
+	@echo "  3. Or build all:   make build-linux-all"
+
+# Build CoreDNS with rqlite plugin for Linux
+build-linux-coredns:
+	@echo "Building CoreDNS with rqlite plugin for linux/amd64..."
+	@rm -rf /tmp/coredns-build-linux
+	@mkdir -p /tmp/coredns-build-linux
+	git clone --depth 1 --branch v1.12.0 https://github.com/coredns/coredns.git /tmp/coredns-build-linux
+	@mkdir -p /tmp/coredns-build-linux/plugin/rqlite
+	@cp pkg/coredns/rqlite/*.go /tmp/coredns-build-linux/plugin/rqlite/
+	@echo 'metadata:metadata\ncancel:cancel\ntls:tls\nreload:reload\nnsid:nsid\nbufsize:bufsize\nroot:root\nbind:bind\ndebug:debug\ntrace:trace\nready:ready\nhealth:health\npprof:pprof\nprometheus:metrics\nerrors:errors\nlog:log\ndnstap:dnstap\nlocal:local\ndns64:dns64\nacl:acl\nany:any\nchaos:chaos\nloadbalance:loadbalance\ncache:cache\nrewrite:rewrite\nheader:header\ndnssec:dnssec\nautopath:autopath\nminimal:minimal\ntemplate:template\ntransfer:transfer\nhosts:hosts\nfile:file\nauto:auto\nsecondary:secondary\nloop:loop\nforward:forward\ngrpc:grpc\nerratic:erratic\nwhoami:whoami\non:github.com/coredns/caddy/onevent\nsign:sign\nview:view\nrqlite:rqlite' > /tmp/coredns-build-linux/plugin.cfg
+	cd /tmp/coredns-build-linux && go get github.com/miekg/dns@latest && go get go.uber.org/zap@latest && go mod tidy && go generate && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o coredns
+	@cp /tmp/coredns-build-linux/coredns bin-linux/coredns
+	@rm -rf /tmp/coredns-build-linux
+	@echo "✓ CoreDNS built: bin-linux/coredns"
+
+# Build Caddy with orama DNS module for Linux
+build-linux-caddy:
+	@echo "Building Caddy with orama DNS module for linux/amd64..."
+	@which xcaddy > /dev/null 2>&1 || (echo "Installing xcaddy..." && go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest)
+	@rm -rf /tmp/caddy-build-linux
+	@mkdir -p /tmp/caddy-build-linux/caddy-dns-orama
+	@# Generate the module source
+	@echo 'module github.com/DeBrosOfficial/caddy-dns-orama\n\ngo 1.22\n\nrequire (\n\tgithub.com/caddyserver/caddy/v2 v2.10.2\n\tgithub.com/libdns/libdns v1.1.0\n)' > /tmp/caddy-build-linux/caddy-dns-orama/go.mod
+	@cp pkg/caddy/dns/orama/provider.go /tmp/caddy-build-linux/caddy-dns-orama/ 2>/dev/null || true
+	cd /tmp/caddy-build-linux/caddy-dns-orama && go mod tidy
+	GOOS=linux GOARCH=amd64 xcaddy build v2.10.2 --with github.com/DeBrosOfficial/caddy-dns-orama=/tmp/caddy-build-linux/caddy-dns-orama --output bin-linux/caddy
+	@rm -rf /tmp/caddy-build-linux
+	@echo "✓ Caddy built: bin-linux/caddy"
+
+# Build everything for Linux (all binaries + CoreDNS + Caddy)
+build-linux-all: build-linux build-linux-coredns build-linux-caddy
+	@echo ""
+	@echo "✅ All Linux binaries ready in bin-linux/:"
+	@ls -la bin-linux/
+	@echo ""
+	@echo "Deploy to VPS:"
+	@echo "  scp bin-linux/* ubuntu@<ip>:/home/debros/bin/"
+	@echo "  scp bin-linux/coredns ubuntu@<ip>:/usr/local/bin/coredns"
+	@echo "  scp bin-linux/caddy ubuntu@<ip>:/usr/bin/caddy"
+	@echo "  sudo orama install --pre-built --no-pull ..."
+
 # Install git hooks
 install-hooks:
 	@echo "Installing git hooks..."

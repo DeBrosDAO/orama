@@ -51,6 +51,7 @@ type ProductionSetup struct {
 	binaryInstaller    *BinaryInstaller
 	branch             string
 	skipRepoUpdate     bool
+	skipBuild          bool   // Skip all Go compilation (use pre-built binaries)
 	NodePeerID         string // Captured during Phase3 for later display
 }
 
@@ -82,7 +83,7 @@ func SaveBranchPreference(oramaDir, branch string) error {
 }
 
 // NewProductionSetup creates a new production setup orchestrator
-func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool, skipResourceChecks bool) *ProductionSetup {
+func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure bool, branch string, skipRepoUpdate bool, skipResourceChecks bool, skipBuild bool) *ProductionSetup {
 	oramaDir := filepath.Join(oramaHome, ".orama")
 	arch, _ := (&ArchitectureDetector{}).Detect()
 
@@ -99,6 +100,7 @@ func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure 
 		arch:               arch,
 		branch:             branch,
 		skipRepoUpdate:     skipRepoUpdate,
+		skipBuild:          skipBuild,
 		skipResourceChecks: skipResourceChecks,
 		privChecker:        &PrivilegeChecker{},
 		osDetector:         &OSDetector{},
@@ -280,17 +282,94 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	ps.logf("Phase 2b: Installing binaries...")
 
-	// Install system dependencies
+	// Install system dependencies (always needed for runtime libs)
 	if err := ps.binaryInstaller.InstallSystemDependencies(); err != nil {
 		ps.logf("  ⚠️  System dependencies warning: %v", err)
 	}
 
-	// Install Go if not present
-	if err := ps.binaryInstaller.InstallGo(); err != nil {
-		return fmt.Errorf("failed to install Go: %w", err)
+	if ps.skipBuild {
+		// --pre-built mode: skip all Go compilation, verify binaries exist
+		ps.logf("  ℹ️  --pre-built mode: skipping Go installation and all compilation")
+
+		// Verify required DeBros binaries exist
+		binDir := filepath.Join(ps.oramaHome, "bin")
+		requiredBins := []string{"orama-node", "gateway", "orama", "identity"}
+		for _, bin := range requiredBins {
+			binPath := filepath.Join(binDir, bin)
+			if _, err := os.Stat(binPath); os.IsNotExist(err) {
+				return fmt.Errorf("--pre-built: required binary not found at %s (run 'make build-linux' locally and copy to VPS)", binPath)
+			}
+			ps.logf("  ✓ Found %s", binPath)
+		}
+
+		// Grant CAP_NET_BIND_SERVICE to orama-node
+		nodeBinary := filepath.Join(binDir, "orama-node")
+		if err := exec.Command("setcap", "cap_net_bind_service=+ep", nodeBinary).Run(); err != nil {
+			ps.logf("  ⚠️  Warning: failed to setcap on orama-node: %v", err)
+		}
+
+		// Verify Olric
+		if _, err := exec.LookPath("olric-server"); err != nil {
+			// Check if it's in the bin dir
+			olricPath := filepath.Join(binDir, "olric-server")
+			if _, err := os.Stat(olricPath); os.IsNotExist(err) {
+				return fmt.Errorf("--pre-built: olric-server not found in PATH or %s", binDir)
+			}
+			// Copy to /usr/local/bin
+			if data, err := os.ReadFile(olricPath); err == nil {
+				os.WriteFile("/usr/local/bin/olric-server", data, 0755)
+			}
+			ps.logf("  ✓ Found %s", olricPath)
+		} else {
+			ps.logf("  ✓ olric-server already in PATH")
+		}
+
+		// Verify CoreDNS and Caddy if nameserver
+		if ps.isNameserver {
+			if _, err := os.Stat("/usr/local/bin/coredns"); os.IsNotExist(err) {
+				return fmt.Errorf("--pre-built: coredns not found at /usr/local/bin/coredns")
+			}
+			ps.logf("  ✓ Found /usr/local/bin/coredns")
+
+			if _, err := os.Stat("/usr/bin/caddy"); os.IsNotExist(err) {
+				return fmt.Errorf("--pre-built: caddy not found at /usr/bin/caddy")
+			}
+			ps.logf("  ✓ Found /usr/bin/caddy")
+
+			// Grant CAP_NET_BIND_SERVICE to caddy
+			if err := exec.Command("setcap", "cap_net_bind_service=+ep", "/usr/bin/caddy").Run(); err != nil {
+				ps.logf("  ⚠️  Warning: failed to setcap on caddy: %v", err)
+			}
+		}
+	} else {
+		// Normal mode: install Go and build everything
+		if err := ps.binaryInstaller.InstallGo(); err != nil {
+			return fmt.Errorf("failed to install Go: %w", err)
+		}
+
+		if err := ps.binaryInstaller.InstallOlric(); err != nil {
+			ps.logf("  ⚠️  Olric install warning: %v", err)
+		}
+
+		// Install DeBros binaries (must be done before CoreDNS since we need the RQLite plugin source)
+		if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.oramaHome, ps.skipRepoUpdate); err != nil {
+			return fmt.Errorf("failed to install DeBros binaries: %w", err)
+		}
+
+		// Install CoreDNS and Caddy only if this is a nameserver node
+		if ps.isNameserver {
+			if err := ps.binaryInstaller.InstallCoreDNS(); err != nil {
+				ps.logf("  ⚠️  CoreDNS install warning: %v", err)
+			}
+			if err := ps.binaryInstaller.InstallCaddy(); err != nil {
+				ps.logf("  ⚠️  Caddy install warning: %v", err)
+			}
+		} else {
+			ps.logf("  ℹ️  Skipping CoreDNS/Caddy (not a nameserver node)")
+		}
 	}
 
-	// Install binaries
+	// These are pre-built binary downloads (not Go compilation), always run them
 	if err := ps.binaryInstaller.InstallRQLite(); err != nil {
 		ps.logf("  ⚠️  RQLite install warning: %v", err)
 	}
@@ -303,11 +382,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  IPFS Cluster install warning: %v", err)
 	}
 
-	if err := ps.binaryInstaller.InstallOlric(); err != nil {
-		ps.logf("  ⚠️  Olric install warning: %v", err)
-	}
-
-	// Install Anyone (client or relay based on configuration)
+	// Install Anyone (client or relay based on configuration) — apt-based, not Go
 	if ps.IsAnyoneRelay() {
 		ps.logf("  Installing Anyone relay (operator mode)...")
 		relayConfig := installers.AnyoneRelayConfig{
@@ -343,26 +418,6 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		if err := relayInstaller.Configure(); err != nil {
 			ps.logf("  ⚠️  Anyone relay config warning: %v", err)
 		}
-	}
-
-	// Install DeBros binaries (must be done before CoreDNS since we need the RQLite plugin source)
-	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.branch, ps.oramaHome, ps.skipRepoUpdate); err != nil {
-		return fmt.Errorf("failed to install DeBros binaries: %w", err)
-	}
-
-	// Install CoreDNS and Caddy only if this is a nameserver node
-	if ps.isNameserver {
-		// Install CoreDNS with RQLite plugin (for dynamic DNS records and ACME challenges)
-		if err := ps.binaryInstaller.InstallCoreDNS(); err != nil {
-			ps.logf("  ⚠️  CoreDNS install warning: %v", err)
-		}
-
-		// Install Caddy with orama DNS module (for SSL certificate management)
-		if err := ps.binaryInstaller.InstallCaddy(); err != nil {
-			ps.logf("  ⚠️  Caddy install warning: %v", err)
-		}
-	} else {
-		ps.logf("  ℹ️  Skipping CoreDNS/Caddy (not a nameserver node)")
 	}
 
 	ps.logf("  ✓ All binaries installed")

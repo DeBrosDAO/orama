@@ -11,6 +11,7 @@ type Flags struct {
 	Force           bool
 	RestartServices bool
 	NoPull          bool
+	PreBuilt        bool
 	Branch          string
 	Nameserver      *bool  // Pointer so we can detect if explicitly set vs default
 
@@ -35,6 +36,7 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.BoolVar(&flags.Force, "force", false, "Reconfigure all settings")
 	fs.BoolVar(&flags.RestartServices, "restart", false, "Automatically restart services after upgrade")
 	fs.BoolVar(&flags.NoPull, "no-pull", false, "Skip source download, use existing /home/debros/src")
+	fs.BoolVar(&flags.PreBuilt, "pre-built", false, "Skip building binaries on VPS, use pre-built binaries already in /home/debros/bin and /usr/local/bin")
 	fs.StringVar(&flags.Branch, "branch", "", "Git branch to use (uses saved preference if not specified)")
 
 	// Nameserver flag - use pointer to detect if explicitly set

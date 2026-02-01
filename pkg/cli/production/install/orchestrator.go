@@ -44,7 +44,7 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 		return nil, fmt.Errorf("invalid peers: %w", err)
 	}
 
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, flags.SkipChecks)
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
 	setup.SetNameserver(flags.Nameserver)
 
 	// Configure Anyone relay if enabled
@@ -81,6 +81,12 @@ func (o *Orchestrator) Execute() error {
 	if o.flags.NoPull {
 		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
 		fmt.Printf("     Using existing repository at /home/debros/src\n")
+	}
+
+	// Inform user if using pre-built binaries
+	if o.flags.PreBuilt {
+		fmt.Printf("  ⚠️  --pre-built flag enabled: Skipping all Go compilation\n")
+		fmt.Printf("     Using pre-built binaries from /home/debros/bin and /usr/local/bin\n")
 	}
 
 	// Validate DNS if domain is provided
