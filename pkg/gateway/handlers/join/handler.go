@@ -37,6 +37,9 @@ type JoinResponse struct {
 	IPFSClusterPeer   PeerInfo `json:"ipfs_cluster_peer"`
 	BootstrapPeers    []string `json:"bootstrap_peers"`
 
+	// Olric seed peers (WG IP:port for memberlist)
+	OlricPeers []string `json:"olric_peers,omitempty"`
+
 	// Domain
 	BaseDomain string `json:"base_domain"`
 }
@@ -163,6 +166,15 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// 10. Read base domain from config
 	baseDomain := h.readBaseDomain()
 
+	// Build Olric seed peers from all existing WG peer IPs (memberlist port 3322)
+	var olricPeers []string
+	for _, p := range wgPeers {
+		peerIP := strings.TrimSuffix(p.AllowedIP, "/32")
+		olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", peerIP))
+	}
+	// Include this node too
+	olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", myWGIP))
+
 	resp := JoinResponse{
 		WGIP:              wgIP,
 		WGPeers:           wgPeers,
@@ -172,6 +184,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		IPFSPeer:          ipfsPeer,
 		IPFSClusterPeer:   ipfsClusterPeer,
 		BootstrapPeers:    bootstrapPeers,
+		OlricPeers:        olricPeers,
 		BaseDomain:        baseDomain,
 	}
 
@@ -361,7 +374,7 @@ func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 	return PeerInfo{
 		ID: result.ID,
 		Addrs: []string{
-			fmt.Sprintf("/ip4/%s/tcp/4101", myWGIP),
+			fmt.Sprintf("/ip4/%s/tcp/4101/p2p/%s", myWGIP, result.ID),
 		},
 	}
 }

@@ -1,8 +1,17 @@
 server:
   bindAddr: "{{.ServerBindAddr}}"
-  bindPort: { { .HTTPPort } }
+  bindPort: {{.HTTPPort}}
 
 memberlist:
-  environment: { { .MemberlistEnvironment } }
+  environment: {{.MemberlistEnvironment}}
   bindAddr: "{{.MemberlistBindAddr}}"
-  bindPort: { { .MemberlistPort } }
+  bindPort: {{.MemberlistPort}}
+{{- if .MemberlistAdvertiseAddr}}
+  advertiseAddr: "{{.MemberlistAdvertiseAddr}}"
+{{- end}}
+{{- if .Peers}}
+  peers:
+{{- range .Peers}}
+    - "{{.}}"
+{{- end}}
+{{- end}}

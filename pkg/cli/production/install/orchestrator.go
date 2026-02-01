@@ -289,7 +289,7 @@ func (o *Orchestrator) executeJoinFlow() error {
 	fmt.Printf("\n⚙️  Generating configurations...\n")
 	enableHTTPS := false
 	rqliteJoin := joinResp.RQLiteJoinAddress
-	if err := o.setup.Phase4GenerateConfigs(joinResp.BootstrapPeers, joinResp.WGIP, enableHTTPS, o.flags.Domain, joinResp.BaseDomain, rqliteJoin); err != nil {
+	if err := o.setup.Phase4GenerateConfigs(joinResp.BootstrapPeers, joinResp.WGIP, enableHTTPS, o.flags.Domain, joinResp.BaseDomain, rqliteJoin, joinResp.OlricPeers); err != nil {
 		return fmt.Errorf("configuration generation failed: %w", err)
 	}
 

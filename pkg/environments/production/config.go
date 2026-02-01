@@ -208,13 +208,15 @@ func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableH
 }
 
 // GenerateOlricConfig generates Olric configuration
-func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string) (string, error) {
+func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string, advertiseAddr string, peers []string) (string, error) {
 	data := templates.OlricConfigData{
-		ServerBindAddr:        serverBindAddr,
-		HTTPPort:              httpPort,
-		MemberlistBindAddr:    memberlistBindAddr,
-		MemberlistPort:        memberlistPort,
-		MemberlistEnvironment: memberlistEnv,
+		ServerBindAddr:          serverBindAddr,
+		HTTPPort:                httpPort,
+		MemberlistBindAddr:      memberlistBindAddr,
+		MemberlistPort:          memberlistPort,
+		MemberlistEnvironment:   memberlistEnv,
+		MemberlistAdvertiseAddr: advertiseAddr,
+		Peers:                   peers,
 	}
 	return templates.RenderOlricConfig(data)
 }
