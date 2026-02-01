@@ -90,8 +90,8 @@ type IPFSClusterPeerInfo = installers.IPFSClusterPeerInfo
 
 // InitializeIPFSRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
 // If ipfsPeer is provided, configures Peering.Peers for peer discovery in private networks
-func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, ipfsPeer *IPFSPeerInfo) error {
-	return bi.ipfs.InitializeRepo(ipfsRepoPath, swarmKeyPath, apiPort, gatewayPort, swarmPort, ipfsPeer)
+func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, bindIP string, ipfsPeer *IPFSPeerInfo) error {
+	return bi.ipfs.InitializeRepo(ipfsRepoPath, swarmKeyPath, apiPort, gatewayPort, swarmPort, bindIP, ipfsPeer)
 }
 
 // InitializeIPFSClusterConfig initializes IPFS Cluster configuration (unified - no bootstrap/node distinction)
