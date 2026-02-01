@@ -79,27 +79,18 @@ Cross-compile everything locally and skip all Go compilation on the VPS. This is
 make build-linux-all
 # Outputs everything to bin-linux/
 
-# 2. Generate a source archive (still needed for configs, templates, etc.)
+# 2. Generate a single deploy archive (source + pre-built binaries)
 ./scripts/generate-source-archive.sh
+# Creates: /tmp/network-source.tar.gz (includes bin-linux/ if present)
 
-# 3. Copy everything to the VPS
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/orama ubuntu@<ip>:/tmp/orama
+# 3. Copy the single archive to the VPS
 sshpass -p '<password>' scp -o StrictHostKeyChecking=no /tmp/network-source.tar.gz ubuntu@<ip>:/tmp/
 
-# 4. On the VPS: extract source, install CLI, and copy pre-built binaries
-ssh ubuntu@<ip>
-sudo rm -rf /home/debros/src && sudo mkdir -p /home/debros/src
-sudo tar xzf /tmp/network-source.tar.gz -C /home/debros/src
-sudo chown -R debros:debros /home/debros/src
-sudo mv /tmp/orama /usr/local/bin/orama && sudo chmod +x /usr/local/bin/orama
+# 4. Extract and install everything on the VPS
+sshpass -p '<password>' ssh -o StrictHostKeyChecking=no ubuntu@<ip> \
+    'sudo bash -s' < scripts/extract-deploy.sh
 
-# 5. Copy pre-built binaries to their expected locations
-# (from your local machine)
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/orama-node bin-linux/gateway bin-linux/identity bin-linux/rqlite-mcp bin-linux/olric-server ubuntu@<ip>:/home/debros/bin/
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/coredns ubuntu@<ip>:/usr/local/bin/coredns
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no bin-linux/caddy ubuntu@<ip>:/usr/bin/caddy
-
-# 6. Install/upgrade with --pre-built (skips ALL Go compilation on VPS)
+# 5. Install/upgrade with --pre-built (skips ALL Go compilation on VPS)
 sudo orama install --no-pull --pre-built --vps-ip <ip> ...
 # or
 sudo orama upgrade --no-pull --pre-built --restart
