@@ -201,18 +201,60 @@ func CollectPortsForServices(services []string, skipActive bool) ([]PortSpec, er
 	return ports, nil
 }
 
-// EnsurePortsAvailable checks if the specified ports are available
+// EnsurePortsAvailable checks if the specified ports are available.
+// If a port is in use, it identifies the process and gives actionable guidance.
 func EnsurePortsAvailable(action string, ports []PortSpec) error {
+	var conflicts []string
 	for _, spec := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", spec.Port))
 		if err != nil {
 			if errors.Is(err, syscall.EADDRINUSE) || strings.Contains(err.Error(), "address already in use") {
-				return fmt.Errorf("%s cannot continue: %s (port %d) is already in use", action, spec.Name, spec.Port)
+				processInfo := identifyPortProcess(spec.Port)
+				conflicts = append(conflicts, fmt.Sprintf("  - %s (port %d): %s", spec.Name, spec.Port, processInfo))
+				continue
 			}
 			return fmt.Errorf("%s cannot continue: failed to inspect %s (port %d): %w", action, spec.Name, spec.Port, err)
 		}
 		_ = ln.Close()
 	}
+	if len(conflicts) > 0 {
+		msg := fmt.Sprintf("%s cannot continue: the following ports are already in use:\n%s\n\n", action, strings.Join(conflicts, "\n"))
+		msg += "Please stop the conflicting services before running this command.\n"
+		msg += "Common fixes:\n"
+		msg += "  - Docker:           sudo systemctl stop docker docker.socket\n"
+		msg += "  - Old IPFS:         sudo systemctl stop ipfs\n"
+		msg += "  - systemd-resolved: already handled by installer (port 53)\n"
+		msg += "  - Other services:   sudo kill <PID> or sudo systemctl stop <service>"
+		return fmt.Errorf(msg)
+	}
 	return nil
+}
+
+// identifyPortProcess uses ss/lsof to find what process is using a port
+func identifyPortProcess(port int) string {
+	// Try ss first (available on most Linux)
+	out, err := exec.Command("ss", "-tlnp", fmt.Sprintf("sport = :%d", port)).CombinedOutput()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "users:") {
+				// Extract process info from ss output like: users:(("docker-proxy",pid=2049,fd=4))
+				if idx := strings.Index(line, "users:"); idx != -1 {
+					return strings.TrimSpace(line[idx:])
+				}
+			}
+		}
+	}
+
+	// Fallback: try lsof
+	out, err = exec.Command("lsof", "-i", fmt.Sprintf(":%d", port), "-sTCP:LISTEN", "-n", "-P").CombinedOutput()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) > 1 {
+			return strings.TrimSpace(lines[1]) // first data line after header
+		}
+	}
+
+	return "unknown process"
 }
 
