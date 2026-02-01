@@ -8,8 +8,8 @@ Run this as root or with sudo on the target VPS:
 
 ```bash
 # 1. Stop and disable all services
-sudo systemctl stop debros-node debros-ipfs debros-ipfs-cluster debros-olric coredns caddy 2>/dev/null
-sudo systemctl disable debros-node debros-ipfs debros-ipfs-cluster debros-olric coredns caddy 2>/dev/null
+sudo systemctl stop debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
+sudo systemctl disable debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
 
 # 2. Remove systemd service files
 sudo rm -f /etc/systemd/system/debros-*.service
@@ -72,6 +72,7 @@ echo "Node cleaned. Ready for fresh install."
 | **Sudoers** | `/etc/sudoers.d/debros-*` |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
+| **Anyone Relay** | `debros-anyone-relay.service`, `debros-anyone-client.service` |
 | **Temp files** | `/tmp/orama`, `/tmp/network-source.*`, build dirs |
 
 ## What This Does NOT Remove
@@ -120,8 +121,8 @@ for entry in "${NODES[@]}"; do
   IFS=: read -r userhost pass <<< "$entry"
   echo "Cleaning $userhost..."
   sshpass -p "$pass" ssh -o StrictHostKeyChecking=no "$userhost" 'bash -s' << 'CLEAN'
-sudo systemctl stop debros-node debros-ipfs debros-ipfs-cluster debros-olric coredns caddy 2>/dev/null
-sudo systemctl disable debros-node debros-ipfs debros-ipfs-cluster debros-olric coredns caddy 2>/dev/null
+sudo systemctl stop debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
+sudo systemctl disable debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
 sudo rm -f /etc/systemd/system/debros-*.service /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service
 sudo systemctl daemon-reload
 sudo systemctl stop wg-quick@wg0 2>/dev/null
