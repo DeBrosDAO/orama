@@ -56,11 +56,13 @@ type GatewayConfigData struct {
 
 // OlricConfigData holds parameters for olric.yaml rendering
 type OlricConfigData struct {
-	ServerBindAddr        string // HTTP API bind address (127.0.0.1 for security)
-	HTTPPort              int
-	MemberlistBindAddr    string // Memberlist bind address (0.0.0.0 for clustering)
-	MemberlistPort        int
-	MemberlistEnvironment string // "local", "lan", or "wan"
+	ServerBindAddr         string // HTTP API bind address (127.0.0.1 for security)
+	HTTPPort               int
+	MemberlistBindAddr     string // Memberlist bind address (WG IP for clustering)
+	MemberlistPort         int
+	MemberlistEnvironment  string // "local", "lan", or "wan"
+	MemberlistAdvertiseAddr string   // Advertise address (WG IP) so other nodes can reach us
+	Peers                  []string // Seed peers for memberlist (host:port)
 }
 
 // SystemdIPFSData holds parameters for systemd IPFS service rendering

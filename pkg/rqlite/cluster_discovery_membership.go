@@ -3,14 +3,22 @@ package rqlite
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"go.uber.org/zap"
 )
+
+// MaxDefaultVoters is the maximum number of voter nodes in the default cluster.
+// Additional nodes join as non-voters (read replicas). Voter election is
+// deterministic: all peers sorted by the IP component of their raft address,
+// and the first MaxDefaultVoters are voters.
+const MaxDefaultVoters = 5
 
 // collectPeerMetadata collects RQLite metadata from LibP2P peers
 func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeMetadata {
@@ -240,18 +248,71 @@ func (c *ClusterDiscoveryService) getPeersJSON() []map[string]interface{} {
 }
 
 func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{} {
-	peers := make([]map[string]interface{}, 0, len(c.knownPeers))
-
+	// Collect all raft addresses
+	raftAddrs := make([]string, 0, len(c.knownPeers))
 	for _, peer := range c.knownPeers {
+		raftAddrs = append(raftAddrs, peer.RaftAddress)
+	}
+
+	// Determine voter set
+	voterSet := computeVoterSet(raftAddrs, MaxDefaultVoters)
+
+	peers := make([]map[string]interface{}, 0, len(c.knownPeers))
+	for _, peer := range c.knownPeers {
+		_, isVoter := voterSet[peer.RaftAddress]
 		peerEntry := map[string]interface{}{
 			"id":        peer.RaftAddress,
 			"address":   peer.RaftAddress,
-			"non_voter": false,
+			"non_voter": !isVoter,
 		}
 		peers = append(peers, peerEntry)
 	}
 
 	return peers
+}
+
+// computeVoterSet returns the set of raft addresses that should be voters.
+// It sorts addresses by their IP component and selects the first maxVoters.
+// This is deterministic — all nodes compute the same voter set from the same peer list.
+func computeVoterSet(raftAddrs []string, maxVoters int) map[string]struct{} {
+	sorted := make([]string, len(raftAddrs))
+	copy(sorted, raftAddrs)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		ipI := extractIPForSort(sorted[i])
+		ipJ := extractIPForSort(sorted[j])
+		return ipI < ipJ
+	})
+
+	voters := make(map[string]struct{})
+	for i, addr := range sorted {
+		if i >= maxVoters {
+			break
+		}
+		voters[addr] = struct{}{}
+	}
+	return voters
+}
+
+// extractIPForSort extracts the IP string from a raft address (host:port) for sorting.
+func extractIPForSort(raftAddr string) string {
+	host, _, err := net.SplitHostPort(raftAddr)
+	if err != nil {
+		return raftAddr
+	}
+	return host
+}
+
+// IsVoter returns true if the given raft address is in the voter set
+// based on the current known peers. Must be called with c.mu held.
+func (c *ClusterDiscoveryService) IsVoterLocked(raftAddress string) bool {
+	raftAddrs := make([]string, 0, len(c.knownPeers))
+	for _, peer := range c.knownPeers {
+		raftAddrs = append(raftAddrs, peer.RaftAddress)
+	}
+	voterSet := computeVoterSet(raftAddrs, MaxDefaultVoters)
+	_, isVoter := voterSet[raftAddress]
+	return isVoter
 }
 
 func (c *ClusterDiscoveryService) writePeersJSON() error {

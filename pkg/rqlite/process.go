@@ -116,6 +116,14 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		}
 
 		args = append(args, "-join", joinArg, "-join-as", r.discoverConfig.RaftAdvAddress, "-join-attempts", "30", "-join-interval", "10s")
+
+		// Check if this node should join as a non-voter (read replica).
+		// The discovery service determines voter status based on WG IP ordering.
+		if r.discoveryService != nil && !r.discoveryService.IsVoter(r.discoverConfig.RaftAdvAddress) {
+			r.logger.Info("Joining as non-voter (read replica)",
+				zap.String("raft_address", r.discoverConfig.RaftAdvAddress))
+			args = append(args, "-non-voter")
+		}
 	}
 
 	args = append(args, rqliteDataDir)

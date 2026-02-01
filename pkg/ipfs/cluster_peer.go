@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,6 +318,26 @@ func (cm *ClusterConfigManager) UpdateIPFSPeeringConfig(peers []IPFSPeerEntry) e
 
 	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
 		return fmt.Errorf("failed to write IPFS config: %w", err)
+	}
+
+	// Also add peers via the live IPFS API so the running daemon picks them up
+	// immediately without requiring a restart. The config file write above
+	// ensures persistence across restarts.
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, p := range peers {
+		for _, addr := range p.Addrs {
+			peeringMA := addr
+			if !strings.Contains(addr, "/p2p/") {
+				peeringMA = fmt.Sprintf("%s/p2p/%s", addr, p.ID)
+			}
+			addURL := fmt.Sprintf("http://localhost:4501/api/v0/swarm/peering/add?arg=%s", url.QueryEscape(peeringMA))
+			if resp, err := client.Post(addURL, "", nil); err == nil {
+				resp.Body.Close()
+				cm.logger.Debug("Added IPFS peering via live API", zap.String("multiaddr", peeringMA))
+			} else {
+				cm.logger.Debug("Failed to add IPFS peering via live API", zap.String("multiaddr", peeringMA), zap.Error(err))
+			}
+		}
 	}
 
 	return nil

@@ -119,6 +119,14 @@ func (c *ClusterDiscoveryService) Stop() {
 	c.logger.Info("Cluster discovery service stopped")
 }
 
+// IsVoter returns true if the given raft address should be a voter
+// in the default cluster based on the current known peers.
+func (c *ClusterDiscoveryService) IsVoter(raftAddress string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.IsVoterLocked(raftAddress)
+}
+
 // periodicSync runs periodic cluster membership synchronization
 func (c *ClusterDiscoveryService) periodicSync(ctx context.Context) {
 	c.logger.Debug("periodicSync goroutine started, waiting for RQLite readiness")

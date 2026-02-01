@@ -471,7 +471,7 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
-func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, baseDomain string, joinAddress string) error {
+func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, baseDomain string, joinAddress string, olricPeers ...[]string) error {
 	if ps.IsUpdate() {
 		ps.logf("Phase 4: Updating configurations...")
 		ps.logf("  (Existing configs will be updated to latest format)")
@@ -496,14 +496,21 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 
 	// Olric config:
 	// - HTTP API binds to localhost for security (accessed via gateway)
-	// - Memberlist binds to 0.0.0.0 for cluster communication across nodes
-	// - Environment "lan" for production multi-node clustering
+	// - Memberlist binds to WG IP for cluster communication across nodes
+	// - Advertise WG IP so peers can reach this node
+	// - Seed peers from join response for initial cluster formation
+	var olricSeedPeers []string
+	if len(olricPeers) > 0 {
+		olricSeedPeers = olricPeers[0]
+	}
 	olricConfig, err := ps.configGenerator.GenerateOlricConfig(
 		"127.0.0.1", // HTTP API on localhost
 		3320,
-		"0.0.0.0", // Memberlist on all interfaces for clustering
+		vpsIP, // Memberlist on WG IP for clustering
 		3322,
 		"lan", // Production environment
+		vpsIP, // Advertise WG IP
+		olricSeedPeers,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate olric config: %w", err)
