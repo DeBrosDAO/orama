@@ -75,7 +75,7 @@ type InstanceConfig struct {
 	Namespace      string   // Namespace name (e.g., "alice")
 	NodeID         string   // Physical node ID
 	HTTPPort       int      // HTTP API port
-	BaseDomain     string   // Base domain (e.g., "devnet-orama.network")
+	BaseDomain     string   // Base domain (e.g., "orama-devnet.network")
 	RQLiteDSN      string   // RQLite connection DSN (e.g., "http://localhost:10000")
 	OlricServers   []string // Olric server addresses
 	NodePeerID     string   // Physical node's peer ID for home node management

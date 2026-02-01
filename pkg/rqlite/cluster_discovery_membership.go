@@ -306,6 +306,11 @@ func extractIPForSort(raftAddr string) string {
 // IsVoter returns true if the given raft address is in the voter set
 // based on the current known peers. Must be called with c.mu held.
 func (c *ClusterDiscoveryService) IsVoterLocked(raftAddress string) bool {
+	// If we don't know enough peers yet, default to voter.
+	// Non-voter demotion only kicks in once we see more than MaxDefaultVoters peers.
+	if len(c.knownPeers) <= MaxDefaultVoters {
+		return true
+	}
 	raftAddrs := make([]string, 0, len(c.knownPeers))
 	for _, peer := range c.knownPeers {
 		raftAddrs = append(raftAddrs, peer.RaftAddress)

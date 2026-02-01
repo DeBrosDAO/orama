@@ -70,7 +70,11 @@ http_gateway:
   client_namespace: "default"
   rqlite_dsn: "http://localhost:{{.RQLiteHTTPPort}}"
   olric_servers:
+{{- if .WGIP}}
+    - "{{.WGIP}}:3320"
+{{- else}}
     - "127.0.0.1:3320"
+{{- end}}
   olric_timeout: "10s"
   ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
   ipfs_api_url: "http://localhost:{{.IPFSAPIPort}}"

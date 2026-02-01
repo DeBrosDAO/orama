@@ -100,10 +100,10 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | Flag | Description |
 |------|-------------|
 | `--vps-ip <ip>` | VPS public IP address (required) |
-| `--domain <domain>` | Domain for HTTPS certificates |
-| `--base-domain <domain>` | Base domain for deployment routing (e.g., dbrs.space) |
+| `--domain <domain>` | Domain for HTTPS certificates. Nameserver nodes use the base domain (e.g., `example.com`); non-nameserver nodes use a subdomain (e.g., `node-4.example.com`) |
+| `--base-domain <domain>` | Base domain for deployment routing (e.g., example.com) |
 | `--nameserver` | Configure this node as a nameserver (CoreDNS + Caddy) |
-| `--join <url>` | Join existing cluster via HTTPS URL (e.g., `https://node1.dbrs.space`) |
+| `--join <url>` | Join existing cluster via HTTPS URL (e.g., `https://node1.example.com`) |
 | `--token <token>` | Invite token for joining (from `orama invite` on existing node) |
 | `--branch <branch>` | Git branch to use (default: main) |
 | `--no-pull` | Skip git clone/pull, use existing `/home/debros/src` |
@@ -143,16 +143,18 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 
 ```bash
 # 1. Genesis node (first node, creates cluster)
-sudo orama install --vps-ip 1.2.3.4 --domain node1.dbrs.space \
-    --base-domain dbrs.space --nameserver
+# Nameserver nodes use the base domain as --domain
+sudo orama install --vps-ip 1.2.3.4 --domain example.com \
+    --base-domain example.com --nameserver
 
 # 2. On genesis node, generate an invite
 orama invite
-# Output: sudo orama install --join https://node1.dbrs.space --token <TOKEN> --vps-ip <IP>
+# Output: sudo orama install --join https://example.com --token <TOKEN> --vps-ip <IP>
 
 # 3. On the new node, run the printed command
-sudo orama install --join https://node1.dbrs.space --token abc123... \
-    --vps-ip 5.6.7.8 --nameserver
+# Nameserver nodes use the base domain; non-nameserver nodes use subdomains (e.g., node-4.example.com)
+sudo orama install --join https://example.com --token abc123... \
+    --vps-ip 5.6.7.8 --domain example.com --base-domain example.com --nameserver
 ```
 
 The join flow establishes a WireGuard VPN tunnel before starting cluster services.
@@ -161,9 +163,9 @@ No cluster ports are ever exposed publicly.
 
 #### DNS Prerequisite
 
-The `--join` URL should use the HTTPS domain of the genesis node (e.g., `https://node1.dbrs.space`).
-For this to work, the domain registrar for `dbrs.space` must have NS records pointing to the genesis
-node's IP so that `node1.dbrs.space` resolves publicly.
+The `--join` URL should use the HTTPS domain of the genesis node (e.g., `https://node1.example.com`).
+For this to work, the domain registrar for `example.com` must have NS records pointing to the genesis
+node's IP so that `node1.example.com` resolves publicly.
 
 **If DNS is not yet configured**, you can use the genesis node's public IP with HTTP as a fallback:
 

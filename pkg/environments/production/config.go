@@ -176,6 +176,7 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		TLSCacheDir:            tlsCacheDir,
 		HTTPPort:               httpPort,
 		HTTPSPort:              httpsPort,
+		WGIP:                   vpsIP,
 	}
 
 	// RQLite node-to-node TLS encryption is disabled by default

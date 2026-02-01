@@ -122,7 +122,7 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		if r.discoveryService != nil && !r.discoveryService.IsVoter(r.discoverConfig.RaftAdvAddress) {
 			r.logger.Info("Joining as non-voter (read replica)",
 				zap.String("raft_address", r.discoverConfig.RaftAdvAddress))
-			args = append(args, "-non-voter")
+			args = append(args, "-raft-non-voter")
 		}
 	}
 

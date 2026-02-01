@@ -10,7 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"path/filepath"
+
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
 )
 
@@ -406,12 +410,30 @@ func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
 }
 
 // buildBootstrapPeers constructs bootstrap peer multiaddrs using WG IPs
+// Uses the node's LibP2P peer ID (port 4001), NOT the IPFS peer ID (port 4101)
 func (h *Handler) buildBootstrapPeers(myWGIP, ipfsPeerID string) []string {
-	if ipfsPeerID == "" {
+	// Read the node's LibP2P identity from disk
+	keyPath := filepath.Join(h.oramaDir, "data", "identity.key")
+	keyData, err := os.ReadFile(keyPath)
+	if err != nil {
+		h.logger.Warn("Failed to read node identity for bootstrap peers", zap.Error(err))
 		return nil
 	}
+
+	priv, err := crypto.UnmarshalPrivateKey(keyData)
+	if err != nil {
+		h.logger.Warn("Failed to unmarshal node identity key", zap.Error(err))
+		return nil
+	}
+
+	peerID, err := peer.IDFromPublicKey(priv.GetPublic())
+	if err != nil {
+		h.logger.Warn("Failed to derive peer ID from identity key", zap.Error(err))
+		return nil
+	}
+
 	return []string{
-		fmt.Sprintf("/ip4/%s/tcp/4101/p2p/%s", myWGIP, ipfsPeerID),
+		fmt.Sprintf("/ip4/%s/tcp/4001/p2p/%s", myWGIP, peerID.String()),
 	}
 }
 

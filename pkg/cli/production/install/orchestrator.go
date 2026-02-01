@@ -484,9 +484,9 @@ func promptForBaseDomain() string {
 	fmt.Println("=================================")
 	fmt.Println("Select the network environment for this node:")
 	fmt.Println()
-	fmt.Println("  1. devnet-orama.network   (Development - for testing)")
-	fmt.Println("  2. testnet-orama.network  (Testnet - pre-production)")
-	fmt.Println("  3. mainnet-orama.network  (Mainnet - production)")
+	fmt.Println("  1. orama-devnet.network   (Development - for testing)")
+	fmt.Println("  2. orama-testnet.network  (Testnet - pre-production)")
+	fmt.Println("  3. orama-mainnet.network  (Mainnet - production)")
 	fmt.Println("  4. Custom domain...")
 	fmt.Println()
 	fmt.Print("Select option [1-4] (default: 1): ")
@@ -496,21 +496,21 @@ func promptForBaseDomain() string {
 
 	switch choice {
 	case "", "1":
-		fmt.Println("✓ Selected: devnet-orama.network")
-		return "devnet-orama.network"
+		fmt.Println("✓ Selected: orama-devnet.network")
+		return "orama-devnet.network"
 	case "2":
-		fmt.Println("✓ Selected: testnet-orama.network")
-		return "testnet-orama.network"
+		fmt.Println("✓ Selected: orama-testnet.network")
+		return "orama-testnet.network"
 	case "3":
-		fmt.Println("✓ Selected: mainnet-orama.network")
-		return "mainnet-orama.network"
+		fmt.Println("✓ Selected: orama-mainnet.network")
+		return "orama-mainnet.network"
 	case "4":
 		fmt.Print("Enter custom base domain (e.g., example.com): ")
 		customDomain, _ := reader.ReadString('\n')
 		customDomain = strings.TrimSpace(customDomain)
 		if customDomain == "" {
-			fmt.Println("⚠️  No domain entered, using devnet-orama.network")
-			return "devnet-orama.network"
+			fmt.Println("⚠️  No domain entered, using orama-devnet.network")
+			return "orama-devnet.network"
 		}
 		// Remove any protocol prefix if user included it
 		customDomain = strings.TrimPrefix(customDomain, "https://")
@@ -519,7 +519,7 @@ func promptForBaseDomain() string {
 		fmt.Printf("✓ Selected: %s\n", customDomain)
 		return customDomain
 	default:
-		fmt.Println("⚠️  Invalid option, using devnet-orama.network")
-		return "devnet-orama.network"
+		fmt.Println("⚠️  Invalid option, using orama-devnet.network")
+		return "orama-devnet.network"
 	}
 }
