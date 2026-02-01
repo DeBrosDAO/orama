@@ -171,14 +171,28 @@ func (ari *AnyoneRelayInstaller) Install() error {
 		return fmt.Errorf("failed to add Anyone repository: %w", err)
 	}
 
-	// Install the anon package
-	cmd := exec.Command("apt-get", "install", "-y", "anon")
+	// Pre-accept terms via debconf to avoid interactive prompt during apt install.
+	// The anon package preinst script checks "anon/terms" via debconf.
+	preseed := exec.Command("bash", "-c", `echo "anon anon/terms boolean true" | debconf-set-selections`)
+	if output, err := preseed.CombinedOutput(); err != nil {
+		fmt.Fprintf(ari.logWriter, "    ⚠️  debconf preseed warning: %v (%s)\n", err, string(output))
+	}
+
+	// Install the anon package non-interactively.
+	// --force-confold keeps existing config files if present (e.g. during migration).
+	cmd := exec.Command("apt-get", "install", "-y", "-o", "Dpkg::Options::=--force-confold", "anon")
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to install anon package: %w\n%s", err, string(output))
 	}
 
 	// Clean up
 	os.Remove(installScript)
+
+	// Stop and disable the default 'anon' systemd service that the apt package
+	// auto-enables. We use our own 'debros-anyone-relay' service instead.
+	exec.Command("systemctl", "stop", "anon").Run()
+	exec.Command("systemctl", "disable", "anon").Run()
 
 	fmt.Fprintf(ari.logWriter, "  ✓ Anyone relay binary installed\n")
 

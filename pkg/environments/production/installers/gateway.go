@@ -222,14 +222,21 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome strin
 
 // InstallGo downloads and installs Go toolchain
 func (gi *GatewayInstaller) InstallGo() error {
-	if _, err := exec.LookPath("go"); err == nil {
-		fmt.Fprintf(gi.logWriter, "  ✓ Go already installed\n")
-		return nil
+	requiredVersion := "1.22.5"
+	if goPath, err := exec.LookPath("go"); err == nil {
+		// Check version - upgrade if too old
+		out, _ := exec.Command(goPath, "version").Output()
+		if strings.Contains(string(out), "go"+requiredVersion) || strings.Contains(string(out), "go1.23") || strings.Contains(string(out), "go1.24") {
+			fmt.Fprintf(gi.logWriter, "  ✓ Go already installed (%s)\n", strings.TrimSpace(string(out)))
+			return nil
+		}
+		fmt.Fprintf(gi.logWriter, "  Upgrading Go (current: %s, need >= %s)...\n", strings.TrimSpace(string(out)), requiredVersion)
+		os.RemoveAll("/usr/local/go")
+	} else {
+		fmt.Fprintf(gi.logWriter, "  Installing Go...\n")
 	}
 
-	fmt.Fprintf(gi.logWriter, "  Installing Go...\n")
-
-	goTarball := fmt.Sprintf("go1.22.5.linux-%s.tar.gz", gi.arch)
+	goTarball := fmt.Sprintf("go%s.linux-%s.tar.gz", requiredVersion, gi.arch)
 	goURL := fmt.Sprintf("https://go.dev/dl/%s", goTarball)
 
 	// Download

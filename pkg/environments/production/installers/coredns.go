@@ -54,6 +54,46 @@ func (ci *CoreDNSInstaller) IsInstalled() bool {
 }
 
 // Install builds and installs CoreDNS with the custom RQLite plugin
+// DisableResolvedStubListener disables systemd-resolved's DNS stub listener
+// so CoreDNS can bind to port 53. This is required on Ubuntu/Debian systems
+// where systemd-resolved listens on 127.0.0.53:53 by default.
+func (ci *CoreDNSInstaller) DisableResolvedStubListener() error {
+	// Check if systemd-resolved is running
+	if err := exec.Command("systemctl", "is-active", "--quiet", "systemd-resolved").Run(); err != nil {
+		return nil // Not running, nothing to do
+	}
+
+	fmt.Fprintf(ci.logWriter, "  Disabling systemd-resolved DNS stub listener (for CoreDNS)...\n")
+
+	// Disable the stub listener
+	resolvedConf := "/etc/systemd/resolved.conf.d/no-stub.conf"
+	if err := os.MkdirAll("/etc/systemd/resolved.conf.d", 0755); err != nil {
+		return fmt.Errorf("failed to create resolved.conf.d: %w", err)
+	}
+	conf := "[Resolve]\nDNSStubListener=no\n"
+	if err := os.WriteFile(resolvedConf, []byte(conf), 0644); err != nil {
+		return fmt.Errorf("failed to write resolved config: %w", err)
+	}
+
+	// Point resolv.conf to localhost (CoreDNS) and a fallback
+	resolvConf := "nameserver 127.0.0.1\nnameserver 8.8.8.8\n"
+	if err := os.Remove("/etc/resolv.conf"); err != nil && !os.IsNotExist(err) {
+		// It might be a symlink
+		fmt.Fprintf(ci.logWriter, "    ⚠️  Could not remove /etc/resolv.conf: %v\n", err)
+	}
+	if err := os.WriteFile("/etc/resolv.conf", []byte(resolvConf), 0644); err != nil {
+		return fmt.Errorf("failed to write resolv.conf: %w", err)
+	}
+
+	// Restart systemd-resolved
+	if output, err := exec.Command("systemctl", "restart", "systemd-resolved").CombinedOutput(); err != nil {
+		fmt.Fprintf(ci.logWriter, "    ⚠️  Failed to restart systemd-resolved: %v (%s)\n", err, string(output))
+	}
+
+	fmt.Fprintf(ci.logWriter, "  ✓ systemd-resolved stub listener disabled\n")
+	return nil
+}
+
 func (ci *CoreDNSInstaller) Install() error {
 	if ci.IsInstalled() {
 		fmt.Fprintf(ci.logWriter, "  ✓ CoreDNS with RQLite plugin already installed\n")

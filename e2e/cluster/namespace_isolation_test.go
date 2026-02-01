@@ -17,14 +17,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNamespaceIsolation_Deployments(t *testing.T) {
-	// Setup two test environments with different namespaces
+// TestNamespaceIsolation creates two namespaces once and runs all isolation
+// subtests against them. This keeps namespace usage to 2 regardless of how
+// many isolation scenarios we test.
+func TestNamespaceIsolation(t *testing.T) {
 	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Failed to create namespace A environment")
 
 	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
 	require.NoError(t, err, "Failed to create namespace B environment")
 
+	t.Run("Deployments", func(t *testing.T) {
+		testNamespaceIsolationDeployments(t, envA, envB)
+	})
+
+	t.Run("SQLiteDatabases", func(t *testing.T) {
+		testNamespaceIsolationSQLiteDatabases(t, envA, envB)
+	})
+
+	t.Run("IPFSContent", func(t *testing.T) {
+		testNamespaceIsolationIPFSContent(t, envA, envB)
+	})
+
+	t.Run("OlricCache", func(t *testing.T) {
+		testNamespaceIsolationOlricCache(t, envA, envB)
+	})
+}
+
+func testNamespaceIsolationDeployments(t *testing.T, envA, envB *e2e.E2ETestEnv) {
 	tarballPath := filepath.Join("../../testdata/apps/react-app")
 
 	// Create deployment in namespace-a
@@ -112,13 +132,7 @@ func TestNamespaceIsolation_Deployments(t *testing.T) {
 	})
 }
 
-func TestNamespaceIsolation_SQLiteDatabases(t *testing.T) {
-	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
-	require.NoError(t, err, "Should create test environment for namespace-a")
-
-	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
-	require.NoError(t, err, "Should create test environment for namespace-b")
-
+func testNamespaceIsolationSQLiteDatabases(t *testing.T, envA, envB *e2e.E2ETestEnv) {
 	// Create database in namespace-a
 	dbNameA := "users-db-a"
 	e2e.CreateSQLiteDB(t, envA, dbNameA)
@@ -201,13 +215,7 @@ func TestNamespaceIsolation_SQLiteDatabases(t *testing.T) {
 	})
 }
 
-func TestNamespaceIsolation_IPFSContent(t *testing.T) {
-	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
-	require.NoError(t, err, "Should create test environment for namespace-a")
-
-	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
-	require.NoError(t, err, "Should create test environment for namespace-b")
-
+func testNamespaceIsolationIPFSContent(t *testing.T, envA, envB *e2e.E2ETestEnv) {
 	// Upload file in namespace-a
 	cidA := e2e.UploadTestFile(t, envA, "test-file-a.txt", "Content from namespace A")
 	defer func() {
@@ -217,8 +225,6 @@ func TestNamespaceIsolation_IPFSContent(t *testing.T) {
 	}()
 
 	t.Run("Namespace-B cannot GET Namespace-A IPFS content", func(t *testing.T) {
-		// This tests application-level access control
-		// IPFS content is globally accessible by CID, but our handlers should enforce namespace
 		req, _ := http.NewRequest("GET", envB.GatewayURL+"/v1/storage/get/"+cidA, nil)
 		req.Header.Set("Authorization", "Bearer "+envB.APIKey)
 
@@ -226,7 +232,6 @@ func TestNamespaceIsolation_IPFSContent(t *testing.T) {
 		require.NoError(t, err, "Should execute request")
 		defer resp.Body.Close()
 
-		// Should return 403 or 404 (namespace doesn't own this CID)
 		assert.Contains(t, []int{http.StatusNotFound, http.StatusForbidden}, resp.StatusCode,
 			"Should block cross-namespace IPFS GET")
 
@@ -273,13 +278,7 @@ func TestNamespaceIsolation_IPFSContent(t *testing.T) {
 	})
 }
 
-func TestNamespaceIsolation_OlricCache(t *testing.T) {
-	envA, err := e2e.LoadTestEnvWithNamespace("namespace-a-" + fmt.Sprintf("%d", time.Now().Unix()))
-	require.NoError(t, err, "Should create test environment for namespace-a")
-
-	envB, err := e2e.LoadTestEnvWithNamespace("namespace-b-" + fmt.Sprintf("%d", time.Now().Unix()))
-	require.NoError(t, err, "Should create test environment for namespace-b")
-
+func testNamespaceIsolationOlricCache(t *testing.T, envA, envB *e2e.E2ETestEnv) {
 	dmap := "test-cache"
 	keyA := "user-session-123"
 	valueA := `{"user_id": "alice", "token": "secret-token-a"}`
@@ -342,7 +341,6 @@ func TestNamespaceIsolation_OlricCache(t *testing.T) {
 		require.NoError(t, err, "Should execute request")
 		defer resp.Body.Close()
 
-		// Should return 404 or success (key doesn't exist in their namespace)
 		assert.Contains(t, []int{http.StatusOK, http.StatusNotFound}, resp.StatusCode)
 
 		// Verify key still exists for namespace-a

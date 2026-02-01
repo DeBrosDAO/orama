@@ -1,6 +1,7 @@
 package production
 
 import (
+	"fmt"
 	"io"
 	"os/exec"
 
@@ -117,8 +118,12 @@ func (bi *BinaryInstaller) InstallAnyoneClient() error {
 	return bi.gateway.InstallAnyoneClient()
 }
 
-// InstallCoreDNS builds and installs CoreDNS with the custom RQLite plugin
+// InstallCoreDNS builds and installs CoreDNS with the custom RQLite plugin.
+// Also disables systemd-resolved's stub listener so CoreDNS can bind to port 53.
 func (bi *BinaryInstaller) InstallCoreDNS() error {
+	if err := bi.coredns.DisableResolvedStubListener(); err != nil {
+		fmt.Fprintf(bi.logWriter, "  ⚠️  Failed to disable systemd-resolved stub: %v\n", err)
+	}
 	return bi.coredns.Install()
 }
 

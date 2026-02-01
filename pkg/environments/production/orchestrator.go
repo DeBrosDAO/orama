@@ -640,9 +640,11 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		// Caddy service (for SSL/TLS with DNS-01 ACME challenges)
 		if _, err := os.Stat("/usr/bin/caddy"); err == nil {
 			// Create caddy user if it doesn't exist
-			exec.Command("useradd", "-r", "-s", "/sbin/nologin", "caddy").Run()
+			exec.Command("useradd", "-r", "-m", "-d", "/home/caddy", "-s", "/sbin/nologin", "caddy").Run()
 			exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
 			exec.Command("chown", "caddy:caddy", "/var/lib/caddy").Run()
+			exec.Command("mkdir", "-p", "/home/caddy").Run()
+			exec.Command("chown", "caddy:caddy", "/home/caddy").Run()
 
 			caddyUnit := ps.serviceGenerator.GenerateCaddyService()
 			if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
