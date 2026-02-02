@@ -534,22 +534,23 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Skip API paths (they should use JWT/API key auth)
-		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Check for namespace gateway domain: ns-{namespace}.{baseDomain}
+		// Check for namespace gateway domain FIRST (before API path skip)
+		// Namespace subdomains (ns-{name}.{baseDomain}) must be proxied to namespace gateways
+		// regardless of path — including /v1/ paths
 		suffix := "." + baseDomain
 		if strings.HasSuffix(host, suffix) {
 			subdomain := strings.TrimSuffix(host, suffix)
 			if strings.HasPrefix(subdomain, "ns-") {
-				// This is a namespace gateway request
 				namespaceName := strings.TrimPrefix(subdomain, "ns-")
 				g.handleNamespaceGatewayRequest(w, r, namespaceName)
 				return
 			}
+		}
+
+		// Skip API paths (they should use JWT/API key auth on the main gateway)
+		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		// Check if deployment handlers are available

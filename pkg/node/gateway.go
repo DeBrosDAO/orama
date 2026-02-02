@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	namespacehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/namespace"
@@ -91,6 +92,15 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
 			zap.String("base_domain", clusterCfg.BaseDomain),
 			zap.String("base_data_dir", baseDataDir))
+
+		// Restore previously-running namespace cluster processes in background
+		go func() {
+			// Wait for main RQLite to be ready before querying cluster assignments
+			time.Sleep(10 * time.Second)
+			if err := clusterManager.RestoreLocalClusters(ctx); err != nil {
+				n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters", zap.Error(err))
+			}
+		}()
 	}
 
 	go func() {

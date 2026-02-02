@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -575,7 +577,7 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 // createDNSRecords creates DNS records for the namespace gateway
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	// Create A records for ns-{namespace}.{baseDomain} pointing to all 3 nodes
-	fqdn := fmt.Sprintf("ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
 
 	for i, node := range nodes {
 		query := `
@@ -1021,6 +1023,283 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		zap.String("cluster_id", cluster.ID),
 		zap.String("namespace", namespaceName),
 	)
+}
+
+// RestoreLocalClusters restores namespace cluster processes that should be running on this node.
+// Called on node startup to re-spawn RQLite, Olric, and Gateway processes for clusters
+// that were previously provisioned and assigned to this node.
+func (cm *ClusterManager) RestoreLocalClusters(ctx context.Context) error {
+	if cm.localNodeID == "" {
+		return fmt.Errorf("local node ID not set")
+	}
+
+	cm.logger.Info("Checking for namespace clusters to restore", zap.String("local_node_id", cm.localNodeID))
+
+	// Find all ready clusters that have this node assigned
+	type clusterNodeInfo struct {
+		ClusterID     string `db:"namespace_cluster_id"`
+		NamespaceName string `db:"namespace_name"`
+		NodeID        string `db:"node_id"`
+		Role          string `db:"role"`
+	}
+	var assignments []clusterNodeInfo
+	query := `
+		SELECT DISTINCT cn.namespace_cluster_id, c.namespace_name, cn.node_id, cn.role
+		FROM namespace_cluster_nodes cn
+		JOIN namespace_clusters c ON cn.namespace_cluster_id = c.id
+		WHERE cn.node_id = ? AND c.status = 'ready'
+	`
+	if err := cm.db.Query(ctx, &assignments, query, cm.localNodeID); err != nil {
+		return fmt.Errorf("failed to query local cluster assignments: %w", err)
+	}
+
+	if len(assignments) == 0 {
+		cm.logger.Info("No namespace clusters to restore on this node")
+		return nil
+	}
+
+	// Group by cluster
+	clusterNamespaces := make(map[string]string) // clusterID -> namespaceName
+	for _, a := range assignments {
+		clusterNamespaces[a.ClusterID] = a.NamespaceName
+	}
+
+	cm.logger.Info("Found namespace clusters to restore",
+		zap.Int("count", len(clusterNamespaces)),
+		zap.String("local_node_id", cm.localNodeID),
+	)
+
+	// Get local node's WireGuard IP
+	type nodeIPInfo struct {
+		InternalIP string `db:"internal_ip"`
+	}
+	var localNodeInfo []nodeIPInfo
+	ipQuery := `SELECT COALESCE(internal_ip, ip_address) as internal_ip FROM dns_nodes WHERE id = ? LIMIT 1`
+	if err := cm.db.Query(ctx, &localNodeInfo, ipQuery, cm.localNodeID); err != nil || len(localNodeInfo) == 0 {
+		cm.logger.Warn("Could not determine local node IP, skipping restore", zap.Error(err))
+		return fmt.Errorf("failed to get local node IP: %w", err)
+	}
+	localIP := localNodeInfo[0].InternalIP
+
+	for clusterID, namespaceName := range clusterNamespaces {
+		if err := cm.restoreClusterOnNode(ctx, clusterID, namespaceName, localIP); err != nil {
+			cm.logger.Error("Failed to restore namespace cluster",
+				zap.String("namespace", namespaceName),
+				zap.String("cluster_id", clusterID),
+				zap.Error(err),
+			)
+			// Continue restoring other clusters
+		}
+	}
+
+	return nil
+}
+
+// restoreClusterOnNode restores all processes for a single cluster on this node
+func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, namespaceName, localIP string) error {
+	cm.logger.Info("Restoring namespace cluster processes",
+		zap.String("namespace", namespaceName),
+		zap.String("cluster_id", clusterID),
+	)
+
+	// Get port allocation for this node
+	var portBlocks []PortBlock
+	portQuery := `SELECT * FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`
+	if err := cm.db.Query(ctx, &portBlocks, portQuery, clusterID, cm.localNodeID); err != nil || len(portBlocks) == 0 {
+		return fmt.Errorf("no port allocation found for cluster %s on node %s", clusterID, cm.localNodeID)
+	}
+	pb := &portBlocks[0]
+
+	// Get all nodes in this cluster (for join addresses and peer addresses)
+	allNodes, err := cm.getClusterNodes(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster nodes: %w", err)
+	}
+
+	// Get all nodes' IPs and port allocations
+	type nodePortInfo struct {
+		NodeID             string `db:"node_id"`
+		InternalIP         string `db:"internal_ip"`
+		RQLiteHTTPPort     int    `db:"rqlite_http_port"`
+		RQLiteRaftPort     int    `db:"rqlite_raft_port"`
+		OlricHTTPPort      int    `db:"olric_http_port"`
+		OlricMemberlistPort int   `db:"olric_memberlist_port"`
+	}
+	var allNodePorts []nodePortInfo
+	allPortsQuery := `
+		SELECT pa.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip,
+			pa.rqlite_http_port, pa.rqlite_raft_port, pa.olric_http_port, pa.olric_memberlist_port
+		FROM namespace_port_allocations pa
+		JOIN dns_nodes dn ON pa.node_id = dn.id
+		WHERE pa.namespace_cluster_id = ?
+	`
+	if err := cm.db.Query(ctx, &allNodePorts, allPortsQuery, clusterID); err != nil {
+		return fmt.Errorf("failed to get all node ports: %w", err)
+	}
+
+	// 1. Restore RQLite
+	if !cm.rqliteSpawner.IsInstanceRunning(pb.RQLiteHTTPPort) {
+		hasExistingData := cm.rqliteSpawner.HasExistingData(namespaceName, cm.localNodeID)
+
+		if hasExistingData {
+			// Write peers.json for Raft cluster recovery (official RQLite mechanism).
+			// When all nodes restart simultaneously, Raft can't form quorum from stale state.
+			// peers.json tells rqlited the correct voter list so it can hold a fresh election.
+			var peers []rqlite.RaftPeer
+			for _, np := range allNodePorts {
+				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
+				peers = append(peers, rqlite.RaftPeer{
+					ID:       raftAddr,
+					Address:  raftAddr,
+					NonVoter: false,
+				})
+			}
+			dataDir := cm.rqliteSpawner.GetDataDir(namespaceName, cm.localNodeID)
+			if err := cm.rqliteSpawner.WritePeersJSON(dataDir, peers); err != nil {
+				cm.logger.Error("Failed to write peers.json", zap.String("namespace", namespaceName), zap.Error(err))
+			}
+		}
+
+		// Build join addresses for first-time joins (no existing data)
+		var joinAddrs []string
+		isLeader := false
+		if !hasExistingData {
+			// Deterministic leader selection: sort all node IDs and pick the first one.
+			// Every node independently computes the same result — no coordination needed.
+			// The elected leader bootstraps the cluster; followers use -join with retries
+			// to wait for the leader to become ready (up to 5 minutes).
+			sortedNodeIDs := make([]string, 0, len(allNodePorts))
+			for _, np := range allNodePorts {
+				sortedNodeIDs = append(sortedNodeIDs, np.NodeID)
+			}
+			sort.Strings(sortedNodeIDs)
+			electedLeaderID := sortedNodeIDs[0]
+
+			if cm.localNodeID == electedLeaderID {
+				isLeader = true
+				cm.logger.Info("Deterministic leader election: this node is the leader",
+					zap.String("namespace", namespaceName),
+					zap.String("node_id", cm.localNodeID))
+			} else {
+				// Follower: join the elected leader's raft address
+				for _, np := range allNodePorts {
+					if np.NodeID == electedLeaderID {
+						joinAddrs = append(joinAddrs, fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort))
+						break
+					}
+				}
+				cm.logger.Info("Deterministic leader election: this node is a follower",
+					zap.String("namespace", namespaceName),
+					zap.String("node_id", cm.localNodeID),
+					zap.String("leader_id", electedLeaderID),
+					zap.Strings("join_addrs", joinAddrs))
+			}
+		}
+
+		rqliteCfg := rqlite.InstanceConfig{
+			Namespace:      namespaceName,
+			NodeID:         cm.localNodeID,
+			HTTPPort:       pb.RQLiteHTTPPort,
+			RaftPort:       pb.RQLiteRaftPort,
+			HTTPAdvAddress: fmt.Sprintf("%s:%d", localIP, pb.RQLiteHTTPPort),
+			RaftAdvAddress: fmt.Sprintf("%s:%d", localIP, pb.RQLiteRaftPort),
+			JoinAddresses:  joinAddrs,
+			IsLeader:       isLeader,
+		}
+
+		if _, err := cm.rqliteSpawner.SpawnInstance(ctx, rqliteCfg); err != nil {
+			cm.logger.Error("Failed to restore RQLite", zap.String("namespace", namespaceName), zap.Error(err))
+		} else {
+			cm.logger.Info("Restored RQLite instance", zap.String("namespace", namespaceName), zap.Int("port", pb.RQLiteHTTPPort))
+		}
+	} else {
+		cm.logger.Info("RQLite already running", zap.String("namespace", namespaceName), zap.Int("port", pb.RQLiteHTTPPort))
+	}
+
+	// 2. Restore Olric
+	olricRunning := false
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", pb.OlricMemberlistPort), 2*time.Second)
+	if err == nil {
+		conn.Close()
+		olricRunning = true
+	}
+
+	if !olricRunning {
+		var peers []string
+		for _, np := range allNodePorts {
+			if np.NodeID != cm.localNodeID {
+				peers = append(peers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricMemberlistPort))
+			}
+		}
+
+		olricCfg := olric.InstanceConfig{
+			Namespace:      namespaceName,
+			NodeID:         cm.localNodeID,
+			HTTPPort:       pb.OlricHTTPPort,
+			MemberlistPort: pb.OlricMemberlistPort,
+			BindAddr:       localIP,
+			AdvertiseAddr:  localIP,
+			PeerAddresses:  peers,
+		}
+
+		if _, err := cm.olricSpawner.SpawnInstance(ctx, olricCfg); err != nil {
+			cm.logger.Error("Failed to restore Olric", zap.String("namespace", namespaceName), zap.Error(err))
+		} else {
+			cm.logger.Info("Restored Olric instance", zap.String("namespace", namespaceName), zap.Int("port", pb.OlricHTTPPort))
+		}
+	} else {
+		cm.logger.Info("Olric already running", zap.String("namespace", namespaceName), zap.Int("port", pb.OlricMemberlistPort))
+	}
+
+	// 3. Restore Gateway
+	// Check if any cluster node has the gateway role (gateway may have been skipped during provisioning)
+	hasGateway := false
+	for _, node := range allNodes {
+		if node.Role == NodeRoleGateway {
+			hasGateway = true
+			break
+		}
+	}
+
+	if hasGateway {
+		gwRunning := false
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
+		if err == nil {
+			resp.Body.Close()
+			gwRunning = true
+		}
+
+		if !gwRunning {
+			// Build olric server addresses
+			var olricServers []string
+			for _, np := range allNodePorts {
+				if np.NodeID == cm.localNodeID {
+					olricServers = append(olricServers, fmt.Sprintf("localhost:%d", np.OlricHTTPPort))
+				} else {
+					olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
+				}
+			}
+
+			gwCfg := gateway.InstanceConfig{
+				Namespace:    namespaceName,
+				NodeID:       cm.localNodeID,
+				HTTPPort:     pb.GatewayHTTPPort,
+				BaseDomain:   cm.baseDomain,
+				RQLiteDSN:    fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				OlricServers: olricServers,
+			}
+
+			if _, err := cm.gatewaySpawner.SpawnInstance(ctx, gwCfg); err != nil {
+				cm.logger.Error("Failed to restore Gateway", zap.String("namespace", namespaceName), zap.Error(err))
+			} else {
+				cm.logger.Info("Restored Gateway instance", zap.String("namespace", namespaceName), zap.Int("port", pb.GatewayHTTPPort))
+			}
+		} else {
+			cm.logger.Info("Gateway already running", zap.String("namespace", namespaceName), zap.Int("port", pb.GatewayHTTPPort))
+		}
+	}
+
+	return nil
 }
 
 // GetClusterStatusByID returns the full status of a cluster by ID.

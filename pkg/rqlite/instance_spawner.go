@@ -2,6 +2,7 @@ package rqlite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,13 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// RaftPeer represents a peer entry in RQLite's peers.json recovery file
+type RaftPeer struct {
+	ID       string `json:"id"`
+	Address  string `json:"address"`
+	NonVoter bool   `json:"non_voter"`
+}
 
 // InstanceConfig contains configuration for spawning a RQLite instance
 type InstanceConfig struct {
@@ -80,6 +88,9 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		for _, addr := range cfg.JoinAddresses {
 			args = append(args, "-join", addr)
 		}
+		// Retry joining for up to 5 minutes (default is 5 attempts / 3s = 15s which is too short
+		// when all namespace nodes restart simultaneously and the leader isn't ready yet)
+		args = append(args, "-join-attempts", "30", "-join-interval", "10s")
 	}
 
 	// Data directory must be the last argument
@@ -139,7 +150,9 @@ func (is *InstanceSpawner) waitForReady(ctx context.Context, httpPort int) error
 	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	deadline := time.Now().Add(30 * time.Second)
+	// 6 minutes: must exceed the join retry window (30 attempts * 10s = 5min)
+	// so we don't kill followers that are still waiting for the leader
+	deadline := time.Now().Add(6 * time.Minute)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -235,6 +248,42 @@ func (is *InstanceSpawner) IsInstanceRunning(httpPort int) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// HasExistingData checks if a RQLite instance has existing data (raft.db indicates prior startup)
+func (is *InstanceSpawner) HasExistingData(namespace, nodeID string) bool {
+	dataDir := is.GetDataDir(namespace, nodeID)
+	if _, err := os.Stat(filepath.Join(dataDir, "raft.db")); err == nil {
+		return true
+	}
+	return false
+}
+
+// WritePeersJSON writes a peers.json recovery file into the Raft directory.
+// This is RQLite's official mechanism for recovering a cluster when all nodes are down.
+// On startup, rqlited reads this file, overwrites the Raft peer configuration,
+// and renames it to peers.info after recovery.
+func (is *InstanceSpawner) WritePeersJSON(dataDir string, peers []RaftPeer) error {
+	raftDir := filepath.Join(dataDir, "raft")
+	if err := os.MkdirAll(raftDir, 0755); err != nil {
+		return fmt.Errorf("failed to create raft directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(peers, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal peers.json: %w", err)
+	}
+
+	peersPath := filepath.Join(raftDir, "peers.json")
+	if err := os.WriteFile(peersPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write peers.json: %w", err)
+	}
+
+	is.logger.Info("Wrote peers.json for cluster recovery",
+		zap.String("path", peersPath),
+		zap.Int("peer_count", len(peers)),
+	)
+	return nil
 }
 
 // GetDataDir returns the data directory path for a namespace RQLite instance
