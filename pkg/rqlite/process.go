@@ -90,17 +90,8 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		}
 	}
 
-	if r.config.RQLiteJoinAddress != "" {
-		r.logger.Info("Joining RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
-
-		peersJSONPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
-		if _, err := os.Stat(peersJSONPath); err == nil {
-			r.logger.Info("Removing existing peers.json before joining cluster",
-				zap.String("path", peersJSONPath))
-			if err := os.Remove(peersJSONPath); err != nil {
-				r.logger.Warn("Failed to remove peers.json", zap.Error(err))
-			}
-		}
+	if r.config.RQLiteJoinAddress != "" && !r.hasExistingState(rqliteDataDir) {
+		r.logger.Info("First-time join to RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
 
 		joinArg := r.config.RQLiteJoinAddress
 		if strings.HasPrefix(joinArg, "http://") {
