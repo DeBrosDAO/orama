@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -143,8 +146,10 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		value string
 	}
 
-	// Base domain records (e.g., dbrs.space, *.dbrs.space) — for round-robin across all nodes
-	if baseDomain != "" {
+	// Base domain records (e.g., dbrs.space, *.dbrs.space) — only for nameserver nodes.
+	// Only nameserver nodes run Caddy (HTTPS), so only they should appear in base domain
+	// round-robin. Non-nameserver nodes would cause TLS failures for clients.
+	if baseDomain != "" && n.isNameserverNode(ctx) {
 		records = append(records,
 			struct{ fqdn, value string }{baseDomain + ".", ipAddress},
 			struct{ fqdn, value string }{"*." + baseDomain + ".", ipAddress},
@@ -176,8 +181,9 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		n.ensureSOAAndNSRecords(ctx, baseDomain)
 	}
 
-	// Claim an NS slot for the base domain (ns1/ns2/ns3)
-	if baseDomain != "" {
+	// Claim an NS slot for the base domain (ns1/ns2/ns3) — only if this node
+	// was installed with --nameserver (i.e. runs Caddy + CoreDNS).
+	if baseDomain != "" && n.isNameserverPreference() {
 		n.claimNameserverSlot(ctx, baseDomain, ipAddress)
 	}
 
@@ -369,6 +375,37 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 	}
 }
 
+// isNameserverPreference checks if this node was installed with --nameserver flag
+// by reading the preferences.yaml file. Only nameserver nodes should claim NS slots.
+func (n *Node) isNameserverPreference() bool {
+	oramaDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..")
+	prefsPath := filepath.Join(oramaDir, "preferences.yaml")
+	data, err := os.ReadFile(prefsPath)
+	if err != nil {
+		return false
+	}
+	// Simple check: look for "nameserver: true" in the YAML
+	return strings.Contains(string(data), "nameserver: true")
+}
+
+// isNameserverNode checks if this node has claimed a nameserver slot (ns1/ns2/ns3).
+// Only nameserver nodes run Caddy for HTTPS, so only they should be in base domain DNS.
+func (n *Node) isNameserverNode(ctx context.Context) bool {
+	if n.rqliteAdapter == nil {
+		return false
+	}
+	nodeID := n.GetPeerID()
+	if nodeID == "" {
+		return false
+	}
+	db := n.rqliteAdapter.GetSQLDB()
+	var count int
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dns_nameservers WHERE node_id = ?`, nodeID,
+	).Scan(&count)
+	return err == nil && count > 0
+}
+
 // getWireGuardIP returns the IPv4 address assigned to the wg0 interface, if any
 func (n *Node) getWireGuardIP() (string, error) {
 	iface, err := net.InterfaceByName("wg0")
@@ -411,5 +448,21 @@ func (n *Node) getNodeIPAddress() (string, error) {
 	defer conn.Close()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	if localAddr.IP.IsPrivate() || localAddr.IP.IsLoopback() {
+		// UDP dial returned a private/loopback IP (e.g. WireGuard 10.0.0.x).
+		// Fall back to scanning interfaces for a public IPv4.
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return "", fmt.Errorf("private IP detected (%s) and failed to list interfaces: %w", localAddr.IP, err)
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsPrivate() {
+				if ipnet.IP.To4() != nil {
+					return ipnet.IP.String(), nil
+				}
+			}
+		}
+		return "", fmt.Errorf("private IP detected (%s) and no public IPv4 found on interfaces", localAddr.IP)
+	}
 	return localAddr.IP.String(), nil
 }

@@ -19,6 +19,7 @@ type Credentials struct {
 	IssuedAt     time.Time `json:"issued_at"`
 	LastUsedAt   time.Time `json:"last_used_at,omitempty"`
 	Plan         string    `json:"plan,omitempty"`
+	NamespaceURL string    `json:"namespace_url,omitempty"`
 }
 
 // CredentialStore manages credentials for multiple gateways

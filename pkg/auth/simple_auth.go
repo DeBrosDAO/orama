@@ -72,13 +72,20 @@ func PerformSimpleAuthentication(gatewayURL, wallet, namespace string) (*Credent
 		return nil, fmt.Errorf("failed to request API key: %w", err)
 	}
 
+	// Build namespace gateway URL from the gateway URL
+	namespaceURL := ""
+	if domain := extractDomainFromURL(gatewayURL); domain != "" {
+		namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, domain)
+	}
+
 	// Create credentials
 	creds := &Credentials{
-		APIKey:    apiKey,
-		Namespace: namespace,
-		UserID:    wallet,
-		Wallet:    wallet,
-		IssuedAt:  time.Now(),
+		APIKey:       apiKey,
+		Namespace:    namespace,
+		UserID:       wallet,
+		Wallet:       wallet,
+		IssuedAt:     time.Now(),
+		NamespaceURL: namespaceURL,
 	}
 
 	fmt.Printf("\n🎉 Authentication successful!\n")
