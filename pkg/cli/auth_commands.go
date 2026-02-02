@@ -156,6 +156,9 @@ func handleAuthLogin(wallet, namespace string) {
 	fmt.Printf("🎯 Wallet: %s\n", creds.Wallet)
 	fmt.Printf("🏢 Namespace: %s\n", creds.Namespace)
 	fmt.Printf("🔑 API Key: %s\n", creds.APIKey)
+	if creds.NamespaceURL != "" {
+		fmt.Printf("🌐 Namespace URL: %s\n", creds.NamespaceURL)
+	}
 }
 
 func handleAuthLogout() {
@@ -184,6 +187,9 @@ func handleAuthWhoami() {
 	fmt.Println("✅ Authenticated")
 	fmt.Printf("  Wallet:    %s\n", creds.Wallet)
 	fmt.Printf("  Namespace: %s\n", creds.Namespace)
+	if creds.NamespaceURL != "" {
+		fmt.Printf("  NS Gateway: %s\n", creds.NamespaceURL)
+	}
 	fmt.Printf("  Issued At: %s\n", creds.IssuedAt.Format("2006-01-02 15:04:05"))
 	if !creds.ExpiresAt.IsZero() {
 		fmt.Printf("  Expires At: %s\n", creds.ExpiresAt.Format("2006-01-02 15:04:05"))
@@ -231,6 +237,9 @@ func handleAuthStatus() {
 	fmt.Println("  Status:     ✅ Authenticated")
 	fmt.Printf("  Wallet:     %s\n", creds.Wallet)
 	fmt.Printf("  Namespace:  %s\n", creds.Namespace)
+	if creds.NamespaceURL != "" {
+		fmt.Printf("  NS Gateway: %s\n", creds.NamespaceURL)
+	}
 	if !creds.ExpiresAt.IsZero() {
 		fmt.Printf("  Expires:    %s\n", creds.ExpiresAt.Format("2006-01-02 15:04:05"))
 	}
