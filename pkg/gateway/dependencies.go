@@ -126,6 +126,11 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 		dsn = "http://localhost:5001"
 	}
 
+	if strings.Contains(dsn, "?") {
+		dsn += "&disableClusterDiscovery=true"
+	} else {
+		dsn += "?disableClusterDiscovery=true"
+	}
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open rqlite sql db: %w", err)

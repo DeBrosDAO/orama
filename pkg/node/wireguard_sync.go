@@ -212,6 +212,9 @@ func (n *Node) startWireGuardSyncLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Re-register self on every tick to pick up IPFS peer ID if it wasn't
+				// ready at startup (INSERT OR REPLACE is idempotent)
+				n.ensureWireGuardSelfRegistered(ctx)
 				if err := n.syncWireGuardPeers(ctx); err != nil {
 					n.logger.ComponentWarn(logging.ComponentNode, "WireGuard peer sync failed", zap.Error(err))
 				}

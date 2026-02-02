@@ -235,10 +235,7 @@ SyslogIdentifier=debros-node
 
 PrivateTmp=yes
 ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
 ProtectControlGroups=yes
-RestrictRealtime=yes
 ReadWritePaths=%[2]s /etc/systemd/system
 
 [Install]

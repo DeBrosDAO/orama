@@ -256,6 +256,9 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 	addresses["Swarm"] = []string{
 		fmt.Sprintf("/ip4/%s/tcp/%d", bindIP, swarmPort),
 	}
+	// Clear NoAnnounce — the server profile blocks private IPs (10.0.0.0/8, etc.)
+	// which prevents nodes from advertising their WireGuard swarm addresses via DHT
+	addresses["NoAnnounce"] = []string{}
 
 	config["Addresses"] = addresses
 
