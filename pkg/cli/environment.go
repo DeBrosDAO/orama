@@ -39,13 +39,13 @@ var DefaultEnvironments = []Environment{
 	},
 	{
 		Name:        "devnet",
-		GatewayURL:  "https://devnet.orama.network",
+		GatewayURL:  "https://orama-devnet.network",
 		Description: "Development network (testnet)",
 		IsActive:    false,
 	},
 	{
 		Name:        "testnet",
-		GatewayURL:  "https://testnet.orama.network",
+		GatewayURL:  "https://orama-tesetnet.network",
 		Description: "Test network (staging)",
 		IsActive:    false,
 	},

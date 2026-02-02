@@ -399,7 +399,7 @@ func (n *Node) getNodeIPAddress() (string, error) {
 		}
 
 		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsPrivate() {
 				if ipnet.IP.To4() != nil {
 					return ipnet.IP.String(), nil
 				}
