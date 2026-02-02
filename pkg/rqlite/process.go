@@ -118,10 +118,12 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		args = append(args, "-join", joinArg, "-join-as", r.discoverConfig.RaftAdvAddress, "-join-attempts", "30", "-join-interval", "10s")
 
 		// Check if this node should join as a non-voter (read replica).
-		// The discovery service determines voter status based on WG IP ordering.
-		if r.discoveryService != nil && !r.discoveryService.IsVoter(r.discoverConfig.RaftAdvAddress) {
-			r.logger.Info("Joining as non-voter (read replica)",
-				zap.String("raft_address", r.discoverConfig.RaftAdvAddress))
+		// Query the join target's /nodes endpoint to count existing voters,
+		// rather than relying on LibP2P peer count which is incomplete at join time.
+		if shouldBeNonVoter := r.checkShouldBeNonVoter(r.config.RQLiteJoinAddress); shouldBeNonVoter {
+			r.logger.Info("Joining as non-voter (read replica) - cluster already has max voters",
+				zap.String("raft_address", r.discoverConfig.RaftAdvAddress),
+				zap.Int("max_voters", MaxDefaultVoters))
 			args = append(args, "-raft-non-voter")
 		}
 	}
@@ -168,16 +170,26 @@ func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 	var conn *gorqlite.Connection
 	var err error
 	maxConnectAttempts := 10
-	connectBackoff := 500 * time.Millisecond
+	connectBackoff := 1 * time.Second
+
+	// Use disableClusterDiscovery=true to avoid gorqlite calling /nodes on Open().
+	// The /nodes endpoint probes all cluster members including unreachable ones,
+	// which can block for the full HTTP timeout (~10s per attempt).
+	// This is safe because rqlited followers automatically forward writes to the leader.
+	connURL := fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort)
 
 	for attempt := 0; attempt < maxConnectAttempts; attempt++ {
-		conn, err = gorqlite.Open(fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+		conn, err = gorqlite.Open(connURL)
 		if err == nil {
 			r.connection = conn
 			break
 		}
 
-		if strings.Contains(err.Error(), "store is not open") {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "store is not open") {
+			r.logger.Debug("RQLite not ready yet, retrying",
+				zap.Int("attempt", attempt+1),
+				zap.Error(err))
 			time.Sleep(connectBackoff)
 			connectBackoff = time.Duration(float64(connectBackoff) * 1.5)
 			if connectBackoff > 5*time.Second {
@@ -286,6 +298,58 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 		return fmt.Errorf("leader returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// checkShouldBeNonVoter queries the join target's /nodes endpoint to count
+// existing voters. Returns true if the cluster already has MaxDefaultVoters
+// voters, meaning this node should join as a non-voter.
+func (r *RQLiteManager) checkShouldBeNonVoter(joinAddress string) bool {
+	// Derive HTTP API URL from the join address (which is a raft address like 10.0.0.1:7001)
+	host := joinAddress
+	if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
+		host = strings.TrimPrefix(host, "http://")
+		host = strings.TrimPrefix(host, "https://")
+	}
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	nodesURL := fmt.Sprintf("http://%s:%d/nodes?timeout=2s", host, r.config.RQLitePort)
+
+	client := tlsutil.NewHTTPClient(5 * time.Second)
+	resp, err := client.Get(nodesURL)
+	if err != nil {
+		r.logger.Warn("Could not query /nodes to check voter count, defaulting to voter", zap.Error(err))
+		return false
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		r.logger.Warn("Could not read /nodes response, defaulting to voter", zap.Error(err))
+		return false
+	}
+
+	var nodes map[string]struct {
+		Voter     bool `json:"voter"`
+		Reachable bool `json:"reachable"`
+	}
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		r.logger.Warn("Could not parse /nodes response, defaulting to voter", zap.Error(err))
+		return false
+	}
+
+	voterCount := 0
+	for _, n := range nodes {
+		if n.Voter && n.Reachable {
+			voterCount++
+		}
+	}
+
+	r.logger.Info("Checked existing voter count from join target",
+		zap.Int("reachable_voters", voterCount),
+		zap.Int("max_voters", MaxDefaultVoters))
+
+	return voterCount >= MaxDefaultVoters
 }
 
 // waitForJoinTarget waits until the join target's HTTP status becomes reachable

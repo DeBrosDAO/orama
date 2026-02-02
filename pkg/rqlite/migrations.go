@@ -119,7 +119,7 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 
 // ApplyMigrationsFromManager is a convenience helper bound to RQLiteManager.
 func (r *RQLiteManager) ApplyMigrations(ctx context.Context, dir string) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
 	if err != nil {
 		return fmt.Errorf("open rqlite db: %w", err)
 	}
@@ -130,7 +130,7 @@ func (r *RQLiteManager) ApplyMigrations(ctx context.Context, dir string) error {
 
 // ApplyMigrationsDirs is the multi-dir variant on RQLiteManager.
 func (r *RQLiteManager) ApplyMigrationsDirs(ctx context.Context, dirs []string) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
 	if err != nil {
 		return fmt.Errorf("open rqlite db: %w", err)
 	}
@@ -474,7 +474,7 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 
 // ApplyEmbeddedMigrations is a convenience helper bound to RQLiteManager.
 func (r *RQLiteManager) ApplyEmbeddedMigrations(ctx context.Context, fsys fs.FS) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
 	if err != nil {
 		return fmt.Errorf("open rqlite db: %w", err)
 	}

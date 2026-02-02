@@ -60,6 +60,12 @@ type MCPServer struct {
 }
 
 func NewMCPServer(rqliteURL string) (*MCPServer, error) {
+	// Disable gorqlite cluster discovery to avoid /nodes timeouts from unreachable peers
+	if strings.Contains(rqliteURL, "?") {
+		rqliteURL += "&disableClusterDiscovery=true"
+	} else {
+		rqliteURL += "?disableClusterDiscovery=true"
+	}
 	conn, err := gorqlite.Open(rqliteURL)
 	if err != nil {
 		return nil, err
