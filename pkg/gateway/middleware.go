@@ -589,24 +589,23 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 // handleNamespaceGatewayRequest proxies requests to a namespace's dedicated gateway cluster
 // This enables physical isolation where each namespace has its own RQLite, Olric, and Gateway
 func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
-	// Look up namespace cluster gateway IPs from DNS records
+	// Look up namespace cluster gateway using internal (WireGuard) IPs for inter-node proxying
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(r.Context())
 
-	baseDomain := "dbrs.space"
-	if g.cfg != nil && g.cfg.BaseDomain != "" {
-		baseDomain = g.cfg.BaseDomain
-	}
-
-	// Query DNS records for the namespace gateway
-	fqdn := "ns-" + namespaceName + "." + baseDomain + "."
-	query := `SELECT value FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND is_active = TRUE ORDER BY RANDOM() LIMIT 1`
-	result, err := db.Query(internalCtx, query, fqdn)
+	// Single query: get internal IP + gateway port from cluster tables
+	query := `
+		SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
+		FROM namespace_port_allocations npa
+		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
+		JOIN dns_nodes dn ON npa.node_id = dn.id
+		WHERE nc.namespace_name = ? AND nc.status = 'ready'
+		ORDER BY RANDOM() LIMIT 1
+	`
+	result, err := db.Query(internalCtx, query, namespaceName)
 	if err != nil || result == nil || len(result.Rows) == 0 {
-		// No gateway found for this namespace
 		g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
 			zap.String("namespace", namespaceName),
-			zap.String("fqdn", fqdn),
 		)
 		http.Error(w, "Namespace gateway not found", http.StatusNotFound)
 		return
@@ -617,22 +616,9 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		http.Error(w, "Namespace gateway not available", http.StatusServiceUnavailable)
 		return
 	}
-
-	// Get the gateway port from namespace_port_allocations
-	// Gateway HTTP port is port_start + 4
-	portQuery := `
-		SELECT npa.gateway_http_port
-		FROM namespace_port_allocations npa
-		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
-		WHERE nc.namespace_name = ?
-		LIMIT 1
-	`
-	portResult, err := db.Query(internalCtx, portQuery, namespaceName)
-	gatewayPort := 10004 // Default to first namespace's gateway port
-	if err == nil && portResult != nil && len(portResult.Rows) > 0 {
-		if p := getInt(portResult.Rows[0][0]); p > 0 {
-			gatewayPort = p
-		}
+	gatewayPort := 10004
+	if p := getInt(result.Rows[0][1]); p > 0 {
+		gatewayPort = p
 	}
 
 	// Proxy request to the namespace gateway

@@ -93,13 +93,35 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			zap.String("base_domain", clusterCfg.BaseDomain),
 			zap.String("base_data_dir", baseDataDir))
 
-		// Restore previously-running namespace cluster processes in background
+		// Restore previously-running namespace cluster processes in background.
+		// First try local state files (no DB dependency), then fall back to DB query with retries.
 		go func() {
-			// Wait for main RQLite to be ready before querying cluster assignments
-			time.Sleep(10 * time.Second)
-			if err := clusterManager.RestoreLocalClusters(ctx); err != nil {
-				n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters", zap.Error(err))
+			time.Sleep(5 * time.Second)
+
+			// Try disk-based restore first (instant, no DB needed)
+			restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
+			if err != nil {
+				n.logger.ComponentWarn(logging.ComponentNode, "Disk-based namespace restore failed", zap.Error(err))
 			}
+			if restored > 0 {
+				n.logger.ComponentInfo(logging.ComponentNode, "Restored namespace clusters from local state",
+					zap.Int("count", restored))
+				return
+			}
+
+			// No state files found — fall back to DB query with retries
+			n.logger.ComponentInfo(logging.ComponentNode, "No local state files, falling back to DB restore")
+			time.Sleep(5 * time.Second)
+			for attempt := 1; attempt <= 12; attempt++ {
+				if err := clusterManager.RestoreLocalClusters(ctx); err == nil {
+					return
+				} else {
+					n.logger.ComponentWarn(logging.ComponentNode, "Namespace cluster restore failed, retrying",
+						zap.Int("attempt", attempt), zap.Error(err))
+				}
+				time.Sleep(10 * time.Second)
+			}
+			n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters after all retries")
 		}()
 	}
 
