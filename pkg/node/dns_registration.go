@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
 	"os"
@@ -139,6 +140,11 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 	}
 
 	db := n.rqliteAdapter.GetSQLDB()
+
+	// Clean up any private IP A records left by old code versions.
+	// Old code could insert WireGuard IPs (10.0.0.x) into dns_records.
+	// This self-heals on every heartbeat cycle.
+	cleanupPrivateIPRecords(ctx, db, n.logger)
 
 	// Build list of A records to ensure
 	var records []struct {
@@ -465,4 +471,23 @@ func (n *Node) getNodeIPAddress() (string, error) {
 		return "", fmt.Errorf("private IP detected (%s) and no public IPv4 found on interfaces", localAddr.IP)
 	}
 	return localAddr.IP.String(), nil
+}
+
+// cleanupPrivateIPRecords deletes any A records with private/loopback IPs from dns_records.
+// Old code versions could insert WireGuard IPs (10.0.0.x) into the table. This runs on
+// every heartbeat to self-heal.
+func cleanupPrivateIPRecords(ctx context.Context, db *sql.DB, logger *logging.ColoredLogger) {
+	query := `DELETE FROM dns_records WHERE record_type = 'A' AND namespace = 'system'
+		AND (value LIKE '10.%' OR value LIKE '172.16.%' OR value LIKE '172.17.%' OR value LIKE '172.18.%'
+		OR value LIKE '172.19.%' OR value LIKE '172.2_.%' OR value LIKE '172.30.%' OR value LIKE '172.31.%'
+		OR value LIKE '192.168.%' OR value = '127.0.0.1')`
+	result, err := db.ExecContext(ctx, query)
+	if err != nil {
+		logger.ComponentWarn(logging.ComponentNode, "Failed to clean up private IP DNS records", zap.Error(err))
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		logger.ComponentInfo(logging.ComponentNode, "Cleaned up private IP DNS records",
+			zap.Int64("deleted", rows))
+	}
 }
