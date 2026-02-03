@@ -26,6 +26,11 @@ import (
 type ClusterManagerConfig struct {
 	BaseDomain  string // Base domain for namespace gateways (e.g., "orama-devnet.network")
 	BaseDataDir string // Base directory for namespace data (e.g., "~/.orama/data/namespaces")
+	// IPFS configuration for namespace gateways (defaults used if not set)
+	IPFSClusterAPIURL     string        // IPFS Cluster API URL (default: "http://localhost:9094")
+	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:5001")
+	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
+	IPFSReplicationFactor int           // IPFS replication factor (default: 3)
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -39,6 +44,12 @@ type ClusterManager struct {
 	logger         *zap.Logger
 	baseDomain     string
 	baseDataDir    string
+
+	// IPFS configuration for namespace gateways
+	ipfsClusterAPIURL     string
+	ipfsAPIURL            string
+	ipfsTimeout           time.Duration
+	ipfsReplicationFactor int
 
 	// Local node identity for distributed spawning
 	localNodeID string
@@ -61,17 +72,39 @@ func NewClusterManager(
 	olricSpawner := olric.NewInstanceSpawner(cfg.BaseDataDir, logger)
 	gatewaySpawner := gateway.NewInstanceSpawner(cfg.BaseDataDir, logger)
 
+	// Set IPFS defaults
+	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
+	if ipfsClusterAPIURL == "" {
+		ipfsClusterAPIURL = "http://localhost:9094"
+	}
+	ipfsAPIURL := cfg.IPFSAPIURL
+	if ipfsAPIURL == "" {
+		ipfsAPIURL = "http://localhost:5001"
+	}
+	ipfsTimeout := cfg.IPFSTimeout
+	if ipfsTimeout == 0 {
+		ipfsTimeout = 60 * time.Second
+	}
+	ipfsReplicationFactor := cfg.IPFSReplicationFactor
+	if ipfsReplicationFactor == 0 {
+		ipfsReplicationFactor = 3
+	}
+
 	return &ClusterManager{
-		db:             db,
-		portAllocator:  portAllocator,
-		nodeSelector:   nodeSelector,
-		rqliteSpawner:  rqliteSpawner,
-		olricSpawner:   olricSpawner,
-		gatewaySpawner: gatewaySpawner,
-		baseDomain:     cfg.BaseDomain,
-		baseDataDir:    cfg.BaseDataDir,
-		logger:         logger.With(zap.String("component", "cluster-manager")),
-		provisioning:   make(map[string]bool),
+		db:                    db,
+		portAllocator:         portAllocator,
+		nodeSelector:          nodeSelector,
+		rqliteSpawner:         rqliteSpawner,
+		olricSpawner:          olricSpawner,
+		gatewaySpawner:        gatewaySpawner,
+		baseDomain:            cfg.BaseDomain,
+		baseDataDir:           cfg.BaseDataDir,
+		ipfsClusterAPIURL:     ipfsClusterAPIURL,
+		ipfsAPIURL:            ipfsAPIURL,
+		ipfsTimeout:           ipfsTimeout,
+		ipfsReplicationFactor: ipfsReplicationFactor,
+		logger:                logger.With(zap.String("component", "cluster-manager")),
+		provisioning:          make(map[string]bool),
 	}
 }
 
@@ -86,17 +119,39 @@ func NewClusterManagerWithComponents(
 	cfg ClusterManagerConfig,
 	logger *zap.Logger,
 ) *ClusterManager {
+	// Set IPFS defaults (same as NewClusterManager)
+	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
+	if ipfsClusterAPIURL == "" {
+		ipfsClusterAPIURL = "http://localhost:9094"
+	}
+	ipfsAPIURL := cfg.IPFSAPIURL
+	if ipfsAPIURL == "" {
+		ipfsAPIURL = "http://localhost:5001"
+	}
+	ipfsTimeout := cfg.IPFSTimeout
+	if ipfsTimeout == 0 {
+		ipfsTimeout = 60 * time.Second
+	}
+	ipfsReplicationFactor := cfg.IPFSReplicationFactor
+	if ipfsReplicationFactor == 0 {
+		ipfsReplicationFactor = 3
+	}
+
 	return &ClusterManager{
-		db:             db,
-		portAllocator:  portAllocator,
-		nodeSelector:   nodeSelector,
-		rqliteSpawner:  rqliteSpawner,
-		olricSpawner:   olricSpawner,
-		gatewaySpawner: gatewaySpawner,
-		baseDomain:     cfg.BaseDomain,
-		baseDataDir:    cfg.BaseDataDir,
-		logger:         logger.With(zap.String("component", "cluster-manager")),
-		provisioning:   make(map[string]bool),
+		db:                    db,
+		portAllocator:         portAllocator,
+		nodeSelector:          nodeSelector,
+		rqliteSpawner:         rqliteSpawner,
+		olricSpawner:          olricSpawner,
+		gatewaySpawner:        gatewaySpawner,
+		baseDomain:            cfg.BaseDomain,
+		baseDataDir:           cfg.BaseDataDir,
+		ipfsClusterAPIURL:     ipfsClusterAPIURL,
+		ipfsAPIURL:            ipfsAPIURL,
+		ipfsTimeout:           ipfsTimeout,
+		ipfsReplicationFactor: ipfsReplicationFactor,
+		logger:                logger.With(zap.String("component", "cluster-manager")),
+		provisioning:          make(map[string]bool),
 	}
 }
 
@@ -407,14 +462,10 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) ([]*gateway.GatewayInstance, error) {
 	instances := make([]*gateway.GatewayInstance, len(nodes))
 
-	// Build Olric server addresses — use WireGuard IPs for remote instances
+	// Build Olric server addresses — always use WireGuard IPs (Olric binds to WireGuard interface)
 	olricServers := make([]string, len(olricInstances))
 	for i, inst := range olricInstances {
-		if nodes[i].NodeID == cm.localNodeID {
-			olricServers[i] = inst.DSN() // localhost for local
-		} else {
-			olricServers[i] = inst.AdvertisedDSN() // WireGuard IP for remote
-		}
+		olricServers[i] = inst.AdvertisedDSN() // Always use WireGuard IP
 	}
 
 	// Start all Gateway instances
@@ -423,12 +474,16 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 		rqliteDSN := fmt.Sprintf("http://localhost:%d", portBlocks[i].RQLiteHTTPPort)
 
 		cfg := gateway.InstanceConfig{
-			Namespace:    cluster.NamespaceName,
-			NodeID:       node.NodeID,
-			HTTPPort:     portBlocks[i].GatewayHTTPPort,
-			BaseDomain:   cm.baseDomain,
-			RQLiteDSN:    rqliteDSN,
-			OlricServers: olricServers,
+			Namespace:             cluster.NamespaceName,
+			NodeID:                node.NodeID,
+			HTTPPort:              portBlocks[i].GatewayHTTPPort,
+			BaseDomain:            cm.baseDomain,
+			RQLiteDSN:             rqliteDSN,
+			OlricServers:          olricServers,
+			IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
+			IPFSAPIURL:            cm.ipfsAPIURL,
+			IPFSTimeout:           cm.ipfsTimeout,
+			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 		}
 
 		instance, err := cm.gatewaySpawner.SpawnInstance(ctx, cfg)
@@ -577,32 +632,13 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 }
 
 // createDNSRecords creates DNS records for the namespace gateway.
-// Only nameserver nodes get DNS A records, because only they run Caddy
+// All namespace nodes get DNS A records since all nodes now run Caddy
 // and can serve TLS for ns-{namespace}.{baseDomain} subdomains.
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
 
-	// Query nameserver node IDs so we only add DNS records for nodes that can serve TLS
-	type nsRow struct {
-		NodeID string `db:"node_id"`
-	}
-	var nameservers []nsRow
-	_ = cm.db.Query(ctx, &nameservers, `SELECT node_id FROM dns_nameservers`)
-	nsSet := make(map[string]bool, len(nameservers))
-	for _, ns := range nameservers {
-		nsSet[ns.NodeID] = true
-	}
-
 	recordCount := 0
 	for i, node := range nodes {
-		if len(nsSet) > 0 && !nsSet[node.NodeID] {
-			cm.logger.Info("Skipping DNS record for non-nameserver node",
-				zap.String("node_id", node.NodeID),
-				zap.String("ip", node.IPAddress),
-			)
-			continue
-		}
-
 		query := `
 			INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by)
 			VALUES (?, 'A', ?, 300, ?, 'system')
@@ -1294,23 +1330,23 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 		}
 
 		if !gwRunning {
-			// Build olric server addresses
+			// Build olric server addresses — always use WireGuard IPs (Olric binds to WireGuard interface)
 			var olricServers []string
 			for _, np := range allNodePorts {
-				if np.NodeID == cm.localNodeID {
-					olricServers = append(olricServers, fmt.Sprintf("localhost:%d", np.OlricHTTPPort))
-				} else {
-					olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
-				}
+				olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
 			}
 
 			gwCfg := gateway.InstanceConfig{
-				Namespace:    namespaceName,
-				NodeID:       cm.localNodeID,
-				HTTPPort:     pb.GatewayHTTPPort,
-				BaseDomain:   cm.baseDomain,
-				RQLiteDSN:    fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
-				OlricServers: olricServers,
+				Namespace:             namespaceName,
+				NodeID:                cm.localNodeID,
+				HTTPPort:              pb.GatewayHTTPPort,
+				BaseDomain:            cm.baseDomain,
+				RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				OlricServers:          olricServers,
+				IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
+				IPFSAPIURL:            cm.ipfsAPIURL,
+				IPFSTimeout:           cm.ipfsTimeout,
+				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
 
 			if _, err := cm.gatewaySpawner.SpawnInstance(ctx, gwCfg); err != nil {
@@ -1550,21 +1586,22 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		if err == nil {
 			resp.Body.Close()
 		} else {
+			// Build olric server addresses — always use WireGuard IPs (Olric binds to WireGuard interface)
 			var olricServers []string
 			for _, np := range state.AllNodes {
-				if np.NodeID == cm.localNodeID {
-					olricServers = append(olricServers, fmt.Sprintf("localhost:%d", np.OlricHTTPPort))
-				} else {
-					olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
-				}
+				olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
 			}
 			gwCfg := gateway.InstanceConfig{
-				Namespace:    state.NamespaceName,
-				NodeID:       cm.localNodeID,
-				HTTPPort:     pb.GatewayHTTPPort,
-				BaseDomain:   state.BaseDomain,
-				RQLiteDSN:    fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
-				OlricServers: olricServers,
+				Namespace:             state.NamespaceName,
+				NodeID:                cm.localNodeID,
+				HTTPPort:              pb.GatewayHTTPPort,
+				BaseDomain:            state.BaseDomain,
+				RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				OlricServers:          olricServers,
+				IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
+				IPFSAPIURL:            cm.ipfsAPIURL,
+				IPFSTimeout:           cm.ipfsTimeout,
+				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
 			if _, err := cm.gatewaySpawner.SpawnInstance(ctx, gwCfg); err != nil {
 				cm.logger.Error("Failed to restore Gateway from state", zap.String("namespace", state.NamespaceName), zap.Error(err))

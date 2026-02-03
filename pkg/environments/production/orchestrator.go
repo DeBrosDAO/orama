@@ -356,16 +356,16 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 			return fmt.Errorf("failed to install DeBros binaries: %w", err)
 		}
 
-		// Install CoreDNS and Caddy only if this is a nameserver node
+		// Install CoreDNS only for nameserver nodes
 		if ps.isNameserver {
 			if err := ps.binaryInstaller.InstallCoreDNS(); err != nil {
 				ps.logf("  ⚠️  CoreDNS install warning: %v", err)
 			}
-			if err := ps.binaryInstaller.InstallCaddy(); err != nil {
-				ps.logf("  ⚠️  Caddy install warning: %v", err)
-			}
-		} else {
-			ps.logf("  ℹ️  Skipping CoreDNS/Caddy (not a nameserver node)")
+		}
+
+		// Install Caddy on ALL nodes (any node may host namespaces and need TLS)
+		if err := ps.binaryInstaller.InstallCaddy(); err != nil {
+			ps.logf("  ⚠️  Caddy install warning: %v", err)
 		}
 	}
 
@@ -687,9 +687,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
 	}
 
-	// CoreDNS and Caddy services (only for nameserver nodes)
+	// CoreDNS service (only for nameserver nodes)
 	if ps.isNameserver {
-		// CoreDNS service (for dynamic DNS with RQLite)
 		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
 			corednsUnit := ps.serviceGenerator.GenerateCoreDNSService()
 			if err := ps.serviceController.WriteServiceUnit("coredns.service", corednsUnit); err != nil {
@@ -698,22 +697,22 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 				ps.logf("  ✓ CoreDNS service created")
 			}
 		}
+	}
 
-		// Caddy service (for SSL/TLS with DNS-01 ACME challenges)
-		if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-			// Create caddy user if it doesn't exist
-			exec.Command("useradd", "-r", "-m", "-d", "/home/caddy", "-s", "/sbin/nologin", "caddy").Run()
-			exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
-			exec.Command("chown", "caddy:caddy", "/var/lib/caddy").Run()
-			exec.Command("mkdir", "-p", "/home/caddy").Run()
-			exec.Command("chown", "caddy:caddy", "/home/caddy").Run()
+	// Caddy service on ALL nodes (any node may host namespaces and need TLS)
+	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
+		// Create caddy user if it doesn't exist
+		exec.Command("useradd", "-r", "-m", "-d", "/home/caddy", "-s", "/sbin/nologin", "caddy").Run()
+		exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
+		exec.Command("chown", "caddy:caddy", "/var/lib/caddy").Run()
+		exec.Command("mkdir", "-p", "/home/caddy").Run()
+		exec.Command("chown", "caddy:caddy", "/home/caddy").Run()
 
-			caddyUnit := ps.serviceGenerator.GenerateCaddyService()
-			if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
-				ps.logf("  ⚠️  Failed to write Caddy service: %v", err)
-			} else {
-				ps.logf("  ✓ Caddy service created")
-			}
+		caddyUnit := ps.serviceGenerator.GenerateCaddyService()
+		if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
+			ps.logf("  ⚠️  Failed to write Caddy service: %v", err)
+		} else {
+			ps.logf("  ✓ Caddy service created")
 		}
 	}
 
@@ -733,14 +732,15 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		services = append(services, "debros-anyone-relay.service")
 	}
 
-	// Add CoreDNS and Caddy only for nameserver nodes
+	// Add CoreDNS only for nameserver nodes
 	if ps.isNameserver {
 		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
 			services = append(services, "coredns.service")
 		}
-		if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-			services = append(services, "caddy.service")
-		}
+	}
+	// Add Caddy on ALL nodes (any node may host namespaces and need TLS)
+	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
+		services = append(services, "caddy.service")
 	}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
@@ -796,8 +796,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("    - debros-node.service started (with embedded gateway)")
 	}
 
-	// Start CoreDNS and Caddy (nameserver nodes only)
-	// Caddy depends on debros-node.service (gateway on :6001), so start after node
+	// Start CoreDNS (nameserver nodes only)
 	if ps.isNameserver {
 		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
 			if err := ps.serviceController.RestartService("coredns.service"); err != nil {
@@ -806,12 +805,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 				ps.logf("    - coredns.service started")
 			}
 		}
-		if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-			if err := ps.serviceController.RestartService("caddy.service"); err != nil {
-				ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
-			} else {
-				ps.logf("    - caddy.service started")
-			}
+	}
+	// Start Caddy on ALL nodes (any node may host namespaces and need TLS)
+	// Caddy depends on debros-node.service (gateway on :6001), so start after node
+	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
+		if err := ps.serviceController.RestartService("caddy.service"); err != nil {
+			ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
+		} else {
+			ps.logf("    - caddy.service started")
 		}
 	}
 

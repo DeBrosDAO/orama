@@ -80,6 +80,11 @@ type InstanceConfig struct {
 	OlricServers   []string // Olric server addresses
 	NodePeerID     string   // Physical node's peer ID for home node management
 	DataDir        string   // Data directory for deployments, SQLite, etc.
+	// IPFS configuration for storage endpoints
+	IPFSClusterAPIURL     string        // IPFS Cluster API URL (e.g., "http://localhost:9094")
+	IPFSAPIURL            string        // IPFS API URL (e.g., "http://localhost:5001")
+	IPFSTimeout           time.Duration // Timeout for IPFS operations
+	IPFSReplicationFactor int           // IPFS replication factor
 }
 
 // GatewayYAMLConfig represents the gateway YAML configuration structure
@@ -275,6 +280,14 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		OlricServers:    cfg.OlricServers,
 		// Note: DomainName is used for HTTPS/TLS, not needed for namespace gateways in dev mode
 		DomainName: cfg.BaseDomain,
+		// IPFS configuration for storage endpoints
+		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
+		IPFSAPIURL:            cfg.IPFSAPIURL,
+		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+	}
+	// Set IPFS timeout if provided
+	if cfg.IPFSTimeout > 0 {
+		gatewayCfg.IPFSTimeout = cfg.IPFSTimeout.String()
 	}
 
 	data, err := yaml.Marshal(gatewayCfg)
