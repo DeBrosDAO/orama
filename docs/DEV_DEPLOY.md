@@ -128,30 +128,41 @@ ssh ubuntu@<ip> "sudo orama upgrade --branch <branch> --restart"
 Always upgrade nodes **one at a time**, waiting for each to rejoin before proceeding:
 
 ```bash
-# 1. Build and deploy archives to ALL nodes first (don't restart yet)
+# 1. Build locally
 make build-linux-all
 ./scripts/generate-source-archive.sh
+# Creates: /tmp/network-source.tar.gz (includes bin-linux/)
 
-# Copy to all nodes
-for ip in <ip1> <ip2> <ip3> ...; do
+# 2. Upload to ONE node first (the "hub" node)
+sshpass -p '<password>' scp /tmp/network-source.tar.gz ubuntu@<hub-ip>:/tmp/
+
+# 3. Fan out from hub to all other nodes (server-to-server is faster)
+ssh ubuntu@<hub-ip>
+for ip in <ip2> <ip3> <ip4> <ip5> <ip6>; do
   scp /tmp/network-source.tar.gz ubuntu@$ip:/tmp/
+done
+exit
+
+# 4. Extract on ALL nodes (can be done in parallel, no restart yet)
+for ip in <ip1> <ip2> <ip3> <ip4> <ip5> <ip6>; do
   ssh ubuntu@$ip 'sudo bash -s' < scripts/extract-deploy.sh
 done
 
-# 2. Upgrade nodes ONE AT A TIME (rolling restart)
-# Start with follower nodes, do the leader LAST
-
-# Check which node is the RQLite leader
+# 5. Find the RQLite leader (upgrade this one LAST)
 ssh ubuntu@<any-node> 'curl -s http://localhost:5001/status | jq -r .store.raft.state'
 
-# Upgrade a follower node
-ssh ubuntu@<follower-ip> 'sudo orama upgrade --no-pull --pre-built --restart'
+# 6. Upgrade FOLLOWER nodes one at a time
+# First stop services, then upgrade, which restarts them
+ssh ubuntu@<follower-ip> 'sudo orama prod stop && sudo orama upgrade --no-pull --pre-built --restart'
 
-# Wait for it to rejoin (check from any healthy node)
+# Wait for rejoin before proceeding to next node
 ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft.num_peers'
-# Should show the expected number of peers
+# Should show expected number of peers (N-1)
 
-# Repeat for each follower, then upgrade the leader last
+# Repeat for each follower...
+
+# 7. Upgrade the LEADER node last
+ssh ubuntu@<leader-ip> 'sudo orama prod stop && sudo orama upgrade --no-pull --pre-built --restart'
 ```
 
 #### What NOT to Do
