@@ -89,15 +89,14 @@ func (g *Gateway) Routes() http.Handler {
 	// anon proxy (authenticated users only)
 	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)
 
-	// cache endpoints (Olric)
-	if g.cacheHandlers != nil {
-		mux.HandleFunc("/v1/cache/health", g.cacheHandlers.HealthHandler)
-		mux.HandleFunc("/v1/cache/get", g.cacheHandlers.GetHandler)
-		mux.HandleFunc("/v1/cache/mget", g.cacheHandlers.MultiGetHandler)
-		mux.HandleFunc("/v1/cache/put", g.cacheHandlers.SetHandler)
-		mux.HandleFunc("/v1/cache/delete", g.cacheHandlers.DeleteHandler)
-		mux.HandleFunc("/v1/cache/scan", g.cacheHandlers.ScanHandler)
-	}
+	// cache endpoints (Olric) - always register, check handler dynamically
+	// This allows cache routes to work after background Olric reconnection
+	mux.HandleFunc("/v1/cache/health", g.cacheHealthHandler)
+	mux.HandleFunc("/v1/cache/get", g.cacheGetHandler)
+	mux.HandleFunc("/v1/cache/mget", g.cacheMGetHandler)
+	mux.HandleFunc("/v1/cache/put", g.cachePutHandler)
+	mux.HandleFunc("/v1/cache/delete", g.cacheDeleteHandler)
+	mux.HandleFunc("/v1/cache/scan", g.cacheScanHandler)
 
 	// storage endpoints (IPFS)
 	if g.storageHandlers != nil {

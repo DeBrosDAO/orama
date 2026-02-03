@@ -119,9 +119,77 @@ ssh ubuntu@<ip> "sudo mv /tmp/orama /usr/local/bin/orama && sudo chmod +x /usr/l
 ssh ubuntu@<ip> "sudo orama upgrade --branch <branch> --restart"
 ```
 
-### Deploying to All 3 Nodes
+### Upgrading a Multi-Node Cluster (CRITICAL)
+
+**NEVER restart all nodes simultaneously.** RQLite uses Raft consensus and requires a majority (quorum) to function. Restarting all nodes at once can cause cluster splits where nodes elect different leaders or form isolated clusters.
+
+#### Safe Upgrade Procedure (Rolling Restart)
+
+Always upgrade nodes **one at a time**, waiting for each to rejoin before proceeding:
+
+```bash
+# 1. Build and deploy archives to ALL nodes first (don't restart yet)
+make build-linux-all
+./scripts/generate-source-archive.sh
+
+# Copy to all nodes
+for ip in <ip1> <ip2> <ip3> ...; do
+  scp /tmp/network-source.tar.gz ubuntu@$ip:/tmp/
+  ssh ubuntu@$ip 'sudo bash -s' < scripts/extract-deploy.sh
+done
+
+# 2. Upgrade nodes ONE AT A TIME (rolling restart)
+# Start with follower nodes, do the leader LAST
+
+# Check which node is the RQLite leader
+ssh ubuntu@<any-node> 'curl -s http://localhost:5001/status | jq -r .store.raft.state'
+
+# Upgrade a follower node
+ssh ubuntu@<follower-ip> 'sudo orama upgrade --no-pull --pre-built --restart'
+
+# Wait for it to rejoin (check from any healthy node)
+ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft.num_peers'
+# Should show the expected number of peers
+
+# Repeat for each follower, then upgrade the leader last
+```
+
+#### What NOT to Do
+
+- **DON'T** stop all nodes, replace binaries, then start all nodes
+- **DON'T** run `orama upgrade --restart` on multiple nodes in parallel
+- **DON'T** clear RQLite data directories unless doing a full cluster rebuild
+- **DON'T** use `systemctl stop debros-node` on multiple nodes simultaneously
+
+#### Recovery from Cluster Split
+
+If nodes get stuck in "Candidate" state or show "leader not found" errors:
+
+1. Identify which node has the most recent data (usually the old leader)
+2. Keep that node running as the new leader
+3. On each other node, clear RQLite data and restart:
+   ```bash
+   sudo orama prod stop
+   sudo rm -rf /home/debros/.orama/data/rqlite
+   sudo systemctl start debros-node
+   ```
+4. The node should automatically rejoin using its configured `rqlite_join_address`
+
+If automatic rejoin fails, the node may have started without the `-join` flag. Check:
+```bash
+ps aux | grep rqlited
+# Should include: -join 10.0.0.1:7001 (or similar)
+```
+
+If `-join` is missing, the node bootstrapped standalone. You'll need to either:
+- Restart debros-node (it should detect empty data and use join)
+- Or do a full cluster rebuild from CLEAN_NODE.md
+
+### Deploying to Multiple Nodes
 
 To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS IP.
+
+**Important:** When using `--restart`, do nodes one at a time (see "Upgrading a Multi-Node Cluster" above).
 
 ### CLI Flags Reference
 
@@ -170,6 +238,26 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--no-pull` | Skip git pull, use existing source |
 | `--pre-built` | Skip all Go compilation, use pre-built binaries already on disk |
 | `--restart` | Restart all services after upgrade |
+
+#### `orama prod` (Service Management)
+
+Use these commands to manage services on production nodes:
+
+```bash
+# Stop all services (debros-node, coredns, caddy)
+sudo orama prod stop
+
+# Start all services
+sudo orama prod start
+
+# Restart all services
+sudo orama prod restart
+
+# Check service status
+sudo orama prod status
+```
+
+**Note:** Always use `orama prod stop` instead of manually running `systemctl stop`. The CLI ensures all related services (including CoreDNS and Caddy on nameserver nodes) are handled correctly.
 
 ### Node Join Flow
 

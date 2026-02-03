@@ -82,7 +82,8 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		// Wire spawn handler for distributed namespace instance spawning
 		rqliteSpawner := rqlitepkg.NewInstanceSpawner(baseDataDir, n.logger.Logger)
 		olricSpawner := olricpkg.NewInstanceSpawner(baseDataDir, n.logger.Logger)
-		spawnHandler := namespacehandlers.NewSpawnHandler(rqliteSpawner, olricSpawner, n.logger.Logger)
+		gatewaySpawner := gateway.NewInstanceSpawner(baseDataDir, n.logger.Logger)
+		spawnHandler := namespacehandlers.NewSpawnHandler(rqliteSpawner, olricSpawner, gatewaySpawner, n.logger.Logger)
 		apiGateway.SetSpawnHandler(spawnHandler)
 
 		// Wire namespace delete handler
