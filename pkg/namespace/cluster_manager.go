@@ -458,7 +458,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 	return instances, nil
 }
 
-// startGatewayCluster starts Gateway instances on all nodes
+// startGatewayCluster starts Gateway instances on all nodes (locally or remotely)
 func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) ([]*gateway.GatewayInstance, error) {
 	instances := make([]*gateway.GatewayInstance, len(nodes))
 
@@ -470,7 +470,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 
 	// Start all Gateway instances
 	for i, node := range nodes {
-		// Connect to local RQLite instance
+		// Connect to local RQLite instance on each node
 		rqliteDSN := fmt.Sprintf("http://localhost:%d", portBlocks[i].RQLiteHTTPPort)
 
 		cfg := gateway.InstanceConfig{
@@ -486,11 +486,19 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 		}
 
-		instance, err := cm.gatewaySpawner.SpawnInstance(ctx, cfg)
+		var instance *gateway.GatewayInstance
+		var err error
+		if node.NodeID == cm.localNodeID {
+			cm.logger.Info("Spawning Gateway locally", zap.String("node", node.NodeID))
+			instance, err = cm.gatewaySpawner.SpawnInstance(ctx, cfg)
+		} else {
+			cm.logger.Info("Spawning Gateway remotely", zap.String("node", node.NodeID), zap.String("ip", node.InternalIP))
+			instance, err = cm.spawnGatewayRemote(ctx, node.InternalIP, cfg)
+		}
 		if err != nil {
 			// Stop previously started instances
 			for j := 0; j < i; j++ {
-				cm.gatewaySpawner.StopInstance(ctx, cluster.NamespaceName, nodes[j].NodeID)
+				cm.stopGatewayOnNode(ctx, nodes[j].NodeID, nodes[j].InternalIP, cluster.NamespaceName)
 			}
 			return nil, fmt.Errorf("failed to start Gateway on node %s: %w", node.NodeID, err)
 		}
@@ -546,6 +554,40 @@ func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, c
 		MemberlistPort: cfg.MemberlistPort,
 		BindAddr:       cfg.BindAddr,
 		AdvertiseAddr:  cfg.AdvertiseAddr,
+	}, nil
+}
+
+// spawnGatewayRemote sends a spawn-gateway request to a remote node
+func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string, cfg gateway.InstanceConfig) (*gateway.GatewayInstance, error) {
+	ipfsTimeout := ""
+	if cfg.IPFSTimeout > 0 {
+		ipfsTimeout = cfg.IPFSTimeout.String()
+	}
+
+	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
+		"action":                  "spawn-gateway",
+		"namespace":               cfg.Namespace,
+		"node_id":                 cfg.NodeID,
+		"gateway_http_port":       cfg.HTTPPort,
+		"gateway_base_domain":     cfg.BaseDomain,
+		"gateway_rqlite_dsn":      cfg.RQLiteDSN,
+		"gateway_olric_servers":   cfg.OlricServers,
+		"ipfs_cluster_api_url":    cfg.IPFSClusterAPIURL,
+		"ipfs_api_url":            cfg.IPFSAPIURL,
+		"ipfs_timeout":            ipfsTimeout,
+		"ipfs_replication_factor": cfg.IPFSReplicationFactor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.GatewayInstance{
+		Namespace:    cfg.Namespace,
+		NodeID:       cfg.NodeID,
+		HTTPPort:     cfg.HTTPPort,
+		BaseDomain:   cfg.BaseDomain,
+		RQLiteDSN:    cfg.RQLiteDSN,
+		OlricServers: cfg.OlricServers,
+		PID:          resp.PID,
 	}, nil
 }
 
@@ -612,6 +654,15 @@ func (cm *ClusterManager) stopOlricOnNode(ctx context.Context, nodeID, nodeIP, n
 		cm.olricSpawner.StopInstance(ctx, namespace, nodeID)
 	} else {
 		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID)
+	}
+}
+
+// stopGatewayOnNode stops a Gateway instance on a node (local or remote)
+func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
+	if nodeID == cm.localNodeID {
+		cm.gatewaySpawner.StopInstance(ctx, namespace, nodeID)
+	} else {
+		cm.sendStopRequest(ctx, nodeIP, "stop-gateway", namespace, nodeID)
 	}
 }
 

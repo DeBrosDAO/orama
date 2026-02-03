@@ -44,7 +44,7 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 		isNameserver = *flags.Nameserver
 	}
 
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, false, flags.PreBuilt)
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
 	setup.SetNameserver(isNameserver)
 
 	// Configure Anyone relay if enabled

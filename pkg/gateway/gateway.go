@@ -506,6 +506,76 @@ func (g *Gateway) startOlricReconnectLoop(cfg olric.Config) {
 	}()
 }
 
+// Cache handler wrappers - these check cacheHandlers dynamically to support
+// background Olric reconnection. Without these, cache routes won't work if
+// Olric wasn't available at gateway startup but connected later.
+
+func (g *Gateway) cacheHealthHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.HealthHandler(w, r)
+}
+
+func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.GetHandler(w, r)
+}
+
+func (g *Gateway) cacheMGetHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.MultiGetHandler(w, r)
+}
+
+func (g *Gateway) cachePutHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.SetHandler(w, r)
+}
+
+func (g *Gateway) cacheDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.DeleteHandler(w, r)
+}
+
+func (g *Gateway) cacheScanHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.ScanHandler(w, r)
+}
+
 // namespaceClusterStatusHandler handles GET /v1/namespace/status?id={cluster_id}
 // This endpoint is public (no API key required) to allow polling during provisioning.
 func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.Request) {

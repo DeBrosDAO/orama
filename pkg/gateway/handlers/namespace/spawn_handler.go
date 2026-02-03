@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -14,7 +16,7 @@ import (
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // "spawn-rqlite", "spawn-olric", "stop-rqlite", "stop-olric"
+	Action    string `json:"action"` // "spawn-rqlite", "spawn-olric", "spawn-gateway", "stop-rqlite", "stop-olric", "stop-gateway"
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
 
@@ -32,6 +34,16 @@ type SpawnRequest struct {
 	OlricBindAddr       string   `json:"olric_bind_addr,omitempty"`
 	OlricAdvertiseAddr  string   `json:"olric_advertise_addr,omitempty"`
 	OlricPeerAddresses  []string `json:"olric_peer_addresses,omitempty"`
+
+	// Gateway config (when action = "spawn-gateway")
+	GatewayHTTPPort       int      `json:"gateway_http_port,omitempty"`
+	GatewayBaseDomain     string   `json:"gateway_base_domain,omitempty"`
+	GatewayRQLiteDSN      string   `json:"gateway_rqlite_dsn,omitempty"`
+	GatewayOlricServers   []string `json:"gateway_olric_servers,omitempty"`
+	IPFSClusterAPIURL     string   `json:"ipfs_cluster_api_url,omitempty"`
+	IPFSAPIURL            string   `json:"ipfs_api_url,omitempty"`
+	IPFSTimeout           string   `json:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor int      `json:"ipfs_replication_factor,omitempty"`
 }
 
 // SpawnResponse represents the response from a spawn/stop request
@@ -46,16 +58,18 @@ type SpawnResponse struct {
 type SpawnHandler struct {
 	rqliteSpawner    *rqlite.InstanceSpawner
 	olricSpawner     *olric.InstanceSpawner
+	gatewaySpawner   *gateway.InstanceSpawner
 	logger           *zap.Logger
 	rqliteInstances  map[string]*rqlite.Instance // key: "namespace:nodeID"
 	rqliteInstanceMu sync.RWMutex
 }
 
 // NewSpawnHandler creates a new spawn handler
-func NewSpawnHandler(rs *rqlite.InstanceSpawner, os *olric.InstanceSpawner, logger *zap.Logger) *SpawnHandler {
+func NewSpawnHandler(rs *rqlite.InstanceSpawner, os *olric.InstanceSpawner, gs *gateway.InstanceSpawner, logger *zap.Logger) *SpawnHandler {
 	return &SpawnHandler{
 		rqliteSpawner:   rs,
 		olricSpawner:    os,
+		gatewaySpawner:  gs,
 		logger:          logger.With(zap.String("component", "namespace-spawn-handler")),
 		rqliteInstances: make(map[string]*rqlite.Instance),
 	}
@@ -160,6 +174,46 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop-olric":
 		if err := h.olricSpawner.StopInstance(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop Olric instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "spawn-gateway":
+		// Parse IPFS timeout if provided
+		var ipfsTimeout time.Duration
+		if req.IPFSTimeout != "" {
+			var err error
+			ipfsTimeout, err = time.ParseDuration(req.IPFSTimeout)
+			if err != nil {
+				h.logger.Warn("Invalid IPFS timeout, using default", zap.String("timeout", req.IPFSTimeout), zap.Error(err))
+				ipfsTimeout = 60 * time.Second
+			}
+		}
+
+		cfg := gateway.InstanceConfig{
+			Namespace:             req.Namespace,
+			NodeID:                req.NodeID,
+			HTTPPort:              req.GatewayHTTPPort,
+			BaseDomain:            req.GatewayBaseDomain,
+			RQLiteDSN:             req.GatewayRQLiteDSN,
+			OlricServers:          req.GatewayOlricServers,
+			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
+			IPFSAPIURL:            req.IPFSAPIURL,
+			IPFSTimeout:           ipfsTimeout,
+			IPFSReplicationFactor: req.IPFSReplicationFactor,
+		}
+		instance, err := h.gatewaySpawner.SpawnInstance(ctx, cfg)
+		if err != nil {
+			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true, PID: instance.PID})
+
+	case "stop-gateway":
+		if err := h.gatewaySpawner.StopInstance(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to stop Gateway instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}
