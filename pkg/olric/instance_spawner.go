@@ -503,8 +503,12 @@ func (oi *OlricInstance) IsHealthy(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// DSN returns the connection address for this Olric instance
+// DSN returns the connection address for this Olric instance.
+// Uses the bind address if set (e.g. WireGuard IP), since Olric may not listen on localhost.
 func (oi *OlricInstance) DSN() string {
+	if oi.BindAddr != "" {
+		return fmt.Sprintf("%s:%d", oi.BindAddr, oi.HTTPPort)
+	}
 	return fmt.Sprintf("localhost:%d", oi.HTTPPort)
 }
 

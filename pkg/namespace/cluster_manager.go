@@ -576,12 +576,33 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 	}
 }
 
-// createDNSRecords creates DNS records for the namespace gateway
+// createDNSRecords creates DNS records for the namespace gateway.
+// Only nameserver nodes get DNS A records, because only they run Caddy
+// and can serve TLS for ns-{namespace}.{baseDomain} subdomains.
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
-	// Create A records for ns-{namespace}.{baseDomain} pointing to all 3 nodes
 	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
 
+	// Query nameserver node IDs so we only add DNS records for nodes that can serve TLS
+	type nsRow struct {
+		NodeID string `db:"node_id"`
+	}
+	var nameservers []nsRow
+	_ = cm.db.Query(ctx, &nameservers, `SELECT node_id FROM dns_nameservers`)
+	nsSet := make(map[string]bool, len(nameservers))
+	for _, ns := range nameservers {
+		nsSet[ns.NodeID] = true
+	}
+
+	recordCount := 0
 	for i, node := range nodes {
+		if len(nsSet) > 0 && !nsSet[node.NodeID] {
+			cm.logger.Info("Skipping DNS record for non-nameserver node",
+				zap.String("node_id", node.NodeID),
+				zap.String("ip", node.IPAddress),
+			)
+			continue
+		}
+
 		query := `
 			INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by)
 			VALUES (?, 'A', ?, 300, ?, 'system')
@@ -599,10 +620,11 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 				zap.String("ip", node.IPAddress),
 				zap.Int("gateway_port", portBlocks[i].GatewayHTTPPort),
 			)
+			recordCount++
 		}
 	}
 
-	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s", fqdn), nil)
+	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d records)", fqdn, recordCount), nil)
 	return nil
 }
 

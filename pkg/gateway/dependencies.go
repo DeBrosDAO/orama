@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -154,6 +155,18 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 		zap.String("base_path", "/v1/db"),
 		zap.Duration("timeout", deps.ORMHTTP.Timeout),
 	)
+
+	// Apply embedded migrations to ensure schema is up-to-date.
+	// This is critical for namespace gateways whose RQLite instances
+	// don't get migrations from the main cluster RQLiteManager.
+	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer migCancel()
+	if err := rqlite.ApplyEmbeddedMigrations(migCtx, db, migrations.FS, logger.Logger); err != nil {
+		logger.ComponentWarn(logging.ComponentGeneral, "Failed to apply embedded migrations to gateway RQLite",
+			zap.Error(err))
+	} else {
+		logger.ComponentInfo(logging.ComponentGeneral, "Embedded migrations applied to gateway RQLite")
+	}
 
 	return nil
 }
