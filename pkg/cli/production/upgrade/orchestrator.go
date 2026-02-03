@@ -1,8 +1,11 @@
 package upgrade
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -206,7 +209,128 @@ func (o *Orchestrator) handleBranchPreferences() error {
 	return nil
 }
 
+// ClusterState represents the saved state of the RQLite cluster before shutdown
+type ClusterState struct {
+	Nodes     []ClusterNode `json:"nodes"`
+	CapturedAt time.Time    `json:"captured_at"`
+}
+
+// ClusterNode represents a node in the cluster
+type ClusterNode struct {
+	ID        string `json:"id"`
+	Address   string `json:"address"`
+	Voter     bool   `json:"voter"`
+	Reachable bool   `json:"reachable"`
+}
+
+// captureClusterState saves the current RQLite cluster state before stopping services
+// This allows nodes to recover cluster membership faster after restart
+func (o *Orchestrator) captureClusterState() error {
+	fmt.Printf("\n📸 Capturing cluster state before shutdown...\n")
+
+	// Query RQLite /nodes endpoint to get current cluster membership
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://localhost:5001/nodes?timeout=3s")
+	if err != nil {
+		fmt.Printf("  ⚠️  Could not query cluster state: %v\n", err)
+		return nil // Non-fatal - continue with upgrade
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("  ⚠️  RQLite returned status %d\n", resp.StatusCode)
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("  ⚠️  Could not read cluster state: %v\n", err)
+		return nil
+	}
+
+	// Parse the nodes response
+	var nodes map[string]struct {
+		Addr      string `json:"addr"`
+		Voter     bool   `json:"voter"`
+		Reachable bool   `json:"reachable"`
+	}
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		fmt.Printf("  ⚠️  Could not parse cluster state: %v\n", err)
+		return nil
+	}
+
+	// Build cluster state
+	state := ClusterState{
+		Nodes:      make([]ClusterNode, 0, len(nodes)),
+		CapturedAt: time.Now(),
+	}
+
+	for id, node := range nodes {
+		state.Nodes = append(state.Nodes, ClusterNode{
+			ID:        id,
+			Address:   node.Addr,
+			Voter:     node.Voter,
+			Reachable: node.Reachable,
+		})
+		fmt.Printf("  Found node: %s (voter=%v, reachable=%v)\n", id, node.Voter, node.Reachable)
+	}
+
+	// Save to file
+	stateFile := filepath.Join(o.oramaDir, "cluster-state.json")
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		fmt.Printf("  ⚠️  Could not marshal cluster state: %v\n", err)
+		return nil
+	}
+
+	if err := os.WriteFile(stateFile, data, 0644); err != nil {
+		fmt.Printf("  ⚠️  Could not save cluster state: %v\n", err)
+		return nil
+	}
+
+	fmt.Printf("  ✓ Cluster state saved (%d nodes) to %s\n", len(state.Nodes), stateFile)
+
+	// Also write peers.json directly for RQLite recovery
+	if err := o.writePeersJSONFromState(state); err != nil {
+		fmt.Printf("  ⚠️  Could not write peers.json: %v\n", err)
+	} else {
+		fmt.Printf("  ✓ peers.json written for cluster recovery\n")
+	}
+
+	return nil
+}
+
+// writePeersJSONFromState writes RQLite's peers.json file from captured cluster state
+func (o *Orchestrator) writePeersJSONFromState(state ClusterState) error {
+	// Build peers.json format
+	peers := make([]map[string]interface{}, 0, len(state.Nodes))
+	for _, node := range state.Nodes {
+		peers = append(peers, map[string]interface{}{
+			"id":        node.ID,
+			"address":   node.ID, // RQLite uses raft address as both id and address
+			"non_voter": !node.Voter,
+		})
+	}
+
+	data, err := json.MarshalIndent(peers, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Write to RQLite's raft directory
+	raftDir := filepath.Join(o.oramaHome, ".orama", "data", "rqlite", "raft")
+	if err := os.MkdirAll(raftDir, 0755); err != nil {
+		return err
+	}
+
+	peersFile := filepath.Join(raftDir, "peers.json")
+	return os.WriteFile(peersFile, data, 0644)
+}
+
 func (o *Orchestrator) stopServices() error {
+	// Capture cluster state BEFORE stopping services
+	_ = o.captureClusterState()
+
 	fmt.Printf("\n⏹️  Stopping all services before upgrade...\n")
 	serviceController := production.NewSystemdController()
 	// Stop services in reverse dependency order
@@ -395,13 +519,14 @@ func (o *Orchestrator) regenerateConfigs() error {
 }
 
 func (o *Orchestrator) restartServices() error {
-	fmt.Printf("   Restarting services...\n")
+	fmt.Printf("\n🔄 Restarting services with rolling restart...\n")
+
 	// Reload systemd daemon
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "   ⚠️  Warning: Failed to reload systemd daemon: %v\n", err)
 	}
 
-	// Restart services to apply changes - use getProductionServices to only restart existing services
+	// Get services to restart
 	services := utils.GetProductionServices()
 
 	// If this is a nameserver, also restart CoreDNS and Caddy
@@ -417,23 +542,71 @@ func (o *Orchestrator) restartServices() error {
 
 	if len(services) == 0 {
 		fmt.Printf("   ⚠️  No services found to restart\n")
-	} else {
+		return nil
+	}
+
+	// Define the order for rolling restart - node service first (contains RQLite)
+	// This ensures the cluster can reform before other services start
+	priorityOrder := []string{
+		"debros-node",         // Start node first - contains RQLite cluster
+		"debros-olric",        // Distributed cache
+		"debros-ipfs",         // IPFS daemon
+		"debros-ipfs-cluster", // IPFS cluster
+		"debros-gateway",      // Gateway (legacy)
+		"coredns",             // DNS server
+		"caddy",               // Reverse proxy
+	}
+
+	// Restart services in priority order with health checks
+	for _, priority := range priorityOrder {
 		for _, svc := range services {
+			if svc == priority {
+				fmt.Printf("   Starting %s...\n", svc)
+				if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
+					fmt.Printf("   ⚠️  Failed to restart %s: %v\n", svc, err)
+					continue
+				}
+				fmt.Printf("   ✓ Started %s\n", svc)
+
+				// For the node service, wait for RQLite cluster health
+				if svc == "debros-node" {
+					fmt.Printf("   Waiting for RQLite cluster to become healthy...\n")
+					if err := o.waitForClusterHealth(2 * time.Minute); err != nil {
+						fmt.Printf("   ⚠️  Cluster health check warning: %v\n", err)
+						fmt.Printf("   Continuing with restart (cluster may recover)...\n")
+					} else {
+						fmt.Printf("   ✓ RQLite cluster is healthy\n")
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Start any remaining services not in priority list
+	for _, svc := range services {
+		found := false
+		for _, priority := range priorityOrder {
+			if svc == priority {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("   Starting %s...\n", svc)
 			if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
 				fmt.Printf("   ⚠️  Failed to restart %s: %v\n", svc, err)
 			} else {
-				fmt.Printf("   ✓ Restarted %s\n", svc)
+				fmt.Printf("   ✓ Started %s\n", svc)
 			}
 		}
-		fmt.Printf("   ✓ All services restarted\n")
 	}
+
+	fmt.Printf("   ✓ All services restarted\n")
 
 	// Seed DNS records after services are running (RQLite must be up)
 	if o.setup.IsNameserver() {
 		fmt.Printf("   Seeding DNS records...\n")
-		// Wait for RQLite to fully start - it takes about 10 seconds to initialize
-		fmt.Printf("   Waiting for RQLite to start (10s)...\n")
-		time.Sleep(10 * time.Second)
 
 		_, _, baseDomain := o.extractGatewayConfig()
 		peers := o.extractPeers()
@@ -447,4 +620,55 @@ func (o *Orchestrator) restartServices() error {
 	}
 
 	return nil
+}
+
+// waitForClusterHealth waits for the RQLite cluster to become healthy
+func (o *Orchestrator) waitForClusterHealth(timeout time.Duration) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		// Query RQLite status
+		resp, err := client.Get("http://localhost:5001/status")
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Parse status response
+		var status struct {
+			Store struct {
+				Raft struct {
+					State    string `json:"state"`
+					NumPeers int    `json:"num_peers"`
+				} `json:"raft"`
+			} `json:"store"`
+		}
+
+		if err := json.Unmarshal(body, &status); err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		raftState := status.Store.Raft.State
+		numPeers := status.Store.Raft.NumPeers
+
+		// Cluster is healthy if we're a Leader or Follower (not Candidate)
+		if raftState == "Leader" || raftState == "Follower" {
+			fmt.Printf("   RQLite state: %s (peers: %d)\n", raftState, numPeers)
+			return nil
+		}
+
+		fmt.Printf("   RQLite state: %s (waiting for Leader/Follower)...\n", raftState)
+		time.Sleep(3 * time.Second)
+	}
+
+	return fmt.Errorf("timeout waiting for cluster to become healthy")
 }

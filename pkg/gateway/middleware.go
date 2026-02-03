@@ -19,6 +19,150 @@ import (
 
 // Note: context keys (ctxKeyAPIKey, ctxKeyJWT, CtxKeyNamespaceOverride) are now defined in context.go
 
+// Internal auth headers for trusted inter-gateway communication.
+// When the main gateway proxies to a namespace gateway, it validates auth first
+// and passes the validated namespace via these headers. The namespace gateway
+// trusts these headers when they come from internal IPs (WireGuard 10.0.0.x).
+const (
+	// HeaderInternalAuthNamespace contains the validated namespace name
+	HeaderInternalAuthNamespace = "X-Internal-Auth-Namespace"
+	// HeaderInternalAuthValidated indicates the request was pre-authenticated by main gateway
+	HeaderInternalAuthValidated = "X-Internal-Auth-Validated"
+)
+
+// validateAuthForNamespaceProxy validates the request's auth credentials against the MAIN
+// cluster RQLite and returns the namespace the credentials belong to.
+// This is used by handleNamespaceGatewayRequest to pre-authenticate before proxying to
+// namespace gateways (which have isolated RQLites without API keys).
+//
+// Returns:
+//   - (namespace, "") if auth is valid
+//   - ("", errorMessage) if auth is invalid
+//   - ("", "") if no auth credentials provided (for public paths)
+func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, errMsg string) {
+	// 1) Try JWT Bearer first
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		lower := strings.ToLower(auth)
+		if strings.HasPrefix(lower, "bearer ") {
+			tok := strings.TrimSpace(auth[len("Bearer "):])
+			if strings.Count(tok, ".") == 2 {
+				if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+					if ns := strings.TrimSpace(claims.Namespace); ns != "" {
+						return ns, ""
+					}
+				}
+				// JWT verification failed - fall through to API key check
+			}
+		}
+	}
+
+	// 2) Try API key
+	key := extractAPIKey(r)
+	if key == "" {
+		return "", "" // No credentials provided
+	}
+
+	// Look up API key in main cluster RQLite
+	db := g.client.Database()
+	internalCtx := client.WithInternalAuth(r.Context())
+	q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
+	res, err := db.Query(internalCtx, q, key)
+	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return "", "invalid API key"
+	}
+
+	// Extract namespace name
+	var ns string
+	if s, ok := res.Rows[0][0].(string); ok {
+		ns = strings.TrimSpace(s)
+	} else {
+		b, _ := json.Marshal(res.Rows[0][0])
+		_ = json.Unmarshal(b, &ns)
+		ns = strings.TrimSpace(ns)
+	}
+	if ns == "" {
+		return "", "invalid API key"
+	}
+
+	return ns, ""
+}
+
+// isWebSocketUpgrade checks if the request is a WebSocket upgrade request
+func isWebSocketUpgrade(r *http.Request) bool {
+	connection := strings.ToLower(r.Header.Get("Connection"))
+	upgrade := strings.ToLower(r.Header.Get("Upgrade"))
+	return strings.Contains(connection, "upgrade") && upgrade == "websocket"
+}
+
+// proxyWebSocket proxies a WebSocket connection by hijacking the client connection
+// and tunneling bidirectionally to the backend
+func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetHost string) bool {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "WebSocket proxy not supported", http.StatusInternalServerError)
+		return false
+	}
+
+	// Connect to backend
+	backendConn, err := net.DialTimeout("tcp", targetHost, 10*time.Second)
+	if err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral, "WebSocket backend dial failed",
+			zap.String("target", targetHost),
+			zap.Error(err),
+		)
+		http.Error(w, "Backend unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+
+	// Write the original request to backend (this initiates the WebSocket handshake)
+	if err := r.Write(backendConn); err != nil {
+		backendConn.Close()
+		g.logger.ComponentError(logging.ComponentGeneral, "WebSocket handshake write failed",
+			zap.Error(err),
+		)
+		http.Error(w, "Failed to initiate WebSocket", http.StatusBadGateway)
+		return false
+	}
+
+	// Hijack client connection
+	clientConn, clientBuf, err := hijacker.Hijack()
+	if err != nil {
+		backendConn.Close()
+		g.logger.ComponentError(logging.ComponentGeneral, "WebSocket hijack failed",
+			zap.Error(err),
+		)
+		return false
+	}
+
+	// Flush any buffered data from the client
+	if clientBuf.Reader.Buffered() > 0 {
+		buffered := make([]byte, clientBuf.Reader.Buffered())
+		clientBuf.Read(buffered)
+		backendConn.Write(buffered)
+	}
+
+	// Bidirectional copy between client and backend
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		io.Copy(clientConn, backendConn)
+		clientConn.Close()
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		io.Copy(backendConn, clientConn)
+		backendConn.Close()
+	}()
+
+	// Wait for one side to close
+	<-done
+	clientConn.Close()
+	backendConn.Close()
+	<-done
+
+	return true
+}
+
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> handler
@@ -72,6 +216,7 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 //   - Authorization: Bearer <JWT> (RS256 issued by this gateway)
 //   - Authorization: Bearer <API key> or ApiKey <API key>
 //   - X-API-Key: <API key>
+//   - X-Internal-Auth-Validated: true (from internal IPs only - pre-authenticated by main gateway)
 func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Allow preflight without auth
@@ -81,6 +226,23 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		isPublic := isPublicPath(r.URL.Path)
+
+		// 0) Trust internal auth headers from internal IPs (WireGuard network or localhost)
+		// This allows the main gateway to pre-authenticate requests before proxying to namespace gateways
+		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
+			clientIP := getClientIP(r)
+			if isInternalIP(clientIP) {
+				ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
+				if ns != "" {
+					// Pre-authenticated by main gateway - trust the namespace
+					reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
+					next.ServeHTTP(w, r.WithContext(reqCtx))
+					return
+				}
+			}
+			// If internal auth header is present but invalid (wrong IP or missing namespace),
+			// fall through to normal auth flow
+		}
 
 		// 1) Try JWT Bearer first if Authorization looks like one
 		if auth := r.Header.Get("Authorization"); auth != "" {
@@ -588,7 +750,27 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 
 // handleNamespaceGatewayRequest proxies requests to a namespace's dedicated gateway cluster
 // This enables physical isolation where each namespace has its own RQLite, Olric, and Gateway
+//
+// IMPORTANT: This function validates auth against the MAIN cluster RQLite before proxying.
+// The validated namespace is passed to the namespace gateway via X-Internal-Auth-* headers.
+// This is necessary because namespace gateways have their own isolated RQLite that doesn't
+// contain API keys (API keys are stored in the main cluster RQLite only).
 func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
+	// Validate auth against main cluster RQLite BEFORE proxying
+	// This ensures API keys work even though they're not in the namespace's RQLite
+	validatedNamespace, authErr := g.validateAuthForNamespaceProxy(r)
+	if authErr != "" && !isPublicPath(r.URL.Path) {
+		w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
+		writeError(w, http.StatusUnauthorized, authErr)
+		return
+	}
+
+	// If auth succeeded, ensure the API key belongs to the target namespace
+	if validatedNamespace != "" && validatedNamespace != namespaceName {
+		writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
+		return
+	}
+
 	// Look up namespace cluster gateway using internal (WireGuard) IPs for inter-node proxying
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(r.Context())
@@ -621,8 +803,31 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		gatewayPort = p
 	}
 
-	// Proxy request to the namespace gateway
-	targetURL := "http://" + gatewayIP + ":" + strconv.Itoa(gatewayPort) + r.URL.Path
+	targetHost := gatewayIP + ":" + strconv.Itoa(gatewayPort)
+
+	// Handle WebSocket upgrade requests specially (http.Client can't handle 101 Switching Protocols)
+	if isWebSocketUpgrade(r) {
+		// Set forwarding headers on the original request
+		r.Header.Set("X-Forwarded-For", getClientIP(r))
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("X-Forwarded-Host", r.Host)
+		// Set internal auth headers if auth was validated
+		if validatedNamespace != "" {
+			r.Header.Set(HeaderInternalAuthValidated, "true")
+			r.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
+		}
+		r.URL.Scheme = "http"
+		r.URL.Host = targetHost
+		r.Host = targetHost
+		if g.proxyWebSocket(w, r, targetHost) {
+			return
+		}
+		// If WebSocket proxy failed and already wrote error, return
+		return
+	}
+
+	// Proxy regular HTTP request to the namespace gateway
+	targetURL := "http://" + targetHost + r.URL.Path
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
 	}
@@ -647,6 +852,13 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	proxyReq.Header.Set("X-Forwarded-Proto", "https")
 	proxyReq.Header.Set("X-Forwarded-Host", r.Host)
 	proxyReq.Header.Set("X-Original-Host", r.Host)
+
+	// Set internal auth headers if auth was validated by main gateway
+	// This allows the namespace gateway to trust the authentication
+	if validatedNamespace != "" {
+		proxyReq.Header.Set(HeaderInternalAuthValidated, "true")
+		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
+	}
 
 	// Execute proxy request
 	httpClient := &http.Client{Timeout: 30 * time.Second}
@@ -863,12 +1075,31 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 serveLocal:
 
 	// Create a simple reverse proxy to localhost
-	target := "http://localhost:" + strconv.Itoa(deployment.Port)
+	targetHost := "localhost:" + strconv.Itoa(deployment.Port)
+	target := "http://" + targetHost
 
 	// Set proxy headers
 	r.Header.Set("X-Forwarded-For", getClientIP(r))
 	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("X-Forwarded-Host", r.Host)
+
+	// Handle WebSocket upgrade requests specially
+	if isWebSocketUpgrade(r) {
+		r.URL.Scheme = "http"
+		r.URL.Host = targetHost
+		r.Host = targetHost
+		if g.proxyWebSocket(w, r, targetHost) {
+			return
+		}
+		// WebSocket proxy failed - try cross-node replicas as fallback
+		if g.replicaManager != nil {
+			if g.proxyCrossNodeWithReplicas(w, r, deployment) {
+				return
+			}
+		}
+		http.Error(w, "WebSocket connection failed", http.StatusServiceUnavailable)
+		return
+	}
 
 	// Create a new request to the backend
 	backendURL := target + r.URL.Path
@@ -955,7 +1186,19 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 
 	// Proxy to home node via internal HTTP port (6001)
 	// This is node-to-node internal communication - no TLS needed
-	targetURL := "http://" + homeIP + ":6001" + r.URL.Path
+	targetHost := homeIP + ":6001"
+
+	// Handle WebSocket upgrade requests specially
+	if isWebSocketUpgrade(r) {
+		r.Header.Set("X-Forwarded-For", getClientIP(r))
+		r.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
+		r.URL.Scheme = "http"
+		r.URL.Host = targetHost
+		// Keep original Host header for domain routing
+		return g.proxyWebSocket(w, r, targetHost)
+	}
+
+	targetURL := "http://" + targetHost + r.URL.Path
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
 	}
@@ -1056,7 +1299,18 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 		zap.String("node_ip", nodeIP),
 	)
 
-	targetURL := "http://" + nodeIP + ":6001" + r.URL.Path
+	targetHost := nodeIP + ":6001"
+
+	// Handle WebSocket upgrade requests specially
+	if isWebSocketUpgrade(r) {
+		r.Header.Set("X-Forwarded-For", getClientIP(r))
+		r.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
+		r.URL.Scheme = "http"
+		r.URL.Host = targetHost
+		return g.proxyWebSocket(w, r, targetHost)
+	}
+
+	targetURL := "http://" + targetHost + r.URL.Path
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
 	}
