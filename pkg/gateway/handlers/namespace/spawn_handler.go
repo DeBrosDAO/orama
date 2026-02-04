@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
+	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -54,24 +54,17 @@ type SpawnResponse struct {
 }
 
 // SpawnHandler handles remote namespace instance spawn/stop requests.
-// It tracks spawned RQLite instances locally so they can be stopped later.
+// Now uses systemd for service management instead of direct process spawning.
 type SpawnHandler struct {
-	rqliteSpawner    *rqlite.InstanceSpawner
-	olricSpawner     *olric.InstanceSpawner
-	gatewaySpawner   *gateway.InstanceSpawner
-	logger           *zap.Logger
-	rqliteInstances  map[string]*rqlite.Instance // key: "namespace:nodeID"
-	rqliteInstanceMu sync.RWMutex
+	systemdSpawner *namespacepkg.SystemdSpawner
+	logger         *zap.Logger
 }
 
 // NewSpawnHandler creates a new spawn handler
-func NewSpawnHandler(rs *rqlite.InstanceSpawner, os *olric.InstanceSpawner, gs *gateway.InstanceSpawner, logger *zap.Logger) *SpawnHandler {
+func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, logger *zap.Logger) *SpawnHandler {
 	return &SpawnHandler{
-		rqliteSpawner:   rs,
-		olricSpawner:    os,
-		gatewaySpawner:  gs,
-		logger:          logger.With(zap.String("component", "namespace-spawn-handler")),
-		rqliteInstances: make(map[string]*rqlite.Instance),
+		systemdSpawner: systemdSpawner,
+		logger:         logger.With(zap.String("component", "namespace-spawn-handler")),
 	}
 }
 
@@ -121,18 +114,12 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			JoinAddresses:  req.RQLiteJoinAddrs,
 			IsLeader:       req.RQLiteIsLeader,
 		}
-		instance, err := h.rqliteSpawner.SpawnInstance(ctx, cfg)
-		if err != nil {
+		if err := h.systemdSpawner.SpawnRQLite(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn RQLite instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}
-		// Track the instance for later stop requests
-		key := fmt.Sprintf("%s:%s", req.Namespace, req.NodeID)
-		h.rqliteInstanceMu.Lock()
-		h.rqliteInstances[key] = instance
-		h.rqliteInstanceMu.Unlock()
-		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true, PID: instance.PID})
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
 	case "spawn-olric":
 		cfg := olric.InstanceConfig{
@@ -144,27 +131,15 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			AdvertiseAddr:  req.OlricAdvertiseAddr,
 			PeerAddresses:  req.OlricPeerAddresses,
 		}
-		instance, err := h.olricSpawner.SpawnInstance(ctx, cfg)
-		if err != nil {
+		if err := h.systemdSpawner.SpawnOlric(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn Olric instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}
-		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true, PID: instance.PID})
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
 	case "stop-rqlite":
-		key := fmt.Sprintf("%s:%s", req.Namespace, req.NodeID)
-		h.rqliteInstanceMu.Lock()
-		instance, ok := h.rqliteInstances[key]
-		if ok {
-			delete(h.rqliteInstances, key)
-		}
-		h.rqliteInstanceMu.Unlock()
-		if !ok {
-			writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true}) // Already stopped
-			return
-		}
-		if err := h.rqliteSpawner.StopInstance(ctx, instance); err != nil {
+		if err := h.systemdSpawner.StopRQLite(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop RQLite instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
@@ -172,7 +147,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
 	case "stop-olric":
-		if err := h.olricSpawner.StopInstance(ctx, req.Namespace, req.NodeID); err != nil {
+		if err := h.systemdSpawner.StopOlric(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop Olric instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
@@ -203,16 +178,15 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			IPFSTimeout:           ipfsTimeout,
 			IPFSReplicationFactor: req.IPFSReplicationFactor,
 		}
-		instance, err := h.gatewaySpawner.SpawnInstance(ctx, cfg)
-		if err != nil {
+		if err := h.systemdSpawner.SpawnGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}
-		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true, PID: instance.PID})
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
 	case "stop-gateway":
-		if err := h.gatewaySpawner.StopInstance(ctx, req.Namespace, req.NodeID); err != nil {
+		if err := h.systemdSpawner.StopGateway(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop Gateway instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return

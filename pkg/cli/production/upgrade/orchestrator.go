@@ -156,6 +156,12 @@ func (o *Orchestrator) Execute() error {
 		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
 	}
 
+	// Install namespace systemd template units
+	fmt.Printf("\n🔧 Phase 5b: Installing namespace systemd templates...\n")
+	if err := o.installNamespaceTemplates(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
+	}
+
 	// Re-apply UFW firewall rules (idempotent)
 	fmt.Printf("\n🛡️  Re-applying firewall rules...\n")
 	if err := o.setup.Phase6bSetupFirewall(false); err != nil {
@@ -333,6 +339,13 @@ func (o *Orchestrator) stopServices() error {
 
 	fmt.Printf("\n⏹️  Stopping all services before upgrade...\n")
 	serviceController := production.NewSystemdController()
+
+	// First, stop all namespace services (debros-namespace-*@*.service)
+	fmt.Printf("  Stopping namespace services...\n")
+	if err := o.stopAllNamespaceServices(serviceController); err != nil {
+		fmt.Printf("  ⚠️  Warning: Failed to stop namespace services: %v\n", err)
+	}
+
 	// Stop services in reverse dependency order
 	services := []string{
 		"caddy.service",              // Depends on node
@@ -357,6 +370,82 @@ func (o *Orchestrator) stopServices() error {
 	}
 	// Give services time to shut down gracefully
 	time.Sleep(3 * time.Second)
+	return nil
+}
+
+// stopAllNamespaceServices stops all running namespace services
+func (o *Orchestrator) stopAllNamespaceServices(serviceController *production.SystemdController) error {
+	// Find all running namespace services using systemctl list-units
+	cmd := exec.Command("systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend", "debros-namespace-*@*.service")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to list namespace services: %w", err)
+	}
+
+	lines := strings.Split(string(output), "\n")
+	stoppedCount := 0
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			serviceName := fields[0]
+			if strings.HasPrefix(serviceName, "debros-namespace-") {
+				if err := serviceController.StopService(serviceName); err != nil {
+					fmt.Printf("    ⚠️  Warning: Failed to stop %s: %v\n", serviceName, err)
+				} else {
+					stoppedCount++
+				}
+			}
+		}
+	}
+
+	if stoppedCount > 0 {
+		fmt.Printf("  ✓ Stopped %d namespace service(s)\n", stoppedCount)
+	}
+
+	return nil
+}
+
+// installNamespaceTemplates installs systemd template unit files for namespace services
+func (o *Orchestrator) installNamespaceTemplates() error {
+	sourceDir := filepath.Join(o.oramaHome, "src", "systemd")
+	systemdDir := "/etc/systemd/system"
+
+	templates := []string{
+		"debros-namespace-rqlite@.service",
+		"debros-namespace-olric@.service",
+		"debros-namespace-gateway@.service",
+	}
+
+	installedCount := 0
+	for _, template := range templates {
+		sourcePath := filepath.Join(sourceDir, template)
+		destPath := filepath.Join(systemdDir, template)
+
+		// Read template file
+		data, err := os.ReadFile(sourcePath)
+		if err != nil {
+			fmt.Printf("  ⚠️  Warning: Failed to read %s: %v\n", template, err)
+			continue
+		}
+
+		// Write to systemd directory
+		if err := os.WriteFile(destPath, data, 0644); err != nil {
+			fmt.Printf("  ⚠️  Warning: Failed to install %s: %v\n", template, err)
+			continue
+		}
+
+		installedCount++
+		fmt.Printf("  ✓ Installed %s\n", template)
+	}
+
+	if installedCount > 0 {
+		// Reload systemd daemon to pick up new templates
+		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+			return fmt.Errorf("failed to reload systemd daemon: %w", err)
+		}
+		fmt.Printf("  ✓ Systemd daemon reloaded (%d templates installed)\n", installedCount)
+	}
+
 	return nil
 }
 

@@ -18,8 +18,10 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 // ClusterManagerConfig contains configuration for the cluster manager
@@ -36,12 +38,10 @@ type ClusterManagerConfig struct {
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
 type ClusterManager struct {
-	db             rqlite.Client
-	portAllocator  *NamespacePortAllocator
-	nodeSelector   *ClusterNodeSelector
-	rqliteSpawner  *rqlite.InstanceSpawner
-	olricSpawner   *olric.InstanceSpawner
-	gatewaySpawner *gateway.InstanceSpawner
+	db              rqlite.Client
+	portAllocator   *NamespacePortAllocator
+	nodeSelector    *ClusterNodeSelector
+	systemdSpawner  *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
 	logger          *zap.Logger
 	baseDomain      string
 	baseDataDir     string
@@ -70,9 +70,7 @@ func NewClusterManager(
 	// Create internal components
 	portAllocator := NewNamespacePortAllocator(db, logger)
 	nodeSelector := NewClusterNodeSelector(db, portAllocator, logger)
-	rqliteSpawner := rqlite.NewInstanceSpawner(cfg.BaseDataDir, logger)
-	olricSpawner := olric.NewInstanceSpawner(cfg.BaseDataDir, logger)
-	gatewaySpawner := gateway.NewInstanceSpawner(cfg.BaseDataDir, logger)
+	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, logger)
 
 	// Set IPFS defaults
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
@@ -96,9 +94,7 @@ func NewClusterManager(
 		db:                    db,
 		portAllocator:         portAllocator,
 		nodeSelector:          nodeSelector,
-		rqliteSpawner:         rqliteSpawner,
-		olricSpawner:          olricSpawner,
-		gatewaySpawner:        gatewaySpawner,
+		systemdSpawner:        systemdSpawner,
 		baseDomain:            cfg.BaseDomain,
 		baseDataDir:           cfg.BaseDataDir,
 		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
@@ -116,9 +112,7 @@ func NewClusterManagerWithComponents(
 	db rqlite.Client,
 	portAllocator *NamespacePortAllocator,
 	nodeSelector *ClusterNodeSelector,
-	rqliteSpawner *rqlite.InstanceSpawner,
-	olricSpawner *olric.InstanceSpawner,
-	gatewaySpawner *gateway.InstanceSpawner,
+	systemdSpawner *SystemdSpawner,
 	cfg ClusterManagerConfig,
 	logger *zap.Logger,
 ) *ClusterManager {
@@ -144,9 +138,7 @@ func NewClusterManagerWithComponents(
 		db:                    db,
 		portAllocator:         portAllocator,
 		nodeSelector:          nodeSelector,
-		rqliteSpawner:         rqliteSpawner,
-		olricSpawner:          olricSpawner,
-		gatewaySpawner:        gatewaySpawner,
+		systemdSpawner:        systemdSpawner,
 		baseDomain:            cfg.BaseDomain,
 		baseDataDir:           cfg.BaseDataDir,
 		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
@@ -163,6 +155,135 @@ func NewClusterManagerWithComponents(
 func (cm *ClusterManager) SetLocalNodeID(id string) {
 	cm.localNodeID = id
 	cm.logger.Info("Local node ID set for distributed provisioning", zap.String("local_node_id", id))
+}
+
+// spawnRQLiteWithSystemd generates config and spawns RQLite via systemd
+func (cm *ClusterManager) spawnRQLiteWithSystemd(ctx context.Context, cfg rqlite.InstanceConfig) error {
+	// RQLite uses command-line args, no config file needed
+	// Just call systemd spawner which will generate env file and start service
+	return cm.systemdSpawner.SpawnRQLite(ctx, cfg.Namespace, cfg.NodeID, cfg)
+}
+
+// spawnOlricWithSystemd generates config and spawns Olric via systemd
+func (cm *ClusterManager) spawnOlricWithSystemd(ctx context.Context, cfg olric.InstanceConfig) error {
+	// Generate Olric config file (YAML)
+	configDir := filepath.Join(cm.baseDataDir, cfg.Namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("olric-%s.yaml", cfg.NodeID))
+
+	// Generate Olric YAML config
+	type olricServerConfig struct {
+		BindAddr string `yaml:"bindAddr"`
+		BindPort int    `yaml:"bindPort"`
+	}
+	type olricMemberlistConfig struct {
+		Environment string   `yaml:"environment"`
+		BindAddr    string   `yaml:"bindAddr"`
+		BindPort    int      `yaml:"bindPort"`
+		Peers       []string `yaml:"peers,omitempty"`
+	}
+	type olricConfig struct {
+		Server         olricServerConfig      `yaml:"server"`
+		Memberlist     olricMemberlistConfig  `yaml:"memberlist"`
+		PartitionCount uint64                 `yaml:"partitionCount"`
+	}
+
+	config := olricConfig{
+		Server: olricServerConfig{
+			BindAddr: cfg.BindAddr,
+			BindPort: cfg.HTTPPort,
+		},
+		Memberlist: olricMemberlistConfig{
+			Environment: "lan",
+			BindAddr:    cfg.BindAddr,
+			BindPort:    cfg.MemberlistPort,
+			Peers:       cfg.PeerAddresses,
+		},
+		PartitionCount: 12, // Optimized for namespace clusters (vs 256 default)
+	}
+
+	configBytes, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Olric config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write Olric config: %w", err)
+	}
+
+	// Start via systemd
+	return cm.systemdSpawner.SpawnOlric(ctx, cfg.Namespace, cfg.NodeID, cfg)
+}
+
+// writePeersJSON writes RQLite peers.json file for Raft cluster recovery
+func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer) error {
+	raftDir := filepath.Join(dataDir, "raft")
+	if err := os.MkdirAll(raftDir, 0755); err != nil {
+		return fmt.Errorf("failed to create raft directory: %w", err)
+	}
+
+	peersFile := filepath.Join(raftDir, "peers.json")
+	data, err := json.Marshal(peers)
+	if err != nil {
+		return fmt.Errorf("failed to marshal peers: %w", err)
+	}
+
+	return os.WriteFile(peersFile, data, 0644)
+}
+
+// spawnGatewayWithSystemd generates config and spawns Gateway via systemd
+func (cm *ClusterManager) spawnGatewayWithSystemd(ctx context.Context, cfg gateway.InstanceConfig) error {
+	// Generate Gateway config file (YAML)
+	configDir := filepath.Join(cm.baseDataDir, cfg.Namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("gateway-%s.yaml", cfg.NodeID))
+
+	// Build Gateway YAML config
+	type gatewayYAMLConfig struct {
+		ListenAddr            string        `yaml:"listen_addr"`
+		ClientNamespace       string        `yaml:"client_namespace"`
+		RQLiteDSN             string        `yaml:"rqlite_dsn"`
+		GlobalRQLiteDSN       string        `yaml:"global_rqlite_dsn,omitempty"`
+		DomainName            string        `yaml:"domain_name"`
+		OlricServers          []string      `yaml:"olric_servers"`
+		OlricTimeout          string        `yaml:"olric_timeout"`
+		IPFSClusterAPIURL     string        `yaml:"ipfs_cluster_api_url"`
+		IPFSAPIURL            string        `yaml:"ipfs_api_url"`
+		IPFSTimeout           string        `yaml:"ipfs_timeout"`
+		IPFSReplicationFactor int           `yaml:"ipfs_replication_factor"`
+	}
+
+	gatewayConfig := gatewayYAMLConfig{
+		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
+		ClientNamespace:       cfg.Namespace,
+		RQLiteDSN:             cfg.RQLiteDSN,
+		GlobalRQLiteDSN:       cfg.GlobalRQLiteDSN,
+		DomainName:            cfg.BaseDomain,
+		OlricServers:          cfg.OlricServers,
+		OlricTimeout:          cfg.OlricTimeout.String(),
+		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
+		IPFSAPIURL:            cfg.IPFSAPIURL,
+		IPFSTimeout:           cfg.IPFSTimeout.String(),
+		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+	}
+
+	configBytes, err := yaml.Marshal(gatewayConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Gateway config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write Gateway config: %w", err)
+	}
+
+	// Start via systemd
+	return cm.systemdSpawner.SpawnGateway(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 
 // ProvisionCluster provisions a new 3-node cluster for a namespace
@@ -306,19 +427,23 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		IsLeader:       true,
 	}
 
-	var leaderInstance *rqlite.Instance
 	var err error
 	if nodes[0].NodeID == cm.localNodeID {
 		cm.logger.Info("Spawning RQLite leader locally", zap.String("node", nodes[0].NodeID))
-		leaderInstance, err = cm.rqliteSpawner.SpawnInstance(ctx, leaderCfg)
+		err = cm.spawnRQLiteWithSystemd(ctx, leaderCfg)
+		if err == nil {
+			// Create Instance object for consistency with existing code
+			instances[0] = &rqlite.Instance{
+				Config: leaderCfg,
+			}
+		}
 	} else {
 		cm.logger.Info("Spawning RQLite leader remotely", zap.String("node", nodes[0].NodeID), zap.String("ip", nodes[0].InternalIP))
-		leaderInstance, err = cm.spawnRQLiteRemote(ctx, nodes[0].InternalIP, leaderCfg)
+		instances[0], err = cm.spawnRQLiteRemote(ctx, nodes[0].InternalIP, leaderCfg)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to start RQLite leader: %w", err)
 	}
-	instances[0] = leaderInstance
 
 	cm.logEvent(ctx, cluster.ID, EventRQLiteStarted, nodes[0].NodeID, "RQLite leader started", nil)
 	cm.logEvent(ctx, cluster.ID, EventRQLiteLeaderElected, nodes[0].NodeID, "RQLite leader elected", nil)
@@ -344,7 +469,12 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		var followerInstance *rqlite.Instance
 		if nodes[i].NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning RQLite follower locally", zap.String("node", nodes[i].NodeID))
-			followerInstance, err = cm.rqliteSpawner.SpawnInstance(ctx, followerCfg)
+			err = cm.spawnRQLiteWithSystemd(ctx, followerCfg)
+			if err == nil {
+				followerInstance = &rqlite.Instance{
+					Config: followerCfg,
+				}
+			}
 		} else {
 			cm.logger.Info("Spawning RQLite follower remotely", zap.String("node", nodes[i].NodeID), zap.String("ip", nodes[i].InternalIP))
 			followerInstance, err = cm.spawnRQLiteRemote(ctx, nodes[i].InternalIP, followerCfg)
@@ -406,7 +536,20 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			defer wg.Done()
 			if n.NodeID == cm.localNodeID {
 				cm.logger.Info("Spawning Olric locally", zap.String("node", n.NodeID))
-				instances[idx], errs[idx] = cm.olricSpawner.SpawnInstance(ctx, configs[idx])
+				errs[idx] = cm.spawnOlricWithSystemd(ctx, configs[idx])
+				if errs[idx] == nil {
+					instances[idx] = &olric.OlricInstance{
+						Namespace:      configs[idx].Namespace,
+						NodeID:         configs[idx].NodeID,
+						HTTPPort:       configs[idx].HTTPPort,
+						MemberlistPort: configs[idx].MemberlistPort,
+						BindAddr:       configs[idx].BindAddr,
+						AdvertiseAddr:  configs[idx].AdvertiseAddr,
+						PeerAddresses:  configs[idx].PeerAddresses,
+						Status:         olric.InstanceStatusRunning,
+						StartedAt:      time.Now(),
+					}
+				}
 			} else {
 				cm.logger.Info("Spawning Olric remotely", zap.String("node", n.NodeID), zap.String("ip", n.InternalIP))
 				instances[idx], errs[idx] = cm.spawnOlricRemote(ctx, n.InternalIP, configs[idx])
@@ -496,7 +639,19 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 		var err error
 		if node.NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning Gateway locally", zap.String("node", node.NodeID))
-			instance, err = cm.gatewaySpawner.SpawnInstance(ctx, cfg)
+			err = cm.spawnGatewayWithSystemd(ctx, cfg)
+			if err == nil {
+				instance = &gateway.GatewayInstance{
+					Namespace:    cfg.Namespace,
+					NodeID:       cfg.NodeID,
+					HTTPPort:     cfg.HTTPPort,
+					BaseDomain:   cfg.BaseDomain,
+					RQLiteDSN:    cfg.RQLiteDSN,
+					OlricServers: cfg.OlricServers,
+					Status:       gateway.InstanceStatusRunning,
+					StartedAt:    time.Now(),
+				}
+			}
 		} else {
 			cm.logger.Info("Spawning Gateway remotely", zap.String("node", node.NodeID), zap.String("ip", node.InternalIP))
 			instance, err = cm.spawnGatewayRemote(ctx, node.InternalIP, cfg)
@@ -646,9 +801,7 @@ func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, r
 // stopRQLiteOnNode stops a RQLite instance on a node (local or remote)
 func (cm *ClusterManager) stopRQLiteOnNode(ctx context.Context, nodeID, nodeIP, namespace string, inst *rqlite.Instance) {
 	if nodeID == cm.localNodeID {
-		if inst != nil {
-			cm.rqliteSpawner.StopInstance(ctx, inst)
-		}
+		cm.systemdSpawner.StopRQLite(ctx, namespace, nodeID)
 	} else {
 		cm.sendStopRequest(ctx, nodeIP, "stop-rqlite", namespace, nodeID)
 	}
@@ -657,7 +810,7 @@ func (cm *ClusterManager) stopRQLiteOnNode(ctx context.Context, nodeID, nodeIP, 
 // stopOlricOnNode stops an Olric instance on a node (local or remote)
 func (cm *ClusterManager) stopOlricOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
 	if nodeID == cm.localNodeID {
-		cm.olricSpawner.StopInstance(ctx, namespace, nodeID)
+		cm.systemdSpawner.StopOlric(ctx, namespace, nodeID)
 	} else {
 		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID)
 	}
@@ -666,7 +819,7 @@ func (cm *ClusterManager) stopOlricOnNode(ctx context.Context, nodeID, nodeIP, n
 // stopGatewayOnNode stops a Gateway instance on a node (local or remote)
 func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
 	if nodeID == cm.localNodeID {
-		cm.gatewaySpawner.StopInstance(ctx, namespace, nodeID)
+		cm.systemdSpawner.StopGateway(ctx, namespace, nodeID)
 	} else {
 		cm.sendStopRequest(ctx, nodeIP, "stop-gateway", namespace, nodeID)
 	}
@@ -763,8 +916,8 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) {
 	cm.logger.Info("Rolling back failed provisioning", zap.String("cluster_id", cluster.ID))
 
-	// Stop Gateway instances (local only for now)
-	cm.gatewaySpawner.StopAllInstances(ctx, cluster.NamespaceName)
+	// Stop all namespace services (Gateway, Olric, RQLite) using systemd
+	cm.systemdSpawner.StopAll(ctx, cluster.NamespaceName)
 
 	// Stop Olric instances on each node
 	if olricInstances != nil && nodes != nil {
@@ -808,10 +961,8 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
 
-	// Stop all services
-	cm.gatewaySpawner.StopAllInstances(ctx, cluster.NamespaceName)
-	cm.olricSpawner.StopAllInstances(ctx, cluster.NamespaceName)
-	// Note: RQLite instances need to be stopped individually based on stored PIDs
+	// Stop all services using systemd
+	cm.systemdSpawner.StopAll(ctx, cluster.NamespaceName)
 
 	// Deallocate all ports
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
@@ -1293,8 +1444,15 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 	}
 
 	// 1. Restore RQLite
-	if !cm.rqliteSpawner.IsInstanceRunning(pb.RQLiteHTTPPort) {
-		hasExistingData := cm.rqliteSpawner.HasExistingData(namespaceName, cm.localNodeID)
+	// Check if RQLite systemd service is already running
+	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, systemd.ServiceTypeRQLite)
+	if !rqliteRunning {
+		// Check if RQLite data directory exists (has existing data)
+		dataDir := filepath.Join(cm.baseDataDir, namespaceName, "rqlite", cm.localNodeID)
+		hasExistingData := false
+		if _, err := os.Stat(filepath.Join(dataDir, "raft")); err == nil {
+			hasExistingData = true
+		}
 
 		if hasExistingData {
 			// Write peers.json for Raft cluster recovery (official RQLite mechanism).
@@ -1309,8 +1467,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 					NonVoter: false,
 				})
 			}
-			dataDir := cm.rqliteSpawner.GetDataDir(namespaceName, cm.localNodeID)
-			if err := cm.rqliteSpawner.WritePeersJSON(dataDir, peers); err != nil {
+			if err := cm.writePeersJSON(dataDir, peers); err != nil {
 				cm.logger.Error("Failed to write peers.json", zap.String("namespace", namespaceName), zap.Error(err))
 			}
 		}
@@ -1362,7 +1519,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 			IsLeader:       isLeader,
 		}
 
-		if _, err := cm.rqliteSpawner.SpawnInstance(ctx, rqliteCfg); err != nil {
+		if err := cm.spawnRQLiteWithSystemd(ctx, rqliteCfg); err != nil {
 			cm.logger.Error("Failed to restore RQLite", zap.String("namespace", namespaceName), zap.Error(err))
 		} else {
 			cm.logger.Info("Restored RQLite instance", zap.String("namespace", namespaceName), zap.Int("port", pb.RQLiteHTTPPort))
@@ -1397,7 +1554,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 			PeerAddresses:  peers,
 		}
 
-		if _, err := cm.olricSpawner.SpawnInstance(ctx, olricCfg); err != nil {
+		if err := cm.spawnOlricWithSystemd(ctx, olricCfg); err != nil {
 			cm.logger.Error("Failed to restore Olric", zap.String("namespace", namespaceName), zap.Error(err))
 		} else {
 			cm.logger.Info("Restored Olric instance", zap.String("namespace", namespaceName), zap.Int("port", pb.OlricHTTPPort))
@@ -1446,7 +1603,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
 
-			if _, err := cm.gatewaySpawner.SpawnInstance(ctx, gwCfg); err != nil {
+			if err := cm.spawnGatewayWithSystemd(ctx, gwCfg); err != nil {
 				cm.logger.Error("Failed to restore Gateway", zap.String("namespace", namespaceName), zap.Error(err))
 			} else {
 				cm.logger.Info("Restored Gateway instance", zap.String("namespace", namespaceName), zap.Int("port", pb.GatewayHTTPPort))
@@ -1596,8 +1753,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 	localIP := state.LocalIP
 
 	// 1. Restore RQLite
-	if !cm.rqliteSpawner.IsInstanceRunning(pb.RQLiteHTTPPort) {
-		hasExistingData := cm.rqliteSpawner.HasExistingData(state.NamespaceName, cm.localNodeID)
+	// Check if RQLite systemd service is already running
+	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeRQLite)
+	if !rqliteRunning {
+		// Check if RQLite data directory exists (has existing data)
+		dataDir := filepath.Join(cm.baseDataDir, state.NamespaceName, "rqlite", cm.localNodeID)
+		hasExistingData := false
+		if _, err := os.Stat(filepath.Join(dataDir, "raft")); err == nil {
+			hasExistingData = true
+		}
 
 		if hasExistingData {
 			var peers []rqlite.RaftPeer
@@ -1605,8 +1769,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
 				peers = append(peers, rqlite.RaftPeer{ID: raftAddr, Address: raftAddr, NonVoter: false})
 			}
-			dataDir := cm.rqliteSpawner.GetDataDir(state.NamespaceName, cm.localNodeID)
-			if err := cm.rqliteSpawner.WritePeersJSON(dataDir, peers); err != nil {
+			if err := cm.writePeersJSON(dataDir, peers); err != nil {
 				cm.logger.Error("Failed to write peers.json", zap.String("namespace", state.NamespaceName), zap.Error(err))
 			}
 		}
@@ -1643,7 +1806,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			JoinAddresses:  joinAddrs,
 			IsLeader:       isLeader,
 		}
-		if _, err := cm.rqliteSpawner.SpawnInstance(ctx, rqliteCfg); err != nil {
+		if err := cm.spawnRQLiteWithSystemd(ctx, rqliteCfg); err != nil {
 			cm.logger.Error("Failed to restore RQLite from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
 		} else {
 			cm.logger.Info("Restored RQLite instance from state", zap.String("namespace", state.NamespaceName))
@@ -1670,7 +1833,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			AdvertiseAddr:  localIP,
 			PeerAddresses:  peers,
 		}
-		if _, err := cm.olricSpawner.SpawnInstance(ctx, olricCfg); err != nil {
+		if err := cm.spawnOlricWithSystemd(ctx, olricCfg); err != nil {
 			cm.logger.Error("Failed to restore Olric from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
 		} else {
 			cm.logger.Info("Restored Olric instance from state", zap.String("namespace", state.NamespaceName))
@@ -1702,7 +1865,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				IPFSTimeout:           cm.ipfsTimeout,
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
-			if _, err := cm.gatewaySpawner.SpawnInstance(ctx, gwCfg); err != nil {
+			if err := cm.spawnGatewayWithSystemd(ctx, gwCfg); err != nil {
 				cm.logger.Error("Failed to restore Gateway from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
 			} else {
 				cm.logger.Info("Restored Gateway instance from state", zap.String("namespace", state.NamespaceName))

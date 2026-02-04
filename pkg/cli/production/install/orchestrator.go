@@ -205,6 +205,12 @@ func (o *Orchestrator) executeGenesisFlow() error {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
+	// Install namespace systemd template units
+	fmt.Printf("\n🔧 Phase 5b: Installing namespace systemd templates...\n")
+	if err := o.installNamespaceTemplates(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
+	}
+
 	// Phase 7: Seed DNS records (with retry — migrations may still be running)
 	if o.flags.Nameserver && o.flags.BaseDomain != "" {
 		fmt.Printf("\n🌐 Phase 7: Seeding DNS records...\n")
@@ -328,6 +334,12 @@ func (o *Orchestrator) executeJoinFlow() error {
 	fmt.Printf("\n🔧 Creating systemd services...\n")
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		return fmt.Errorf("service creation failed: %w", err)
+	}
+
+	// Install namespace systemd template units
+	fmt.Printf("\n🔧 Installing namespace systemd templates...\n")
+	if err := o.installNamespaceTemplates(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
 	}
 
 	o.setup.LogSetupComplete(o.setup.NodePeerID)
@@ -528,4 +540,48 @@ func promptForBaseDomain() string {
 		fmt.Println("⚠️  Invalid option, using orama-devnet.network")
 		return "orama-devnet.network"
 	}
+}
+
+// installNamespaceTemplates installs systemd template unit files for namespace services
+func (o *Orchestrator) installNamespaceTemplates() error {
+	sourceDir := filepath.Join(o.oramaHome, "src", "systemd")
+	systemdDir := "/etc/systemd/system"
+
+	templates := []string{
+		"debros-namespace-rqlite@.service",
+		"debros-namespace-olric@.service",
+		"debros-namespace-gateway@.service",
+	}
+
+	installedCount := 0
+	for _, template := range templates {
+		sourcePath := filepath.Join(sourceDir, template)
+		destPath := filepath.Join(systemdDir, template)
+
+		// Read template file
+		data, err := os.ReadFile(sourcePath)
+		if err != nil {
+			fmt.Printf("  ⚠️  Warning: Failed to read %s: %v\n", template, err)
+			continue
+		}
+
+		// Write to systemd directory
+		if err := os.WriteFile(destPath, data, 0644); err != nil {
+			fmt.Printf("  ⚠️  Warning: Failed to install %s: %v\n", template, err)
+			continue
+		}
+
+		installedCount++
+		fmt.Printf("  ✓ Installed %s\n", template)
+	}
+
+	if installedCount > 0 {
+		// Reload systemd daemon to pick up new templates
+		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+			return fmt.Errorf("failed to reload systemd daemon: %w", err)
+		}
+		fmt.Printf("  ✓ Systemd daemon reloaded (%d templates installed)\n", installedCount)
+	}
+
+	return nil
 }

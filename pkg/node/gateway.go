@@ -13,8 +13,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/namespace"
-	olricpkg "github.com/DeBrosOfficial/network/pkg/olric"
-	rqlitepkg "github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
 
@@ -81,10 +79,8 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		apiGateway.SetClusterProvisioner(clusterManager)
 
 		// Wire spawn handler for distributed namespace instance spawning
-		rqliteSpawner := rqlitepkg.NewInstanceSpawner(baseDataDir, n.logger.Logger)
-		olricSpawner := olricpkg.NewInstanceSpawner(baseDataDir, n.logger.Logger)
-		gatewaySpawner := gateway.NewInstanceSpawner(baseDataDir, n.logger.Logger)
-		spawnHandler := namespacehandlers.NewSpawnHandler(rqliteSpawner, olricSpawner, gatewaySpawner, n.logger.Logger)
+		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, n.logger.Logger)
+		spawnHandler := namespacehandlers.NewSpawnHandler(systemdSpawner, n.logger.Logger)
 		apiGateway.SetSpawnHandler(spawnHandler)
 
 		// Wire namespace delete handler
