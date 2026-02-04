@@ -77,7 +77,9 @@ type InstanceConfig struct {
 	HTTPPort       int      // HTTP API port
 	BaseDomain     string   // Base domain (e.g., "orama-devnet.network")
 	RQLiteDSN      string   // RQLite connection DSN (e.g., "http://localhost:10000")
+	GlobalRQLiteDSN string  // Global RQLite DSN for API key validation (empty = use RQLiteDSN)
 	OlricServers   []string // Olric server addresses
+	OlricTimeout   time.Duration // Timeout for Olric operations
 	NodePeerID     string   // Physical node's peer ID for home node management
 	DataDir        string   // Data directory for deployments, SQLite, etc.
 	// IPFS configuration for storage endpoints
@@ -94,6 +96,7 @@ type GatewayYAMLConfig struct {
 	ListenAddr            string   `yaml:"listen_addr"`
 	ClientNamespace       string   `yaml:"client_namespace"`
 	RQLiteDSN             string   `yaml:"rqlite_dsn"`
+	GlobalRQLiteDSN       string   `yaml:"global_rqlite_dsn,omitempty"`
 	BootstrapPeers        []string `yaml:"bootstrap_peers,omitempty"`
 	EnableHTTPS           bool     `yaml:"enable_https,omitempty"`
 	DomainName            string   `yaml:"domain_name,omitempty"`
@@ -277,6 +280,7 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		ListenAddr:      fmt.Sprintf(":%d", cfg.HTTPPort),
 		ClientNamespace: cfg.Namespace,
 		RQLiteDSN:       cfg.RQLiteDSN,
+		GlobalRQLiteDSN: cfg.GlobalRQLiteDSN,
 		OlricServers:    cfg.OlricServers,
 		// Note: DomainName is used for HTTPS/TLS, not needed for namespace gateways in dev mode
 		DomainName: cfg.BaseDomain,
@@ -284,6 +288,10 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
 		IPFSAPIURL:            cfg.IPFSAPIURL,
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+	}
+	// Set Olric timeout if provided
+	if cfg.OlricTimeout > 0 {
+		gatewayCfg.OlricTimeout = cfg.OlricTimeout.String()
 	}
 	// Set IPFS timeout if provided
 	if cfg.IPFSTimeout > 0 {

@@ -52,6 +52,9 @@ type Gateway struct {
 	ormClient rqlite.Client
 	ormHTTP   *rqlite.HTTPGateway
 
+	// Global RQLite client for API key validation (namespace gateways only)
+	authClient client.NetworkClient
+
 	// Olric cache client
 	olricClient *olric.Client
 	olricMu     sync.RWMutex
@@ -235,6 +238,33 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		authService:        deps.AuthService,
 		localSubscribers:   make(map[string][]*localSubscriber),
 		presenceMembers:    make(map[string][]PresenceMember),
+	}
+
+	// Create separate auth client for global RQLite if GlobalRQLiteDSN is provided
+	// This allows namespace gateways to validate API keys against the global database
+	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
+		logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
+			zap.String("global_dsn", cfg.GlobalRQLiteDSN),
+		)
+
+		// Create client config for global namespace
+		authCfg := client.DefaultClientConfig("default") // Use "default" namespace for global
+		authCfg.DatabaseEndpoints = []string{cfg.GlobalRQLiteDSN}
+		if len(cfg.BootstrapPeers) > 0 {
+			authCfg.BootstrapPeers = cfg.BootstrapPeers
+		}
+
+		authClient, err := client.NewClient(authCfg)
+		if err != nil {
+			logger.ComponentWarn(logging.ComponentGeneral, "Failed to create global auth client", zap.Error(err))
+		} else {
+			if err := authClient.Connect(); err != nil {
+				logger.ComponentWarn(logging.ComponentGeneral, "Failed to connect global auth client", zap.Error(err))
+			} else {
+				gw.authClient = authClient
+				logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
+			}
+		}
 	}
 
 	// Initialize handler instances

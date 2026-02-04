@@ -24,8 +24,9 @@ import (
 
 // ClusterManagerConfig contains configuration for the cluster manager
 type ClusterManagerConfig struct {
-	BaseDomain  string // Base domain for namespace gateways (e.g., "orama-devnet.network")
-	BaseDataDir string // Base directory for namespace data (e.g., "~/.orama/data/namespaces")
+	BaseDomain      string // Base domain for namespace gateways (e.g., "orama-devnet.network")
+	BaseDataDir     string // Base directory for namespace data (e.g., "~/.orama/data/namespaces")
+	GlobalRQLiteDSN string // Global RQLite DSN for API key validation (e.g., "http://localhost:4001")
 	// IPFS configuration for namespace gateways (defaults used if not set)
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (default: "http://localhost:9094")
 	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:5001")
@@ -41,9 +42,10 @@ type ClusterManager struct {
 	rqliteSpawner  *rqlite.InstanceSpawner
 	olricSpawner   *olric.InstanceSpawner
 	gatewaySpawner *gateway.InstanceSpawner
-	logger         *zap.Logger
-	baseDomain     string
-	baseDataDir    string
+	logger          *zap.Logger
+	baseDomain      string
+	baseDataDir     string
+	globalRQLiteDSN string // Global RQLite DSN for namespace gateway auth
 
 	// IPFS configuration for namespace gateways
 	ipfsClusterAPIURL     string
@@ -99,6 +101,7 @@ func NewClusterManager(
 		gatewaySpawner:        gatewaySpawner,
 		baseDomain:            cfg.BaseDomain,
 		baseDataDir:           cfg.BaseDataDir,
+		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
 		ipfsClusterAPIURL:     ipfsClusterAPIURL,
 		ipfsAPIURL:            ipfsAPIURL,
 		ipfsTimeout:           ipfsTimeout,
@@ -146,6 +149,7 @@ func NewClusterManagerWithComponents(
 		gatewaySpawner:        gatewaySpawner,
 		baseDomain:            cfg.BaseDomain,
 		baseDataDir:           cfg.BaseDataDir,
+		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
 		ipfsClusterAPIURL:     ipfsClusterAPIURL,
 		ipfsAPIURL:            ipfsAPIURL,
 		ipfsTimeout:           ipfsTimeout,
@@ -479,7 +483,9 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			HTTPPort:              portBlocks[i].GatewayHTTPPort,
 			BaseDomain:            cm.baseDomain,
 			RQLiteDSN:             rqliteDSN,
+			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
+			OlricTimeout:          30 * time.Second,
 			IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
 			IPFSAPIURL:            cm.ipfsAPIURL,
 			IPFSTimeout:           cm.ipfsTimeout,
@@ -683,35 +689,73 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 }
 
 // createDNSRecords creates DNS records for the namespace gateway.
-// All namespace nodes get DNS A records since all nodes now run Caddy
-// and can serve TLS for ns-{namespace}.{baseDomain} subdomains.
+// Creates A records for ALL nameservers (not just cluster nodes) so that any nameserver
+// can receive requests and proxy them to the namespace cluster via internal routing.
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
 
+	// Query for ALL nameserver IPs (not just the selected cluster nodes)
+	// This ensures DNS round-robins across all nameservers, even those not hosting the cluster
+	type nameserverIP struct {
+		IPAddress string `db:"ip_address"`
+	}
+	var nameservers []nameserverIP
+	nameserverQuery := `
+		SELECT DISTINCT ip_address
+		FROM dns_nameservers
+		WHERE domain = ?
+		ORDER BY hostname
+	`
+	err := cm.db.Query(ctx, &nameservers, nameserverQuery, cm.baseDomain)
+	if err != nil {
+		cm.logger.Error("Failed to query nameservers for DNS records",
+			zap.String("domain", cm.baseDomain),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to query nameservers: %w", err)
+	}
+
+	var nameserverIPs []string
+	for _, ns := range nameservers {
+		if ns.IPAddress != "" {
+			nameserverIPs = append(nameserverIPs, ns.IPAddress)
+		}
+	}
+
+	// Fallback: if no nameservers found in dns_nameservers table, use cluster node IPs
+	// This maintains backwards compatibility with clusters created before nameserver tracking
+	if len(nameserverIPs) == 0 {
+		cm.logger.Warn("No nameservers found in dns_nameservers table, falling back to cluster node IPs",
+			zap.String("domain", cm.baseDomain),
+		)
+		for _, node := range nodes {
+			nameserverIPs = append(nameserverIPs, node.IPAddress)
+		}
+	}
+
 	recordCount := 0
-	for i, node := range nodes {
+	for _, ip := range nameserverIPs {
 		query := `
 			INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by)
 			VALUES (?, 'A', ?, 300, ?, 'system')
 		`
-		_, err := cm.db.Exec(ctx, query, fqdn, node.IPAddress, cluster.NamespaceName)
+		_, err := cm.db.Exec(ctx, query, fqdn, ip, cluster.NamespaceName)
 		if err != nil {
 			cm.logger.Warn("Failed to create DNS record",
 				zap.String("fqdn", fqdn),
-				zap.String("ip", node.IPAddress),
+				zap.String("ip", ip),
 				zap.Error(err),
 			)
 		} else {
-			cm.logger.Info("Created DNS A record",
+			cm.logger.Info("Created DNS A record for nameserver",
 				zap.String("fqdn", fqdn),
-				zap.String("ip", node.IPAddress),
-				zap.Int("gateway_port", portBlocks[i].GatewayHTTPPort),
+				zap.String("ip", ip),
 			)
 			recordCount++
 		}
 	}
 
-	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d records)", fqdn, recordCount), nil)
+	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d nameserver records)", fqdn, recordCount), nil)
 	return nil
 }
 
@@ -1393,7 +1437,9 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				HTTPPort:              pb.GatewayHTTPPort,
 				BaseDomain:            cm.baseDomain,
 				RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 				OlricServers:          olricServers,
+				OlricTimeout:          30 * time.Second,
 				IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
 				IPFSAPIURL:            cm.ipfsAPIURL,
 				IPFSTimeout:           cm.ipfsTimeout,
@@ -1648,7 +1694,9 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				HTTPPort:              pb.GatewayHTTPPort,
 				BaseDomain:            state.BaseDomain,
 				RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 				OlricServers:          olricServers,
+				OlricTimeout:          30 * time.Second,
 				IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
 				IPFSAPIURL:            cm.ipfsAPIURL,
 				IPFSTimeout:           cm.ipfsTimeout,

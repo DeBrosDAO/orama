@@ -3,11 +3,13 @@ package storage
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"go.uber.org/zap"
 )
 
 // IPFSClient defines the interface for interacting with IPFS.
@@ -82,12 +84,27 @@ func (h *Handlers) checkCIDOwnership(ctx context.Context, cid, namespace string)
 		return true, nil // Allow access in test mode
 	}
 
+	// Add 5-second timeout to prevent hanging on slow RQLite queries
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	h.logger.ComponentDebug(logging.ComponentGeneral, "Querying RQLite for CID ownership",
+		zap.String("cid", cid),
+		zap.String("namespace", namespace))
+
 	query := `SELECT COUNT(*) as count FROM ipfs_content_ownership WHERE cid = ? AND namespace = ?`
 
 	var result []map[string]interface{}
 	if err := h.db.Query(ctx, &result, query, cid, namespace); err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "RQLite ownership query failed",
+			zap.Error(err),
+			zap.String("cid", cid))
 		return false, err
 	}
+
+	h.logger.ComponentDebug(logging.ComponentGeneral, "RQLite ownership query completed",
+		zap.String("cid", cid),
+		zap.Int("result_count", len(result)))
 
 	if len(result) == 0 {
 		return false, nil

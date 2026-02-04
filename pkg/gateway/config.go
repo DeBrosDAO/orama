@@ -13,6 +13,10 @@ type Config struct {
 	// If empty, defaults to "http://localhost:4001".
 	RQLiteDSN string
 
+	// Global RQLite DSN for API key validation (for namespace gateways)
+	// If empty, uses RQLiteDSN (for main/global gateways)
+	GlobalRQLiteDSN string
+
 	// HTTPS configuration
 	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
 	DomainName  string // Domain name for HTTPS certificate
