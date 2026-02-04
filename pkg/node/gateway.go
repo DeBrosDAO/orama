@@ -72,8 +72,9 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 	if ormClient := apiGateway.GetORMClient(); ormClient != nil {
 		baseDataDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "data", "namespaces")
 		clusterCfg := namespace.ClusterManagerConfig{
-			BaseDomain:  n.config.HTTPGateway.BaseDomain,
-			BaseDataDir: baseDataDir,
+			BaseDomain:      n.config.HTTPGateway.BaseDomain,
+			BaseDataDir:     baseDataDir,
+			GlobalRQLiteDSN: gwCfg.RQLiteDSN, // Pass global RQLite DSN for namespace gateway auth
 		}
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)

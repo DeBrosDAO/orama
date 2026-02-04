@@ -150,10 +150,11 @@ func IsServiceMasked(service string) (bool, error) {
 	return false, nil
 }
 
-// GetProductionServices returns a list of all DeBros production service names that exist
+// GetProductionServices returns a list of all DeBros production service names that exist,
+// including both global services and namespace-specific services
 func GetProductionServices() []string {
-	// Unified service names (no bootstrap/node distinction)
-	allServices := []string{
+	// Global/default service names
+	globalServices := []string{
 		"debros-gateway",
 		"debros-node",
 		"debros-olric",
@@ -163,12 +164,31 @@ func GetProductionServices() []string {
 		"debros-anyone-relay",
 	}
 
-	// Filter to only existing services by checking if unit file exists
 	var existing []string
-	for _, svc := range allServices {
+
+	// Add existing global services
+	for _, svc := range globalServices {
 		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
 		if _, err := os.Stat(unitPath); err == nil {
 			existing = append(existing, svc)
+		}
+	}
+
+	// Also discover namespace-specific services (debros-*@<namespace>.service)
+	// These are created when namespaces are provisioned and need to be restarted too
+	systemdDir := "/etc/systemd/system"
+	entries, err := os.ReadDir(systemdDir)
+	if err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			// Look for debros-*@*.service pattern (namespace services)
+			if strings.HasPrefix(name, "debros-") &&
+				strings.Contains(name, "@") &&
+				strings.HasSuffix(name, ".service") {
+				// Extract service name without .service extension
+				serviceName := strings.TrimSuffix(name, ".service")
+				existing = append(existing, serviceName)
+			}
 		}
 	}
 

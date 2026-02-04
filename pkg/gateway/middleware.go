@@ -277,7 +277,13 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Look up API key in DB and derive namespace
-		db := g.client.Database()
+		// Use authClient for namespace gateways (validates against global RQLite)
+		// Otherwise use regular client for global gateways
+		authClient := g.client
+		if g.authClient != nil {
+			authClient = g.authClient
+		}
+		db := authClient.Database()
 		// Use internal auth for DB validation (auth not established yet)
 		internalCtx := client.WithInternalAuth(r.Context())
 		// Join to namespaces to resolve name in one query

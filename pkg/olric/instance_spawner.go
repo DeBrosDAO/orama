@@ -86,8 +86,9 @@ type InstanceConfig struct {
 
 // OlricConfig represents the Olric YAML configuration structure
 type OlricConfig struct {
-	Server     OlricServerConfig     `yaml:"server"`
-	Memberlist OlricMemberlistConfig `yaml:"memberlist"`
+	Server         OlricServerConfig     `yaml:"server"`
+	Memberlist     OlricMemberlistConfig `yaml:"memberlist"`
+	PartitionCount uint64                `yaml:"partitionCount"` // Number of partitions (default: 256, we use 12 for namespace isolation)
 }
 
 // OlricServerConfig represents the server section of Olric config
@@ -269,6 +270,10 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig)
 			BindPort:    cfg.MemberlistPort,
 			Peers:       cfg.PeerAddresses,
 		},
+		// Use 12 partitions for namespace Olric instances (vs 256 default)
+		// This gives perfect distribution for 2-6 nodes and 20x faster scans
+		// 12 partitions × 2 (primary+replica) = 24 network calls (~0.6s vs 12s)
+		PartitionCount: 12,
 	}
 
 	data, err := yaml.Marshal(olricCfg)
