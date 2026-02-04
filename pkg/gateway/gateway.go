@@ -63,6 +63,12 @@ type Config struct {
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 	IPFSEnableEncryption  bool          // Enable client-side encryption before upload (default: true, discovered from node configs)
+
+	// TURN/STUN configuration for WebRTC
+	TURN *config.TURNConfig
+
+	// SFU configuration for WebRTC group calls
+	SFU *config.SFUConfig
 }
 
 type Gateway struct {
@@ -99,6 +105,9 @@ type Gateway struct {
 
 	// Authentication service
 	authService *auth.Service
+
+	// SFU manager for WebRTC group calls
+	sfuManager *SFUManager
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -410,6 +419,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentWarn(logging.ComponentGeneral, "serverless engine requires RQLite and IPFS; functions disabled")
 	}
 
+	// Initialize SFU manager for WebRTC calls
+	if err := gw.initializeSFUManager(); err != nil {
+		logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize SFU manager; WebRTC calls disabled", zap.Error(err))
+	}
+
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed, returning...")
 	return gw, nil
 }
@@ -421,7 +435,13 @@ func (g *Gateway) withInternalAuth(ctx context.Context) context.Context {
 
 // Close disconnects the gateway client
 func (g *Gateway) Close() {
-	// Close serverless engine first
+	// Close SFU manager first
+	if g.sfuManager != nil {
+		if err := g.sfuManager.Close(); err != nil {
+			g.logger.ComponentWarn(logging.ComponentGeneral, "error during SFU manager close", zap.Error(err))
+		}
+	}
+	// Close serverless engine
 	if g.serverlessEngine != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := g.serverlessEngine.Close(ctx); err != nil {

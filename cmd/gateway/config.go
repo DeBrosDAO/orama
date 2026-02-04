@@ -73,6 +73,26 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 
 	// Load YAML
+	type yamlICEServer struct {
+		URLs       []string `yaml:"urls"`
+		Username   string   `yaml:"username,omitempty"`
+		Credential string   `yaml:"credential,omitempty"`
+	}
+
+	type yamlTURN struct {
+		SharedSecret string   `yaml:"shared_secret"`
+		TTL          string   `yaml:"ttl"`
+		STUNURLs     []string `yaml:"stun_urls"`
+		TURNURLs     []string `yaml:"turn_urls"`
+	}
+
+	type yamlSFU struct {
+		Enabled         bool            `yaml:"enabled"`
+		MaxParticipants int             `yaml:"max_participants"`
+		MediaTimeout    string          `yaml:"media_timeout"`
+		ICEServers      []yamlICEServer `yaml:"ice_servers"`
+	}
+
 	type yamlCfg struct {
 		ListenAddr            string   `yaml:"listen_addr"`
 		ClientNamespace       string   `yaml:"client_namespace"`
@@ -87,6 +107,8 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
 		IPFSTimeout           string   `yaml:"ipfs_timeout"`
 		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
+		TURN                  yamlTURN `yaml:"turn"`
+		SFU                   yamlSFU  `yaml:"sfu"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -189,6 +211,59 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if y.IPFSReplicationFactor > 0 {
 		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
+	}
+
+	// TURN configuration
+	if y.TURN.SharedSecret != "" || len(y.TURN.STUNURLs) > 0 || len(y.TURN.TURNURLs) > 0 {
+		turnCfg := &config.TURNConfig{
+			SharedSecret: y.TURN.SharedSecret,
+			STUNURLs:     y.TURN.STUNURLs,
+			TURNURLs:     y.TURN.TURNURLs,
+		}
+		// Check for environment variable override for shared secret
+		if envSecret := os.Getenv("TURN_SHARED_SECRET"); envSecret != "" {
+			turnCfg.SharedSecret = envSecret
+		}
+		if v := strings.TrimSpace(y.TURN.TTL); v != "" {
+			if parsed, err := time.ParseDuration(v); err == nil {
+				turnCfg.TTL = parsed
+			} else {
+				logger.ComponentWarn(logging.ComponentGeneral, "invalid turn.ttl, using default", zap.String("value", v), zap.Error(err))
+			}
+		}
+		cfg.TURN = turnCfg
+		logger.ComponentInfo(logging.ComponentGeneral, "TURN configuration loaded",
+			zap.Int("stun_urls", len(turnCfg.STUNURLs)),
+			zap.Int("turn_urls", len(turnCfg.TURNURLs)),
+		)
+	}
+
+	// SFU configuration
+	if y.SFU.Enabled {
+		sfuCfg := &config.SFUConfig{
+			Enabled:         true,
+			MaxParticipants: y.SFU.MaxParticipants,
+		}
+		if v := strings.TrimSpace(y.SFU.MediaTimeout); v != "" {
+			if parsed, err := time.ParseDuration(v); err == nil {
+				sfuCfg.MediaTimeout = parsed
+			} else {
+				logger.ComponentWarn(logging.ComponentGeneral, "invalid sfu.media_timeout, using default", zap.String("value", v), zap.Error(err))
+			}
+		}
+		// Parse ICE servers
+		for _, iceServer := range y.SFU.ICEServers {
+			sfuCfg.ICEServers = append(sfuCfg.ICEServers, config.ICEServerConfig{
+				URLs:       iceServer.URLs,
+				Username:   iceServer.Username,
+				Credential: iceServer.Credential,
+			})
+		}
+		cfg.SFU = sfuCfg
+		logger.ComponentInfo(logging.ComponentGeneral, "SFU configuration loaded",
+			zap.Int("max_participants", sfuCfg.MaxParticipants),
+			zap.Int("ice_servers", len(sfuCfg.ICEServers)),
+		)
 	}
 
 	// Validate configuration

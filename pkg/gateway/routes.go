@@ -69,5 +69,14 @@ func (g *Gateway) Routes() http.Handler {
 		g.serverlessHandlers.RegisterRoutes(mux)
 	}
 
+	// TURN credentials for WebRTC
+	mux.HandleFunc("/v1/turn/credentials", g.turnCredentialsHandler)
+
+	// SFU endpoints for WebRTC group calls (if enabled)
+	if g.sfuManager != nil {
+		mux.HandleFunc("/v1/sfu/room", g.sfuCreateRoomHandler)
+		mux.HandleFunc("/v1/sfu/room/", g.sfuRoomHandler) // Handles :roomId/* paths
+	}
+
 	return g.withMiddleware(mux)
 }

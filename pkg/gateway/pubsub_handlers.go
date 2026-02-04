@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -410,11 +411,16 @@ func (g *Gateway) pubsubTopicsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveNamespaceFromRequest gets namespace from context set by auth middleware
+// Falls back to query parameter "namespace" for development/testing
 func resolveNamespaceFromRequest(r *http.Request) string {
 	if v := r.Context().Value(ctxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok {
 			return s
 		}
+	}
+	// Fallback: check query parameter for development
+	if ns := strings.TrimSpace(r.URL.Query().Get("namespace")); ns != "" {
+		return ns
 	}
 	return ""
 }

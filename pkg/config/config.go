@@ -164,6 +164,50 @@ type ClientConfig struct {
 	RetryAttempts  int           `yaml:"retry_attempts"`
 }
 
+// TURNConfig contains TURN/STUN server credential configuration
+type TURNConfig struct {
+	// SharedSecret is the shared secret for TURN credential generation (HMAC-SHA1)
+	// Should be set via TURN_SHARED_SECRET environment variable
+	SharedSecret string `yaml:"shared_secret"`
+
+	// TTL is the time-to-live for generated credentials
+	// Default: 24 hours
+	TTL time.Duration `yaml:"ttl"`
+
+	// STUNURLs are the STUN server URLs to return to clients
+	// e.g., ["stun:gateway.orama.com:3478"]
+	STUNURLs []string `yaml:"stun_urls"`
+
+	// TURNURLs are the TURN server URLs to return to clients
+	// e.g., ["turn:gateway.orama.com:3478?transport=udp", "turns:gateway.orama.com:443?transport=tcp"]
+	TURNURLs []string `yaml:"turn_urls"`
+}
+
+// SFUConfig contains WebRTC SFU (Selective Forwarding Unit) configuration
+type SFUConfig struct {
+	// Enabled enables the SFU service
+	Enabled bool `yaml:"enabled"`
+
+	// MaxParticipants is the maximum number of participants per room
+	// Default: 10
+	MaxParticipants int `yaml:"max_participants"`
+
+	// MediaTimeout is the timeout for media operations
+	// Default: 30 seconds
+	MediaTimeout time.Duration `yaml:"media_timeout"`
+
+	// ICEServers are additional ICE servers for WebRTC connections
+	// These are used in addition to the TURN servers from TURNConfig
+	ICEServers []ICEServerConfig `yaml:"ice_servers"`
+}
+
+// ICEServerConfig represents a single ICE server configuration
+type ICEServerConfig struct {
+	URLs       []string `yaml:"urls"`
+	Username   string   `yaml:"username,omitempty"`
+	Credential string   `yaml:"credential,omitempty"`
+}
+
 // ParseMultiaddrs converts string addresses to multiaddr objects
 func (c *Config) ParseMultiaddrs() ([]multiaddr.Multiaddr, error) {
 	var addrs []multiaddr.Multiaddr
