@@ -1,0 +1,32 @@
+[Unit]
+Description=DeBros Namespace Gateway (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target debros-namespace-rqlite@%i.service debros-namespace-olric@%i.service
+Requires=debros-namespace-rqlite@%i.service debros-namespace-olric@%i.service
+PartOf=debros-node.service
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+WorkingDirectory=/home/debros
+
+EnvironmentFile=/home/debros/.orama/data/namespaces/%i/gateway.env
+
+ExecStart=/home/debros/bin/gateway --config /home/debros/.orama/data/namespaces/%i/configs/gateway-${NODE_ID}.yaml
+
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=debros-gateway-%i
+
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
@@ -18,11 +19,17 @@ func HandleStop() {
 
 	fmt.Printf("Stopping all DeBros production services...\n")
 
+	// First, stop all namespace services
+	fmt.Printf("\n  Stopping namespace services...\n")
+	stopAllNamespaceServices()
+
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
 		fmt.Printf("  ⚠️  No DeBros services found\n")
 		return
 	}
+
+	fmt.Printf("\n  Stopping main services...\n")
 
 	// First, disable all services to prevent auto-restart
 	disableArgs := []string{"disable"}
@@ -109,4 +116,41 @@ func HandleStop() {
 		fmt.Printf("\n✅ All services stopped and disabled (will not auto-start on boot)\n")
 		fmt.Printf("   Use 'orama prod start' to start and re-enable services\n")
 	}
+}
+
+// stopAllNamespaceServices stops all running namespace services
+func stopAllNamespaceServices() {
+	// Find all running namespace services using systemctl list-units
+	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "debros-namespace-*@*.service")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("    ⚠️  Warning: Failed to list namespace services: %v\n", err)
+		return
+	}
+
+	lines := strings.Split(string(output), "\n")
+	var namespaceServices []string
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			serviceName := fields[0]
+			if strings.HasPrefix(serviceName, "debros-namespace-") {
+				namespaceServices = append(namespaceServices, serviceName)
+			}
+		}
+	}
+
+	if len(namespaceServices) == 0 {
+		fmt.Printf("    No namespace services found\n")
+		return
+	}
+
+	// Stop all namespace services
+	for _, svc := range namespaceServices {
+		if err := exec.Command("systemctl", "stop", svc).Run(); err != nil {
+			fmt.Printf("    ⚠️  Warning: Failed to stop %s: %v\n", svc, err)
+		}
+	}
+
+	fmt.Printf("    ✓ Stopped %d namespace service(s)\n", len(namespaceServices))
 }
