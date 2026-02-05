@@ -256,6 +256,13 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 		ps.logf("  ✓ Deployment sudoers configured")
 	}
 
+	// Set up namespace sudoers (allows debros user to manage debros-namespace-* services)
+	if err := ps.userProvisioner.SetupNamespaceSudoers(); err != nil {
+		ps.logf("  ⚠️  Failed to setup namespace sudoers: %v", err)
+	} else {
+		ps.logf("  ✓ Namespace sudoers configured")
+	}
+
 	// Set up WireGuard sudoers (allows debros user to manage WG peers)
 	if err := ps.userProvisioner.SetupWireGuardSudoers(); err != nil {
 		ps.logf("  ⚠️  Failed to setup wireguard sudoers: %v", err)

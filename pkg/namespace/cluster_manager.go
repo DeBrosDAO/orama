@@ -21,7 +21,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 // ClusterManagerConfig contains configuration for the cluster manager
@@ -164,57 +163,9 @@ func (cm *ClusterManager) spawnRQLiteWithSystemd(ctx context.Context, cfg rqlite
 	return cm.systemdSpawner.SpawnRQLite(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 
-// spawnOlricWithSystemd generates config and spawns Olric via systemd
+// spawnOlricWithSystemd spawns Olric via systemd (config creation now handled by spawner)
 func (cm *ClusterManager) spawnOlricWithSystemd(ctx context.Context, cfg olric.InstanceConfig) error {
-	// Generate Olric config file (YAML)
-	configDir := filepath.Join(cm.baseDataDir, cfg.Namespace, "configs")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	configPath := filepath.Join(configDir, fmt.Sprintf("olric-%s.yaml", cfg.NodeID))
-
-	// Generate Olric YAML config
-	type olricServerConfig struct {
-		BindAddr string `yaml:"bindAddr"`
-		BindPort int    `yaml:"bindPort"`
-	}
-	type olricMemberlistConfig struct {
-		Environment string   `yaml:"environment"`
-		BindAddr    string   `yaml:"bindAddr"`
-		BindPort    int      `yaml:"bindPort"`
-		Peers       []string `yaml:"peers,omitempty"`
-	}
-	type olricConfig struct {
-		Server         olricServerConfig      `yaml:"server"`
-		Memberlist     olricMemberlistConfig  `yaml:"memberlist"`
-		PartitionCount uint64                 `yaml:"partitionCount"`
-	}
-
-	config := olricConfig{
-		Server: olricServerConfig{
-			BindAddr: cfg.BindAddr,
-			BindPort: cfg.HTTPPort,
-		},
-		Memberlist: olricMemberlistConfig{
-			Environment: "lan",
-			BindAddr:    cfg.BindAddr,
-			BindPort:    cfg.MemberlistPort,
-			Peers:       cfg.PeerAddresses,
-		},
-		PartitionCount: 12, // Optimized for namespace clusters (vs 256 default)
-	}
-
-	configBytes, err := yaml.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("failed to marshal Olric config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
-		return fmt.Errorf("failed to write Olric config: %w", err)
-	}
-
-	// Start via systemd
+	// SystemdSpawner now handles config file creation
 	return cm.systemdSpawner.SpawnOlric(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 
@@ -234,55 +185,9 @@ func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer
 	return os.WriteFile(peersFile, data, 0644)
 }
 
-// spawnGatewayWithSystemd generates config and spawns Gateway via systemd
+// spawnGatewayWithSystemd spawns Gateway via systemd (config creation now handled by spawner)
 func (cm *ClusterManager) spawnGatewayWithSystemd(ctx context.Context, cfg gateway.InstanceConfig) error {
-	// Generate Gateway config file (YAML)
-	configDir := filepath.Join(cm.baseDataDir, cfg.Namespace, "configs")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	configPath := filepath.Join(configDir, fmt.Sprintf("gateway-%s.yaml", cfg.NodeID))
-
-	// Build Gateway YAML config
-	type gatewayYAMLConfig struct {
-		ListenAddr            string        `yaml:"listen_addr"`
-		ClientNamespace       string        `yaml:"client_namespace"`
-		RQLiteDSN             string        `yaml:"rqlite_dsn"`
-		GlobalRQLiteDSN       string        `yaml:"global_rqlite_dsn,omitempty"`
-		DomainName            string        `yaml:"domain_name"`
-		OlricServers          []string      `yaml:"olric_servers"`
-		OlricTimeout          string        `yaml:"olric_timeout"`
-		IPFSClusterAPIURL     string        `yaml:"ipfs_cluster_api_url"`
-		IPFSAPIURL            string        `yaml:"ipfs_api_url"`
-		IPFSTimeout           string        `yaml:"ipfs_timeout"`
-		IPFSReplicationFactor int           `yaml:"ipfs_replication_factor"`
-	}
-
-	gatewayConfig := gatewayYAMLConfig{
-		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
-		ClientNamespace:       cfg.Namespace,
-		RQLiteDSN:             cfg.RQLiteDSN,
-		GlobalRQLiteDSN:       cfg.GlobalRQLiteDSN,
-		DomainName:            cfg.BaseDomain,
-		OlricServers:          cfg.OlricServers,
-		OlricTimeout:          cfg.OlricTimeout.String(),
-		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
-		IPFSAPIURL:            cfg.IPFSAPIURL,
-		IPFSTimeout:           cfg.IPFSTimeout.String(),
-		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
-	}
-
-	configBytes, err := yaml.Marshal(gatewayConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal Gateway config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
-		return fmt.Errorf("failed to write Gateway config: %w", err)
-	}
-
-	// Start via systemd
+	// SystemdSpawner now handles config file creation
 	return cm.systemdSpawner.SpawnGateway(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 

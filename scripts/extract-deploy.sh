@@ -49,21 +49,25 @@ if [ -d "$SRC_DIR/bin-linux" ]; then
 
     for bin in orama-node gateway identity rqlite-mcp olric-server orama; do
         if [ -f "$SRC_DIR/bin-linux/$bin" ]; then
-            cp "$SRC_DIR/bin-linux/$bin" "$BIN_DIR/$bin"
-            chmod +x "$BIN_DIR/$bin"
+            # Atomic rename: copy to temp, then move (works even if binary is running)
+            cp "$SRC_DIR/bin-linux/$bin" "$BIN_DIR/$bin.tmp"
+            chmod +x "$BIN_DIR/$bin.tmp"
+            mv -f "$BIN_DIR/$bin.tmp" "$BIN_DIR/$bin"
             echo "  ✓ $bin → $BIN_DIR/$bin"
         fi
     done
 
     if [ -f "$SRC_DIR/bin-linux/coredns" ]; then
-        cp "$SRC_DIR/bin-linux/coredns" /usr/local/bin/coredns
-        chmod +x /usr/local/bin/coredns
+        cp "$SRC_DIR/bin-linux/coredns" /usr/local/bin/coredns.tmp
+        chmod +x /usr/local/bin/coredns.tmp
+        mv -f /usr/local/bin/coredns.tmp /usr/local/bin/coredns
         echo "  ✓ coredns → /usr/local/bin/coredns"
     fi
 
     if [ -f "$SRC_DIR/bin-linux/caddy" ]; then
-        cp "$SRC_DIR/bin-linux/caddy" /usr/bin/caddy
-        chmod +x /usr/bin/caddy
+        cp "$SRC_DIR/bin-linux/caddy" /usr/bin/caddy.tmp
+        chmod +x /usr/bin/caddy.tmp
+        mv -f /usr/bin/caddy.tmp /usr/bin/caddy
         echo "  ✓ caddy → /usr/bin/caddy"
     fi
 

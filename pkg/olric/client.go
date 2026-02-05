@@ -6,6 +6,7 @@ import (
 	"time"
 
 	olriclib "github.com/olric-data/olric"
+	"github.com/olric-data/olric/config"
 	"go.uber.org/zap"
 )
 
@@ -33,14 +34,23 @@ func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 		servers = []string{"localhost:3320"}
 	}
 
-	client, err := olriclib.NewClusterClient(servers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Olric cluster client: %w", err)
-	}
-
 	timeout := cfg.Timeout
 	if timeout == 0 {
-		timeout = 10 * time.Second
+		timeout = 30 * time.Second  // Increased default timeout for slow SCAN operations
+	}
+
+	// Configure client with increased timeouts for slow operations
+	clientCfg := &config.Client{
+		DialTimeout:     5 * time.Second,
+		ReadTimeout:     timeout,        // 30s default - enough for slow SCAN operations
+		WriteTimeout:    timeout,
+		MaxRetries:      1,              // Reduce retries to 1 to avoid excessive delays
+		Authentication:  &config.Authentication{},  // Initialize to prevent nil pointer
+	}
+
+	client, err := olriclib.NewClusterClient(servers, olriclib.WithConfig(clientCfg))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Olric cluster client: %w", err)
 	}
 
 	return &Client{

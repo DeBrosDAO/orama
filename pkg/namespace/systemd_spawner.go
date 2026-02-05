@@ -3,6 +3,8 @@ package namespace
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
@@ -10,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 // SystemdSpawner spawns namespace cluster processes using systemd services
@@ -80,10 +83,62 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
 
-	// Generate environment file (Olric uses OLRIC_SERVER_CONFIG env var, set in systemd unit)
+	// Create config directory
+	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("olric-%s.yaml", nodeID))
+
+	// Generate Olric YAML config
+	type olricServerConfig struct {
+		BindAddr string `yaml:"bindAddr"`
+		BindPort int    `yaml:"bindPort"`
+	}
+	type olricMemberlistConfig struct {
+		Environment string   `yaml:"environment"`
+		BindAddr    string   `yaml:"bindAddr"`
+		BindPort    int      `yaml:"bindPort"`
+		Peers       []string `yaml:"peers,omitempty"`
+	}
+	type olricConfig struct {
+		Server         olricServerConfig     `yaml:"server"`
+		Memberlist     olricMemberlistConfig `yaml:"memberlist"`
+		PartitionCount uint64                `yaml:"partitionCount"`
+	}
+
+	config := olricConfig{
+		Server: olricServerConfig{
+			BindAddr: cfg.BindAddr,
+			BindPort: cfg.HTTPPort,
+		},
+		Memberlist: olricMemberlistConfig{
+			Environment: "lan",
+			BindAddr:    cfg.BindAddr,
+			BindPort:    cfg.MemberlistPort,
+			Peers:       cfg.PeerAddresses,
+		},
+		PartitionCount: 12, // Optimized for namespace clusters (vs 256 default)
+	}
+
+	configBytes, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Olric config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write Olric config: %w", err)
+	}
+
+	s.logger.Info("Created Olric config file",
+		zap.String("path", configPath),
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	// Generate environment file with Olric config path
 	envVars := map[string]string{
-		// No additional env vars needed - Olric reads from config file
-		// The config file path is set in the systemd unit file
+		"OLRIC_SERVER_CONFIG": configPath,
 	}
 
 	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeOlric, envVars); err != nil {
@@ -113,9 +168,60 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
 
-	// Generate environment file
+	// Create config directory
+	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("gateway-%s.yaml", nodeID))
+
+	// Build Gateway YAML config
+	type gatewayYAMLConfig struct {
+		ListenAddr            string   `yaml:"listen_addr"`
+		ClientNamespace       string   `yaml:"client_namespace"`
+		RQLiteDSN             string   `yaml:"rqlite_dsn"`
+		GlobalRQLiteDSN       string   `yaml:"global_rqlite_dsn,omitempty"`
+		DomainName            string   `yaml:"domain_name"`
+		OlricServers          []string `yaml:"olric_servers"`
+		OlricTimeout          string   `yaml:"olric_timeout"`
+		IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url"`
+		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
+		IPFSTimeout           string   `yaml:"ipfs_timeout"`
+		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
+	}
+
+	gatewayConfig := gatewayYAMLConfig{
+		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
+		ClientNamespace:       cfg.Namespace,
+		RQLiteDSN:             cfg.RQLiteDSN,
+		GlobalRQLiteDSN:       cfg.GlobalRQLiteDSN,
+		DomainName:            cfg.BaseDomain,
+		OlricServers:          cfg.OlricServers,
+		OlricTimeout:          cfg.OlricTimeout.String(),
+		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
+		IPFSAPIURL:            cfg.IPFSAPIURL,
+		IPFSTimeout:           cfg.IPFSTimeout.String(),
+		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+	}
+
+	configBytes, err := yaml.Marshal(gatewayConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Gateway config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write Gateway config: %w", err)
+	}
+
+	s.logger.Info("Created Gateway config file",
+		zap.String("path", configPath),
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	// Generate environment file with Gateway config path
 	envVars := map[string]string{
-		// Gateway uses config file, no additional env vars needed
+		"GATEWAY_CONFIG": configPath,
 	}
 
 	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeGateway, envVars); err != nil {
