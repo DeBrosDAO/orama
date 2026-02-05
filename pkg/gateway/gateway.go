@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,6 +122,9 @@ type Gateway struct {
 
 	// Namespace delete handler
 	namespaceDeleteHandler http.Handler
+
+	// Peer discovery for namespace gateways (libp2p mesh formation)
+	peerDiscovery *PeerDiscovery
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -448,6 +453,51 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			olricCfg.Servers = []string{"localhost:3320"}
 		}
 		gw.startOlricReconnectLoop(olricCfg)
+	}
+
+	// Initialize peer discovery for namespace gateways
+	// This allows the 3 namespace gateway instances to discover each other
+	if cfg.ClientNamespace != "" && cfg.ClientNamespace != "default" && deps.Client != nil {
+		logger.ComponentInfo(logging.ComponentGeneral, "Initializing peer discovery for namespace gateway...",
+			zap.String("namespace", cfg.ClientNamespace))
+
+		// Get libp2p host from client
+		host := deps.Client.Host()
+		if host != nil {
+			// Parse listen port from ListenAddr (format: ":port" or "addr:port")
+			listenPort := 0
+			if cfg.ListenAddr != "" {
+				parts := strings.Split(cfg.ListenAddr, ":")
+				if len(parts) > 0 {
+					portStr := parts[len(parts)-1]
+					if p, err := strconv.Atoi(portStr); err == nil {
+						listenPort = p
+					}
+				}
+			}
+
+			// Create peer discovery manager
+			gw.peerDiscovery = NewPeerDiscovery(
+				host,
+				deps.SQLDB,
+				cfg.NodePeerID,
+				listenPort,
+				cfg.ClientNamespace,
+				logger.Logger,
+			)
+
+			// Start peer discovery
+			ctx := context.Background()
+			if err := gw.peerDiscovery.Start(ctx); err != nil {
+				logger.ComponentWarn(logging.ComponentGeneral, "Failed to start peer discovery",
+					zap.Error(err))
+			} else {
+				logger.ComponentInfo(logging.ComponentGeneral, "Peer discovery started successfully",
+					zap.String("namespace", cfg.ClientNamespace))
+			}
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "Cannot initialize peer discovery: libp2p host not available")
+		}
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed")
