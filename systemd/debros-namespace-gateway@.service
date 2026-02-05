@@ -13,7 +13,8 @@ WorkingDirectory=/home/debros
 
 EnvironmentFile=/home/debros/.orama/data/namespaces/%i/gateway.env
 
-ExecStart=/home/debros/bin/gateway --config /home/debros/.orama/data/namespaces/%i/configs/gateway-${NODE_ID}.yaml
+# Use shell to properly expand NODE_ID from env file
+ExecStart=/bin/sh -c 'exec /home/debros/bin/gateway --config ${GATEWAY_CONFIG}'
 
 TimeoutStopSec=30s
 KillMode=mixed

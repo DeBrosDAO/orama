@@ -11,11 +11,10 @@ User=debros
 Group=debros
 WorkingDirectory=/home/debros
 
-# Olric reads config from environment variable
-Environment="OLRIC_SERVER_CONFIG=/home/debros/.orama/data/namespaces/%i/configs/olric-${NODE_ID}.yaml"
+# Olric reads config from environment variable (set in env file)
 EnvironmentFile=/home/debros/.orama/data/namespaces/%i/olric.env
 
-ExecStart=/usr/local/bin/olric-server
+ExecStart=/home/debros/bin/olric-server
 
 TimeoutStopSec=30s
 KillMode=mixed
