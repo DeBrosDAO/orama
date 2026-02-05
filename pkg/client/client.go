@@ -113,6 +113,13 @@ func (c *Client) Config() *ClientConfig {
 	return &cp
 }
 
+// Host returns the underlying libp2p host for advanced usage
+func (c *Client) Host() host.Host {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.host
+}
+
 // Connect establishes connection to the network
 func (c *Client) Connect() error {
 	c.mu.Lock()
