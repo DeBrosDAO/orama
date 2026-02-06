@@ -64,7 +64,14 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 		return "", "" // No credentials provided
 	}
 
-	// Look up API key in main cluster RQLite
+	// Check middleware cache first
+	if g.mwCache != nil {
+		if cachedNS, ok := g.mwCache.GetAPIKeyNamespace(key); ok {
+			return cachedNS, ""
+		}
+	}
+
+	// Cache miss — look up API key in main cluster RQLite
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(r.Context())
 	q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
@@ -84,6 +91,11 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 	}
 	if ns == "" {
 		return "", "invalid API key"
+	}
+
+	// Cache the result
+	if g.mwCache != nil {
+		g.mwCache.SetAPIKeyNamespace(key, ns)
 	}
 
 	return ns, ""
@@ -208,8 +220,24 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 			zap.String("duration", dur.String()),
 		)
 
-		// Persist request log asynchronously (best-effort)
-		go g.persistRequestLog(r, srw, dur)
+		// Enqueue log entry for batched persistence (replaces per-request DB writes)
+		if g.logBatcher != nil {
+			apiKey := ""
+			if v := r.Context().Value(ctxKeyAPIKey); v != nil {
+				if s, ok := v.(string); ok {
+					apiKey = s
+				}
+			}
+			g.logBatcher.Add(requestLogEntry{
+				method:     r.Method,
+				path:       r.URL.Path,
+				statusCode: srw.status,
+				bytesOut:   srw.bytes,
+				durationMs: dur.Milliseconds(),
+				ip:         getClientIP(r),
+				apiKey:     apiKey,
+			})
+		}
 	})
 }
 
@@ -278,7 +306,17 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Look up API key in DB and derive namespace
+		// Check middleware cache first for API key → namespace mapping
+		if g.mwCache != nil {
+			if cachedNS, ok := g.mwCache.GetAPIKeyNamespace(key); ok {
+				reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
+				reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, cachedNS)
+				next.ServeHTTP(w, r.WithContext(reqCtx))
+				return
+			}
+		}
+
+		// Cache miss — look up API key in DB and derive namespace
 		// Use authClient for namespace gateways (validates against global RQLite)
 		// Otherwise use regular client for global gateways
 		authClient := g.client
@@ -317,6 +355,11 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
+		}
+
+		// Cache the result for subsequent requests
+		if g.mwCache != nil {
+			g.mwCache.SetAPIKeyNamespace(key, ns)
 		}
 
 		// Attach auth metadata to context for downstream use
@@ -439,6 +482,18 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/v1/namespace/status") {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// Skip ownership checks for requests pre-authenticated by the main gateway.
+		// The main gateway already validated the API key and resolved the namespace
+		// before proxying, so re-checking ownership against the namespace RQLite is
+		// redundant and adds ~300ms of unnecessary latency (3 DB round-trips).
+		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
+			clientIP := getClientIP(r)
+			if isInternalIP(clientIP) {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		// Cross-namespace access control for namespace gateways
@@ -779,50 +834,72 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Look up namespace cluster gateway using internal (WireGuard) IPs for inter-node proxying
-	db := g.client.Database()
-	internalCtx := client.WithInternalAuth(r.Context())
-
-	// Query all ready namespace gateways and choose a stable target.
-	// Random selection causes WS subscribe and publish calls to hit different
-	// nodes, which makes pubsub delivery flaky for short-lived subscriptions.
-	query := `
-		SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
-		FROM namespace_port_allocations npa
-		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
-		JOIN dns_nodes dn ON npa.node_id = dn.id
-		WHERE nc.namespace_name = ? AND nc.status = 'ready'
-	`
-	result, err := db.Query(internalCtx, query, namespaceName)
-	if err != nil || result == nil || len(result.Rows) == 0 {
-		g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
-			zap.String("namespace", namespaceName),
-		)
-		http.Error(w, "Namespace gateway not found", http.StatusNotFound)
-		return
-	}
-
+	// Check middleware cache for namespace gateway targets
 	type namespaceGatewayTarget struct {
 		ip   string
 		port int
 	}
-	targets := make([]namespaceGatewayTarget, 0, len(result.Rows))
-	for _, row := range result.Rows {
-		if len(row) == 0 {
-			continue
-		}
-		ip := getString(row[0])
-		if ip == "" {
-			continue
-		}
-		port := 10004
-		if len(row) > 1 {
-			if p := getInt(row[1]); p > 0 {
-				port = p
+	var targets []namespaceGatewayTarget
+
+	if g.mwCache != nil {
+		if cached, ok := g.mwCache.GetNamespaceTargets(namespaceName); ok {
+			for _, t := range cached {
+				targets = append(targets, namespaceGatewayTarget{ip: t.ip, port: t.port})
 			}
 		}
-		targets = append(targets, namespaceGatewayTarget{ip: ip, port: port})
 	}
+
+	// Cache miss — look up namespace cluster gateway from DB
+	if len(targets) == 0 {
+		db := g.client.Database()
+		internalCtx := client.WithInternalAuth(r.Context())
+
+		// Query all ready namespace gateways and choose a stable target.
+		// Random selection causes WS subscribe and publish calls to hit different
+		// nodes, which makes pubsub delivery flaky for short-lived subscriptions.
+		query := `
+			SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
+			FROM namespace_port_allocations npa
+			JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
+			JOIN dns_nodes dn ON npa.node_id = dn.id
+			WHERE nc.namespace_name = ? AND nc.status = 'ready'
+		`
+		result, err := db.Query(internalCtx, query, namespaceName)
+		if err != nil || result == nil || len(result.Rows) == 0 {
+			g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
+				zap.String("namespace", namespaceName),
+			)
+			http.Error(w, "Namespace gateway not found", http.StatusNotFound)
+			return
+		}
+
+		for _, row := range result.Rows {
+			if len(row) == 0 {
+				continue
+			}
+			ip := getString(row[0])
+			if ip == "" {
+				continue
+			}
+			port := 10004
+			if len(row) > 1 {
+				if p := getInt(row[1]); p > 0 {
+					port = p
+				}
+			}
+			targets = append(targets, namespaceGatewayTarget{ip: ip, port: port})
+		}
+
+		// Cache the result for subsequent requests
+		if g.mwCache != nil && len(targets) > 0 {
+			cacheTargets := make([]gatewayTarget, len(targets))
+			for i, t := range targets {
+				cacheTargets[i] = gatewayTarget{ip: t.ip, port: t.port}
+			}
+			g.mwCache.SetNamespaceTargets(namespaceName, cacheTargets)
+		}
+	}
+
 	if len(targets) == 0 {
 		http.Error(w, "Namespace gateway not available", http.StatusServiceUnavailable)
 		return
