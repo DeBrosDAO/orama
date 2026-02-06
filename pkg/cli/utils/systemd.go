@@ -174,20 +174,27 @@ func GetProductionServices() []string {
 		}
 	}
 
-	// Also discover namespace-specific services (debros-*@<namespace>.service)
-	// These are created when namespaces are provisioned and need to be restarted too
-	systemdDir := "/etc/systemd/system"
-	entries, err := os.ReadDir(systemdDir)
+	// Discover namespace service instances from the namespaces data directory.
+	// We can't rely on scanning /etc/systemd/system because that only contains
+	// template files (e.g. debros-namespace-gateway@.service) with no instance name.
+	// Restarting a template without an instance is a no-op.
+	// Instead, scan the data directory where each subdirectory is a provisioned namespace.
+	namespacesDir := "/home/debros/.orama/data/namespaces"
+	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
-		for _, entry := range entries {
-			name := entry.Name()
-			// Look for debros-*@*.service pattern (namespace services)
-			if strings.HasPrefix(name, "debros-") &&
-				strings.Contains(name, "@") &&
-				strings.HasSuffix(name, ".service") {
-				// Extract service name without .service extension
-				serviceName := strings.TrimSuffix(name, ".service")
-				existing = append(existing, serviceName)
+		serviceTypes := []string{"rqlite", "olric", "gateway"}
+		for _, nsEntry := range nsEntries {
+			if !nsEntry.IsDir() {
+				continue
+			}
+			ns := nsEntry.Name()
+			for _, svcType := range serviceTypes {
+				// Only add if the env file exists (service was provisioned)
+				envFile := filepath.Join(namespacesDir, ns, svcType+".env")
+				if _, err := os.Stat(envFile); err == nil {
+					svcName := fmt.Sprintf("debros-namespace-%s@%s", svcType, ns)
+					existing = append(existing, svcName)
+				}
 			}
 		}
 	}

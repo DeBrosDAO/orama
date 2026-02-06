@@ -618,6 +618,18 @@ func (o *Orchestrator) restartServices() error {
 	// Get services to restart
 	services := utils.GetProductionServices()
 
+	// Re-enable namespace services BEFORE restarting debros-node.
+	// orama prod stop disables them, and debros-node's PartOf= dependency
+	// won't propagate restart to disabled services. We must re-enable first
+	// so that namespace gateways restart with the updated binary.
+	for _, svc := range services {
+		if strings.Contains(svc, "@") {
+			if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
+				fmt.Printf("   ⚠️  Warning: Failed to re-enable %s: %v\n", svc, err)
+			}
+		}
+	}
+
 	// If this is a nameserver, also restart CoreDNS and Caddy
 	if o.setup.IsNameserver() {
 		nameserverServices := []string{"coredns", "caddy"}
@@ -672,7 +684,7 @@ func (o *Orchestrator) restartServices() error {
 		}
 	}
 
-	// Start any remaining services not in priority list
+	// Start any remaining services not in priority list (includes namespace services)
 	for _, svc := range services {
 		found := false
 		for _, priority := range priorityOrder {

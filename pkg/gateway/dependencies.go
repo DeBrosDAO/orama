@@ -128,9 +128,9 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	}
 
 	if strings.Contains(dsn, "?") {
-		dsn += "&disableClusterDiscovery=true"
+		dsn += "&disableClusterDiscovery=true&level=none"
 	} else {
-		dsn += "?disableClusterDiscovery=true"
+		dsn += "?disableClusterDiscovery=true&level=none"
 	}
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
