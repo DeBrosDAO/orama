@@ -1,0 +1,33 @@
+[Unit]
+Description=DeBros Namespace Gateway (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target debros-namespace-rqlite@%i.service debros-namespace-olric@%i.service
+Requires=debros-namespace-rqlite@%i.service debros-namespace-olric@%i.service
+PartOf=debros-node.service
+
+[Service]
+Type=simple
+User=debros
+Group=debros
+WorkingDirectory=/home/debros
+
+EnvironmentFile=/home/debros/.orama/data/namespaces/%i/gateway.env
+
+# Use shell to properly expand NODE_ID from env file
+ExecStart=/bin/sh -c 'exec /home/debros/bin/gateway --config ${GATEWAY_CONFIG}'
+
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=debros-gateway-%i
+
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

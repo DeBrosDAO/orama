@@ -18,7 +18,6 @@ import (
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/host"
 	"go.uber.org/zap"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 // Node represents a network node with RQLite database
@@ -44,17 +43,8 @@ type Node struct {
 	clusterConfigManager *ipfs.ClusterConfigManager
 
 	// Full gateway (for API, auth, pubsub, and internal service routing)
-	apiGateway *gateway.Gateway
+	apiGateway       *gateway.Gateway
 	apiGatewayServer *http.Server
-
-	// SNI gateway (for TCP routing of raft, ipfs, olric, etc.)
-	sniGateway *gateway.TCPSNIGateway
-
-	// Shared certificate manager for HTTPS and SNI
-	certManager *autocert.Manager
-
-	// Certificate ready signal - closed when TLS certificates are extracted and ready for use
-	certReady chan struct{}
 }
 
 // NewNode creates a new network node
@@ -113,6 +103,26 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	// Sync WireGuard peers from RQLite (if WG is active on this node)
+	n.startWireGuardSyncLoop(ctx)
+
+	// Sync IPFS swarm connections with all cluster peers
+	n.startIPFSSwarmSyncLoop(ctx)
+
+	// Register this node in dns_nodes table for deployment routing
+	if err := n.registerDNSNode(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to register DNS node", zap.Error(err))
+		// Don't fail startup if DNS registration fails, it will retry on heartbeat
+	} else {
+		// Start DNS heartbeat to keep node status fresh
+		n.startDNSHeartbeat(ctx)
+
+		// Ensure base DNS records exist for this node (self-healing)
+		if err := n.ensureBaseDNSRecords(ctx); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure base DNS records", zap.Error(err))
+		}
+	}
+
 	// Get listen addresses for logging
 	var listenAddrs []string
 	if n.host != nil {
@@ -145,13 +155,6 @@ func (n *Node) Stop() error {
 	// Close Gateway client
 	if n.apiGateway != nil {
 		n.apiGateway.Close()
-	}
-
-	// Stop SNI Gateway
-	if n.sniGateway != nil {
-		if err := n.sniGateway.Stop(); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "SNI Gateway stop error", zap.Error(err))
-		}
 	}
 
 	// Stop cluster discovery

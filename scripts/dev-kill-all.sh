@@ -29,6 +29,12 @@ PORTS=(
   9096 9106 9116 9126 9136
 )
 
+# Add namespace cluster ports (10000-10099)
+# These are dynamically allocated for per-namespace RQLite/Olric/Gateway instances
+for port in $(seq 10000 10099); do
+  PORTS+=($port)
+done
+
 killed_count=0
 killed_pids=()
 
@@ -56,6 +62,41 @@ SPECIFIC_PATTERNS=(
   "bin/gateway"
   "anyone-client"
 )
+
+# Kill namespace cluster processes (spawned by ClusterManager)
+# These are RQLite/Olric/Gateway instances running on ports 10000-10099
+NAMESPACE_DATA_DIR="$HOME/.orama/data/namespaces"
+if [[ -d "$NAMESPACE_DATA_DIR" ]]; then
+  # Find rqlited processes started in namespace directories
+  ns_pids=$(pgrep -f "rqlited.*$NAMESPACE_DATA_DIR" 2>/dev/null || true)
+  if [[ -n "$ns_pids" ]]; then
+    for pid in $ns_pids; do
+      echo "  Killing namespace rqlited process (PID: $pid)"
+      kill -9 "$pid" 2>/dev/null || true
+      killed_pids+=("$pid")
+    done
+  fi
+
+  # Find olric-server processes started for namespaces (check env var or config path)
+  ns_olric_pids=$(pgrep -f "olric-server.*$NAMESPACE_DATA_DIR" 2>/dev/null || true)
+  if [[ -n "$ns_olric_pids" ]]; then
+    for pid in $ns_olric_pids; do
+      echo "  Killing namespace olric-server process (PID: $pid)"
+      kill -9 "$pid" 2>/dev/null || true
+      killed_pids+=("$pid")
+    done
+  fi
+
+  # Find gateway processes started for namespaces
+  ns_gw_pids=$(pgrep -f "gateway.*--config.*$NAMESPACE_DATA_DIR" 2>/dev/null || true)
+  if [[ -n "$ns_gw_pids" ]]; then
+    for pid in $ns_gw_pids; do
+      echo "  Killing namespace gateway process (PID: $pid)"
+      kill -9 "$pid" 2>/dev/null || true
+      killed_pids+=("$pid")
+    done
+  fi
+fi
 
 for pattern in "${SPECIFIC_PATTERNS[@]}"; do
   # Use exact pattern matching to avoid false positives

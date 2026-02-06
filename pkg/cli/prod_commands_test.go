@@ -7,42 +7,32 @@ import (
 )
 
 // TestProdCommandFlagParsing verifies that prod command flags are parsed correctly
-// Note: The installer now uses --vps-ip presence to determine if it's a first node (no --bootstrap flag)
-// First node: has --vps-ip but no --peers or --join
-// Joining node: has --vps-ip, --peers, and --cluster-secret
+// Genesis node: has --vps-ip but no --join or --token
+// Joining node: has --vps-ip, --join (HTTPS URL), and --token (invite token)
 func TestProdCommandFlagParsing(t *testing.T) {
 	tests := []struct {
-		name          string
-		args          []string
-		expectVPSIP   string
-		expectDomain  string
-		expectPeers   string
-		expectJoin    string
-		expectSecret  string
-		expectBranch  string
-		isFirstNode   bool // first node = no peers and no join address
+		name         string
+		args         []string
+		expectVPSIP  string
+		expectDomain string
+		expectJoin   string
+		expectToken  string
+		expectBranch string
+		isFirstNode  bool // genesis node = no --join and no --token
 	}{
 		{
-			name:        "first node (creates new cluster)",
-			args:        []string{"install", "--vps-ip", "10.0.0.1", "--domain", "node-1.example.com"},
-			expectVPSIP: "10.0.0.1",
+			name:         "genesis node (creates new cluster)",
+			args:         []string{"install", "--vps-ip", "10.0.0.1", "--domain", "node-1.example.com"},
+			expectVPSIP:  "10.0.0.1",
 			expectDomain: "node-1.example.com",
-			isFirstNode: true,
+			isFirstNode:  true,
 		},
 		{
-			name:         "joining node with peers",
-			args:         []string{"install", "--vps-ip", "10.0.0.2", "--peers", "/ip4/10.0.0.1/tcp/4001/p2p/Qm123", "--cluster-secret", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-			expectVPSIP:  "10.0.0.2",
-			expectPeers:  "/ip4/10.0.0.1/tcp/4001/p2p/Qm123",
-			expectSecret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-			isFirstNode:  false,
-		},
-		{
-			name:        "joining node with join address",
-			args:        []string{"install", "--vps-ip", "10.0.0.3", "--join", "10.0.0.1:7001", "--cluster-secret", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-			expectVPSIP: "10.0.0.3",
-			expectJoin:  "10.0.0.1:7001",
-			expectSecret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			name:        "joining node with invite token",
+			args:        []string{"install", "--vps-ip", "10.0.0.2", "--join", "https://node1.dbrs.space", "--token", "abc123def456"},
+			expectVPSIP: "10.0.0.2",
+			expectJoin:  "https://node1.dbrs.space",
+			expectToken: "abc123def456",
 			isFirstNode: false,
 		},
 		{
@@ -56,8 +46,7 @@ func TestProdCommandFlagParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Extract flags manually to verify parsing logic
-			var vpsIP, domain, peersStr, joinAddr, clusterSecret, branch string
+			var vpsIP, domain, joinAddr, token, branch string
 
 			for i, arg := range tt.args {
 				switch arg {
@@ -69,17 +58,13 @@ func TestProdCommandFlagParsing(t *testing.T) {
 					if i+1 < len(tt.args) {
 						domain = tt.args[i+1]
 					}
-				case "--peers":
-					if i+1 < len(tt.args) {
-						peersStr = tt.args[i+1]
-					}
 				case "--join":
 					if i+1 < len(tt.args) {
 						joinAddr = tt.args[i+1]
 					}
-				case "--cluster-secret":
+				case "--token":
 					if i+1 < len(tt.args) {
-						clusterSecret = tt.args[i+1]
+						token = tt.args[i+1]
 					}
 				case "--branch":
 					if i+1 < len(tt.args) {
@@ -88,8 +73,8 @@ func TestProdCommandFlagParsing(t *testing.T) {
 				}
 			}
 
-			// First node detection: no peers and no join address
-			isFirstNode := peersStr == "" && joinAddr == ""
+			// Genesis node detection: no --join and no --token
+			isFirstNode := joinAddr == "" && token == ""
 
 			if vpsIP != tt.expectVPSIP {
 				t.Errorf("expected vpsIP=%q, got %q", tt.expectVPSIP, vpsIP)
@@ -97,14 +82,11 @@ func TestProdCommandFlagParsing(t *testing.T) {
 			if domain != tt.expectDomain {
 				t.Errorf("expected domain=%q, got %q", tt.expectDomain, domain)
 			}
-			if peersStr != tt.expectPeers {
-				t.Errorf("expected peers=%q, got %q", tt.expectPeers, peersStr)
-			}
 			if joinAddr != tt.expectJoin {
 				t.Errorf("expected join=%q, got %q", tt.expectJoin, joinAddr)
 			}
-			if clusterSecret != tt.expectSecret {
-				t.Errorf("expected clusterSecret=%q, got %q", tt.expectSecret, clusterSecret)
+			if token != tt.expectToken {
+				t.Errorf("expected token=%q, got %q", tt.expectToken, token)
 			}
 			if branch != tt.expectBranch {
 				t.Errorf("expected branch=%q, got %q", tt.expectBranch, branch)

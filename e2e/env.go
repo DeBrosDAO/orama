@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -39,6 +40,73 @@ var (
 	ipfsAPICache     string
 	cacheMutex       sync.RWMutex
 )
+
+// createAPIKeyWithProvisioning creates an API key for a namespace, handling async provisioning
+// For non-default namespaces, this may trigger cluster provisioning and wait for it to complete.
+func createAPIKeyWithProvisioning(gatewayURL, wallet, namespace string, timeout time.Duration) (string, error) {
+	httpClient := NewHTTPClient(10 * time.Second)
+
+	makeRequest := func() (*http.Response, []byte, error) {
+		reqBody := map[string]string{
+			"wallet":    wallet,
+			"namespace": namespace,
+		}
+		bodyBytes, _ := json.Marshal(reqBody)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL+"/v1/auth/simple-key", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("request failed: %w", err)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, respBody, nil
+	}
+
+	startTime := time.Now()
+	for {
+		if time.Since(startTime) > timeout {
+			return "", fmt.Errorf("timeout waiting for namespace provisioning")
+		}
+
+		resp, respBody, err := makeRequest()
+		if err != nil {
+			return "", err
+		}
+
+		// If we got 200, extract the API key
+		if resp.StatusCode == http.StatusOK {
+			var apiKeyResp map[string]interface{}
+			if err := json.Unmarshal(respBody, &apiKeyResp); err != nil {
+				return "", fmt.Errorf("failed to decode API key response: %w", err)
+			}
+			apiKey, ok := apiKeyResp["api_key"].(string)
+			if !ok || apiKey == "" {
+				return "", fmt.Errorf("API key not found in response")
+			}
+			return apiKey, nil
+		}
+
+		// If we got 202 Accepted, provisioning is in progress
+		if resp.StatusCode == http.StatusAccepted {
+			// Wait and retry - the cluster is being provisioned
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// Any other status is an error
+		return "", fmt.Errorf("API key creation failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+}
 
 // loadGatewayConfig loads gateway configuration from ~/.orama/gateway.yaml
 func loadGatewayConfig() (map[string]interface{}, error) {
@@ -80,6 +148,90 @@ func loadNodeConfig(filename string) (map[string]interface{}, error) {
 	return cfg, nil
 }
 
+// loadActiveEnvironment reads ~/.orama/environments.json and returns the active environment's gateway URL.
+func loadActiveEnvironment() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	data, err := os.ReadFile(filepath.Join(homeDir, ".orama", "environments.json"))
+	if err != nil {
+		return "", err
+	}
+
+	var envConfig struct {
+		Environments []struct {
+			Name       string `json:"name"`
+			GatewayURL string `json:"gateway_url"`
+		} `json:"environments"`
+		ActiveEnvironment string `json:"active_environment"`
+	}
+	if err := json.Unmarshal(data, &envConfig); err != nil {
+		return "", err
+	}
+
+	for _, env := range envConfig.Environments {
+		if env.Name == envConfig.ActiveEnvironment {
+			return env.GatewayURL, nil
+		}
+	}
+
+	return "", fmt.Errorf("active environment %q not found", envConfig.ActiveEnvironment)
+}
+
+// loadCredentialAPIKey reads ~/.orama/credentials.json and returns the API key for the given gateway URL.
+func loadCredentialAPIKey(gatewayURL string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	data, err := os.ReadFile(filepath.Join(homeDir, ".orama", "credentials.json"))
+	if err != nil {
+		return "", err
+	}
+
+	// credentials.json v2 format: gateways -> url -> credentials[] array
+	var store struct {
+		Gateways map[string]json.RawMessage `json:"gateways"`
+	}
+	if err := json.Unmarshal(data, &store); err != nil {
+		return "", err
+	}
+
+	raw, ok := store.Gateways[gatewayURL]
+	if !ok {
+		return "", fmt.Errorf("no credentials for gateway %s", gatewayURL)
+	}
+
+	// Try v2 format: { "credentials": [...], "default_index": 0 }
+	var v2 struct {
+		Credentials []struct {
+			APIKey    string `json:"api_key"`
+			Namespace string `json:"namespace"`
+		} `json:"credentials"`
+		DefaultIndex int `json:"default_index"`
+	}
+	if err := json.Unmarshal(raw, &v2); err == nil && len(v2.Credentials) > 0 {
+		idx := v2.DefaultIndex
+		if idx >= len(v2.Credentials) {
+			idx = 0
+		}
+		return v2.Credentials[idx].APIKey, nil
+	}
+
+	// Try v1 format: direct Credentials object { "api_key": "..." }
+	var v1 struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(raw, &v1); err == nil && v1.APIKey != "" {
+		return v1.APIKey, nil
+	}
+
+	return "", fmt.Errorf("no API key found in credentials for %s", gatewayURL)
+}
+
 // GetGatewayURL returns the gateway base URL from config
 func GetGatewayURL() string {
 	cacheMutex.RLock()
@@ -89,8 +241,22 @@ func GetGatewayURL() string {
 	}
 	cacheMutex.RUnlock()
 
-	// Check environment variable first
+	// Check environment variables first (ORAMA_GATEWAY_URL takes precedence)
+	if envURL := os.Getenv("ORAMA_GATEWAY_URL"); envURL != "" {
+		cacheMutex.Lock()
+		gatewayURLCache = envURL
+		cacheMutex.Unlock()
+		return envURL
+	}
 	if envURL := os.Getenv("GATEWAY_URL"); envURL != "" {
+		cacheMutex.Lock()
+		gatewayURLCache = envURL
+		cacheMutex.Unlock()
+		return envURL
+	}
+
+	// Try to load from orama active environment (~/.orama/environments.json)
+	if envURL, err := loadActiveEnvironment(); err == nil && envURL != "" {
 		cacheMutex.Lock()
 		gatewayURLCache = envURL
 		cacheMutex.Unlock()
@@ -153,7 +319,16 @@ func queryAPIKeyFromRQLite() (string, error) {
 		return envKey, nil
 	}
 
-	// 2. Build database path from bootstrap/node config
+	// 2. If ORAMA_GATEWAY_URL is set (production mode), query the remote RQLite HTTP API
+	if gatewayURL := os.Getenv("ORAMA_GATEWAY_URL"); gatewayURL != "" {
+		apiKey, err := queryAPIKeyFromRemoteRQLite(gatewayURL)
+		if err == nil && apiKey != "" {
+			return apiKey, nil
+		}
+		// Fall through to local database check if remote fails
+	}
+
+	// 3. Build database path from bootstrap/node config (for local development)
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
@@ -210,7 +385,61 @@ func queryAPIKeyFromRQLite() (string, error) {
 	return "", fmt.Errorf("failed to retrieve API key from any SQLite database")
 }
 
-// GetAPIKey returns the gateway API key from rqlite or cache
+// queryAPIKeyFromRemoteRQLite queries the remote RQLite HTTP API for an API key
+func queryAPIKeyFromRemoteRQLite(gatewayURL string) (string, error) {
+	// Parse the gateway URL to extract the host
+	parsed, err := url.Parse(gatewayURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse gateway URL: %w", err)
+	}
+
+	// RQLite HTTP API runs on port 5001 (not the gateway port 6001)
+	rqliteURL := fmt.Sprintf("http://%s:5001/db/query", parsed.Hostname())
+
+	// Create request body
+	reqBody := `["SELECT key FROM api_keys LIMIT 1"]`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rqliteURL, strings.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to query rqlite: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("rqlite returned status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var result struct {
+		Results []struct {
+			Columns []string        `json:"columns"`
+			Values  [][]interface{} `json:"values"`
+		} `json:"results"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(result.Results) > 0 && len(result.Results[0].Values) > 0 && len(result.Results[0].Values[0]) > 0 {
+		if apiKey, ok := result.Results[0].Values[0][0].(string); ok && apiKey != "" {
+			return apiKey, nil
+		}
+	}
+
+	return "", fmt.Errorf("no API key found in rqlite")
+}
+
+// GetAPIKey returns the gateway API key from credentials.json, env vars, or rqlite
 func GetAPIKey() string {
 	cacheMutex.RLock()
 	if apiKeyCache != "" {
@@ -219,7 +448,24 @@ func GetAPIKey() string {
 	}
 	cacheMutex.RUnlock()
 
-	// Query rqlite for API key
+	// 1. Check env var
+	if envKey := os.Getenv("DEBROS_API_KEY"); envKey != "" {
+		cacheMutex.Lock()
+		apiKeyCache = envKey
+		cacheMutex.Unlock()
+		return envKey
+	}
+
+	// 2. Try credentials.json for the active gateway
+	gatewayURL := GetGatewayURL()
+	if apiKey, err := loadCredentialAPIKey(gatewayURL); err == nil && apiKey != "" {
+		cacheMutex.Lock()
+		apiKeyCache = apiKey
+		cacheMutex.Unlock()
+		return apiKey
+	}
+
+	// 3. Fall back to querying rqlite directly
 	apiKey, err := queryAPIKeyFromRQLite()
 	if err != nil {
 		return ""
@@ -965,4 +1211,560 @@ func (p *WSPubSubClientPair) Close() {
 	if p.Subscriber != nil {
 		p.Subscriber.Close()
 	}
+}
+
+// ============================================================================
+// Deployment Testing Helpers
+// ============================================================================
+
+// E2ETestEnv holds the environment configuration for deployment E2E tests
+type E2ETestEnv struct {
+	GatewayURL  string
+	APIKey      string
+	Namespace   string
+	BaseDomain  string       // Domain for deployment routing (e.g., "dbrs.space")
+	Config      *E2EConfig   // Full E2E configuration (for production tests)
+	HTTPClient  *http.Client
+	SkipCleanup bool
+}
+
+// BuildDeploymentDomain returns the full domain for a deployment name
+// Format: {name}.{baseDomain} (e.g., "myapp.dbrs.space")
+func (env *E2ETestEnv) BuildDeploymentDomain(deploymentName string) string {
+	return fmt.Sprintf("%s.%s", deploymentName, env.BaseDomain)
+}
+
+// LoadTestEnv loads the test environment from environment variables and config file
+// If ORAMA_API_KEY is not set, it creates a fresh API key for the default test namespace
+func LoadTestEnv() (*E2ETestEnv, error) {
+	// Load E2E config (for base_domain and production settings)
+	cfg, err := LoadE2EConfig()
+	if err != nil {
+		// If config loading fails in production mode, that's an error
+		if IsProductionMode() {
+			return nil, fmt.Errorf("failed to load e2e config: %w", err)
+		}
+		// For local mode, use defaults
+		cfg = DefaultConfig()
+	}
+
+	gatewayURL := os.Getenv("ORAMA_GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = GetGatewayURL()
+	}
+
+	// Check if API key is provided via environment variable, config, or credentials.json
+	apiKey := os.Getenv("ORAMA_API_KEY")
+	if apiKey == "" && cfg.APIKey != "" {
+		apiKey = cfg.APIKey
+	}
+	if apiKey == "" {
+		apiKey = GetAPIKey() // Reads from credentials.json or rqlite
+	}
+	namespace := os.Getenv("ORAMA_NAMESPACE")
+
+	// If still no API key, create a fresh one for a default test namespace
+	if apiKey == "" {
+		if namespace == "" {
+			namespace = "default-test-ns"
+		}
+
+		// Generate a unique wallet address for this namespace
+		wallet := fmt.Sprintf("0x%x", []byte(namespace+fmt.Sprintf("%d", time.Now().UnixNano())))
+		if len(wallet) < 42 {
+			wallet = wallet + strings.Repeat("0", 42-len(wallet))
+		}
+		if len(wallet) > 42 {
+			wallet = wallet[:42]
+		}
+
+		// Create an API key for this namespace (handles async provisioning for non-default namespaces)
+		var err error
+		apiKey, err = createAPIKeyWithProvisioning(gatewayURL, wallet, namespace, 2*time.Minute)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create API key for namespace %s: %w", namespace, err)
+		}
+	} else if namespace == "" {
+		namespace = GetClientNamespace()
+	}
+
+	skipCleanup := os.Getenv("ORAMA_SKIP_CLEANUP") == "true"
+
+	return &E2ETestEnv{
+		GatewayURL:  gatewayURL,
+		APIKey:      apiKey,
+		Namespace:   namespace,
+		BaseDomain:  cfg.BaseDomain,
+		Config:      cfg,
+		HTTPClient:  NewHTTPClient(30 * time.Second),
+		SkipCleanup: skipCleanup,
+	}, nil
+}
+
+// LoadTestEnvWithNamespace loads test environment with a specific namespace
+// It creates a new API key for the specified namespace to ensure proper isolation
+func LoadTestEnvWithNamespace(namespace string) (*E2ETestEnv, error) {
+	// Load E2E config (for base_domain and production settings)
+	cfg, err := LoadE2EConfig()
+	if err != nil {
+		cfg = DefaultConfig()
+	}
+
+	gatewayURL := os.Getenv("ORAMA_GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = GetGatewayURL()
+	}
+
+	skipCleanup := os.Getenv("ORAMA_SKIP_CLEANUP") == "true"
+
+	// Generate a unique wallet address for this namespace
+	// Using namespace as part of the wallet address for uniqueness
+	wallet := fmt.Sprintf("0x%x", []byte(namespace+fmt.Sprintf("%d", time.Now().UnixNano())))
+	if len(wallet) < 42 {
+		wallet = wallet + strings.Repeat("0", 42-len(wallet))
+	}
+	if len(wallet) > 42 {
+		wallet = wallet[:42]
+	}
+
+	// Create an API key for this namespace (handles async provisioning for non-default namespaces)
+	apiKey, err := createAPIKeyWithProvisioning(gatewayURL, wallet, namespace, 2*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API key for namespace %s: %w", namespace, err)
+	}
+
+	return &E2ETestEnv{
+		GatewayURL:  gatewayURL,
+		APIKey:      apiKey,
+		Namespace:   namespace,
+		BaseDomain:  cfg.BaseDomain,
+		Config:      cfg,
+		HTTPClient:  NewHTTPClient(30 * time.Second),
+		SkipCleanup: skipCleanup,
+	}, nil
+}
+
+// tarballFromDir creates a .tar.gz in memory from a directory.
+func tarballFromDir(dirPath string) ([]byte, error) {
+	var buf bytes.Buffer
+	cmd := exec.Command("tar", "-czf", "-", "-C", dirPath, ".")
+	cmd.Stdout = &buf
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("tar failed: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// CreateTestDeployment creates a test deployment and returns its ID.
+// tarballPath can be a .tar.gz file or a directory (which will be tarred automatically).
+func CreateTestDeployment(t *testing.T, env *E2ETestEnv, name, tarballPath string) string {
+	t.Helper()
+
+	var fileData []byte
+
+	info, err := os.Stat(tarballPath)
+	if err != nil {
+		t.Fatalf("failed to stat tarball path: %v", err)
+	}
+
+	if info.IsDir() {
+		// Create tarball from directory
+		fileData, err = tarballFromDir(tarballPath)
+		if err != nil {
+			t.Fatalf("failed to create tarball from dir: %v", err)
+		}
+	} else {
+		fileData, err = os.ReadFile(tarballPath)
+		if err != nil {
+			t.Fatalf("failed to read tarball: %v", err)
+		}
+	}
+
+	// Create multipart form
+	body := &bytes.Buffer{}
+	boundary := "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+
+	// Write name field
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"name\"\r\n\r\n")
+	body.WriteString(name + "\r\n")
+
+	// NOTE: We intentionally do NOT send subdomain field
+	// This ensures only node-specific domains are created: {name}.node-{id}.domain
+	// Subdomain should only be sent if explicitly requested for custom domains
+
+	// Write tarball file
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"tarball\"; filename=\"app.tar.gz\"\r\n")
+	body.WriteString("Content-Type: application/gzip\r\n\r\n")
+
+	body.Write(fileData)
+	body.WriteString("\r\n--" + boundary + "--\r\n")
+
+	req, err := http.NewRequest("POST", env.GatewayURL+"/v1/deployments/static/upload", body)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to upload deployment: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("deployment upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Try both "id" and "deployment_id" field names
+	if id, ok := result["deployment_id"].(string); ok {
+		return id
+	}
+	if id, ok := result["id"].(string); ok {
+		return id
+	}
+	t.Fatalf("deployment response missing id field: %+v", result)
+	return ""
+}
+
+// DeleteDeployment deletes a deployment by ID
+func DeleteDeployment(t *testing.T, env *E2ETestEnv, deploymentID string) {
+	t.Helper()
+
+	req, _ := http.NewRequest("DELETE", env.GatewayURL+"/v1/deployments/delete?id="+deploymentID, nil)
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Logf("warning: failed to delete deployment: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("warning: delete deployment returned status %d", resp.StatusCode)
+	}
+}
+
+// GetDeployment retrieves deployment metadata by ID
+func GetDeployment(t *testing.T, env *E2ETestEnv, deploymentID string) map[string]interface{} {
+	t.Helper()
+
+	req, _ := http.NewRequest("GET", env.GatewayURL+"/v1/deployments/get?id="+deploymentID, nil)
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("get deployment failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var deployment map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&deployment); err != nil {
+		t.Fatalf("failed to decode deployment: %v", err)
+	}
+
+	return deployment
+}
+
+// CreateSQLiteDB creates a SQLite database for a namespace
+func CreateSQLiteDB(t *testing.T, env *E2ETestEnv, dbName string) {
+	t.Helper()
+
+	reqBody := map[string]string{"database_name": dbName}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", env.GatewayURL+"/v1/db/sqlite/create", bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create database failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+}
+
+// DeleteSQLiteDB deletes a SQLite database
+func DeleteSQLiteDB(t *testing.T, env *E2ETestEnv, dbName string) {
+	t.Helper()
+
+	reqBody := map[string]string{"database_name": dbName}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("DELETE", env.GatewayURL+"/v1/db/sqlite/delete", bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Logf("warning: failed to delete database: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("warning: delete database returned status %d", resp.StatusCode)
+	}
+}
+
+// ExecuteSQLQuery executes a SQL query on a database
+func ExecuteSQLQuery(t *testing.T, env *E2ETestEnv, dbName, query string) map[string]interface{} {
+	t.Helper()
+
+	reqBody := map[string]interface{}{
+		"database_name": dbName,
+		"query":         query,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", env.GatewayURL+"/v1/db/sqlite/query", bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to execute query: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode query response: %v", err)
+	}
+
+	if errMsg, ok := result["error"].(string); ok && errMsg != "" {
+		t.Fatalf("SQL query failed: %s", errMsg)
+	}
+
+	return result
+}
+
+// QuerySQLite executes a SELECT query and returns rows
+func QuerySQLite(t *testing.T, env *E2ETestEnv, dbName, query string) []map[string]interface{} {
+	t.Helper()
+
+	result := ExecuteSQLQuery(t, env, dbName, query)
+
+	rows, ok := result["rows"].([]interface{})
+	if !ok {
+		return []map[string]interface{}{}
+	}
+
+	columns, _ := result["columns"].([]interface{})
+
+	var results []map[string]interface{}
+	for _, row := range rows {
+		rowData, ok := row.([]interface{})
+		if !ok {
+			continue
+		}
+
+		rowMap := make(map[string]interface{})
+		for i, col := range columns {
+			if i < len(rowData) {
+				rowMap[col.(string)] = rowData[i]
+			}
+		}
+		results = append(results, rowMap)
+	}
+
+	return results
+}
+
+// UploadTestFile uploads a file to IPFS and returns the CID
+func UploadTestFile(t *testing.T, env *E2ETestEnv, filename, content string) string {
+	t.Helper()
+
+	body := &bytes.Buffer{}
+	boundary := "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString(fmt.Sprintf("Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n", filename))
+	body.WriteString("Content-Type: text/plain\r\n\r\n")
+	body.WriteString(content)
+	body.WriteString("\r\n--" + boundary + "--\r\n")
+
+	req, _ := http.NewRequest("POST", env.GatewayURL+"/v1/storage/upload", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to upload file: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload file failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode upload response: %v", err)
+	}
+
+	cid, ok := result["cid"].(string)
+	if !ok {
+		t.Fatalf("CID not found in response")
+	}
+
+	return cid
+}
+
+// UnpinFile unpins a file from IPFS
+func UnpinFile(t *testing.T, env *E2ETestEnv, cid string) {
+	t.Helper()
+
+	reqBody := map[string]string{"cid": cid}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", env.GatewayURL+"/v1/storage/unpin", bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+env.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Logf("warning: failed to unpin file: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("warning: unpin file returned status %d", resp.StatusCode)
+	}
+}
+
+// TestDeploymentWithHostHeader tests a deployment by setting the Host header
+func TestDeploymentWithHostHeader(t *testing.T, env *E2ETestEnv, host, path string) *http.Response {
+	t.Helper()
+
+	req, err := http.NewRequest("GET", env.GatewayURL+path, nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	req.Host = host
+
+	resp, err := env.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("failed to test deployment: %v", err)
+	}
+
+	return resp
+}
+
+// PutToOlric stores a key-value pair in Olric via the gateway HTTP API
+func PutToOlric(gatewayURL, apiKey, dmap, key, value string) error {
+	reqBody := map[string]interface{}{
+		"dmap":  dmap,
+		"key":   key,
+		"value": value,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", gatewayURL+"/v1/cache/put", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("put failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// GetFromOlric retrieves a value from Olric via the gateway HTTP API
+func GetFromOlric(gatewayURL, apiKey, dmap, key string) (string, error) {
+	reqBody := map[string]interface{}{
+		"dmap": dmap,
+		"key":  key,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", gatewayURL+"/v1/cache/get", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("key not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("get failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", err
+	}
+
+	if value, ok := result["value"].(string); ok {
+		return value, nil
+	}
+	if value, ok := result["value"]; ok {
+		return fmt.Sprintf("%v", value), nil
+	}
+	return "", fmt.Errorf("value not found in response")
+}
+
+// WaitForHealthy waits for a deployment to become healthy
+func WaitForHealthy(t *testing.T, env *E2ETestEnv, deploymentID string, timeout time.Duration) bool {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		deployment := GetDeployment(t, env, deploymentID)
+
+		if status, ok := deployment["status"].(string); ok && status == "active" {
+			return true
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+
+	return false
 }

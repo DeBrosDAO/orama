@@ -17,8 +17,55 @@ import (
 	"go.uber.org/zap"
 )
 
+// killOrphanedRQLite kills any orphaned rqlited process still holding the port.
+// This can happen when the parent node process crashes and rqlited keeps running.
+func (r *RQLiteManager) killOrphanedRQLite() {
+	// Check if port is already in use by querying the status endpoint
+	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return // Port not in use, nothing to clean up
+	}
+	resp.Body.Close()
+
+	// Port is in use — find and kill the orphaned process
+	r.logger.Warn("Found orphaned rqlited process on port, killing it",
+		zap.Int("port", r.config.RQLitePort))
+
+	// Use fuser to find and kill the process holding the port
+	cmd := exec.Command("fuser", "-k", fmt.Sprintf("%d/tcp", r.config.RQLitePort))
+	if err := cmd.Run(); err != nil {
+		r.logger.Warn("fuser failed, trying lsof", zap.Error(err))
+		// Fallback: use lsof
+		out, err := exec.Command("lsof", "-ti", fmt.Sprintf(":%d", r.config.RQLitePort)).Output()
+		if err == nil {
+			for _, pidStr := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if pidStr != "" {
+					killCmd := exec.Command("kill", "-9", pidStr)
+					killCmd.Run()
+				}
+			}
+		}
+	}
+
+	// Wait for port to be released
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		resp, err := client.Get(url)
+		if err != nil {
+			return // Port released
+		}
+		resp.Body.Close()
+	}
+	r.logger.Warn("Could not release port from orphaned process")
+}
+
 // launchProcess starts the RQLite process with appropriate arguments
 func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string) error {
+	// Kill any orphaned rqlited from a previous crash
+	r.killOrphanedRQLite()
+
 	// Build RQLite command
 	args := []string{
 		"-http-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLitePort),
@@ -43,8 +90,8 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		}
 	}
 
-	if r.config.RQLiteJoinAddress != "" {
-		r.logger.Info("Joining RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
+	if r.config.RQLiteJoinAddress != "" && !r.hasExistingState(rqliteDataDir) {
+		r.logger.Info("First-time join to RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
 
 		joinArg := r.config.RQLiteJoinAddress
 		if strings.HasPrefix(joinArg, "http://") {
@@ -60,6 +107,16 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		}
 
 		args = append(args, "-join", joinArg, "-join-as", r.discoverConfig.RaftAdvAddress, "-join-attempts", "30", "-join-interval", "10s")
+
+		// Check if this node should join as a non-voter (read replica).
+		// Query the join target's /nodes endpoint to count existing voters,
+		// rather than relying on LibP2P peer count which is incomplete at join time.
+		if shouldBeNonVoter := r.checkShouldBeNonVoter(r.config.RQLiteJoinAddress); shouldBeNonVoter {
+			r.logger.Info("Joining as non-voter (read replica) - cluster already has max voters",
+				zap.String("raft_address", r.discoverConfig.RaftAdvAddress),
+				zap.Int("max_voters", MaxDefaultVoters))
+			args = append(args, "-raft-non-voter")
+		}
 	}
 
 	args = append(args, rqliteDataDir)
@@ -104,16 +161,26 @@ func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 	var conn *gorqlite.Connection
 	var err error
 	maxConnectAttempts := 10
-	connectBackoff := 500 * time.Millisecond
+	connectBackoff := 1 * time.Second
+
+	// Use disableClusterDiscovery=true to avoid gorqlite calling /nodes on Open().
+	// The /nodes endpoint probes all cluster members including unreachable ones,
+	// which can block for the full HTTP timeout (~10s per attempt).
+	// This is safe because rqlited followers automatically forward writes to the leader.
+	connURL := fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort)
 
 	for attempt := 0; attempt < maxConnectAttempts; attempt++ {
-		conn, err = gorqlite.Open(fmt.Sprintf("http://localhost:%d", r.config.RQLitePort))
+		conn, err = gorqlite.Open(connURL)
 		if err == nil {
 			r.connection = conn
 			break
 		}
 
-		if strings.Contains(err.Error(), "store is not open") {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "store is not open") {
+			r.logger.Debug("RQLite not ready yet, retrying",
+				zap.Int("attempt", attempt+1),
+				zap.Error(err))
 			time.Sleep(connectBackoff)
 			connectBackoff = time.Duration(float64(connectBackoff) * 1.5)
 			if connectBackoff > 5*time.Second {
@@ -171,20 +238,29 @@ func (r *RQLiteManager) waitForReady(ctx context.Context) error {
 
 // waitForSQLAvailable waits until a simple query succeeds
 func (r *RQLiteManager) waitForSQLAvailable(ctx context.Context) error {
+	r.logger.Info("Waiting for SQL to become available...")
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	attempts := 0
 	for {
 		select {
 		case <-ctx.Done():
+			r.logger.Error("waitForSQLAvailable timed out", zap.Int("attempts", attempts))
 			return ctx.Err()
 		case <-ticker.C:
+			attempts++
 			if r.connection == nil {
+				r.logger.Warn("connection is nil in waitForSQLAvailable")
 				continue
 			}
 			_, err := r.connection.QueryOne("SELECT 1")
 			if err == nil {
+				r.logger.Info("SQL is available", zap.Int("attempts", attempts))
 				return nil
+			}
+			if attempts <= 5 || attempts%10 == 0 {
+				r.logger.Debug("SQL not yet available", zap.Int("attempt", attempts), zap.Error(err))
 			}
 		}
 	}
@@ -215,6 +291,58 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 	return nil
 }
 
+// checkShouldBeNonVoter queries the join target's /nodes endpoint to count
+// existing voters. Returns true if the cluster already has MaxDefaultVoters
+// voters, meaning this node should join as a non-voter.
+func (r *RQLiteManager) checkShouldBeNonVoter(joinAddress string) bool {
+	// Derive HTTP API URL from the join address (which is a raft address like 10.0.0.1:7001)
+	host := joinAddress
+	if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
+		host = strings.TrimPrefix(host, "http://")
+		host = strings.TrimPrefix(host, "https://")
+	}
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	nodesURL := fmt.Sprintf("http://%s:%d/nodes?timeout=2s", host, r.config.RQLitePort)
+
+	client := tlsutil.NewHTTPClient(5 * time.Second)
+	resp, err := client.Get(nodesURL)
+	if err != nil {
+		r.logger.Warn("Could not query /nodes to check voter count, defaulting to voter", zap.Error(err))
+		return false
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		r.logger.Warn("Could not read /nodes response, defaulting to voter", zap.Error(err))
+		return false
+	}
+
+	var nodes map[string]struct {
+		Voter     bool `json:"voter"`
+		Reachable bool `json:"reachable"`
+	}
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		r.logger.Warn("Could not parse /nodes response, defaulting to voter", zap.Error(err))
+		return false
+	}
+
+	voterCount := 0
+	for _, n := range nodes {
+		if n.Voter && n.Reachable {
+			voterCount++
+		}
+	}
+
+	r.logger.Info("Checked existing voter count from join target",
+		zap.Int("reachable_voters", voterCount),
+		zap.Int("max_voters", MaxDefaultVoters))
+
+	return voterCount >= MaxDefaultVoters
+}
+
 // waitForJoinTarget waits until the join target's HTTP status becomes reachable
 func (r *RQLiteManager) waitForJoinTarget(ctx context.Context, joinAddress string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -236,4 +364,3 @@ func (r *RQLiteManager) waitForJoinTarget(ctx context.Context, joinAddress strin
 
 	return lastErr
 }
-

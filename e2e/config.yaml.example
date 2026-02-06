@@ -1,0 +1,45 @@
+# E2E Test Configuration
+#
+# Copy this file to config.yaml and fill in your values.
+# config.yaml is git-ignored and should contain your actual credentials.
+#
+# Usage:
+#   cp config.yaml.example config.yaml
+#   # Edit config.yaml with your server credentials
+#   go test -v -tags e2e ./e2e/...
+
+# Test mode: "local" or "production"
+# - local: Tests run against `make dev` cluster on localhost
+# - production: Tests run against real VPS servers
+mode: local
+
+# Base domain for deployment routing
+# - Local: orama.network (default)
+# - Production: dbrs.space (or your custom domain)
+base_domain: orama.network
+
+# Production servers (only used when mode=production)
+# Add your VPS servers here with their credentials
+servers:
+  # Example:
+  # - name: vps-1
+  #   ip: 1.2.3.4
+  #   user: ubuntu
+  #   password: "your-password-here"
+  #   is_nameserver: true
+  # - name: vps-2
+  #   ip: 5.6.7.8
+  #   user: ubuntu
+  #   password: "another-password"
+  #   is_nameserver: false
+
+# Nameserver hostnames (for DNS tests in production)
+# These should match your NS records
+nameservers:
+  # Example:
+  # - ns1.yourdomain.com
+  # - ns2.yourdomain.com
+
+# API key for production testing
+# Leave empty to auto-discover from RQLite or create fresh key
+api_key: ""

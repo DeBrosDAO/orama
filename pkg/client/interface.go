@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"time"
+
+	"github.com/libp2p/go-libp2p/core/host"
 )
 
 // NetworkClient provides the main interface for applications to interact with the network
@@ -27,6 +29,9 @@ type NetworkClient interface {
 
 	// Config access (snapshot copy)
 	Config() *ClientConfig
+
+	// Host returns the underlying libp2p host (for advanced usage like peer discovery)
+	Host() host.Host
 }
 
 // DatabaseClient provides database operations for applications

@@ -52,6 +52,13 @@ The system follows a clean, layered architecture with clear separation of concer
         │                 │         │              │
         │  Port 9094      │         │   In-Process │
         └─────────────────┘         └──────────────┘
+
+        ┌─────────────────┐
+        │     Anyone      │
+        │  (Anonymity)    │
+        │                 │
+        │  Port 9050      │
+        └─────────────────┘
 ```
 
 ## Core Components
@@ -226,7 +233,38 @@ pkg/config/
     └── gateway.go
 ```
 
-### 6. Shared Utilities
+### 6. Anyone Integration (`pkg/anyoneproxy/`)
+
+Integration with the Anyone Protocol for anonymous routing.
+
+**Modes:**
+
+| Mode | Purpose | Port | Rewards |
+|------|---------|------|---------|
+| Client | Route traffic anonymously | 9050 (SOCKS5) | No |
+| Relay | Provide bandwidth to network | 9001 (ORPort) + 9050 | Yes ($ANYONE) |
+
+**Key Files:**
+- `pkg/anyoneproxy/socks.go` - SOCKS5 proxy client interface
+- `pkg/gateway/anon_proxy_handler.go` - Anonymous proxy API endpoint
+- `pkg/environments/production/installers/anyone_relay.go` - Relay installation
+
+**Features:**
+- Smart routing (bypasses proxy for local/private addresses)
+- Automatic detection of existing Anyone installations
+- Migration support for existing relay operators
+- Exit relay mode with legal warnings
+
+**API Endpoint:**
+- `POST /v1/proxy/anon` - Route HTTP requests through Anyone network
+
+**Relay Requirements:**
+- Linux OS (Debian/Ubuntu)
+- 100 $ANYONE tokens in wallet
+- ORPort accessible from internet
+- Registration at dashboard.anyone.io
+
+### 7. Shared Utilities
 
 **HTTP Utilities (`pkg/httputil/`):**
 - Request parsing and validation
@@ -315,12 +353,22 @@ Function Invocation:
    - Refresh token support
    - Claims-based authorization
 
+### Network Security (WireGuard Mesh)
+
+All inter-node communication is encrypted via a WireGuard VPN mesh:
+
+- **WireGuard IPs:** Each node gets a private IP (10.0.0.x) used for all cluster traffic
+- **UFW Firewall:** Only public ports are exposed: 22 (SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
+- **Internal services** (RQLite 5001/7001, IPFS 4001/4501, Olric 3320/3322, Gateway 6001) are only accessible via WireGuard or localhost
+- **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
+- **Join flow:** New nodes authenticate via HTTPS (443), establish WireGuard tunnel, then join all services over the encrypted mesh
+
 ### TLS/HTTPS
 
-- Automatic ACME (Let's Encrypt) certificate management
+- Automatic ACME (Let's Encrypt) certificate management via Caddy
 - TLS 1.3 support
 - HTTP/2 enabled
-- Certificate caching
+- On-demand TLS for deployment custom domains
 
 ### Middleware Stack
 
@@ -403,16 +451,25 @@ make test-e2e  # Run E2E tests
 ### Production
 
 ```bash
-# First node (creates cluster)
-sudo orama install --vps-ip <IP> --domain node1.example.com
+# First node (genesis — creates cluster)
+# Nameserver nodes use the base domain as --domain
+sudo orama install --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 
-# Additional nodes (join cluster)
-sudo orama install --vps-ip <IP> --domain node2.example.com \
-    --peers /dns4/node1.example.com/tcp/4001/p2p/<PEER_ID> \
-    --join <node1-ip>:7002 \
-    --cluster-secret <secret> \
-    --swarm-key <key>
+# On the genesis node, generate an invite for a new node
+orama invite
+# Outputs: sudo orama install --join https://example.com --token <TOKEN> --vps-ip <NEW_IP>
+
+# Additional nameserver nodes (join via invite token over HTTPS)
+sudo orama install --join https://example.com --token <TOKEN> \
+    --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 ```
+
+**Security:** Nodes join via single-use invite tokens over HTTPS. A WireGuard VPN tunnel
+is established before any cluster services start. All inter-node traffic (RQLite, IPFS,
+Olric, LibP2P) flows over the encrypted WireGuard mesh — no cluster ports are exposed
+publicly. **Never use `http://<ip>:6001`** for joining — port 6001 is internal-only and
+blocked by UFW. Use the domain (`https://node1.example.com`) or, if DNS is not yet
+configured, use the IP over HTTP port 80 (`http://<ip>`) which goes through Caddy.
 
 ### Docker (Future)
 

@@ -2,21 +2,24 @@ package node
 
 import (
 	"context"
-	"crypto/tls"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
+	namespacehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/namespace"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
-	"golang.org/x/crypto/acme"
-	"golang.org/x/crypto/acme/autocert"
+	"github.com/DeBrosOfficial/network/pkg/namespace"
+	"go.uber.org/zap"
 )
 
 // startHTTPGateway initializes and starts the full API gateway
+// The gateway always runs HTTP on the configured port (default :6001).
+// When running with Caddy (nameserver mode), Caddy handles external HTTPS
+// and proxies requests to this internal HTTP gateway.
 func (n *Node) startHTTPGateway(ctx context.Context) error {
 	if !n.config.HTTPGateway.Enabled {
 		n.logger.ComponentInfo(logging.ComponentNode, "HTTP Gateway disabled in config")
@@ -32,20 +35,29 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		return err
 	}
 
+	// DataDir in node config is ~/.orama/data; the orama dir is the parent
+	oramaDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..")
+
+	// Read cluster secret for WireGuard peer exchange auth
+	clusterSecret := ""
+	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "cluster-secret")); err == nil {
+		clusterSecret = string(secretBytes)
+	}
+
 	gwCfg := &gateway.Config{
-		ListenAddr:      n.config.HTTPGateway.ListenAddr,
-		ClientNamespace: n.config.HTTPGateway.ClientNamespace,
-		BootstrapPeers:  n.config.Discovery.BootstrapPeers,
-		NodePeerID:      loadNodePeerIDFromIdentity(n.config.Node.DataDir),
-		RQLiteDSN:       n.config.HTTPGateway.RQLiteDSN,
-		OlricServers:    n.config.HTTPGateway.OlricServers,
-		OlricTimeout:    n.config.HTTPGateway.OlricTimeout,
+		ListenAddr:        n.config.HTTPGateway.ListenAddr,
+		ClientNamespace:   n.config.HTTPGateway.ClientNamespace,
+		BootstrapPeers:    n.config.Discovery.BootstrapPeers,
+		NodePeerID:        loadNodePeerIDFromIdentity(n.config.Node.DataDir),
+		RQLiteDSN:         n.config.HTTPGateway.RQLiteDSN,
+		OlricServers:      n.config.HTTPGateway.OlricServers,
+		OlricTimeout:      n.config.HTTPGateway.OlricTimeout,
 		IPFSClusterAPIURL: n.config.HTTPGateway.IPFSClusterAPIURL,
-		IPFSAPIURL:       n.config.HTTPGateway.IPFSAPIURL,
-		IPFSTimeout:      n.config.HTTPGateway.IPFSTimeout,
-		EnableHTTPS:     n.config.HTTPGateway.HTTPS.Enabled,
-		DomainName:      n.config.HTTPGateway.HTTPS.Domain,
-		TLSCacheDir:     n.config.HTTPGateway.HTTPS.CacheDir,
+		IPFSAPIURL:        n.config.HTTPGateway.IPFSAPIURL,
+		IPFSTimeout:       n.config.HTTPGateway.IPFSTimeout,
+		BaseDomain:        n.config.HTTPGateway.BaseDomain,
+		DataDir:           oramaDir,
+		ClusterSecret:     clusterSecret,
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
@@ -54,133 +66,87 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 	}
 	n.apiGateway = apiGateway
 
-	var certManager *autocert.Manager
-	if gwCfg.EnableHTTPS && gwCfg.DomainName != "" {
-		tlsCacheDir := gwCfg.TLSCacheDir
-		if tlsCacheDir == "" {
-			tlsCacheDir = "/home/debros/.orama/tls-cache"
+	// Wire up ClusterManager for per-namespace cluster provisioning
+	if ormClient := apiGateway.GetORMClient(); ormClient != nil {
+		baseDataDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "data", "namespaces")
+		clusterCfg := namespace.ClusterManagerConfig{
+			BaseDomain:            n.config.HTTPGateway.BaseDomain,
+			BaseDataDir:           baseDataDir,
+			GlobalRQLiteDSN:       gwCfg.RQLiteDSN, // Pass global RQLite DSN for namespace gateway auth
+			IPFSClusterAPIURL:     gwCfg.IPFSClusterAPIURL,
+			IPFSAPIURL:            gwCfg.IPFSAPIURL,
+			IPFSTimeout:           gwCfg.IPFSTimeout,
+			IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
 		}
-		_ = os.MkdirAll(tlsCacheDir, 0700)
+		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
+		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)
+		apiGateway.SetClusterProvisioner(clusterManager)
 
-		certManager = &autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(gwCfg.DomainName),
-			Cache:      autocert.DirCache(tlsCacheDir),
-			Email:      fmt.Sprintf("admin@%s", gwCfg.DomainName),
-			Client: &acme.Client{
-				DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory",
-			},
-		}
-		n.certManager = certManager
-		n.certReady = make(chan struct{})
+		// Wire spawn handler for distributed namespace instance spawning
+		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, n.logger.Logger)
+		spawnHandler := namespacehandlers.NewSpawnHandler(systemdSpawner, n.logger.Logger)
+		apiGateway.SetSpawnHandler(spawnHandler)
+
+		// Wire namespace delete handler
+		deleteHandler := namespacehandlers.NewDeleteHandler(clusterManager, ormClient, n.logger.Logger)
+		apiGateway.SetNamespaceDeleteHandler(deleteHandler)
+
+		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
+			zap.String("base_domain", clusterCfg.BaseDomain),
+			zap.String("base_data_dir", baseDataDir))
+
+		// Restore previously-running namespace cluster processes in background.
+		// First try local state files (no DB dependency), then fall back to DB query with retries.
+		go func() {
+			time.Sleep(5 * time.Second)
+
+			// Try disk-based restore first (instant, no DB needed)
+			restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
+			if err != nil {
+				n.logger.ComponentWarn(logging.ComponentNode, "Disk-based namespace restore failed", zap.Error(err))
+			}
+			if restored > 0 {
+				n.logger.ComponentInfo(logging.ComponentNode, "Restored namespace clusters from local state",
+					zap.Int("count", restored))
+				return
+			}
+
+			// No state files found — fall back to DB query with retries
+			n.logger.ComponentInfo(logging.ComponentNode, "No local state files, falling back to DB restore")
+			time.Sleep(5 * time.Second)
+			for attempt := 1; attempt <= 12; attempt++ {
+				if err := clusterManager.RestoreLocalClusters(ctx); err == nil {
+					return
+				} else {
+					n.logger.ComponentWarn(logging.ComponentNode, "Namespace cluster restore failed, retrying",
+						zap.Int("attempt", attempt), zap.Error(err))
+				}
+				time.Sleep(10 * time.Second)
+			}
+			n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters after all retries")
+		}()
 	}
-
-	httpReady := make(chan struct{})
 
 	go func() {
-		if gwCfg.EnableHTTPS && gwCfg.DomainName != "" && certManager != nil {
-			httpsPort := 443
-			httpPort := 80
-
-			httpServer := &http.Server{
-				Addr: fmt.Sprintf(":%d", httpPort),
-				Handler: certManager.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					target := fmt.Sprintf("https://%s%s", r.Host, r.URL.RequestURI())
-					http.Redirect(w, r, target, http.StatusMovedPermanently)
-				})),
-			}
-
-			httpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", httpPort))
-			if err != nil {
-				close(httpReady)
-				return
-			}
-
-			go httpServer.Serve(httpListener)
-
-			// Pre-provision cert
-			certReq := &tls.ClientHelloInfo{ServerName: gwCfg.DomainName}
-			_, certErr := certManager.GetCertificate(certReq)
-			
-			if certErr != nil {
-				close(httpReady)
-				httpServer.Handler = apiGateway.Routes()
-				return
-			}
-
-			close(httpReady)
-
-			tlsConfig := &tls.Config{
-				MinVersion:     tls.VersionTLS12,
-				GetCertificate: certManager.GetCertificate,
-			}
-
-			httpsServer := &http.Server{
-				Addr:      fmt.Sprintf(":%d", httpsPort),
-				TLSConfig: tlsConfig,
-				Handler:   apiGateway.Routes(),
-			}
-			n.apiGatewayServer = httpsServer
-
-			ln, err := tls.Listen("tcp", fmt.Sprintf(":%d", httpsPort), tlsConfig)
-			if err == nil {
-				httpsServer.Serve(ln)
-			}
-		} else {
-			close(httpReady)
-			server := &http.Server{
-				Addr:    gwCfg.ListenAddr,
-				Handler: apiGateway.Routes(),
-			}
-			n.apiGatewayServer = server
-			ln, err := net.Listen("tcp", gwCfg.ListenAddr)
-			if err == nil {
-				server.Serve(ln)
-			}
+		server := &http.Server{
+			Addr:    gwCfg.ListenAddr,
+			Handler: apiGateway.Routes(),
 		}
+		n.apiGatewayServer = server
+
+		ln, err := net.Listen("tcp", gwCfg.ListenAddr)
+		if err != nil {
+			n.logger.ComponentError(logging.ComponentNode, "Failed to bind HTTP gateway",
+				zap.String("addr", gwCfg.ListenAddr), zap.Error(err))
+			return
+		}
+
+		n.logger.ComponentInfo(logging.ComponentNode, "HTTP gateway started",
+			zap.String("addr", gwCfg.ListenAddr))
+		server.Serve(ln)
 	}()
 
-	// SNI Gateway
-	if n.config.HTTPGateway.SNI.Enabled && n.certManager != nil {
-		go n.startSNIGateway(ctx, httpReady)
-	}
-
 	return nil
-}
-
-func (n *Node) startSNIGateway(ctx context.Context, httpReady <-chan struct{}) {
-	<-httpReady
-	domain := n.config.HTTPGateway.HTTPS.Domain
-	if domain == "" {
-		return
-	}
-
-	certReq := &tls.ClientHelloInfo{ServerName: domain}
-	tlsCert, err := n.certManager.GetCertificate(certReq)
-	if err != nil {
-		return
-	}
-
-	tlsCacheDir := n.config.HTTPGateway.HTTPS.CacheDir
-	if tlsCacheDir == "" {
-		tlsCacheDir = "/home/debros/.orama/tls-cache"
-	}
-
-	certPath := filepath.Join(tlsCacheDir, domain+".crt")
-	keyPath := filepath.Join(tlsCacheDir, domain+".key")
-
-	if err := extractPEMFromTLSCert(tlsCert, certPath, keyPath); err == nil {
-		if n.certReady != nil {
-			close(n.certReady)
-		}
-	}
-
-	sniCfg := n.config.HTTPGateway.SNI
-	sniGateway, err := gateway.NewTCPSNIGateway(n.logger, &sniCfg)
-	if err == nil {
-		n.sniGateway = sniGateway
-		sniGateway.Start(ctx)
-	}
 }
 
 // startIPFSClusterConfig initializes and ensures IPFS Cluster configuration
@@ -201,4 +167,3 @@ func (n *Node) startIPFSClusterConfig() error {
 	_ = cm.RepairPeerConfiguration()
 	return nil
 }
-

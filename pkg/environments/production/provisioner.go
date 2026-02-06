@@ -182,6 +182,123 @@ func (up *UserProvisioner) SetupSudoersAccess(invokerUser string) error {
 	return nil
 }
 
+// SetupDeploymentSudoers configures the debros user with permissions needed for
+// managing user deployments via systemd services.
+func (up *UserProvisioner) SetupDeploymentSudoers() error {
+	sudoersFile := "/etc/sudoers.d/debros-deployments"
+
+	// Check if already configured
+	if _, err := os.Stat(sudoersFile); err == nil {
+		return nil // Already configured
+	}
+
+	sudoersContent := `# DeBros Network - Deployment Management Permissions
+# Allows debros user to manage systemd services for user deployments
+
+# Systemd service management for orama-deploy-* services
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl start orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable orama-deploy-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl status orama-deploy-*
+
+# Service file management (tee to write, rm to remove)
+debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/orama-deploy-*.service
+debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-deploy-*.service
+`
+
+	// Write sudoers rule
+	if err := os.WriteFile(sudoersFile, []byte(sudoersContent), 0440); err != nil {
+		return fmt.Errorf("failed to create deployment sudoers rule: %w", err)
+	}
+
+	// Validate sudoers file
+	cmd := exec.Command("visudo", "-c", "-f", sudoersFile)
+	if err := cmd.Run(); err != nil {
+		os.Remove(sudoersFile) // Clean up on validation failure
+		return fmt.Errorf("deployment sudoers rule validation failed: %w", err)
+	}
+
+	return nil
+}
+
+// SetupNamespaceSudoers configures the debros user with permissions needed for
+// managing namespace cluster services via systemd.
+func (up *UserProvisioner) SetupNamespaceSudoers() error {
+	sudoersFile := "/etc/sudoers.d/debros-namespaces"
+
+	// Check if already configured
+	if _, err := os.Stat(sudoersFile); err == nil {
+		return nil // Already configured
+	}
+
+	sudoersContent := `# DeBros Network - Namespace Cluster Management Permissions
+# Allows debros user to manage systemd services for namespace clusters
+
+# Systemd service management for debros-namespace-* services
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl start debros-namespace-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop debros-namespace-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart debros-namespace-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable debros-namespace-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable debros-namespace-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl status debros-namespace-*
+debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active debros-namespace-*
+
+# Service file management (tee to write, rm to remove)
+debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/debros-namespace-*.service
+debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/debros-namespace-*.service
+
+# Environment file management for namespace services
+debros ALL=(ALL) NOPASSWD: /usr/bin/tee /home/debros/.orama/namespace/*/env/*
+debros ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/debros/.orama/namespace/*/env
+`
+
+	// Write sudoers rule
+	if err := os.WriteFile(sudoersFile, []byte(sudoersContent), 0440); err != nil {
+		return fmt.Errorf("failed to create namespace sudoers rule: %w", err)
+	}
+
+	// Validate sudoers file
+	cmd := exec.Command("visudo", "-c", "-f", sudoersFile)
+	if err := cmd.Run(); err != nil {
+		os.Remove(sudoersFile) // Clean up on validation failure
+		return fmt.Errorf("namespace sudoers rule validation failed: %w", err)
+	}
+
+	return nil
+}
+
+// SetupWireGuardSudoers configures the debros user with permissions to manage WireGuard
+func (up *UserProvisioner) SetupWireGuardSudoers() error {
+	sudoersFile := "/etc/sudoers.d/debros-wireguard"
+
+	sudoersContent := `# DeBros Network - WireGuard Management Permissions
+# Allows debros user to manage WireGuard peers
+
+debros ALL=(ALL) NOPASSWD: /usr/bin/wg set wg0 *
+debros ALL=(ALL) NOPASSWD: /usr/bin/wg show wg0
+debros ALL=(ALL) NOPASSWD: /usr/bin/wg showconf wg0
+debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wireguard/wg0.conf
+`
+
+	// Write sudoers rule (always overwrite to ensure latest)
+	if err := os.WriteFile(sudoersFile, []byte(sudoersContent), 0440); err != nil {
+		return fmt.Errorf("failed to create wireguard sudoers rule: %w", err)
+	}
+
+	// Validate sudoers file
+	cmd := exec.Command("visudo", "-c", "-f", sudoersFile)
+	if err := cmd.Run(); err != nil {
+		os.Remove(sudoersFile)
+		return fmt.Errorf("wireguard sudoers rule validation failed: %w", err)
+	}
+
+	return nil
+}
+
 // StateDetector checks for existing production state
 type StateDetector struct {
 	oramaDir string

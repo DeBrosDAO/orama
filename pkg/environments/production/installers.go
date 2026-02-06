@@ -1,6 +1,7 @@
 package production
 
 import (
+	"fmt"
 	"io"
 	"os/exec"
 
@@ -12,6 +13,7 @@ import (
 type BinaryInstaller struct {
 	arch      string
 	logWriter io.Writer
+	oramaHome string
 
 	// Embedded installers
 	rqlite      *installers.RQLiteInstaller
@@ -19,18 +21,24 @@ type BinaryInstaller struct {
 	ipfsCluster *installers.IPFSClusterInstaller
 	olric       *installers.OlricInstaller
 	gateway     *installers.GatewayInstaller
+	coredns     *installers.CoreDNSInstaller
+	caddy       *installers.CaddyInstaller
 }
 
 // NewBinaryInstaller creates a new binary installer
 func NewBinaryInstaller(arch string, logWriter io.Writer) *BinaryInstaller {
+	oramaHome := "/home/debros"
 	return &BinaryInstaller{
 		arch:        arch,
 		logWriter:   logWriter,
+		oramaHome:   oramaHome,
 		rqlite:      installers.NewRQLiteInstaller(arch, logWriter),
 		ipfs:        installers.NewIPFSInstaller(arch, logWriter),
 		ipfsCluster: installers.NewIPFSClusterInstaller(arch, logWriter),
 		olric:       installers.NewOlricInstaller(arch, logWriter),
 		gateway:     installers.NewGatewayInstaller(arch, logWriter),
+		coredns:     installers.NewCoreDNSInstaller(arch, logWriter, oramaHome),
+		caddy:       installers.NewCaddyInstaller(arch, logWriter, oramaHome),
 	}
 }
 
@@ -82,8 +90,8 @@ type IPFSClusterPeerInfo = installers.IPFSClusterPeerInfo
 
 // InitializeIPFSRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
 // If ipfsPeer is provided, configures Peering.Peers for peer discovery in private networks
-func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, ipfsPeer *IPFSPeerInfo) error {
-	return bi.ipfs.InitializeRepo(ipfsRepoPath, swarmKeyPath, apiPort, gatewayPort, swarmPort, ipfsPeer)
+func (bi *BinaryInstaller) InitializeIPFSRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, bindIP string, ipfsPeer *IPFSPeerInfo) error {
+	return bi.ipfs.InitializeRepo(ipfsRepoPath, swarmKeyPath, apiPort, gatewayPort, swarmPort, bindIP, ipfsPeer)
 }
 
 // InitializeIPFSClusterConfig initializes IPFS Cluster configuration (unified - no bootstrap/node distinction)
@@ -108,6 +116,35 @@ func (bi *BinaryInstaller) InitializeRQLiteDataDir(dataDir string) error {
 // InstallAnyoneClient installs the anyone-client npm package globally
 func (bi *BinaryInstaller) InstallAnyoneClient() error {
 	return bi.gateway.InstallAnyoneClient()
+}
+
+// InstallCoreDNS builds and installs CoreDNS with the custom RQLite plugin.
+// Also disables systemd-resolved's stub listener so CoreDNS can bind to port 53.
+func (bi *BinaryInstaller) InstallCoreDNS() error {
+	if err := bi.coredns.DisableResolvedStubListener(); err != nil {
+		fmt.Fprintf(bi.logWriter, "  ⚠️  Failed to disable systemd-resolved stub: %v\n", err)
+	}
+	return bi.coredns.Install()
+}
+
+// ConfigureCoreDNS creates CoreDNS configuration files
+func (bi *BinaryInstaller) ConfigureCoreDNS(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	return bi.coredns.Configure(domain, rqliteDSN, ns1IP, ns2IP, ns3IP)
+}
+
+// SeedDNS seeds static DNS records into RQLite. Call after RQLite is running.
+func (bi *BinaryInstaller) SeedDNS(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	return bi.coredns.SeedDNS(domain, rqliteDSN, ns1IP, ns2IP, ns3IP)
+}
+
+// InstallCaddy builds and installs Caddy with the custom orama DNS module
+func (bi *BinaryInstaller) InstallCaddy() error {
+	return bi.caddy.Install()
+}
+
+// ConfigureCaddy creates Caddy configuration files
+func (bi *BinaryInstaller) ConfigureCaddy(domain string, email string, acmeEndpoint string, baseDomain string) error {
+	return bi.caddy.Configure(domain, email, acmeEndpoint, baseDomain)
 }
 
 // Mock system commands for testing (if needed)

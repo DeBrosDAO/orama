@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/production/install"
+	"github.com/DeBrosOfficial/network/pkg/cli/production/invite"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/lifecycle"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/logs"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/migrate"
@@ -24,6 +25,8 @@ func HandleCommand(args []string) {
 	subargs := args[1:]
 
 	switch subcommand {
+	case "invite":
+		invite.Handle(subargs)
 	case "install":
 		install.Handle(subargs)
 	case "upgrade":

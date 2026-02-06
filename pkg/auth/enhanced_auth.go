@@ -86,7 +86,8 @@ func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
 		}
 	}
 
-	// Parse as legacy v2.0 format (single credential per gateway) and migrate
+	// Parse as legacy format (single credential per gateway) and migrate
+	// Supports both v1.0 and v2.0 legacy formats
 	var legacyStore struct {
 		Gateways map[string]*Credentials `json:"gateways"`
 		Version  string                  `json:"version"`
@@ -96,8 +97,8 @@ func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
 		return nil, fmt.Errorf("invalid credentials file format: %w", err)
 	}
 
-	if legacyStore.Version != "2.0" {
-		return nil, fmt.Errorf("unsupported credentials version %q; expected \"2.0\"", legacyStore.Version)
+	if legacyStore.Version != "1.0" && legacyStore.Version != "2.0" {
+		return nil, fmt.Errorf("unsupported credentials version %q; expected \"1.0\" or \"2.0\"", legacyStore.Version)
 	}
 
 	// Convert legacy format to enhanced format

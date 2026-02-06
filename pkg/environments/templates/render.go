@@ -27,10 +27,12 @@ type NodeConfigData struct {
 	RaftAdvAddress         string // Advertised Raft address (IP:port or domain:port for SNI)
 	UnifiedGatewayPort     int    // Unified gateway port for all node services
 	Domain                 string // Domain for this node (e.g., node-123.orama.network)
+	BaseDomain             string // Base domain for deployment routing (e.g., dbrs.space)
 	EnableHTTPS            bool   // Enable HTTPS/TLS with ACME
 	TLSCacheDir            string // Directory for ACME certificate cache
 	HTTPPort               int    // HTTP port for ACME challenges (usually 80)
 	HTTPSPort              int    // HTTPS port (usually 443)
+	WGIP                   string // WireGuard IP address (e.g., 10.0.0.1)
 
 	// Node-to-node TLS encryption for RQLite Raft communication
 	// Required when using SNI gateway for Raft traffic routing
@@ -55,11 +57,13 @@ type GatewayConfigData struct {
 
 // OlricConfigData holds parameters for olric.yaml rendering
 type OlricConfigData struct {
-	ServerBindAddr        string // HTTP API bind address (127.0.0.1 for security)
-	HTTPPort              int
-	MemberlistBindAddr    string // Memberlist bind address (0.0.0.0 for clustering)
-	MemberlistPort        int
-	MemberlistEnvironment string // "local", "lan", or "wan"
+	ServerBindAddr         string // HTTP API bind address (127.0.0.1 for security)
+	HTTPPort               int
+	MemberlistBindAddr     string // Memberlist bind address (WG IP for clustering)
+	MemberlistPort         int
+	MemberlistEnvironment  string // "local", "lan", or "wan"
+	MemberlistAdvertiseAddr string   // Advertise address (WG IP) so other nodes can reach us
+	Peers                  []string // Seed peers for memberlist (host:port)
 }
 
 // SystemdIPFSData holds parameters for systemd IPFS service rendering

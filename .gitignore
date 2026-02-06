@@ -30,6 +30,8 @@ dist/
 
 # OS generated files
 .DS_Store
+.codex/
+redeploy-6.sh
 .DS_Store?
 ._*
 .Spotlight-V100
@@ -44,6 +46,9 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# E2E test config (contains production credentials)
+e2e/config.yaml
 
 # Temporary files
 tmp/
@@ -81,3 +86,16 @@ configs/
 .claude/
 .mcp.json
 .cursor/
+
+# Remote node credentials
+scripts/remote-nodes.conf
+
+orama-cli-linux
+
+rnd/
+
+keys_backup/
+
+vps.txt
+
+bin-linux/

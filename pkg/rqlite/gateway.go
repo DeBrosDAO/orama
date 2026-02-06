@@ -449,39 +449,37 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 
 	results := make([]any, 0, len(body.Ops))
-	err := g.Client.Tx(ctx, func(tx Tx) error {
-		for _, op := range body.Ops {
-			switch strings.ToLower(strings.TrimSpace(op.Kind)) {
-			case "exec":
-				res, err := tx.Exec(ctx, op.SQL, normalizeArgs(op.Args)...)
-				if err != nil {
-					return err
-				}
-				if body.ReturnResults {
-					li, _ := res.LastInsertId()
-					ra, _ := res.RowsAffected()
-					results = append(results, map[string]any{
-						"rows_affected":  ra,
-						"last_insert_id": li,
-					})
-				}
-			case "query":
-				var rows []map[string]any
-				if err := tx.Query(ctx, &rows, op.SQL, normalizeArgs(op.Args)...); err != nil {
-					return err
-				}
-				if body.ReturnResults {
-					results = append(results, rows)
-				}
-			default:
-				return fmt.Errorf("invalid op kind: %s", op.Kind)
+	// Note: RQLite transactions don't work as expected (Begin/Commit are no-ops)
+	// Executing queries directly instead of wrapping in Tx()
+	for _, op := range body.Ops {
+		switch strings.ToLower(strings.TrimSpace(op.Kind)) {
+		case "exec":
+			res, err := g.Client.Exec(ctx, op.SQL, normalizeArgs(op.Args)...)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
 			}
+			if body.ReturnResults {
+				li, _ := res.LastInsertId()
+				ra, _ := res.RowsAffected()
+				results = append(results, map[string]any{
+					"rows_affected":  ra,
+					"last_insert_id": li,
+				})
+			}
+		case "query":
+			var rows []map[string]any
+			if err := g.Client.Query(ctx, &rows, op.SQL, normalizeArgs(op.Args)...); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if body.ReturnResults {
+				results = append(results, rows)
+			}
+		default:
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid op kind: %s", op.Kind))
+			return
 		}
-		return nil
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
 	}
 	if body.ReturnResults {
 		writeJSON(w, http.StatusOK, map[string]any{

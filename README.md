@@ -9,11 +9,97 @@ A high-performance API Gateway and distributed platform built in Go. Provides a 
 - **🔐 Authentication** - Wallet signatures, API keys, JWT tokens
 - **💾 Storage** - IPFS-based decentralized file storage with encryption
 - **⚡ Cache** - Distributed cache with Olric (in-memory key-value)
-- **🗄️ Database** - RQLite distributed SQL with Raft consensus
+- **🗄️ Database** - RQLite distributed SQL with Raft consensus + Per-namespace SQLite databases
 - **📡 Pub/Sub** - Real-time messaging via LibP2P and WebSocket
 - **⚙️ Serverless** - WebAssembly function execution with host functions
 - **🌐 HTTP Gateway** - Unified REST API with automatic HTTPS (Let's Encrypt)
 - **📦 Client SDK** - Type-safe Go SDK for all services
+- **🚀 App Deployments** - Deploy React, Next.js, Go, Node.js apps with automatic domains
+- **🗄️ SQLite Databases** - Per-namespace isolated databases with IPFS backups
+
+## Application Deployments
+
+Deploy full-stack applications with automatic domain assignment and namespace isolation.
+
+### Deploy a React App
+
+```bash
+# Build your app
+cd my-react-app
+npm run build
+
+# Deploy to Orama Network
+orama deploy static ./dist --name my-app
+
+# Your app is now live at: https://my-app.orama.network
+```
+
+### Deploy Next.js with SSR
+
+```bash
+cd my-nextjs-app
+
+# Ensure next.config.js has: output: 'standalone'
+npm run build
+orama deploy nextjs . --name my-nextjs --ssr
+
+# Live at: https://my-nextjs.orama.network
+```
+
+### Deploy Go Backend
+
+```bash
+# Build for Linux (name binary 'app' for auto-detection)
+GOOS=linux GOARCH=amd64 go build -o app main.go
+
+# Deploy (must implement /health endpoint)
+orama deploy go ./app --name my-api
+
+# API live at: https://my-api.orama.network
+```
+
+### Create SQLite Database
+
+```bash
+# Create database
+orama db create my-database
+
+# Create schema
+orama db query my-database "CREATE TABLE users (id INT, name TEXT)"
+
+# Insert data
+orama db query my-database "INSERT INTO users VALUES (1, 'Alice')"
+
+# Query data
+orama db query my-database "SELECT * FROM users"
+
+# Backup to IPFS
+orama db backup my-database
+```
+
+### Full-Stack Example
+
+Deploy a complete app with React frontend, Go backend, and SQLite database:
+
+```bash
+# 1. Create database
+orama db create myapp-db
+orama db query myapp-db "CREATE TABLE users (id INT PRIMARY KEY, name TEXT)"
+
+# 2. Deploy Go backend (connects to database)
+GOOS=linux GOARCH=amd64 go build -o api main.go
+orama deploy go ./api --name myapp-api
+
+# 3. Deploy React frontend (calls backend API)
+cd frontend && npm run build
+orama deploy static ./dist --name myapp
+
+# Access:
+# Frontend: https://myapp.orama.network
+# Backend: https://myapp-api.orama.network
+```
+
+**📖 Full Guide**: See [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) for complete documentation, examples, and best practices.
 
 ## Quick Start
 
@@ -108,36 +194,63 @@ make build
 
 ## CLI Commands
 
+### Authentication
+
+```bash
+orama auth login            # Authenticate with wallet
+orama auth status           # Check authentication
+orama auth logout           # Clear credentials
+```
+
+### Application Deployments
+
+```bash
+# Deploy applications
+orama deploy static <path> --name myapp       # React, Vue, static sites
+orama deploy nextjs <path> --name myapp --ssr # Next.js with SSR (requires output: 'standalone')
+orama deploy go <path> --name myapp           # Go binaries (must have /health endpoint)
+orama deploy nodejs <path> --name myapp       # Node.js apps (must have /health endpoint)
+
+# Manage deployments
+orama deployments list                        # List all deployments
+orama deployments get <name>                  # Get deployment details
+orama deployments logs <name> --follow        # View logs
+orama deployments delete <name>               # Delete deployment
+orama deployments rollback <name> --version 1 # Rollback to version
+```
+
+### SQLite Databases
+
+```bash
+orama db create <name>                   # Create database
+orama db query <name> "SELECT * FROM t"  # Execute SQL query
+orama db list                            # List all databases
+orama db backup <name>                   # Backup to IPFS
+orama db backups <name>                  # List backups
+```
+
 ### Network Status
 
 ```bash
-./bin/orama health          # Cluster health check
-./bin/orama peers           # List connected peers
-./bin/orama status          # Network status
+orama health                # Cluster health check
+orama peers                 # List connected peers
+orama status                # Network status
 ```
 
-### Database Operations
+### RQLite Operations
 
 ```bash
-./bin/orama query "SELECT * FROM users"
-./bin/orama query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
-./bin/orama transaction --file ops.json
+orama query "SELECT * FROM users"
+orama query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
+orama transaction --file ops.json
 ```
 
 ### Pub/Sub
 
 ```bash
-./bin/orama pubsub publish <topic> <message>
-./bin/orama pubsub subscribe <topic> 30s
-./bin/orama pubsub topics
-```
-
-### Authentication
-
-```bash
-./bin/orama auth login
-./bin/orama auth status
-./bin/orama auth logout
+orama pubsub publish <topic> <message>
+orama pubsub subscribe <topic> 30s
+orama pubsub topics
 ```
 
 ## Serverless Functions (WASM)
@@ -211,18 +324,81 @@ curl -X DELETE http://localhost:6001/v1/functions/hello-world?namespace=default
 - 5001 - RQLite HTTP API
 - 6001 - Unified Gateway
 - 8080 - IPFS Gateway
-- 9050 - Anyone Client SOCKS5 proxy
+- 9050 - Anyone SOCKS5 proxy
 - 9094 - IPFS Cluster API
 - 3320/3322 - Olric Cache
 
-### Installation
+**Anyone Relay Mode (optional, for earning rewards):**
+
+- 9001 - Anyone ORPort (relay traffic, must be open externally)
+
+### Anyone Network Integration
+
+Orama Network integrates with the [Anyone Protocol](https://anyone.io) for anonymous routing. By default, nodes run as **clients** (consuming the network). Optionally, you can run as a **relay operator** to earn rewards.
+
+**Client Mode (Default):**
+- Routes traffic through Anyone network for anonymity
+- SOCKS5 proxy on localhost:9050
+- No rewards, just consumes network
+
+**Relay Mode (Earn Rewards):**
+- Provide bandwidth to the Anyone network
+- Earn $ANYONE tokens as a relay operator
+- Requires 100 $ANYONE tokens in your wallet
+- Requires ORPort (9001) open to the internet
 
 ```bash
-# Install via APT
-echo "deb https://debrosficial.github.io/network/apt stable main" | sudo tee /etc/apt/sources.list.d/debros.list
+# Install as relay operator (earn rewards)
+sudo orama install --vps-ip <IP> --domain <domain> \
+  --anyone-relay \
+  --anyone-nickname "MyRelay" \
+  --anyone-contact "operator@email.com" \
+  --anyone-wallet "0x1234...abcd"
 
-sudo apt update && sudo apt install orama
+# With exit relay (legal implications apply)
+sudo orama install --vps-ip <IP> --domain <domain> \
+  --anyone-relay \
+  --anyone-exit \
+  --anyone-nickname "MyExitRelay" \
+  --anyone-contact "operator@email.com" \
+  --anyone-wallet "0x1234...abcd"
 
+# Migrate existing Anyone installation
+sudo orama install --vps-ip <IP> --domain <domain> \
+  --anyone-relay \
+  --anyone-migrate \
+  --anyone-nickname "MyRelay" \
+  --anyone-contact "operator@email.com" \
+  --anyone-wallet "0x1234...abcd"
+```
+
+**Important:** After installation, register your relay at [dashboard.anyone.io](https://dashboard.anyone.io) to start earning rewards.
+
+### Installation
+
+**macOS (Homebrew):**
+
+```bash
+brew install DeBrosOfficial/tap/orama
+```
+
+**Linux (Debian/Ubuntu):**
+
+```bash
+# Download and install the latest .deb package
+curl -sL https://github.com/DeBrosOfficial/network/releases/latest/download/orama_$(curl -s https://api.github.com/repos/DeBrosOfficial/network/releases/latest | grep tag_name | cut -d '"' -f 4 | tr -d 'v')_linux_amd64.deb -o orama.deb
+sudo dpkg -i orama.deb
+```
+
+**From Source:**
+
+```bash
+go install github.com/DeBrosOfficial/network/cmd/cli@latest
+```
+
+**Setup (after installation):**
+
+```bash
 sudo orama install --interactive
 ```
 
@@ -331,10 +507,12 @@ See `openapi/gateway.yaml` for complete API specification.
 
 ## Documentation
 
+- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)** - Deploy React, Next.js, Go apps and manage databases
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - System architecture and design patterns
 - **[Client SDK](docs/CLIENT_SDK.md)** - Go SDK documentation and examples
 - **[Gateway API](docs/GATEWAY_API.md)** - Complete HTTP API reference
 - **[Security Deployment](docs/SECURITY_DEPLOYMENT_GUIDE.md)** - Production security hardening
+- **[Testing Plan](docs/TESTING_PLAN.md)** - Comprehensive testing strategy and implementation
 
 ## Resources
 
