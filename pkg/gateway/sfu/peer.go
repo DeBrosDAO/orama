@@ -92,12 +92,21 @@ func (p *Peer) InitPeerConnection(api *webrtc.API, config webrtc.Configuration) 
 			zap.String("candidate", candidate.String()),
 		)
 
-		p.SendMessage(NewServerMessage(MessageTypeICECandidate, &ICECandidateData{
-			Candidate:        candidate.ToJSON().Candidate,
-			SDPMid:           *candidate.ToJSON().SDPMid,
-			SDPMLineIndex:    *candidate.ToJSON().SDPMLineIndex,
-			UsernameFragment: *candidate.ToJSON().UsernameFragment,
-		}))
+		candidateJSON := candidate.ToJSON()
+		data := &ICECandidateData{
+			Candidate: candidateJSON.Candidate,
+		}
+		if candidateJSON.SDPMid != nil {
+			data.SDPMid = *candidateJSON.SDPMid
+		}
+		if candidateJSON.SDPMLineIndex != nil {
+			data.SDPMLineIndex = *candidateJSON.SDPMLineIndex
+		}
+		if candidateJSON.UsernameFragment != nil {
+			data.UsernameFragment = *candidateJSON.UsernameFragment
+		}
+
+		p.SendMessage(NewServerMessage(MessageTypeICECandidate, data))
 	})
 
 	// Handle incoming tracks from remote peers

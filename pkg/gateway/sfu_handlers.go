@@ -281,21 +281,49 @@ func (g *Gateway) sfuWebSocketHandler(w http.ResponseWriter, r *http.Request, ns
 		return
 	}
 
+	// Recover from panics to avoid silent crashes
+	defer func() {
+		if r := recover(); r != nil {
+			g.logger.ComponentError(logging.ComponentGeneral, "SFU WebSocket handler panic",
+				zap.Any("panic", r),
+				zap.String("room_id", roomID),
+				zap.String("user_id", userID),
+			)
+			conn.Close()
+		}
+	}()
+
 	g.logger.ComponentInfo(logging.ComponentGeneral, "SFU WebSocket connected",
 		zap.String("room_id", roomID),
 		zap.String("namespace", ns),
 		zap.String("user_id", userID),
+		zap.String("display_name", displayName),
 	)
 
 	// Get or create room
-	room, _ := g.sfuManager.GetOrCreateRoom(ns, roomID)
+	g.logger.ComponentDebug(logging.ComponentGeneral, "SFU getting/creating room",
+		zap.String("room_id", roomID),
+		zap.String("namespace", ns),
+	)
+	room, created := g.sfuManager.GetOrCreateRoom(ns, roomID)
+	g.logger.ComponentInfo(logging.ComponentGeneral, "SFU room ready",
+		zap.String("room_id", roomID),
+		zap.Bool("created", created),
+	)
 
 	// Create peer
 	peer := sfu.NewPeer(userID, displayName, conn, room, g.logger.Logger)
+	g.logger.ComponentInfo(logging.ComponentGeneral, "SFU peer created",
+		zap.String("peer_id", peer.ID),
+	)
 
 	// Add peer to room
+	g.logger.ComponentDebug(logging.ComponentGeneral, "SFU adding peer to room (will init peer connection)",
+		zap.String("peer_id", peer.ID),
+		zap.String("room_id", roomID),
+	)
 	if err := room.AddPeer(peer); err != nil {
-		g.logger.ComponentWarn(logging.ComponentGeneral, "Failed to add peer to room",
+		g.logger.ComponentError(logging.ComponentGeneral, "Failed to add peer to room",
 			zap.String("room_id", roomID),
 			zap.Error(err),
 		)
@@ -303,13 +331,36 @@ func (g *Gateway) sfuWebSocketHandler(w http.ResponseWriter, r *http.Request, ns
 		conn.Close()
 		return
 	}
+	g.logger.ComponentInfo(logging.ComponentGeneral, "SFU peer added to room successfully",
+		zap.String("peer_id", peer.ID),
+		zap.String("room_id", roomID),
+	)
 
 	// Send welcome message
-	peer.SendMessage(sfu.NewServerMessage(sfu.MessageTypeWelcome, &sfu.WelcomeData{
+	g.logger.ComponentDebug(logging.ComponentGeneral, "SFU preparing welcome message",
+		zap.String("peer_id", peer.ID),
+		zap.Int("num_participants", len(room.GetParticipants())),
+	)
+	welcomeMsg := sfu.NewServerMessage(sfu.MessageTypeWelcome, &sfu.WelcomeData{
 		ParticipantID: peer.ID,
 		RoomID:        roomID,
 		Participants:  room.GetParticipants(),
-	}))
+	})
+	g.logger.ComponentDebug(logging.ComponentGeneral, "SFU sending welcome message via SendMessage",
+		zap.String("peer_id", peer.ID),
+	)
+	if err := peer.SendMessage(welcomeMsg); err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral, "Failed to send welcome message",
+			zap.String("peer_id", peer.ID),
+			zap.Error(err),
+		)
+		conn.Close()
+		return
+	}
+	g.logger.ComponentInfo(logging.ComponentGeneral, "SFU welcome message sent successfully",
+		zap.String("peer_id", peer.ID),
+		zap.String("room_id", roomID),
+	)
 
 	// Handle signaling messages
 	g.handleSFUSignaling(conn, peer, room)

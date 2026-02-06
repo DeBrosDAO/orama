@@ -64,10 +64,10 @@ func (r *Room) AddPeer(peer *Peer) error {
 	r.closedMu.RUnlock()
 
 	r.peersMu.Lock()
-	defer r.peersMu.Unlock()
 
 	// Check max participants
 	if r.config.MaxParticipants > 0 && len(r.peers) >= r.config.MaxParticipants {
+		r.peersMu.Unlock()
 		return ErrRoomFull
 	}
 
@@ -77,6 +77,7 @@ func (r *Room) AddPeer(peer *Peer) error {
 	}
 
 	if err := peer.InitPeerConnection(r.api, pcConfig); err != nil {
+		r.peersMu.Unlock()
 		return err
 	}
 
@@ -86,16 +87,22 @@ func (r *Room) AddPeer(peer *Peer) error {
 	})
 
 	r.peers[peer.ID] = peer
+	peerInfo := peer.GetInfo() // Get info while holding lock
+	totalPeers := len(r.peers)
+
+	// Release lock BEFORE broadcasting to avoid deadlock
+	// (broadcastMessage also acquires the lock)
+	r.peersMu.Unlock()
 
 	r.logger.Info("Peer added to room",
 		zap.String("peer_id", peer.ID),
 		zap.String("user_id", peer.UserID),
-		zap.Int("total_peers", len(r.peers)),
+		zap.Int("total_peers", totalPeers),
 	)
 
-	// Notify other peers
+	// Notify other peers (now safe since we released the lock)
 	r.broadcastMessage(peer.ID, NewServerMessage(MessageTypeParticipantJoined, &ParticipantJoinedData{
-		Participant: peer.GetInfo(),
+		Participant: peerInfo,
 	}))
 
 	return nil
