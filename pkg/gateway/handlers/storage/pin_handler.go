@@ -34,19 +34,48 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
+	// Get namespace from context for ownership check
+	namespace := h.getNamespaceFromContext(ctx)
+	if namespace == "" {
+		httputil.WriteError(w, http.StatusUnauthorized, "namespace required")
+		return
+	}
+
+	// Check if namespace owns this CID (namespace isolation)
+	hasAccess, err := h.checkCIDOwnership(ctx, req.Cid, namespace)
+	if err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
+			zap.Error(err), zap.String("cid", req.Cid), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		return
+	}
+	if !hasAccess {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "namespace attempted to pin CID they don't own",
+			zap.String("cid", req.Cid), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusForbidden, "access denied: CID not owned by namespace")
+		return
+	}
+
 	// Get replication factor from config (default: 3)
 	replicationFactor := h.config.IPFSReplicationFactor
 	if replicationFactor == 0 {
 		replicationFactor = 3
 	}
 
-	ctx := r.Context()
 	pinResp, err := h.ipfsClient.Pin(ctx, req.Cid, req.Name, replicationFactor)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to pin CID",
 			zap.Error(err), zap.String("cid", req.Cid))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to pin: %v", err))
 		return
+	}
+
+	// Update pin status in database
+	if err := h.updatePinStatus(ctx, req.Cid, namespace, true); err != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
+			zap.Error(err), zap.String("cid", req.Cid))
 	}
 
 	// Use name from request if response doesn't have it

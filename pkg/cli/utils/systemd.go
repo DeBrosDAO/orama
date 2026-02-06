@@ -150,24 +150,52 @@ func IsServiceMasked(service string) (bool, error) {
 	return false, nil
 }
 
-// GetProductionServices returns a list of all DeBros production service names that exist
+// GetProductionServices returns a list of all DeBros production service names that exist,
+// including both global services and namespace-specific services
 func GetProductionServices() []string {
-	// Unified service names (no bootstrap/node distinction)
-	allServices := []string{
+	// Global/default service names
+	globalServices := []string{
 		"debros-gateway",
 		"debros-node",
 		"debros-olric",
 		"debros-ipfs-cluster",
 		"debros-ipfs",
 		"debros-anyone-client",
+		"debros-anyone-relay",
 	}
 
-	// Filter to only existing services by checking if unit file exists
 	var existing []string
-	for _, svc := range allServices {
+
+	// Add existing global services
+	for _, svc := range globalServices {
 		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
 		if _, err := os.Stat(unitPath); err == nil {
 			existing = append(existing, svc)
+		}
+	}
+
+	// Discover namespace service instances from the namespaces data directory.
+	// We can't rely on scanning /etc/systemd/system because that only contains
+	// template files (e.g. debros-namespace-gateway@.service) with no instance name.
+	// Restarting a template without an instance is a no-op.
+	// Instead, scan the data directory where each subdirectory is a provisioned namespace.
+	namespacesDir := "/home/debros/.orama/data/namespaces"
+	nsEntries, err := os.ReadDir(namespacesDir)
+	if err == nil {
+		serviceTypes := []string{"rqlite", "olric", "gateway"}
+		for _, nsEntry := range nsEntries {
+			if !nsEntry.IsDir() {
+				continue
+			}
+			ns := nsEntry.Name()
+			for _, svcType := range serviceTypes {
+				// Only add if the env file exists (service was provisioned)
+				envFile := filepath.Join(namespacesDir, ns, svcType+".env")
+				if _, err := os.Stat(envFile); err == nil {
+					svcName := fmt.Sprintf("debros-namespace-%s@%s", svcType, ns)
+					existing = append(existing, svcName)
+				}
+			}
 		}
 	}
 
@@ -200,18 +228,60 @@ func CollectPortsForServices(services []string, skipActive bool) ([]PortSpec, er
 	return ports, nil
 }
 
-// EnsurePortsAvailable checks if the specified ports are available
+// EnsurePortsAvailable checks if the specified ports are available.
+// If a port is in use, it identifies the process and gives actionable guidance.
 func EnsurePortsAvailable(action string, ports []PortSpec) error {
+	var conflicts []string
 	for _, spec := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", spec.Port))
 		if err != nil {
 			if errors.Is(err, syscall.EADDRINUSE) || strings.Contains(err.Error(), "address already in use") {
-				return fmt.Errorf("%s cannot continue: %s (port %d) is already in use", action, spec.Name, spec.Port)
+				processInfo := identifyPortProcess(spec.Port)
+				conflicts = append(conflicts, fmt.Sprintf("  - %s (port %d): %s", spec.Name, spec.Port, processInfo))
+				continue
 			}
 			return fmt.Errorf("%s cannot continue: failed to inspect %s (port %d): %w", action, spec.Name, spec.Port, err)
 		}
 		_ = ln.Close()
 	}
+	if len(conflicts) > 0 {
+		msg := fmt.Sprintf("%s cannot continue: the following ports are already in use:\n%s\n\n", action, strings.Join(conflicts, "\n"))
+		msg += "Please stop the conflicting services before running this command.\n"
+		msg += "Common fixes:\n"
+		msg += "  - Docker:           sudo systemctl stop docker docker.socket\n"
+		msg += "  - Old IPFS:         sudo systemctl stop ipfs\n"
+		msg += "  - systemd-resolved: already handled by installer (port 53)\n"
+		msg += "  - Other services:   sudo kill <PID> or sudo systemctl stop <service>"
+		return fmt.Errorf("%s", msg)
+	}
 	return nil
+}
+
+// identifyPortProcess uses ss/lsof to find what process is using a port
+func identifyPortProcess(port int) string {
+	// Try ss first (available on most Linux)
+	out, err := exec.Command("ss", "-tlnp", fmt.Sprintf("sport = :%d", port)).CombinedOutput()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "users:") {
+				// Extract process info from ss output like: users:(("docker-proxy",pid=2049,fd=4))
+				if idx := strings.Index(line, "users:"); idx != -1 {
+					return strings.TrimSpace(line[idx:])
+				}
+			}
+		}
+	}
+
+	// Fallback: try lsof
+	out, err = exec.Command("lsof", "-i", fmt.Sprintf(":%d", port), "-sTCP:LISTEN", "-n", "-P").CombinedOutput()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) > 1 {
+			return strings.TrimSpace(lines[1]) // first data line after header
+		}
+	}
+
+	return "unknown process"
 }
 

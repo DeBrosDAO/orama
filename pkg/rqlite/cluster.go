@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // establishLeadershipOrJoin handles post-startup cluster establishment
@@ -38,6 +40,13 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 	}
 
 	requiredRemotePeers := r.config.MinClusterSize - 1
+
+	// Genesis node (single-node cluster) doesn't need to wait for peers
+	if requiredRemotePeers <= 0 {
+		r.logger.Info("Genesis node, skipping peer discovery wait")
+		return nil
+	}
+
 	_ = r.discoveryService.TriggerPeerExchange(ctx)
 
 	checkInterval := 2 * time.Second
@@ -88,7 +97,9 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	r.discoveryService.TriggerSync()
 	time.Sleep(2 * time.Second)
 
-	discoveryDeadline := time.Now().Add(30 * time.Second)
+	// Wait up to 2 minutes for peer discovery - LibP2P DHT can take 60+ seconds
+	// to re-establish connections after simultaneous restart
+	discoveryDeadline := time.Now().Add(2 * time.Minute)
 	var discoveredPeers int
 
 	for time.Now().Before(discoveryDeadline) {
@@ -96,12 +107,23 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		discoveredPeers = len(allPeers)
 
 		if discoveredPeers >= r.config.MinClusterSize {
+			r.logger.Info("Discovered required peers for cluster",
+				zap.Int("discovered", discoveredPeers),
+				zap.Int("required", r.config.MinClusterSize))
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
 
+	// Even if we only discovered ourselves, write peers.json as a fallback
+	// This ensures RQLite has consistent state and can potentially recover
+	// when other nodes come online
 	if discoveredPeers <= 1 {
+		r.logger.Warn("Only discovered self during pre-start discovery, writing single-node peers.json as fallback",
+			zap.Int("discovered_peers", discoveredPeers),
+			zap.Int("min_cluster_size", r.config.MinClusterSize))
+		// Still write peers.json with just ourselves - better than nothing
+		_ = r.discoveryService.ForceWritePeersJSON()
 		return nil
 	}
 

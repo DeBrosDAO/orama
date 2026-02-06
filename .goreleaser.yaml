@@ -1,17 +1,21 @@
 # GoReleaser Configuration for DeBros Network
-# Builds and releases the dbn binary for multiple platforms
-# Other binaries (node, gateway, identity) are installed via: dbn setup
+# Builds and releases orama (CLI) and orama-node binaries
+# Publishes to: GitHub Releases, Homebrew, and apt (.deb packages)
 
 project_name: debros-network
 
 env:
   - GO111MODULE=on
 
+before:
+  hooks:
+    - go mod tidy
+
 builds:
-  # dbn binary - only build the CLI
-  - id: dbn
+  # orama CLI binary
+  - id: orama
     main: ./cmd/cli
-    binary: dbn
+    binary: orama
     goos:
       - linux
       - darwin
@@ -25,18 +29,107 @@ builds:
       - -X main.date={{.Date}}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  # orama-node binary (Linux only for apt)
+  - id: orama-node
+    main: ./cmd/node
+    binary: orama-node
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 archives:
-  # Tar.gz archives for dbn
-  - id: binaries
+  # Tar.gz archives for orama CLI
+  - id: orama-archives
+    builds:
+      - orama
     format: tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "orama_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
       - LICENSE
       - CHANGELOG.md
-    format_overrides:
-      - goos: windows
-        format: zip
+
+  # Tar.gz archives for orama-node
+  - id: orama-node-archives
+    builds:
+      - orama-node
+    format: tar.gz
+    name_template: "orama-node_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+# Debian packages for apt
+nfpms:
+  # orama CLI .deb package
+  - id: orama-deb
+    package_name: orama
+    builds:
+      - orama
+    vendor: DeBros
+    homepage: https://github.com/DeBrosOfficial/network
+    maintainer: DeBros <support@debros.io>
+    description: CLI tool for the Orama decentralized network
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/bin
+    section: utils
+    priority: optional
+    contents:
+      - src: ./README.md
+        dst: /usr/share/doc/orama/README.md
+    deb:
+      lintian_overrides:
+        - statically-linked-binary
+
+  # orama-node .deb package
+  - id: orama-node-deb
+    package_name: orama-node
+    builds:
+      - orama-node
+    vendor: DeBros
+    homepage: https://github.com/DeBrosOfficial/network
+    maintainer: DeBros <support@debros.io>
+    description: Node daemon for the Orama decentralized network
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/bin
+    section: net
+    priority: optional
+    contents:
+      - src: ./README.md
+        dst: /usr/share/doc/orama-node/README.md
+    deb:
+      lintian_overrides:
+        - statically-linked-binary
+
+# Homebrew tap for macOS (orama CLI only)
+brews:
+  - name: orama
+    ids:
+      - orama-archives
+    repository:
+      owner: DeBrosOfficial
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    folder: Formula
+    homepage: https://github.com/DeBrosOfficial/network
+    description: CLI tool for the Orama decentralized network
+    license: MIT
+    install: |
+      bin.install "orama"
+    test: |
+      system "#{bin}/orama", "--version"
 
 checksum:
   name_template: "checksums.txt"
@@ -64,3 +157,5 @@ release:
   draft: false
   prerelease: auto
   name_template: "Release {{.Version}}"
+  extra_files:
+    - glob: ./dist/*.deb

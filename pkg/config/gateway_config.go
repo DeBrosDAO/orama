@@ -19,6 +19,7 @@ type HTTPGatewayConfig struct {
 	IPFSClusterAPIURL string        `yaml:"ipfs_cluster_api_url"` // IPFS Cluster API URL
 	IPFSAPIURL        string        `yaml:"ipfs_api_url"`         // IPFS API URL
 	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
+	BaseDomain        string        `yaml:"base_domain"`          // Base domain for deployments (e.g., "dbrs.space"). Defaults to "dbrs.space"
 }
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway

@@ -57,8 +57,16 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// Namespace isolation: prefix dmap with namespace
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		writeError(w, http.StatusUnauthorized, "namespace not found in context")
+		return
+	}
+	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
+
 	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(req.DMap)
+	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return
@@ -146,8 +154,16 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	// Namespace isolation: prefix dmap with namespace
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		writeError(w, http.StatusUnauthorized, "namespace not found in context")
+		return
+	}
+	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
+
 	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(req.DMap)
+	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return

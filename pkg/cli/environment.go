@@ -32,14 +32,20 @@ var DefaultEnvironments = []Environment{
 		IsActive:    true,
 	},
 	{
+		Name:        "production",
+		GatewayURL:  "https://dbrs.space",
+		Description: "Production network (dbrs.space)",
+		IsActive:    false,
+	},
+	{
 		Name:        "devnet",
-		GatewayURL:  "https://devnet.orama.network",
+		GatewayURL:  "https://orama-devnet.network",
 		Description: "Development network (testnet)",
 		IsActive:    false,
 	},
 	{
 		Name:        "testnet",
-		GatewayURL:  "https://testnet.orama.network",
+		GatewayURL:  "https://orama-tesetnet.network",
 		Description: "Test network (staging)",
 		IsActive:    false,
 	},

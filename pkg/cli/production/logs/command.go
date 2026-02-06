@@ -47,7 +47,7 @@ func Handle(args []string) {
 }
 
 func showUsage() {
-	fmt.Fprintf(os.Stderr, "Usage: dbn prod logs <service> [--follow]\n")
+	fmt.Fprintf(os.Stderr, "Usage: orama prod logs <service> [--follow]\n")
 	fmt.Fprintf(os.Stderr, "\nService aliases:\n")
 	fmt.Fprintf(os.Stderr, "  node, ipfs, cluster, gateway, olric\n")
 	fmt.Fprintf(os.Stderr, "\nOr use full service name:\n")

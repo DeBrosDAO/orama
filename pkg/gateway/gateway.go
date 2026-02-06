@@ -8,21 +8,36 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/health"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
+	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
+	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
+	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 )
 
@@ -38,6 +53,9 @@ type Gateway struct {
 	sqlDB     *sql.DB
 	ormClient rqlite.Client
 	ormHTTP   *rqlite.HTTPGateway
+
+	// Global RQLite client for API key validation (namespace gateways only)
+	authClient client.NetworkClient
 
 	// Olric cache client
 	olricClient *olric.Client
@@ -65,6 +83,54 @@ type Gateway struct {
 	// Authentication service
 	authService  *auth.Service
 	authHandlers *authhandlers.Handlers
+
+	// Deployment system
+	deploymentService    *deploymentshandlers.DeploymentService
+	staticHandler        *deploymentshandlers.StaticDeploymentHandler
+	nextjsHandler        *deploymentshandlers.NextJSHandler
+	goHandler            *deploymentshandlers.GoHandler
+	nodejsHandler        *deploymentshandlers.NodeJSHandler
+	listHandler          *deploymentshandlers.ListHandler
+	updateHandler        *deploymentshandlers.UpdateHandler
+	rollbackHandler      *deploymentshandlers.RollbackHandler
+	logsHandler          *deploymentshandlers.LogsHandler
+	statsHandler         *deploymentshandlers.StatsHandler
+	domainHandler        *deploymentshandlers.DomainHandler
+	sqliteHandler        *sqlitehandlers.SQLiteHandler
+	sqliteBackupHandler  *sqlitehandlers.BackupHandler
+	replicaHandler       *deploymentshandlers.ReplicaHandler
+	portAllocator        *deployments.PortAllocator
+	homeNodeManager      *deployments.HomeNodeManager
+	replicaManager       *deployments.ReplicaManager
+	processManager       *process.Manager
+	healthChecker        *health.HealthChecker
+
+	// Middleware cache for auth/routing lookups (eliminates redundant DB queries)
+	mwCache *middlewareCache
+
+	// Request log batcher (aggregates writes instead of per-request inserts)
+	logBatcher *requestLogBatcher
+
+	// Rate limiter
+	rateLimiter *RateLimiter
+
+	// WireGuard peer exchange
+	wireguardHandler *wireguardhandlers.Handler
+
+	// Node join handler
+	joinHandler *joinhandlers.Handler
+
+	// Cluster provisioning for namespace clusters
+	clusterProvisioner authhandlers.ClusterProvisioner
+
+	// Namespace instance spawn handler (for distributed provisioning)
+	spawnHandler http.Handler
+
+	// Namespace delete handler
+	namespaceDeleteHandler http.Handler
+
+	// Peer discovery for namespace gateways (libp2p mesh formation)
+	peerDiscovery *PeerDiscovery
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -112,6 +178,45 @@ func (a *authDatabaseAdapter) Query(ctx context.Context, sql string, args ...int
 	}, nil
 }
 
+// deploymentDatabaseAdapter adapts rqlite.Client to database.Database
+type deploymentDatabaseAdapter struct {
+	client rqlite.Client
+}
+
+func (a *deploymentDatabaseAdapter) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	return a.client.Query(ctx, dest, query, args...)
+}
+
+func (a *deploymentDatabaseAdapter) QueryOne(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	// Query expects a slice, so we need to query into a slice and check length
+	// Get the type of dest and create a slice of that type
+	destType := reflect.TypeOf(dest).Elem()
+	sliceType := reflect.SliceOf(destType)
+	slice := reflect.New(sliceType).Interface()
+
+	// Execute query into slice
+	if err := a.client.Query(ctx, slice, query, args...); err != nil {
+		return err
+	}
+
+	// Check that we got exactly one result
+	sliceVal := reflect.ValueOf(slice).Elem()
+	if sliceVal.Len() == 0 {
+		return fmt.Errorf("no rows found")
+	}
+	if sliceVal.Len() > 1 {
+		return fmt.Errorf("expected 1 row, got %d", sliceVal.Len())
+	}
+
+	// Copy the first element to dest
+	reflect.ValueOf(dest).Elem().Set(sliceVal.Index(0))
+	return nil
+}
+
+func (a *deploymentDatabaseAdapter) Exec(ctx context.Context, query string, args ...interface{}) (interface{}, error) {
+	return a.client.Exec(ctx, query, args...)
+}
+
 // New creates and initializes a new Gateway instance.
 // It establishes all necessary service connections and dependencies.
 func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
@@ -146,6 +251,33 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		presenceMembers:    make(map[string][]PresenceMember),
 	}
 
+	// Create separate auth client for global RQLite if GlobalRQLiteDSN is provided
+	// This allows namespace gateways to validate API keys against the global database
+	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
+		logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
+			zap.String("global_dsn", cfg.GlobalRQLiteDSN),
+		)
+
+		// Create client config for global namespace
+		authCfg := client.DefaultClientConfig("default") // Use "default" namespace for global
+		authCfg.DatabaseEndpoints = []string{cfg.GlobalRQLiteDSN}
+		if len(cfg.BootstrapPeers) > 0 {
+			authCfg.BootstrapPeers = cfg.BootstrapPeers
+		}
+
+		authClient, err := client.NewClient(authCfg)
+		if err != nil {
+			logger.ComponentWarn(logging.ComponentGeneral, "Failed to create global auth client", zap.Error(err))
+		} else {
+			if err := authClient.Connect(); err != nil {
+				logger.ComponentWarn(logging.ComponentGeneral, "Failed to connect global auth client", zap.Error(err))
+			} else {
+				gw.authClient = authClient
+				logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
+			}
+		}
+	}
+
 	// Initialize handler instances
 	gw.pubsubHandlers = pubsubhandlers.NewPubSubHandlers(deps.Client, logger)
 
@@ -157,7 +289,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.storageHandlers = storage.New(deps.IPFSClient, logger, storage.Config{
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
-		})
+		}, deps.ORMClient)
 	}
 
 	if deps.AuthService != nil {
@@ -172,6 +304,157 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		)
 	}
 
+	// Initialize middleware cache (60s TTL for auth/routing lookups)
+	gw.mwCache = newMiddlewareCache(60 * time.Second)
+
+	// Initialize request log batcher (flush every 5 seconds)
+	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
+
+	// Initialize rate limiter (10000 req/min, burst 5000)
+	gw.rateLimiter = NewRateLimiter(10000, 5000)
+	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	// Initialize WireGuard peer exchange handler
+	if deps.ORMClient != nil {
+		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
+		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
+	}
+
+	// Initialize deployment system
+	if deps.ORMClient != nil && deps.IPFSClient != nil {
+		// Convert rqlite.Client to database.Database interface for health checker
+		dbAdapter := &deploymentDatabaseAdapter{client: deps.ORMClient}
+
+		// Create deployment service components
+		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
+		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
+		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
+		gw.processManager = process.NewManager(logger.Logger)
+
+		// Create deployment service
+		gw.deploymentService = deploymentshandlers.NewDeploymentService(
+			deps.ORMClient,
+			gw.homeNodeManager,
+			gw.portAllocator,
+			gw.replicaManager,
+			logger.Logger,
+		)
+		// Set base domain from config
+		if gw.cfg.BaseDomain != "" {
+			gw.deploymentService.SetBaseDomain(gw.cfg.BaseDomain)
+		}
+		// Set node peer ID so deployments run on the node that receives the request
+		if gw.cfg.NodePeerID != "" {
+			gw.deploymentService.SetNodePeerID(gw.cfg.NodePeerID)
+		}
+
+		// Create deployment handlers
+		gw.staticHandler = deploymentshandlers.NewStaticDeploymentHandler(
+			gw.deploymentService,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
+		// Determine base deploy path from config
+		baseDeployPath := filepath.Join(cfg.DataDir, "deployments")
+		if cfg.DataDir == "" {
+			baseDeployPath = "" // Let handlers use default
+		}
+
+		gw.nextjsHandler = deploymentshandlers.NewNextJSHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.goHandler = deploymentshandlers.NewGoHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.nodejsHandler = deploymentshandlers.NewNodeJSHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.listHandler = deploymentshandlers.NewListHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.updateHandler = deploymentshandlers.NewUpdateHandler(
+			gw.deploymentService,
+			gw.staticHandler,
+			gw.nextjsHandler,
+			gw.processManager,
+			logger.Logger,
+		)
+
+		gw.rollbackHandler = deploymentshandlers.NewRollbackHandler(
+			gw.deploymentService,
+			gw.updateHandler,
+			logger.Logger,
+		)
+
+		gw.replicaHandler = deploymentshandlers.NewReplicaHandler(
+			gw.deploymentService,
+			gw.processManager,
+			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.logsHandler = deploymentshandlers.NewLogsHandler(
+			gw.deploymentService,
+			gw.processManager,
+			logger.Logger,
+		)
+
+		gw.statsHandler = deploymentshandlers.NewStatsHandler(
+			gw.deploymentService,
+			gw.processManager,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.domainHandler = deploymentshandlers.NewDomainHandler(
+			gw.deploymentService,
+			logger.Logger,
+		)
+
+		// SQLite handlers
+		gw.sqliteHandler = sqlitehandlers.NewSQLiteHandler(
+			deps.ORMClient,
+			gw.homeNodeManager,
+			logger.Logger,
+			cfg.DataDir,
+			cfg.NodePeerID,
+		)
+
+		gw.sqliteBackupHandler = sqlitehandlers.NewBackupHandler(
+			gw.sqliteHandler,
+			deps.IPFSClient,
+			logger.Logger,
+		)
+
+		// Start health checker
+		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger)
+		go gw.healthChecker.Start(context.Background())
+
+		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
+	}
+
 	// Start background Olric reconnection if initial connection failed
 	if deps.OlricClient == nil {
 		olricCfg := olric.Config{
@@ -182,6 +465,51 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			olricCfg.Servers = []string{"localhost:3320"}
 		}
 		gw.startOlricReconnectLoop(olricCfg)
+	}
+
+	// Initialize peer discovery for namespace gateways
+	// This allows the 3 namespace gateway instances to discover each other
+	if cfg.ClientNamespace != "" && cfg.ClientNamespace != "default" && deps.Client != nil {
+		logger.ComponentInfo(logging.ComponentGeneral, "Initializing peer discovery for namespace gateway...",
+			zap.String("namespace", cfg.ClientNamespace))
+
+		// Get libp2p host from client
+		host := deps.Client.Host()
+		if host != nil {
+			// Parse listen port from ListenAddr (format: ":port" or "addr:port")
+			listenPort := 0
+			if cfg.ListenAddr != "" {
+				parts := strings.Split(cfg.ListenAddr, ":")
+				if len(parts) > 0 {
+					portStr := parts[len(parts)-1]
+					if p, err := strconv.Atoi(portStr); err == nil {
+						listenPort = p
+					}
+				}
+			}
+
+			// Create peer discovery manager
+			gw.peerDiscovery = NewPeerDiscovery(
+				host,
+				deps.SQLDB,
+				cfg.NodePeerID,
+				listenPort,
+				cfg.ClientNamespace,
+				logger.Logger,
+			)
+
+			// Start peer discovery
+			ctx := context.Background()
+			if err := gw.peerDiscovery.Start(ctx); err != nil {
+				logger.ComponentWarn(logging.ComponentGeneral, "Failed to start peer discovery",
+					zap.Error(err))
+			} else {
+				logger.ComponentInfo(logging.ComponentGeneral, "Peer discovery started successfully",
+					zap.String("namespace", cfg.ClientNamespace))
+			}
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral, "Cannot initialize peer discovery: libp2p host not available")
+		}
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed")
@@ -195,6 +523,30 @@ func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscribe
 		return subs
 	}
 	return nil
+}
+
+// SetClusterProvisioner sets the cluster provisioner for namespace cluster management.
+// This enables automatic RQLite/Olric/Gateway cluster provisioning when new namespaces are created.
+func (g *Gateway) SetClusterProvisioner(cp authhandlers.ClusterProvisioner) {
+	g.clusterProvisioner = cp
+	if g.authHandlers != nil {
+		g.authHandlers.SetClusterProvisioner(cp)
+	}
+}
+
+// SetSpawnHandler sets the handler for internal namespace spawn/stop requests.
+func (g *Gateway) SetSpawnHandler(h http.Handler) {
+	g.spawnHandler = h
+}
+
+// SetNamespaceDeleteHandler sets the handler for namespace deletion requests.
+func (g *Gateway) SetNamespaceDeleteHandler(h http.Handler) {
+	g.namespaceDeleteHandler = h
+}
+
+// GetORMClient returns the RQLite ORM client for external use (e.g., by ClusterManager)
+func (g *Gateway) GetORMClient() rqlite.Client {
+	return g.ormClient
 }
 
 // setOlricClient atomically sets the Olric client and reinitializes cache handlers.
@@ -244,5 +596,105 @@ func (g *Gateway) startOlricReconnectLoop(cfg olric.Config) {
 			}
 		}
 	}()
+}
+
+// Cache handler wrappers - these check cacheHandlers dynamically to support
+// background Olric reconnection. Without these, cache routes won't work if
+// Olric wasn't available at gateway startup but connected later.
+
+func (g *Gateway) cacheHealthHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.HealthHandler(w, r)
+}
+
+func (g *Gateway) cacheGetHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.GetHandler(w, r)
+}
+
+func (g *Gateway) cacheMGetHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.MultiGetHandler(w, r)
+}
+
+func (g *Gateway) cachePutHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.SetHandler(w, r)
+}
+
+func (g *Gateway) cacheDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.DeleteHandler(w, r)
+}
+
+func (g *Gateway) cacheScanHandler(w http.ResponseWriter, r *http.Request) {
+	g.olricMu.RLock()
+	handlers := g.cacheHandlers
+	g.olricMu.RUnlock()
+	if handlers == nil {
+		writeError(w, http.StatusServiceUnavailable, "cache service unavailable")
+		return
+	}
+	handlers.ScanHandler(w, r)
+}
+
+// namespaceClusterStatusHandler handles GET /v1/namespace/status?id={cluster_id}
+// This endpoint is public (no API key required) to allow polling during provisioning.
+func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	clusterID := r.URL.Query().Get("id")
+	if clusterID == "" {
+		writeError(w, http.StatusBadRequest, "cluster_id parameter required")
+		return
+	}
+
+	if g.clusterProvisioner == nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster provisioning not enabled")
+		return
+	}
+
+	status, err := g.clusterProvisioner.GetClusterStatusByID(r.Context(), clusterID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(status)
 }
 

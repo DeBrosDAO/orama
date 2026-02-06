@@ -39,6 +39,12 @@ func Handle(args []string) {
 		os.Exit(1)
 	}
 
+	// Validate Anyone relay configuration if enabled
+	if err := orchestrator.validator.ValidateAnyoneRelayFlags(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+
 	// Execute installation
 	if err := orchestrator.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)

@@ -94,7 +94,7 @@ func inferPeerIP(peers []string, vpsIP string) string {
 }
 
 // GenerateNodeConfig generates node.yaml configuration (unified architecture)
-func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, enableHTTPS bool) (string, error) {
+func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, baseDomain string, enableHTTPS bool) (string, error) {
 	// Generate node ID from domain or use default
 	nodeID := "node"
 	if domain != "" {
@@ -106,18 +106,11 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 
 	// Determine advertise addresses - use vpsIP if provided
-	// When HTTPS is enabled, RQLite uses native TLS on port 7002 (not SNI gateway)
-	// This avoids conflicts between SNI gateway TLS termination and RQLite's native TLS
+	// Always use port 7001 for RQLite Raft (no TLS)
 	var httpAdvAddr, raftAdvAddr string
 	if vpsIP != "" {
 		httpAdvAddr = net.JoinHostPort(vpsIP, "5001")
-		if enableHTTPS {
-			// Use direct IP:7002 for Raft - RQLite handles TLS natively via -node-cert
-			// This bypasses the SNI gateway which would cause TLS termination conflicts
-			raftAdvAddr = net.JoinHostPort(vpsIP, "7002")
-		} else {
-			raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
-		}
+		raftAdvAddr = net.JoinHostPort(vpsIP, "7001")
 	} else {
 		// Fallback to localhost if no vpsIP
 		httpAdvAddr = "localhost:5001"
@@ -125,18 +118,15 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 
 	// Determine RQLite join address
-	// When HTTPS is enabled, use port 7002 (direct RQLite TLS) instead of 7001 (SNI gateway)
+	// Always use port 7001 for RQLite Raft communication (no TLS)
 	joinPort := "7001"
-	if enableHTTPS {
-		joinPort = "7002"
-	}
 
 	var rqliteJoinAddr string
 	if joinAddress != "" {
 		// Use explicitly provided join address
-		// If it contains :7001 and HTTPS is enabled, update to :7002
-		if enableHTTPS && strings.Contains(joinAddress, ":7001") {
-			rqliteJoinAddr = strings.Replace(joinAddress, ":7001", ":7002", 1)
+		// Normalize to port 7001 (non-TLS) regardless of what was provided
+		if strings.Contains(joinAddress, ":7002") {
+			rqliteJoinAddr = strings.Replace(joinAddress, ":7002", ":7001", 1)
 		} else {
 			rqliteJoinAddr = joinAddress
 		}
@@ -162,11 +152,9 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 
 	// Unified data directory (all nodes equal)
-	// When HTTPS/SNI is enabled, use internal port 7002 for RQLite Raft (SNI gateway listens on 7001)
+	// Always use port 7001 for RQLite Raft - TLS is optional and managed separately
+	// The SNI gateway approach was removed to simplify certificate management
 	raftInternalPort := 7001
-	if enableHTTPS {
-		raftInternalPort = 7002 // Internal port when SNI is enabled
-	}
 
 	data := templates.NodeConfigData{
 		NodeID:                 nodeID,
@@ -183,21 +171,18 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		RaftAdvAddress:         raftAdvAddr,
 		UnifiedGatewayPort:     6001,
 		Domain:                 domain,
+		BaseDomain:             baseDomain,
 		EnableHTTPS:            enableHTTPS,
 		TLSCacheDir:            tlsCacheDir,
 		HTTPPort:               httpPort,
 		HTTPSPort:              httpsPort,
+		WGIP:                   vpsIP,
 	}
 
-	// When HTTPS is enabled, configure RQLite node-to-node TLS encryption
-	// RQLite handles TLS natively on port 7002, bypassing the SNI gateway
-	// This avoids TLS termination conflicts between SNI gateway and RQLite
-	if enableHTTPS && domain != "" {
-		data.NodeCert = filepath.Join(tlsCacheDir, domain+".crt")
-		data.NodeKey = filepath.Join(tlsCacheDir, domain+".key")
-		// Skip verification since nodes may have different domain certificates
-		data.NodeNoVerify = true
-	}
+	// RQLite node-to-node TLS encryption is disabled by default
+	// This simplifies certificate management - RQLite uses plain TCP for internal Raft
+	// HTTPS is still used for client-facing gateway traffic via autocert
+	// TLS can be enabled manually later if needed for inter-node encryption
 
 	return templates.RenderNodeConfig(data)
 }
@@ -224,13 +209,15 @@ func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableH
 }
 
 // GenerateOlricConfig generates Olric configuration
-func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string) (string, error) {
+func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string, advertiseAddr string, peers []string) (string, error) {
 	data := templates.OlricConfigData{
-		ServerBindAddr:        serverBindAddr,
-		HTTPPort:              httpPort,
-		MemberlistBindAddr:    memberlistBindAddr,
-		MemberlistPort:        memberlistPort,
-		MemberlistEnvironment: memberlistEnv,
+		ServerBindAddr:          serverBindAddr,
+		HTTPPort:                httpPort,
+		MemberlistBindAddr:      memberlistBindAddr,
+		MemberlistPort:          memberlistPort,
+		MemberlistEnvironment:   memberlistEnv,
+		MemberlistAdvertiseAddr: advertiseAddr,
+		Peers:                   peers,
 	}
 	return templates.RenderOlricConfig(data)
 }
@@ -341,10 +328,25 @@ func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 		return nil, fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
-	// Try to read existing key
+	// Try to read existing key — validate and auto-fix if corrupted (e.g. double headers)
 	if data, err := os.ReadFile(swarmKeyPath); err == nil {
-		if strings.Contains(string(data), "/key/swarm/psk/1.0.0/") {
-			return data, nil
+		content := string(data)
+		if strings.Contains(content, "/key/swarm/psk/1.0.0/") {
+			// Extract hex and rebuild clean file
+			lines := strings.Split(strings.TrimSpace(content), "\n")
+			hexKey := ""
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := strings.TrimSpace(lines[i])
+				if line != "" && !strings.HasPrefix(line, "/") {
+					hexKey = line
+					break
+				}
+			}
+			clean := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", hexKey)
+			if clean != content {
+				_ = os.WriteFile(swarmKeyPath, []byte(clean), 0600)
+			}
+			return []byte(clean), nil
 		}
 	}
 

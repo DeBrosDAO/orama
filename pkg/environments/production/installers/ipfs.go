@@ -123,7 +123,7 @@ func (ii *IPFSInstaller) Configure() error {
 
 // InitializeRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
 // If ipfsPeer is provided, configures Peering.Peers for peer discovery in private networks
-func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, ipfsPeer *IPFSPeerInfo) error {
+func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, bindIP string, ipfsPeer *IPFSPeerInfo) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 	repoExists := false
 	if _, err := os.Stat(configPath); err == nil {
@@ -164,7 +164,7 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 	// Configure IPFS addresses (API, Gateway, Swarm) by modifying the config file directly
 	// This ensures the ports are set correctly and avoids conflicts with RQLite on port 5001
 	fmt.Fprintf(ii.logWriter, "    Configuring IPFS addresses (API: %d, Gateway: %d, Swarm: %d)...\n", apiPort, gatewayPort, swarmPort)
-	if err := ii.configureAddresses(ipfsRepoPath, apiPort, gatewayPort, swarmPort); err != nil {
+	if err := ii.configureAddresses(ipfsRepoPath, apiPort, gatewayPort, swarmPort, bindIP); err != nil {
 		return fmt.Errorf("failed to configure IPFS addresses: %w", err)
 	}
 
@@ -223,7 +223,7 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 }
 
 // configureAddresses configures the IPFS API, Gateway, and Swarm addresses in the config file
-func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewayPort, swarmPort int) error {
+func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewayPort, swarmPort int, bindIP string) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 
 	// Read existing config
@@ -246,7 +246,7 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 
 	// Update specific address fields while preserving others
 	// Bind API and Gateway to localhost only for security
-	// Swarm binds to all interfaces for peer connections
+	// Swarm binds to the WireGuard IP so it's only reachable over the VPN
 	addresses["API"] = []string{
 		fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", apiPort),
 	}
@@ -254,11 +254,41 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 		fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", gatewayPort),
 	}
 	addresses["Swarm"] = []string{
-		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", swarmPort),
-		fmt.Sprintf("/ip6/::/tcp/%d", swarmPort),
+		fmt.Sprintf("/ip4/%s/tcp/%d", bindIP, swarmPort),
 	}
+	// Clear NoAnnounce — the server profile blocks private IPs (10.0.0.0/8, etc.)
+	// which prevents nodes from advertising their WireGuard swarm addresses via DHT
+	addresses["NoAnnounce"] = []string{}
 
 	config["Addresses"] = addresses
+
+	// Clear Swarm.AddrFilters — the server profile blocks private IPs (10.0.0.0/8, 172.16.0.0/12, etc.)
+	// which prevents IPFS from connecting over our WireGuard mesh (10.0.0.x)
+	swarm, ok := config["Swarm"].(map[string]interface{})
+	if !ok {
+		swarm = make(map[string]interface{})
+	}
+	swarm["AddrFilters"] = []interface{}{}
+	// Disable Websocket transport (not supported in private networks)
+	transports, _ := swarm["Transports"].(map[string]interface{})
+	if transports == nil {
+		transports = make(map[string]interface{})
+	}
+	network, _ := transports["Network"].(map[string]interface{})
+	if network == nil {
+		network = make(map[string]interface{})
+	}
+	network["Websocket"] = false
+	transports["Network"] = network
+	swarm["Transports"] = transports
+	config["Swarm"] = swarm
+
+	// Disable AutoTLS (incompatible with private networks)
+	autoTLS := map[string]interface{}{"Enabled": false}
+	config["AutoTLS"] = autoTLS
+
+	// Use DHT routing (Routing.Type=auto is incompatible with private networks)
+	config["Routing"] = map[string]interface{}{"Type": "dht"}
 
 	// Write config back
 	updatedData, err := json.MarshalIndent(config, "", "  ")

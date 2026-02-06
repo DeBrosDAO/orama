@@ -7,7 +7,17 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 )
+
+// getNamespaceFromContext extracts the namespace from the request context
+func getNamespaceFromContext(ctx context.Context) string {
+	if ns, ok := ctx.Value(ctxkeys.NamespaceOverride).(string); ok {
+		return ns
+	}
+	return ""
+}
 
 // SetHandler handles cache PUT/SET requests for storing a key-value pair in a distributed map.
 // It expects a JSON body with "dmap", "key", and "value" fields, and optionally "ttl".
@@ -60,8 +70,16 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// Namespace isolation: prefix dmap with namespace
+	namespace := getNamespaceFromContext(ctx)
+	if namespace == "" {
+		writeError(w, http.StatusUnauthorized, "namespace not found in context")
+		return
+	}
+	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
+
 	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(req.DMap)
+	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
 		return

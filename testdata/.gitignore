@@ -1,0 +1,15 @@
+# Dependencies
+apps/*/node_modules/
+apps/*/.next/
+apps/*/dist/
+
+# Build outputs
+apps/go-backend/api
+tarballs/*.tar.gz
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store

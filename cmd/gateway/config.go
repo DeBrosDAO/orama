@@ -77,6 +77,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		ListenAddr            string   `yaml:"listen_addr"`
 		ClientNamespace       string   `yaml:"client_namespace"`
 		RQLiteDSN             string   `yaml:"rqlite_dsn"`
+		GlobalRQLiteDSN       string   `yaml:"global_rqlite_dsn"`
 		Peers                 []string `yaml:"bootstrap_peers"`
 		EnableHTTPS           bool     `yaml:"enable_https"`
 		DomainName            string   `yaml:"domain_name"`
@@ -95,7 +96,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 			zap.String("path", configPath),
 			zap.Error(err))
 		fmt.Fprintf(os.Stderr, "\nConfig file not found at %s\n", configPath)
-		fmt.Fprintf(os.Stderr, "Generate it using: dbn config init --type gateway\n")
+		fmt.Fprintf(os.Stderr, "Generate it using: orama config init --type gateway\n")
 		os.Exit(1)
 	}
 
@@ -113,6 +114,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		ClientNamespace:       "default",
 		BootstrapPeers:        nil,
 		RQLiteDSN:             "",
+		GlobalRQLiteDSN:       "",
 		EnableHTTPS:           false,
 		DomainName:            "",
 		TLSCacheDir:           "",
@@ -132,6 +134,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if v := strings.TrimSpace(y.RQLiteDSN); v != "" {
 		cfg.RQLiteDSN = v
+	}
+	if v := strings.TrimSpace(y.GlobalRQLiteDSN); v != "" {
+		cfg.GlobalRQLiteDSN = v
 	}
 	if len(y.Peers) > 0 {
 		var peers []string

@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -85,4 +86,30 @@ func (g *Gateway) versionHandler(w http.ResponseWriter, r *http.Request) {
 		"started_at": g.startedAt,
 		"uptime":     time.Since(g.startedAt).String(),
 	})
+}
+
+// tlsCheckHandler validates if a domain should receive a TLS certificate
+// Used by Caddy's on-demand TLS feature to prevent abuse
+func (g *Gateway) tlsCheckHandler(w http.ResponseWriter, r *http.Request) {
+	domain := r.URL.Query().Get("domain")
+	if domain == "" {
+		http.Error(w, "domain parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Get base domain from config
+	baseDomain := "dbrs.space"
+	if g.cfg != nil && g.cfg.BaseDomain != "" {
+		baseDomain = g.cfg.BaseDomain
+	}
+
+	// Allow any subdomain of our base domain
+	if strings.HasSuffix(domain, "."+baseDomain) || domain == baseDomain {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Domain not allowed - only allow subdomains of our base domain
+	// Custom domains would need to be verified separately
+	http.Error(w, "domain not allowed", http.StatusForbidden)
 }

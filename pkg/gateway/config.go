@@ -13,10 +13,20 @@ type Config struct {
 	// If empty, defaults to "http://localhost:4001".
 	RQLiteDSN string
 
+	// Global RQLite DSN for API key validation (for namespace gateways)
+	// If empty, uses RQLiteDSN (for main/global gateways)
+	GlobalRQLiteDSN string
+
 	// HTTPS configuration
 	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
 	DomainName  string // Domain name for HTTPS certificate
 	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.orama/tls-cache)
+
+	// Domain routing configuration
+	BaseDomain string // Base domain for deployment routing. Set via node config http_gateway.base_domain. Defaults to "dbrs.space"
+
+	// Data directory configuration
+	DataDir string // Base directory for node-local data (SQLite databases, deployments). Defaults to ~/.orama
 
 	// Olric cache configuration
 	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:3320"]). If empty, defaults to ["localhost:3320"]
@@ -24,8 +34,11 @@ type Config struct {
 
 	// IPFS Cluster configuration
 	IPFSClusterAPIURL     string        // IPFS Cluster HTTP API URL (e.g., "http://localhost:9094"). If empty, gateway will discover from node configs
-	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:5001"). If empty, gateway will discover from node configs
+	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501"). If empty, gateway will discover from node configs
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 	IPFSEnableEncryption  bool          // Enable client-side encryption before upload (default: true, discovered from node configs)
+
+	// WireGuard mesh configuration
+	ClusterSecret string // Cluster secret for authenticating internal WireGuard peer exchange
 }

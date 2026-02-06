@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/config/validate"
 	"github.com/DeBrosOfficial/network/pkg/installer/discovery"
 	"github.com/DeBrosOfficial/network/pkg/installer/steps"
 	"github.com/DeBrosOfficial/network/pkg/installer/validation"
@@ -197,8 +198,9 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.config.PeerIP = peerIP
 
-		// Auto-populate join address (direct RQLite TLS on port 7002) and bootstrap peers
-		m.config.JoinAddress = fmt.Sprintf("%s:7002", peerIP)
+		// Auto-populate join address using port 7001 (standard RQLite Raft port)
+		// config.go will adjust to 7002 if HTTPS/SNI is enabled
+		m.config.JoinAddress = fmt.Sprintf("%s:7001", peerIP)
 		m.config.Peers = []string{
 			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, disc.PeerID),
 		}
@@ -231,7 +233,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.setupStepInput()
 
 	case StepSwarmKey:
-		swarmKey := strings.TrimSpace(m.textInput.Value())
+		swarmKey := validate.ExtractSwarmKeyHex(m.textInput.Value())
 		if err := config.ValidateSwarmKey(swarmKey); err != nil {
 			m.err = err
 			return m, nil

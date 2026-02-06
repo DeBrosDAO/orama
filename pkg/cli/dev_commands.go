@@ -158,7 +158,7 @@ func handleDevStatus(args []string) {
 
 func handleDevLogs(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: dbn dev logs <component> [--follow]\n")
+		fmt.Fprintf(os.Stderr, "Usage: orama dev logs <component> [--follow]\n")
 		fmt.Fprintf(os.Stderr, "\nComponents: node-1, node-2, node-3, node-4, node-5, gateway, ipfs-node-1, ipfs-node-2, ipfs-node-3, ipfs-node-4, ipfs-node-5, olric, anon\n")
 		os.Exit(1)
 	}

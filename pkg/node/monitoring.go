@@ -184,16 +184,18 @@ func (n *Node) GetDiscoveryStatus() map[string]interface{} {
 // Unlike nodes which need extensive monitoring, clients only need basic health checks.
 func (n *Node) startConnectionMonitoring() {
 	go func() {
-		ticker := time.NewTicker(30 * time.Second) // Less frequent than nodes (60s vs 30s)
+		ticker := time.NewTicker(30 * time.Second) // Ticks every 30 seconds
 		defer ticker.Stop()
 
 		var lastPeerCount int
 		firstCheck := true
+		tickCount := 0
 
 		for range ticker.C {
 			if n.host == nil {
 				return
 			}
+			tickCount++
 
 			// Get current peer count
 			peers := n.host.Network().Peers()
@@ -217,9 +219,9 @@ func (n *Node) startConnectionMonitoring() {
 			// This discovers all cluster peers and updates peer_addresses in service.json
 			// so IPFS Cluster can automatically connect to all discovered peers
 			if n.clusterConfigManager != nil {
-				// First try to discover from LibP2P connections (works even if cluster peers aren't connected yet)
-				// This runs every minute to discover peers automatically via LibP2P discovery
-				if time.Now().Unix()%60 == 0 {
+				// Discover from LibP2P connections every 2 ticks (once per minute)
+				// Works even if cluster peers aren't connected yet
+				if tickCount%2 == 0 {
 					if err := n.clusterConfigManager.DiscoverClusterPeersFromLibP2P(n.host); err != nil {
 						n.logger.ComponentWarn(logging.ComponentNode, "Failed to discover cluster peers from LibP2P", zap.Error(err))
 					} else {
@@ -227,9 +229,9 @@ func (n *Node) startConnectionMonitoring() {
 					}
 				}
 
-				// Also try to update from cluster API (works once peers are connected)
-				// Update all cluster peers every 2 minutes to discover new peers
-				if time.Now().Unix()%120 == 0 {
+				// Update from cluster API every 4 ticks (once per 2 minutes)
+				// Works once peers are already connected
+				if tickCount%4 == 0 {
 					if err := n.clusterConfigManager.UpdateAllClusterPeers(); err != nil {
 						n.logger.ComponentWarn(logging.ComponentNode, "Failed to update cluster peers during monitoring", zap.Error(err))
 					} else {

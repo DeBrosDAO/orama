@@ -38,13 +38,40 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
+	h.logger.ComponentDebug(logging.ComponentGeneral, "Starting CID retrieval",
+		zap.String("cid", path),
+		zap.String("namespace", namespace))
+
+	// Check if namespace owns this CID (namespace isolation)
+	h.logger.ComponentDebug(logging.ComponentGeneral, "Checking CID ownership", zap.String("cid", path))
+	hasAccess, err := h.checkCIDOwnership(ctx, path, namespace)
+	if err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
+			zap.Error(err), zap.String("cid", path), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		return
+	}
+	if !hasAccess {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "namespace attempted to access CID they don't own",
+			zap.String("cid", path), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusForbidden, "access denied: CID not owned by namespace")
+		return
+	}
+
+	h.logger.ComponentDebug(logging.ComponentGeneral, "CID ownership check passed", zap.String("cid", path))
+
 	// Get IPFS API URL from config
 	ipfsAPIURL := h.config.IPFSAPIURL
 	if ipfsAPIURL == "" {
 		ipfsAPIURL = "http://localhost:5001"
 	}
 
-	ctx := r.Context()
+	h.logger.ComponentDebug(logging.ComponentGeneral, "Fetching content from IPFS",
+		zap.String("cid", path),
+		zap.String("ipfs_api_url", ipfsAPIURL))
+
 	reader, err := h.ipfsClient.Get(ctx, path, ipfsAPIURL)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to get content from IPFS",
@@ -60,6 +87,9 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer reader.Close()
+
+	h.logger.ComponentDebug(logging.ComponentGeneral, "Successfully retrieved content from IPFS, starting stream",
+		zap.String("cid", path))
 
 	// Set headers for file download
 	w.Header().Set("Content-Type", "application/octet-stream")

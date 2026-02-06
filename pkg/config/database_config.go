@@ -41,8 +41,8 @@ type IPFSConfig struct {
 	// If empty, IPFS storage is disabled for this node
 	ClusterAPIURL string `yaml:"cluster_api_url"`
 
-	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:5001")
-	// If empty, defaults to "http://localhost:5001"
+	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501")
+	// If empty, defaults to "http://localhost:4501"
 	APIURL string `yaml:"api_url"`
 
 	// Timeout for IPFS operations

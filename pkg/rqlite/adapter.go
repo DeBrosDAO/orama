@@ -17,16 +17,17 @@ type RQLiteAdapter struct {
 // NewRQLiteAdapter creates a new adapter that provides sql.DB interface for RQLite
 func NewRQLiteAdapter(manager *RQLiteManager) (*RQLiteAdapter, error) {
 	// Use the gorqlite database/sql driver
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d", manager.config.RQLitePort))
+	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true&level=none", manager.config.RQLitePort))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open RQLite SQL connection: %w", err)
 	}
 
 	// Configure connection pool with proper timeouts and limits
-	db.SetMaxOpenConns(25)                 // Maximum number of open connections
-	db.SetMaxIdleConns(5)                  // Maximum number of idle connections
-	db.SetConnMaxLifetime(5 * time.Minute) // Maximum lifetime of a connection
-	db.SetConnMaxIdleTime(2 * time.Minute) // Maximum idle time before closing
+	// Optimized for concurrent operations and fast bad connection eviction
+	db.SetMaxOpenConns(100)                 // Allow more concurrent connections to prevent queuing
+	db.SetMaxIdleConns(10)                  // Keep fewer idle connections to force fresh reconnects
+	db.SetConnMaxLifetime(30 * time.Second) // Short lifetime ensures bad connections die quickly
+	db.SetConnMaxIdleTime(10 * time.Second) // Kill idle connections quickly to prevent stale state
 
 	return &RQLiteAdapter{
 		manager: manager,

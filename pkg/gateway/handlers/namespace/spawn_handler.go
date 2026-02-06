@@ -1,0 +1,205 @@
+package namespace
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/gateway"
+	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
+	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"go.uber.org/zap"
+)
+
+// SpawnRequest represents a request to spawn or stop a namespace instance
+type SpawnRequest struct {
+	Action    string `json:"action"` // "spawn-rqlite", "spawn-olric", "spawn-gateway", "stop-rqlite", "stop-olric", "stop-gateway"
+	Namespace string `json:"namespace"`
+	NodeID    string `json:"node_id"`
+
+	// RQLite config (when action = "spawn-rqlite")
+	RQLiteHTTPPort    int      `json:"rqlite_http_port,omitempty"`
+	RQLiteRaftPort    int      `json:"rqlite_raft_port,omitempty"`
+	RQLiteHTTPAdvAddr string   `json:"rqlite_http_adv_addr,omitempty"`
+	RQLiteRaftAdvAddr string   `json:"rqlite_raft_adv_addr,omitempty"`
+	RQLiteJoinAddrs   []string `json:"rqlite_join_addrs,omitempty"`
+	RQLiteIsLeader    bool     `json:"rqlite_is_leader,omitempty"`
+
+	// Olric config (when action = "spawn-olric")
+	OlricHTTPPort       int      `json:"olric_http_port,omitempty"`
+	OlricMemberlistPort int      `json:"olric_memberlist_port,omitempty"`
+	OlricBindAddr       string   `json:"olric_bind_addr,omitempty"`
+	OlricAdvertiseAddr  string   `json:"olric_advertise_addr,omitempty"`
+	OlricPeerAddresses  []string `json:"olric_peer_addresses,omitempty"`
+
+	// Gateway config (when action = "spawn-gateway")
+	GatewayHTTPPort       int      `json:"gateway_http_port,omitempty"`
+	GatewayBaseDomain     string   `json:"gateway_base_domain,omitempty"`
+	GatewayRQLiteDSN      string   `json:"gateway_rqlite_dsn,omitempty"`
+	GatewayOlricServers   []string `json:"gateway_olric_servers,omitempty"`
+	IPFSClusterAPIURL     string   `json:"ipfs_cluster_api_url,omitempty"`
+	IPFSAPIURL            string   `json:"ipfs_api_url,omitempty"`
+	IPFSTimeout           string   `json:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor int      `json:"ipfs_replication_factor,omitempty"`
+}
+
+// SpawnResponse represents the response from a spawn/stop request
+type SpawnResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	PID     int    `json:"pid,omitempty"`
+}
+
+// SpawnHandler handles remote namespace instance spawn/stop requests.
+// Now uses systemd for service management instead of direct process spawning.
+type SpawnHandler struct {
+	systemdSpawner *namespacepkg.SystemdSpawner
+	logger         *zap.Logger
+}
+
+// NewSpawnHandler creates a new spawn handler
+func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, logger *zap.Logger) *SpawnHandler {
+	return &SpawnHandler{
+		systemdSpawner: systemdSpawner,
+		logger:         logger.With(zap.String("component", "namespace-spawn-handler")),
+	}
+}
+
+// ServeHTTP implements http.Handler
+func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Authenticate via internal auth header
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req SpawnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "invalid request body"})
+		return
+	}
+
+	if req.Namespace == "" || req.NodeID == "" {
+		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "namespace and node_id are required"})
+		return
+	}
+
+	h.logger.Info("Received spawn request",
+		zap.String("action", req.Action),
+		zap.String("namespace", req.Namespace),
+		zap.String("node_id", req.NodeID),
+	)
+
+	// Use a background context for spawn operations so processes outlive the HTTP request.
+	// Stop operations can use request context since they're short-lived.
+	ctx := context.Background()
+
+	switch req.Action {
+	case "spawn-rqlite":
+		cfg := rqlite.InstanceConfig{
+			Namespace:      req.Namespace,
+			NodeID:         req.NodeID,
+			HTTPPort:       req.RQLiteHTTPPort,
+			RaftPort:       req.RQLiteRaftPort,
+			HTTPAdvAddress: req.RQLiteHTTPAdvAddr,
+			RaftAdvAddress: req.RQLiteRaftAdvAddr,
+			JoinAddresses:  req.RQLiteJoinAddrs,
+			IsLeader:       req.RQLiteIsLeader,
+		}
+		if err := h.systemdSpawner.SpawnRQLite(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+			h.logger.Error("Failed to spawn RQLite instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "spawn-olric":
+		cfg := olric.InstanceConfig{
+			Namespace:      req.Namespace,
+			NodeID:         req.NodeID,
+			HTTPPort:       req.OlricHTTPPort,
+			MemberlistPort: req.OlricMemberlistPort,
+			BindAddr:       req.OlricBindAddr,
+			AdvertiseAddr:  req.OlricAdvertiseAddr,
+			PeerAddresses:  req.OlricPeerAddresses,
+		}
+		if err := h.systemdSpawner.SpawnOlric(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+			h.logger.Error("Failed to spawn Olric instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "stop-rqlite":
+		if err := h.systemdSpawner.StopRQLite(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to stop RQLite instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "stop-olric":
+		if err := h.systemdSpawner.StopOlric(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to stop Olric instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "spawn-gateway":
+		// Parse IPFS timeout if provided
+		var ipfsTimeout time.Duration
+		if req.IPFSTimeout != "" {
+			var err error
+			ipfsTimeout, err = time.ParseDuration(req.IPFSTimeout)
+			if err != nil {
+				h.logger.Warn("Invalid IPFS timeout, using default", zap.String("timeout", req.IPFSTimeout), zap.Error(err))
+				ipfsTimeout = 60 * time.Second
+			}
+		}
+
+		cfg := gateway.InstanceConfig{
+			Namespace:             req.Namespace,
+			NodeID:                req.NodeID,
+			HTTPPort:              req.GatewayHTTPPort,
+			BaseDomain:            req.GatewayBaseDomain,
+			RQLiteDSN:             req.GatewayRQLiteDSN,
+			OlricServers:          req.GatewayOlricServers,
+			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
+			IPFSAPIURL:            req.IPFSAPIURL,
+			IPFSTimeout:           ipfsTimeout,
+			IPFSReplicationFactor: req.IPFSReplicationFactor,
+		}
+		if err := h.systemdSpawner.SpawnGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "stop-gateway":
+		if err := h.systemdSpawner.StopGateway(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to stop Gateway instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	default:
+		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: fmt.Sprintf("unknown action: %s", req.Action)})
+	}
+}
+
+func writeSpawnResponse(w http.ResponseWriter, status int, resp SpawnResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}

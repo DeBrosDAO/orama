@@ -14,13 +14,13 @@ var (
 	// Global cache of trusted domains loaded from environment
 	trustedDomains []string
 	// CA certificate pool for trusting self-signed certs
-	caCertPool *x509.CertPool
-	initialized    bool
+	caCertPool  *x509.CertPool
+	initialized bool
 )
 
-// Default trusted domains - always trust debros.network for staging/development
+// Default trusted domains - always trust orama.network for staging/development
 var defaultTrustedDomains = []string{
-	"*.debros.network",
+	"*.orama.network",
 }
 
 // init loads trusted domains and CA certificate from environment and files
@@ -64,7 +64,7 @@ func GetTrustedDomains() []string {
 func ShouldSkipTLSVerify(domain string) bool {
 	for _, trusted := range trustedDomains {
 		if strings.HasPrefix(trusted, "*.") {
-			// Handle wildcards like *.debros.network
+			// Handle wildcards like *.orama.network
 			suffix := strings.TrimPrefix(trusted, "*")
 			if strings.HasSuffix(domain, suffix) || domain == strings.TrimPrefix(suffix, ".") {
 				return true
@@ -119,4 +119,3 @@ func NewHTTPClientForDomain(timeout time.Duration, hostname string) *http.Client
 		},
 	}
 }
-
