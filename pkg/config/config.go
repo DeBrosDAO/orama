@@ -127,7 +127,7 @@ func DefaultConfig() *Config {
 			// IPFS storage configuration
 			IPFS: IPFSConfig{
 				ClusterAPIURL:     "", // Empty = disabled
-				APIURL:            "http://localhost:5001",
+				APIURL:            "http://localhost:4501",
 				Timeout:           60 * time.Second,
 				ReplicationFactor: 3,
 				EnableEncryption:  true,
@@ -158,7 +158,7 @@ func DefaultConfig() *Config {
 			OlricServers:      []string{"localhost:3320"},
 			OlricTimeout:      10 * time.Second,
 			IPFSClusterAPIURL: "http://localhost:9094",
-			IPFSAPIURL:        "http://localhost:5001",
+			IPFSAPIURL:        "http://localhost:4501",
 			IPFSTimeout:       60 * time.Second,
 		},
 	}
