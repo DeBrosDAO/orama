@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -781,14 +783,15 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(r.Context())
 
-	// Single query: get internal IP + gateway port from cluster tables
+	// Query all ready namespace gateways and choose a stable target.
+	// Random selection causes WS subscribe and publish calls to hit different
+	// nodes, which makes pubsub delivery flaky for short-lived subscriptions.
 	query := `
 		SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
 		FROM namespace_port_allocations npa
 		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
 		JOIN dns_nodes dn ON npa.node_id = dn.id
 		WHERE nc.namespace_name = ? AND nc.status = 'ready'
-		ORDER BY RANDOM() LIMIT 1
 	`
 	result, err := db.Query(internalCtx, query, namespaceName)
 	if err != nil || result == nil || len(result.Rows) == 0 {
@@ -799,16 +802,54 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	gatewayIP := getString(result.Rows[0][0])
-	if gatewayIP == "" {
+	type namespaceGatewayTarget struct {
+		ip   string
+		port int
+	}
+	targets := make([]namespaceGatewayTarget, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		if len(row) == 0 {
+			continue
+		}
+		ip := getString(row[0])
+		if ip == "" {
+			continue
+		}
+		port := 10004
+		if len(row) > 1 {
+			if p := getInt(row[1]); p > 0 {
+				port = p
+			}
+		}
+		targets = append(targets, namespaceGatewayTarget{ip: ip, port: port})
+	}
+	if len(targets) == 0 {
 		http.Error(w, "Namespace gateway not available", http.StatusServiceUnavailable)
 		return
 	}
-	gatewayPort := 10004
-	if p := getInt(result.Rows[0][1]); p > 0 {
-		gatewayPort = p
-	}
 
+	// Keep ordering deterministic before hashing, otherwise DB row order can vary.
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].ip == targets[j].ip {
+			return targets[i].port < targets[j].port
+		}
+		return targets[i].ip < targets[j].ip
+	})
+
+	affinityKey := namespaceName + "|" + validatedNamespace
+	if apiKey := extractAPIKey(r); apiKey != "" {
+		affinityKey = namespaceName + "|" + apiKey
+	} else if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {
+		affinityKey = namespaceName + "|" + authz
+	} else {
+		affinityKey = namespaceName + "|" + getClientIP(r)
+	}
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(affinityKey))
+	targetIdx := int(hasher.Sum32()) % len(targets)
+	selected := targets[targetIdx]
+	gatewayIP := selected.ip
+	gatewayPort := selected.port
 	targetHost := gatewayIP + ":" + strconv.Itoa(gatewayPort)
 
 	// Handle WebSocket upgrade requests specially (http.Client can't handle 101 Switching Protocols)

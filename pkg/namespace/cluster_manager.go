@@ -30,7 +30,7 @@ type ClusterManagerConfig struct {
 	GlobalRQLiteDSN string // Global RQLite DSN for API key validation (e.g., "http://localhost:4001")
 	// IPFS configuration for namespace gateways (defaults used if not set)
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (default: "http://localhost:9094")
-	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:5001")
+	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:4501")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // IPFS replication factor (default: 3)
 }
@@ -78,7 +78,7 @@ func NewClusterManager(
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:5001"
+		ipfsAPIURL = "http://localhost:4501"
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -122,7 +122,7 @@ func NewClusterManagerWithComponents(
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:5001"
+		ipfsAPIURL = "http://localhost:4501"
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -262,7 +262,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 			return nil, fmt.Errorf("failed to allocate ports on node %s: %w", node.NodeID, err)
 		}
 		portBlocks[i] = block
-		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID, 
+		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID,
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
@@ -427,8 +427,8 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			NodeID:         node.NodeID,
 			HTTPPort:       portBlocks[i].OlricHTTPPort,
 			MemberlistPort: portBlocks[i].OlricMemberlistPort,
-			BindAddr:       node.InternalIP,   // Bind to WG IP directly (0.0.0.0 resolves to IPv6 on some hosts)
-			AdvertiseAddr:  node.InternalIP,   // Advertise WG IP to peers
+			BindAddr:       node.InternalIP, // Bind to WG IP directly (0.0.0.0 resolves to IPv6 on some hosts)
+			AdvertiseAddr:  node.InternalIP, // Advertise WG IP to peers
 			PeerAddresses:  peers,
 		}
 	}
@@ -583,15 +583,15 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 // spawnRQLiteRemote sends a spawn-rqlite request to a remote node
 func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, cfg rqlite.InstanceConfig) (*rqlite.Instance, error) {
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":              "spawn-rqlite",
-		"namespace":           cfg.Namespace,
-		"node_id":             cfg.NodeID,
-		"rqlite_http_port":    cfg.HTTPPort,
-		"rqlite_raft_port":    cfg.RaftPort,
+		"action":               "spawn-rqlite",
+		"namespace":            cfg.Namespace,
+		"node_id":              cfg.NodeID,
+		"rqlite_http_port":     cfg.HTTPPort,
+		"rqlite_raft_port":     cfg.RaftPort,
 		"rqlite_http_adv_addr": cfg.HTTPAdvAddress,
 		"rqlite_raft_adv_addr": cfg.RaftAdvAddress,
-		"rqlite_join_addrs":   cfg.JoinAddresses,
-		"rqlite_is_leader":    cfg.IsLeader,
+		"rqlite_join_addrs":    cfg.JoinAddresses,
+		"rqlite_is_leader":     cfg.IsLeader,
 	})
 	if err != nil {
 		return nil, err
@@ -602,14 +602,14 @@ func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, 
 // spawnOlricRemote sends a spawn-olric request to a remote node
 func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, cfg olric.InstanceConfig) (*olric.OlricInstance, error) {
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":               "spawn-olric",
-		"namespace":            cfg.Namespace,
-		"node_id":              cfg.NodeID,
-		"olric_http_port":      cfg.HTTPPort,
+		"action":                "spawn-olric",
+		"namespace":             cfg.Namespace,
+		"node_id":               cfg.NodeID,
+		"olric_http_port":       cfg.HTTPPort,
 		"olric_memberlist_port": cfg.MemberlistPort,
-		"olric_bind_addr":      cfg.BindAddr,
-		"olric_advertise_addr": cfg.AdvertiseAddr,
-		"olric_peer_addresses": cfg.PeerAddresses,
+		"olric_bind_addr":       cfg.BindAddr,
+		"olric_advertise_addr":  cfg.AdvertiseAddr,
+		"olric_peer_addresses":  cfg.PeerAddresses,
 	})
 	if err != nil {
 		return nil, err
@@ -747,52 +747,33 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 }
 
 // createDNSRecords creates DNS records for the namespace gateway.
-// Creates A records for ALL nameservers (not just cluster nodes) so that any nameserver
-// can receive requests and proxy them to the namespace cluster via internal routing.
+// Creates A records pointing to the public IPs of nodes running the namespace gateway cluster.
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
 
-	// Query for ALL nameserver IPs (not just the selected cluster nodes)
-	// This ensures DNS round-robins across all nameservers, even those not hosting the cluster
-	type nameserverIP struct {
-		IPAddress string `db:"ip_address"`
-	}
-	var nameservers []nameserverIP
-	nameserverQuery := `
-		SELECT DISTINCT ip_address
-		FROM dns_nameservers
-		WHERE domain = ?
-		ORDER BY hostname
-	`
-	err := cm.db.Query(ctx, &nameservers, nameserverQuery, cm.baseDomain)
-	if err != nil {
-		cm.logger.Error("Failed to query nameservers for DNS records",
-			zap.String("domain", cm.baseDomain),
-			zap.Error(err),
-		)
-		return fmt.Errorf("failed to query nameservers: %w", err)
-	}
-
-	var nameserverIPs []string
-	for _, ns := range nameservers {
-		if ns.IPAddress != "" {
-			nameserverIPs = append(nameserverIPs, ns.IPAddress)
+	// Collect public IPs from the selected cluster nodes
+	var gatewayIPs []string
+	for _, node := range nodes {
+		if node.IPAddress != "" {
+			gatewayIPs = append(gatewayIPs, node.IPAddress)
 		}
 	}
 
-	// Fallback: if no nameservers found in dns_nameservers table, use cluster node IPs
-	// This maintains backwards compatibility with clusters created before nameserver tracking
-	if len(nameserverIPs) == 0 {
-		cm.logger.Warn("No nameservers found in dns_nameservers table, falling back to cluster node IPs",
-			zap.String("domain", cm.baseDomain),
+	if len(gatewayIPs) == 0 {
+		cm.logger.Error("No valid node IPs found for DNS records",
+			zap.String("namespace", cluster.NamespaceName),
+			zap.Int("node_count", len(nodes)),
 		)
-		for _, node := range nodes {
-			nameserverIPs = append(nameserverIPs, node.IPAddress)
-		}
+		return fmt.Errorf("no valid node IPs found for DNS records")
 	}
+
+	cm.logger.Info("Creating DNS records for namespace gateway",
+		zap.String("namespace", cluster.NamespaceName),
+		zap.Strings("ips", gatewayIPs),
+	)
 
 	recordCount := 0
-	for _, ip := range nameserverIPs {
+	for _, ip := range gatewayIPs {
 		query := `
 			INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by)
 			VALUES (?, 'A', ?, 300, ?, 'system')
@@ -805,7 +786,7 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 				zap.Error(err),
 			)
 		} else {
-			cm.logger.Info("Created DNS A record for nameserver",
+			cm.logger.Info("Created DNS A record for gateway node",
 				zap.String("fqdn", fqdn),
 				zap.String("ip", ip),
 			)
@@ -813,7 +794,7 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 		}
 	}
 
-	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d nameserver records)", fqdn, recordCount), nil)
+	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d gateway node records)", fqdn, recordCount), nil)
 	return nil
 }
 
@@ -1329,12 +1310,12 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	// Get all nodes' IPs and port allocations
 	type nodePortInfo struct {
-		NodeID             string `db:"node_id"`
-		InternalIP         string `db:"internal_ip"`
-		RQLiteHTTPPort     int    `db:"rqlite_http_port"`
-		RQLiteRaftPort     int    `db:"rqlite_raft_port"`
-		OlricHTTPPort      int    `db:"olric_http_port"`
-		OlricMemberlistPort int   `db:"olric_memberlist_port"`
+		NodeID              string `db:"node_id"`
+		InternalIP          string `db:"internal_ip"`
+		RQLiteHTTPPort      int    `db:"rqlite_http_port"`
+		RQLiteRaftPort      int    `db:"rqlite_raft_port"`
+		OlricHTTPPort       int    `db:"olric_http_port"`
+		OlricMemberlistPort int    `db:"olric_memberlist_port"`
 	}
 	var allNodePorts []nodePortInfo
 	allPortsQuery := `
@@ -1557,15 +1538,15 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 // ClusterLocalState is persisted to disk so namespace processes can be restored
 // without querying the main RQLite cluster (which may not have a leader yet on cold start).
 type ClusterLocalState struct {
-	ClusterID     string                 `json:"cluster_id"`
-	NamespaceName string                 `json:"namespace_name"`
-	LocalNodeID   string                 `json:"local_node_id"`
-	LocalIP       string                 `json:"local_ip"`
-	LocalPorts    ClusterLocalStatePorts `json:"local_ports"`
+	ClusterID     string                  `json:"cluster_id"`
+	NamespaceName string                  `json:"namespace_name"`
+	LocalNodeID   string                  `json:"local_node_id"`
+	LocalIP       string                  `json:"local_ip"`
+	LocalPorts    ClusterLocalStatePorts  `json:"local_ports"`
 	AllNodes      []ClusterLocalStateNode `json:"all_nodes"`
-	HasGateway    bool                   `json:"has_gateway"`
-	BaseDomain    string                 `json:"base_domain"`
-	SavedAt       time.Time              `json:"saved_at"`
+	HasGateway    bool                    `json:"has_gateway"`
+	BaseDomain    string                  `json:"base_domain"`
+	SavedAt       time.Time               `json:"saved_at"`
 }
 
 type ClusterLocalStatePorts struct {
