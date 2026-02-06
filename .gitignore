@@ -30,6 +30,8 @@ dist/
 
 # OS generated files
 .DS_Store
+.codex/
+redeploy-6.sh
 .DS_Store?
 ._*
 .Spotlight-V100
