@@ -310,8 +310,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
 
-	// Initialize rate limiter (300 req/min, burst 50)
-	gw.rateLimiter = NewRateLimiter(300, 50)
+	// Initialize rate limiter (10000 req/min, burst 5000)
+	gw.rateLimiter = NewRateLimiter(10000, 5000)
 	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 
 	// Initialize WireGuard peer exchange handler

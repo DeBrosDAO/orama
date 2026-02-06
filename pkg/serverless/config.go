@@ -62,7 +62,7 @@ func DefaultConfig() *Config {
 		DefaultRetryDelaySeconds: 5,
 
 		// Rate limiting
-		GlobalRateLimitPerMinute: 10000, // 10k requests/minute globally
+		GlobalRateLimitPerMinute: 250000, // 250k requests/minute globally
 
 		// Background jobs
 		JobWorkers:        4,
@@ -184,4 +184,3 @@ func (c *Config) WithRateLimit(perMinute int) *Config {
 	copy.GlobalRateLimitPerMinute = perMinute
 	return &copy
 }
-

@@ -224,12 +224,14 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 		var conn *gorqlite.Connection
 		var err error
 
-		// Disable gorqlite cluster discovery to avoid /nodes timeouts from unreachable peers
+		// Disable gorqlite cluster discovery to avoid /nodes timeouts from unreachable peers.
+		// Use level=none to read from local SQLite directly (no leader forwarding).
+		// Writes are unaffected — they always go through Raft consensus.
 		openURL := rqliteURL
 		if strings.Contains(openURL, "?") {
-			openURL += "&disableClusterDiscovery=true"
+			openURL += "&disableClusterDiscovery=true&level=none"
 		} else {
-			openURL += "?disableClusterDiscovery=true"
+			openURL += "?disableClusterDiscovery=true&level=none"
 		}
 		conn, err = gorqlite.Open(openURL)
 		if err != nil {
