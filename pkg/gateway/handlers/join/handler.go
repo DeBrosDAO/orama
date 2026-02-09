@@ -222,43 +222,49 @@ func (h *Handler) consumeToken(ctx context.Context, token, usedByIP string) erro
 	return nil
 }
 
-// assignWGIP finds the next available 10.0.0.x IP, retrying on UNIQUE constraint violation
+// assignWGIP finds the next available 10.0.0.x IP by querying all peers and
+// finding the numerically highest IP. This avoids lexicographic comparison issues
+// where MAX("10.0.0.9") > MAX("10.0.0.10") in SQL string comparison.
 func (h *Handler) assignWGIP(ctx context.Context) (string, error) {
-	for attempt := 0; attempt < 3; attempt++ {
-		var result []struct {
-			MaxIP string `db:"max_ip"`
-		}
-
-		err := h.rqliteClient.Query(ctx, &result,
-			"SELECT MAX(wg_ip) as max_ip FROM wireguard_peers")
-		if err != nil {
-			return "", fmt.Errorf("failed to query max WG IP: %w", err)
-		}
-
-		if len(result) == 0 || result[0].MaxIP == "" {
-			return "10.0.0.2", nil // 10.0.0.1 is genesis
-		}
-
-		maxIP := result[0].MaxIP
-		var a, b, c, d int
-		if _, err := fmt.Sscanf(maxIP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
-			return "", fmt.Errorf("failed to parse max WG IP %s: %w", maxIP, err)
-		}
-
-		d++
-		if d > 254 {
-			c++
-			d = 1
-			if c > 255 {
-				return "", fmt.Errorf("WireGuard IP space exhausted")
-			}
-		}
-
-		nextIP := fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
-		return nextIP, nil
+	var rows []struct {
+		WGIP string `db:"wg_ip"`
 	}
 
-	return "", fmt.Errorf("failed to assign WG IP after retries")
+	err := h.rqliteClient.Query(ctx, &rows, "SELECT wg_ip FROM wireguard_peers")
+	if err != nil {
+		return "", fmt.Errorf("failed to query WG IPs: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return "10.0.0.2", nil // 10.0.0.1 is genesis
+	}
+
+	// Find the numerically highest IP
+	maxA, maxB, maxC, maxD := 0, 0, 0, 0
+	for _, row := range rows {
+		var a, b, c, d int
+		if _, err := fmt.Sscanf(row.WGIP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
+			continue
+		}
+		if c > maxC || (c == maxC && d > maxD) {
+			maxA, maxB, maxC, maxD = a, b, c, d
+		}
+	}
+
+	if maxA == 0 {
+		return "10.0.0.2", nil
+	}
+
+	maxD++
+	if maxD > 254 {
+		maxC++
+		maxD = 1
+		if maxC > 255 {
+			return "", fmt.Errorf("WireGuard IP space exhausted")
+		}
+	}
+
+	return fmt.Sprintf("%d.%d.%d.%d", maxA, maxB, maxC, maxD), nil
 }
 
 // addWGPeerLocally adds a peer to the local wg0 interface and persists to config
