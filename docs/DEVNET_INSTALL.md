@@ -68,7 +68,8 @@ sudo orama install --no-pull --pre-built \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..."
+  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
+  --anyone-bandwidth 30
 ```
 
 ## ns3 - Nameserver + Relay
@@ -86,7 +87,8 @@ sudo orama install --no-pull --pre-built \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..."
+  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
+  --anyone-bandwidth 30
 ```
 
 ## node4 - Non-Nameserver + Relay
@@ -104,7 +106,8 @@ sudo orama install --no-pull --pre-built \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..."
+  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
+  --anyone-bandwidth 30
 ```
 
 ## node5 - Non-Nameserver + Relay
@@ -122,7 +125,8 @@ sudo orama install --no-pull --pre-built \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..."
+  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
+  --anyone-bandwidth 30
 ```
 
 ## node6 - Non-Nameserver (No Anyone Relay)

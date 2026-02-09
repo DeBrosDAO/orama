@@ -34,14 +34,16 @@ type Flags struct {
 	SkipFirewall bool // Skip UFW firewall setup (for users who manage their own firewall)
 
 	// Anyone relay operator flags
-	AnyoneRelay    bool   // Run as relay operator instead of client
-	AnyoneExit     bool   // Run as exit relay (legal implications)
-	AnyoneMigrate  bool   // Migrate existing Anyone installation
-	AnyoneNickname string // Relay nickname (1-19 alphanumeric)
-	AnyoneContact  string // Contact info (email or @telegram)
-	AnyoneWallet   string // Ethereum wallet for rewards
-	AnyoneORPort   int    // ORPort for relay (default 9001)
-	AnyoneFamily   string // Comma-separated fingerprints of other relays you operate
+	AnyoneRelay      bool   // Run as relay operator instead of client
+	AnyoneExit       bool   // Run as exit relay (legal implications)
+	AnyoneMigrate    bool   // Migrate existing Anyone installation
+	AnyoneNickname   string // Relay nickname (1-19 alphanumeric)
+	AnyoneContact    string // Contact info (email or @telegram)
+	AnyoneWallet     string // Ethereum wallet for rewards
+	AnyoneORPort     int    // ORPort for relay (default 9001)
+	AnyoneFamily     string // Comma-separated fingerprints of other relays you operate
+	AnyoneBandwidth  int    // Percentage of VPS bandwidth for relay (default: 30, 0=unlimited)
+	AnyoneAccounting int    // Monthly data cap for relay in GB (0=unlimited)
 }
 
 // ParseFlags parses install command flags
@@ -87,6 +89,8 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.StringVar(&flags.AnyoneWallet, "anyone-wallet", "", "Ethereum wallet address for rewards")
 	fs.IntVar(&flags.AnyoneORPort, "anyone-orport", 9001, "ORPort for relay (default 9001)")
 	fs.StringVar(&flags.AnyoneFamily, "anyone-family", "", "Comma-separated fingerprints of other relays you operate")
+	fs.IntVar(&flags.AnyoneBandwidth, "anyone-bandwidth", 30, "Limit relay to N% of VPS bandwidth (0=unlimited, runs speedtest)")
+	fs.IntVar(&flags.AnyoneAccounting, "anyone-accounting", 0, "Monthly data cap for relay in GB (0=unlimited)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {

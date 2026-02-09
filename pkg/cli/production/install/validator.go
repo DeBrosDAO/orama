@@ -194,15 +194,33 @@ func (v *Validator) ValidateAnyoneRelayFlags() error {
 		return fmt.Errorf("--anyone-orport must be between 1 and 65535")
 	}
 
+	// Validate bandwidth percentage
+	if v.flags.AnyoneBandwidth < 0 || v.flags.AnyoneBandwidth > 100 {
+		return fmt.Errorf("--anyone-bandwidth must be between 0 and 100")
+	}
+
+	// Validate accounting
+	if v.flags.AnyoneAccounting < 0 {
+		return fmt.Errorf("--anyone-accounting must be >= 0")
+	}
+
 	// Display configuration summary
-	fmt.Printf("  Nickname: %s\n", v.flags.AnyoneNickname)
-	fmt.Printf("  Contact:  %s\n", v.flags.AnyoneContact)
-	fmt.Printf("  Wallet:   %s\n", v.flags.AnyoneWallet)
-	fmt.Printf("  ORPort:   %d\n", v.flags.AnyoneORPort)
+	fmt.Printf("  Nickname:  %s\n", v.flags.AnyoneNickname)
+	fmt.Printf("  Contact:   %s\n", v.flags.AnyoneContact)
+	fmt.Printf("  Wallet:    %s\n", v.flags.AnyoneWallet)
+	fmt.Printf("  ORPort:    %d\n", v.flags.AnyoneORPort)
 	if v.flags.AnyoneExit {
-		fmt.Printf("  Mode:     Exit Relay\n")
+		fmt.Printf("  Mode:      Exit Relay\n")
 	} else {
-		fmt.Printf("  Mode:     Non-exit Relay\n")
+		fmt.Printf("  Mode:      Non-exit Relay\n")
+	}
+	if v.flags.AnyoneBandwidth > 0 {
+		fmt.Printf("  Bandwidth: %d%% of VPS speed (speedtest will run during install)\n", v.flags.AnyoneBandwidth)
+	} else {
+		fmt.Printf("  Bandwidth: Unlimited\n")
+	}
+	if v.flags.AnyoneAccounting > 0 {
+		fmt.Printf("  Data cap:  %d GB/month\n", v.flags.AnyoneAccounting)
 	}
 
 	// Warning about token requirement

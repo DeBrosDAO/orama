@@ -50,14 +50,16 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	// Configure Anyone relay if enabled
 	if flags.AnyoneRelay {
 		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
-			Enabled:  true,
-			Exit:     flags.AnyoneExit,
-			Migrate:  flags.AnyoneMigrate,
-			Nickname: flags.AnyoneNickname,
-			Contact:  flags.AnyoneContact,
-			Wallet:   flags.AnyoneWallet,
-			ORPort:   flags.AnyoneORPort,
-			MyFamily: flags.AnyoneFamily,
+			Enabled:      true,
+			Exit:         flags.AnyoneExit,
+			Migrate:      flags.AnyoneMigrate,
+			Nickname:     flags.AnyoneNickname,
+			Contact:      flags.AnyoneContact,
+			Wallet:       flags.AnyoneWallet,
+			ORPort:       flags.AnyoneORPort,
+			MyFamily:     flags.AnyoneFamily,
+			BandwidthPct: flags.AnyoneBandwidth,
+			AccountingMax: flags.AnyoneAccounting,
 		})
 	}
 
