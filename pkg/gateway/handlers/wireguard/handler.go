@@ -175,37 +175,45 @@ func (h *Handler) ListPeers(ctx context.Context) ([]PeerRecord, error) {
 	return peers, nil
 }
 
-// assignNextWGIP finds the next available 10.0.0.x IP
+// assignNextWGIP finds the next available 10.0.0.x IP by querying all peers
+// and finding the numerically highest IP. Avoids lexicographic MAX() issues.
 func (h *Handler) assignNextWGIP(ctx context.Context) (string, error) {
-	var result []struct {
-		MaxIP string `db:"max_ip"`
+	var rows []struct {
+		WGIP string `db:"wg_ip"`
 	}
 
-	err := h.rqliteClient.Query(ctx, &result,
-		"SELECT MAX(wg_ip) as max_ip FROM wireguard_peers")
+	err := h.rqliteClient.Query(ctx, &rows, "SELECT wg_ip FROM wireguard_peers")
 	if err != nil {
-		return "", fmt.Errorf("failed to query max WG IP: %w", err)
+		return "", fmt.Errorf("failed to query WG IPs: %w", err)
 	}
 
-	if len(result) == 0 || result[0].MaxIP == "" {
+	if len(rows) == 0 {
 		return "10.0.0.1", nil
 	}
 
-	// Parse last octet and increment
-	maxIP := result[0].MaxIP
-	var a, b, c, d int
-	if _, err := fmt.Sscanf(maxIP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
-		return "", fmt.Errorf("failed to parse max WG IP %s: %w", maxIP, err)
+	maxA, maxB, maxC, maxD := 0, 0, 0, 0
+	for _, row := range rows {
+		var a, b, c, d int
+		if _, err := fmt.Sscanf(row.WGIP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
+			continue
+		}
+		if c > maxC || (c == maxC && d > maxD) {
+			maxA, maxB, maxC, maxD = a, b, c, d
+		}
 	}
 
-	d++
-	if d > 254 {
-		c++
-		d = 1
-		if c > 255 {
+	if maxA == 0 {
+		return "10.0.0.1", nil
+	}
+
+	maxD++
+	if maxD > 254 {
+		maxC++
+		maxD = 1
+		if maxC > 255 {
 			return "", fmt.Errorf("WireGuard IP space exhausted")
 		}
 	}
 
-	return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d), nil
+	return fmt.Sprintf("%d.%d.%d.%d", maxA, maxB, maxC, maxD), nil
 }
