@@ -156,5 +156,3 @@ release:
   draft: false
   prerelease: auto
   name_template: "Release {{.Version}}"
-  extra_files:
-    - glob: ./dist/*.deb
