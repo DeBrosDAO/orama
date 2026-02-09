@@ -55,7 +55,6 @@ archives:
     files:
       - README.md
       - LICENSE
-      - CHANGELOG.md
 
   # Tar.gz archives for orama-node
   - id: orama-node-archives
