@@ -17,14 +17,16 @@ type Flags struct {
 	Nameserver      *bool  // Pointer so we can detect if explicitly set vs default
 
 	// Anyone relay operator flags
-	AnyoneRelay    bool
-	AnyoneExit     bool
-	AnyoneMigrate  bool
-	AnyoneNickname string
-	AnyoneContact  string
-	AnyoneWallet   string
-	AnyoneORPort   int
-	AnyoneFamily   string
+	AnyoneRelay      bool
+	AnyoneExit       bool
+	AnyoneMigrate    bool
+	AnyoneNickname   string
+	AnyoneContact    string
+	AnyoneWallet     string
+	AnyoneORPort     int
+	AnyoneFamily     string
+	AnyoneBandwidth  int // Percentage of VPS bandwidth for relay (default: 30, 0=unlimited)
+	AnyoneAccounting int // Monthly data cap for relay in GB (0=unlimited)
 }
 
 // ParseFlags parses upgrade command flags
@@ -53,6 +55,8 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.StringVar(&flags.AnyoneWallet, "anyone-wallet", "", "Ethereum wallet address for rewards")
 	fs.IntVar(&flags.AnyoneORPort, "anyone-orport", 9001, "ORPort for relay (default 9001)")
 	fs.StringVar(&flags.AnyoneFamily, "anyone-family", "", "Comma-separated fingerprints of other relays you operate")
+	fs.IntVar(&flags.AnyoneBandwidth, "anyone-bandwidth", 30, "Limit relay to N% of VPS bandwidth (0=unlimited, runs speedtest)")
+	fs.IntVar(&flags.AnyoneAccounting, "anyone-accounting", 0, "Monthly data cap for relay in GB (0=unlimited)")
 
 	// Support legacy flags for backwards compatibility
 	nightly := fs.Bool("nightly", false, "Use nightly branch (deprecated, use --branch nightly)")

@@ -228,6 +228,8 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--anyone-family <fps>` | Comma-separated fingerprints of related relays (MyFamily) |
 | `--anyone-orport <port>` | ORPort for relay (default: 9001) |
 | `--anyone-exit` | Configure as an exit relay (default: non-exit) |
+| `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited). Runs a speedtest during install to measure available bandwidth |
+| `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
 
 #### `orama invite`
 
@@ -249,6 +251,9 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--no-pull` | Skip git pull, use existing source |
 | `--pre-built` | Skip all Go compilation, use pre-built binaries already on disk |
 | `--restart` | Restart all services after upgrade |
+| `--anyone-relay` | Enable Anyone relay (same flags as install) |
+| `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited) |
+| `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
 
 #### `orama prod` (Service Management)
 

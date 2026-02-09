@@ -9,17 +9,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // AnyoneRelayConfig holds configuration for the Anyone relay
 type AnyoneRelayConfig struct {
-	Nickname  string // Relay nickname (1-19 alphanumeric)
-	Contact   string // Contact info (email or @telegram)
-	Wallet    string // Ethereum wallet for rewards
-	ORPort    int    // ORPort for relay (default 9001)
-	ExitRelay bool   // Whether to run as exit relay
-	Migrate   bool   // Whether to migrate existing installation
-	MyFamily  string // Comma-separated list of family fingerprints (for multi-relay operators)
+	Nickname       string // Relay nickname (1-19 alphanumeric)
+	Contact        string // Contact info (email or @telegram)
+	Wallet         string // Ethereum wallet for rewards
+	ORPort         int    // ORPort for relay (default 9001)
+	ExitRelay      bool   // Whether to run as exit relay
+	Migrate        bool   // Whether to migrate existing installation
+	MyFamily       string // Comma-separated list of family fingerprints (for multi-relay operators)
+	BandwidthRate  int    // RelayBandwidthRate in KBytes/s (0 = unlimited)
+	BandwidthBurst int    // RelayBandwidthBurst in KBytes/s (0 = unlimited)
+	AccountingMax  int    // Monthly data cap in GB (0 = unlimited)
 }
 
 // ExistingAnyoneInfo contains information about an existing Anyone installation
@@ -336,6 +340,26 @@ func (ari *AnyoneRelayInstaller) generateAnonrc() string {
 	// Control port for monitoring
 	sb.WriteString("ControlPort 9051\n")
 
+	// Bandwidth limiting
+	if ari.config.BandwidthRate > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("# Bandwidth limiting (managed by Orama Network)\n")
+		sb.WriteString(fmt.Sprintf("RelayBandwidthRate %d KBytes\n", ari.config.BandwidthRate))
+		sb.WriteString(fmt.Sprintf("RelayBandwidthBurst %d KBytes\n", ari.config.BandwidthBurst))
+
+		rateMbps := float64(ari.config.BandwidthRate) * 8 / 1024
+		burstMbps := float64(ari.config.BandwidthBurst) * 8 / 1024
+		sb.WriteString(fmt.Sprintf("# Rate: %.1f Mbps, Burst: %.1f Mbps\n", rateMbps, burstMbps))
+	}
+
+	// Monthly data cap
+	if ari.config.AccountingMax > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("# Monthly data cap (managed by Orama Network)\n")
+		sb.WriteString("AccountingStart month 1 00:00\n")
+		sb.WriteString(fmt.Sprintf("AccountingMax %d GBytes\n", ari.config.AccountingMax))
+	}
+
 	// MyFamily for multi-relay operators (preserve from existing config)
 	if ari.config.MyFamily != "" {
 		sb.WriteString("\n")
@@ -401,6 +425,62 @@ func (ari *AnyoneRelayInstaller) MigrateExistingInstallation(existing *ExistingA
 	fmt.Fprintf(ari.logWriter, "  ✓ Migration complete - keys and fingerprint preserved\n")
 
 	return nil
+}
+
+// MeasureBandwidth downloads a test file and returns the measured download speed in KBytes/s.
+// Uses wget to download a 10MB file from a public CDN and measures throughput.
+// Returns 0 if the test fails (caller should skip bandwidth limiting).
+func MeasureBandwidth(logWriter io.Writer) (int, error) {
+	fmt.Fprintf(logWriter, "  Running bandwidth test...\n")
+
+	testFile := "/tmp/speedtest-orama.tmp"
+	defer os.Remove(testFile)
+
+	// Use wget with progress output to download a 10MB test file
+	// We time the download ourselves for accuracy
+	start := time.Now()
+	cmd := exec.Command("wget", "-q", "-O", testFile, "http://speedtest.tele2.net/10MB.zip")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(logWriter, "    ⚠️  Bandwidth test failed: %v\n", err)
+		return 0, fmt.Errorf("bandwidth test download failed: %w", err)
+	}
+
+	elapsed := time.Since(start)
+
+	// Get file size
+	info, err := os.Stat(testFile)
+	if err != nil {
+		return 0, fmt.Errorf("failed to stat test file: %w", err)
+	}
+
+	// Calculate speed in KBytes/s
+	sizeKB := int(info.Size() / 1024)
+	seconds := elapsed.Seconds()
+	if seconds < 0.1 {
+		seconds = 0.1 // avoid division by zero
+	}
+	speedKBs := int(float64(sizeKB) / seconds)
+
+	speedMbps := float64(speedKBs) * 8 / 1024 // Convert KBytes/s to Mbps
+	fmt.Fprintf(logWriter, "    Measured download speed: %d KBytes/s (%.1f Mbps)\n", speedKBs, speedMbps)
+
+	return speedKBs, nil
+}
+
+// CalculateBandwidthLimits computes RelayBandwidthRate and RelayBandwidthBurst
+// from measured speed and a percentage. Returns rate and burst in KBytes/s.
+func CalculateBandwidthLimits(measuredKBs int, percent int) (rate int, burst int) {
+	rate = measuredKBs * percent / 100
+	burst = rate * 3 / 2 // 1.5x rate for burst headroom
+	if rate < 1 {
+		rate = 1
+	}
+	if burst < rate {
+		burst = rate
+	}
+	return rate, burst
 }
 
 // ValidateNickname validates the relay nickname (1-19 alphanumeric chars)

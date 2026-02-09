@@ -14,14 +14,16 @@ import (
 
 // AnyoneRelayConfig holds configuration for Anyone relay mode
 type AnyoneRelayConfig struct {
-	Enabled  bool   // Whether to run as relay operator
-	Exit     bool   // Whether to run as exit relay
-	Migrate  bool   // Whether to migrate existing installation
-	Nickname string // Relay nickname (1-19 alphanumeric)
-	Contact  string // Contact info (email or @telegram)
-	Wallet   string // Ethereum wallet for rewards
-	ORPort   int    // ORPort for relay (default 9001)
-	MyFamily string // Comma-separated fingerprints of other relays (for multi-relay operators)
+	Enabled       bool   // Whether to run as relay operator
+	Exit          bool   // Whether to run as exit relay
+	Migrate       bool   // Whether to migrate existing installation
+	Nickname      string // Relay nickname (1-19 alphanumeric)
+	Contact       string // Contact info (email or @telegram)
+	Wallet        string // Ethereum wallet for rewards
+	ORPort        int    // ORPort for relay (default 9001)
+	MyFamily      string // Comma-separated fingerprints of other relays (for multi-relay operators)
+	BandwidthPct  int    // Percentage of VPS bandwidth to allocate to relay (0 = unlimited)
+	AccountingMax int    // Monthly data cap in GB (0 = unlimited)
 }
 
 // ProductionSetup orchestrates the entire production deployment
@@ -393,14 +395,31 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	if ps.IsAnyoneRelay() {
 		ps.logf("  Installing Anyone relay (operator mode)...")
 		relayConfig := installers.AnyoneRelayConfig{
-			Nickname:  ps.anyoneRelayConfig.Nickname,
-			Contact:   ps.anyoneRelayConfig.Contact,
-			Wallet:    ps.anyoneRelayConfig.Wallet,
-			ORPort:    ps.anyoneRelayConfig.ORPort,
-			ExitRelay: ps.anyoneRelayConfig.Exit,
-			Migrate:   ps.anyoneRelayConfig.Migrate,
-			MyFamily:  ps.anyoneRelayConfig.MyFamily,
+			Nickname:      ps.anyoneRelayConfig.Nickname,
+			Contact:       ps.anyoneRelayConfig.Contact,
+			Wallet:        ps.anyoneRelayConfig.Wallet,
+			ORPort:        ps.anyoneRelayConfig.ORPort,
+			ExitRelay:     ps.anyoneRelayConfig.Exit,
+			Migrate:       ps.anyoneRelayConfig.Migrate,
+			MyFamily:      ps.anyoneRelayConfig.MyFamily,
+			AccountingMax: ps.anyoneRelayConfig.AccountingMax,
 		}
+
+		// Run bandwidth test and calculate limits if percentage is set
+		if ps.anyoneRelayConfig.BandwidthPct > 0 {
+			measuredKBs, err := installers.MeasureBandwidth(ps.logWriter)
+			if err != nil {
+				ps.logf("  ⚠️  Bandwidth test failed, relay will run without bandwidth limits: %v", err)
+			} else if measuredKBs > 0 {
+				rate, burst := installers.CalculateBandwidthLimits(measuredKBs, ps.anyoneRelayConfig.BandwidthPct)
+				relayConfig.BandwidthRate = rate
+				relayConfig.BandwidthBurst = burst
+				rateMbps := float64(rate) * 8 / 1024
+				ps.logf("  ✓ Relay bandwidth limited to %d%% of measured speed (%d KBytes/s = %.1f Mbps)",
+					ps.anyoneRelayConfig.BandwidthPct, rate, rateMbps)
+			}
+		}
+
 		relayInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, relayConfig)
 
 		// Check for existing installation if migration is requested
