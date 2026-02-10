@@ -92,6 +92,12 @@ func TestWireGuardProvisioner_GenerateConfig_NoPeers(t *testing.T) {
 	if !strings.Contains(config, "PrivateKey = dGVzdHByaXZhdGVrZXl0ZXN0cHJpdmF0ZWtleXM=") {
 		t.Error("config should contain PrivateKey")
 	}
+	if !strings.Contains(config, "PostUp = iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT") {
+		t.Error("config should contain PostUp iptables rule for WireGuard subnet")
+	}
+	if !strings.Contains(config, "PostDown = iptables -D INPUT -i wg0 -s 10.0.0.0/8 -j ACCEPT") {
+		t.Error("config should contain PostDown iptables cleanup rule")
+	}
 	if strings.Contains(config, "[Peer]") {
 		t.Error("config should NOT contain [Peer] section with no peers")
 	}

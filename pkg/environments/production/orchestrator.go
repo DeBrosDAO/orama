@@ -37,6 +37,7 @@ type ProductionSetup struct {
 	skipOptionalDeps   bool
 	skipResourceChecks bool
 	isNameserver       bool   // Whether this node is a nameserver (runs CoreDNS + Caddy)
+	isAnyoneClient     bool               // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	anyoneRelayConfig  *AnyoneRelayConfig // Configuration for Anyone relay mode
 	privChecker        *PrivilegeChecker
 	osDetector         *OSDetector
@@ -150,6 +151,16 @@ func (ps *ProductionSetup) SetAnyoneRelayConfig(config *AnyoneRelayConfig) {
 // IsAnyoneRelay returns whether this node is configured as an Anyone relay operator
 func (ps *ProductionSetup) IsAnyoneRelay() bool {
 	return ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.Enabled
+}
+
+// SetAnyoneClient sets whether this node runs Anyone as client-only
+func (ps *ProductionSetup) SetAnyoneClient(enabled bool) {
+	ps.isAnyoneClient = enabled
+}
+
+// IsAnyoneClient returns whether this node runs Anyone as client-only
+func (ps *ProductionSetup) IsAnyoneClient() bool {
+	return ps.isAnyoneClient
 }
 
 // Phase1CheckPrerequisites performs initial environment validation
@@ -444,6 +455,19 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		if err := relayInstaller.Configure(); err != nil {
 			ps.logf("  ⚠️  Anyone relay config warning: %v", err)
 		}
+	} else if ps.IsAnyoneClient() {
+		ps.logf("  Installing Anyone client-only mode (SOCKS5 proxy)...")
+		clientInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, installers.AnyoneRelayConfig{})
+
+		// Install the anon binary (same apt package as relay)
+		if err := clientInstaller.Install(); err != nil {
+			ps.logf("  ⚠️  Anyone client install warning: %v", err)
+		}
+
+		// Configure as client-only (SocksPort 9050, no ORPort)
+		if err := clientInstaller.ConfigureClient(); err != nil {
+			ps.logf("  ⚠️  Anyone client config warning: %v", err)
+		}
 	}
 
 	ps.logf("  ✓ All binaries installed")
@@ -711,6 +735,12 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
 		}
 		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
+	} else if ps.IsAnyoneClient() {
+		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
+		if err := ps.serviceController.WriteServiceUnit("debros-anyone-relay.service", anyoneUnit); err != nil {
+			return fmt.Errorf("failed to write Anyone client service: %w", err)
+		}
+		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
 	}
 
 	// CoreDNS service (only for nameserver nodes)
@@ -753,8 +783,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
 	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service"}
 
-	// Add Anyone Relay service if configured
-	if ps.IsAnyoneRelay() {
+	// Add Anyone service if configured (relay or client)
+	if ps.IsAnyoneRelay() || ps.IsAnyoneClient() {
 		services = append(services, "debros-anyone-relay.service")
 	}
 
@@ -783,7 +813,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
 	infraServices := []string{"debros-ipfs.service", "debros-olric.service"}
 
-	// Add Anyone Relay service if configured
+	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
 		orPort := 9001
 		if ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.ORPort > 0 {
@@ -795,6 +825,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		} else {
 			infraServices = append(infraServices, "debros-anyone-relay.service")
 		}
+	} else if ps.IsAnyoneClient() {
+		infraServices = append(infraServices, "debros-anyone-relay.service")
 	}
 
 	for _, svc := range infraServices {

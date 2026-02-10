@@ -16,7 +16,8 @@ type Flags struct {
 	Branch          string
 	Nameserver      *bool  // Pointer so we can detect if explicitly set vs default
 
-	// Anyone relay operator flags
+	// Anyone flags
+	AnyoneClient     bool
 	AnyoneRelay      bool
 	AnyoneExit       bool
 	AnyoneMigrate    bool
@@ -46,7 +47,8 @@ func ParseFlags(args []string) (*Flags, error) {
 	// Nameserver flag - use pointer to detect if explicitly set
 	nameserver := fs.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
 
-	// Anyone relay operator flags
+	// Anyone flags
+	fs.BoolVar(&flags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")
 	fs.BoolVar(&flags.AnyoneRelay, "anyone-relay", false, "Run as Anyone relay operator (earn rewards)")
 	fs.BoolVar(&flags.AnyoneExit, "anyone-exit", false, "Run as exit relay (requires --anyone-relay, legal implications)")
 	fs.BoolVar(&flags.AnyoneMigrate, "anyone-migrate", false, "Migrate existing Anyone installation into Orama Network")

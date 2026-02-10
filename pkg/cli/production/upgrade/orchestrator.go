@@ -47,7 +47,7 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
 	setup.SetNameserver(isNameserver)
 
-	// Configure Anyone relay if enabled
+	// Configure Anyone mode (flag > saved preference)
 	if flags.AnyoneRelay {
 		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
 			Enabled:      true,
@@ -61,6 +61,8 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 			BandwidthPct: flags.AnyoneBandwidth,
 			AccountingMax: flags.AnyoneAccounting,
 		})
+	} else if flags.AnyoneClient || prefs.AnyoneClient {
+		setup.SetAnyoneClient(true)
 	}
 
 	return &Orchestrator{
@@ -206,6 +208,12 @@ func (o *Orchestrator) handleBranchPreferences() error {
 	}
 	if o.setup.IsNameserver() {
 		fmt.Printf("  Nameserver mode: enabled (CoreDNS + Caddy)\n")
+	}
+
+	// If anyone-client was explicitly provided, update it
+	if o.flags.AnyoneClient {
+		prefs.AnyoneClient = true
+		prefsChanged = true
 	}
 
 	// Save preferences if anything changed

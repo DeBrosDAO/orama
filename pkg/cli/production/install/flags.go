@@ -33,7 +33,8 @@ type Flags struct {
 	// Security flags
 	SkipFirewall bool // Skip UFW firewall setup (for users who manage their own firewall)
 
-	// Anyone relay operator flags
+	// Anyone flags
+	AnyoneClient     bool   // Run Anyone as client-only (SOCKS5 proxy on port 9050, no relay)
 	AnyoneRelay      bool   // Run as relay operator instead of client
 	AnyoneExit       bool   // Run as exit relay (legal implications)
 	AnyoneMigrate    bool   // Migrate existing Anyone installation
@@ -80,7 +81,8 @@ func ParseFlags(args []string) (*Flags, error) {
 	// Security flags
 	fs.BoolVar(&flags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
 
-	// Anyone relay operator flags
+	// Anyone flags
+	fs.BoolVar(&flags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")
 	fs.BoolVar(&flags.AnyoneRelay, "anyone-relay", false, "Run as Anyone relay operator (earn rewards)")
 	fs.BoolVar(&flags.AnyoneExit, "anyone-exit", false, "Run as exit relay (requires --anyone-relay, legal implications)")
 	fs.BoolVar(&flags.AnyoneMigrate, "anyone-migrate", false, "Migrate existing Anyone installation into Orama Network")
