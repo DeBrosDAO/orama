@@ -53,15 +53,9 @@ func HandleRestart() {
 		os.Exit(1)
 	}
 
-	// Start all services
+	// Start all services in dependency order (namespace: rqlite → olric → gateway)
 	fmt.Printf("  Starting services...\n")
-	for _, svc := range services {
-		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
-			fmt.Printf("  ⚠️  Failed to start %s: %v\n", svc, err)
-		} else {
-			fmt.Printf("  ✓ Started %s\n", svc)
-		}
-	}
+	utils.StartServicesOrdered(services, "start")
 
 	fmt.Printf("\n✅ All services restarted\n")
 }

@@ -81,9 +81,8 @@ func HandleStart() {
 		os.Exit(1)
 	}
 
-	// Enable and start inactive services
+	// Re-enable inactive services first (in case they were disabled by 'orama prod stop')
 	for _, svc := range inactive {
-		// Re-enable the service first (in case it was disabled by 'orama prod stop')
 		enabled, err := utils.IsServiceEnabled(svc)
 		if err == nil && !enabled {
 			if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
@@ -92,18 +91,12 @@ func HandleStart() {
 				fmt.Printf("  ✓ Enabled %s (will auto-start on boot)\n", svc)
 			}
 		}
-
-		// Start the service
-		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
-			fmt.Printf("  ⚠️  Failed to start %s: %v\n", svc, err)
-		} else {
-			fmt.Printf("  ✓ Started %s\n", svc)
-		}
 	}
 
+	// Start services in dependency order (namespace: rqlite → olric → gateway)
+	utils.StartServicesOrdered(inactive, "start")
+
 	// Give services more time to fully initialize before verification
-	// Some services may need more time to start up, especially if they're
-	// waiting for dependencies or initializing databases
 	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
 	time.Sleep(5 * time.Second)
 
