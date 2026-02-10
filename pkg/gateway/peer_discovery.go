@@ -336,16 +336,15 @@ func (pd *PeerDiscovery) updateHeartbeat(ctx context.Context) error {
 	return nil
 }
 
-// getWireGuardIP extracts the WireGuard IP from the WireGuard interface
-func (pd *PeerDiscovery) getWireGuardIP() (string, error) {
+// GetWireGuardIP detects the local WireGuard IP address using the wg0 network
+// interface or the WireGuard config file. It does not require a PeerDiscovery
+// instance and can be called from anywhere in the gateway package.
+func GetWireGuardIP() (string, error) {
 	// Method 1: Use 'ip addr show wg0' command (works without root)
-	ip, err := pd.getWireGuardIPFromInterface()
+	ip, err := getWireGuardIPFromCommand()
 	if err == nil {
-		pd.logger.Info("Found WireGuard IP from network interface",
-			zap.String("ip", ip))
 		return ip, nil
 	}
-	pd.logger.Debug("Failed to get WireGuard IP from interface", zap.Error(err))
 
 	// Method 2: Try to read from WireGuard config file (requires root, may fail)
 	configPath := "/etc/wireguard/wg0.conf"
@@ -363,14 +362,24 @@ func (pd *PeerDiscovery) getWireGuardIP() (string, error) {
 					// Remove /24 suffix
 					ip := strings.Split(addrWithCIDR, "/")[0]
 					ip = strings.TrimSpace(ip)
-					pd.logger.Info("Found WireGuard IP from config",
-						zap.String("ip", ip))
 					return ip, nil
 				}
 			}
 		}
 	}
-	pd.logger.Debug("Failed to read WireGuard config", zap.Error(err))
+
+	return "", fmt.Errorf("could not determine WireGuard IP")
+}
+
+// getWireGuardIP extracts the WireGuard IP from the WireGuard interface
+func (pd *PeerDiscovery) getWireGuardIP() (string, error) {
+	// Try the standalone methods first (interface + config file)
+	ip, err := GetWireGuardIP()
+	if err == nil {
+		pd.logger.Info("Found WireGuard IP", zap.String("ip", ip))
+		return ip, nil
+	}
+	pd.logger.Debug("Failed to get WireGuard IP from interface/config", zap.Error(err))
 
 	// Method 3: Fallback - Try to get from libp2p host addresses
 	for _, addr := range pd.host.Addrs() {
@@ -400,8 +409,8 @@ func (pd *PeerDiscovery) getWireGuardIP() (string, error) {
 	return "", fmt.Errorf("could not determine WireGuard IP")
 }
 
-// getWireGuardIPFromInterface gets the WireGuard IP using 'ip addr show wg0'
-func (pd *PeerDiscovery) getWireGuardIPFromInterface() (string, error) {
+// getWireGuardIPFromCommand gets the WireGuard IP using 'ip addr show wg0'
+func getWireGuardIPFromCommand() (string, error) {
 	cmd := exec.Command("ip", "addr", "show", "wg0")
 	output, err := cmd.Output()
 	if err != nil {

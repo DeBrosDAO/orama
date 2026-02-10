@@ -296,26 +296,40 @@ func (c *Client) Health() (*HealthStatus, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	start := time.Now()
 	status := "healthy"
-	if !c.connected {
+	checks := make(map[string]string)
+
+	// Connection (real)
+	if c.connected {
+		checks["connection"] = "ok"
+	} else {
+		checks["connection"] = "disconnected"
 		status = "unhealthy"
 	}
 
-	checks := map[string]string{
-		"connection": "ok",
-		"database":   "ok",
-		"pubsub":     "ok",
+	// LibP2P peers (real)
+	if c.host != nil {
+		checks["peers"] = fmt.Sprintf("%d", len(c.host.Network().Peers()))
+	} else {
+		checks["peers"] = "0"
 	}
 
-	if !c.connected {
-		checks["connection"] = "disconnected"
+	// PubSub (real — check if adapter was initialized)
+	if c.pubsub != nil && c.pubsub.adapter != nil {
+		checks["pubsub"] = "ok"
+	} else {
+		checks["pubsub"] = "unavailable"
+		if status == "healthy" {
+			status = "degraded"
+		}
 	}
 
 	return &HealthStatus{
 		Status:       status,
 		Checks:       checks,
 		LastUpdated:  time.Now(),
-		ResponseTime: time.Millisecond * 10, // Simulated
+		ResponseTime: time.Since(start),
 	}, nil
 }
 

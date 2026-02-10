@@ -174,7 +174,7 @@ func TestHealth(t *testing.T) {
 	cfg := &ClientConfig{AppName: "app"}
 	c := &Client{config: cfg}
 
-	// default disconnected
+	// default disconnected → unhealthy
 	h, err := c.Health()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -183,10 +183,17 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("expected unhealthy when not connected, got %q", h.Status)
 	}
 
-	// mark connected
+	// connected but no pubsub → degraded (pubsub not initialized)
 	c.connected = true
 	h2, _ := c.Health()
-	if h2.Status != "healthy" {
-		t.Fatalf("expected healthy when connected, got %q", h2.Status)
+	if h2.Status != "degraded" {
+		t.Fatalf("expected degraded when connected without pubsub, got %q", h2.Status)
+	}
+
+	// connected with pubsub → healthy
+	c.pubsub = &pubSubBridge{client: c, adapter: &pubsub.ClientAdapter{}}
+	h3, _ := c.Health()
+	if h3.Status != "healthy" {
+		t.Fatalf("expected healthy when fully connected, got %q", h3.Status)
 	}
 }

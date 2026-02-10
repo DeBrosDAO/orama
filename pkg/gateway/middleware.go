@@ -913,18 +913,34 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		return targets[i].ip < targets[j].ip
 	})
 
-	affinityKey := namespaceName + "|" + validatedNamespace
-	if apiKey := extractAPIKey(r); apiKey != "" {
-		affinityKey = namespaceName + "|" + apiKey
-	} else if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {
-		affinityKey = namespaceName + "|" + authz
-	} else {
-		affinityKey = namespaceName + "|" + getClientIP(r)
+	// Prefer local gateway if this node is part of the namespace cluster.
+	// This avoids a WireGuard network hop and eliminates single-point-of-failure
+	// when a remote gateway node is down.
+	var selected namespaceGatewayTarget
+	if g.localWireGuardIP != "" {
+		for _, t := range targets {
+			if t.ip == g.localWireGuardIP {
+				selected = t
+				break
+			}
+		}
 	}
-	hasher := fnv.New32a()
-	_, _ = hasher.Write([]byte(affinityKey))
-	targetIdx := int(hasher.Sum32()) % len(targets)
-	selected := targets[targetIdx]
+
+	// Fall back to consistent hashing for nodes not in the namespace cluster
+	if selected.ip == "" {
+		affinityKey := namespaceName + "|" + validatedNamespace
+		if apiKey := extractAPIKey(r); apiKey != "" {
+			affinityKey = namespaceName + "|" + apiKey
+		} else if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {
+			affinityKey = namespaceName + "|" + authz
+		} else {
+			affinityKey = namespaceName + "|" + getClientIP(r)
+		}
+		hasher := fnv.New32a()
+		_, _ = hasher.Write([]byte(affinityKey))
+		targetIdx := int(hasher.Sum32()) % len(targets)
+		selected = targets[targetIdx]
+	}
 	gatewayIP := selected.ip
 	gatewayPort := selected.port
 	targetHost := gatewayIP + ":" + strconv.Itoa(gatewayPort)

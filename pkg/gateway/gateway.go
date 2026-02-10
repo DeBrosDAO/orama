@@ -46,8 +46,9 @@ type Gateway struct {
 	logger     *logging.ColoredLogger
 	cfg        *Config
 	client     client.NetworkClient
-	nodePeerID string // The node's actual peer ID from its identity file (overrides client's peer ID)
-	startedAt  time.Time
+	nodePeerID       string // The node's actual peer ID from its identity file (overrides client's peer ID)
+	localWireGuardIP string // WireGuard IP of this node, used to prefer local namespace gateways
+	startedAt        time.Time
 
 	// rqlite SQL connection and HTTP ORM gateway
 	sqlDB     *sql.DB
@@ -61,6 +62,10 @@ type Gateway struct {
 	olricClient *olric.Client
 	olricMu     sync.RWMutex
 	cacheHandlers *cache.CacheHandlers
+
+	// Health check result cache (5s TTL)
+	healthCacheMu sync.RWMutex
+	healthCache   *cachedHealthResult
 
 	// IPFS storage client
 	ipfsClient      ipfs.IPFSClient
@@ -249,6 +254,16 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		authService:        deps.AuthService,
 		localSubscribers:   make(map[string][]*localSubscriber),
 		presenceMembers:    make(map[string][]PresenceMember),
+	}
+
+	// Resolve local WireGuard IP for local namespace gateway preference
+	if wgIP, err := GetWireGuardIP(); err == nil {
+		gw.localWireGuardIP = wgIP
+		logger.ComponentInfo(logging.ComponentGeneral, "Detected local WireGuard IP for gateway routing",
+			zap.String("wireguard_ip", wgIP))
+	} else {
+		logger.ComponentWarn(logging.ComponentGeneral, "Could not detect WireGuard IP, local gateway preference disabled",
+			zap.Error(err))
 	}
 
 	// Create separate auth client for global RQLite if GlobalRQLiteDSN is provided
