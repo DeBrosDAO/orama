@@ -34,6 +34,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	nodehealth "github.com/DeBrosOfficial/network/pkg/node/health"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
@@ -136,6 +137,9 @@ type Gateway struct {
 
 	// Peer discovery for namespace gateways (libp2p mesh formation)
 	peerDiscovery *PeerDiscovery
+
+	// Node health monitor (ring-based peer failure detection)
+	healthMonitor *nodehealth.Monitor
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -525,6 +529,24 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		} else {
 			logger.ComponentWarn(logging.ComponentGeneral, "Cannot initialize peer discovery: libp2p host not available")
 		}
+	}
+
+	// Start node health monitor (ring-based peer failure detection)
+	if cfg.NodePeerID != "" && deps.SQLDB != nil {
+		gw.healthMonitor = nodehealth.NewMonitor(nodehealth.Config{
+			NodeID:        cfg.NodePeerID,
+			DB:            deps.SQLDB,
+			Logger:        logger.Logger,
+			ProbeInterval: 10 * time.Second,
+			Neighbors:     3,
+		})
+		gw.healthMonitor.OnNodeDead(func(nodeID string) {
+			logger.ComponentError(logging.ComponentGeneral, "Node confirmed dead by quorum — recovery not yet implemented",
+				zap.String("dead_node", nodeID))
+		})
+		go gw.healthMonitor.Start(context.Background())
+		logger.ComponentInfo(logging.ComponentGeneral, "Node health monitor started",
+			zap.String("node_id", cfg.NodePeerID))
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed")

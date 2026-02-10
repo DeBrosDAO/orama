@@ -171,6 +171,16 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, httpStatus, resp)
 }
 
+// pingHandler is a lightweight internal endpoint used for peer-to-peer
+// health probing over the WireGuard mesh. No subsystem checks — just
+// confirms the gateway process is alive and returns its node ID.
+func (g *Gateway) pingHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node_id": g.nodePeerID,
+		"status":  "ok",
+	})
+}
+
 // statusHandler aggregates server uptime and network status
 func (g *Gateway) statusHandler(w http.ResponseWriter, r *http.Request) {
 	if g.client == nil {

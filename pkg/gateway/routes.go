@@ -17,6 +17,9 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/version", g.versionHandler)
 	mux.HandleFunc("/v1/status", g.statusHandler)
 
+	// Internal ping for peer-to-peer health monitoring
+	mux.HandleFunc("/v1/internal/ping", g.pingHandler)
+
 	// TLS check endpoint for Caddy on-demand TLS
 	mux.HandleFunc("/v1/internal/tls/check", g.tlsCheckHandler)
 
