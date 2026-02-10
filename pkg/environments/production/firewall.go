@@ -90,6 +90,14 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 	// Enable firewall
 	rules = append(rules, "ufw --force enable")
 
+	// Accept all WireGuard traffic before conntrack can classify it as "invalid".
+	// UFW's built-in "ct state invalid → DROP" runs before user rules like
+	// "allow from 10.0.0.0/8". Packets arriving through the WireGuard tunnel
+	// can be misclassified as "invalid" by conntrack due to reordering/jitter
+	// (especially between high-latency peers), causing silent packet drops.
+	// Inserting at position 1 in INPUT ensures this runs before UFW chains.
+	rules = append(rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT")
+
 	return rules
 }
 

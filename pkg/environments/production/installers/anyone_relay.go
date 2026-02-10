@@ -290,6 +290,38 @@ func (ari *AnyoneRelayInstaller) Configure() error {
 	return nil
 }
 
+// ConfigureClient generates a client-only anonrc (SocksPort 9050, no relay)
+func (ari *AnyoneRelayInstaller) ConfigureClient() error {
+	fmt.Fprintf(ari.logWriter, "  Configuring Anyone client-only mode...\n")
+
+	configPath := "/etc/anon/anonrc"
+
+	// Backup existing config if it exists
+	if _, err := os.Stat(configPath); err == nil {
+		backupPath := configPath + ".bak"
+		if err := exec.Command("cp", configPath, backupPath).Run(); err != nil {
+			fmt.Fprintf(ari.logWriter, "    ⚠️  Warning: failed to backup existing config: %v\n", err)
+		}
+	}
+
+	config := `# Anyone Client Configuration (Managed by Orama Network)
+# Client-only mode — no relay traffic, no ORPort
+
+SocksPort 9050
+
+Log notice file /var/log/anon/notices.log
+DataDirectory /var/lib/anon
+ControlPort 9051
+`
+
+	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+		return fmt.Errorf("failed to write client anonrc: %w", err)
+	}
+
+	fmt.Fprintf(ari.logWriter, "  ✓ Anyone client configured (SocksPort 9050)\n")
+	return nil
+}
+
 // generateAnonrc creates the anonrc configuration content
 func (ari *AnyoneRelayInstaller) generateAnonrc() string {
 	var sb strings.Builder

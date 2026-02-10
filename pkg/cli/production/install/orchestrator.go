@@ -47,7 +47,10 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
 	setup.SetNameserver(flags.Nameserver)
 
-	// Configure Anyone relay if enabled
+	// Configure Anyone mode
+	if flags.AnyoneRelay && flags.AnyoneClient {
+		return nil, fmt.Errorf("--anyone-relay and --anyone-client are mutually exclusive")
+	}
 	if flags.AnyoneRelay {
 		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
 			Enabled:       true,
@@ -61,6 +64,8 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 			BandwidthPct:  flags.AnyoneBandwidth,
 			AccountingMax: flags.AnyoneAccounting,
 		})
+	} else if flags.AnyoneClient {
+		setup.SetAnyoneClient(true)
 	}
 
 	validator := NewValidator(flags, oramaDir)
@@ -118,10 +123,11 @@ func (o *Orchestrator) Execute() error {
 		}
 	}
 
-	// Save preferences for future upgrades (branch + nameserver)
+	// Save preferences for future upgrades
 	prefs := &production.NodePreferences{
-		Branch:     o.flags.Branch,
-		Nameserver: o.flags.Nameserver,
+		Branch:       o.flags.Branch,
+		Nameserver:   o.flags.Nameserver,
+		AnyoneClient: o.flags.AnyoneClient,
 	}
 	if err := production.SavePreferences(o.oramaDir, prefs); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)

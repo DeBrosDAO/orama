@@ -114,6 +114,11 @@ func (wp *WireGuardProvisioner) GenerateConfig() string {
 	sb.WriteString(fmt.Sprintf("Address = %s/24\n", wp.config.PrivateIP))
 	sb.WriteString(fmt.Sprintf("ListenPort = %d\n", wp.config.ListenPort))
 
+	// Accept all WireGuard subnet traffic before UFW's conntrack "invalid" drop.
+	// Without this, packets reordered by the tunnel get silently dropped.
+	sb.WriteString("PostUp = iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT\n")
+	sb.WriteString("PostDown = iptables -D INPUT -i wg0 -s 10.0.0.0/8 -j ACCEPT\n")
+
 	for _, peer := range wp.config.Peers {
 		sb.WriteString("\n[Peer]\n")
 		sb.WriteString(fmt.Sprintf("PublicKey = %s\n", peer.PublicKey))

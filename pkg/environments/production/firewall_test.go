@@ -20,6 +20,7 @@ func TestFirewallProvisioner_GenerateRules_StandardNode(t *testing.T) {
 	assertContainsRule(t, rules, "ufw allow 443/tcp")
 	assertContainsRule(t, rules, "ufw allow from 10.0.0.0/8")
 	assertContainsRule(t, rules, "ufw --force enable")
+	assertContainsRule(t, rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT")
 
 	// Should NOT contain DNS or Anyone relay
 	for _, rule := range rules {
