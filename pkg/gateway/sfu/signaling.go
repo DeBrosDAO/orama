@@ -106,15 +106,19 @@ type ParticipantLeftData struct {
 
 // TrackAddedData is sent when a new track is available
 type TrackAddedData struct {
-	ParticipantID string `json:"participantId"`
-	TrackID       string `json:"trackId"`
-	Kind          string `json:"kind"` // "audio" or "video"
+	ParticipantID string `json:"participantId"`           // Internal SFU peer ID
+	UserID        string `json:"userId"`                  // The user's actual ID for easier mapping
+	TrackID       string `json:"trackId"`                 // Format: "{kind}-{participantId}"
+	StreamID      string `json:"streamId"`                // Same as userId (for WebRTC stream matching)
+	Kind          string `json:"kind"`                    // "audio" or "video"
 }
 
 // TrackRemovedData is sent when a track is removed
 type TrackRemovedData struct {
 	ParticipantID string `json:"participantId"`
+	UserID        string `json:"userId"` // The user's actual ID for easier mapping
 	TrackID       string `json:"trackId"`
+	StreamID      string `json:"streamId"`
 	Kind          string `json:"kind"`
 }
 

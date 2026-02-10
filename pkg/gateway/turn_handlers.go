@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -43,11 +44,21 @@ func (g *Gateway) turnCredentialsHandler(w http.ResponseWriter, r *http.Request)
 		userID = "anonymous"
 	}
 
+	// Get gateway hostname from request
+	gatewayHost := r.Host
+	if idx := strings.Index(gatewayHost, ":"); idx != -1 {
+		gatewayHost = gatewayHost[:idx] // Remove port
+	}
+	if gatewayHost == "" {
+		gatewayHost = "localhost"
+	}
+
 	// Generate credentials
-	credentials := g.generateTURNCredentials(userID)
+	credentials := g.generateTURNCredentials(userID, gatewayHost)
 
 	g.logger.ComponentInfo(logging.ComponentGeneral, "TURN credentials generated",
 		zap.String("user_id", userID),
+		zap.String("gateway_host", gatewayHost),
 		zap.Int64("ttl", credentials.TTL),
 	)
 
@@ -55,7 +66,7 @@ func (g *Gateway) turnCredentialsHandler(w http.ResponseWriter, r *http.Request)
 }
 
 // generateTURNCredentials creates time-limited TURN credentials using HMAC-SHA1
-func (g *Gateway) generateTURNCredentials(userID string) *TURNCredentialsResponse {
+func (g *Gateway) generateTURNCredentials(userID, gatewayHost string) *TURNCredentialsResponse {
 	cfg := g.cfg.TURN
 
 	// Default TTL to 24 hours if not configured
@@ -75,13 +86,32 @@ func (g *Gateway) generateTURNCredentials(userID string) *TURNCredentialsRespons
 	h.Write([]byte(username))
 	credential := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
+	// Process URLs - replace empty hostnames with gateway host
+	stunURLs := processURLsWithHost(cfg.STUNURLs, gatewayHost)
+	turnURLs := processURLsWithHost(cfg.TURNURLs, gatewayHost)
+
 	return &TURNCredentialsResponse{
 		Username:   username,
 		Credential: credential,
 		TTL:        int64(ttl.Seconds()),
-		STUNURLs:   cfg.STUNURLs,
-		TURNURLs:   cfg.TURNURLs,
+		STUNURLs:   stunURLs,
+		TURNURLs:   turnURLs,
 	}
+}
+
+// processURLsWithHost replaces empty hostnames in URLs with the given host
+// e.g., "stun::3478" -> "stun:localhost:3478"
+func processURLsWithHost(urls []string, host string) []string {
+	result := make([]string, 0, len(urls))
+	for _, url := range urls {
+		// Check for empty hostname pattern like "stun::3478" or "turn::3478"
+		if strings.Contains(url, "::") {
+			// Replace :: with :host:
+			url = strings.Replace(url, "::", ":"+host+":", 1)
+		}
+		result = append(result, url)
+	}
+	return result
 }
 
 // extractUserID extracts the user ID from the request context

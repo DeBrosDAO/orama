@@ -47,6 +47,15 @@ logging:
   level: "info"
   format: "console"
 
+# Built-in TURN server for WebRTC NAT traversal
+turn_server:
+  enabled: true
+  listen_addr: "0.0.0.0:3478"
+  public_ip: ""  # Auto-detect if empty, or set to your public IP
+  realm: "orama.network"
+  min_port: 49152
+  max_port: 65535
+
 http_gateway:
   enabled: true
   listen_addr: "{{if .EnableHTTPS}}:{{.HTTPSPort}}{{else}}:{{.UnifiedGatewayPort}}{{end}}"
@@ -86,3 +95,19 @@ http_gateway:
   
   # Routes for internal service reverse proxy (kept for backwards compatibility but not used by full gateway)
   routes: {}
+
+  # TURN/STUN URLs returned to clients (points to built-in TURN server)
+  turn:
+    shared_secret: "${TURN_SHARED_SECRET}"
+    ttl: "24h"
+    stun_urls:
+      - "stun:{{.Domain}}:3478"
+    turn_urls:
+      - "turn:{{.Domain}}:3478?transport=udp"
+
+  # SFU (Selective Forwarding Unit) configuration for WebRTC group calls
+  sfu:
+    enabled: true
+    max_participants: 10
+    media_timeout: "30s"
+    ice_servers: []  # Additional ICE servers beyond TURN config (optional)

@@ -14,6 +14,7 @@ type Config struct {
 	Security    SecurityConfig    `yaml:"security"`
 	Logging     LoggingConfig     `yaml:"logging"`
 	HTTPGateway HTTPGatewayConfig `yaml:"http_gateway"`
+	TURNServer  TURNServerConfig  `yaml:"turn_server"` // Built-in TURN server
 }
 
 // NodeConfig contains node-specific configuration
@@ -115,13 +116,17 @@ type HTTPGatewayConfig struct {
 	SNI        SNIConfig              `yaml:"sni"`         // SNI-based TCP routing configuration
 
 	// Full gateway configuration (for API, auth, pubsub)
-	ClientNamespace   string        `yaml:"client_namespace"`    // Namespace for network client
-	RQLiteDSN         string        `yaml:"rqlite_dsn"`          // RQLite database DSN
-	OlricServers      []string      `yaml:"olric_servers"`       // List of Olric server addresses
-	OlricTimeout      time.Duration `yaml:"olric_timeout"`       // Timeout for Olric operations
+	ClientNamespace   string        `yaml:"client_namespace"`     // Namespace for network client
+	RQLiteDSN         string        `yaml:"rqlite_dsn"`           // RQLite database DSN
+	OlricServers      []string      `yaml:"olric_servers"`        // List of Olric server addresses
+	OlricTimeout      time.Duration `yaml:"olric_timeout"`        // Timeout for Olric operations
 	IPFSClusterAPIURL string        `yaml:"ipfs_cluster_api_url"` // IPFS Cluster API URL
-	IPFSAPIURL        string        `yaml:"ipfs_api_url"`        // IPFS API URL
-	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`        // Timeout for IPFS operations
+	IPFSAPIURL        string        `yaml:"ipfs_api_url"`         // IPFS API URL
+	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
+
+	// WebRTC configuration for video/audio calls
+	TURN *TURNConfig `yaml:"turn"` // TURN/STUN server configuration
+	SFU  *SFUConfig  `yaml:"sfu"`  // SFU (Selective Forwarding Unit) configuration
 }
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway
@@ -206,6 +211,26 @@ type ICEServerConfig struct {
 	URLs       []string `yaml:"urls"`
 	Username   string   `yaml:"username,omitempty"`
 	Credential string   `yaml:"credential,omitempty"`
+}
+
+// TURNServerConfig contains built-in TURN server configuration
+type TURNServerConfig struct {
+	// Enabled enables the built-in TURN server
+	Enabled bool `yaml:"enabled"`
+
+	// ListenAddr is the UDP address to listen on (e.g., "0.0.0.0:3478")
+	ListenAddr string `yaml:"listen_addr"`
+
+	// PublicIP is the public IP address to advertise for relay
+	// If empty, will try to auto-detect
+	PublicIP string `yaml:"public_ip"`
+
+	// Realm is the TURN realm (e.g., "orama.network")
+	Realm string `yaml:"realm"`
+
+	// MinPort and MaxPort define the relay port range
+	MinPort uint16 `yaml:"min_port"`
+	MaxPort uint16 `yaml:"max_port"`
 }
 
 // ParseMultiaddrs converts string addresses to multiaddr objects

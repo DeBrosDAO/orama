@@ -175,8 +175,11 @@ func (g *Gateway) sfuJoinRoomHandler(w http.ResponseWriter, r *http.Request, ns,
 		req.DisplayName = "Anonymous"
 	}
 
-	// Get user ID
-	userID := g.extractUserID(r)
+	// Get user ID from query param or auth context
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		userID = g.extractUserID(r)
+	}
 	if userID == "" {
 		userID = "anonymous"
 	}
@@ -261,8 +264,13 @@ func (g *Gateway) sfuWebSocketHandler(w http.ResponseWriter, r *http.Request, ns
 		return
 	}
 
-	// Get user ID and display name
-	userID := g.extractUserID(r)
+	// Get user ID and display name from query parameters
+	// Priority: 1) userId query param, 2) JWT/API key auth, 3) "anonymous"
+	userID := r.URL.Query().Get("userId")
+	if userID == "" {
+		// Fall back to authentication-based user ID
+		userID = g.extractUserID(r)
+	}
 	if userID == "" {
 		userID = "anonymous"
 	}
@@ -363,6 +371,7 @@ func (g *Gateway) sfuWebSocketHandler(w http.ResponseWriter, r *http.Request, ns
 	)
 
 	// Handle signaling messages
+	// Note: existing tracks are sent AFTER the first offer/answer exchange completes
 	g.handleSFUSignaling(conn, peer, room)
 }
 
@@ -435,6 +444,16 @@ func (g *Gateway) handleSFUMessage(peer *sfu.Peer, room *sfu.Room, msg *sfu.Clie
 		}
 		if err := peer.HandleOffer(data.SDP); err != nil {
 			peer.SendMessage(sfu.NewErrorMessage("offer_failed", err.Error()))
+			return
+		}
+
+		// After successfully handling the FIRST offer, send existing tracks
+		// This ensures the WebRTC connection is established before adding more tracks
+		if peer.MarkInitialOfferHandled() {
+			g.logger.ComponentInfo(logging.ComponentGeneral, "First offer handled, sending existing tracks",
+				zap.String("peer_id", peer.ID),
+			)
+			room.SendExistingTracksTo(peer)
 		}
 
 	case sfu.MessageTypeAnswer:
@@ -505,9 +524,18 @@ func (g *Gateway) initializeSFUManager() error {
 
 	// Add TURN servers if configured (credentials will be generated dynamically)
 	if g.cfg.TURN != nil {
+		// Determine hostname for ICE server URLs
+		// Use configured domain, or fallback to localhost for local development
+		iceHost := g.cfg.DomainName
+		if iceHost == "" {
+			iceHost = "localhost"
+		}
+
 		if len(g.cfg.TURN.STUNURLs) > 0 {
+			// Process URLs to replace empty hostnames (e.g., "stun::3478" -> "stun:localhost:3478")
+			processedURLs := processURLsWithHost(g.cfg.TURN.STUNURLs, iceHost)
 			iceServers = append(iceServers, webrtc.ICEServer{
-				URLs: g.cfg.TURN.STUNURLs,
+				URLs: processedURLs,
 			})
 		}
 		// Note: TURN credentials are time-limited, so clients should fetch them

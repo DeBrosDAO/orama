@@ -32,10 +32,14 @@ type Peer struct {
 	connMu sync.Mutex
 
 	// State
-	audioMuted bool
-	videoMuted bool
-	closed     bool
-	closedMu   sync.RWMutex
+	audioMuted           bool
+	videoMuted           bool
+	closed               bool
+	closedMu             sync.RWMutex
+	negotiationPending   bool
+	negotiationPendingMu sync.Mutex
+	initialOfferHandled  bool
+	initialOfferMu       sync.Mutex
 
 	// Room reference
 	room   *Room
@@ -111,10 +115,16 @@ func (p *Peer) InitPeerConnection(api *webrtc.API, config webrtc.Configuration) 
 
 	// Handle incoming tracks from remote peers
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		p.logger.Info("Track received",
+		codec := track.Codec()
+		p.logger.Info("Track received from client",
 			zap.String("peer_id", p.ID),
+			zap.String("user_id", p.UserID),
 			zap.String("track_id", track.ID()),
+			zap.String("stream_id", track.StreamID()),
 			zap.String("kind", track.Kind().String()),
+			zap.String("codec_mime", codec.MimeType),
+			zap.Uint32("codec_clock_rate", codec.ClockRate),
+			zap.Uint8("codec_payload_type", uint8(codec.PayloadType)),
 		)
 
 		p.trackReceiversMu.Lock()
@@ -125,10 +135,47 @@ func (p *Peer) InitPeerConnection(api *webrtc.API, config webrtc.Configuration) 
 		p.room.BroadcastTrack(p.ID, track)
 	})
 
-	// Handle negotiation needed
+	// Handle negotiation needed - only trigger when in stable state
 	pc.OnNegotiationNeeded(func() {
-		p.logger.Debug("Negotiation needed", zap.String("peer_id", p.ID))
-		p.createAndSendOffer()
+		p.logger.Debug("Negotiation needed",
+			zap.String("peer_id", p.ID),
+			zap.String("signaling_state", pc.SignalingState().String()),
+		)
+
+		// Only create offer if we're in stable state
+		// Otherwise, mark negotiation as pending
+		if pc.SignalingState() == webrtc.SignalingStateStable {
+			p.createAndSendOffer()
+		} else {
+			p.negotiationPendingMu.Lock()
+			p.negotiationPending = true
+			p.negotiationPendingMu.Unlock()
+			p.logger.Debug("Negotiation queued - not in stable state",
+				zap.String("peer_id", p.ID),
+				zap.String("signaling_state", pc.SignalingState().String()),
+			)
+		}
+	})
+
+	// Handle signaling state changes to process pending negotiations
+	pc.OnSignalingStateChange(func(state webrtc.SignalingState) {
+		p.logger.Debug("Signaling state changed",
+			zap.String("peer_id", p.ID),
+			zap.String("state", state.String()),
+		)
+
+		// When we return to stable state, check if negotiation was pending
+		if state == webrtc.SignalingStateStable {
+			p.negotiationPendingMu.Lock()
+			pending := p.negotiationPending
+			p.negotiationPending = false
+			p.negotiationPendingMu.Unlock()
+
+			if pending {
+				p.logger.Debug("Processing pending negotiation", zap.String("peer_id", p.ID))
+				p.createAndSendOffer()
+			}
+		}
 	})
 
 	return nil
@@ -139,6 +186,21 @@ func (p *Peer) createAndSendOffer() {
 	if p.pc == nil {
 		return
 	}
+
+	// Double-check signaling state before creating offer
+	if p.pc.SignalingState() != webrtc.SignalingStateStable {
+		p.logger.Debug("Skipping offer - not in stable state",
+			zap.String("peer_id", p.ID),
+			zap.String("signaling_state", p.pc.SignalingState().String()),
+		)
+		// Mark as pending so it will be retried when state becomes stable
+		p.negotiationPendingMu.Lock()
+		p.negotiationPending = true
+		p.negotiationPendingMu.Unlock()
+		return
+	}
+
+	p.logger.Info("Creating SDP offer", zap.String("peer_id", p.ID))
 
 	offer, err := p.pc.CreateOffer(nil)
 	if err != nil {
@@ -157,6 +219,7 @@ func (p *Peer) createAndSendOffer() {
 		return
 	}
 
+	p.logger.Info("Sending SDP offer", zap.String("peer_id", p.ID))
 	p.SendMessage(NewServerMessage(MessageTypeOffer, &OfferData{
 		SDP: offer.SDP,
 	}))
@@ -282,6 +345,19 @@ func (p *Peer) SetAudioMuted(muted bool) {
 // SetVideoMuted sets the video mute state
 func (p *Peer) SetVideoMuted(muted bool) {
 	p.videoMuted = muted
+}
+
+// MarkInitialOfferHandled marks that the initial offer has been processed.
+// Returns true if this is the first time it's being marked (i.e., this was the first offer).
+func (p *Peer) MarkInitialOfferHandled() bool {
+	p.initialOfferMu.Lock()
+	defer p.initialOfferMu.Unlock()
+
+	if p.initialOfferHandled {
+		return false
+	}
+	p.initialOfferHandled = true
+	return true
 }
 
 // handleDisconnect handles peer disconnection
