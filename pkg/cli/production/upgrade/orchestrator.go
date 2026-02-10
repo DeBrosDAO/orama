@@ -694,24 +694,24 @@ func (o *Orchestrator) restartServices() error {
 		}
 	}
 
-	// Start any remaining services not in priority list (includes namespace services)
+	// Restart remaining services (namespace + any others) in dependency order.
+	// Namespace services are restarted: rqlite → olric (+ wait) → gateway.
+	// Without ordering, the gateway starts before Olric is accepting connections,
+	// the Olric client initialization fails, and the cache stays permanently unavailable.
+	var remaining []string
 	for _, svc := range services {
-		found := false
+		isPriority := false
 		for _, priority := range priorityOrder {
 			if svc == priority {
-				found = true
+				isPriority = true
 				break
 			}
 		}
-		if !found {
-			fmt.Printf("   Starting %s...\n", svc)
-			if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
-				fmt.Printf("   ⚠️  Failed to restart %s: %v\n", svc, err)
-			} else {
-				fmt.Printf("   ✓ Started %s\n", svc)
-			}
+		if !isPriority {
+			remaining = append(remaining, svc)
 		}
 	}
+	utils.StartServicesOrdered(remaining, "restart")
 
 	fmt.Printf("   ✓ All services restarted\n")
 

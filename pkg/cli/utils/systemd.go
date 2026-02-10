@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var ErrServiceNotFound = errors.New("service not found")
@@ -283,5 +284,66 @@ func identifyPortProcess(port int) string {
 	}
 
 	return "unknown process"
+}
+
+// NamespaceServiceOrder defines the dependency order for namespace services.
+// RQLite must start first (database), then Olric (cache), then Gateway (depends on both).
+var NamespaceServiceOrder = []string{"rqlite", "olric", "gateway"}
+
+// StartServicesOrdered starts services respecting namespace dependency order.
+// Namespace services are started in order: rqlite → olric (+ wait) → gateway.
+// Non-namespace services are started after.
+// The action parameter is the systemctl command (e.g., "start" or "restart").
+func StartServicesOrdered(services []string, action string) {
+	// Separate namespace services by type, and collect non-namespace services
+	nsServices := make(map[string][]string) // svcType → []svcName
+	var other []string
+
+	for _, svc := range services {
+		matched := false
+		for _, svcType := range NamespaceServiceOrder {
+			prefix := "debros-namespace-" + svcType + "@"
+			if strings.HasPrefix(svc, prefix) {
+				nsServices[svcType] = append(nsServices[svcType], svc)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			other = append(other, svc)
+		}
+	}
+
+	// Start namespace services in dependency order
+	for _, svcType := range NamespaceServiceOrder {
+		svcs := nsServices[svcType]
+		for _, svc := range svcs {
+			fmt.Printf("  %s%sing %s...\n", strings.ToUpper(action[:1]), action[1:], svc)
+			if err := exec.Command("systemctl", action, svc).Run(); err != nil {
+				fmt.Printf("  ⚠️  Failed to %s %s: %v\n", action, svc, err)
+			} else {
+				fmt.Printf("  ✓ %s\n", svc)
+			}
+		}
+
+		// After starting all Olric instances for all namespaces, wait for them
+		// to bind their HTTP ports and form memberlist clusters before starting
+		// gateways. Without this, gateways start before Olric is ready and the
+		// Olric client initialization fails permanently.
+		if svcType == "olric" && len(svcs) > 0 {
+			fmt.Printf("  Waiting for namespace Olric instances to become ready...\n")
+			time.Sleep(5 * time.Second)
+		}
+	}
+
+	// Start any remaining non-namespace services
+	for _, svc := range other {
+		fmt.Printf("  %s%sing %s...\n", strings.ToUpper(action[:1]), action[1:], svc)
+		if err := exec.Command("systemctl", action, svc).Run(); err != nil {
+			fmt.Printf("  ⚠️  Failed to %s %s: %v\n", action, svc, err)
+		} else {
+			fmt.Printf("  ✓ %s\n", svc)
+		}
+	}
 }
 
