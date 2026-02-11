@@ -124,10 +124,18 @@ func (o *Orchestrator) Execute() error {
 	}
 
 	// Save preferences for future upgrades
+	anyoneORPort := 0
+	if o.flags.AnyoneRelay && o.flags.AnyoneORPort > 0 {
+		anyoneORPort = o.flags.AnyoneORPort
+	} else if o.flags.AnyoneRelay {
+		anyoneORPort = 9001
+	}
 	prefs := &production.NodePreferences{
 		Branch:       o.flags.Branch,
 		Nameserver:   o.flags.Nameserver,
 		AnyoneClient: o.flags.AnyoneClient,
+		AnyoneRelay:  o.flags.AnyoneRelay,
+		AnyoneORPort: anyoneORPort,
 	}
 	if err := production.SavePreferences(o.oramaDir, prefs); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)

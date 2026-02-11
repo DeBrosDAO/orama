@@ -198,6 +198,12 @@ func (ari *AnyoneRelayInstaller) Install() error {
 	exec.Command("systemctl", "stop", "anon").Run()
 	exec.Command("systemctl", "disable", "anon").Run()
 
+	// Fix logrotate: the apt package installs /etc/logrotate.d/anon with
+	// "invoke-rc.d anon reload" in postrotate, but we disabled the anon service.
+	// Without this fix, log rotation leaves an empty notices.log and the relay
+	// keeps writing to the old (rotated) file descriptor.
+	ari.fixLogrotate()
+
 	fmt.Fprintf(ari.logWriter, "  ✓ Anyone relay binary installed\n")
 
 	// Install nyx for relay monitoring (connects to ControlPort 9051)
@@ -206,6 +212,31 @@ func (ari *AnyoneRelayInstaller) Install() error {
 	}
 
 	return nil
+}
+
+// fixLogrotate replaces the apt-provided logrotate config which uses
+// "invoke-rc.d anon reload" (broken because we disable the anon service).
+// Without this, log rotation creates an empty notices.log but the relay
+// process keeps writing to the old file descriptor, so bootstrap detection
+// and all log-based monitoring breaks after the first midnight rotation.
+func (ari *AnyoneRelayInstaller) fixLogrotate() {
+	config := `/var/log/anon/*log {
+	daily
+	rotate 5
+	compress
+	delaycompress
+	missingok
+	notifempty
+	create 0640 debian-anon adm
+	sharedscripts
+	postrotate
+		/usr/bin/killall -HUP anon 2>/dev/null || true
+	endscript
+}
+`
+	if err := os.WriteFile("/etc/logrotate.d/anon", []byte(config), 0644); err != nil {
+		fmt.Fprintf(ari.logWriter, "  ⚠️  logrotate fix warning: %v\n", err)
+	}
 }
 
 // installNyx installs the nyx relay monitor tool

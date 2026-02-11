@@ -94,13 +94,25 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.6 Failed systemd units
-	if len(sys.FailedUnits) == 0 {
-		r = append(r, inspector.Pass("system.no_failed_units", "No failed systemd units", systemSub, node,
-			"no failed units", inspector.High))
+	// 6.6 Failed systemd units (only debros-related units count as failures)
+	var debrosUnits, externalUnits []string
+	for _, u := range sys.FailedUnits {
+		if strings.HasPrefix(u, "debros-") || u == "wg-quick@wg0.service" || u == "caddy.service" || u == "coredns.service" {
+			debrosUnits = append(debrosUnits, u)
+		} else {
+			externalUnits = append(externalUnits, u)
+		}
+	}
+	if len(debrosUnits) > 0 {
+		r = append(r, inspector.Fail("system.no_failed_units", "No failed debros systemd units", systemSub, node,
+			fmt.Sprintf("failed: %s", strings.Join(debrosUnits, ", ")), inspector.High))
 	} else {
-		r = append(r, inspector.Fail("system.no_failed_units", "No failed systemd units", systemSub, node,
-			fmt.Sprintf("failed: %s", strings.Join(sys.FailedUnits, ", ")), inspector.High))
+		r = append(r, inspector.Pass("system.no_failed_units", "No failed debros systemd units", systemSub, node,
+			"no failed debros units", inspector.High))
+	}
+	if len(externalUnits) > 0 {
+		r = append(r, inspector.Warn("system.external_failed_units", "External systemd units healthy", systemSub, node,
+			fmt.Sprintf("external: %s", strings.Join(externalUnits, ", ")), inspector.Low))
 	}
 
 	// 6.14 Memory usage
