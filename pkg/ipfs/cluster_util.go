@@ -77,19 +77,6 @@ func parseIPFSPort(rawURL string) (int, error) {
 	return port, nil
 }
 
-func parsePeerHostAndPort(multiaddr string) (string, int) {
-	parts := strings.Split(multiaddr, "/")
-	var hostStr string
-	var port int
-	for i, part := range parts {
-		if part == "ip4" || part == "dns" || part == "dns4" {
-			hostStr = parts[i+1]
-		} else if part == "tcp" {
-			fmt.Sscanf(parts[i+1], "%d", &port)
-		}
-	}
-	return hostStr, port
-}
 
 func extractIPFromMultiaddrForCluster(maddr string) string {
 	parts := strings.Split(maddr, "/")

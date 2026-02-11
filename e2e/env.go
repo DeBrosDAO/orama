@@ -478,11 +478,6 @@ func GetAPIKey() string {
 	return apiKey
 }
 
-// GetJWT returns the gateway JWT token (currently not auto-discovered)
-func GetJWT() string {
-	return ""
-}
-
 // GetBootstrapPeers returns bootstrap peer addresses from config
 func GetBootstrapPeers() []string {
 	cacheMutex.RLock()
@@ -747,10 +742,6 @@ func NewNetworkClient(t *testing.T) client.NetworkClient {
 	cfg := client.DefaultClientConfig(namespace)
 	cfg.APIKey = GetAPIKey()
 	cfg.QuietMode = true // Suppress debug logs in tests
-
-	if jwt := GetJWT(); jwt != "" {
-		cfg.JWT = jwt
-	}
 
 	if peers := GetBootstrapPeers(); len(peers) > 0 {
 		cfg.BootstrapPeers = peers

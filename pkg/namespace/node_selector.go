@@ -363,23 +363,3 @@ func (cns *ClusterNodeSelector) calculateCapacityScore(
 	return totalScore
 }
 
-// GetNodeByID retrieves a node's information by ID
-func (cns *ClusterNodeSelector) GetNodeByID(ctx context.Context, nodeID string) (*nodeInfo, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	var results []nodeInfo
-	query := `SELECT id, ip_address, COALESCE(internal_ip, ip_address) as internal_ip FROM dns_nodes WHERE id = ? LIMIT 1`
-	err := cns.db.Query(internalCtx, &results, query, nodeID)
-	if err != nil {
-		return nil, &ClusterError{
-			Message: "failed to query node",
-			Cause:   err,
-		}
-	}
-
-	if len(results) == 0 {
-		return nil, nil
-	}
-
-	return &results[0], nil
-}
