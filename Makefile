@@ -84,7 +84,7 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
+.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill redeploy-devnet redeploy-testnet release health
 
 VERSION := 0.101.6
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -196,6 +196,42 @@ stop:
 kill:
 	@bash scripts/dev-kill-all.sh
 
+# Deploy to devnet (build + rolling upgrade all nodes)
+redeploy-devnet:
+	@bash scripts/redeploy.sh --devnet
+
+# Deploy to devnet without rebuilding
+redeploy-devnet-quick:
+	@bash scripts/redeploy.sh --devnet --no-build
+
+# Deploy to testnet (build + rolling upgrade all nodes)
+redeploy-testnet:
+	@bash scripts/redeploy.sh --testnet
+
+# Deploy to testnet without rebuilding
+redeploy-testnet-quick:
+	@bash scripts/redeploy.sh --testnet --no-build
+
+# Interactive release workflow (tag + push)
+release:
+	@bash scripts/release.sh
+
+# Check health of all nodes in an environment
+# Usage: make health ENV=devnet
+health:
+	@if [ -z "$(ENV)" ]; then \
+		echo "Usage: make health ENV=devnet|testnet"; \
+		exit 1; \
+	fi
+	@while IFS='|' read -r env host pass role key; do \
+		[ -z "$$env" ] && continue; \
+		case "$$env" in \#*) continue;; esac; \
+		env="$$(echo "$$env" | xargs)"; \
+		[ "$$env" != "$(ENV)" ] && continue; \
+		role="$$(echo "$$role" | xargs)"; \
+		bash scripts/check-node-health.sh "$$host" "$$pass" "$$host ($$role)"; \
+	done < scripts/remote-nodes.conf
+
 # Help
 help:
 	@echo "Available targets:"
@@ -224,6 +260,14 @@ help:
 	@echo ""
 	@echo "  Example production test:"
 	@echo "    ORAMA_GATEWAY_URL=https://dbrs.space make test-e2e-prod"
+	@echo ""
+	@echo "Deployment:"
+	@echo "  make redeploy-devnet       - Build + rolling deploy to all devnet nodes"
+	@echo "  make redeploy-devnet-quick - Deploy to devnet without rebuilding"
+	@echo "  make redeploy-testnet      - Build + rolling deploy to all testnet nodes"
+	@echo "  make redeploy-testnet-quick- Deploy to testnet without rebuilding"
+	@echo "  make health ENV=devnet     - Check health of all nodes in an environment"
+	@echo "  make release               - Interactive release workflow (tag + push)"
 	@echo ""
 	@echo "Development Management (via orama):"
 	@echo "  ./bin/orama dev status  - Show status of all dev services"
