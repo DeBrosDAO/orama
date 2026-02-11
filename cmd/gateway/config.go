@@ -14,10 +14,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// For transition, alias main.GatewayConfig to pkg/gateway.Config
-// server.go will be removed; this keeps compatibility until then.
-type GatewayConfig = gateway.Config
-
 func getEnvDefault(key, def string) string {
 	if v := os.Getenv(key); strings.TrimSpace(v) != "" {
 		return v

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
@@ -337,16 +338,21 @@ func (pd *PeerDiscovery) updateHeartbeat(ctx context.Context) error {
 }
 
 // GetWireGuardIP detects the local WireGuard IP address using the wg0 network
-// interface or the WireGuard config file. It does not require a PeerDiscovery
-// instance and can be called from anywhere in the gateway package.
+// interface, the 'ip' command, or the WireGuard config file.
+// It does not require a PeerDiscovery instance and can be called from anywhere
+// in the gateway package.
 func GetWireGuardIP() (string, error) {
-	// Method 1: Use 'ip addr show wg0' command (works without root)
-	ip, err := getWireGuardIPFromCommand()
-	if err == nil {
+	// Method 1: Use net.InterfaceByName (shared implementation)
+	if ip, err := wireguard.GetIP(); err == nil {
 		return ip, nil
 	}
 
-	// Method 2: Try to read from WireGuard config file (requires root, may fail)
+	// Method 2: Use 'ip addr show wg0' command (works without root)
+	if ip, err := getWireGuardIPFromCommand(); err == nil {
+		return ip, nil
+	}
+
+	// Method 3: Try to read from WireGuard config file (requires root, may fail)
 	configPath := "/etc/wireguard/wg0.conf"
 	data, err := os.ReadFile(configPath)
 	if err == nil {
@@ -359,7 +365,6 @@ func GetWireGuardIP() (string, error) {
 				parts := strings.Split(line, "=")
 				if len(parts) == 2 {
 					addrWithCIDR := strings.TrimSpace(parts[1])
-					// Remove /24 suffix
 					ip := strings.Split(addrWithCIDR, "/")[0]
 					ip = strings.TrimSpace(ip)
 					return ip, nil

@@ -893,21 +893,35 @@ func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string
 		ClusterID: cluster.ID,
 	}
 
-	// Check individual service status
-	// TODO: Actually check each service's health
-	if cluster.Status == ClusterStatusReady {
-		status.RQLiteReady = true
-		status.OlricReady = true
-		status.GatewayReady = true
-		status.DNSReady = true
-	}
-
-	// Get node list
+	// Check individual service status by inspecting cluster nodes
 	nodes, err := cm.getClusterNodes(ctx, clusterID)
 	if err == nil {
+		runningCount := 0
+		hasRQLite := false
+		hasOlric := false
+		hasGateway := false
+
 		for _, node := range nodes {
 			status.Nodes = append(status.Nodes, node.NodeID)
+			if node.Status == NodeStatusRunning {
+				runningCount++
+			}
+			if node.RQLiteHTTPPort > 0 {
+				hasRQLite = true
+			}
+			if node.OlricHTTPPort > 0 {
+				hasOlric = true
+			}
+			if node.GatewayHTTPPort > 0 {
+				hasGateway = true
+			}
 		}
+
+		allRunning := len(nodes) > 0 && runningCount == len(nodes)
+		status.RQLiteReady = allRunning && hasRQLite
+		status.OlricReady = allRunning && hasOlric
+		status.GatewayReady = allRunning && hasGateway
+		status.DNSReady = allRunning
 	}
 
 	if cluster.ErrorMessage != "" {

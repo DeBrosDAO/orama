@@ -47,7 +47,9 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 		return nil
 	}
 
-	_ = r.discoveryService.TriggerPeerExchange(ctx)
+	if err := r.discoveryService.TriggerPeerExchange(ctx); err != nil {
+		r.logger.Warn("Failed to trigger peer exchange before cluster wait", zap.Error(err))
+	}
 
 	checkInterval := 2 * time.Second
 	for {
@@ -92,7 +94,9 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		return fmt.Errorf("discovery service not available")
 	}
 
-	_ = r.discoveryService.TriggerPeerExchange(ctx)
+	if err := r.discoveryService.TriggerPeerExchange(ctx); err != nil {
+		r.logger.Warn("Failed to trigger peer exchange during pre-start discovery", zap.Error(err))
+	}
 	time.Sleep(1 * time.Second)
 	r.discoveryService.TriggerSync()
 	time.Sleep(2 * time.Second)
@@ -123,7 +127,9 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 			zap.Int("discovered_peers", discoveredPeers),
 			zap.Int("min_cluster_size", r.config.MinClusterSize))
 		// Still write peers.json with just ourselves - better than nothing
-		_ = r.discoveryService.ForceWritePeersJSON()
+		if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+			r.logger.Warn("Failed to write single-node peers.json fallback", zap.Error(err))
+		}
 		return nil
 	}
 
@@ -137,8 +143,12 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		}
 
 		if ourLogIndex == 0 && maxPeerIndex > 0 {
-			_ = r.clearRaftState(rqliteDataDir)
-			_ = r.discoveryService.ForceWritePeersJSON()
+			if err := r.clearRaftState(rqliteDataDir); err != nil {
+				r.logger.Warn("Failed to clear raft state during pre-start discovery", zap.Error(err))
+			}
+			if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+				r.logger.Warn("Failed to write peers.json after clearing raft state", zap.Error(err))
+			}
 		}
 	}
 
@@ -150,7 +160,9 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 
 // recoverCluster restarts RQLite using peers.json
 func (r *RQLiteManager) recoverCluster(ctx context.Context, peersJSONPath string) error {
-	_ = r.Stop()
+	if err := r.Stop(); err != nil {
+		r.logger.Warn("Failed to stop RQLite during cluster recovery", zap.Error(err))
+	}
 	time.Sleep(2 * time.Second)
 
 	rqliteDataDir, err := r.rqliteDataDirPath()
@@ -187,10 +199,14 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 	}
 
 	if ourIndex == 0 && maxPeerIndex > 0 {
-		_ = r.clearRaftState(rqliteDataDir)
+		if err := r.clearRaftState(rqliteDataDir); err != nil {
+			r.logger.Warn("Failed to clear raft state during split-brain recovery", zap.Error(err))
+		}
 		r.discoveryService.TriggerPeerExchange(ctx)
 		time.Sleep(1 * time.Second)
-		_ = r.discoveryService.ForceWritePeersJSON()
+		if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
+			r.logger.Warn("Failed to write peers.json during split-brain recovery", zap.Error(err))
+		}
 		return r.recoverCluster(ctx, filepath.Join(rqliteDataDir, "raft", "peers.json"))
 	}
 
@@ -265,7 +281,9 @@ func (r *RQLiteManager) startHealthMonitoring(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if r.isInSplitBrainState() {
-				_ = r.recoverFromSplitBrain(ctx)
+				if err := r.recoverFromSplitBrain(ctx); err != nil {
+					r.logger.Warn("Split-brain recovery attempt failed", zap.Error(err))
+				}
 			}
 		}
 	}

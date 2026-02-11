@@ -429,7 +429,9 @@ func (sg *SecretGenerator) SaveConfig(filename string, content string) error {
 	}
 
 	// Fix ownership
-	exec.Command("chown", "debros:debros", configPath).Run()
+	if err := exec.Command("chown", "debros:debros", configPath).Run(); err != nil {
+		fmt.Printf("Warning: failed to chown %s to debros:debros: %v\n", configPath, err)
+	}
 
 	return nil
 }

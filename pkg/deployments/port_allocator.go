@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -216,21 +217,6 @@ func isConflictError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// RQLite returns constraint violation errors as strings containing "UNIQUE constraint failed"
 	errStr := err.Error()
-	return contains(errStr, "UNIQUE") || contains(errStr, "constraint") || contains(errStr, "conflict")
-}
-
-// contains checks if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(errStr, "UNIQUE") || strings.Contains(errStr, "constraint") || strings.Contains(errStr, "conflict")
 }

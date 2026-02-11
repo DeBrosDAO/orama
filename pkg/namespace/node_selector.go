@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -176,12 +177,10 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 	}
 
 	// Calculate available capacity
-	const (
-		maxDeployments           = 100
-		maxPorts                 = 9900 // User deployment port range
-		maxMemoryMB              = 8192 // 8GB
-		maxCPUPercent            = 400  // 4 cores
-	)
+	maxDeployments := constants.MaxDeploymentsPerNode
+	maxPorts := constants.MaxPortsPerNode
+	maxMemoryMB := constants.MaxMemoryMB
+	maxCPUPercent := constants.MaxCPUPercent
 
 	availablePorts := maxPorts - allocatedPorts
 	if availablePorts < 0 {
