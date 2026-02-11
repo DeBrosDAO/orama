@@ -103,3 +103,6 @@ bin-linux/
 website/
 
 terms-agreement
+
+cli
+./inspector
