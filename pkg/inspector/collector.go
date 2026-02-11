@@ -229,6 +229,7 @@ type NetworkData struct {
 type AnyoneData struct {
 	RelayActive      bool   // debros-anyone-relay systemd service active
 	ClientActive     bool   // debros-anyone-client systemd service active
+	Mode             string // "relay" or "client" (from anonrc ORPort presence)
 	ORPortListening  bool   // port 9001 bound locally
 	SocksListening   bool   // port 9050 bound locally (client SOCKS5)
 	ControlListening bool   // port 9051 bound locally (control port)
@@ -624,7 +625,7 @@ curl -sf -X POST 'http://localhost:4501/api/v0/version' 2>/dev/null | python3 -c
 echo "$SEP"
 curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-test -f /home/debros/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
+sudo test -f /home/debros/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
 curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
@@ -695,7 +696,7 @@ ps -C coredns -o rss= 2>/dev/null | head -1 || echo 0
 echo "$SEP"
 systemctl show coredns --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
-journalctl -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
+journalctl -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
 echo "$SEP"
 test -f /etc/coredns/Corefile && echo yes || echo no
 echo "$SEP"
@@ -823,9 +824,9 @@ cat /sys/class/net/wg0/mtu 2>/dev/null || echo 0
 echo "$SEP"
 sudo wg show wg0 dump 2>/dev/null
 echo "$SEP"
-test -f /etc/wireguard/wg0.conf && echo yes || echo no
+sudo test -f /etc/wireguard/wg0.conf && echo yes || echo no
 echo "$SEP"
-stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
+sudo stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
 `
 	res := RunSSH(ctx, node, cmd)
 	if !res.OK() && res.Stdout == "" {
@@ -915,7 +916,7 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	cmd += ` && echo "$SEP"`
 	cmd += ` && ss -tlnp 2>/dev/null | awk 'NR>1{split($4,a,":"); print a[length(a)]}' | sort -un`
 	cmd += ` && echo "$SEP"`
-	cmd += ` && ufw status 2>/dev/null | head -1`
+	cmd += ` && sudo ufw status 2>/dev/null | head -1`
 	cmd += ` && echo "$SEP"`
 	cmd += ` && ps -C debros-node -o user= 2>/dev/null | head -1 || echo unknown`
 	cmd += ` && echo "$SEP"`
@@ -1063,7 +1064,7 @@ ip route show default 2>/dev/null | head -1
 echo "$SEP"
 ip route show 10.0.0.0/24 dev wg0 2>/dev/null | head -1
 echo "$SEP"
-cat /proc/net/snmp 2>/dev/null | awk '/^Tcp:/{getline; print}'
+awk '/^Tcp:/{getline; print $12" "$13}' /proc/net/snmp 2>/dev/null; sleep 1; awk '/^Tcp:/{getline; print $12" "$13}' /proc/net/snmp 2>/dev/null
 echo "$SEP"
 %s
 `, pingCmds)
@@ -1105,16 +1106,23 @@ echo "$SEP"
 		data.WGRouteExists = strings.TrimSpace(parts[4]) != ""
 	}
 
-	// Parse TCP retransmission rate from /proc/net/snmp
-	// Values line: "Tcp: <RtoAlg> <RtoMin> <RtoMax> <MaxConn> <ActiveOpens> <PassiveOpens> <AttemptFails> <EstabResets> <CurrEstab> <InSegs> <OutSegs> <RetransSegs> ..."
-	// Index:        0      1         2        3         4           5              6              7              8            9         10        11           12
+	// Parse TCP retransmission rate from /proc/net/snmp (delta over 1 second)
+	// Two snapshots: "OutSegs RetransSegs\nOutSegs RetransSegs"
 	if len(parts) > 5 {
-		fields := strings.Fields(strings.TrimSpace(parts[5]))
-		if len(fields) >= 13 {
-			outSegs := parseIntDefault(fields[11], 0)
-			retransSegs := parseIntDefault(fields[12], 0)
-			if outSegs > 0 {
-				data.TCPRetransRate = float64(retransSegs) / float64(outSegs) * 100
+		lines := strings.Split(strings.TrimSpace(parts[5]), "\n")
+		if len(lines) >= 2 {
+			before := strings.Fields(lines[0])
+			after := strings.Fields(lines[1])
+			if len(before) >= 2 && len(after) >= 2 {
+				outBefore := parseIntDefault(before[0], 0)
+				retBefore := parseIntDefault(before[1], 0)
+				outAfter := parseIntDefault(after[0], 0)
+				retAfter := parseIntDefault(after[1], 0)
+				deltaOut := outAfter - outBefore
+				deltaRet := retAfter - retBefore
+				if deltaOut > 0 {
+					data.TCPRetransRate = float64(deltaRet) / float64(deltaOut) * 100
+				}
 			}
 		}
 	}
@@ -1154,14 +1162,22 @@ ss -tlnp 2>/dev/null | grep -q ':9050 ' && echo yes || echo no
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep -q ':9051 ' && echo yes || echo no
 echo "$SEP"
-# Check bootstrap status from log (last 50 lines)
-grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log 2>/dev/null | tail -1 || echo 0
+# Check bootstrap status from log. Fall back to notices.log.1 if current log
+# is empty (logrotate may have rotated the file without signaling the relay).
+BPCT=$(grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log 2>/dev/null | tail -1)
+if [ -z "$BPCT" ]; then
+  BPCT=$(grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log.1 2>/dev/null | tail -1)
+fi
+echo "${BPCT:-0}"
 echo "$SEP"
-# Read fingerprint
-cat /var/lib/anon/fingerprint 2>/dev/null || echo ""
+# Read fingerprint (sudo needed: file is owned by debian-anon with 0600 perms)
+sudo cat /var/lib/anon/fingerprint 2>/dev/null || echo ""
 echo "$SEP"
 # Read nickname from config
 grep -oP '^Nickname \K\S+' /etc/anon/anonrc 2>/dev/null || echo ""
+echo "$SEP"
+# Detect relay vs client mode: check if ORPort is configured in anonrc
+grep -qP '^\s*ORPort\s' /etc/anon/anonrc 2>/dev/null && echo relay || echo client
 `
 
 	res := RunSSH(ctx, node, cmd)
@@ -1197,6 +1213,9 @@ grep -oP '^Nickname \K\S+' /etc/anon/anonrc 2>/dev/null || echo ""
 	if len(parts) > 8 {
 		data.Nickname = strings.TrimSpace(parts[8])
 	}
+	if len(parts) > 9 {
+		data.Mode = strings.TrimSpace(parts[9])
+	}
 
 	// If neither relay nor client is active, skip further checks
 	if !data.RelayActive && !data.ClientActive {
@@ -1226,8 +1245,8 @@ func collectAnyoneReachability(ctx context.Context, data *ClusterData) {
 	var wg sync.WaitGroup
 
 	for _, nd := range data.Nodes {
-		if nd.Anyone == nil {
-			continue
+		if nd.Anyone == nil || nd.Anyone.Mode == "client" {
+			continue // skip nodes without Anyone data or in client mode
 		}
 		wg.Add(1)
 		go func(nd *NodeData) {

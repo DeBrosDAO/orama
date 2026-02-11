@@ -38,18 +38,22 @@ func checkAnyonePerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		return r
 	}
 
-	// --- Relay checks ---
+	isClientMode := a.Mode == "client"
+
 	if a.RelayActive {
 		r = append(r, inspector.Pass("anyone.relay_active", "Anyone relay service active", anyoneSub, node,
 			"debros-anyone-relay is active", inspector.High))
+	}
 
-		// ORPort listening
-		if a.ORPortListening {
-			r = append(r, inspector.Pass("anyone.orport_listening", "ORPort 9001 listening", anyoneSub, node,
-				"port 9001 bound", inspector.High))
+	// --- Client-mode checks ---
+	if isClientMode {
+		// SOCKS5 port
+		if a.SocksListening {
+			r = append(r, inspector.Pass("anyone.socks_listening", "SOCKS5 port 9050 listening", anyoneSub, node,
+				"port 9050 bound", inspector.High))
 		} else {
-			r = append(r, inspector.Fail("anyone.orport_listening", "ORPort 9001 listening", anyoneSub, node,
-				"port 9001 NOT bound", inspector.High))
+			r = append(r, inspector.Fail("anyone.socks_listening", "SOCKS5 port 9050 listening", anyoneSub, node,
+				"port 9050 NOT bound (traffic cannot route through anonymity network)", inspector.High))
 		}
 
 		// Control port
@@ -61,49 +65,82 @@ func checkAnyonePerNode(nd *inspector.NodeData) []inspector.CheckResult {
 				"port 9051 NOT bound (monitoring unavailable)", inspector.Low))
 		}
 
-		// Bootstrap status
+		// Bootstrap (clients also bootstrap to the network)
 		if a.Bootstrapped {
-			r = append(r, inspector.Pass("anyone.bootstrapped", "Relay bootstrapped", anyoneSub, node,
+			r = append(r, inspector.Pass("anyone.client_bootstrapped", "Client bootstrapped", anyoneSub, node,
 				fmt.Sprintf("bootstrap=%d%%", a.BootstrapPct), inspector.High))
 		} else if a.BootstrapPct > 0 {
-			r = append(r, inspector.Warn("anyone.bootstrapped", "Relay bootstrapped", anyoneSub, node,
+			r = append(r, inspector.Warn("anyone.client_bootstrapped", "Client bootstrapped", anyoneSub, node,
 				fmt.Sprintf("bootstrap=%d%% (still connecting)", a.BootstrapPct), inspector.High))
 		} else {
-			r = append(r, inspector.Fail("anyone.bootstrapped", "Relay bootstrapped", anyoneSub, node,
+			r = append(r, inspector.Fail("anyone.client_bootstrapped", "Client bootstrapped", anyoneSub, node,
 				"bootstrap=0% (not started or log missing)", inspector.High))
 		}
 
-		// Fingerprint present
-		if a.Fingerprint != "" {
-			r = append(r, inspector.Pass("anyone.fingerprint", "Relay has fingerprint", anyoneSub, node,
-				fmt.Sprintf("fingerprint=%s", a.Fingerprint), inspector.Medium))
-		} else {
-			r = append(r, inspector.Warn("anyone.fingerprint", "Relay has fingerprint", anyoneSub, node,
-				"no fingerprint found (relay may not have generated keys yet)", inspector.Medium))
-		}
-
-		// Nickname configured
-		if a.Nickname != "" {
-			r = append(r, inspector.Pass("anyone.nickname", "Relay nickname configured", anyoneSub, node,
-				fmt.Sprintf("nickname=%s", a.Nickname), inspector.Low))
-		} else {
-			r = append(r, inspector.Warn("anyone.nickname", "Relay nickname configured", anyoneSub, node,
-				"no nickname in /etc/anon/anonrc", inspector.Low))
-		}
+		return r
 	}
 
-	// --- Client checks ---
+	// --- Relay-mode checks ---
+
+	// ORPort listening
+	if a.ORPortListening {
+		r = append(r, inspector.Pass("anyone.orport_listening", "ORPort 9001 listening", anyoneSub, node,
+			"port 9001 bound", inspector.High))
+	} else {
+		r = append(r, inspector.Fail("anyone.orport_listening", "ORPort 9001 listening", anyoneSub, node,
+			"port 9001 NOT bound", inspector.High))
+	}
+
+	// Control port
+	if a.ControlListening {
+		r = append(r, inspector.Pass("anyone.control_listening", "Control port 9051 listening", anyoneSub, node,
+			"port 9051 bound", inspector.Low))
+	} else {
+		r = append(r, inspector.Warn("anyone.control_listening", "Control port 9051 listening", anyoneSub, node,
+			"port 9051 NOT bound (monitoring unavailable)", inspector.Low))
+	}
+
+	// Bootstrap status
+	if a.Bootstrapped {
+		r = append(r, inspector.Pass("anyone.bootstrapped", "Relay bootstrapped", anyoneSub, node,
+			fmt.Sprintf("bootstrap=%d%%", a.BootstrapPct), inspector.High))
+	} else if a.BootstrapPct > 0 {
+		r = append(r, inspector.Warn("anyone.bootstrapped", "Relay bootstrapped", anyoneSub, node,
+			fmt.Sprintf("bootstrap=%d%% (still connecting)", a.BootstrapPct), inspector.High))
+	} else {
+		r = append(r, inspector.Fail("anyone.bootstrapped", "Relay bootstrapped", anyoneSub, node,
+			"bootstrap=0% (not started or log missing)", inspector.High))
+	}
+
+	// Fingerprint present
+	if a.Fingerprint != "" {
+		r = append(r, inspector.Pass("anyone.fingerprint", "Relay has fingerprint", anyoneSub, node,
+			fmt.Sprintf("fingerprint=%s", a.Fingerprint), inspector.Medium))
+	} else {
+		r = append(r, inspector.Warn("anyone.fingerprint", "Relay has fingerprint", anyoneSub, node,
+			"no fingerprint found (relay may not have generated keys yet)", inspector.Medium))
+	}
+
+	// Nickname configured
+	if a.Nickname != "" {
+		r = append(r, inspector.Pass("anyone.nickname", "Relay nickname configured", anyoneSub, node,
+			fmt.Sprintf("nickname=%s", a.Nickname), inspector.Low))
+	} else {
+		r = append(r, inspector.Warn("anyone.nickname", "Relay nickname configured", anyoneSub, node,
+			"no nickname in /etc/anon/anonrc", inspector.Low))
+	}
+
+	// --- Legacy client checks (if also running client service) ---
 	if a.ClientActive {
 		r = append(r, inspector.Pass("anyone.client_active", "Anyone client service active", anyoneSub, node,
 			"debros-anyone-client is active", inspector.High))
 
-		// SOCKS5 port listening
 		if a.SocksListening {
 			r = append(r, inspector.Pass("anyone.socks_listening", "SOCKS5 port 9050 listening", anyoneSub, node,
 				"port 9050 bound", inspector.High))
 		} else {
 			r = append(r, inspector.Fail("anyone.socks_listening", "SOCKS5 port 9050 listening", anyoneSub, node,
-				"port 9050 NOT bound (IPFS traffic cannot route through anonymity network)", inspector.High))
+				"port 9050 NOT bound", inspector.High))
 		}
 	}
 
@@ -113,32 +150,7 @@ func checkAnyonePerNode(nd *inspector.NodeData) []inspector.CheckResult {
 func checkAnyoneCrossNode(data *inspector.ClusterData) []inspector.CheckResult {
 	var r []inspector.CheckResult
 
-	// Count relay and client nodes
-	relayActive := 0
-	relayTotal := 0
-	clientActive := 0
-	clientTotal := 0
-
-	for _, nd := range data.Nodes {
-		if nd.Anyone == nil {
-			continue
-		}
-		if nd.Anyone.RelayActive {
-			relayActive++
-			relayTotal++
-		}
-		if nd.Anyone.ClientActive {
-			clientActive++
-			clientTotal++
-		}
-	}
-
-	// Skip cross-node checks if no Anyone services at all
-	if relayTotal == 0 && clientTotal == 0 {
-		return r
-	}
-
-	// ORPort reachability: check if relays are publicly accessible from other nodes
+	// ORPort reachability: only check from/to relay-mode nodes
 	orportChecked := 0
 	orportReachable := 0
 	orportFailed := 0

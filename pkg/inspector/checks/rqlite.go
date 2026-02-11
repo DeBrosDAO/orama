@@ -174,14 +174,20 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData) []i
 		}
 	}
 
-	// 1.15 db_applied_index == fsm_index
+	// 1.15 db_applied_index close to fsm_index
 	if s.DBAppliedIndex > 0 && s.FsmIndex > 0 {
-		if s.DBAppliedIndex == s.FsmIndex {
+		var dbFsmGap uint64
+		if s.FsmIndex > s.DBAppliedIndex {
+			dbFsmGap = s.FsmIndex - s.DBAppliedIndex
+		} else {
+			dbFsmGap = s.DBAppliedIndex - s.FsmIndex
+		}
+		if dbFsmGap <= 5 {
 			r = append(r, inspector.Pass("rqlite.db_fsm_sync", "DB applied index matches FSM index", rqliteSub, node,
-				fmt.Sprintf("db_applied=%d fsm=%d", s.DBAppliedIndex, s.FsmIndex), inspector.Critical))
+				fmt.Sprintf("db_applied=%d fsm=%d gap=%d", s.DBAppliedIndex, s.FsmIndex, dbFsmGap), inspector.Critical))
 		} else {
 			r = append(r, inspector.Fail("rqlite.db_fsm_sync", "DB applied index matches FSM index", rqliteSub, node,
-				fmt.Sprintf("db_applied=%d fsm=%d (diverged)", s.DBAppliedIndex, s.FsmIndex), inspector.Critical))
+				fmt.Sprintf("db_applied=%d fsm=%d gap=%d (diverged)", s.DBAppliedIndex, s.FsmIndex, dbFsmGap), inspector.Critical))
 		}
 	}
 

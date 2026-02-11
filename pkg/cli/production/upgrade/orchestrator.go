@@ -50,16 +50,26 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	// Configure Anyone mode (flag > saved preference)
 	if flags.AnyoneRelay {
 		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
-			Enabled:      true,
-			Exit:         flags.AnyoneExit,
-			Migrate:      flags.AnyoneMigrate,
-			Nickname:     flags.AnyoneNickname,
-			Contact:      flags.AnyoneContact,
-			Wallet:       flags.AnyoneWallet,
-			ORPort:       flags.AnyoneORPort,
-			MyFamily:     flags.AnyoneFamily,
-			BandwidthPct: flags.AnyoneBandwidth,
+			Enabled:       true,
+			Exit:          flags.AnyoneExit,
+			Migrate:       flags.AnyoneMigrate,
+			Nickname:      flags.AnyoneNickname,
+			Contact:       flags.AnyoneContact,
+			Wallet:        flags.AnyoneWallet,
+			ORPort:        flags.AnyoneORPort,
+			MyFamily:      flags.AnyoneFamily,
+			BandwidthPct:  flags.AnyoneBandwidth,
 			AccountingMax: flags.AnyoneAccounting,
+		})
+	} else if prefs.AnyoneRelay {
+		// Restore relay config from saved preferences (for firewall rules)
+		orPort := prefs.AnyoneORPort
+		if orPort == 0 {
+			orPort = 9001
+		}
+		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
+			Enabled: true,
+			ORPort:  orPort,
 		})
 	} else if flags.AnyoneClient || prefs.AnyoneClient {
 		setup.SetAnyoneClient(true)
@@ -216,6 +226,16 @@ func (o *Orchestrator) handleBranchPreferences() error {
 		prefsChanged = true
 	}
 
+	// If anyone-relay was explicitly provided, update it
+	if o.flags.AnyoneRelay {
+		prefs.AnyoneRelay = true
+		prefs.AnyoneORPort = o.flags.AnyoneORPort
+		if prefs.AnyoneORPort == 0 {
+			prefs.AnyoneORPort = 9001
+		}
+		prefsChanged = true
+	}
+
 	// Save preferences if anything changed
 	if prefsChanged {
 		if err := production.SavePreferences(o.oramaDir, prefs); err != nil {
@@ -227,8 +247,8 @@ func (o *Orchestrator) handleBranchPreferences() error {
 
 // ClusterState represents the saved state of the RQLite cluster before shutdown
 type ClusterState struct {
-	Nodes     []ClusterNode `json:"nodes"`
-	CapturedAt time.Time    `json:"captured_at"`
+	Nodes      []ClusterNode `json:"nodes"`
+	CapturedAt time.Time     `json:"captured_at"`
 }
 
 // ClusterNode represents a node in the cluster
@@ -358,13 +378,13 @@ func (o *Orchestrator) stopServices() error {
 
 	// Stop services in reverse dependency order
 	services := []string{
-		"caddy.service",              // Depends on node
-		"coredns.service",            // Depends on node
-		"debros-gateway.service",     // Legacy
-		"debros-node.service",        // Depends on cluster, olric
-		"debros-ipfs-cluster.service", // Depends on IPFS
-		"debros-ipfs.service",        // Base IPFS
-		"debros-olric.service",       // Independent
+		"caddy.service",                // Depends on node
+		"coredns.service",              // Depends on node
+		"debros-gateway.service",       // Legacy
+		"debros-node.service",          // Depends on cluster, olric
+		"debros-ipfs-cluster.service",  // Depends on IPFS
+		"debros-ipfs.service",          // Base IPFS
+		"debros-olric.service",         // Independent
 		"debros-anyone-client.service", // Client mode
 		"debros-anyone-relay.service",  // Relay mode
 	}

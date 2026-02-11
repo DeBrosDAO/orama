@@ -112,15 +112,27 @@ func TestCheckSystem_NameserverServicesNotCheckedOnRegularNode(t *testing.T) {
 	}
 }
 
-func TestCheckSystem_FailedUnits(t *testing.T) {
+func TestCheckSystem_FailedUnits_Debros(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
 		Services:    map[string]string{},
-		FailedUnits: []string{"some-service.service"},
+		FailedUnits: []string{"debros-node.service"},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
 	results := CheckSystem(data)
 	expectStatus(t, results, "system.no_failed_units", inspector.StatusFail)
+}
+
+func TestCheckSystem_FailedUnits_External(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.System = &inspector.SystemData{
+		Services:    map[string]string{},
+		FailedUnits: []string{"cloud-init.service"},
+	}
+	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
+	results := CheckSystem(data)
+	expectStatus(t, results, "system.no_failed_units", inspector.StatusPass)
+	expectStatus(t, results, "system.external_failed_units", inspector.StatusWarn)
 }
 
 func TestCheckSystem_Memory(t *testing.T) {
