@@ -36,14 +36,19 @@ type SpawnRequest struct {
 	OlricPeerAddresses  []string `json:"olric_peer_addresses,omitempty"`
 
 	// Gateway config (when action = "spawn-gateway")
-	GatewayHTTPPort       int      `json:"gateway_http_port,omitempty"`
-	GatewayBaseDomain     string   `json:"gateway_base_domain,omitempty"`
-	GatewayRQLiteDSN      string   `json:"gateway_rqlite_dsn,omitempty"`
-	GatewayOlricServers   []string `json:"gateway_olric_servers,omitempty"`
-	IPFSClusterAPIURL     string   `json:"ipfs_cluster_api_url,omitempty"`
-	IPFSAPIURL            string   `json:"ipfs_api_url,omitempty"`
-	IPFSTimeout           string   `json:"ipfs_timeout,omitempty"`
-	IPFSReplicationFactor int      `json:"ipfs_replication_factor,omitempty"`
+	GatewayHTTPPort        int      `json:"gateway_http_port,omitempty"`
+	GatewayBaseDomain      string   `json:"gateway_base_domain,omitempty"`
+	GatewayRQLiteDSN       string   `json:"gateway_rqlite_dsn,omitempty"`
+	GatewayGlobalRQLiteDSN string   `json:"gateway_global_rqlite_dsn,omitempty"`
+	GatewayOlricServers    []string `json:"gateway_olric_servers,omitempty"`
+	GatewayOlricTimeout    string   `json:"gateway_olric_timeout,omitempty"`
+	IPFSClusterAPIURL      string   `json:"ipfs_cluster_api_url,omitempty"`
+	IPFSAPIURL            string          `json:"ipfs_api_url,omitempty"`
+	IPFSTimeout           string          `json:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor int             `json:"ipfs_replication_factor,omitempty"`
+
+	// Cluster state (when action = "save-cluster-state")
+	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
 }
 
 // SpawnResponse represents the response from a spawn/stop request
@@ -122,6 +127,13 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
 	case "spawn-olric":
+		// Reject empty or 0.0.0.0 BindAddr early — these cause IPv6 resolution on dual-stack hosts
+		if req.OlricBindAddr == "" || req.OlricBindAddr == "0.0.0.0" {
+			writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{
+				Error: fmt.Sprintf("olric_bind_addr must be a valid IP, got %q", req.OlricBindAddr),
+			})
+			return
+		}
 		cfg := olric.InstanceConfig{
 			Namespace:      req.Namespace,
 			NodeID:         req.NodeID,
@@ -166,13 +178,28 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Parse Olric timeout if provided
+		var olricTimeout time.Duration
+		if req.GatewayOlricTimeout != "" {
+			var err error
+			olricTimeout, err = time.ParseDuration(req.GatewayOlricTimeout)
+			if err != nil {
+				h.logger.Warn("Invalid Olric timeout, using default", zap.String("timeout", req.GatewayOlricTimeout), zap.Error(err))
+				olricTimeout = 30 * time.Second
+			}
+		} else {
+			olricTimeout = 30 * time.Second
+		}
+
 		cfg := gateway.InstanceConfig{
 			Namespace:             req.Namespace,
 			NodeID:                req.NodeID,
 			HTTPPort:              req.GatewayHTTPPort,
 			BaseDomain:            req.GatewayBaseDomain,
 			RQLiteDSN:             req.GatewayRQLiteDSN,
+			GlobalRQLiteDSN:       req.GatewayGlobalRQLiteDSN,
 			OlricServers:          req.GatewayOlricServers,
+			OlricTimeout:          olricTimeout,
 			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
 			IPFSAPIURL:            req.IPFSAPIURL,
 			IPFSTimeout:           ipfsTimeout,
@@ -188,6 +215,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop-gateway":
 		if err := h.systemdSpawner.StopGateway(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop Gateway instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "save-cluster-state":
+		if len(req.ClusterState) == 0 {
+			writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "cluster_state is required"})
+			return
+		}
+		if err := h.systemdSpawner.SaveClusterState(req.Namespace, req.ClusterState); err != nil {
+			h.logger.Error("Failed to save cluster state", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

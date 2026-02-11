@@ -83,6 +83,23 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
 
+	// Validate BindAddr: 0.0.0.0 or empty causes IPv6 resolution on dual-stack hosts,
+	// breaking memberlist UDP gossip over WireGuard. Resolve from wg0 as fallback.
+	if cfg.BindAddr == "" || cfg.BindAddr == "0.0.0.0" {
+		wgIP, err := getWireGuardIP()
+		if err != nil {
+			return fmt.Errorf("Olric BindAddr is %q and failed to detect WireGuard IP: %w", cfg.BindAddr, err)
+		}
+		s.logger.Warn("Olric BindAddr was invalid, resolved from wg0",
+			zap.String("original", cfg.BindAddr),
+			zap.String("resolved", wgIP),
+			zap.String("namespace", namespace))
+		cfg.BindAddr = wgIP
+		if cfg.AdvertiseAddr == "" || cfg.AdvertiseAddr == "0.0.0.0" {
+			cfg.AdvertiseAddr = wgIP
+		}
+	}
+
 	// Create config directory
 	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -270,6 +287,23 @@ func (s *SystemdSpawner) StopGateway(ctx context.Context, namespace, nodeID stri
 		zap.String("node_id", nodeID))
 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeGateway)
+}
+
+// SaveClusterState writes cluster state JSON to the namespace data directory.
+// Used by the spawn handler to persist state received from the coordinator node.
+func (s *SystemdSpawner) SaveClusterState(namespace string, data []byte) error {
+	dir := filepath.Join(s.namespaceBase, namespace)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create namespace dir: %w", err)
+	}
+	path := filepath.Join(dir, "cluster-state.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write cluster state: %w", err)
+	}
+	s.logger.Info("Saved cluster state from coordinator",
+		zap.String("namespace", namespace),
+		zap.String("path", path))
+	return nil
 }
 
 // StopAll stops all services for a namespace
