@@ -3,7 +3,6 @@ package production
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,10 +14,7 @@ type NodePreferences struct {
 	AnyoneClient bool   `yaml:"anyone_client"`
 }
 
-const (
-	preferencesFile = "preferences.yaml"
-	legacyBranchFile = ".branch"
-)
+const preferencesFile = "preferences.yaml"
 
 // SavePreferences saves node preferences to disk
 func SavePreferences(oramaDir string, prefs *NodePreferences) error {
@@ -38,10 +34,6 @@ func SavePreferences(oramaDir string, prefs *NodePreferences) error {
 		return err
 	}
 
-	// Also save branch to legacy .branch file for backward compatibility
-	legacyPath := filepath.Join(oramaDir, legacyBranchFile)
-	os.WriteFile(legacyPath, []byte(prefs.Branch), 0644)
-
 	return nil
 }
 
@@ -53,20 +45,11 @@ func LoadPreferences(oramaDir string) *NodePreferences {
 		Nameserver: false,
 	}
 
-	// Try to load from preferences.yaml first
+	// Try to load from preferences.yaml
 	path := filepath.Join(oramaDir, preferencesFile)
 	if data, err := os.ReadFile(path); err == nil {
 		if err := yaml.Unmarshal(data, prefs); err == nil {
 			return prefs
-		}
-	}
-
-	// Fall back to legacy .branch file
-	legacyPath := filepath.Join(oramaDir, legacyBranchFile)
-	if data, err := os.ReadFile(legacyPath); err == nil {
-		branch := strings.TrimSpace(string(data))
-		if branch != "" {
-			prefs.Branch = branch
 		}
 	}
 

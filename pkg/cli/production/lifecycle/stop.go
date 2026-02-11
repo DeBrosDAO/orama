@@ -53,13 +53,17 @@ func HandleStop() {
 	// Reset failed state for any services that might be in failed state
 	resetArgs := []string{"reset-failed"}
 	resetArgs = append(resetArgs, services...)
-	exec.Command("systemctl", resetArgs...).Run()
+	if err := exec.Command("systemctl", resetArgs...).Run(); err != nil {
+		fmt.Printf("  ⚠️  Warning: Failed to reset-failed state: %v\n", err)
+	}
 
 	// Wait again after reset-failed
 	time.Sleep(1 * time.Second)
 
 	// Stop again to ensure they're stopped
-	exec.Command("systemctl", stopArgs...).Run()
+	if err := exec.Command("systemctl", stopArgs...).Run(); err != nil {
+		fmt.Printf("  ⚠️  Warning: Second stop attempt had errors: %v\n", err)
+	}
 	time.Sleep(1 * time.Second)
 
 	hadError := false

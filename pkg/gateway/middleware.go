@@ -1111,35 +1111,6 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 			}
 		}
 
-		// Legacy format: {name}.node-{shortID}.{baseDomain} (backwards compatibility)
-		if len(parts) == 2 && strings.HasPrefix(parts[1], "node-") {
-			deploymentName := parts[0]
-			shortNodeID := parts[1] // e.g., "node-kv4la8"
-
-			// Query by name and matching short node ID
-			query := `
-				SELECT id, namespace, name, type, port, content_cid, status, home_node_id
-				FROM deployments
-				WHERE name = ?
-				AND ('node-' || substr(home_node_id, 9, 6) = ? OR home_node_id = ?)
-				AND status = 'active'
-				LIMIT 1
-			`
-			result, err := db.Query(internalCtx, query, deploymentName, shortNodeID, shortNodeID)
-			if err == nil && len(result.Rows) > 0 {
-				row := result.Rows[0]
-				return &deployments.Deployment{
-					ID:         getString(row[0]),
-					Namespace:  getString(row[1]),
-					Name:       getString(row[2]),
-					Type:       deployments.DeploymentType(getString(row[3])),
-					Port:       getInt(row[4]),
-					ContentCID: getString(row[5]),
-					Status:     deployments.DeploymentStatus(getString(row[6])),
-					HomeNodeID: getString(row[7]),
-				}, nil
-			}
-		}
 	}
 
 	// Try custom domain from deployment_domains table

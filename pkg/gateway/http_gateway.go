@@ -23,9 +23,8 @@ import (
 type HTTPGateway struct {
 	logger         *logging.ColoredLogger
 	config         *config.HTTPGatewayConfig
-	router         chi.Router
-	reverseProxies map[string]*httputil.ReverseProxy
-	mu             sync.RWMutex
+	router chi.Router
+	mu     sync.RWMutex
 	server         *http.Server
 }
 
@@ -46,8 +45,7 @@ func NewHTTPGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfig
 	gateway := &HTTPGateway{
 		logger:         logger,
 		config:         cfg,
-		router:         chi.NewRouter(),
-		reverseProxies: make(map[string]*httputil.ReverseProxy),
+		router: chi.NewRouter(),
 	}
 
 	// Set up router middleware
@@ -109,8 +107,6 @@ func (hg *HTTPGateway) initializeRoutes() error {
 				ResponseHeaderTimeout: routeConfig.Timeout,
 			}
 		}
-
-		hg.reverseProxies[routeName] = proxy
 
 		// Register route handler
 		hg.registerRouteHandler(routeName, routeConfig, proxy)

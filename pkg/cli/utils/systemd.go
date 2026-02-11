@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 var ErrServiceNotFound = errors.New("service not found")
@@ -22,15 +24,15 @@ type PortSpec struct {
 
 var ServicePorts = map[string][]PortSpec{
 	"debros-gateway": {
-		{Name: "Gateway API", Port: 6001},
+		{Name: "Gateway API", Port: constants.GatewayAPIPort},
 	},
 	"debros-olric": {
-		{Name: "Olric HTTP", Port: 3320},
-		{Name: "Olric Memberlist", Port: 3322},
+		{Name: "Olric HTTP", Port: constants.OlricHTTPPort},
+		{Name: "Olric Memberlist", Port: constants.OlricMemberlistPort},
 	},
 	"debros-node": {
-		{Name: "RQLite HTTP", Port: 5001},
-		{Name: "RQLite Raft", Port: 7001},
+		{Name: "RQLite HTTP", Port: constants.RQLiteHTTPPort},
+		{Name: "RQLite Raft", Port: constants.RQLiteRaftPort},
 	},
 	"debros-ipfs": {
 		{Name: "IPFS API", Port: 4501},
@@ -48,12 +50,12 @@ func DefaultPorts() []PortSpec {
 		{Name: "IPFS Swarm", Port: 4001},
 		{Name: "IPFS API", Port: 4501},
 		{Name: "IPFS Gateway", Port: 8080},
-		{Name: "Gateway API", Port: 6001},
-		{Name: "RQLite HTTP", Port: 5001},
-		{Name: "RQLite Raft", Port: 7001},
+		{Name: "Gateway API", Port: constants.GatewayAPIPort},
+		{Name: "RQLite HTTP", Port: constants.RQLiteHTTPPort},
+		{Name: "RQLite Raft", Port: constants.RQLiteRaftPort},
 		{Name: "IPFS Cluster API", Port: 9094},
-		{Name: "Olric HTTP", Port: 3320},
-		{Name: "Olric Memberlist", Port: 3322},
+		{Name: "Olric HTTP", Port: constants.OlricHTTPPort},
+		{Name: "Olric Memberlist", Port: constants.OlricMemberlistPort},
 	}
 }
 

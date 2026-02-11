@@ -438,27 +438,6 @@ func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string
 	return resp.Cid, nil
 }
 
-// getLatestVersion returns the latest version number for a function.
-func (r *Registry) getLatestVersion(ctx context.Context, namespace, name string) (int, error) {
-	query := `SELECT MAX(version) FROM functions WHERE namespace = ? AND name = ?`
-
-	var maxVersion sql.NullInt64
-	var results []struct {
-		MaxVersion sql.NullInt64 `db:"max(version)"`
-	}
-
-	if err := r.db.Query(ctx, &results, query, namespace, name); err != nil {
-		return 0, err
-	}
-
-	if len(results) == 0 || !results[0].MaxVersion.Valid {
-		return 0, ErrFunctionNotFound
-	}
-
-	maxVersion = results[0].MaxVersion
-	return int(maxVersion.Int64), nil
-}
-
 // getByNameInternal retrieves a function by name regardless of status.
 func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string) (*Function, error) {
 	namespace = strings.TrimSpace(namespace)

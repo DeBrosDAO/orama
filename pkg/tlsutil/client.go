@@ -82,12 +82,9 @@ func GetTLSConfig() *tls.Config {
 		MinVersion: tls.VersionTLS12,
 	}
 
-	// If we have a CA cert pool, use it
+	// If we have a CA cert pool, use it for verifying self-signed certs
 	if caCertPool != nil {
 		config.RootCAs = caCertPool
-	} else if len(trustedDomains) > 0 {
-		// Fallback: skip verification if trusted domains are configured but no CA pool
-		config.InsecureSkipVerify = true
 	}
 
 	return config
@@ -103,11 +100,12 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-// NewHTTPClientForDomain creates an HTTP client configured for a specific domain
+// NewHTTPClientForDomain creates an HTTP client configured for a specific domain.
+// Only skips TLS verification for explicitly trusted domains when no CA cert is available.
 func NewHTTPClientForDomain(timeout time.Duration, hostname string) *http.Client {
 	tlsConfig := GetTLSConfig()
 
-	// If this domain is in trusted list and we don't have a CA pool, allow insecure
+	// Only skip TLS for explicitly trusted domains when no CA pool is configured
 	if caCertPool == nil && ShouldSkipTLSVerify(hostname) {
 		tlsConfig.InsecureSkipVerify = true
 	}
