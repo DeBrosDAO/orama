@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -410,7 +411,7 @@ func TestContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := contains(tt.s, tt.substr)
+			result := strings.Contains(tt.s, tt.substr)
 			if result != tt.expected {
 				t.Errorf("contains(%q, %q) = %v, expected %v", tt.s, tt.substr, result, tt.expected)
 			}

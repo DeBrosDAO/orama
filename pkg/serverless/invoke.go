@@ -3,6 +3,7 @@ package serverless
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -249,7 +250,7 @@ func (i *Invoker) isRetryable(err error) bool {
 
 	// Retry execution errors (could be transient)
 	var execErr *ExecutionError
-	if ok := errorAs(err, &execErr); ok {
+	if errors.As(err, &execErr) {
 		return true
 	}
 
@@ -345,22 +346,6 @@ type DLQMessage struct {
 	FailedAt     time.Time   `json:"failed_at"`
 	TriggerType  TriggerType `json:"trigger_type"`
 	CallerWallet string      `json:"caller_wallet,omitempty"`
-}
-
-// errorAs is a helper to avoid import of errors package.
-func errorAs(err error, target interface{}) bool {
-	if err == nil {
-		return false
-	}
-	// Simple type assertion for our custom error types
-	switch t := target.(type) {
-	case **ExecutionError:
-		if e, ok := err.(*ExecutionError); ok {
-			*t = e
-			return true
-		}
-	}
-	return false
 }
 
 // -----------------------------------------------------------------------------

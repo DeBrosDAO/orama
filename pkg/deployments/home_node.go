@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -270,7 +271,7 @@ func (hnm *HomeNodeManager) getNodeCapacity(ctx context.Context, nodeID string) 
 		AllocatedPorts:    allocatedPorts,
 		AvailablePorts:    availablePorts,
 		UsedMemoryMB:      totalMemoryMB,
-		AvailableMemoryMB: 8192 - totalMemoryMB, // Assume 8GB per node (make configurable later)
+		AvailableMemoryMB: constants.MaxMemoryMB - totalMemoryMB,
 		UsedCPUPercent:    totalCPUPercent,
 		Score:             score,
 	}
@@ -331,12 +332,10 @@ func (hnm *HomeNodeManager) getNodeResourceUsage(ctx context.Context, nodeID str
 
 // calculateCapacityScore calculates a 0.0-1.0 score (higher is better)
 func (hnm *HomeNodeManager) calculateCapacityScore(deploymentCount, allocatedPorts, availablePorts, usedMemoryMB, usedCPUPercent int) float64 {
-	const (
-		maxDeployments = 100    // Max deployments per node
-		maxMemoryMB    = 8192   // 8GB
-		maxCPUPercent  = 400    // 400% = 4 cores
-		maxPorts       = 9900   // ~10k ports available
-	)
+	maxDeployments := constants.MaxDeploymentsPerNode
+	maxMemoryMB := constants.MaxMemoryMB
+	maxCPUPercent := constants.MaxCPUPercent
+	maxPorts := constants.MaxPortsPerNode
 
 	// Calculate individual component scores (0.0 to 1.0)
 	deploymentScore := 1.0 - (float64(deploymentCount) / float64(maxDeployments))
