@@ -60,23 +60,11 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.IntVar(&flags.AnyoneBandwidth, "anyone-bandwidth", 30, "Limit relay to N% of VPS bandwidth (0=unlimited, runs speedtest)")
 	fs.IntVar(&flags.AnyoneAccounting, "anyone-accounting", 0, "Monthly data cap for relay in GB (0=unlimited)")
 
-	// Support legacy flags for backwards compatibility
-	nightly := fs.Bool("nightly", false, "Use nightly branch (deprecated, use --branch nightly)")
-	main := fs.Bool("main", false, "Use main branch (deprecated, use --branch main)")
-
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil, err
 		}
 		return nil, fmt.Errorf("failed to parse flags: %w", err)
-	}
-
-	// Handle legacy flags
-	if *nightly {
-		flags.Branch = "nightly"
-	}
-	if *main {
-		flags.Branch = "main"
 	}
 
 	// Set nameserver if explicitly provided

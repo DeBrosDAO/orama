@@ -61,7 +61,9 @@ func (cm *ClusterConfigManager) UpdateAllClusterPeers() error {
 func (cm *ClusterConfigManager) RepairPeerConfiguration() error {
 	cm.logger.Info("Attempting to repair IPFS Cluster peer configuration")
 
-	_ = cm.FixIPFSConfigAddresses()
+	if err := cm.FixIPFSConfigAddresses(); err != nil {
+		cm.logger.Warn("Failed to fix IPFS config addresses during repair", zap.Error(err))
+	}
 
 	peers, err := cm.DiscoverClusterPeersFromGateway()
 	if err != nil {
@@ -72,7 +74,9 @@ func (cm *ClusterConfigManager) RepairPeerConfiguration() error {
 			peerAddrs = append(peerAddrs, p.Multiaddress)
 		}
 		if len(peerAddrs) > 0 {
-			_ = cm.UpdatePeerAddresses(peerAddrs)
+			if err := cm.UpdatePeerAddresses(peerAddrs); err != nil {
+				cm.logger.Warn("Failed to update peer addresses during repair", zap.Error(err))
+			}
 		}
 	}
 

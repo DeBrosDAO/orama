@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"go.uber.org/zap"
 )
 
@@ -414,20 +415,7 @@ func (n *Node) isNameserverNode(ctx context.Context) bool {
 
 // getWireGuardIP returns the IPv4 address assigned to the wg0 interface, if any
 func (n *Node) getWireGuardIP() (string, error) {
-	iface, err := net.InterfaceByName("wg0")
-	if err != nil {
-		return "", err
-	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", err
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-			return ipnet.IP.String(), nil
-		}
-	}
-	return "", fmt.Errorf("no IPv4 address on wg0")
+	return wireguard.GetIP()
 }
 
 // getNodeIPAddress attempts to determine the node's external IP address

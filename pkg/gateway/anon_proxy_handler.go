@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -234,31 +235,15 @@ func isPrivateOrLocalHost(host string) bool {
 	}
 
 	// Check for localhost variants
-	if host == "localhost" || host == "::1" {
+	if host == "localhost" {
 		return true
 	}
 
-	// Check common private ranges (basic check)
-	if strings.HasPrefix(host, "10.") ||
-		strings.HasPrefix(host, "192.168.") ||
-		strings.HasPrefix(host, "172.16.") ||
-		strings.HasPrefix(host, "172.17.") ||
-		strings.HasPrefix(host, "172.18.") ||
-		strings.HasPrefix(host, "172.19.") ||
-		strings.HasPrefix(host, "172.20.") ||
-		strings.HasPrefix(host, "172.21.") ||
-		strings.HasPrefix(host, "172.22.") ||
-		strings.HasPrefix(host, "172.23.") ||
-		strings.HasPrefix(host, "172.24.") ||
-		strings.HasPrefix(host, "172.25.") ||
-		strings.HasPrefix(host, "172.26.") ||
-		strings.HasPrefix(host, "172.27.") ||
-		strings.HasPrefix(host, "172.28.") ||
-		strings.HasPrefix(host, "172.29.") ||
-		strings.HasPrefix(host, "172.30.") ||
-		strings.HasPrefix(host, "172.31.") {
-		return true
+	// Parse as IP and use standard library checks
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
 	}
 
-	return false
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }

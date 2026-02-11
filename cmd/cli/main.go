@@ -88,6 +88,10 @@ func main() {
 	case "db":
 		cli.HandleDBCommand(args)
 
+	// Cluster inspection
+	case "inspect":
+		cli.HandleInspectCommand(args)
+
 	// Namespace management
 	case "namespace":
 		cli.HandleNamespaceCommand(args)
@@ -172,6 +176,12 @@ func showHelp() {
 
 	fmt.Printf("🏢 Namespaces:\n")
 	fmt.Printf("  namespace delete              - Delete current namespace and all resources\n\n")
+
+	fmt.Printf("🔍 Cluster Inspection:\n")
+	fmt.Printf("  inspect                       - Inspect cluster health via SSH\n")
+	fmt.Printf("  inspect --env devnet          - Inspect devnet nodes\n")
+	fmt.Printf("  inspect --subsystem rqlite    - Inspect only RQLite subsystem\n")
+	fmt.Printf("  inspect --format json         - Output as JSON\n\n")
 
 	fmt.Printf("🌍 Environments:\n")
 	fmt.Printf("  env list                      - List all environments\n")

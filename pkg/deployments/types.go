@@ -249,9 +249,7 @@ var (
 	ErrNoNodesAvailable     = &DeploymentError{Message: "no nodes available for deployment"}
 	ErrDeploymentNotFound   = &DeploymentError{Message: "deployment not found"}
 	ErrNamespaceNotAssigned = &DeploymentError{Message: "namespace has no home node assigned"}
-	ErrInvalidDeploymentType = &DeploymentError{Message: "invalid deployment type"}
 	ErrSubdomainTaken       = &DeploymentError{Message: "subdomain already in use"}
-	ErrDomainReserved       = &DeploymentError{Message: "domain is reserved"}
 )
 
 // DeploymentError represents a deployment-related error
