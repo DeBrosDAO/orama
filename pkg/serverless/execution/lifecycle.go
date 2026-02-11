@@ -81,36 +81,3 @@ func (m *ModuleLifecycle) ValidateModule(module wazero.CompiledModule) error {
 	return nil
 }
 
-// InstantiateModule creates a module instance for execution.
-// Note: This method is currently unused but kept for potential future use.
-func (m *ModuleLifecycle) InstantiateModule(ctx context.Context, compiled wazero.CompiledModule, config wazero.ModuleConfig) error {
-	if compiled == nil {
-		return fmt.Errorf("compiled module is nil")
-	}
-
-	instance, err := m.runtime.InstantiateModule(ctx, compiled, config)
-	if err != nil {
-		return fmt.Errorf("failed to instantiate module: %w", err)
-	}
-
-	// Close immediately - this is just for validation
-	_ = instance.Close(ctx)
-
-	return nil
-}
-
-// ModuleInfo provides information about a compiled module.
-type ModuleInfo struct {
-	CID       string
-	SizeBytes int
-	Compiled  bool
-}
-
-// GetModuleInfo returns information about a module.
-func (m *ModuleLifecycle) GetModuleInfo(wasmCID string, wasmBytes []byte, isCompiled bool) *ModuleInfo {
-	return &ModuleInfo{
-		CID:       wasmCID,
-		SizeBytes: len(wasmBytes),
-		Compiled:  isCompiled,
-	}
-}
