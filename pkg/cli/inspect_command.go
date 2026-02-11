@@ -141,7 +141,12 @@ func HandleInspectCommand(args []string) {
 		if len(issues) == 0 {
 			fmt.Printf("\nAll checks passed — no AI analysis needed.\n")
 		} else {
-			fmt.Printf("\nAnalyzing %d issues with %s...\n", len(issues), *aiModel)
+			// Count affected subsystems
+			subs := map[string]bool{}
+			for _, c := range issues {
+				subs[c.Subsystem] = true
+			}
+			fmt.Printf("\nAnalyzing %d issues across %d subsystems with %s...\n", len(issues), len(subs), *aiModel)
 			analysis, err := inspector.Analyze(results, data, *aiModel, *aiAPIKey)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "\nAI analysis failed: %v\n", err)
