@@ -51,10 +51,12 @@ func HandleInspectCommand(args []string) {
 
 	configPath := fs.String("config", "scripts/remote-nodes.conf", "Path to remote-nodes.conf")
 	env := fs.String("env", "", "Environment to inspect (devnet, testnet)")
-	subsystem := fs.String("subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,all)")
+	subsystem := fs.String("subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,anyone,all)")
 	format := fs.String("format", "table", "Output format (table, json)")
 	timeout := fs.Duration("timeout", 30*time.Second, "SSH command timeout")
 	verbose := fs.Bool("verbose", false, "Verbose output")
+	// Output flags
+	outputDir := fs.String("output", "", "Save results to directory as markdown (e.g., ./results)")
 	// AI flags
 	aiEnabled := fs.Bool("ai", false, "Enable AI analysis of failures")
 	aiModel := fs.String("model", "moonshotai/kimi-k2.5", "OpenRouter model for AI analysis")
@@ -70,6 +72,7 @@ func HandleInspectCommand(args []string) {
 		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --subsystem rqlite\n")
 		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --ai\n")
 		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --ai --model openai/gpt-4o\n")
+		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --ai --output ./results\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -136,23 +139,46 @@ func HandleInspectCommand(args []string) {
 	}
 
 	// Phase 4: AI Analysis (if enabled and there are failures or warnings)
+	var analysis *inspector.AnalysisResult
 	if *aiEnabled {
 		issues := results.FailuresAndWarnings()
 		if len(issues) == 0 {
 			fmt.Printf("\nAll checks passed — no AI analysis needed.\n")
-		} else {
-			// Count affected subsystems
-			subs := map[string]bool{}
-			for _, c := range issues {
-				subs[c.Subsystem] = true
-			}
-			fmt.Printf("\nAnalyzing %d issues across %d subsystems with %s...\n", len(issues), len(subs), *aiModel)
-			analysis, err := inspector.Analyze(results, data, *aiModel, *aiAPIKey)
+		} else if *outputDir != "" {
+			// Per-group AI analysis for file output
+			groups := inspector.GroupFailures(results)
+			fmt.Printf("\nAnalyzing %d unique issues with %s...\n", len(groups), *aiModel)
+			var err error
+			analysis, err = inspector.AnalyzeGroups(groups, results, data, *aiModel, *aiAPIKey)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "\nAI analysis failed: %v\n", err)
 			} else {
 				inspector.PrintAnalysis(analysis, os.Stdout)
 			}
+		} else {
+			// Per-subsystem AI analysis for terminal output
+			subs := map[string]bool{}
+			for _, c := range issues {
+				subs[c.Subsystem] = true
+			}
+			fmt.Printf("\nAnalyzing %d issues across %d subsystems with %s...\n", len(issues), len(subs), *aiModel)
+			var err error
+			analysis, err = inspector.Analyze(results, data, *aiModel, *aiAPIKey)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\nAI analysis failed: %v\n", err)
+			} else {
+				inspector.PrintAnalysis(analysis, os.Stdout)
+			}
+		}
+	}
+
+	// Phase 5: Write results to disk (if --output is set)
+	if *outputDir != "" {
+		outPath, err := inspector.WriteResults(*outputDir, *env, results, data, analysis)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nError writing results: %v\n", err)
+		} else {
+			fmt.Printf("\nResults saved to %s\n", outPath)
 		}
 	}
 

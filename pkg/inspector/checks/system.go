@@ -50,6 +50,22 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
+	// 6.2 Anyone relay/client services (only check if installed, don't fail if absent)
+	for _, svc := range []string{"debros-anyone-relay", "debros-anyone-client"} {
+		status, ok := sys.Services[svc]
+		if !ok || status == "inactive" {
+			continue // not installed or intentionally stopped
+		}
+		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc, "-", "_"))
+		name := fmt.Sprintf("%s service active", svc)
+		if status == "active" {
+			r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.High))
+		} else {
+			r = append(r, inspector.Fail(id, name, systemSub, node,
+				fmt.Sprintf("status=%s (should be active or uninstalled)", status), inspector.High))
+		}
+	}
+
 	// 6.5 WireGuard service
 	if status, ok := sys.Services["wg-quick@wg0"]; ok {
 		if status == "active" {
