@@ -26,6 +26,7 @@ type NodeData struct {
 	WireGuard  *WireGuardData
 	System     *SystemData
 	Network    *NetworkData
+	Anyone     *AnyoneData
 	Namespaces []NamespaceData // namespace instances on this node
 	Errors     []string        // collection errors for this node
 }
@@ -224,6 +225,21 @@ type NetworkData struct {
 	PingResults       map[string]bool // WG peer IP → ping success
 }
 
+// AnyoneData holds parsed Anyone relay/client status from a node.
+type AnyoneData struct {
+	RelayActive      bool   // debros-anyone-relay systemd service active
+	ClientActive     bool   // debros-anyone-client systemd service active
+	ORPortListening  bool   // port 9001 bound locally
+	SocksListening   bool   // port 9050 bound locally (client SOCKS5)
+	ControlListening bool   // port 9051 bound locally (control port)
+	Bootstrapped     bool   // relay has bootstrapped to 100%
+	BootstrapPct     int    // bootstrap percentage (0-100)
+	Fingerprint      string // relay fingerprint
+	Nickname         string // relay nickname
+	UptimeStr        string // uptime from control port
+	ORPortReachable  map[string]bool // host IP → whether we can TCP connect to their 9001 from this node
+}
+
 // Collect gathers data from all nodes in parallel.
 func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose bool) *ClusterData {
 	start := time.Now()
@@ -246,6 +262,10 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 	}
 
 	wg.Wait()
+
+	// Second pass: cross-node ORPort reachability (needs all nodes collected first)
+	collectAnyoneReachability(ctx, data)
+
 	data.Duration = time.Since(start)
 	return data
 }
@@ -285,6 +305,9 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 	}
 	if shouldCollect("network") {
 		nd.Network = collectNetwork(ctx, node, nd.WireGuard)
+	}
+	if shouldCollect("anyone") {
+		nd.Anyone = collectAnyone(ctx, node)
 	}
 	// Namespace collection — always collect if any subsystem is collected
 	nd.Namespaces = collectNamespaces(ctx, node)
@@ -1111,6 +1134,139 @@ echo "$SEP"
 	}
 
 	return data
+}
+
+func collectAnyone(ctx context.Context, node Node) *AnyoneData {
+	data := &AnyoneData{
+		ORPortReachable: make(map[string]bool),
+	}
+
+	cmd := `
+SEP="===INSPECTOR_SEP==="
+echo "$SEP"
+systemctl is-active debros-anyone-relay 2>/dev/null || echo inactive
+echo "$SEP"
+systemctl is-active debros-anyone-client 2>/dev/null || echo inactive
+echo "$SEP"
+ss -tlnp 2>/dev/null | grep -q ':9001 ' && echo yes || echo no
+echo "$SEP"
+ss -tlnp 2>/dev/null | grep -q ':9050 ' && echo yes || echo no
+echo "$SEP"
+ss -tlnp 2>/dev/null | grep -q ':9051 ' && echo yes || echo no
+echo "$SEP"
+# Check bootstrap status from log (last 50 lines)
+grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log 2>/dev/null | tail -1 || echo 0
+echo "$SEP"
+# Read fingerprint
+cat /var/lib/anon/fingerprint 2>/dev/null || echo ""
+echo "$SEP"
+# Read nickname from config
+grep -oP '^Nickname \K\S+' /etc/anon/anonrc 2>/dev/null || echo ""
+`
+
+	res := RunSSH(ctx, node, cmd)
+	if !res.OK() && res.Stdout == "" {
+		return data
+	}
+
+	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
+
+	if len(parts) > 1 {
+		data.RelayActive = strings.TrimSpace(parts[1]) == "active"
+	}
+	if len(parts) > 2 {
+		data.ClientActive = strings.TrimSpace(parts[2]) == "active"
+	}
+	if len(parts) > 3 {
+		data.ORPortListening = strings.TrimSpace(parts[3]) == "yes"
+	}
+	if len(parts) > 4 {
+		data.SocksListening = strings.TrimSpace(parts[4]) == "yes"
+	}
+	if len(parts) > 5 {
+		data.ControlListening = strings.TrimSpace(parts[5]) == "yes"
+	}
+	if len(parts) > 6 {
+		pct := parseIntDefault(strings.TrimSpace(parts[6]), 0)
+		data.BootstrapPct = pct
+		data.Bootstrapped = pct >= 100
+	}
+	if len(parts) > 7 {
+		data.Fingerprint = strings.TrimSpace(parts[7])
+	}
+	if len(parts) > 8 {
+		data.Nickname = strings.TrimSpace(parts[8])
+	}
+
+	// If neither relay nor client is active, skip further checks
+	if !data.RelayActive && !data.ClientActive {
+		return data
+	}
+
+	return data
+}
+
+// collectAnyoneReachability runs a second pass to check ORPort reachability across nodes.
+// Called after all nodes are collected so we know which nodes run relays.
+func collectAnyoneReachability(ctx context.Context, data *ClusterData) {
+	// Find all nodes running the relay (have ORPort listening)
+	var relayHosts []string
+	for host, nd := range data.Nodes {
+		if nd.Anyone != nil && nd.Anyone.RelayActive && nd.Anyone.ORPortListening {
+			relayHosts = append(relayHosts, host)
+		}
+	}
+
+	if len(relayHosts) == 0 {
+		return
+	}
+
+	// From each node, try to TCP connect to each relay's ORPort 9001
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, nd := range data.Nodes {
+		if nd.Anyone == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(nd *NodeData) {
+			defer wg.Done()
+
+			// Build commands to test TCP connectivity to each relay
+			var tcpCmds string
+			for _, relayHost := range relayHosts {
+				if relayHost == nd.Node.Host {
+					continue // skip self
+				}
+				tcpCmds += fmt.Sprintf(
+					`echo "ORPORT:%s:$(timeout 3 bash -c 'echo >/dev/tcp/%s/9001' 2>/dev/null && echo ok || echo fail)"
+`, relayHost, relayHost)
+			}
+
+			if tcpCmds == "" {
+				return
+			}
+
+			res := RunSSH(ctx, nd.Node, tcpCmds)
+			if res.Stdout == "" {
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			for _, line := range strings.Split(res.Stdout, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "ORPORT:") {
+					p := strings.SplitN(line, ":", 3)
+					if len(p) == 3 {
+						nd.Anyone.ORPortReachable[p[1]] = p[2] == "ok"
+					}
+				}
+			}
+		}(nd)
+	}
+	wg.Wait()
 }
 
 func collectNamespaces(ctx context.Context, node Node) []NamespaceData {

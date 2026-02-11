@@ -52,9 +52,10 @@ Step-by-step commands to resolve. Include actual node IPs/names from the data wh
 ### Prevention
 What could prevent this in the future? (omit if not applicable)`
 
-// SubsystemAnalysis holds the AI analysis for a single subsystem.
+// SubsystemAnalysis holds the AI analysis for a single subsystem or failure group.
 type SubsystemAnalysis struct {
 	Subsystem string
+	GroupID   string // e.g. "anyone.bootstrapped" — empty when analyzing whole subsystem
 	Analysis  string
 	Duration  time.Duration
 	Error     error
@@ -147,6 +148,125 @@ func Analyze(results *Results, data *ClusterData, model, apiKey string) (*Analys
 		Analyses: analyses,
 		Duration: time.Since(start),
 	}, nil
+}
+
+// AnalyzeGroups sends each failure group to OpenRouter for focused AI analysis.
+// Unlike Analyze which sends one call per subsystem, this sends one call per unique
+// failure pattern, producing more focused and actionable results.
+func AnalyzeGroups(groups []FailureGroup, results *Results, data *ClusterData, model, apiKey string) (*AnalysisResult, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENROUTER_API_KEY")
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("no API key: set --api-key or OPENROUTER_API_KEY env")
+	}
+
+	if len(groups) == 0 {
+		return &AnalysisResult{Model: model}, nil
+	}
+
+	// Build shared context
+	issuesBySubsystem := map[string][]CheckResult{}
+	for _, c := range results.FailuresAndWarnings() {
+		issuesBySubsystem[c.Subsystem] = append(issuesBySubsystem[c.Subsystem], c)
+	}
+	healthySummary := buildHealthySummary(results, issuesBySubsystem)
+	collectionErrors := buildCollectionErrors(data)
+
+	start := time.Now()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var analyses []SubsystemAnalysis
+
+	for _, g := range groups {
+		wg.Add(1)
+		go func(group FailureGroup) {
+			defer wg.Done()
+
+			prompt := buildGroupPrompt(group, data, healthySummary, collectionErrors)
+			subStart := time.Now()
+			response, err := callOpenRouter(model, apiKey, prompt)
+
+			sa := SubsystemAnalysis{
+				Subsystem: group.Subsystem,
+				GroupID:   group.ID,
+				Duration:  time.Since(subStart),
+			}
+			if err != nil {
+				sa.Error = err
+			} else {
+				sa.Analysis = response
+			}
+
+			mu.Lock()
+			analyses = append(analyses, sa)
+			mu.Unlock()
+		}(g)
+	}
+	wg.Wait()
+
+	// Sort by subsystem then group ID for consistent output
+	sort.Slice(analyses, func(i, j int) bool {
+		if analyses[i].Subsystem != analyses[j].Subsystem {
+			return analyses[i].Subsystem < analyses[j].Subsystem
+		}
+		return analyses[i].GroupID < analyses[j].GroupID
+	})
+
+	return &AnalysisResult{
+		Model:    model,
+		Analyses: analyses,
+		Duration: time.Since(start),
+	}, nil
+}
+
+func buildGroupPrompt(group FailureGroup, data *ClusterData, healthySummary, collectionErrors string) string {
+	var b strings.Builder
+
+	icon := "FAILURE"
+	if group.Status == StatusWarn {
+		icon = "WARNING"
+	}
+
+	b.WriteString(fmt.Sprintf("## %s: %s\n\n", icon, group.Name))
+	b.WriteString(fmt.Sprintf("**Check ID:** %s  \n", group.ID))
+	b.WriteString(fmt.Sprintf("**Severity:** %s  \n", group.Severity))
+	b.WriteString(fmt.Sprintf("**Nodes affected:** %d  \n\n", len(group.Nodes)))
+
+	b.WriteString("**Affected nodes:**\n")
+	for _, n := range group.Nodes {
+		b.WriteString(fmt.Sprintf("- %s\n", n))
+	}
+	b.WriteString("\n")
+
+	b.WriteString("**Error messages:**\n")
+	for _, m := range group.Messages {
+		b.WriteString(fmt.Sprintf("- %s\n", m))
+	}
+	b.WriteString("\n")
+
+	// Subsystem raw data
+	contextData := buildSubsystemContext(group.Subsystem, data)
+	if contextData != "" {
+		b.WriteString(fmt.Sprintf("## %s Raw Data (all nodes)\n", strings.ToUpper(group.Subsystem)))
+		b.WriteString(contextData)
+		b.WriteString("\n")
+	}
+
+	if healthySummary != "" {
+		b.WriteString("## Healthy Subsystems\n")
+		b.WriteString(healthySummary)
+		b.WriteString("\n")
+	}
+
+	if collectionErrors != "" {
+		b.WriteString("## Collection Errors\n")
+		b.WriteString(collectionErrors)
+		b.WriteString("\n")
+	}
+
+	b.WriteString(fmt.Sprintf("\nAnalyze this specific %s issue. Be concise — focus on this one problem.\n", group.Subsystem))
+	return b.String()
 }
 
 func buildClusterOverview(data *ClusterData, results *Results) string {
@@ -286,6 +406,8 @@ func buildSubsystemContext(subsystem string, data *ClusterData) string {
 		return buildNetworkContext(data)
 	case "namespace":
 		return buildNamespaceContext(data)
+	case "anyone":
+		return buildAnyoneContext(data)
 	default:
 		return ""
 	}
@@ -486,6 +608,40 @@ func buildNamespaceContext(data *ClusterData) string {
 	return b.String()
 }
 
+func buildAnyoneContext(data *ClusterData) string {
+	var b strings.Builder
+	for host, nd := range data.Nodes {
+		if nd.Anyone == nil {
+			continue
+		}
+		a := nd.Anyone
+		if !a.RelayActive && !a.ClientActive {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("### %s\n", host))
+		b.WriteString(fmt.Sprintf("  relay=%v client=%v orport=%v socks=%v control=%v\n",
+			a.RelayActive, a.ClientActive, a.ORPortListening, a.SocksListening, a.ControlListening))
+		if a.RelayActive {
+			b.WriteString(fmt.Sprintf("  bootstrap=%d%% fingerprint=%s nickname=%s\n",
+				a.BootstrapPct, a.Fingerprint, a.Nickname))
+		}
+		if len(a.ORPortReachable) > 0 {
+			var unreachable []string
+			for h, ok := range a.ORPortReachable {
+				if !ok {
+					unreachable = append(unreachable, h)
+				}
+			}
+			if len(unreachable) > 0 {
+				b.WriteString(fmt.Sprintf("  orport_unreachable: %s\n", strings.Join(unreachable, ", ")))
+			} else {
+				b.WriteString(fmt.Sprintf("  orport: all %d peers reachable\n", len(a.ORPortReachable)))
+			}
+		}
+	}
+	return b.String()
+}
+
 // OpenRouter API types (OpenAI-compatible)
 
 type openRouterRequest struct {
@@ -531,7 +687,7 @@ func callOpenRouter(model, apiKey, prompt string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP request: %w", err)
