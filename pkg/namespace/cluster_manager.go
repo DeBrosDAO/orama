@@ -309,6 +309,9 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
 	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
 
+	// Save cluster-state.json on all nodes (local + remote) for disk-based restore on restart
+	cm.saveClusterStateToAllNodes(ctx, cluster, nodes, portBlocks)
+
 	cm.logger.Info("Cluster provisioning completed",
 		zap.String("cluster_id", cluster.ID),
 		zap.String("namespace", namespaceName),
@@ -630,18 +633,25 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 		ipfsTimeout = cfg.IPFSTimeout.String()
 	}
 
+	olricTimeout := ""
+	if cfg.OlricTimeout > 0 {
+		olricTimeout = cfg.OlricTimeout.String()
+	}
+
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":                  "spawn-gateway",
-		"namespace":               cfg.Namespace,
-		"node_id":                 cfg.NodeID,
-		"gateway_http_port":       cfg.HTTPPort,
-		"gateway_base_domain":     cfg.BaseDomain,
-		"gateway_rqlite_dsn":      cfg.RQLiteDSN,
-		"gateway_olric_servers":   cfg.OlricServers,
-		"ipfs_cluster_api_url":    cfg.IPFSClusterAPIURL,
-		"ipfs_api_url":            cfg.IPFSAPIURL,
-		"ipfs_timeout":            ipfsTimeout,
-		"ipfs_replication_factor": cfg.IPFSReplicationFactor,
+		"action":                    "spawn-gateway",
+		"namespace":                 cfg.Namespace,
+		"node_id":                   cfg.NodeID,
+		"gateway_http_port":         cfg.HTTPPort,
+		"gateway_base_domain":       cfg.BaseDomain,
+		"gateway_rqlite_dsn":        cfg.RQLiteDSN,
+		"gateway_global_rqlite_dsn": cfg.GlobalRQLiteDSN,
+		"gateway_olric_servers":     cfg.OlricServers,
+		"gateway_olric_timeout":     olricTimeout,
+		"ipfs_cluster_api_url":      cfg.IPFSClusterAPIURL,
+		"ipfs_api_url":              cfg.IPFSAPIURL,
+		"ipfs_timeout":              ipfsTimeout,
+		"ipfs_replication_factor":   cfg.IPFSReplicationFactor,
 	})
 	if err != nil {
 		return nil, err
@@ -1564,6 +1574,69 @@ type ClusterLocalStateNode struct {
 	RQLiteRaftPort      int    `json:"rqlite_raft_port"`
 	OlricHTTPPort       int    `json:"olric_http_port"`
 	OlricMemberlistPort int    `json:"olric_memberlist_port"`
+}
+
+// saveClusterStateToAllNodes builds and saves cluster-state.json on every node in the cluster.
+// Each node gets its own state file with node-specific LocalNodeID, LocalIP, and LocalPorts.
+func (cm *ClusterManager) saveClusterStateToAllNodes(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) {
+	// Build the shared AllNodes list
+	var allNodes []ClusterLocalStateNode
+	for i, node := range nodes {
+		allNodes = append(allNodes, ClusterLocalStateNode{
+			NodeID:              node.NodeID,
+			InternalIP:          node.InternalIP,
+			RQLiteHTTPPort:      portBlocks[i].RQLiteHTTPPort,
+			RQLiteRaftPort:      portBlocks[i].RQLiteRaftPort,
+			OlricHTTPPort:       portBlocks[i].OlricHTTPPort,
+			OlricMemberlistPort: portBlocks[i].OlricMemberlistPort,
+		})
+	}
+
+	for i, node := range nodes {
+		state := &ClusterLocalState{
+			ClusterID:     cluster.ID,
+			NamespaceName: cluster.NamespaceName,
+			LocalNodeID:   node.NodeID,
+			LocalIP:       node.InternalIP,
+			LocalPorts: ClusterLocalStatePorts{
+				RQLiteHTTPPort:      portBlocks[i].RQLiteHTTPPort,
+				RQLiteRaftPort:      portBlocks[i].RQLiteRaftPort,
+				OlricHTTPPort:       portBlocks[i].OlricHTTPPort,
+				OlricMemberlistPort: portBlocks[i].OlricMemberlistPort,
+				GatewayHTTPPort:     portBlocks[i].GatewayHTTPPort,
+			},
+			AllNodes:   allNodes,
+			HasGateway: true,
+			BaseDomain: cm.baseDomain,
+			SavedAt:    time.Now(),
+		}
+
+		if node.NodeID == cm.localNodeID {
+			// Save locally
+			if err := cm.saveLocalState(state); err != nil {
+				cm.logger.Warn("Failed to save local cluster state", zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+			}
+		} else {
+			// Send to remote node
+			data, err := json.MarshalIndent(state, "", "  ")
+			if err != nil {
+				cm.logger.Warn("Failed to marshal cluster state for remote node", zap.String("node", node.NodeID), zap.Error(err))
+				continue
+			}
+			_, err = cm.sendSpawnRequest(ctx, node.InternalIP, map[string]interface{}{
+				"action":        "save-cluster-state",
+				"namespace":     cluster.NamespaceName,
+				"node_id":       node.NodeID,
+				"cluster_state": json.RawMessage(data),
+			})
+			if err != nil {
+				cm.logger.Warn("Failed to send cluster state to remote node",
+					zap.String("node", node.NodeID),
+					zap.String("ip", node.InternalIP),
+					zap.Error(err))
+			}
+		}
+	}
 }
 
 // saveLocalState writes cluster state to disk for fast recovery without DB queries.
