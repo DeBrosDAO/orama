@@ -18,21 +18,57 @@ const rqliteSub = "rqlite"
 func CheckRQLite(data *inspector.ClusterData) []inspector.CheckResult {
 	var results []inspector.CheckResult
 
+	// Find the leader's authoritative /nodes data
+	leaderNodes := findLeaderNodes(data)
+
 	// Per-node checks
 	for _, nd := range data.Nodes {
 		if nd.RQLite == nil {
 			continue
 		}
-		results = append(results, checkRQLitePerNode(nd, data)...)
+		results = append(results, checkRQLitePerNode(nd, data, leaderNodes)...)
 	}
 
 	// Cross-node checks
-	results = append(results, checkRQLiteCrossNode(data)...)
+	results = append(results, checkRQLiteCrossNode(data, leaderNodes)...)
 
 	return results
 }
 
-func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData) []inspector.CheckResult {
+// findLeaderNodes returns the leader's /nodes map as the authoritative cluster membership.
+func findLeaderNodes(data *inspector.ClusterData) map[string]*inspector.RQLiteNode {
+	for _, nd := range data.Nodes {
+		if nd.RQLite != nil && nd.RQLite.Status != nil && nd.RQLite.Status.RaftState == "Leader" && nd.RQLite.Nodes != nil {
+			return nd.RQLite.Nodes
+		}
+	}
+	return nil
+}
+
+// nodeIP extracts the IP from a "host:port" address.
+func nodeIP(addr string) string {
+	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
+		return addr[:idx]
+	}
+	return addr
+}
+
+// lookupInLeaderNodes finds a node in the leader's /nodes map by matching IP.
+// Leader's /nodes keys use HTTP port (5001), while node IDs use Raft port (7001).
+func lookupInLeaderNodes(leaderNodes map[string]*inspector.RQLiteNode, nodeID string) *inspector.RQLiteNode {
+	if leaderNodes == nil {
+		return nil
+	}
+	ip := nodeIP(nodeID)
+	for addr, n := range leaderNodes {
+		if nodeIP(addr) == ip {
+			return n
+		}
+	}
+	return nil
+}
+
+func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData, leaderNodes map[string]*inspector.RQLiteNode) []inspector.CheckResult {
 	var r []inspector.CheckResult
 	rq := nd.RQLite
 	node := nd.Node.Name()
@@ -99,19 +135,39 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData) []i
 			fmt.Sprintf("leader=%s", s.LeaderNodeID), inspector.Critical))
 	}
 
-	// 1.8 Voter status
-	if s.Voter {
+	// 1.8 Voter status — use leader's /nodes as authoritative source
+	if leaderNode := lookupInLeaderNodes(leaderNodes, s.NodeID); leaderNode != nil {
+		if leaderNode.Voter {
+			r = append(r, inspector.Pass("rqlite.voter", "Node is voter", rqliteSub, node,
+				"voter=true (confirmed by leader)", inspector.Low))
+		} else {
+			r = append(r, inspector.Pass("rqlite.voter", "Node is non-voter", rqliteSub, node,
+				"non-voter (by design, confirmed by leader)", inspector.Low))
+		}
+	} else if s.Voter {
 		r = append(r, inspector.Pass("rqlite.voter", "Node is voter", rqliteSub, node,
 			"voter=true", inspector.Low))
 	} else {
-		r = append(r, inspector.Warn("rqlite.voter", "Node is voter", rqliteSub, node,
-			"voter=false (non-voter)", inspector.Low))
+		r = append(r, inspector.Pass("rqlite.voter", "Node is non-voter", rqliteSub, node,
+			"non-voter (no leader data to confirm)", inspector.Low))
 	}
 
-	// 1.9 Num peers — use the node's own /nodes endpoint to determine cluster size
-	// (not config file, since not all config nodes are necessarily in the Raft cluster)
-	if rq.Nodes != nil && len(rq.Nodes) > 0 {
-		expectedPeers := len(rq.Nodes) - 1 // cluster members minus self
+	// 1.9 Num peers — use leader's /nodes as authoritative cluster size
+	if leaderNodes != nil && len(leaderNodes) > 0 {
+		expectedPeers := len(leaderNodes) - 1 // cluster members minus self
+		if expectedPeers < 0 {
+			expectedPeers = 0
+		}
+		if s.NumPeers == expectedPeers {
+			r = append(r, inspector.Pass("rqlite.num_peers", "Peer count matches cluster size", rqliteSub, node,
+				fmt.Sprintf("peers=%d (cluster has %d nodes)", s.NumPeers, len(leaderNodes)), inspector.Critical))
+		} else {
+			r = append(r, inspector.Warn("rqlite.num_peers", "Peer count matches cluster size", rqliteSub, node,
+				fmt.Sprintf("peers=%d but leader reports %d members", s.NumPeers, len(leaderNodes)), inspector.High))
+		}
+	} else if rq.Nodes != nil && len(rq.Nodes) > 0 {
+		// Fallback: use node's own /nodes if leader data unavailable
+		expectedPeers := len(rq.Nodes) - 1
 		if expectedPeers < 0 {
 			expectedPeers = 0
 		}
@@ -332,7 +388,7 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData) []i
 	return r
 }
 
-func checkRQLiteCrossNode(data *inspector.ClusterData) []inspector.CheckResult {
+func checkRQLiteCrossNode(data *inspector.ClusterData, leaderNodes map[string]*inspector.RQLiteNode) []inspector.CheckResult {
 	var r []inspector.CheckResult
 
 	type nodeInfo struct {
@@ -506,13 +562,25 @@ func checkRQLiteCrossNode(data *inspector.ClusterData) []inspector.CheckResult {
 		}
 	}
 
-	// 1.42 Quorum math
+	// 1.42 Quorum math — use leader's /nodes as authoritative voter source
 	voters := 0
 	reachableVoters := 0
-	for _, n := range nodes {
-		if n.status.Voter {
-			voters++
-			reachableVoters++ // responded to SSH + curl = reachable
+	if leaderNodes != nil && len(leaderNodes) > 0 {
+		for _, ln := range leaderNodes {
+			if ln.Voter {
+				voters++
+				if ln.Reachable {
+					reachableVoters++
+				}
+			}
+		}
+	} else {
+		// Fallback: use each node's self-reported voter status
+		for _, n := range nodes {
+			if n.status.Voter {
+				voters++
+				reachableVoters++ // responded to SSH + curl = reachable
+			}
 		}
 	}
 	quorumNeeded := int(math.Floor(float64(voters)/2)) + 1

@@ -93,9 +93,9 @@ func TestCheckNetwork_TCPRetransmission(t *testing.T) {
 		rate   float64
 		status inspector.Status
 	}{
-		{"low", 0.1, inspector.StatusPass},
-		{"elevated", 3.0, inspector.StatusWarn},
-		{"high", 8.0, inspector.StatusFail},
+		{"low", 0.5, inspector.StatusPass},
+		{"elevated", 6.0, inspector.StatusWarn},
+		{"high", 12.0, inspector.StatusFail},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

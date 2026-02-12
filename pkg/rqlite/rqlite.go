@@ -68,6 +68,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 
 	if r.discoveryService != nil {
 		go r.startHealthMonitoring(ctx)
+		go r.startVoterReconciliation(ctx)
 	}
 
 	if err := r.establishLeadershipOrJoin(ctx, rqliteDataDir); err != nil {
