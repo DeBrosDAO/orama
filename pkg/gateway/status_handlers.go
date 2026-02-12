@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
@@ -51,7 +52,7 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		name   string
 		result checkResult
 	}
-	ch := make(chan namedResult, 4)
+	ch := make(chan namedResult, 5)
 
 	// RQLite
 	go func() {
@@ -118,9 +119,25 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		ch <- nr
 	}()
 
+	// Anyone proxy (SOCKS5)
+	go func() {
+		nr := namedResult{name: "anyone"}
+		if !anyoneproxy.Enabled() {
+			nr.result = checkResult{Status: "unavailable"}
+		} else {
+			start := time.Now()
+			if anyoneproxy.Running() {
+				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
+			} else {
+				nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: "SOCKS5 proxy not reachable at " + anyoneproxy.Address()}
+			}
+		}
+		ch <- nr
+	}()
+
 	// Collect
-	checks := make(map[string]checkResult, 4)
-	for i := 0; i < 4; i++ {
+	checks := make(map[string]checkResult, 5)
+	for i := 0; i < 5; i++ {
 		nr := <-ch
 		checks[nr.name] = nr.result
 	}

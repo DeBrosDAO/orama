@@ -79,11 +79,13 @@ func checkNetworkPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	}
 
 	// 7.8 TCP retransmission rate
+	// Thresholds are relaxed for WireGuard-encapsulated traffic across VPS providers:
+	// <2% normal, 2-10% elevated (warn), >=10% problematic (fail).
 	if net.TCPRetransRate >= 0 {
-		if net.TCPRetransRate < 1 {
+		if net.TCPRetransRate < 2 {
 			r = append(r, inspector.Pass("network.tcp_retrans", "TCP retransmission rate low", networkSub, node,
 				fmt.Sprintf("retrans=%.2f%%", net.TCPRetransRate), inspector.Medium))
-		} else if net.TCPRetransRate < 5 {
+		} else if net.TCPRetransRate < 10 {
 			r = append(r, inspector.Warn("network.tcp_retrans", "TCP retransmission rate low", networkSub, node,
 				fmt.Sprintf("retrans=%.2f%% (elevated)", net.TCPRetransRate), inspector.Medium))
 		} else {

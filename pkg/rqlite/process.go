@@ -306,18 +306,52 @@ func (r *RQLiteManager) checkShouldBeNonVoter(joinAddress string) bool {
 	}
 	nodesURL := fmt.Sprintf("http://%s:%d/nodes?timeout=2s", host, r.config.RQLitePort)
 
+	// Retry with backoff — network (WireGuard) may not be ready immediately.
+	// Defaulting to voter on failure is dangerous: it creates excess voters
+	// that can cause split-brain during leader failover.
+	const maxRetries = 5
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(attempt*2) * time.Second
+			r.logger.Info("Retrying voter check",
+				zap.Int("attempt", attempt+1),
+				zap.Duration("delay", delay))
+			time.Sleep(delay)
+		}
+
+		voterCount, err := r.queryVoterCount(nodesURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		r.logger.Info("Checked existing voter count from join target",
+			zap.Int("reachable_voters", voterCount),
+			zap.Int("max_voters", MaxDefaultVoters))
+
+		return voterCount >= MaxDefaultVoters
+	}
+
+	r.logger.Warn("Could not determine voter count after retries, defaulting to voter",
+		zap.Int("attempts", maxRetries),
+		zap.Error(lastErr))
+	return false
+}
+
+// queryVoterCount queries the /nodes endpoint and returns the number of reachable voters.
+func (r *RQLiteManager) queryVoterCount(nodesURL string) (int, error) {
 	client := tlsutil.NewHTTPClient(5 * time.Second)
 	resp, err := client.Get(nodesURL)
 	if err != nil {
-		r.logger.Warn("Could not query /nodes to check voter count, defaulting to voter", zap.Error(err))
-		return false
+		return 0, fmt.Errorf("query /nodes: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		r.logger.Warn("Could not read /nodes response, defaulting to voter", zap.Error(err))
-		return false
+		return 0, fmt.Errorf("read /nodes response: %w", err)
 	}
 
 	var nodes map[string]struct {
@@ -325,8 +359,7 @@ func (r *RQLiteManager) checkShouldBeNonVoter(joinAddress string) bool {
 		Reachable bool `json:"reachable"`
 	}
 	if err := json.Unmarshal(body, &nodes); err != nil {
-		r.logger.Warn("Could not parse /nodes response, defaulting to voter", zap.Error(err))
-		return false
+		return 0, fmt.Errorf("parse /nodes response: %w", err)
 	}
 
 	voterCount := 0
@@ -336,11 +369,7 @@ func (r *RQLiteManager) checkShouldBeNonVoter(joinAddress string) bool {
 		}
 	}
 
-	r.logger.Info("Checked existing voter count from join target",
-		zap.Int("reachable_voters", voterCount),
-		zap.Int("max_voters", MaxDefaultVoters))
-
-	return voterCount >= MaxDefaultVoters
+	return voterCount, nil
 }
 
 // waitForJoinTarget waits until the join target's HTTP status becomes reachable

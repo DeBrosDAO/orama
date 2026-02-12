@@ -307,7 +307,7 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 	if shouldCollect("network") {
 		nd.Network = collectNetwork(ctx, node, nd.WireGuard)
 	}
-	if shouldCollect("anyone") {
+	if shouldCollect("anyone") && !node.IsNameserver() {
 		nd.Anyone = collectAnyone(ctx, node)
 	}
 	// Namespace collection — always collect if any subsystem is collected
