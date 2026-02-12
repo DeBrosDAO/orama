@@ -89,6 +89,9 @@ func TestWireGuardProvisioner_GenerateConfig_NoPeers(t *testing.T) {
 	if !strings.Contains(config, "ListenPort = 51820") {
 		t.Error("config should contain ListenPort")
 	}
+	if !strings.Contains(config, "MTU = 1420") {
+		t.Error("config should contain MTU = 1420")
+	}
 	if !strings.Contains(config, "PrivateKey = dGVzdHByaXZhdGVrZXl0ZXN0cHJpdmF0ZWtleXM=") {
 		t.Error("config should contain PrivateKey")
 	}

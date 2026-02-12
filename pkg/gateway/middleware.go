@@ -259,8 +259,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 
 		// 0) Trust internal auth headers from internal IPs (WireGuard network or localhost)
 		// This allows the main gateway to pre-authenticate requests before proxying to namespace gateways
+		// IMPORTANT: Use r.RemoteAddr (actual TCP peer), NOT getClientIP() which reads
+		// X-Forwarded-For and would return the original client IP instead of the proxy's IP.
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
-			clientIP := getClientIP(r)
+			clientIP := remoteAddrIP(r)
 			if isInternalIP(clientIP) {
 				ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
 				if ns != "" {
@@ -489,7 +491,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// before proxying, so re-checking ownership against the namespace RQLite is
 		// redundant and adds ~300ms of unnecessary latency (3 DB round-trips).
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
-			clientIP := getClientIP(r)
+			clientIP := remoteAddrIP(r)
 			if isInternalIP(clientIP) {
 				next.ServeHTTP(w, r)
 				return
@@ -714,6 +716,18 @@ func (g *Gateway) persistRequestLog(r *http.Request, srw *statusResponseWriter, 
 	if apiKeyID != nil {
 		_, _ = db.Query(ctx, "UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?", apiKeyID)
 	}
+}
+
+// remoteAddrIP extracts the actual TCP peer IP from r.RemoteAddr, ignoring
+// X-Forwarded-For and other proxy headers. Use this for security-sensitive
+// checks like internal auth validation where we need to verify the direct
+// connection source (e.g. WireGuard proxy IP), not the original client.
+func remoteAddrIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // getClientIP extracts the client IP from headers or RemoteAddr

@@ -113,6 +113,7 @@ func (wp *WireGuardProvisioner) GenerateConfig() string {
 	sb.WriteString(fmt.Sprintf("PrivateKey = %s\n", wp.config.PrivateKey))
 	sb.WriteString(fmt.Sprintf("Address = %s/24\n", wp.config.PrivateIP))
 	sb.WriteString(fmt.Sprintf("ListenPort = %d\n", wp.config.ListenPort))
+	sb.WriteString("MTU = 1420\n")
 
 	// Accept all WireGuard subnet traffic before UFW's conntrack "invalid" drop.
 	// Without this, packets reordered by the tunnel get silently dropped.
