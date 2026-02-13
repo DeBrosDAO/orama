@@ -150,6 +150,9 @@ type Gateway struct {
 
 	// Shared HTTP transport for proxy connections (connection pooling)
 	proxyTransport *http.Transport
+
+	// Namespace health state (local service probes + hourly reconciliation)
+	nsHealth *namespaceHealthState
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -581,6 +584,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		go gw.healthMonitor.Start(context.Background())
 		logger.ComponentInfo(logging.ComponentGeneral, "Node health monitor started",
 			zap.String("node_id", cfg.NodePeerID))
+	}
+
+	// Start namespace health monitoring loop (local probes every 30s, reconciliation every 1h)
+	if cfg.NodePeerID != "" && deps.SQLDB != nil {
+		go gw.startNamespaceHealthLoop(context.Background())
+		logger.ComponentInfo(logging.ComponentGeneral, "Namespace health monitor started")
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed")

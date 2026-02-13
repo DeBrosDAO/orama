@@ -379,6 +379,21 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 			zap.String("node_id", nodeID),
 			zap.String("ip", ip),
 		)
+
+		// Check if the dead node hosted any namespace services
+		var nsCount int
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(DISTINCT nc.namespace_name) FROM namespace_cluster_nodes ncn
+			 JOIN namespace_clusters nc ON ncn.namespace_cluster_id = nc.id
+			 WHERE ncn.node_id = ? AND ncn.status = 'running'`, nodeID,
+		).Scan(&nsCount); err == nil && nsCount > 0 {
+			n.logger.ComponentWarn(logging.ComponentNode,
+				"Dead node hosted namespace services — reconciliation loop will repair",
+				zap.String("node_id", nodeID),
+				zap.String("ip", ip),
+				zap.Int("affected_namespaces", nsCount),
+			)
+		}
 	}
 }
 
