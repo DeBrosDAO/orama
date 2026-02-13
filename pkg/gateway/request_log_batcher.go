@@ -158,7 +158,9 @@ func (b *requestLogBatcher) flush() {
 			args = append(args, e.method, e.path, e.statusCode, e.bytesOut, e.durationMs, e.ip, apiKeyID)
 		}
 
-		_, _ = db.Query(client.WithInternalAuth(ctx), sb.String(), args...)
+		if _, err := db.Query(client.WithInternalAuth(ctx), sb.String(), args...); err != nil && b.gw.logger != nil {
+			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to flush request logs", zap.Error(err))
+		}
 	}
 
 	// Batch UPDATE last_used_at for all API keys seen in this batch
@@ -171,7 +173,9 @@ func (b *requestLogBatcher) flush() {
 		}
 
 		q := fmt.Sprintf("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id IN (%s)", strings.Join(ids, ","))
-		_, _ = db.Query(client.WithInternalAuth(ctx), q, args...)
+		if _, err := db.Query(client.WithInternalAuth(ctx), q, args...); err != nil && b.gw.logger != nil {
+			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to update api key last_used_at", zap.Error(err))
+		}
 	}
 
 	if b.gw.logger != nil {

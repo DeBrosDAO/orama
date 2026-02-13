@@ -45,9 +45,11 @@ func ValidateDatabase(dc DatabaseConfig) []error {
 			Message: fmt.Sprintf("must be >= 1; got %d", dc.ReplicationFactor),
 		})
 	} else if dc.ReplicationFactor%2 == 0 {
-		// Warn about even replication factor (Raft best practice: odd)
-		// For now we log a note but don't error
-		_ = fmt.Sprintf("note: database.replication_factor %d is even; Raft recommends odd numbers for quorum", dc.ReplicationFactor)
+		errs = append(errs, ValidationError{
+			Path:    "database.replication_factor",
+			Message: fmt.Sprintf("value %d is even; Raft recommends odd numbers for quorum", dc.ReplicationFactor),
+			Hint:    "use 1, 3, or 5 for proper Raft consensus",
+		})
 	}
 
 	// Validate shard_count

@@ -9,9 +9,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -74,11 +74,11 @@ func addJitter(interval time.Duration) time.Duration {
 }
 
 func loadNodePeerIDFromIdentity(dataDir string) string {
-	identityFile := filepath.Join(os.ExpandEnv(dataDir), "identity.key")
-	if strings.HasPrefix(identityFile, "~") {
-		home, _ := os.UserHomeDir()
-		identityFile = filepath.Join(home, identityFile[1:])
+	expanded, err := config.ExpandPath(dataDir)
+	if err != nil {
+		return ""
 	}
+	identityFile := filepath.Join(expanded, "identity.key")
 
 	if info, err := encryption.LoadIdentity(identityFile); err == nil {
 		return info.PeerID.String()
@@ -98,7 +98,9 @@ func extractPEMFromTLSCert(tlsCert *tls.Certificate, certPath, keyPath string) e
 	defer certFile.Close()
 
 	for _, certBytes := range tlsCert.Certificate {
-		pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes})
+		if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes}); err != nil {
+			return fmt.Errorf("failed to encode certificate PEM: %w", err)
+		}
 	}
 
 	if tlsCert.PrivateKey == nil {
@@ -111,17 +113,20 @@ func extractPEMFromTLSCert(tlsCert *tls.Certificate, certPath, keyPath string) e
 	}
 	defer keyFile.Close()
 
-	var keyBytes []byte
-	switch key := tlsCert.PrivateKey.(type) {
-	case *x509.Certificate:
-		keyBytes, _ = x509.MarshalPKCS8PrivateKey(key)
-	default:
-		keyBytes, _ = x509.MarshalPKCS8PrivateKey(tlsCert.PrivateKey)
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(tlsCert.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 
-	pem.Encode(keyFile, &pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
-	os.Chmod(certPath, 0644)
-	os.Chmod(keyPath, 0600)
+	if err := pem.Encode(keyFile, &pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}); err != nil {
+		return fmt.Errorf("failed to encode private key PEM: %w", err)
+	}
+	if err := os.Chmod(certPath, 0644); err != nil {
+		return fmt.Errorf("failed to set certificate permissions: %w", err)
+	}
+	if err := os.Chmod(keyPath, 0600); err != nil {
+		return fmt.Errorf("failed to set private key permissions: %w", err)
+	}
 	return nil
 }
 

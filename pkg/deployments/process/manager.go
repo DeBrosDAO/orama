@@ -194,9 +194,9 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 // stopDirect stops a directly spawned process
 func (m *Manager) stopDirect(serviceName string) error {
 	m.processesMu.Lock()
-	cmd, exists := m.processes[serviceName]
-	m.processesMu.Unlock()
+	defer m.processesMu.Unlock()
 
+	cmd, exists := m.processes[serviceName]
 	if !exists || cmd.Process == nil {
 		return nil // Already stopped
 	}
@@ -511,11 +511,10 @@ func (m *Manager) GetStats(ctx context.Context, deployment *deployments.Deployme
 		// Direct mode (macOS) — only disk, no /proc
 		serviceName := m.getServiceName(deployment)
 		m.processesMu.RLock()
-		cmd, exists := m.processes[serviceName]
-		m.processesMu.RUnlock()
-		if exists && cmd.Process != nil {
+		if cmd, exists := m.processes[serviceName]; exists && cmd.Process != nil {
 			stats.PID = cmd.Process.Pid
 		}
+		m.processesMu.RUnlock()
 		return stats, nil
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"go.uber.org/zap"
 )
 
 // ClientAdapter adapts the pubsub Manager to work with the existing client interface
@@ -12,9 +13,9 @@ type ClientAdapter struct {
 }
 
 // NewClientAdapter creates a new adapter for the pubsub manager
-func NewClientAdapter(ps *pubsub.PubSub, namespace string) *ClientAdapter {
+func NewClientAdapter(ps *pubsub.PubSub, namespace string, logger *zap.Logger) *ClientAdapter {
 	return &ClientAdapter{
-		manager: NewManager(ps, namespace),
+		manager: NewManager(ps, namespace, logger),
 	}
 }
 

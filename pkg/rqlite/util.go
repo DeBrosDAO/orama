@@ -3,15 +3,15 @@ package rqlite
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
 )
 
 func (r *RQLiteManager) rqliteDataDirPath() (string, error) {
-	dataDir := os.ExpandEnv(r.dataDir)
-	if strings.HasPrefix(dataDir, "~") {
-		home, _ := os.UserHomeDir()
-		dataDir = filepath.Join(home, dataDir[1:])
+	dataDir, err := config.ExpandPath(r.dataDir)
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(dataDir, "rqlite"), nil
 }

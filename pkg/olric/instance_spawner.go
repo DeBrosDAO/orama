@@ -64,13 +64,17 @@ type OlricInstance struct {
 	ConfigPath     string
 	DataDir        string
 	PID            int
-	Status         InstanceNodeStatus
 	StartedAt      time.Time
-	LastHealthCheck time.Time
 	cmd            *exec.Cmd
 	logFile        *os.File     // kept open for process lifetime
 	waitDone       chan struct{} // closed when cmd.Wait() completes
 	logger         *zap.Logger
+
+	// mu protects mutable state (Status, LastHealthCheck) accessed concurrently
+	// by the monitor goroutine and external callers.
+	mu              sync.RWMutex
+	Status          InstanceNodeStatus
+	LastHealthCheck  time.Time
 }
 
 // InstanceConfig holds configuration for spawning an Olric instance
@@ -130,7 +134,10 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 
 	is.mu.Lock()
 	if existing, ok := is.instances[key]; ok {
-		if existing.Status == InstanceStatusRunning || existing.Status == InstanceStatusStarting {
+		existing.mu.RLock()
+		status := existing.Status
+		existing.mu.RUnlock()
+		if status == InstanceStatusRunning || status == InstanceStatusStarting {
 			is.mu.Unlock()
 			return existing, nil
 		}
@@ -243,8 +250,10 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		}
 	}
 
+	instance.mu.Lock()
 	instance.Status = InstanceStatusRunning
 	instance.LastHealthCheck = time.Now()
+	instance.mu.Unlock()
 
 	instance.logger.Info("Olric instance started successfully",
 		zap.Int("pid", instance.PID),
@@ -331,7 +340,9 @@ func (is *InstanceSpawner) StopInstance(ctx context.Context, ns, nodeID string) 
 		}
 	}
 
+	instance.mu.Lock()
 	instance.Status = InstanceStatusStopped
+	instance.mu.Unlock()
 	return nil
 }
 
@@ -390,9 +401,9 @@ func (is *InstanceSpawner) HealthCheck(ctx context.Context, ns, nodeID string) (
 
 	healthy, err := instance.IsHealthy(ctx)
 	if healthy {
-		is.mu.Lock()
+		instance.mu.Lock()
 		instance.LastHealthCheck = time.Now()
-		is.mu.Unlock()
+		instance.mu.Unlock()
 	}
 	return healthy, err
 }
@@ -450,13 +461,16 @@ func (is *InstanceSpawner) monitorInstance(instance *OlricInstance) {
 		select {
 		case <-instance.waitDone:
 			// Process exited — update status and stop monitoring
-			is.mu.Lock()
+			is.mu.RLock()
 			key := instanceKey(instance.Namespace, instance.NodeID)
-			if _, exists := is.instances[key]; exists {
+			_, exists := is.instances[key]
+			is.mu.RUnlock()
+			if exists {
+				instance.mu.Lock()
 				instance.Status = InstanceStatusStopped
+				instance.mu.Unlock()
 				instance.logger.Warn("Olric instance process exited unexpectedly")
 			}
-			is.mu.Unlock()
 			return
 		case <-ticker.C:
 		}
@@ -474,7 +488,7 @@ func (is *InstanceSpawner) monitorInstance(instance *OlricInstance) {
 		healthy, _ := instance.IsHealthy(ctx)
 		cancel()
 
-		is.mu.Lock()
+		instance.mu.Lock()
 		if healthy {
 			instance.Status = InstanceStatusRunning
 			instance.LastHealthCheck = time.Now()
@@ -482,7 +496,7 @@ func (is *InstanceSpawner) monitorInstance(instance *OlricInstance) {
 			instance.Status = InstanceStatusFailed
 			instance.logger.Warn("Olric instance health check failed")
 		}
-		is.mu.Unlock()
+		instance.mu.Unlock()
 	}
 }
 

@@ -195,7 +195,7 @@ func (c *Client) Connect() error {
 	c.logger.Info("App namespace retrieved", zap.String("namespace", namespace))
 
 	c.logger.Info("Calling pubsub.NewClientAdapter...")
-	adapter := pubsub.NewClientAdapter(c.libp2pPS, namespace)
+	adapter := pubsub.NewClientAdapter(c.libp2pPS, namespace, c.logger)
 	c.logger.Info("pubsub.NewClientAdapter completed successfully")
 
 	c.logger.Info("Creating pubSubBridge...")

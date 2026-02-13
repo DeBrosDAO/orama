@@ -28,7 +28,9 @@ func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	}
 
 	// Get peers from LibP2P host
+	n.client.mu.RLock()
 	host := n.client.host
+	n.client.mu.RUnlock()
 	if host == nil {
 		return nil, fmt.Errorf("no host available")
 	}
@@ -87,7 +89,10 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 		return nil, fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
 	}
 
+	n.client.mu.RLock()
 	host := n.client.host
+	dbClient := n.client.database
+	n.client.mu.RUnlock()
 	if host == nil {
 		return nil, fmt.Errorf("no host available")
 	}
@@ -97,7 +102,6 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 
 	// Try to get database size from RQLite (optional - don't fail if unavailable)
 	var dbSize int64 = 0
-	dbClient := n.client.database
 	if conn, err := dbClient.getRQLiteConnection(); err == nil {
 		// Query database size (rough estimate)
 		if result, err := conn.QueryOne("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"); err == nil {

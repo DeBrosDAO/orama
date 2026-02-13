@@ -224,7 +224,12 @@ func (hc *HealthChecker) checkConsecutiveFailures(ctx context.Context, deploymen
 				INSERT INTO deployment_events (deployment_id, event_type, message, created_at)
 				VALUES (?, 'health_failed', 'Deployment marked as failed after 3 consecutive health check failures', ?)
 			`
-			hc.db.Exec(ctx, eventQuery, deploymentID, time.Now())
+			if _, err := hc.db.Exec(ctx, eventQuery, deploymentID, time.Now()); err != nil {
+				hc.logger.Error("Failed to record health_failed event",
+					zap.String("deployment", deploymentID),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 }

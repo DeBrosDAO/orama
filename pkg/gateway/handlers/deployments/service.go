@@ -34,13 +34,15 @@ type DeploymentService struct {
 	nodePeerID      string // Current node's peer ID (deployments run on this node)
 }
 
-// NewDeploymentService creates a new deployment service
+// NewDeploymentService creates a new deployment service.
+// baseDomain is required and sets the domain used for deployment URLs (e.g., "dbrs.space").
 func NewDeploymentService(
 	db rqlite.Client,
 	homeNodeManager *deployments.HomeNodeManager,
 	portAllocator *deployments.PortAllocator,
 	replicaManager *deployments.ReplicaManager,
 	logger *zap.Logger,
+	baseDomain string,
 ) *DeploymentService {
 	return &DeploymentService{
 		db:              db,
@@ -48,7 +50,7 @@ func NewDeploymentService(
 		portAllocator:   portAllocator,
 		replicaManager:  replicaManager,
 		logger:          logger,
-		baseDomain:      "dbrs.space", // default
+		baseDomain:      baseDomain,
 	}
 }
 
@@ -65,11 +67,8 @@ func (s *DeploymentService) SetNodePeerID(peerID string) {
 	s.nodePeerID = peerID
 }
 
-// BaseDomain returns the configured base domain
+// BaseDomain returns the configured base domain.
 func (s *DeploymentService) BaseDomain() string {
-	if s.baseDomain == "" {
-		return "dbrs.space"
-	}
 	return s.baseDomain
 }
 

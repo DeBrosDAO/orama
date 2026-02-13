@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -336,22 +337,15 @@ func retryAPIKeyRequest(gatewayURL string, client *http.Client, wallet, namespac
 	return apiKey, nil
 }
 
-// extractDomainFromURL extracts the domain from a URL
-// Removes protocol (https://, http://), path, and port components
-func extractDomainFromURL(url string) string {
-	// Remove protocol prefixes
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-
-	// Remove path component
-	if idx := strings.Index(url, "/"); idx != -1 {
-		url = url[:idx]
+// extractDomainFromURL extracts the hostname from a URL, stripping scheme, port, and path.
+func extractDomainFromURL(rawURL string) string {
+	// Ensure the URL has a scheme so net/url.Parse works correctly
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "https://" + rawURL
 	}
-
-	// Remove port component
-	if idx := strings.Index(url, ":"); idx != -1 {
-		url = url[:idx]
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
 	}
-
-	return url
+	return u.Hostname()
 }

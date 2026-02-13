@@ -4,7 +4,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// ExpandPath expands environment variables and ~ in a path.
+func ExpandPath(path string) (string, error) {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		path = filepath.Join(home, path[1:])
+	}
+	return path, nil
+}
 
 // ConfigDir returns the path to the DeBros config directory (~/.orama).
 func ConfigDir() (string, error) {

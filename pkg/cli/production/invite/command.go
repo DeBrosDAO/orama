@@ -1,12 +1,13 @@
 package invite
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -89,12 +90,18 @@ func readNodeDomain() (string, error) {
 	return config.Node.Domain, nil
 }
 
-// insertToken inserts an invite token into RQLite via HTTP API
+// insertToken inserts an invite token into RQLite via HTTP API using parameterized queries
 func insertToken(token, createdBy, expiresAt string) error {
-	body := fmt.Sprintf(`[["INSERT INTO invite_tokens (token, created_by, expires_at) VALUES ('%s', '%s', '%s')"]]`,
-		token, createdBy, expiresAt)
+	stmt := []interface{}{
+		"INSERT INTO invite_tokens (token, created_by, expires_at) VALUES (?, ?, ?)",
+		token, createdBy, expiresAt,
+	}
+	payload, err := json.Marshal([]interface{}{stmt})
+	if err != nil {
+		return fmt.Errorf("failed to marshal query: %w", err)
+	}
 
-	req, err := http.NewRequest("POST", "http://localhost:5001/db/execute", strings.NewReader(body))
+	req, err := http.NewRequest("POST", "http://localhost:5001/db/execute", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 // HTTPError represents an HTTP error response.
@@ -211,7 +212,7 @@ func ToHTTPError(err error, traceID string) *HTTPError {
 		}
 	case errors.As(err, &rateLimitErr):
 		if rateLimitErr.RetryAfter > 0 {
-			httpErr.Details["retry_after"] = string(rune(rateLimitErr.RetryAfter))
+			httpErr.Details["retry_after"] = strconv.Itoa(rateLimitErr.RetryAfter)
 		}
 	case errors.As(err, &serviceErr):
 		if serviceErr.Service != "" {
@@ -234,7 +235,7 @@ func WriteHTTPError(w http.ResponseWriter, err error, traceID string) {
 	// Add retry-after header for rate limit errors
 	var rateLimitErr *RateLimitError
 	if errors.As(err, &rateLimitErr) && rateLimitErr.RetryAfter > 0 {
-		w.Header().Set("Retry-After", string(rune(rateLimitErr.RetryAfter)))
+		w.Header().Set("Retry-After", strconv.Itoa(rateLimitErr.RetryAfter))
 	}
 
 	// Add WWW-Authenticate header for unauthorized errors

@@ -84,7 +84,7 @@ func (n *Node) startLibP2P() error {
 	}
 
 	// Create pubsub adapter
-	n.pubsub = pubsub.NewClientAdapter(ps, n.config.Discovery.NodeNamespace)
+	n.pubsub = pubsub.NewClientAdapter(ps, n.config.Discovery.NodeNamespace, n.logger.Logger)
 	n.logger.Info("Initialized pubsub adapter on namespace", zap.String("namespace", n.config.Discovery.NodeNamespace))
 
 	// Connect to peers

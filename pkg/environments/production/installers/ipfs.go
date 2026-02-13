@@ -96,7 +96,9 @@ func (ii *IPFSInstaller) Install() error {
 				found = true
 				// Ensure it's executable
 				if info.Mode()&0111 == 0 {
-					os.Chmod(loc, 0755)
+					if err := os.Chmod(loc, 0755); err != nil {
+						return fmt.Errorf("failed to make ipfs executable at %s: %w", loc, err)
+					}
 				}
 				break
 			}

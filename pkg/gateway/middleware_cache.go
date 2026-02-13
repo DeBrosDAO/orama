@@ -20,7 +20,8 @@ type middlewareCache struct {
 	nsTargets   map[string]*cachedGatewayTargets
 	nsTargetsMu sync.RWMutex
 
-	ttl time.Duration
+	ttl    time.Duration
+	stopCh chan struct{}
 }
 
 type cachedValue struct {
@@ -43,9 +44,15 @@ func newMiddlewareCache(ttl time.Duration) *middlewareCache {
 		apiKeyNS:  make(map[string]*cachedValue),
 		nsTargets: make(map[string]*cachedGatewayTargets),
 		ttl:       ttl,
+		stopCh:    make(chan struct{}),
 	}
 	go mc.cleanup()
 	return mc
+}
+
+// Stop stops the background cleanup goroutine.
+func (mc *middlewareCache) Stop() {
+	close(mc.stopCh)
 }
 
 // GetAPIKeyNamespace returns the cached namespace for an API key, or "" if not cached/expired.
@@ -99,23 +106,28 @@ func (mc *middlewareCache) cleanup() {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		now := time.Now()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
 
-		mc.apiKeyNSMu.Lock()
-		for k, v := range mc.apiKeyNS {
-			if now.After(v.expiresAt) {
-				delete(mc.apiKeyNS, k)
+			mc.apiKeyNSMu.Lock()
+			for k, v := range mc.apiKeyNS {
+				if now.After(v.expiresAt) {
+					delete(mc.apiKeyNS, k)
+				}
 			}
-		}
-		mc.apiKeyNSMu.Unlock()
+			mc.apiKeyNSMu.Unlock()
 
-		mc.nsTargetsMu.Lock()
-		for k, v := range mc.nsTargets {
-			if now.After(v.expiresAt) {
-				delete(mc.nsTargets, k)
+			mc.nsTargetsMu.Lock()
+			for k, v := range mc.nsTargets {
+				if now.After(v.expiresAt) {
+					delete(mc.nsTargets, k)
+				}
 			}
+			mc.nsTargetsMu.Unlock()
+		case <-mc.stopCh:
+			return
 		}
-		mc.nsTargetsMu.Unlock()
 	}
 }
