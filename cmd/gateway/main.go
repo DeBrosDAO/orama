@@ -66,15 +66,25 @@ func main() {
 
 		// Create HTTP server for ACME challenge (port 80)
 		httpServer := &http.Server{
-			Addr:    ":80",
-			Handler: manager.HTTPHandler(nil), // Redirects all HTTP traffic to HTTPS except ACME challenge
+			Addr:              ":80",
+			Handler:           manager.HTTPHandler(nil), // Redirects all HTTP traffic to HTTPS except ACME challenge
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      120 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20, // 1MB
 		}
 
 		// Create HTTPS server (port 443)
 		httpsServer := &http.Server{
-			Addr:      ":443",
-			Handler:   gw.Routes(),
-			TLSConfig: manager.TLSConfig(),
+			Addr:              ":443",
+			Handler:           gw.Routes(),
+			TLSConfig:         manager.TLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      120 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20, // 1MB
 		}
 
 		// Start HTTP server for ACME challenge
@@ -161,8 +171,13 @@ func main() {
 
 	// Standard HTTP server (no HTTPS)
 	server := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: gw.Routes(),
+		Addr:              cfg.ListenAddr,
+		Handler:           gw.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
 	// Try to bind listener explicitly so binding failures are visible immediately.

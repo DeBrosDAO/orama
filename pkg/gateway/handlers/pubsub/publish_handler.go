@@ -27,6 +27,7 @@ func (p *PubSubHandlers) PublishHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var body PublishRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Topic == "" || body.DataB64 == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: expected {topic,data_base64}")

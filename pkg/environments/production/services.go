@@ -56,6 +56,10 @@ ProtectControlGroups=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 ReadWritePaths=%[3]s
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
@@ -107,6 +111,10 @@ ProtectControlGroups=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 ReadWritePaths=%[1]s
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target
@@ -162,6 +170,9 @@ ProtectControlGroups=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 ReadWritePaths=%[4]s
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
@@ -201,6 +212,10 @@ ProtectControlGroups=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 ReadWritePaths=%[4]s
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
@@ -233,10 +248,21 @@ StandardOutput=append:%[4]s
 StandardError=append:%[4]s
 SyslogIdentifier=debros-node
 
+NoNewPrivileges=yes
 PrivateTmp=yes
+ProtectSystem=strict
 ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
 ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=%[2]s /etc/systemd/system
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=8G
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target
@@ -278,6 +304,10 @@ ProtectControlGroups=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 ReadWritePaths=%[2]s
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
@@ -317,6 +347,10 @@ ProtectControlGroups=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 ReadWritePaths=%[3]s
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target
@@ -346,7 +380,15 @@ NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 ReadWritePaths=/var/lib/anon /var/log/anon /etc/anon
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target
@@ -372,6 +414,10 @@ SyslogIdentifier=coredns
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target
@@ -402,6 +448,8 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=caddy
+KillMode=mixed
+MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target

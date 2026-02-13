@@ -74,6 +74,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Handle JSON request with base64 data
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 		var req StorageUploadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("failed to decode request: %v", err))

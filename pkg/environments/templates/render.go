@@ -33,6 +33,7 @@ type NodeConfigData struct {
 	HTTPPort               int    // HTTP port for ACME challenges (usually 80)
 	HTTPSPort              int    // HTTPS port (usually 443)
 	WGIP                   string // WireGuard IP address (e.g., 10.0.0.1)
+	MinClusterSize         int    // Minimum cluster size for RQLite discovery (1 for genesis, 3 for joining)
 
 	// Node-to-node TLS encryption for RQLite Raft communication
 	// Required when using SNI gateway for Raft traffic routing

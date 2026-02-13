@@ -76,14 +76,24 @@ func TestHasExistingState(t *testing.T) {
 		t.Errorf("hasExistingState() = true; want false for empty dir")
 	}
 
-	// Test directory with a file
+	// Test directory with only non-raft files (should still be false)
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("data"), 0644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
+	if r.hasExistingState(tmpDir) {
+		t.Errorf("hasExistingState() = true; want false for dir with only non-raft files")
+	}
+
+	// Test directory with raft.db (should be true)
+	raftDB := filepath.Join(tmpDir, "raft.db")
+	if err := os.WriteFile(raftDB, make([]byte, 2048), 0644); err != nil {
+		t.Fatalf("failed to create raft.db: %v", err)
+	}
+
 	if !r.hasExistingState(tmpDir) {
-		t.Errorf("hasExistingState() = false; want true for non-empty dir")
+		t.Errorf("hasExistingState() = false; want true for dir with raft.db")
 	}
 }
 

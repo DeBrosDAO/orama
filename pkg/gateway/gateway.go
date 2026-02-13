@@ -117,8 +117,9 @@ type Gateway struct {
 	// Request log batcher (aggregates writes instead of per-request inserts)
 	logBatcher *requestLogBatcher
 
-	// Rate limiter
-	rateLimiter *RateLimiter
+	// Rate limiters
+	rateLimiter          *RateLimiter
+	namespaceRateLimiter *NamespaceRateLimiter
 
 	// WireGuard peer exchange
 	wireguardHandler *wireguardhandlers.Handler
@@ -143,6 +144,12 @@ type Gateway struct {
 
 	// Node recovery handler (called when health monitor confirms a node dead or recovered)
 	nodeRecoverer authhandlers.NodeRecoverer
+
+	// Circuit breakers for proxy targets (per-target failure tracking)
+	circuitBreakers *CircuitBreakerRegistry
+
+	// Shared HTTP transport for proxy connections (connection pooling)
+	proxyTransport *http.Transport
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -261,6 +268,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		authService:        deps.AuthService,
 		localSubscribers:   make(map[string][]*localSubscriber),
 		presenceMembers:    make(map[string][]PresenceMember),
+		circuitBreakers:    NewCircuitBreakerRegistry(),
+		proxyTransport: &http.Transport{
+			MaxIdleConns:        200,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
+		},
 	}
 
 	// Resolve local WireGuard IP for local namespace gateway preference
@@ -337,9 +350,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
 
-	// Initialize rate limiter (10000 req/min, burst 5000)
+	// Initialize rate limiters
+	// Per-IP: 10000 req/min, burst 5000
 	gw.rateLimiter = NewRateLimiter(10000, 5000)
 	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+	// Per-namespace: 60000 req/hr (1000/min), burst 500
+	gw.namespaceRateLimiter = NewNamespaceRateLimiter(1000, 500)
 
 	// Initialize WireGuard peer exchange handler
 	if deps.ORMClient != nil {

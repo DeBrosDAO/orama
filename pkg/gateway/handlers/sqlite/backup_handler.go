@@ -41,6 +41,7 @@ func (h *BackupHandler) BackupDatabase(w http.ResponseWriter, r *http.Request) {
 		DatabaseName string `json:"database_name"`
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return

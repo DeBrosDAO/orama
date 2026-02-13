@@ -84,6 +84,10 @@ func main() {
 	case "db":
 		cli.HandleDBCommand(args)
 
+	// Cluster management
+	case "cluster":
+		cli.HandleClusterCommand(args)
+
 	// Cluster inspection
 	case "inspect":
 		cli.HandleInspectCommand(args)
@@ -166,6 +170,14 @@ func showHelp() {
 	fmt.Printf("🏢 Namespaces:\n")
 	fmt.Printf("  namespace delete              - Delete current namespace and all resources\n")
 	fmt.Printf("  namespace repair <name>       - Repair under-provisioned cluster (add missing nodes)\n\n")
+
+	fmt.Printf("🔧 Cluster Management:\n")
+	fmt.Printf("  cluster status                - Show cluster node status\n")
+	fmt.Printf("  cluster health                - Run cluster health checks\n")
+	fmt.Printf("  cluster rqlite status         - Show detailed Raft state\n")
+	fmt.Printf("  cluster rqlite voters         - Show voter list\n")
+	fmt.Printf("  cluster rqlite backup         - Trigger manual backup\n")
+	fmt.Printf("  cluster watch                 - Live cluster status monitor\n\n")
 
 	fmt.Printf("🔍 Cluster Inspection:\n")
 	fmt.Printf("  inspect                       - Inspect cluster health via SSH\n")

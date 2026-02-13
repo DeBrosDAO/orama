@@ -119,17 +119,15 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		time.Sleep(2 * time.Second)
 	}
 
-	// Even if we only discovered ourselves, write peers.json as a fallback
-	// This ensures RQLite has consistent state and can potentially recover
-	// when other nodes come online
+	// If we only discovered ourselves, do NOT write a single-node peers.json.
+	// Writing single-node peers.json causes RQLite to bootstrap as a solo cluster,
+	// making it impossible to rejoin the actual cluster later (-join fails with
+	// "single-node cluster, joining not supported"). Let RQLite start with its
+	// existing Raft state or use the -join flag to connect.
 	if discoveredPeers <= 1 {
-		r.logger.Warn("Only discovered self during pre-start discovery, writing single-node peers.json as fallback",
+		r.logger.Warn("Only discovered self during pre-start discovery, skipping peers.json write to prevent solo bootstrap",
 			zap.Int("discovered_peers", discoveredPeers),
 			zap.Int("min_cluster_size", r.config.MinClusterSize))
-		// Still write peers.json with just ourselves - better than nothing
-		if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
-			r.logger.Warn("Failed to write single-node peers.json fallback", zap.Error(err))
-		}
 		return nil
 	}
 

@@ -111,8 +111,13 @@ func (g *HTTPSGateway) Start(ctx context.Context) error {
 
 	// Start HTTP server for ACME challenge and redirect
 	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", httpPort),
-		Handler: g.httpHandler(),
+		Addr:              fmt.Sprintf(":%d", httpPort),
+		Handler:           g.httpHandler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
 	go func() {
@@ -143,15 +148,21 @@ func (g *HTTPSGateway) Start(ctx context.Context) error {
 
 	// Start HTTPS server
 	g.httpsServer = &http.Server{
-		Addr:      fmt.Sprintf(":%d", httpsPort),
-		Handler:   g.router,
-		TLSConfig: tlsConfig,
+		Addr:              fmt.Sprintf(":%d", httpsPort),
+		Handler:           g.router,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
-	listener, err := tls.Listen("tcp", g.httpsServer.Addr, tlsConfig)
+	rawListener, err := tls.Listen("tcp", g.httpsServer.Addr, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create TLS listener: %w", err)
 	}
+	listener := LimitedListener(rawListener, DefaultMaxConnections)
 
 	g.logger.ComponentInfo(logging.ComponentGeneral, "HTTPS Gateway starting",
 		zap.String("domain", g.httpsConfig.Domain),

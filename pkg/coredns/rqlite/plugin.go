@@ -179,7 +179,7 @@ func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter,
 			Name:   p.zones[0],
 			Rrtype: dns.TypeSOA,
 			Class:  dns.ClassINET,
-			Ttl:    300,
+			Ttl:    60,
 		},
 		Ns:      "ns1." + p.zones[0],
 		Mbox:    "admin." + p.zones[0],
@@ -187,7 +187,7 @@ func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter,
 		Refresh: 3600,
 		Retry:   600,
 		Expire:  86400,
-		Minttl:  300,
+		Minttl:  60,
 	}
 	msg.Ns = append(msg.Ns, soa)
 

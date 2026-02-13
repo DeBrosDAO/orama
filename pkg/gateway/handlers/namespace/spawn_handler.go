@@ -86,6 +86,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req SpawnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "invalid request body"})

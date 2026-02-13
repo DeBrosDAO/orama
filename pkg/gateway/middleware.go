@@ -179,14 +179,15 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> handler
+	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> namespace rate limit -> handler
 	return g.loggingMiddleware(
 		g.securityHeadersMiddleware(
 			g.rateLimitMiddleware(
 				g.corsMiddleware(
 					g.domainRoutingMiddleware(
 						g.authMiddleware(
-							g.authorizationMiddleware(next)))))))
+							g.authorizationMiddleware(
+								g.namespaceRateLimitMiddleware(next))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -406,13 +407,16 @@ func extractAPIKey(r *http.Request) string {
 		}
 	}
 
-	// Fallback to query parameter (for WebSocket support)
-	if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
-		return v
-	}
-	// Also check token query parameter (alternative name)
-	if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
-		return v
+	// Fallback to query parameter ONLY for WebSocket upgrade requests.
+	// WebSocket clients cannot set custom headers, so query params are the
+	// only way to authenticate. For regular HTTP requests, require headers.
+	if isWebSocketUpgrade(r) {
+		if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
+			return v
+		}
+		if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
+			return v
+		}
 	}
 	return ""
 }
@@ -658,19 +662,56 @@ func requiresNamespaceOwnership(p string) bool {
 	return false
 }
 
-// corsMiddleware applies permissive CORS headers suitable for early development
+// corsMiddleware applies CORS headers. Allows requests from the configured base
+// domain and its subdomains. Falls back to permissive "*" only if no base domain
+// is configured.
 func (g *Gateway) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		allowedOrigin := g.getAllowedOrigin(origin)
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 		w.Header().Set("Access-Control-Max-Age", strconv.Itoa(600))
+		if allowedOrigin != "*" {
+			w.Header().Set("Vary", "Origin")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// getAllowedOrigin returns the allowed origin for CORS based on the request origin.
+// If no base domain is configured, allows all origins (*).
+// Otherwise, allows the base domain and any subdomain of it.
+func (g *Gateway) getAllowedOrigin(origin string) string {
+	if g.cfg.BaseDomain == "" {
+		return "*"
+	}
+	if origin == "" {
+		return "https://" + g.cfg.BaseDomain
+	}
+	// Extract hostname from origin (e.g., "https://app.dbrs.space" -> "app.dbrs.space")
+	host := origin
+	if idx := strings.Index(host, "://"); idx != -1 {
+		host = host[idx+3:]
+	}
+	// Strip port if present
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	// Allow exact match or subdomain match
+	if host == g.cfg.BaseDomain || strings.HasSuffix(host, "."+g.cfg.BaseDomain) {
+		return origin
+	}
+	// Also allow common development origins
+	if host == "localhost" || host == "127.0.0.1" {
+		return origin
+	}
+	return "https://" + g.cfg.BaseDomain
 }
 
 // persistRequestLog writes request metadata to the database (best-effort)
@@ -1024,10 +1065,19 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
 	}
 
-	// Execute proxy request
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	// Circuit breaker: check if target is healthy before sending request
+	cbKey := "ns:" + gatewayIP
+	cb := g.circuitBreakers.Get(cbKey)
+	if !cb.Allow() {
+		http.Error(w, "Namespace gateway unavailable (circuit open)", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Execute proxy request using shared transport for connection pooling
+	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
+		cb.RecordFailure()
 		g.logger.ComponentError(logging.ComponentGeneral, "namespace gateway proxy request failed",
 			zap.String("namespace", namespaceName),
 			zap.String("target", gatewayIP),
@@ -1037,6 +1087,12 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 	defer resp.Body.Close()
+
+	if IsResponseFailure(resp.StatusCode) {
+		cb.RecordFailure()
+	} else {
+		cb.RecordSuccess()
+	}
 
 	// Copy response headers
 	for key, values := range resp.Header {
@@ -1255,8 +1311,8 @@ serveLocal:
 		}
 	}
 
-	// Execute proxy request
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	// Execute proxy request using shared transport
+	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "local proxy request failed",
@@ -1354,13 +1410,19 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID) // Prevent loops
 
-	// Simple HTTP client for internal node-to-node communication
-	httpClient := &http.Client{
-		Timeout: 120 * time.Second,
+	// Circuit breaker: check if target node is healthy
+	cbKey := "node:" + homeIP
+	cb := g.circuitBreakers.Get(cbKey)
+	if !cb.Allow() {
+		g.logger.Warn("Cross-node proxy skipped (circuit open)", zap.String("target_ip", homeIP))
+		return false
 	}
 
+	// Internal node-to-node communication using shared transport
+	httpClient := &http.Client{Timeout: 120 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
+		cb.RecordFailure()
 		g.logger.Error("Cross-node proxy request failed",
 			zap.String("target_ip", homeIP),
 			zap.String("host", r.Host),
@@ -1368,6 +1430,12 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 		return false
 	}
 	defer resp.Body.Close()
+
+	if IsResponseFailure(resp.StatusCode) {
+		cb.RecordFailure()
+	} else {
+		cb.RecordSuccess()
+	}
 
 	// Copy response headers
 	for key, values := range resp.Header {
@@ -1465,9 +1533,18 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	// Circuit breaker: skip this replica if it's been failing
+	cbKey := "node:" + nodeIP
+	cb := g.circuitBreakers.Get(cbKey)
+	if !cb.Allow() {
+		g.logger.Warn("Replica proxy skipped (circuit open)", zap.String("target_ip", nodeIP))
+		return false
+	}
+
+	httpClient := &http.Client{Timeout: 5 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
+		cb.RecordFailure()
 		g.logger.Warn("Replica proxy request failed",
 			zap.String("target_ip", nodeIP),
 			zap.Error(err),
@@ -1477,13 +1554,15 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	defer resp.Body.Close()
 
 	// If the remote node returned a gateway error, try the next replica
-	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
+	if IsResponseFailure(resp.StatusCode) {
+		cb.RecordFailure()
 		g.logger.Warn("Replica returned gateway error, trying next",
 			zap.String("target_ip", nodeIP),
 			zap.Int("status", resp.StatusCode),
 		)
 		return false
 	}
+	cb.RecordSuccess()
 
 	for key, values := range resp.Header {
 		for _, value := range values {
