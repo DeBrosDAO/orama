@@ -439,11 +439,10 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 
 ## Deployment
 
-### Development
+### Building & Testing
 
 ```bash
-make dev       # Start 5-node cluster
-make stop      # Stop all services
+make build     # Build all binaries
 make test      # Run unit tests
 make test-e2e  # Run E2E tests
 ```

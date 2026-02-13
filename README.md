@@ -103,92 +103,10 @@ orama deploy static ./dist --name myapp
 
 ## Quick Start
 
-### Local Development
+### Building
 
 ```bash
-# Build the project
-make build
-
-# Start 5-node development cluster
-make dev
-```
-
-The cluster automatically performs health checks before declaring success.
-
-### Stop Development Environment
-
-```bash
-make stop
-```
-
-## Testing Services
-
-After running `make dev`, test service health using these curl requests:
-
-### Node Unified Gateways
-
-Each node is accessible via a single unified gateway port:
-
-```bash
-# Node-1 (port 6001)
-curl http://localhost:6001/health
-
-# Node-2 (port 6002)
-curl http://localhost:6002/health
-
-# Node-3 (port 6003)
-curl http://localhost:6003/health
-
-# Node-4 (port 6004)
-curl http://localhost:6004/health
-
-# Node-5 (port 6005)
-curl http://localhost:6005/health
-```
-
-## Network Architecture
-
-### Unified Gateway Ports
-
-```
-Node-1:     localhost:6001  → /rqlite/http, /rqlite/raft, /cluster, /ipfs/api
-Node-2:     localhost:6002  → Same routes
-Node-3:     localhost:6003  → Same routes
-Node-4:     localhost:6004  → Same routes
-Node-5:     localhost:6005  → Same routes
-```
-
-### Direct Service Ports (for debugging)
-
-```
-RQLite HTTP:     5001, 5002, 5003, 5004, 5005 (one per node)
-RQLite Raft:     7001, 7002, 7003, 7004, 7005
-IPFS API:        4501, 4502, 4503, 4504, 4505
-IPFS Swarm:      4101, 4102, 4103, 4104, 4105
-Cluster API:     9094, 9104, 9114, 9124, 9134
-Internal Gateway: 6000
-Olric Cache:     3320
-Anon SOCKS:      9050
-```
-
-## Development Commands
-
-```bash
-# Start full cluster (5 nodes + gateway)
-make dev
-
-# Check service status
-orama dev status
-
-# View logs
-orama dev logs node-1           # Node-1 logs
-orama dev logs node-1 --follow  # Follow logs in real-time
-orama dev logs gateway --follow # Gateway logs
-
-# Stop all services
-orama stop
-
-# Build binaries
+# Build all binaries
 make build
 ```
 
@@ -272,7 +190,7 @@ Deploy your compiled `.wasm` file to the network via the Gateway.
 
 ```bash
 # Deploy a function
-curl -X POST http://localhost:6001/v1/functions \
+curl -X POST https://your-node.example.com/v1/functions \
   -H "Authorization: Bearer <your_api_key>" \
   -F "name=hello-world" \
   -F "namespace=default" \
@@ -285,7 +203,7 @@ Trigger your function with a JSON payload. The function receives the payload via
 
 ```bash
 # Invoke via HTTP
-curl -X POST http://localhost:6001/v1/functions/hello-world/invoke \
+curl -X POST https://your-node.example.com/v1/functions/hello-world/invoke \
   -H "Authorization: Bearer <your_api_key>" \
   -H "Content-Type: application/json" \
   -d '{"name": "Developer"}'
@@ -295,10 +213,10 @@ curl -X POST http://localhost:6001/v1/functions/hello-world/invoke \
 
 ```bash
 # List all functions in a namespace
-curl http://localhost:6001/v1/functions?namespace=default
+curl https://your-node.example.com/v1/functions?namespace=default
 
 # Delete a function
-curl -X DELETE http://localhost:6001/v1/functions/hello-world?namespace=default
+curl -X DELETE https://your-node.example.com/v1/functions/hello-world?namespace=default
 ```
 
 ## Production Deployment

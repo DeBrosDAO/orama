@@ -8,29 +8,7 @@ test:
 # Gateway-focused E2E tests assume gateway and nodes are already running
 # Auto-discovers configuration from ~/.orama and queries database for API key
 # No environment variables required
-.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick test-e2e-local test-e2e-prod test-e2e-shared test-e2e-cluster test-e2e-integration test-e2e-production
-
-# Check if gateway is running (helper)
-.PHONY: check-gateway
-check-gateway:
-	@if ! curl -sf http://localhost:6001/v1/health > /dev/null 2>&1; then \
-		echo "❌ Gateway not running on localhost:6001"; \
-		echo ""; \
-		echo "To run tests locally:"; \
-		echo "  1. Start the dev environment: make dev"; \
-		echo "  2. Wait for all services to start (~30 seconds)"; \
-		echo "  3. Run tests: make test-e2e-local"; \
-		echo ""; \
-		echo "To run tests against production:"; \
-		echo "  ORAMA_GATEWAY_URL=https://dbrs.space make test-e2e"; \
-		exit 1; \
-	fi
-	@echo "✅ Gateway is running"
-
-# Local E2E tests - checks gateway first
-test-e2e-local: check-gateway
-	@echo "Running E2E tests against local dev environment..."
-	go test -v -tags e2e -timeout 30m ./e2e/...
+.PHONY: test-e2e test-e2e-deployments test-e2e-fullstack test-e2e-https test-e2e-quick test-e2e-prod test-e2e-shared test-e2e-cluster test-e2e-integration test-e2e-production
 
 # Production E2E tests - includes production-only tests
 test-e2e-prod:
@@ -42,11 +20,10 @@ test-e2e-prod:
 	@echo "Running E2E tests (including production-only) against $$ORAMA_GATEWAY_URL..."
 	go test -v -tags "e2e production" -timeout 30m ./e2e/...
 
-# Generic e2e target (works with both local and production)
+# Generic e2e target
 test-e2e:
 	@echo "Running comprehensive E2E tests..."
 	@echo "Auto-discovering configuration from ~/.orama..."
-	@echo "Tip: Use 'make test-e2e-local' for local or 'make test-e2e-prod' for production"
 	go test -v -tags e2e -timeout 30m ./e2e/...
 
 test-e2e-deployments:
@@ -84,9 +61,9 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill redeploy-devnet redeploy-testnet release health
+.PHONY: build clean test deps tidy fmt vet lint install-hooks redeploy-devnet redeploy-testnet release health
 
-VERSION := 0.103.0
+VERSION := 0.104.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -156,46 +133,6 @@ clean:
 	rm -rf data/
 	@echo "Clean complete!"
 
-# Run bootstrap node (auto-selects identity and data dir)
-run-node:
-	@echo "Starting node..."
-	@echo "Config: ~/.orama/node.yaml"
-	go run ./cmd/orama-node --config node.yaml
-
-# Run second node - requires join address
-run-node2:
-	@echo "Starting second node..."
-	@echo "Config: ~/.orama/node2.yaml"
-	go run ./cmd/orama-node --config node2.yaml
-
-# Run third node - requires join address
-run-node3:
-	@echo "Starting third node..."
-	@echo "Config: ~/.orama/node3.yaml"
-	go run ./cmd/orama-node --config node3.yaml
-
-# Run gateway HTTP server
-run-gateway:
-	@echo "Starting gateway HTTP server..."
-	@echo "Note: Config must be in ~/.orama/data/gateway.yaml"
-	go run ./cmd/orama-gateway
-
-# Development environment target
-# Uses orama dev up to start full stack with dependency and port checking
-dev: build
-	@./bin/orama dev up
-
-# Graceful shutdown of all dev services
-stop:
-	@if [ -f ./bin/orama ]; then \
-		./bin/orama dev down || true; \
-	fi
-	@bash scripts/dev-kill-all.sh
-
-# Force kill all processes (immediate termination)
-kill:
-	@bash scripts/dev-kill-all.sh
-
 # Deploy to devnet (build + rolling upgrade all nodes)
 redeploy-devnet:
 	@bash scripts/redeploy.sh --devnet
@@ -239,16 +176,7 @@ help:
 	@echo "  clean         - Clean build artifacts"
 	@echo "  test          - Run unit tests"
 	@echo ""
-	@echo "Local Development (Recommended):"
-	@echo "  make dev      - Start full development stack with one command"
-	@echo "                 - Checks dependencies and available ports"
-	@echo "                 - Generates configs and starts all services"
-	@echo "                 - Validates cluster health"
-	@echo "  make stop     - Gracefully stop all development services"
-	@echo "  make kill     - Force kill all development services (use if stop fails)"
-	@echo ""
 	@echo "E2E Testing:"
-	@echo "  make test-e2e-local       - Run E2E tests against local dev (checks gateway first)"
 	@echo "  make test-e2e-prod        - Run all E2E tests incl. production-only (needs ORAMA_GATEWAY_URL)"
 	@echo "  make test-e2e-shared      - Run shared E2E tests (cache, storage, pubsub, auth)"
 	@echo "  make test-e2e-cluster     - Run cluster E2E tests (libp2p, olric, rqlite, namespace)"
@@ -258,8 +186,8 @@ help:
 	@echo "  make test-e2e-quick       - Quick smoke tests (static deploys, health checks)"
 	@echo "  make test-e2e             - Generic E2E tests (auto-discovers config)"
 	@echo ""
-	@echo "  Example production test:"
-	@echo "    ORAMA_GATEWAY_URL=https://dbrs.space make test-e2e-prod"
+	@echo "  Example:"
+	@echo "    ORAMA_GATEWAY_URL=https://orama-devnet.network make test-e2e-prod"
 	@echo ""
 	@echo "Deployment:"
 	@echo "  make redeploy-devnet       - Build + rolling deploy to all devnet nodes"
@@ -268,16 +196,6 @@ help:
 	@echo "  make redeploy-testnet-quick- Deploy to testnet without rebuilding"
 	@echo "  make health ENV=devnet     - Check health of all nodes in an environment"
 	@echo "  make release               - Interactive release workflow (tag + push)"
-	@echo ""
-	@echo "Development Management (via orama):"
-	@echo "  ./bin/orama dev status  - Show status of all dev services"
-	@echo "  ./bin/orama dev logs <component> [--follow]"
-	@echo ""
-	@echo "Individual Node Targets (advanced):"
-	@echo "  run-node      - Start first node directly"
-	@echo "  run-node2     - Start second node directly"
-	@echo "  run-node3     - Start third node directly"
-	@echo "  run-gateway   - Start HTTP gateway directly"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  deps          - Download dependencies"

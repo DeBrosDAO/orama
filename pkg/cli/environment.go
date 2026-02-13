@@ -26,12 +26,6 @@ type EnvironmentConfig struct {
 // Default environments
 var DefaultEnvironments = []Environment{
 	{
-		Name:        "local",
-		GatewayURL:  "http://localhost:6001",
-		Description: "Local development environment (node-1)",
-		IsActive:    true,
-	},
-	{
 		Name:        "production",
 		GatewayURL:  "https://dbrs.space",
 		Description: "Production network (dbrs.space)",
@@ -41,7 +35,7 @@ var DefaultEnvironments = []Environment{
 		Name:        "devnet",
 		GatewayURL:  "https://orama-devnet.network",
 		Description: "Development network (testnet)",
-		IsActive:    false,
+		IsActive:    true,
 	},
 	{
 		Name:        "testnet",
@@ -71,7 +65,7 @@ func LoadEnvironmentConfig() (*EnvironmentConfig, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return &EnvironmentConfig{
 			Environments:      DefaultEnvironments,
-			ActiveEnvironment: "local",
+			ActiveEnvironment: "devnet",
 		}, nil
 	}
 
@@ -126,9 +120,9 @@ func GetActiveEnvironment() (*Environment, error) {
 		}
 	}
 
-	// Fallback to local if active environment not found
+	// Fallback to devnet if active environment not found
 	for _, env := range envConfig.Environments {
-		if env.Name == "local" {
+		if env.Name == "devnet" {
 			return &env, nil
 		}
 	}
@@ -190,7 +184,7 @@ func InitializeEnvironments() error {
 
 	envConfig := &EnvironmentConfig{
 		Environments:      DefaultEnvironments,
-		ActiveEnvironment: "local",
+		ActiveEnvironment: "devnet",
 	}
 
 	return SaveEnvironmentConfig(envConfig)

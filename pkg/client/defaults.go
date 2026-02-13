@@ -62,8 +62,8 @@ func DefaultDatabaseEndpoints() []string {
 		return dedupeStrings(endpoints)
 	}
 
-	// Fallback to localhost
-	return []string{"http://localhost:" + strconv.Itoa(port)}
+	// No fallback — require explicit configuration
+	return nil
 }
 
 // MapAddrsToDBEndpoints converts a set of peer multiaddrs to DB HTTP endpoints using dbPort.
@@ -107,7 +107,7 @@ func endpointFromMultiaddr(ma multiaddr.Multiaddr, port int) string {
 		}
 	}
 	if host == "" {
-		host = "localhost"
+		return ""
 	}
 
 	return "http://" + host + ":" + strconv.Itoa(port)

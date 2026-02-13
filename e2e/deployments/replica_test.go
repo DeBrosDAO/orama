@@ -120,8 +120,6 @@ func TestDynamicReplica_CreatedOnDeploy(t *testing.T) {
 	})
 
 	t.Run("Dynamic app served from both nodes", func(t *testing.T) {
-		e2e.SkipIfLocal(t)
-
 		if len(env.Config.Servers) < 2 {
 			t.Skip("Requires at least 2 servers")
 		}
@@ -147,7 +145,6 @@ func TestDynamicReplica_CreatedOnDeploy(t *testing.T) {
 func TestReplica_UpdatePropagation(t *testing.T) {
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
-	e2e.SkipIfLocal(t)
 
 	if len(env.Config.Servers) < 2 {
 		t.Skip("Requires at least 2 servers")
@@ -202,7 +199,6 @@ func TestReplica_UpdatePropagation(t *testing.T) {
 func TestReplica_RollbackPropagation(t *testing.T) {
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
-	e2e.SkipIfLocal(t)
 
 	if len(env.Config.Servers) < 2 {
 		t.Skip("Requires at least 2 servers")
@@ -259,7 +255,6 @@ func TestReplica_RollbackPropagation(t *testing.T) {
 func TestReplica_TeardownOnDelete(t *testing.T) {
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
-	e2e.SkipIfLocal(t)
 
 	if len(env.Config.Servers) < 2 {
 		t.Skip("Requires at least 2 servers")

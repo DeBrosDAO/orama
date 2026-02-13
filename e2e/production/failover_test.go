@@ -22,8 +22,6 @@ import (
 // TestFailover_HomeNodeDown verifies that when the home node's deployment process
 // is down, requests still succeed via the replica node.
 func TestFailover_HomeNodeDown(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 
@@ -68,8 +66,6 @@ func TestFailover_HomeNodeDown(t *testing.T) {
 // TestFailover_5xxRetry verifies that if one node returns a gateway error,
 // the middleware retries on the next replica.
 func TestFailover_5xxRetry(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 
@@ -112,8 +108,6 @@ func TestFailover_5xxRetry(t *testing.T) {
 // TestFailover_CrossNodeProxyTimeout verifies that cross-node proxy fails fast
 // (within a reasonable timeout) rather than hanging.
 func TestFailover_CrossNodeProxyTimeout(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 

@@ -11,7 +11,7 @@ type ClientConfig struct {
 	DatabaseName      string        `json:"database_name"`
 	BootstrapPeers    []string      `json:"peers"`
 	DatabaseEndpoints []string      `json:"database_endpoints"`
-	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access (e.g., "http://localhost:6001")
+	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access
 	ConnectTimeout    time.Duration `json:"connect_timeout"`
 	RetryAttempts     int           `json:"retry_attempts"`
 	RetryDelay        time.Duration `json:"retry_delay"`
@@ -31,7 +31,7 @@ func DefaultClientConfig(appName string) *ClientConfig {
 		DatabaseName:      fmt.Sprintf("%s_db", appName),
 		BootstrapPeers:    peers,
 		DatabaseEndpoints: endpoints,
-		GatewayURL:        "http://localhost:6001",
+		GatewayURL:        "",
 		ConnectTimeout:    time.Second * 30,
 		RetryAttempts:     3,
 		RetryDelay:        time.Second * 5,

@@ -26,19 +26,6 @@ make build
 make test
 ```
 
-## Running Locally (macOS)
-
-The node runs in "direct mode" on macOS — processes are managed directly instead of via systemd.
-
-```bash
-# Start a single node
-make run-node
-
-# Start multiple nodes for cluster testing
-make run-node2
-make run-node3
-```
-
 ## Deploying to VPS
 
 There are two deployment workflows: **development** (fast iteration, no git required) and **production** (via git).
