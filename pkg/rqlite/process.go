@@ -145,6 +145,11 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	// Write PID file for reliable orphan detection
+	pidPath := filepath.Join(logsDir, "rqlited.pid")
+	_ = os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", r.cmd.Process.Pid)), 0644)
+	r.logger.Info("RQLite process started", zap.Int("pid", r.cmd.Process.Pid), zap.String("pid_file", pidPath))
+
 	logFile.Close()
 	return nil
 }

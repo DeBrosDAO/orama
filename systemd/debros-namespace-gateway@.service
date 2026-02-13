@@ -27,7 +27,16 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=debros-gateway-%i
 
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ReadWritePaths=/home/debros/.orama/data/namespaces
+
 LimitNOFILE=65536
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target

@@ -37,8 +37,17 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=debros-rqlite-%i
 
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ReadWritePaths=/home/debros/.orama/data/namespaces
+
 # Resource limits
 LimitNOFILE=65536
+MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target

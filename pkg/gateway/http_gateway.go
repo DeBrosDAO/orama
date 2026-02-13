@@ -194,15 +194,21 @@ func (hg *HTTPGateway) Start(ctx context.Context) error {
 	}
 
 	hg.server = &http.Server{
-		Addr:    hg.config.ListenAddr,
-		Handler: hg.router,
+		Addr:              hg.config.ListenAddr,
+		Handler:           hg.router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
-	// Listen for connections
-	listener, err := net.Listen("tcp", hg.config.ListenAddr)
+	// Listen for connections with a max concurrent connection limit
+	rawListener, err := net.Listen("tcp", hg.config.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", hg.config.ListenAddr, err)
 	}
+	listener := LimitedListener(rawListener, DefaultMaxConnections)
 
 	hg.logger.ComponentInfo(logging.ComponentGeneral, "HTTP Gateway server starting",
 		zap.String("node_name", hg.config.NodeName),

@@ -82,6 +82,28 @@ func (rl *RateLimiter) StartCleanup(interval, maxAge time.Duration) {
 	}()
 }
 
+// NamespaceRateLimiter provides per-namespace rate limiting using a sync.Map
+// for better concurrent performance than a single mutex.
+type NamespaceRateLimiter struct {
+	limiters sync.Map // namespace -> *RateLimiter
+	rate     int      // per-minute rate per namespace
+	burst    int
+}
+
+// NewNamespaceRateLimiter creates a per-namespace rate limiter.
+func NewNamespaceRateLimiter(ratePerMinute, burst int) *NamespaceRateLimiter {
+	return &NamespaceRateLimiter{rate: ratePerMinute, burst: burst}
+}
+
+// Allow checks if a request for the given namespace should be allowed.
+func (nrl *NamespaceRateLimiter) Allow(namespace string) bool {
+	if namespace == "" {
+		return true
+	}
+	val, _ := nrl.limiters.LoadOrStore(namespace, NewRateLimiter(nrl.rate, nrl.burst))
+	return val.(*RateLimiter).Allow(namespace)
+}
+
 // rateLimitMiddleware returns 429 when a client exceeds the rate limit.
 // Internal traffic from the WireGuard subnet (10.0.0.0/8) is exempt.
 func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
@@ -101,6 +123,27 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Retry-After", "5")
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// namespaceRateLimitMiddleware enforces per-namespace rate limits.
+// It runs after auth middleware so the namespace is available in context.
+func (g *Gateway) namespaceRateLimitMiddleware(next http.Handler) http.Handler {
+	if g.namespaceRateLimiter == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract namespace from context (set by auth middleware)
+		if v := r.Context().Value(CtxKeyNamespaceOverride); v != nil {
+			if ns, ok := v.(string); ok && ns != "" {
+				if !g.namespaceRateLimiter.Allow(ns) {
+					w.Header().Set("Retry-After", "60")
+					http.Error(w, "namespace rate limit exceeded", http.StatusTooManyRequests)
+					return
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

@@ -12,9 +12,28 @@ import (
 
 // HandleStop stops all production services
 func HandleStop() {
+	HandleStopWithFlags(false)
+}
+
+// HandleStopForce stops all production services, bypassing quorum checks
+func HandleStopForce() {
+	HandleStopWithFlags(true)
+}
+
+// HandleStopWithFlags stops all production services with optional force flag
+func HandleStopWithFlags(force bool) {
 	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
+		fmt.Fprintf(os.Stderr, "Error: Production commands must be run as root (use sudo)\n")
 		os.Exit(1)
+	}
+
+	// Pre-flight: check if stopping this node would break RQLite quorum
+	if !force {
+		if warning := checkQuorumSafety(); warning != "" {
+			fmt.Fprintf(os.Stderr, "\nWARNING: %s\n", warning)
+			fmt.Fprintf(os.Stderr, "Use 'orama prod stop --force' to proceed anyway.\n\n")
+			os.Exit(1)
+		}
 	}
 
 	fmt.Printf("Stopping all DeBros production services...\n")
@@ -25,27 +44,49 @@ func HandleStop() {
 
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
-		fmt.Printf("  ⚠️  No DeBros services found\n")
+		fmt.Printf("  No DeBros services found\n")
 		return
 	}
 
-	fmt.Printf("\n  Stopping main services...\n")
+	fmt.Printf("\n  Stopping main services (ordered)...\n")
+
+	// Ordered shutdown: gateway first, then node (RQLite), then supporting services
+	// This ensures we stop accepting requests before shutting down the database
+	shutdownOrder := [][]string{
+		{"debros-gateway"},                         // 1. Stop accepting new requests
+		{"debros-node"},                            // 2. Stop node (includes RQLite with leadership transfer)
+		{"debros-olric"},                           // 3. Stop cache
+		{"debros-ipfs-cluster", "debros-ipfs"},     // 4. Stop storage
+		{"debros-anyone-relay", "anyone-client"},   // 5. Stop privacy relay
+		{"coredns", "caddy"},                       // 6. Stop DNS/TLS last
+	}
 
 	// First, disable all services to prevent auto-restart
 	disableArgs := []string{"disable"}
 	disableArgs = append(disableArgs, services...)
 	if err := exec.Command("systemctl", disableArgs...).Run(); err != nil {
-		fmt.Printf("  ⚠️  Warning: Failed to disable some services: %v\n", err)
+		fmt.Printf("  Warning: Failed to disable some services: %v\n", err)
 	}
 
-	// Stop all services at once using a single systemctl command
-	// This is more efficient and ensures they all stop together
-	stopArgs := []string{"stop"}
-	stopArgs = append(stopArgs, services...)
-	if err := exec.Command("systemctl", stopArgs...).Run(); err != nil {
-		fmt.Printf("  ⚠️  Warning: Some services may have failed to stop: %v\n", err)
-		// Continue anyway - we'll verify and handle individually below
+	// Stop services in order with brief pauses between groups
+	for _, group := range shutdownOrder {
+		for _, svc := range group {
+			if !containsService(services, svc) {
+				continue
+			}
+			if err := exec.Command("systemctl", "stop", svc).Run(); err != nil {
+				// Not all services may exist on all nodes
+			} else {
+				fmt.Printf("  Stopped %s\n", svc)
+			}
+		}
+		time.Sleep(2 * time.Second) // Brief pause between groups for drain
 	}
+
+	// Stop any remaining services not in the ordered list
+	remainingStopArgs := []string{"stop"}
+	remainingStopArgs = append(remainingStopArgs, services...)
+	_ = exec.Command("systemctl", remainingStopArgs...).Run()
 
 	// Wait a moment for services to fully stop
 	time.Sleep(2 * time.Second)
@@ -61,7 +102,9 @@ func HandleStop() {
 	time.Sleep(1 * time.Second)
 
 	// Stop again to ensure they're stopped
-	if err := exec.Command("systemctl", stopArgs...).Run(); err != nil {
+	secondStopArgs := []string{"stop"}
+	secondStopArgs = append(secondStopArgs, services...)
+	if err := exec.Command("systemctl", secondStopArgs...).Run(); err != nil {
 		fmt.Printf("  ⚠️  Warning: Second stop attempt had errors: %v\n", err)
 	}
 	time.Sleep(1 * time.Second)

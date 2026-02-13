@@ -74,6 +74,7 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 		DatabaseName string `json:"database_name"`
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeCreateError(w, http.StatusBadRequest, "Invalid request body")
 		return

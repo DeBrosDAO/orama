@@ -37,6 +37,7 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req struct {
 		Name    string `json:"name"`
 		Version int    `json:"version"`

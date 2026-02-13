@@ -26,6 +26,7 @@ func (g *Gateway) acmePresentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req ACMERequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.logger.Error("Failed to decode ACME present request", zap.Error(err))
@@ -83,6 +84,7 @@ func (g *Gateway) acmeCleanupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req ACMERequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.logger.Error("Failed to decode ACME cleanup request", zap.Error(err))

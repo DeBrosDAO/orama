@@ -132,21 +132,67 @@ func (r *RQLiteManager) reconcileVoters() error {
 // cluster and immediately re-adding it with the desired voter flag.
 // This is necessary because RQLite's /join endpoint ignores voter flag changes
 // for nodes that are already cluster members with the same ID and address.
+//
+// Safety improvements:
+// - Pre-check: verify quorum would survive the temporary removal
+// - Rollback: if rejoin fails, attempt to re-add with original status
+// - Retry: attempt rejoin up to 3 times with backoff
 func (r *RQLiteManager) changeNodeVoterStatus(nodeID string, voter bool) error {
+	// Pre-check: if demoting a voter, verify quorum safety
+	if !voter {
+		nodes, err := r.getAllClusterNodes()
+		if err != nil {
+			return fmt.Errorf("quorum pre-check: %w", err)
+		}
+		voterCount := 0
+		for _, n := range nodes {
+			if n.Voter && n.Reachable {
+				voterCount++
+			}
+		}
+		// After removing this voter, we need (voterCount-1)/2 + 1 for quorum
+		// which means voterCount-1 > (voterCount-1)/2, i.e., voterCount >= 3
+		if voterCount <= 2 {
+			return fmt.Errorf("cannot remove voter: only %d reachable voters, quorum would be lost", voterCount)
+		}
+	}
+
 	// Step 1: Remove the node from the cluster
 	if err := r.removeClusterNode(nodeID); err != nil {
 		return fmt.Errorf("remove node: %w", err)
 	}
 
-	// Brief pause for Raft to commit the configuration change
-	time.Sleep(2 * time.Second)
+	// Wait for Raft to commit the configuration change, then rejoin with retries
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		waitTime := time.Duration(2+attempt*2) * time.Second // 2s, 4s, 6s
+		time.Sleep(waitTime)
 
-	// Step 2: Re-add with the correct voter status
-	if err := r.joinClusterNode(nodeID, nodeID, voter); err != nil {
-		return fmt.Errorf("rejoin node: %w", err)
+		if err := r.joinClusterNode(nodeID, nodeID, voter); err != nil {
+			lastErr = err
+			r.logger.Warn("Rejoin attempt failed, retrying",
+				zap.String("node_id", nodeID),
+				zap.Int("attempt", attempt+1),
+				zap.Error(err))
+			continue
+		}
+		return nil // Success
 	}
 
-	return nil
+	// All rejoin attempts failed — try to re-add with the ORIGINAL status as rollback
+	r.logger.Error("All rejoin attempts failed, attempting rollback",
+		zap.String("node_id", nodeID),
+		zap.Bool("desired_voter", voter),
+		zap.Error(lastErr))
+
+	originalVoter := !voter
+	if err := r.joinClusterNode(nodeID, nodeID, originalVoter); err != nil {
+		r.logger.Error("Rollback also failed — node may be orphaned from cluster",
+			zap.String("node_id", nodeID),
+			zap.Error(err))
+	}
+
+	return fmt.Errorf("rejoin node after 3 attempts: %w", lastErr)
 }
 
 // getAllClusterNodes queries /nodes?nonvoters&ver=2 to get all cluster members

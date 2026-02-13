@@ -22,7 +22,7 @@ database:
   {{end}}{{if .NodeNoVerify}}node_no_verify: true
   {{end}}{{end}}cluster_sync_interval: "30s"
   peer_inactivity_limit: "24h"
-  min_cluster_size: 1
+  min_cluster_size: {{if .MinClusterSize}}{{.MinClusterSize}}{{else}}1{{end}}
   ipfs:
     cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
     api_url: "http://localhost:{{.IPFSAPIPort}}"

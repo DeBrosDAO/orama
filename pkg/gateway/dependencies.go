@@ -2,11 +2,7 @@ package gateway
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
 	"database/sql"
-	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -424,13 +420,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
-	// Initialize auth service
-	// For now using ephemeral key, can be loaded from config later
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
+	// Initialize auth service with persistent signing key
+	keyPEM, err := loadOrCreateSigningKey(cfg.DataDir, logger)
+	if err != nil {
+		return fmt.Errorf("failed to load or create JWT signing key: %w", err)
+	}
 	authService, err := auth.NewService(logger, networkClient, string(keyPEM), cfg.ClientNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to initialize auth service: %w", err)

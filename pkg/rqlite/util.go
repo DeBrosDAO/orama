@@ -36,16 +36,16 @@ func (r *RQLiteManager) prepareDataDir() (string, error) {
 }
 
 func (r *RQLiteManager) hasExistingState(rqliteDataDir string) bool {
-	entries, err := os.ReadDir(rqliteDataDir)
+	// Check specifically for raft.db with non-trivial content.
+	// Previously this checked for ANY file in the data dir, which was too broad —
+	// auto-discovery creates peers.json and log files before RQLite starts,
+	// causing false positives that skip the -join flag on restart.
+	raftDB := filepath.Join(rqliteDataDir, "raft.db")
+	info, err := os.Stat(raftDB)
 	if err != nil {
 		return false
 	}
-	for _, e := range entries {
-		if e.Name() != "." && e.Name() != ".." {
-			return true
-		}
-	}
-	return false
+	return info.Size() > 1024
 }
 
 func (r *RQLiteManager) exponentialBackoff(attempt int, baseDelay time.Duration, maxDelay time.Duration) time.Duration {

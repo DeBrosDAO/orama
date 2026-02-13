@@ -38,9 +38,11 @@ func HandleCommand(args []string) {
 	case "start":
 		lifecycle.HandleStart()
 	case "stop":
-		lifecycle.HandleStop()
+		force := hasFlag(subargs, "--force")
+		lifecycle.HandleStopWithFlags(force)
 	case "restart":
-		lifecycle.HandleRestart()
+		force := hasFlag(subargs, "--force")
+		lifecycle.HandleRestartWithFlags(force)
 	case "logs":
 		logs.Handle(subargs)
 	case "uninstall":
@@ -52,6 +54,16 @@ func HandleCommand(args []string) {
 		ShowHelp()
 		os.Exit(1)
 	}
+}
+
+// hasFlag checks if a flag is present in the args slice
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }
 
 // ShowHelp displays help information for production commands
@@ -88,7 +100,11 @@ func ShowHelp() {
 	fmt.Printf("  status                    - Show status of production services\n")
 	fmt.Printf("  start                     - Start all production services (requires root/sudo)\n")
 	fmt.Printf("  stop                      - Stop all production services (requires root/sudo)\n")
+	fmt.Printf("    Options:\n")
+	fmt.Printf("      --force               - Bypass quorum safety check\n")
 	fmt.Printf("  restart                   - Restart all production services (requires root/sudo)\n")
+	fmt.Printf("    Options:\n")
+	fmt.Printf("      --force               - Bypass quorum safety check\n")
 	fmt.Printf("  logs <service>            - View production service logs\n")
 	fmt.Printf("    Service aliases: node, ipfs, cluster, gateway, olric\n")
 	fmt.Printf("    Options:\n")

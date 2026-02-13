@@ -130,8 +130,13 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 
 	go func() {
 		server := &http.Server{
-			Addr:    gwCfg.ListenAddr,
-			Handler: apiGateway.Routes(),
+			Addr:              gwCfg.ListenAddr,
+			Handler:           apiGateway.Routes(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      120 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20, // 1MB
 		}
 		n.apiGatewayServer = server
 
