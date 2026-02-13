@@ -76,7 +76,11 @@ func PerformSimpleAuthentication(gatewayURL, wallet, namespace, existingAPIKey s
 	// Build namespace gateway URL from the gateway URL
 	namespaceURL := ""
 	if domain := extractDomainFromURL(gatewayURL); domain != "" {
-		namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, domain)
+		if namespace == "default" {
+			namespaceURL = fmt.Sprintf("https://%s", domain)
+		} else {
+			namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, domain)
+		}
 	}
 
 	// Create credentials

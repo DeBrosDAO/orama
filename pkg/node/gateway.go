@@ -57,10 +57,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		IPFSTimeout:          n.config.HTTPGateway.IPFSTimeout,
 		BaseDomain:           n.config.HTTPGateway.BaseDomain,
 		DataDir:              oramaDir,
-		ClusterSecret:        clusterSecret,
-		PhantomAuthURL:       os.Getenv("PHANTOM_AUTH_URL"),
-		SolanaRPCURL:         os.Getenv("SOLANA_RPC_URL"),
-		NFTCollectionAddress: os.Getenv("NFT_COLLECTION_ADDRESS"),
+		ClusterSecret: clusterSecret,
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
@@ -84,6 +81,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)
 		apiGateway.SetClusterProvisioner(clusterManager)
+		apiGateway.SetNodeRecoverer(clusterManager)
 
 		// Wire spawn handler for distributed namespace instance spawning
 		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, n.logger.Logger)

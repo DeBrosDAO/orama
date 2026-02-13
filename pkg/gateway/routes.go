@@ -44,6 +44,9 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/internal/namespace/spawn", g.spawnHandler)
 	}
 
+	// Namespace cluster repair (internal, handler does its own auth)
+	mux.HandleFunc("/v1/internal/namespace/repair", g.namespaceClusterRepairHandler)
+
 	// auth endpoints
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)

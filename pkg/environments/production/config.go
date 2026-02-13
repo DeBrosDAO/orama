@@ -161,8 +161,8 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		P2PPort:                4001,
 		DataDir:                filepath.Join(cg.oramaDir, "data"),
 		RQLiteHTTPPort:         5001,
-		RQLiteRaftPort:         7001,                // External SNI port
-		RQLiteRaftInternalPort: raftInternalPort,    // Internal RQLite binding port
+		RQLiteRaftPort:         7001,             // External SNI port
+		RQLiteRaftInternalPort: raftInternalPort, // Internal RQLite binding port
 		RQLiteJoinAddress:      rqliteJoinAddr,
 		BootstrapPeers:         peerAddresses,
 		ClusterAPIPort:         9094,

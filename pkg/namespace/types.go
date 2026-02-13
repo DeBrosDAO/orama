@@ -58,6 +58,10 @@ const (
 	EventNodeRecovered       EventType = "node_recovered"
 	EventDeprovisionStarted  EventType = "deprovisioning_started"
 	EventDeprovisioned       EventType = "deprovisioned"
+	EventRecoveryStarted     EventType = "recovery_started"
+	EventNodeReplaced        EventType = "node_replaced"
+	EventRecoveryComplete    EventType = "recovery_complete"
+	EventRecoveryFailed      EventType = "recovery_failed"
 )
 
 // Port allocation constants
@@ -201,4 +205,5 @@ var (
 	ErrProvisioningFailed    = &ClusterError{Message: "cluster provisioning failed"}
 	ErrNamespaceNotFound     = &ClusterError{Message: "namespace not found"}
 	ErrInvalidClusterStatus  = &ClusterError{Message: "invalid cluster status for operation"}
+	ErrRecoveryInProgress    = &ClusterError{Message: "recovery already in progress for this cluster"}
 )

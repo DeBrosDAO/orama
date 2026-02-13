@@ -1722,6 +1722,28 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		zap.String("cluster_id", state.ClusterID),
 	)
 
+	// Self-check: verify this node is still assigned to this cluster in the DB.
+	// If we were replaced during downtime, do NOT restore — stop services instead.
+	if cm.db != nil {
+		type countResult struct {
+			Count int `db:"count"`
+		}
+		var results []countResult
+		verifyQuery := `SELECT COUNT(*) as count FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?`
+		if err := cm.db.Query(ctx, &results, verifyQuery, state.ClusterID, cm.localNodeID); err == nil && len(results) > 0 {
+			if results[0].Count == 0 {
+				cm.logger.Warn("Node was replaced during downtime, stopping orphaned services instead of restoring",
+					zap.String("namespace", state.NamespaceName),
+					zap.String("cluster_id", state.ClusterID))
+				cm.systemdSpawner.StopAll(ctx, state.NamespaceName)
+				// Delete the stale cluster-state.json
+				stateFilePath := filepath.Join(cm.baseDataDir, state.NamespaceName, "cluster-state.json")
+				os.Remove(stateFilePath)
+				return nil
+			}
+		}
+	}
+
 	pb := &state.LocalPorts
 	localIP := state.LocalIP
 

@@ -175,7 +175,8 @@ func showHelp() {
 	fmt.Printf("  db backups <name>             - List database backups\n\n")
 
 	fmt.Printf("🏢 Namespaces:\n")
-	fmt.Printf("  namespace delete              - Delete current namespace and all resources\n\n")
+	fmt.Printf("  namespace delete              - Delete current namespace and all resources\n")
+	fmt.Printf("  namespace repair <name>       - Repair under-provisioned cluster (add missing nodes)\n\n")
 
 	fmt.Printf("🔍 Cluster Inspection:\n")
 	fmt.Printf("  inspect                       - Inspect cluster health via SSH\n")

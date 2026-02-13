@@ -140,6 +140,9 @@ type Gateway struct {
 
 	// Node health monitor (ring-based peer failure detection)
 	healthMonitor *nodehealth.Monitor
+
+	// Node recovery handler (called when health monitor confirms a node dead or recovered)
+	nodeRecoverer authhandlers.NodeRecoverer
 }
 
 // localSubscriber represents a WebSocket subscriber for local message delivery
@@ -322,18 +325,10 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.withInternalAuth,
 		)
 
-		// Configure Phantom Solana auth if env vars are set
-		if cfg.PhantomAuthURL != "" {
-			var solanaVerifier *auth.SolanaNFTVerifier
-			if cfg.SolanaRPCURL != "" && cfg.NFTCollectionAddress != "" {
-				solanaVerifier = auth.NewSolanaNFTVerifier(cfg.SolanaRPCURL, cfg.NFTCollectionAddress)
-				logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured",
-					zap.String("collection", cfg.NFTCollectionAddress))
-			}
-			gw.authHandlers.SetPhantomConfig(cfg.PhantomAuthURL, solanaVerifier)
-			logger.ComponentInfo(logging.ComponentGeneral, "Phantom auth configured",
-				zap.String("auth_url", cfg.PhantomAuthURL))
-		}
+		// Configure Solana NFT verifier for Phantom auth (hardcoded collection + RPC)
+		solanaVerifier := auth.NewDefaultSolanaNFTVerifier()
+		gw.authHandlers.SetSolanaVerifier(solanaVerifier)
+		logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured")
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)
@@ -554,8 +549,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			Neighbors:     3,
 		})
 		gw.healthMonitor.OnNodeDead(func(nodeID string) {
-			logger.ComponentError(logging.ComponentGeneral, "Node confirmed dead by quorum — recovery not yet implemented",
+			logger.ComponentError(logging.ComponentGeneral, "Node confirmed dead by quorum — starting recovery",
 				zap.String("dead_node", nodeID))
+			if gw.nodeRecoverer != nil {
+				go gw.nodeRecoverer.HandleDeadNode(context.Background(), nodeID)
+			}
+		})
+		gw.healthMonitor.OnNodeRecovered(func(nodeID string) {
+			logger.ComponentInfo(logging.ComponentGeneral, "Previously dead node recovered — checking for orphaned services",
+				zap.String("node_id", nodeID))
+			if gw.nodeRecoverer != nil {
+				go gw.nodeRecoverer.HandleRecoveredNode(context.Background(), nodeID)
+			}
 		})
 		go gw.healthMonitor.Start(context.Background())
 		logger.ComponentInfo(logging.ComponentGeneral, "Node health monitor started",
@@ -582,6 +587,11 @@ func (g *Gateway) SetClusterProvisioner(cp authhandlers.ClusterProvisioner) {
 	if g.authHandlers != nil {
 		g.authHandlers.SetClusterProvisioner(cp)
 	}
+}
+
+// SetNodeRecoverer sets the handler for dead node recovery and revived node cleanup.
+func (g *Gateway) SetNodeRecoverer(nr authhandlers.NodeRecoverer) {
+	g.nodeRecoverer = nr
 }
 
 // SetSpawnHandler sets the handler for internal namespace spawn/stop requests.
@@ -746,5 +756,45 @@ func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(status)
+}
+
+// namespaceClusterRepairHandler handles POST /v1/internal/namespace/repair?namespace={name}
+// This endpoint repairs under-provisioned namespace clusters by adding missing nodes.
+// Internal-only: authenticated by X-Orama-Internal-Auth header.
+func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Internal auth check
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	namespaceName := r.URL.Query().Get("namespace")
+	if namespaceName == "" {
+		writeError(w, http.StatusBadRequest, "namespace parameter required")
+		return
+	}
+
+	if g.nodeRecoverer == nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster recovery not enabled")
+		return
+	}
+
+	if err := g.nodeRecoverer.RepairCluster(r.Context(), namespaceName); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "cluster repair completed",
+	})
 }
 

@@ -48,6 +48,14 @@ type ClusterProvisioner interface {
 	GetClusterStatusByID(ctx context.Context, clusterID string) (interface{}, error)
 }
 
+// NodeRecoverer handles automatic recovery when nodes die or come back online,
+// and manual cluster repair for under-provisioned clusters.
+type NodeRecoverer interface {
+	HandleDeadNode(ctx context.Context, deadNodeID string)
+	HandleRecoveredNode(ctx context.Context, nodeID string)
+	RepairCluster(ctx context.Context, namespaceName string) error
+}
+
 // Handlers holds dependencies for authentication HTTP handlers
 type Handlers struct {
 	logger             *logging.ColoredLogger
@@ -55,8 +63,7 @@ type Handlers struct {
 	netClient          NetworkClient
 	defaultNS          string
 	internalAuthFn     func(context.Context) context.Context
-	clusterProvisioner ClusterProvisioner // Optional: for namespace cluster provisioning
-	phantomAuthURL     string                  // URL of the Phantom auth React app
+	clusterProvisioner ClusterProvisioner        // Optional: for namespace cluster provisioning
 	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 }
 
@@ -82,9 +89,8 @@ func (h *Handlers) SetClusterProvisioner(cp ClusterProvisioner) {
 	h.clusterProvisioner = cp
 }
 
-// SetPhantomConfig sets the Phantom auth app URL and Solana NFT verifier
-func (h *Handlers) SetPhantomConfig(authURL string, verifier *authsvc.SolanaNFTVerifier) {
-	h.phantomAuthURL = authURL
+// SetSolanaVerifier sets the server-side NFT ownership verifier for Phantom auth
+func (h *Handlers) SetSolanaVerifier(verifier *authsvc.SolanaNFTVerifier) {
 	h.solanaVerifier = verifier
 }
 

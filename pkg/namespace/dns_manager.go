@@ -182,6 +182,48 @@ func (drm *DNSRecordManager) GetNamespaceGatewayIPs(ctx context.Context, namespa
 	return ips, nil
 }
 
+// AddNamespaceRecord adds DNS A records for a single IP to an existing namespace.
+// Unlike CreateNamespaceRecords, this does NOT delete existing records — it's purely additive.
+// Used when adding a new node to an under-provisioned cluster (repair).
+func (drm *DNSRecordManager) AddNamespaceRecord(ctx context.Context, namespaceName, ip string) error {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	fqdn := fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain)
+	wildcardFqdn := fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain)
+
+	drm.logger.Info("Adding DNS record for namespace",
+		zap.String("namespace", namespaceName),
+		zap.String("ip", ip),
+	)
+
+	now := time.Now()
+	for _, f := range []string{fqdn, wildcardFqdn} {
+		recordID := uuid.New().String()
+		insertQuery := `
+			INSERT INTO dns_records (
+				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`
+		_, err := drm.db.Exec(internalCtx, insertQuery,
+			recordID, f, "A", ip, 60,
+			"namespace:"+namespaceName, "cluster-manager", true, now, now,
+		)
+		if err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("failed to add DNS record %s -> %s", f, ip),
+				Cause:   err,
+			}
+		}
+	}
+
+	drm.logger.Info("DNS records added for namespace",
+		zap.String("namespace", namespaceName),
+		zap.String("ip", ip),
+	)
+
+	return nil
+}
+
 // UpdateNamespaceRecord updates a specific node's DNS record (for failover)
 func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespaceName, oldIP, newIP string) error {
 	internalCtx := client.WithInternalAuth(ctx)

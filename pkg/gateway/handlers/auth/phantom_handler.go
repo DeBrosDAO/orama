@@ -5,9 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -27,10 +25,6 @@ var (
 func (h *Handlers) PhantomSessionHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if h.phantomAuthURL == "" {
-		writeError(w, http.StatusServiceUnavailable, "phantom auth not configured")
 		return
 	}
 
@@ -78,23 +72,8 @@ func (h *Handlers) PhantomSessionHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Build the auth URL that the phone will open
-	gatewayURL := r.Header.Get("X-Forwarded-Proto") + "://" + r.Header.Get("X-Forwarded-Host")
-	if gatewayURL == "://" {
-		// Fallback: construct from request
-		scheme := "https"
-		if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
-			scheme = "http"
-		}
-		gatewayURL = scheme + "://" + r.Host
-	}
-
-	authURL := fmt.Sprintf("%s/?session=%s&gateway=%s&namespace=%s",
-		h.phantomAuthURL, sessionID, url.QueryEscape(gatewayURL), url.QueryEscape(namespace))
-
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": sessionID,
-		"auth_url":   authURL,
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }

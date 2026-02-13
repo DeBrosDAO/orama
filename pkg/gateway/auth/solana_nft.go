@@ -20,6 +20,11 @@ const (
 	tokenProgramID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 	// Metaplex Token Metadata Program ID
 	metaplexProgramID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+
+	// Hardcoded Solana RPC endpoint (mainnet-beta)
+	defaultSolanaRPCURL = "https://api.mainnet-beta.solana.com"
+	// Required NFT collection address for Phantom auth
+	defaultNFTCollectionAddress = "GtsCViqB9fWriKeDMQdveDvYmqqvBCEoxRfu1gzE48uh"
 )
 
 // SolanaNFTVerifier verifies NFT ownership on Solana via JSON-RPC.
@@ -29,11 +34,11 @@ type SolanaNFTVerifier struct {
 	httpClient        *http.Client
 }
 
-// NewSolanaNFTVerifier creates a new verifier for the given collection.
-func NewSolanaNFTVerifier(rpcURL, collectionAddress string) *SolanaNFTVerifier {
+// NewDefaultSolanaNFTVerifier creates a verifier with the hardcoded collection and RPC endpoint.
+func NewDefaultSolanaNFTVerifier() *SolanaNFTVerifier {
 	return &SolanaNFTVerifier{
-		rpcURL:            rpcURL,
-		collectionAddress: collectionAddress,
+		rpcURL:            defaultSolanaRPCURL,
+		collectionAddress: defaultNFTCollectionAddress,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},

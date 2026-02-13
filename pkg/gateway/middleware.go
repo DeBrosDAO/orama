@@ -449,6 +449,11 @@ func isPublicPath(p string) bool {
 		return true
 	}
 
+	// Namespace cluster repair endpoint (auth handled by internal auth header)
+	if p == "/v1/internal/namespace/repair" {
+		return true
+	}
+
 	// Phantom auth endpoints are public (session creation, status polling, completion)
 	if strings.HasPrefix(p, "/v1/auth/phantom/") {
 		return true
