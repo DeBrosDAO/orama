@@ -46,12 +46,14 @@ func ValidateTopicName(topic string) bool {
 	return topicRegex.MatchString(topic)
 }
 
-// ValidateWalletAddress checks if a string looks like an Ethereum wallet address.
-// Valid addresses are 40 hex characters, optionally prefixed with "0x".
-var walletRegex = regexp.MustCompile(`^(0x)?[0-9a-fA-F]{40}$`)
+// ValidateWalletAddress checks if a string looks like a valid wallet address.
+// Supports Ethereum (40 hex chars, optional "0x" prefix) and Solana (32-44 base58 chars).
+var ethWalletRegex = regexp.MustCompile(`^(0x)?[0-9a-fA-F]{40}$`)
+var solanaWalletRegex = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 
 func ValidateWalletAddress(wallet string) bool {
-	return walletRegex.MatchString(strings.TrimSpace(wallet))
+	wallet = strings.TrimSpace(wallet)
+	return ethWalletRegex.MatchString(wallet) || solanaWalletRegex.MatchString(wallet)
 }
 
 // NormalizeWalletAddress normalizes a wallet address by removing "0x" prefix and converting to lowercase.

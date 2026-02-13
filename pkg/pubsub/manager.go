@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"go.uber.org/zap"
 )
 
 // Manager handles pub/sub operations
@@ -14,6 +15,7 @@ type Manager struct {
     topics        map[string]*pubsub.Topic
     subscriptions map[string]*topicSubscription
     namespace     string
+    logger        *zap.Logger
     mu            sync.RWMutex
 }
 
@@ -27,12 +29,13 @@ type topicSubscription struct {
 }
 
 // NewManager creates a new pubsub manager
-func NewManager(ps *pubsub.PubSub, namespace string) *Manager {
-    return &Manager {
+func NewManager(ps *pubsub.PubSub, namespace string, logger *zap.Logger) *Manager {
+    return &Manager{
         pubsub:        ps,
         topics:        make(map[string]*pubsub.Topic),
         subscriptions: make(map[string]*topicSubscription),
         namespace:     namespace,
+        logger:        logger.Named("pubsub"),
     }
 }
 

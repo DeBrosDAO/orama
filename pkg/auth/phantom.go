@@ -16,8 +16,17 @@ import (
 	qrterminal "github.com/mdp/qrterminal/v3"
 )
 
-// Hardcoded Phantom auth React app URL (deployed on Orama devnet)
-const phantomAuthURL = "https://phantom-auth-y0w9aa.orama-devnet.network"
+// defaultPhantomAuthURL is the default Phantom auth React app URL (deployed on Orama devnet).
+// Override with ORAMA_PHANTOM_AUTH_URL environment variable.
+const defaultPhantomAuthURL = "https://phantom-auth-y0w9aa.orama-devnet.network"
+
+// phantomAuthURL returns the Phantom auth URL, preferring the environment variable.
+func phantomAuthURL() string {
+	if u := os.Getenv("ORAMA_PHANTOM_AUTH_URL"); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	return defaultPhantomAuthURL
+}
 
 // PhantomSession represents a phantom auth session from the gateway.
 type PhantomSession struct {
@@ -76,7 +85,7 @@ func PerformPhantomAuthentication(gatewayURL, namespace string) (*Credentials, e
 
 	// 2. Build auth URL and display QR code
 	authURL := fmt.Sprintf("%s/?session=%s&gateway=%s&namespace=%s",
-		phantomAuthURL, session.SessionID, url.QueryEscape(gatewayURL), url.QueryEscape(namespace))
+		phantomAuthURL(), session.SessionID, url.QueryEscape(gatewayURL), url.QueryEscape(namespace))
 
 	fmt.Println("\nScan this QR code with your phone to authenticate:")
 	fmt.Println()

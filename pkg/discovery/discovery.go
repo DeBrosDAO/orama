@@ -19,6 +19,42 @@ import (
 // Protocol ID for peer exchange
 const PeerExchangeProtocol = "/debros/peer-exchange/1.0.0"
 
+// libp2pPort is the standard port used for libp2p peer connections.
+// Filtering on this port prevents cross-connecting with IPFS (4101) or IPFS Cluster (9096/9098).
+const libp2pPort = 4001
+
+// filterLibp2pAddrs returns only multiaddrs with TCP port 4001 (standard libp2p port).
+func filterLibp2pAddrs(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	filtered := make([]multiaddr.Multiaddr, 0, len(addrs))
+	for _, addr := range addrs {
+		port, err := addr.ValueForProtocol(multiaddr.P_TCP)
+		if err != nil {
+			continue
+		}
+		portNum, err := strconv.Atoi(port)
+		if err != nil || portNum != libp2pPort {
+			continue
+		}
+		filtered = append(filtered, addr)
+	}
+	return filtered
+}
+
+// hasLibp2pAddr returns true if any of the peer's addresses use the standard libp2p port.
+func hasLibp2pAddr(addrs []multiaddr.Multiaddr) bool {
+	for _, addr := range addrs {
+		port, err := addr.ValueForProtocol(multiaddr.P_TCP)
+		if err != nil {
+			continue
+		}
+		portNum, err := strconv.Atoi(port)
+		if err == nil && portNum == libp2pPort {
+			return true
+		}
+	}
+	return false
+}
+
 // PeerExchangeRequest represents a request for peer information
 type PeerExchangeRequest struct {
 	Limit int `json:"limit"`
@@ -116,38 +152,11 @@ func (d *Manager) handlePeerExchangeStream(s network.Stream) {
 			continue
 		}
 
-		// Filter addresses to only include port 4001 (standard libp2p port)
-		// This prevents including non-libp2p service ports (like RQLite ports) in peer exchange
-		const libp2pPort = 4001
-		filteredAddrs := make([]multiaddr.Multiaddr, 0)
-		filteredCount := 0
-		for _, addr := range addrs {
-			// Extract TCP port from multiaddr
-			port, err := addr.ValueForProtocol(multiaddr.P_TCP)
-			if err == nil {
-				portNum, err := strconv.Atoi(port)
-				if err == nil {
-					// Only include addresses with port 4001
-					if portNum == libp2pPort {
-						filteredAddrs = append(filteredAddrs, addr)
-					} else {
-						filteredCount++
-					}
-				}
-				// Skip addresses with unparseable ports
-			} else {
-				// Skip non-TCP addresses (libp2p uses TCP)
-				filteredCount++
-			}
-		}
-
-		// If no addresses remain after filtering, skip this peer
-		// (Filtering is routine - no need to log every occurrence)
+		filteredAddrs := filterLibp2pAddrs(addrs)
 		if len(filteredAddrs) == 0 {
 			continue
 		}
 
-		// Convert addresses to strings
 		addrStrs := make([]string, len(filteredAddrs))
 		for i, addr := range filteredAddrs {
 			addrStrs[i] = addr.String()
@@ -253,38 +262,20 @@ func (d *Manager) discoverViaPeerstore(ctx context.Context, maxConnections int) 
 	// Iterate over peerstore known peers
 	peers := d.host.Peerstore().Peers()
 
-	// Only connect to peers on our standard LibP2P port to avoid cross-connecting
-	// with IPFS/IPFS Cluster instances that use different ports
-	const libp2pPort = 4001
-
 	for _, pid := range peers {
 		if connected >= maxConnections {
 			break
 		}
-		// Skip self
 		if pid == d.host.ID() {
 			continue
 		}
-		// Skip already connected peers
 		if d.host.Network().Connectedness(pid) != network.NotConnected {
 			continue
 		}
 
-		// Filter peers to only include those with addresses on our port (4001)
-		// This prevents attempting to connect to IPFS (port 4101) or IPFS Cluster (port 9096/9098)
+		// Only connect to peers with addresses on the standard libp2p port
 		peerInfo := d.host.Peerstore().PeerInfo(pid)
-		hasValidPort := false
-		for _, addr := range peerInfo.Addrs {
-			if port, err := addr.ValueForProtocol(multiaddr.P_TCP); err == nil {
-				if portNum, err := strconv.Atoi(port); err == nil && portNum == libp2pPort {
-					hasValidPort = true
-					break
-				}
-			}
-		}
-
-		// Skip peers without valid port 4001 addresses
-		if !hasValidPort {
+		if !hasLibp2pAddr(peerInfo.Addrs) {
 			continue
 		}
 
@@ -356,28 +347,17 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 			}
 
 			// Parse and filter addresses to only include port 4001 (standard libp2p port)
-			const libp2pPort = 4001
-			addrs := make([]multiaddr.Multiaddr, 0, len(peerInfo.Addrs))
+			parsedAddrs := make([]multiaddr.Multiaddr, 0, len(peerInfo.Addrs))
 			for _, addrStr := range peerInfo.Addrs {
 				ma, err := multiaddr.NewMultiaddr(addrStr)
 				if err != nil {
 					d.logger.Debug("Failed to parse multiaddr", zap.Error(err))
 					continue
 				}
-				// Only include addresses with port 4001
-				port, err := ma.ValueForProtocol(multiaddr.P_TCP)
-				if err == nil {
-					portNum, err := strconv.Atoi(port)
-					if err == nil && portNum == libp2pPort {
-						addrs = append(addrs, ma)
-					}
-					// Skip addresses with wrong ports
-				}
-				// Skip non-TCP addresses
+				parsedAddrs = append(parsedAddrs, ma)
 			}
-
+			addrs := filterLibp2pAddrs(parsedAddrs)
 			if len(addrs) == 0 {
-				// Skip peers without valid addresses - no need to log every occurrence
 				continue
 			}
 

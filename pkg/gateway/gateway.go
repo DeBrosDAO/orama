@@ -378,17 +378,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.processManager = process.NewManager(logger.Logger)
 
 		// Create deployment service
+		baseDomain := gw.cfg.BaseDomain
+		if baseDomain == "" {
+			baseDomain = "dbrs.space"
+		}
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
 			deps.ORMClient,
 			gw.homeNodeManager,
 			gw.portAllocator,
 			gw.replicaManager,
 			logger.Logger,
+			baseDomain,
 		)
-		// Set base domain from config
-		if gw.cfg.BaseDomain != "" {
-			gw.deploymentService.SetBaseDomain(gw.cfg.BaseDomain)
-		}
 		// Set node peer ID so deployments run on the node that receives the request
 		if gw.cfg.NodePeerID != "" {
 			gw.deploymentService.SetNodePeerID(gw.cfg.NodePeerID)

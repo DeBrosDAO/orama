@@ -174,6 +174,21 @@ func TestValidateWalletAddress(t *testing.T) {
 			wallet: "",
 			valid:  false,
 		},
+		{
+			name:   "valid Solana address",
+			wallet: "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV",
+			valid:  true,
+		},
+		{
+			name:   "valid Solana address 44 chars",
+			wallet: "DRpbCBMxVnDK7maPMoGQfFiDro5Z4Ztgcyih2yZbpaHY",
+			valid:  true,
+		},
+		{
+			name:   "invalid Solana - too short",
+			wallet: "7EcDhSYGx",
+			valid:  false,
+		},
 	}
 
 	for _, tt := range tests {

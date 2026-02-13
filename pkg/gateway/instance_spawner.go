@@ -63,11 +63,14 @@ type GatewayInstance struct {
 	OlricServers   []string // Connection to namespace Olric
 	ConfigPath     string
 	PID            int
-	Status         InstanceNodeStatus
 	StartedAt      time.Time
-	LastHealthCheck time.Time
 	cmd            *exec.Cmd
 	logger         *zap.Logger
+
+	// mu protects mutable state accessed concurrently by the monitor goroutine.
+	mu              sync.RWMutex
+	Status          InstanceNodeStatus
+	LastHealthCheck time.Time
 }
 
 // InstanceConfig holds configuration for spawning a Gateway instance
@@ -130,13 +133,14 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 
 	is.mu.Lock()
 	if existing, ok := is.instances[key]; ok {
-		is.mu.Unlock()
-		// Instance already exists, return it if running
-		if existing.Status == InstanceStatusRunning {
+		existing.mu.RLock()
+		status := existing.Status
+		existing.mu.RUnlock()
+		if status == InstanceStatusRunning {
+			is.mu.Unlock()
 			return existing, nil
 		}
 		// Otherwise, remove it and start fresh
-		is.mu.Lock()
 		delete(is.instances, key)
 	}
 	is.mu.Unlock()
@@ -261,8 +265,10 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		}
 	}
 
+	instance.mu.Lock()
 	instance.Status = InstanceStatusRunning
 	instance.LastHealthCheck = time.Now()
+	instance.mu.Unlock()
 
 	instance.logger.Info("Gateway instance started successfully",
 		zap.Int("pid", instance.PID),
@@ -356,7 +362,9 @@ func (is *InstanceSpawner) StopInstance(ctx context.Context, ns, nodeID string) 
 		}
 	}
 
+	instance.mu.Lock()
 	instance.Status = InstanceStatusStopped
+	instance.mu.Unlock()
 	return nil
 }
 
@@ -415,9 +423,9 @@ func (is *InstanceSpawner) HealthCheck(ctx context.Context, ns, nodeID string) (
 
 	healthy, err := instance.IsHealthy(ctx)
 	if healthy {
-		is.mu.Lock()
+		instance.mu.Lock()
 		instance.LastHealthCheck = time.Now()
-		is.mu.Unlock()
+		instance.mu.Unlock()
 	}
 	return healthy, err
 }
@@ -474,7 +482,7 @@ func (is *InstanceSpawner) monitorInstance(instance *GatewayInstance) {
 		healthy, _ := instance.IsHealthy(ctx)
 		cancel()
 
-		is.mu.Lock()
+		instance.mu.Lock()
 		if healthy {
 			instance.Status = InstanceStatusRunning
 			instance.LastHealthCheck = time.Now()
@@ -482,13 +490,13 @@ func (is *InstanceSpawner) monitorInstance(instance *GatewayInstance) {
 			instance.Status = InstanceStatusFailed
 			instance.logger.Warn("Gateway instance health check failed")
 		}
-		is.mu.Unlock()
+		instance.mu.Unlock()
 
 		// Check if process is still running
 		if instance.cmd != nil && instance.cmd.ProcessState != nil && instance.cmd.ProcessState.Exited() {
-			is.mu.Lock()
+			instance.mu.Lock()
 			instance.Status = InstanceStatusStopped
-			is.mu.Unlock()
+			instance.mu.Unlock()
 			instance.logger.Warn("Gateway instance process exited unexpectedly")
 			return
 		}

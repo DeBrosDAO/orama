@@ -2,7 +2,7 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"io"
 	"net"
@@ -64,41 +64,40 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 		return "", "" // No credentials provided
 	}
 
-	// Check middleware cache first
+	ns, err := g.lookupAPIKeyNamespace(r.Context(), key, g.client)
+	if err != nil {
+		return "", "invalid API key"
+	}
+	return ns, ""
+}
+
+// lookupAPIKeyNamespace resolves an API key to its namespace using cache and DB.
+// dbClient controls which database is queried (global vs namespace-specific).
+// Returns the namespace name or an error if the key is invalid.
+func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, dbClient client.NetworkClient) (string, error) {
 	if g.mwCache != nil {
 		if cachedNS, ok := g.mwCache.GetAPIKeyNamespace(key); ok {
-			return cachedNS, ""
+			return cachedNS, nil
 		}
 	}
 
-	// Cache miss — look up API key in main cluster RQLite
-	db := g.client.Database()
-	internalCtx := client.WithInternalAuth(r.Context())
+	db := dbClient.Database()
+	internalCtx := client.WithInternalAuth(ctx)
 	q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
 	res, err := db.Query(internalCtx, q, key)
 	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
-		return "", "invalid API key"
+		return "", fmt.Errorf("invalid API key")
 	}
 
-	// Extract namespace name
-	var ns string
-	if s, ok := res.Rows[0][0].(string); ok {
-		ns = strings.TrimSpace(s)
-	} else {
-		b, _ := json.Marshal(res.Rows[0][0])
-		_ = json.Unmarshal(b, &ns)
-		ns = strings.TrimSpace(ns)
-	}
+	ns := getString(res.Rows[0][0])
 	if ns == "" {
-		return "", "invalid API key"
+		return "", fmt.Errorf("invalid API key")
 	}
 
-	// Cache the result
 	if g.mwCache != nil {
 		g.mwCache.SetAPIKeyNamespace(key, ns)
 	}
-
-	return ns, ""
+	return ns, nil
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request
@@ -179,7 +178,7 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> namespace rate limit -> handler
+	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> authorization -> namespace rate limit -> handler
 	return g.loggingMiddleware(
 		g.securityHeadersMiddleware(
 			g.rateLimitMiddleware(
@@ -309,30 +308,13 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check middleware cache first for API key → namespace mapping
-		if g.mwCache != nil {
-			if cachedNS, ok := g.mwCache.GetAPIKeyNamespace(key); ok {
-				reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
-				reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, cachedNS)
-				next.ServeHTTP(w, r.WithContext(reqCtx))
-				return
-			}
-		}
-
-		// Cache miss — look up API key in DB and derive namespace
-		// Use authClient for namespace gateways (validates against global RQLite)
-		// Otherwise use regular client for global gateways
-		authClient := g.client
+		// Look up API key → namespace (uses cache + DB)
+		dbClient := g.client
 		if g.authClient != nil {
-			authClient = g.authClient
+			dbClient = g.authClient
 		}
-		db := authClient.Database()
-		// Use internal auth for DB validation (auth not established yet)
-		internalCtx := client.WithInternalAuth(r.Context())
-		// Join to namespaces to resolve name in one query
-		q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
-		res, err := db.Query(internalCtx, q, key)
-		if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		ns, err := g.lookupAPIKeyNamespace(r.Context(), key, dbClient)
+		if err != nil {
 			if isPublic {
 				next.ServeHTTP(w, r)
 				return
@@ -340,29 +322,6 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
-		}
-		// Extract namespace name
-		var ns string
-		if s, ok := res.Rows[0][0].(string); ok {
-			ns = strings.TrimSpace(s)
-		} else {
-			b, _ := json.Marshal(res.Rows[0][0])
-			_ = json.Unmarshal(b, &ns)
-			ns = strings.TrimSpace(ns)
-		}
-		if ns == "" {
-			if isPublic {
-				next.ServeHTTP(w, r)
-				return
-			}
-			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
-			writeError(w, http.StatusUnauthorized, "invalid API key")
-			return
-		}
-
-		// Cache the result for subsequent requests
-		if g.mwCache != nil {
-			g.mwCache.SetAPIKeyNamespace(key, ns)
 		}
 
 		// Attach auth metadata to context for downstream use

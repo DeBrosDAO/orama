@@ -8,6 +8,7 @@ import (
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"go.uber.org/zap"
 )
 
 func createTestManager(t *testing.T, ns string) (*Manager, func()) {
@@ -24,7 +25,7 @@ func createTestManager(t *testing.T, ns string) (*Manager, func()) {
 		t.Fatalf("failed to create gossipsub: %v", err)
 	}
 
-	mgr := NewManager(ps, ns)
+	mgr := NewManager(ps, ns, zap.NewNop())
 
 	cleanup := func() {
 		mgr.Close()
@@ -165,13 +166,13 @@ func TestManager_PubSub(t *testing.T) {
 
 	h1, _ := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	ps1, _ := pubsub.NewGossipSub(ctx, h1)
-	mgr1 := NewManager(ps1, "test")
+	mgr1 := NewManager(ps1, "test", zap.NewNop())
 	defer h1.Close()
 	defer mgr1.Close()
 
 	h2, _ := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	ps2, _ := pubsub.NewGossipSub(ctx, h2)
-	mgr2 := NewManager(ps2, "test")
+	mgr2 := NewManager(ps2, "test", zap.NewNop())
 	defer h2.Close()
 	defer mgr2.Close()
 

@@ -34,7 +34,7 @@ func ValidateDataDir(path string) error {
 	if strings.HasPrefix(expandedPath, "~") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("cannot determine home directory: %v", err)
+			return fmt.Errorf("cannot determine home directory: %w", err)
 		}
 		expandedPath = filepath.Join(home, expandedPath[1:])
 	}
@@ -47,7 +47,7 @@ func ValidateDataDir(path string) error {
 		// Try to write a test file to check permissions
 		testFile := filepath.Join(expandedPath, ".write_test")
 		if err := os.WriteFile(testFile, []byte(""), 0644); err != nil {
-			return fmt.Errorf("directory not writable: %v", err)
+			return fmt.Errorf("directory not writable: %w", err)
 		}
 		os.Remove(testFile)
 	} else if os.IsNotExist(err) {
@@ -59,7 +59,7 @@ func ValidateDataDir(path string) error {
 		// Allow parent not existing - it will be created at runtime
 		if info, err := os.Stat(parent); err != nil {
 			if !os.IsNotExist(err) {
-				return fmt.Errorf("parent directory not accessible: %v", err)
+				return fmt.Errorf("parent directory not accessible: %w", err)
 			}
 			// Parent doesn't exist either - that's ok, will be created
 		} else if !info.IsDir() {
@@ -67,11 +67,11 @@ func ValidateDataDir(path string) error {
 		} else {
 			// Parent exists, check if writable
 			if err := ValidateDirWritable(parent); err != nil {
-				return fmt.Errorf("parent directory not writable: %v", err)
+				return fmt.Errorf("parent directory not writable: %w", err)
 			}
 		}
 	} else {
-		return fmt.Errorf("cannot access path: %v", err)
+		return fmt.Errorf("cannot access path: %w", err)
 	}
 
 	return nil
@@ -81,7 +81,7 @@ func ValidateDataDir(path string) error {
 func ValidateDirWritable(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("cannot access directory: %v", err)
+		return fmt.Errorf("cannot access directory: %w", err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("path is not a directory")
@@ -90,7 +90,7 @@ func ValidateDirWritable(path string) error {
 	// Try to write a test file
 	testFile := filepath.Join(path, ".write_test")
 	if err := os.WriteFile(testFile, []byte(""), 0644); err != nil {
-		return fmt.Errorf("directory not writable: %v", err)
+		return fmt.Errorf("directory not writable: %w", err)
 	}
 	os.Remove(testFile)
 
@@ -101,7 +101,7 @@ func ValidateDirWritable(path string) error {
 func ValidateFileReadable(path string) error {
 	_, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("cannot read file: %v", err)
+		return fmt.Errorf("cannot read file: %w", err)
 	}
 	return nil
 }

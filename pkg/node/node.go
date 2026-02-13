@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
@@ -65,15 +63,10 @@ func NewNode(cfg *config.Config) (*Node, error) {
 func (n *Node) Start(ctx context.Context) error {
 	n.logger.Info("Starting network node", zap.String("data_dir", n.config.Node.DataDir))
 
-	// Expand ~ in data directory path
-	dataDir := n.config.Node.DataDir
-	dataDir = os.ExpandEnv(dataDir)
-	if strings.HasPrefix(dataDir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to determine home directory: %w", err)
-		}
-		dataDir = filepath.Join(home, dataDir[1:])
+	// Expand ~ and env vars in data directory path
+	dataDir, err := config.ExpandPath(n.config.Node.DataDir)
+	if err != nil {
+		return fmt.Errorf("failed to expand data directory path: %w", err)
 	}
 
 	// Create data directory

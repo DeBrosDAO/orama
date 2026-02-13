@@ -168,7 +168,7 @@ func (as *AuthServer) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send success response to browser
+	// Send success response to browser (API key is never exposed in HTML)
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `
@@ -181,30 +181,25 @@ func (as *AuthServer) handleCallback(w http.ResponseWriter, r *http.Request) {
         .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto; }
         .success { color: #4CAF50; font-size: 48px; margin-bottom: 20px; }
         .details { background: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0; text-align: left; }
-        .key { font-family: monospace; background: #e9ecef; padding: 10px; border-radius: 3px; word-break: break-all; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="success">✅</div>
+        <div class="success">&#10003;</div>
         <h1>Authentication Successful!</h1>
         <p>You have successfully authenticated with your wallet.</p>
 
         <div class="details">
-            <h3>🔑 Your Credentials:</h3>
-            <p><strong>API Key:</strong></p>
-            <div class="key">%s</div>
             <p><strong>Namespace:</strong> %s</p>
             <p><strong>Wallet:</strong> %s</p>
             %s
         </div>
 
-        <p>Your credentials have been saved securely to <code>~/.orama/credentials.json</code></p>
-        <p><strong>You can now close this browser window and return to your terminal.</strong></p>
+        <p>Your credentials have been saved securely. Return to your terminal to continue.</p>
+        <p><strong>You can now close this browser window.</strong></p>
     </div>
 </body>
 </html>`,
-		result.APIKey,
 		result.Namespace,
 		result.Wallet,
 		func() string {

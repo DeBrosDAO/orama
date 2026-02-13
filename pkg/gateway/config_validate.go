@@ -20,7 +20,7 @@ func (c *Config) ValidateConfig() []error {
 		errs = append(errs, fmt.Errorf("gateway.listen_addr: must not be empty"))
 	} else {
 		if err := validateListenAddr(c.ListenAddr); err != nil {
-			errs = append(errs, fmt.Errorf("gateway.listen_addr: %v", err))
+			errs = append(errs, fmt.Errorf("gateway.listen_addr: %w", err))
 		}
 	}
 
@@ -36,7 +36,7 @@ func (c *Config) ValidateConfig() []error {
 
 		_, err := multiaddr.NewMultiaddr(peer)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: invalid multiaddr: %v; expected /ip{4,6}/.../tcp/<port>/p2p/<peerID>", path, err))
+			errs = append(errs, fmt.Errorf("%s: invalid multiaddr: %w", path, err))
 			continue
 		}
 
@@ -66,7 +66,7 @@ func (c *Config) ValidateConfig() []error {
 	// Validate rqlite_dsn if provided
 	if c.RQLiteDSN != "" {
 		if err := validateRQLiteDSN(c.RQLiteDSN); err != nil {
-			errs = append(errs, fmt.Errorf("gateway.rqlite_dsn: %v", err))
+			errs = append(errs, fmt.Errorf("gateway.rqlite_dsn: %w", err))
 		}
 	}
 
@@ -116,7 +116,7 @@ func validateListenAddr(addr string) error {
 func validateRQLiteDSN(dsn string) error {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return fmt.Errorf("invalid URL: %v", err)
+		return fmt.Errorf("invalid URL: %w", err)
 	}
 
 	if u.Scheme != "http" && u.Scheme != "https" {

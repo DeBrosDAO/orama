@@ -8,12 +8,20 @@ import (
 	"time"
 )
 
+// wireGuardNet is the WireGuard mesh subnet, parsed once at init.
+var wireGuardNet *net.IPNet
+
+func init() {
+	_, wireGuardNet, _ = net.ParseCIDR("10.0.0.0/8")
+}
+
 // RateLimiter implements a token-bucket rate limiter per client IP.
 type RateLimiter struct {
 	mu      sync.Mutex
 	clients map[string]*bucket
 	rate    float64 // tokens per second
 	burst   int     // max tokens (burst capacity)
+	stopCh  chan struct{}
 }
 
 type bucket struct {
@@ -71,15 +79,28 @@ func (rl *RateLimiter) Cleanup(maxAge time.Duration) {
 	}
 }
 
-// StartCleanup runs periodic cleanup in a goroutine.
+// StartCleanup runs periodic cleanup in a goroutine. Call Stop() to terminate it.
 func (rl *RateLimiter) StartCleanup(interval, maxAge time.Duration) {
+	rl.stopCh = make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			rl.Cleanup(maxAge)
+		for {
+			select {
+			case <-ticker.C:
+				rl.Cleanup(maxAge)
+			case <-rl.stopCh:
+				return
+			}
 		}
 	}()
+}
+
+// Stop terminates the background cleanup goroutine.
+func (rl *RateLimiter) Stop() {
+	if rl.stopCh != nil {
+		close(rl.stopCh)
+	}
 }
 
 // NamespaceRateLimiter provides per-namespace rate limiting using a sync.Map
@@ -167,6 +188,5 @@ func isInternalIP(ipStr string) bool {
 		return true
 	}
 	// 10.0.0.0/8 — WireGuard mesh
-	_, wgNet, _ := net.ParseCIDR("10.0.0.0/8")
-	return wgNet.Contains(ip)
+	return wireGuardNet.Contains(ip)
 }

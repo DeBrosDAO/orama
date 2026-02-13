@@ -50,4 +50,12 @@ func (g *Gateway) Close() {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "error during IPFS client close", zap.Error(err))
 		}
 	}
+
+	// Stop background goroutines
+	if g.mwCache != nil {
+		g.mwCache.Stop()
+	}
+	if g.rateLimiter != nil {
+		g.rateLimiter.Stop()
+	}
 }
