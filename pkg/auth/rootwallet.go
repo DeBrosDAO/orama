@@ -208,7 +208,11 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 	// Build namespace gateway URL
 	namespaceURL := ""
 	if d := extractDomainFromURL(gatewayURL); d != "" {
-		namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, d)
+		if namespace == "default" {
+			namespaceURL = fmt.Sprintf("https://%s", d)
+		} else {
+			namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, d)
+		}
 	}
 
 	creds := &Credentials{
@@ -221,9 +225,8 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 		NamespaceURL: namespaceURL,
 	}
 
-	if result.ExpiresIn > 0 {
-		creds.ExpiresAt = time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
-	}
+	// Note: result.ExpiresIn is the JWT access token lifetime (15min),
+	// NOT the API key lifetime. Don't set ExpiresAt — the API key is permanent.
 
 	return creds, nil
 }

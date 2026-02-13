@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -15,10 +16,12 @@ import (
 	qrterminal "github.com/mdp/qrterminal/v3"
 )
 
+// Hardcoded Phantom auth React app URL (deployed on Orama devnet)
+const phantomAuthURL = "https://phantom-auth-y0w9aa.orama-devnet.network"
+
 // PhantomSession represents a phantom auth session from the gateway.
 type PhantomSession struct {
 	SessionID string `json:"session_id"`
-	AuthURL   string `json:"auth_url"`
 	ExpiresAt string `json:"expires_at"`
 }
 
@@ -71,10 +74,13 @@ func PerformPhantomAuthentication(gatewayURL, namespace string) (*Credentials, e
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
-	// 2. Display QR code
+	// 2. Build auth URL and display QR code
+	authURL := fmt.Sprintf("%s/?session=%s&gateway=%s&namespace=%s",
+		phantomAuthURL, session.SessionID, url.QueryEscape(gatewayURL), url.QueryEscape(namespace))
+
 	fmt.Println("\nScan this QR code with your phone to authenticate:")
 	fmt.Println()
-	qrterminal.GenerateWithConfig(session.AuthURL, qrterminal.Config{
+	qrterminal.GenerateWithConfig(authURL, qrterminal.Config{
 		Level:     qrterminal.M,
 		Writer:    os.Stdout,
 		BlackChar: qrterminal.BLACK,
@@ -82,7 +88,7 @@ func PerformPhantomAuthentication(gatewayURL, namespace string) (*Credentials, e
 		QuietZone: 1,
 	})
 	fmt.Println()
-	fmt.Printf("Or open this URL on your phone:\n%s\n\n", session.AuthURL)
+	fmt.Printf("Or open this URL on your phone:\n%s\n\n", authURL)
 	fmt.Println("Waiting for authentication... (timeout: 5 minutes)")
 
 	// 3. Poll for completion
@@ -94,7 +100,11 @@ func PerformPhantomAuthentication(gatewayURL, namespace string) (*Credentials, e
 	// Set namespace and build namespace URL
 	creds.Namespace = namespace
 	if domain := extractDomainFromURL(gatewayURL); domain != "" {
-		creds.NamespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, domain)
+		if namespace == "default" {
+			creds.NamespaceURL = fmt.Sprintf("https://%s", domain)
+		} else {
+			creds.NamespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, domain)
+		}
 	}
 
 	fmt.Printf("\n🎉 Authentication successful!\n")

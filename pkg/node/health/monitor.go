@@ -60,7 +60,8 @@ type Monitor struct {
 	mu    sync.Mutex
 	peers map[string]*peerState // nodeID → state
 
-	onDeadFn func(nodeID string) // callback when quorum confirms death
+	onDeadFn      func(nodeID string) // callback when quorum confirms death
+	onRecoveredFn func(nodeID string) // callback when node transitions from dead → healthy
 }
 
 // NewMonitor creates a new health monitor.
@@ -92,6 +93,12 @@ func NewMonitor(cfg Config) *Monitor {
 // quorum. The callback runs synchronously in the monitor goroutine.
 func (m *Monitor) OnNodeDead(fn func(nodeID string)) {
 	m.onDeadFn = fn
+}
+
+// OnNodeRecovered registers a callback invoked when a previously dead node
+// transitions back to healthy. Used to clean up orphaned services.
+func (m *Monitor) OnNodeRecovered(fn func(nodeID string)) {
+	m.onRecoveredFn = fn
 }
 
 // Start runs the monitor loop until ctx is cancelled.
@@ -173,8 +180,17 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 	if healthy {
 		// Recovered
 		if ps.status != "healthy" {
-			m.logger.Info("Node recovered", zap.String("target", nodeID))
+			wasDead := ps.status == "dead"
+			m.logger.Info("Node recovered", zap.String("target", nodeID),
+				zap.String("previous_status", ps.status))
 			m.writeEvent(ctx, nodeID, "recovered")
+
+			// Fire recovery callback for nodes that were confirmed dead
+			if wasDead && m.onRecoveredFn != nil {
+				m.mu.Unlock()
+				m.onRecoveredFn(nodeID)
+				m.mu.Lock()
+			}
 		}
 		ps.missCount = 0
 		ps.status = "healthy"

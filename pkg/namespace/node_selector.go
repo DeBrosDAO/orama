@@ -117,6 +117,56 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 	return selectedNodes, nil
 }
 
+// SelectReplacementNode selects a single optimal node for replacing a dead node
+// in an existing cluster. excludeNodeIDs contains nodes that should not be
+// selected (dead node + existing cluster members).
+func (cns *ClusterNodeSelector) SelectReplacementNode(ctx context.Context, excludeNodeIDs []string) (*NodeCapacity, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	activeNodes, err := cns.getActiveNodes(internalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	exclude := make(map[string]bool, len(excludeNodeIDs))
+	for _, id := range excludeNodeIDs {
+		exclude[id] = true
+	}
+
+	var eligible []NodeCapacity
+	for _, node := range activeNodes {
+		if exclude[node.NodeID] {
+			continue
+		}
+		capacity, err := cns.getNodeCapacity(internalCtx, node.NodeID, node.IPAddress, node.InternalIP)
+		if err != nil {
+			cns.logger.Warn("Failed to get node capacity for replacement, skipping",
+				zap.String("node_id", node.NodeID), zap.Error(err))
+			continue
+		}
+		if capacity.AvailableNamespaceSlots > 0 {
+			eligible = append(eligible, *capacity)
+		}
+	}
+
+	if len(eligible) == 0 {
+		return nil, ErrInsufficientNodes
+	}
+
+	sort.Slice(eligible, func(i, j int) bool {
+		return eligible[i].Score > eligible[j].Score
+	})
+
+	selected := &eligible[0]
+	cns.logger.Info("Selected replacement node",
+		zap.String("node_id", selected.NodeID),
+		zap.Float64("score", selected.Score),
+		zap.Int("available_slots", selected.AvailableNamespaceSlots),
+	)
+
+	return selected, nil
+}
+
 // nodeInfo is used for querying active nodes
 type nodeInfo struct {
 	NodeID     string `db:"id"`
