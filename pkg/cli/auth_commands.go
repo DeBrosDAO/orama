@@ -21,11 +21,13 @@ func HandleAuthCommand(args []string) {
 	switch subcommand {
 	case "login":
 		var wallet, namespace string
+		var simple bool
 		fs := flag.NewFlagSet("auth login", flag.ExitOnError)
-		fs.StringVar(&wallet, "wallet", "", "Wallet address (0x...)")
+		fs.StringVar(&wallet, "wallet", "", "Wallet address (implies --simple)")
 		fs.StringVar(&namespace, "namespace", "", "Namespace name")
+		fs.BoolVar(&simple, "simple", false, "Use simple auth without signature verification")
 		_ = fs.Parse(args[1:])
-		handleAuthLogin(wallet, namespace)
+		handleAuthLogin(wallet, namespace, simple)
 	case "logout":
 		handleAuthLogout()
 	case "whoami":
@@ -47,30 +49,37 @@ func showAuthHelp() {
 	fmt.Printf("🔐 Authentication Commands\n\n")
 	fmt.Printf("Usage: orama auth <subcommand>\n\n")
 	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  login      - Authenticate by providing your wallet address\n")
+	fmt.Printf("  login      - Authenticate with RootWallet (default) or simple auth\n")
 	fmt.Printf("  logout     - Clear stored credentials\n")
 	fmt.Printf("  whoami     - Show current authentication status\n")
 	fmt.Printf("  status     - Show detailed authentication info\n")
 	fmt.Printf("  list       - List all stored credentials for current environment\n")
 	fmt.Printf("  switch     - Switch between stored credentials\n\n")
+	fmt.Printf("Login Flags:\n")
+	fmt.Printf("  --namespace <name>  - Target namespace\n")
+	fmt.Printf("  --simple            - Use simple auth (no signature, dev only)\n")
+	fmt.Printf("  --wallet <0x...>    - Wallet address (implies --simple)\n\n")
 	fmt.Printf("Examples:\n")
-	fmt.Printf("  orama auth login          # Enter wallet address interactively\n")
-	fmt.Printf("  orama auth login --wallet 0x... --namespace myns  # Non-interactive\n")
-	fmt.Printf("  orama auth whoami         # Check who you're logged in as\n")
-	fmt.Printf("  orama auth status         # View detailed authentication info\n")
-	fmt.Printf("  orama auth logout         # Clear all stored credentials\n\n")
+	fmt.Printf("  orama auth login                    # Sign with RootWallet (default)\n")
+	fmt.Printf("  orama auth login --namespace myns   # Sign with RootWallet + namespace\n")
+	fmt.Printf("  orama auth login --simple           # Simple auth (no signature)\n")
+	fmt.Printf("  orama auth whoami                   # Check who you're logged in as\n")
+	fmt.Printf("  orama auth logout                   # Clear all stored credentials\n\n")
 	fmt.Printf("Environment Variables:\n")
 	fmt.Printf("  DEBROS_GATEWAY_URL - Gateway URL (overrides environment config)\n\n")
-	fmt.Printf("Authentication Flow:\n")
+	fmt.Printf("Authentication Flow (RootWallet):\n")
 	fmt.Printf("  1. Run 'orama auth login'\n")
-	fmt.Printf("  2. Enter your wallet address when prompted\n")
-	fmt.Printf("  3. Enter your namespace (or press Enter for 'default')\n")
-	fmt.Printf("  4. An API key will be generated and saved to ~/.orama/credentials.json\n\n")
-	fmt.Printf("Note: Authentication uses the currently active environment.\n")
+	fmt.Printf("  2. Your wallet address is read from RootWallet automatically\n")
+	fmt.Printf("  3. Enter your namespace when prompted\n")
+	fmt.Printf("  4. A challenge nonce is signed with your wallet key\n")
+	fmt.Printf("  5. Credentials are saved to ~/.orama/credentials.json\n\n")
+	fmt.Printf("Note: Requires RootWallet CLI (rw) in PATH.\n")
+	fmt.Printf("      Install: cd rootwallet/cli && ./install.sh\n")
+	fmt.Printf("      Authentication uses the currently active environment.\n")
 	fmt.Printf("      Use 'orama env current' to see your active environment.\n")
 }
 
-func handleAuthLogin(wallet, namespace string) {
+func handleAuthLogin(wallet, namespace string, simple bool) {
 	// Get gateway URL from active environment
 	gatewayURL := getGatewayURL()
 
@@ -129,8 +138,43 @@ func handleAuthLogin(wallet, namespace string) {
 		}
 	}
 
-	// Perform simple authentication to add a new credential
-	creds, err := auth.PerformSimpleAuthentication(gatewayURL, wallet, namespace)
+	// Choose authentication method
+	var creds *auth.Credentials
+	reader := bufio.NewReader(os.Stdin)
+
+	if simple || wallet != "" {
+		// Explicit simple auth — requires existing credentials
+		existingCreds := store.GetDefaultCredential(gatewayURL)
+		if existingCreds == nil || !existingCreds.IsValid() {
+			fmt.Fprintf(os.Stderr, "❌ Simple auth requires existing credentials. Authenticate with RootWallet or Phantom first.\n")
+			os.Exit(1)
+		}
+		creds, err = auth.PerformSimpleAuthentication(gatewayURL, wallet, namespace, existingCreds.APIKey)
+	} else {
+		// Show auth method selection
+		fmt.Println("How would you like to authenticate?")
+		fmt.Println("  1. RootWallet (EVM signature)")
+		fmt.Println("  2. Phantom (Solana + NFT required)")
+		fmt.Print("\nSelect [1/2]: ")
+
+		choice, _ := reader.ReadString('\n')
+		choice = strings.TrimSpace(choice)
+
+		switch choice {
+		case "2":
+			creds, err = auth.PerformPhantomAuthentication(gatewayURL, namespace)
+		default:
+			// Default to RootWallet
+			if auth.IsRootWalletInstalled() {
+				creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace)
+			} else {
+				fmt.Println("\n⚠️  RootWallet CLI (rw) not found in PATH.")
+				fmt.Println("   Install it: cd rootwallet/cli && ./install.sh")
+				os.Exit(1)
+			}
+		}
+	}
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
 		os.Exit(1)
@@ -155,7 +199,6 @@ func handleAuthLogin(wallet, namespace string) {
 	fmt.Printf("📁 Credentials saved to: %s\n", credsPath)
 	fmt.Printf("🎯 Wallet: %s\n", creds.Wallet)
 	fmt.Printf("🏢 Namespace: %s\n", creds.Namespace)
-	fmt.Printf("🔑 API Key: %s\n", creds.APIKey)
 	if creds.NamespaceURL != "" {
 		fmt.Printf("🌐 Namespace URL: %s\n", creds.NamespaceURL)
 	}

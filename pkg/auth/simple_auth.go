@@ -15,8 +15,9 @@ import (
 )
 
 // PerformSimpleAuthentication performs a simple authentication flow where the user
-// provides a wallet address and receives an API key without signature verification
-func PerformSimpleAuthentication(gatewayURL, wallet, namespace string) (*Credentials, error) {
+// provides a wallet address and receives an API key without signature verification.
+// Requires an existing valid API key (convenience re-auth only).
+func PerformSimpleAuthentication(gatewayURL, wallet, namespace, existingAPIKey string) (*Credentials, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\n🔐 Simple Wallet Authentication")
@@ -67,7 +68,7 @@ func PerformSimpleAuthentication(gatewayURL, wallet, namespace string) (*Credent
 	fmt.Println("⏳ Requesting API key from gateway...")
 
 	// Request API key from gateway
-	apiKey, err := requestAPIKeyFromGateway(gatewayURL, wallet, namespace)
+	apiKey, err := requestAPIKeyFromGateway(gatewayURL, wallet, namespace, existingAPIKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to request API key: %w", err)
 	}
@@ -89,14 +90,18 @@ func PerformSimpleAuthentication(gatewayURL, wallet, namespace string) (*Credent
 	}
 
 	fmt.Printf("\n🎉 Authentication successful!\n")
-	fmt.Printf("📝 API Key: %s\n", creds.APIKey)
+	truncatedKey := creds.APIKey
+	if len(truncatedKey) > 8 {
+		truncatedKey = truncatedKey[:8] + "..."
+	}
+	fmt.Printf("📝 API Key: %s\n", truncatedKey)
 
 	return creds, nil
 }
 
 // requestAPIKeyFromGateway calls the gateway's simple-key endpoint to generate an API key
 // For non-default namespaces, this may trigger cluster provisioning and require polling
-func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, error) {
+func requestAPIKeyFromGateway(gatewayURL, wallet, namespace, existingAPIKey string) (string, error) {
 	reqBody := map[string]string{
 		"wallet":    wallet,
 		"namespace": namespace,
@@ -114,7 +119,16 @@ func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, err
 	domain := extractDomainFromURL(gatewayURL)
 	client := tlsutil.NewHTTPClientForDomain(30*time.Second, domain)
 
-	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if existingAPIKey != "" {
+		req.Header.Set("X-API-Key", existingAPIKey)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to call gateway: %w", err)
 	}
@@ -122,7 +136,7 @@ func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, err
 
 	// Handle 202 Accepted - namespace cluster is being provisioned
 	if resp.StatusCode == http.StatusAccepted {
-		return handleProvisioningResponse(gatewayURL, client, resp, wallet, namespace)
+		return handleProvisioningResponse(gatewayURL, client, resp, wallet, namespace, existingAPIKey)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -144,7 +158,7 @@ func requestAPIKeyFromGateway(gatewayURL, wallet, namespace string) (string, err
 }
 
 // handleProvisioningResponse handles 202 Accepted responses when namespace cluster provisioning is needed
-func handleProvisioningResponse(gatewayURL string, client *http.Client, resp *http.Response, wallet, namespace string) (string, error) {
+func handleProvisioningResponse(gatewayURL string, client *http.Client, resp *http.Response, wallet, namespace, existingAPIKey string) (string, error) {
 	var provResp map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&provResp); err != nil {
 		return "", fmt.Errorf("failed to decode provisioning response: %w", err)
@@ -177,7 +191,7 @@ func handleProvisioningResponse(gatewayURL string, client *http.Client, resp *ht
 	fmt.Println("\n✅ Namespace cluster ready!")
 	fmt.Println("⏳ Retrieving API key...")
 
-	return retryAPIKeyRequest(gatewayURL, client, wallet, namespace)
+	return retryAPIKeyRequest(gatewayURL, client, wallet, namespace, existingAPIKey)
 }
 
 // pollProvisioningStatus polls the status endpoint until the cluster is ready
@@ -185,6 +199,13 @@ func pollProvisioningStatus(gatewayURL string, client *http.Client, pollURL stri
 	// Build full poll URL if it's a relative path
 	if strings.HasPrefix(pollURL, "/") {
 		pollURL = gatewayURL + pollURL
+	} else {
+		// Validate that absolute poll URLs point to the same gateway domain
+		gatewayDomain := extractDomainFromURL(gatewayURL)
+		pollDomain := extractDomainFromURL(pollURL)
+		if gatewayDomain != pollDomain {
+			return fmt.Errorf("poll URL domain mismatch: expected %s, got %s", gatewayDomain, pollDomain)
+		}
 	}
 
 	maxAttempts := 120 // 10 minutes (5 seconds per poll)
@@ -260,7 +281,7 @@ func pollProvisioningStatus(gatewayURL string, client *http.Client, pollURL stri
 }
 
 // retryAPIKeyRequest retries the API key request after cluster provisioning
-func retryAPIKeyRequest(gatewayURL string, client *http.Client, wallet, namespace string) (string, error) {
+func retryAPIKeyRequest(gatewayURL string, client *http.Client, wallet, namespace, existingAPIKey string) (string, error) {
 	reqBody := map[string]string{
 		"wallet":    wallet,
 		"namespace": namespace,
@@ -273,7 +294,16 @@ func retryAPIKeyRequest(gatewayURL string, client *http.Client, wallet, namespac
 
 	endpoint := gatewayURL + "/v1/auth/simple-key"
 
-	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if existingAPIKey != "" {
+		req.Header.Set("X-API-Key", existingAPIKey)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to call gateway: %w", err)
 	}

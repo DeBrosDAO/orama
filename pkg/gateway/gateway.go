@@ -321,6 +321,19 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.ClientNamespace,
 			gw.withInternalAuth,
 		)
+
+		// Configure Phantom Solana auth if env vars are set
+		if cfg.PhantomAuthURL != "" {
+			var solanaVerifier *auth.SolanaNFTVerifier
+			if cfg.SolanaRPCURL != "" && cfg.NFTCollectionAddress != "" {
+				solanaVerifier = auth.NewSolanaNFTVerifier(cfg.SolanaRPCURL, cfg.NFTCollectionAddress)
+				logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured",
+					zap.String("collection", cfg.NFTCollectionAddress))
+			}
+			gw.authHandlers.SetPhantomConfig(cfg.PhantomAuthURL, solanaVerifier)
+			logger.ComponentInfo(logging.ComponentGeneral, "Phantom auth configured",
+				zap.String("auth_url", cfg.PhantomAuthURL))
+		}
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)

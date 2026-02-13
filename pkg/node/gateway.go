@@ -45,19 +45,22 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 	}
 
 	gwCfg := &gateway.Config{
-		ListenAddr:        n.config.HTTPGateway.ListenAddr,
-		ClientNamespace:   n.config.HTTPGateway.ClientNamespace,
-		BootstrapPeers:    n.config.Discovery.BootstrapPeers,
-		NodePeerID:        loadNodePeerIDFromIdentity(n.config.Node.DataDir),
-		RQLiteDSN:         n.config.HTTPGateway.RQLiteDSN,
-		OlricServers:      n.config.HTTPGateway.OlricServers,
-		OlricTimeout:      n.config.HTTPGateway.OlricTimeout,
-		IPFSClusterAPIURL: n.config.HTTPGateway.IPFSClusterAPIURL,
-		IPFSAPIURL:        n.config.HTTPGateway.IPFSAPIURL,
-		IPFSTimeout:       n.config.HTTPGateway.IPFSTimeout,
-		BaseDomain:        n.config.HTTPGateway.BaseDomain,
-		DataDir:           oramaDir,
-		ClusterSecret:     clusterSecret,
+		ListenAddr:           n.config.HTTPGateway.ListenAddr,
+		ClientNamespace:      n.config.HTTPGateway.ClientNamespace,
+		BootstrapPeers:       n.config.Discovery.BootstrapPeers,
+		NodePeerID:           loadNodePeerIDFromIdentity(n.config.Node.DataDir),
+		RQLiteDSN:            n.config.HTTPGateway.RQLiteDSN,
+		OlricServers:         n.config.HTTPGateway.OlricServers,
+		OlricTimeout:         n.config.HTTPGateway.OlricTimeout,
+		IPFSClusterAPIURL:    n.config.HTTPGateway.IPFSClusterAPIURL,
+		IPFSAPIURL:           n.config.HTTPGateway.IPFSAPIURL,
+		IPFSTimeout:          n.config.HTTPGateway.IPFSTimeout,
+		BaseDomain:           n.config.HTTPGateway.BaseDomain,
+		DataDir:              oramaDir,
+		ClusterSecret:        clusterSecret,
+		PhantomAuthURL:       os.Getenv("PHANTOM_AUTH_URL"),
+		SolanaRPCURL:         os.Getenv("SOLANA_RPC_URL"),
+		NFTCollectionAddress: os.Getenv("NFT_COLLECTION_ADDRESS"),
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)

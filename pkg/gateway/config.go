@@ -41,4 +41,9 @@ type Config struct {
 
 	// WireGuard mesh configuration
 	ClusterSecret string // Cluster secret for authenticating internal WireGuard peer exchange
+
+	// Phantom Solana auth configuration
+	PhantomAuthURL       string // URL of the deployed Phantom auth React app
+	SolanaRPCURL         string // Solana RPC endpoint for NFT verification
+	NFTCollectionAddress string // Required NFT collection address for Phantom auth
 }

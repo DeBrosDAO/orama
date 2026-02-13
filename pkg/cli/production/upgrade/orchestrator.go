@@ -47,7 +47,7 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
 	setup.SetNameserver(isNameserver)
 
-	// Configure Anyone mode (flag > saved preference)
+	// Configure Anyone mode (flag > saved preference > auto-detect)
 	if flags.AnyoneRelay {
 		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
 			Enabled:       true,
@@ -71,6 +71,20 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 			Enabled: true,
 			ORPort:  orPort,
 		})
+	} else if detectAnyoneRelay(oramaDir) {
+		// Auto-detect: relay is installed but preferences weren't saved.
+		// This happens when upgrading from older versions that didn't persist
+		// the anyone_relay preference, or when preferences.yaml was reset.
+		orPort := detectAnyoneORPort(oramaDir)
+		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
+			Enabled: true,
+			ORPort:  orPort,
+		})
+		// Save the detected preference for future upgrades
+		prefs.AnyoneRelay = true
+		prefs.AnyoneORPort = orPort
+		_ = production.SavePreferences(oramaDir, prefs)
+		fmt.Printf("  Auto-detected Anyone relay (ORPort: %d), saved to preferences\n", orPort)
 	} else if flags.AnyoneClient || prefs.AnyoneClient {
 		setup.SetAnyoneClient(true)
 	}
@@ -648,15 +662,13 @@ func (o *Orchestrator) restartServices() error {
 	// Get services to restart
 	services := utils.GetProductionServices()
 
-	// Re-enable namespace services BEFORE restarting debros-node.
-	// orama prod stop disables them, and debros-node's PartOf= dependency
+	// Re-enable all services BEFORE restarting them.
+	// orama prod stop disables services, and debros-node's PartOf= dependency
 	// won't propagate restart to disabled services. We must re-enable first
-	// so that namespace gateways restart with the updated binary.
+	// so that all services restart with the updated binary.
 	for _, svc := range services {
-		if strings.Contains(svc, "@") {
-			if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
-				fmt.Printf("   ⚠️  Warning: Failed to re-enable %s: %v\n", svc, err)
-			}
+		if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
+			fmt.Printf("   ⚠️  Warning: Failed to re-enable %s: %v\n", svc, err)
 		}
 	}
 
@@ -802,4 +814,47 @@ func (o *Orchestrator) waitForClusterHealth(timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("timeout waiting for cluster to become healthy")
+}
+
+// detectAnyoneRelay checks if an Anyone relay is installed on this node
+// by looking for the systemd service file or the anonrc config file.
+func detectAnyoneRelay(oramaDir string) bool {
+	// Check if systemd service file exists
+	if _, err := os.Stat("/etc/systemd/system/debros-anyone-relay.service"); err == nil {
+		return true
+	}
+	// Check if anonrc config exists
+	if _, err := os.Stat(filepath.Join(oramaDir, "anyone", "anonrc")); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/etc/anon/anonrc"); err == nil {
+		return true
+	}
+	return false
+}
+
+// detectAnyoneORPort reads the configured ORPort from anonrc, defaulting to 9001.
+func detectAnyoneORPort(oramaDir string) int {
+	for _, path := range []string{
+		filepath.Join(oramaDir, "anyone", "anonrc"),
+		"/etc/anon/anonrc",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "ORPort ") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					port := 0
+					if _, err := fmt.Sscanf(parts[1], "%d", &port); err == nil && port > 0 {
+						return port
+					}
+				}
+			}
+		}
+	}
+	return 9001
 }

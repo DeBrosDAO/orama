@@ -108,3 +108,5 @@ cli
 ./inspector
 
 results/
+
+phantom-auth/

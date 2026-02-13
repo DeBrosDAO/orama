@@ -116,10 +116,11 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // SimpleAPIKeyHandler generates an API key without signature verification.
-// This is a simplified flow for development/testing purposes.
+// Requires an existing valid API key (convenience re-auth only, not standalone).
 //
 // POST /v1/auth/simple-key
 // Request body: SimpleAPIKeyRequest
+// Headers: X-API-Key or Authorization required
 // Response: { "api_key", "namespace", "wallet", "created" }
 func (h *Handlers) SimpleAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 	if h.authService == nil {
@@ -128,6 +129,13 @@ func (h *Handlers) SimpleAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Require existing API key — simple auth is a convenience shortcut, not standalone
+	existingKey, _ := r.Context().Value(CtxKeyAPIKey).(string)
+	if existingKey == "" {
+		writeError(w, http.StatusUnauthorized, "simple auth requires an existing API key")
 		return
 	}
 

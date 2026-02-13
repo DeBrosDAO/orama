@@ -48,10 +48,9 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)
 	if g.authHandlers != nil {
-		mux.HandleFunc("/v1/auth/login", g.authHandlers.LoginPageHandler)
 		mux.HandleFunc("/v1/auth/challenge", g.authHandlers.ChallengeHandler)
 		mux.HandleFunc("/v1/auth/verify", g.authHandlers.VerifyHandler)
-		// New: issue JWT from API key; new: create or return API key for a wallet after verification
+		// Issue JWT from API key; create or return API key for a wallet after verification
 		mux.HandleFunc("/v1/auth/token", g.authHandlers.APIKeyToJWTHandler)
 		mux.HandleFunc("/v1/auth/api-key", g.authHandlers.IssueAPIKeyHandler)
 		mux.HandleFunc("/v1/auth/simple-key", g.authHandlers.SimpleAPIKeyHandler)
@@ -59,6 +58,10 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
+		// Phantom Solana auth (QR code + deep link)
+		mux.HandleFunc("/v1/auth/phantom/session", g.authHandlers.PhantomSessionHandler)
+		mux.HandleFunc("/v1/auth/phantom/session/", g.authHandlers.PhantomSessionStatusHandler)
+		mux.HandleFunc("/v1/auth/phantom/complete", g.authHandlers.PhantomCompleteHandler)
 	}
 
 	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints)
