@@ -5,7 +5,6 @@ package e2e
 import (
 	"os"
 	"path/filepath"
-	"testing"
 
 	"gopkg.in/yaml.v2"
 )
@@ -37,10 +36,10 @@ type ServerConfig struct {
 	IsNameserver bool   `yaml:"is_nameserver"`
 }
 
-// DefaultConfig returns the default configuration for local development
+// DefaultConfig returns the default configuration
 func DefaultConfig() *E2EConfig {
 	return &E2EConfig{
-		Mode:        "local",
+		Mode:        "production",
 		BaseDomain:  "orama.network",
 		Servers:     []ServerConfig{},
 		Nameservers: []string{},
@@ -94,7 +93,7 @@ func LoadE2EConfig() (*E2EConfig, error) {
 
 	// Apply defaults for empty values
 	if cfg.Mode == "" {
-		cfg.Mode = "local"
+		cfg.Mode = "production"
 	}
 	if cfg.BaseDomain == "" {
 		cfg.BaseDomain = "orama.network"
@@ -115,29 +114,6 @@ func IsProductionMode() bool {
 		return false
 	}
 	return cfg.Mode == "production"
-}
-
-// IsLocalMode returns true if running in local mode
-func IsLocalMode() bool {
-	return !IsProductionMode()
-}
-
-// SkipIfLocal skips the test if running in local mode
-// Use this for tests that require real production infrastructure
-func SkipIfLocal(t *testing.T) {
-	t.Helper()
-	if IsLocalMode() {
-		t.Skip("Skipping: requires production environment (set mode: production in e2e/config.yaml)")
-	}
-}
-
-// SkipIfProduction skips the test if running in production mode
-// Use this for tests that should only run locally
-func SkipIfProduction(t *testing.T) {
-	t.Helper()
-	if IsProductionMode() {
-		t.Skip("Skipping: local-only test")
-	}
 }
 
 // GetServerIPs returns a list of all server IP addresses from config

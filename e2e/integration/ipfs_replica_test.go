@@ -18,8 +18,6 @@ import (
 // TestIPFS_ContentPinnedOnMultipleNodes verifies that deploying a static app
 // makes the IPFS content available across multiple nodes.
 func TestIPFS_ContentPinnedOnMultipleNodes(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 

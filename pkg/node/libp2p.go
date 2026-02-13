@@ -54,25 +54,17 @@ func (n *Node) startLibP2P() error {
 			zap.Strings("addrs", n.config.Node.ListenAddresses))
 	}
 
-	// For localhost/development, disable NAT services
-	isLocalhost := len(n.config.Node.ListenAddresses) > 0 &&
-		(strings.Contains(n.config.Node.ListenAddresses[0], "localhost") ||
-			strings.Contains(n.config.Node.ListenAddresses[0], "127.0.0.1"))
-
-	if isLocalhost {
-		n.logger.ComponentInfo(logging.ComponentLibP2P, "Localhost detected - disabling NAT services for local development")
-	} else {
-		n.logger.ComponentInfo(logging.ComponentLibP2P, "Production mode - enabling NAT services")
-		opts = append(opts,
-			libp2p.EnableNATService(),
-			libp2p.EnableAutoNATv2(),
-			libp2p.EnableRelay(),
-			libp2p.NATPortMap(),
-			libp2p.EnableAutoRelayWithPeerSource(
-				peerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
-			),
-		)
-	}
+	// Enable NAT services for network traversal
+	n.logger.ComponentInfo(logging.ComponentLibP2P, "Enabling NAT services")
+	opts = append(opts,
+		libp2p.EnableNATService(),
+		libp2p.EnableAutoNATv2(),
+		libp2p.EnableRelay(),
+		libp2p.NATPortMap(),
+		libp2p.EnableAutoRelayWithPeerSource(
+			peerSource(n.config.Discovery.BootstrapPeers, n.logger.Logger),
+		),
+	)
 
 	h, err := libp2p.New(opts...)
 	if err != nil {

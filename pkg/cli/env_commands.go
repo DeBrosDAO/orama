@@ -46,7 +46,6 @@ func showEnvHelp() {
 	fmt.Printf("  switch     - Switch to a different environment\n")
 	fmt.Printf("  enable     - Alias for 'switch' (e.g., 'devnet enable')\n\n")
 	fmt.Printf("Available Environments:\n")
-	fmt.Printf("  local      - Local development (http://localhost:6001)\n")
 	fmt.Printf("  devnet     - Development network (https://orama-devnet.network)\n")
 	fmt.Printf("  testnet    - Test network (https://orama-tesetnet.network)\n\n")
 	fmt.Printf("Examples:\n")
@@ -104,7 +103,7 @@ func handleEnvCurrent() {
 func handleEnvSwitch(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: orama env switch <environment>\n")
-		fmt.Fprintf(os.Stderr, "Available: local, devnet, testnet\n")
+		fmt.Fprintf(os.Stderr, "Available: devnet, testnet\n")
 		os.Exit(1)
 	}
 
@@ -207,12 +206,6 @@ func handleEnvRemove(args []string) {
 
 	name := args[0]
 
-	// Don't allow removing 'local'
-	if name == "local" {
-		fmt.Fprintf(os.Stderr, "❌ Cannot remove the 'local' environment\n")
-		os.Exit(1)
-	}
-
 	envConfig, err := LoadEnvironmentConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to load environment config: %v\n", err)
@@ -237,9 +230,9 @@ func handleEnvRemove(args []string) {
 
 	envConfig.Environments = newEnvs
 
-	// If we removed the active environment, switch to local
+	// If we removed the active environment, switch to devnet
 	if envConfig.ActiveEnvironment == name {
-		envConfig.ActiveEnvironment = "local"
+		envConfig.ActiveEnvironment = "devnet"
 	}
 
 	if err := SaveEnvironmentConfig(envConfig); err != nil {

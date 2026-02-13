@@ -292,50 +292,54 @@ func handleAuthStatus() {
 }
 
 // promptForGatewayURL interactively prompts for the gateway URL
-// Allows user to choose between local node or remote node by domain
+// Uses the active environment or allows entering a custom domain
 func promptForGatewayURL() string {
 	// Check environment variable first (allows override without prompting)
 	if url := os.Getenv("DEBROS_GATEWAY_URL"); url != "" {
 		return url
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+	// Try active environment
+	env, err := GetActiveEnvironment()
+	if err == nil {
+		reader := bufio.NewReader(os.Stdin)
 
-	fmt.Println("\n🌐 Node Connection")
-	fmt.Println("==================")
-	fmt.Println("1. Local node (localhost:6001)")
-	fmt.Println("2. Remote node (enter domain)")
-	fmt.Print("\nSelect option [1/2]: ")
+		fmt.Println("\n🌐 Node Connection")
+		fmt.Println("==================")
+		fmt.Printf("1. Use active environment: %s (%s)\n", env.Name, env.GatewayURL)
+		fmt.Println("2. Enter custom domain")
+		fmt.Print("\nSelect option [1/2]: ")
 
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+		choice, _ := reader.ReadString('\n')
+		choice = strings.TrimSpace(choice)
 
-	if choice == "1" || choice == "" {
-		return "http://localhost:6001"
+		if choice == "1" || choice == "" {
+			return env.GatewayURL
+		}
+
+		if choice == "2" {
+			fmt.Print("Enter node domain (e.g., node-hk19de.orama.network): ")
+			domain, _ := reader.ReadString('\n')
+			domain = strings.TrimSpace(domain)
+
+			if domain == "" {
+				fmt.Printf("⚠️  No domain entered, using %s\n", env.Name)
+				return env.GatewayURL
+			}
+
+			// Remove any protocol prefix if user included it
+			domain = strings.TrimPrefix(domain, "https://")
+			domain = strings.TrimPrefix(domain, "http://")
+			// Remove trailing slash
+			domain = strings.TrimSuffix(domain, "/")
+
+			return fmt.Sprintf("https://%s", domain)
+		}
+
+		return env.GatewayURL
 	}
 
-	if choice != "2" {
-		fmt.Println("⚠️  Invalid option, using localhost")
-		return "http://localhost:6001"
-	}
-
-	fmt.Print("Enter node domain (e.g., node-hk19de.orama.network): ")
-	domain, _ := reader.ReadString('\n')
-	domain = strings.TrimSpace(domain)
-
-	if domain == "" {
-		fmt.Println("⚠️  No domain entered, using localhost")
-		return "http://localhost:6001"
-	}
-
-	// Remove any protocol prefix if user included it
-	domain = strings.TrimPrefix(domain, "https://")
-	domain = strings.TrimPrefix(domain, "http://")
-	// Remove trailing slash
-	domain = strings.TrimSuffix(domain, "/")
-
-	// Use HTTPS for remote domains
-	return fmt.Sprintf("https://%s", domain)
+	return "https://orama-devnet.network"
 }
 
 // getGatewayURL returns the gateway URL based on environment or env var
@@ -352,8 +356,8 @@ func getGatewayURL() string {
 		return env.GatewayURL
 	}
 
-	// Fallback to default (node-1)
-	return "http://localhost:6001"
+	// Fallback to devnet
+	return "https://orama-devnet.network"
 }
 
 func handleAuthList() {

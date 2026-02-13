@@ -19,8 +19,6 @@ import (
 // TestCrossNode_ProxyRouting tests that requests routed through the gateway
 // are served correctly for a deployment.
 func TestCrossNode_ProxyRouting(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
@@ -60,8 +58,6 @@ func TestCrossNode_ProxyRouting(t *testing.T) {
 
 // TestCrossNode_APIConsistency tests that API responses are consistent
 func TestCrossNode_APIConsistency(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
@@ -110,8 +106,6 @@ func TestCrossNode_APIConsistency(t *testing.T) {
 
 // TestCrossNode_DeploymentGetConsistency tests that deployment details are correct
 func TestCrossNode_DeploymentGetConsistency(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 

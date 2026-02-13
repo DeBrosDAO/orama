@@ -44,10 +44,6 @@ func main() {
 		fmt.Println()
 		return
 
-	// Development environment commands
-	case "dev":
-		cli.HandleDevCommand(args)
-
 	// Production environment commands (legacy with 'prod' prefix)
 	case "prod":
 		cli.HandleProdCommand(args)
@@ -131,13 +127,6 @@ func parseGlobalFlags(args []string) {
 func showHelp() {
 	fmt.Printf("Orama CLI - Distributed P2P Network Management Tool\n\n")
 	fmt.Printf("Usage: orama <command> [args...]\n\n")
-
-	fmt.Printf("💻 Local Development:\n")
-	fmt.Printf("  dev up                        - Start full local dev environment\n")
-	fmt.Printf("  dev down                      - Stop all dev services\n")
-	fmt.Printf("  dev status                    - Show status of dev services\n")
-	fmt.Printf("  dev logs <component>          - View dev component logs\n")
-	fmt.Printf("  dev help                      - Show dev command help\n\n")
 
 	fmt.Printf("🚀 Production Deployment:\n")
 	fmt.Printf("  install                       - Install production node (requires root/sudo)\n")

@@ -277,8 +277,8 @@ func GetGatewayURL() string {
 		}
 	}
 
-	// Default fallback
-	return "http://localhost:6001"
+	// Fallback to devnet
+	return "https://orama-devnet.network"
 }
 
 // GetRQLiteNodes returns rqlite endpoint addresses from config
@@ -290,26 +290,8 @@ func GetRQLiteNodes() []string {
 	}
 	cacheMutex.RUnlock()
 
-	// Try all node config files
-	for _, cfgFile := range []string{"node-1.yaml", "node-2.yaml", "node-3.yaml", "node-4.yaml", "node-5.yaml"} {
-		nodeCfg, err := loadNodeConfig(cfgFile)
-		if err != nil {
-			continue
-		}
-
-		if db, ok := nodeCfg["database"].(map[interface{}]interface{}); ok {
-			if rqlitePort, ok := db["rqlite_port"].(int); ok {
-				nodes := []string{fmt.Sprintf("http://localhost:%d", rqlitePort)}
-				cacheMutex.Lock()
-				rqliteCache = nodes
-				cacheMutex.Unlock()
-				return nodes
-			}
-		}
-	}
-
-	// Default fallback
-	return []string{"http://localhost:5001"}
+	// No fallback — require explicit configuration via RQLITE_NODES env var
+	return nil
 }
 
 // queryAPIKeyFromRQLite queries the SQLite database directly for an API key
@@ -328,21 +310,14 @@ func queryAPIKeyFromRQLite() (string, error) {
 		// Fall through to local database check if remote fails
 	}
 
-	// 3. Build database path from bootstrap/node config (for local development)
+	// 3. Build database path from node config
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Try all node data directories (both production and development paths)
+	// Production paths (~/.orama/data/node-x/...)
 	dbPaths := []string{
-		// Development paths (~/.orama/node-x/...)
-		filepath.Join(homeDir, ".orama", "node-1", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".orama", "node-2", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".orama", "node-3", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".orama", "node-4", "rqlite", "db.sqlite"),
-		filepath.Join(homeDir, ".orama", "node-5", "rqlite", "db.sqlite"),
-		// Production paths (~/.orama/data/node-x/...)
 		filepath.Join(homeDir, ".orama", "data", "node-1", "rqlite", "db.sqlite"),
 		filepath.Join(homeDir, ".orama", "data", "node-2", "rqlite", "db.sqlite"),
 		filepath.Join(homeDir, ".orama", "data", "node-3", "rqlite", "db.sqlite"),
@@ -556,8 +531,8 @@ func GetIPFSClusterURL() string {
 		}
 	}
 
-	// Default fallback
-	return "http://localhost:9094"
+	// No fallback — require explicit configuration
+	return ""
 }
 
 // GetIPFSAPIURL returns the IPFS API URL from config
@@ -588,8 +563,8 @@ func GetIPFSAPIURL() string {
 		}
 	}
 
-	// Default fallback
-	return "http://localhost:5001"
+	// No fallback — require explicit configuration
+	return ""
 }
 
 // GetClientNamespace returns the test client namespace from config
@@ -1231,11 +1206,6 @@ func LoadTestEnv() (*E2ETestEnv, error) {
 	// Load E2E config (for base_domain and production settings)
 	cfg, err := LoadE2EConfig()
 	if err != nil {
-		// If config loading fails in production mode, that's an error
-		if IsProductionMode() {
-			return nil, fmt.Errorf("failed to load e2e config: %w", err)
-		}
-		// For local mode, use defaults
 		cfg = DefaultConfig()
 	}
 

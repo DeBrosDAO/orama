@@ -17,8 +17,6 @@ import (
 // TestMiddleware_NonExistentDeployment verifies that requests to a non-existent
 // deployment return 404 (not 502 or hang).
 func TestMiddleware_NonExistentDeployment(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 
@@ -51,8 +49,6 @@ func TestMiddleware_NonExistentDeployment(t *testing.T) {
 // TestMiddleware_InternalAPIAuthRejection verifies that internal replica API
 // endpoints reject requests without the proper internal auth header.
 func TestMiddleware_InternalAPIAuthRejection(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err)
 

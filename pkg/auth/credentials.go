@@ -181,7 +181,7 @@ func GetDefaultGatewayURL() string {
 		return gwURL
 	}
 
-	return "http://localhost:6001"
+	return "https://orama-devnet.network"
 }
 
 // getGatewayFromEnvConfig reads the active environment's gateway URL from the config file

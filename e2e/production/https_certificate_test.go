@@ -18,8 +18,6 @@ import (
 
 // TestHTTPS_CertificateValid tests that HTTPS works with a valid certificate
 func TestHTTPS_CertificateValid(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
@@ -86,8 +84,6 @@ func TestHTTPS_CertificateValid(t *testing.T) {
 
 // TestHTTPS_CertificateDetails tests certificate properties
 func TestHTTPS_CertificateDetails(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
@@ -152,8 +148,6 @@ func TestHTTPS_CertificateDetails(t *testing.T) {
 
 // TestHTTPS_HTTPRedirect tests that HTTP requests are redirected to HTTPS
 func TestHTTPS_HTTPRedirect(t *testing.T) {
-	e2e.SkipIfLocal(t)
-
 	env, err := e2e.LoadTestEnv()
 	require.NoError(t, err, "Failed to load test environment")
 
