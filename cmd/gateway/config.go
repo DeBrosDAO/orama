@@ -192,6 +192,17 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
 	}
 
+	// Phantom Solana auth (from env vars)
+	if v := os.Getenv("PHANTOM_AUTH_URL"); v != "" {
+		cfg.PhantomAuthURL = v
+	}
+	if v := os.Getenv("SOLANA_RPC_URL"); v != "" {
+		cfg.SolanaRPCURL = v
+	}
+	if v := os.Getenv("NFT_COLLECTION_ADDRESS"); v != "" {
+		cfg.NFTCollectionAddress = v
+	}
+
 	// Validate configuration
 	if errs := cfg.ValidateConfig(); len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "\nGateway configuration errors (%d):\n", len(errs))

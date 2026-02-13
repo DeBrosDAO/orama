@@ -56,6 +56,8 @@ type Handlers struct {
 	defaultNS          string
 	internalAuthFn     func(context.Context) context.Context
 	clusterProvisioner ClusterProvisioner // Optional: for namespace cluster provisioning
+	phantomAuthURL     string                  // URL of the Phantom auth React app
+	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 }
 
 // NewHandlers creates a new authentication handlers instance
@@ -78,6 +80,12 @@ func NewHandlers(
 // SetClusterProvisioner sets the cluster provisioner for namespace cluster management
 func (h *Handlers) SetClusterProvisioner(cp ClusterProvisioner) {
 	h.clusterProvisioner = cp
+}
+
+// SetPhantomConfig sets the Phantom auth app URL and Solana NFT verifier
+func (h *Handlers) SetPhantomConfig(authURL string, verifier *authsvc.SolanaNFTVerifier) {
+	h.phantomAuthURL = authURL
+	h.solanaVerifier = verifier
 }
 
 // markNonceUsed marks a nonce as used in the database
