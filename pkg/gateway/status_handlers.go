@@ -176,6 +176,11 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		"checks": checks,
 	}
 
+	// Include namespace health if available (populated by namespace health loop)
+	if nsHealth := g.getNamespaceHealth(); nsHealth != nil {
+		resp["namespaces"] = nsHealth
+	}
+
 	// Cache
 	g.healthCacheMu.Lock()
 	g.healthCache = &cachedHealthResult{
