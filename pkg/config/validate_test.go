@@ -81,7 +81,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 	}{
 		{"valid 1", 1, false},
 		{"valid 3", 3, false},
-		{"valid even", 2, false}, // warn but not error
+		{"even replication factor", 2, true}, // even numbers are invalid for Raft quorum
 		{"invalid zero", 0, true},
 		{"invalid negative", -1, true},
 	}

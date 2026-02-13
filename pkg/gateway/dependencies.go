@@ -75,6 +75,15 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	if len(cfg.BootstrapPeers) > 0 {
 		cliCfg.BootstrapPeers = cfg.BootstrapPeers
 	}
+	// Ensure the gorqlite client can reach the local RQLite instance.
+	// Without this, gorqlite has zero endpoints and all DB queries fail.
+	if len(cliCfg.DatabaseEndpoints) == 0 {
+		dsn := cfg.RQLiteDSN
+		if dsn == "" {
+			dsn = "http://localhost:5001"
+		}
+		cliCfg.DatabaseEndpoints = []string{dsn}
+	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating network client...")
 	c, err := client.NewClient(cliCfg)

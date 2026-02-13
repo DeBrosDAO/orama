@@ -892,6 +892,9 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		if err != nil || result == nil || len(result.Rows) == 0 {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
 				zap.String("namespace", namespaceName),
+				zap.Error(err),
+				zap.Bool("result_nil", result == nil),
+				zap.Int("row_count", func() int { if result != nil { return len(result.Rows) }; return -1 }()),
 			)
 			http.Error(w, "Namespace gateway not found", http.StatusNotFound)
 			return
