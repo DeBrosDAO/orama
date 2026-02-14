@@ -20,7 +20,7 @@ import (
 
 // Manager manages deployment processes via systemd (Linux) or direct process spawning (macOS/other)
 type Manager struct {
-	logger    *zap.Logger
+	logger     *zap.Logger
 	useSystemd bool
 
 	// For non-systemd mode: track running processes
@@ -310,8 +310,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory={{.WorkDir}}
 
 {{range .Env}}Environment="{{.}}"
@@ -373,7 +373,7 @@ WantedBy=multi-user.target
 		return err
 	}
 
-	// Use sudo tee to write to systemd directory (debros user needs sudo access)
+	// Use sudo tee to write to systemd directory (orama user needs sudo access)
 	cmd := exec.Command("sudo", "tee", serviceFile)
 	cmd.Stdin = &buf
 	output, err := cmd.CombinedOutput()

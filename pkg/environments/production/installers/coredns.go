@@ -171,21 +171,21 @@ func (ci *CoreDNSInstaller) Install() error {
 
 	getCmd := exec.Command("go", "get", "github.com/miekg/dns@latest")
 	getCmd.Dir = buildDir
-	getCmd.Env = append(os.Environ(), "PATH="+goPath)
+	getCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := getCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to get miekg/dns: %w\n%s", err, string(output))
 	}
 
 	getCmd = exec.Command("go", "get", "go.uber.org/zap@latest")
 	getCmd.Dir = buildDir
-	getCmd.Env = append(os.Environ(), "PATH="+goPath)
+	getCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := getCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to get zap: %w\n%s", err, string(output))
 	}
 
 	tidyCmd := exec.Command("go", "mod", "tidy")
 	tidyCmd.Dir = buildDir
-	tidyCmd.Env = append(os.Environ(), "PATH="+goPath)
+	tidyCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := tidyCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to run go mod tidy: %w\n%s", err, string(output))
 	}
@@ -194,7 +194,7 @@ func (ci *CoreDNSInstaller) Install() error {
 	fmt.Fprintf(ci.logWriter, "    Generating plugin code...\n")
 	genCmd := exec.Command("go", "generate")
 	genCmd.Dir = buildDir
-	genCmd.Env = append(os.Environ(), "PATH="+goPath)
+	genCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := genCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to generate: %w\n%s", err, string(output))
 	}
@@ -203,7 +203,7 @@ func (ci *CoreDNSInstaller) Install() error {
 	fmt.Fprintf(ci.logWriter, "    Building CoreDNS binary...\n")
 	buildCmd := exec.Command("go", "build", "-o", "coredns")
 	buildCmd.Dir = buildDir
-	buildCmd.Env = append(os.Environ(), "PATH="+goPath, "CGO_ENABLED=0")
+	buildCmd.Env = append(os.Environ(), "PATH="+goPath, "CGO_ENABLED=0", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build CoreDNS: %w\n%s", err, string(output))
 	}

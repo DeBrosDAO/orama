@@ -24,9 +24,9 @@ func (v *Validator) CheckNeedsMigration() bool {
 	}
 
 	oldServices := []string{
-		"debros-ipfs",
-		"debros-ipfs-cluster",
-		"debros-node",
+		"orama-ipfs",
+		"orama-ipfs-cluster",
+		"orama-node",
 	}
 
 	oldConfigs := []string{

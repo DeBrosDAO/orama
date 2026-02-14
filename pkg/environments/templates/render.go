@@ -17,8 +17,8 @@ type NodeConfigData struct {
 	P2PPort                int
 	DataDir                string
 	RQLiteHTTPPort         int
-	RQLiteRaftPort         int // External Raft port for advertisement (7001 for SNI)
-	RQLiteRaftInternalPort int // Internal Raft port for local binding (7002 when SNI enabled)
+	RQLiteRaftPort         int      // External Raft port for advertisement (7001 for SNI)
+	RQLiteRaftInternalPort int      // Internal Raft port for local binding (7002 when SNI enabled)
 	RQLiteJoinAddress      string   // Optional: join address for joining existing cluster
 	BootstrapPeers         []string // List of peer multiaddrs to connect to
 	ClusterAPIPort         int
@@ -58,13 +58,13 @@ type GatewayConfigData struct {
 
 // OlricConfigData holds parameters for olric.yaml rendering
 type OlricConfigData struct {
-	ServerBindAddr         string // HTTP API bind address (127.0.0.1 for security)
-	HTTPPort               int
-	MemberlistBindAddr     string // Memberlist bind address (WG IP for clustering)
-	MemberlistPort         int
-	MemberlistEnvironment  string // "local", "lan", or "wan"
+	ServerBindAddr          string // HTTP API bind address (127.0.0.1 for security)
+	HTTPPort                int
+	MemberlistBindAddr      string // Memberlist bind address (WG IP for clustering)
+	MemberlistPort          int
+	MemberlistEnvironment   string   // "local", "lan", or "wan"
 	MemberlistAdvertiseAddr string   // Advertise address (WG IP) so other nodes can reach us
-	Peers                  []string // Seed peers for memberlist (host:port)
+	Peers                   []string // Seed peers for memberlist (host:port)
 }
 
 // SystemdIPFSData holds parameters for systemd IPFS service rendering
@@ -72,33 +72,33 @@ type SystemdIPFSData struct {
 	HomeDir      string
 	IPFSRepoPath string
 	SecretsDir   string
-	OramaDir    string
+	OramaDir     string
 }
 
 // SystemdIPFSClusterData holds parameters for systemd IPFS Cluster service rendering
 type SystemdIPFSClusterData struct {
 	HomeDir     string
 	ClusterPath string
-	OramaDir   string
+	OramaDir    string
 }
 
 // SystemdOlricData holds parameters for systemd Olric service rendering
 type SystemdOlricData struct {
 	HomeDir    string
 	ConfigPath string
-	OramaDir  string
+	OramaDir   string
 }
 
 // SystemdNodeData holds parameters for systemd Node service rendering
 type SystemdNodeData struct {
 	HomeDir    string
 	ConfigFile string
-	OramaDir  string
+	OramaDir   string
 }
 
 // SystemdGatewayData holds parameters for systemd Gateway service rendering
 type SystemdGatewayData struct {
-	HomeDir   string
+	HomeDir  string
 	OramaDir string
 }
 
@@ -132,12 +132,12 @@ func RenderOlricService(data SystemdOlricData) (string, error) {
 	return renderTemplate("systemd_olric.service", data)
 }
 
-// RenderNodeService renders the DeBros Node systemd service template
+// RenderNodeService renders the Orama Node systemd service template
 func RenderNodeService(data SystemdNodeData) (string, error) {
 	return renderTemplate("systemd_node.service", data)
 }
 
-// RenderGatewayService renders the DeBros Gateway systemd service template
+// RenderGatewayService renders the Orama Gateway systemd service template
 func RenderGatewayService(data SystemdGatewayData) (string, error) {
 	return renderTemplate("systemd_gateway.service", data)
 }

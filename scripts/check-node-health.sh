@@ -25,7 +25,7 @@ WG_IP=$(ip -4 addr show wg0 2>/dev/null | grep -oP 'inet \K[0-9.]+' || true)
 
 # 1. Services
 echo "── Services ──"
-for svc in debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy; do
+for svc in orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy; do
     status=$(systemctl is-active "$svc" 2>/dev/null || true)
     case "$status" in
         active)     mark="✓";;
@@ -86,7 +86,7 @@ echo ""
 
 # 4. IPFS
 echo "── IPFS ──"
-PEERS=$(sudo -u debros IPFS_PATH=/home/debros/.orama/data/ipfs/repo /usr/local/bin/ipfs swarm peers 2>/dev/null)
+PEERS=$(sudo -u orama IPFS_PATH=/home/orama/.orama/data/ipfs/repo /usr/local/bin/ipfs swarm peers 2>/dev/null)
 if [ -n "$PEERS" ]; then
     COUNT=$(echo "$PEERS" | wc -l)
     echo "  Connected peers: $COUNT"
@@ -119,7 +119,7 @@ echo ""
 
 # 6. Olric
 echo "── Olric ──"
-if systemctl is-active debros-olric &>/dev/null; then
+if systemctl is-active orama-olric &>/dev/null; then
     echo "  service: active"
     # Olric doesn't have a simple HTTP health endpoint; just check the process
     OLRIC_PID=$(pgrep -f olric-server || true)

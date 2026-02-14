@@ -38,7 +38,7 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: 600, margin: '40px auto', fontFamily: 'system-ui' }}>
-      <h1>DeBros Notes</h1>
+      <h1>Orama Notes</h1>
       <p style={{ color: '#666', fontSize: 14 }}>
         React Static + Node.js Proxy + Go API + SQLite
       </p>

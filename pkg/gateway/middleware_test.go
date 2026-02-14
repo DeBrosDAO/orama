@@ -28,7 +28,7 @@ func TestExtractAPIKey(t *testing.T) {
 	}
 }
 
-// TestDomainRoutingMiddleware_NonDebrosNetwork tests that non-debros domains pass through
+// TestDomainRoutingMiddleware_NonDebrosNetwork tests that non-orama domains pass through
 func TestDomainRoutingMiddleware_NonDebrosNetwork(t *testing.T) {
 	nextCalled := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +46,7 @@ func TestDomainRoutingMiddleware_NonDebrosNetwork(t *testing.T) {
 	middleware.ServeHTTP(rr, req)
 
 	if !nextCalled {
-		t.Error("Expected next handler to be called for non-debros domain")
+		t.Error("Expected next handler to be called for non-orama domain")
 	}
 
 	if rr.Code != http.StatusOK {
@@ -379,10 +379,10 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 
 		expected := map[string]string{
 			"X-Content-Type-Options": "nosniff",
-			"X-Frame-Options":       "DENY",
-			"X-Xss-Protection":      "0",
-			"Referrer-Policy":       "strict-origin-when-cross-origin",
-			"Permissions-Policy":    "camera=(), microphone=(), geolocation=()",
+			"X-Frame-Options":        "DENY",
+			"X-Xss-Protection":       "0",
+			"Referrer-Policy":        "strict-origin-when-cross-origin",
+			"Permissions-Policy":     "camera=(), microphone=(), geolocation=()",
 		}
 		for header, want := range expected {
 			got := rr.Header().Get(header)

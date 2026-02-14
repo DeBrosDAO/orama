@@ -66,7 +66,7 @@ func showAuthHelp() {
 	fmt.Printf("  orama auth whoami                   # Check who you're logged in as\n")
 	fmt.Printf("  orama auth logout                   # Clear all stored credentials\n\n")
 	fmt.Printf("Environment Variables:\n")
-	fmt.Printf("  DEBROS_GATEWAY_URL - Gateway URL (overrides environment config)\n\n")
+	fmt.Printf("  ORAMA_GATEWAY_URL - Gateway URL (overrides environment config)\n\n")
 	fmt.Printf("Authentication Flow (RootWallet):\n")
 	fmt.Printf("  1. Run 'orama auth login'\n")
 	fmt.Printf("  2. Your wallet address is read from RootWallet automatically\n")
@@ -295,7 +295,7 @@ func handleAuthStatus() {
 // Uses the active environment or allows entering a custom domain
 func promptForGatewayURL() string {
 	// Check environment variable first (allows override without prompting)
-	if url := os.Getenv("DEBROS_GATEWAY_URL"); url != "" {
+	if url := os.Getenv("ORAMA_GATEWAY_URL"); url != "" {
 		return url
 	}
 
@@ -346,7 +346,7 @@ func promptForGatewayURL() string {
 // Used by other commands that don't need interactive node selection
 func getGatewayURL() string {
 	// Check environment variable first (for backwards compatibility)
-	if url := os.Getenv("DEBROS_GATEWAY_URL"); url != "" {
+	if url := os.Getenv("ORAMA_GATEWAY_URL"); url != "" {
 		return url
 	}
 

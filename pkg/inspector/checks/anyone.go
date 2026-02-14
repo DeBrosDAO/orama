@@ -42,7 +42,7 @@ func checkAnyonePerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	if a.RelayActive {
 		r = append(r, inspector.Pass("anyone.relay_active", "Anyone relay service active", anyoneSub, node,
-			"debros-anyone-relay is active", inspector.High))
+			"orama-anyone-relay is active", inspector.High))
 	}
 
 	// --- Client-mode checks ---
@@ -133,7 +133,7 @@ func checkAnyonePerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	// --- Legacy client checks (if also running client service) ---
 	if a.ClientActive {
 		r = append(r, inspector.Pass("anyone.client_active", "Anyone client service active", anyoneSub, node,
-			"debros-anyone-client is active", inspector.High))
+			"orama-anyone-client is active", inspector.High))
 
 		if a.SocksListening {
 			r = append(r, inspector.Pass("anyone.socks_listening", "SOCKS5 port 9050 listening", anyoneSub, node,

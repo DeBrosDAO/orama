@@ -5,7 +5,7 @@
 # After orama upgrade, the firewall reset drops the ORPort 9001 rule because
 # preferences.yaml didn't have anyone_relay=true. This patch:
 #   1. Opens port 9001/tcp in UFW
-#   2. Re-enables debros-anyone-relay (survives reboot)
+#   2. Re-enables orama-anyone-relay (survives reboot)
 #   3. Saves anyone_relay preference so future upgrades preserve the rule
 #
 # Usage:
@@ -51,10 +51,10 @@ fix_node() {
   local cmd
   cmd=$(cat <<'REMOTE'
 set -e
-PREFS="/home/debros/.orama/preferences.yaml"
+PREFS="/home/orama/.orama/preferences.yaml"
 
 # Only patch nodes that have the Anyone relay service installed
-if [ ! -f /etc/systemd/system/debros-anyone-relay.service ]; then
+if [ ! -f /etc/systemd/system/orama-anyone-relay.service ]; then
   echo "SKIP_NO_RELAY"
   exit 0
 fi
@@ -63,11 +63,11 @@ fi
 sudo ufw allow 9001/tcp >/dev/null 2>&1
 
 # 2. Enable the service so it survives reboot
-sudo systemctl enable debros-anyone-relay >/dev/null 2>&1
+sudo systemctl enable orama-anyone-relay >/dev/null 2>&1
 
 # 3. Restart the service if not running
-if ! systemctl is-active --quiet debros-anyone-relay; then
-  sudo systemctl start debros-anyone-relay >/dev/null 2>&1
+if ! systemctl is-active --quiet orama-anyone-relay; then
+  sudo systemctl start orama-anyone-relay >/dev/null 2>&1
 fi
 
 # 4. Save anyone_relay preference if missing

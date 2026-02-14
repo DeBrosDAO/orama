@@ -127,7 +127,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Set default User-Agent if not provided
 	if proxyReq.Header.Get("User-Agent") == "" {
-		proxyReq.Header.Set("User-Agent", "DeBros-Gateway/1.0")
+		proxyReq.Header.Set("User-Agent", "Orama-Gateway/1.0")
 	}
 
 	// Log the proxy request

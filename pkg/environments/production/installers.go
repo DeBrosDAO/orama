@@ -27,7 +27,7 @@ type BinaryInstaller struct {
 
 // NewBinaryInstaller creates a new binary installer
 func NewBinaryInstaller(arch string, logWriter io.Writer) *BinaryInstaller {
-	oramaHome := "/home/debros"
+	oramaHome := "/home/orama"
 	return &BinaryInstaller{
 		arch:        arch,
 		logWriter:   logWriter,
@@ -72,7 +72,7 @@ func (bi *BinaryInstaller) ResolveBinaryPath(binary string, extraPaths ...string
 	return installers.ResolveBinaryPath(binary, extraPaths...)
 }
 
-// InstallDeBrosBinaries builds DeBros binaries from source
+// InstallDeBrosBinaries builds Orama binaries from source
 func (bi *BinaryInstaller) InstallDeBrosBinaries(oramaHome string) error {
 	return bi.gateway.InstallDeBrosBinaries(oramaHome)
 }

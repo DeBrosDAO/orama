@@ -21,7 +21,7 @@ type DiscoveryResult struct {
 
 // DiscoverPeerFromDomain queries an existing node to get its peer ID and IPFS info
 // Tries HTTPS first, then falls back to HTTP
-// Respects DEBROS_TRUSTED_TLS_DOMAINS and DEBROS_CA_CERT_PATH environment variables for certificate verification
+// Respects ORAMA_TRUSTED_TLS_DOMAINS and ORAMA_CA_CERT_PATH environment variables for certificate verification
 func DiscoverPeerFromDomain(domain string) (*DiscoveryResult, error) {
 	// Use centralized TLS configuration that respects CA certificates and trusted domains
 	client := tlsutil.NewHTTPClientForDomain(10*time.Second, domain)

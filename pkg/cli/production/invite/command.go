@@ -68,7 +68,7 @@ func Handle(args []string) {
 
 // readNodeDomain reads the domain from the node config file
 func readNodeDomain() (string, error) {
-	configPath := "/home/debros/.orama/configs/node.yaml"
+	configPath := "/home/orama/.orama/configs/node.yaml"
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", fmt.Errorf("read config: %w", err)

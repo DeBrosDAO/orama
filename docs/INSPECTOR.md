@@ -62,7 +62,7 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **ipfs** | Daemon active, cluster active, swarm peer count, cluster peer count, cluster errors, repo usage %, swarm key present, bootstrap list empty, cross-node version consistency |
 | **dns** | CoreDNS active, Caddy active, ports (53/80/443), memory, restart count, log errors, Corefile exists, SOA/NS/wildcard/base-A resolution, TLS cert expiry, cross-node nameserver availability |
 | **wireguard** | Interface up, service active, correct 10.0.0.x IP, listen port 51820, peer count vs expected, MTU 1420, config exists + permissions 600, peer handshakes (fresh/stale/never), peer traffic, catch-all route detection, cross-node peer count + MTU consistency |
-| **system** | Core services (debros-node, rqlite, olric, ipfs, ipfs-cluster, wg-quick), nameserver services (coredns, caddy), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (debros), panic count, expected ports |
+| **system** | Core services (orama-node, rqlite, olric, ipfs, ipfs-cluster, wg-quick), nameserver services (coredns, caddy), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (orama), panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, TCP retransmission rate, WireGuard mesh ping (all peers) |
 | **namespace** | Per-namespace: RQLite up + raft state + readyz, Olric memberlist, Gateway HTTP health. Cross-namespace: all-healthy check, RQLite quorum per namespace |
 

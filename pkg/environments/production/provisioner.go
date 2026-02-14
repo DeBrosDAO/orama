@@ -12,7 +12,7 @@ import (
 type FilesystemProvisioner struct {
 	oramaHome string
 	oramaDir  string
-	logWriter  interface{} // Can be io.Writer for logging
+	logWriter interface{} // Can be io.Writer for logging
 }
 
 // NewFilesystemProvisioner creates a new provisioner
@@ -81,30 +81,30 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 	return nil
 }
 
-// FixOwnership changes ownership of .orama directory to debros user
+// FixOwnership changes ownership of .orama directory to orama user
 func (fp *FilesystemProvisioner) FixOwnership() error {
 	// Fix entire .orama directory recursively (includes all data, configs, logs, etc.)
-	cmd := exec.Command("chown", "-R", "debros:debros", fp.oramaDir)
+	cmd := exec.Command("chown", "-R", "orama:orama", fp.oramaDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.oramaDir, err, string(output))
 	}
 
 	// Also fix home directory ownership
-	cmd = exec.Command("chown", "debros:debros", fp.oramaHome)
+	cmd = exec.Command("chown", "orama:orama", fp.oramaHome)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", fp.oramaHome, err, string(output))
 	}
 
 	// Fix bin directory
 	binDir := filepath.Join(fp.oramaHome, "bin")
-	cmd = exec.Command("chown", "-R", "debros:debros", binDir)
+	cmd = exec.Command("chown", "-R", "orama:orama", binDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", binDir, err, string(output))
 	}
 
 	// Fix npm cache directory
 	npmDir := filepath.Join(fp.oramaHome, ".npm")
-	cmd = exec.Command("chown", "-R", "debros:debros", npmDir)
+	cmd = exec.Command("chown", "-R", "orama:orama", npmDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set ownership for %s: %w\nOutput: %s", npmDir, err, string(output))
 	}
@@ -157,8 +157,8 @@ func (up *UserProvisioner) SetupSudoersAccess(invokerUser string) error {
 		return nil // Skip if no invoker
 	}
 
-	sudoersRule := fmt.Sprintf("%s ALL=(debros) NOPASSWD: ALL\n", invokerUser)
-	sudoersFile := "/etc/sudoers.d/debros-access"
+	sudoersRule := fmt.Sprintf("%s ALL=(orama) NOPASSWD: ALL\n", invokerUser)
+	sudoersFile := "/etc/sudoers.d/orama-access"
 
 	// Check if rule already exists
 	if existing, err := os.ReadFile(sudoersFile); err == nil {
@@ -182,31 +182,31 @@ func (up *UserProvisioner) SetupSudoersAccess(invokerUser string) error {
 	return nil
 }
 
-// SetupDeploymentSudoers configures the debros user with permissions needed for
+// SetupDeploymentSudoers configures the orama user with permissions needed for
 // managing user deployments via systemd services.
 func (up *UserProvisioner) SetupDeploymentSudoers() error {
-	sudoersFile := "/etc/sudoers.d/debros-deployments"
+	sudoersFile := "/etc/sudoers.d/orama-deployments"
 
 	// Check if already configured
 	if _, err := os.Stat(sudoersFile); err == nil {
 		return nil // Already configured
 	}
 
-	sudoersContent := `# DeBros Network - Deployment Management Permissions
-# Allows debros user to manage systemd services for user deployments
+	sudoersContent := `# Orama Network - Deployment Management Permissions
+# Allows orama user to manage systemd services for user deployments
 
 # Systemd service management for orama-deploy-* services
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl start orama-deploy-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop orama-deploy-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart orama-deploy-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable orama-deploy-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable orama-deploy-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl status orama-deploy-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl start orama-deploy-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop orama-deploy-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart orama-deploy-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable orama-deploy-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable orama-deploy-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl status orama-deploy-*
 
 # Service file management (tee to write, rm to remove)
-debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/orama-deploy-*.service
-debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-deploy-*.service
+orama ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/orama-deploy-*.service
+orama ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-deploy-*.service
 `
 
 	// Write sudoers rule
@@ -224,36 +224,36 @@ debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-deploy-*.service
 	return nil
 }
 
-// SetupNamespaceSudoers configures the debros user with permissions needed for
+// SetupNamespaceSudoers configures the orama user with permissions needed for
 // managing namespace cluster services via systemd.
 func (up *UserProvisioner) SetupNamespaceSudoers() error {
-	sudoersFile := "/etc/sudoers.d/debros-namespaces"
+	sudoersFile := "/etc/sudoers.d/orama-namespaces"
 
 	// Check if already configured
 	if _, err := os.Stat(sudoersFile); err == nil {
 		return nil // Already configured
 	}
 
-	sudoersContent := `# DeBros Network - Namespace Cluster Management Permissions
-# Allows debros user to manage systemd services for namespace clusters
+	sudoersContent := `# Orama Network - Namespace Cluster Management Permissions
+# Allows orama user to manage systemd services for namespace clusters
 
-# Systemd service management for debros-namespace-* services
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl start debros-namespace-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop debros-namespace-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart debros-namespace-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable debros-namespace-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable debros-namespace-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl status debros-namespace-*
-debros ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active debros-namespace-*
+# Systemd service management for orama-namespace-* services
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl start orama-namespace-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop orama-namespace-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart orama-namespace-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable orama-namespace-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable orama-namespace-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl status orama-namespace-*
+orama ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active orama-namespace-*
 
 # Service file management (tee to write, rm to remove)
-debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/debros-namespace-*.service
-debros ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/debros-namespace-*.service
+orama ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/orama-namespace-*.service
+orama ALL=(ALL) NOPASSWD: /bin/rm -f /etc/systemd/system/orama-namespace-*.service
 
 # Environment file management for namespace services
-debros ALL=(ALL) NOPASSWD: /usr/bin/tee /home/debros/.orama/namespace/*/env/*
-debros ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/debros/.orama/namespace/*/env
+orama ALL=(ALL) NOPASSWD: /usr/bin/tee /home/orama/.orama/namespace/*/env/*
+orama ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/orama/.orama/namespace/*/env
 `
 
 	// Write sudoers rule
@@ -271,17 +271,17 @@ debros ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /home/debros/.orama/namespace/*/env
 	return nil
 }
 
-// SetupWireGuardSudoers configures the debros user with permissions to manage WireGuard
+// SetupWireGuardSudoers configures the orama user with permissions to manage WireGuard
 func (up *UserProvisioner) SetupWireGuardSudoers() error {
-	sudoersFile := "/etc/sudoers.d/debros-wireguard"
+	sudoersFile := "/etc/sudoers.d/orama-wireguard"
 
-	sudoersContent := `# DeBros Network - WireGuard Management Permissions
-# Allows debros user to manage WireGuard peers
+	sudoersContent := `# Orama Network - WireGuard Management Permissions
+# Allows orama user to manage WireGuard peers
 
-debros ALL=(ALL) NOPASSWD: /usr/bin/wg set wg0 *
-debros ALL=(ALL) NOPASSWD: /usr/bin/wg show wg0
-debros ALL=(ALL) NOPASSWD: /usr/bin/wg showconf wg0
-debros ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wireguard/wg0.conf
+orama ALL=(ALL) NOPASSWD: /usr/bin/wg set wg0 *
+orama ALL=(ALL) NOPASSWD: /usr/bin/wg show wg0
+orama ALL=(ALL) NOPASSWD: /usr/bin/wg showconf wg0
+orama ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wireguard/wg0.conf
 `
 
 	// Write sudoers rule (always overwrite to ensure latest)

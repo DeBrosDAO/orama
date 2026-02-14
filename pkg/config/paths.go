@@ -20,7 +20,7 @@ func ExpandPath(path string) (string, error) {
 	return path, nil
 }
 
-// ConfigDir returns the path to the DeBros config directory (~/.orama).
+// ConfigDir returns the path to the Orama config directory (~/.orama).
 func ConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

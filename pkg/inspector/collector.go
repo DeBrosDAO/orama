@@ -46,53 +46,53 @@ type NamespaceData struct {
 // RQLiteData holds parsed RQLite status from a single node.
 type RQLiteData struct {
 	Responsive bool
-	StatusRaw  string            // raw JSON from /status
-	NodesRaw   string            // raw JSON from /nodes?nonvoters
-	ReadyzRaw  string            // raw response from /readyz
-	DebugRaw   string            // raw JSON from /debug/vars
-	Status     *RQLiteStatus     // parsed /status
+	StatusRaw  string                 // raw JSON from /status
+	NodesRaw   string                 // raw JSON from /nodes?nonvoters
+	ReadyzRaw  string                 // raw response from /readyz
+	DebugRaw   string                 // raw JSON from /debug/vars
+	Status     *RQLiteStatus          // parsed /status
 	Nodes      map[string]*RQLiteNode // parsed /nodes
-	Readyz     *RQLiteReadyz     // parsed /readyz
-	DebugVars  *RQLiteDebugVars  // parsed /debug/vars
-	StrongRead bool              // SELECT 1 with level=strong succeeded
+	Readyz     *RQLiteReadyz          // parsed /readyz
+	DebugVars  *RQLiteDebugVars       // parsed /debug/vars
+	StrongRead bool                   // SELECT 1 with level=strong succeeded
 }
 
 // RQLiteDebugVars holds metrics from /debug/vars.
 type RQLiteDebugVars struct {
-	QueryErrors       uint64
-	ExecuteErrors     uint64
-	RemoteExecErrors  uint64
-	LeaderNotFound    uint64
-	SnapshotErrors    uint64
-	ClientRetries     uint64
-	ClientTimeouts    uint64
+	QueryErrors      uint64
+	ExecuteErrors    uint64
+	RemoteExecErrors uint64
+	LeaderNotFound   uint64
+	SnapshotErrors   uint64
+	ClientRetries    uint64
+	ClientTimeouts   uint64
 }
 
 // RQLiteStatus holds parsed fields from /status.
 type RQLiteStatus struct {
-	RaftState      string  // Leader, Follower, Candidate, Shutdown
-	LeaderNodeID   string  // store.leader.node_id
-	LeaderAddr     string  // store.leader.addr
-	NodeID         string  // store.node_id
-	Term           uint64  // store.raft.term (current_term)
-	AppliedIndex   uint64  // store.raft.applied_index
-	CommitIndex    uint64  // store.raft.commit_index
-	FsmPending     uint64  // store.raft.fsm_pending
-	LastContact    string  // store.raft.last_contact (followers only)
-	LastLogIndex   uint64  // store.raft.last_log_index
-	LastLogTerm    uint64  // store.raft.last_log_term
-	NumPeers       int     // store.raft.num_peers (string in JSON)
-	LastSnapshot   uint64  // store.raft.last_snapshot_index
-	Voter          bool    // store.raft.voter
-	DBSize         int64   // store.sqlite3.db_size
-	DBSizeFriendly string  // store.sqlite3.db_size_friendly
-	DBAppliedIndex uint64  // store.db_applied_index
-	FsmIndex       uint64  // store.fsm_index
-	Uptime         string  // http.uptime
-	Version        string  // build.version
-	GoVersion      string  // runtime.GOARCH + runtime.version
-	Goroutines     int     // runtime.num_goroutine
-	HeapAlloc      uint64  // runtime.memory.heap_alloc (bytes)
+	RaftState      string // Leader, Follower, Candidate, Shutdown
+	LeaderNodeID   string // store.leader.node_id
+	LeaderAddr     string // store.leader.addr
+	NodeID         string // store.node_id
+	Term           uint64 // store.raft.term (current_term)
+	AppliedIndex   uint64 // store.raft.applied_index
+	CommitIndex    uint64 // store.raft.commit_index
+	FsmPending     uint64 // store.raft.fsm_pending
+	LastContact    string // store.raft.last_contact (followers only)
+	LastLogIndex   uint64 // store.raft.last_log_index
+	LastLogTerm    uint64 // store.raft.last_log_term
+	NumPeers       int    // store.raft.num_peers (string in JSON)
+	LastSnapshot   uint64 // store.raft.last_snapshot_index
+	Voter          bool   // store.raft.voter
+	DBSize         int64  // store.sqlite3.db_size
+	DBSizeFriendly string // store.sqlite3.db_size_friendly
+	DBAppliedIndex uint64 // store.db_applied_index
+	FsmIndex       uint64 // store.fsm_index
+	Uptime         string // http.uptime
+	Version        string // build.version
+	GoVersion      string // runtime.GOARCH + runtime.version
+	Goroutines     int    // runtime.num_goroutine
+	HeapAlloc      uint64 // runtime.memory.heap_alloc (bytes)
 }
 
 // RQLiteNode holds parsed fields from /nodes response per node.
@@ -107,11 +107,11 @@ type RQLiteNode struct {
 
 // RQLiteReadyz holds parsed readiness state.
 type RQLiteReadyz struct {
-	Ready    bool
-	Store    string // "ready" or error
-	Leader   string // "ready" or error
-	Node     string // "ready" or error
-	RawBody  string
+	Ready   bool
+	Store   string // "ready" or error
+	Leader  string // "ready" or error
+	Node    string // "ready" or error
+	RawBody string
 }
 
 // OlricData holds parsed Olric status from a single node.
@@ -130,17 +130,17 @@ type OlricData struct {
 
 // IPFSData holds parsed IPFS status from a single node.
 type IPFSData struct {
-	DaemonActive   bool
-	ClusterActive  bool
-	SwarmPeerCount int
+	DaemonActive     bool
+	ClusterActive    bool
+	SwarmPeerCount   int
 	ClusterPeerCount int
-	RepoSizeBytes  int64
-	RepoMaxBytes   int64
-	KuboVersion    string
-	ClusterVersion string
-	ClusterErrors  int  // peers reporting errors
-	HasSwarmKey    bool
-	BootstrapEmpty bool // true if bootstrap list is empty (private swarm)
+	RepoSizeBytes    int64
+	RepoMaxBytes     int64
+	KuboVersion      string
+	ClusterVersion   string
+	ClusterErrors    int // peers reporting errors
+	HasSwarmKey      bool
+	BootstrapEmpty   bool // true if bootstrap list is empty (private swarm)
 }
 
 // DNSData holds parsed DNS/CoreDNS status from a nameserver node.
@@ -154,29 +154,29 @@ type DNSData struct {
 	CoreDNSRestarts int
 	LogErrors       int // error count in recent CoreDNS logs
 	// Resolution tests (dig results)
-	SOAResolves     bool
-	NSResolves      bool
-	NSRecordCount   int
+	SOAResolves      bool
+	NSResolves       bool
+	NSRecordCount    int
 	WildcardResolves bool
-	BaseAResolves   bool
+	BaseAResolves    bool
 	// TLS
-	BaseTLSDaysLeft  int  // -1 = failed to check
-	WildTLSDaysLeft  int  // -1 = failed to check
+	BaseTLSDaysLeft int // -1 = failed to check
+	WildTLSDaysLeft int // -1 = failed to check
 	// Corefile
-	CorefileExists   bool
+	CorefileExists bool
 }
 
 // WireGuardData holds parsed WireGuard status from a node.
 type WireGuardData struct {
-	InterfaceUp  bool
+	InterfaceUp   bool
 	ServiceActive bool
-	WgIP         string
-	PeerCount    int
-	Peers        []WGPeer
-	MTU          int
-	ListenPort   int
-	ConfigExists bool
-	ConfigPerms  string // e.g. "600"
+	WgIP          string
+	PeerCount     int
+	Peers         []WGPeer
+	MTU           int
+	ListenPort    int
+	ConfigExists  bool
+	ConfigPerms   string // e.g. "600"
 }
 
 // WGPeer holds parsed data for a single WireGuard peer.
@@ -192,26 +192,26 @@ type WGPeer struct {
 
 // SystemData holds parsed system-level data from a node.
 type SystemData struct {
-	Services      map[string]string // service name → status
-	FailedUnits   []string          // systemd units in failed state
-	MemTotalMB    int
-	MemUsedMB     int
-	MemFreeMB     int
-	DiskTotalGB   string
-	DiskUsedGB    string
-	DiskAvailGB   string
-	DiskUsePct    int
-	UptimeRaw       string
-	LoadAvg         string
-	CPUCount        int
-	OOMKills        int
-	SwapUsedMB      int
-	SwapTotalMB     int
-	InodePct        int      // inode usage percentage
-	ListeningPorts  []int    // ports from ss -tlnp
-	UFWActive       bool
-	ProcessUser     string   // user running debros-node (e.g. "debros")
-	PanicCount      int      // panic/fatal in recent logs
+	Services       map[string]string // service name → status
+	FailedUnits    []string          // systemd units in failed state
+	MemTotalMB     int
+	MemUsedMB      int
+	MemFreeMB      int
+	DiskTotalGB    string
+	DiskUsedGB     string
+	DiskAvailGB    string
+	DiskUsePct     int
+	UptimeRaw      string
+	LoadAvg        string
+	CPUCount       int
+	OOMKills       int
+	SwapUsedMB     int
+	SwapTotalMB    int
+	InodePct       int   // inode usage percentage
+	ListeningPorts []int // ports from ss -tlnp
+	UFWActive      bool
+	ProcessUser    string // user running orama-node (e.g. "orama")
+	PanicCount     int    // panic/fatal in recent logs
 }
 
 // NetworkData holds parsed network-level data from a node.
@@ -227,17 +227,17 @@ type NetworkData struct {
 
 // AnyoneData holds parsed Anyone relay/client status from a node.
 type AnyoneData struct {
-	RelayActive      bool   // debros-anyone-relay systemd service active
-	ClientActive     bool   // debros-anyone-client systemd service active
-	Mode             string // "relay" or "client" (from anonrc ORPort presence)
-	ORPortListening  bool   // port 9001 bound locally
-	SocksListening   bool   // port 9050 bound locally (client SOCKS5)
-	ControlListening bool   // port 9051 bound locally (control port)
-	Bootstrapped     bool   // relay has bootstrapped to 100%
-	BootstrapPct     int    // bootstrap percentage (0-100)
-	Fingerprint      string // relay fingerprint
-	Nickname         string // relay nickname
-	UptimeStr        string // uptime from control port
+	RelayActive      bool            // orama-anyone-relay systemd service active
+	ClientActive     bool            // orama-anyone-client systemd service active
+	Mode             string          // "relay" or "client" (from anonrc ORPort presence)
+	ORPortListening  bool            // port 9001 bound locally
+	SocksListening   bool            // port 9050 bound locally (client SOCKS5)
+	ControlListening bool            // port 9051 bound locally (control port)
+	Bootstrapped     bool            // relay has bootstrapped to 100%
+	BootstrapPct     int             // bootstrap percentage (0-100)
+	Fingerprint      string          // relay fingerprint
+	Nickname         string          // relay nickname
+	UptimeStr        string          // uptime from control port
 	ORPortReachable  map[string]bool // host IP → whether we can TCP connect to their 9001 from this node
 }
 
@@ -567,17 +567,17 @@ func collectOlric(ctx context.Context, node Node) *OlricData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active debros-olric 2>/dev/null
+systemctl is-active orama-olric 2>/dev/null
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep ':3322 ' | head -1
 echo "$SEP"
-journalctl -u debros-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
+journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
 echo "$SEP"
-journalctl -u debros-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
+journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
 echo "$SEP"
-journalctl -u debros-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
+journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
 echo "$SEP"
-systemctl show debros-olric --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show orama-olric --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
 ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 `
@@ -611,9 +611,9 @@ func collectIPFS(ctx context.Context, node Node) *IPFSData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active debros-ipfs 2>/dev/null
+systemctl is-active orama-ipfs 2>/dev/null
 echo "$SEP"
-systemctl is-active debros-ipfs-cluster 2>/dev/null
+systemctl is-active orama-ipfs-cluster 2>/dev/null
 echo "$SEP"
 curl -sf -X POST 'http://localhost:4501/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
@@ -625,7 +625,7 @@ curl -sf -X POST 'http://localhost:4501/api/v0/version' 2>/dev/null | python3 -c
 echo "$SEP"
 curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-sudo test -f /home/debros/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
+sudo test -f /home/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
 curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
@@ -887,8 +887,8 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	}
 
 	services := []string{
-		"debros-node", "debros-ipfs", "debros-ipfs-cluster",
-		"debros-olric", "debros-anyone-relay", "debros-anyone-client",
+		"orama-node", "orama-ipfs", "orama-ipfs-cluster",
+		"orama-olric", "orama-anyone-relay", "orama-anyone-client",
 		"coredns", "caddy", "wg-quick@wg0",
 	}
 
@@ -918,9 +918,9 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	cmd += ` && echo "$SEP"`
 	cmd += ` && sudo ufw status 2>/dev/null | head -1`
 	cmd += ` && echo "$SEP"`
-	cmd += ` && ps -C debros-node -o user= 2>/dev/null | head -1 || echo unknown`
+	cmd += ` && ps -C orama-node -o user= 2>/dev/null | head -1 || echo unknown`
 	cmd += ` && echo "$SEP"`
-	cmd += ` && journalctl -u debros-node --no-pager -n 500 --since "1 hour ago" 2>/dev/null | grep -ciE '(panic|fatal)' || echo 0`
+	cmd += ` && journalctl -u orama-node --no-pager -n 500 --since "1 hour ago" 2>/dev/null | grep -ciE '(panic|fatal)' || echo 0`
 
 	res := RunSSH(ctx, node, cmd)
 	if !res.OK() && res.Stdout == "" {
@@ -1152,9 +1152,9 @@ func collectAnyone(ctx context.Context, node Node) *AnyoneData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active debros-anyone-relay 2>/dev/null || echo inactive
+systemctl is-active orama-anyone-relay 2>/dev/null || echo inactive
 echo "$SEP"
-systemctl is-active debros-anyone-client 2>/dev/null || echo inactive
+systemctl is-active orama-anyone-client 2>/dev/null || echo inactive
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep -q ':9001 ' && echo yes || echo no
 echo "$SEP"
@@ -1289,11 +1289,11 @@ func collectAnyoneReachability(ctx context.Context, data *ClusterData) {
 }
 
 func collectNamespaces(ctx context.Context, node Node) []NamespaceData {
-	// Detect namespace services: debros-namespace-gateway@<name>.service
+	// Detect namespace services: orama-namespace-gateway@<name>.service
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl list-units --type=service --all --no-pager --no-legend 'debros-namespace-gateway@*.service' 2>/dev/null | awk '{print $1}' | sed 's/debros-namespace-gateway@//;s/\.service//'
+systemctl list-units --type=service --all --no-pager --no-legend 'orama-namespace-gateway@*.service' 2>/dev/null | awk '{print $1}' | sed 's/orama-namespace-gateway@//;s/\.service//'
 echo "$SEP"
 `
 	res := RunSSH(ctx, node, cmd)
@@ -1327,7 +1327,7 @@ echo "$SEP"
 		nsCmd += fmt.Sprintf(`
 echo "NS_START:%s"
 # Get gateway port from systemd or default discovery
-GWPORT=$(ss -tlnp 2>/dev/null | grep 'debros-namespace-gateway@%s' | grep -oP ':\K[0-9]+' | head -1)
+GWPORT=$(ss -tlnp 2>/dev/null | grep 'orama-namespace-gateway@%s' | grep -oP ':\K[0-9]+' | head -1)
 echo "GW_PORT:${GWPORT:-0}"
 # Try common namespace port ranges (10000-10099)
 for BASE in $(seq 10000 5 10099); do

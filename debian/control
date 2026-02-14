@@ -4,7 +4,7 @@ Section: net
 Priority: optional
 Architecture: amd64
 Depends: libc6
-Maintainer: DeBros Team <dev@debros.io>
+Maintainer: DeBros Team <dev@orama.io>
 Description: Orama Network - Distributed P2P Database System
  Orama is a distributed peer-to-peer network that combines
  RQLite for distributed SQL, IPFS for content-addressed storage,

@@ -34,7 +34,7 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	node := nd.Node.Name()
 
 	// 6.1 Core services active
-	coreServices := []string{"debros-node", "debros-olric", "debros-ipfs", "debros-ipfs-cluster"}
+	coreServices := []string{"orama-node", "orama-olric", "orama-ipfs", "orama-ipfs-cluster"}
 	for _, svc := range coreServices {
 		status, ok := sys.Services[svc]
 		if !ok {
@@ -51,7 +51,7 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	}
 
 	// 6.2 Anyone relay/client services (only check if installed, don't fail if absent)
-	for _, svc := range []string{"debros-anyone-relay", "debros-anyone-client"} {
+	for _, svc := range []string{"orama-anyone-relay", "orama-anyone-client"} {
 		status, ok := sys.Services[svc]
 		if !ok || status == "inactive" {
 			continue // not installed or intentionally stopped
@@ -94,21 +94,21 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.6 Failed systemd units (only debros-related units count as failures)
-	var debrosUnits, externalUnits []string
+	// 6.6 Failed systemd units (only orama-related units count as failures)
+	var oramaUnits, externalUnits []string
 	for _, u := range sys.FailedUnits {
-		if strings.HasPrefix(u, "debros-") || u == "wg-quick@wg0.service" || u == "caddy.service" || u == "coredns.service" {
-			debrosUnits = append(debrosUnits, u)
+		if strings.HasPrefix(u, "orama-") || u == "wg-quick@wg0.service" || u == "caddy.service" || u == "coredns.service" {
+			oramaUnits = append(oramaUnits, u)
 		} else {
 			externalUnits = append(externalUnits, u)
 		}
 	}
-	if len(debrosUnits) > 0 {
-		r = append(r, inspector.Fail("system.no_failed_units", "No failed debros systemd units", systemSub, node,
-			fmt.Sprintf("failed: %s", strings.Join(debrosUnits, ", ")), inspector.High))
+	if len(oramaUnits) > 0 {
+		r = append(r, inspector.Fail("system.no_failed_units", "No failed orama systemd units", systemSub, node,
+			fmt.Sprintf("failed: %s", strings.Join(oramaUnits, ", ")), inspector.High))
 	} else {
-		r = append(r, inspector.Pass("system.no_failed_units", "No failed debros systemd units", systemSub, node,
-			"no failed debros units", inspector.High))
+		r = append(r, inspector.Pass("system.no_failed_units", "No failed orama systemd units", systemSub, node,
+			"no failed orama units", inspector.High))
 	}
 	if len(externalUnits) > 0 {
 		r = append(r, inspector.Warn("system.external_failed_units", "External systemd units healthy", systemSub, node,
@@ -217,15 +217,15 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	// 6.23 Process user
 	if sys.ProcessUser != "" && sys.ProcessUser != "unknown" {
-		if sys.ProcessUser == "debros" {
-			r = append(r, inspector.Pass("system.process_user", "debros-node runs as correct user", systemSub, node,
-				"user=debros", inspector.High))
+		if sys.ProcessUser == "orama" {
+			r = append(r, inspector.Pass("system.process_user", "orama-node runs as correct user", systemSub, node,
+				"user=orama", inspector.High))
 		} else if sys.ProcessUser == "root" {
-			r = append(r, inspector.Warn("system.process_user", "debros-node runs as correct user", systemSub, node,
-				"user=root (should be debros)", inspector.High))
+			r = append(r, inspector.Warn("system.process_user", "orama-node runs as correct user", systemSub, node,
+				"user=root (should be orama)", inspector.High))
 		} else {
-			r = append(r, inspector.Warn("system.process_user", "debros-node runs as correct user", systemSub, node,
-				fmt.Sprintf("user=%s (expected debros)", sys.ProcessUser), inspector.Medium))
+			r = append(r, inspector.Warn("system.process_user", "orama-node runs as correct user", systemSub, node,
+				fmt.Sprintf("user=%s (expected orama)", sys.ProcessUser), inspector.Medium))
 		}
 	}
 

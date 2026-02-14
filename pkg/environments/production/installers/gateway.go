@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// GatewayInstaller handles DeBros binary installation (including gateway)
+// GatewayInstaller handles Orama binary installation (including gateway)
 type GatewayInstaller struct {
 	*BaseInstaller
 }
@@ -27,7 +27,7 @@ func (gi *GatewayInstaller) IsInstalled() bool {
 	return false // Always build to ensure latest version
 }
 
-// Install clones and builds DeBros binaries
+// Install clones and builds Orama binaries
 func (gi *GatewayInstaller) Install() error {
 	// This is a placeholder - actual installation is handled by InstallDeBrosBinaries
 	return nil
@@ -39,10 +39,10 @@ func (gi *GatewayInstaller) Configure() error {
 	return nil
 }
 
-// InstallDeBrosBinaries builds DeBros binaries from source at /home/debros/src.
+// InstallDeBrosBinaries builds Orama binaries from source at /home/orama/src.
 // Source must already be present (uploaded via SCP archive).
 func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
-	fmt.Fprintf(gi.logWriter, "  Building DeBros binaries...\n")
+	fmt.Fprintf(gi.logWriter, "  Building Orama binaries...\n")
 
 	srcDir := filepath.Join(oramaHome, "src")
 	binDir := filepath.Join(oramaHome, "bin")
@@ -64,7 +64,7 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 	fmt.Fprintf(gi.logWriter, "    Building binaries...\n")
 	cmd := exec.Command("make", "build")
 	cmd.Dir = srcDir
-	cmd.Env = append(os.Environ(), "HOME="+oramaHome, "PATH="+os.Getenv("PATH")+":/usr/local/go/bin")
+	cmd.Env = append(os.Environ(), "HOME="+oramaHome, "PATH="+os.Getenv("PATH")+":/usr/local/go/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build: %v\n%s", err, string(output))
 	}
@@ -117,7 +117,7 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 	if err := exec.Command("chmod", "-R", "755", binDir).Run(); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chmod bin directory: %v\n", err)
 	}
-	if err := exec.Command("chown", "-R", "debros:debros", binDir).Run(); err != nil {
+	if err := exec.Command("chown", "-R", "orama:orama", binDir).Run(); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown bin directory: %v\n", err)
 	}
 
@@ -132,25 +132,28 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 		}
 	}
 
-	fmt.Fprintf(gi.logWriter, "  ✓ DeBros binaries installed\n")
+	fmt.Fprintf(gi.logWriter, "  ✓ Orama binaries installed\n")
 	return nil
 }
 
 // InstallGo downloads and installs Go toolchain
 func (gi *GatewayInstaller) InstallGo() error {
-	requiredVersion := "1.22.5"
+	requiredVersion := "1.24.6"
 	if goPath, err := exec.LookPath("go"); err == nil {
 		// Check version - upgrade if too old
 		out, _ := exec.Command(goPath, "version").Output()
-		if strings.Contains(string(out), "go"+requiredVersion) || strings.Contains(string(out), "go1.23") || strings.Contains(string(out), "go1.24") {
+		if strings.Contains(string(out), "go"+requiredVersion) {
 			fmt.Fprintf(gi.logWriter, "  ✓ Go already installed (%s)\n", strings.TrimSpace(string(out)))
 			return nil
 		}
-		fmt.Fprintf(gi.logWriter, "  Upgrading Go (current: %s, need >= %s)...\n", strings.TrimSpace(string(out)), requiredVersion)
+		fmt.Fprintf(gi.logWriter, "  Upgrading Go (current: %s, need %s)...\n", strings.TrimSpace(string(out)), requiredVersion)
 		os.RemoveAll("/usr/local/go")
 	} else {
 		fmt.Fprintf(gi.logWriter, "  Installing Go...\n")
 	}
+
+	// Always remove old Go installation to avoid mixing versions
+	os.RemoveAll("/usr/local/go")
 
 	goTarball := fmt.Sprintf("go%s.linux-%s.tar.gz", requiredVersion, gi.arch)
 	goURL := fmt.Sprintf("https://go.dev/dl/%s", goTarball)
@@ -214,12 +217,12 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 	fmt.Fprintf(gi.logWriter, "    Initializing NPM cache...\n")
 
 	// Create nested cache directories with proper permissions
-	debrosHome := "/home/debros"
+	oramaHome := "/home/orama"
 	npmCacheDirs := []string{
-		filepath.Join(debrosHome, ".npm"),
-		filepath.Join(debrosHome, ".npm", "_cacache"),
-		filepath.Join(debrosHome, ".npm", "_cacache", "tmp"),
-		filepath.Join(debrosHome, ".npm", "_logs"),
+		filepath.Join(oramaHome, ".npm"),
+		filepath.Join(oramaHome, ".npm", "_cacache"),
+		filepath.Join(oramaHome, ".npm", "_cacache", "tmp"),
+		filepath.Join(oramaHome, ".npm", "_logs"),
 	}
 
 	for _, dir := range npmCacheDirs {
@@ -227,8 +230,8 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 			fmt.Fprintf(gi.logWriter, "    ⚠️  Failed to create %s: %v\n", dir, err)
 			continue
 		}
-		// Fix ownership to debros user (sequential to avoid race conditions)
-		if err := exec.Command("chown", "debros:debros", dir).Run(); err != nil {
+		// Fix ownership to orama user (sequential to avoid race conditions)
+		if err := exec.Command("chown", "orama:orama", dir).Run(); err != nil {
 			fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown %s: %v\n", dir, err)
 		}
 		if err := exec.Command("chmod", "700", dir).Run(); err != nil {
@@ -236,14 +239,14 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 		}
 	}
 
-	// Recursively fix ownership of entire .npm directory to ensure all nested files are owned by debros
-	if err := exec.Command("chown", "-R", "debros:debros", filepath.Join(debrosHome, ".npm")).Run(); err != nil {
+	// Recursively fix ownership of entire .npm directory to ensure all nested files are owned by orama
+	if err := exec.Command("chown", "-R", "orama:orama", filepath.Join(oramaHome, ".npm")).Run(); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown .npm directory: %v\n", err)
 	}
 
-	// Run npm cache verify as debros user with proper environment
-	cacheInitCmd := exec.Command("sudo", "-u", "debros", "npm", "cache", "verify", "--silent")
-	cacheInitCmd.Env = append(os.Environ(), "HOME="+debrosHome)
+	// Run npm cache verify as orama user with proper environment
+	cacheInitCmd := exec.Command("sudo", "-u", "orama", "npm", "cache", "verify", "--silent")
+	cacheInitCmd.Env = append(os.Environ(), "HOME="+oramaHome)
 	if err := cacheInitCmd.Run(); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  NPM cache verify warning: %v (continuing anyway)\n", err)
 	}
@@ -255,11 +258,11 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 	}
 
 	// Create terms-agreement file to bypass interactive prompt when running as a service
-	termsFile := filepath.Join(debrosHome, "terms-agreement")
+	termsFile := filepath.Join(oramaHome, "terms-agreement")
 	if err := os.WriteFile(termsFile, []byte("agreed"), 0644); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to create terms-agreement: %v\n", err)
 	} else {
-		if err := exec.Command("chown", "debros:debros", termsFile).Run(); err != nil {
+		if err := exec.Command("chown", "orama:orama", termsFile).Run(); err != nil {
 			fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown terms-agreement: %v\n", err)
 		}
 	}

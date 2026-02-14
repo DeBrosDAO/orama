@@ -28,7 +28,7 @@ func Handle(args []string) {
 		os.Exit(1)
 	}
 
-	oramaDir := "/home/debros/.orama"
+	oramaDir := "/home/orama/.orama"
 
 	fmt.Printf("🔄 Checking for installations to migrate...\n\n")
 
@@ -70,9 +70,9 @@ func Handle(args []string) {
 
 func stopOldServices() {
 	oldServices := []string{
-		"debros-ipfs",
-		"debros-ipfs-cluster",
-		"debros-node",
+		"orama-ipfs",
+		"orama-ipfs-cluster",
+		"orama-node",
 	}
 
 	fmt.Printf("\n  Stopping old services...\n")
@@ -141,9 +141,9 @@ func migrateConfigFiles(oramaDir string) {
 
 func removeOldServices() {
 	oldServices := []string{
-		"debros-ipfs",
-		"debros-ipfs-cluster",
-		"debros-node",
+		"orama-ipfs",
+		"orama-ipfs-cluster",
+		"orama-node",
 	}
 
 	fmt.Printf("\n  Removing old service files...\n")

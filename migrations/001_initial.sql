@@ -1,4 +1,4 @@
--- DeBros Gateway - Initial database schema (SQLite/RQLite dialect)
+-- Orama Gateway - Initial database schema (SQLite/RQLite dialect)
 -- This file scaffolds core tables used by the HTTP gateway for auth, observability, and namespacing.
 -- Apply via your migration tooling or manual execution in RQLite.
 

@@ -17,7 +17,7 @@ func (r *RQLiteManager) rqliteDataDirPath() (string, error) {
 }
 
 func (r *RQLiteManager) resolveMigrationsDir() (string, error) {
-	productionPath := "/home/debros/src/migrations"
+	productionPath := "/home/orama/src/migrations"
 	if _, err := os.Stat(productionPath); err == nil {
 		return productionPath, nil
 	}
@@ -55,4 +55,3 @@ func (r *RQLiteManager) exponentialBackoff(attempt int, baseDelay time.Duration,
 	}
 	return delay
 }
-

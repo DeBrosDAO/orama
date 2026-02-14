@@ -369,7 +369,7 @@ orama db create my-database
 # Output:
 # ✅ Database created: my-database
 # Home Node: node-abc123
-# File Path: /home/debros/.orama/data/sqlite/your-namespace/my-database.db
+# File Path: /home/orama/.orama/data/sqlite/your-namespace/my-database.db
 ```
 
 ### Executing Queries
@@ -588,7 +588,7 @@ func main() {
     // DATABASE_NAME env var is automatically set by Orama
     dbPath := os.Getenv("DATABASE_PATH")
     if dbPath == "" {
-        dbPath = "/home/debros/.orama/data/sqlite/" + os.Getenv("NAMESPACE") + "/myapp-db.db"
+        dbPath = "/home/orama/.orama/data/sqlite/" + os.Getenv("NAMESPACE") + "/myapp-db.db"
     }
 
     var err error

@@ -57,16 +57,16 @@ func TestDomainRouting_BasicRouting(t *testing.T) {
 		t.Logf("✓ Standard domain routing works: %s", domain)
 	})
 
-	t.Run("Non-debros domain passes through", func(t *testing.T) {
-		// Request with non-debros domain should not route to deployment
+	t.Run("Non-orama domain passes through", func(t *testing.T) {
+		// Request with non-orama domain should not route to deployment
 		resp := e2e.TestDeploymentWithHostHeader(t, env, "example.com", "/")
 		defer resp.Body.Close()
 
 		// Should either return 404 or pass to default handler
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
-			"Non-debros domain should not route to deployment")
+			"Non-orama domain should not route to deployment")
 
-		t.Logf("✓ Non-debros domains correctly pass through (status: %d)", resp.StatusCode)
+		t.Logf("✓ Non-orama domains correctly pass through (status: %d)", resp.StatusCode)
 	})
 
 	t.Run("API paths bypass domain routing", func(t *testing.T) {

@@ -30,7 +30,7 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new install orchestrator
 func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
-	oramaHome := "/home/debros"
+	oramaHome := "/home/orama"
 	oramaDir := oramaHome + "/.orama"
 
 	// Normalize peers
@@ -547,9 +547,9 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 	systemdDir := "/etc/systemd/system"
 
 	templates := []string{
-		"debros-namespace-rqlite@.service",
-		"debros-namespace-olric@.service",
-		"debros-namespace-gateway@.service",
+		"orama-namespace-rqlite@.service",
+		"orama-namespace-olric@.service",
+		"orama-namespace-gateway@.service",
 	}
 
 	installedCount := 0

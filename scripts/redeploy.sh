@@ -4,7 +4,7 @@
 # Reads node credentials from scripts/remote-nodes.conf.
 #
 # Flow:
-#  1) make build-linux-all
+#  1) make build-linux
 #  2) scripts/generate-source-archive.sh -> /tmp/network-source.tar.gz
 #  3) scp archive + extract-deploy.sh + conf to hub node
 #  4) from hub: sshpass scp to all other nodes + sudo bash /tmp/extract-deploy.sh
@@ -107,9 +107,9 @@ echo "Hub: $HUB_HOST (idx=$HUB_IDX, key=${HUB_KEY:-none})"
 
 # ── Build ────────────────────────────────────────────────────────────────────
 if [[ "$NO_BUILD" -eq 0 ]]; then
-  echo "== build-linux-all =="
-  (cd "$ROOT_DIR" && make build-linux-all) || {
-    echo "WARN: make build-linux-all failed; continuing if existing bin-linux is acceptable."
+  echo "== build-linux =="
+  (cd "$ROOT_DIR" && make build-linux) || {
+    echo "WARN: make build-linux failed; continuing if existing bin-linux is acceptable."
   }
 else
   echo "== skipping build (--no-build) =="
@@ -289,7 +289,7 @@ upgrade_one() {
   # 2. Stop all services
   echo "  [2/4] stopping services..."
   if ! sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "$h" "printf '%s\n' '$p' | sudo -S systemctl stop 'debros-*'" 2>&1; then
+    "$h" "printf '%s\n' '$p' | sudo -S systemctl stop 'orama-*'" 2>&1; then
     echo "  !! stop failed on $h"
     failed_nodes+=("$h")
     return 1
@@ -327,7 +327,7 @@ upgrade_hub() {
 
   # 2. Stop all services
   echo "  [2/4] stopping services..."
-  if ! (printf '%s\n' "$hub_pass" | sudo -S systemctl stop 'debros-*') 2>&1; then
+  if ! (printf '%s\n' "$hub_pass" | sudo -S systemctl stop 'orama-*') 2>&1; then
     echo "  !! stop failed on hub ($hub_host)"
     failed_nodes+=("$hub_host (hub)")
     return 1

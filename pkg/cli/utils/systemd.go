@@ -23,23 +23,23 @@ type PortSpec struct {
 }
 
 var ServicePorts = map[string][]PortSpec{
-	"debros-gateway": {
+	"orama-gateway": {
 		{Name: "Gateway API", Port: constants.GatewayAPIPort},
 	},
-	"debros-olric": {
+	"orama-olric": {
 		{Name: "Olric HTTP", Port: constants.OlricHTTPPort},
 		{Name: "Olric Memberlist", Port: constants.OlricMemberlistPort},
 	},
-	"debros-node": {
+	"orama-node": {
 		{Name: "RQLite HTTP", Port: constants.RQLiteHTTPPort},
 		{Name: "RQLite Raft", Port: constants.RQLiteRaftPort},
 	},
-	"debros-ipfs": {
+	"orama-ipfs": {
 		{Name: "IPFS API", Port: 4501},
 		{Name: "IPFS Gateway", Port: 8080},
 		{Name: "IPFS Swarm", Port: 4101},
 	},
-	"debros-ipfs-cluster": {
+	"orama-ipfs-cluster": {
 		{Name: "IPFS Cluster API", Port: 9094},
 	},
 }
@@ -63,13 +63,13 @@ func DefaultPorts() []PortSpec {
 func ResolveServiceName(alias string) ([]string, error) {
 	// Service alias mapping (unified - no bootstrap/node distinction)
 	aliases := map[string][]string{
-		"node":         {"debros-node"},
-		"ipfs":         {"debros-ipfs"},
-		"cluster":      {"debros-ipfs-cluster"},
-		"ipfs-cluster": {"debros-ipfs-cluster"},
-		"gateway":      {"debros-gateway"},
-		"olric":        {"debros-olric"},
-		"rqlite":       {"debros-node"}, // RQLite logs are in node logs
+		"node":         {"orama-node"},
+		"ipfs":         {"orama-ipfs"},
+		"cluster":      {"orama-ipfs-cluster"},
+		"ipfs-cluster": {"orama-ipfs-cluster"},
+		"gateway":      {"orama-gateway"},
+		"olric":        {"orama-olric"},
+		"rqlite":       {"orama-node"}, // RQLite logs are in node logs
 	}
 
 	// Check if it's an alias
@@ -153,18 +153,18 @@ func IsServiceMasked(service string) (bool, error) {
 	return false, nil
 }
 
-// GetProductionServices returns a list of all DeBros production service names that exist,
+// GetProductionServices returns a list of all Orama production service names that exist,
 // including both global services and namespace-specific services
 func GetProductionServices() []string {
 	// Global/default service names
 	globalServices := []string{
-		"debros-gateway",
-		"debros-node",
-		"debros-olric",
-		"debros-ipfs-cluster",
-		"debros-ipfs",
-		"debros-anyone-client",
-		"debros-anyone-relay",
+		"orama-gateway",
+		"orama-node",
+		"orama-olric",
+		"orama-ipfs-cluster",
+		"orama-ipfs",
+		"orama-anyone-client",
+		"orama-anyone-relay",
 	}
 
 	var existing []string
@@ -179,10 +179,10 @@ func GetProductionServices() []string {
 
 	// Discover namespace service instances from the namespaces data directory.
 	// We can't rely on scanning /etc/systemd/system because that only contains
-	// template files (e.g. debros-namespace-gateway@.service) with no instance name.
+	// template files (e.g. orama-namespace-gateway@.service) with no instance name.
 	// Restarting a template without an instance is a no-op.
 	// Instead, scan the data directory where each subdirectory is a provisioned namespace.
-	namespacesDir := "/home/debros/.orama/data/namespaces"
+	namespacesDir := "/home/orama/.orama/data/namespaces"
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
 		serviceTypes := []string{"rqlite", "olric", "gateway"}
@@ -195,7 +195,7 @@ func GetProductionServices() []string {
 				// Only add if the env file exists (service was provisioned)
 				envFile := filepath.Join(namespacesDir, ns, svcType+".env")
 				if _, err := os.Stat(envFile); err == nil {
-					svcName := fmt.Sprintf("debros-namespace-%s@%s", svcType, ns)
+					svcName := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
 					existing = append(existing, svcName)
 				}
 			}
@@ -304,7 +304,7 @@ func StartServicesOrdered(services []string, action string) {
 	for _, svc := range services {
 		matched := false
 		for _, svcType := range NamespaceServiceOrder {
-			prefix := "debros-namespace-" + svcType + "@"
+			prefix := "orama-namespace-" + svcType + "@"
 			if strings.HasPrefix(svc, prefix) {
 				nsServices[svcType] = append(nsServices[svcType], svc)
 				matched = true
@@ -348,4 +348,3 @@ func StartServicesOrdered(services []string, action string) {
 		}
 	}
 }
-

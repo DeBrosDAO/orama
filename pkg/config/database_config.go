@@ -27,7 +27,7 @@ type DatabaseConfig struct {
 	RaftElectionTimeout    time.Duration `yaml:"raft_election_timeout"`     // default: 5s
 	RaftHeartbeatTimeout   time.Duration `yaml:"raft_heartbeat_timeout"`    // default: 2s
 	RaftApplyTimeout       time.Duration `yaml:"raft_apply_timeout"`        // default: 30s
-	RaftLeaderLeaseTimeout time.Duration `yaml:"raft_leader_lease_timeout"` // default: 5s
+	RaftLeaderLeaseTimeout time.Duration `yaml:"raft_leader_lease_timeout"` // default: 2s (must be <= heartbeat timeout)
 
 	// Dynamic discovery configuration (always enabled)
 	ClusterSyncInterval time.Duration `yaml:"cluster_sync_interval"` // default: 30s

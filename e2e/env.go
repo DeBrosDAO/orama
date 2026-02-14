@@ -297,7 +297,7 @@ func GetRQLiteNodes() []string {
 // queryAPIKeyFromRQLite queries the SQLite database directly for an API key
 func queryAPIKeyFromRQLite() (string, error) {
 	// 1. Check environment variable first
-	if envKey := os.Getenv("DEBROS_API_KEY"); envKey != "" {
+	if envKey := os.Getenv("ORAMA_API_KEY"); envKey != "" {
 		return envKey, nil
 	}
 
@@ -424,7 +424,7 @@ func GetAPIKey() string {
 	cacheMutex.RUnlock()
 
 	// 1. Check env var
-	if envKey := os.Getenv("DEBROS_API_KEY"); envKey != "" {
+	if envKey := os.Getenv("ORAMA_API_KEY"); envKey != "" {
 		cacheMutex.Lock()
 		apiKeyCache = envKey
 		cacheMutex.Unlock()
@@ -1188,8 +1188,8 @@ type E2ETestEnv struct {
 	GatewayURL  string
 	APIKey      string
 	Namespace   string
-	BaseDomain  string       // Domain for deployment routing (e.g., "dbrs.space")
-	Config      *E2EConfig   // Full E2E configuration (for production tests)
+	BaseDomain  string     // Domain for deployment routing (e.g., "dbrs.space")
+	Config      *E2EConfig // Full E2E configuration (for production tests)
 	HTTPClient  *http.Client
 	SkipCleanup bool
 }

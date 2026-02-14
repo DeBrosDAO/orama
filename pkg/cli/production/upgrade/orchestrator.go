@@ -26,7 +26,7 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new upgrade orchestrator
 func NewOrchestrator(flags *Flags) *Orchestrator {
-	oramaHome := "/home/debros"
+	oramaHome := "/home/orama"
 	oramaDir := oramaHome + "/.orama"
 
 	// Load existing preferences
@@ -187,7 +187,7 @@ func (o *Orchestrator) Execute() error {
 
 	fmt.Printf("   To apply changes, restart services:\n")
 	fmt.Printf("   sudo systemctl daemon-reload\n")
-	fmt.Printf("   sudo systemctl restart debros-*\n")
+	fmt.Printf("   sudo systemctl restart orama-*\n")
 	fmt.Printf("\n")
 
 	return nil
@@ -357,7 +357,7 @@ func (o *Orchestrator) stopServices() error {
 	fmt.Printf("\n⏹️  Stopping all services before upgrade...\n")
 	serviceController := production.NewSystemdController()
 
-	// First, stop all namespace services (debros-namespace-*@*.service)
+	// First, stop all namespace services (orama-namespace-*@*.service)
 	fmt.Printf("  Stopping namespace services...\n")
 	if err := o.stopAllNamespaceServices(serviceController); err != nil {
 		fmt.Printf("  ⚠️  Warning: Failed to stop namespace services: %v\n", err)
@@ -365,15 +365,15 @@ func (o *Orchestrator) stopServices() error {
 
 	// Stop services in reverse dependency order
 	services := []string{
-		"caddy.service",                // Depends on node
-		"coredns.service",              // Depends on node
-		"debros-gateway.service",       // Legacy
-		"debros-node.service",          // Depends on cluster, olric
-		"debros-ipfs-cluster.service",  // Depends on IPFS
-		"debros-ipfs.service",          // Base IPFS
-		"debros-olric.service",         // Independent
-		"debros-anyone-client.service", // Client mode
-		"debros-anyone-relay.service",  // Relay mode
+		"caddy.service",               // Depends on node
+		"coredns.service",             // Depends on node
+		"orama-gateway.service",       // Legacy
+		"orama-node.service",          // Depends on cluster, olric
+		"orama-ipfs-cluster.service",  // Depends on IPFS
+		"orama-ipfs.service",          // Base IPFS
+		"orama-olric.service",         // Independent
+		"orama-anyone-client.service", // Client mode
+		"orama-anyone-relay.service",  // Relay mode
 	}
 	for _, svc := range services {
 		unitPath := filepath.Join("/etc/systemd/system", svc)
@@ -393,7 +393,7 @@ func (o *Orchestrator) stopServices() error {
 // stopAllNamespaceServices stops all running namespace services
 func (o *Orchestrator) stopAllNamespaceServices(serviceController *production.SystemdController) error {
 	// Find all running namespace services using systemctl list-units
-	cmd := exec.Command("systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend", "debros-namespace-*@*.service")
+	cmd := exec.Command("systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend", "orama-namespace-*@*.service")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to list namespace services: %w", err)
@@ -405,7 +405,7 @@ func (o *Orchestrator) stopAllNamespaceServices(serviceController *production.Sy
 		fields := strings.Fields(line)
 		if len(fields) > 0 {
 			serviceName := fields[0]
-			if strings.HasPrefix(serviceName, "debros-namespace-") {
+			if strings.HasPrefix(serviceName, "orama-namespace-") {
 				if err := serviceController.StopService(serviceName); err != nil {
 					fmt.Printf("    ⚠️  Warning: Failed to stop %s: %v\n", serviceName, err)
 				} else {
@@ -428,9 +428,9 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 	systemdDir := "/etc/systemd/system"
 
 	templates := []string{
-		"debros-namespace-rqlite@.service",
-		"debros-namespace-olric@.service",
-		"debros-namespace-gateway@.service",
+		"orama-namespace-rqlite@.service",
+		"orama-namespace-olric@.service",
+		"orama-namespace-gateway@.service",
 	}
 
 	installedCount := 0
@@ -636,7 +636,7 @@ func (o *Orchestrator) restartServices() error {
 	services := utils.GetProductionServices()
 
 	// Re-enable all services BEFORE restarting them.
-	// orama prod stop disables services, and debros-node's PartOf= dependency
+	// orama prod stop disables services, and orama-node's PartOf= dependency
 	// won't propagate restart to disabled services. We must re-enable first
 	// so that all services restart with the updated binary.
 	for _, svc := range services {
@@ -664,13 +664,13 @@ func (o *Orchestrator) restartServices() error {
 	// Define the order for rolling restart - node service first (contains RQLite)
 	// This ensures the cluster can reform before other services start
 	priorityOrder := []string{
-		"debros-node",         // Start node first - contains RQLite cluster
-		"debros-olric",        // Distributed cache
-		"debros-ipfs",         // IPFS daemon
-		"debros-ipfs-cluster", // IPFS cluster
-		"debros-gateway",      // Gateway (legacy)
-		"coredns",             // DNS server
-		"caddy",               // Reverse proxy
+		"orama-node",         // Start node first - contains RQLite cluster
+		"orama-olric",        // Distributed cache
+		"orama-ipfs",         // IPFS daemon
+		"orama-ipfs-cluster", // IPFS cluster
+		"orama-gateway",      // Gateway (legacy)
+		"coredns",            // DNS server
+		"caddy",              // Reverse proxy
 	}
 
 	// Restart services in priority order with health checks
@@ -685,7 +685,7 @@ func (o *Orchestrator) restartServices() error {
 				fmt.Printf("   ✓ Started %s\n", svc)
 
 				// For the node service, wait for RQLite cluster health
-				if svc == "debros-node" {
+				if svc == "orama-node" {
 					fmt.Printf("   Waiting for RQLite cluster to become healthy...\n")
 					if err := o.waitForClusterHealth(2 * time.Minute); err != nil {
 						fmt.Printf("   ⚠️  Cluster health check warning: %v\n", err)
@@ -793,7 +793,7 @@ func (o *Orchestrator) waitForClusterHealth(timeout time.Duration) error {
 // by looking for the systemd service file or the anonrc config file.
 func detectAnyoneRelay(oramaDir string) bool {
 	// Check if systemd service file exists
-	if _, err := os.Stat("/etc/systemd/system/debros-anyone-relay.service"); err == nil {
+	if _, err := os.Stat("/etc/systemd/system/orama-anyone-relay.service"); err == nil {
 		return true
 	}
 	// Check if anonrc config exists

@@ -41,7 +41,7 @@ Install nodes **one at a time**, waiting for each to complete before starting th
 ```bash
 # SSH: <user>@<ns1-ip>
 
-sudo orama install --no-pull --pre-built \
+sudo orama install \
   --vps-ip <ns1-ip> \
   --domain <your-domain.com> \
   --base-domain <your-domain.com> \
@@ -58,7 +58,7 @@ orama invite --expiry 24h
 ```bash
 # SSH: <user>@<ns2-ip>
 
-sudo orama install --no-pull --pre-built \
+sudo orama install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <ns2-ip> \
   --domain <your-domain.com> \
@@ -77,7 +77,7 @@ sudo orama install --no-pull --pre-built \
 ```bash
 # SSH: <user>@<ns3-ip>
 
-sudo orama install --no-pull --pre-built \
+sudo orama install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <ns3-ip> \
   --domain <your-domain.com> \
@@ -96,7 +96,7 @@ sudo orama install --no-pull --pre-built \
 ```bash
 # SSH: <user>@<node4-ip>
 
-sudo orama install --no-pull --pre-built \
+sudo orama install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <node4-ip> \
   --domain node4.<your-domain.com> \
@@ -115,7 +115,7 @@ sudo orama install --no-pull --pre-built \
 ```bash
 # SSH: <user>@<node5-ip>
 
-sudo orama install --no-pull --pre-built \
+sudo orama install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <node5-ip> \
   --domain node5.<your-domain.com> \
@@ -134,7 +134,7 @@ sudo orama install --no-pull --pre-built \
 ```bash
 # SSH: <user>@<node6-ip>
 
-sudo orama install --no-pull --pre-built \
+sudo orama install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <node6-ip> \
   --domain node6.<your-domain.com> \
@@ -155,5 +155,5 @@ curl -s http://localhost:5001/status | jq -r '.store.raft.state, .store.raft.num
 curl -s http://localhost:6001/health
 
 # Check Anyone relay (on nodes with relays)
-systemctl status debros-anyone-relay
+systemctl status orama-anyone-relay
 ```

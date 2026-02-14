@@ -1,4 +1,4 @@
--- DeBros Gateway - Core schema (Phase 2)
+-- Orama Gateway - Core schema (Phase 2)
 -- Adds apps, nonces, subscriptions, refresh_tokens, audit_events, namespace_ownership
 -- SQLite/RQLite dialect
 

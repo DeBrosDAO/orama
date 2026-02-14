@@ -18,7 +18,7 @@ import (
 )
 
 // Protocol ID for peer exchange
-const PeerExchangeProtocol = "/debros/peer-exchange/1.0.0"
+const PeerExchangeProtocol = "/orama/peer-exchange/1.0.0"
 
 // libp2pPort is the standard port used for libp2p peer connections.
 // Filtering on this port prevents cross-connecting with IPFS (4101) or IPFS Cluster (9096/9098).

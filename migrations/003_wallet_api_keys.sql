@@ -1,4 +1,4 @@
--- DeBros Gateway - Wallet to API Key linkage (Phase 3)
+-- Orama Gateway - Wallet to API Key linkage (Phase 3)
 -- Ensures one API key per (namespace, wallet) and enables lookup
 
 BEGIN;

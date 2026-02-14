@@ -1,18 +1,18 @@
 [Unit]
-Description=DeBros Namespace RQLite (%i)
+Description=Orama Namespace RQLite (%i)
 Documentation=https://github.com/DeBrosOfficial/network
 After=network.target
-PartOf=debros-node.service
+PartOf=orama-node.service
 StopWhenUnneeded=false
 
 [Service]
 Type=simple
-User=debros
-Group=debros
-WorkingDirectory=/home/debros
+User=orama
+Group=orama
+WorkingDirectory=/home/orama
 
 # Environment file contains namespace-specific config
-EnvironmentFile=/home/debros/.orama/data/namespaces/%i/rqlite.env
+EnvironmentFile=/home/orama/.orama/data/namespaces/%i/rqlite.env
 
 # Start rqlited with args from environment (using shell to properly expand JOIN_ARGS)
 ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
@@ -21,7 +21,7 @@ ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
   -http-adv-addr ${HTTP_ADV_ADDR} \
   -raft-adv-addr ${RAFT_ADV_ADDR} \
   ${JOIN_ARGS} \
-  /home/debros/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
+  /home/orama/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
 
 # Graceful shutdown
 TimeoutStopSec=30s
@@ -35,7 +35,7 @@ RestartSec=5s
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=debros-rqlite-%i
+SyslogIdentifier=orama-rqlite-%i
 
 # Security hardening
 NoNewPrivileges=yes
@@ -43,7 +43,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
-ReadWritePaths=/home/debros/.orama/data/namespaces
+ReadWritePaths=/home/orama/.orama/data/namespaces
 
 # Resource limits
 LimitNOFILE=65536

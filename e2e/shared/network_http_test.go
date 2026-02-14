@@ -118,7 +118,7 @@ func TestNetwork_ProxyAnonSuccess(t *testing.T) {
 		Body: map[string]interface{}{
 			"url":     "https://httpbin.org/get",
 			"method":  "GET",
-			"headers": map[string]string{"User-Agent": "DeBros-E2E-Test/1.0"},
+			"headers": map[string]string{"User-Agent": "Orama-E2E-Test/1.0"},
 		},
 	}
 
@@ -178,7 +178,7 @@ func TestNetwork_ProxyAnonPostRequest(t *testing.T) {
 		Body: map[string]interface{}{
 			"url":     "https://httpbin.org/post",
 			"method":  "POST",
-			"headers": map[string]string{"User-Agent": "DeBros-E2E-Test/1.0"},
+			"headers": map[string]string{"User-Agent": "Orama-E2E-Test/1.0"},
 			"body":    "test_data",
 		},
 	}

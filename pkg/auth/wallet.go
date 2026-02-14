@@ -225,7 +225,7 @@ func (as *AuthServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
-		"server": "debros-auth-callback",
+		"server": "orama-auth-callback",
 	})
 }
 

@@ -115,8 +115,8 @@ func (cm *CertificateManager) generateCACertificate() ([]byte, []byte, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName:   "DeBros Network Root CA",
-			Organization: []string{"DeBros"},
+			CommonName:   "Orama Network Root CA",
+			Organization: []string{"Orama"},
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(10, 0, 0), // 10 year validity

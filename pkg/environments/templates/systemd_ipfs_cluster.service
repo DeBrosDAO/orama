@@ -1,13 +1,13 @@
 [Unit]
 Description=IPFS Cluster Service ({{.NodeType}})
-After=debros-ipfs-{{.NodeType}}.service
-Wants=debros-ipfs-{{.NodeType}}.service
-Requires=debros-ipfs-{{.NodeType}}.service
+After=orama-ipfs-{{.NodeType}}.service
+Wants=orama-ipfs-{{.NodeType}}.service
+Requires=orama-ipfs-{{.NodeType}}.service
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 Environment=CLUSTER_PATH={{.ClusterPath}}

@@ -23,7 +23,7 @@ export async function getServerSideProps() {
 export default function Home({ notes, error, fetchedAt, goApiUrl }) {
   return (
     <div style={{ maxWidth: 600, margin: '40px auto', fontFamily: 'system-ui' }}>
-      <h1>DeBros Notes (SSR)</h1>
+      <h1>Orama Notes (SSR)</h1>
       <p style={{ color: '#666', fontSize: 14 }}>
         Next.js SSR + Go API + SQLite
       </p>

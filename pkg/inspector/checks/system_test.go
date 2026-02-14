@@ -10,11 +10,11 @@ func TestCheckSystem_HealthyNode(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
 		Services: map[string]string{
-			"debros-node":         "active",
-			"debros-olric":        "active",
-			"debros-ipfs":         "active",
-			"debros-ipfs-cluster": "active",
-			"wg-quick@wg0":        "active",
+			"orama-node":         "active",
+			"orama-olric":        "active",
+			"orama-ipfs":         "active",
+			"orama-ipfs-cluster": "active",
+			"wg-quick@wg0":       "active",
 		},
 		FailedUnits:    nil,
 		MemTotalMB:     8192,
@@ -31,17 +31,17 @@ func TestCheckSystem_HealthyNode(t *testing.T) {
 		InodePct:       10,
 		ListeningPorts: []int{5001, 3322, 6001, 4501},
 		UFWActive:      true,
-		ProcessUser:    "debros",
+		ProcessUser:    "orama",
 		PanicCount:     0,
 	}
 
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
 	results := CheckSystem(data)
 
-	expectStatus(t, results, "system.svc_debros_node", inspector.StatusPass)
-	expectStatus(t, results, "system.svc_debros_olric", inspector.StatusPass)
-	expectStatus(t, results, "system.svc_debros_ipfs", inspector.StatusPass)
-	expectStatus(t, results, "system.svc_debros_ipfs_cluster", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_node", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_olric", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_ipfs", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_ipfs_cluster", inspector.StatusPass)
 	expectStatus(t, results, "system.svc_wg", inspector.StatusPass)
 	expectStatus(t, results, "system.no_failed_units", inspector.StatusPass)
 	expectStatus(t, results, "system.memory", inspector.StatusPass)
@@ -63,30 +63,30 @@ func TestCheckSystem_ServiceInactive(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
 		Services: map[string]string{
-			"debros-node":         "active",
-			"debros-olric":        "inactive",
-			"debros-ipfs":         "active",
-			"debros-ipfs-cluster": "failed",
+			"orama-node":         "active",
+			"orama-olric":        "inactive",
+			"orama-ipfs":         "active",
+			"orama-ipfs-cluster": "failed",
 		},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
 	results := CheckSystem(data)
 
-	expectStatus(t, results, "system.svc_debros_node", inspector.StatusPass)
-	expectStatus(t, results, "system.svc_debros_olric", inspector.StatusFail)
-	expectStatus(t, results, "system.svc_debros_ipfs_cluster", inspector.StatusFail)
+	expectStatus(t, results, "system.svc_orama_node", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_olric", inspector.StatusFail)
+	expectStatus(t, results, "system.svc_orama_ipfs_cluster", inspector.StatusFail)
 }
 
 func TestCheckSystem_NameserverServices(t *testing.T) {
 	nd := makeNodeData("5.5.5.5", "nameserver-ns1")
 	nd.System = &inspector.SystemData{
 		Services: map[string]string{
-			"debros-node":         "active",
-			"debros-olric":        "active",
-			"debros-ipfs":         "active",
-			"debros-ipfs-cluster": "active",
-			"coredns":             "active",
-			"caddy":               "active",
+			"orama-node":         "active",
+			"orama-olric":        "active",
+			"orama-ipfs":         "active",
+			"orama-ipfs-cluster": "active",
+			"coredns":            "active",
+			"caddy":              "active",
 		},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"5.5.5.5": nd})
@@ -99,10 +99,10 @@ func TestCheckSystem_NameserverServicesNotCheckedOnRegularNode(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
 		Services: map[string]string{
-			"debros-node":         "active",
-			"debros-olric":        "active",
-			"debros-ipfs":         "active",
-			"debros-ipfs-cluster": "active",
+			"orama-node":         "active",
+			"orama-olric":        "active",
+			"orama-ipfs":         "active",
+			"orama-ipfs-cluster": "active",
 		},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
@@ -116,7 +116,7 @@ func TestCheckSystem_FailedUnits_Debros(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
 		Services:    map[string]string{},
-		FailedUnits: []string{"debros-node.service"},
+		FailedUnits: []string{"orama-node.service"},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
 	results := CheckSystem(data)
@@ -142,9 +142,9 @@ func TestCheckSystem_Memory(t *testing.T) {
 		total  int
 		status inspector.Status
 	}{
-		{"healthy", 4000, 8000, inspector.StatusPass},    // 50%
-		{"elevated", 7000, 8000, inspector.StatusWarn},   // 87.5%
-		{"critical", 7500, 8000, inspector.StatusFail},   // 93.75%
+		{"healthy", 4000, 8000, inspector.StatusPass},  // 50%
+		{"elevated", 7000, 8000, inspector.StatusWarn}, // 87.5%
+		{"critical", 7500, 8000, inspector.StatusFail}, // 93.75%
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -248,7 +248,7 @@ func TestCheckSystem_ProcessUser(t *testing.T) {
 		user   string
 		status inspector.Status
 	}{
-		{"correct", "debros", inspector.StatusPass},
+		{"correct", "orama", inspector.StatusPass},
 		{"root", "root", inspector.StatusWarn},
 		{"other", "ubuntu", inspector.StatusWarn},
 	}

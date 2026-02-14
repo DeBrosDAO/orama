@@ -29,11 +29,11 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 
 echo "  Stopping services..."
-systemctl stop debros-node debros-gateway debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null || true
-systemctl disable debros-node debros-gateway debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null || true
+systemctl stop orama-node orama-gateway orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null || true
+systemctl disable orama-node orama-gateway orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null || true
 
 echo "  Removing systemd service files..."
-rm -f /etc/systemd/system/debros-*.service
+rm -f /etc/systemd/system/orama-*.service
 rm -f /etc/systemd/system/coredns.service
 rm -f /etc/systemd/system/caddy.service
 rm -f /etc/systemd/system/orama-deploy-*.service
@@ -50,18 +50,18 @@ ufw --force reset
 ufw allow 22/tcp
 ufw --force enable
 
-echo "  Killing debros processes..."
-pkill -u debros 2>/dev/null || true
+echo "  Killing orama processes..."
+pkill -u orama 2>/dev/null || true
 sleep 1
 
-echo "  Removing debros user and data..."
-userdel -r debros 2>/dev/null || true
-rm -rf /home/debros
+echo "  Removing orama user and data..."
+userdel -r orama 2>/dev/null || true
+rm -rf /home/orama
 
 echo "  Removing sudoers files..."
-rm -f /etc/sudoers.d/debros-access
-rm -f /etc/sudoers.d/debros-deployments
-rm -f /etc/sudoers.d/debros-wireguard
+rm -f /etc/sudoers.d/orama-access
+rm -f /etc/sudoers.d/orama-deployments
+rm -f /etc/sudoers.d/orama-wireguard
 
 echo "  Removing CoreDNS and Caddy configs..."
 rm -rf /etc/coredns
