@@ -76,11 +76,6 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 		return fmt.Errorf("failed to create IPFS Cluster directory: %w", err)
 	}
 
-	// Fix ownership before running init (best-effort)
-	if err := exec.Command("chown", "-R", "orama:orama", clusterPath).Run(); err != nil {
-		fmt.Fprintf(ici.logWriter, "    ⚠️  Warning: failed to chown cluster path before init: %v\n", err)
-	}
-
 	// Resolve ipfs-cluster-service binary path
 	clusterBinary, err := ResolveBinaryPath("ipfs-cluster-service", "/usr/local/bin/ipfs-cluster-service", "/usr/bin/ipfs-cluster-service")
 	if err != nil {
@@ -117,11 +112,6 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 			return fmt.Errorf("cluster secret verification failed: %w", err)
 		}
 		fmt.Fprintf(ici.logWriter, "    ✓ Cluster secret verified\n")
-	}
-
-	// Fix ownership again after updates (best-effort)
-	if err := exec.Command("chown", "-R", "orama:orama", clusterPath).Run(); err != nil {
-		fmt.Fprintf(ici.logWriter, "    ⚠️  Warning: failed to chown cluster path after updates: %v\n", err)
 	}
 
 	return nil

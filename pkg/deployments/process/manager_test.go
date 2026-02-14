@@ -91,7 +91,7 @@ func TestGetStartCommand(t *testing.T) {
 	// On macOS (test environment), useSystemd will be false, so node/npm use short paths.
 	// We explicitly set it to test both modes.
 
-	workDir := "/home/orama/deployments/alice/myapp"
+	workDir := "/opt/orama/deployments/alice/myapp"
 
 	tests := []struct {
 		name       string

@@ -366,7 +366,7 @@ systemctl status orama-node
 journalctl -u orama-node -f
 
 # Check log files
-tail -f /home/orama/.orama/logs/node.log
+tail -f /opt/orama/.orama/logs/node.log
 ```
 
 ### Port Conflicts
@@ -398,7 +398,7 @@ rqlite -H localhost -p 5001
 ```bash
 # Production reset (⚠️ DESTROYS DATA)
 sudo orama uninstall
-sudo rm -rf /home/orama/.orama
+sudo rm -rf /opt/orama/.orama
 sudo orama install
 ```
 

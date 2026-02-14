@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -436,11 +435,6 @@ func (sg *SecretGenerator) SaveConfig(filename string, content string) error {
 	configPath := filepath.Join(configDir, filename)
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write config %s: %w", filename, err)
-	}
-
-	// Fix ownership
-	if err := exec.Command("chown", "orama:orama", configPath).Run(); err != nil {
-		fmt.Printf("Warning: failed to chown %s to orama:orama: %v\n", configPath, err)
 	}
 
 	return nil

@@ -17,7 +17,7 @@ func (r *RQLiteManager) rqliteDataDirPath() (string, error) {
 }
 
 func (r *RQLiteManager) resolveMigrationsDir() (string, error) {
-	productionPath := "/home/orama/src/migrations"
+	productionPath := "/opt/orama/src/migrations"
 	if _, err := os.Stat(productionPath); err == nil {
 		return productionPath, nil
 	}

@@ -27,7 +27,7 @@ type BinaryInstaller struct {
 
 // NewBinaryInstaller creates a new binary installer
 func NewBinaryInstaller(arch string, logWriter io.Writer) *BinaryInstaller {
-	oramaHome := "/home/orama"
+	oramaHome := OramaBase
 	return &BinaryInstaller{
 		arch:        arch,
 		logWriter:   logWriter,

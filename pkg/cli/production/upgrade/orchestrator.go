@@ -26,8 +26,8 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new upgrade orchestrator
 func NewOrchestrator(flags *Flags) *Orchestrator {
-	oramaHome := "/home/orama"
-	oramaDir := oramaHome + "/.orama"
+	oramaHome := production.OramaBase
+	oramaDir := production.OramaDir
 
 	// Load existing preferences
 	prefs := production.LoadPreferences(oramaDir)
@@ -341,7 +341,7 @@ func (o *Orchestrator) writePeersJSONFromState(state ClusterState) error {
 	}
 
 	// Write to RQLite's raft directory
-	raftDir := filepath.Join(o.oramaHome, ".orama", "data", "rqlite", "raft")
+	raftDir := filepath.Join(production.OramaData, "rqlite", "raft")
 	if err := os.MkdirAll(raftDir, 0755); err != nil {
 		return err
 	}

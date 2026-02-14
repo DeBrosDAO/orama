@@ -48,7 +48,7 @@ make build-linux
 
 The `orama install` command automatically:
 1. Uploads the source archive via SCP
-2. Extracts source to `/home/orama/src` and installs the CLI to `/usr/local/bin/orama`
+2. Extracts source to `/opt/orama/src` and installs the CLI to `/usr/local/bin/orama`
 3. Runs `orama install` on the VPS which builds all binaries from source (Go, CoreDNS, Caddy, Olric, etc.)
 
 ### Upgrading a Multi-Node Cluster (CRITICAL)
@@ -112,7 +112,7 @@ If nodes get stuck in "Candidate" state or show "leader not found" errors:
 3. On each other node, clear RQLite data and restart:
    ```bash
    sudo orama prod stop
-   sudo rm -rf /home/orama/.orama/data/rqlite
+   sudo rm -rf /opt/orama/.orama/data/rqlite
    sudo systemctl start orama-node
    ```
 4. The node should automatically rejoin using its configured `rqlite_join_address`

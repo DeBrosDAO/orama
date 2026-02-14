@@ -5,8 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 Environment=HOME={{.HomeDir}}
 Environment=OLRIC_SERVER_CONFIG={{.ConfigPath}}
 ExecStart=/usr/local/bin/olric-server
@@ -16,11 +14,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=olric
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths={{.OramaDir}}
 
 [Install]
 WantedBy=multi-user.target
-

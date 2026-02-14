@@ -145,11 +145,11 @@ func (wp *WireGuardProvisioner) WriteConfig() error {
 		}
 	}
 
-	// Fallback to sudo tee (for non-root, e.g. orama user)
-	cmd := exec.Command("sudo", "tee", confPath)
+	// Fallback to tee (for non-root, e.g. orama user)
+	cmd := exec.Command("tee", confPath)
 	cmd.Stdin = strings.NewReader(content)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to write wg0.conf via sudo: %w\n%s", err, string(output))
+		return fmt.Errorf("failed to write wg0.conf via tee: %w\n%s", err, string(output))
 	}
 
 	return nil
@@ -198,7 +198,7 @@ func (wp *WireGuardProvisioner) AddPeer(peer WireGuardPeer) error {
 		args = append(args, "endpoint", peer.Endpoint)
 	}
 
-	cmd := exec.Command("sudo", args...)
+	cmd := exec.Command(args[0], args[1:]...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to add peer %s: %w\n%s", peer.AllowedIP, err, string(output))
 	}
@@ -210,7 +210,7 @@ func (wp *WireGuardProvisioner) AddPeer(peer WireGuardPeer) error {
 
 // RemovePeer removes a peer from the running WireGuard interface
 func (wp *WireGuardProvisioner) RemovePeer(publicKey string) error {
-	cmd := exec.Command("sudo", "wg", "set", "wg0", "peer", publicKey, "remove")
+	cmd := exec.Command("wg", "set", "wg0", "peer", publicKey, "remove")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to remove peer: %w\n%s", err, string(output))
 	}

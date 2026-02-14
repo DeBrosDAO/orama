@@ -65,7 +65,7 @@ type PeerInfo struct {
 type Handler struct {
 	logger       *zap.Logger
 	rqliteClient rqlite.Client
-	oramaDir     string // e.g., /home/orama/.orama
+	oramaDir     string // e.g., /opt/orama/.orama
 }
 
 // NewHandler creates a new join handler
@@ -271,7 +271,7 @@ func (h *Handler) assignWGIP(ctx context.Context) (string, error) {
 // addWGPeerLocally adds a peer to the local wg0 interface and persists to config
 func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
 	// Add to running interface with persistent-keepalive
-	cmd := exec.Command("sudo", "wg", "set", "wg0",
+	cmd := exec.Command("wg", "set", "wg0",
 		"peer", pubKey,
 		"endpoint", fmt.Sprintf("%s:51820", publicIP),
 		"allowed-ips", fmt.Sprintf("%s/32", wgIP),
@@ -298,7 +298,7 @@ func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
 		pubKey, publicIP, wgIP)
 
 	newConf := string(data) + peerSection
-	writeCmd := exec.Command("sudo", "tee", confPath)
+	writeCmd := exec.Command("tee", confPath)
 	writeCmd.Stdin = strings.NewReader(newConf)
 	if output, err := writeCmd.CombinedOutput(); err != nil {
 		h.logger.Warn("could not persist peer to wg0.conf", zap.Error(err), zap.String("output", string(output)))

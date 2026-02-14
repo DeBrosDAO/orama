@@ -39,7 +39,7 @@ func (gi *GatewayInstaller) Configure() error {
 	return nil
 }
 
-// InstallDeBrosBinaries builds Orama binaries from source at /home/orama/src.
+// InstallDeBrosBinaries builds Orama binaries from source at /opt/orama/src.
 // Source must already be present (uploaded via SCP archive).
 func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 	fmt.Fprintf(gi.logWriter, "  Building Orama binaries...\n")
@@ -217,7 +217,7 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 	fmt.Fprintf(gi.logWriter, "    Initializing NPM cache...\n")
 
 	// Create nested cache directories with proper permissions
-	oramaHome := "/home/orama"
+	oramaHome := "/opt/orama"
 	npmCacheDirs := []string{
 		filepath.Join(oramaHome, ".npm"),
 		filepath.Join(oramaHome, ".npm", "_cacache"),

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maintenanceFlagPath = "/home/orama/.orama/maintenance.flag"
+	maintenanceFlagPath = "/opt/orama/.orama/maintenance.flag"
 )
 
 // HandlePreUpgrade prepares the node for a safe rolling upgrade:
@@ -83,7 +83,7 @@ func HandlePreUpgrade() {
 // getNamespaceRQLitePorts scans namespace env files to find RQLite HTTP ports.
 // Returns map of namespace_name → HTTP port.
 func getNamespaceRQLitePorts() map[string]int {
-	namespacesDir := "/home/orama/.orama/data/namespaces"
+	namespacesDir := "/opt/orama/.orama/data/namespaces"
 	ports := make(map[string]int)
 
 	entries, err := os.ReadDir(namespacesDir)

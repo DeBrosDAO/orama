@@ -28,7 +28,7 @@ func Handle(args []string) {
 		os.Exit(1)
 	}
 
-	oramaDir := "/home/orama/.orama"
+	oramaDir := "/opt/orama/.orama"
 
 	fmt.Printf("🔄 Checking for installations to migrate...\n\n")
 

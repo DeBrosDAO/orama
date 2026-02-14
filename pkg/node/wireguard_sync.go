@@ -30,7 +30,7 @@ func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 	}
 
 	// Check if wg0 interface exists
-	out, err := exec.CommandContext(ctx, "sudo", "wg", "show", "wg0").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "wg", "show", "wg0").CombinedOutput()
 	if err != nil {
 		n.logger.ComponentInfo(logging.ComponentNode, "WireGuard interface wg0 not active, skipping peer sync")
 		return nil
@@ -116,7 +116,7 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 	}
 
 	// Check if wg0 is active
-	out, err := exec.CommandContext(ctx, "sudo", "wg", "show", "wg0").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "wg", "show", "wg0").CombinedOutput()
 	if err != nil {
 		return // WG not active, nothing to register
 	}

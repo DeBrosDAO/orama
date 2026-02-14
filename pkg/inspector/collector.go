@@ -625,7 +625,7 @@ curl -sf -X POST 'http://localhost:4501/api/v0/version' 2>/dev/null | python3 -c
 echo "$SEP"
 curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-sudo test -f /home/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
+test -f /opt/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
 curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `

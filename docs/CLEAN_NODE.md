@@ -31,11 +31,12 @@ sudo ufw --force reset
 sudo ufw allow 22/tcp
 sudo ufw --force enable
 
-# 5. Remove orama user and home directory
+# 5. Remove orama data directory
+sudo rm -rf /opt/orama
+
+# 6. Remove legacy orama user (if exists from old installs)
 sudo userdel -r orama 2>/dev/null
 sudo rm -rf /home/orama
-
-# 6. Remove sudoers files
 sudo rm -f /etc/sudoers.d/orama-access
 sudo rm -f /etc/sudoers.d/orama-deployments
 sudo rm -f /etc/sudoers.d/orama-wireguard
@@ -62,14 +63,13 @@ echo "Node cleaned. Ready for fresh install."
 
 | Category | Paths |
 |----------|-------|
-| **User** | `orama` system user and `/home/orama/` |
-| **App data** | `/home/orama/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
-| **Source code** | `/home/orama/src/` |
-| **Binaries** | `/home/orama/bin/orama-node`, `/home/orama/bin/gateway` |
+| **App data** | `/opt/orama/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
+| **Source code** | `/opt/orama/src/` |
+| **Binaries** | `/opt/orama/bin/orama-node`, `/opt/orama/bin/gateway` |
 | **Systemd** | `orama-*.service`, `coredns.service`, `caddy.service`, `orama-deploy-*.service` |
 | **WireGuard** | `/etc/wireguard/wg0.conf`, `wg-quick@wg0` systemd unit |
 | **Firewall** | All UFW rules (reset to default + SSH only) |
-| **Sudoers** | `/etc/sudoers.d/orama-*` |
+| **Legacy** | `orama` user, `/etc/sudoers.d/orama-*` (old installs only) |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
 | **Anyone Relay** | `orama-anyone-relay.service`, `orama-anyone-client.service` |
@@ -130,6 +130,7 @@ sudo wg-quick down wg0 2>/dev/null
 sudo systemctl disable wg-quick@wg0 2>/dev/null
 sudo rm -f /etc/wireguard/wg0.conf
 sudo ufw --force reset && sudo ufw allow 22/tcp && sudo ufw --force enable
+sudo rm -rf /opt/orama
 sudo userdel -r orama 2>/dev/null
 sudo rm -rf /home/orama
 sudo rm -f /etc/sudoers.d/orama-access /etc/sudoers.d/orama-deployments /etc/sudoers.d/orama-wireguard

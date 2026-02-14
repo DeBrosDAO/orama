@@ -7,12 +7,10 @@ StopWhenUnneeded=false
 
 [Service]
 Type=simple
-User=orama
-Group=orama
-WorkingDirectory=/home/orama
+WorkingDirectory=/opt/orama
 
 # Environment file contains namespace-specific config
-EnvironmentFile=/home/orama/.orama/data/namespaces/%i/rqlite.env
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/rqlite.env
 
 # Start rqlited with args from environment (using shell to properly expand JOIN_ARGS)
 ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
@@ -21,7 +19,7 @@ ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
   -http-adv-addr ${HTTP_ADV_ADDR} \
   -raft-adv-addr ${RAFT_ADV_ADDR} \
   ${JOIN_ARGS} \
-  /home/orama/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
+  /opt/orama/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
 
 # Graceful shutdown
 TimeoutStopSec=30s
@@ -37,15 +35,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=orama-rqlite-%i
 
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ReadWritePaths=/home/orama/.orama/data/namespaces
-
 # Resource limits
+PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=2G
 

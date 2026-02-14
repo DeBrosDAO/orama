@@ -81,17 +81,14 @@ func (r *RemoteOrchestrator) extractOnVPS() error {
 	// All other binaries are built from source on the VPS during install.
 	extractCmd := r.sudoPrefix() + "bash -c '" +
 		`ARCHIVE="/tmp/network-source.tar.gz" && ` +
-		`SRC_DIR="/home/orama/src" && ` +
-		`BIN_DIR="/home/orama/bin" && ` +
-		`id -u orama &>/dev/null || useradd -m -s /bin/bash orama && ` +
+		`SRC_DIR="/opt/orama/src" && ` +
+		`BIN_DIR="/opt/orama/bin" && ` +
 		`rm -rf "$SRC_DIR" && mkdir -p "$SRC_DIR" "$BIN_DIR" && ` +
 		`tar xzf "$ARCHIVE" -C "$SRC_DIR" && ` +
-		`chown -R orama:orama "$SRC_DIR" && ` +
 		// Install pre-built CLI binary (only binary cross-compiled locally)
 		`if [ -f "$SRC_DIR/bin-linux/orama" ]; then ` +
 		`cp "$SRC_DIR/bin-linux/orama" /usr/local/bin/orama && ` +
 		`chmod +x /usr/local/bin/orama; fi && ` +
-		`chown -R orama:orama "$BIN_DIR" && ` +
 		`echo "Extract complete."` +
 		"'"
 
