@@ -360,13 +360,13 @@ All configuration lives in `~/.orama/`:
 
 ```bash
 # Check status
-systemctl status debros-node
+systemctl status orama-node
 
 # View logs
-journalctl -u debros-node -f
+journalctl -u orama-node -f
 
 # Check log files
-tail -f /home/debros/.orama/logs/node.log
+tail -f /home/orama/.orama/logs/node.log
 ```
 
 ### Port Conflicts
@@ -398,7 +398,7 @@ rqlite -H localhost -p 5001
 ```bash
 # Production reset (⚠️ DESTROYS DATA)
 sudo orama uninstall
-sudo rm -rf /home/debros/.orama
+sudo rm -rf /home/orama/.orama
 sudo orama install
 ```
 

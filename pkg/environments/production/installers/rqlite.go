@@ -79,7 +79,7 @@ func (ri *RQLiteInstaller) InitializeDataDir(dataDir string) error {
 		return fmt.Errorf("failed to create RQLite data directory: %w", err)
 	}
 
-	if err := exec.Command("chown", "-R", "debros:debros", dataDir).Run(); err != nil {
+	if err := exec.Command("chown", "-R", "orama:orama", dataDir).Run(); err != nil {
 		fmt.Fprintf(ri.logWriter, "    ⚠️  Warning: failed to chown RQLite data dir: %v\n", err)
 	}
 	return nil

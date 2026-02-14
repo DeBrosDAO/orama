@@ -9,7 +9,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/config"
 )
 
-// Environment represents a DeBros network environment
+// Environment represents a Orama network environment
 type Environment struct {
 	Name        string `json:"name"`
 	GatewayURL  string `json:"gateway_url"`

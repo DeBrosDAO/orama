@@ -41,7 +41,7 @@ You can find peer public keys with `wg show wg0`.
 Check the Olric config on each node:
 
 ```bash
-cat /home/debros/.orama/data/namespaces/<name>/configs/olric-*.yaml
+cat /home/orama/.orama/data/namespaces/<name>/configs/olric-*.yaml
 ```
 
 If `bindAddr` is `0.0.0.0`, the node will try to bind to IPv6 on dual-stack hosts, breaking memberlist gossip.
@@ -53,7 +53,7 @@ This was fixed in code (BindAddr validation in `SpawnOlric`), so new namespaces 
 ### Check 3: Olric logs show "Failed UDP ping" constantly
 
 ```bash
-journalctl -u debros-namespace-olric@<name>.service --no-pager -n 30
+journalctl -u orama-namespace-olric@<name>.service --no-pager -n 30
 ```
 
 If every UDP ping fails but TCP stream connections succeed, it's the WireGuard packet loss issue (see Check 1).
@@ -69,7 +69,7 @@ If every UDP ping fails but TCP stream connections succeed, it's the WireGuard p
 **Fix:** Edit the gateway config manually:
 
 ```bash
-vim /home/debros/.orama/data/namespaces/<name>/configs/gateway-*.yaml
+vim /home/orama/.orama/data/namespaces/<name>/configs/gateway-*.yaml
 ```
 
 Add/fix:
@@ -95,7 +95,7 @@ This was fixed in code, so new namespaces get the correct config.
 **Check:**
 
 ```bash
-ls /home/debros/.orama/data/namespaces/<name>/cluster-state.json
+ls /home/orama/.orama/data/namespaces/<name>/cluster-state.json
 ```
 
 If the file doesn't exist, the node can't restore the namespace.
@@ -119,14 +119,14 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 **Symptom:** After `orama upgrade --restart` or `orama prod restart`, namespace gateway/olric/rqlite services don't start.
 
-**Cause:** `orama prod stop` disables systemd template services (`debros-namespace-gateway@<name>.service`). They have `PartOf=debros-node.service`, but that only propagates restart to **enabled** services.
+**Cause:** `orama prod stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
 
 **Fix:** Re-enable the services before restarting:
 
 ```bash
-systemctl enable debros-namespace-rqlite@<name>.service
-systemctl enable debros-namespace-olric@<name>.service
-systemctl enable debros-namespace-gateway@<name>.service
+systemctl enable orama-namespace-rqlite@<name>.service
+systemctl enable orama-namespace-olric@<name>.service
+systemctl enable orama-namespace-gateway@<name>.service
 sudo orama prod restart
 ```
 
@@ -153,8 +153,8 @@ ssh -n user@host 'command'
 ## General Debugging Tips
 
 - **Always use `sudo orama prod restart`** instead of raw `systemctl` commands
-- **Namespace data lives at:** `/home/debros/.orama/data/namespaces/<name>/`
-- **Check service logs:** `journalctl -u debros-namespace-olric@<name>.service --no-pager -n 50`
+- **Namespace data lives at:** `/home/orama/.orama/data/namespaces/<name>/`
+- **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
 - **Node IPs:** Check `scripts/remote-nodes.conf` for credentials, `wg show wg0` for WG IPs

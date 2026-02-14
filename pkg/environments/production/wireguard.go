@@ -145,7 +145,7 @@ func (wp *WireGuardProvisioner) WriteConfig() error {
 		}
 	}
 
-	// Fallback to sudo tee (for non-root, e.g. debros user)
+	// Fallback to sudo tee (for non-root, e.g. orama user)
 	cmd := exec.Command("sudo", "tee", confPath)
 	cmd.Stdin = strings.NewReader(content)
 	if output, err := cmd.CombinedOutput(); err != nil {

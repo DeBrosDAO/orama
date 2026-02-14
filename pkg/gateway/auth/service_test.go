@@ -138,8 +138,8 @@ func TestJWTFlow(t *testing.T) {
 		t.Errorf("expected namespace %s, got %s", ns, claims.Namespace)
 	}
 
-	if claims.Iss != "debros-gateway" {
-		t.Errorf("expected issuer debros-gateway, got %s", claims.Iss)
+	if claims.Iss != "orama-gateway" {
+		t.Errorf("expected issuer orama-gateway, got %s", claims.Iss)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestAlgorithmConfusion_Rejected(t *testing.T) {
 		header := map[string]string{"alg": "none", "typ": "JWT"}
 		hb, _ := json.Marshal(header)
 		payload := map[string]any{
-			"iss": "debros-gateway", "sub": "attacker", "aud": "gateway",
+			"iss": "orama-gateway", "sub": "attacker", "aud": "gateway",
 			"iat": time.Now().Unix(), "nbf": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(), "namespace": "test-ns",
 		}
@@ -275,7 +275,7 @@ func TestAlgorithmConfusion_Rejected(t *testing.T) {
 		header := map[string]string{"alg": "HS256", "typ": "JWT", "kid": s.keyID}
 		hb, _ := json.Marshal(header)
 		payload := map[string]any{
-			"iss": "debros-gateway", "sub": "attacker", "aud": "gateway",
+			"iss": "orama-gateway", "sub": "attacker", "aud": "gateway",
 			"iat": time.Now().Unix(), "nbf": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(), "namespace": "test-ns",
 		}
@@ -295,7 +295,7 @@ func TestAlgorithmConfusion_Rejected(t *testing.T) {
 		header := map[string]string{"alg": "RS256", "typ": "JWT", "kid": s.edKeyID}
 		hb, _ := json.Marshal(header)
 		payload := map[string]any{
-			"iss": "debros-gateway", "sub": "attacker", "aud": "gateway",
+			"iss": "orama-gateway", "sub": "attacker", "aud": "gateway",
 			"iat": time.Now().Unix(), "nbf": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(), "namespace": "test-ns",
 		}
@@ -321,7 +321,7 @@ func TestAlgorithmConfusion_Rejected(t *testing.T) {
 		header := map[string]string{"alg": "RS256", "typ": "JWT", "kid": "unknown-kid-123"}
 		hb, _ := json.Marshal(header)
 		payload := map[string]any{
-			"iss": "debros-gateway", "sub": "attacker", "aud": "gateway",
+			"iss": "orama-gateway", "sub": "attacker", "aud": "gateway",
 			"iat": time.Now().Unix(), "nbf": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(), "namespace": "test-ns",
 		}
@@ -341,7 +341,7 @@ func TestAlgorithmConfusion_Rejected(t *testing.T) {
 		header := map[string]string{"alg": "EdDSA", "typ": "JWT"}
 		hb, _ := json.Marshal(header)
 		payload := map[string]any{
-			"iss": "debros-gateway", "sub": "attacker", "aud": "gateway",
+			"iss": "orama-gateway", "sub": "attacker", "aud": "gateway",
 			"iat": time.Now().Unix(), "nbf": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(), "namespace": "test-ns",
 		}

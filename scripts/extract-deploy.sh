@@ -1,81 +1,46 @@
 #!/bin/bash
-# Extracts /tmp/network-source.tar.gz on a VPS and places everything correctly.
+# Extracts /tmp/network-source.tar.gz on a VPS and places the CLI binary.
 # Run as root on the target VPS.
 #
 # What it does:
-#   1. Extracts source to /home/debros/src/
+#   1. Extracts source to /home/orama/src/
 #   2. Installs CLI to /usr/local/bin/orama
-#   3. If bin-linux/ is in the archive (pre-built), copies binaries to their locations:
-#      - orama-node, gateway, identity, rqlite-mcp, olric-server → /home/debros/bin/
-#      - coredns → /usr/local/bin/coredns
-#      - caddy → /usr/bin/caddy
+#   All other binaries are built from source during `orama install`.
 #
-# Usage: sudo bash /home/debros/src/scripts/extract-deploy.sh
-#   (or pipe via SSH: ssh root@host 'bash -s' < scripts/extract-deploy.sh)
+# Usage: sudo bash /home/orama/src/scripts/extract-deploy.sh
 
 set -e
 
 ARCHIVE="/tmp/network-source.tar.gz"
-SRC_DIR="/home/debros/src"
-BIN_DIR="/home/debros/bin"
+SRC_DIR="/home/orama/src"
+BIN_DIR="/home/orama/bin"
 
 if [ ! -f "$ARCHIVE" ]; then
     echo "Error: $ARCHIVE not found"
     exit 1
 fi
 
-# Ensure debros user exists (orama install also creates it, but we need it now for chown)
-if ! id -u debros &>/dev/null; then
-    echo "Creating 'debros' user..."
-    useradd -m -s /bin/bash debros
+# Ensure orama user exists
+if ! id -u orama &>/dev/null; then
+    echo "Creating 'orama' user..."
+    useradd -m -s /bin/bash orama
 fi
 
 echo "Extracting source..."
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR" "$BIN_DIR"
 tar xzf "$ARCHIVE" -C "$SRC_DIR"
-id -u debros &>/dev/null && chown -R debros:debros "$SRC_DIR" || true
+chown -R orama:orama "$SRC_DIR" || true
 
-# Install CLI
+# Install CLI binary
 if [ -f "$SRC_DIR/bin-linux/orama" ]; then
     cp "$SRC_DIR/bin-linux/orama" /usr/local/bin/orama
     chmod +x /usr/local/bin/orama
     echo "  ✓ CLI installed: /usr/local/bin/orama"
-fi
-
-# Place pre-built binaries if present
-if [ -d "$SRC_DIR/bin-linux" ]; then
-    echo "Installing pre-built binaries..."
-
-    for bin in orama-node gateway identity rqlite-mcp olric-server orama; do
-        if [ -f "$SRC_DIR/bin-linux/$bin" ]; then
-            # Atomic rename: copy to temp, then move (works even if binary is running)
-            cp "$SRC_DIR/bin-linux/$bin" "$BIN_DIR/$bin.tmp"
-            chmod +x "$BIN_DIR/$bin.tmp"
-            mv -f "$BIN_DIR/$bin.tmp" "$BIN_DIR/$bin"
-            echo "  ✓ $bin → $BIN_DIR/$bin"
-        fi
-    done
-
-    if [ -f "$SRC_DIR/bin-linux/coredns" ]; then
-        cp "$SRC_DIR/bin-linux/coredns" /usr/local/bin/coredns.tmp
-        chmod +x /usr/local/bin/coredns.tmp
-        mv -f /usr/local/bin/coredns.tmp /usr/local/bin/coredns
-        echo "  ✓ coredns → /usr/local/bin/coredns"
-    fi
-
-    if [ -f "$SRC_DIR/bin-linux/caddy" ]; then
-        cp "$SRC_DIR/bin-linux/caddy" /usr/bin/caddy.tmp
-        chmod +x /usr/bin/caddy.tmp
-        mv -f /usr/bin/caddy.tmp /usr/bin/caddy
-        echo "  ✓ caddy → /usr/bin/caddy"
-    fi
-
-    id -u debros &>/dev/null && chown -R debros:debros "$BIN_DIR" || true
-    echo "All binaries installed."
 else
-    echo "No pre-built binaries in archive (bin-linux/ not found)."
-    echo "Install CLI manually: sudo mv /tmp/orama /usr/local/bin/orama"
+    echo "  ⚠️  CLI binary not found in archive (bin-linux/orama)"
 fi
 
-echo "Done. Ready for: sudo orama install --no-pull --pre-built ..."
+chown -R orama:orama "$BIN_DIR" || true
+
+echo "Done. Ready for: sudo orama install --vps-ip <ip> ..."

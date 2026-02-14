@@ -91,7 +91,7 @@ func TestGetStartCommand(t *testing.T) {
 	// On macOS (test environment), useSystemd will be false, so node/npm use short paths.
 	// We explicitly set it to test both modes.
 
-	workDir := "/home/debros/deployments/alice/myapp"
+	workDir := "/home/orama/deployments/alice/myapp"
 
 	tests := []struct {
 		name       string
@@ -227,9 +227,9 @@ func TestMapRestartPolicy(t *testing.T) {
 
 func TestParseSystemctlShow(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		want   map[string]string
+		name  string
+		input string
+		want  map[string]string
 	}{
 		{
 			name:  "typical output",

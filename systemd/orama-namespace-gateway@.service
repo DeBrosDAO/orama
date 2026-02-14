@@ -1,0 +1,42 @@
+[Unit]
+Description=Orama Namespace Gateway (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target orama-namespace-rqlite@%i.service orama-namespace-olric@%i.service
+Requires=orama-namespace-rqlite@%i.service orama-namespace-olric@%i.service
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+WorkingDirectory=/home/orama
+
+EnvironmentFile=/home/orama/.orama/data/namespaces/%i/gateway.env
+
+# Use shell to properly expand NODE_ID from env file
+ExecStart=/bin/sh -c 'exec /home/orama/bin/gateway --config ${GATEWAY_CONFIG}'
+
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-gateway-%i
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ReadWritePaths=/home/orama/.orama/data/namespaces
+
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

@@ -113,7 +113,7 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 	cfg.Cluster.Peername = nodeName
 	cfg.Cluster.Secret = cm.secret
 	cfg.Cluster.ListenMultiaddress = []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", clusterListenPort)}
-	cfg.Consensus.CRDT.ClusterName = "debros-cluster"
+	cfg.Consensus.CRDT.ClusterName = "orama-cluster"
 	cfg.Consensus.CRDT.TrustedPeers = []string{"*"}
 	cfg.API.RestAPI.HTTPListenMultiaddress = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", restAPIPort)
 	cfg.API.IPFSProxy.ListenMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", proxyPort)

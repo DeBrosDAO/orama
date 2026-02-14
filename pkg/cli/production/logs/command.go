@@ -27,7 +27,7 @@ func Handle(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		fmt.Fprintf(os.Stderr, "\nAvailable service aliases: node, ipfs, cluster, gateway, olric\n")
-		fmt.Fprintf(os.Stderr, "Or use full service name like: debros-node\n")
+		fmt.Fprintf(os.Stderr, "Or use full service name like: orama-node\n")
 		os.Exit(1)
 	}
 
@@ -51,7 +51,7 @@ func showUsage() {
 	fmt.Fprintf(os.Stderr, "\nService aliases:\n")
 	fmt.Fprintf(os.Stderr, "  node, ipfs, cluster, gateway, olric\n")
 	fmt.Fprintf(os.Stderr, "\nOr use full service name:\n")
-	fmt.Fprintf(os.Stderr, "  debros-node, debros-gateway, etc.\n")
+	fmt.Fprintf(os.Stderr, "  orama-node, orama-gateway, etc.\n")
 }
 
 func handleMultipleServices(serviceNames []string, serviceAlias string, follow bool) {

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# DeBros Network Interactive Release Script
+# Orama Network Interactive Release Script
 # Handles the complete release workflow for both stable and nightly releases
 
 set -e

@@ -37,7 +37,7 @@ func NewManager(namespaceBase string, logger *zap.Logger) *Manager {
 
 // serviceName returns the systemd service name for a namespace and service type
 func (m *Manager) serviceName(namespace string, serviceType ServiceType) string {
-	return fmt.Sprintf("debros-namespace-%s@%s.service", serviceType, namespace)
+	return fmt.Sprintf("orama-namespace-%s@%s.service", serviceType, namespace)
 }
 
 // StartService starts a namespace service
@@ -228,7 +228,7 @@ func (m *Manager) StartAllNamespaceServices(namespace string) error {
 
 // ListNamespaceServices returns all namespace services currently registered in systemd
 func (m *Manager) ListNamespaceServices() ([]string, error) {
-	cmd := exec.Command("sudo", "-n", "systemctl", "list-units", "--all", "--no-legend", "debros-namespace-*@*.service")
+	cmd := exec.Command("sudo", "-n", "systemctl", "list-units", "--all", "--no-legend", "orama-namespace-*@*.service")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list namespace services: %w; output: %s", err, string(output))
@@ -343,9 +343,9 @@ func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 	m.logger.Info("Installing systemd template units", zap.String("source", sourceDir))
 
 	templates := []string{
-		"debros-namespace-rqlite@.service",
-		"debros-namespace-olric@.service",
-		"debros-namespace-gateway@.service",
+		"orama-namespace-rqlite@.service",
+		"orama-namespace-olric@.service",
+		"orama-namespace-gateway@.service",
 	}
 
 	for _, template := range templates {

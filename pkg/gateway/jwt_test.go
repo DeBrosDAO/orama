@@ -32,7 +32,7 @@ func TestJWTGenerateAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify err: %v", err)
 	}
-	if claims.Namespace != "ns1" || claims.Sub != "subj" || claims.Aud != "gateway" || claims.Iss != "debros-gateway" {
+	if claims.Namespace != "ns1" || claims.Sub != "subj" || claims.Aud != "gateway" || claims.Iss != "orama-gateway" {
 		t.Fatalf("unexpected claims: %+v", claims)
 	}
 }

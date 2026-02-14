@@ -119,7 +119,7 @@ sudo chmod +x /usr/local/bin/coredns
 # 2. Create directories
 sudo mkdir -p /etc/coredns
 sudo mkdir -p /var/lib/coredns
-sudo chown debros:debros /var/lib/coredns
+sudo chown orama:orama /var/lib/coredns
 
 # 3. Copy configuration
 sudo cp configs/coredns/Corefile /etc/coredns/
@@ -425,8 +425,8 @@ Adjust in `client.go` if needed for higher load.
 ```bash
 # Increase file descriptor limit
 # Add to /etc/security/limits.conf:
-debros soft nofile 65536
-debros hard nofile 65536
+orama soft nofile 65536
+orama hard nofile 65536
 ```
 
 ## Next Steps

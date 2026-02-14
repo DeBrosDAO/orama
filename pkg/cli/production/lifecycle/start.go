@@ -16,11 +16,11 @@ func HandleStart() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Starting all DeBros production services...\n")
+	fmt.Printf("Starting all Orama production services...\n")
 
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
-		fmt.Printf("  ⚠️  No DeBros services found\n")
+		fmt.Printf("  ⚠️  No Orama services found\n")
 		return
 	}
 

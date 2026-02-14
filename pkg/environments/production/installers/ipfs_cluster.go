@@ -43,7 +43,7 @@ func (ici *IPFSClusterInstaller) Install() error {
 	}
 
 	cmd := exec.Command("go", "install", "github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest")
-	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin")
+	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install IPFS Cluster: %w", err)
 	}
@@ -77,7 +77,7 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 	}
 
 	// Fix ownership before running init (best-effort)
-	if err := exec.Command("chown", "-R", "debros:debros", clusterPath).Run(); err != nil {
+	if err := exec.Command("chown", "-R", "orama:orama", clusterPath).Run(); err != nil {
 		fmt.Fprintf(ici.logWriter, "    ⚠️  Warning: failed to chown cluster path before init: %v\n", err)
 	}
 
@@ -120,7 +120,7 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 	}
 
 	// Fix ownership again after updates (best-effort)
-	if err := exec.Command("chown", "-R", "debros:debros", clusterPath).Run(); err != nil {
+	if err := exec.Command("chown", "-R", "orama:orama", clusterPath).Run(); err != nil {
 		fmt.Fprintf(ici.logWriter, "    ⚠️  Warning: failed to chown cluster path after updates: %v\n", err)
 	}
 

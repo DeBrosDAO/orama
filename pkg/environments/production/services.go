@@ -34,8 +34,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 Environment=HOME=%[1]s
 Environment=IPFS_PATH=%[2]s
 ExecStartPre=/bin/bash -c 'if [ -f %[3]s/secrets/swarm.key ] && [ ! -f %[2]s/swarm.key ]; then cp %[3]s/secrets/swarm.key %[2]s/swarm.key && chmod 600 %[2]s/swarm.key; fi'
@@ -44,7 +44,7 @@ Restart=always
 RestartSec=5
 StandardOutput=append:%[4]s
 StandardError=append:%[4]s
-SyslogIdentifier=debros-ipfs
+SyslogIdentifier=orama-ipfs
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -80,14 +80,14 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary str
 
 	return fmt.Sprintf(`[Unit]
 Description=IPFS Cluster Service
-After=debros-ipfs.service
-Wants=debros-ipfs.service
-Requires=debros-ipfs.service
+After=orama-ipfs.service
+Wants=orama-ipfs.service
+Requires=orama-ipfs.service
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
@@ -99,7 +99,7 @@ Restart=always
 RestartSec=5
 StandardOutput=append:%[3]s
 StandardError=append:%[3]s
-SyslogIdentifier=debros-ipfs-cluster
+SyslogIdentifier=orama-ipfs-cluster
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -150,15 +150,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 Environment=HOME=%[1]s
 ExecStart=%[5]s %[2]s
 Restart=always
 RestartSec=5
 StandardOutput=append:%[3]s
 StandardError=append:%[3]s
-SyslogIdentifier=debros-rqlite
+SyslogIdentifier=orama-rqlite
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -191,8 +191,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 Environment=HOME=%[1]s
 Environment=OLRIC_SERVER_CONFIG=%[2]s
 ExecStart=%[5]s
@@ -222,7 +222,7 @@ WantedBy=multi-user.target
 `, ssg.oramaHome, olricConfigPath, logFile, ssg.oramaDir, olricBinary)
 }
 
-// GenerateNodeService generates the DeBros Node systemd unit
+// GenerateNodeService generates the Orama Node systemd unit
 func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 	configFile := "node.yaml"
 	logFile := filepath.Join(ssg.oramaDir, "logs", "node.log")
@@ -230,15 +230,15 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 	// Use absolute paths directly as they will be resolved by systemd at runtime
 
 	return fmt.Sprintf(`[Unit]
-Description=DeBros Network Node
-After=debros-ipfs-cluster.service debros-olric.service wg-quick@wg0.service
-Wants=debros-ipfs-cluster.service debros-olric.service
+Description=Orama Network Node
+After=orama-ipfs-cluster.service orama-olric.service wg-quick@wg0.service
+Wants=orama-ipfs-cluster.service orama-olric.service
 Requires=wg-quick@wg0.service
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/orama-node --config %[2]s/configs/%[3]s
@@ -246,7 +246,7 @@ Restart=always
 RestartSec=5
 StandardOutput=append:%[4]s
 StandardError=append:%[4]s
-SyslogIdentifier=debros-node
+SyslogIdentifier=orama-node
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -269,18 +269,18 @@ WantedBy=multi-user.target
 `, ssg.oramaHome, ssg.oramaDir, configFile, logFile)
 }
 
-// GenerateGatewayService generates the DeBros Gateway systemd unit
+// GenerateGatewayService generates the Orama Gateway systemd unit
 func (ssg *SystemdServiceGenerator) GenerateGatewayService() string {
 	logFile := filepath.Join(ssg.oramaDir, "logs", "gateway.log")
 	return fmt.Sprintf(`[Unit]
-Description=DeBros Gateway
-After=debros-node.service debros-olric.service
-Wants=debros-node.service debros-olric.service
+Description=Orama Gateway
+After=orama-node.service orama-olric.service
+Wants=orama-node.service orama-olric.service
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/gateway --config %[2]s/data/gateway.yaml
@@ -288,7 +288,7 @@ Restart=always
 RestartSec=5
 StandardOutput=append:%[3]s
 StandardError=append:%[3]s
-SyslogIdentifier=debros-gateway
+SyslogIdentifier=orama-gateway
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -325,8 +325,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 Environment=HOME=%[1]s
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/lib/node_modules/.bin
 WorkingDirectory=%[1]s
@@ -400,8 +400,8 @@ func (ssg *SystemdServiceGenerator) GenerateCoreDNSService() string {
 	return `[Unit]
 Description=CoreDNS DNS Server with RQLite backend
 Documentation=https://coredns.io
-After=network-online.target debros-node.service
-Wants=network-online.target debros-node.service
+After=network-online.target orama-node.service
+Wants=network-online.target orama-node.service
 
 [Service]
 Type=simple
@@ -429,9 +429,9 @@ func (ssg *SystemdServiceGenerator) GenerateCaddyService() string {
 	return `[Unit]
 Description=Caddy HTTP/2 Server
 Documentation=https://caddyserver.com/docs/
-After=network-online.target debros-node.service coredns.service
+After=network-online.target orama-node.service coredns.service
 Wants=network-online.target
-Wants=debros-node.service
+Wants=orama-node.service
 
 [Service]
 Type=simple

@@ -1,12 +1,12 @@
 [Unit]
-Description=DeBros Gateway
-After=debros-node.service
-Wants=debros-node.service
+Description=Orama Gateway
+After=orama-node.service
+Wants=orama-node.service
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 ExecStart={{.HomeDir}}/bin/gateway --config {{.OramaDir}}/data/gateway.yaml
@@ -14,7 +14,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=debros-gateway
+SyslogIdentifier=orama-gateway
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE

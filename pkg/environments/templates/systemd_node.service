@@ -1,13 +1,13 @@
 [Unit]
-Description=DeBros Network Node ({{.NodeType}})
-After=debros-ipfs-cluster-{{.NodeType}}.service
-Wants=debros-ipfs-cluster-{{.NodeType}}.service
-Requires=debros-ipfs-cluster-{{.NodeType}}.service
+Description=Orama Network Node ({{.NodeType}})
+After=orama-ipfs-cluster-{{.NodeType}}.service
+Wants=orama-ipfs-cluster-{{.NodeType}}.service
+Requires=orama-ipfs-cluster-{{.NodeType}}.service
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 ExecStart={{.HomeDir}}/bin/orama-node --config {{.OramaDir}}/configs/{{.ConfigFile}}
@@ -15,7 +15,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=debros-node-{{.NodeType}}
+SyslogIdentifier=orama-node-{{.NodeType}}
 
 NoNewPrivileges=yes
 PrivateTmp=yes

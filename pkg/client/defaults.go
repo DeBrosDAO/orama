@@ -13,7 +13,7 @@ import (
 // These can be overridden by environment variables or config.
 func DefaultBootstrapPeers() []string {
 	// Check environment variable first
-	if envPeers := os.Getenv("DEBROS_BOOTSTRAP_PEERS"); envPeers != "" {
+	if envPeers := os.Getenv("ORAMA_BOOTSTRAP_PEERS"); envPeers != "" {
 		peers := splitCSVOrSpace(envPeers)
 		// Filter out empty strings
 		result := make([]string, 0, len(peers))

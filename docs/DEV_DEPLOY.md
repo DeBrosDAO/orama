@@ -28,83 +28,29 @@ make test
 
 ## Deploying to VPS
 
-There are two deployment workflows: **development** (fast iteration, no git required) and **production** (via git).
+Source is always deployed via SCP (no git on VPS). The CLI is the only binary cross-compiled locally; everything else is built from source on the VPS.
 
-### Development Deployment (Fast Iteration)
-
-Use this when iterating quickly — no need to commit or push to git.
+### Deploy Workflow
 
 ```bash
-# 1. Build the CLI for Linux
-GOOS=linux GOARCH=amd64 go build -o orama-cli-linux ./cmd/cli
+# 1. Cross-compile the CLI for Linux
+make build-linux
 
-# 2. Generate a source archive (excludes .git, node_modules, bin/, etc.)
+# 2. Generate a source archive (includes CLI binary + full source)
 ./scripts/generate-source-archive.sh
 # Creates: /tmp/network-source.tar.gz
 
-# 3. Copy CLI and source to the VPS
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no orama-cli-linux ubuntu@<ip>:/tmp/orama
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no /tmp/network-source.tar.gz ubuntu@<ip>:/tmp/
+# 3. Install on a new VPS (handles SCP, extract, and remote install automatically)
+./bin/orama install --vps-ip <ip> --nameserver --domain <domain> --base-domain <domain>
 
-# 4. On the VPS: extract source and install the CLI
-ssh ubuntu@<ip>
-sudo rm -rf /home/debros/src && sudo mkdir -p /home/debros/src
-sudo tar xzf /tmp/network-source.tar.gz -C /home/debros/src
-sudo chown -R debros:debros /home/debros/src
-sudo mv /tmp/orama /usr/local/bin/orama && sudo chmod +x /usr/local/bin/orama
-
-# 5. Upgrade using local source (skips git pull)
-sudo orama upgrade --no-pull --restart
+# Or upgrade an existing VPS
+./bin/orama upgrade --restart
 ```
 
-### Development Deployment with Pre-Built Binaries (Fastest)
-
-Cross-compile everything locally and skip all Go compilation on the VPS. This is significantly faster because your local machine compiles much faster than the VPS.
-
-```bash
-# 1. Cross-compile all binaries for Linux (DeBros + Olric + CoreDNS + Caddy)
-make build-linux-all
-# Outputs everything to bin-linux/
-
-# 2. Generate a single deploy archive (source + pre-built binaries)
-./scripts/generate-source-archive.sh
-# Creates: /tmp/network-source.tar.gz (includes bin-linux/ if present)
-
-# 3. Copy the single archive to the VPS
-sshpass -p '<password>' scp -o StrictHostKeyChecking=no /tmp/network-source.tar.gz ubuntu@<ip>:/tmp/
-
-# 4. Extract and install everything on the VPS
-sshpass -p '<password>' ssh -o StrictHostKeyChecking=no ubuntu@<ip> \
-    'sudo bash -s' < scripts/extract-deploy.sh
-
-# 5. Install/upgrade with --pre-built (skips ALL Go compilation on VPS)
-sudo orama install --no-pull --pre-built --vps-ip <ip> ...
-# or
-sudo orama upgrade --no-pull --pre-built --restart
-```
-
-**What `--pre-built` skips:** Go installation, `make build`, Olric `go install`, CoreDNS build, Caddy/xcaddy build.
-
-**What `--pre-built` still runs:** apt dependencies, RQLite/IPFS/IPFS Cluster downloads (pre-built binary downloads, fast), Anyone relay setup, config generation, systemd service creation.
-
-### Production Deployment (Via Git)
-
-For production releases — pulls source from GitHub on the VPS.
-
-```bash
-# 1. Commit and push your changes
-git push origin <branch>
-
-# 2. Build the CLI for Linux
-GOOS=linux GOARCH=amd64 go build -o orama-cli-linux ./cmd/cli
-
-# 3. Deploy the CLI to the VPS
-sshpass -p '<password>' scp orama-cli-linux ubuntu@<ip>:/tmp/orama
-ssh ubuntu@<ip> "sudo mv /tmp/orama /usr/local/bin/orama && sudo chmod +x /usr/local/bin/orama"
-
-# 4. Run upgrade (downloads source from GitHub)
-ssh ubuntu@<ip> "sudo orama upgrade --branch <branch> --restart"
-```
+The `orama install` command automatically:
+1. Uploads the source archive via SCP
+2. Extracts source to `/home/orama/src` and installs the CLI to `/usr/local/bin/orama`
+3. Runs `orama install` on the VPS which builds all binaries from source (Go, CoreDNS, Caddy, Olric, etc.)
 
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
@@ -115,10 +61,10 @@ ssh ubuntu@<ip> "sudo orama upgrade --branch <branch> --restart"
 Always upgrade nodes **one at a time**, waiting for each to rejoin before proceeding:
 
 ```bash
-# 1. Build locally
-make build-linux-all
+# 1. Build CLI + generate archive
+make build-linux
 ./scripts/generate-source-archive.sh
-# Creates: /tmp/network-source.tar.gz (includes bin-linux/)
+# Creates: /tmp/network-source.tar.gz
 
 # 2. Upload to ONE node first (the "hub" node)
 sshpass -p '<password>' scp /tmp/network-source.tar.gz ubuntu@<hub-ip>:/tmp/
@@ -139,8 +85,7 @@ done
 ssh ubuntu@<any-node> 'curl -s http://localhost:5001/status | jq -r .store.raft.state'
 
 # 6. Upgrade FOLLOWER nodes one at a time
-# First stop services, then upgrade, which restarts them
-ssh ubuntu@<follower-ip> 'sudo orama prod stop && sudo orama upgrade --no-pull --pre-built --restart'
+ssh ubuntu@<follower-ip> 'sudo orama prod stop && sudo orama upgrade --restart'
 
 # Wait for rejoin before proceeding to next node
 ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft.num_peers'
@@ -149,7 +94,7 @@ ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft
 # Repeat for each follower...
 
 # 7. Upgrade the LEADER node last
-ssh ubuntu@<leader-ip> 'sudo orama prod stop && sudo orama upgrade --no-pull --pre-built --restart'
+ssh ubuntu@<leader-ip> 'sudo orama prod stop && sudo orama upgrade --restart'
 ```
 
 #### What NOT to Do
@@ -157,7 +102,7 @@ ssh ubuntu@<leader-ip> 'sudo orama prod stop && sudo orama upgrade --no-pull --p
 - **DON'T** stop all nodes, replace binaries, then start all nodes
 - **DON'T** run `orama upgrade --restart` on multiple nodes in parallel
 - **DON'T** clear RQLite data directories unless doing a full cluster rebuild
-- **DON'T** use `systemctl stop debros-node` on multiple nodes simultaneously
+- **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously
 
 #### Recovery from Cluster Split
 
@@ -168,8 +113,8 @@ If nodes get stuck in "Candidate" state or show "leader not found" errors:
 3. On each other node, clear RQLite data and restart:
    ```bash
    sudo orama prod stop
-   sudo rm -rf /home/debros/.orama/data/rqlite
-   sudo systemctl start debros-node
+   sudo rm -rf /home/orama/.orama/data/rqlite
+   sudo systemctl start orama-node
    ```
 4. The node should automatically rejoin using its configured `rqlite_join_address`
 
@@ -180,7 +125,7 @@ ps aux | grep rqlited
 ```
 
 If `-join` is missing, the node bootstrapped standalone. You'll need to either:
-- Restart debros-node (it should detect empty data and use join)
+- Restart orama-node (it should detect empty data and use join)
 - Or do a full cluster rebuild from CLEAN_NODE.md
 
 ### Deploying to Multiple Nodes
@@ -201,9 +146,6 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--nameserver` | Configure this node as a nameserver (CoreDNS + Caddy) |
 | `--join <url>` | Join existing cluster via HTTPS URL (e.g., `https://node1.example.com`) |
 | `--token <token>` | Invite token for joining (from `orama invite` on existing node) |
-| `--branch <branch>` | Git branch to use (default: main) |
-| `--no-pull` | Skip git clone/pull, use existing `/home/debros/src` |
-| `--pre-built` | Skip all Go compilation, use pre-built binaries already on disk (see above) |
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
 | `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
@@ -234,9 +176,6 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 
 | Flag | Description |
 |------|-------------|
-| `--branch <branch>` | Git branch to pull from |
-| `--no-pull` | Skip git pull, use existing source |
-| `--pre-built` | Skip all Go compilation, use pre-built binaries already on disk |
 | `--restart` | Restart all services after upgrade |
 | `--anyone-relay` | Enable Anyone relay (same flags as install) |
 | `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited) |
@@ -247,7 +186,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 Use these commands to manage services on production nodes:
 
 ```bash
-# Stop all services (debros-node, coredns, caddy)
+# Stop all services (orama-node, coredns, caddy)
 sudo orama prod stop
 
 # Start all services
@@ -318,12 +257,7 @@ Before running `orama install` on a VPS, ensure:
    sudo systemctl stop ipfs
    ```
 
-3. **Ensure `make` is installed.** Required for building CoreDNS and Caddy from source:
-   ```bash
-   sudo apt-get install -y make
-   ```
-
-4. **Stop any service on port 53** (for nameserver nodes). The installer handles `systemd-resolved` automatically, but other DNS services (like `bind9` or `dnsmasq`) must be stopped manually.
+3. **Stop any service on port 53** (for nameserver nodes). The installer handles `systemd-resolved` automatically, but other DNS services (like `bind9` or `dnsmasq`) must be stopped manually.
 
 ## Recovering from Failed Joins
 

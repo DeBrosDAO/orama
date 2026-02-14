@@ -8,11 +8,11 @@ Run this as root or with sudo on the target VPS:
 
 ```bash
 # 1. Stop and disable all services
-sudo systemctl stop debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
-sudo systemctl disable debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
+sudo systemctl stop orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
+sudo systemctl disable orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
 
 # 2. Remove systemd service files
-sudo rm -f /etc/systemd/system/debros-*.service
+sudo rm -f /etc/systemd/system/orama-*.service
 sudo rm -f /etc/systemd/system/coredns.service
 sudo rm -f /etc/systemd/system/caddy.service
 sudo systemctl daemon-reload
@@ -31,14 +31,14 @@ sudo ufw --force reset
 sudo ufw allow 22/tcp
 sudo ufw --force enable
 
-# 5. Remove debros user and home directory
-sudo userdel -r debros 2>/dev/null
-sudo rm -rf /home/debros
+# 5. Remove orama user and home directory
+sudo userdel -r orama 2>/dev/null
+sudo rm -rf /home/orama
 
 # 6. Remove sudoers files
-sudo rm -f /etc/sudoers.d/debros-access
-sudo rm -f /etc/sudoers.d/debros-deployments
-sudo rm -f /etc/sudoers.d/debros-wireguard
+sudo rm -f /etc/sudoers.d/orama-access
+sudo rm -f /etc/sudoers.d/orama-deployments
+sudo rm -f /etc/sudoers.d/orama-wireguard
 
 # 7. Remove CoreDNS config
 sudo rm -rf /etc/coredns
@@ -62,17 +62,17 @@ echo "Node cleaned. Ready for fresh install."
 
 | Category | Paths |
 |----------|-------|
-| **User** | `debros` system user and `/home/debros/` |
-| **App data** | `/home/debros/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
-| **Source code** | `/home/debros/src/` |
-| **Binaries** | `/home/debros/bin/orama-node`, `/home/debros/bin/gateway` |
-| **Systemd** | `debros-*.service`, `coredns.service`, `caddy.service`, `orama-deploy-*.service` |
+| **User** | `orama` system user and `/home/orama/` |
+| **App data** | `/home/orama/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
+| **Source code** | `/home/orama/src/` |
+| **Binaries** | `/home/orama/bin/orama-node`, `/home/orama/bin/gateway` |
+| **Systemd** | `orama-*.service`, `coredns.service`, `caddy.service`, `orama-deploy-*.service` |
 | **WireGuard** | `/etc/wireguard/wg0.conf`, `wg-quick@wg0` systemd unit |
 | **Firewall** | All UFW rules (reset to default + SSH only) |
-| **Sudoers** | `/etc/sudoers.d/debros-*` |
+| **Sudoers** | `/etc/sudoers.d/orama-*` |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
-| **Anyone Relay** | `debros-anyone-relay.service`, `debros-anyone-client.service` |
+| **Anyone Relay** | `orama-anyone-relay.service`, `orama-anyone-client.service` |
 | **Temp files** | `/tmp/orama`, `/tmp/network-source.*`, build dirs |
 
 ## What This Does NOT Remove
@@ -121,18 +121,18 @@ for entry in "${NODES[@]}"; do
   IFS=: read -r userhost pass <<< "$entry"
   echo "Cleaning $userhost..."
   sshpass -p "$pass" ssh -o StrictHostKeyChecking=no "$userhost" 'bash -s' << 'CLEAN'
-sudo systemctl stop debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
-sudo systemctl disable debros-node debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-anyone-client coredns caddy 2>/dev/null
-sudo rm -f /etc/systemd/system/debros-*.service /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service
+sudo systemctl stop orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
+sudo systemctl disable orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
+sudo rm -f /etc/systemd/system/orama-*.service /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service
 sudo systemctl daemon-reload
 sudo systemctl stop wg-quick@wg0 2>/dev/null
 sudo wg-quick down wg0 2>/dev/null
 sudo systemctl disable wg-quick@wg0 2>/dev/null
 sudo rm -f /etc/wireguard/wg0.conf
 sudo ufw --force reset && sudo ufw allow 22/tcp && sudo ufw --force enable
-sudo userdel -r debros 2>/dev/null
-sudo rm -rf /home/debros
-sudo rm -f /etc/sudoers.d/debros-access /etc/sudoers.d/debros-deployments /etc/sudoers.d/debros-wireguard
+sudo userdel -r orama 2>/dev/null
+sudo rm -rf /home/orama
+sudo rm -f /etc/sudoers.d/orama-access /etc/sudoers.d/orama-deployments /etc/sudoers.d/orama-wireguard
 sudo rm -rf /etc/coredns /etc/caddy /var/lib/caddy
 sudo rm -f /tmp/orama /tmp/network-source.tar.gz
 sudo rm -rf /tmp/network-extract /tmp/coredns-build /tmp/caddy-build

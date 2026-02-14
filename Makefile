@@ -81,47 +81,16 @@ build: deps
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	@echo "Build complete! Run ./bin/orama version"
 
-# Cross-compile all binaries for Linux (used with --pre-built flag on VPS)
-# Builds: DeBros binaries + Olric + CoreDNS (with rqlite plugin) + Caddy (with orama DNS module)
+# Cross-compile CLI for Linux (only binary needed locally; VPS builds everything else from source)
 build-linux: deps
-	@echo "Cross-compiling all binaries for linux/amd64 (version=$(VERSION))..."
+	@echo "Cross-compiling CLI for linux/amd64 (version=$(VERSION))..."
 	@mkdir -p bin-linux
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/identity ./cmd/identity
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama-node ./cmd/node
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama cmd/cli/main.go
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/rqlite-mcp ./cmd/rqlite-mcp
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -trimpath -o bin-linux/gateway ./cmd/gateway
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama-cli ./cmd/cli
-	@echo "Building Olric for linux/amd64..."
-	GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -trimpath -o bin-linux/olric-server github.com/olric-data/olric/cmd/olric-server
-	@echo "Building IPFS Cluster Service for linux/amd64..."
-	GOOS=linux GOARCH=amd64 GOBIN=$(CURDIR)/bin-linux go install -ldflags "-s -w" -trimpath github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest
-	@echo "✓ All Linux binaries built in bin-linux/"
+	@echo "✓ CLI built at bin-linux/orama"
 	@echo ""
 	@echo "Next steps:"
-	@echo "  1. Build CoreDNS:  make build-linux-coredns"
-	@echo "  2. Build Caddy:    make build-linux-caddy"
-	@echo "  3. Or build all:   make build-linux-all"
-
-# Build CoreDNS with rqlite plugin for Linux
-build-linux-coredns:
-	@bash scripts/build-linux-coredns.sh
-
-# Build Caddy with orama DNS module for Linux
-build-linux-caddy:
-	@bash scripts/build-linux-caddy.sh
-
-# Build everything for Linux (all binaries + CoreDNS + Caddy)
-build-linux-all: build-linux build-linux-coredns build-linux-caddy
-	@echo ""
-	@echo "✅ All Linux binaries ready in bin-linux/:"
-	@ls -la bin-linux/
-	@echo ""
-	@echo "Deploy to VPS:"
-	@echo "  scp bin-linux/* ubuntu@<ip>:/home/debros/bin/"
-	@echo "  scp bin-linux/coredns ubuntu@<ip>:/usr/local/bin/coredns"
-	@echo "  scp bin-linux/caddy ubuntu@<ip>:/usr/bin/caddy"
-	@echo "  sudo orama install --pre-built --no-pull ..."
+	@echo "  ./scripts/generate-source-archive.sh"
+	@echo "  ./bin/orama install --vps-ip <ip> --nameserver --domain ..."
 
 # Install git hooks
 install-hooks:

@@ -8,11 +8,11 @@ import (
 )
 
 func TestDefaultBootstrapPeersNonEmpty(t *testing.T) {
-	old := os.Getenv("DEBROS_BOOTSTRAP_PEERS")
-	t.Cleanup(func() { os.Setenv("DEBROS_BOOTSTRAP_PEERS", old) })
+	old := os.Getenv("ORAMA_BOOTSTRAP_PEERS")
+	t.Cleanup(func() { os.Setenv("ORAMA_BOOTSTRAP_PEERS", old) })
 	// Set a valid peer
 	validPeer := "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
-	_ = os.Setenv("DEBROS_BOOTSTRAP_PEERS", validPeer)
+	_ = os.Setenv("ORAMA_BOOTSTRAP_PEERS", validPeer)
 	peers := DefaultBootstrapPeers()
 	if len(peers) == 0 {
 		t.Fatalf("expected non-empty default peers")

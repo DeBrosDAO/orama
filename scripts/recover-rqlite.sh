@@ -3,7 +3,7 @@
 # Recover RQLite cluster from split-brain.
 #
 # Strategy:
-#   1. Stop debros-node on ALL nodes simultaneously
+#   1. Stop orama-node on ALL nodes simultaneously
 #   2. Keep raft/ data ONLY on the node with the highest commit index (leader candidate)
 #   3. Delete raft/ on all other nodes (they'll join fresh via -join)
 #   4. Start the leader candidate first, wait for it to become Leader
@@ -121,7 +121,7 @@ node_ssh() {
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
 echo "⚠️  THIS WILL:"
-echo "  1. Stop debros-node on ALL ${#HOSTS[@]} nodes"
+echo "  1. Stop orama-node on ALL ${#HOSTS[@]} nodes"
 echo "  2. DELETE raft/ data on ${#HOSTS[@]}-1 nodes (backup to /tmp/rqlite-raft-backup/)"
 echo "  3. Keep raft/ data ONLY on ${HOSTS[$LEADER_IDX]} (leader candidate)"
 echo "  4. Restart all nodes to reform the cluster"
@@ -133,17 +133,17 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
 fi
 echo ""
 
-RAFT_DIR="/home/debros/.orama/data/rqlite/raft"
+RAFT_DIR="/home/orama/.orama/data/rqlite/raft"
 BACKUP_DIR="/tmp/rqlite-raft-backup"
 
-# ── Phase 1: Stop debros-node on ALL nodes ───────────────────────────────────
-echo "== Phase 1: Stopping debros-node on all ${#HOSTS[@]} nodes =="
+# ── Phase 1: Stop orama-node on ALL nodes ───────────────────────────────────
+echo "== Phase 1: Stopping orama-node on all ${#HOSTS[@]} nodes =="
 failed=()
 for i in "${!HOSTS[@]}"; do
   h="${HOSTS[$i]}"
   p="${PASSES[$i]}"
   echo -n "  Stopping $h ... "
-  if node_ssh "$i" "printf '%s\n' '$p' | sudo -S systemctl stop debros-node 2>&1 && echo STOPPED"; then
+  if node_ssh "$i" "printf '%s\n' '$p' | sudo -S systemctl stop orama-node 2>&1 && echo STOPPED"; then
     echo ""
   else
     echo "FAILED"
@@ -202,7 +202,7 @@ echo "Leader node ${HOSTS[$LEADER_IDX]} raft/ data preserved."
 echo ""
 echo "== Phase 3: Starting leader node (${HOSTS[$LEADER_IDX]}) =="
 lp="${PASSES[$LEADER_IDX]}"
-node_ssh "$LEADER_IDX" "printf '%s\n' '$lp' | sudo -S systemctl start debros-node" || die "Failed to start leader node"
+node_ssh "$LEADER_IDX" "printf '%s\n' '$lp' | sudo -S systemctl start orama-node" || die "Failed to start leader node"
 
 echo "  Waiting for leader to become Leader..."
 max_wait=120
@@ -236,7 +236,7 @@ for i in "${!HOSTS[@]}"; do
   h="${HOSTS[$i]}"
   p="${PASSES[$i]}"
   echo -n "  Starting $h ... "
-  if node_ssh "$i" "printf '%s\n' '$p' | sudo -S systemctl start debros-node && echo STARTED"; then
+  if node_ssh "$i" "printf '%s\n' '$p' | sudo -S systemctl start orama-node && echo STARTED"; then
     true
   else
     echo "FAILED"
@@ -286,4 +286,4 @@ echo ""
 echo "Next steps:"
 echo "  1. Run 'scripts/inspect.sh --devnet' to verify full cluster health"
 echo "  2. If some nodes show Candidate state, give them more time (up to 5 min)"
-echo "  3. If nodes fail to join, check /home/debros/.orama/logs/rqlite-node.log on the node"
+echo "  3. If nodes fail to join, check /home/orama/.orama/logs/rqlite-node.log on the node"

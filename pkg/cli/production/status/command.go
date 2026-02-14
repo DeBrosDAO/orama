@@ -13,21 +13,21 @@ func Handle() {
 
 	// Unified service names (no bootstrap/node distinction)
 	serviceNames := []string{
-		"debros-ipfs",
-		"debros-ipfs-cluster",
+		"orama-ipfs",
+		"orama-ipfs-cluster",
 		// Note: RQLite is managed by node process, not as separate service
-		"debros-olric",
-		"debros-node",
-		"debros-gateway",
+		"orama-olric",
+		"orama-node",
+		"orama-gateway",
 	}
 
 	// Friendly descriptions
 	descriptions := map[string]string{
-		"debros-ipfs":         "IPFS Daemon",
-		"debros-ipfs-cluster": "IPFS Cluster",
-		"debros-olric":        "Olric Cache Server",
-		"debros-node":         "DeBros Node (includes RQLite)",
-		"debros-gateway":      "DeBros Gateway",
+		"orama-ipfs":         "IPFS Daemon",
+		"orama-ipfs-cluster": "IPFS Cluster",
+		"orama-olric":        "Olric Cache Server",
+		"orama-node":         "Orama Node (includes RQLite)",
+		"orama-gateway":      "Orama Gateway",
 	}
 
 	fmt.Printf("Services:\n")
@@ -47,7 +47,7 @@ func Handle() {
 	}
 
 	fmt.Printf("\nDirectories:\n")
-	oramaDir := "/home/debros/.orama"
+	oramaDir := "/home/orama/.orama"
 	if _, err := os.Stat(oramaDir); err == nil {
 		fmt.Printf("  ✅ %s exists\n", oramaDir)
 	} else {

@@ -2,10 +2,13 @@
 # Generates a tarball of the current codebase for deployment
 # Output: /tmp/network-source.tar.gz
 #
-# If bin-linux/ exists (from make build-linux-all), it is included in the archive.
-# On the VPS, use scripts/extract-deploy.sh to extract source + place binaries.
+# Includes bin-linux/orama (CLI binary cross-compiled via make build-linux).
+# All other binaries are built from source on the VPS during install.
 #
-# Usage: ./scripts/generate-source-archive.sh
+# Usage:
+#   make build-linux
+#   ./scripts/generate-source-archive.sh
+#   ./bin/orama install --vps-ip <ip> --nameserver --domain ...
 
 set -e
 
@@ -18,14 +21,13 @@ cd "$PROJECT_ROOT"
 # Remove root-level binaries before archiving (they'll be rebuilt on VPS)
 rm -f gateway cli node orama-cli-linux 2>/dev/null
 
-# Check if pre-built binaries exist
-if [ -d "bin-linux" ] && [ "$(ls -A bin-linux 2>/dev/null)" ]; then
-    echo "Generating source archive (with pre-built binaries)..."
-    EXCLUDE_BIN=""
-else
-    echo "Generating source archive (source only, no bin-linux/)..."
-    EXCLUDE_BIN="--exclude=bin-linux/"
+# Verify CLI binary exists
+if [ ! -f "bin-linux/orama" ]; then
+    echo "Error: bin-linux/orama not found. Run 'make build-linux' first."
+    exit 1
 fi
+
+echo "Generating source archive (with CLI binary)..."
 
 tar czf "$OUTPUT" \
     --exclude='.git' \
@@ -39,12 +41,8 @@ tar czf "$OUTPUT" \
     --exclude='testdata/' \
     --exclude='examples/' \
     --exclude='*.tar.gz' \
-    $EXCLUDE_BIN \
     .
 
 echo "Archive created: $OUTPUT"
 echo "Size: $(du -h $OUTPUT | cut -f1)"
-
-if [ -d "bin-linux" ] && [ "$(ls -A bin-linux 2>/dev/null)" ]; then
-    echo "Includes pre-built binaries: $(ls bin-linux/ | tr '\n' ' ')"
-fi
+echo "Includes CLI binary: bin-linux/orama"

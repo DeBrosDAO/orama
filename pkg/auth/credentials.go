@@ -169,10 +169,10 @@ func (creds *Credentials) UpdateLastUsed() {
 // GetDefaultGatewayURL returns the default gateway URL from environment config, env vars, or fallback
 func GetDefaultGatewayURL() string {
 	// Check environment variables first (for backwards compatibility)
-	if envURL := os.Getenv("DEBROS_GATEWAY_URL"); envURL != "" {
+	if envURL := os.Getenv("ORAMA_GATEWAY_URL"); envURL != "" {
 		return envURL
 	}
-	if envURL := os.Getenv("DEBROS_GATEWAY"); envURL != "" {
+	if envURL := os.Getenv("ORAMA_GATEWAY"); envURL != "" {
 		return envURL
 	}
 

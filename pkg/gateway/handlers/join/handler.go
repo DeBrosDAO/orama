@@ -65,7 +65,7 @@ type PeerInfo struct {
 type Handler struct {
 	logger       *zap.Logger
 	rqliteClient rqlite.Client
-	oramaDir     string // e.g., /home/debros/.orama
+	oramaDir     string // e.g., /home/orama/.orama
 }
 
 // NewHandler creates a new join handler

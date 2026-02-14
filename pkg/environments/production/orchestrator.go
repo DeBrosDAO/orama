@@ -30,13 +30,13 @@ type AnyoneRelayConfig struct {
 type ProductionSetup struct {
 	osInfo             *OSInfo
 	arch               string
-	oramaHome         string
-	oramaDir          string
+	oramaHome          string
+	oramaDir           string
 	logWriter          io.Writer
 	forceReconfigure   bool
 	skipOptionalDeps   bool
 	skipResourceChecks bool
-	isNameserver       bool   // Whether this node is a nameserver (runs CoreDNS + Caddy)
+	isNameserver       bool               // Whether this node is a nameserver (runs CoreDNS + Caddy)
 	isAnyoneClient     bool               // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	anyoneRelayConfig  *AnyoneRelayConfig // Configuration for Anyone relay mode
 	privChecker        *PrivilegeChecker
@@ -73,12 +73,12 @@ func ReadBranchPreference(oramaDir string) string {
 func SaveBranchPreference(oramaDir, branch string) error {
 	branchFile := filepath.Join(oramaDir, ".branch")
 	if err := os.MkdirAll(oramaDir, 0755); err != nil {
-		return fmt.Errorf("failed to create debros directory: %w", err)
+		return fmt.Errorf("failed to create orama directory: %w", err)
 	}
 	if err := os.WriteFile(branchFile, []byte(branch), 0644); err != nil {
 		return fmt.Errorf("failed to save branch preference: %w", err)
 	}
-	exec.Command("chown", "debros:debros", branchFile).Run()
+	exec.Command("chown", "orama:orama", branchFile).Run()
 	return nil
 }
 
@@ -88,8 +88,8 @@ func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure 
 	arch, _ := (&ArchitectureDetector{}).Detect()
 
 	return &ProductionSetup{
-		oramaHome:         oramaHome,
-		oramaDir:          oramaDir,
+		oramaHome:          oramaHome,
+		oramaDir:           oramaDir,
 		logWriter:          logWriter,
 		forceReconfigure:   forceReconfigure,
 		arch:               arch,
@@ -100,7 +100,7 @@ func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure 
 		resourceChecker:    NewResourceChecker(),
 		portChecker:        NewPortChecker(),
 		fsProvisioner:      NewFilesystemProvisioner(oramaHome),
-		userProvisioner:    NewUserProvisioner("debros", oramaHome, "/bin/bash"),
+		userProvisioner:    NewUserProvisioner("orama", oramaHome, "/bin/bash"),
 		stateDetector:      NewStateDetector(oramaDir),
 		configGenerator:    NewConfigGenerator(oramaDir),
 		secretGenerator:    NewSecretGenerator(oramaDir),
@@ -231,14 +231,14 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	ps.logf("Phase 2: Provisioning environment...")
 
-	// Create debros user
+	// Create orama user
 	if !ps.userProvisioner.UserExists() {
 		if err := ps.userProvisioner.CreateUser(); err != nil {
-			return fmt.Errorf("failed to create debros user: %w", err)
+			return fmt.Errorf("failed to create orama user: %w", err)
 		}
-		ps.logf("  ✓ Created 'debros' user")
+		ps.logf("  ✓ Created 'orama' user")
 	} else {
-		ps.logf("  ✓ 'debros' user already exists")
+		ps.logf("  ✓ 'orama' user already exists")
 	}
 
 	// Set up sudoers access if invoked via sudo
@@ -251,21 +251,21 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 		}
 	}
 
-	// Set up deployment sudoers (allows debros user to manage orama-deploy-* services)
+	// Set up deployment sudoers (allows orama user to manage orama-deploy-* services)
 	if err := ps.userProvisioner.SetupDeploymentSudoers(); err != nil {
 		ps.logf("  ⚠️  Failed to setup deployment sudoers: %v", err)
 	} else {
 		ps.logf("  ✓ Deployment sudoers configured")
 	}
 
-	// Set up namespace sudoers (allows debros user to manage debros-namespace-* services)
+	// Set up namespace sudoers (allows orama user to manage orama-namespace-* services)
 	if err := ps.userProvisioner.SetupNamespaceSudoers(); err != nil {
 		ps.logf("  ⚠️  Failed to setup namespace sudoers: %v", err)
 	} else {
 		ps.logf("  ✓ Namespace sudoers configured")
 	}
 
-	// Set up WireGuard sudoers (allows debros user to manage WG peers)
+	// Set up WireGuard sudoers (allows orama user to manage WG peers)
 	if err := ps.userProvisioner.SetupWireGuardSudoers(); err != nil {
 		ps.logf("  ⚠️  Failed to setup wireguard sudoers: %v", err)
 	} else {
@@ -287,7 +287,7 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	return nil
 }
 
-// Phase2bInstallBinaries installs external binaries and DeBros components
+// Phase2bInstallBinaries installs external binaries and Orama components
 func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	ps.logf("Phase 2b: Installing binaries...")
 
@@ -305,9 +305,9 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  Olric install warning: %v", err)
 	}
 
-	// Install DeBros binaries (source must be at /home/debros/src via SCP)
+	// Install Orama binaries (source must be at /home/orama/src via SCP)
 	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.oramaHome); err != nil {
-		return fmt.Errorf("failed to install DeBros binaries: %w", err)
+		return fmt.Errorf("failed to install Orama binaries: %w", err)
 	}
 
 	// Install CoreDNS only for nameserver nodes
@@ -471,7 +471,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	}
 
 	// Ensure all directories and files created during service initialization have correct ownership
-	// This is critical because directories/files created as root need to be owned by debros user
+	// This is critical because directories/files created as root need to be owned by orama user
 	if err := ps.fsProvisioner.FixOwnership(); err != nil {
 		return fmt.Errorf("failed to fix ownership after service initialization: %w", err)
 	}
@@ -564,7 +564,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	if err := os.WriteFile(olricConfigPath, []byte(olricConfig), 0644); err != nil {
 		return fmt.Errorf("failed to save olric config: %w", err)
 	}
-	exec.Command("chown", "debros:debros", olricConfigPath).Run()
+	exec.Command("chown", "orama:orama", olricConfigPath).Run()
 	ps.logf("  ✓ Olric config generated")
 
 	// Configure CoreDNS (if baseDomain is provided - this is the zone name)
@@ -633,44 +633,44 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 
 	// IPFS service (unified - no bootstrap/node distinction)
 	ipfsUnit := ps.serviceGenerator.GenerateIPFSService(ipfsBinary)
-	if err := ps.serviceController.WriteServiceUnit("debros-ipfs.service", ipfsUnit); err != nil {
+	if err := ps.serviceController.WriteServiceUnit("orama-ipfs.service", ipfsUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS service: %w", err)
 	}
-	ps.logf("  ✓ IPFS service created: debros-ipfs.service")
+	ps.logf("  ✓ IPFS service created: orama-ipfs.service")
 
 	// IPFS Cluster service
 	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
-	if err := ps.serviceController.WriteServiceUnit("debros-ipfs-cluster.service", clusterUnit); err != nil {
+	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-cluster.service", clusterUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS Cluster service: %w", err)
 	}
-	ps.logf("  ✓ IPFS Cluster service created: debros-ipfs-cluster.service")
+	ps.logf("  ✓ IPFS Cluster service created: orama-ipfs-cluster.service")
 
 	// RQLite is managed internally by each node - no separate systemd service needed
 
 	// Olric service
 	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
-	if err := ps.serviceController.WriteServiceUnit("debros-olric.service", olricUnit); err != nil {
+	if err := ps.serviceController.WriteServiceUnit("orama-olric.service", olricUnit); err != nil {
 		return fmt.Errorf("failed to write Olric service: %w", err)
 	}
 	ps.logf("  ✓ Olric service created")
 
 	// Node service (unified - includes embedded gateway)
 	nodeUnit := ps.serviceGenerator.GenerateNodeService()
-	if err := ps.serviceController.WriteServiceUnit("debros-node.service", nodeUnit); err != nil {
+	if err := ps.serviceController.WriteServiceUnit("orama-node.service", nodeUnit); err != nil {
 		return fmt.Errorf("failed to write Node service: %w", err)
 	}
-	ps.logf("  ✓ Node service created: debros-node.service (with embedded gateway)")
+	ps.logf("  ✓ Node service created: orama-node.service (with embedded gateway)")
 
 	// Anyone Relay service (only created when --anyone-relay flag is used)
 	if ps.IsAnyoneRelay() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
-		if err := ps.serviceController.WriteServiceUnit("debros-anyone-relay.service", anyoneUnit); err != nil {
+		if err := ps.serviceController.WriteServiceUnit("orama-anyone-relay.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
 		}
 		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
 	} else if ps.IsAnyoneClient() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
-		if err := ps.serviceController.WriteServiceUnit("debros-anyone-relay.service", anyoneUnit); err != nil {
+		if err := ps.serviceController.WriteServiceUnit("orama-anyone-relay.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone client service: %w", err)
 		}
 		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
@@ -712,13 +712,13 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("  ✓ Systemd daemon reloaded")
 
 	// Enable services (unified names - no bootstrap/node distinction)
-	// Note: debros-gateway.service is no longer needed - each node has an embedded gateway
-	// Note: debros-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"debros-ipfs.service", "debros-ipfs-cluster.service", "debros-olric.service", "debros-node.service"}
+	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
+	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
+	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-node.service"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() || ps.IsAnyoneClient() {
-		services = append(services, "debros-anyone-relay.service")
+		services = append(services, "orama-anyone-relay.service")
 	}
 
 	// Add CoreDNS only for nameserver nodes
@@ -744,7 +744,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("  Starting services...")
 
 	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
-	infraServices := []string{"debros-ipfs.service", "debros-olric.service"}
+	infraServices := []string{"orama-ipfs.service", "orama-olric.service"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -754,12 +754,12 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 		if ps.portChecker.IsPortInUse(orPort) {
 			ps.logf("  ℹ️  ORPort %d is already in use (existing anon relay running)", orPort)
-			ps.logf("  ℹ️  Skipping debros-anyone-relay startup - using existing service")
+			ps.logf("  ℹ️  Skipping orama-anyone-relay startup - using existing service")
 		} else {
-			infraServices = append(infraServices, "debros-anyone-relay.service")
+			infraServices = append(infraServices, "orama-anyone-relay.service")
 		}
 	} else if ps.IsAnyoneClient() {
-		infraServices = append(infraServices, "debros-anyone-relay.service")
+		infraServices = append(infraServices, "orama-anyone-relay.service")
 	}
 
 	for _, svc := range infraServices {
@@ -774,17 +774,17 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	time.Sleep(2 * time.Second)
 
 	// Start IPFS Cluster
-	if err := ps.serviceController.RestartService("debros-ipfs-cluster.service"); err != nil {
-		ps.logf("  ⚠️  Failed to start debros-ipfs-cluster.service: %v", err)
+	if err := ps.serviceController.RestartService("orama-ipfs-cluster.service"); err != nil {
+		ps.logf("  ⚠️  Failed to start orama-ipfs-cluster.service: %v", err)
 	} else {
-		ps.logf("    - debros-ipfs-cluster.service started")
+		ps.logf("    - orama-ipfs-cluster.service started")
 	}
 
 	// Start node service (gateway is embedded in node, no separate service needed)
-	if err := ps.serviceController.RestartService("debros-node.service"); err != nil {
-		ps.logf("  ⚠️  Failed to start debros-node.service: %v", err)
+	if err := ps.serviceController.RestartService("orama-node.service"); err != nil {
+		ps.logf("  ⚠️  Failed to start orama-node.service: %v", err)
 	} else {
-		ps.logf("    - debros-node.service started (with embedded gateway)")
+		ps.logf("    - orama-node.service started (with embedded gateway)")
 	}
 
 	// Start CoreDNS (nameserver nodes only)
@@ -798,7 +798,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 	// Start Caddy on ALL nodes (any node may host namespaces and need TLS)
-	// Caddy depends on debros-node.service (gateway on :6001), so start after node
+	// Caddy depends on orama-node.service (gateway on :6001), so start after node
 	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
 		if err := ps.serviceController.RestartService("caddy.service"); err != nil {
 			ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
@@ -955,8 +955,8 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf(strings.Repeat("=", 70))
 	ps.logf("\nNode Peer ID: %s", peerID)
 	ps.logf("\nService Management:")
-	ps.logf("  systemctl status debros-ipfs")
-	ps.logf("  journalctl -u debros-node -f")
+	ps.logf("  systemctl status orama-ipfs")
+	ps.logf("  journalctl -u orama-node -f")
 	ps.logf("  tail -f %s/logs/node.log", ps.oramaDir)
 	ps.logf("\nLog Files:")
 	ps.logf("  %s/logs/ipfs.log", ps.oramaDir)
@@ -969,7 +969,7 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	if ps.IsAnyoneRelay() {
 		ps.logf("  /var/log/anon/notices.log (Anyone Relay)")
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-anyone-relay debros-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-node")
 		ps.logf("\nAnyone Relay Operator:")
 		ps.logf("  ORPort: %d", ps.anyoneRelayConfig.ORPort)
 		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
@@ -978,7 +978,7 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
 	} else {
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start debros-ipfs debros-ipfs-cluster debros-olric debros-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-node")
 	}
 
 	ps.logf("\nVerify Installation:")

@@ -77,7 +77,7 @@ func (ci *CaddyInstaller) Install() error {
 	if _, err := exec.LookPath("xcaddy"); err != nil {
 		fmt.Fprintf(ci.logWriter, "    Installing xcaddy...\n")
 		cmd := exec.Command("go", "install", xcaddyRepo)
-		cmd.Env = append(os.Environ(), "PATH="+goPath, "GOBIN=/usr/local/bin")
+		cmd.Env = append(os.Environ(), "PATH="+goPath, "GOBIN=/usr/local/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to install xcaddy: %w\n%s", err, string(output))
 		}
@@ -105,7 +105,7 @@ func (ci *CaddyInstaller) Install() error {
 	// Run go mod tidy
 	tidyCmd := exec.Command("go", "mod", "tidy")
 	tidyCmd.Dir = moduleDir
-	tidyCmd.Env = append(os.Environ(), "PATH="+goPath)
+	tidyCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := tidyCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to run go mod tidy: %w\n%s", err, string(output))
 	}
@@ -122,7 +122,7 @@ func (ci *CaddyInstaller) Install() error {
 		"--with", "github.com/DeBrosOfficial/caddy-dns-orama="+moduleDir,
 		"--output", filepath.Join(buildDir, "caddy"))
 	buildCmd.Dir = buildDir
-	buildCmd.Env = append(os.Environ(), "PATH="+goPath)
+	buildCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build Caddy: %w\n%s", err, string(output))
 	}

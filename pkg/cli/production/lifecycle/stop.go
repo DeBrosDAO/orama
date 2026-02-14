@@ -36,7 +36,7 @@ func HandleStopWithFlags(force bool) {
 		}
 	}
 
-	fmt.Printf("Stopping all DeBros production services...\n")
+	fmt.Printf("Stopping all Orama production services...\n")
 
 	// First, stop all namespace services
 	fmt.Printf("\n  Stopping namespace services...\n")
@@ -44,7 +44,7 @@ func HandleStopWithFlags(force bool) {
 
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
-		fmt.Printf("  No DeBros services found\n")
+		fmt.Printf("  No Orama services found\n")
 		return
 	}
 
@@ -53,12 +53,12 @@ func HandleStopWithFlags(force bool) {
 	// Ordered shutdown: gateway first, then node (RQLite), then supporting services
 	// This ensures we stop accepting requests before shutting down the database
 	shutdownOrder := [][]string{
-		{"debros-gateway"},                         // 1. Stop accepting new requests
-		{"debros-node"},                            // 2. Stop node (includes RQLite with leadership transfer)
-		{"debros-olric"},                           // 3. Stop cache
-		{"debros-ipfs-cluster", "debros-ipfs"},     // 4. Stop storage
-		{"debros-anyone-relay", "anyone-client"},   // 5. Stop privacy relay
-		{"coredns", "caddy"},                       // 6. Stop DNS/TLS last
+		{"orama-gateway"},                       // 1. Stop accepting new requests
+		{"orama-node"},                          // 2. Stop node (includes RQLite with leadership transfer)
+		{"orama-olric"},                         // 3. Stop cache
+		{"orama-ipfs-cluster", "orama-ipfs"},    // 4. Stop storage
+		{"orama-anyone-relay", "anyone-client"}, // 5. Stop privacy relay
+		{"coredns", "caddy"},                    // 6. Stop DNS/TLS last
 	}
 
 	// First, disable all services to prevent auto-restart
@@ -157,7 +157,7 @@ func HandleStopWithFlags(force bool) {
 
 	if hadError {
 		fmt.Fprintf(os.Stderr, "\n⚠️  Some services may still be restarting due to Restart=always\n")
-		fmt.Fprintf(os.Stderr, "   Check status with: systemctl list-units 'debros-*'\n")
+		fmt.Fprintf(os.Stderr, "   Check status with: systemctl list-units 'orama-*'\n")
 		fmt.Fprintf(os.Stderr, "   If services are still restarting, they may need manual intervention\n")
 	} else {
 		fmt.Printf("\n✅ All services stopped and disabled (will not auto-start on boot)\n")
@@ -168,7 +168,7 @@ func HandleStopWithFlags(force bool) {
 // stopAllNamespaceServices stops all running namespace services
 func stopAllNamespaceServices() {
 	// Find all running namespace services using systemctl list-units
-	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "debros-namespace-*@*.service")
+	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "orama-namespace-*@*.service")
 	output, err := cmd.Output()
 	if err != nil {
 		fmt.Printf("    ⚠️  Warning: Failed to list namespace services: %v\n", err)
@@ -181,7 +181,7 @@ func stopAllNamespaceServices() {
 		fields := strings.Fields(line)
 		if len(fields) > 0 {
 			serviceName := fields[0]
-			if strings.HasPrefix(serviceName, "debros-namespace-") {
+			if strings.HasPrefix(serviceName, "orama-namespace-") {
 				namespaceServices = append(namespaceServices, serviceName)
 			}
 		}

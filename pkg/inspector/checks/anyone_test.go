@@ -55,7 +55,7 @@ func TestCheckAnyone_HealthyRelay(t *testing.T) {
 func TestCheckAnyone_HealthyClient(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "nameserver")
 	nd.Anyone = &inspector.AnyoneData{
-		RelayActive:      true, // service is debros-anyone-relay for both modes
+		RelayActive:      true, // service is orama-anyone-relay for both modes
 		Mode:             "client",
 		SocksListening:   true,
 		ControlListening: true,

@@ -194,7 +194,7 @@ func (ari *AnyoneRelayInstaller) Install() error {
 	os.Remove(installScript)
 
 	// Stop and disable the default 'anon' systemd service that the apt package
-	// auto-enables. We use our own 'debros-anyone-relay' service instead.
+	// auto-enables. We use our own 'orama-anyone-relay' service instead.
 	exec.Command("systemctl", "stop", "anon").Run()
 	exec.Command("systemctl", "disable", "anon").Run()
 

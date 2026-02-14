@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debros
-Group=debros
+User=orama
+Group=orama
 Environment=HOME={{.HomeDir}}
 Environment=OLRIC_SERVER_CONFIG={{.ConfigPath}}
 ExecStart=/usr/local/bin/olric-server

@@ -77,7 +77,7 @@ func ShowDryRunSummaryWithRelay(vpsIP, domain, branch string, peers []string, jo
 	} else {
 		fmt.Printf("  - anyone-client (npm)\n")
 	}
-	fmt.Printf("  - DeBros binaries (built from %s branch)\n", branch)
+	fmt.Printf("  - Orama binaries (built from %s branch)\n", branch)
 
 	fmt.Printf("\n🔐 Secrets that would be generated:\n")
 	fmt.Printf("  - Cluster secret (64-hex)\n")
@@ -89,14 +89,14 @@ func ShowDryRunSummaryWithRelay(vpsIP, domain, branch string, peers []string, jo
 	fmt.Printf("  - %s/configs/olric/config.yaml\n", oramaDir)
 
 	fmt.Printf("\n⚙️  Systemd services that would be created:\n")
-	fmt.Printf("  - debros-ipfs.service\n")
-	fmt.Printf("  - debros-ipfs-cluster.service\n")
-	fmt.Printf("  - debros-olric.service\n")
-	fmt.Printf("  - debros-node.service (includes embedded gateway + RQLite)\n")
+	fmt.Printf("  - orama-ipfs.service\n")
+	fmt.Printf("  - orama-ipfs-cluster.service\n")
+	fmt.Printf("  - orama-olric.service\n")
+	fmt.Printf("  - orama-node.service (includes embedded gateway + RQLite)\n")
 	if relayInfo != nil && relayInfo.Enabled {
-		fmt.Printf("  - debros-anyone-relay.service (relay operator mode)\n")
+		fmt.Printf("  - orama-anyone-relay.service (relay operator mode)\n")
 	} else {
-		fmt.Printf("  - debros-anyone-client.service\n")
+		fmt.Printf("  - orama-anyone-client.service\n")
 	}
 
 	fmt.Printf("\n🌐 Ports that would be used:\n")

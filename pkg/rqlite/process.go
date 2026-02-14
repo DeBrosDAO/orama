@@ -128,11 +128,11 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 	}
 	raftLeaderLease := r.config.RaftLeaderLeaseTimeout
 	if raftLeaderLease == 0 {
-		raftLeaderLease = 5 * time.Second
+		raftLeaderLease = 2 * time.Second
 	}
 	args = append(args,
 		"-raft-election-timeout", raftElection.String(),
-		"-raft-heartbeat-timeout", raftHeartbeat.String(),
+		"-raft-timeout", raftHeartbeat.String(),
 		"-raft-apply-timeout", raftApply.String(),
 		"-raft-leader-lease-timeout", raftLeaderLease.String(),
 	)

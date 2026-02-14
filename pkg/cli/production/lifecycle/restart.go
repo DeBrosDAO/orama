@@ -35,22 +35,22 @@ func HandleRestartWithFlags(force bool) {
 		}
 	}
 
-	fmt.Printf("Restarting all DeBros production services...\n")
+	fmt.Printf("Restarting all Orama production services...\n")
 
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
-		fmt.Printf("  No DeBros services found\n")
+		fmt.Printf("  No Orama services found\n")
 		return
 	}
 
 	// Ordered stop: gateway first, then node (RQLite), then supporting services
 	fmt.Printf("\n  Stopping services (ordered)...\n")
 	shutdownOrder := [][]string{
-		{"debros-gateway"},
-		{"debros-node"},
-		{"debros-olric"},
-		{"debros-ipfs-cluster", "debros-ipfs"},
-		{"debros-anyone-relay", "anyone-client"},
+		{"orama-gateway"},
+		{"orama-node"},
+		{"orama-olric"},
+		{"orama-ipfs-cluster", "orama-ipfs"},
+		{"orama-anyone-relay", "anyone-client"},
 		{"coredns", "caddy"},
 	}
 

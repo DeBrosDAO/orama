@@ -307,14 +307,14 @@ func ensureSecretFilePermissions(secretPath string) error {
 		return fmt.Errorf("failed to set permissions on %s: %w", secretPath, err)
 	}
 
-	if usr, err := user.Lookup("debros"); err == nil {
+	if usr, err := user.Lookup("orama"); err == nil {
 		uid, err := strconv.Atoi(usr.Uid)
 		if err != nil {
-			return fmt.Errorf("failed to parse debros UID: %w", err)
+			return fmt.Errorf("failed to parse orama UID: %w", err)
 		}
 		gid, err := strconv.Atoi(usr.Gid)
 		if err != nil {
-			return fmt.Errorf("failed to parse debros GID: %w", err)
+			return fmt.Errorf("failed to parse orama GID: %w", err)
 		}
 		if err := os.Chown(secretPath, uid, gid); err != nil {
 			return fmt.Errorf("failed to change ownership of %s: %w", secretPath, err)
@@ -439,8 +439,8 @@ func (sg *SecretGenerator) SaveConfig(filename string, content string) error {
 	}
 
 	// Fix ownership
-	if err := exec.Command("chown", "debros:debros", configPath).Run(); err != nil {
-		fmt.Printf("Warning: failed to chown %s to debros:debros: %v\n", configPath, err)
+	if err := exec.Command("chown", "orama:orama", configPath).Run(); err != nil {
+		fmt.Printf("Warning: failed to chown %s to orama:orama: %v\n", configPath, err)
 	}
 
 	return nil

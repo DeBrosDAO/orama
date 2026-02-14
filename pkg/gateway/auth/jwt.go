@@ -157,7 +157,7 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 		return nil, errors.New("invalid claims json")
 	}
 	// Validate issuer
-	if claims.Iss != "debros-gateway" {
+	if claims.Iss != "orama-gateway" {
 		return nil, errors.New("invalid issuer")
 	}
 	// Validate registered claims
@@ -199,7 +199,7 @@ func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration) (strin
 	now := time.Now().UTC()
 	exp := now.Add(ttl)
 	payload := map[string]any{
-		"iss":       "debros-gateway",
+		"iss":       "orama-gateway",
 		"sub":       subject,
 		"aud":       "gateway",
 		"iat":       now.Unix(),
@@ -229,7 +229,7 @@ func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration) (string,
 	now := time.Now().UTC()
 	exp := now.Add(ttl)
 	payload := map[string]any{
-		"iss":       "debros-gateway",
+		"iss":       "orama-gateway",
 		"sub":       subject,
 		"aud":       "gateway",
 		"iat":       now.Unix(),

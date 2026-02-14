@@ -42,7 +42,7 @@ func (oi *OlricInstaller) Install() error {
 	}
 
 	cmd := exec.Command("go", "install", fmt.Sprintf("github.com/olric-data/olric/cmd/olric-server@%s", oi.version))
-	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin")
+	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install Olric: %w", err)
 	}

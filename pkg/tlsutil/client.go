@@ -29,7 +29,7 @@ func init() {
 	trustedDomains = append(trustedDomains, defaultTrustedDomains...)
 
 	// Add any additional domains from environment
-	domains := os.Getenv("DEBROS_TRUSTED_TLS_DOMAINS")
+	domains := os.Getenv("ORAMA_TRUSTED_TLS_DOMAINS")
 	if domains != "" {
 		for _, d := range strings.Split(domains, ",") {
 			d = strings.TrimSpace(d)
@@ -40,9 +40,9 @@ func init() {
 	}
 
 	// Try to load CA certificate
-	caCertPath := os.Getenv("DEBROS_CA_CERT_PATH")
+	caCertPath := os.Getenv("ORAMA_CA_CERT_PATH")
 	if caCertPath == "" {
-		caCertPath = "/etc/debros/ca.crt"
+		caCertPath = "/etc/orama/ca.crt"
 	}
 
 	if caCertData, err := os.ReadFile(caCertPath); err == nil {
