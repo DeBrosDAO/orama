@@ -17,7 +17,6 @@ make build
 #   bin/orama        — the CLI
 #   bin/gateway      — standalone gateway (optional)
 #   bin/identity     — identity tool
-#   bin/rqlite-mcp   — RQLite MCP server
 ```
 
 ## Running Tests

@@ -76,7 +76,6 @@ build: deps
 	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
 	go build -ldflags "$(LDFLAGS)" -o bin/orama-node ./cmd/node
 	go build -ldflags "$(LDFLAGS)" -o bin/orama cmd/cli/main.go
-	go build -ldflags "$(LDFLAGS)" -o bin/rqlite-mcp ./cmd/rqlite-mcp
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	@echo "Build complete! Run ./bin/orama version"

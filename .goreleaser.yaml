@@ -75,7 +75,7 @@ nfpms:
       - orama
     vendor: DeBros
     homepage: https://github.com/DeBrosOfficial/network
-    maintainer: DeBros <support@orama.io>
+    maintainer: DeBros <dev@debros.io>
     description: CLI tool for the Orama decentralized network
     license: MIT
     formats:
@@ -97,7 +97,7 @@ nfpms:
       - orama-node
     vendor: DeBros
     homepage: https://github.com/DeBrosOfficial/network
-    maintainer: DeBros <support@orama.io>
+    maintainer: DeBros <dev@debros.io>
     description: Node daemon for the Orama decentralized network
     license: MIT
     formats:
