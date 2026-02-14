@@ -128,9 +128,12 @@ func (c *ClusterDiscoveryService) TriggerSync() {
 	c.updateClusterMembership()
 }
 
-// ForceWritePeersJSON forces writing peers.json regardless of membership changes
+// ForceWritePeersJSON writes peers.json to the RAFT directory for intentional
+// cluster recovery. rqlite v8 will read this on startup and reset its Raft
+// configuration. Only call this when you explicitly want Raft recovery
+// (e.g., after clearing raft state or during split-brain recovery).
 func (c *ClusterDiscoveryService) ForceWritePeersJSON() error {
-	c.logger.Info("Force writing peers.json")
+	c.logger.Info("Force writing recovery peers.json to raft directory")
 
 	metadata := c.collectPeerMetadata()
 
@@ -153,16 +156,17 @@ func (c *ClusterDiscoveryService) ForceWritePeersJSON() error {
 	peers := c.getPeersJSONUnlocked()
 	c.mu.Unlock()
 
-	if err := c.writePeersJSONWithData(peers); err != nil {
-		c.logger.Error("Failed to force write peers.json",
+	// Write to RAFT directory — this is intentional recovery
+	if err := c.writeRecoveryPeersJSON(peers); err != nil {
+		c.logger.Error("Failed to force write recovery peers.json",
 			zap.Error(err),
 			zap.String("data_dir", c.dataDir),
 			zap.Int("peers", len(peers)))
 		return err
 	}
 
-	c.logger.Info("peers.json written",
-		zap.Int("peers", len(peers)))
+	// Also update discovery location
+	_ = c.writePeersJSONWithData(peers)
 
 	return nil
 }
@@ -179,7 +183,9 @@ func (c *ClusterDiscoveryService) TriggerPeerExchange(ctx context.Context) error
 	return nil
 }
 
-// UpdateOwnMetadata updates our own RQLite metadata in the peerstore
+// UpdateOwnMetadata updates our own RQLite metadata in the peerstore.
+// This is called periodically and after significant state changes (lifecycle
+// transitions, service status updates) to ensure peers have current info.
 func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 	c.mu.RLock()
 	currentRaftAddr := c.raftAddress
@@ -194,6 +200,17 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
+		PeerID:         c.host.ID().String(),
+		WireGuardIP:    c.wireGuardIP,
+	}
+
+	// Populate lifecycle state from the lifecycle manager
+	if c.lifecycle != nil {
+		state, ttl := c.lifecycle.Snapshot()
+		metadata.LifecycleState = string(state)
+		if state == "maintenance" {
+			metadata.MaintenanceTTL = ttl
+		}
 	}
 
 	if c.adjustSelfAdvertisedAddresses(metadata) {
@@ -215,7 +232,41 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 
 	c.logger.Debug("Metadata updated",
 		zap.String("node", metadata.NodeID),
-		zap.Uint64("log_index", metadata.RaftLogIndex))
+		zap.Uint64("log_index", metadata.RaftLogIndex),
+		zap.String("lifecycle", metadata.LifecycleState))
+}
+
+// ProvideMetadata builds and returns the current node metadata without storing it.
+// Implements discovery.MetadataProvider so the MetadataPublisher can call this
+// on a regular interval and store the result in the peerstore.
+func (c *ClusterDiscoveryService) ProvideMetadata() *discovery.RQLiteNodeMetadata {
+	c.mu.RLock()
+	currentRaftAddr := c.raftAddress
+	currentHTTPAddr := c.httpAddress
+	c.mu.RUnlock()
+
+	metadata := &discovery.RQLiteNodeMetadata{
+		NodeID:         currentRaftAddr,
+		RaftAddress:    currentRaftAddr,
+		HTTPAddress:    currentHTTPAddr,
+		NodeType:       c.nodeType,
+		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
+		LastSeen:       time.Now(),
+		ClusterVersion: "1.0",
+		PeerID:         c.host.ID().String(),
+		WireGuardIP:    c.wireGuardIP,
+	}
+
+	if c.lifecycle != nil {
+		state, ttl := c.lifecycle.Snapshot()
+		metadata.LifecycleState = string(state)
+		if state == "maintenance" {
+			metadata.MaintenanceTTL = ttl
+		}
+	}
+
+	c.adjustSelfAdvertisedAddresses(metadata)
+	return metadata
 }
 
 // StoreRemotePeerMetadata stores metadata received from a remote peer

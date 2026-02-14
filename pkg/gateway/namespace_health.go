@@ -42,7 +42,7 @@ func (g *Gateway) startNamespaceHealthLoop(ctx context.Context) {
 	}
 
 	probeTicker := time.NewTicker(30 * time.Second)
-	reconcileTicker := time.NewTicker(1 * time.Hour)
+	reconcileTicker := time.NewTicker(5 * time.Minute)
 	defer probeTicker.Stop()
 	defer reconcileTicker.Stop()
 

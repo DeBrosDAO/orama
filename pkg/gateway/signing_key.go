@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -14,6 +15,7 @@ import (
 )
 
 const jwtKeyFileName = "jwt-signing-key.pem"
+const eddsaKeyFileName = "jwt-eddsa-key.pem"
 
 // loadOrCreateSigningKey loads the JWT signing key from disk, or generates a new one
 // if none exists. This ensures JWTs survive gateway restarts.
@@ -60,4 +62,57 @@ func loadOrCreateSigningKey(dataDir string, logger *logging.ColoredLogger) ([]by
 	logger.ComponentInfo(logging.ComponentGeneral, "Generated and saved new JWT signing key",
 		zap.String("path", keyPath))
 	return keyPEM, nil
+}
+
+// loadOrCreateEdSigningKey loads or generates an Ed25519 private key for EdDSA JWT signing.
+// The key is stored as a PKCS8-encoded PEM file alongside the RSA key.
+func loadOrCreateEdSigningKey(dataDir string, logger *logging.ColoredLogger) (ed25519.PrivateKey, error) {
+	keyPath := filepath.Join(dataDir, "secrets", eddsaKeyFileName)
+
+	// Try to load existing key
+	if keyPEM, err := os.ReadFile(keyPath); err == nil && len(keyPEM) > 0 {
+		block, _ := pem.Decode(keyPEM)
+		if block != nil {
+			parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+			if err == nil {
+				if edKey, ok := parsed.(ed25519.PrivateKey); ok {
+					logger.ComponentInfo(logging.ComponentGeneral, "Loaded existing EdDSA signing key",
+						zap.String("path", keyPath))
+					return edKey, nil
+				}
+			}
+		}
+		logger.ComponentWarn(logging.ComponentGeneral, "Existing EdDSA signing key is invalid, generating new one",
+			zap.String("path", keyPath))
+	}
+
+	// Generate new Ed25519 key
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate Ed25519 key: %w", err)
+	}
+
+	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Ed25519 key: %w", err)
+	}
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: pkcs8Bytes,
+	})
+
+	// Ensure secrets directory exists
+	secretsDir := filepath.Dir(keyPath)
+	if err := os.MkdirAll(secretsDir, 0700); err != nil {
+		return nil, fmt.Errorf("create secrets directory: %w", err)
+	}
+
+	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		return nil, fmt.Errorf("write EdDSA signing key: %w", err)
+	}
+
+	logger.ComponentInfo(logging.ComponentGeneral, "Generated and saved new EdDSA signing key",
+		zap.String("path", keyPath))
+	return priv, nil
 }

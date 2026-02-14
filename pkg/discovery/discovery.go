@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -77,10 +78,14 @@ type PeerInfo struct {
 // interface{} to remain source-compatible with previous call sites that
 // passed a DHT instance. The value is ignored.
 type Manager struct {
-	host                host.Host
-	logger              *zap.Logger
-	cancel              context.CancelFunc
-	failedPeerExchanges map[peer.ID]time.Time // Track failed peer exchange attempts to suppress repeated warnings
+	host   host.Host
+	logger *zap.Logger
+	cancel context.CancelFunc
+
+	// failedMu protects failedPeerExchanges from concurrent access during
+	// parallel peer exchange dials (H3 fix).
+	failedMu            sync.Mutex
+	failedPeerExchanges map[peer.ID]time.Time
 }
 
 // Config contains discovery configuration
@@ -364,8 +369,8 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 			// Add to peerstore (only valid addresses with port 4001)
 			d.host.Peerstore().AddAddrs(parsedID, addrs, time.Hour*24)
 
-			// Try to connect
-			connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			// Try to connect (5s timeout — WireGuard peers respond fast)
+			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			peerAddrInfo := peer.AddrInfo{ID: parsedID, Addrs: addrs}
 
 			if err := d.host.Connect(connectCtx, peerAddrInfo); err != nil {
@@ -401,15 +406,15 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 	// Open a stream to the peer
 	stream, err := d.host.NewStream(ctx, peerID, PeerExchangeProtocol)
 	if err != nil {
-		// Check if this is a "protocols not supported" error (expected for lightweight clients like gateway)
+		d.failedMu.Lock()
 		if strings.Contains(err.Error(), "protocols not supported") {
-			// This is a lightweight client (gateway, etc.) that doesn't support peer exchange - expected behavior
-			// Track it to avoid repeated attempts, but don't log as it's not an error
+			// Lightweight client (gateway, etc.) — expected, track to suppress retries
 			d.failedPeerExchanges[peerID] = time.Now()
+			d.failedMu.Unlock()
 			return nil
 		}
 
-		// For actual connection errors, log but suppress repeated warnings for the same peer
+		// Actual connection error — log but suppress repeated warnings
 		lastFailure, seen := d.failedPeerExchanges[peerID]
 		if !seen || time.Since(lastFailure) > time.Minute {
 			d.logger.Debug("Failed to open peer exchange stream with node",
@@ -418,12 +423,15 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 				zap.Error(err))
 			d.failedPeerExchanges[peerID] = time.Now()
 		}
+		d.failedMu.Unlock()
 		return nil
 	}
 	defer stream.Close()
 
 	// Clear failure tracking on success
+	d.failedMu.Lock()
 	delete(d.failedPeerExchanges, peerID)
+	d.failedMu.Unlock()
 
 	// Send request
 	req := PeerExchangeRequest{Limit: limit}
@@ -433,8 +441,8 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 		return nil
 	}
 
-	// Set read deadline
-	if err := stream.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	// Set read deadline (5s — small JSON payload)
+	if err := stream.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		d.logger.Debug("Failed to set read deadline", zap.Error(err))
 		return nil
 	}
@@ -451,10 +459,20 @@ func (d *Manager) requestPeersFromPeer(ctx context.Context, peerID peer.ID, limi
 
 	// Store remote peer's RQLite metadata if available
 	if resp.RQLiteMetadata != nil {
+		// Verify sender identity — prevent metadata spoofing (H2 fix).
+		// If the metadata contains a PeerID, it must match the stream sender.
+		if resp.RQLiteMetadata.PeerID != "" && resp.RQLiteMetadata.PeerID != peerID.String() {
+			d.logger.Warn("Rejected metadata: PeerID mismatch",
+				zap.String("claimed", resp.RQLiteMetadata.PeerID[:8]+"..."),
+				zap.String("actual", peerID.String()[:8]+"..."))
+			return resp.Peers
+		}
+		// Stamp verified PeerID so downstream consumers can trust it
+		resp.RQLiteMetadata.PeerID = peerID.String()
+
 		metadataJSON, err := json.Marshal(resp.RQLiteMetadata)
 		if err == nil {
 			_ = d.host.Peerstore().Put(peerID, "rqlite_metadata", metadataJSON)
-			// Only log when new metadata is stored (useful for debugging)
 			d.logger.Debug("Metadata stored",
 				zap.String("peer", peerID.String()[:8]+"..."),
 				zap.String("node", resp.RQLiteMetadata.NodeID))

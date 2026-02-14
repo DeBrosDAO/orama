@@ -25,7 +25,18 @@ const (
 	DefaultDeadAfter      = 12 // consecutive misses → dead
 	DefaultQuorumWindow   = 5 * time.Minute
 	DefaultMinQuorum      = 2  // out of K observers must agree
+
+	// DefaultStartupGracePeriod prevents false dead declarations after
+	// cluster-wide restart. During this period, no nodes are declared dead.
+	DefaultStartupGracePeriod = 5 * time.Minute
 )
+
+// MetadataReader provides lifecycle metadata for peers. Implemented by
+// ClusterDiscoveryService. The health monitor uses this to check maintenance
+// status and LastSeen before falling through to HTTP probes.
+type MetadataReader interface {
+	GetPeerLifecycleState(nodeID string) (state string, lastSeen time.Time, found bool)
+}
 
 // Config holds the configuration for a Monitor.
 type Config struct {
@@ -35,6 +46,16 @@ type Config struct {
 	ProbeInterval time.Duration // how often to probe (default 10s)
 	ProbeTimeout  time.Duration // per-probe HTTP timeout (default 3s)
 	Neighbors     int           // K — how many ring neighbors to monitor (default 3)
+
+	// MetadataReader provides LibP2P lifecycle metadata for peers.
+	// When set, the monitor checks peer maintenance state and LastSeen
+	// before falling through to HTTP probes.
+	MetadataReader MetadataReader
+
+	// StartupGracePeriod prevents false dead declarations after cluster-wide
+	// restart. During this period, nodes can be marked suspect but never dead.
+	// Default: 5 minutes.
+	StartupGracePeriod time.Duration
 }
 
 // nodeInfo is a row from dns_nodes used for probing.
@@ -56,6 +77,7 @@ type Monitor struct {
 	cfg        Config
 	httpClient *http.Client
 	logger     *zap.Logger
+	startTime  time.Time // when the monitor was created
 
 	mu    sync.Mutex
 	peers map[string]*peerState // nodeID → state
@@ -75,6 +97,9 @@ func NewMonitor(cfg Config) *Monitor {
 	if cfg.Neighbors == 0 {
 		cfg.Neighbors = DefaultNeighbors
 	}
+	if cfg.StartupGracePeriod == 0 {
+		cfg.StartupGracePeriod = DefaultStartupGracePeriod
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = zap.NewNop()
 	}
@@ -84,19 +109,20 @@ func NewMonitor(cfg Config) *Monitor {
 		httpClient: &http.Client{
 			Timeout: cfg.ProbeTimeout,
 		},
-		logger: cfg.Logger.With(zap.String("component", "health-monitor")),
-		peers:  make(map[string]*peerState),
+		logger:    cfg.Logger.With(zap.String("component", "health-monitor")),
+		startTime: time.Now(),
+		peers:     make(map[string]*peerState),
 	}
 }
 
 // OnNodeDead registers a callback invoked when a node is confirmed dead by
-// quorum. The callback runs synchronously in the monitor goroutine.
+// quorum. The callback runs with the monitor lock released.
 func (m *Monitor) OnNodeDead(fn func(nodeID string)) {
 	m.onDeadFn = fn
 }
 
 // OnNodeRecovered registers a callback invoked when a previously dead node
-// transitions back to healthy. Used to clean up orphaned services.
+// transitions back to healthy. The callback runs with the monitor lock released.
 func (m *Monitor) OnNodeRecovered(fn func(nodeID string)) {
 	m.onRecoveredFn = fn
 }
@@ -107,6 +133,7 @@ func (m *Monitor) Start(ctx context.Context) {
 		zap.String("node_id", m.cfg.NodeID),
 		zap.Duration("probe_interval", m.cfg.ProbeInterval),
 		zap.Int("neighbors", m.cfg.Neighbors),
+		zap.Duration("startup_grace", m.cfg.StartupGracePeriod),
 	)
 
 	ticker := time.NewTicker(m.cfg.ProbeInterval)
@@ -121,6 +148,11 @@ func (m *Monitor) Start(ctx context.Context) {
 			m.probeRound(ctx)
 		}
 	}
+}
+
+// isInStartupGrace returns true if the startup grace period is still active.
+func (m *Monitor) isInStartupGrace() bool {
+	return time.Since(m.startTime) < m.cfg.StartupGracePeriod
 }
 
 // probeRound runs a single round of probing our ring neighbors.
@@ -140,7 +172,7 @@ func (m *Monitor) probeRound(ctx context.Context) {
 		wg.Add(1)
 		go func(node nodeInfo) {
 			defer wg.Done()
-			ok := m.probe(ctx, node)
+			ok := m.probeNode(ctx, node)
 			m.updateState(ctx, node.ID, ok)
 		}(n)
 	}
@@ -148,6 +180,28 @@ func (m *Monitor) probeRound(ctx context.Context) {
 
 	// Clean up state for nodes no longer in our neighbor set
 	m.pruneStaleState(neighbors)
+}
+
+// probeNode checks a node's health. It first checks LibP2P metadata (if
+// available) to avoid unnecessary HTTP probes, then falls through to HTTP.
+func (m *Monitor) probeNode(ctx context.Context, node nodeInfo) bool {
+	if m.cfg.MetadataReader != nil {
+		state, lastSeen, found := m.cfg.MetadataReader.GetPeerLifecycleState(node.ID)
+		if found {
+			// Maintenance node with recent LastSeen → count as healthy
+			if state == "maintenance" && time.Since(lastSeen) < 2*time.Minute {
+				return true
+			}
+
+			// Recently seen active node → count as healthy (no HTTP needed)
+			if state == "active" && time.Since(lastSeen) < 30*time.Second {
+				return true
+			}
+		}
+	}
+
+	// Fall through to HTTP probe
+	return m.probe(ctx, node)
 }
 
 // probe sends an HTTP ping to a single node. Returns true if healthy.
@@ -167,9 +221,9 @@ func (m *Monitor) probe(ctx context.Context, node nodeInfo) bool {
 }
 
 // updateState updates the in-memory state for a peer after a probe.
+// Callbacks are invoked with the lock released to prevent deadlocks (C2 fix).
 func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	ps, exists := m.peers[nodeID]
 	if !exists {
@@ -178,23 +232,26 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 	}
 
 	if healthy {
-		// Recovered
-		if ps.status != "healthy" {
-			wasDead := ps.status == "dead"
-			m.logger.Info("Node recovered", zap.String("target", nodeID),
-				zap.String("previous_status", ps.status))
-			m.writeEvent(ctx, nodeID, "recovered")
+		wasDead := ps.status == "dead"
+		shouldCallback := wasDead && m.onRecoveredFn != nil
+		prevStatus := ps.status
 
-			// Fire recovery callback for nodes that were confirmed dead
-			if wasDead && m.onRecoveredFn != nil {
-				m.mu.Unlock()
-				m.onRecoveredFn(nodeID)
-				m.mu.Lock()
-			}
-		}
+		// Update state BEFORE releasing lock (C2 fix)
 		ps.missCount = 0
 		ps.status = "healthy"
 		ps.reportedDead = false
+		m.mu.Unlock()
+
+		if prevStatus != "healthy" {
+			m.logger.Info("Node recovered", zap.String("target", nodeID),
+				zap.String("previous_status", prevStatus))
+			m.writeEvent(ctx, nodeID, "recovered")
+		}
+
+		// Fire recovery callback without holding the lock (C2 fix)
+		if shouldCallback {
+			m.onRecoveredFn(nodeID)
+		}
 		return
 	}
 
@@ -203,6 +260,23 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 
 	switch {
 	case ps.missCount >= DefaultDeadAfter && !ps.reportedDead:
+		// During startup grace period, don't declare dead — only suspect
+		if m.isInStartupGrace() {
+			if ps.status != "suspect" {
+				ps.status = "suspect"
+				ps.suspectAt = time.Now()
+				m.mu.Unlock()
+				m.logger.Warn("Node SUSPECT (startup grace — deferring dead)",
+					zap.String("target", nodeID),
+					zap.Int("misses", ps.missCount),
+				)
+				m.writeEvent(ctx, nodeID, "suspect")
+				return
+			}
+			m.mu.Unlock()
+			return
+		}
+
 		if ps.status != "dead" {
 			m.logger.Error("Node declared DEAD",
 				zap.String("target", nodeID),
@@ -211,22 +285,34 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 		}
 		ps.status = "dead"
 		ps.reportedDead = true
+
+		// Copy what we need before releasing lock
+		shouldCheckQuorum := m.cfg.DB != nil && m.onDeadFn != nil
+		m.mu.Unlock()
+
 		m.writeEvent(ctx, nodeID, "dead")
-		m.checkQuorum(ctx, nodeID)
+		if shouldCheckQuorum {
+			m.checkQuorum(ctx, nodeID)
+		}
+		return
 
 	case ps.missCount >= DefaultSuspectAfter && ps.status == "healthy":
 		ps.status = "suspect"
 		ps.suspectAt = time.Now()
+		m.mu.Unlock()
+
 		m.logger.Warn("Node SUSPECT",
 			zap.String("target", nodeID),
 			zap.Int("misses", ps.missCount),
 		)
 		m.writeEvent(ctx, nodeID, "suspect")
+		return
 	}
+
+	m.mu.Unlock()
 }
 
-// writeEvent inserts a health event into node_health_events. Must be called
-// with m.mu held.
+// writeEvent inserts a health event into node_health_events.
 func (m *Monitor) writeEvent(ctx context.Context, targetID, status string) {
 	if m.cfg.DB == nil {
 		return
@@ -242,7 +328,8 @@ func (m *Monitor) writeEvent(ctx context.Context, targetID, status string) {
 }
 
 // checkQuorum queries the events table to see if enough observers agree the
-// target is dead, then fires the onDead callback. Must be called with m.mu held.
+// target is dead, then fires the onDead callback. Called WITHOUT the lock held
+// (C2 fix — previously called with lock held, causing deadlocks in callbacks).
 func (m *Monitor) checkQuorum(ctx context.Context, targetID string) {
 	if m.cfg.DB == nil || m.onDeadFn == nil {
 		return
@@ -287,10 +374,7 @@ func (m *Monitor) checkQuorum(ctx context.Context, targetID string) {
 		zap.String("target", targetID),
 		zap.Int("observers", count),
 	)
-	// Release the lock before calling the callback to avoid deadlocks.
-	m.mu.Unlock()
 	m.onDeadFn(targetID)
-	m.mu.Lock()
 }
 
 // getRingNeighbors queries dns_nodes for active nodes, sorts them, and

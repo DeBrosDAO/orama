@@ -3,10 +3,12 @@ package rqlite
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/discovery"
+	"github.com/DeBrosOfficial/network/pkg/node/lifecycle"
 	"github.com/libp2p/go-libp2p/core/host"
 	"go.uber.org/zap"
 )
@@ -20,8 +22,12 @@ type ClusterDiscoveryService struct {
 	nodeType       string
 	raftAddress    string
 	httpAddress    string
+	wireGuardIP    string // extracted from raftAddress (IP component)
 	dataDir        string
 	minClusterSize int // Minimum cluster size required
+
+	// Lifecycle manager for this node's state machine
+	lifecycle *lifecycle.Manager
 
 	knownPeers      map[string]*discovery.RQLiteNodeMetadata // NodeID -> Metadata
 	peerHealth      map[string]*PeerHealth                   // NodeID -> Health
@@ -45,11 +51,18 @@ func NewClusterDiscoveryService(
 	raftAddress string,
 	httpAddress string,
 	dataDir string,
+	lm *lifecycle.Manager,
 	logger *zap.Logger,
 ) *ClusterDiscoveryService {
 	minClusterSize := 1
 	if rqliteManager != nil && rqliteManager.config != nil {
 		minClusterSize = rqliteManager.config.MinClusterSize
+	}
+
+	// Extract WireGuard IP from the raft address (e.g., "10.0.0.1" from "10.0.0.1:7001")
+	wgIP := ""
+	if host, _, err := net.SplitHostPort(raftAddress); err == nil {
+		wgIP = host
 	}
 
 	return &ClusterDiscoveryService{
@@ -60,8 +73,10 @@ func NewClusterDiscoveryService(
 		nodeType:        nodeType,
 		raftAddress:     raftAddress,
 		httpAddress:     httpAddress,
+		wireGuardIP:     wgIP,
 		dataDir:         dataDir,
 		minClusterSize:  minClusterSize,
+		lifecycle:       lm,
 		knownPeers:      make(map[string]*discovery.RQLiteNodeMetadata),
 		peerHealth:      make(map[string]*PeerHealth),
 		updateInterval:  30 * time.Second,
@@ -117,6 +132,25 @@ func (c *ClusterDiscoveryService) Stop() {
 	c.started = false
 
 	c.logger.Info("Cluster discovery service stopped")
+}
+
+// Lifecycle returns the node's lifecycle manager.
+func (c *ClusterDiscoveryService) Lifecycle() *lifecycle.Manager {
+	return c.lifecycle
+}
+
+// GetPeerLifecycleState returns the lifecycle state and last-seen time for a
+// peer identified by its RQLite node ID (raft address). This method implements
+// the MetadataReader interface used by the health monitor.
+func (c *ClusterDiscoveryService) GetPeerLifecycleState(nodeID string) (state string, lastSeen time.Time, found bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	peer, ok := c.knownPeers[nodeID]
+	if !ok {
+		return "", time.Time{}, false
+	}
+	return peer.EffectiveLifecycleState(), peer.LastSeen, true
 }
 
 // IsVoter returns true if the given raft address should be a voter

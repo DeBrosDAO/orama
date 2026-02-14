@@ -83,6 +83,14 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		"-raft-adv-addr", cfg.RaftAdvAddress,
 	}
 
+	// Raft tuning — match the global node's tuning for consistency
+	args = append(args,
+		"-raft-election-timeout", "5s",
+		"-raft-heartbeat-timeout", "2s",
+		"-raft-apply-timeout", "30s",
+		"-raft-leader-lease-timeout", "5s",
+	)
+
 	// Add join addresses if not the leader (must be before data directory)
 	if !cfg.IsLeader && len(cfg.JoinAddresses) > 0 {
 		for _, addr := range cfg.JoinAddresses {

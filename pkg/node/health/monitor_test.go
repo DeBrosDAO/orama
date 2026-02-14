@@ -158,10 +158,12 @@ func TestRingNeighbors_KLargerThanRing(t *testing.T) {
 
 func TestStateTransitions(t *testing.T) {
 	m := NewMonitor(Config{
-		NodeID:        "self",
-		ProbeInterval: time.Second,
-		Neighbors:     3,
+		NodeID:             "self",
+		ProbeInterval:      time.Second,
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond, // disable grace for this test
 	})
+	time.Sleep(2 * time.Millisecond) // ensure grace period expired
 
 	ctx := context.Background()
 
@@ -298,9 +300,11 @@ func TestOnNodeDead_Callback(t *testing.T) {
 	var called atomic.Int32
 
 	m := NewMonitor(Config{
-		NodeID:   "self",
-		Neighbors: 3,
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond,
 	})
+	time.Sleep(2 * time.Millisecond)
 	m.OnNodeDead(func(nodeID string) {
 		called.Add(1)
 	})
@@ -315,4 +319,205 @@ func TestOnNodeDead_Callback(t *testing.T) {
 	if m.peers["victim"].status != "dead" {
 		t.Fatalf("expected dead, got %s", m.peers["victim"].status)
 	}
+}
+
+// ---------------------------------------------------------------
+// Startup grace period
+// ---------------------------------------------------------------
+
+func TestStartupGrace_PreventsDead(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Hour, // very long grace
+	})
+
+	ctx := context.Background()
+
+	// Accumulate enough misses for dead (12)
+	for i := 0; i < DefaultDeadAfter+5; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+
+	m.mu.Lock()
+	status := m.peers["peer1"].status
+	m.mu.Unlock()
+
+	// During grace, should be suspect, NOT dead
+	if status != "suspect" {
+		t.Fatalf("expected suspect during startup grace, got %s", status)
+	}
+}
+
+func TestStartupGrace_AllowsDeadAfterExpiry(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond,
+	})
+	time.Sleep(2 * time.Millisecond) // grace expired
+
+	ctx := context.Background()
+	for i := 0; i < DefaultDeadAfter; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+
+	m.mu.Lock()
+	status := m.peers["peer1"].status
+	m.mu.Unlock()
+
+	if status != "dead" {
+		t.Fatalf("expected dead after grace expired, got %s", status)
+	}
+}
+
+// ---------------------------------------------------------------
+// MetadataReader integration
+// ---------------------------------------------------------------
+
+type mockMetadataReader struct {
+	state    string
+	lastSeen time.Time
+	found    bool
+}
+
+func (m *mockMetadataReader) GetPeerLifecycleState(nodeID string) (string, time.Time, bool) {
+	return m.state, m.lastSeen, m.found
+}
+
+func TestProbeNode_MaintenanceCountsHealthy(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:   "self",
+		MetadataReader: &mockMetadataReader{
+			state:    "maintenance",
+			lastSeen: time.Now(),
+			found:    true,
+		},
+	})
+
+	node := nodeInfo{ID: "peer1", InternalIP: "192.0.2.1"} // unreachable
+	ok := m.probeNode(context.Background(), node)
+	if !ok {
+		t.Fatal("maintenance node with recent LastSeen should count as healthy")
+	}
+}
+
+func TestProbeNode_RecentActiveSkipsHTTP(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:   "self",
+		MetadataReader: &mockMetadataReader{
+			state:    "active",
+			lastSeen: time.Now(),
+			found:    true,
+		},
+	})
+
+	// Use unreachable IP — if HTTP were attempted, it would fail
+	node := nodeInfo{ID: "peer1", InternalIP: "192.0.2.1"}
+	ok := m.probeNode(context.Background(), node)
+	if !ok {
+		t.Fatal("recently seen active node should skip HTTP and count as healthy")
+	}
+}
+
+func TestProbeNode_StaleMetadataFallsToHTTP(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:       "self",
+		ProbeTimeout: 100 * time.Millisecond,
+		MetadataReader: &mockMetadataReader{
+			state:    "active",
+			lastSeen: time.Now().Add(-5 * time.Minute), // stale
+			found:    true,
+		},
+	})
+
+	node := nodeInfo{ID: "peer1", InternalIP: "192.0.2.1"} // unreachable
+	ok := m.probeNode(context.Background(), node)
+	if ok {
+		t.Fatal("stale metadata should fall through to HTTP probe, which should fail")
+	}
+}
+
+func TestProbeNode_UnknownPeerFallsToHTTP(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:       "self",
+		ProbeTimeout: 100 * time.Millisecond,
+		MetadataReader: &mockMetadataReader{
+			found: false, // peer not found in metadata
+		},
+	})
+
+	node := nodeInfo{ID: "unknown", InternalIP: "192.0.2.1"}
+	ok := m.probeNode(context.Background(), node)
+	if ok {
+		t.Fatal("unknown peer should fall through to HTTP probe, which should fail")
+	}
+}
+
+func TestProbeNode_NoMetadataReader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	m := NewMonitor(Config{
+		NodeID:         "self",
+		ProbeTimeout:   2 * time.Second,
+		MetadataReader: nil, // no metadata reader
+	})
+
+	// Without MetadataReader, should go straight to HTTP
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	node := nodeInfo{ID: "peer1", InternalIP: addr}
+	// Note: probe() hardcodes port 6001, so this won't hit our server.
+	// But we verify it doesn't panic and falls through correctly.
+	_ = m.probeNode(context.Background(), node)
+}
+
+// ---------------------------------------------------------------
+// Recovery callback (C2 fix)
+// ---------------------------------------------------------------
+
+func TestRecoveryCallback_InvokedWithoutLock(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond,
+	})
+	time.Sleep(2 * time.Millisecond)
+
+	var recoveredNode string
+	m.OnNodeRecovered(func(nodeID string) {
+		recoveredNode = nodeID
+		// If lock were held, this would deadlock since we try to access peers
+		// Just verify callback fires correctly
+	})
+
+	ctx := context.Background()
+
+	// Drive to dead state
+	for i := 0; i < DefaultDeadAfter; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+
+	m.mu.Lock()
+	if m.peers["peer1"].status != "dead" {
+		m.mu.Unlock()
+		t.Fatal("expected dead state")
+	}
+	m.mu.Unlock()
+
+	// Recover
+	m.updateState(ctx, "peer1", true)
+
+	if recoveredNode != "peer1" {
+		t.Fatalf("expected recovery callback for peer1, got %q", recoveredNode)
+	}
+
+	m.mu.Lock()
+	if m.peers["peer1"].status != "healthy" {
+		m.mu.Unlock()
+		t.Fatal("expected healthy after recovery")
+	}
+	m.mu.Unlock()
 }

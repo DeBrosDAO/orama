@@ -43,6 +43,10 @@ func HandleCommand(args []string) {
 	case "restart":
 		force := hasFlag(subargs, "--force")
 		lifecycle.HandleRestartWithFlags(force)
+	case "pre-upgrade":
+		lifecycle.HandlePreUpgrade()
+	case "post-upgrade":
+		lifecycle.HandlePostUpgrade()
 	case "logs":
 		logs.Handle(subargs)
 	case "uninstall":
@@ -105,6 +109,10 @@ func ShowHelp() {
 	fmt.Printf("  restart                   - Restart all production services (requires root/sudo)\n")
 	fmt.Printf("    Options:\n")
 	fmt.Printf("      --force               - Bypass quorum safety check\n")
+	fmt.Printf("  pre-upgrade               - Prepare node for safe restart (requires root/sudo)\n")
+	fmt.Printf("                              Transfers leadership, enters maintenance mode, waits for propagation\n")
+	fmt.Printf("  post-upgrade              - Bring node back online after restart (requires root/sudo)\n")
+	fmt.Printf("                              Starts services, verifies RQLite health, exits maintenance\n")
 	fmt.Printf("  logs <service>            - View production service logs\n")
 	fmt.Printf("    Service aliases: node, ipfs, cluster, gateway, olric\n")
 	fmt.Printf("    Options:\n")

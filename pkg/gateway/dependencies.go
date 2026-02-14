@@ -429,7 +429,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
-	// Initialize auth service with persistent signing key
+	// Initialize auth service with persistent signing keys (RSA + EdDSA)
 	keyPEM, err := loadOrCreateSigningKey(cfg.DataDir, logger)
 	if err != nil {
 		return fmt.Errorf("failed to load or create JWT signing key: %w", err)
@@ -438,6 +438,17 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	if err != nil {
 		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
+
+	// Load or create EdDSA key for new JWT tokens
+	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, logger)
+	if err != nil {
+		logger.ComponentWarn(logging.ComponentGeneral, "Failed to load EdDSA signing key; new JWTs will use RS256",
+			zap.Error(err))
+	} else {
+		authService.SetEdDSAKey(edKey)
+		logger.ComponentInfo(logging.ComponentGeneral, "EdDSA signing key loaded; new JWTs will use EdDSA")
+	}
+
 	deps.AuthService = authService
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",

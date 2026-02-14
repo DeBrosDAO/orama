@@ -130,11 +130,14 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 	}
 
 	if len(results) > 0 && results[0].Count > 0 {
-		// Node still has legitimate assignments — just mark active and return
+		// Node still has legitimate assignments — mark active and repair degraded clusters
 		cm.logger.Info("Recovered node still has cluster assignments, marking active",
 			zap.String("node_id", nodeID),
 			zap.Int("assignments", results[0].Count))
 		cm.markNodeActive(ctx, nodeID)
+
+		// Trigger repair for any degraded clusters this node belongs to
+		cm.repairDegradedClusters(ctx, nodeID)
 		return
 	}
 
@@ -519,6 +522,37 @@ func (cm *ClusterManager) markNodeActive(ctx context.Context, nodeID string) {
 	query := `UPDATE dns_nodes SET status = 'active', updated_at = ? WHERE id = ?`
 	if _, err := cm.db.Exec(ctx, query, time.Now().Format("2006-01-02 15:04:05"), nodeID); err != nil {
 		cm.logger.Warn("Failed to mark node active", zap.String("node_id", nodeID), zap.Error(err))
+	}
+}
+
+// repairDegradedClusters finds degraded clusters that the recovered node
+// belongs to and triggers RepairCluster for each one.
+func (cm *ClusterManager) repairDegradedClusters(ctx context.Context, nodeID string) {
+	type clusterRef struct {
+		NamespaceName string `db:"namespace_name"`
+	}
+	var refs []clusterRef
+	query := `
+		SELECT DISTINCT c.namespace_name
+		FROM namespace_cluster_nodes cn
+		JOIN namespace_clusters c ON cn.namespace_cluster_id = c.id
+		WHERE cn.node_id = ? AND c.status = 'degraded'
+	`
+	if err := cm.db.Query(ctx, &refs, query, nodeID); err != nil {
+		cm.logger.Warn("Failed to query degraded clusters for recovered node",
+			zap.String("node_id", nodeID), zap.Error(err))
+		return
+	}
+
+	for _, ref := range refs {
+		cm.logger.Info("Triggering repair for degraded cluster after node recovery",
+			zap.String("namespace", ref.NamespaceName),
+			zap.String("recovered_node", nodeID))
+		if err := cm.RepairCluster(ctx, ref.NamespaceName); err != nil {
+			cm.logger.Warn("Failed to repair degraded cluster",
+				zap.String("namespace", ref.NamespaceName),
+				zap.Error(err))
+		}
 	}
 }
 

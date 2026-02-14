@@ -34,6 +34,7 @@ func (n *Node) startRQLite(ctx context.Context) error {
 			n.config.Discovery.RaftAdvAddress,
 			n.config.Discovery.HttpAdvAddress,
 			n.config.Node.DataDir,
+			n.lifecycle,
 			n.logger.Logger,
 		)
 
