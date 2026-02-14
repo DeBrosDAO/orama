@@ -449,7 +449,6 @@ network/
 │   ├── cli/         # CLI tool
 │   ├── gateway/     # HTTP Gateway
 │   ├── node/        # P2P Node
-│   └── rqlite-mcp/  # RQLite MCP server
 ├── pkg/              # Core packages
 │   ├── gateway/     # Gateway implementation
 │   │   └── handlers/ # HTTP handlers by domain
