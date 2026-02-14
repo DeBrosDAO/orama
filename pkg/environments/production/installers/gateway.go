@@ -39,78 +39,9 @@ func (gi *GatewayInstaller) Configure() error {
 	return nil
 }
 
-// downloadSourceZIP downloads source code as ZIP from GitHub
-// This is simpler and more reliable than git clone with shallow clones
-func (gi *GatewayInstaller) downloadSourceZIP(branch string, srcDir string) error {
-	// GitHub archive URL format
-	zipURL := fmt.Sprintf("https://github.com/DeBrosOfficial/network/archive/refs/heads/%s.zip", branch)
-	zipPath := "/tmp/network-source.zip"
-	extractDir := "/tmp/network-extract"
-
-	// Clean up any previous download artifacts
-	os.RemoveAll(zipPath)
-	os.RemoveAll(extractDir)
-
-	// Download ZIP
-	fmt.Fprintf(gi.logWriter, "    Downloading source (branch: %s)...\n", branch)
-	if err := DownloadFile(zipURL, zipPath); err != nil {
-		return fmt.Errorf("failed to download source from %s: %w", zipURL, err)
-	}
-
-	// Create extraction directory
-	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return fmt.Errorf("failed to create extraction directory: %w", err)
-	}
-
-	// Extract ZIP
-	fmt.Fprintf(gi.logWriter, "    Extracting source...\n")
-	extractCmd := exec.Command("unzip", "-q", "-o", zipPath, "-d", extractDir)
-	if output, err := extractCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to extract source: %w\n%s", err, string(output))
-	}
-
-	// GitHub extracts to network-{branch}/ directory
-	extractedDir := filepath.Join(extractDir, fmt.Sprintf("network-%s", branch))
-
-	// Verify extracted directory exists
-	if _, err := os.Stat(extractedDir); os.IsNotExist(err) {
-		// Try alternative naming (GitHub may sanitize branch names)
-		entries, _ := os.ReadDir(extractDir)
-		if len(entries) == 1 && entries[0].IsDir() {
-			extractedDir = filepath.Join(extractDir, entries[0].Name())
-		} else {
-			return fmt.Errorf("extracted directory not found at %s", extractedDir)
-		}
-	}
-
-	// Remove existing source directory
-	os.RemoveAll(srcDir)
-
-	// Move extracted content to source directory
-	if err := os.Rename(extractedDir, srcDir); err != nil {
-		// Cross-filesystem fallback: copy instead of rename
-		fmt.Fprintf(gi.logWriter, "    Moving source (cross-filesystem copy)...\n")
-		copyCmd := exec.Command("cp", "-r", extractedDir, srcDir)
-		if output, err := copyCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to move source: %w\n%s", err, string(output))
-		}
-	}
-
-	// Cleanup temp files
-	os.RemoveAll(zipPath)
-	os.RemoveAll(extractDir)
-
-	// Fix ownership
-	if err := exec.Command("chown", "-R", "debros:debros", srcDir).Run(); err != nil {
-		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown source directory: %v\n", err)
-	}
-
-	fmt.Fprintf(gi.logWriter, "    ✓ Source downloaded\n")
-	return nil
-}
-
-// InstallDeBrosBinaries downloads and builds DeBros binaries
-func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome string, skipRepoUpdate bool) error {
+// InstallDeBrosBinaries builds DeBros binaries from source at /home/debros/src.
+// Source must already be present (uploaded via SCP archive).
+func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 	fmt.Fprintf(gi.logWriter, "  Building DeBros binaries...\n")
 
 	srcDir := filepath.Join(oramaHome, "src")
@@ -124,24 +55,9 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(branch string, oramaHome strin
 		return fmt.Errorf("failed to create bin directory %s: %w", binDir, err)
 	}
 
-	// Check if source directory has content
-	hasSourceContent := false
-	if entries, err := os.ReadDir(srcDir); err == nil && len(entries) > 0 {
-		hasSourceContent = true
-	}
-
-	// Handle repository update/download based on skipRepoUpdate flag
-	if skipRepoUpdate {
-		fmt.Fprintf(gi.logWriter, "    Skipping source download (--no-pull flag)\n")
-		if !hasSourceContent {
-			return fmt.Errorf("cannot skip download: source directory is empty at %s (need to populate it first)", srcDir)
-		}
-		fmt.Fprintf(gi.logWriter, "    Using existing source at %s\n", srcDir)
-	} else {
-		// Download source as ZIP from GitHub (simpler than git, no shallow clone issues)
-		if err := gi.downloadSourceZIP(branch, srcDir); err != nil {
-			return err
-		}
+	// Verify source exists
+	if entries, err := os.ReadDir(srcDir); err != nil || len(entries) == 0 {
+		return fmt.Errorf("source directory is empty at %s (upload source archive first)", srcDir)
 	}
 
 	// Build binaries

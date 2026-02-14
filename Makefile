@@ -94,6 +94,8 @@ build-linux: deps
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama-cli ./cmd/cli
 	@echo "Building Olric for linux/amd64..."
 	GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -trimpath -o bin-linux/olric-server github.com/olric-data/olric/cmd/olric-server
+	@echo "Building IPFS Cluster Service for linux/amd64..."
+	GOOS=linux GOARCH=amd64 GOBIN=$(CURDIR)/bin-linux go install -ldflags "-s -w" -trimpath github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest
 	@echo "✓ All Linux binaries built in bin-linux/"
 	@echo ""
 	@echo "Next steps:"

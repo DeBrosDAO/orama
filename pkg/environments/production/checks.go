@@ -116,66 +116,84 @@ func (ad *ArchitectureDetector) Detect() (string, error) {
 	}
 }
 
-// DependencyChecker validates external tool availability
-type DependencyChecker struct {
-	skipOptional bool
-}
+// DependencyChecker validates external tool availability and auto-installs missing ones
+type DependencyChecker struct{}
 
 // NewDependencyChecker creates a new checker
-func NewDependencyChecker(skipOptional bool) *DependencyChecker {
-	return &DependencyChecker{
-		skipOptional: skipOptional,
-	}
+func NewDependencyChecker(_ bool) *DependencyChecker {
+	return &DependencyChecker{}
 }
 
 // Dependency represents an external binary dependency
 type Dependency struct {
-	Name        string
-	Command     string
-	Optional    bool
-	InstallHint string
+	Name    string
+	Command string
+	AptPkg  string // apt package name to install
 }
 
-// CheckAll validates all required dependencies
+// CheckAll validates all required dependencies, auto-installing any that are missing.
 func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
 	dependencies := []Dependency{
-		{
-			Name:        "curl",
-			Command:     "curl",
-			Optional:    false,
-			InstallHint: "Usually pre-installed; if missing: apt-get install curl",
-		},
-		{
-			Name:        "git",
-			Command:     "git",
-			Optional:    false,
-			InstallHint: "Install with: apt-get install git",
-		},
-		{
-			Name:        "make",
-			Command:     "make",
-			Optional:    false,
-			InstallHint: "Install with: apt-get install make",
-		},
+		{Name: "curl", Command: "curl", AptPkg: "curl"},
+		{Name: "git", Command: "git", AptPkg: "git"},
+		{Name: "make", Command: "make", AptPkg: "make"},
+		{Name: "jq", Command: "jq", AptPkg: "jq"},
+		{Name: "speedtest", Command: "speedtest-cli", AptPkg: "speedtest-cli"},
 	}
 
 	var missing []Dependency
 	for _, dep := range dependencies {
 		if _, err := exec.LookPath(dep.Command); err != nil {
-			if !dep.Optional || !dc.skipOptional {
-				missing = append(missing, dep)
-			}
+			missing = append(missing, dep)
 		}
 	}
 
-	if len(missing) > 0 {
-		errMsg := "missing required dependencies:\n"
-		for _, dep := range missing {
-			errMsg += fmt.Sprintf("  - %s (%s): %s\n", dep.Name, dep.Command, dep.InstallHint)
-		}
-		return missing, fmt.Errorf("%s", errMsg)
+	if len(missing) == 0 {
+		return nil, nil
 	}
 
+	// Auto-install missing dependencies
+	var pkgs []string
+	var names []string
+	for _, dep := range missing {
+		pkgs = append(pkgs, dep.AptPkg)
+		names = append(names, dep.Name)
+	}
+
+	fmt.Fprintf(os.Stderr, "  Installing missing dependencies: %s\n", strings.Join(names, ", "))
+
+	// apt-get update first
+	update := exec.Command("apt-get", "update", "-qq")
+	update.Stdout = os.Stdout
+	update.Stderr = os.Stderr
+	update.Run() // best-effort, don't fail on update
+
+	// apt-get install
+	args := append([]string{"install", "-y", "-qq"}, pkgs...)
+	install := exec.Command("apt-get", args...)
+	install.Stdout = os.Stdout
+	install.Stderr = os.Stderr
+	if err := install.Run(); err != nil {
+		return missing, fmt.Errorf("failed to install dependencies (%s): %w", strings.Join(names, ", "), err)
+	}
+
+	// Verify after install
+	var stillMissing []Dependency
+	for _, dep := range missing {
+		if _, err := exec.LookPath(dep.Command); err != nil {
+			stillMissing = append(stillMissing, dep)
+		}
+	}
+
+	if len(stillMissing) > 0 {
+		errMsg := "dependencies still missing after install attempt:\n"
+		for _, dep := range stillMissing {
+			errMsg += fmt.Sprintf("  - %s\n", dep.Name)
+		}
+		return stillMissing, fmt.Errorf("%s", errMsg)
+	}
+
+	fmt.Fprintf(os.Stderr, "  ✓ Dependencies installed successfully\n")
 	return nil, nil
 }
 
