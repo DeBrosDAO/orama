@@ -71,9 +71,10 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 		}
 
 		if remotePeerCount >= requiredRemotePeers {
-			peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
+			// Check discovery-peers.json (safe location outside raft dir)
+			peersPath := filepath.Join(rqliteDataDir, "discovery-peers.json")
 			r.discoveryService.TriggerSync()
-			time.Sleep(2 * time.Second)
+			time.Sleep(500 * time.Millisecond)
 
 			if info, err := os.Stat(peersPath); err == nil && info.Size() > 10 {
 				data, err := os.ReadFile(peersPath)
@@ -97,13 +98,11 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	if err := r.discoveryService.TriggerPeerExchange(ctx); err != nil {
 		r.logger.Warn("Failed to trigger peer exchange during pre-start discovery", zap.Error(err))
 	}
-	time.Sleep(1 * time.Second)
 	r.discoveryService.TriggerSync()
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
-	// Wait up to 2 minutes for peer discovery - LibP2P DHT can take 60+ seconds
-	// to re-establish connections after simultaneous restart
-	discoveryDeadline := time.Now().Add(2 * time.Minute)
+	// Wait up to 45s for peer discovery — parallel dials compensate for the shorter deadline
+	discoveryDeadline := time.Now().Add(45 * time.Second)
 	var discoveredPeers int
 
 	for time.Now().Before(discoveryDeadline) {
@@ -151,7 +150,7 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	}
 
 	r.discoveryService.TriggerSync()
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	return nil
 }
@@ -182,13 +181,12 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 	}
 
 	r.discoveryService.TriggerPeerExchange(ctx)
-	time.Sleep(2 * time.Second)
 	r.discoveryService.TriggerSync()
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	rqliteDataDir, _ := r.rqliteDataDirPath()
 	ourIndex := r.getRaftLogIndex()
-	
+
 	maxPeerIndex := uint64(0)
 	for _, peer := range r.discoveryService.GetAllPeers() {
 		if peer.NodeID != r.discoverConfig.RaftAdvAddress && peer.RaftLogIndex > maxPeerIndex {
@@ -201,7 +199,7 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 			r.logger.Warn("Failed to clear raft state during split-brain recovery", zap.Error(err))
 		}
 		r.discoveryService.TriggerPeerExchange(ctx)
-		time.Sleep(1 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 		if err := r.discoveryService.ForceWritePeersJSON(); err != nil {
 			r.logger.Warn("Failed to write peers.json during split-brain recovery", zap.Error(err))
 		}
@@ -326,14 +324,15 @@ func (r *RQLiteManager) hasExistingRaftState(rqliteDataDir string) bool {
 	if info, err := os.Stat(raftLogPath); err == nil && info.Size() > 1024 {
 		return true
 	}
-	peersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
-	_, err := os.Stat(peersPath)
-	return err == nil
+	// Don't check peers.json — discovery-peers.json is now written outside
+	// the raft dir and should not be treated as existing Raft state.
+	return false
 }
 
 func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 	_ = os.Remove(filepath.Join(rqliteDataDir, "raft.db"))
 	_ = os.Remove(filepath.Join(rqliteDataDir, "raft", "peers.json"))
+	_ = os.Remove(filepath.Join(rqliteDataDir, "discovery-peers.json"))
 	return nil
 }
 

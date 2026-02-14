@@ -70,6 +70,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 	if r.discoveryService != nil {
 		go r.startHealthMonitoring(ctx)
 		go r.startVoterReconciliation(ctx)
+		go r.startOrphanedNodeRecovery(ctx) // C1 fix: recover nodes orphaned by failed voter changes
 	}
 
 	// Start child process watchdog to detect and recover from crashes
@@ -138,21 +139,9 @@ func (r *RQLiteManager) Stop() error {
 // transferLeadershipIfLeader checks if this node is the Raft leader and
 // requests a leadership transfer to minimize election disruption.
 func (r *RQLiteManager) transferLeadershipIfLeader() {
-	status, err := r.getRQLiteStatus()
-	if err != nil {
-		return
+	if err := TransferLeadership(r.config.RQLitePort, r.logger); err != nil {
+		r.logger.Warn("Leadership transfer failed, relying on SIGTERM", zap.Error(err))
 	}
-	if status.Store.Raft.State != "Leader" {
-		return
-	}
-
-	r.logger.Info("This node is the Raft leader, requesting leadership transfer before shutdown")
-
-	// RQLite doesn't have a direct leadership transfer API, but we can
-	// signal readiness to step down. The fastest approach is to let the
-	// SIGTERM handler in rqlited handle this — rqlite v8 gracefully
-	// steps down on SIGTERM when possible. We log the state for visibility.
-	r.logger.Info("Leader will transfer on SIGTERM (rqlite built-in behavior)")
 }
 
 // cleanupPIDFile removes the PID file on shutdown

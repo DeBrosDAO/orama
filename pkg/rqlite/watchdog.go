@@ -10,13 +10,34 @@ import (
 )
 
 const (
-	watchdogInterval   = 30 * time.Second
+	// watchdogInterval is how often we check if rqlited is alive.
+	watchdogInterval = 30 * time.Second
+
+	// watchdogMaxRestart is the maximum number of restart attempts before giving up.
 	watchdogMaxRestart = 3
+
+	// watchdogGracePeriod is how long to wait after a restart before
+	// the watchdog starts checking. This gives rqlited time to rejoin
+	// the Raft cluster — Raft election timeouts + log replay can take
+	// 60-120 seconds after a restart.
+	watchdogGracePeriod = 120 * time.Second
 )
 
 // startProcessWatchdog monitors the RQLite child process and restarts it if it crashes.
-// It checks both process liveness and HTTP responsiveness.
+// It only restarts when the process has actually DIED (exited). It does NOT kill
+// rqlited for being slow to find a leader — that's normal during cluster rejoin.
 func (r *RQLiteManager) startProcessWatchdog(ctx context.Context) {
+	// Wait for the grace period before starting to monitor.
+	// rqlited needs time to:
+	// 1. Open the raft log and snapshots
+	// 2. Reconnect to existing Raft peers
+	// 3. Either rejoin as follower or participate in a new election
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(watchdogGracePeriod):
+	}
+
 	ticker := time.NewTicker(watchdogInterval)
 	defer ticker.Stop()
 
@@ -46,10 +67,21 @@ func (r *RQLiteManager) startProcessWatchdog(ctx context.Context) {
 				restartCount++
 				r.logger.Info("RQLite process restarted by watchdog",
 					zap.Int("restart_count", restartCount))
+
+				// Give the restarted process time to stabilize before checking again
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(watchdogGracePeriod):
+				}
 			} else {
-				// Process is alive — check HTTP responsiveness
-				if !r.isHTTPResponsive() {
-					r.logger.Warn("RQLite process is alive but not responding to HTTP")
+				// Process is alive — reset restart counter on sustained health
+				if r.isHTTPResponsive() {
+					if restartCount > 0 {
+						r.logger.Info("RQLite process has stabilized, resetting restart counter",
+							zap.Int("previous_restart_count", restartCount))
+						restartCount = 0
+					}
 				}
 			}
 		}

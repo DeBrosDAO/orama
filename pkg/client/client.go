@@ -19,6 +19,7 @@ import (
 
 	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
 
+	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
@@ -144,6 +145,30 @@ func (c *Client) Connect() error {
 		libp2p.DefaultMuxers,
 	)
 	opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
+
+	// Load or create persistent identity if IdentityPath is configured
+	if c.config.IdentityPath != "" {
+		identity, loadErr := encryption.LoadIdentity(c.config.IdentityPath)
+		if loadErr != nil {
+			// File doesn't exist yet — generate and save
+			identity, loadErr = encryption.GenerateIdentity()
+			if loadErr != nil {
+				return fmt.Errorf("failed to generate identity: %w", loadErr)
+			}
+			if saveErr := encryption.SaveIdentity(identity, c.config.IdentityPath); saveErr != nil {
+				return fmt.Errorf("failed to save identity: %w", saveErr)
+			}
+			c.logger.Info("Generated new persistent identity",
+				zap.String("peer_id", identity.PeerID.String()),
+				zap.String("path", c.config.IdentityPath))
+		} else {
+			c.logger.Info("Loaded persistent identity",
+				zap.String("peer_id", identity.PeerID.String()),
+				zap.String("path", c.config.IdentityPath))
+		}
+		opts = append(opts, libp2p.Identity(identity.PrivateKey))
+	}
+
 	// Enable QUIC only when not proxying. When proxy is enabled, prefer TCP via SOCKS5.
 	h, err := libp2p.New(opts...)
 	if err != nil {

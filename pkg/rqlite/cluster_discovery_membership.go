@@ -39,6 +39,17 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
+		PeerID:         c.host.ID().String(),
+		WireGuardIP:    c.wireGuardIP,
+	}
+
+	// Populate lifecycle state
+	if c.lifecycle != nil {
+		state, ttl := c.lifecycle.Snapshot()
+		ourMetadata.LifecycleState = string(state)
+		if state == "maintenance" {
+			ourMetadata.MaintenanceTTL = ttl
+		}
 	}
 
 	if c.adjustSelfAdvertisedAddresses(ourMetadata) {
@@ -272,7 +283,7 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 }
 
 // computeVoterSet returns the set of raft addresses that should be voters.
-// It sorts addresses by their IP component and selects the first maxVoters.
+// It sorts addresses by their numeric IP and selects the first maxVoters.
 // This is deterministic — all nodes compute the same voter set from the same peer list.
 func computeVoterSet(raftAddrs []string, maxVoters int) map[string]struct{} {
 	sorted := make([]string, len(raftAddrs))
@@ -281,7 +292,7 @@ func computeVoterSet(raftAddrs []string, maxVoters int) map[string]struct{} {
 	sort.Slice(sorted, func(i, j int) bool {
 		ipI := extractIPForSort(sorted[i])
 		ipJ := extractIPForSort(sorted[j])
-		return ipI < ipJ
+		return compareIPs(ipI, ipJ)
 	})
 
 	voters := make(map[string]struct{})
@@ -301,6 +312,31 @@ func extractIPForSort(raftAddr string) string {
 		return raftAddr
 	}
 	return host
+}
+
+// compareIPs compares two IP strings numerically (not alphabetically).
+// Alphabetical sort gives wrong results: "10.0.0.10" < "10.0.0.2" alphabetically,
+// but numerically 10.0.0.2 < 10.0.0.10. This was causing wrong nodes to be
+// selected as voters (e.g., 10.0.0.1, 10.0.0.10, 10.0.0.11 instead of 10.0.0.1-5).
+func compareIPs(a, b string) bool {
+	ipA := net.ParseIP(a)
+	ipB := net.ParseIP(b)
+
+	// Fallback to string comparison if parsing fails
+	if ipA == nil || ipB == nil {
+		return a < b
+	}
+
+	// Normalize to 16-byte representation for consistent comparison
+	ipA = ipA.To16()
+	ipB = ipB.To16()
+
+	for i := range ipA {
+		if ipA[i] != ipB[i] {
+			return ipA[i] < ipB[i]
+		}
+	}
+	return false
 }
 
 // IsVoter returns true if the given raft address is in the voter set
@@ -328,6 +364,14 @@ func (c *ClusterDiscoveryService) writePeersJSON() error {
 	return c.writePeersJSONWithData(peers)
 }
 
+// writePeersJSONWithData writes the discovery peers file to a SAFE location
+// outside the raft directory. This is critical: rqlite v8 treats any
+// peers.json inside <dataDir>/raft/ as a recovery signal and RESETS
+// the Raft configuration on startup. Writing there on every periodic sync
+// caused split-brain on every node restart.
+//
+// Safe location: <dataDir>/rqlite/discovery-peers.json
+// Dangerous location: <dataDir>/rqlite/raft/peers.json (only for explicit recovery)
 func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]interface{}) error {
 	dataDir := os.ExpandEnv(c.dataDir)
 	if strings.HasPrefix(dataDir, "~") {
@@ -338,30 +382,25 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 		dataDir = filepath.Join(home, dataDir[1:])
 	}
 
-	rqliteDir := filepath.Join(dataDir, "rqlite", "raft")
+	// Write to <dataDir>/rqlite/ — NOT inside raft/ subdirectory.
+	// rqlite v8 auto-recovers from raft/peers.json on every startup,
+	// which resets the Raft config and causes split-brain.
+	rqliteDir := filepath.Join(dataDir, "rqlite")
 
 	if err := os.MkdirAll(rqliteDir, 0755); err != nil {
-		return fmt.Errorf("failed to create raft directory %s: %w", rqliteDir, err)
+		return fmt.Errorf("failed to create rqlite directory %s: %w", rqliteDir, err)
 	}
 
-	peersFile := filepath.Join(rqliteDir, "peers.json")
-	backupFile := filepath.Join(rqliteDir, "peers.json.backup")
-
-	if _, err := os.Stat(peersFile); err == nil {
-		data, err := os.ReadFile(peersFile)
-		if err == nil {
-			_ = os.WriteFile(backupFile, data, 0644)
-		}
-	}
+	peersFile := filepath.Join(rqliteDir, "discovery-peers.json")
 
 	data, err := json.MarshalIndent(peers, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal peers.json: %w", err)
+		return fmt.Errorf("failed to marshal discovery-peers.json: %w", err)
 	}
 
 	tempFile := peersFile + ".tmp"
 	if err := os.WriteFile(tempFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp peers.json %s: %w", tempFile, err)
+		return fmt.Errorf("failed to write temp discovery-peers.json %s: %w", tempFile, err)
 	}
 
 	if err := os.Rename(tempFile, peersFile); err != nil {
@@ -375,7 +414,57 @@ func (c *ClusterDiscoveryService) writePeersJSONWithData(peers []map[string]inte
 		}
 	}
 
-	c.logger.Info("peers.json written",
+	c.logger.Debug("discovery-peers.json written",
+		zap.Int("peers", len(peers)),
+		zap.Strings("nodes", nodeIDs))
+
+	return nil
+}
+
+// writeRecoveryPeersJSON writes peers.json to the raft directory for
+// INTENTIONAL cluster recovery only. rqlite v8 will read this file on
+// startup and reset the Raft configuration accordingly. Only call this
+// when you explicitly want to trigger Raft recovery.
+func (c *ClusterDiscoveryService) writeRecoveryPeersJSON(peers []map[string]interface{}) error {
+	dataDir := os.ExpandEnv(c.dataDir)
+	if strings.HasPrefix(dataDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		dataDir = filepath.Join(home, dataDir[1:])
+	}
+
+	raftDir := filepath.Join(dataDir, "rqlite", "raft")
+
+	if err := os.MkdirAll(raftDir, 0755); err != nil {
+		return fmt.Errorf("failed to create raft directory %s: %w", raftDir, err)
+	}
+
+	peersFile := filepath.Join(raftDir, "peers.json")
+
+	data, err := json.MarshalIndent(peers, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal recovery peers.json: %w", err)
+	}
+
+	tempFile := peersFile + ".tmp"
+	if err := os.WriteFile(tempFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp recovery peers.json %s: %w", tempFile, err)
+	}
+
+	if err := os.Rename(tempFile, peersFile); err != nil {
+		return fmt.Errorf("failed to rename %s to %s: %w", tempFile, peersFile, err)
+	}
+
+	nodeIDs := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if id, ok := p["id"].(string); ok {
+			nodeIDs = append(nodeIDs, id)
+		}
+	}
+
+	c.logger.Warn("RECOVERY peers.json written to raft directory — rqlited will reset Raft config on next startup",
 		zap.Int("peers", len(peers)),
 		zap.Strings("nodes", nodeIDs))
 

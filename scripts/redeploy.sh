@@ -3,18 +3,19 @@
 # Redeploy to all nodes in a given environment (devnet or testnet).
 # Reads node credentials from scripts/remote-nodes.conf.
 #
-# Flow (per docs/DEV_DEPLOY.md):
-#  1) make build-linux
+# Flow:
+#  1) make build-linux-all
 #  2) scripts/generate-source-archive.sh -> /tmp/network-source.tar.gz
 #  3) scp archive + extract-deploy.sh + conf to hub node
 #  4) from hub: sshpass scp to all other nodes + sudo bash /tmp/extract-deploy.sh
-#  5) rolling: upgrade followers one-by-one, leader last
+#  5) rolling upgrade: followers first, leader last
+#     per node: pre-upgrade -> stop -> extract binary -> post-upgrade
 #
 # Usage:
 #   scripts/redeploy.sh --devnet
 #   scripts/redeploy.sh --testnet
 #   scripts/redeploy.sh --devnet --no-build
-#   scripts/redeploy.sh --testnet --no-build
+#   scripts/redeploy.sh --devnet --skip-build
 #
 set -euo pipefail
 
@@ -26,14 +27,14 @@ for arg in "$@"; do
   case "$arg" in
     --devnet)   ENV="devnet" ;;
     --testnet)  ENV="testnet" ;;
-    --no-build) NO_BUILD=1 ;;
+    --no-build|--skip-build) NO_BUILD=1 ;;
     -h|--help)
-      echo "Usage: scripts/redeploy.sh --devnet|--testnet [--no-build]"
+      echo "Usage: scripts/redeploy.sh --devnet|--testnet [--no-build|--skip-build]"
       exit 0
       ;;
     *)
       echo "Unknown flag: $arg" >&2
-      echo "Usage: scripts/redeploy.sh --devnet|--testnet [--no-build]" >&2
+      echo "Usage: scripts/redeploy.sh --devnet|--testnet [--no-build|--skip-build]" >&2
       exit 1
       ;;
   esac
@@ -106,9 +107,9 @@ echo "Hub: $HUB_HOST (idx=$HUB_IDX, key=${HUB_KEY:-none})"
 
 # ── Build ────────────────────────────────────────────────────────────────────
 if [[ "$NO_BUILD" -eq 0 ]]; then
-  echo "== build-linux =="
-  (cd "$ROOT_DIR" && make build-linux) || {
-    echo "WARN: make build-linux failed; continuing if existing bin-linux is acceptable."
+  echo "== build-linux-all =="
+  (cd "$ROOT_DIR" && make build-linux-all) || {
+    echo "WARN: make build-linux-all failed; continuing if existing bin-linux is acceptable."
   }
 else
   echo "== skipping build (--no-build) =="
@@ -192,12 +193,16 @@ if [[ ${#hosts[@]} -gt 0 ]] && ! command -v sshpass >/dev/null 2>&1; then
 fi
 
 echo "== fan-out: upload to ${#hosts[@]} nodes =="
+upload_failed=()
 for i in "${!hosts[@]}"; do
   h="${hosts[$i]}"
   p="${passes[$i]}"
   echo "  -> $h"
-  sshpass -p "$p" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "$TAR" "$EX" "$h":/tmp/
+  if ! sshpass -p "$p" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$TAR" "$EX" "$h":/tmp/; then
+    echo "  !! UPLOAD FAILED: $h"
+    upload_failed+=("$h")
+  fi
 done
 
 echo "== extract on all fan-out nodes =="
@@ -205,9 +210,21 @@ for i in "${!hosts[@]}"; do
   h="${hosts[$i]}"
   p="${passes[$i]}"
   echo "  -> $h"
-  sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "$h" "printf '%s\n' '$p' | sudo -S bash /tmp/extract-deploy.sh >/tmp/extract.log 2>&1 && echo OK"
+  if ! sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$h" "printf '%s\n' '$p' | sudo -S bash /tmp/extract-deploy.sh >/tmp/extract.log 2>&1 && echo OK"; then
+    echo "  !! EXTRACT FAILED: $h"
+    upload_failed+=("$h")
+  fi
 done
+
+if [[ ${#upload_failed[@]} -gt 0 ]]; then
+  echo ""
+  echo "WARNING: ${#upload_failed[@]} nodes had upload/extract failures:"
+  for uf in "${upload_failed[@]}"; do
+    echo "  - $uf"
+  done
+  echo "Continuing with rolling restart..."
+fi
 
 echo "== extract on hub =="
 printf '%s\n' "$hub_pass" | sudo -S bash "$EX" >/tmp/extract.log 2>&1
@@ -253,44 +270,131 @@ if [[ -z "$leader" ]]; then
 fi
 echo "Leader: $leader"
 
+failed_nodes=()
+
+# ── Per-node upgrade flow ──
+# Uses pre-upgrade (maintenance + leadership transfer + propagation wait)
+# then stops, deploys binary, and post-upgrade (start + health verification).
 upgrade_one() {
   local h="$1" p="$2"
   echo "== upgrade $h =="
-  sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "$h" "printf '%s\n' '$p' | sudo -S orama prod stop && printf '%s\n' '$p' | sudo -S orama upgrade --no-pull --pre-built --restart"
+
+  # 1. Pre-upgrade: enter maintenance, transfer leadership, wait for propagation
+  echo "  [1/4] pre-upgrade..."
+  if ! sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$h" "printf '%s\n' '$p' | sudo -S orama prod pre-upgrade" 2>&1; then
+    echo "  !! pre-upgrade failed on $h (continuing with stop)"
+  fi
+
+  # 2. Stop all services
+  echo "  [2/4] stopping services..."
+  if ! sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$h" "printf '%s\n' '$p' | sudo -S systemctl stop 'debros-*'" 2>&1; then
+    echo "  !! stop failed on $h"
+    failed_nodes+=("$h")
+    return 1
+  fi
+
+  # 3. Deploy new binary
+  echo "  [3/4] deploying binary..."
+  if ! sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$h" "printf '%s\n' '$p' | sudo -S bash /tmp/extract-deploy.sh >/tmp/extract.log 2>&1 && echo OK" 2>&1; then
+    echo "  !! extract failed on $h"
+    failed_nodes+=("$h")
+    return 1
+  fi
+
+  # 4. Post-upgrade: start services, verify health, exit maintenance
+  echo "  [4/4] post-upgrade..."
+  if ! sshpass -p "$p" ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$h" "printf '%s\n' '$p' | sudo -S orama prod post-upgrade" 2>&1; then
+    echo "  !! post-upgrade failed on $h"
+    failed_nodes+=("$h")
+    return 1
+  fi
+
+  echo "  OK: $h"
 }
 
 upgrade_hub() {
   echo "== upgrade hub (localhost) =="
-  printf '%s\n' "$hub_pass" | sudo -S orama prod stop
-  printf '%s\n' "$hub_pass" | sudo -S orama upgrade --no-pull --pre-built --restart
+
+  # 1. Pre-upgrade
+  echo "  [1/4] pre-upgrade..."
+  if ! (printf '%s\n' "$hub_pass" | sudo -S orama prod pre-upgrade) 2>&1; then
+    echo "  !! pre-upgrade failed on hub (continuing with stop)"
+  fi
+
+  # 2. Stop all services
+  echo "  [2/4] stopping services..."
+  if ! (printf '%s\n' "$hub_pass" | sudo -S systemctl stop 'debros-*') 2>&1; then
+    echo "  !! stop failed on hub ($hub_host)"
+    failed_nodes+=("$hub_host (hub)")
+    return 1
+  fi
+
+  # 3. Deploy new binary
+  echo "  [3/4] deploying binary..."
+  if ! (printf '%s\n' "$hub_pass" | sudo -S bash "$EX" >/tmp/extract.log 2>&1); then
+    echo "  !! extract failed on hub ($hub_host)"
+    failed_nodes+=("$hub_host (hub)")
+    return 1
+  fi
+
+  # 4. Post-upgrade
+  echo "  [4/4] post-upgrade..."
+  if ! (printf '%s\n' "$hub_pass" | sudo -S orama prod post-upgrade) 2>&1; then
+    echo "  !! post-upgrade failed on hub ($hub_host)"
+    failed_nodes+=("$hub_host (hub)")
+    return 1
+  fi
+
+  echo "  OK: hub ($hub_host)"
 }
 
-echo "== rolling upgrade (followers first) =="
+echo "== rolling upgrade (followers first, leader last) =="
 for i in "${!hosts[@]}"; do
   h="${hosts[$i]}"
   p="${passes[$i]}"
   [[ "$h" == "$leader" ]] && continue
-  upgrade_one "$h" "$p"
+  upgrade_one "$h" "$p" || true
 done
 
 # Upgrade hub if not the leader
 if [[ "$leader" != "HUB" ]]; then
-  upgrade_hub
+  upgrade_hub || true
 fi
 
 # Upgrade leader last
 echo "== upgrade leader last =="
 if [[ "$leader" == "HUB" ]]; then
-  upgrade_hub
+  upgrade_hub || true
 else
-  upgrade_one "$leader" "$leader_pass"
+  upgrade_one "$leader" "$leader_pass" || true
 fi
 
 # Clean up conf from hub
 rm -f "$CONF"
 
-echo "Done."
+# ── Report results ──
+echo ""
+echo "========================================"
+if [[ ${#failed_nodes[@]} -gt 0 ]]; then
+  echo "UPGRADE COMPLETED WITH FAILURES (${#failed_nodes[@]} nodes failed):"
+  for fn in "${failed_nodes[@]}"; do
+    echo "  FAILED: $fn"
+  done
+  echo ""
+  echo "Recommended actions:"
+  echo "  1. SSH into the failed node(s)"
+  echo "  2. Check logs: sudo orama prod logs node --follow"
+  echo "  3. Manually run: sudo orama prod post-upgrade"
+  echo "========================================"
+  exit 1
+else
+  echo "All nodes upgraded successfully."
+  echo "========================================"
+fi
 REMOTE
 
 echo "== complete =="

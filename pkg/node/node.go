@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/node/lifecycle"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -23,6 +24,9 @@ type Node struct {
 	config *config.Config
 	logger *logging.ColoredLogger
 	host   host.Host
+
+	// Lifecycle state machine (joining → active ⇄ maintenance)
+	lifecycle *lifecycle.Manager
 
 	rqliteManager    *database.RQLiteManager
 	rqliteAdapter    *database.RQLiteAdapter
@@ -54,8 +58,9 @@ func NewNode(cfg *config.Config) (*Node, error) {
 	}
 
 	return &Node{
-		config: cfg,
-		logger: logger,
+		config:    cfg,
+		logger:    logger,
+		lifecycle: lifecycle.NewManager(),
 	}, nil
 }
 
@@ -124,9 +129,20 @@ func (n *Node) Start(ctx context.Context) error {
 		}
 	}
 
+	// All services started — transition lifecycle: joining → active
+	if err := n.lifecycle.TransitionTo(lifecycle.StateActive); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to transition lifecycle to active", zap.Error(err))
+	}
+
+	// Publish updated metadata with active lifecycle state
+	if n.clusterDiscovery != nil {
+		n.clusterDiscovery.UpdateOwnMetadata()
+	}
+
 	n.logger.ComponentInfo(logging.ComponentNode, "Network node started successfully",
 		zap.String("peer_id", n.GetPeerID()),
 		zap.Strings("listen_addrs", listenAddrs),
+		zap.String("lifecycle", string(n.lifecycle.State())),
 	)
 
 	n.startConnectionMonitoring()
@@ -137,6 +153,17 @@ func (n *Node) Start(ctx context.Context) error {
 // Stop stops the node and all its services
 func (n *Node) Stop() error {
 	n.logger.ComponentInfo(logging.ComponentNode, "Stopping network node")
+
+	// Enter maintenance so peers know we're shutting down
+	if n.lifecycle.IsAvailable() {
+		if err := n.lifecycle.EnterMaintenance(5 * time.Minute); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to enter maintenance on shutdown", zap.Error(err))
+		}
+		// Publish maintenance state before tearing down services
+		if n.clusterDiscovery != nil {
+			n.clusterDiscovery.UpdateOwnMetadata()
+		}
+	}
 
 	// Stop HTTP Gateway server
 	if n.apiGatewayServer != nil {

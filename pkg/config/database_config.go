@@ -22,6 +22,13 @@ type DatabaseConfig struct {
 	NodeCACert   string `yaml:"node_ca_cert"`   // Path to CA certificate (optional, uses system CA if not set)
 	NodeNoVerify bool   `yaml:"node_no_verify"` // Skip certificate verification (for testing/self-signed certs)
 
+	// Raft tuning (passed through to rqlited CLI flags).
+	// Higher defaults than rqlited's 1s suit WireGuard latency.
+	RaftElectionTimeout    time.Duration `yaml:"raft_election_timeout"`     // default: 5s
+	RaftHeartbeatTimeout   time.Duration `yaml:"raft_heartbeat_timeout"`    // default: 2s
+	RaftApplyTimeout       time.Duration `yaml:"raft_apply_timeout"`        // default: 30s
+	RaftLeaderLeaseTimeout time.Duration `yaml:"raft_leader_lease_timeout"` // default: 5s
+
 	// Dynamic discovery configuration (always enabled)
 	ClusterSyncInterval time.Duration `yaml:"cluster_sync_interval"` // default: 30s
 	PeerInactivityLimit time.Duration `yaml:"peer_inactivity_limit"` // default: 24h

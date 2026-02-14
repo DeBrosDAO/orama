@@ -66,6 +66,29 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 	// Kill any orphaned rqlited from a previous crash
 	r.killOrphanedRQLite()
 
+	// Remove stale peers.json from the raft directory to prevent rqlite v8
+	// from triggering automatic Raft recovery on normal restarts.
+	//
+	// Only delete when raft.db EXISTS (normal restart). If raft.db does NOT
+	// exist, peers.json was likely placed intentionally by ForceWritePeersJSON()
+	// as part of a recovery flow (clearRaftState + ForceWritePeersJSON + launch).
+	stalePeersPath := filepath.Join(rqliteDataDir, "raft", "peers.json")
+	raftDBPath := filepath.Join(rqliteDataDir, "raft.db")
+	if _, err := os.Stat(stalePeersPath); err == nil {
+		if _, err := os.Stat(raftDBPath); err == nil {
+			// raft.db exists → this is a normal restart, peers.json is stale
+			r.logger.Warn("Removing stale peers.json from raft directory to prevent accidental recovery",
+				zap.String("path", stalePeersPath))
+			_ = os.Remove(stalePeersPath)
+			_ = os.Remove(stalePeersPath + ".backup")
+			_ = os.Remove(stalePeersPath + ".tmp")
+		} else {
+			// raft.db missing → intentional recovery, keep peers.json for rqlited
+			r.logger.Info("Keeping peers.json in raft directory for intentional cluster recovery",
+				zap.String("path", stalePeersPath))
+		}
+	}
+
 	// Build RQLite command
 	args := []string{
 		"-http-addr", fmt.Sprintf("0.0.0.0:%d", r.config.RQLitePort),
@@ -89,6 +112,30 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 			args = append(args, "-node-no-verify")
 		}
 	}
+
+	// Raft tuning — higher timeouts suit WireGuard latency
+	raftElection := r.config.RaftElectionTimeout
+	if raftElection == 0 {
+		raftElection = 5 * time.Second
+	}
+	raftHeartbeat := r.config.RaftHeartbeatTimeout
+	if raftHeartbeat == 0 {
+		raftHeartbeat = 2 * time.Second
+	}
+	raftApply := r.config.RaftApplyTimeout
+	if raftApply == 0 {
+		raftApply = 30 * time.Second
+	}
+	raftLeaderLease := r.config.RaftLeaderLeaseTimeout
+	if raftLeaderLease == 0 {
+		raftLeaderLease = 5 * time.Second
+	}
+	args = append(args,
+		"-raft-election-timeout", raftElection.String(),
+		"-raft-heartbeat-timeout", raftHeartbeat.String(),
+		"-raft-apply-timeout", raftApply.String(),
+		"-raft-leader-lease-timeout", raftLeaderLease.String(),
+	)
 
 	if r.config.RQLiteJoinAddress != "" && !r.hasExistingState(rqliteDataDir) {
 		r.logger.Info("First-time join to RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))

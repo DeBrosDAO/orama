@@ -24,11 +24,14 @@ import (
 
 // Service handles authentication business logic
 type Service struct {
-	logger      *logging.ColoredLogger
-	orm         client.NetworkClient
-	signingKey  *rsa.PrivateKey
-	keyID       string
-	defaultNS   string
+	logger       *logging.ColoredLogger
+	orm          client.NetworkClient
+	signingKey   *rsa.PrivateKey
+	keyID        string
+	edSigningKey ed25519.PrivateKey
+	edKeyID      string
+	preferEdDSA  bool
+	defaultNS    string
 }
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
@@ -56,6 +59,16 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 	}
 
 	return s, nil
+}
+
+// SetEdDSAKey configures an Ed25519 signing key for EdDSA JWT support.
+// When set, new tokens are signed with EdDSA; RS256 is still accepted for verification.
+func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey) {
+	s.edSigningKey = privKey
+	pubBytes := []byte(privKey.Public().(ed25519.PublicKey))
+	sum := sha256.Sum256(pubBytes)
+	s.edKeyID = "ed_" + hex.EncodeToString(sum[:8])
+	s.preferEdDSA = true
 }
 
 // CreateNonce generates a new nonce and stores it in the database
