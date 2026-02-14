@@ -216,11 +216,6 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 		}
 	}
 
-	// Fix ownership (best-effort, don't fail if it doesn't work)
-	if err := exec.Command("chown", "-R", "orama:orama", ipfsRepoPath).Run(); err != nil {
-		fmt.Fprintf(ii.logWriter, "    ⚠️  Warning: failed to chown IPFS repo: %v\n", err)
-	}
-
 	return nil
 }
 

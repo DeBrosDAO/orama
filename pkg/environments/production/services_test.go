@@ -47,8 +47,8 @@ func TestGenerateRQLiteService(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ssg := &SystemdServiceGenerator{
-				oramaHome: "/home/orama",
-				oramaDir:  "/home/orama/.orama",
+				oramaHome: "/opt/orama",
+				oramaDir:  "/opt/orama/.orama",
 			}
 
 			unit := ssg.GenerateRQLiteService("/usr/local/bin/rqlited", 5001, 7001, tt.joinAddr, tt.advertiseIP)
@@ -81,8 +81,8 @@ func TestGenerateRQLiteService(t *testing.T) {
 // TestGenerateRQLiteServiceArgs verifies the ExecStart command arguments
 func TestGenerateRQLiteServiceArgs(t *testing.T) {
 	ssg := &SystemdServiceGenerator{
-		oramaHome: "/home/orama",
-		oramaDir:  "/home/orama/.orama",
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
 	}
 
 	unit := ssg.GenerateRQLiteService("/usr/local/bin/rqlited", 5001, 7001, "10.0.0.1:7001", "10.0.0.2")

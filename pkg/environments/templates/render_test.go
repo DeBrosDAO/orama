@@ -10,7 +10,7 @@ func TestRenderNodeConfig(t *testing.T) {
 	data := NodeConfigData{
 		NodeID:            "node2",
 		P2PPort:           4002,
-		DataDir:           "/home/orama/.orama/node2",
+		DataDir:           "/opt/orama/.orama/node2",
 		RQLiteHTTPPort:    5002,
 		RQLiteRaftPort:    7002,
 		RQLiteJoinAddress: "localhost:5001",

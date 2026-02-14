@@ -7,14 +7,12 @@ PartOf=orama-node.service
 
 [Service]
 Type=simple
-User=orama
-Group=orama
-WorkingDirectory=/home/orama
+WorkingDirectory=/opt/orama
 
 # Olric reads config from environment variable (set in env file)
-EnvironmentFile=/home/orama/.orama/data/namespaces/%i/olric.env
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/olric.env
 
-ExecStart=/home/orama/bin/olric-server
+ExecStart=/opt/orama/bin/olric-server
 
 TimeoutStopSec=30s
 KillMode=mixed
@@ -27,14 +25,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=orama-olric-%i
 
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ReadWritePaths=/home/orama/.orama/data/namespaces
-
+PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=2G
 

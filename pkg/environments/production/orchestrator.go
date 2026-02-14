@@ -45,7 +45,6 @@ type ProductionSetup struct {
 	resourceChecker    *ResourceChecker
 	portChecker        *PortChecker
 	fsProvisioner      *FilesystemProvisioner
-	userProvisioner    *UserProvisioner
 	stateDetector      *StateDetector
 	configGenerator    *ConfigGenerator
 	secretGenerator    *SecretGenerator
@@ -78,7 +77,6 @@ func SaveBranchPreference(oramaDir, branch string) error {
 	if err := os.WriteFile(branchFile, []byte(branch), 0644); err != nil {
 		return fmt.Errorf("failed to save branch preference: %w", err)
 	}
-	exec.Command("chown", "orama:orama", branchFile).Run()
 	return nil
 }
 
@@ -100,7 +98,6 @@ func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure 
 		resourceChecker:    NewResourceChecker(),
 		portChecker:        NewPortChecker(),
 		fsProvisioner:      NewFilesystemProvisioner(oramaHome),
-		userProvisioner:    NewUserProvisioner("orama", oramaHome, "/bin/bash"),
 		stateDetector:      NewStateDetector(oramaDir),
 		configGenerator:    NewConfigGenerator(oramaDir),
 		secretGenerator:    NewSecretGenerator(oramaDir),
@@ -227,62 +224,15 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	return nil
 }
 
-// Phase2ProvisionEnvironment sets up users and filesystems
+// Phase2ProvisionEnvironment sets up filesystems
 func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	ps.logf("Phase 2: Provisioning environment...")
-
-	// Create orama user
-	if !ps.userProvisioner.UserExists() {
-		if err := ps.userProvisioner.CreateUser(); err != nil {
-			return fmt.Errorf("failed to create orama user: %w", err)
-		}
-		ps.logf("  ✓ Created 'orama' user")
-	} else {
-		ps.logf("  ✓ 'orama' user already exists")
-	}
-
-	// Set up sudoers access if invoked via sudo
-	sudoUser := os.Getenv("SUDO_USER")
-	if sudoUser != "" {
-		if err := ps.userProvisioner.SetupSudoersAccess(sudoUser); err != nil {
-			ps.logf("  ⚠️  Failed to setup sudoers: %v", err)
-		} else {
-			ps.logf("  ✓ Sudoers access configured")
-		}
-	}
-
-	// Set up deployment sudoers (allows orama user to manage orama-deploy-* services)
-	if err := ps.userProvisioner.SetupDeploymentSudoers(); err != nil {
-		ps.logf("  ⚠️  Failed to setup deployment sudoers: %v", err)
-	} else {
-		ps.logf("  ✓ Deployment sudoers configured")
-	}
-
-	// Set up namespace sudoers (allows orama user to manage orama-namespace-* services)
-	if err := ps.userProvisioner.SetupNamespaceSudoers(); err != nil {
-		ps.logf("  ⚠️  Failed to setup namespace sudoers: %v", err)
-	} else {
-		ps.logf("  ✓ Namespace sudoers configured")
-	}
-
-	// Set up WireGuard sudoers (allows orama user to manage WG peers)
-	if err := ps.userProvisioner.SetupWireGuardSudoers(); err != nil {
-		ps.logf("  ⚠️  Failed to setup wireguard sudoers: %v", err)
-	} else {
-		ps.logf("  ✓ WireGuard sudoers configured")
-	}
 
 	// Create directory structure (unified structure)
 	if err := ps.fsProvisioner.EnsureDirectoryStructure(); err != nil {
 		return fmt.Errorf("failed to create directory structure: %w", err)
 	}
 	ps.logf("  ✓ Directory structure created")
-
-	// Fix ownership
-	if err := ps.fsProvisioner.FixOwnership(); err != nil {
-		return fmt.Errorf("failed to fix ownership: %w", err)
-	}
-	ps.logf("  ✓ Ownership fixed")
 
 	return nil
 }
@@ -305,7 +255,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  Olric install warning: %v", err)
 	}
 
-	// Install Orama binaries (source must be at /home/orama/src via SCP)
+	// Install Orama binaries (source must be at /opt/orama/src via SCP)
 	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.oramaHome); err != nil {
 		return fmt.Errorf("failed to install Orama binaries: %w", err)
 	}
@@ -470,12 +420,6 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		ps.logf("  ⚠️  RQLite initialization warning: %v", err)
 	}
 
-	// Ensure all directories and files created during service initialization have correct ownership
-	// This is critical because directories/files created as root need to be owned by orama user
-	if err := ps.fsProvisioner.FixOwnership(); err != nil {
-		return fmt.Errorf("failed to fix ownership after service initialization: %w", err)
-	}
-
 	ps.logf("  ✓ Services initialized")
 	return nil
 }
@@ -564,7 +508,6 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	if err := os.WriteFile(olricConfigPath, []byte(olricConfig), 0644); err != nil {
 		return fmt.Errorf("failed to save olric config: %w", err)
 	}
-	exec.Command("chown", "orama:orama", olricConfigPath).Run()
 	ps.logf("  ✓ Olric config generated")
 
 	// Configure CoreDNS (if baseDomain is provided - this is the zone name)
@@ -690,12 +633,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 
 	// Caddy service on ALL nodes (any node may host namespaces and need TLS)
 	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		// Create caddy user if it doesn't exist
-		exec.Command("useradd", "-r", "-m", "-d", "/home/caddy", "-s", "/sbin/nologin", "caddy").Run()
+		// Create caddy data directory
 		exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
-		exec.Command("chown", "caddy:caddy", "/var/lib/caddy").Run()
-		exec.Command("mkdir", "-p", "/home/caddy").Run()
-		exec.Command("chown", "caddy:caddy", "/home/caddy").Run()
 
 		caddyUnit := ps.serviceGenerator.GenerateCaddyService()
 		if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {

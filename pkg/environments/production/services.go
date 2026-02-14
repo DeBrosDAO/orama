@@ -34,8 +34,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 Environment=HOME=%[1]s
 Environment=IPFS_PATH=%[2]s
 ExecStartPre=/bin/bash -c 'if [ -f %[3]s/secrets/swarm.key ] && [ ! -f %[2]s/swarm.key ]; then cp %[3]s/secrets/swarm.key %[2]s/swarm.key && chmod 600 %[2]s/swarm.key; fi'
@@ -46,16 +44,7 @@ StandardOutput=append:%[4]s
 StandardError=append:%[4]s
 SyslogIdentifier=orama-ipfs
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[3]s
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -86,8 +75,6 @@ Requires=orama-ipfs.service
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
@@ -101,16 +88,7 @@ StandardOutput=append:%[3]s
 StandardError=append:%[3]s
 SyslogIdentifier=orama-ipfs-cluster
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[1]s
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -150,8 +128,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 Environment=HOME=%[1]s
 ExecStart=%[5]s %[2]s
 Restart=always
@@ -160,16 +136,7 @@ StandardOutput=append:%[3]s
 StandardError=append:%[3]s
 SyslogIdentifier=orama-rqlite
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[4]s
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -191,8 +158,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 Environment=HOME=%[1]s
 Environment=OLRIC_SERVER_CONFIG=%[2]s
 ExecStart=%[5]s
@@ -202,16 +167,7 @@ StandardOutput=append:%[3]s
 StandardError=append:%[3]s
 SyslogIdentifier=olric
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[4]s
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -237,8 +193,6 @@ Requires=wg-quick@wg0.service
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/orama-node --config %[2]s/configs/%[3]s
@@ -248,16 +202,7 @@ StandardOutput=append:%[4]s
 StandardError=append:%[4]s
 SyslogIdentifier=orama-node
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[2]s /etc/systemd/system
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -279,8 +224,6 @@ Wants=orama-node.service orama-olric.service
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/gateway --config %[2]s/data/gateway.yaml
@@ -290,20 +233,7 @@ StandardOutput=append:%[3]s
 StandardError=append:%[3]s
 SyslogIdentifier=orama-gateway
 
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-
-# Note: NoNewPrivileges is omitted because it conflicts with AmbientCapabilities
-# The service needs CAP_NET_BIND_SERVICE to bind to privileged ports (80, 443)
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[2]s
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -325,8 +255,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 Environment=HOME=%[1]s
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/lib/node_modules/.bin
 WorkingDirectory=%[1]s
@@ -337,16 +265,7 @@ StandardOutput=append:%[2]s
 StandardError=append:%[2]s
 SyslogIdentifier=anyone-client
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=no
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=%[3]s
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -405,15 +324,11 @@ Wants=network-online.target orama-node.service
 
 [Service]
 Type=simple
-User=root
 ExecStart=/usr/local/bin/coredns -conf /etc/coredns/Corefile
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=coredns
 
-NoNewPrivileges=true
-ProtectSystem=full
-ProtectHome=true
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -435,16 +350,12 @@ Wants=orama-node.service
 
 [Service]
 Type=simple
-User=caddy
-Group=caddy
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
 PrivateTmp=true
-ProtectSystem=full
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=caddy

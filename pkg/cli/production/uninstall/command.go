@@ -17,7 +17,7 @@ func Handle() {
 	}
 
 	fmt.Printf("⚠️  This will stop and remove all Orama production services\n")
-	fmt.Printf("⚠️  Configuration and data will be preserved in /home/orama/.orama\n\n")
+	fmt.Printf("⚠️  Configuration and data will be preserved in /opt/orama/.orama\n\n")
 	fmt.Printf("Continue? (yes/no): ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -48,6 +48,6 @@ func Handle() {
 
 	exec.Command("systemctl", "daemon-reload").Run()
 	fmt.Printf("✅ Services uninstalled\n")
-	fmt.Printf("   Configuration and data preserved in /home/orama/.orama\n")
-	fmt.Printf("   To remove all data: rm -rf /home/orama/.orama\n\n")
+	fmt.Printf("   Configuration and data preserved in /opt/orama/.orama\n")
+	fmt.Printf("   To remove all data: rm -rf /opt/orama/.orama\n\n")
 }

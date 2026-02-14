@@ -182,7 +182,7 @@ func GetProductionServices() []string {
 	// template files (e.g. orama-namespace-gateway@.service) with no instance name.
 	// Restarting a template without an instance is a no-op.
 	// Instead, scan the data directory where each subdirectory is a provisioned namespace.
-	namespacesDir := "/home/orama/.orama/data/namespaces"
+	namespacesDir := "/opt/orama/.orama/data/namespaces"
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
 		serviceTypes := []string{"rqlite", "olric", "gateway"}

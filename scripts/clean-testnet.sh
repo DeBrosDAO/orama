@@ -50,11 +50,10 @@ ufw --force reset
 ufw allow 22/tcp
 ufw --force enable
 
-echo "  Killing orama processes..."
-pkill -u orama 2>/dev/null || true
-sleep 1
+echo "  Removing orama data..."
+rm -rf /opt/orama
 
-echo "  Removing orama user and data..."
+echo "  Removing legacy user and data..."
 userdel -r orama 2>/dev/null || true
 rm -rf /home/orama
 

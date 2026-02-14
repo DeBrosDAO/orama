@@ -41,7 +41,7 @@ You can find peer public keys with `wg show wg0`.
 Check the Olric config on each node:
 
 ```bash
-cat /home/orama/.orama/data/namespaces/<name>/configs/olric-*.yaml
+cat /opt/orama/.orama/data/namespaces/<name>/configs/olric-*.yaml
 ```
 
 If `bindAddr` is `0.0.0.0`, the node will try to bind to IPv6 on dual-stack hosts, breaking memberlist gossip.
@@ -69,7 +69,7 @@ If every UDP ping fails but TCP stream connections succeed, it's the WireGuard p
 **Fix:** Edit the gateway config manually:
 
 ```bash
-vim /home/orama/.orama/data/namespaces/<name>/configs/gateway-*.yaml
+vim /opt/orama/.orama/data/namespaces/<name>/configs/gateway-*.yaml
 ```
 
 Add/fix:
@@ -95,7 +95,7 @@ This was fixed in code, so new namespaces get the correct config.
 **Check:**
 
 ```bash
-ls /home/orama/.orama/data/namespaces/<name>/cluster-state.json
+ls /opt/orama/.orama/data/namespaces/<name>/cluster-state.json
 ```
 
 If the file doesn't exist, the node can't restore the namespace.
@@ -153,7 +153,7 @@ ssh -n user@host 'command'
 ## General Debugging Tips
 
 - **Always use `sudo orama prod restart`** instead of raw `systemctl` commands
-- **Namespace data lives at:** `/home/orama/.orama/data/namespaces/<name>/`
+- **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
 - **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself

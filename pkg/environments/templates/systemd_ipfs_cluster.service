@@ -6,8 +6,6 @@ Requires=orama-ipfs-{{.NodeType}}.service
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 Environment=CLUSTER_PATH={{.ClusterPath}}
@@ -18,11 +16,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ipfs-cluster-{{.NodeType}}
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths={{.OramaDir}}
 
 [Install]
 WantedBy=multi-user.target
-

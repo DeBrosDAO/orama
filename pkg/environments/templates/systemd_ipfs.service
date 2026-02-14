@@ -5,8 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=orama
-Group=orama
 Environment=HOME={{.HomeDir}}
 Environment=IPFS_PATH={{.IPFSRepoPath}}
 ExecStartPre=/bin/bash -c 'if [ -f {{.SecretsDir}}/swarm.key ] && [ ! -f {{.IPFSRepoPath}}/swarm.key ]; then cp {{.SecretsDir}}/swarm.key {{.IPFSRepoPath}}/swarm.key && chmod 600 {{.IPFSRepoPath}}/swarm.key; fi'
@@ -17,11 +15,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ipfs-{{.NodeType}}
 
-NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths={{.OramaDir}}
 
 [Install]
 WantedBy=multi-user.target
-

@@ -133,7 +133,7 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
 fi
 echo ""
 
-RAFT_DIR="/home/orama/.orama/data/rqlite/raft"
+RAFT_DIR="/opt/orama/.orama/data/rqlite/raft"
 BACKUP_DIR="/tmp/rqlite-raft-backup"
 
 # ── Phase 1: Stop orama-node on ALL nodes ───────────────────────────────────
@@ -286,4 +286,4 @@ echo ""
 echo "Next steps:"
 echo "  1. Run 'scripts/inspect.sh --devnet' to verify full cluster health"
 echo "  2. If some nodes show Candidate state, give them more time (up to 5 min)"
-echo "  3. If nodes fail to join, check /home/orama/.orama/logs/rqlite-node.log on the node"
+echo "  3. If nodes fail to join, check /opt/orama/.orama/logs/rqlite-node.log on the node"

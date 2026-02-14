@@ -86,7 +86,7 @@ echo ""
 
 # 4. IPFS
 echo "── IPFS ──"
-PEERS=$(sudo -u orama IPFS_PATH=/home/orama/.orama/data/ipfs/repo /usr/local/bin/ipfs swarm peers 2>/dev/null)
+PEERS=$(IPFS_PATH=/opt/orama/.orama/data/ipfs/repo /usr/local/bin/ipfs swarm peers 2>/dev/null)
 if [ -n "$PEERS" ]; then
     COUNT=$(echo "$PEERS" | wc -l)
     echo "  Connected peers: $COUNT"

@@ -30,8 +30,8 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new install orchestrator
 func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
-	oramaHome := "/home/orama"
-	oramaDir := oramaHome + "/.orama"
+	oramaHome := production.OramaBase
+	oramaDir := production.OramaDir
 
 	// Normalize peers
 	peers, err := utils.NormalizePeers(flags.PeersStr)

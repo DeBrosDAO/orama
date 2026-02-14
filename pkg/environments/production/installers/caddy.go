@@ -150,11 +150,6 @@ func (ci *CaddyInstaller) Install() error {
 		return fmt.Errorf("failed to install binary: %w", err)
 	}
 
-	// Grant CAP_NET_BIND_SERVICE to allow binding to ports 80/443
-	if err := exec.Command("setcap", "cap_net_bind_service=+ep", dstBinary).Run(); err != nil {
-		fmt.Fprintf(ci.logWriter, "    ⚠️  Warning: failed to setcap on caddy: %v\n", err)
-	}
-
 	fmt.Fprintf(ci.logWriter, "  ✓ Caddy with orama DNS module installed\n")
 	return nil
 }

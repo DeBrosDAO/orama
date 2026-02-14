@@ -59,7 +59,7 @@ func NewHTTPSGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfi
 		// Use Let's Encrypt STAGING (consistent with SNI gateway)
 		cacheDir := cfg.HTTPS.CacheDir
 		if cacheDir == "" {
-			cacheDir = "/home/orama/.orama/tls-cache"
+			cacheDir = "/opt/orama/.orama/tls-cache"
 		}
 
 		// Use Let's Encrypt STAGING - provides higher rate limits for testing/development

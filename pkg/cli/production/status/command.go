@@ -47,7 +47,7 @@ func Handle() {
 	}
 
 	fmt.Printf("\nDirectories:\n")
-	oramaDir := "/home/orama/.orama"
+	oramaDir := "/opt/orama/.orama"
 	if _, err := os.Stat(oramaDir); err == nil {
 		fmt.Printf("  ✅ %s exists\n", oramaDir)
 	} else {

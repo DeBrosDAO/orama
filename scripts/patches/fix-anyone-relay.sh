@@ -51,7 +51,7 @@ fix_node() {
   local cmd
   cmd=$(cat <<'REMOTE'
 set -e
-PREFS="/home/orama/.orama/preferences.yaml"
+PREFS="/opt/orama/.orama/preferences.yaml"
 
 # Only patch nodes that have the Anyone relay service installed
 if [ ! -f /etc/systemd/system/orama-anyone-relay.service ]; then
