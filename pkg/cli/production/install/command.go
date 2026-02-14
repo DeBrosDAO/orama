@@ -14,7 +14,26 @@ func Handle(args []string) {
 		os.Exit(1)
 	}
 
-	// Create orchestrator
+	// Resolve base domain interactively if not provided (before local/VPS branch)
+	if flags.BaseDomain == "" {
+		flags.BaseDomain = promptForBaseDomain()
+	}
+
+	// Local mode: not running as root → orchestrate install via SSH
+	if os.Geteuid() != 0 {
+		remote, err := NewRemoteOrchestrator(flags)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
+		if err := remote.Execute(); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// VPS mode: running as root on the VPS — existing behavior
 	orchestrator, err := NewOrchestrator(flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
@@ -24,12 +43,6 @@ func Handle(args []string) {
 	// Validate flags
 	if err := orchestrator.validator.ValidateFlags(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Check root privileges
-	if err := orchestrator.validator.ValidateRootPrivileges(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 

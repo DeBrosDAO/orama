@@ -72,9 +72,9 @@ func (bi *BinaryInstaller) ResolveBinaryPath(binary string, extraPaths ...string
 	return installers.ResolveBinaryPath(binary, extraPaths...)
 }
 
-// InstallDeBrosBinaries clones and builds DeBros binaries
-func (bi *BinaryInstaller) InstallDeBrosBinaries(branch string, oramaHome string, skipRepoUpdate bool) error {
-	return bi.gateway.InstallDeBrosBinaries(branch, oramaHome, skipRepoUpdate)
+// InstallDeBrosBinaries builds DeBros binaries from source
+func (bi *BinaryInstaller) InstallDeBrosBinaries(oramaHome string) error {
+	return bi.gateway.InstallDeBrosBinaries(oramaHome)
 }
 
 // InstallSystemDependencies installs system-level dependencies via apt

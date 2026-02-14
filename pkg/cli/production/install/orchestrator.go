@@ -33,18 +33,13 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	oramaHome := "/home/debros"
 	oramaDir := oramaHome + "/.orama"
 
-	// Prompt for base domain if not provided via flag
-	if flags.BaseDomain == "" {
-		flags.BaseDomain = promptForBaseDomain()
-	}
-
 	// Normalize peers
 	peers, err := utils.NormalizePeers(flags.PeersStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid peers: %w", err)
 	}
 
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.Branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(flags.Nameserver)
 
 	// Configure Anyone mode
@@ -84,18 +79,6 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 func (o *Orchestrator) Execute() error {
 	fmt.Printf("🚀 Starting production installation...\n\n")
 
-	// Inform user if skipping git pull
-	if o.flags.NoPull {
-		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
-		fmt.Printf("     Using existing repository at /home/debros/src\n")
-	}
-
-	// Inform user if using pre-built binaries
-	if o.flags.PreBuilt {
-		fmt.Printf("  ⚠️  --pre-built flag enabled: Skipping all Go compilation\n")
-		fmt.Printf("     Using pre-built binaries from /home/debros/bin and /usr/local/bin\n")
-	}
-
 	// Validate DNS if domain is provided
 	o.validator.ValidateDNS()
 
@@ -112,7 +95,7 @@ func (o *Orchestrator) Execute() error {
 				ORPort:   o.flags.AnyoneORPort,
 			}
 		}
-		utils.ShowDryRunSummaryWithRelay(o.flags.VpsIP, o.flags.Domain, o.flags.Branch, o.peers, o.flags.JoinAddress, o.validator.IsFirstNode(), o.oramaDir, relayInfo)
+		utils.ShowDryRunSummaryWithRelay(o.flags.VpsIP, o.flags.Domain, "main", o.peers, o.flags.JoinAddress, o.validator.IsFirstNode(), o.oramaDir, relayInfo)
 		return nil
 	}
 
@@ -131,7 +114,7 @@ func (o *Orchestrator) Execute() error {
 		anyoneORPort = 9001
 	}
 	prefs := &production.NodePreferences{
-		Branch:       o.flags.Branch,
+		Branch:       "main",
 		Nameserver:   o.flags.Nameserver,
 		AnyoneClient: o.flags.AnyoneClient,
 		AnyoneRelay:  o.flags.AnyoneRelay,

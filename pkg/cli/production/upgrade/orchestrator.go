@@ -32,19 +32,13 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	// Load existing preferences
 	prefs := production.LoadPreferences(oramaDir)
 
-	// Use saved branch if not specified
-	branch := flags.Branch
-	if branch == "" {
-		branch = prefs.Branch
-	}
-
 	// Use saved nameserver preference if not explicitly specified
 	isNameserver := prefs.Nameserver
 	if flags.Nameserver != nil {
 		isNameserver = *flags.Nameserver
 	}
 
-	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, branch, flags.NoPull, flags.SkipChecks, flags.PreBuilt)
+	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(isNameserver)
 
 	// Configure Anyone mode (flag > saved preference > auto-detect)
@@ -102,18 +96,6 @@ func (o *Orchestrator) Execute() error {
 	fmt.Printf("🔄 Upgrading production installation...\n")
 	fmt.Printf("  This will preserve existing configurations and data\n")
 	fmt.Printf("  Configurations will be updated to latest format\n\n")
-
-	// Log if --no-pull is enabled
-	if o.flags.NoPull {
-		fmt.Printf("  ⚠️  --no-pull flag enabled: Skipping git clone/pull\n")
-		fmt.Printf("     Using existing repository at %s/src\n", o.oramaHome)
-	}
-
-	// Log if --pre-built is enabled
-	if o.flags.PreBuilt {
-		fmt.Printf("  ⚠️  --pre-built flag enabled: Skipping all Go compilation\n")
-		fmt.Printf("     Using pre-built binaries from %s/bin and /usr/local/bin\n", o.oramaHome)
-	}
 
 	// Handle branch preferences
 	if err := o.handleBranchPreferences(); err != nil {
@@ -215,15 +197,6 @@ func (o *Orchestrator) handleBranchPreferences() error {
 	// Load current preferences
 	prefs := production.LoadPreferences(o.oramaDir)
 	prefsChanged := false
-
-	// If branch was explicitly provided, update it
-	if o.flags.Branch != "" {
-		prefs.Branch = o.flags.Branch
-		prefsChanged = true
-		fmt.Printf("  Using branch: %s (saved for future upgrades)\n", o.flags.Branch)
-	} else {
-		fmt.Printf("  Using branch: %s (from saved preference)\n", prefs.Branch)
-	}
 
 	// If nameserver was explicitly provided, update it
 	if o.flags.Nameserver != nil {

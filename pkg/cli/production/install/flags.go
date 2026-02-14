@@ -8,15 +8,12 @@ import (
 
 // Flags represents install command flags
 type Flags struct {
-	VpsIP         string
-	Domain        string
-	BaseDomain    string // Base domain for deployment routing (e.g., "dbrs.space")
-	Branch        string
-	NoPull        bool
-	Force         bool
-	DryRun        bool
-	SkipChecks    bool
-	PreBuilt      bool   // Skip building binaries, use pre-built binaries already on disk
+	VpsIP      string
+	Domain     string
+	BaseDomain string // Base domain for deployment routing (e.g., "dbrs.space")
+	Force      bool
+	DryRun     bool
+	SkipChecks bool
 	Nameserver    bool   // Make this node a nameserver (runs CoreDNS + Caddy)
 	JoinAddress   string // HTTPS URL of existing node (e.g., https://node1.dbrs.space)
 	Token         string // Invite token for joining (from orama invite)
@@ -57,12 +54,9 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.StringVar(&flags.VpsIP, "vps-ip", "", "Public IP of this VPS (required)")
 	fs.StringVar(&flags.Domain, "domain", "", "Domain name for HTTPS (optional, e.g. gateway.example.com)")
 	fs.StringVar(&flags.BaseDomain, "base-domain", "", "Base domain for deployment routing (e.g., dbrs.space)")
-	fs.StringVar(&flags.Branch, "branch", "main", "Git branch to use (main or nightly)")
-	fs.BoolVar(&flags.NoPull, "no-pull", false, "Skip git clone/pull, use existing repository in /home/debros/src")
 	fs.BoolVar(&flags.Force, "force", false, "Force reconfiguration even if already installed")
 	fs.BoolVar(&flags.DryRun, "dry-run", false, "Show what would be done without making changes")
 	fs.BoolVar(&flags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
-	fs.BoolVar(&flags.PreBuilt, "pre-built", false, "Skip building binaries on VPS, use pre-built binaries already in /home/debros/bin and /usr/local/bin")
 	fs.BoolVar(&flags.Nameserver, "nameserver", false, "Make this node a nameserver (runs CoreDNS + Caddy)")
 
 	// Cluster join flags
