@@ -130,11 +130,11 @@ orama deploy go <path> --name myapp           # Go binaries (must have /health e
 orama deploy nodejs <path> --name myapp       # Node.js apps (must have /health endpoint)
 
 # Manage deployments
-orama deployments list                        # List all deployments
-orama deployments get <name>                  # Get deployment details
-orama deployments logs <name> --follow        # View logs
-orama deployments delete <name>               # Delete deployment
-orama deployments rollback <name> --version 1 # Rollback to version
+orama app list                               # List all deployments
+orama app get <name>                         # Get deployment details
+orama app logs <name> --follow               # View logs
+orama app delete <name>                      # Delete deployment
+orama app rollback <name> --version 1        # Rollback to version
 ```
 
 ### SQLite Databases
@@ -147,28 +147,12 @@ orama db backup <name>                   # Backup to IPFS
 orama db backups <name>                  # List backups
 ```
 
-### Network Status
+### Environment Management
 
 ```bash
-orama health                # Cluster health check
-orama peers                 # List connected peers
-orama status                # Network status
-```
-
-### RQLite Operations
-
-```bash
-orama query "SELECT * FROM users"
-orama query "CREATE TABLE users (id INTEGER PRIMARY KEY)"
-orama transaction --file ops.json
-```
-
-### Pub/Sub
-
-```bash
-orama pubsub publish <topic> <message>
-orama pubsub subscribe <topic> 30s
-orama pubsub topics
+orama env list              # List available environments
+orama env current           # Show active environment
+orama env use <name>        # Switch environment
 ```
 
 ## Serverless Functions (WASM)
@@ -267,14 +251,14 @@ Orama Network integrates with the [Anyone Protocol](https://anyone.io) for anony
 
 ```bash
 # Install as relay operator (earn rewards)
-sudo orama install --vps-ip <IP> --domain <domain> \
+sudo orama node install --vps-ip <IP> --domain <domain> \
   --anyone-relay \
   --anyone-nickname "MyRelay" \
   --anyone-contact "operator@email.com" \
   --anyone-wallet "0x1234...abcd"
 
 # With exit relay (legal implications apply)
-sudo orama install --vps-ip <IP> --domain <domain> \
+sudo orama node install --vps-ip <IP> --domain <domain> \
   --anyone-relay \
   --anyone-exit \
   --anyone-nickname "MyExitRelay" \
@@ -282,7 +266,7 @@ sudo orama install --vps-ip <IP> --domain <domain> \
   --anyone-wallet "0x1234...abcd"
 
 # Migrate existing Anyone installation
-sudo orama install --vps-ip <IP> --domain <domain> \
+sudo orama node install --vps-ip <IP> --domain <domain> \
   --anyone-relay \
   --anyone-migrate \
   --anyone-nickname "MyRelay" \
@@ -317,31 +301,34 @@ go install github.com/DeBrosOfficial/network/cmd/cli@latest
 **Setup (after installation):**
 
 ```bash
-sudo orama install --interactive
+sudo orama node install --interactive
 ```
 
 ### Service Management
 
 ```bash
 # Status
-orama status
+sudo orama node status
 
 # Control services
-sudo orama start
-sudo orama stop
-sudo orama restart
+sudo orama node start
+sudo orama node stop
+sudo orama node restart
+
+# Diagnose issues
+sudo orama node doctor
 
 # View logs
-orama logs node --follow
-orama logs gateway --follow
-orama logs ipfs --follow
+orama node logs node --follow
+orama node logs gateway --follow
+orama node logs ipfs --follow
 ```
 
 ### Upgrade
 
 ```bash
 # Upgrade to latest version
-sudo orama upgrade --interactive
+sudo orama node upgrade --restart
 ```
 
 ## Configuration
@@ -397,9 +384,9 @@ rqlite -H localhost -p 5001
 
 ```bash
 # Production reset (⚠️ DESTROYS DATA)
-sudo orama uninstall
+sudo orama node uninstall
 sudo rm -rf /opt/orama/.orama
-sudo orama install
+sudo orama node install
 ```
 
 ## HTTP Gateway API
