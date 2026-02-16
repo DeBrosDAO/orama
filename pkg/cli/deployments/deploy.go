@@ -218,7 +218,7 @@ func deployNextJS(cmd *cobra.Command, args []string) error {
 	printDeploymentInfo(resp)
 
 	if deploySSR {
-		fmt.Printf("⚠️  Note: SSR deployment may take a minute to start. Check status with: orama deployments get %s\n", deployName)
+		fmt.Printf("⚠️  Note: SSR deployment may take a minute to start. Check status with: orama app get %s\n", deployName)
 	}
 
 	return nil

@@ -32,7 +32,7 @@ const systemPrompt = `You are a distributed systems expert analyzing health chec
 - High TCP retransmission (>2%) indicates packet loss, often due to WireGuard MTU issues.
 
 ## Service Management
-- ALWAYS use the CLI for service operations: ` + "`sudo orama prod restart`" + `, ` + "`sudo orama prod stop`" + `, ` + "`sudo orama prod start`" + `
+- ALWAYS use the CLI for service operations: ` + "`sudo orama node restart`" + `, ` + "`sudo orama node stop`" + `, ` + "`sudo orama node start`" + `
 - NEVER use raw systemctl commands (they skip important lifecycle hooks).
 - For rolling restarts: upgrade followers first, leader LAST, one node at a time.
 - Check RQLite leader: ` + "`curl -s localhost:4001/status | python3 -c \"import sys,json; print(json.load(sys.stdin)['store']['raft']['state'])\"`" + `

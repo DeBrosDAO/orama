@@ -54,5 +54,5 @@ func Handle() {
 		fmt.Printf("  ❌ %s not found\n", oramaDir)
 	}
 
-	fmt.Printf("\nView logs with: orama prod logs <service>\n")
+	fmt.Printf("\nView logs with: orama node logs <service>\n")
 }

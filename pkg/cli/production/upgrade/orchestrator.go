@@ -636,7 +636,7 @@ func (o *Orchestrator) restartServices() error {
 	services := utils.GetProductionServices()
 
 	// Re-enable all services BEFORE restarting them.
-	// orama prod stop disables services, and orama-node's PartOf= dependency
+	// orama node stop disables services, and orama-node's PartOf= dependency
 	// won't propagate restart to disabled services. We must re-enable first
 	// so that all services restart with the updated binary.
 	for _, svc := range services {

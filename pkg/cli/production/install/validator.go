@@ -30,7 +30,7 @@ func NewValidator(flags *Flags, oramaDir string) *Validator {
 // ValidateFlags validates required flags
 func (v *Validator) ValidateFlags() error {
 	if v.flags.VpsIP == "" && !v.flags.DryRun {
-		return fmt.Errorf("--vps-ip is required for installation\nExample: orama prod install --vps-ip 1.2.3.4")
+		return fmt.Errorf("--vps-ip is required for installation\nExample: orama node install --vps-ip 1.2.3.4")
 	}
 	return nil
 }
