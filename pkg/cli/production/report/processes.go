@@ -16,6 +16,10 @@ var oramaProcessNames = []string{
 func collectProcesses() *ProcessReport {
 	r := &ProcessReport{}
 
+	// Collect known systemd-managed PIDs to avoid false positive orphan detection.
+	// Processes with PPID=1 that are systemd-managed daemons are NOT orphans.
+	managedPIDs := collectManagedPIDs()
+
 	// Run ps once and reuse the output for both zombies and orphans.
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -50,8 +54,9 @@ func collectProcesses() *ProcessReport {
 				r.Zombies = append(r.Zombies, proc)
 			}
 
-			// Orphans: PPID == 1 and command contains an orama-related name.
-			if ppid == 1 && isOramaProcess(command) {
+			// Orphans: PPID == 1 and command is orama-related,
+			// but NOT a known systemd-managed service PID.
+			if ppid == 1 && isOramaProcess(command) && !managedPIDs[pid] {
 				r.Orphans = append(r.Orphans, proc)
 			}
 		}
@@ -75,6 +80,35 @@ func collectProcesses() *ProcessReport {
 	}
 
 	return r
+}
+
+// managedServiceUnits lists systemd units whose MainPID should be excluded from orphan detection.
+var managedServiceUnits = []string{
+	"orama-node", "orama-gateway", "orama-olric",
+	"orama-ipfs", "orama-ipfs-cluster",
+	"orama-anyone-relay", "orama-anyone-client",
+	"coredns", "caddy", "rqlited",
+}
+
+// collectManagedPIDs queries systemd for the MainPID of each known service.
+// Returns a set of PIDs that are legitimately managed by systemd (not orphans).
+func collectManagedPIDs() map[int]bool {
+	pids := make(map[int]bool)
+	for _, unit := range managedServiceUnits {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		out, err := runCmd(ctx, "systemctl", "show", unit, "--property=MainPID")
+		cancel()
+		if err != nil {
+			continue
+		}
+		props := parseProperties(out)
+		if pidStr, ok := props["MainPID"]; ok {
+			if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+				pids[pid] = true
+			}
+		}
+	}
+	return pids
 }
 
 // isOramaProcess checks if a command string contains any orama-related process name.
