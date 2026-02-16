@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"golang.org/x/term"
 )
 
 const sourceArchivePath = "/tmp/network-source.tar.gz"
@@ -65,8 +66,18 @@ func promptSSHCredentials(vpsIP string) inspector.Node {
 	}
 
 	fmt.Print("  SSH password: ")
-	password, _ := reader.ReadString('\n')
-	password = strings.TrimSpace(password)
+	passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println() // newline after hidden input
+	if err != nil {
+		// Fall back to plain read if terminal is not available
+		password, _ := reader.ReadString('\n')
+		return inspector.Node{
+			User:     user,
+			Host:     vpsIP,
+			Password: strings.TrimSpace(password),
+		}
+	}
+	password := string(passwordBytes)
 
 	return inspector.Node{
 		User:     user,

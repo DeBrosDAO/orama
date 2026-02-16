@@ -117,20 +117,6 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 	if err := exec.Command("chmod", "-R", "755", binDir).Run(); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chmod bin directory: %v\n", err)
 	}
-	if err := exec.Command("chown", "-R", "orama:orama", binDir).Run(); err != nil {
-		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown bin directory: %v\n", err)
-	}
-
-	// Grant CAP_NET_BIND_SERVICE to orama-node to allow binding to ports 80/443 without root
-	nodeBinary := filepath.Join(binDir, "orama-node")
-	if _, err := os.Stat(nodeBinary); err == nil {
-		if err := exec.Command("setcap", "cap_net_bind_service=+ep", nodeBinary).Run(); err != nil {
-			fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to setcap on orama-node: %v\n", err)
-			fmt.Fprintf(gi.logWriter, "    ⚠️  Gateway may not be able to bind to port 80/443\n")
-		} else {
-			fmt.Fprintf(gi.logWriter, "    ✓ Set CAP_NET_BIND_SERVICE on orama-node\n")
-		}
-	}
 
 	fmt.Fprintf(gi.logWriter, "  ✓ Orama binaries installed\n")
 	return nil
@@ -230,22 +216,10 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 			fmt.Fprintf(gi.logWriter, "    ⚠️  Failed to create %s: %v\n", dir, err)
 			continue
 		}
-		// Fix ownership to orama user (sequential to avoid race conditions)
-		if err := exec.Command("chown", "orama:orama", dir).Run(); err != nil {
-			fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown %s: %v\n", dir, err)
-		}
-		if err := exec.Command("chmod", "700", dir).Run(); err != nil {
-			fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chmod %s: %v\n", dir, err)
-		}
 	}
 
-	// Recursively fix ownership of entire .npm directory to ensure all nested files are owned by orama
-	if err := exec.Command("chown", "-R", "orama:orama", filepath.Join(oramaHome, ".npm")).Run(); err != nil {
-		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown .npm directory: %v\n", err)
-	}
-
-	// Run npm cache verify as orama user with proper environment
-	cacheInitCmd := exec.Command("sudo", "-u", "orama", "npm", "cache", "verify", "--silent")
+	// Run npm cache verify
+	cacheInitCmd := exec.Command("npm", "cache", "verify", "--silent")
 	cacheInitCmd.Env = append(os.Environ(), "HOME="+oramaHome)
 	if err := cacheInitCmd.Run(); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  NPM cache verify warning: %v (continuing anyway)\n", err)
@@ -261,10 +235,6 @@ func (gi *GatewayInstaller) InstallAnyoneClient() error {
 	termsFile := filepath.Join(oramaHome, "terms-agreement")
 	if err := os.WriteFile(termsFile, []byte("agreed"), 0644); err != nil {
 		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to create terms-agreement: %v\n", err)
-	} else {
-		if err := exec.Command("chown", "orama:orama", termsFile).Run(); err != nil {
-			fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to chown terms-agreement: %v\n", err)
-		}
 	}
 
 	// Verify installation - try npx with the correct CLI name (anyone-client, not full scoped package name)

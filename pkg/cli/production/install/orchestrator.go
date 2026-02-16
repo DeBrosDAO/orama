@@ -437,59 +437,12 @@ func (o *Orchestrator) verifyWGTunnel(peers []joinhandlers.WGPeerInfo) error {
 	return fmt.Errorf("could not reach %s via WireGuard after 30s", targetIP)
 }
 
-func (o *Orchestrator) buildIPFSPeerInfo() *production.IPFSPeerInfo {
-	if o.flags.IPFSPeerID != "" {
-		var addrs []string
-		if o.flags.IPFSAddrs != "" {
-			addrs = strings.Split(o.flags.IPFSAddrs, ",")
-		}
-		return &production.IPFSPeerInfo{
-			PeerID: o.flags.IPFSPeerID,
-			Addrs:  addrs,
-		}
-	}
-	return nil
-}
-
-func (o *Orchestrator) buildIPFSClusterPeerInfo() *production.IPFSClusterPeerInfo {
-	if o.flags.IPFSClusterPeerID != "" {
-		var addrs []string
-		if o.flags.IPFSClusterAddrs != "" {
-			addrs = strings.Split(o.flags.IPFSClusterAddrs, ",")
-		}
-		return &production.IPFSClusterPeerInfo{
-			PeerID: o.flags.IPFSClusterPeerID,
-			Addrs:  addrs,
-		}
-	}
-	return nil
-}
-
 func (o *Orchestrator) printFirstNodeSecrets() {
-	fmt.Printf("📋 Save these for joining future nodes:\n\n")
-
-	// Print cluster secret
-	clusterSecretPath := filepath.Join(o.oramaDir, "secrets", "cluster-secret")
-	if clusterSecretData, err := os.ReadFile(clusterSecretPath); err == nil {
-		fmt.Printf("  Cluster Secret (--cluster-secret):\n")
-		fmt.Printf("    %s\n\n", string(clusterSecretData))
-	}
-
-	// Print swarm key
-	swarmKeyPath := filepath.Join(o.oramaDir, "secrets", "swarm.key")
-	if swarmKeyData, err := os.ReadFile(swarmKeyPath); err == nil {
-		swarmKeyContent := strings.TrimSpace(string(swarmKeyData))
-		lines := strings.Split(swarmKeyContent, "\n")
-		if len(lines) >= 3 {
-			// Extract just the hex part (last line)
-			fmt.Printf("  IPFS Swarm Key (--swarm-key, last line only):\n")
-			fmt.Printf("    %s\n\n", lines[len(lines)-1])
-		}
-	}
-
-	// Print peer ID
-	fmt.Printf("  Node Peer ID:\n")
-	fmt.Printf("    %s\n\n", o.setup.NodePeerID)
+	fmt.Printf("📋 To add more nodes to this cluster:\n\n")
+	fmt.Printf("  1. Generate an invite token:\n")
+	fmt.Printf("     orama invite\n\n")
+	fmt.Printf("  2. Run the printed command on the new VPS.\n\n")
+	fmt.Printf("  Node Peer ID: %s\n\n", o.setup.NodePeerID)
 }
 
 // promptForBaseDomain interactively prompts the user to select a network environment

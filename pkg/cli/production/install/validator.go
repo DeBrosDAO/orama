@@ -84,7 +84,7 @@ func (v *Validator) SaveSecrets() error {
 	// If cluster secret was provided, save it to secrets directory before setup
 	if v.flags.ClusterSecret != "" {
 		secretsDir := filepath.Join(v.oramaDir, "secrets")
-		if err := os.MkdirAll(secretsDir, 0755); err != nil {
+		if err := os.MkdirAll(secretsDir, 0700); err != nil {
 			return fmt.Errorf("failed to create secrets directory: %w", err)
 		}
 		secretPath := filepath.Join(secretsDir, "cluster-secret")
@@ -97,7 +97,7 @@ func (v *Validator) SaveSecrets() error {
 	// If swarm key was provided, save it to secrets directory in full format
 	if v.flags.SwarmKey != "" {
 		secretsDir := filepath.Join(v.oramaDir, "secrets")
-		if err := os.MkdirAll(secretsDir, 0755); err != nil {
+		if err := os.MkdirAll(secretsDir, 0700); err != nil {
 			return fmt.Errorf("failed to create secrets directory: %w", err)
 		}
 		// Extract hex only (strips headers if user passed full file content)
