@@ -178,15 +178,13 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		WGIP:                   vpsIP,
 	}
 
-	// Set MinClusterSize based on whether this is a genesis or joining node.
-	// Genesis nodes (no join address) bootstrap alone, so MinClusterSize=1.
-	// Joining nodes should wait for at least 2 remote peers before writing peers.json
-	// to prevent accidental solo bootstrap during mass restarts.
-	if rqliteJoinAddr != "" {
-		data.MinClusterSize = 3
-	} else {
-		data.MinClusterSize = 1
-	}
+	// MinClusterSize=1 for all nodes. Joining nodes use the -join flag to
+	// connect to the existing cluster; gating on peer discovery caused a
+	// deadlock where the WG sync loop (needs RQLite) couldn't add new peers
+	// and RQLite (needs WG peers discovered) couldn't start.
+	// Solo-bootstrap protection is already handled by performPreStartClusterDiscovery
+	// which refuses to write a single-node peers.json.
+	data.MinClusterSize = 1
 
 	// RQLite node-to-node TLS encryption is disabled by default
 	// This simplifies certificate management - RQLite uses plain TCP for internal Raft

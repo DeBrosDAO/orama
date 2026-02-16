@@ -31,9 +31,13 @@ export DEBIAN_FRONTEND=noninteractive
 echo "  Stopping services..."
 systemctl stop orama-node orama-gateway orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null || true
 systemctl disable orama-node orama-gateway orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null || true
+# Legacy debros-* services (pre-rename)
+systemctl stop debros-anyone-relay debros-anyone-client 2>/dev/null || true
+systemctl disable debros-anyone-relay debros-anyone-client 2>/dev/null || true
 
 echo "  Removing systemd service files..."
 rm -f /etc/systemd/system/orama-*.service
+rm -f /etc/systemd/system/debros-*.service
 rm -f /etc/systemd/system/coredns.service
 rm -f /etc/systemd/system/caddy.service
 rm -f /etc/systemd/system/orama-deploy-*.service
