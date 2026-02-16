@@ -46,14 +46,32 @@ func collectIPFS() *IPFSReport {
 		}
 	}
 
-	// 4. ClusterPeerCount: GET /peers
+	// 4. ClusterPeerCount: GET /peers (with fallback to /id)
+	//    The /peers endpoint does a synchronous round-trip to ALL cluster peers,
+	//    so it can be slow if some peers are unreachable (ghost WG entries, etc.).
+	//    Use a generous timeout and fall back to /id if /peers times out.
 	{
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if body, err := httpGet(ctx, "http://localhost:9094/peers"); err == nil {
 			var peers []interface{}
 			if err := json.Unmarshal(body, &peers); err == nil {
 				r.ClusterPeerCount = len(peers)
+			}
+		}
+	}
+	// Fallback: if /peers returned 0 (timeout or error), try /id which returns
+	// cached cluster_peers instantly without contacting other nodes.
+	if r.ClusterPeerCount == 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if body, err := httpGet(ctx, "http://localhost:9094/id"); err == nil {
+			var resp struct {
+				ClusterPeers []string `json:"cluster_peers"`
+			}
+			if err := json.Unmarshal(body, &resp); err == nil && len(resp.ClusterPeers) > 0 {
+				// cluster_peers includes self, so count is len(cluster_peers)
+				r.ClusterPeerCount = len(resp.ClusterPeers)
 			}
 		}
 	}

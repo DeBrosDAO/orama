@@ -35,6 +35,18 @@ systemctl disable orama-node orama-gateway orama-ipfs orama-ipfs-cluster orama-o
 systemctl stop debros-anyone-relay debros-anyone-client 2>/dev/null || true
 systemctl disable debros-anyone-relay debros-anyone-client 2>/dev/null || true
 
+echo "  Killing leftover processes..."
+# Kill any orama/ipfs/olric/rqlite/coredns/caddy processes that survived systemd stop
+pkill -f orama-node 2>/dev/null || true
+pkill -f orama-gateway 2>/dev/null || true
+pkill -f ipfs-cluster-service 2>/dev/null || true
+pkill -f "ipfs daemon" 2>/dev/null || true
+pkill -f olric-server 2>/dev/null || true
+pkill -f rqlited 2>/dev/null || true
+pkill -f coredns 2>/dev/null || true
+# Don't pkill caddy — it's a common system service
+sleep 1
+
 echo "  Removing systemd service files..."
 rm -f /etc/systemd/system/orama-*.service
 rm -f /etc/systemd/system/debros-*.service

@@ -11,6 +11,12 @@ Run this as root or with sudo on the target VPS:
 sudo systemctl stop orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
 sudo systemctl disable orama-node orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
 
+# 1b. Kill leftover processes (binaries may run outside systemd)
+sudo pkill -f orama-node 2>/dev/null; sudo pkill -f ipfs-cluster-service 2>/dev/null
+sudo pkill -f "ipfs daemon" 2>/dev/null; sudo pkill -f olric-server 2>/dev/null
+sudo pkill -f rqlited 2>/dev/null; sudo pkill -f coredns 2>/dev/null
+sleep 1
+
 # 2. Remove systemd service files
 sudo rm -f /etc/systemd/system/orama-*.service
 sudo rm -f /etc/systemd/system/coredns.service

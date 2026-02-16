@@ -84,7 +84,7 @@ func collectProcesses() *ProcessReport {
 
 // managedServiceUnits lists systemd units whose MainPID should be excluded from orphan detection.
 var managedServiceUnits = []string{
-	"orama-node", "orama-gateway", "orama-olric",
+	"orama-node", "orama-olric",
 	"orama-ipfs", "orama-ipfs-cluster",
 	"orama-anyone-relay", "orama-anyone-client",
 	"coredns", "caddy", "rqlited",

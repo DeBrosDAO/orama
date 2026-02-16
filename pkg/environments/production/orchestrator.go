@@ -612,8 +612,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
 	} else if ps.IsAnyoneClient() {
-		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
-		if err := ps.serviceController.WriteServiceUnit("orama-anyone-relay.service", anyoneUnit); err != nil {
+		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
+		if err := ps.serviceController.WriteServiceUnit("orama-anyone-client.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone client service: %w", err)
 		}
 		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
@@ -656,8 +656,10 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-node.service"}
 
 	// Add Anyone service if configured (relay or client)
-	if ps.IsAnyoneRelay() || ps.IsAnyoneClient() {
+	if ps.IsAnyoneRelay() {
 		services = append(services, "orama-anyone-relay.service")
+	} else if ps.IsAnyoneClient() {
+		services = append(services, "orama-anyone-client.service")
 	}
 
 	// Add CoreDNS only for nameserver nodes
@@ -698,7 +700,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			infraServices = append(infraServices, "orama-anyone-relay.service")
 		}
 	} else if ps.IsAnyoneClient() {
-		infraServices = append(infraServices, "orama-anyone-relay.service")
+		infraServices = append(infraServices, "orama-anyone-client.service")
 	}
 
 	for _, svc := range infraServices {
@@ -915,6 +917,9 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 		ps.logf("  Config: /etc/anon/anonrc")
 		ps.logf("  Register at: https://dashboard.anyone.io")
 		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
+	} else if ps.IsAnyoneClient() {
+		ps.logf("\nStart All Services:")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-client orama-node")
 	} else {
 		ps.logf("\nStart All Services:")
 		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-node")

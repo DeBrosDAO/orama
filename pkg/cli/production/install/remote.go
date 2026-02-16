@@ -62,7 +62,7 @@ func (r *RemoteOrchestrator) buildRemoteCommand() string {
 	if r.node.User != "root" {
 		args = append(args, "sudo")
 	}
-	args = append(args, "orama", "install")
+	args = append(args, "orama", "node", "install")
 
 	args = append(args, "--vps-ip", r.flags.VpsIP)
 
