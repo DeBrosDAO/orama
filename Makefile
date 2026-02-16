@@ -75,7 +75,7 @@ build: deps
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
 	go build -ldflags "$(LDFLAGS)" -o bin/orama-node ./cmd/node
-	go build -ldflags "$(LDFLAGS)" -o bin/orama cmd/cli/main.go
+	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/cli/
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	@echo "Build complete! Run ./bin/orama version"
@@ -84,7 +84,7 @@ build: deps
 build-linux: deps
 	@echo "Cross-compiling CLI for linux/amd64 (version=$(VERSION))..."
 	@mkdir -p bin-linux
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama cmd/cli/main.go
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama ./cmd/cli/
 	@echo "✓ CLI built at bin-linux/orama"
 	@echo ""
 	@echo "Next steps:"

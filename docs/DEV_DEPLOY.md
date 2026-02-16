@@ -40,16 +40,16 @@ make build-linux
 # Creates: /tmp/network-source.tar.gz
 
 # 3. Install on a new VPS (handles SCP, extract, and remote install automatically)
-./bin/orama install --vps-ip <ip> --nameserver --domain <domain> --base-domain <domain>
+./bin/orama node install --vps-ip <ip> --nameserver --domain <domain> --base-domain <domain>
 
 # Or upgrade an existing VPS
-./bin/orama upgrade --restart
+./bin/orama node upgrade --restart
 ```
 
-The `orama install` command automatically:
+The `orama node install` command automatically:
 1. Uploads the source archive via SCP
 2. Extracts source to `/opt/orama/src` and installs the CLI to `/usr/local/bin/orama`
-3. Runs `orama install` on the VPS which builds all binaries from source (Go, CoreDNS, Caddy, Olric, etc.)
+3. Runs `orama node install` on the VPS which builds all binaries from source (Go, CoreDNS, Caddy, Olric, etc.)
 
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
@@ -84,7 +84,7 @@ done
 ssh ubuntu@<any-node> 'curl -s http://localhost:5001/status | jq -r .store.raft.state'
 
 # 6. Upgrade FOLLOWER nodes one at a time
-ssh ubuntu@<follower-ip> 'sudo orama prod stop && sudo orama upgrade --restart'
+ssh ubuntu@<follower-ip> 'sudo orama node stop && sudo orama node upgrade --restart'
 
 # Wait for rejoin before proceeding to next node
 ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft.num_peers'
@@ -93,13 +93,13 @@ ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft
 # Repeat for each follower...
 
 # 7. Upgrade the LEADER node last
-ssh ubuntu@<leader-ip> 'sudo orama prod stop && sudo orama upgrade --restart'
+ssh ubuntu@<leader-ip> 'sudo orama node stop && sudo orama node upgrade --restart'
 ```
 
 #### What NOT to Do
 
 - **DON'T** stop all nodes, replace binaries, then start all nodes
-- **DON'T** run `orama upgrade --restart` on multiple nodes in parallel
+- **DON'T** run `orama node upgrade --restart` on multiple nodes in parallel
 - **DON'T** clear RQLite data directories unless doing a full cluster rebuild
 - **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously
 
@@ -111,7 +111,7 @@ If nodes get stuck in "Candidate" state or show "leader not found" errors:
 2. Keep that node running as the new leader
 3. On each other node, clear RQLite data and restart:
    ```bash
-   sudo orama prod stop
+   sudo orama node stop
    sudo rm -rf /opt/orama/.orama/data/rqlite
    sudo systemctl start orama-node
    ```
@@ -135,7 +135,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 
 ### CLI Flags Reference
 
-#### `orama install`
+#### `orama node install`
 
 | Flag | Description |
 |------|-------------|
@@ -144,7 +144,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--base-domain <domain>` | Base domain for deployment routing (e.g., example.com) |
 | `--nameserver` | Configure this node as a nameserver (CoreDNS + Caddy) |
 | `--join <url>` | Join existing cluster via HTTPS URL (e.g., `https://node1.example.com`) |
-| `--token <token>` | Invite token for joining (from `orama invite` on existing node) |
+| `--token <token>` | Invite token for joining (from `orama node invite` on existing node) |
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
 | `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
@@ -159,7 +159,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited). Runs a speedtest during install to measure available bandwidth |
 | `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
 
-#### `orama invite`
+#### `orama node invite`
 
 | Flag | Description |
 |------|-------------|
@@ -171,7 +171,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 - **Expiry is checked in UTC.** RQLite uses `datetime('now')` which is always UTC. If your local timezone differs, account for the offset when choosing expiry durations.
 - **Use longer expiry for multi-node deployments.** When deploying multiple nodes, use `--expiry 24h` to avoid tokens expiring mid-deployment.
 
-#### `orama upgrade`
+#### `orama node upgrade`
 
 | Flag | Description |
 |------|-------------|
@@ -180,41 +180,44 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited) |
 | `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
 
-#### `orama prod` (Service Management)
+#### `orama node` (Service Management)
 
 Use these commands to manage services on production nodes:
 
 ```bash
 # Stop all services (orama-node, coredns, caddy)
-sudo orama prod stop
+sudo orama node stop
 
 # Start all services
-sudo orama prod start
+sudo orama node start
 
 # Restart all services
-sudo orama prod restart
+sudo orama node restart
 
 # Check service status
-sudo orama prod status
+sudo orama node status
+
+# Diagnose common issues
+sudo orama node doctor
 ```
 
-**Note:** Always use `orama prod stop` instead of manually running `systemctl stop`. The CLI ensures all related services (including CoreDNS and Caddy on nameserver nodes) are handled correctly.
+**Note:** Always use `orama node stop` instead of manually running `systemctl stop`. The CLI ensures all related services (including CoreDNS and Caddy on nameserver nodes) are handled correctly.
 
 ### Node Join Flow
 
 ```bash
 # 1. Genesis node (first node, creates cluster)
 # Nameserver nodes use the base domain as --domain
-sudo orama install --vps-ip 1.2.3.4 --domain example.com \
+sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
     --base-domain example.com --nameserver
 
 # 2. On genesis node, generate an invite
-orama invite
-# Output: sudo orama install --join https://example.com --token <TOKEN> --vps-ip <IP>
+orama node invite
+# Output: sudo orama node install --join https://example.com --token <TOKEN> --vps-ip <IP>
 
 # 3. On the new node, run the printed command
 # Nameserver nodes use the base domain; non-nameserver nodes use subdomains (e.g., node-4.example.com)
-sudo orama install --join https://example.com --token abc123... \
+sudo orama node install --join https://example.com --token abc123... \
     --vps-ip 5.6.7.8 --domain example.com --base-domain example.com --nameserver
 ```
 
@@ -231,7 +234,7 @@ node's IP so that `node1.example.com` resolves publicly.
 **If DNS is not yet configured**, you can use the genesis node's public IP with HTTP as a fallback:
 
 ```bash
-sudo orama install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123... --nameserver
+sudo orama node install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123... --nameserver
 ```
 
 This works because Caddy's `:80` block proxies all HTTP traffic to the gateway. However, once DNS
@@ -243,7 +246,7 @@ which proxies to the gateway internally.
 
 ## Pre-Install Checklist
 
-Before running `orama install` on a VPS, ensure:
+Before running `orama node install` on a VPS, ensure:
 
 1. **Stop Docker if running.** Docker commonly binds ports 4001 and 8080 which conflict with IPFS. The installer checks for port conflicts and shows which process is using each port, but it's easier to stop Docker first:
    ```bash

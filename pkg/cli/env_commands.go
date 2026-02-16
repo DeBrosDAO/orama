@@ -47,7 +47,7 @@ func showEnvHelp() {
 	fmt.Printf("  enable     - Alias for 'switch' (e.g., 'devnet enable')\n\n")
 	fmt.Printf("Available Environments:\n")
 	fmt.Printf("  devnet     - Development network (https://orama-devnet.network)\n")
-	fmt.Printf("  testnet    - Test network (https://orama-tesetnet.network)\n\n")
+	fmt.Printf("  testnet    - Test network (https://orama-testnet.network)\n\n")
 	fmt.Printf("Examples:\n")
 	fmt.Printf("  orama env list\n")
 	fmt.Printf("  orama env current\n")

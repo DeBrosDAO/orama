@@ -163,7 +163,7 @@ orama deploy nextjs ./nextjs.tar.gz --name my-nextjs --ssr
 # URLs:
 #   • https://my-nextjs.orama.network
 #
-# ⚠️  Note: SSR deployment may take a minute to start. Check status with: orama deployments get my-nextjs
+# ⚠️  Note: SSR deployment may take a minute to start. Check status with: orama app get my-nextjs
 ```
 
 ### What Happens Behind the Scenes
@@ -795,7 +795,7 @@ Open your browser to:
 ### List All Deployments
 
 ```bash
-orama deployments list
+orama app list
 
 # Output:
 # NAME              TYPE      STATUS    VERSION    CREATED
@@ -809,7 +809,7 @@ orama deployments list
 ### Get Deployment Details
 
 ```bash
-orama deployments get my-react-app
+orama app get my-react-app
 
 # Output:
 # Deployment: my-react-app
@@ -835,17 +835,17 @@ orama deployments get my-react-app
 
 ```bash
 # View last 100 lines
-orama deployments logs my-nextjs
+orama app logs my-nextjs
 
 # Follow logs in real-time
-orama deployments logs my-nextjs --follow
+orama app logs my-nextjs --follow
 ```
 
 ### Rollback to Previous Version
 
 ```bash
 # Rollback to version 1
-orama deployments rollback my-nextjs --version 1
+orama app rollback my-nextjs --version 1
 
 # Output:
 # ⚠️  Rolling back 'my-nextjs' to version 1. Continue? (y/N): y
@@ -862,7 +862,7 @@ orama deployments rollback my-nextjs --version 1
 ### Delete Deployment
 
 ```bash
-orama deployments delete my-old-app
+orama app delete my-old-app
 
 # Output:
 # ⚠️  Are you sure you want to delete deployment 'my-old-app'? (y/N): y
@@ -880,10 +880,10 @@ orama deployments delete my-old-app
 
 ```bash
 # Check deployment details
-orama deployments get my-app
+orama app get my-app
 
 # View logs for errors
-orama deployments logs my-app
+orama app logs my-app
 
 # Common issues:
 # - Binary not compiled for Linux (GOOS=linux GOARCH=amd64)
@@ -896,7 +896,7 @@ orama deployments logs my-app
 
 ```bash
 # 1. Check deployment status
-orama deployments get my-app
+orama app get my-app
 
 # 2. Verify DNS (may take up to 10 seconds to propagate)
 dig my-app.orama.network
@@ -980,7 +980,7 @@ orama auth status
 
 - **Explore the API**: See `/docs/GATEWAY_API.md` for HTTP API details
 - **Advanced Features**: Custom domains, load balancing, autoscaling (coming soon)
-- **Production Deployment**: Install nodes with `orama install` for production clusters
+- **Production Deployment**: Install nodes with `orama node install` for production clusters
 - **Client SDK**: Use the Go/JS SDK for programmatic deployments
 
 ---

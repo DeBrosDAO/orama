@@ -51,7 +51,7 @@ func HandleStart() {
 		}
 		if active {
 			fmt.Printf("  ℹ️  %s already running\n", svc)
-			// Re-enable if disabled (in case it was stopped with 'orama prod stop')
+			// Re-enable if disabled (in case it was stopped with 'orama node stop')
 			enabled, err := utils.IsServiceEnabled(svc)
 			if err == nil && !enabled {
 				if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
@@ -81,7 +81,7 @@ func HandleStart() {
 		os.Exit(1)
 	}
 
-	// Re-enable inactive services first (in case they were disabled by 'orama prod stop')
+	// Re-enable inactive services first (in case they were disabled by 'orama node stop')
 	for _, svc := range inactive {
 		enabled, err := utils.IsServiceEnabled(svc)
 		if err == nil && !enabled {

@@ -30,7 +30,7 @@ func HandleRestartWithFlags(force bool) {
 	if !force {
 		if warning := checkQuorumSafety(); warning != "" {
 			fmt.Fprintf(os.Stderr, "\nWARNING: %s\n", warning)
-			fmt.Fprintf(os.Stderr, "Use 'orama prod restart --force' to proceed anyway.\n\n")
+			fmt.Fprintf(os.Stderr, "Use 'orama node restart --force' to proceed anyway.\n\n")
 			os.Exit(1)
 		}
 	}
@@ -42,6 +42,10 @@ func HandleRestartWithFlags(force bool) {
 		fmt.Printf("  No Orama services found\n")
 		return
 	}
+
+	// Stop namespace services first (same as stop command)
+	fmt.Printf("\n  Stopping namespace services...\n")
+	stopAllNamespaceServices()
 
 	// Ordered stop: gateway first, then node (RQLite), then supporting services
 	fmt.Printf("\n  Stopping services (ordered)...\n")
