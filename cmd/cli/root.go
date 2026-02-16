@@ -13,6 +13,7 @@ import (
 	deploycmd "github.com/DeBrosOfficial/network/pkg/cli/cmd/deploy"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/envcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/inspectcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
 )
@@ -74,6 +75,9 @@ and interacting with the Orama distributed network.`,
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)
+
+	// Monitor command
+	rootCmd.AddCommand(monitorcmd.Cmd)
 
 	return rootCmd
 }
