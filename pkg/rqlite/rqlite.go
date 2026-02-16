@@ -24,6 +24,7 @@ type RQLiteManager struct {
 	cmd              *exec.Cmd
 	connection       *gorqlite.Connection
 	discoveryService *ClusterDiscoveryService
+	waitDone         chan struct{} // closed when cmd.Wait() completes (reaps zombie)
 }
 
 // NewRQLiteManager creates a new RQLite manager
@@ -118,16 +119,16 @@ func (r *RQLiteManager) Stop() error {
 
 	_ = r.cmd.Process.Signal(syscall.SIGTERM)
 
-	done := make(chan error, 1)
-	go func() { done <- r.cmd.Wait() }()
-
-	// Give RQLite 30s to flush pending writes and shut down gracefully
-	// (previously 5s which risked Raft log corruption)
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		r.logger.Warn("RQLite did not stop within 30s, sending SIGKILL")
-		_ = r.cmd.Process.Kill()
+	// Wait for the background reaper goroutine (started in launchProcess) to
+	// collect the child process. This avoids a double cmd.Wait() panic.
+	if r.waitDone != nil {
+		select {
+		case <-r.waitDone:
+		case <-time.After(30 * time.Second):
+			r.logger.Warn("RQLite did not stop within 30s, sending SIGKILL")
+			_ = r.cmd.Process.Kill()
+			<-r.waitDone // wait for reaper after kill
+		}
 	}
 
 	// Clean up PID file

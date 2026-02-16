@@ -18,7 +18,7 @@ func Handle() {
 		// Note: RQLite is managed by node process, not as separate service
 		"orama-olric",
 		"orama-node",
-		"orama-gateway",
+		// Note: gateway is embedded in orama-node, no separate service
 	}
 
 	// Friendly descriptions
@@ -26,8 +26,7 @@ func Handle() {
 		"orama-ipfs":         "IPFS Daemon",
 		"orama-ipfs-cluster": "IPFS Cluster",
 		"orama-olric":        "Olric Cache Server",
-		"orama-node":         "Orama Node (includes RQLite)",
-		"orama-gateway":      "Orama Gateway",
+		"orama-node":         "Orama Node (includes RQLite + Gateway)",
 	}
 
 	fmt.Printf("Services:\n")

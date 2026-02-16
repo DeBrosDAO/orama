@@ -24,6 +24,55 @@ type Alert struct {
 	Message   string        `json:"message"`
 }
 
+// joiningGraceSec is the grace period (in seconds) after a node starts during
+// which unreachability alerts from other nodes are downgraded to info.
+const joiningGraceSec = 300
+
+// nodeContext carries per-node metadata needed for context-aware alerting.
+type nodeContext struct {
+	host         string
+	role         string // "node", "nameserver-ns1", etc.
+	isNameserver bool
+	isJoining    bool // orama-node active_since_sec < joiningGraceSec
+	uptimeSec    int  // orama-node active_since_sec
+}
+
+// buildNodeContexts builds a map of WG IP -> nodeContext for all healthy nodes.
+func buildNodeContexts(snap *ClusterSnapshot) map[string]*nodeContext {
+	ctxMap := make(map[string]*nodeContext)
+	for _, cs := range snap.Nodes {
+		if cs.Report == nil {
+			continue
+		}
+		r := cs.Report
+		host := nodeHost(r)
+
+		nc := &nodeContext{
+			host:         host,
+			role:         cs.Node.Role,
+			isNameserver: strings.HasPrefix(cs.Node.Role, "nameserver"),
+		}
+
+		// Determine uptime from orama-node service
+		if r.Services != nil {
+			for _, svc := range r.Services.Services {
+				if svc.Name == "orama-node" && svc.ActiveState == "active" {
+					nc.uptimeSec = int(svc.ActiveSinceSec)
+					nc.isJoining = svc.ActiveSinceSec < joiningGraceSec
+					break
+				}
+			}
+		}
+
+		ctxMap[host] = nc
+		// Also index by WG IP for cross-node RQLite unreachability lookups
+		if r.WireGuard != nil && r.WireGuard.WgIP != "" {
+			ctxMap[r.WireGuard.WgIP] = nc
+		}
+	}
+	return ctxMap
+}
+
 // DeriveAlerts scans a ClusterSnapshot and produces alerts.
 func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 	var alerts []Alert
@@ -45,6 +94,9 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 		return alerts
 	}
 
+	// Build context map for role/uptime-aware alerting
+	nodeCtxMap := buildNodeContexts(snap)
+
 	// Cross-node checks
 	alerts = append(alerts, checkRQLiteLeader(reports)...)
 	alerts = append(alerts, checkRQLiteQuorum(reports)...)
@@ -60,11 +112,12 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 	// Per-node checks
 	for _, r := range reports {
 		host := nodeHost(r)
-		alerts = append(alerts, checkNodeRQLite(r, host)...)
+		nc := nodeCtxMap[host]
+		alerts = append(alerts, checkNodeRQLite(r, host, nodeCtxMap)...)
 		alerts = append(alerts, checkNodeWireGuard(r, host)...)
 		alerts = append(alerts, checkNodeSystem(r, host)...)
-		alerts = append(alerts, checkNodeServices(r, host)...)
-		alerts = append(alerts, checkNodeDNS(r, host)...)
+		alerts = append(alerts, checkNodeServices(r, host, nc)...)
+		alerts = append(alerts, checkNodeDNS(r, host, nc)...)
 		alerts = append(alerts, checkNodeAnyone(r, host)...)
 		alerts = append(alerts, checkNodeProcesses(r, host)...)
 		alerts = append(alerts, checkNodeNamespaces(r, host)...)
@@ -377,7 +430,7 @@ func checkIPFSClusterConsistency(reports []*report.NodeReport) []Alert {
 // Per-node checks
 // ---------------------------------------------------------------------------
 
-func checkNodeRQLite(r *report.NodeReport, host string) []Alert {
+func checkNodeRQLite(r *report.NodeReport, host string, nodeCtxMap map[string]*nodeContext) []Alert {
 	if r.RQLite == nil {
 		return nil
 	}
@@ -428,11 +481,21 @@ func checkNodeRQLite(r *report.NodeReport, host string) []Alert {
 			fmt.Sprintf("RQLite heap memory high: %dMB", r.RQLite.HeapMB)})
 	}
 
-	// Cluster partition detection: check if this node reports other nodes as unreachable
+	// Cluster partition detection: check if this node reports other nodes as unreachable.
+	// If the unreachable node recently joined (< 5 min), downgrade to info — probes
+	// may not have succeeded yet and this is expected transient behavior.
 	for nodeAddr, info := range r.RQLite.Nodes {
 		if !info.Reachable {
-			alerts = append(alerts, Alert{AlertCritical, "rqlite", host,
-				fmt.Sprintf("RQLite reports node %s unreachable (cluster partition)", nodeAddr)})
+			// nodeAddr is like "10.0.0.4:7001" — extract the IP to look up context
+			targetIP := strings.Split(nodeAddr, ":")[0]
+			if targetCtx, ok := nodeCtxMap[targetIP]; ok && targetCtx.isJoining {
+				alerts = append(alerts, Alert{AlertInfo, "rqlite", host,
+					fmt.Sprintf("Node %s recently joined (%ds ago), probe pending for %s",
+						targetCtx.host, targetCtx.uptimeSec, nodeAddr)})
+			} else {
+				alerts = append(alerts, Alert{AlertCritical, "rqlite", host,
+					fmt.Sprintf("RQLite reports node %s unreachable (cluster partition)", nodeAddr)})
+			}
 		}
 	}
 
@@ -521,12 +584,17 @@ func checkNodeSystem(r *report.NodeReport, host string) []Alert {
 	return alerts
 }
 
-func checkNodeServices(r *report.NodeReport, host string) []Alert {
+func checkNodeServices(r *report.NodeReport, host string, nc *nodeContext) []Alert {
 	if r.Services == nil {
 		return nil
 	}
 	var alerts []Alert
 	for _, svc := range r.Services.Services {
+		// Skip services that are expected to be inactive based on node role/mode
+		if shouldSkipServiceAlert(svc.Name, svc.ActiveState, r, nc) {
+			continue
+		}
+
 		if svc.ActiveState == "failed" {
 			alerts = append(alerts, Alert{AlertCritical, "service", host,
 				fmt.Sprintf("Service %s is FAILED", svc.Name)})
@@ -546,30 +614,72 @@ func checkNodeServices(r *report.NodeReport, host string) []Alert {
 	return alerts
 }
 
-func checkNodeDNS(r *report.NodeReport, host string) []Alert {
+// shouldSkipServiceAlert returns true if this service being inactive is expected
+// given the node's role and anyone mode.
+func shouldSkipServiceAlert(svcName, state string, r *report.NodeReport, nc *nodeContext) bool {
+	if state == "active" || state == "failed" {
+		return false // always report active (no alert) and failed (always alert)
+	}
+
+	// CoreDNS: only expected on nameserver nodes
+	if svcName == "coredns" && (nc == nil || !nc.isNameserver) {
+		return true
+	}
+
+	// Anyone services: only alert for the mode the node is configured for
+	if r.Anyone != nil {
+		mode := r.Anyone.Mode
+		if svcName == "orama-anyone-client" && mode == "relay" {
+			return true // relay node doesn't run client
+		}
+		if svcName == "orama-anyone-relay" && mode == "client" {
+			return true // client node doesn't run relay
+		}
+	}
+	// If anyone section is nil (no anyone configured), skip both anyone services
+	if r.Anyone == nil && (svcName == "orama-anyone-client" || svcName == "orama-anyone-relay") {
+		return true
+	}
+
+	return false
+}
+
+func checkNodeDNS(r *report.NodeReport, host string, nc *nodeContext) []Alert {
 	if r.DNS == nil {
 		return nil
 	}
+
+	isNameserver := nc != nil && nc.isNameserver
+
 	var alerts []Alert
-	if !r.DNS.CoreDNSActive {
+
+	// CoreDNS: only check on nameserver nodes
+	if isNameserver && !r.DNS.CoreDNSActive {
 		alerts = append(alerts, Alert{AlertCritical, "dns", host, "CoreDNS is down"})
 	}
+
+	// Caddy: check on all nodes (any node can host namespaces)
 	if !r.DNS.CaddyActive {
 		alerts = append(alerts, Alert{AlertCritical, "dns", host, "Caddy is down"})
 	}
-	if r.DNS.BaseTLSDaysLeft >= 0 && r.DNS.BaseTLSDaysLeft < 14 {
-		alerts = append(alerts, Alert{AlertWarning, "dns", host,
-			fmt.Sprintf("Base TLS cert expires in %d days", r.DNS.BaseTLSDaysLeft)})
+
+	// TLS cert expiry: only meaningful on nameserver nodes that have public domains
+	if isNameserver {
+		if r.DNS.BaseTLSDaysLeft >= 0 && r.DNS.BaseTLSDaysLeft < 14 {
+			alerts = append(alerts, Alert{AlertWarning, "dns", host,
+				fmt.Sprintf("Base TLS cert expires in %d days", r.DNS.BaseTLSDaysLeft)})
+		}
+		if r.DNS.WildTLSDaysLeft >= 0 && r.DNS.WildTLSDaysLeft < 14 {
+			alerts = append(alerts, Alert{AlertWarning, "dns", host,
+				fmt.Sprintf("Wildcard TLS cert expires in %d days", r.DNS.WildTLSDaysLeft)})
+		}
 	}
-	if r.DNS.WildTLSDaysLeft >= 0 && r.DNS.WildTLSDaysLeft < 14 {
-		alerts = append(alerts, Alert{AlertWarning, "dns", host,
-			fmt.Sprintf("Wildcard TLS cert expires in %d days", r.DNS.WildTLSDaysLeft)})
-	}
-	if r.DNS.CoreDNSActive && !r.DNS.SOAResolves {
-		alerts = append(alerts, Alert{AlertWarning, "dns", host, "SOA record not resolving"})
-	}
-	// Additional DNS checks (only when CoreDNS is running)
-	if r.DNS.CoreDNSActive {
+
+	// DNS resolution checks: only on nameserver nodes with CoreDNS running
+	if isNameserver && r.DNS.CoreDNSActive {
+		if !r.DNS.SOAResolves {
+			alerts = append(alerts, Alert{AlertWarning, "dns", host, "SOA record not resolving"})
+		}
 		if !r.DNS.WildcardResolves {
 			alerts = append(alerts, Alert{AlertWarning, "dns", host, "Wildcard DNS not resolving"})
 		}
@@ -583,6 +693,7 @@ func checkNodeDNS(r *report.NodeReport, host string) []Alert {
 			alerts = append(alerts, Alert{AlertCritical, "dns", host, "CoreDNS active but port 53 not bound"})
 		}
 	}
+
 	if r.DNS.CaddyActive && !r.DNS.Port443Bound {
 		alerts = append(alerts, Alert{AlertCritical, "dns", host, "Caddy active but port 443 not bound"})
 	}

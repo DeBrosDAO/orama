@@ -10,7 +10,6 @@ import (
 
 var coreServices = []string{
 	"orama-node",
-	"orama-gateway",
 	"orama-olric",
 	"orama-ipfs",
 	"orama-ipfs-cluster",

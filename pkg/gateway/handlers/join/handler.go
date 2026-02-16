@@ -105,7 +105,17 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Assign WG IP with retry on conflict
+	// 2. Clean up stale WG entries for this public IP (from previous installs).
+	//    This prevents ghost peers: old rows with different node_id/wg_key that
+	//    the sync loop would keep trying to reach.
+	if _, err := h.rqliteClient.Exec(ctx,
+		"DELETE FROM wireguard_peers WHERE public_ip = ?", req.PublicIP); err != nil {
+		h.logger.Warn("failed to clean up stale WG entries", zap.Error(err))
+		// Non-fatal: proceed with join
+	}
+
+	// 3. Assign WG IP with retry on conflict (runs after cleanup so ghost IPs
+	//    from this public_ip are not counted)
 	wgIP, err := h.assignWGIP(ctx)
 	if err != nil {
 		h.logger.Error("failed to assign WG IP", zap.Error(err))
@@ -113,7 +123,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Register WG peer in database
+	// 4. Register WG peer in database
 	nodeID := fmt.Sprintf("node-%s", wgIP) // temporary ID based on WG IP
 	_, err = h.rqliteClient.Exec(ctx,
 		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port) VALUES (?, ?, ?, ?, ?)",
@@ -124,13 +134,13 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Add peer to local WireGuard interface immediately
+	// 5. Add peer to local WireGuard interface immediately
 	if err := h.addWGPeerLocally(req.WGPublicKey, req.PublicIP, wgIP); err != nil {
 		h.logger.Warn("failed to add WG peer to local interface", zap.Error(err))
 		// Non-fatal: the sync loop will pick it up
 	}
 
-	// 5. Read secrets from disk
+	// 6. Read secrets from disk
 	clusterSecret, err := os.ReadFile(h.oramaDir + "/secrets/cluster-secret")
 	if err != nil {
 		h.logger.Error("failed to read cluster secret", zap.Error(err))
@@ -145,7 +155,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Get all WG peers
+	// 7. Get all WG peers
 	wgPeers, err := h.getWGPeers(ctx, req.WGPublicKey)
 	if err != nil {
 		h.logger.Error("failed to list WG peers", zap.Error(err))
@@ -153,7 +163,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Get this node's WG IP
+	// 8. Get this node's WG IP
 	myWGIP, err := h.getMyWGIP()
 	if err != nil {
 		h.logger.Error("failed to get local WG IP", zap.Error(err))
@@ -161,14 +171,14 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 8. Query IPFS and IPFS Cluster peer info
+	// 9. Query IPFS and IPFS Cluster peer info
 	ipfsPeer := h.queryIPFSPeerInfo(myWGIP)
 	ipfsClusterPeer := h.queryIPFSClusterPeerInfo(myWGIP)
 
-	// 9. Get this node's libp2p peer ID for bootstrap peers
+	// 10. Get this node's libp2p peer ID for bootstrap peers
 	bootstrapPeers := h.buildBootstrapPeers(myWGIP, ipfsPeer.ID)
 
-	// 10. Read base domain from config
+	// 11. Read base domain from config
 	baseDomain := h.readBaseDomain()
 
 	// Build Olric seed peers from all existing WG peer IPs (memberlist port 3322)

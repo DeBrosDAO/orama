@@ -33,9 +33,9 @@ func Handle() {
 	fmt.Printf("Stopping namespace services...\n")
 	stopNamespaceServices()
 
-	// All global services (was missing: orama-anyone-relay, coredns, caddy)
+	// All global services (orama-gateway is legacy — now embedded in orama-node)
 	services := []string{
-		"orama-gateway",
+		"orama-gateway", // Legacy: kept for cleanup of old installs
 		"orama-node",
 		"orama-olric",
 		"orama-ipfs-cluster",

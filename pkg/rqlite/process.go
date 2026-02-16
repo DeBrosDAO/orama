@@ -197,7 +197,15 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 	_ = os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", r.cmd.Process.Pid)), 0644)
 	r.logger.Info("RQLite process started", zap.Int("pid", r.cmd.Process.Pid), zap.String("pid_file", pidPath))
 
-	logFile.Close()
+	// Reap the child process in the background to prevent zombies.
+	// Stop() waits on this channel instead of calling cmd.Wait() directly.
+	r.waitDone = make(chan struct{})
+	go func() {
+		_ = r.cmd.Wait()
+		logFile.Close()
+		close(r.waitDone)
+	}()
+
 	return nil
 }
 

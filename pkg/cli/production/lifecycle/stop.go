@@ -50,15 +50,13 @@ func HandleStopWithFlags(force bool) {
 
 	fmt.Printf("\n  Stopping main services (ordered)...\n")
 
-	// Ordered shutdown: gateway first, then node (RQLite), then supporting services
-	// This ensures we stop accepting requests before shutting down the database
+	// Ordered shutdown: node first (includes embedded gateway + RQLite), then supporting services
 	shutdownOrder := [][]string{
-		{"orama-gateway"},                       // 1. Stop accepting new requests
-		{"orama-node"},                          // 2. Stop node (includes RQLite with leadership transfer)
-		{"orama-olric"},                         // 3. Stop cache
-		{"orama-ipfs-cluster", "orama-ipfs"},    // 4. Stop storage
-		{"orama-anyone-relay", "anyone-client"}, // 5. Stop privacy relay
-		{"coredns", "caddy"},                    // 6. Stop DNS/TLS last
+		{"orama-node"},                          // 1. Stop node (includes gateway + RQLite with leadership transfer)
+		{"orama-olric"},                         // 2. Stop cache
+		{"orama-ipfs-cluster", "orama-ipfs"},    // 3. Stop storage
+		{"orama-anyone-relay", "orama-anyone-client"}, // 4. Stop privacy relay
+		{"coredns", "caddy"},                    // 5. Stop DNS/TLS last
 	}
 
 	// First, disable all services to prevent auto-restart

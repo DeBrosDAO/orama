@@ -47,14 +47,13 @@ func HandleRestartWithFlags(force bool) {
 	fmt.Printf("\n  Stopping namespace services...\n")
 	stopAllNamespaceServices()
 
-	// Ordered stop: gateway first, then node (RQLite), then supporting services
+	// Ordered stop: node first (includes embedded gateway + RQLite), then supporting services
 	fmt.Printf("\n  Stopping services (ordered)...\n")
 	shutdownOrder := [][]string{
-		{"orama-gateway"},
 		{"orama-node"},
 		{"orama-olric"},
 		{"orama-ipfs-cluster", "orama-ipfs"},
-		{"orama-anyone-relay", "anyone-client"},
+		{"orama-anyone-relay", "orama-anyone-client"},
 		{"coredns", "caddy"},
 	}
 

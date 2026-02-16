@@ -23,14 +23,12 @@ type PortSpec struct {
 }
 
 var ServicePorts = map[string][]PortSpec{
-	"orama-gateway": {
-		{Name: "Gateway API", Port: constants.GatewayAPIPort},
-	},
 	"orama-olric": {
 		{Name: "Olric HTTP", Port: constants.OlricHTTPPort},
 		{Name: "Olric Memberlist", Port: constants.OlricMemberlistPort},
 	},
 	"orama-node": {
+		{Name: "Gateway API", Port: constants.GatewayAPIPort}, // Gateway is embedded in orama-node
 		{Name: "RQLite HTTP", Port: constants.RQLiteHTTPPort},
 		{Name: "RQLite Raft", Port: constants.RQLiteRaftPort},
 	},
@@ -67,7 +65,7 @@ func ResolveServiceName(alias string) ([]string, error) {
 		"ipfs":         {"orama-ipfs"},
 		"cluster":      {"orama-ipfs-cluster"},
 		"ipfs-cluster": {"orama-ipfs-cluster"},
-		"gateway":      {"orama-gateway"},
+		"gateway":      {"orama-node"}, // Gateway is embedded in orama-node
 		"olric":        {"orama-olric"},
 		"rqlite":       {"orama-node"}, // RQLite logs are in node logs
 	}
@@ -158,7 +156,6 @@ func IsServiceMasked(service string) (bool, error) {
 func GetProductionServices() []string {
 	// Global/default service names
 	globalServices := []string{
-		"orama-gateway",
 		"orama-node",
 		"orama-olric",
 		"orama-ipfs-cluster",
