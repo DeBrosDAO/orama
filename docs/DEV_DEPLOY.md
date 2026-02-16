@@ -203,6 +203,36 @@ sudo orama node doctor
 
 **Note:** Always use `orama node stop` instead of manually running `systemctl stop`. The CLI ensures all related services (including CoreDNS and Caddy on nameserver nodes) are handled correctly.
 
+#### `orama node report`
+
+Outputs comprehensive health data as JSON. Used by `orama monitor` over SSH:
+
+```bash
+sudo orama node report --json
+```
+
+See [MONITORING.md](MONITORING.md) for full details.
+
+#### `orama monitor`
+
+Real-time cluster monitoring from your local machine:
+
+```bash
+# Interactive TUI
+orama monitor --env testnet
+
+# Cluster overview
+orama monitor cluster --env testnet
+
+# Alerts only
+orama monitor alerts --env testnet
+
+# Full JSON for LLM analysis
+orama monitor report --env testnet
+```
+
+See [MONITORING.md](MONITORING.md) for all subcommands and flags.
+
 ### Node Join Flow
 
 ```bash
