@@ -52,7 +52,7 @@ func ParseFlags(args []string) (*Flags, error) {
 	flags := &Flags{}
 
 	fs.StringVar(&flags.VpsIP, "vps-ip", "", "Public IP of this VPS (required)")
-	fs.StringVar(&flags.Domain, "domain", "", "Domain name for HTTPS (optional, e.g. gateway.example.com)")
+	fs.StringVar(&flags.Domain, "domain", "", "Domain for HTTPS (auto-generated for non-nameserver nodes if omitted)")
 	fs.StringVar(&flags.BaseDomain, "base-domain", "", "Base domain for deployment routing (e.g., dbrs.space)")
 	fs.BoolVar(&flags.Force, "force", false, "Force reconfiguration even if already installed")
 	fs.BoolVar(&flags.DryRun, "dry-run", false, "Show what would be done without making changes")

@@ -2,6 +2,7 @@ package install
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -295,6 +296,12 @@ func (o *Orchestrator) executeJoinFlow() error {
 	}
 	fmt.Printf("  ✓ Secrets saved\n")
 
+	// Auto-generate domain for non-nameserver joining nodes
+	if o.flags.Domain == "" && !o.flags.Nameserver && joinResp.BaseDomain != "" {
+		o.flags.Domain = generateNodeDomain(joinResp.BaseDomain)
+		fmt.Printf("\n🌐 Auto-generated domain: %s\n", o.flags.Domain)
+	}
+
 	// Step 7: Generate configs using WG IP as advertise address
 	// All inter-node communication uses WireGuard IPs, not public IPs
 	fmt.Printf("\n⚙️  Generating configurations...\n")
@@ -536,4 +543,18 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 	}
 
 	return nil
+}
+
+// generateNodeDomain creates a random subdomain like "node-a3f8k2.example.com"
+func generateNodeDomain(baseDomain string) string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based
+		return fmt.Sprintf("node-%06x.%s", time.Now().UnixNano()%0xffffff, baseDomain)
+	}
+	for i := range b {
+		b[i] = chars[int(b[i])%len(chars)]
+	}
+	return fmt.Sprintf("node-%s.%s", string(b), baseDomain)
 }

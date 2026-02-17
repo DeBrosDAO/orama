@@ -244,7 +244,8 @@ WantedBy=multi-user.target
 `, ssg.oramaHome, ssg.oramaDir, logFile)
 }
 
-// GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit
+// GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit.
+// Uses the same anon binary as the relay, but with a client-only config (SocksPort only, no relay).
 func (ssg *SystemdServiceGenerator) GenerateAnyoneClientService() string {
 	logFile := filepath.Join(ssg.oramaDir, "logs", "anyone-client.log")
 
@@ -255,14 +256,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=HOME=%[1]s
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/lib/node_modules/.bin
-WorkingDirectory=%[1]s
-ExecStart=/usr/bin/npx anyone-client
-Restart=always
+User=debian-anon
+Group=debian-anon
+ExecStart=/usr/bin/anon -f /etc/anon/anonrc
+Restart=on-failure
 RestartSec=5
-StandardOutput=append:%[2]s
-StandardError=append:%[2]s
+StandardOutput=append:%[1]s
+StandardError=append:%[1]s
 SyslogIdentifier=anyone-client
 
 PrivateTmp=yes
@@ -273,7 +273,7 @@ MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, logFile, ssg.oramaDir)
+`, logFile)
 }
 
 // GenerateAnyoneRelayService generates the Anyone Relay operator systemd unit

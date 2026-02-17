@@ -81,19 +81,33 @@ for ip in <ip1> <ip2> <ip3> <ip4> <ip5> <ip6>; do
 done
 
 # 5. Find the RQLite leader (upgrade this one LAST)
-ssh ubuntu@<any-node> 'curl -s http://localhost:5001/status | jq -r .store.raft.state'
+orama monitor report --env <env>
+# Check "rqlite_leader" in summary output
 
 # 6. Upgrade FOLLOWER nodes one at a time
 ssh ubuntu@<follower-ip> 'sudo orama node stop && sudo orama node upgrade --restart'
 
-# Wait for rejoin before proceeding to next node
-ssh ubuntu@<leader-ip> 'curl -s http://localhost:5001/status | jq -r .store.raft.num_peers'
-# Should show expected number of peers (N-1)
+# IMPORTANT: Verify FULL health before proceeding to next node:
+orama monitor report --env <env> --node <follower-ip>
+# Check:
+#   - All services active, 0 restart loops
+#   - RQLite: Follower state, applied_index matches cluster
+#   - All RQLite peers reachable (no partition alerts)
+#   - WireGuard peers connected with recent handshakes
+# Only proceed to next node after ALL checks pass.
+#
+# NOTE: After restarting a node, other nodes may briefly report it as
+# "unreachable" with "broken pipe" errors. This is normal — Raft TCP
+# connections need ~1-2 minutes to re-establish. Wait and re-check
+# before escalating.
 
 # Repeat for each follower...
 
 # 7. Upgrade the LEADER node last
 ssh ubuntu@<leader-ip> 'sudo orama node stop && sudo orama node upgrade --restart'
+
+# Verify the new leader was elected and cluster is fully healthy:
+orama monitor report --env <env>
 ```
 
 #### What NOT to Do
@@ -140,7 +154,7 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 | Flag | Description |
 |------|-------------|
 | `--vps-ip <ip>` | VPS public IP address (required) |
-| `--domain <domain>` | Domain for HTTPS certificates. Nameserver nodes use the base domain (e.g., `example.com`); non-nameserver nodes use a subdomain (e.g., `node-4.example.com`) |
+| `--domain <domain>` | Domain for HTTPS certificates. Required for nameserver nodes (use the base domain, e.g., `example.com`). Auto-generated for non-nameserver nodes if omitted (e.g., `node-a3f8k2.example.com`) |
 | `--base-domain <domain>` | Base domain for deployment routing (e.g., example.com) |
 | `--nameserver` | Configure this node as a nameserver (CoreDNS + Caddy) |
 | `--join <url>` | Join existing cluster via HTTPS URL (e.g., `https://node1.example.com`) |
@@ -242,13 +256,16 @@ sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
     --base-domain example.com --nameserver
 
 # 2. On genesis node, generate an invite
-orama node invite
+orama node invite --expiry 24h
 # Output: sudo orama node install --join https://example.com --token <TOKEN> --vps-ip <IP>
 
-# 3. On the new node, run the printed command
-# Nameserver nodes use the base domain; non-nameserver nodes use subdomains (e.g., node-4.example.com)
-sudo orama node install --join https://example.com --token abc123... \
+# 3a. Join as nameserver (requires --domain set to base domain)
+sudo orama node install --join http://1.2.3.4 --token abc123... \
     --vps-ip 5.6.7.8 --domain example.com --base-domain example.com --nameserver
+
+# 3b. Join as regular node (domain auto-generated, no --domain needed)
+sudo orama node install --join http://1.2.3.4 --token abc123... \
+    --vps-ip 5.6.7.8 --base-domain example.com
 ```
 
 The join flow establishes a WireGuard VPN tunnel before starting cluster services.

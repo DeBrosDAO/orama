@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 #
-# Clean all testnet nodes for fresh reinstall.
+# Clean testnet nodes for fresh reinstall.
 # Preserves Anyone relay keys (/var/lib/anon/) for --anyone-migrate.
 # DOES NOT TOUCH DEVNET NODES.
 #
-# Usage: scripts/clean-testnet.sh [--nuclear]
+# Usage: scripts/clean-testnet.sh [--nuclear] [IP ...]
 #   --nuclear  Also remove shared binaries (rqlited, ipfs, coredns, caddy, etc.)
+#   IP ...     Optional: only clean specific nodes by IP (e.g. 62.72.44.87 51.178.84.172)
+#              If no IPs given, cleans ALL testnet nodes.
 #
 set -euo pipefail
 
@@ -16,7 +18,14 @@ CONF="$ROOT_DIR/scripts/remote-nodes.conf"
 command -v sshpass >/dev/null 2>&1 || { echo "ERROR: sshpass not installed (brew install sshpass / apt install sshpass)"; exit 1; }
 
 NUCLEAR=false
-[[ "${1:-}" == "--nuclear" ]] && NUCLEAR=true
+TARGET_IPS=()
+for arg in "$@"; do
+  if [[ "$arg" == "--nuclear" ]]; then
+    NUCLEAR=true
+  else
+    TARGET_IPS+=("$arg")
+  fi
+done
 
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR -o PubkeyAuthentication=no)
 
@@ -130,24 +139,41 @@ while IFS='|' read -r env hostspec pass role key; do
   env="$(echo "$env" | xargs)"
   [[ "$env" != "testnet" ]] && continue
 
+  # If target IPs specified, only include matching nodes
+  if [[ ${#TARGET_IPS[@]} -gt 0 ]]; then
+    node_ip="${hostspec#*@}"
+    matched=false
+    for tip in "${TARGET_IPS[@]}"; do
+      [[ "$tip" == "$node_ip" ]] && matched=true && break
+    done
+    $matched || continue
+  fi
+
   hosts+=("$hostspec")
   passes+=("$pass")
   users+=("${hostspec%%@*}")
 done < "$CONF"
 
 if [[ ${#hosts[@]} -eq 0 ]]; then
-  echo "ERROR: No testnet nodes found in $CONF"
+  if [[ ${#TARGET_IPS[@]} -gt 0 ]]; then
+    echo "ERROR: No testnet nodes found matching: ${TARGET_IPS[*]}"
+  else
+    echo "ERROR: No testnet nodes found in $CONF"
+  fi
   exit 1
 fi
 
-echo "== clean-testnet.sh — ${#hosts[@]} testnet nodes =="
+if [[ ${#TARGET_IPS[@]} -gt 0 ]]; then
+  echo "== clean-testnet.sh — ${#hosts[@]} selected node(s) =="
+else
+  echo "== clean-testnet.sh — ${#hosts[@]} testnet nodes (ALL) =="
+fi
 for i in "${!hosts[@]}"; do
   echo "  [$((i+1))] ${hosts[$i]}"
 done
 echo ""
-echo "This will CLEAN all testnet nodes (stop services, remove data)."
+echo "This will CLEAN the above node(s) (stop services, remove data)."
 echo "Anyone relay keys (/var/lib/anon/) will be PRESERVED."
-echo "Devnet nodes will NOT be touched."
 $NUCLEAR && echo "Nuclear mode: shared binaries will also be removed."
 echo ""
 read -rp "Type 'yes' to continue: " confirm

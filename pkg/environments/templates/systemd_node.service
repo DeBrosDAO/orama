@@ -11,6 +11,9 @@ Environment=HOME={{.HomeDir}}
 ExecStart={{.HomeDir}}/bin/orama-node --config {{.OramaDir}}/configs/{{.ConfigFile}}
 Restart=always
 RestartSec=5
+TimeoutStopSec=45s
+KillMode=mixed
+KillSignal=SIGTERM
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=orama-node-{{.NodeType}}
