@@ -20,6 +20,10 @@ type Credentials struct {
 	LastUsedAt   time.Time `json:"last_used_at,omitempty"`
 	Plan         string    `json:"plan,omitempty"`
 	NamespaceURL string    `json:"namespace_url,omitempty"`
+
+	// ProvisioningPollURL is set when namespace cluster is being provisioned.
+	// Used only during the login flow, not persisted.
+	ProvisioningPollURL string `json:"-"`
 }
 
 // CredentialStore manages credentials for multiple gateways

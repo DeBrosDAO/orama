@@ -40,19 +40,19 @@ func discoverNamespaces() []nsInfo {
 	var result []nsInfo
 	seen := make(map[string]bool)
 
-	// Strategy 1: Glob for orama-deploy-*-rqlite.service files.
-	matches, _ := filepath.Glob("/etc/systemd/system/orama-deploy-*-rqlite.service")
+	// Strategy 1: Glob for orama-namespace-rqlite@*.service files.
+	matches, _ := filepath.Glob("/etc/systemd/system/orama-namespace-rqlite@*.service")
 	for _, path := range matches {
 		base := filepath.Base(path)
-		// Extract namespace name: orama-deploy-<name>-rqlite.service
-		name := strings.TrimPrefix(base, "orama-deploy-")
-		name = strings.TrimSuffix(name, "-rqlite.service")
+		// Extract namespace name: orama-namespace-rqlite@<name>.service
+		name := strings.TrimPrefix(base, "orama-namespace-rqlite@")
+		name = strings.TrimSuffix(name, ".service")
 		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
 
-		portBase := parsePortBaseFromUnit(path)
+		portBase := parsePortFromEnvFile(name)
 		if portBase > 0 {
 			result = append(result, nsInfo{name: name, portBase: portBase})
 		}
@@ -69,9 +69,7 @@ func discoverNamespaces() []nsInfo {
 			name := entry.Name()
 			seen[name] = true
 
-			// Try to find the port base from a corresponding service unit.
-			unitPath := fmt.Sprintf("/etc/systemd/system/orama-deploy-%s-rqlite.service", name)
-			portBase := parsePortBaseFromUnit(unitPath)
+			portBase := parsePortFromEnvFile(name)
 			if portBase > 0 {
 				result = append(result, nsInfo{name: name, portBase: portBase})
 			}
@@ -81,58 +79,21 @@ func discoverNamespaces() []nsInfo {
 	return result
 }
 
-// parsePortBaseFromUnit reads a systemd unit file and extracts the port base
-// from ExecStart arguments or environment variables.
-//
-// It looks for patterns like:
-//   - "-http-addr localhost:PORT" or "-http-addr 0.0.0.0:PORT" in ExecStart
-//   - "PORT_BASE=NNNN" in environment files
-//   - Any port number that appears to be the RQLite HTTP port (the base port)
-func parsePortBaseFromUnit(unitPath string) int {
-	data, err := os.ReadFile(unitPath)
+// parsePortFromEnvFile reads the RQLite env file for a namespace and extracts
+// the HTTP port from HTTP_ADDR (e.g. "0.0.0.0:14001").
+func parsePortFromEnvFile(namespace string) int {
+	envPath := fmt.Sprintf("/opt/orama/.orama/data/namespaces/%s/rqlite.env", namespace)
+	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return 0
 	}
-	content := string(data)
 
-	// Look for -http-addr with a port number in ExecStart line.
-	httpAddrRe := regexp.MustCompile(`-http-addr\s+\S+:(\d+)`)
-	if m := httpAddrRe.FindStringSubmatch(content); len(m) >= 2 {
+	httpAddrRe := regexp.MustCompile(`HTTP_ADDR=\S+:(\d+)`)
+	if m := httpAddrRe.FindStringSubmatch(string(data)); len(m) >= 2 {
 		if port, err := strconv.Atoi(m[1]); err == nil {
 			return port
 		}
 	}
-
-	// Look for a port in -addr or -http flags.
-	addrRe := regexp.MustCompile(`(?:-addr|-http)\s+\S*:(\d+)`)
-	if m := addrRe.FindStringSubmatch(content); len(m) >= 2 {
-		if port, err := strconv.Atoi(m[1]); err == nil {
-			return port
-		}
-	}
-
-	// Look for PORT_BASE environment variable in EnvironmentFile or Environment= directives.
-	portBaseRe := regexp.MustCompile(`PORT_BASE=(\d+)`)
-	if m := portBaseRe.FindStringSubmatch(content); len(m) >= 2 {
-		if port, err := strconv.Atoi(m[1]); err == nil {
-			return port
-		}
-	}
-
-	// Check referenced EnvironmentFile for PORT_BASE.
-	envFileRe := regexp.MustCompile(`EnvironmentFile=(.+)`)
-	if m := envFileRe.FindStringSubmatch(content); len(m) >= 2 {
-		envPath := strings.TrimSpace(m[1])
-		envPath = strings.TrimPrefix(envPath, "-") // optional prefix means "ignore if missing"
-		if envData, err := os.ReadFile(envPath); err == nil {
-			if m2 := portBaseRe.FindStringSubmatch(string(envData)); len(m2) >= 2 {
-				if port, err := strconv.Atoi(m2[1]); err == nil {
-					return port
-				}
-			}
-		}
-	}
-
 	return 0
 }
 

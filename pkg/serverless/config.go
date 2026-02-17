@@ -33,6 +33,9 @@ type Config struct {
 	TimerPollInterval time.Duration `yaml:"timer_poll_interval"`
 	DBPollInterval    time.Duration `yaml:"db_poll_interval"`
 
+	// WASM execution limits
+	MaxConcurrentExecutions int `yaml:"max_concurrent_executions"` // Max concurrent WASM module instantiations
+
 	// WASM compilation cache
 	ModuleCacheSize int  `yaml:"module_cache_size"` // Number of compiled modules to cache
 	EnablePrewarm   bool `yaml:"enable_prewarm"`    // Pre-compile frequently used functions
@@ -74,6 +77,9 @@ func DefaultConfig() *Config {
 		CronPollInterval:  time.Minute,
 		TimerPollInterval: time.Second,
 		DBPollInterval:    time.Second * 5,
+
+		// WASM execution
+		MaxConcurrentExecutions: 10,
 
 		// WASM cache
 		ModuleCacheSize: 100,
@@ -153,6 +159,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.DBPollInterval == 0 {
 		c.DBPollInterval = defaults.DBPollInterval
+	}
+	if c.MaxConcurrentExecutions == 0 {
+		c.MaxConcurrentExecutions = defaults.MaxConcurrentExecutions
 	}
 	if c.ModuleCacheSize == 0 {
 		c.ModuleCacheSize = defaults.ModuleCacheSize

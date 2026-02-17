@@ -181,10 +181,10 @@ func collectFailedUnits(ctx context.Context) []string {
 	return units
 }
 
-// discoverNamespaceServices finds orama-deploy-*.service files in /etc/systemd/system
+// discoverNamespaceServices finds orama-namespace-*@*.service files in /etc/systemd/system
 // and returns the service names (without the .service suffix path).
 func discoverNamespaceServices() []string {
-	matches, err := filepath.Glob("/etc/systemd/system/orama-deploy-*.service")
+	matches, err := filepath.Glob("/etc/systemd/system/orama-namespace-*@*.service")
 	if err != nil || len(matches) == 0 {
 		return nil
 	}

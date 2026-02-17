@@ -244,11 +244,15 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Delete subdomain registry
 	subdomainQuery := `DELETE FROM global_deployment_subdomains WHERE deployment_id = ?`
-	_, _ = h.service.db.Exec(ctx, subdomainQuery, deployment.ID)
+	if _, subErr := h.service.db.Exec(ctx, subdomainQuery, deployment.ID); subErr != nil {
+		h.logger.Warn("Failed to delete subdomain registry", zap.String("id", deployment.ID), zap.Error(subErr))
+	}
 
 	// 5. Delete DNS records
 	dnsQuery := `DELETE FROM dns_records WHERE deployment_id = ?`
-	_, _ = h.service.db.Exec(ctx, dnsQuery, deployment.ID)
+	if _, dnsErr := h.service.db.Exec(ctx, dnsQuery, deployment.ID); dnsErr != nil {
+		h.logger.Warn("Failed to delete DNS records", zap.String("id", deployment.ID), zap.Error(dnsErr))
+	}
 
 	// 6. Delete deployment record
 	query := `DELETE FROM deployments WHERE namespace = ? AND name = ?`

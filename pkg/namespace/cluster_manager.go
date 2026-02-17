@@ -41,6 +41,7 @@ type ClusterManager struct {
 	portAllocator   *NamespacePortAllocator
 	nodeSelector    *ClusterNodeSelector
 	systemdSpawner  *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
+	dnsManager      *DNSRecordManager
 	logger          *zap.Logger
 	baseDomain      string
 	baseDataDir     string
@@ -70,6 +71,7 @@ func NewClusterManager(
 	portAllocator := NewNamespacePortAllocator(db, logger)
 	nodeSelector := NewClusterNodeSelector(db, portAllocator, logger)
 	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, logger)
+	dnsManager := NewDNSRecordManager(db, cfg.BaseDomain, logger)
 
 	// Set IPFS defaults
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
@@ -94,6 +96,7 @@ func NewClusterManager(
 		portAllocator:         portAllocator,
 		nodeSelector:          nodeSelector,
 		systemdSpawner:        systemdSpawner,
+		dnsManager:            dnsManager,
 		baseDomain:            cfg.BaseDomain,
 		baseDataDir:           cfg.BaseDataDir,
 		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
@@ -138,6 +141,7 @@ func NewClusterManagerWithComponents(
 		portAllocator:         portAllocator,
 		nodeSelector:          nodeSelector,
 		systemdSpawner:        systemdSpawner,
+		dnsManager:            NewDNSRecordManager(db, cfg.BaseDomain, logger),
 		baseDomain:            cfg.BaseDomain,
 		baseDataDir:           cfg.BaseDataDir,
 		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
@@ -757,10 +761,8 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 }
 
 // createDNSRecords creates DNS records for the namespace gateway.
-// Creates A records pointing to the public IPs of nodes running the namespace gateway cluster.
+// Creates A records (+ wildcards) pointing to the public IPs of nodes running the namespace gateway cluster.
 func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) error {
-	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
-
 	// Collect public IPs from the selected cluster nodes
 	var gatewayIPs []string
 	for _, node := range nodes {
@@ -777,34 +779,12 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 		return fmt.Errorf("no valid node IPs found for DNS records")
 	}
 
-	cm.logger.Info("Creating DNS records for namespace gateway",
-		zap.String("namespace", cluster.NamespaceName),
-		zap.Strings("ips", gatewayIPs),
-	)
-
-	recordCount := 0
-	for _, ip := range gatewayIPs {
-		query := `
-			INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by)
-			VALUES (?, 'A', ?, 300, ?, 'system')
-		`
-		_, err := cm.db.Exec(ctx, query, fqdn, ip, cluster.NamespaceName)
-		if err != nil {
-			cm.logger.Warn("Failed to create DNS record",
-				zap.String("fqdn", fqdn),
-				zap.String("ip", ip),
-				zap.Error(err),
-			)
-		} else {
-			cm.logger.Info("Created DNS A record for gateway node",
-				zap.String("fqdn", fqdn),
-				zap.String("ip", ip),
-			)
-			recordCount++
-		}
+	if err := cm.dnsManager.CreateNamespaceRecords(ctx, cluster.NamespaceName, gatewayIPs); err != nil {
+		return err
 	}
 
-	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d gateway node records)", fqdn, recordCount), nil)
+	fqdn := fmt.Sprintf("ns-%s.%s.", cluster.NamespaceName, cm.baseDomain)
+	cm.logEvent(ctx, cluster.ID, EventDNSCreated, "", fmt.Sprintf("DNS records created for %s (%d gateway node records)", fqdn, len(gatewayIPs)*2), nil)
 	return nil
 }
 
@@ -864,12 +844,10 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
 
 	// Delete DNS records
-	query := `DELETE FROM dns_records WHERE namespace = ?`
-	cm.db.Exec(ctx, query, cluster.NamespaceName)
+	cm.dnsManager.DeleteNamespaceRecords(ctx, cluster.NamespaceName)
 
 	// Delete cluster record
-	query = `DELETE FROM namespace_clusters WHERE id = ?`
-	cm.db.Exec(ctx, query, cluster.ID)
+	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
 

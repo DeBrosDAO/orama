@@ -112,7 +112,12 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create DNS records (use background context since HTTP context will be cancelled)
-	go h.service.CreateDNSRecords(context.Background(), deployment)
+	go func() {
+		if err := h.service.CreateDNSRecords(context.Background(), deployment); err != nil {
+			h.logger.Error("Background DNS creation failed",
+				zap.String("deployment", deployment.Name), zap.Error(err))
+		}
+	}()
 
 	// Build response
 	urls := h.service.BuildDeploymentURLs(deployment)

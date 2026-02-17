@@ -102,6 +102,14 @@ func Handle(jsonFlag bool, version string) error {
 		rpt.Namespaces = collectNamespaces()
 	})
 
+	safeGo(&wg, "deployments", func() {
+		rpt.Deployments = collectDeployments()
+	})
+
+	safeGo(&wg, "serverless", func() {
+		rpt.Serverless = collectServerless()
+	})
+
 	wg.Wait()
 
 	// Populate top-level WireGuard IP from the WireGuard collector result.

@@ -15,13 +15,20 @@ import (
 type Executor struct {
 	runtime wazero.Runtime
 	logger  *zap.Logger
+	sem     chan struct{} // concurrency limiter
 }
 
 // NewExecutor creates a new Executor.
-func NewExecutor(runtime wazero.Runtime, logger *zap.Logger) *Executor {
+// maxConcurrent limits simultaneous module instantiations (0 = unlimited).
+func NewExecutor(runtime wazero.Runtime, logger *zap.Logger, maxConcurrent int) *Executor {
+	var sem chan struct{}
+	if maxConcurrent > 0 {
+		sem = make(chan struct{}, maxConcurrent)
+	}
 	return &Executor{
 		runtime: runtime,
 		logger:  logger,
+		sem:     sem,
 	}
 }
 
@@ -48,6 +55,16 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		WithStdout(stdout).
 		WithStderr(stderr).
 		WithArgs(moduleName) // argv[0] is the program name
+
+	// Acquire concurrency slot
+	if e.sem != nil {
+		select {
+		case e.sem <- struct{}{}:
+			defer func() { <-e.sem }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
 	// Instantiate and run the module (WASI _start will be called automatically)
 	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
