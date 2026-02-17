@@ -117,6 +117,18 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 		return nil, fmt.Errorf("failed to verify signature: %w", err)
 	}
 
+	// If namespace cluster is being provisioned, poll until ready
+	if creds.ProvisioningPollURL != "" {
+		fmt.Println("⏳ Provisioning namespace cluster...")
+		pollErr := pollNamespaceProvisioning(client, gatewayURL, creds.ProvisioningPollURL)
+		if pollErr != nil {
+			fmt.Printf("⚠️  Provisioning poll failed: %v\n", pollErr)
+			fmt.Println("   Credentials are saved. Cluster may still be provisioning in background.")
+		} else {
+			fmt.Println("✅ Namespace cluster ready!")
+		}
+	}
+
 	fmt.Printf("\n🎉 Authentication successful!\n")
 	fmt.Printf("🏢 Namespace: %s\n", creds.Namespace)
 
@@ -184,7 +196,7 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("gateway returned status %d: %s", resp.StatusCode, string(body))
 	}
@@ -196,6 +208,9 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 		Subject      string `json:"subject"`
 		Namespace    string `json:"namespace"`
 		APIKey       string `json:"api_key"`
+		// Provisioning fields (202 Accepted)
+		Status  string `json:"status"`
+		PollURL string `json:"poll_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
@@ -225,8 +240,51 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 		NamespaceURL: namespaceURL,
 	}
 
+	// If 202, namespace cluster is being provisioned — set poll URL
+	if resp.StatusCode == http.StatusAccepted && result.PollURL != "" {
+		creds.ProvisioningPollURL = result.PollURL
+	}
+
 	// Note: result.ExpiresIn is the JWT access token lifetime (15min),
 	// NOT the API key lifetime. Don't set ExpiresAt — the API key is permanent.
 
 	return creds, nil
+}
+
+// pollNamespaceProvisioning polls the namespace status endpoint until the cluster is ready.
+func pollNamespaceProvisioning(client *http.Client, gatewayURL, pollPath string) error {
+	pollURL := gatewayURL + pollPath
+	timeout := time.After(120 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timed out after 120s waiting for namespace cluster")
+		case <-ticker.C:
+			resp, err := client.Get(pollURL)
+			if err != nil {
+				continue // Retry on network error
+			}
+
+			var status struct {
+				Status string `json:"status"`
+			}
+			decErr := json.NewDecoder(resp.Body).Decode(&status)
+			resp.Body.Close()
+			if decErr != nil {
+				continue
+			}
+
+			switch status.Status {
+			case "ready":
+				return nil
+			case "failed", "error":
+				return fmt.Errorf("namespace provisioning failed")
+			}
+			// "provisioning" or other — keep polling
+			fmt.Print(".")
+		}
+	}
 }

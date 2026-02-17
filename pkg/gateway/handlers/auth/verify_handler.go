@@ -9,11 +9,13 @@ import (
 
 // VerifyHandler verifies a wallet signature and issues JWT tokens and an API key.
 // This completes the authentication flow by validating the signed nonce and returning
-// access credentials.
+// access credentials. For non-default namespaces, may trigger cluster provisioning
+// and return 202 Accepted with credentials + poll URL.
 //
 // POST /v1/auth/verify
 // Request body: VerifyRequest
-// Response: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "api_key", "nonce", "signature_verified" }
+// Response 200: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "api_key", "nonce", "signature_verified" }
+// Response 202: { "status": "provisioning", "cluster_id", "poll_url", "access_token", "refresh_token", "api_key", ... }
 func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	if h.authService == nil {
 		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
@@ -45,6 +47,70 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	// Mark nonce used
 	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
 	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
+
+	// Check if namespace cluster provisioning is needed (for non-default namespaces)
+	namespace := strings.TrimSpace(req.Namespace)
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	if h.clusterProvisioner != nil && namespace != "default" {
+		clusterID, status, needsProvisioning, checkErr := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
+		if checkErr != nil {
+			_ = checkErr // Log but don't fail
+		} else if needsProvisioning || status == "provisioning" {
+			// Issue tokens and API key before returning provisioning status
+			token, refresh, expUnix, tokenErr := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
+			if tokenErr != nil {
+				writeError(w, http.StatusInternalServerError, tokenErr.Error())
+				return
+			}
+			apiKey, keyErr := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
+			if keyErr != nil {
+				writeError(w, http.StatusInternalServerError, keyErr.Error())
+				return
+			}
+
+			pollURL := ""
+			if needsProvisioning {
+				nsIDInt := 0
+				if id, ok := nsID.(int); ok {
+					nsIDInt = id
+				} else if id, ok := nsID.(int64); ok {
+					nsIDInt = int(id)
+				} else if id, ok := nsID.(float64); ok {
+					nsIDInt = int(id)
+				}
+
+				newClusterID, newPollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
+				if provErr != nil {
+					writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
+					return
+				}
+				clusterID = newClusterID
+				pollURL = newPollURL
+			} else {
+				pollURL = "/v1/namespace/status?id=" + clusterID
+			}
+
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"status":                 "provisioning",
+				"cluster_id":             clusterID,
+				"poll_url":               pollURL,
+				"estimated_time_seconds": 60,
+				"access_token":           token,
+				"token_type":             "Bearer",
+				"expires_in":             int(expUnix - time.Now().Unix()),
+				"refresh_token":          refresh,
+				"api_key":                apiKey,
+				"namespace":              req.Namespace,
+				"subject":                req.Wallet,
+				"nonce":                  req.Nonce,
+				"signature_verified":     true,
+			})
+			return
+		}
+	}
 
 	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
 	if err != nil {

@@ -23,7 +23,9 @@ type NodeReport struct {
 	Anyone     *AnyoneReport      `json:"anyone,omitempty"`
 	Network    *NetworkReport     `json:"network"`
 	Processes  *ProcessReport     `json:"processes"`
-	Namespaces []NamespaceReport  `json:"namespaces,omitempty"`
+	Namespaces  []NamespaceReport  `json:"namespaces,omitempty"`
+	Deployments *DeploymentsReport `json:"deployments,omitempty"`
+	Serverless  *ServerlessReport  `json:"serverless,omitempty"`
 }
 
 // --- System ---
@@ -272,4 +274,20 @@ type NamespaceReport struct {
 	OlricUp       bool   `json:"olric_up"`
 	GatewayUp     bool   `json:"gateway_up"`
 	GatewayStatus int    `json:"gateway_status,omitempty"`
+}
+
+// --- Deployments ---
+
+type DeploymentsReport struct {
+	TotalCount   int `json:"total_count"`
+	RunningCount int `json:"running_count"`
+	FailedCount  int `json:"failed_count"`
+	StaticCount  int `json:"static_count"`
+}
+
+// --- Serverless ---
+
+type ServerlessReport struct {
+	FunctionCount int    `json:"function_count"`
+	EngineStatus  string `json:"engine_status"`
 }

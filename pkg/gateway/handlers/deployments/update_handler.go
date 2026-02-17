@@ -139,9 +139,11 @@ func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.
 
 	cid := addResp.Cid
 
+	oldContentCID := existing.ContentCID
+
 	h.logger.Info("New content uploaded",
 		zap.String("deployment", existing.Name),
-		zap.String("old_cid", existing.ContentCID),
+		zap.String("old_cid", oldContentCID),
 		zap.String("new_cid", cid),
 	)
 
@@ -158,6 +160,13 @@ func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.
 	_, err = h.service.db.Exec(ctx, query, cid, newVersion, now, existing.Namespace, existing.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update deployment: %w", err)
+	}
+
+	// Unpin old IPFS content (best-effort)
+	if oldContentCID != "" && oldContentCID != cid {
+		if unpinErr := h.staticHandler.ipfsClient.Unpin(ctx, oldContentCID); unpinErr != nil {
+			h.logger.Warn("Failed to unpin old content CID", zap.String("cid", oldContentCID), zap.Error(unpinErr))
+		}
 	}
 
 	// Record in history
@@ -193,9 +202,11 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 
 	cid := addResp.Cid
 
+	oldBuildCID := existing.BuildCID
+
 	h.logger.Info("New build uploaded",
 		zap.String("deployment", existing.Name),
-		zap.String("old_cid", existing.BuildCID),
+		zap.String("old_cid", oldBuildCID),
 		zap.String("new_cid", cid),
 	)
 
@@ -263,6 +274,13 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 
 	// Cleanup old
 	removeDirectory(oldPath)
+
+	// Unpin old IPFS build (best-effort)
+	if oldBuildCID != "" && oldBuildCID != cid {
+		if unpinErr := h.nextjsHandler.ipfsClient.Unpin(ctx, oldBuildCID); unpinErr != nil {
+			h.logger.Warn("Failed to unpin old build CID", zap.String("cid", oldBuildCID), zap.Error(unpinErr))
+		}
+	}
 
 	existing.BuildCID = cid
 	existing.Version = newVersion

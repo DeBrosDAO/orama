@@ -387,6 +387,23 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		}
 	}
 
+	// Create WASM engine configuration (needed before secrets manager)
+	engineCfg := serverless.DefaultConfig()
+	engineCfg.DefaultMemoryLimitMB = 128
+	engineCfg.MaxMemoryLimitMB = 256
+	engineCfg.DefaultTimeoutSeconds = 30
+	engineCfg.MaxTimeoutSeconds = 60
+	engineCfg.ModuleCacheSize = 100
+
+	// Create secrets manager for serverless functions (AES-256-GCM encrypted)
+	var secretsMgr serverless.SecretsManager
+	if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, engineCfg.SecretsEncryptionKey, logger.Logger); secretsErr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral, "Failed to initialize secrets manager; get_secret will be unavailable",
+			zap.Error(secretsErr))
+	} else {
+		secretsMgr = smImpl
+	}
+
 	// Create host functions provider (allows functions to call Orama services)
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
 		IPFSAPIURL:  cfg.IPFSAPIURL,
@@ -398,21 +415,17 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		deps.IPFSClient,
 		pubsubAdapter, // pubsub adapter for serverless functions
 		deps.ServerlessWSMgr,
-		nil, // secrets manager - TODO: implement
+		secretsMgr,
 		hostFuncsCfg,
 		logger.Logger,
 	)
 
-	// Create WASM engine configuration
-	engineCfg := serverless.DefaultConfig()
-	engineCfg.DefaultMemoryLimitMB = 128
-	engineCfg.MaxMemoryLimitMB = 256
-	engineCfg.DefaultTimeoutSeconds = 30
-	engineCfg.MaxTimeoutSeconds = 60
-	engineCfg.ModuleCacheSize = 100
-
-	// Create WASM engine
-	engine, err := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger, serverless.WithInvocationLogger(registry))
+	// Create WASM engine with rate limiter
+	rateLimiter := serverless.NewTokenBucketLimiter(engineCfg.GlobalRateLimitPerMinute)
+	engine, err := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger,
+		serverless.WithInvocationLogger(registry),
+		serverless.WithRateLimiter(rateLimiter),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize serverless engine: %w", err)
 	}

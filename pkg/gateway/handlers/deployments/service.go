@@ -209,31 +209,42 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return fmt.Errorf("failed to marshal environment: %w", err)
 	}
 
-	// Insert deployment
-	query := `
-		INSERT INTO deployments (
-			id, namespace, name, type, version, status,
-			content_cid, build_cid, home_node_id, port, subdomain, environment,
-			memory_limit_mb, cpu_limit_percent, disk_limit_mb,
-			health_check_path, health_check_interval, restart_policy, max_restart_count,
-			created_at, updated_at, deployed_by
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+	// Insert deployment + record history in a single transaction
+	err = s.db.Tx(ctx, func(tx rqlite.Tx) error {
+		insertQuery := `
+			INSERT INTO deployments (
+				id, namespace, name, type, version, status,
+				content_cid, build_cid, home_node_id, port, subdomain, environment,
+				memory_limit_mb, cpu_limit_percent, disk_limit_mb,
+				health_check_path, health_check_interval, restart_policy, max_restart_count,
+				created_at, updated_at, deployed_by
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`
+		_, insertErr := tx.Exec(ctx, insertQuery,
+			deployment.ID, deployment.Namespace, deployment.Name, deployment.Type, deployment.Version, deployment.Status,
+			deployment.ContentCID, deployment.BuildCID, deployment.HomeNodeID, deployment.Port, deployment.Subdomain, string(envJSON),
+			deployment.MemoryLimitMB, deployment.CPULimitPercent, deployment.DiskLimitMB,
+			deployment.HealthCheckPath, deployment.HealthCheckInterval, deployment.RestartPolicy, deployment.MaxRestartCount,
+			deployment.CreatedAt, deployment.UpdatedAt, deployment.DeployedBy,
+		)
+		if insertErr != nil {
+			return insertErr
+		}
 
-	_, err = s.db.Exec(ctx, query,
-		deployment.ID, deployment.Namespace, deployment.Name, deployment.Type, deployment.Version, deployment.Status,
-		deployment.ContentCID, deployment.BuildCID, deployment.HomeNodeID, deployment.Port, deployment.Subdomain, string(envJSON),
-		deployment.MemoryLimitMB, deployment.CPULimitPercent, deployment.DiskLimitMB,
-		deployment.HealthCheckPath, deployment.HealthCheckInterval, deployment.RestartPolicy, deployment.MaxRestartCount,
-		deployment.CreatedAt, deployment.UpdatedAt, deployment.DeployedBy,
-	)
-
+		historyQuery := `
+			INSERT INTO deployment_history (id, deployment_id, version, content_cid, build_cid, deployed_at, deployed_by, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`
+		_, histErr := tx.Exec(ctx, historyQuery,
+			uuid.New().String(), deployment.ID, deployment.Version,
+			deployment.ContentCID, deployment.BuildCID,
+			time.Now(), deployment.DeployedBy, "deployed",
+		)
+		return histErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to insert deployment: %w", err)
 	}
-
-	// Record in history
-	s.recordHistory(ctx, deployment, "deployed")
 
 	// Create replica records
 	if s.replicaManager != nil {

@@ -116,7 +116,7 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 		hostServices: hostServices,
 		logger:       logger,
 		moduleCache:  cache.NewModuleCache(cfg.ModuleCacheSize, logger),
-		executor:     execution.NewExecutor(runtime, logger),
+		executor:     execution.NewExecutor(runtime, logger, cfg.MaxConcurrentExecutions),
 		lifecycle:    execution.NewModuleLifecycle(runtime, logger),
 	}
 
@@ -204,6 +204,12 @@ func (e *Engine) Precompile(ctx context.Context, wasmCID string, wasmBytes []byt
 		return &DeployError{FunctionName: wasmCID, Cause: err}
 	}
 
+	// Enforce memory limits
+	if err := e.checkMemoryLimits(compiled); err != nil {
+		compiled.Close(ctx)
+		return &DeployError{FunctionName: wasmCID, Cause: err}
+	}
+
 	// Cache the compiled module
 	e.moduleCache.Set(wasmCID, compiled)
 
@@ -233,6 +239,19 @@ func (e *Engine) GetCacheStats() (size int, capacity int) {
 // Private methods
 // -----------------------------------------------------------------------------
 
+// checkMemoryLimits validates that a compiled module's memory declarations
+// don't exceed the configured maximum. Each WASM memory page is 64KB.
+func (e *Engine) checkMemoryLimits(compiled wazero.CompiledModule) error {
+	maxPages := uint32(e.config.MaxMemoryLimitMB * 16) // 1 MB = 16 pages (64KB each)
+	for _, mem := range compiled.ExportedMemories() {
+		if max, hasMax := mem.Max(); hasMax && max > maxPages {
+			return fmt.Errorf("module declares %d MB max memory, exceeds limit of %d MB",
+				max/16, e.config.MaxMemoryLimitMB)
+		}
+	}
+	return nil
+}
+
 // getOrCompileModule retrieves a compiled module from cache or compiles it.
 func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero.CompiledModule, error) {
 	return e.moduleCache.GetOrCompute(wasmCID, func() (wazero.CompiledModule, error) {
@@ -246,6 +265,12 @@ func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero
 		compiled, err := e.lifecycle.CompileModule(ctx, wasmCID, wasmBytes)
 		if err != nil {
 			return nil, ErrCompilationFailed
+		}
+
+		// Enforce memory limits
+		if err := e.checkMemoryLimits(compiled); err != nil {
+			compiled.Close(ctx)
+			return nil, err
 		}
 
 		return compiled, nil
