@@ -41,7 +41,7 @@ Install nodes **one at a time**, waiting for each to complete before starting th
 ```bash
 # SSH: <user>@<ns1-ip>
 
-sudo orama install \
+sudo orama node install \
   --vps-ip <ns1-ip> \
   --domain <your-domain.com> \
   --base-domain <your-domain.com> \
@@ -50,7 +50,7 @@ sudo orama install \
 
 After ns1 is installed, generate invite tokens:
 ```bash
-orama invite --expiry 24h
+sudo orama node invite --expiry 24h
 ```
 
 ## ns2 - Nameserver + Relay
@@ -58,7 +58,7 @@ orama invite --expiry 24h
 ```bash
 # SSH: <user>@<ns2-ip>
 
-sudo orama install \
+sudo orama node install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <ns2-ip> \
   --domain <your-domain.com> \
@@ -68,8 +68,7 @@ sudo orama install \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
-  --anyone-bandwidth 30
+  --anyone-family "<fingerprint1>,<fingerprint2>,..."
 ```
 
 ## ns3 - Nameserver + Relay
@@ -77,7 +76,7 @@ sudo orama install \
 ```bash
 # SSH: <user>@<ns3-ip>
 
-sudo orama install \
+sudo orama node install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <ns3-ip> \
   --domain <your-domain.com> \
@@ -87,27 +86,25 @@ sudo orama install \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
-  --anyone-bandwidth 30
+  --anyone-family "<fingerprint1>,<fingerprint2>,..."
 ```
 
 ## node4 - Non-Nameserver + Relay
 
+Domain is auto-generated (e.g., `node-a3f8k2.<your-domain.com>`). No `--domain` flag needed.
+
 ```bash
 # SSH: <user>@<node4-ip>
 
-sudo orama install \
+sudo orama node install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <node4-ip> \
-  --domain node4.<your-domain.com> \
   --base-domain <your-domain.com> \
-  --skip-checks \
   --anyone-relay --anyone-migrate \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
-  --anyone-bandwidth 30
+  --anyone-family "<fingerprint1>,<fingerprint2>,..."
 ```
 
 ## node5 - Non-Nameserver + Relay
@@ -115,18 +112,15 @@ sudo orama install \
 ```bash
 # SSH: <user>@<node5-ip>
 
-sudo orama install \
+sudo orama node install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <node5-ip> \
-  --domain node5.<your-domain.com> \
   --base-domain <your-domain.com> \
-  --skip-checks \
   --anyone-relay --anyone-migrate \
   --anyone-nickname <relay-name> \
   --anyone-wallet <wallet-address> \
   --anyone-contact "<contact-info>" \
-  --anyone-family "<fingerprint1>,<fingerprint2>,..." \
-  --anyone-bandwidth 30
+  --anyone-family "<fingerprint1>,<fingerprint2>,..."
 ```
 
 ## node6 - Non-Nameserver (No Anyone Relay)
@@ -134,12 +128,10 @@ sudo orama install \
 ```bash
 # SSH: <user>@<node6-ip>
 
-sudo orama install \
+sudo orama node install \
   --join http://<ns1-ip> --token <TOKEN> \
   --vps-ip <node6-ip> \
-  --domain node6.<your-domain.com> \
-  --base-domain <your-domain.com> \
-  --skip-checks
+  --base-domain <your-domain.com>
 ```
 
 ## Verification
@@ -147,13 +139,14 @@ sudo orama install \
 After all nodes are installed, verify cluster health:
 
 ```bash
-# Check RQLite cluster (from any node)
+# Full cluster report (from local machine)
+./bin/orama monitor report --env devnet
+
+# Single node health
+./bin/orama monitor report --env devnet --node <ip>
+
+# Or manually from any VPS:
 curl -s http://localhost:5001/status | jq -r '.store.raft.state, .store.raft.num_peers'
-# Should show: Leader (on one node) and N-1 peers
-
-# Check gateway health
 curl -s http://localhost:6001/health
-
-# Check Anyone relay (on nodes with relays)
 systemctl status orama-anyone-relay
 ```

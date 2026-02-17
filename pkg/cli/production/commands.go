@@ -80,7 +80,7 @@ func ShowHelp() {
 	fmt.Printf("      --interactive         - Launch interactive TUI wizard\n")
 	fmt.Printf("      --force               - Reconfigure all settings\n")
 	fmt.Printf("      --vps-ip IP           - VPS public IP address (required)\n")
-	fmt.Printf("      --domain DOMAIN       - Domain for this node (e.g., node-1.orama.network)\n")
+	fmt.Printf("      --domain DOMAIN       - Domain for HTTPS (auto-generated if omitted)\n")
 	fmt.Printf("      --peers ADDRS         - Comma-separated peer multiaddrs (for joining cluster)\n")
 	fmt.Printf("      --join ADDR           - RQLite join address IP:port (for joining cluster)\n")
 	fmt.Printf("      --cluster-secret HEX  - 64-hex cluster secret (required when joining)\n")

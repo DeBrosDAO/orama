@@ -59,11 +59,13 @@ func HandleStopWithFlags(force bool) {
 		{"coredns", "caddy"},                    // 5. Stop DNS/TLS last
 	}
 
-	// First, disable all services to prevent auto-restart
-	disableArgs := []string{"disable"}
-	disableArgs = append(disableArgs, services...)
-	if err := exec.Command("systemctl", disableArgs...).Run(); err != nil {
-		fmt.Printf("  Warning: Failed to disable some services: %v\n", err)
+	// Mask all services to immediately prevent Restart=always from reviving them.
+	// Unlike "disable" (which only removes boot symlinks), "mask" links the unit
+	// to /dev/null so systemd cannot start it at all. Unmasked by "orama node start".
+	maskArgs := []string{"mask"}
+	maskArgs = append(maskArgs, services...)
+	if err := exec.Command("systemctl", maskArgs...).Run(); err != nil {
+		fmt.Printf("  Warning: Failed to mask some services: %v\n", err)
 	}
 
 	// Stop services in order with brief pauses between groups
@@ -135,31 +137,16 @@ func HandleStopWithFlags(force bool) {
 			}
 		}
 
-		// Disable the service to prevent it from auto-starting on boot
-		enabled, err := utils.IsServiceEnabled(svc)
-		if err != nil {
-			fmt.Printf("  ⚠️  Unable to check if %s is enabled: %v\n", svc, err)
-			// Continue anyway - try to disable
-		}
-		if enabled {
-			if err := exec.Command("systemctl", "disable", svc).Run(); err != nil {
-				fmt.Printf("  ⚠️  Failed to disable %s: %v\n", svc, err)
-				hadError = true
-			} else {
-				fmt.Printf("  ✓ Disabled %s (will not auto-start on boot)\n", svc)
-			}
-		} else {
-			fmt.Printf("  ℹ️  %s already disabled\n", svc)
-		}
+		// Service is already masked (prevents both restart and boot start).
+		// No additional disable needed.
 	}
 
 	if hadError {
-		fmt.Fprintf(os.Stderr, "\n⚠️  Some services may still be restarting due to Restart=always\n")
+		fmt.Fprintf(os.Stderr, "\n⚠️  Some services could not be stopped cleanly\n")
 		fmt.Fprintf(os.Stderr, "   Check status with: systemctl list-units 'orama-*'\n")
-		fmt.Fprintf(os.Stderr, "   If services are still restarting, they may need manual intervention\n")
 	} else {
-		fmt.Printf("\n✅ All services stopped and disabled (will not auto-start on boot)\n")
-		fmt.Printf("   Use 'orama node start' to start and re-enable services\n")
+		fmt.Printf("\n✅ All services stopped and masked (will not auto-start on boot)\n")
+		fmt.Printf("   Use 'orama node start' to unmask and start services\n")
 	}
 }
 

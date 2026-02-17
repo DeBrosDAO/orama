@@ -22,7 +22,7 @@ ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
   /opt/orama/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
 
 # Graceful shutdown
-TimeoutStopSec=30s
+TimeoutStopSec=60s
 KillMode=mixed
 KillSignal=SIGTERM
 
