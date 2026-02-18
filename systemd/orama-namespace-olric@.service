@@ -12,7 +12,7 @@ WorkingDirectory=/opt/orama
 # Olric reads config from environment variable (set in env file)
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/olric.env
 
-ExecStart=/opt/orama/bin/olric-server
+ExecStart=/usr/local/bin/olric-server
 
 TimeoutStopSec=30s
 KillMode=mixed

@@ -81,6 +81,11 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/namespace/delete", g.namespaceDeleteHandler)
 	}
 
+	// namespace list (authenticated — lists namespaces owned by the current wallet)
+	if g.namespaceListHandler != nil {
+		mux.Handle("/v1/namespace/list", g.namespaceListHandler)
+	}
+
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
 	mux.HandleFunc("/v1/network/peers", g.networkPeersHandler)

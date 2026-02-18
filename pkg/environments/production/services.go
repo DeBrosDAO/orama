@@ -433,6 +433,24 @@ func (sc *SystemdController) StopService(name string) error {
 	return nil
 }
 
+// DisableService disables a service from starting on boot
+func (sc *SystemdController) DisableService(name string) error {
+	cmd := exec.Command("systemctl", "disable", name)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to disable service %s: %w", name, err)
+	}
+	return nil
+}
+
+// RemoveServiceUnit removes a systemd unit file from disk
+func (sc *SystemdController) RemoveServiceUnit(name string) error {
+	unitPath := filepath.Join(sc.systemdDir, name)
+	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove unit file %s: %w", name, err)
+	}
+	return nil
+}
+
 // StatusService gets the status of a service
 func (sc *SystemdController) StatusService(name string) (bool, error) {
 	cmd := exec.Command("systemctl", "is-active", "--quiet", name)

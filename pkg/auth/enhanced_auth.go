@@ -218,6 +218,37 @@ func (store *EnhancedCredentialStore) SetDefaultCredential(gatewayURL string, in
 	return true
 }
 
+// RemoveCredentialByNamespace removes the credential for a specific namespace from a gateway.
+// Returns true if a credential was removed.
+func (store *EnhancedCredentialStore) RemoveCredentialByNamespace(gatewayURL, namespace string) bool {
+	gwCreds := store.Gateways[gatewayURL]
+	if gwCreds == nil || len(gwCreds.Credentials) == 0 {
+		return false
+	}
+
+	for i, cred := range gwCreds.Credentials {
+		if cred.Namespace == namespace {
+			// Remove this credential from the slice
+			gwCreds.Credentials = append(gwCreds.Credentials[:i], gwCreds.Credentials[i+1:]...)
+
+			// Fix indices if they now point beyond the slice
+			if len(gwCreds.Credentials) == 0 {
+				gwCreds.DefaultIndex = 0
+				gwCreds.LastUsedIndex = 0
+			} else {
+				if gwCreds.DefaultIndex >= len(gwCreds.Credentials) {
+					gwCreds.DefaultIndex = len(gwCreds.Credentials) - 1
+				}
+				if gwCreds.LastUsedIndex >= len(gwCreds.Credentials) {
+					gwCreds.LastUsedIndex = gwCreds.DefaultIndex
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // ClearAllCredentials removes all credentials
 func (store *EnhancedCredentialStore) ClearAllCredentials() {
 	store.Gateways = make(map[string]*GatewayCredentials)

@@ -273,6 +273,79 @@ func (m *Manager) StopAllNamespaceServicesGlobally() error {
 	return nil
 }
 
+// StopDeploymentServicesForNamespace stops all deployment systemd units for a given namespace.
+// Deployment units follow the naming pattern: orama-deploy-{namespace}-{name}.service
+// (with dots replaced by hyphens, matching process/manager.go:getServiceName).
+// This is best-effort: individual failures are logged but do not abort the operation.
+func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
+	// Match the sanitization from deployments/process/manager.go:getServiceName
+	sanitizedNS := strings.ReplaceAll(namespace, ".", "-")
+	pattern := fmt.Sprintf("orama-deploy-%s-*", sanitizedNS)
+
+	m.logger.Info("Stopping deployment services for namespace",
+		zap.String("namespace", namespace),
+		zap.String("pattern", pattern))
+
+	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", pattern)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logger.Warn("Failed to list deployment services",
+			zap.String("namespace", namespace),
+			zap.Error(err))
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	stopped := 0
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		svc := fields[0]
+
+		// Stop the service
+		if stopOut, stopErr := exec.Command("systemctl", "stop", svc).CombinedOutput(); stopErr != nil {
+			m.logger.Warn("Failed to stop deployment service",
+				zap.String("service", svc),
+				zap.Error(stopErr),
+				zap.String("output", string(stopOut)))
+		}
+
+		// Disable the service
+		if disOut, disErr := exec.Command("systemctl", "disable", svc).CombinedOutput(); disErr != nil {
+			m.logger.Warn("Failed to disable deployment service",
+				zap.String("service", svc),
+				zap.Error(disErr),
+				zap.String("output", string(disOut)))
+		}
+
+		// Remove the service file
+		serviceFile := filepath.Join(m.systemdDir, svc)
+		if !strings.HasSuffix(serviceFile, ".service") {
+			serviceFile += ".service"
+		}
+		if rmErr := os.Remove(serviceFile); rmErr != nil && !os.IsNotExist(rmErr) {
+			m.logger.Warn("Failed to remove deployment service file",
+				zap.String("file", serviceFile),
+				zap.Error(rmErr))
+		}
+
+		stopped++
+		m.logger.Info("Stopped deployment service", zap.String("service", svc))
+	}
+
+	if stopped > 0 {
+		m.ReloadDaemon()
+		m.logger.Info("Deployment services cleanup complete",
+			zap.String("namespace", namespace),
+			zap.Int("stopped", stopped))
+	}
+}
+
 // CleanupOrphanedProcesses finds and kills any orphaned namespace processes not managed by systemd
 // This is for cleaning up after migration from old exec.Command approach
 func (m *Manager) CleanupOrphanedProcesses() error {

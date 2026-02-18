@@ -306,11 +306,15 @@ func (s *SystemdSpawner) SaveClusterState(namespace string, data []byte) error {
 	return nil
 }
 
-// StopAll stops all services for a namespace
+// StopAll stops all services for a namespace, including deployment processes
 func (s *SystemdSpawner) StopAll(ctx context.Context, namespace string) error {
 	s.logger.Info("Stopping all namespace services via systemd",
 		zap.String("namespace", namespace))
 
+	// Stop deployment processes first (they depend on the cluster services)
+	s.systemdMgr.StopDeploymentServicesForNamespace(namespace)
+
+	// Then stop infrastructure services (Gateway → Olric → RQLite)
 	return s.systemdMgr.StopAllNamespaceServices(namespace)
 }
 

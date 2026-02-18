@@ -29,6 +29,8 @@ func HandleNamespaceCommand(args []string) {
 		fs.BoolVar(&force, "force", false, "Skip confirmation prompt")
 		_ = fs.Parse(args[1:])
 		handleNamespaceDelete(force)
+	case "list":
+		handleNamespaceList()
 	case "repair":
 		if len(args) < 2 {
 			fmt.Fprintf(os.Stderr, "Usage: orama namespace repair <namespace_name>\n")
@@ -48,12 +50,14 @@ func showNamespaceHelp() {
 	fmt.Printf("Namespace Management Commands\n\n")
 	fmt.Printf("Usage: orama namespace <subcommand>\n\n")
 	fmt.Printf("Subcommands:\n")
+	fmt.Printf("  list                 - List namespaces owned by the current wallet\n")
 	fmt.Printf("  delete               - Delete the current namespace and all its resources\n")
 	fmt.Printf("  repair <namespace>   - Repair an under-provisioned namespace cluster (add missing nodes)\n")
 	fmt.Printf("  help                 - Show this help message\n\n")
 	fmt.Printf("Flags:\n")
 	fmt.Printf("  --force     - Skip confirmation prompt (delete only)\n\n")
 	fmt.Printf("Examples:\n")
+	fmt.Printf("  orama namespace list\n")
 	fmt.Printf("  orama namespace delete\n")
 	fmt.Printf("  orama namespace delete --force\n")
 	fmt.Printf("  orama namespace repair anchat\n")
@@ -122,10 +126,12 @@ func handleNamespaceDelete(force bool) {
 	// Confirm deletion
 	if !force {
 		fmt.Printf("This will permanently delete namespace '%s' and all its resources:\n", namespace)
+		fmt.Printf("  - All deployments and their processes\n")
 		fmt.Printf("  - RQLite cluster (3 nodes)\n")
 		fmt.Printf("  - Olric cache cluster (3 nodes)\n")
 		fmt.Printf("  - Gateway instances\n")
-		fmt.Printf("  - API keys and credentials\n\n")
+		fmt.Printf("  - API keys and credentials\n")
+		fmt.Printf("  - IPFS content and DNS records\n\n")
 		fmt.Printf("Type the namespace name to confirm: ")
 
 		scanner := bufio.NewScanner(os.Stdin)
@@ -174,5 +180,88 @@ func handleNamespaceDelete(force bool) {
 	}
 
 	fmt.Printf("Namespace '%s' deleted successfully.\n", namespace)
+
+	// Clean up local credentials for the deleted namespace
+	if store.RemoveCredentialByNamespace(gatewayURL, namespace) {
+		if err := store.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to clean up local credentials: %v\n", err)
+		} else {
+			fmt.Printf("Local credentials for '%s' cleared.\n", namespace)
+		}
+	}
+
 	fmt.Printf("Run 'orama auth login' to create a new namespace.\n")
+}
+
+func handleNamespaceList() {
+	// Load credentials
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	gatewayURL := getGatewayURL()
+	creds := store.GetDefaultCredential(gatewayURL)
+
+	if creds == nil || !creds.IsValid() {
+		fmt.Fprintf(os.Stderr, "Not authenticated. Run 'orama auth login' first.\n")
+		os.Exit(1)
+	}
+
+	// Make GET request to namespace list endpoint
+	url := fmt.Sprintf("%s/v1/namespace/list", gatewayURL)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Authorization", "Bearer "+creds.APIKey)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != http.StatusOK {
+		errMsg := "unknown error"
+		if e, ok := result["error"].(string); ok {
+			errMsg = e
+		}
+		fmt.Fprintf(os.Stderr, "Failed to list namespaces: %s\n", errMsg)
+		os.Exit(1)
+	}
+
+	namespaces, _ := result["namespaces"].([]interface{})
+	if len(namespaces) == 0 {
+		fmt.Println("No namespaces found.")
+		return
+	}
+
+	activeNS := creds.Namespace
+
+	fmt.Printf("Namespaces (%d):\n\n", len(namespaces))
+	for _, ns := range namespaces {
+		nsMap, _ := ns.(map[string]interface{})
+		name, _ := nsMap["name"].(string)
+		status, _ := nsMap["cluster_status"].(string)
+
+		marker := "  "
+		if name == activeNS {
+			marker = "* "
+		}
+
+		fmt.Printf("%s%-20s  cluster: %s\n", marker, name, status)
+	}
+	fmt.Printf("\n* = active namespace\n")
 }
