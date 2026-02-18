@@ -10,7 +10,7 @@ import (
 
 // DownloadFile downloads a file from a URL to a destination path
 func DownloadFile(url, dest string) error {
-	cmd := exec.Command("wget", "-q", url, "-O", dest)
+	cmd := exec.Command("wget", "-q", "-4", url, "-O", dest)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

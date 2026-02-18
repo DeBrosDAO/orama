@@ -149,6 +149,28 @@ func (ps *ProductionSetup) IsAnyoneClient() bool {
 	return ps.isAnyoneClient
 }
 
+// disableConflictingAnyoneService stops, disables, and removes a conflicting
+// Anyone service file. A node must run either relay or client, never both.
+// This is best-effort: errors are logged but do not abort the operation.
+func (ps *ProductionSetup) disableConflictingAnyoneService(serviceName string) {
+	unitPath := filepath.Join("/etc/systemd/system", serviceName)
+	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
+		return // Nothing to clean up
+	}
+
+	ps.logf("  Removing conflicting Anyone service: %s", serviceName)
+
+	if err := ps.serviceController.StopService(serviceName); err != nil {
+		ps.logf("  ⚠️  Warning: failed to stop %s: %v", serviceName, err)
+	}
+	if err := ps.serviceController.DisableService(serviceName); err != nil {
+		ps.logf("  ⚠️  Warning: failed to disable %s: %v", serviceName, err)
+	}
+	if err := ps.serviceController.RemoveServiceUnit(serviceName); err != nil {
+		ps.logf("  ⚠️  Warning: failed to remove %s: %v", serviceName, err)
+	}
+}
+
 // Phase1CheckPrerequisites performs initial environment validation
 func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	ps.logf("Phase 1: Checking prerequisites...")
@@ -605,18 +627,27 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("  ✓ Node service created: orama-node.service (with embedded gateway)")
 
 	// Anyone Relay service (only created when --anyone-relay flag is used)
+	// A node must run EITHER relay OR client, never both. When writing one
+	// mode's service, we remove the other to prevent conflicts (they share
+	// the same anon binary and would fight over ports).
 	if ps.IsAnyoneRelay() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
 		if err := ps.serviceController.WriteServiceUnit("orama-anyone-relay.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
 		}
 		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
+		ps.disableConflictingAnyoneService("orama-anyone-client.service")
 	} else if ps.IsAnyoneClient() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
 		if err := ps.serviceController.WriteServiceUnit("orama-anyone-client.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone client service: %w", err)
 		}
 		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
+		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
+	} else {
+		// Neither mode configured — clean up both
+		ps.disableConflictingAnyoneService("orama-anyone-client.service")
+		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
 	}
 
 	// CoreDNS service (only for nameserver nodes)

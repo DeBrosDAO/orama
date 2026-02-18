@@ -3,9 +3,11 @@ package namespace
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -19,14 +21,16 @@ type NamespaceDeprovisioner interface {
 type DeleteHandler struct {
 	deprovisioner NamespaceDeprovisioner
 	ormClient     rqlite.Client
+	ipfsClient    ipfs.IPFSClient // can be nil
 	logger        *zap.Logger
 }
 
 // NewDeleteHandler creates a new delete handler
-func NewDeleteHandler(dp NamespaceDeprovisioner, orm rqlite.Client, logger *zap.Logger) *DeleteHandler {
+func NewDeleteHandler(dp NamespaceDeprovisioner, orm rqlite.Client, ipfsClient ipfs.IPFSClient, logger *zap.Logger) *DeleteHandler {
 	return &DeleteHandler{
 		deprovisioner: dp,
 		ormClient:     orm,
+		ipfsClient:    ipfsClient,
 		logger:        logger.With(zap.String("component", "namespace-delete-handler")),
 	}
 }
@@ -80,14 +84,20 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		zap.Int64("namespace_id", namespaceID),
 	)
 
-	// Deprovision the cluster (stops processes, deallocates ports, deletes DB records)
+	// 1. Deprovision the cluster (stops infra + deployment processes, deallocates ports, deletes DNS)
 	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
 		h.logger.Error("Failed to deprovision cluster", zap.Error(err))
 		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
 	}
 
-	// Delete API keys, ownership records, and namespace record
+	// 2. Unpin IPFS content (must run before global table cleanup to read CID list)
+	h.unpinNamespaceContent(r.Context(), ns)
+
+	// 3. Clean up global tables that use namespace TEXT (not FK cascade)
+	h.cleanupGlobalTables(r.Context(), ns)
+
+	// 4. Delete API keys, ownership records, and namespace record (FK cascade handles children)
 	h.ormClient.Exec(r.Context(), "DELETE FROM wallet_api_keys WHERE namespace_id = ?", namespaceID)
 	h.ormClient.Exec(r.Context(), "DELETE FROM api_keys WHERE namespace_id = ?", namespaceID)
 	h.ormClient.Exec(r.Context(), "DELETE FROM namespace_ownership WHERE namespace_id = ?", namespaceID)
@@ -99,6 +109,71 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"status":    "deleted",
 		"namespace": ns,
 	})
+}
+
+// unpinNamespaceContent unpins all IPFS content owned by the namespace.
+// Best-effort: individual failures are logged but do not abort deletion.
+func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
+	if h.ipfsClient == nil {
+		h.logger.Debug("IPFS client not available, skipping IPFS cleanup")
+		return
+	}
+
+	type cidRow struct {
+		CID string `db:"cid"`
+	}
+	var rows []cidRow
+	if err := h.ormClient.Query(ctx, &rows,
+		"SELECT cid FROM ipfs_content_ownership WHERE namespace = ?", ns); err != nil {
+		h.logger.Warn("Failed to query IPFS content for namespace",
+			zap.String("namespace", ns), zap.Error(err))
+		return
+	}
+
+	if len(rows) == 0 {
+		return
+	}
+
+	h.logger.Info("Unpinning IPFS content for namespace",
+		zap.String("namespace", ns),
+		zap.Int("cid_count", len(rows)))
+
+	for _, row := range rows {
+		if err := h.ipfsClient.Unpin(ctx, row.CID); err != nil {
+			h.logger.Warn("Failed to unpin CID (best-effort)",
+				zap.String("cid", row.CID),
+				zap.String("namespace", ns),
+				zap.Error(err))
+		}
+	}
+}
+
+// cleanupGlobalTables deletes orphaned records from global tables that reference
+// the namespace by TEXT name (not by integer FK, so CASCADE doesn't help).
+// Best-effort: individual failures are logged but do not abort deletion.
+func (h *DeleteHandler) cleanupGlobalTables(ctx context.Context, ns string) {
+	tables := []struct {
+		table  string
+		column string
+	}{
+		{"global_deployment_subdomains", "namespace"},
+		{"ipfs_content_ownership", "namespace"},
+		{"functions", "namespace"},
+		{"function_secrets", "namespace"},
+		{"namespace_sqlite_databases", "namespace"},
+		{"namespace_quotas", "namespace"},
+		{"home_node_assignments", "namespace"},
+	}
+
+	for _, t := range tables {
+		query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", t.table, t.column)
+		if _, err := h.ormClient.Exec(ctx, query, ns); err != nil {
+			h.logger.Warn("Failed to clean up global table (best-effort)",
+				zap.String("table", t.table),
+				zap.String("namespace", ns),
+				zap.Error(err))
+		}
+	}
 }
 
 func writeDeleteResponse(w http.ResponseWriter, status int, resp map[string]interface{}) {

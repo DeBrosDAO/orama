@@ -88,9 +88,13 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		spawnHandler := namespacehandlers.NewSpawnHandler(systemdSpawner, n.logger.Logger)
 		apiGateway.SetSpawnHandler(spawnHandler)
 
-		// Wire namespace delete handler
-		deleteHandler := namespacehandlers.NewDeleteHandler(clusterManager, ormClient, n.logger.Logger)
+		// Wire namespace delete handler (with IPFS client for content unpinning)
+		deleteHandler := namespacehandlers.NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), n.logger.Logger)
 		apiGateway.SetNamespaceDeleteHandler(deleteHandler)
+
+		// Wire namespace list handler
+		nsListHandler := namespacehandlers.NewListHandler(ormClient, n.logger.Logger)
+		apiGateway.SetNamespaceListHandler(nsListHandler)
 
 		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
 			zap.String("base_domain", clusterCfg.BaseDomain),

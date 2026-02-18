@@ -136,6 +136,9 @@ type Gateway struct {
 	// Namespace delete handler
 	namespaceDeleteHandler http.Handler
 
+	// Namespace list handler
+	namespaceListHandler http.Handler
+
 	// Peer discovery for namespace gateways (libp2p mesh formation)
 	peerDiscovery *PeerDiscovery
 
@@ -630,9 +633,19 @@ func (g *Gateway) SetNamespaceDeleteHandler(h http.Handler) {
 	g.namespaceDeleteHandler = h
 }
 
+// SetNamespaceListHandler sets the handler for namespace list requests.
+func (g *Gateway) SetNamespaceListHandler(h http.Handler) {
+	g.namespaceListHandler = h
+}
+
 // GetORMClient returns the RQLite ORM client for external use (e.g., by ClusterManager)
 func (g *Gateway) GetORMClient() rqlite.Client {
 	return g.ormClient
+}
+
+// GetIPFSClient returns the IPFS client for external use (e.g., by namespace delete handler)
+func (g *Gateway) GetIPFSClient() ipfs.IPFSClient {
+	return g.ipfsClient
 }
 
 // setOlricClient atomically sets the Olric client and reinitializes cache handlers.

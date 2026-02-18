@@ -27,6 +27,15 @@ var deleteCmd = &cobra.Command{
 	},
 }
 
+var listCmd = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List namespaces owned by the current wallet",
+	Run: func(cmd *cobra.Command, args []string) {
+		cli.HandleNamespaceCommand([]string{"list"})
+	},
+}
+
 var repairCmd = &cobra.Command{
 	Use:   "repair <namespace>",
 	Short: "Repair an under-provisioned namespace cluster",
@@ -39,6 +48,7 @@ var repairCmd = &cobra.Command{
 func init() {
 	deleteCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 
+	Cmd.AddCommand(listCmd)
 	Cmd.AddCommand(deleteCmd)
 	Cmd.AddCommand(repairCmd)
 }
