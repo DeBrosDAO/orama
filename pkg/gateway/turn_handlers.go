@@ -90,6 +90,22 @@ func (g *Gateway) generateTURNCredentials(userID, gatewayHost string) *TURNCrede
 	stunURLs := processURLsWithHost(cfg.STUNURLs, gatewayHost)
 	turnURLs := processURLsWithHost(cfg.TURNURLs, gatewayHost)
 
+	// If TLS is enabled, ensure we have turns:// URLs
+	if cfg.TLSEnabled {
+		hasTurns := false
+		for _, url := range turnURLs {
+			if strings.HasPrefix(url, "turns:") {
+				hasTurns = true
+				break
+			}
+		}
+		// Auto-add turns:// URL if not already configured
+		if !hasTurns {
+			turnsURL := fmt.Sprintf("turns:%s:443?transport=tcp", gatewayHost)
+			turnURLs = append(turnURLs, turnsURL)
+		}
+	}
+
 	return &TURNCredentialsResponse{
 		Username:   username,
 		Credential: credential,

@@ -186,6 +186,10 @@ type TURNConfig struct {
 	// TURNURLs are the TURN server URLs to return to clients
 	// e.g., ["turn:gateway.orama.com:3478?transport=udp", "turns:gateway.orama.com:443?transport=tcp"]
 	TURNURLs []string `yaml:"turn_urls"`
+
+	// TLSEnabled indicates whether TURNS (TURN over TLS) is available
+	// When true, turns:// URLs will be included in the response
+	TLSEnabled bool `yaml:"tls_enabled"`
 }
 
 // SFUConfig contains WebRTC SFU (Selective Forwarding Unit) configuration
@@ -231,6 +235,19 @@ type TURNServerConfig struct {
 	// MinPort and MaxPort define the relay port range
 	MinPort uint16 `yaml:"min_port"`
 	MaxPort uint16 `yaml:"max_port"`
+
+	// TLS Configuration for TURNS (TURN over TLS)
+	// TLSEnabled enables TURNS listener
+	TLSEnabled bool `yaml:"tls_enabled"`
+
+	// TLSListenAddr is the TCP/TLS address to listen on (e.g., "0.0.0.0:443")
+	TLSListenAddr string `yaml:"tls_listen_addr"`
+
+	// TLSCertFile is the path to the TLS certificate file
+	TLSCertFile string `yaml:"tls_cert_file"`
+
+	// TLSKeyFile is the path to the TLS private key file
+	TLSKeyFile string `yaml:"tls_key_file"`
 }
 
 // ParseMultiaddrs converts string addresses to multiaddr objects

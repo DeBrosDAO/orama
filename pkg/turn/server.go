@@ -4,6 +4,7 @@ package turn
 import (
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -40,6 +41,19 @@ type Config struct {
 	// MinPort and MaxPort define the relay port range
 	MinPort uint16 `yaml:"min_port"`
 	MaxPort uint16 `yaml:"max_port"`
+
+	// TLS Configuration for TURNS (TURN over TLS)
+	// TLSEnabled enables TURNS listener on TLSListenAddr
+	TLSEnabled bool `yaml:"tls_enabled"`
+
+	// TLSListenAddr is the TCP/TLS address to listen on (e.g., "0.0.0.0:443")
+	TLSListenAddr string `yaml:"tls_listen_addr"`
+
+	// TLSCertFile is the path to the TLS certificate file
+	TLSCertFile string `yaml:"tls_cert_file"`
+
+	// TLSKeyFile is the path to the TLS private key file
+	TLSKeyFile string `yaml:"tls_key_file"`
 }
 
 // DefaultConfig returns a default TURN server configuration
@@ -56,12 +70,13 @@ func DefaultConfig() *Config {
 
 // Server is a built-in TURN/STUN server
 type Server struct {
-	config     *Config
-	logger     *zap.Logger
-	turnServer *turn.Server
-	conn       net.PacketConn
-	mu         sync.RWMutex
-	running    bool
+	config      *Config
+	logger      *zap.Logger
+	turnServer  *turn.Server
+	conn        net.PacketConn // UDP listener
+	tlsListener net.Listener   // TLS listener for TURNS
+	mu          sync.RWMutex
+	running     bool
 }
 
 // NewServer creates a new TURN server
@@ -127,7 +142,53 @@ func (s *Server) Start() error {
 		zap.String("realm", s.config.Realm),
 		zap.Uint16("min_port", s.config.MinPort),
 		zap.Uint16("max_port", s.config.MaxPort),
+		zap.Bool("tls_enabled", s.config.TLSEnabled),
 	)
+
+	// Prepare listener configs for TLS (TURNS)
+	var listenerConfigs []turn.ListenerConfig
+
+	if s.config.TLSEnabled && s.config.TLSCertFile != "" && s.config.TLSKeyFile != "" {
+		// Load TLS certificate
+		cert, err := tls.LoadX509KeyPair(s.config.TLSCertFile, s.config.TLSKeyFile)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+
+		// Determine TLS listen address
+		tlsListenAddr := s.config.TLSListenAddr
+		if tlsListenAddr == "" {
+			tlsListenAddr = "0.0.0.0:443"
+		}
+
+		// Create TLS listener
+		tlsListener, err := tls.Listen("tcp", tlsListenAddr, tlsConfig)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("failed to start TLS listener on %s: %w", tlsListenAddr, err)
+		}
+		s.tlsListener = tlsListener
+
+		listenerConfigs = append(listenerConfigs, turn.ListenerConfig{
+			Listener: tlsListener,
+			RelayAddressGenerator: &turn.RelayAddressGeneratorPortRange{
+				RelayAddress: relayIP,
+				Address:      "0.0.0.0",
+				MinPort:      s.config.MinPort,
+				MaxPort:      s.config.MaxPort,
+			},
+		})
+
+		s.logger.Info("TURNS (TLS) listener started",
+			zap.String("tls_addr", tlsListenAddr),
+		)
+	}
 
 	// Create TURN server with HMAC-SHA1 auth
 	turnServer, err := turn.NewServer(turn.ServerConfig{
@@ -146,9 +207,13 @@ func (s *Server) Start() error {
 				},
 			},
 		},
+		ListenerConfigs: listenerConfigs,
 	})
 	if err != nil {
 		conn.Close()
+		if s.tlsListener != nil {
+			s.tlsListener.Close()
+		}
 		return fmt.Errorf("failed to create TURN server: %w", err)
 	}
 
@@ -158,6 +223,7 @@ func (s *Server) Start() error {
 	s.logger.Info("TURN server started successfully",
 		zap.String("addr", s.config.ListenAddr),
 		zap.String("realm", s.config.Realm),
+		zap.Bool("turns_enabled", s.config.TLSEnabled),
 	)
 
 	return nil
@@ -228,6 +294,12 @@ func (s *Server) Stop() error {
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
+	}
+
+	// Close TLS listener
+	if s.tlsListener != nil {
+		s.tlsListener.Close()
+		s.tlsListener = nil
 	}
 
 	s.running = false

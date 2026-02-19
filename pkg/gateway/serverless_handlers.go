@@ -19,10 +19,11 @@ import (
 // ServerlessHandlers contains handlers for serverless function endpoints.
 // It's a separate struct to keep the Gateway struct clean.
 type ServerlessHandlers struct {
-	invoker   *serverless.Invoker
-	registry  serverless.FunctionRegistry
-	wsManager *serverless.WSManager
-	logger    *zap.Logger
+	invoker        *serverless.Invoker
+	registry       serverless.FunctionRegistry
+	wsManager      *serverless.WSManager
+	triggerManager serverless.TriggerManager
+	logger         *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
@@ -30,13 +31,15 @@ func NewServerlessHandlers(
 	invoker *serverless.Invoker,
 	registry serverless.FunctionRegistry,
 	wsManager *serverless.WSManager,
+	triggerManager serverless.TriggerManager,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
 	return &ServerlessHandlers{
-		invoker:   invoker,
-		registry:  registry,
-		wsManager: wsManager,
-		logger:    logger,
+		invoker:        invoker,
+		registry:       registry,
+		wsManager:      wsManager,
+		triggerManager: triggerManager,
+		logger:         logger,
 	}
 }
 
@@ -105,6 +108,8 @@ func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http
 		h.listVersions(w, r, name)
 	case "logs":
 		h.getFunctionLogs(w, r, name)
+	case "triggers":
+		h.handleFunctionTriggers(w, r, name)
 	case "":
 		switch r.Method {
 		case http.MethodGet:
@@ -320,10 +325,36 @@ func (h *ServerlessHandlers) deployFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
+	// Register PubSub triggers if provided in metadata
+	var triggersAdded []string
+	if len(def.PubSubTopics) > 0 && h.triggerManager != nil {
+		for _, topic := range def.PubSubTopics {
+			if err := h.triggerManager.AddPubSubTrigger(ctx, fn.ID, topic); err != nil {
+				// Log but don't fail deployment
+				h.logger.Warn("Failed to add pubsub trigger during deployment",
+					zap.String("function", def.Name),
+					zap.String("topic", topic),
+					zap.Error(err),
+				)
+			} else {
+				triggersAdded = append(triggersAdded, topic)
+				h.logger.Info("PubSub trigger added during deployment",
+					zap.String("function", def.Name),
+					zap.String("topic", topic),
+				)
+			}
+		}
+	}
+
+	response := map[string]interface{}{
 		"message":  "Function deployed successfully",
 		"function": fn,
-	})
+	}
+	if len(triggersAdded) > 0 {
+		response["triggers_added"] = triggersAdded
+	}
+
+	writeJSON(w, http.StatusCreated, response)
 }
 
 // getFunctionInfo handles GET /v1/functions/{name}
@@ -691,4 +722,212 @@ func (h *ServerlessHandlers) HealthStatus() map[string]interface{} {
 		"connections": stats.ConnectionCount,
 		"topics":      stats.TopicCount,
 	}
+}
+
+// handleFunctionTriggers handles trigger operations for a function
+// Routes:
+//   - GET    /v1/functions/{name}/triggers           - List all triggers
+//   - POST   /v1/functions/{name}/triggers/pubsub    - Add pubsub trigger
+//   - DELETE /v1/functions/{name}/triggers/{id}      - Remove trigger
+func (h *ServerlessHandlers) handleFunctionTriggers(w http.ResponseWriter, r *http.Request, name string) {
+	if h.triggerManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "Trigger management not available")
+		return
+	}
+
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = h.getNamespaceFromRequest(r)
+	}
+
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "namespace required")
+		return
+	}
+
+	// Parse sub-path for trigger type or ID
+	// Path after "triggers" could be: "", "pubsub", or "{trigger_id}"
+	fullPath := r.URL.Path
+	triggersIdx := strings.Index(fullPath, "/triggers")
+	subPath := ""
+	if triggersIdx > 0 {
+		subPath = strings.TrimPrefix(fullPath[triggersIdx:], "/triggers")
+		subPath = strings.TrimPrefix(subPath, "/")
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		h.listFunctionTriggers(w, r, namespace, name)
+	case http.MethodPost:
+		if subPath == "pubsub" {
+			h.addPubSubTrigger(w, r, namespace, name)
+		} else {
+			writeError(w, http.StatusBadRequest, "Invalid trigger type. Use /triggers/pubsub")
+		}
+	case http.MethodDelete:
+		if subPath == "" {
+			writeError(w, http.StatusBadRequest, "Trigger ID required")
+			return
+		}
+		h.removeFunctionTrigger(w, r, namespace, name, subPath)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// listFunctionTriggers handles GET /v1/functions/{name}/triggers
+func (h *ServerlessHandlers) listFunctionTriggers(w http.ResponseWriter, r *http.Request, namespace, name string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Get function to verify it exists and get its ID
+	fn, err := h.registry.Get(ctx, namespace, name, 0)
+	if err != nil {
+		if serverless.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "Function not found")
+			return
+		}
+		h.logger.Error("Failed to get function",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "Failed to get function")
+		return
+	}
+
+	// Get pubsub triggers
+	pubsubTriggers, err := h.triggerManager.ListPubSubTriggers(ctx, fn.ID)
+	if err != nil {
+		h.logger.Error("Failed to list triggers",
+			zap.String("function_id", fn.ID),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "Failed to list triggers")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"name":            name,
+		"namespace":       namespace,
+		"function_id":     fn.ID,
+		"pubsub_triggers": pubsubTriggers,
+		"count":           len(pubsubTriggers),
+	})
+}
+
+// addPubSubTrigger handles POST /v1/functions/{name}/triggers/pubsub
+func (h *ServerlessHandlers) addPubSubTrigger(w http.ResponseWriter, r *http.Request, namespace, name string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Parse request body
+	var req struct {
+		Topic string `json:"topic"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if req.Topic == "" {
+		writeError(w, http.StatusBadRequest, "topic is required")
+		return
+	}
+
+	// Get function to verify it exists and get its ID
+	fn, err := h.registry.Get(ctx, namespace, name, 0)
+	if err != nil {
+		if serverless.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "Function not found")
+			return
+		}
+		h.logger.Error("Failed to get function",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "Failed to get function")
+		return
+	}
+
+	// Add the trigger
+	err = h.triggerManager.AddPubSubTrigger(ctx, fn.ID, req.Topic)
+	if err != nil {
+		if serverless.IsValidationError(err) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.logger.Error("Failed to add pubsub trigger",
+			zap.String("function_id", fn.ID),
+			zap.String("topic", req.Topic),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "Failed to add trigger")
+		return
+	}
+
+	// Get the triggers to return the newly created one
+	triggers, _ := h.triggerManager.ListPubSubTriggers(ctx, fn.ID)
+	var newTrigger *serverless.PubSubTrigger
+	for i := range triggers {
+		if triggers[i].Topic == req.Topic {
+			newTrigger = &triggers[i]
+			break
+		}
+	}
+
+	h.logger.Info("PubSub trigger added",
+		zap.String("function", name),
+		zap.String("namespace", namespace),
+		zap.String("topic", req.Topic),
+	)
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"message": "Trigger added successfully",
+		"trigger": newTrigger,
+	})
+}
+
+// removeFunctionTrigger handles DELETE /v1/functions/{name}/triggers/{id}
+func (h *ServerlessHandlers) removeFunctionTrigger(w http.ResponseWriter, r *http.Request, namespace, name, triggerID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Verify function exists
+	fn, err := h.registry.Get(ctx, namespace, name, 0)
+	if err != nil {
+		if serverless.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "Function not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to get function")
+		return
+	}
+
+	// Remove the trigger
+	err = h.triggerManager.RemoveTrigger(ctx, triggerID)
+	if err != nil {
+		if err == serverless.ErrTriggerNotFound {
+			writeError(w, http.StatusNotFound, "Trigger not found")
+			return
+		}
+		h.logger.Error("Failed to remove trigger",
+			zap.String("trigger_id", triggerID),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "Failed to remove trigger")
+		return
+	}
+
+	h.logger.Info("Trigger removed",
+		zap.String("function", name),
+		zap.String("function_id", fn.ID),
+		zap.String("trigger_id", triggerID),
+	)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":    "Trigger removed successfully",
+		"trigger_id": triggerID,
+	})
 }

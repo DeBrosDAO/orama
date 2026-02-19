@@ -387,11 +387,15 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			// Create invoker
 			gw.serverlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
 
+			// Create trigger manager
+			triggerManager := serverless.NewDBTriggerManager(gw.ormClient, logger.Logger)
+
 			// Create HTTP handlers
 			gw.serverlessHandlers = NewServerlessHandlers(
 				gw.serverlessInvoker,
 				registry,
 				gw.serverlessWSMgr,
+				triggerManager,
 				logger.Logger,
 			)
 
