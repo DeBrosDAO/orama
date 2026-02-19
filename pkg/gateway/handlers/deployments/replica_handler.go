@@ -11,6 +11,7 @@ import (
 
 	"os/exec"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -422,6 +423,11 @@ func (h *ReplicaHandler) extractFromIPFS(ctx context.Context, cid, destPath stri
 }
 
 // isInternalRequest checks if the request is an internal node-to-node call.
+// Requires both the static auth header AND that the request originates from
+// the WireGuard mesh subnet (cryptographic peer authentication).
 func (h *ReplicaHandler) isInternalRequest(r *http.Request) bool {
-	return r.Header.Get("X-Orama-Internal-Auth") == "replica-coordination"
+	if r.Header.Get("X-Orama-Internal-Auth") != "replica-coordination" {
+		return false
+	}
+	return auth.IsWireGuardPeer(r.RemoteAddr)
 }

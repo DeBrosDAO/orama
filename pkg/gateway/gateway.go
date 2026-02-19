@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/health"
@@ -806,8 +807,8 @@ func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Internal auth check
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" {
+	// Internal auth check: header + WireGuard subnet verification
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}

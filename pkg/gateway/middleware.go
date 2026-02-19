@@ -940,33 +940,57 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		return targets[i].ip < targets[j].ip
 	})
 
-	// Prefer local gateway if this node is part of the namespace cluster.
-	// This avoids a WireGuard network hop and eliminates single-point-of-failure
-	// when a remote gateway node is down.
-	var selected namespaceGatewayTarget
+	// Build ordered target list: local gateway first, then hash-selected, then remaining.
+	// This ordering is used by the circuit breaker fallback loop below.
+	orderedTargets := make([]namespaceGatewayTarget, 0, len(targets))
+	localIdx := -1
 	if g.localWireGuardIP != "" {
-		for _, t := range targets {
+		for i, t := range targets {
 			if t.ip == g.localWireGuardIP {
-				selected = t
+				orderedTargets = append(orderedTargets, t)
+				localIdx = i
 				break
 			}
 		}
 	}
 
-	// Fall back to consistent hashing for nodes not in the namespace cluster
-	if selected.ip == "" {
-		affinityKey := namespaceName + "|" + validatedNamespace
-		if apiKey := extractAPIKey(r); apiKey != "" {
-			affinityKey = namespaceName + "|" + apiKey
-		} else if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {
-			affinityKey = namespaceName + "|" + authz
-		} else {
-			affinityKey = namespaceName + "|" + getClientIP(r)
+	// Consistent hashing for affinity (keeps WS subscribe/publish on same node)
+	affinityKey := namespaceName + "|" + validatedNamespace
+	if apiKey := extractAPIKey(r); apiKey != "" {
+		affinityKey = namespaceName + "|" + apiKey
+	} else if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {
+		affinityKey = namespaceName + "|" + authz
+	} else {
+		affinityKey = namespaceName + "|" + getClientIP(r)
+	}
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(affinityKey))
+	hashIdx := int(hasher.Sum32()) % len(targets)
+	if hashIdx != localIdx {
+		orderedTargets = append(orderedTargets, targets[hashIdx])
+	}
+	for i, t := range targets {
+		if i != localIdx && i != hashIdx {
+			orderedTargets = append(orderedTargets, t)
 		}
-		hasher := fnv.New32a()
-		_, _ = hasher.Write([]byte(affinityKey))
-		targetIdx := int(hasher.Sum32()) % len(targets)
-		selected = targets[targetIdx]
+	}
+
+	// Select the first target whose circuit breaker allows a request through.
+	// This provides automatic failover when a namespace gateway node is down.
+	var selected namespaceGatewayTarget
+	var cb *CircuitBreaker
+	for _, candidate := range orderedTargets {
+		cbKey := "ns:" + candidate.ip
+		candidateCB := g.circuitBreakers.Get(cbKey)
+		if candidateCB.Allow() {
+			selected = candidate
+			cb = candidateCB
+			break
+		}
+	}
+	if selected.ip == "" {
+		http.Error(w, "Namespace gateway unavailable (all circuits open)", http.StatusServiceUnavailable)
+		return
 	}
 	gatewayIP := selected.ip
 	gatewayPort := selected.port
@@ -1025,14 +1049,6 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	if validatedNamespace != "" {
 		proxyReq.Header.Set(HeaderInternalAuthValidated, "true")
 		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
-	}
-
-	// Circuit breaker: check if target is healthy before sending request
-	cbKey := "ns:" + gatewayIP
-	cb := g.circuitBreakers.Get(cbKey)
-	if !cb.Allow() {
-		http.Error(w, "Namespace gateway unavailable (circuit open)", http.StatusServiceUnavailable)
-		return
 	}
 
 	// Execute proxy request using shared transport for connection pooling
