@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"gopkg.in/yaml.v3"
 )
 
 var ErrServiceNotFound = errors.New("service not found")
@@ -325,13 +327,25 @@ func StartServicesOrdered(services []string, action string) {
 			}
 		}
 
-		// After starting all Olric instances for all namespaces, wait for them
-		// to bind their HTTP ports and form memberlist clusters before starting
-		// gateways. Without this, gateways start before Olric is ready and the
-		// Olric client initialization fails permanently.
+		// After starting all Olric instances, wait for each one's memberlist
+		// port to accept TCP connections before starting gateways. Without this,
+		// gateways start before Olric is ready and the Olric client initialization
+		// fails permanently (no retry).
 		if svcType == "olric" && len(svcs) > 0 {
 			fmt.Printf("  Waiting for namespace Olric instances to become ready...\n")
-			time.Sleep(5 * time.Second)
+			for _, svc := range svcs {
+				ns := strings.TrimPrefix(svc, "orama-namespace-olric@")
+				port := getOlricMemberlistPort(ns)
+				if port <= 0 {
+					fmt.Printf("  ⚠️  Could not determine Olric memberlist port for namespace %s\n", ns)
+					continue
+				}
+				if err := waitForTCPPort(port, 30*time.Second); err != nil {
+					fmt.Printf("  ⚠️  Olric memberlist port %d not ready for namespace %s: %v\n", port, ns, err)
+				} else {
+					fmt.Printf("  ✓ Olric ready for namespace %s (port %d)\n", ns, port)
+				}
+			}
 		}
 	}
 
@@ -344,4 +358,63 @@ func StartServicesOrdered(services []string, action string) {
 			fmt.Printf("  ✓ %s\n", svc)
 		}
 	}
+}
+
+// getOlricMemberlistPort reads a namespace's Olric config and returns the
+// memberlist bind port. Returns 0 if the config cannot be read or parsed.
+func getOlricMemberlistPort(namespace string) int {
+	envFile := filepath.Join("/opt/orama/.orama/data/namespaces", namespace, "olric.env")
+	f, err := os.Open(envFile)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	// Read OLRIC_SERVER_CONFIG path from env file
+	var configPath string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "OLRIC_SERVER_CONFIG=") {
+			configPath = strings.TrimPrefix(line, "OLRIC_SERVER_CONFIG=")
+			break
+		}
+	}
+	if configPath == "" {
+		return 0
+	}
+
+	// Parse the YAML config to extract memberlist.bindPort
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0
+	}
+
+	var cfg struct {
+		Memberlist struct {
+			BindPort int `yaml:"bindPort"`
+		} `yaml:"memberlist"`
+	}
+	if err := yaml.Unmarshal(configData, &cfg); err != nil {
+		return 0
+	}
+
+	return cfg.Memberlist.BindPort
+}
+
+// waitForTCPPort polls a TCP port until it accepts connections or the timeout expires.
+func waitForTCPPort(port int, timeout time.Duration) error {
+	addr := fmt.Sprintf("localhost:%d", port)
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	return fmt.Errorf("port %d did not become ready within %s", port, timeout)
 }
