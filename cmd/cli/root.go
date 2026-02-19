@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/pkg/cli/cmd/deploy"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/envcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/functioncmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/inspectcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
@@ -78,6 +79,9 @@ and interacting with the Orama distributed network.`,
 
 	// Monitor command
 	rootCmd.AddCommand(monitorcmd.Cmd)
+
+	// Serverless function commands
+	rootCmd.AddCommand(functioncmd.Cmd)
 
 	return rootCmd
 }
