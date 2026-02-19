@@ -2,6 +2,9 @@ package report
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -93,22 +96,56 @@ var managedServiceUnits = []string{
 // collectManagedPIDs queries systemd for the MainPID of each known service.
 // Returns a set of PIDs that are legitimately managed by systemd (not orphans).
 func collectManagedPIDs() map[int]bool {
+	// Hard deadline: stop querying if this takes too long (e.g., node with many namespaces).
+	deadline := time.Now().Add(10 * time.Second)
 	pids := make(map[int]bool)
+
+	// Collect PIDs from global services.
 	for _, unit := range managedServiceUnits {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		out, err := runCmd(ctx, "systemctl", "show", unit, "--property=MainPID")
-		cancel()
-		if err != nil {
-			continue
-		}
-		props := parseProperties(out)
-		if pidStr, ok := props["MainPID"]; ok {
-			if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
-				pids[pid] = true
+		addMainPID(pids, unit)
+	}
+
+	// Collect PIDs from namespace service instances.
+	// Scan the namespaces data directory (same pattern as GetProductionServices).
+	namespacesDir := "/opt/orama/.orama/data/namespaces"
+	nsEntries, err := os.ReadDir(namespacesDir)
+	if err == nil {
+		nsServiceTypes := []string{"rqlite", "olric", "gateway"}
+		for _, nsEntry := range nsEntries {
+			if !nsEntry.IsDir() {
+				continue
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			ns := nsEntry.Name()
+			for _, svcType := range nsServiceTypes {
+				envFile := filepath.Join(namespacesDir, ns, svcType+".env")
+				if _, err := os.Stat(envFile); err == nil {
+					unit := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
+					addMainPID(pids, unit)
+				}
 			}
 		}
 	}
+
 	return pids
+}
+
+// addMainPID queries systemd for a unit's MainPID and adds it to the set.
+func addMainPID(pids map[int]bool, unit string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	out, err := runCmd(ctx, "systemctl", "show", unit, "--property=MainPID")
+	cancel()
+	if err != nil {
+		return
+	}
+	props := parseProperties(out)
+	if pidStr, ok := props["MainPID"]; ok {
+		if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+			pids[pid] = true
+		}
+	}
 }
 
 // isOramaProcess checks if a command string contains any orama-related process name.
