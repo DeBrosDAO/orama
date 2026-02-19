@@ -635,11 +635,16 @@ func (o *Orchestrator) restartServices() error {
 	// Get services to restart
 	services := utils.GetProductionServices()
 
-	// Re-enable all services BEFORE restarting them.
-	// orama node stop disables services, and orama-node's PartOf= dependency
-	// won't propagate restart to disabled services. We must re-enable first
-	// so that all services restart with the updated binary.
+	// Unmask and re-enable all services BEFORE restarting them.
+	// "orama node stop" masks services (symlinks unit to /dev/null) to prevent
+	// Restart=always from reviving them. We must unmask first, then re-enable,
+	// so that all services (including namespace services) can actually start.
 	for _, svc := range services {
+		if masked, err := utils.IsServiceMasked(svc); err == nil && masked {
+			if err := exec.Command("systemctl", "unmask", svc).Run(); err != nil {
+				fmt.Printf("   ⚠️  Warning: Failed to unmask %s: %v\n", svc, err)
+			}
+		}
 		if err := exec.Command("systemctl", "enable", svc).Run(); err != nil {
 			fmt.Printf("   ⚠️  Warning: Failed to re-enable %s: %v\n", svc, err)
 		}
