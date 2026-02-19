@@ -217,14 +217,14 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Update status
+	// Update status (scoped to deployment_id for defense-in-depth)
 	updateQuery := `
 		UPDATE deployment_domains
 		SET verification_status = 'verified', verified_at = ?
-		WHERE domain = ?
+		WHERE domain = ? AND deployment_id = ?
 	`
 
-	_, err = h.service.db.Exec(ctx, updateQuery, time.Now(), domain)
+	_, err = h.service.db.Exec(ctx, updateQuery, time.Now(), domain, domainRecord.DeploymentID)
 	if err != nil {
 		h.logger.Error("Failed to update verification status", zap.Error(err))
 		http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
@@ -358,9 +358,9 @@ func (h *DomainHandler) HandleRemoveDomain(w http.ResponseWriter, r *http.Reques
 	}
 	deploymentID = rows[0].DeploymentID
 
-	// Delete domain
-	deleteQuery := `DELETE FROM deployment_domains WHERE domain = ?`
-	_, err = h.service.db.Exec(ctx, deleteQuery, domain)
+	// Delete domain (scoped to deployment_id for defense-in-depth)
+	deleteQuery := `DELETE FROM deployment_domains WHERE domain = ? AND deployment_id = ?`
+	_, err = h.service.db.Exec(ctx, deleteQuery, domain, deploymentID)
 	if err != nil {
 		h.logger.Error("Failed to delete domain", zap.Error(err))
 		http.Error(w, "Failed to delete domain", http.StatusInternalServerError)

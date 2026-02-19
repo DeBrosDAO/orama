@@ -3,9 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -89,7 +89,7 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 	}
 
 	query := `
-		SELECT nc.namespace_name, npa.rqlite_http_port, npa.olric_memberlist_port, npa.gateway_http_port
+		SELECT nc.namespace_name, npa.rqlite_http_port, npa.olric_http_port, npa.gateway_http_port
 		FROM namespace_port_allocations npa
 		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
 		WHERE npa.node_id = ? AND nc.status = 'ready'
@@ -117,7 +117,7 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 		// Probe RQLite (HTTP on localhost)
 		nsHealth.Services["rqlite"] = probeTCP("127.0.0.1", rqlitePort)
 
-		// Probe Olric memberlist (binds to WireGuard IP)
+		// Probe Olric HTTP API (binds to WireGuard IP)
 		olricHost := g.localWireGuardIP
 		if olricHost == "" {
 			olricHost = "127.0.0.1"
@@ -238,7 +238,7 @@ func (g *Gateway) isRQLiteLeader(ctx context.Context) bool {
 // probeTCP checks if a port is listening by attempting a TCP connection.
 func probeTCP(host string, port int) NamespaceServiceHealth {
 	start := time.Now()
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	latency := time.Since(start)
 

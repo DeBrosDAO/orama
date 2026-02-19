@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -80,8 +81,8 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate via internal auth header
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" {
+	// Authenticate via internal auth header + WireGuard subnet check
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !auth.IsWireGuardPeer(r.RemoteAddr) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
