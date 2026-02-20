@@ -70,6 +70,13 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 			statusCode = http.StatusUnauthorized
 		}
 
+		if resp == nil {
+			writeJSON(w, statusCode, map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+
 		writeJSON(w, statusCode, map[string]interface{}{
 			"request_id":  resp.RequestID,
 			"status":      resp.Status,

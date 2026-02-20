@@ -270,12 +270,29 @@ func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deploy
 	primaryNodeID := deployment.HomeNodeID
 
 	// Register the primary replica
-	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, primaryNodeID, deployment.Port, true); err != nil {
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, primaryNodeID, deployment.Port, true, deployments.ReplicaStatusActive); err != nil {
 		s.logger.Error("Failed to create primary replica record",
 			zap.String("deployment_id", deployment.ID),
 			zap.Error(err),
 		)
 		return
+	}
+
+	// Create DNS record for the home node (synchronous, before replicas)
+	dnsName := deployment.Subdomain
+	if dnsName == "" {
+		dnsName = deployment.Name
+	}
+	fqdn := fmt.Sprintf("%s.%s.", dnsName, s.BaseDomain())
+	if nodeIP, err := s.getNodeIP(ctx, deployment.HomeNodeID); err != nil {
+		s.logger.Error("Failed to get home node IP for DNS", zap.String("node_id", deployment.HomeNodeID), zap.Error(err))
+	} else if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
+		s.logger.Error("Failed to create DNS record for home node", zap.Error(err))
+	} else {
+		s.logger.Info("Created DNS record for home node",
+			zap.String("fqdn", fqdn),
+			zap.String("ip", nodeIP),
+		)
 	}
 
 	// Select a secondary node
@@ -302,12 +319,17 @@ func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deploy
 
 		if isStatic {
 			// Static deployments: content is in IPFS, no process to start
-			if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false); err != nil {
+			if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false, deployments.ReplicaStatusActive); err != nil {
 				s.logger.Error("Failed to create static replica",
 					zap.String("deployment_id", deployment.ID),
 					zap.String("node_id", nodeID),
 					zap.Error(err),
 				)
+			} else {
+				// Create DNS record for static replica
+				if nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID); err == nil {
+					s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID)
+				}
 			}
 		} else {
 			// Dynamic deployments: fan out to the secondary node to set up the process
@@ -328,7 +350,7 @@ func (s *DeploymentService) setupDynamicReplica(ctx context.Context, deployment 
 	}
 
 	// Create the replica record in pending status
-	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false); err != nil {
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false, deployments.ReplicaStatusPending); err != nil {
 		s.logger.Error("Failed to create pending replica record",
 			zap.String("deployment_id", deployment.ID),
 			zap.String("node_id", nodeID),
@@ -368,13 +390,22 @@ func (s *DeploymentService) setupDynamicReplica(ctx context.Context, deployment 
 	}
 
 	// Update replica with allocated port
-	if port, ok := resp["port"].(float64); ok && port > 0 {
-		s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false)
+	port, ok := resp["port"].(float64)
+	if !ok || port <= 0 {
+		s.logger.Error("Replica setup returned invalid port",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Any("port_value", resp["port"]),
+		)
+		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		return
 	}
+	s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false, deployments.ReplicaStatusActive)
 
 	s.logger.Info("Dynamic replica set up on remote node",
 		zap.String("deployment_id", deployment.ID),
 		zap.String("node_id", nodeID),
+		zap.Int("port", int(port)),
 	)
 
 	// Create DNS record for the replica node (after successful setup)
@@ -653,8 +684,8 @@ func (s *DeploymentService) getNodeIP(ctx context.Context, nodeID string) (strin
 
 	var rows []nodeRow
 
-	// Try full node ID first (prefer internal/WG IP for cross-node communication)
-	query := `SELECT COALESCE(internal_ip, ip_address) AS ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	// Use public IP for DNS A records (internal/WG IPs are not reachable from the internet)
+	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := s.db.Query(ctx, &rows, query, nodeID)
 	if err != nil {
 		return "", err
