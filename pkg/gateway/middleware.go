@@ -1125,7 +1125,7 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 				SELECT id, namespace, name, type, port, content_cid, status, home_node_id, subdomain
 				FROM deployments
 				WHERE subdomain = ?
-				AND status = 'active'
+				AND status IN ('active', 'degraded')
 				LIMIT 1
 			`
 			result, err := db.Query(internalCtx, query, subdomainOrName)
@@ -1149,7 +1149,7 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 				SELECT id, namespace, name, type, port, content_cid, status, home_node_id, subdomain
 				FROM deployments
 				WHERE name = ?
-				AND status = 'active'
+				AND status IN ('active', 'degraded')
 				LIMIT 1
 			`
 			result, err = db.Query(internalCtx, query, subdomainOrName)
@@ -1177,7 +1177,7 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 		FROM deployments d
 		JOIN deployment_domains dd ON d.id = dd.deployment_id
 		WHERE dd.domain = ? AND dd.verified_at IS NOT NULL
-		AND d.status = 'active'
+		AND d.status IN ('active', 'degraded')
 		LIMIT 1
 	`
 	result, err := db.Query(internalCtx, query, domain)
