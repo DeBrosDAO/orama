@@ -34,8 +34,9 @@ type survivingNodePorts struct {
 }
 
 // HandleDeadNode processes the death of a network node by recovering all affected
-// namespace clusters. It finds all clusters with assignments to the dead node and
-// replaces it with a healthy node in each cluster.
+// namespace clusters and deployment replicas. It marks all deployment replicas on
+// the dead node as failed, updates deployment statuses, and replaces namespace
+// cluster nodes.
 func (cm *ClusterManager) HandleDeadNode(ctx context.Context, deadNodeID string) {
 	cm.logger.Error("Handling dead node — starting recovery",
 		zap.String("dead_node", deadNodeID),
@@ -45,6 +46,11 @@ func (cm *ClusterManager) HandleDeadNode(ctx context.Context, deadNodeID string)
 	if err := cm.markNodeOffline(ctx, deadNodeID); err != nil {
 		cm.logger.Warn("Failed to mark node offline", zap.Error(err))
 	}
+
+	// Mark all deployment replicas on the dead node as failed.
+	// This must happen before namespace recovery so routing immediately
+	// excludes the dead node — no relying on circuit breakers to discover it.
+	cm.markDeadNodeReplicasFailed(ctx, deadNodeID)
 
 	// Find all affected clusters
 	clusters, err := cm.getClustersByNodeID(ctx, deadNodeID)
@@ -1086,4 +1092,84 @@ func (cm *ClusterManager) addNodeToCluster(
 		map[string]interface{}{"new_node": replacement.NodeID})
 
 	return replacement, portBlock, nil
+}
+
+// markDeadNodeReplicasFailed marks all deployment replicas on a dead node as
+// 'failed' and recalculates each affected deployment's status. This ensures
+// routing immediately excludes the dead node instead of discovering it's
+// unreachable through timeouts.
+func (cm *ClusterManager) markDeadNodeReplicasFailed(ctx context.Context, deadNodeID string) {
+	// Find all active deployment replicas on the dead node.
+	type affectedReplica struct {
+		DeploymentID string `db:"deployment_id"`
+	}
+	var affected []affectedReplica
+	findQuery := `SELECT DISTINCT deployment_id FROM deployment_replicas WHERE node_id = ? AND status = 'active'`
+	if err := cm.db.Query(ctx, &affected, findQuery, deadNodeID); err != nil {
+		cm.logger.Warn("Failed to query deployment replicas for dead node",
+			zap.String("dead_node", deadNodeID), zap.Error(err))
+		return
+	}
+
+	if len(affected) == 0 {
+		return
+	}
+
+	cm.logger.Info("Marking deployment replicas on dead node as failed",
+		zap.String("dead_node", deadNodeID),
+		zap.Int("replica_count", len(affected)),
+	)
+
+	// Mark all replicas on the dead node as failed in a single UPDATE.
+	markQuery := `UPDATE deployment_replicas SET status = 'failed' WHERE node_id = ? AND status = 'active'`
+	if _, err := cm.db.Exec(ctx, markQuery, deadNodeID); err != nil {
+		cm.logger.Error("Failed to mark deployment replicas as failed",
+			zap.String("dead_node", deadNodeID), zap.Error(err))
+		return
+	}
+
+	// Recalculate each affected deployment's status based on remaining active replicas.
+	type replicaCount struct {
+		Count int `db:"count"`
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+
+	for _, a := range affected {
+		var counts []replicaCount
+		countQuery := `SELECT COUNT(*) as count FROM deployment_replicas WHERE deployment_id = ? AND status = 'active'`
+		if err := cm.db.Query(ctx, &counts, countQuery, a.DeploymentID); err != nil {
+			cm.logger.Warn("Failed to count active replicas for deployment",
+				zap.String("deployment_id", a.DeploymentID), zap.Error(err))
+			continue
+		}
+
+		activeCount := 0
+		if len(counts) > 0 {
+			activeCount = counts[0].Count
+		}
+
+		if activeCount > 0 {
+			// Some replicas still alive — degraded, not dead.
+			statusQuery := `UPDATE deployments SET status = 'degraded' WHERE id = ? AND status = 'active'`
+			cm.db.Exec(ctx, statusQuery, a.DeploymentID)
+			cm.logger.Warn("Deployment degraded — replica on dead node marked failed",
+				zap.String("deployment_id", a.DeploymentID),
+				zap.String("dead_node", deadNodeID),
+				zap.Int("remaining_active", activeCount),
+			)
+		} else {
+			// No replicas alive — deployment is failed.
+			statusQuery := `UPDATE deployments SET status = 'failed' WHERE id = ? AND status IN ('active', 'degraded')`
+			cm.db.Exec(ctx, statusQuery, a.DeploymentID)
+			cm.logger.Error("Deployment failed — all replicas on dead node",
+				zap.String("deployment_id", a.DeploymentID),
+				zap.String("dead_node", deadNodeID),
+			)
+		}
+
+		// Log event for audit trail.
+		eventQuery := `INSERT INTO deployment_events (deployment_id, event_type, message, created_at) VALUES (?, 'node_death_replica_failed', ?, ?)`
+		msg := fmt.Sprintf("Replica on node %s marked failed (node confirmed dead), %d active replicas remaining", deadNodeID, activeCount)
+		cm.db.Exec(ctx, eventQuery, a.DeploymentID, msg, now)
+	}
 }
