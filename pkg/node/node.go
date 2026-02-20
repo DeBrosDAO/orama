@@ -16,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 	"github.com/libp2p/go-libp2p/core/host"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/acme/autocert"
@@ -55,6 +56,9 @@ type Node struct {
 
 	// Certificate ready signal - closed when TLS certificates are extracted and ready for use
 	certReady chan struct{}
+
+	// Built-in TURN server for WebRTC NAT traversal
+	turnServer *turn.Server
 }
 
 // NewNode creates a new network node
@@ -96,6 +100,11 @@ func (n *Node) Start(ctx context.Context) error {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start HTTP Gateway", zap.Error(err))
 	}
 
+	// Start built-in TURN server if enabled
+	if err := n.startTURNServer(); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start TURN server", zap.Error(err))
+	}
+
 	// Start LibP2P host first (needed for cluster discovery)
 	if err := n.startLibP2P(); err != nil {
 		return fmt.Errorf("failed to start LibP2P: %w", err)
@@ -134,6 +143,11 @@ func (n *Node) Start(ctx context.Context) error {
 // Stop stops the node and all its services
 func (n *Node) Stop() error {
 	n.logger.ComponentInfo(logging.ComponentNode, "Stopping network node")
+
+	// Stop TURN server
+	if n.turnServer != nil {
+		_ = n.turnServer.Stop()
+	}
 
 	// Stop HTTP Gateway server
 	if n.apiGatewayServer != nil {

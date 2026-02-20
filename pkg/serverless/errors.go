@@ -214,3 +214,9 @@ func IsServiceUnavailable(err error) bool {
 		errors.Is(err, ErrDatabaseUnavailable) ||
 		errors.Is(err, ErrCacheUnavailable)
 }
+
+// IsValidationError checks if an error is a validation error.
+func IsValidationError(err error) bool {
+	var validationErr *ValidationError
+	return errors.As(err, &validationErr)
+}

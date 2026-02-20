@@ -131,6 +131,12 @@ type TriggerManager interface {
 
 	// RemoveTrigger removes a trigger by ID.
 	RemoveTrigger(ctx context.Context, triggerID string) error
+
+	// ListPubSubTriggers returns all pubsub triggers for a function.
+	ListPubSubTriggers(ctx context.Context, functionID string) ([]PubSubTrigger, error)
+
+	// GetTriggersByTopic returns all enabled triggers for a specific topic.
+	GetTriggersByTopic(ctx context.Context, topic string) ([]PubSubTrigger, error)
 }
 
 // JobManager manages background job execution.
