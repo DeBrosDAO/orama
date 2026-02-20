@@ -53,6 +53,8 @@ type ClusterProvisioner interface {
 type NodeRecoverer interface {
 	HandleDeadNode(ctx context.Context, deadNodeID string)
 	HandleRecoveredNode(ctx context.Context, nodeID string)
+	HandleSuspectNode(ctx context.Context, suspectNodeID string)
+	HandleSuspectRecovery(ctx context.Context, nodeID string)
 	RepairCluster(ctx context.Context, namespaceName string) error
 }
 

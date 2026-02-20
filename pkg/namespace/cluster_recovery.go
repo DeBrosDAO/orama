@@ -191,6 +191,148 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 		zap.Int("namespaces_cleaned", len(events)))
 }
 
+// HandleSuspectNode disables DNS records for a suspect node to prevent traffic
+// from being routed to it. Called early (T+30s) when the node first becomes suspect,
+// before confirming it's actually dead. If the node recovers, HandleSuspectRecovery
+// will re-enable the records.
+//
+// Safety: never disables the last active record for a namespace.
+func (cm *ClusterManager) HandleSuspectNode(ctx context.Context, suspectNodeID string) {
+	cm.logger.Warn("Handling suspect node — disabling DNS records",
+		zap.String("suspect_node", suspectNodeID),
+	)
+
+	// Acquire per-node lock to prevent concurrent suspect handling
+	suspectKey := "suspect:" + suspectNodeID
+	cm.provisioningMu.Lock()
+	if cm.provisioning[suspectKey] {
+		cm.provisioningMu.Unlock()
+		cm.logger.Info("Suspect handling already in progress for node, skipping",
+			zap.String("node_id", suspectNodeID))
+		return
+	}
+	cm.provisioning[suspectKey] = true
+	cm.provisioningMu.Unlock()
+	defer func() {
+		cm.provisioningMu.Lock()
+		delete(cm.provisioning, suspectKey)
+		cm.provisioningMu.Unlock()
+	}()
+
+	// Find all clusters this node belongs to
+	clusters, err := cm.getClustersByNodeID(ctx, suspectNodeID)
+	if err != nil {
+		cm.logger.Warn("Failed to find clusters for suspect node",
+			zap.String("suspect_node", suspectNodeID), zap.Error(err))
+		return
+	}
+
+	if len(clusters) == 0 {
+		cm.logger.Info("Suspect node has no namespace cluster assignments",
+			zap.String("suspect_node", suspectNodeID))
+		return
+	}
+
+	// Get suspect node's public IP (DNS A records contain public IPs)
+	ips, err := cm.getNodeIPs(ctx, suspectNodeID)
+	if err != nil {
+		cm.logger.Warn("Failed to get suspect node IPs",
+			zap.String("suspect_node", suspectNodeID), zap.Error(err))
+		return
+	}
+
+	dnsManager := NewDNSRecordManager(cm.db, cm.baseDomain, cm.logger)
+	disabledCount := 0
+
+	for _, cluster := range clusters {
+		// Safety check: never disable the last active record
+		activeCount, err := dnsManager.CountActiveNamespaceRecords(ctx, cluster.NamespaceName)
+		if err != nil {
+			cm.logger.Warn("Failed to count active DNS records, skipping namespace",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.Error(err))
+			continue
+		}
+
+		if activeCount <= 1 {
+			cm.logger.Warn("Not disabling DNS — would leave namespace with no active records",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.String("suspect_node", suspectNodeID),
+				zap.Int("active_records", activeCount))
+			continue
+		}
+
+		if err := dnsManager.DisableNamespaceRecord(ctx, cluster.NamespaceName, ips.IPAddress); err != nil {
+			cm.logger.Warn("Failed to disable DNS record for suspect node",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.String("ip", ips.IPAddress),
+				zap.Error(err))
+			continue
+		}
+
+		disabledCount++
+		cm.logger.Info("Disabled DNS record for suspect node",
+			zap.String("namespace", cluster.NamespaceName),
+			zap.String("ip", ips.IPAddress))
+	}
+
+	cm.logger.Info("Suspect node DNS handling completed",
+		zap.String("suspect_node", suspectNodeID),
+		zap.Int("namespaces_affected", len(clusters)),
+		zap.Int("records_disabled", disabledCount))
+}
+
+// HandleSuspectRecovery re-enables DNS records for a node that recovered from
+// suspect state without going dead. Called when the health monitor detects
+// that a previously suspect node is responding to probes again.
+func (cm *ClusterManager) HandleSuspectRecovery(ctx context.Context, nodeID string) {
+	cm.logger.Info("Handling suspect recovery — re-enabling DNS records",
+		zap.String("node_id", nodeID),
+	)
+
+	// Find all clusters this node belongs to
+	clusters, err := cm.getClustersByNodeID(ctx, nodeID)
+	if err != nil {
+		cm.logger.Warn("Failed to find clusters for recovered node",
+			zap.String("node_id", nodeID), zap.Error(err))
+		return
+	}
+
+	if len(clusters) == 0 {
+		return
+	}
+
+	// Get node's public IP (DNS A records contain public IPs)
+	ips, err := cm.getNodeIPs(ctx, nodeID)
+	if err != nil {
+		cm.logger.Warn("Failed to get recovered node IPs",
+			zap.String("node_id", nodeID), zap.Error(err))
+		return
+	}
+
+	dnsManager := NewDNSRecordManager(cm.db, cm.baseDomain, cm.logger)
+	enabledCount := 0
+
+	for _, cluster := range clusters {
+		if err := dnsManager.EnableNamespaceRecord(ctx, cluster.NamespaceName, ips.IPAddress); err != nil {
+			cm.logger.Warn("Failed to re-enable DNS record for recovered node",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.String("ip", ips.IPAddress),
+				zap.Error(err))
+			continue
+		}
+
+		enabledCount++
+		cm.logger.Info("Re-enabled DNS record for recovered node",
+			zap.String("namespace", cluster.NamespaceName),
+			zap.String("ip", ips.IPAddress))
+	}
+
+	cm.logger.Info("Suspect recovery DNS handling completed",
+		zap.String("node_id", nodeID),
+		zap.Int("records_enabled", enabledCount))
+}
+
 // ReplaceClusterNode replaces a dead node in a specific namespace cluster.
 // It selects a new node, allocates ports, spawns services, updates DNS, and cleans up.
 func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *NamespaceCluster, deadNodeID string) error {

@@ -182,6 +182,34 @@ func (drm *DNSRecordManager) GetNamespaceGatewayIPs(ctx context.Context, namespa
 	return ips, nil
 }
 
+// CountActiveNamespaceRecords returns the number of active A records for a namespace's main FQDN.
+// Used as a safety check before disabling records to prevent disabling the last one.
+func (drm *DNSRecordManager) CountActiveNamespaceRecords(ctx context.Context, namespaceName string) (int, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	fqdn := fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain)
+
+	type countResult struct {
+		Count int `db:"count"`
+	}
+
+	var results []countResult
+	query := `SELECT COUNT(*) as count FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND is_active = TRUE`
+	err := drm.db.Query(internalCtx, &results, query, fqdn)
+	if err != nil {
+		return 0, &ClusterError{
+			Message: "failed to count active namespace DNS records",
+			Cause:   err,
+		}
+	}
+
+	if len(results) == 0 {
+		return 0, nil
+	}
+
+	return results[0].Count, nil
+}
+
 // AddNamespaceRecord adds DNS A records for a single IP to an existing namespace.
 // Unlike CreateNamespaceRecords, this does NOT delete existing records — it's purely additive.
 // Used when adding a new node to an under-provisioned cluster (repair).
@@ -239,7 +267,7 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 
 	// Update both the main record and wildcard record
 	for _, f := range []string{fqdn, wildcardFqdn} {
-		updateQuery := `UPDATE dns_records SET value = ?, updated_at = ? WHERE fqdn = ? AND value = ?`
+		updateQuery := `UPDATE dns_records SET value = ?, is_active = TRUE, updated_at = ? WHERE fqdn = ? AND value = ?`
 		_, err := drm.db.Exec(internalCtx, updateQuery, newIP, time.Now(), f, oldIP)
 		if err != nil {
 			drm.logger.Warn("Failed to update DNS record",

@@ -333,7 +333,7 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
     rqlite {
         dsn %s
         refresh 5s
-        ttl 60
+        ttl 30
         cache_size 10000
     }
 

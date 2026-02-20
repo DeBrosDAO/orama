@@ -40,7 +40,7 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 	var (
 		dsn         = "http://localhost:5001"
 		refreshRate = 10 * time.Second
-		cacheTTL    = 60 * time.Second
+		cacheTTL    = 30 * time.Second
 		cacheSize   = 10000
 		zones       []string
 	)
