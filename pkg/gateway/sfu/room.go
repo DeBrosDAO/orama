@@ -3,6 +3,7 @@ package sfu
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -30,6 +31,10 @@ type publishedTrack struct {
 	kind            string
 	forwarderActive bool // tracks if the RTP forwarder goroutine is still running
 	packetCount     int  // number of packets forwarded (for debugging)
+
+	// Packet loss tracking for adaptive keyframe requests
+	lastKeyframeRequest time.Time
+	nackCount           atomic.Int64 // Number of NACK packets received (indicates packet loss)
 }
 
 // Room represents a WebRTC room with multiple participants
@@ -230,6 +235,7 @@ func (r *Room) GetParticipantCount() int {
 
 // SendExistingTracksTo sends all existing tracks from other participants to the specified peer.
 // This should be called AFTER the welcome message is sent to ensure the client is ready.
+// Uses batch mode to send all tracks with a single renegotiation for faster joins.
 func (r *Room) SendExistingTracksTo(peer *Peer) {
 	r.publishedTracksMu.RLock()
 	existingTracks := make([]*publishedTrack, 0, len(r.publishedTracks))
@@ -248,12 +254,15 @@ func (r *Room) SendExistingTracksTo(peer *Peer) {
 		return
 	}
 
-	r.logger.Info("Sending existing tracks to new peer",
+	r.logger.Info("Sending existing tracks to new peer (batch mode)",
 		zap.String("peer_id", peer.ID),
 		zap.Int("track_count", len(existingTracks)),
 	)
 
 	videoTrackIDs := make([]string, 0)
+
+	// Start batch mode - suppresses individual renegotiations
+	peer.StartTrackBatch()
 
 	for _, track := range existingTracks {
 		// Log forwarder status to help diagnose video issues
@@ -285,12 +294,6 @@ func (r *Room) SendExistingTracksTo(peer *Peer) {
 			continue
 		}
 
-		r.logger.Info("Track added to peer connection, renegotiation will be triggered",
-			zap.String("peer_id", peer.ID),
-			zap.String("track_id", track.localTrack.ID()),
-			zap.String("kind", track.kind),
-		)
-
 		// Track video tracks for keyframe requests
 		if track.kind == "video" {
 			videoTrackIDs = append(videoTrackIDs, track.localTrack.ID())
@@ -306,12 +309,20 @@ func (r *Room) SendExistingTracksTo(peer *Peer) {
 		}))
 	}
 
+	// End batch mode - triggers single renegotiation for all tracks
+	peer.EndTrackBatch()
+
+	r.logger.Info("Batch track addition complete - single renegotiation triggered",
+		zap.String("peer_id", peer.ID),
+		zap.Int("total_tracks", len(existingTracks)),
+	)
+
 	// Request keyframes for video tracks after a short delay
 	// This ensures the receiver has time to set up the track before receiving the keyframe
 	if len(videoTrackIDs) > 0 {
 		go func() {
-			// Wait for negotiation to progress
-			time.Sleep(500 * time.Millisecond)
+			// Wait for negotiation to complete
+			time.Sleep(300 * time.Millisecond)
 			r.logger.Info("Requesting keyframes for new peer",
 				zap.String("peer_id", peer.ID),
 				zap.Int("video_track_count", len(videoTrackIDs)),
@@ -319,8 +330,8 @@ func (r *Room) SendExistingTracksTo(peer *Peer) {
 			for _, trackID := range videoTrackIDs {
 				r.RequestKeyframe(trackID)
 			}
-			// Request again after 1 second in case the first was too early
-			time.Sleep(1 * time.Second)
+			// Request again after 500ms in case the first was too early
+			time.Sleep(500 * time.Millisecond)
 			for _, trackID := range videoTrackIDs {
 				r.RequestKeyframe(trackID)
 			}
@@ -382,14 +393,15 @@ func (r *Room) BroadcastTrack(sourcePeerID string, track *webrtc.TrackRemote) {
 
 	// Store the track for new joiners
 	pubTrack := &publishedTrack{
-		sourcePeerID:    sourcePeerID,
-		sourceUserID:    sourceUserID,
-		localTrack:      localTrack,
-		remoteTrackSSRC: uint32(track.SSRC()),
-		remoteTrack:     track,
-		kind:            track.Kind().String(),
-		forwarderActive: true,
-		packetCount:     0,
+		sourcePeerID:        sourcePeerID,
+		sourceUserID:        sourceUserID,
+		localTrack:          localTrack,
+		remoteTrackSSRC:     uint32(track.SSRC()),
+		remoteTrack:         track,
+		kind:                track.Kind().String(),
+		forwarderActive:     true,
+		packetCount:         0,
+		lastKeyframeRequest: time.Now(),
 	}
 	r.publishedTracksMu.Lock()
 	r.publishedTracks[localTrack.ID()] = pubTrack
@@ -432,11 +444,19 @@ func (r *Room) BroadcastTrack(sourcePeerID string, track *webrtc.TrackRemote) {
 			}
 		}()
 
-		// For video tracks, periodically request keyframes to ensure receivers can decode
+		// For video tracks, use adaptive keyframe requests based on packet loss
 		if trackKind == "video" {
 			go func() {
-				ticker := time.NewTicker(3 * time.Second)
+				// Use a faster ticker for checking, but only send keyframes when needed
+				ticker := time.NewTicker(500 * time.Millisecond)
 				defer ticker.Stop()
+
+				var lastNackCount int64
+				var consecutiveLossDetections int
+				baseInterval := 3 * time.Second
+				minInterval := 500 * time.Millisecond // Minimum interval between keyframes
+				lastKeyframeTime := time.Now()
+
 				for range ticker.C {
 					// Check if room is closed
 					if r.IsClosed() {
@@ -446,14 +466,45 @@ func (r *Room) BroadcastTrack(sourcePeerID string, track *webrtc.TrackRemote) {
 					// Check if forwarder is still active
 					r.publishedTracksMu.RLock()
 					pt, ok := r.publishedTracks[localTrackID]
-					active := ok && pt.forwarderActive
-					r.publishedTracksMu.RUnlock()
-
-					if !active {
+					if !ok || !pt.forwarderActive {
+						r.publishedTracksMu.RUnlock()
 						return
 					}
 
-					r.RequestKeyframe(localTrackID)
+					// Get current NACK count to detect packet loss
+					currentNackCount := pt.nackCount.Load()
+					r.publishedTracksMu.RUnlock()
+
+					timeSinceLastKeyframe := time.Since(lastKeyframeTime)
+
+					// Detect if packet loss is happening (NACKs increasing)
+					if currentNackCount > lastNackCount {
+						consecutiveLossDetections++
+						lastNackCount = currentNackCount
+
+						// If we detect packet loss and haven't requested a keyframe recently,
+						// request one immediately to help receivers recover
+						if timeSinceLastKeyframe >= minInterval {
+							r.logger.Debug("Adaptive keyframe request due to packet loss",
+								zap.String("track_id", localTrackID),
+								zap.Int64("nack_count", currentNackCount),
+								zap.Int("consecutive_loss_detections", consecutiveLossDetections),
+							)
+							r.RequestKeyframe(localTrackID)
+							lastKeyframeTime = time.Now()
+						}
+					} else {
+						// Reset consecutive loss counter when no new NACKs
+						if consecutiveLossDetections > 0 {
+							consecutiveLossDetections--
+						}
+					}
+
+					// Regular keyframe request at base interval (regardless of loss)
+					if timeSinceLastKeyframe >= baseInterval {
+						r.RequestKeyframe(localTrackID)
+						lastKeyframeTime = time.Now()
+					}
 				}
 			}()
 		}
@@ -708,5 +759,17 @@ func (r *Room) RequestKeyframeForAllVideoTracks() {
 
 	for _, trackID := range videoTrackIDs {
 		r.RequestKeyframe(trackID)
+	}
+}
+
+// IncrementNackCount increments the NACK counter for a track.
+// This is called when we receive NACK feedback indicating packet loss.
+func (r *Room) IncrementNackCount(trackID string) {
+	r.publishedTracksMu.RLock()
+	track, ok := r.publishedTracks[trackID]
+	r.publishedTracksMu.RUnlock()
+
+	if ok {
+		track.nackCount.Add(1)
 	}
 }

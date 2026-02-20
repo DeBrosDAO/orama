@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 )
@@ -40,6 +41,8 @@ type Peer struct {
 	negotiationPendingMu sync.Mutex
 	initialOfferHandled  bool
 	initialOfferMu       sync.Mutex
+	batchingTracks       bool // When true, suppress automatic negotiation
+	batchingTracksMu     sync.Mutex
 
 	// Room reference
 	room   *Room
@@ -131,6 +134,9 @@ func (p *Peer) InitPeerConnection(api *webrtc.API, config webrtc.Configuration) 
 		p.trackReceivers[track.ID()] = receiver
 		p.trackReceiversMu.Unlock()
 
+		// Start RTCP reader to monitor for packet loss (NACK) and PLI requests
+		go p.readRTCP(receiver, track)
+
 		// Forward track to other peers in the room
 		p.room.BroadcastTrack(p.ID, track)
 	})
@@ -141,6 +147,21 @@ func (p *Peer) InitPeerConnection(api *webrtc.API, config webrtc.Configuration) 
 			zap.String("peer_id", p.ID),
 			zap.String("signaling_state", pc.SignalingState().String()),
 		)
+
+		// Check if we're batching tracks - if so, just mark as pending
+		p.batchingTracksMu.Lock()
+		batching := p.batchingTracks
+		p.batchingTracksMu.Unlock()
+
+		if batching {
+			p.negotiationPendingMu.Lock()
+			p.negotiationPending = true
+			p.negotiationPendingMu.Unlock()
+			p.logger.Debug("Negotiation deferred - batching tracks",
+				zap.String("peer_id", p.ID),
+			)
+			return
+		}
 
 		// Only create offer if we're in stable state
 		// Otherwise, mark negotiation as pending
@@ -288,6 +309,33 @@ func (p *Peer) AddTrack(track *webrtc.TrackLocalStaticRTP) (*webrtc.RTPSender, e
 	return p.pc.AddTrack(track)
 }
 
+// StartTrackBatch starts batching track additions.
+// Call EndTrackBatch when done to trigger a single renegotiation.
+func (p *Peer) StartTrackBatch() {
+	p.batchingTracksMu.Lock()
+	p.batchingTracks = true
+	p.batchingTracksMu.Unlock()
+	p.logger.Debug("Started track batching", zap.String("peer_id", p.ID))
+}
+
+// EndTrackBatch ends track batching and triggers renegotiation if needed.
+func (p *Peer) EndTrackBatch() {
+	p.batchingTracksMu.Lock()
+	p.batchingTracks = false
+	p.batchingTracksMu.Unlock()
+
+	// Check if negotiation was pending during batching
+	p.negotiationPendingMu.Lock()
+	pending := p.negotiationPending
+	p.negotiationPending = false
+	p.negotiationPendingMu.Unlock()
+
+	if pending && p.pc != nil && p.pc.SignalingState() == webrtc.SignalingStateStable {
+		p.logger.Debug("Processing batched negotiation", zap.String("peer_id", p.ID))
+		p.createAndSendOffer()
+	}
+}
+
 // SendMessage sends a signaling message to the peer via WebSocket
 func (p *Peer) SendMessage(msg *ServerMessage) error {
 	p.closedMu.RLock()
@@ -406,4 +454,52 @@ func (p *Peer) Close() error {
 // OnClose sets a callback for when the peer is closed
 func (p *Peer) OnClose(fn func(*Peer)) {
 	p.onClose = fn
+}
+
+// readRTCP reads RTCP packets from a receiver to monitor feedback
+// This helps detect packet loss (via NACK) for adaptive quality adjustments
+func (p *Peer) readRTCP(receiver *webrtc.RTPReceiver, track *webrtc.TrackRemote) {
+	localTrackID := track.Kind().String() + "-" + p.ID
+
+	for {
+		packets, _, err := receiver.ReadRTCP()
+		if err != nil {
+			// Connection closed, exit gracefully
+			return
+		}
+
+		for _, pkt := range packets {
+			switch rtcpPkt := pkt.(type) {
+			case *rtcp.TransportLayerNack:
+				// NACK received - indicates packet loss from receivers
+				// Increment the NACK counter for adaptive keyframe logic
+				p.room.IncrementNackCount(localTrackID)
+
+				p.logger.Debug("NACK received",
+					zap.String("peer_id", p.ID),
+					zap.String("track_id", localTrackID),
+					zap.Uint32("sender_ssrc", rtcpPkt.SenderSSRC),
+					zap.Int("nack_pairs", len(rtcpPkt.Nacks)),
+				)
+
+			case *rtcp.PictureLossIndication:
+				// PLI received - receiver needs a keyframe
+				p.logger.Debug("PLI received from receiver",
+					zap.String("peer_id", p.ID),
+					zap.String("track_id", localTrackID),
+				)
+				// Request keyframe from source
+				p.room.RequestKeyframe(localTrackID)
+
+			case *rtcp.FullIntraRequest:
+				// FIR received - receiver needs a full keyframe
+				p.logger.Debug("FIR received from receiver",
+					zap.String("peer_id", p.ID),
+					zap.String("track_id", localTrackID),
+				)
+				// Request keyframe from source
+				p.room.RequestKeyframe(localTrackID)
+			}
+		}
+	}
 }

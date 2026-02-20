@@ -1,6 +1,8 @@
 package node
 
 import (
+	"os"
+
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/turn"
 	"go.uber.org/zap"
@@ -15,9 +17,9 @@ func (n *Node) startTURNServer() error {
 
 	n.logger.ComponentInfo(logging.ComponentNode, "Starting built-in TURN server")
 
-	// Get shared secret from gateway TURN config or TURNServer config
-	sharedSecret := ""
-	if n.config.HTTPGateway.TURN != nil && n.config.HTTPGateway.TURN.SharedSecret != "" {
+	// Get shared secret - env var takes priority over config file (for production)
+	sharedSecret := os.Getenv("TURN_SHARED_SECRET")
+	if sharedSecret == "" && n.config.HTTPGateway.TURN != nil && n.config.HTTPGateway.TURN.SharedSecret != "" {
 		sharedSecret = n.config.HTTPGateway.TURN.SharedSecret
 	}
 
@@ -26,11 +28,17 @@ func (n *Node) startTURNServer() error {
 		return nil
 	}
 
+	// Get public IP - env var takes priority over config file (for production)
+	publicIP := os.Getenv("TURN_PUBLIC_IP")
+	if publicIP == "" {
+		publicIP = n.config.TURNServer.PublicIP
+	}
+
 	// Build TURN server config
 	turnCfg := &turn.Config{
 		Enabled:       true,
 		ListenAddr:    n.config.TURNServer.ListenAddr,
-		PublicIP:      n.config.TURNServer.PublicIP,
+		PublicIP:      publicIP,
 		Realm:         n.config.TURNServer.Realm,
 		SharedSecret:  sharedSecret,
 		CredentialTTL: 24 * 60 * 60, // 24 hours in seconds (will be converted)

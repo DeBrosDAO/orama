@@ -179,12 +179,20 @@ type TURNConfig struct {
 	// Default: 24 hours
 	TTL time.Duration `yaml:"ttl"`
 
+	// ExternalHost is the external hostname or IP address for STUN/TURN URLs
+	// - Production: Set to your public domain (e.g., "turn.example.com")
+	// - Development: Leave empty for auto-detection of LAN IP
+	// Can also be set via TURN_EXTERNAL_HOST environment variable
+	ExternalHost string `yaml:"external_host"`
+
 	// STUNURLs are the STUN server URLs to return to clients
-	// e.g., ["stun:gateway.orama.com:3478"]
+	// Use "::" as placeholder for ExternalHost (e.g., "stun:::3478" -> "stun:turn.example.com:3478")
+	// e.g., ["stun:::3478"] or ["stun:gateway.orama.com:3478"]
 	STUNURLs []string `yaml:"stun_urls"`
 
 	// TURNURLs are the TURN server URLs to return to clients
-	// e.g., ["turn:gateway.orama.com:3478?transport=udp", "turns:gateway.orama.com:443?transport=tcp"]
+	// Use "::" as placeholder for ExternalHost (e.g., "turn:::3478" -> "turn:turn.example.com:3478")
+	// e.g., ["turn:::3478?transport=udp"] or ["turn:gateway.orama.com:3478?transport=udp"]
 	TURNURLs []string `yaml:"turn_urls"`
 
 	// TLSEnabled indicates whether TURNS (TURN over TLS) is available

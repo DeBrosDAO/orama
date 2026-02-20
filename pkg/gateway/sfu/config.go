@@ -3,6 +3,9 @@ package sfu
 import (
 	"time"
 
+	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/intervalpli"
+	"github.com/pion/interceptor/pkg/nack"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -35,7 +38,15 @@ func DefaultConfig() *Config {
 func NewMediaEngine() (*webrtc.MediaEngine, error) {
 	m := &webrtc.MediaEngine{}
 
-	// Register Opus codec for audio
+	// RTCP feedback for video codecs - enables NACK, PLI, FIR
+	videoRTCPFeedback := []webrtc.RTCPFeedback{
+		{Type: "goog-remb", Parameter: ""},           // Bandwidth estimation
+		{Type: "ccm", Parameter: "fir"},              // Full Intra Request
+		{Type: "nack", Parameter: ""},                // Generic NACK
+		{Type: "nack", Parameter: "pli"},             // Picture Loss Indication
+	}
+
+	// Register Opus codec for audio with NACK support
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:    webrtc.MimeTypeOpus,
@@ -48,25 +59,51 @@ func NewMediaEngine() (*webrtc.MediaEngine, error) {
 		return nil, err
 	}
 
-	// Register VP8 codec for video
+	// Register VP8 codec for video with full RTCP feedback
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypeVP8,
-			ClockRate: 90000,
+			MimeType:     webrtc.MimeTypeVP8,
+			ClockRate:    90000,
+			RTCPFeedback: videoRTCPFeedback,
 		},
 		PayloadType: 96,
 	}, webrtc.RTPCodecTypeVideo); err != nil {
 		return nil, err
 	}
 
-	// Register H264 codec for video (fallback)
+	// Register RTX for VP8 (retransmission)
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeH264,
+			MimeType:    "video/rtx",
 			ClockRate:   90000,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+			SDPFmtpLine: "apt=96",
+		},
+		PayloadType: 97,
+	}, webrtc.RTPCodecTypeVideo); err != nil {
+		return nil, err
+	}
+
+	// Register H264 codec for video with full RTCP feedback (fallback)
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:     webrtc.MimeTypeH264,
+			ClockRate:    90000,
+			SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+			RTCPFeedback: videoRTCPFeedback,
 		},
 		PayloadType: 102,
+	}, webrtc.RTPCodecTypeVideo); err != nil {
+		return nil, err
+	}
+
+	// Register RTX for H264 (retransmission)
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    "video/rtx",
+			ClockRate:   90000,
+			SDPFmtpLine: "apt=102",
+		},
+		PayloadType: 103,
 	}, webrtc.RTPCodecTypeVideo); err != nil {
 		return nil, err
 	}
@@ -82,11 +119,38 @@ func NewWebRTCAPI() (*webrtc.API, error) {
 	}
 
 	// Create interceptor registry for RTCP feedback
-	// This enables features like NACK, PLI, and REMB
+	i := &interceptor.Registry{}
+
+	// Register NACK responder - handles retransmission requests from receivers
+	// This is critical for video quality: when a receiver loses a packet,
+	// it sends NACK and the sender retransmits the lost packet
+	nackResponderFactory, err := nack.NewResponderInterceptor()
+	if err != nil {
+		return nil, err
+	}
+	i.Add(nackResponderFactory)
+
+	// Register NACK generator - sends NACK when we detect packet loss as receiver
+	nackGeneratorFactory, err := nack.NewGeneratorInterceptor()
+	if err != nil {
+		return nil, err
+	}
+	i.Add(nackGeneratorFactory)
+
+	// Register interval PLI - automatically sends PLI periodically for video tracks
+	// This helps new receivers get keyframes faster
+	intervalPLIFactory, err := intervalpli.NewReceiverInterceptor()
+	if err != nil {
+		return nil, err
+	}
+	i.Add(intervalPLIFactory)
+
+	// Configure settings for better media performance
 	settingEngine := webrtc.SettingEngine{}
 
 	return webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(i),
 		webrtc.WithSettingEngine(settingEngine),
 	), nil
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -86,9 +87,21 @@ func (g *Gateway) generateTURNCredentials(userID, gatewayHost string) *TURNCrede
 	h.Write([]byte(username))
 	credential := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
-	// Process URLs - replace empty hostnames with gateway host
-	stunURLs := processURLsWithHost(cfg.STUNURLs, gatewayHost)
-	turnURLs := processURLsWithHost(cfg.TURNURLs, gatewayHost)
+	// Determine the host to use for STUN/TURN URLs
+	// Priority: 1) ExternalHost from config, 2) Auto-detect LAN IP, 3) Gateway host from request
+	host := cfg.ExternalHost
+	if host == "" {
+		// Auto-detect LAN IP for development
+		host = detectLANIP()
+		if host == "" {
+			// Fallback to gateway host from request (may be localhost)
+			host = gatewayHost
+		}
+	}
+
+	// Process URLs - replace empty hostnames (::) with determined host
+	stunURLs := processURLsWithHost(cfg.STUNURLs, host)
+	turnURLs := processURLsWithHost(cfg.TURNURLs, host)
 
 	// If TLS is enabled, ensure we have turns:// URLs
 	if cfg.TLSEnabled {
@@ -101,7 +114,7 @@ func (g *Gateway) generateTURNCredentials(userID, gatewayHost string) *TURNCrede
 		}
 		// Auto-add turns:// URL if not already configured
 		if !hasTurns {
-			turnsURL := fmt.Sprintf("turns:%s:443?transport=tcp", gatewayHost)
+			turnsURL := fmt.Sprintf("turns:%s:443?transport=tcp", host)
 			turnURLs = append(turnURLs, turnsURL)
 		}
 	}
@@ -115,14 +128,37 @@ func (g *Gateway) generateTURNCredentials(userID, gatewayHost string) *TURNCrede
 	}
 }
 
+// detectLANIP returns the first non-loopback IPv4 address found on the system.
+// Returns empty string if no suitable address is found.
+func detectLANIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String()
+			}
+		}
+	}
+	return ""
+}
+
 // processURLsWithHost replaces empty hostnames in URLs with the given host
-// e.g., "stun::3478" -> "stun:localhost:3478"
+// Supports two patterns:
+//   - "stun:::3478" (triple colon) -> "stun:host:3478"
+//   - "stun::3478" (double colon) -> "stun:host:3478"
 func processURLsWithHost(urls []string, host string) []string {
 	result := make([]string, 0, len(urls))
 	for _, url := range urls {
-		// Check for empty hostname pattern like "stun::3478" or "turn::3478"
-		if strings.Contains(url, "::") {
-			// Replace :: with :host:
+		// Check for triple colon pattern first (e.g., "stun:::3478")
+		// This is the preferred format: protocol:::port
+		if strings.Contains(url, ":::") {
+			url = strings.Replace(url, ":::", ":"+host+":", 1)
+		} else if strings.Contains(url, "::") {
+			// Fallback for double colon pattern (e.g., "stun::3478")
 			url = strings.Replace(url, "::", ":"+host+":", 1)
 		}
 		result = append(result, url)

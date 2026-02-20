@@ -82,6 +82,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	type yamlTURN struct {
 		SharedSecret string   `yaml:"shared_secret"`
 		TTL          string   `yaml:"ttl"`
+		ExternalHost string   `yaml:"external_host"`
 		STUNURLs     []string `yaml:"stun_urls"`
 		TURNURLs     []string `yaml:"turn_urls"`
 	}
@@ -217,12 +218,16 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	if y.TURN.SharedSecret != "" || len(y.TURN.STUNURLs) > 0 || len(y.TURN.TURNURLs) > 0 {
 		turnCfg := &config.TURNConfig{
 			SharedSecret: y.TURN.SharedSecret,
+			ExternalHost: y.TURN.ExternalHost,
 			STUNURLs:     y.TURN.STUNURLs,
 			TURNURLs:     y.TURN.TURNURLs,
 		}
-		// Check for environment variable override for shared secret
+		// Check for environment variable overrides
 		if envSecret := os.Getenv("TURN_SHARED_SECRET"); envSecret != "" {
 			turnCfg.SharedSecret = envSecret
+		}
+		if envHost := os.Getenv("TURN_EXTERNAL_HOST"); envHost != "" {
+			turnCfg.ExternalHost = envHost
 		}
 		if v := strings.TrimSpace(y.TURN.TTL); v != "" {
 			if parsed, err := time.ParseDuration(v); err == nil {
@@ -235,6 +240,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		logger.ComponentInfo(logging.ComponentGeneral, "TURN configuration loaded",
 			zap.Int("stun_urls", len(turnCfg.STUNURLs)),
 			zap.Int("turn_urls", len(turnCfg.TURNURLs)),
+			zap.String("external_host", turnCfg.ExternalHost),
 		)
 	}
 

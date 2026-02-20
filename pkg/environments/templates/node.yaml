@@ -98,12 +98,12 @@ http_gateway:
 
   # TURN/STUN URLs returned to clients (points to built-in TURN server)
   turn:
-    shared_secret: "${TURN_SHARED_SECRET}"
+    shared_secret: "dev-secret-12345"
     ttl: "24h"
     stun_urls:
-      - "stun:{{.Domain}}:3478"
+      - "stun:::3478"
     turn_urls:
-      - "turn:{{.Domain}}:3478?transport=udp"
+      - "turn:::3478?transport=udp"
 
   # SFU (Selective Forwarding Unit) configuration for WebRTC group calls
   sfu:
