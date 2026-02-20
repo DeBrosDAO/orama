@@ -19,6 +19,10 @@ type HTTPGatewayConfig struct {
 	IPFSClusterAPIURL string        `yaml:"ipfs_cluster_api_url"` // IPFS Cluster API URL
 	IPFSAPIURL        string        `yaml:"ipfs_api_url"`         // IPFS API URL
 	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
+
+	// WebRTC configuration
+	TURN *TURNConfig `yaml:"turn"` // TURN/STUN server configuration
+	SFU  *SFUConfig  `yaml:"sfu"`  // SFU (Selective Forwarding Unit) configuration
 }
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway
@@ -59,4 +63,51 @@ type ClientConfig struct {
 	BootstrapPeers []string      `yaml:"bootstrap_peers"`
 	ConnectTimeout time.Duration `yaml:"connect_timeout"`
 	RetryAttempts  int           `yaml:"retry_attempts"`
+}
+
+// TURNConfig contains TURN/STUN server credential configuration
+type TURNConfig struct {
+	// SharedSecret is the shared secret for TURN credential generation (HMAC-SHA1)
+	SharedSecret string `yaml:"shared_secret"`
+
+	// TTL is the time-to-live for generated credentials (default: 24 hours)
+	TTL time.Duration `yaml:"ttl"`
+
+	// ExternalHost is the external hostname or IP address for STUN/TURN URLs
+	// Production: Set to your public domain (e.g., "turn.example.com")
+	// Development: Leave empty for auto-detection of LAN IP
+	ExternalHost string `yaml:"external_host"`
+
+	// STUNURLs are the STUN server URLs to return to clients
+	// Use ":::" as placeholder for ExternalHost (e.g., "stun:::3478" -> "stun:host:3478")
+	STUNURLs []string `yaml:"stun_urls"`
+
+	// TURNURLs are the TURN server URLs to return to clients
+	// Use ":::" as placeholder for ExternalHost (e.g., "turn:::3478" -> "turn:host:3478")
+	TURNURLs []string `yaml:"turn_urls"`
+
+	// TLSEnabled indicates whether TURNS (TURN over TLS) is available
+	TLSEnabled bool `yaml:"tls_enabled"`
+}
+
+// SFUConfig contains WebRTC SFU (Selective Forwarding Unit) configuration
+type SFUConfig struct {
+	// Enabled enables the SFU service
+	Enabled bool `yaml:"enabled"`
+
+	// MaxParticipants is the maximum number of participants per room (default: 10)
+	MaxParticipants int `yaml:"max_participants"`
+
+	// MediaTimeout is the timeout for media operations (default: 30 seconds)
+	MediaTimeout time.Duration `yaml:"media_timeout"`
+
+	// ICEServers are additional ICE servers for WebRTC connections
+	ICEServers []ICEServerConfig `yaml:"ice_servers"`
+}
+
+// ICEServerConfig represents a single ICE server configuration
+type ICEServerConfig struct {
+	URLs       []string `yaml:"urls"`
+	Username   string   `yaml:"username,omitempty"`
+	Credential string   `yaml:"credential,omitempty"`
 }

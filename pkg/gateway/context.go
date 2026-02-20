@@ -12,6 +12,7 @@ const (
 	ctxKeyAPIKey            = ctxkeys.APIKey
 	ctxKeyJWT               = ctxkeys.JWT
 	CtxKeyNamespaceOverride = ctxkeys.NamespaceOverride
+	ctxKeyNamespaceOverride = ctxkeys.NamespaceOverride // alias for internal use
 )
 
 // withInternalAuth creates a context for internal gateway operations that bypass authentication.

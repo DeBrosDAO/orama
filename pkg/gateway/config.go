@@ -1,6 +1,10 @@
 package gateway
 
-import "time"
+import (
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
+)
 
 // Config holds configuration for the gateway server
 type Config struct {
@@ -28,4 +32,10 @@ type Config struct {
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 	IPFSEnableEncryption  bool          // Enable client-side encryption before upload (default: true, discovered from node configs)
+
+	// TURN/STUN configuration for WebRTC
+	TURN *config.TURNConfig
+
+	// SFU configuration for WebRTC group calls
+	SFU *config.SFUConfig
 }
