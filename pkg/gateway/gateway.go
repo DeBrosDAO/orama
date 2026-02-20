@@ -500,7 +500,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		)
 
 		// Start health checker
-		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger)
+		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger, cfg.NodePeerID, gw.processManager)
+		gw.healthChecker.SetReconciler(cfg.RQLiteDSN, gw.replicaManager, gw.deploymentService)
 		go gw.healthChecker.Start(context.Background())
 
 		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")

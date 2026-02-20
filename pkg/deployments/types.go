@@ -25,6 +25,7 @@ const (
 	DeploymentStatusDeploying DeploymentStatus = "deploying"
 	DeploymentStatusActive    DeploymentStatus = "active"
 	DeploymentStatusFailed    DeploymentStatus = "failed"
+	DeploymentStatusDegraded  DeploymentStatus = "degraded"
 	DeploymentStatusStopped   DeploymentStatus = "stopped"
 	DeploymentStatusUpdating  DeploymentStatus = "updating"
 )

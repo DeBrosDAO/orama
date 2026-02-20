@@ -333,13 +333,13 @@ func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deploy
 			}
 		} else {
 			// Dynamic deployments: fan out to the secondary node to set up the process
-			go s.setupDynamicReplica(ctx, deployment, nodeID)
+			go s.SetupDynamicReplica(ctx, deployment, nodeID)
 		}
 	}
 }
 
-// setupDynamicReplica calls the secondary node's internal API to set up a deployment replica.
-func (s *DeploymentService) setupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
+// SetupDynamicReplica calls the secondary node's internal API to set up a deployment replica.
+func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
 	nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
 	if err != nil {
 		s.logger.Error("Failed to get node IP for replica setup",
