@@ -20,6 +20,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/gateway/sfu"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
+	"github.com/pion/webrtc/v4"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -174,6 +175,30 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.ClientNamespace,
 			gw.withInternalAuth,
 		)
+	}
+
+	// Initialize SFU manager for WebRTC group calls
+	if cfg.SFU != nil && cfg.SFU.Enabled {
+		sfuCfg := &sfu.Config{
+			MaxParticipants: cfg.SFU.MaxParticipants,
+			MediaTimeout:    cfg.SFU.MediaTimeout,
+		}
+		// Add ICE servers from SFU config
+		for _, ice := range cfg.SFU.ICEServers {
+			sfuCfg.ICEServers = append(sfuCfg.ICEServers, webrtc.ICEServer{
+				URLs:       ice.URLs,
+				Username:   ice.Username,
+				Credential: ice.Credential,
+			})
+		}
+		sfuMgr, err := sfu.NewRoomManager(sfuCfg, logger.Logger)
+		if err != nil {
+			logger.ComponentError(logging.ComponentGeneral, "Failed to initialize SFU manager", zap.Error(err))
+		} else {
+			gw.sfuManager = sfuMgr
+			logger.ComponentInfo(logging.ComponentGeneral, "SFU manager initialized",
+				zap.Int("max_participants", sfuCfg.MaxParticipants))
+		}
 	}
 
 	// Start background Olric reconnection if initial connection failed
