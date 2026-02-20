@@ -521,3 +521,114 @@ func TestRecoveryCallback_InvokedWithoutLock(t *testing.T) {
 	}
 	m.mu.Unlock()
 }
+
+// ---------------------------------------------------------------
+// OnNodeSuspect callback
+// ---------------------------------------------------------------
+
+func TestOnNodeSuspect_Callback(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond,
+	})
+	time.Sleep(2 * time.Millisecond)
+
+	var suspectNode string
+	m.OnNodeSuspect(func(nodeID string) {
+		suspectNode = nodeID
+	})
+
+	ctx := context.Background()
+
+	// Drive 3 misses (DefaultSuspectAfter) → healthy → suspect
+	for i := 0; i < DefaultSuspectAfter; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+
+	if suspectNode != "peer1" {
+		t.Fatalf("expected suspect callback for peer1, got %q", suspectNode)
+	}
+
+	m.mu.Lock()
+	if m.peers["peer1"].status != "suspect" {
+		m.mu.Unlock()
+		t.Fatalf("expected suspect state, got %s", m.peers["peer1"].status)
+	}
+	m.mu.Unlock()
+}
+
+func TestOnNodeSuspect_DoesNotFireOnSubsequentMisses(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond,
+	})
+	time.Sleep(2 * time.Millisecond)
+
+	var callCount int32
+	m.OnNodeSuspect(func(nodeID string) {
+		callCount++
+	})
+
+	ctx := context.Background()
+
+	// Drive to suspect (3 misses)
+	for i := 0; i < DefaultSuspectAfter; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected suspect callback to fire once after 3 misses, got %d", callCount)
+	}
+
+	// Keep missing (4th through 11th miss) — should NOT fire suspect again
+	for i := 0; i < 8; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+
+	if callCount != 1 {
+		t.Fatalf("expected suspect callback to fire exactly once, got %d", callCount)
+	}
+}
+
+func TestRecoveredFromSuspect_Callback(t *testing.T) {
+	m := NewMonitor(Config{
+		NodeID:             "self",
+		Neighbors:          3,
+		StartupGracePeriod: 1 * time.Millisecond,
+	})
+	time.Sleep(2 * time.Millisecond)
+
+	var recoveredNode string
+	m.OnNodeRecovered(func(nodeID string) {
+		recoveredNode = nodeID
+	})
+
+	ctx := context.Background()
+
+	// Drive to suspect (3 misses, NOT dead)
+	for i := 0; i < DefaultSuspectAfter; i++ {
+		m.updateState(ctx, "peer1", false)
+	}
+
+	m.mu.Lock()
+	if m.peers["peer1"].status != "suspect" {
+		m.mu.Unlock()
+		t.Fatal("expected suspect state before recovery")
+	}
+	m.mu.Unlock()
+
+	// Recover from suspect
+	m.updateState(ctx, "peer1", true)
+
+	if recoveredNode != "peer1" {
+		t.Fatalf("expected recovery callback for peer1 after suspect, got %q", recoveredNode)
+	}
+
+	m.mu.Lock()
+	if m.peers["peer1"].status != "healthy" {
+		m.mu.Unlock()
+		t.Fatal("expected healthy after recovery from suspect")
+	}
+	m.mu.Unlock()
+}

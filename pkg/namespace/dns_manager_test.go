@@ -1,7 +1,9 @@
 package namespace
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -213,5 +215,62 @@ func TestDNSRecordManager_FQDNWithTrailingDot(t *testing.T) {
 				t.Errorf("FQDN = %s, want %s", fqdn, tt.expected)
 			}
 		})
+	}
+}
+
+func TestUpdateNamespaceRecord_SetsActiveTrue(t *testing.T) {
+	mockDB := newMockRQLiteClient()
+	logger := zap.NewNop()
+	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", logger)
+
+	ctx := context.Background()
+	err := manager.UpdateNamespaceRecord(ctx, "alice", "1.2.3.4", "5.6.7.8")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the SQL contains is_active = TRUE for both FQDN and wildcard
+	activeCount := 0
+	for _, call := range mockDB.execCalls {
+		if strings.Contains(call.Query, "is_active = TRUE") && strings.Contains(call.Query, "UPDATE dns_records") {
+			activeCount++
+		}
+	}
+	if activeCount != 2 {
+		t.Fatalf("expected 2 UPDATE queries with is_active = TRUE (fqdn + wildcard), got %d", activeCount)
+	}
+}
+
+func TestCountActiveNamespaceRecords(t *testing.T) {
+	mockDB := newMockRQLiteClient()
+	logger := zap.NewNop()
+	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", logger)
+
+	ctx := context.Background()
+	count, err := manager.CountActiveNamespaceRecords(ctx, "alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// With mock returning empty results, count should be 0
+	if count != 0 {
+		t.Fatalf("expected 0, got %d", count)
+	}
+
+	// Verify the correct query was made
+	if len(mockDB.queryCalls) == 0 {
+		t.Fatal("expected a query call")
+	}
+	lastCall := mockDB.queryCalls[len(mockDB.queryCalls)-1]
+	if !strings.Contains(lastCall.Query, "COUNT(*)") || !strings.Contains(lastCall.Query, "is_active = TRUE") {
+		t.Fatalf("unexpected query: %s", lastCall.Query)
+	}
+	// Verify the FQDN arg
+	expectedFQDN := "ns-alice.orama-devnet.network."
+	if len(lastCall.Args) == 0 {
+		t.Fatal("expected query args")
+	}
+	if fqdn, ok := lastCall.Args[0].(string); !ok || fqdn != expectedFQDN {
+		t.Fatalf("expected FQDN arg %q, got %v", expectedFQDN, lastCall.Args[0])
 	}
 }

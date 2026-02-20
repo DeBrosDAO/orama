@@ -580,10 +580,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			}
 		})
 		gw.healthMonitor.OnNodeRecovered(func(nodeID string) {
-			logger.ComponentInfo(logging.ComponentGeneral, "Previously dead node recovered — checking for orphaned services",
+			logger.ComponentInfo(logging.ComponentGeneral, "Node recovered — re-enabling DNS and checking for orphaned services",
 				zap.String("node_id", nodeID))
 			if gw.nodeRecoverer != nil {
+				go gw.nodeRecoverer.HandleSuspectRecovery(context.Background(), nodeID)
 				go gw.nodeRecoverer.HandleRecoveredNode(context.Background(), nodeID)
+			}
+		})
+		gw.healthMonitor.OnNodeSuspect(func(nodeID string) {
+			logger.ComponentWarn(logging.ComponentGeneral, "Node SUSPECT — disabling DNS records",
+				zap.String("suspect_node", nodeID))
+			if gw.nodeRecoverer != nil {
+				go gw.nodeRecoverer.HandleSuspectNode(context.Background(), nodeID)
 			}
 		})
 		go gw.healthMonitor.Start(context.Background())

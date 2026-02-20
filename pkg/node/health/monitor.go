@@ -83,7 +83,8 @@ type Monitor struct {
 	peers map[string]*peerState // nodeID → state
 
 	onDeadFn      func(nodeID string) // callback when quorum confirms death
-	onRecoveredFn func(nodeID string) // callback when node transitions from dead → healthy
+	onRecoveredFn func(nodeID string) // callback when node transitions from suspect/dead → healthy
+	onSuspectFn   func(nodeID string) // callback when node transitions healthy → suspect
 }
 
 // NewMonitor creates a new health monitor.
@@ -121,10 +122,17 @@ func (m *Monitor) OnNodeDead(fn func(nodeID string)) {
 	m.onDeadFn = fn
 }
 
-// OnNodeRecovered registers a callback invoked when a previously dead node
-// transitions back to healthy. The callback runs with the monitor lock released.
+// OnNodeRecovered registers a callback invoked when a previously suspect or dead
+// node transitions back to healthy. The callback runs with the monitor lock released.
 func (m *Monitor) OnNodeRecovered(fn func(nodeID string)) {
 	m.onRecoveredFn = fn
+}
+
+// OnNodeSuspect registers a callback invoked when a node transitions from
+// healthy to suspect (3 consecutive missed probes). The callback runs with
+// the monitor lock released.
+func (m *Monitor) OnNodeSuspect(fn func(nodeID string)) {
+	m.onSuspectFn = fn
 }
 
 // Start runs the monitor loop until ctx is cancelled.
@@ -232,8 +240,8 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 	}
 
 	if healthy {
-		wasDead := ps.status == "dead"
-		shouldCallback := wasDead && m.onRecoveredFn != nil
+		wasUnhealthy := ps.status == "suspect" || ps.status == "dead"
+		shouldCallback := wasUnhealthy && m.onRecoveredFn != nil
 		prevStatus := ps.status
 
 		// Update state BEFORE releasing lock (C2 fix)
@@ -299,6 +307,7 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 	case ps.missCount >= DefaultSuspectAfter && ps.status == "healthy":
 		ps.status = "suspect"
 		ps.suspectAt = time.Now()
+		shouldCallSuspect := m.onSuspectFn != nil
 		m.mu.Unlock()
 
 		m.logger.Warn("Node SUSPECT",
@@ -306,6 +315,10 @@ func (m *Monitor) updateState(ctx context.Context, nodeID string, healthy bool) 
 			zap.Int("misses", ps.missCount),
 		)
 		m.writeEvent(ctx, nodeID, "suspect")
+
+		if shouldCallSuspect {
+			m.onSuspectFn(nodeID)
+		}
 		return
 	}
 
