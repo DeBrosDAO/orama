@@ -67,6 +67,10 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/phantom/complete", g.authHandlers.PhantomCompleteHandler)
 	}
 
+	// RQLite native backup/restore proxy (namespace auth via /v1/rqlite/ prefix)
+	mux.HandleFunc("/v1/rqlite/export", g.rqliteExportHandler)
+	mux.HandleFunc("/v1/rqlite/import", g.rqliteImportHandler)
+
 	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints)
 	if g.ormHTTP != nil {
 		g.ormHTTP.BasePath = "/v1/rqlite"

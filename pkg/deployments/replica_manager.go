@@ -84,7 +84,7 @@ func (rm *ReplicaManager) SelectReplicaNodes(ctx context.Context, primaryNodeID 
 }
 
 // CreateReplica inserts a replica record for a deployment on a specific node.
-func (rm *ReplicaManager) CreateReplica(ctx context.Context, deploymentID, nodeID string, port int, isPrimary bool) error {
+func (rm *ReplicaManager) CreateReplica(ctx context.Context, deploymentID, nodeID string, port int, isPrimary bool, status ReplicaStatus) error {
 	internalCtx := client.WithInternalAuth(ctx)
 
 	query := `
@@ -98,7 +98,7 @@ func (rm *ReplicaManager) CreateReplica(ctx context.Context, deploymentID, nodeI
 	`
 
 	now := time.Now()
-	_, err := rm.db.Exec(internalCtx, query, deploymentID, nodeID, port, ReplicaStatusActive, isPrimary, now, now)
+	_, err := rm.db.Exec(internalCtx, query, deploymentID, nodeID, port, status, isPrimary, now, now)
 	if err != nil {
 		return &DeploymentError{
 			Message: fmt.Sprintf("failed to create replica for deployment %s on node %s", deploymentID, nodeID),
@@ -161,7 +161,7 @@ func (rm *ReplicaManager) GetActiveReplicaNodes(ctx context.Context, deploymentI
 	}
 
 	var rows []nodeRow
-	query := `SELECT node_id FROM deployment_replicas WHERE deployment_id = ? AND status = ?`
+	query := `SELECT node_id FROM deployment_replicas WHERE deployment_id = ? AND status = ? AND port > 0`
 	err := rm.db.Query(internalCtx, &rows, query, deploymentID, ReplicaStatusActive)
 	if err != nil {
 		return nil, &DeploymentError{
@@ -259,7 +259,8 @@ func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string,
 	}
 
 	var rows []nodeRow
-	query := `SELECT COALESCE(internal_ip, ip_address) AS ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	// Use public IP for DNS A records (internal/WG IPs are not reachable from the internet)
+	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := rm.db.Query(internalCtx, &rows, query, nodeID)
 	if err != nil {
 		return "", err

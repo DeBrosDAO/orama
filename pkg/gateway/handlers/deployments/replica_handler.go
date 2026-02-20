@@ -99,6 +99,16 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Release port if setup fails after this point
+	setupOK := false
+	defer func() {
+		if !setupOK {
+			if deallocErr := h.service.portAllocator.DeallocatePort(ctx, req.DeploymentID); deallocErr != nil {
+				h.logger.Error("Failed to deallocate port after setup failure", zap.Error(deallocErr))
+			}
+		}
+	}()
+
 	// Create the deployment directory
 	deployPath := filepath.Join(h.baseDeployPath, req.Namespace, req.Name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
@@ -152,6 +162,8 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setupOK = true
+
 	// Wait for health check
 	if err := h.processManager.WaitForHealthy(ctx, deployment, 90*time.Second); err != nil {
 		h.logger.Warn("Replica did not become healthy", zap.Error(err))
@@ -159,7 +171,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 
 	// Update replica record to active with the port
 	if h.service.replicaManager != nil {
-		h.service.replicaManager.CreateReplica(ctx, req.DeploymentID, h.service.nodePeerID, port, false)
+		h.service.replicaManager.CreateReplica(ctx, req.DeploymentID, h.service.nodePeerID, port, false, deployments.ReplicaStatusActive)
 	}
 
 	resp := map[string]interface{}{
@@ -382,6 +394,11 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 	deployPath := filepath.Join(h.baseDeployPath, req.Namespace, req.Name)
 	if err := os.RemoveAll(deployPath); err != nil {
 		h.logger.Warn("Failed to remove replica files", zap.Error(err))
+	}
+
+	// Deallocate the port
+	if err := h.service.portAllocator.DeallocatePort(ctx, req.DeploymentID); err != nil {
+		h.logger.Warn("Failed to deallocate port during teardown", zap.Error(err))
 	}
 
 	// Update replica status
