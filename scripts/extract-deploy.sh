@@ -1,37 +1,98 @@
 #!/bin/bash
-# Extracts /tmp/network-source.tar.gz on a VPS and places the CLI binary.
-# Run as root on the target VPS.
+# Extracts /tmp/network-source.tar.gz and places the CLI binary.
 #
-# What it does:
-#   1. Extracts source to /opt/orama/src/
-#   2. Installs CLI to /usr/local/bin/orama
-#   All other binaries are built from source during `orama install`.
+# Local mode (run directly on VPS):
+#   sudo bash /opt/orama/src/scripts/extract-deploy.sh
 #
-# Usage: sudo bash /opt/orama/src/scripts/extract-deploy.sh
+# Remote mode (run from dev machine):
+#   ./scripts/extract-deploy.sh --env testnet
+#   ./scripts/extract-deploy.sh <vps-ip> [<vps-ip2> ...]
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCHIVE="/tmp/network-source.tar.gz"
 SRC_DIR="/opt/orama/src"
 BIN_DIR="/opt/orama/bin"
+CONF="$SCRIPT_DIR/remote-nodes.conf"
 
-if [ ! -f "$ARCHIVE" ]; then
-    echo "Error: $ARCHIVE not found"
-    exit 1
+# --- Local mode (no args) ---
+if [ $# -eq 0 ]; then
+    if [ ! -f "$ARCHIVE" ]; then
+        echo "Error: $ARCHIVE not found"
+        exit 1
+    fi
+
+    echo "Extracting source..."
+    rm -rf "$SRC_DIR"
+    mkdir -p "$SRC_DIR" "$BIN_DIR"
+    tar xzf "$ARCHIVE" -C "$SRC_DIR"
+
+    # Install CLI binary
+    if [ -f "$SRC_DIR/bin-linux/orama" ]; then
+        cp "$SRC_DIR/bin-linux/orama" /usr/local/bin/orama
+        chmod +x /usr/local/bin/orama
+        echo "  ✓ CLI installed: /usr/local/bin/orama"
+    else
+        echo "  ⚠️  CLI binary not found in archive (bin-linux/orama)"
+    fi
+
+    echo "Done. Ready for: sudo orama install --vps-ip <ip> ..."
+    exit 0
 fi
 
-echo "Extracting source..."
-rm -rf "$SRC_DIR"
-mkdir -p "$SRC_DIR" "$BIN_DIR"
-tar xzf "$ARCHIVE" -C "$SRC_DIR"
+# --- Remote mode ---
 
-# Install CLI binary
-if [ -f "$SRC_DIR/bin-linux/orama" ]; then
-    cp "$SRC_DIR/bin-linux/orama" /usr/local/bin/orama
-    chmod +x /usr/local/bin/orama
-    echo "  ✓ CLI installed: /usr/local/bin/orama"
-else
-    echo "  ⚠️  CLI binary not found in archive (bin-linux/orama)"
-fi
+resolve_nodes() {
+    if [ "$1" = "--env" ] && [ -n "$2" ] && [ -f "$CONF" ]; then
+        grep "^$2|" "$CONF" | while IFS='|' read -r env userhost pass role; do
+            local user="${userhost%%@*}"
+            local host="${userhost##*@}"
+            echo "$user|$host|$pass"
+        done
+        return
+    fi
 
-echo "Done. Ready for: sudo orama install --vps-ip <ip> ..."
+    for ip in "$@"; do
+        if [ -f "$CONF" ]; then
+            local match
+            match=$(grep "|[^|]*@${ip}|" "$CONF" | head -1)
+            if [ -n "$match" ]; then
+                local userhost pass
+                userhost=$(echo "$match" | cut -d'|' -f2)
+                pass=$(echo "$match" | cut -d'|' -f3)
+                local user="${userhost%%@*}"
+                echo "$user|$ip|$pass"
+                continue
+            fi
+        fi
+        echo "ubuntu|$ip|"
+    done
+}
+
+extract_on_node() {
+    local user="$1" host="$2" pass="$3"
+
+    echo "→ Extracting on $user@$host..."
+
+    local sudo_prefix=""
+    [ "$user" != "root" ] && sudo_prefix="sudo "
+
+    local extract_cmd="${sudo_prefix}bash -c 'rm -rf /opt/orama/src && mkdir -p /opt/orama/src /opt/orama/bin && tar xzf /tmp/network-source.tar.gz -C /opt/orama/src 2>/dev/null && if [ -f /opt/orama/src/bin-linux/orama ]; then cp /opt/orama/src/bin-linux/orama /usr/local/bin/orama && chmod +x /usr/local/bin/orama; fi && echo \"  ✓ Extracted (\$(ls /opt/orama/src/ | wc -l) files)\"'"
+
+    if [ -n "$pass" ]; then
+        sshpass -p "$pass" ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+            "$user@$host" "$extract_cmd"
+    else
+        ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            "$user@$host" "$extract_cmd"
+    fi
+}
+
+resolve_nodes "$@" | while IFS='|' read -r user host pass; do
+    extract_on_node "$user" "$host" "$pass"
+    echo ""
+done
+
+echo "Done."

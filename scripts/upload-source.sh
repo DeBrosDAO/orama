@@ -76,11 +76,11 @@ upload_to_node() {
     local extract_cmd="${sudo_prefix}bash -c 'rm -rf /opt/orama/src && mkdir -p /opt/orama/src /opt/orama/bin && tar xzf /tmp/network-source.tar.gz -C /opt/orama/src 2>/dev/null && if [ -f /opt/orama/src/bin-linux/orama ]; then cp /opt/orama/src/bin-linux/orama /usr/local/bin/orama && chmod +x /usr/local/bin/orama; fi && echo \"  ✓ Extracted (\$(ls /opt/orama/src/ | wc -l) files)\"'"
 
     if [ -n "$pass" ]; then
-        sshpass -p "$pass" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        sshpass -p "$pass" ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
             -o PreferredAuthentications=password -o PubkeyAuthentication=no \
             "$user@$host" "$extract_cmd"
     else
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
             "$user@$host" "$extract_cmd"
     fi
 }
