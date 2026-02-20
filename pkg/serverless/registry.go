@@ -428,13 +428,26 @@ func (r *Registry) GetLogs(ctx context.Context, namespace, name string, limit in
 // Private helpers
 // -----------------------------------------------------------------------------
 
-// uploadWASM uploads WASM bytecode to IPFS and returns the CID.
+// defaultWASMReplicationFactor is the IPFS Cluster replication factor for WASM binaries.
+const defaultWASMReplicationFactor = 3
+
+// uploadWASM uploads WASM bytecode to IPFS and pins it for cluster-wide replication.
 func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string) (string, error) {
 	reader := bytes.NewReader(wasmBytes)
 	resp, err := r.ipfs.Add(ctx, reader, name+".wasm")
 	if err != nil {
 		return "", fmt.Errorf("failed to upload WASM to IPFS: %w", err)
 	}
+
+	// Pin the CID across cluster peers so the binary survives node failures.
+	if _, err := r.ipfs.Pin(ctx, resp.Cid, name+".wasm", defaultWASMReplicationFactor); err != nil {
+		r.logger.Warn("Failed to pin WASM binary — content may not be replicated",
+			zap.String("cid", resp.Cid),
+			zap.String("function", name),
+			zap.Error(err),
+		)
+	}
+
 	return resp.Cid, nil
 }
 
