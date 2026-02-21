@@ -12,6 +12,9 @@ type FirewallConfig struct {
 	IsNameserver  bool // enables port 53 TCP+UDP
 	AnyoneORPort  int  // 0 = disabled, typically 9001
 	WireGuardPort int  // default 51820
+	TURNEnabled   bool // enables TURN relay ports (3478/udp, 443/udp, relay range)
+	TURNRelayStart int // start of TURN relay port range (default 49152)
+	TURNRelayEnd   int // end of TURN relay port range (default 65535)
 }
 
 // FirewallProvisioner manages UFW firewall setup
@@ -84,6 +87,15 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 		rules = append(rules, fmt.Sprintf("ufw allow %d/tcp", fp.config.AnyoneORPort))
 	}
 
+	// TURN relay (only for nodes running TURN servers)
+	if fp.config.TURNEnabled {
+		rules = append(rules, "ufw allow 3478/udp")  // TURN standard port
+		rules = append(rules, "ufw allow 443/udp")   // TURN TLS port (does not conflict with Caddy TCP 443)
+		if fp.config.TURNRelayStart > 0 && fp.config.TURNRelayEnd > 0 {
+			rules = append(rules, fmt.Sprintf("ufw allow %d:%d/udp", fp.config.TURNRelayStart, fp.config.TURNRelayEnd))
+		}
+	}
+
 	// Allow all traffic from WireGuard subnet (inter-node encrypted traffic)
 	rules = append(rules, "ufw allow from 10.0.0.0/8")
 
@@ -128,6 +140,47 @@ func (fp *FirewallProvisioner) IsActive() bool {
 		return false
 	}
 	return strings.Contains(string(output), "Status: active")
+}
+
+// AddWebRTCRules dynamically adds TURN port rules without a full firewall reset.
+// Used when enabling WebRTC on a namespace.
+func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
+	rules := []string{
+		"ufw allow 3478/udp",
+		"ufw allow 443/udp",
+	}
+	if relayStart > 0 && relayEnd > 0 {
+		rules = append(rules, fmt.Sprintf("ufw allow %d:%d/udp", relayStart, relayEnd))
+	}
+
+	for _, rule := range rules {
+		parts := strings.Fields(rule)
+		cmd := exec.Command(parts[0], parts[1:]...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add firewall rule '%s': %w\n%s", rule, err, string(output))
+		}
+	}
+	return nil
+}
+
+// RemoveWebRTCRules dynamically removes TURN port rules without a full firewall reset.
+// Used when disabling WebRTC on a namespace.
+func (fp *FirewallProvisioner) RemoveWebRTCRules(relayStart, relayEnd int) error {
+	rules := []string{
+		"ufw delete allow 3478/udp",
+		"ufw delete allow 443/udp",
+	}
+	if relayStart > 0 && relayEnd > 0 {
+		rules = append(rules, fmt.Sprintf("ufw delete allow %d:%d/udp", relayStart, relayEnd))
+	}
+
+	for _, rule := range rules {
+		parts := strings.Fields(rule)
+		cmd := exec.Command(parts[0], parts[1:]...)
+		// Ignore errors on delete — rule may not exist
+		cmd.CombinedOutput()
+	}
+	return nil
 }
 
 // GetStatus returns the current UFW status

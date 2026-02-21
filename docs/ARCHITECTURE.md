@@ -474,6 +474,36 @@ configured, use the IP over HTTP port 80 (`http://<ip>`) which goes through Cadd
 
 Planned containerization with Docker Compose and Kubernetes support.
 
+## WebRTC (Voice/Video/Data)
+
+Namespaces can opt in to WebRTC support for real-time voice, video, and data channels.
+
+### Components
+
+- **SFU (Selective Forwarding Unit)** — Pion WebRTC server that handles signaling (WebSocket), SDP negotiation, and RTP forwarding. Runs on all 3 cluster nodes, binds only to WireGuard IPs.
+- **TURN Server** — Pion TURN relay that provides NAT traversal. Runs on 2 of 3 nodes for redundancy. Public-facing (UDP 3478, 443, relay range 49152-65535).
+
+### Security Model
+
+- **TURN-shielded**: SFU binds only to WireGuard (10.0.0.x), never 0.0.0.0. All client media flows through TURN relay.
+- **Forced relay**: `iceTransportPolicy: relay` enforced server-side — no direct peer connections.
+- **HMAC credentials**: Per-namespace TURN shared secret with 10-minute TTL.
+- **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
+
+### Port Allocation
+
+WebRTC uses a separate port allocation system from core namespace services:
+
+| Service | Port Range |
+|---------|-----------|
+| SFU signaling | 30000-30099 |
+| SFU media (RTP) | 20000-29999 |
+| TURN listen | 3478/udp (standard) |
+| TURN TLS | 443/udp |
+| TURN relay | 49152-65535/udp |
+
+See [docs/WEBRTC.md](WEBRTC.md) for full details including client integration, API reference, and debugging.
+
 ## Future Enhancements
 
 1. **GraphQL Support** - GraphQL gateway alongside REST

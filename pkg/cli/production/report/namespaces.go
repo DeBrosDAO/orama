@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -162,5 +163,25 @@ func collectNamespaceReport(ns nsInfo) NamespaceReport {
 		}
 	}
 
+	// 5. SFUUp: check if namespace SFU systemd service is active (optional)
+	r.SFUUp = isNamespaceServiceActive("sfu", ns.name)
+
+	// 6. TURNUp: check if namespace TURN systemd service is active (optional)
+	r.TURNUp = isNamespaceServiceActive("turn", ns.name)
+
 	return r
+}
+
+// isNamespaceServiceActive checks if a namespace service is provisioned and active.
+// Returns false if the service is not provisioned (no env file) or not running.
+func isNamespaceServiceActive(serviceType, namespace string) bool {
+	// Only check if the service was provisioned (env file exists)
+	envFile := fmt.Sprintf("/opt/orama/.orama/data/namespaces/%s/%s.env", namespace, serviceType)
+	if _, err := os.Stat(envFile); err != nil {
+		return false // not provisioned
+	}
+
+	svcName := fmt.Sprintf("orama-namespace-%s@%s", serviceType, namespace)
+	cmd := exec.Command("systemctl", "is-active", "--quiet", svcName)
+	return cmd.Run() == nil
 }

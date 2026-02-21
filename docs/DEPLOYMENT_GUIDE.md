@@ -872,6 +872,57 @@ orama app delete my-old-app
 
 ---
 
+## WebRTC (Voice/Video/Data)
+
+Namespaces can enable WebRTC support for real-time communication (voice calls, video calls, data channels).
+
+### Enable WebRTC
+
+```bash
+# Enable WebRTC for a namespace (must be run on a cluster node)
+orama namespace enable webrtc --namespace myapp
+
+# Check WebRTC status
+orama namespace webrtc-status --namespace myapp
+```
+
+This provisions SFU servers on all 3 nodes and TURN relay servers on 2 nodes, allocates port blocks, creates DNS records, and opens firewall ports.
+
+### Disable WebRTC
+
+```bash
+orama namespace disable webrtc --namespace myapp
+```
+
+Stops all SFU/TURN services, deallocates ports, removes DNS records, and closes firewall ports.
+
+### Client Integration
+
+```javascript
+// 1. Get TURN credentials
+const creds = await fetch('https://ns-myapp.orama.network/v1/webrtc/turn/credentials', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${jwt}` }
+});
+const { urls, username, credential, ttl } = await creds.json();
+
+// 2. Create PeerConnection (forced relay)
+const pc = new RTCPeerConnection({
+  iceServers: [{ urls, username, credential }],
+  iceTransportPolicy: 'relay'
+});
+
+// 3. Connect signaling WebSocket
+const ws = new WebSocket(
+  `wss://ns-myapp.orama.network/v1/webrtc/signal?room=${roomId}`,
+  ['Bearer', jwt]
+);
+```
+
+See [docs/WEBRTC.md](WEBRTC.md) for the full API reference, room management, credential protocol, and debugging guide.
+
+---
+
 ## Troubleshooting
 
 ### Deployment Issues
