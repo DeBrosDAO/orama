@@ -92,6 +92,8 @@ func newTestHandlers(reg serverless.FunctionRegistry) *ServerlessHandlers {
 		nil, // invoker is nil — we only test paths that don't reach it
 		reg,
 		wsManager,
+		nil, // triggerStore
+		nil, // dispatcher
 		logger,
 	)
 }

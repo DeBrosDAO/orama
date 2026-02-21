@@ -330,6 +330,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize handler instances
 	gw.pubsubHandlers = pubsubhandlers.NewPubSubHandlers(deps.Client, logger)
 
+	// Wire PubSub trigger dispatch if serverless is available
+	if deps.PubSubDispatcher != nil {
+		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
+			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
+		})
+	}
+
 	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
 		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(
 			logger,

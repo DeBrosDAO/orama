@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"net/http"
 	"sync"
 
@@ -19,6 +20,16 @@ type PubSubHandlers struct {
 	presenceMembers  map[string][]PresenceMember   // topicKey -> members
 	mu               sync.RWMutex
 	presenceMu       sync.RWMutex
+
+	// onPublish is called when a message is published, to dispatch PubSub triggers.
+	// Set via SetOnPublish. May be nil if serverless triggers are not configured.
+	onPublish func(ctx context.Context, namespace, topic string, data []byte)
+}
+
+// SetOnPublish sets the callback invoked when messages are published.
+// Used to wire PubSub trigger dispatch from the serverless engine.
+func (p *PubSubHandlers) SetOnPublish(fn func(ctx context.Context, namespace, topic string, data []byte)) {
+	p.onPublish = fn
 }
 
 // NewPubSubHandlers creates a new PubSubHandlers instance

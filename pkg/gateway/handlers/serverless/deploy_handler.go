@@ -154,6 +154,20 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Register PubSub triggers from definition (deploy-time auto-registration)
+	if h.triggerStore != nil && len(def.PubSubTopics) > 0 && fn != nil {
+		_ = h.triggerStore.RemoveByFunction(ctx, fn.ID)
+		for _, topic := range def.PubSubTopics {
+			if _, err := h.triggerStore.Add(ctx, fn.ID, topic); err != nil {
+				h.logger.Warn("Failed to register pubsub trigger",
+					zap.String("topic", topic),
+					zap.Error(err))
+			} else if h.dispatcher != nil {
+				h.dispatcher.InvalidateCache(ctx, def.Namespace, topic)
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"message":  "Function deployed successfully",
 		"function": fn,
