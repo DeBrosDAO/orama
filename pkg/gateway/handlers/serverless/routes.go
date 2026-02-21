@@ -30,14 +30,17 @@ func (h *ServerlessHandlers) handleFunctions(w http.ResponseWriter, r *http.Requ
 
 // handleFunctionByName handles operations on a specific function
 // Routes:
-//   - GET    /v1/functions/{name}           - Get function info
-//   - DELETE /v1/functions/{name}           - Delete function
-//   - POST   /v1/functions/{name}/invoke    - Invoke function
-//   - GET    /v1/functions/{name}/versions  - List versions
-//   - GET    /v1/functions/{name}/logs      - Get logs
-//   - WS     /v1/functions/{name}/ws        - WebSocket invoke
+//   - GET    /v1/functions/{name}                    - Get function info
+//   - DELETE /v1/functions/{name}                    - Delete function
+//   - POST   /v1/functions/{name}/invoke             - Invoke function
+//   - GET    /v1/functions/{name}/versions           - List versions
+//   - GET    /v1/functions/{name}/logs               - Get logs
+//   - WS     /v1/functions/{name}/ws                 - WebSocket invoke
+//   - POST   /v1/functions/{name}/triggers           - Add trigger
+//   - GET    /v1/functions/{name}/triggers           - List triggers
+//   - DELETE /v1/functions/{name}/triggers/{id}      - Remove trigger
 func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /v1/functions/{name}[/{action}]
+	// Parse path: /v1/functions/{name}[/{action}[/{subID}]]
 	path := strings.TrimPrefix(r.URL.Path, "/v1/functions/")
 	parts := strings.SplitN(path, "/", 2)
 
@@ -62,6 +65,13 @@ func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http
 		}
 	}
 
+	// Handle triggers sub-path: "triggers" or "triggers/{triggerID}"
+	triggerID := ""
+	if strings.HasPrefix(action, "triggers/") {
+		triggerID = strings.TrimPrefix(action, "triggers/")
+		action = "triggers"
+	}
+
 	switch action {
 	case "invoke":
 		h.InvokeFunction(w, r, name, version)
@@ -71,6 +81,17 @@ func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http
 		h.ListVersions(w, r, name)
 	case "logs":
 		h.GetFunctionLogs(w, r, name)
+	case "triggers":
+		switch {
+		case triggerID != "" && r.Method == http.MethodDelete:
+			h.HandleDeleteTrigger(w, r, name, triggerID)
+		case r.Method == http.MethodPost:
+			h.HandleAddTrigger(w, r, name)
+		case r.Method == http.MethodGet:
+			h.HandleListTriggers(w, r, name)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
 	case "":
 		switch r.Method {
 		case http.MethodGet:
