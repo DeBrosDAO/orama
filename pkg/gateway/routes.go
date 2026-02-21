@@ -52,6 +52,11 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/internal/namespace/webrtc/disable", g.namespaceWebRTCDisableHandler)
 	mux.HandleFunc("/v1/internal/namespace/webrtc/status", g.namespaceWebRTCStatusHandler)
 
+	// Namespace WebRTC enable/disable/status (public, JWT/API key auth via middleware)
+	mux.HandleFunc("/v1/namespace/webrtc/enable", g.namespaceWebRTCEnablePublicHandler)
+	mux.HandleFunc("/v1/namespace/webrtc/disable", g.namespaceWebRTCDisablePublicHandler)
+	mux.HandleFunc("/v1/namespace/webrtc/status", g.namespaceWebRTCStatusPublicHandler)
+
 	// auth endpoints
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)

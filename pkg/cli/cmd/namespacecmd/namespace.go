@@ -45,10 +45,59 @@ var repairCmd = &cobra.Command{
 	},
 }
 
+var enableCmd = &cobra.Command{
+	Use:   "enable <feature>",
+	Short: "Enable a feature for a namespace",
+	Long:  "Enable a feature for a namespace. Supported features: webrtc",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"enable", args[0]}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
+var disableCmd = &cobra.Command{
+	Use:   "disable <feature>",
+	Short: "Disable a feature for a namespace",
+	Long:  "Disable a feature for a namespace. Supported features: webrtc",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"disable", args[0]}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
+var webrtcStatusCmd = &cobra.Command{
+	Use:   "webrtc-status",
+	Short: "Show WebRTC service status for a namespace",
+	Run: func(cmd *cobra.Command, args []string) {
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"webrtc-status"}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
 func init() {
 	deleteCmd.Flags().Bool("force", false, "Skip confirmation prompt")
+	enableCmd.Flags().String("namespace", "", "Namespace name")
+	disableCmd.Flags().String("namespace", "", "Namespace name")
+	webrtcStatusCmd.Flags().String("namespace", "", "Namespace name")
 
 	Cmd.AddCommand(listCmd)
 	Cmd.AddCommand(deleteCmd)
 	Cmd.AddCommand(repairCmd)
+	Cmd.AddCommand(enableCmd)
+	Cmd.AddCommand(disableCmd)
+	Cmd.AddCommand(webrtcStatusCmd)
 }
