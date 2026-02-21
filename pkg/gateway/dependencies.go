@@ -22,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/hostfunctions"
+	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	"github.com/multiformats/go-multiaddr"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -58,6 +59,9 @@ type Dependencies struct {
 	ServerlessInvoker  *serverless.Invoker
 	ServerlessWSMgr    *serverless.WSManager
 	ServerlessHandlers *serverlesshandlers.ServerlessHandlers
+
+	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
+	PubSubDispatcher *triggers.PubSubDispatcher
 
 	// Authentication service
 	AuthService *auth.Service
@@ -434,11 +438,27 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// Create invoker
 	deps.ServerlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
 
+	// Create PubSub trigger store and dispatcher
+	triggerStore := triggers.NewPubSubTriggerStore(deps.ORMClient, logger.Logger)
+
+	var olricUnderlying olriclib.Client
+	if deps.OlricClient != nil {
+		olricUnderlying = deps.OlricClient.UnderlyingClient()
+	}
+	deps.PubSubDispatcher = triggers.NewPubSubDispatcher(
+		triggerStore,
+		deps.ServerlessInvoker,
+		olricUnderlying,
+		logger.Logger,
+	)
+
 	// Create HTTP handlers
 	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
 		deps.ServerlessInvoker,
 		registry,
 		deps.ServerlessWSMgr,
+		triggerStore,
+		deps.PubSubDispatcher,
 		logger.Logger,
 	)
 

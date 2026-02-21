@@ -67,6 +67,11 @@ func (p *PubSubHandlers) PublishHandler(w http.ResponseWriter, r *http.Request) 
 		zap.Int("local_subscribers", len(localSubs)),
 		zap.Int("local_delivered", localDeliveryCount))
 
+	// Fire PubSub triggers for serverless functions (non-blocking)
+	if p.onPublish != nil {
+		go p.onPublish(context.Background(), ns, body.Topic, data)
+	}
+
 	// Publish to libp2p asynchronously for cross-node delivery
 	// This prevents blocking the HTTP response if libp2p network is slow
 	go func() {

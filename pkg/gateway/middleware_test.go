@@ -382,7 +382,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 			"X-Frame-Options":        "DENY",
 			"X-Xss-Protection":       "0",
 			"Referrer-Policy":        "strict-origin-when-cross-origin",
-			"Permissions-Policy":     "camera=(), microphone=(), geolocation=()",
+			"Permissions-Policy":     "camera=(self), microphone=(self), geolocation=()",
 		}
 		for header, want := range expected {
 			got := rr.Header().Get(header)

@@ -238,6 +238,8 @@ These checks compare data across all nodes:
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
 - **Clock Skew**: Node clocks within 5 seconds of each other
 - **Binary Version**: All nodes running the same version
+- **WebRTC SFU Coverage**: SFU running on expected nodes (3/3) per namespace
+- **WebRTC TURN Redundancy**: TURN running on expected nodes (2/3) per namespace
 
 ### Per-Node Checks
 
@@ -249,6 +251,7 @@ These checks compare data across all nodes:
 - **Anyone**: Bootstrap progress
 - **Processes**: Zombies, orphans, panics in logs
 - **Namespaces**: Gateway and RQLite per namespace
+- **WebRTC**: SFU and TURN service health (when provisioned)
 - **Network**: UFW, internet reachability, TCP retransmission
 
 ## Monitor vs Inspector

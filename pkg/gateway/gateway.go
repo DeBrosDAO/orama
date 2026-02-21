@@ -30,6 +30,7 @@ import (
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
+	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
@@ -122,6 +123,9 @@ type Gateway struct {
 	rateLimiter          *RateLimiter
 	namespaceRateLimiter *NamespaceRateLimiter
 
+	// WebRTC signaling and TURN credentials
+	webrtcHandlers *webrtchandlers.WebRTCHandlers
+
 	// WireGuard peer exchange
 	wireguardHandler *wireguardhandlers.Handler
 
@@ -148,6 +152,9 @@ type Gateway struct {
 
 	// Node recovery handler (called when health monitor confirms a node dead or recovered)
 	nodeRecoverer authhandlers.NodeRecoverer
+
+	// WebRTC manager for enable/disable operations
+	webrtcManager authhandlers.WebRTCManager
 
 	// Circuit breakers for proxy targets (per-target failure tracking)
 	circuitBreakers *CircuitBreakerRegistry
@@ -322,6 +329,25 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	// Initialize handler instances
 	gw.pubsubHandlers = pubsubhandlers.NewPubSubHandlers(deps.Client, logger)
+
+	// Wire PubSub trigger dispatch if serverless is available
+	if deps.PubSubDispatcher != nil {
+		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
+			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
+		})
+	}
+
+	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
+		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(
+			logger,
+			cfg.SFUPort,
+			cfg.TURNDomain,
+			cfg.TURNSecret,
+			gw.proxyWebSocket,
+		)
+		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
+			zap.Int("sfu_port", cfg.SFUPort))
+	}
 
 	if deps.OlricClient != nil {
 		gw.cacheHandlers = cache.NewCacheHandlers(logger, deps.OlricClient)
@@ -633,6 +659,11 @@ func (g *Gateway) SetNodeRecoverer(nr authhandlers.NodeRecoverer) {
 	g.nodeRecoverer = nr
 }
 
+// SetWebRTCManager sets the WebRTC lifecycle manager for enable/disable operations.
+func (g *Gateway) SetWebRTCManager(wm authhandlers.WebRTCManager) {
+	g.webrtcManager = wm
+}
+
 // SetSpawnHandler sets the handler for internal namespace spawn/stop requests.
 func (g *Gateway) SetSpawnHandler(h http.Handler) {
 	g.spawnHandler = h
@@ -845,5 +876,226 @@ func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.R
 		"namespace": namespaceName,
 		"message":   "cluster repair completed",
 	})
+}
+
+// namespaceWebRTCEnablePublicHandler handles POST /v1/namespace/webrtc/enable
+// Public: authenticated by JWT/API key via auth middleware. Namespace from context.
+func (g *Gateway) namespaceWebRTCEnablePublicHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	if err := g.webrtcManager.EnableWebRTC(r.Context(), namespaceName, "api"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC enabled successfully",
+	})
+}
+
+// namespaceWebRTCDisablePublicHandler handles POST /v1/namespace/webrtc/disable
+// Public: authenticated by JWT/API key via auth middleware. Namespace from context.
+func (g *Gateway) namespaceWebRTCDisablePublicHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	if err := g.webrtcManager.DisableWebRTC(r.Context(), namespaceName); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC disabled successfully",
+	})
+}
+
+// namespaceWebRTCStatusPublicHandler handles GET /v1/namespace/webrtc/status
+// Public: authenticated by JWT/API key via auth middleware. Namespace from context.
+func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	config, err := g.webrtcManager.GetWebRTCStatus(r.Context(), namespaceName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if config == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"namespace": namespaceName,
+			"enabled":   false,
+		})
+	} else {
+		json.NewEncoder(w).Encode(config)
+	}
+}
+
+// namespaceWebRTCEnableHandler handles POST /v1/internal/namespace/webrtc/enable?namespace={name}
+// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
+func (g *Gateway) namespaceWebRTCEnableHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	namespaceName := r.URL.Query().Get("namespace")
+	if namespaceName == "" {
+		writeError(w, http.StatusBadRequest, "namespace parameter required")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	if err := g.webrtcManager.EnableWebRTC(r.Context(), namespaceName, "cli"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC enabled successfully",
+	})
+}
+
+// namespaceWebRTCDisableHandler handles POST /v1/internal/namespace/webrtc/disable?namespace={name}
+// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
+func (g *Gateway) namespaceWebRTCDisableHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	namespaceName := r.URL.Query().Get("namespace")
+	if namespaceName == "" {
+		writeError(w, http.StatusBadRequest, "namespace parameter required")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	if err := g.webrtcManager.DisableWebRTC(r.Context(), namespaceName); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC disabled successfully",
+	})
+}
+
+// namespaceWebRTCStatusHandler handles GET /v1/internal/namespace/webrtc/status?namespace={name}
+// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
+func (g *Gateway) namespaceWebRTCStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	namespaceName := r.URL.Query().Get("namespace")
+	if namespaceName == "" {
+		writeError(w, http.StatusBadRequest, "namespace parameter required")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	config, err := g.webrtcManager.GetWebRTCStatus(r.Context(), namespaceName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if config == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"namespace": namespaceName,
+			"enabled":   false,
+		})
+	} else {
+		json.NewEncoder(w).Encode(config)
+	}
 }
 

@@ -274,6 +274,8 @@ type NamespaceReport struct {
 	OlricUp       bool   `json:"olric_up"`
 	GatewayUp     bool   `json:"gateway_up"`
 	GatewayStatus int    `json:"gateway_status,omitempty"`
+	SFUUp         bool   `json:"sfu_up"`
+	TURNUp        bool   `json:"turn_up"`
 }
 
 // --- Deployments ---

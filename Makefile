@@ -63,7 +63,7 @@ test-e2e-quick:
 
 .PHONY: build clean test deps tidy fmt vet lint install-hooks redeploy-devnet redeploy-testnet release health
 
-VERSION := 0.111.0
+VERSION := 0.112.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -78,6 +78,8 @@ build: deps
 	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/cli/
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
+	go build -ldflags "$(LDFLAGS)" -o bin/sfu ./cmd/sfu
+	go build -ldflags "$(LDFLAGS)" -o bin/turn ./cmd/turn
 	@echo "Build complete! Run ./bin/orama version"
 
 # Cross-compile CLI for Linux (only binary needed locally; VPS builds everything else from source)
