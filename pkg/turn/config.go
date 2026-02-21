@@ -11,7 +11,7 @@ type Config struct {
 	ListenAddr string `yaml:"listen_addr"`
 
 	// TLSListenAddr is the address for TURN over TLS/DTLS (e.g., "0.0.0.0:443")
-	// Uses UDP 443 which does not conflict with Caddy's TCP 443
+	// Uses UDP 443 — requires Caddy HTTP/3 (QUIC) to be disabled to avoid port conflict
 	TLSListenAddr string `yaml:"tls_listen_addr"`
 
 	// PublicIP is the public IP address of this node, advertised in TURN allocations
