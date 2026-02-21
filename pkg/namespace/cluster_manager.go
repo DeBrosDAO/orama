@@ -818,7 +818,9 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
 }
 
-// DeprovisionCluster tears down a namespace cluster
+// DeprovisionCluster tears down a namespace cluster on all nodes.
+// Stops namespace infrastructure (Gateway, Olric, RQLite) on every cluster node,
+// deletes cluster-state.json, deallocates ports, removes DNS records, and cleans up DB.
 func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID int64) error {
 	cluster, err := cm.GetClusterByNamespaceID(ctx, namespaceID)
 	if err != nil {
@@ -837,16 +839,59 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
 
-	// Stop all services using systemd
-	cm.systemdSpawner.StopAll(ctx, cluster.NamespaceName)
+	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
+	type deprovisionNodeInfo struct {
+		NodeID     string `db:"node_id"`
+		InternalIP string `db:"internal_ip"`
+	}
+	var clusterNodes []deprovisionNodeInfo
+	nodeQuery := `
+		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
+		FROM namespace_cluster_nodes ncn
+		JOIN dns_nodes dn ON ncn.node_id = dn.id
+		WHERE ncn.namespace_cluster_id = ?
+	`
+	if err := cm.db.Query(ctx, &clusterNodes, nodeQuery, cluster.ID); err != nil {
+		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only stop", zap.Error(err))
+		// Fall back to local-only stop (individual methods, NOT StopAll which uses dangerous glob)
+		cm.systemdSpawner.StopGateway(ctx, cluster.NamespaceName, cm.localNodeID)
+		cm.systemdSpawner.StopOlric(ctx, cluster.NamespaceName, cm.localNodeID)
+		cm.systemdSpawner.StopRQLite(ctx, cluster.NamespaceName, cm.localNodeID)
+		cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
+	} else {
+		// 2. Stop namespace infra on ALL nodes (reverse dependency order: Gateway → Olric → RQLite)
+		for _, node := range clusterNodes {
+			cm.stopGatewayOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
+		}
+		for _, node := range clusterNodes {
+			cm.stopOlricOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
+		}
+		for _, node := range clusterNodes {
+			cm.stopRQLiteOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName, nil)
+		}
 
-	// Deallocate all ports
+		// 3. Delete cluster-state.json on all nodes
+		for _, node := range clusterNodes {
+			if node.NodeID == cm.localNodeID {
+				cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
+			} else {
+				cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
+			}
+		}
+	}
+
+	// 4. Deallocate all ports
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
 
-	// Delete DNS records
+	// 5. Delete namespace DNS records
 	cm.dnsManager.DeleteNamespaceRecords(ctx, cluster.NamespaceName)
 
-	// Delete cluster record
+	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
+	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
+	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`, cluster.ID)
+	cm.db.Exec(ctx, `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
+
+	// 7. Delete cluster record
 	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)

@@ -110,3 +110,5 @@ terms-agreement
 results/
 
 phantom-auth/
+
+*.db

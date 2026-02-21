@@ -1,10 +1,12 @@
 package namespace
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -79,25 +81,28 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.Info("Deprovisioning namespace cluster",
+	h.logger.Info("Deleting namespace",
 		zap.String("namespace", ns),
 		zap.Int64("namespace_id", namespaceID),
 	)
 
-	// 1. Deprovision the cluster (stops infra + deployment processes, deallocates ports, deletes DNS)
+	// 1. Deprovision the cluster (stops infra on ALL nodes, deletes cluster-state, deallocates ports, deletes DNS)
 	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
 		h.logger.Error("Failed to deprovision cluster", zap.Error(err))
 		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
 	}
 
-	// 2. Unpin IPFS content (must run before global table cleanup to read CID list)
+	// 2. Clean up deployments (teardown replicas on all nodes, unpin IPFS, delete DB records)
+	h.cleanupDeployments(r.Context(), ns)
+
+	// 3. Unpin IPFS content from ipfs_content_ownership (separate from deployment CIDs)
 	h.unpinNamespaceContent(r.Context(), ns)
 
-	// 3. Clean up global tables that use namespace TEXT (not FK cascade)
+	// 4. Clean up global tables that use namespace TEXT (not FK cascade)
 	h.cleanupGlobalTables(r.Context(), ns)
 
-	// 4. Delete API keys, ownership records, and namespace record (FK cascade handles children)
+	// 5. Delete API keys, ownership records, and namespace record
 	h.ormClient.Exec(r.Context(), "DELETE FROM wallet_api_keys WHERE namespace_id = ?", namespaceID)
 	h.ormClient.Exec(r.Context(), "DELETE FROM api_keys WHERE namespace_id = ?", namespaceID)
 	h.ormClient.Exec(r.Context(), "DELETE FROM namespace_ownership WHERE namespace_id = ?", namespaceID)
@@ -109,6 +114,140 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"status":    "deleted",
 		"namespace": ns,
 	})
+}
+
+// cleanupDeployments tears down all deployment replicas on all nodes, unpins IPFS content,
+// and deletes all deployment-related DB records for the namespace.
+// Best-effort: individual failures are logged but do not abort deletion.
+func (h *DeleteHandler) cleanupDeployments(ctx context.Context, ns string) {
+	type deploymentInfo struct {
+		ID         string `db:"id"`
+		Name       string `db:"name"`
+		Type       string `db:"type"`
+		ContentCID string `db:"content_cid"`
+		BuildCID   string `db:"build_cid"`
+	}
+	var deps []deploymentInfo
+	if err := h.ormClient.Query(ctx, &deps,
+		"SELECT id, name, type, content_cid, build_cid FROM deployments WHERE namespace = ?", ns); err != nil {
+		h.logger.Warn("Failed to query deployments for cleanup",
+			zap.String("namespace", ns), zap.Error(err))
+		return
+	}
+
+	if len(deps) == 0 {
+		return
+	}
+
+	h.logger.Info("Cleaning up deployments for namespace",
+		zap.String("namespace", ns),
+		zap.Int("count", len(deps)))
+
+	// 1. Send teardown to all replica nodes for each deployment
+	for _, dep := range deps {
+		h.teardownDeploymentReplicas(ctx, ns, dep.ID, dep.Name, dep.Type)
+	}
+
+	// 2. Unpin deployment IPFS content
+	if h.ipfsClient != nil {
+		for _, dep := range deps {
+			if dep.ContentCID != "" {
+				if err := h.ipfsClient.Unpin(ctx, dep.ContentCID); err != nil {
+					h.logger.Warn("Failed to unpin deployment content CID",
+						zap.String("deployment_id", dep.ID),
+						zap.String("cid", dep.ContentCID), zap.Error(err))
+				}
+			}
+			if dep.BuildCID != "" {
+				if err := h.ipfsClient.Unpin(ctx, dep.BuildCID); err != nil {
+					h.logger.Warn("Failed to unpin deployment build CID",
+						zap.String("deployment_id", dep.ID),
+						zap.String("cid", dep.BuildCID), zap.Error(err))
+				}
+			}
+		}
+	}
+
+	// 3. Clean up deployment DB records (children first, since FK cascades disabled in rqlite)
+	for _, dep := range deps {
+		// Child tables with FK to deployments(id)
+		h.ormClient.Exec(ctx, "DELETE FROM deployment_replicas WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM port_allocations WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM deployment_domains WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM deployment_history WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM deployment_env_vars WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM deployment_events WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM deployment_health_checks WHERE deployment_id = ?", dep.ID)
+		// Tables with no FK constraint
+		h.ormClient.Exec(ctx, "DELETE FROM dns_records WHERE deployment_id = ?", dep.ID)
+		h.ormClient.Exec(ctx, "DELETE FROM global_deployment_subdomains WHERE deployment_id = ?", dep.ID)
+	}
+	h.ormClient.Exec(ctx, "DELETE FROM deployments WHERE namespace = ?", ns)
+
+	h.logger.Info("Deployment cleanup completed",
+		zap.String("namespace", ns),
+		zap.Int("deployments_cleaned", len(deps)))
+}
+
+// teardownDeploymentReplicas sends a teardown request to every node that has a replica
+// of the given deployment. Each node stops its process, removes files, and deallocates its port.
+func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, deploymentID, name, depType string) {
+	type replicaNode struct {
+		NodeID     string `db:"node_id"`
+		InternalIP string `db:"internal_ip"`
+	}
+	var nodes []replicaNode
+	query := `
+		SELECT dr.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
+		FROM deployment_replicas dr
+		JOIN dns_nodes dn ON dr.node_id = dn.id
+		WHERE dr.deployment_id = ?
+	`
+	if err := h.ormClient.Query(ctx, &nodes, query, deploymentID); err != nil {
+		h.logger.Warn("Failed to query replica nodes for teardown",
+			zap.String("deployment_id", deploymentID), zap.Error(err))
+		return
+	}
+
+	if len(nodes) == 0 {
+		return
+	}
+
+	payload := map[string]interface{}{
+		"deployment_id": deploymentID,
+		"namespace":     ns,
+		"name":          name,
+		"type":          depType,
+	}
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("Failed to marshal teardown payload", zap.Error(err))
+		return
+	}
+
+	for _, node := range nodes {
+		url := fmt.Sprintf("http://%s:6001/v1/internal/deployments/replica/teardown", node.InternalIP)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+		if err != nil {
+			h.logger.Warn("Failed to create teardown request",
+				zap.String("node_id", node.NodeID), zap.Error(err))
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Orama-Internal-Auth", "replica-coordination")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			h.logger.Warn("Failed to send teardown to replica node",
+				zap.String("deployment_id", deploymentID),
+				zap.String("node_id", node.NodeID),
+				zap.String("node_ip", node.InternalIP),
+				zap.Error(err))
+			continue
+		}
+		resp.Body.Close()
+	}
 }
 
 // unpinNamespaceContent unpins all IPFS content owned by the namespace.

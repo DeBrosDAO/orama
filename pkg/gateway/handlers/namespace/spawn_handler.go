@@ -17,7 +17,7 @@ import (
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // "spawn-rqlite", "spawn-olric", "spawn-gateway", "stop-rqlite", "stop-olric", "stop-gateway"
+	Action    string `json:"action"` // "spawn-rqlite", "spawn-olric", "spawn-gateway", "stop-rqlite", "stop-olric", "stop-gateway", "save-cluster-state", "delete-cluster-state"
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
 
@@ -229,6 +229,14 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.systemdSpawner.SaveClusterState(req.Namespace, req.ClusterState); err != nil {
 			h.logger.Error("Failed to save cluster state", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "delete-cluster-state":
+		if err := h.systemdSpawner.DeleteClusterState(req.Namespace); err != nil {
+			h.logger.Error("Failed to delete cluster state", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}
