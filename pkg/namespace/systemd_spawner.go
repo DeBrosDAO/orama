@@ -306,6 +306,18 @@ func (s *SystemdSpawner) SaveClusterState(namespace string, data []byte) error {
 	return nil
 }
 
+// DeleteClusterState removes cluster state and config files for a namespace.
+func (s *SystemdSpawner) DeleteClusterState(namespace string) error {
+	dir := filepath.Join(s.namespaceBase, namespace)
+	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete namespace data directory: %w", err)
+	}
+	s.logger.Info("Deleted namespace data directory",
+		zap.String("namespace", namespace),
+		zap.String("path", dir))
+	return nil
+}
+
 // StopAll stops all services for a namespace, including deployment processes
 func (s *SystemdSpawner) StopAll(ctx context.Context, namespace string) error {
 	s.logger.Info("Stopping all namespace services via systemd",

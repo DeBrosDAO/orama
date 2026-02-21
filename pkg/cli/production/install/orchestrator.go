@@ -278,7 +278,7 @@ func (o *Orchestrator) executeJoinFlow() error {
 
 	// Step 4: Verify WG tunnel
 	fmt.Printf("\n🔍 Verifying WireGuard tunnel...\n")
-	if err := o.verifyWGTunnel(joinResp.WGPeers); err != nil {
+	if err := o.verifyWGTunnel(joinResp.WGPeers, o.flags.JoinAddress); err != nil {
 		return fmt.Errorf("WireGuard tunnel verification failed: %w", err)
 	}
 	fmt.Printf("  ✓ WireGuard tunnel established\n")
@@ -422,14 +422,31 @@ func (o *Orchestrator) saveSecretsFromJoinResponse(resp *joinhandlers.JoinRespon
 	return nil
 }
 
-// verifyWGTunnel pings a WG peer to verify the tunnel is working
-func (o *Orchestrator) verifyWGTunnel(peers []joinhandlers.WGPeerInfo) error {
+// verifyWGTunnel pings a WG peer to verify the tunnel is working.
+// It targets the node that handled the join request (joinAddress), since that
+// node is the only one guaranteed to have the new peer's key immediately.
+// Other peers learn the key via the WireGuard sync loop (up to 60s delay),
+// so pinging them would race against replication.
+func (o *Orchestrator) verifyWGTunnel(peers []joinhandlers.WGPeerInfo, joinAddress string) error {
 	if len(peers) == 0 {
 		return fmt.Errorf("no WG peers to verify")
 	}
 
-	// Extract the IP from the first peer's AllowedIP (e.g. "10.0.0.1/32" -> "10.0.0.1")
-	targetIP := strings.TrimSuffix(peers[0].AllowedIP, "/32")
+	// Find the join node's WG IP by matching its public IP against peer endpoints.
+	targetIP := ""
+	joinHost := extractHost(joinAddress)
+	for _, p := range peers {
+		endpointHost := extractHost(p.Endpoint)
+		if endpointHost == joinHost {
+			targetIP = strings.TrimSuffix(p.AllowedIP, "/32")
+			break
+		}
+	}
+
+	// Fallback to first peer if the join node wasn't found in the peer list.
+	if targetIP == "" {
+		targetIP = strings.TrimSuffix(peers[0].AllowedIP, "/32")
+	}
 
 	// Retry ping for up to 30 seconds
 	deadline := time.Now().Add(30 * time.Second)
@@ -442,6 +459,22 @@ func (o *Orchestrator) verifyWGTunnel(peers []joinhandlers.WGPeerInfo) error {
 	}
 
 	return fmt.Errorf("could not reach %s via WireGuard after 30s", targetIP)
+}
+
+// extractHost returns the host part from a URL or host:port string.
+func extractHost(addr string) string {
+	// Strip scheme (http://, https://)
+	addr = strings.TrimPrefix(addr, "http://")
+	addr = strings.TrimPrefix(addr, "https://")
+	// Strip port
+	if idx := strings.LastIndex(addr, ":"); idx != -1 {
+		addr = addr[:idx]
+	}
+	// Strip trailing path
+	if idx := strings.Index(addr, "/"); idx != -1 {
+		addr = addr[:idx]
+	}
+	return addr
 }
 
 func (o *Orchestrator) printFirstNodeSecrets() {
