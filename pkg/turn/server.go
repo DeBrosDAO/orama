@@ -59,7 +59,7 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 	}
 
 	// Create TLS UDP listener (port 443) if configured
-	// UDP 443 does not conflict with Caddy's TCP 443
+	// Requires Caddy HTTP/3 (QUIC) to be disabled to avoid UDP 443 conflict
 	if cfg.TLSListenAddr != "" {
 		tlsConn, err := net.ListenPacket("udp4", cfg.TLSListenAddr)
 		if err != nil {
