@@ -24,6 +24,8 @@ const (
 	NodeRoleRQLiteFollower NodeRole = "rqlite_follower"
 	NodeRoleOlric          NodeRole = "olric"
 	NodeRoleGateway        NodeRole = "gateway"
+	NodeRoleSFU            NodeRole = "sfu"
+	NodeRoleTURN           NodeRole = "turn"
 )
 
 // NodeStatus represents the status of a service on a node
@@ -62,6 +64,12 @@ const (
 	EventNodeReplaced        EventType = "node_replaced"
 	EventRecoveryComplete    EventType = "recovery_complete"
 	EventRecoveryFailed      EventType = "recovery_failed"
+	EventWebRTCEnabled       EventType = "webrtc_enabled"
+	EventWebRTCDisabled      EventType = "webrtc_disabled"
+	EventSFUStarted          EventType = "sfu_started"
+	EventSFUStopped          EventType = "sfu_stopped"
+	EventTURNStarted         EventType = "turn_started"
+	EventTURNStopped         EventType = "turn_stopped"
 )
 
 // Port allocation constants
@@ -78,6 +86,39 @@ const (
 
 	// MaxNamespacesPerNode is the maximum number of namespace instances a single node can host
 	MaxNamespacesPerNode = (NamespacePortRangeEnd - NamespacePortRangeStart + 1) / PortsPerNamespace // 20
+)
+
+// WebRTC port allocation constants
+// These are separate from the core namespace port range (10000-10099)
+// to avoid breaking existing port blocks.
+const (
+	// SFU media port range: 20000-29999
+	// Each namespace gets a 500-port sub-range for RTP media
+	SFUMediaPortRangeStart = 20000
+	SFUMediaPortRangeEnd   = 29999
+	SFUMediaPortsPerNamespace = 500
+
+	// SFU signaling ports: 30000-30099
+	// Each namespace gets 1 signaling port per node
+	SFUSignalingPortRangeStart = 30000
+	SFUSignalingPortRangeEnd   = 30099
+
+	// TURN relay port range: 49152-65535
+	// Each namespace gets an 800-port sub-range for TURN relay
+	TURNRelayPortRangeStart = 49152
+	TURNRelayPortRangeEnd   = 65535
+	TURNRelayPortsPerNamespace = 800
+
+	// TURN listen ports (standard)
+	TURNDefaultPort    = 3478
+	TURNTLSPort        = 443
+
+	// Default TURN credential TTL in seconds (10 minutes)
+	DefaultTURNCredentialTTL = 600
+
+	// Default service counts per namespace
+	DefaultSFUNodeCount  = 3 // SFU on all 3 nodes
+	DefaultTURNNodeCount = 2 // TURN on 2 of 3 nodes for HA
 )
 
 // Default cluster sizes
@@ -206,4 +247,58 @@ var (
 	ErrNamespaceNotFound     = &ClusterError{Message: "namespace not found"}
 	ErrInvalidClusterStatus  = &ClusterError{Message: "invalid cluster status for operation"}
 	ErrRecoveryInProgress    = &ClusterError{Message: "recovery already in progress for this cluster"}
+	ErrWebRTCAlreadyEnabled  = &ClusterError{Message: "WebRTC is already enabled for this namespace"}
+	ErrWebRTCNotEnabled      = &ClusterError{Message: "WebRTC is not enabled for this namespace"}
+	ErrNoWebRTCPortsAvailable = &ClusterError{Message: "no WebRTC ports available on node"}
 )
+
+// WebRTCConfig represents the per-namespace WebRTC configuration stored in the database
+type WebRTCConfig struct {
+	ID                 string     `json:"id" db:"id"`
+	NamespaceClusterID string     `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	NamespaceName      string     `json:"namespace_name" db:"namespace_name"`
+	Enabled            bool       `json:"enabled" db:"enabled"`
+	TURNSharedSecret   string     `json:"-" db:"turn_shared_secret"` // Never serialize secret to JSON
+	TURNCredentialTTL  int        `json:"turn_credential_ttl" db:"turn_credential_ttl"`
+	SFUNodeCount       int        `json:"sfu_node_count" db:"sfu_node_count"`
+	TURNNodeCount      int        `json:"turn_node_count" db:"turn_node_count"`
+	EnabledBy          string     `json:"enabled_by" db:"enabled_by"`
+	EnabledAt          time.Time  `json:"enabled_at" db:"enabled_at"`
+	DisabledAt         *time.Time `json:"disabled_at,omitempty" db:"disabled_at"`
+}
+
+// WebRTCRoom represents an active WebRTC room tracked in the database
+type WebRTCRoom struct {
+	ID                 string    `json:"id" db:"id"`
+	NamespaceClusterID string    `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	NamespaceName      string    `json:"namespace_name" db:"namespace_name"`
+	RoomID             string    `json:"room_id" db:"room_id"`
+	SFUNodeID          string    `json:"sfu_node_id" db:"sfu_node_id"`
+	SFUInternalIP      string    `json:"sfu_internal_ip" db:"sfu_internal_ip"`
+	SFUSignalingPort   int       `json:"sfu_signaling_port" db:"sfu_signaling_port"`
+	ParticipantCount   int       `json:"participant_count" db:"participant_count"`
+	MaxParticipants    int       `json:"max_participants" db:"max_participants"`
+	CreatedAt          time.Time `json:"created_at" db:"created_at"`
+	LastActivity       time.Time `json:"last_activity" db:"last_activity"`
+}
+
+// WebRTCPortBlock represents allocated WebRTC ports for a namespace on a node
+type WebRTCPortBlock struct {
+	ID                 string    `json:"id" db:"id"`
+	NodeID             string    `json:"node_id" db:"node_id"`
+	NamespaceClusterID string    `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	ServiceType        string    `json:"service_type" db:"service_type"` // "sfu" or "turn"
+
+	// SFU ports
+	SFUSignalingPort   int `json:"sfu_signaling_port,omitempty" db:"sfu_signaling_port"`
+	SFUMediaPortStart  int `json:"sfu_media_port_start,omitempty" db:"sfu_media_port_start"`
+	SFUMediaPortEnd    int `json:"sfu_media_port_end,omitempty" db:"sfu_media_port_end"`
+
+	// TURN ports
+	TURNListenPort     int `json:"turn_listen_port,omitempty" db:"turn_listen_port"`
+	TURNTLSPort        int `json:"turn_tls_port,omitempty" db:"turn_tls_port"`
+	TURNRelayPortStart int `json:"turn_relay_port_start,omitempty" db:"turn_relay_port_start"`
+	TURNRelayPortEnd   int `json:"turn_relay_port_end,omitempty" db:"turn_relay_port_end"`
+
+	AllocatedAt time.Time `json:"allocated_at" db:"allocated_at"`
+}

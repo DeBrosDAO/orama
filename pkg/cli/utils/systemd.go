@@ -184,7 +184,7 @@ func GetProductionServices() []string {
 	namespacesDir := "/opt/orama/.orama/data/namespaces"
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
-		serviceTypes := []string{"rqlite", "olric", "gateway"}
+		serviceTypes := []string{"rqlite", "olric", "gateway", "sfu", "turn"}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {
 				continue
@@ -289,7 +289,8 @@ func identifyPortProcess(port int) string {
 
 // NamespaceServiceOrder defines the dependency order for namespace services.
 // RQLite must start first (database), then Olric (cache), then Gateway (depends on both).
-var NamespaceServiceOrder = []string{"rqlite", "olric", "gateway"}
+// TURN and SFU are optional WebRTC services that start after Gateway.
+var NamespaceServiceOrder = []string{"rqlite", "olric", "gateway", "turn", "sfu"}
 
 // StartServicesOrdered starts services respecting namespace dependency order.
 // Namespace services are started in order: rqlite → olric (+ wait) → gateway.

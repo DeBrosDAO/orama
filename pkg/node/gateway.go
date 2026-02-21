@@ -57,7 +57,11 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		IPFSTimeout:          n.config.HTTPGateway.IPFSTimeout,
 		BaseDomain:           n.config.HTTPGateway.BaseDomain,
 		DataDir:              oramaDir,
-		ClusterSecret: clusterSecret,
+		ClusterSecret:        clusterSecret,
+		WebRTCEnabled:        n.config.HTTPGateway.WebRTC.Enabled,
+		SFUPort:              n.config.HTTPGateway.WebRTC.SFUPort,
+		TURNDomain:           n.config.HTTPGateway.WebRTC.TURNDomain,
+		TURNSecret:           n.config.HTTPGateway.WebRTC.TURNSecret,
 	}
 
 	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
@@ -82,6 +86,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)
 		apiGateway.SetClusterProvisioner(clusterManager)
 		apiGateway.SetNodeRecoverer(clusterManager)
+		apiGateway.SetWebRTCManager(clusterManager)
 
 		// Wire spawn handler for distributed namespace instance spawning
 		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, n.logger.Logger)

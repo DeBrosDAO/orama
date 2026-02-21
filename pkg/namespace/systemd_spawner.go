@@ -10,7 +10,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -287,6 +289,185 @@ func (s *SystemdSpawner) StopGateway(ctx context.Context, namespace, nodeID stri
 		zap.String("node_id", nodeID))
 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeGateway)
+}
+
+// SFUInstanceConfig holds configuration for spawning an SFU instance
+type SFUInstanceConfig struct {
+	Namespace      string
+	NodeID         string
+	ListenAddr     string              // WireGuard IP:port (e.g., "10.0.0.1:30000")
+	MediaPortStart int                 // Start of RTP media port range
+	MediaPortEnd   int                 // End of RTP media port range
+	TURNServers    []sfu.TURNServerConfig // TURN servers to advertise to peers
+	TURNSecret     string              // HMAC-SHA1 shared secret
+	TURNCredTTL    int                 // Credential TTL in seconds
+	RQLiteDSN      string              // Namespace-local RQLite DSN
+}
+
+// SpawnSFU starts an SFU instance using systemd
+func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
+	s.logger.Info("Spawning SFU via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.String("listen_addr", cfg.ListenAddr))
+
+	// Create config directory
+	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("sfu-%s.yaml", nodeID))
+
+	// Build SFU YAML config
+	sfuConfig := sfu.Config{
+		ListenAddr:        cfg.ListenAddr,
+		Namespace:         cfg.Namespace,
+		MediaPortStart:    cfg.MediaPortStart,
+		MediaPortEnd:      cfg.MediaPortEnd,
+		TURNServers:       cfg.TURNServers,
+		TURNSecret:        cfg.TURNSecret,
+		TURNCredentialTTL: cfg.TURNCredTTL,
+		RQLiteDSN:         cfg.RQLiteDSN,
+	}
+
+	configBytes, err := yaml.Marshal(sfuConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal SFU config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write SFU config: %w", err)
+	}
+
+	s.logger.Info("Created SFU config file",
+		zap.String("path", configPath),
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	// Generate environment file pointing to config
+	envVars := map[string]string{
+		"SFU_CONFIG": configPath,
+	}
+
+	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeSFU, envVars); err != nil {
+		return fmt.Errorf("failed to generate SFU env file: %w", err)
+	}
+
+	// Start the systemd service
+	if err := s.systemdMgr.StartService(namespace, systemd.ServiceTypeSFU); err != nil {
+		return fmt.Errorf("failed to start SFU service: %w", err)
+	}
+
+	// Wait for service to be active
+	if err := s.waitForService(namespace, systemd.ServiceTypeSFU, 30*time.Second); err != nil {
+		return fmt.Errorf("SFU service did not become active: %w", err)
+	}
+
+	s.logger.Info("SFU spawned successfully via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	return nil
+}
+
+// StopSFU stops an SFU instance
+func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) error {
+	s.logger.Info("Stopping SFU via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeSFU)
+}
+
+// TURNInstanceConfig holds configuration for spawning a TURN instance
+type TURNInstanceConfig struct {
+	Namespace      string
+	NodeID         string
+	ListenAddr     string // e.g., "0.0.0.0:3478"
+	TLSListenAddr  string // e.g., "0.0.0.0:443" (UDP, no conflict with Caddy TCP)
+	PublicIP       string // Public IP for TURN relay allocations
+	Realm          string // TURN realm (typically base domain)
+	AuthSecret     string // HMAC-SHA1 shared secret
+	RelayPortStart int    // Start of relay port range
+	RelayPortEnd   int    // End of relay port range
+}
+
+// SpawnTURN starts a TURN instance using systemd
+func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string, cfg TURNInstanceConfig) error {
+	s.logger.Info("Spawning TURN via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.String("listen_addr", cfg.ListenAddr),
+		zap.String("public_ip", cfg.PublicIP))
+
+	// Create config directory
+	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
+
+	// Build TURN YAML config
+	turnConfig := turn.Config{
+		ListenAddr:     cfg.ListenAddr,
+		TLSListenAddr:  cfg.TLSListenAddr,
+		PublicIP:       cfg.PublicIP,
+		Realm:          cfg.Realm,
+		AuthSecret:     cfg.AuthSecret,
+		RelayPortStart: cfg.RelayPortStart,
+		RelayPortEnd:   cfg.RelayPortEnd,
+		Namespace:      cfg.Namespace,
+	}
+
+	configBytes, err := yaml.Marshal(turnConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TURN config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write TURN config: %w", err)
+	}
+
+	s.logger.Info("Created TURN config file",
+		zap.String("path", configPath),
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	// Generate environment file pointing to config
+	envVars := map[string]string{
+		"TURN_CONFIG": configPath,
+	}
+
+	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeTURN, envVars); err != nil {
+		return fmt.Errorf("failed to generate TURN env file: %w", err)
+	}
+
+	// Start the systemd service
+	if err := s.systemdMgr.StartService(namespace, systemd.ServiceTypeTURN); err != nil {
+		return fmt.Errorf("failed to start TURN service: %w", err)
+	}
+
+	// Wait for service to be active
+	if err := s.waitForService(namespace, systemd.ServiceTypeTURN, 30*time.Second); err != nil {
+		return fmt.Errorf("TURN service did not become active: %w", err)
+	}
+
+	s.logger.Info("TURN spawned successfully via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	return nil
+}
+
+// StopTURN stops a TURN instance
+func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string) error {
+	s.logger.Info("Stopping TURN via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeTURN)
 }
 
 // SaveClusterState writes cluster state JSON to the namespace data directory.

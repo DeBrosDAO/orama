@@ -1,0 +1,71 @@
+package turn
+
+import (
+	"fmt"
+	"net"
+)
+
+// Config holds configuration for the TURN server
+type Config struct {
+	// ListenAddr is the address to bind the TURN listener (e.g., "0.0.0.0:3478")
+	ListenAddr string `yaml:"listen_addr"`
+
+	// TLSListenAddr is the address for TURN over TLS/DTLS (e.g., "0.0.0.0:443")
+	// Uses UDP 443 which does not conflict with Caddy's TCP 443
+	TLSListenAddr string `yaml:"tls_listen_addr"`
+
+	// PublicIP is the public IP address of this node, advertised in TURN allocations
+	PublicIP string `yaml:"public_ip"`
+
+	// Realm is the TURN realm (typically the base domain)
+	Realm string `yaml:"realm"`
+
+	// AuthSecret is the HMAC-SHA1 shared secret for credential validation
+	AuthSecret string `yaml:"auth_secret"`
+
+	// RelayPortStart is the beginning of the UDP relay port range
+	RelayPortStart int `yaml:"relay_port_start"`
+
+	// RelayPortEnd is the end of the UDP relay port range
+	RelayPortEnd int `yaml:"relay_port_end"`
+
+	// Namespace this TURN instance belongs to
+	Namespace string `yaml:"namespace"`
+}
+
+// Validate checks the TURN configuration for errors
+func (c *Config) Validate() []error {
+	var errs []error
+
+	if c.ListenAddr == "" {
+		errs = append(errs, fmt.Errorf("turn.listen_addr: must not be empty"))
+	}
+
+	if c.PublicIP == "" {
+		errs = append(errs, fmt.Errorf("turn.public_ip: must not be empty"))
+	} else if ip := net.ParseIP(c.PublicIP); ip == nil {
+		errs = append(errs, fmt.Errorf("turn.public_ip: %q is not a valid IP address", c.PublicIP))
+	}
+
+	if c.Realm == "" {
+		errs = append(errs, fmt.Errorf("turn.realm: must not be empty"))
+	}
+
+	if c.AuthSecret == "" {
+		errs = append(errs, fmt.Errorf("turn.auth_secret: must not be empty"))
+	}
+
+	if c.RelayPortStart <= 0 || c.RelayPortEnd <= 0 {
+		errs = append(errs, fmt.Errorf("turn.relay_port_range: start and end must be positive"))
+	} else if c.RelayPortEnd <= c.RelayPortStart {
+		errs = append(errs, fmt.Errorf("turn.relay_port_range: end (%d) must be greater than start (%d)", c.RelayPortEnd, c.RelayPortStart))
+	} else if c.RelayPortEnd-c.RelayPortStart < 100 {
+		errs = append(errs, fmt.Errorf("turn.relay_port_range: range must be at least 100 ports (got %d)", c.RelayPortEnd-c.RelayPortStart))
+	}
+
+	if c.Namespace == "" {
+		errs = append(errs, fmt.Errorf("turn.namespace: must not be empty"))
+	}
+
+	return errs
+}

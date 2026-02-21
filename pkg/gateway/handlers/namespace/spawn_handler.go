@@ -12,12 +12,13 @@ import (
 	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"go.uber.org/zap"
 )
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // "spawn-rqlite", "spawn-olric", "spawn-gateway", "stop-rqlite", "stop-olric", "stop-gateway", "save-cluster-state", "delete-cluster-state"
+	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, save-cluster-state, delete-cluster-state
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
 
@@ -47,6 +48,24 @@ type SpawnRequest struct {
 	IPFSAPIURL            string          `json:"ipfs_api_url,omitempty"`
 	IPFSTimeout           string          `json:"ipfs_timeout,omitempty"`
 	IPFSReplicationFactor int             `json:"ipfs_replication_factor,omitempty"`
+
+	// SFU config (when action = "spawn-sfu")
+	SFUListenAddr  string                    `json:"sfu_listen_addr,omitempty"`
+	SFUMediaStart  int                       `json:"sfu_media_start,omitempty"`
+	SFUMediaEnd    int                       `json:"sfu_media_end,omitempty"`
+	TURNServers    []sfu.TURNServerConfig    `json:"turn_servers,omitempty"`
+	TURNSecret     string                    `json:"turn_secret,omitempty"`
+	TURNCredTTL    int                       `json:"turn_cred_ttl,omitempty"`
+	RQLiteDSN      string                    `json:"rqlite_dsn,omitempty"`
+
+	// TURN config (when action = "spawn-turn")
+	TURNListenAddr  string `json:"turn_listen_addr,omitempty"`
+	TURNTLSAddr     string `json:"turn_tls_addr,omitempty"`
+	TURNPublicIP    string `json:"turn_public_ip,omitempty"`
+	TURNRealm       string `json:"turn_realm,omitempty"`
+	TURNAuthSecret  string `json:"turn_auth_secret,omitempty"`
+	TURNRelayStart  int    `json:"turn_relay_start,omitempty"`
+	TURNRelayEnd    int    `json:"turn_relay_end,omitempty"`
 
 	// Cluster state (when action = "save-cluster-state")
 	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
@@ -237,6 +256,60 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "delete-cluster-state":
 		if err := h.systemdSpawner.DeleteClusterState(req.Namespace); err != nil {
 			h.logger.Error("Failed to delete cluster state", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "spawn-sfu":
+		cfg := namespacepkg.SFUInstanceConfig{
+			Namespace:      req.Namespace,
+			NodeID:         req.NodeID,
+			ListenAddr:     req.SFUListenAddr,
+			MediaPortStart: req.SFUMediaStart,
+			MediaPortEnd:   req.SFUMediaEnd,
+			TURNServers:    req.TURNServers,
+			TURNSecret:     req.TURNSecret,
+			TURNCredTTL:    req.TURNCredTTL,
+			RQLiteDSN:      req.RQLiteDSN,
+		}
+		if err := h.systemdSpawner.SpawnSFU(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+			h.logger.Error("Failed to spawn SFU instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "stop-sfu":
+		if err := h.systemdSpawner.StopSFU(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to stop SFU instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "spawn-turn":
+		cfg := namespacepkg.TURNInstanceConfig{
+			Namespace:      req.Namespace,
+			NodeID:         req.NodeID,
+			ListenAddr:     req.TURNListenAddr,
+			TLSListenAddr:  req.TURNTLSAddr,
+			PublicIP:       req.TURNPublicIP,
+			Realm:          req.TURNRealm,
+			AuthSecret:     req.TURNAuthSecret,
+			RelayPortStart: req.TURNRelayStart,
+			RelayPortEnd:   req.TURNRelayEnd,
+		}
+		if err := h.systemdSpawner.SpawnTURN(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+			h.logger.Error("Failed to spawn TURN instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "stop-turn":
+		if err := h.systemdSpawner.StopTURN(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to stop TURN instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

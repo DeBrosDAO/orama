@@ -41,4 +41,10 @@ type Config struct {
 
 	// WireGuard mesh configuration
 	ClusterSecret string // Cluster secret for authenticating internal WireGuard peer exchange
+
+	// WebRTC configuration (set when namespace has WebRTC enabled)
+	WebRTCEnabled bool   // Whether WebRTC endpoints are active on this gateway
+	SFUPort       int    // Local SFU signaling port to proxy WebSocket connections to
+	TURNDomain    string // TURN server domain for credential generation
+	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation
 }
