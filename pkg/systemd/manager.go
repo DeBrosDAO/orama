@@ -17,6 +17,8 @@ const (
 	ServiceTypeRQLite  ServiceType = "rqlite"
 	ServiceTypeOlric   ServiceType = "olric"
 	ServiceTypeGateway ServiceType = "gateway"
+	ServiceTypeSFU     ServiceType = "sfu"
+	ServiceTypeTURN    ServiceType = "turn"
 )
 
 // Manager manages systemd units for namespace services
@@ -192,13 +194,33 @@ func (m *Manager) ReloadDaemon() error {
 	return nil
 }
 
+// serviceExists checks if a namespace service has an env file on disk,
+// indicating the service was provisioned for this namespace.
+func (m *Manager) serviceExists(namespace string, serviceType ServiceType) bool {
+	envFile := filepath.Join(m.namespaceBase, namespace, fmt.Sprintf("%s.env", serviceType))
+	_, err := os.Stat(envFile)
+	return err == nil
+}
+
 // StopAllNamespaceServices stops all namespace services for a given namespace
 func (m *Manager) StopAllNamespaceServices(namespace string) error {
 	m.logger.Info("Stopping all namespace services", zap.String("namespace", namespace))
 
-	// Stop in reverse dependency order: Gateway → Olric → RQLite
-	services := []ServiceType{ServiceTypeGateway, ServiceTypeOlric, ServiceTypeRQLite}
-	for _, svcType := range services {
+	// Stop in reverse dependency order: SFU → TURN → Gateway → Olric → RQLite
+	// SFU and TURN are conditional — only stop if they exist
+	for _, svcType := range []ServiceType{ServiceTypeSFU, ServiceTypeTURN} {
+		if m.serviceExists(namespace, svcType) {
+			if err := m.StopService(namespace, svcType); err != nil {
+				m.logger.Warn("Failed to stop service",
+					zap.String("namespace", namespace),
+					zap.String("service_type", string(svcType)),
+					zap.Error(err))
+			}
+		}
+	}
+
+	// Core services always exist
+	for _, svcType := range []ServiceType{ServiceTypeGateway, ServiceTypeOlric, ServiceTypeRQLite} {
 		if err := m.StopService(namespace, svcType); err != nil {
 			m.logger.Warn("Failed to stop service",
 				zap.String("namespace", namespace),
@@ -215,11 +237,19 @@ func (m *Manager) StopAllNamespaceServices(namespace string) error {
 func (m *Manager) StartAllNamespaceServices(namespace string) error {
 	m.logger.Info("Starting all namespace services", zap.String("namespace", namespace))
 
-	// Start in dependency order: RQLite → Olric → Gateway
-	services := []ServiceType{ServiceTypeRQLite, ServiceTypeOlric, ServiceTypeGateway}
-	for _, svcType := range services {
+	// Start core services in dependency order: RQLite → Olric → Gateway
+	for _, svcType := range []ServiceType{ServiceTypeRQLite, ServiceTypeOlric, ServiceTypeGateway} {
 		if err := m.StartService(namespace, svcType); err != nil {
 			return fmt.Errorf("failed to start %s service: %w", svcType, err)
+		}
+	}
+
+	// Start WebRTC services if provisioned: TURN → SFU
+	for _, svcType := range []ServiceType{ServiceTypeTURN, ServiceTypeSFU} {
+		if m.serviceExists(namespace, svcType) {
+			if err := m.StartService(namespace, svcType); err != nil {
+				return fmt.Errorf("failed to start %s service: %w", svcType, err)
+			}
 		}
 	}
 
@@ -419,6 +449,8 @@ func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 		"orama-namespace-rqlite@.service",
 		"orama-namespace-olric@.service",
 		"orama-namespace-gateway@.service",
+		"orama-namespace-sfu@.service",
+		"orama-namespace-turn@.service",
 	}
 
 	for _, template := range templates {

@@ -431,6 +431,8 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 		"orama-namespace-rqlite@.service",
 		"orama-namespace-olric@.service",
 		"orama-namespace-gateway@.service",
+		"orama-namespace-sfu@.service",
+		"orama-namespace-turn@.service",
 	}
 
 	installedCount := 0

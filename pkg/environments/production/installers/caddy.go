@@ -378,7 +378,8 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
     }`, acmeEndpoint)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("{\n    email %s\n}\n", email))
+	// Disable HTTP/3 (QUIC) so Caddy doesn't bind UDP 443, which TURN needs for relay
+	sb.WriteString(fmt.Sprintf("{\n    email %s\n    servers {\n        protocols h1 h2\n    }\n}\n", email))
 
 	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
 	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))

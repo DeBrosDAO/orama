@@ -173,6 +173,8 @@ func setReflectValue(field reflect.Value, raw any) error {
 			field.SetBool(v)
 		case int64:
 			field.SetBool(v != 0)
+		case float64:
+			field.SetBool(v != 0)
 		case []byte:
 			s := string(v)
 			field.SetBool(s == "1" || strings.EqualFold(s, "true"))

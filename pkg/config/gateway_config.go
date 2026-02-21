@@ -20,6 +20,17 @@ type HTTPGatewayConfig struct {
 	IPFSAPIURL        string        `yaml:"ipfs_api_url"`         // IPFS API URL
 	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
 	BaseDomain        string        `yaml:"base_domain"`          // Base domain for deployments (e.g., "dbrs.space"). Defaults to "dbrs.space"
+
+	// WebRTC configuration (optional, enabled per-namespace)
+	WebRTC WebRTCConfig `yaml:"webrtc"`
+}
+
+// WebRTCConfig contains WebRTC-related gateway configuration
+type WebRTCConfig struct {
+	Enabled    bool   `yaml:"enabled"`     // Whether this gateway has WebRTC support active
+	SFUPort    int    `yaml:"sfu_port"`    // Local SFU signaling port to proxy to
+	TURNDomain string `yaml:"turn_domain"` // TURN domain (e.g., "turn.ns-myapp.dbrs.space")
+	TURNSecret string `yaml:"turn_secret"` // HMAC-SHA1 shared secret for TURN credential generation
 }
 
 // HTTPSConfig contains HTTPS/TLS configuration for the gateway

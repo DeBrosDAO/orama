@@ -41,6 +41,8 @@ type NamespaceData struct {
 	OlricUp       bool   // Olric memberlist port listening
 	GatewayUp     bool   // Gateway HTTP port responding
 	GatewayStatus int    // HTTP status code from gateway health
+	SFUUp         bool   // SFU systemd service active (optional, WebRTC)
+	TURNUp        bool   // TURN systemd service active (optional, WebRTC)
 }
 
 // RQLiteData holds parsed RQLite status from a single node.

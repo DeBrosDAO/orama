@@ -302,6 +302,8 @@ func (h *DeleteHandler) cleanupGlobalTables(ctx context.Context, ns string) {
 		{"namespace_sqlite_databases", "namespace"},
 		{"namespace_quotas", "namespace"},
 		{"home_node_assignments", "namespace"},
+		{"webrtc_rooms", "namespace_name"},
+		{"namespace_webrtc_config", "namespace_name"},
 	}
 
 	for _, t := range tables {

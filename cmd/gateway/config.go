@@ -69,6 +69,13 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 
 	// Load YAML
+	type yamlWebRTCCfg struct {
+		Enabled    bool   `yaml:"enabled"`
+		SFUPort    int    `yaml:"sfu_port"`
+		TURNDomain string `yaml:"turn_domain"`
+		TURNSecret string `yaml:"turn_secret"`
+	}
+
 	type yamlCfg struct {
 		ListenAddr            string   `yaml:"listen_addr"`
 		ClientNamespace       string   `yaml:"client_namespace"`
@@ -84,6 +91,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
 		IPFSTimeout           string   `yaml:"ipfs_timeout"`
 		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
+		WebRTC                yamlWebRTCCfg `yaml:"webrtc"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -190,6 +198,18 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if y.IPFSReplicationFactor > 0 {
 		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
+	}
+
+	// WebRTC configuration
+	cfg.WebRTCEnabled = y.WebRTC.Enabled
+	if y.WebRTC.SFUPort > 0 {
+		cfg.SFUPort = y.WebRTC.SFUPort
+	}
+	if v := strings.TrimSpace(y.WebRTC.TURNDomain); v != "" {
+		cfg.TURNDomain = v
+	}
+	if v := strings.TrimSpace(y.WebRTC.TURNSecret); v != "" {
+		cfg.TURNSecret = v
 	}
 
 	// Validate configuration

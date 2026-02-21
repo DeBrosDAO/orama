@@ -70,6 +70,16 @@ func (c *Config) ValidateConfig() []error {
 		}
 	}
 
+	// Validate WebRTC configuration
+	if c.WebRTCEnabled {
+		if c.SFUPort <= 0 || c.SFUPort > 65535 {
+			errs = append(errs, fmt.Errorf("gateway.sfu_port: must be between 1 and 65535 when webrtc is enabled"))
+		}
+		if c.TURNSecret == "" {
+			errs = append(errs, fmt.Errorf("gateway.turn_secret: must not be empty when webrtc is enabled"))
+		}
+	}
+
 	// Validate HTTPS configuration
 	if c.EnableHTTPS {
 		if c.DomainName == "" {

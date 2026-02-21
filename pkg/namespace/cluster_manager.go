@@ -18,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -37,12 +38,13 @@ type ClusterManagerConfig struct {
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
 type ClusterManager struct {
-	db              rqlite.Client
-	portAllocator   *NamespacePortAllocator
-	nodeSelector    *ClusterNodeSelector
-	systemdSpawner  *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
-	dnsManager      *DNSRecordManager
-	logger          *zap.Logger
+	db                  rqlite.Client
+	portAllocator       *NamespacePortAllocator
+	webrtcPortAllocator *WebRTCPortAllocator
+	nodeSelector        *ClusterNodeSelector
+	systemdSpawner      *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
+	dnsManager          *DNSRecordManager
+	logger              *zap.Logger
 	baseDomain      string
 	baseDataDir     string
 	globalRQLiteDSN string // Global RQLite DSN for namespace gateway auth
@@ -69,6 +71,7 @@ func NewClusterManager(
 ) *ClusterManager {
 	// Create internal components
 	portAllocator := NewNamespacePortAllocator(db, logger)
+	webrtcPortAllocator := NewWebRTCPortAllocator(db, logger)
 	nodeSelector := NewClusterNodeSelector(db, portAllocator, logger)
 	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, logger)
 	dnsManager := NewDNSRecordManager(db, cfg.BaseDomain, logger)
@@ -94,6 +97,7 @@ func NewClusterManager(
 	return &ClusterManager{
 		db:                    db,
 		portAllocator:         portAllocator,
+		webrtcPortAllocator:   webrtcPortAllocator,
 		nodeSelector:          nodeSelector,
 		systemdSpawner:        systemdSpawner,
 		dnsManager:            dnsManager,
@@ -139,6 +143,7 @@ func NewClusterManagerWithComponents(
 	return &ClusterManager{
 		db:                    db,
 		portAllocator:         portAllocator,
+		webrtcPortAllocator:   NewWebRTCPortAllocator(db, logger),
 		nodeSelector:          nodeSelector,
 		systemdSpawner:        systemdSpawner,
 		dnsManager:            NewDNSRecordManager(db, cfg.BaseDomain, logger),
@@ -854,12 +859,21 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	if err := cm.db.Query(ctx, &clusterNodes, nodeQuery, cluster.ID); err != nil {
 		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only stop", zap.Error(err))
 		// Fall back to local-only stop (individual methods, NOT StopAll which uses dangerous glob)
+		// Stop WebRTC services first (SFU → TURN), then core services (Gateway → Olric → RQLite)
+		cm.systemdSpawner.StopSFU(ctx, cluster.NamespaceName, cm.localNodeID)
+		cm.systemdSpawner.StopTURN(ctx, cluster.NamespaceName, cm.localNodeID)
 		cm.systemdSpawner.StopGateway(ctx, cluster.NamespaceName, cm.localNodeID)
 		cm.systemdSpawner.StopOlric(ctx, cluster.NamespaceName, cm.localNodeID)
 		cm.systemdSpawner.StopRQLite(ctx, cluster.NamespaceName, cm.localNodeID)
 		cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
 	} else {
-		// 2. Stop namespace infra on ALL nodes (reverse dependency order: Gateway → Olric → RQLite)
+		// 2. Stop WebRTC services first (SFU → TURN), then core infra (Gateway → Olric → RQLite)
+		for _, node := range clusterNodes {
+			cm.stopSFUOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
+		}
+		for _, node := range clusterNodes {
+			cm.stopTURNOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
+		}
 		for _, node := range clusterNodes {
 			cm.stopGatewayOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
 		}
@@ -880,16 +894,21 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 		}
 	}
 
-	// 4. Deallocate all ports
+	// 4. Deallocate all ports (core + WebRTC)
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
+	cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID)
 
-	// 5. Delete namespace DNS records
+	// 5. Delete namespace DNS records (gateway + TURN)
 	cm.dnsManager.DeleteNamespaceRecords(ctx, cluster.NamespaceName)
+	cm.dnsManager.DeleteTURNRecords(ctx, cluster.NamespaceName)
 
 	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
+	cm.db.Exec(ctx, `DELETE FROM webrtc_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
+	cm.db.Exec(ctx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
+	cm.db.Exec(ctx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 
 	// 7. Delete cluster record
 	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
@@ -1594,6 +1613,19 @@ type ClusterLocalState struct {
 	HasGateway    bool                    `json:"has_gateway"`
 	BaseDomain    string                  `json:"base_domain"`
 	SavedAt       time.Time               `json:"saved_at"`
+
+	// WebRTC fields (zero values when WebRTC not enabled — backward compatible)
+	HasSFU              bool   `json:"has_sfu,omitempty"`
+	HasTURN             bool   `json:"has_turn,omitempty"`
+	TURNSharedSecret    string `json:"-"` // Never persisted to disk state file
+	TURNCredentialTTL   int    `json:"turn_credential_ttl,omitempty"`
+	SFUSignalingPort    int    `json:"sfu_signaling_port,omitempty"`
+	SFUMediaPortStart   int    `json:"sfu_media_port_start,omitempty"`
+	SFUMediaPortEnd     int    `json:"sfu_media_port_end,omitempty"`
+	TURNListenPort      int    `json:"turn_listen_port,omitempty"`
+	TURNTLSPort         int    `json:"turn_tls_port,omitempty"`
+	TURNRelayPortStart  int    `json:"turn_relay_port_start,omitempty"`
+	TURNRelayPortEnd    int    `json:"turn_relay_port_end,omitempty"`
 }
 
 type ClusterLocalStatePorts struct {
@@ -1887,6 +1919,70 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				cm.logger.Error("Failed to restore Gateway from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
 			} else {
 				cm.logger.Info("Restored Gateway instance from state", zap.String("namespace", state.NamespaceName))
+			}
+		}
+	}
+
+	// 4. Restore TURN (if enabled)
+	if state.HasTURN && state.TURNRelayPortStart > 0 {
+		turnRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
+		if !turnRunning {
+			// TURN config needs the shared secret from DB — we can't persist it to disk state.
+			// If DB is available, fetch it; otherwise skip TURN restore (it will come back when DB is ready).
+			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+			if err == nil && webrtcCfg != nil {
+				turnCfg := TURNInstanceConfig{
+					Namespace:      state.NamespaceName,
+					NodeID:         cm.localNodeID,
+					ListenAddr:     fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
+					TLSListenAddr:  fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
+					PublicIP:       "", // Will be resolved by spawner or from node info
+					Realm:          cm.baseDomain,
+					AuthSecret:     webrtcCfg.TURNSharedSecret,
+					RelayPortStart: state.TURNRelayPortStart,
+					RelayPortEnd:   state.TURNRelayPortEnd,
+				}
+				if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
+					cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+				} else {
+					cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName))
+				}
+			} else {
+				cm.logger.Warn("Skipping TURN restore: WebRTC config not available from DB",
+					zap.String("namespace", state.NamespaceName))
+			}
+		}
+	}
+
+	// 5. Restore SFU (if enabled)
+	if state.HasSFU && state.SFUSignalingPort > 0 {
+		sfuRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU)
+		if !sfuRunning {
+			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+			if err == nil && webrtcCfg != nil {
+				turnDomain := fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain)
+				sfuCfg := SFUInstanceConfig{
+					Namespace:      state.NamespaceName,
+					NodeID:         cm.localNodeID,
+					ListenAddr:     fmt.Sprintf("%s:%d", localIP, state.SFUSignalingPort),
+					MediaPortStart: state.SFUMediaPortStart,
+					MediaPortEnd:   state.SFUMediaPortEnd,
+					TURNServers: []sfu.TURNServerConfig{
+						{Host: turnDomain, Port: TURNDefaultPort},
+						{Host: turnDomain, Port: TURNTLSPort},
+					},
+					TURNSecret:  webrtcCfg.TURNSharedSecret,
+					TURNCredTTL: webrtcCfg.TURNCredentialTTL,
+					RQLiteDSN:   fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				}
+				if err := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
+					cm.logger.Error("Failed to restore SFU from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+				} else {
+					cm.logger.Info("Restored SFU instance from state", zap.String("namespace", state.NamespaceName))
+				}
+			} else {
+				cm.logger.Warn("Skipping SFU restore: WebRTC config not available from DB",
+					zap.String("namespace", state.NamespaceName))
 			}
 		}
 	}
