@@ -300,6 +300,78 @@ func (drm *DNSRecordManager) DisableNamespaceRecord(ctx context.Context, namespa
 	return nil
 }
 
+// CreateTURNRecords creates DNS A records for TURN servers.
+// TURN records follow the pattern: turn.ns-{namespace}.{baseDomain} -> TURN node IPs
+func (drm *DNSRecordManager) CreateTURNRecords(ctx context.Context, namespaceName string, turnIPs []string) error {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	if len(turnIPs) == 0 {
+		return &ClusterError{Message: "no TURN IPs provided for DNS records"}
+	}
+
+	fqdn := fmt.Sprintf("turn.ns-%s.%s.", namespaceName, drm.baseDomain)
+
+	drm.logger.Info("Creating TURN DNS records",
+		zap.String("namespace", namespaceName),
+		zap.String("fqdn", fqdn),
+		zap.Strings("turn_ips", turnIPs),
+	)
+
+	// Delete existing TURN records for this namespace
+	deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ?`
+	_, _ = drm.db.Exec(internalCtx, deleteQuery, fqdn, "namespace-turn:"+namespaceName)
+
+	// Create A records for each TURN node IP
+	now := time.Now()
+	for _, ip := range turnIPs {
+		recordID := uuid.New().String()
+		insertQuery := `
+			INSERT INTO dns_records (
+				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`
+		_, err := drm.db.Exec(internalCtx, insertQuery,
+			recordID, fqdn, "A", ip, 60,
+			"namespace-turn:"+namespaceName,
+			"cluster-manager",
+			true, now, now,
+		)
+		if err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("failed to create TURN DNS record %s -> %s", fqdn, ip),
+				Cause:   err,
+			}
+		}
+	}
+
+	drm.logger.Info("TURN DNS records created",
+		zap.String("namespace", namespaceName),
+		zap.Int("record_count", len(turnIPs)),
+	)
+
+	return nil
+}
+
+// DeleteTURNRecords deletes all TURN DNS records for a namespace.
+func (drm *DNSRecordManager) DeleteTURNRecords(ctx context.Context, namespaceName string) error {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	drm.logger.Info("Deleting TURN DNS records",
+		zap.String("namespace", namespaceName),
+	)
+
+	deleteQuery := `DELETE FROM dns_records WHERE namespace = ?`
+	_, err := drm.db.Exec(internalCtx, deleteQuery, "namespace-turn:"+namespaceName)
+	if err != nil {
+		return &ClusterError{
+			Message: "failed to delete TURN DNS records",
+			Cause:   err,
+		}
+	}
+
+	return nil
+}
+
 // EnableNamespaceRecord marks a specific IP's record as active (for recovery)
 func (drm *DNSRecordManager) EnableNamespaceRecord(ctx context.Context, namespaceName, ip string) error {
 	internalCtx := client.WithInternalAuth(ctx)

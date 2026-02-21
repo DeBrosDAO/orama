@@ -58,6 +58,14 @@ type NodeRecoverer interface {
 	RepairCluster(ctx context.Context, namespaceName string) error
 }
 
+// WebRTCManager handles enabling/disabling WebRTC services for namespaces.
+type WebRTCManager interface {
+	EnableWebRTC(ctx context.Context, namespaceName, enabledBy string) error
+	DisableWebRTC(ctx context.Context, namespaceName string) error
+	// GetWebRTCStatus returns the WebRTC config for a namespace, or nil if not enabled.
+	GetWebRTCStatus(ctx context.Context, namespaceName string) (interface{}, error)
+}
+
 // Handlers holds dependencies for authentication HTTP handlers
 type Handlers struct {
 	logger             *logging.ColoredLogger

@@ -1,0 +1,32 @@
+[Unit]
+Description=Orama Namespace SFU (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target orama-namespace-olric@%i.service
+Wants=orama-namespace-olric@%i.service
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/orama
+
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/sfu.env
+
+ExecStart=/bin/sh -c 'exec /opt/orama/bin/sfu --config ${SFU_CONFIG}'
+
+TimeoutStopSec=45s
+KillMode=mixed
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-sfu-%i
+
+PrivateTmp=yes
+LimitNOFILE=65536
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

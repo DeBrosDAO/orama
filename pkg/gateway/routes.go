@@ -47,6 +47,11 @@ func (g *Gateway) Routes() http.Handler {
 	// Namespace cluster repair (internal, handler does its own auth)
 	mux.HandleFunc("/v1/internal/namespace/repair", g.namespaceClusterRepairHandler)
 
+	// Namespace WebRTC enable/disable/status (internal, handler does its own auth)
+	mux.HandleFunc("/v1/internal/namespace/webrtc/enable", g.namespaceWebRTCEnableHandler)
+	mux.HandleFunc("/v1/internal/namespace/webrtc/disable", g.namespaceWebRTCDisableHandler)
+	mux.HandleFunc("/v1/internal/namespace/webrtc/status", g.namespaceWebRTCStatusHandler)
+
 	// auth endpoints
 	mux.HandleFunc("/v1/auth/jwks", g.authService.JWKSHandler)
 	mux.HandleFunc("/.well-known/jwks.json", g.authService.JWKSHandler)
@@ -102,6 +107,13 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/pubsub/publish", g.pubsubHandlers.PublishHandler)
 		mux.HandleFunc("/v1/pubsub/topics", g.pubsubHandlers.TopicsHandler)
 		mux.HandleFunc("/v1/pubsub/presence", g.pubsubHandlers.PresenceHandler)
+	}
+
+	// webrtc
+	if g.webrtcHandlers != nil {
+		mux.HandleFunc("/v1/webrtc/turn/credentials", g.webrtcHandlers.CredentialsHandler)
+		mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
+		mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
 	}
 
 	// anon proxy (authenticated users only)

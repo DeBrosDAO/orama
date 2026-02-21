@@ -78,6 +78,8 @@ build: deps
 	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/cli/
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
+	go build -ldflags "$(LDFLAGS)" -o bin/sfu ./cmd/sfu
+	go build -ldflags "$(LDFLAGS)" -o bin/turn ./cmd/turn
 	@echo "Build complete! Run ./bin/orama version"
 
 # Cross-compile CLI for Linux (only binary needed locally; VPS builds everything else from source)
