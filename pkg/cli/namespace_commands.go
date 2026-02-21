@@ -241,21 +241,27 @@ func handleNamespaceEnable(args []string) {
 		os.Exit(1)
 	}
 
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+
 	fmt.Printf("Enabling WebRTC for namespace '%s'...\n", ns)
 	fmt.Printf("This will provision SFU (3 nodes) and TURN (2 nodes) services.\n")
 
-	url := fmt.Sprintf("http://localhost:%d/v1/internal/namespace/webrtc/enable?namespace=%s", constants.GatewayAPIPort, ns)
+	url := fmt.Sprintf("%s/v1/namespace/webrtc/enable", gatewayURL)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
 		os.Exit(1)
 	}
-	req.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to local gateway (is the node running?): %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -294,20 +300,26 @@ func handleNamespaceDisable(args []string) {
 		os.Exit(1)
 	}
 
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+
 	fmt.Printf("Disabling WebRTC for namespace '%s'...\n", ns)
 
-	url := fmt.Sprintf("http://localhost:%d/v1/internal/namespace/webrtc/disable?namespace=%s", constants.GatewayAPIPort, ns)
+	url := fmt.Sprintf("%s/v1/namespace/webrtc/disable", gatewayURL)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
 		os.Exit(1)
 	}
-	req.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to local gateway (is the node running?): %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -329,18 +341,24 @@ func handleNamespaceDisable(args []string) {
 }
 
 func handleNamespaceWebRTCStatus(ns string) {
-	url := fmt.Sprintf("http://localhost:%d/v1/internal/namespace/webrtc/status?namespace=%s", constants.GatewayAPIPort, ns)
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+
+	url := fmt.Sprintf("%s/v1/namespace/webrtc/status", gatewayURL)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
 		os.Exit(1)
 	}
-	req.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to local gateway (is the node running?): %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -381,6 +399,26 @@ func handleNamespaceWebRTCStatus(ns string) {
 	if enabledAt, ok := result["enabled_at"].(string); ok {
 		fmt.Printf("  Enabled at:       %s\n", enabledAt)
 	}
+}
+
+// loadAuthForNamespace loads credentials and returns the gateway URL and API key.
+// Exits with an error message if not authenticated.
+func loadAuthForNamespace(ns string) (gatewayURL, apiKey string) {
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	gatewayURL = getGatewayURL()
+	creds := store.GetDefaultCredential(gatewayURL)
+
+	if creds == nil || !creds.IsValid() {
+		fmt.Fprintf(os.Stderr, "Not authenticated. Run 'orama auth login' first.\n")
+		os.Exit(1)
+	}
+
+	return gatewayURL, creds.APIKey
 }
 
 func handleNamespaceList() {

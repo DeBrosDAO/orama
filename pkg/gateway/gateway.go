@@ -871,6 +871,109 @@ func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.R
 	})
 }
 
+// namespaceWebRTCEnablePublicHandler handles POST /v1/namespace/webrtc/enable
+// Public: authenticated by JWT/API key via auth middleware. Namespace from context.
+func (g *Gateway) namespaceWebRTCEnablePublicHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	if err := g.webrtcManager.EnableWebRTC(r.Context(), namespaceName, "api"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC enabled successfully",
+	})
+}
+
+// namespaceWebRTCDisablePublicHandler handles POST /v1/namespace/webrtc/disable
+// Public: authenticated by JWT/API key via auth middleware. Namespace from context.
+func (g *Gateway) namespaceWebRTCDisablePublicHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	if err := g.webrtcManager.DisableWebRTC(r.Context(), namespaceName); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC disabled successfully",
+	})
+}
+
+// namespaceWebRTCStatusPublicHandler handles GET /v1/namespace/webrtc/status
+// Public: authenticated by JWT/API key via auth middleware. Namespace from context.
+func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	config, err := g.webrtcManager.GetWebRTCStatus(r.Context(), namespaceName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if config == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"namespace": namespaceName,
+			"enabled":   false,
+		})
+	} else {
+		json.NewEncoder(w).Encode(config)
+	}
+}
+
 // namespaceWebRTCEnableHandler handles POST /v1/internal/namespace/webrtc/enable?namespace={name}
 // Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
 func (g *Gateway) namespaceWebRTCEnableHandler(w http.ResponseWriter, r *http.Request) {
