@@ -331,6 +331,7 @@ func (cm *ClusterManager) getClusterNodesWithIPs(ctx context.Context, clusterID 
 		FROM namespace_cluster_nodes ncn
 		JOIN dns_nodes dn ON ncn.node_id = dn.id
 		WHERE ncn.namespace_cluster_id = ?
+		GROUP BY ncn.node_id
 	`
 	if err := cm.db.Query(internalCtx, &rows, query, clusterID); err != nil {
 		return nil, err

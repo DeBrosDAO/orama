@@ -49,6 +49,13 @@ func (wpa *WebRTCPortAllocator) AllocateSFUPorts(ctx context.Context, nodeID, na
 	retryDelay := 100 * time.Millisecond
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Re-check for existing allocation (handles read-after-write lag on retries)
+		if attempt > 0 {
+			if existing, err := wpa.GetSFUPorts(ctx, namespaceClusterID, nodeID); err == nil && existing != nil {
+				return existing, nil
+			}
+		}
+
 		block, err := wpa.tryAllocateSFUPorts(internalCtx, nodeID, namespaceClusterID)
 		if err == nil {
 			wpa.logger.Info("SFU ports allocated",
@@ -148,6 +155,13 @@ func (wpa *WebRTCPortAllocator) AllocateTURNPorts(ctx context.Context, nodeID, n
 	retryDelay := 100 * time.Millisecond
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Re-check for existing allocation (handles read-after-write lag on retries)
+		if attempt > 0 {
+			if existing, err := wpa.GetTURNPorts(ctx, namespaceClusterID, nodeID); err == nil && existing != nil {
+				return existing, nil
+			}
+		}
+
 		block, err := wpa.tryAllocateTURNPorts(internalCtx, nodeID, namespaceClusterID)
 		if err == nil {
 			wpa.logger.Info("TURN ports allocated",
