@@ -112,3 +112,5 @@ results/
 phantom-auth/
 
 *.db
+
+docs/later_todos/
