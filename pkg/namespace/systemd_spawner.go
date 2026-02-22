@@ -195,22 +195,8 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("gateway-%s.yaml", nodeID))
 
-	// Build Gateway YAML config
-	type gatewayYAMLConfig struct {
-		ListenAddr            string   `yaml:"listen_addr"`
-		ClientNamespace       string   `yaml:"client_namespace"`
-		RQLiteDSN             string   `yaml:"rqlite_dsn"`
-		GlobalRQLiteDSN       string   `yaml:"global_rqlite_dsn,omitempty"`
-		DomainName            string   `yaml:"domain_name"`
-		OlricServers          []string `yaml:"olric_servers"`
-		OlricTimeout          string   `yaml:"olric_timeout"`
-		IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url"`
-		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
-		IPFSTimeout           string   `yaml:"ipfs_timeout"`
-		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
-	}
-
-	gatewayConfig := gatewayYAMLConfig{
+	// Build Gateway YAML config using the shared type from gateway package
+	gatewayConfig := gateway.GatewayYAMLConfig{
 		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
 		ClientNamespace:       cfg.Namespace,
 		RQLiteDSN:             cfg.RQLiteDSN,
@@ -222,6 +208,12 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		IPFSAPIURL:            cfg.IPFSAPIURL,
 		IPFSTimeout:           cfg.IPFSTimeout.String(),
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+		WebRTC: gateway.GatewayYAMLWebRTC{
+			Enabled:    cfg.WebRTCEnabled,
+			SFUPort:    cfg.SFUPort,
+			TURNDomain: cfg.TURNDomain,
+			TURNSecret: cfg.TURNSecret,
+		},
 	}
 
 	configBytes, err := yaml.Marshal(gatewayConfig)
@@ -289,6 +281,24 @@ func (s *SystemdSpawner) StopGateway(ctx context.Context, namespace, nodeID stri
 		zap.String("node_id", nodeID))
 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeGateway)
+}
+
+// RestartGateway stops and re-spawns a Gateway instance with updated config.
+// Used when gateway config changes at runtime (e.g., WebRTC enable/disable).
+func (s *SystemdSpawner) RestartGateway(ctx context.Context, namespace, nodeID string, cfg gateway.InstanceConfig) error {
+	s.logger.Info("Restarting Gateway via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID))
+
+	// Stop existing service (ignore error if already stopped)
+	if err := s.systemdMgr.StopService(namespace, systemd.ServiceTypeGateway); err != nil {
+		s.logger.Warn("Failed to stop Gateway before restart (may not be running)",
+			zap.String("namespace", namespace),
+			zap.Error(err))
+	}
+
+	// Re-spawn with updated config
+	return s.SpawnGateway(ctx, namespace, nodeID, cfg)
 }
 
 // SFUInstanceConfig holds configuration for spawning an SFU instance

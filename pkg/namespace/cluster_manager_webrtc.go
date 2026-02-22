@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -189,7 +190,10 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	}
 
 	// 14. Update cluster-state.json on all nodes with WebRTC info
-	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, sfuBlocks, turnBlocks)
+	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, sfuBlocks, turnBlocks, turnDomain, turnSecret)
+
+	// 15. Restart namespace gateways with WebRTC config so they register WebRTC routes
+	cm.restartGatewaysWithWebRTC(ctx, cluster, clusterNodes, nodePortBlocks, sfuBlocks, turnDomain, turnSecret)
 
 	cm.logEvent(ctx, cluster.ID, EventWebRTCEnabled, "",
 		fmt.Sprintf("WebRTC enabled: SFU on %d nodes, TURN on %d nodes", len(clusterNodes), len(turnNodes)), nil)
@@ -265,7 +269,19 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 	cm.db.Exec(internalCtx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 
 	// 9. Update cluster-state.json to remove WebRTC info
-	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, nil, nil)
+	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, nil, nil, "", "")
+
+	// 10. Restart namespace gateways without WebRTC config so they unregister WebRTC routes
+	portBlocks, err := cm.portAllocator.GetAllPortBlocks(ctx, cluster.ID)
+	if err == nil {
+		nodePortBlocks := make(map[string]*PortBlock)
+		for i := range portBlocks {
+			nodePortBlocks[portBlocks[i].NodeID] = &portBlocks[i]
+		}
+		cm.restartGatewaysWithWebRTC(ctx, cluster, clusterNodes, nodePortBlocks, nil, "", "")
+	} else {
+		cm.logger.Warn("Failed to get port blocks for gateway restart after WebRTC disable", zap.Error(err))
+	}
 
 	cm.logEvent(ctx, cluster.ID, EventWebRTCDisabled, "", "WebRTC disabled", nil)
 
@@ -508,13 +524,14 @@ func (cm *ClusterManager) cleanupWebRTCOnError(ctx context.Context, clusterID, n
 
 // updateClusterStateWithWebRTC updates the cluster-state.json on all nodes
 // to include (or remove) WebRTC port information.
-// Pass nil maps to clear WebRTC state (when disabling).
+// Pass nil maps and empty strings to clear WebRTC state (when disabling).
 func (cm *ClusterManager) updateClusterStateWithWebRTC(
 	ctx context.Context,
 	cluster *NamespaceCluster,
 	nodes []clusterNodeInfo,
 	sfuBlocks map[string]*WebRTCPortBlock,
 	turnBlocks map[string]*WebRTCPortBlock,
+	turnDomain, turnSecret string,
 ) {
 	// Get existing port blocks for base state
 	portBlocks, err := cm.portAllocator.GetAllPortBlocks(ctx, cluster.ID)
@@ -589,6 +606,9 @@ func (cm *ClusterManager) updateClusterStateWithWebRTC(
 				state.TURNRelayPortEnd = turnBlock.TURNRelayPortEnd
 			}
 		}
+		// Persist TURN domain and secret so gateways can be restored on cold start
+		state.TURNDomain = turnDomain
+		state.TURNSharedSecret = turnSecret
 
 		if node.NodeID == cm.localNodeID {
 			if err := cm.saveLocalState(state); err != nil {
@@ -613,5 +633,120 @@ func (cm *ClusterManager) saveRemoteState(ctx context.Context, nodeIP, namespace
 		cm.logger.Warn("Failed to save cluster state on remote node",
 			zap.String("node_ip", nodeIP),
 			zap.Error(err))
+	}
+}
+
+// restartGatewaysWithWebRTC restarts namespace gateways on all nodes with updated WebRTC config.
+// Pass nil sfuBlocks and empty turnDomain/turnSecret to disable WebRTC on gateways.
+func (cm *ClusterManager) restartGatewaysWithWebRTC(
+	ctx context.Context,
+	cluster *NamespaceCluster,
+	nodes []clusterNodeInfo,
+	portBlocks map[string]*PortBlock,
+	sfuBlocks map[string]*WebRTCPortBlock,
+	turnDomain, turnSecret string,
+) {
+	// Build Olric server addresses from port blocks + node IPs
+	var olricServers []string
+	for _, node := range nodes {
+		if pb, ok := portBlocks[node.NodeID]; ok {
+			olricServers = append(olricServers, fmt.Sprintf("%s:%d", node.InternalIP, pb.OlricHTTPPort))
+		}
+	}
+
+	for _, node := range nodes {
+		pb, ok := portBlocks[node.NodeID]
+		if !ok {
+			cm.logger.Warn("No port block for node, skipping gateway restart",
+				zap.String("node_id", node.NodeID))
+			continue
+		}
+
+		// Build gateway config with WebRTC fields
+		webrtcEnabled := false
+		sfuPort := 0
+		if sfuBlocks != nil {
+			if sfuBlock, ok := sfuBlocks[node.NodeID]; ok {
+				webrtcEnabled = true
+				sfuPort = sfuBlock.SFUSignalingPort
+			}
+		}
+
+		cfg := gateway.InstanceConfig{
+			Namespace:             cluster.NamespaceName,
+			NodeID:                node.NodeID,
+			HTTPPort:              pb.GatewayHTTPPort,
+			BaseDomain:            cm.baseDomain,
+			RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
+			OlricServers:          olricServers,
+			OlricTimeout:          30 * time.Second,
+			IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
+			IPFSAPIURL:            cm.ipfsAPIURL,
+			IPFSTimeout:           cm.ipfsTimeout,
+			IPFSReplicationFactor: cm.ipfsReplicationFactor,
+			WebRTCEnabled:         webrtcEnabled,
+			SFUPort:               sfuPort,
+			TURNDomain:            turnDomain,
+			TURNSecret:            turnSecret,
+		}
+
+		if node.NodeID == cm.localNodeID {
+			if err := cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg); err != nil {
+				cm.logger.Error("Failed to restart local gateway with WebRTC config",
+					zap.String("namespace", cluster.NamespaceName),
+					zap.String("node_id", node.NodeID),
+					zap.Error(err))
+			} else {
+				cm.logger.Info("Restarted local gateway with WebRTC config",
+					zap.String("namespace", cluster.NamespaceName),
+					zap.Bool("webrtc_enabled", webrtcEnabled))
+			}
+		} else {
+			cm.restartGatewayRemote(ctx, node.InternalIP, cfg)
+		}
+	}
+}
+
+// restartGatewayRemote sends a restart-gateway request to a remote node.
+func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP string, cfg gateway.InstanceConfig) {
+	ipfsTimeout := ""
+	if cfg.IPFSTimeout > 0 {
+		ipfsTimeout = cfg.IPFSTimeout.String()
+	}
+	olricTimeout := ""
+	if cfg.OlricTimeout > 0 {
+		olricTimeout = cfg.OlricTimeout.String()
+	}
+
+	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
+		"action":                    "restart-gateway",
+		"namespace":                 cfg.Namespace,
+		"node_id":                   cfg.NodeID,
+		"gateway_http_port":         cfg.HTTPPort,
+		"gateway_base_domain":       cfg.BaseDomain,
+		"gateway_rqlite_dsn":        cfg.RQLiteDSN,
+		"gateway_global_rqlite_dsn": cfg.GlobalRQLiteDSN,
+		"gateway_olric_servers":     cfg.OlricServers,
+		"gateway_olric_timeout":     olricTimeout,
+		"ipfs_cluster_api_url":      cfg.IPFSClusterAPIURL,
+		"ipfs_api_url":              cfg.IPFSAPIURL,
+		"ipfs_timeout":              ipfsTimeout,
+		"ipfs_replication_factor":   cfg.IPFSReplicationFactor,
+		"gateway_webrtc_enabled":    cfg.WebRTCEnabled,
+		"gateway_sfu_port":          cfg.SFUPort,
+		"gateway_turn_domain":       cfg.TURNDomain,
+		"gateway_turn_secret":       cfg.TURNSecret,
+	})
+	if err != nil {
+		cm.logger.Error("Failed to restart remote gateway with WebRTC config",
+			zap.String("node_ip", nodeIP),
+			zap.String("namespace", cfg.Namespace),
+			zap.Error(err))
+	} else {
+		cm.logger.Info("Restarted remote gateway with WebRTC config",
+			zap.String("node_ip", nodeIP),
+			zap.String("namespace", cfg.Namespace),
+			zap.Bool("webrtc_enabled", cfg.WebRTCEnabled))
 	}
 }

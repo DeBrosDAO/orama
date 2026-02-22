@@ -661,6 +661,10 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 		"ipfs_api_url":              cfg.IPFSAPIURL,
 		"ipfs_timeout":              ipfsTimeout,
 		"ipfs_replication_factor":   cfg.IPFSReplicationFactor,
+		"gateway_webrtc_enabled":    cfg.WebRTCEnabled,
+		"gateway_sfu_port":          cfg.SFUPort,
+		"gateway_turn_domain":       cfg.TURNDomain,
+		"gateway_turn_secret":       cfg.TURNSecret,
 	})
 	if err != nil {
 		return nil, err
@@ -1555,6 +1559,16 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
 
+			// Add WebRTC config if enabled for this namespace
+			if webrtcCfg, err := cm.GetWebRTCConfig(ctx, namespaceName); err == nil && webrtcCfg != nil {
+				if sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID); err == nil && sfuBlock != nil {
+					gwCfg.WebRTCEnabled = true
+					gwCfg.SFUPort = sfuBlock.SFUSignalingPort
+					gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", namespaceName, cm.baseDomain)
+					gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+				}
+			}
+
 			if err := cm.spawnGatewayWithSystemd(ctx, gwCfg); err != nil {
 				cm.logger.Error("Failed to restore Gateway", zap.String("namespace", namespaceName), zap.Error(err))
 			} else {
@@ -1617,7 +1631,8 @@ type ClusterLocalState struct {
 	// WebRTC fields (zero values when WebRTC not enabled — backward compatible)
 	HasSFU              bool   `json:"has_sfu,omitempty"`
 	HasTURN             bool   `json:"has_turn,omitempty"`
-	TURNSharedSecret    string `json:"-"` // Never persisted to disk state file
+	TURNSharedSecret    string `json:"turn_shared_secret,omitempty"` // Needed for gateway to generate TURN credentials on cold start
+	TURNDomain          string `json:"turn_domain,omitempty"`        // TURN server domain for gateway config
 	TURNCredentialTTL   int    `json:"turn_credential_ttl,omitempty"`
 	SFUSignalingPort    int    `json:"sfu_signaling_port,omitempty"`
 	SFUMediaPortStart   int    `json:"sfu_media_port_start,omitempty"`
@@ -1915,6 +1930,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				IPFSTimeout:           cm.ipfsTimeout,
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
+
+			// Add WebRTC config from persisted local state
+			if state.HasSFU && state.SFUSignalingPort > 0 && state.TURNSharedSecret != "" {
+				gwCfg.WebRTCEnabled = true
+				gwCfg.SFUPort = state.SFUSignalingPort
+				gwCfg.TURNDomain = state.TURNDomain
+				gwCfg.TURNSecret = state.TURNSharedSecret
+			}
+
 			if err := cm.spawnGatewayWithSystemd(ctx, gwCfg); err != nil {
 				cm.logger.Error("Failed to restore Gateway from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
 			} else {

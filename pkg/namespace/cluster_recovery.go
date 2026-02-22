@@ -529,6 +529,16 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 		}
 
+		// Add WebRTC config if enabled for this namespace
+		if webrtcCfg, err := cm.GetWebRTCConfig(ctx, cluster.NamespaceName); err == nil && webrtcCfg != nil {
+			if sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, cluster.ID, replacement.NodeID); err == nil && sfuBlock != nil {
+				gwCfg.WebRTCEnabled = true
+				gwCfg.SFUPort = sfuBlock.SFUSignalingPort
+				gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+				gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+			}
+		}
+
 		var spawnErr error
 		if replacement.NodeID == cm.localNodeID {
 			spawnErr = cm.spawnGatewayWithSystemd(ctx, gwCfg)
@@ -1059,6 +1069,16 @@ func (cm *ClusterManager) addNodeToCluster(
 		IPFSAPIURL:            cm.ipfsAPIURL,
 		IPFSTimeout:           cm.ipfsTimeout,
 		IPFSReplicationFactor: cm.ipfsReplicationFactor,
+	}
+
+	// Add WebRTC config if enabled for this namespace
+	if webrtcCfg, err := cm.GetWebRTCConfig(ctx, cluster.NamespaceName); err == nil && webrtcCfg != nil {
+		if sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, cluster.ID, replacement.NodeID); err == nil && sfuBlock != nil {
+			gwCfg.WebRTCEnabled = true
+			gwCfg.SFUPort = sfuBlock.SFUSignalingPort
+			gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+			gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+		}
 	}
 
 	if replacement.NodeID == cm.localNodeID {
