@@ -48,6 +48,11 @@ type SpawnRequest struct {
 	IPFSAPIURL            string          `json:"ipfs_api_url,omitempty"`
 	IPFSTimeout           string          `json:"ipfs_timeout,omitempty"`
 	IPFSReplicationFactor int             `json:"ipfs_replication_factor,omitempty"`
+	// Gateway WebRTC config (when action = "spawn-gateway" and WebRTC is enabled)
+	GatewayWebRTCEnabled bool   `json:"gateway_webrtc_enabled,omitempty"`
+	GatewaySFUPort       int    `json:"gateway_sfu_port,omitempty"`
+	GatewayTURNDomain    string `json:"gateway_turn_domain,omitempty"`
+	GatewayTURNSecret    string `json:"gateway_turn_secret,omitempty"`
 
 	// SFU config (when action = "spawn-sfu")
 	SFUListenAddr  string                    `json:"sfu_listen_addr,omitempty"`
@@ -225,6 +230,10 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			IPFSAPIURL:            req.IPFSAPIURL,
 			IPFSTimeout:           ipfsTimeout,
 			IPFSReplicationFactor: req.IPFSReplicationFactor,
+			WebRTCEnabled:         req.GatewayWebRTCEnabled,
+			SFUPort:               req.GatewaySFUPort,
+			TURNDomain:            req.GatewayTURNDomain,
+			TURNSecret:            req.GatewayTURNSecret,
 		}
 		if err := h.systemdSpawner.SpawnGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
@@ -236,6 +245,51 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop-gateway":
 		if err := h.systemdSpawner.StopGateway(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop Gateway instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "restart-gateway":
+		// Restart gateway with updated config (used by EnableWebRTC/DisableWebRTC)
+		var ipfsTimeout time.Duration
+		if req.IPFSTimeout != "" {
+			var err error
+			ipfsTimeout, err = time.ParseDuration(req.IPFSTimeout)
+			if err != nil {
+				ipfsTimeout = 60 * time.Second
+			}
+		}
+		var olricTimeout time.Duration
+		if req.GatewayOlricTimeout != "" {
+			var err error
+			olricTimeout, err = time.ParseDuration(req.GatewayOlricTimeout)
+			if err != nil {
+				olricTimeout = 30 * time.Second
+			}
+		} else {
+			olricTimeout = 30 * time.Second
+		}
+		cfg := gateway.InstanceConfig{
+			Namespace:             req.Namespace,
+			NodeID:                req.NodeID,
+			HTTPPort:              req.GatewayHTTPPort,
+			BaseDomain:            req.GatewayBaseDomain,
+			RQLiteDSN:             req.GatewayRQLiteDSN,
+			GlobalRQLiteDSN:       req.GatewayGlobalRQLiteDSN,
+			OlricServers:          req.GatewayOlricServers,
+			OlricTimeout:          olricTimeout,
+			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
+			IPFSAPIURL:            req.IPFSAPIURL,
+			IPFSTimeout:           ipfsTimeout,
+			IPFSReplicationFactor: req.IPFSReplicationFactor,
+			WebRTCEnabled:         req.GatewayWebRTCEnabled,
+			SFUPort:               req.GatewaySFUPort,
+			TURNDomain:            req.GatewayTURNDomain,
+			TURNSecret:            req.GatewayTURNSecret,
+		}
+		if err := h.systemdSpawner.RestartGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+			h.logger.Error("Failed to restart Gateway instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

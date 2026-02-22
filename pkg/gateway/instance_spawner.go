@@ -90,26 +90,41 @@ type InstanceConfig struct {
 	IPFSAPIURL            string        // IPFS API URL (e.g., "http://localhost:5001")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations
 	IPFSReplicationFactor int           // IPFS replication factor
+	// WebRTC configuration (populated when WebRTC is enabled for the namespace)
+	WebRTCEnabled bool   // Enable WebRTC (SFU/TURN) routes on this gateway
+	SFUPort       int    // SFU signaling port on this node
+	TURNDomain    string // TURN server domain (e.g., "turn.ns-alice.orama-devnet.network")
+	TURNSecret    string // TURN shared secret for credential generation
+}
+
+// GatewayYAMLWebRTC represents the webrtc section of the gateway YAML config.
+// Must match yamlWebRTCCfg in cmd/gateway/config.go.
+type GatewayYAMLWebRTC struct {
+	Enabled    bool   `yaml:"enabled"`
+	SFUPort    int    `yaml:"sfu_port,omitempty"`
+	TURNDomain string `yaml:"turn_domain,omitempty"`
+	TURNSecret string `yaml:"turn_secret,omitempty"`
 }
 
 // GatewayYAMLConfig represents the gateway YAML configuration structure
 // This must match the yamlCfg struct in cmd/gateway/config.go exactly
 // because the gateway uses strict YAML decoding that rejects unknown fields
 type GatewayYAMLConfig struct {
-	ListenAddr            string   `yaml:"listen_addr"`
-	ClientNamespace       string   `yaml:"client_namespace"`
-	RQLiteDSN             string   `yaml:"rqlite_dsn"`
-	GlobalRQLiteDSN       string   `yaml:"global_rqlite_dsn,omitempty"`
-	BootstrapPeers        []string `yaml:"bootstrap_peers,omitempty"`
-	EnableHTTPS           bool     `yaml:"enable_https,omitempty"`
-	DomainName            string   `yaml:"domain_name,omitempty"`
-	TLSCacheDir           string   `yaml:"tls_cache_dir,omitempty"`
-	OlricServers          []string `yaml:"olric_servers"`
-	OlricTimeout          string   `yaml:"olric_timeout,omitempty"`
-	IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url,omitempty"`
-	IPFSAPIURL            string   `yaml:"ipfs_api_url,omitempty"`
-	IPFSTimeout           string   `yaml:"ipfs_timeout,omitempty"`
-	IPFSReplicationFactor int      `yaml:"ipfs_replication_factor,omitempty"`
+	ListenAddr            string             `yaml:"listen_addr"`
+	ClientNamespace       string             `yaml:"client_namespace"`
+	RQLiteDSN             string             `yaml:"rqlite_dsn"`
+	GlobalRQLiteDSN       string             `yaml:"global_rqlite_dsn,omitempty"`
+	BootstrapPeers        []string           `yaml:"bootstrap_peers,omitempty"`
+	EnableHTTPS           bool               `yaml:"enable_https,omitempty"`
+	DomainName            string             `yaml:"domain_name,omitempty"`
+	TLSCacheDir           string             `yaml:"tls_cache_dir,omitempty"`
+	OlricServers          []string           `yaml:"olric_servers"`
+	OlricTimeout          string             `yaml:"olric_timeout,omitempty"`
+	IPFSClusterAPIURL     string             `yaml:"ipfs_cluster_api_url,omitempty"`
+	IPFSAPIURL            string             `yaml:"ipfs_api_url,omitempty"`
+	IPFSTimeout           string             `yaml:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor int                `yaml:"ipfs_replication_factor,omitempty"`
+	WebRTC                GatewayYAMLWebRTC  `yaml:"webrtc,omitempty"`
 }
 
 // NewInstanceSpawner creates a new Gateway instance spawner
@@ -294,6 +309,12 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
 		IPFSAPIURL:            cfg.IPFSAPIURL,
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+		WebRTC: GatewayYAMLWebRTC{
+			Enabled:    cfg.WebRTCEnabled,
+			SFUPort:    cfg.SFUPort,
+			TURNDomain: cfg.TURNDomain,
+			TURNSecret: cfg.TURNSecret,
+		},
 	}
 	// Set Olric timeout if provided
 	if cfg.OlricTimeout > 0 {
