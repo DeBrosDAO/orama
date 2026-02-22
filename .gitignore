@@ -1,64 +1,15 @@
-# Binaries for programs and plugins
+# Binaries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-
-# Built binaries
 bin/
+bin-linux/
 dist/
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS generated files
-.DS_Store
-.codex/
-redeploy-6.sh
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Log files
-*.log
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# E2E test config (contains production credentials)
-e2e/config.yaml
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Coverage reports
-coverage.txt
-coverage.html
-profile.out
+orama-cli-linux
 
 # Build artifacts
 *.deb
@@ -66,51 +17,79 @@ profile.out
 *.tar.gz
 *.zip
 
-# Local development files
-.local/
-local/
-
-data/*
-./bootstrap
-./node
-data/bootstrap/rqlite/
-
-.env.*
-
-configs/
-
-.dev/
-
+# Go
+go.work
 .gocache/
 
-.claude/
-.mcp.json
-.cursor/
+# Dependencies
+# vendor/
 
-# Remote node credentials
+# Environment & credentials
+.env
+.env.*
+.env.local
+.env.*.local
 scripts/remote-nodes.conf
-
-orama-cli-linux
-
-rnd/
-
 keys_backup/
+e2e/config.yaml
 
-vps.txt
+# Config (generated/local)
+configs/
 
-bin-linux/
-
-website/
-
-terms-agreement
-
-./cli
-./inspector
-
-results/
-
-phantom-auth/
-
+# Data & databases
+data/*
 *.db
 
+# IDE & editor files
+.vscode/
+.idea/
+.cursor/
+.claude/
+.mcp.json
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage & profiling
+coverage.txt
+coverage.html
+profile.out
+
+# Local development
+.dev/
+.local/
+local/
+.codex/
+results/
+rnd/
+vps.txt
+
+# Project subdirectories (managed separately)
+website/
+phantom-auth/
+
+# One-off scripts & tools
+redeploy-6.sh
+terms-agreement
+./bootstrap
+./node
+./cli
+./inspector
 docs/later_todos/
