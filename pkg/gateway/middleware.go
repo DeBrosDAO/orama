@@ -1054,8 +1054,14 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
 	}
 
+	// Use a longer timeout for upload paths (IPFS add can be slow for large files)
+	proxyTimeout := 30 * time.Second
+	if strings.HasPrefix(r.URL.Path, "/v1/storage/upload") || strings.HasPrefix(r.URL.Path, "/v1/storage/pin") {
+		proxyTimeout = 300 * time.Second
+	}
+
 	// Execute proxy request using shared transport for connection pooling
-	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: g.proxyTransport}
+	httpClient := &http.Client{Timeout: proxyTimeout, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		cb.RecordFailure()

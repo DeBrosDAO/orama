@@ -75,6 +75,10 @@ resolve_nodes "$@" | while IFS='|' read -r user host pass; do
     echo "[$i/$node_count] $user@$host"
     upgrade_node "$user" "$host" "$pass"
     echo "  ✓ Done"
+    if [ "$i" -lt "$node_count" ]; then
+        echo "  Waiting 30s before next node..."
+        sleep 30
+    fi
     echo ""
 done
 
