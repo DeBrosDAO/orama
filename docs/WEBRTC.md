@@ -72,18 +72,37 @@ orama namespace disable webrtc --namespace myapp
 
 ## Client Integration (JavaScript)
 
+### Authentication
+
+All WebRTC endpoints require authentication. Use one of:
+
+```
+# Option A: API Key via header (recommended)
+X-API-Key: <your-namespace-api-key>
+
+# Option B: API Key via Authorization header
+Authorization: ApiKey <your-namespace-api-key>
+
+# Option C: JWT Bearer token
+Authorization: Bearer <jwt>
+```
+
 ### 1. Get TURN Credentials
 
 ```javascript
-const response = await fetch('https://ns-myapp.orama.network/v1/webrtc/turn/credentials', {
+const response = await fetch('https://ns-myapp.orama-devnet.network/v1/webrtc/turn/credentials', {
   method: 'POST',
-  headers: { 'Authorization': `Bearer ${jwt}` }
+  headers: { 'X-API-Key': apiKey }
 });
 
-const { urls, username, credential, ttl } = await response.json();
-// urls: ["turn:1.2.3.4:3478?transport=udp", "turns:1.2.3.4:443?transport=udp"]
+const { uris, username, password, ttl } = await response.json();
+// uris: [
+//   "turn:turn.ns-myapp.orama-devnet.network:3478?transport=udp",
+//   "turn:turn.ns-myapp.orama-devnet.network:3478?transport=tcp",
+//   "turns:turn.ns-myapp.orama-devnet.network:5349"
+// ]
 // username: "{expiry_unix}:{namespace}"
-// credential: HMAC-SHA1 derived
+// password: HMAC-SHA1 derived (base64)
 // ttl: 600 (seconds)
 ```
 
@@ -91,7 +110,7 @@ const { urls, username, credential, ttl } = await response.json();
 
 ```javascript
 const pc = new RTCPeerConnection({
-  iceServers: [{ urls, username, credential }],
+  iceServers: [{ urls: uris, username, credential: password }],
   iceTransportPolicy: 'relay'  // enforced by SFU
 });
 ```
@@ -100,8 +119,7 @@ const pc = new RTCPeerConnection({
 
 ```javascript
 const ws = new WebSocket(
-  `wss://ns-myapp.orama.network/v1/webrtc/signal?room=${roomId}`,
-  ['Bearer', jwt]
+  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&api_key=${apiKey}`
 );
 
 ws.onmessage = (event) => {
@@ -126,22 +144,22 @@ ws.onmessage = (event) => {
 ### 4. Room Management (REST)
 
 ```javascript
+const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
+
 // Create room
 await fetch('/v1/webrtc/rooms', {
   method: 'POST',
-  headers: { 'Authorization': `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+  headers,
   body: JSON.stringify({ room_id: 'my-room' })
 });
 
 // List rooms
-const rooms = await fetch('/v1/webrtc/rooms', {
-  headers: { 'Authorization': `Bearer ${jwt}` }
-});
+const rooms = await fetch('/v1/webrtc/rooms', { headers });
 
 // Close room
 await fetch('/v1/webrtc/rooms?room_id=my-room', {
   method: 'DELETE',
-  headers: { 'Authorization': `Bearer ${jwt}` }
+  headers
 });
 ```
 
@@ -176,21 +194,31 @@ await fetch('/v1/webrtc/rooms?room_id=my-room', {
 
 WebRTC uses a **separate port allocation system** from the core namespace ports:
 
-| Service | Port Range | Per Namespace |
-|---------|-----------|---------------|
-| SFU signaling | 30000-30099 | 1 port |
-| SFU media (RTP) | 20000-29999 | 500 ports |
-| TURN listen | 3478 (standard) | fixed |
-| TURN TLS | 443/udp (standard) | fixed |
-| TURN relay | 49152-65535 | 800 ports |
+| Service | Port Range | Protocol | Per Namespace |
+|---------|-----------|----------|---------------|
+| SFU signaling | 30000-30099 | TCP (WireGuard only) | 1 port |
+| SFU media (RTP) | 20000-29999 | UDP (WireGuard only) | 500 ports |
+| TURN listen | 3478 | UDP + TCP | fixed |
+| TURNS (TLS) | 5349 | TCP | fixed |
+| TURN relay | 49152-65535 | UDP | 800 ports |
 
 ## TURN Credential Protocol
 
 - Credentials use HMAC-SHA1 with a per-namespace shared secret
 - Username format: `{expiry_unix}:{namespace}`
+- Password: `base64(HMAC-SHA1(shared_secret, username))`
 - Default TTL: 600 seconds (10 minutes)
 - SFU proactively sends `refresh-credentials` at 80% of TTL (8 minutes)
 - Clients should update ICE servers on receiving refresh
+
+## TURNS TLS Certificate
+
+TURNS (port 5349) uses TLS. Certificate provisioning:
+
+1. **Let's Encrypt (primary)**: On TURN spawn, the TURN domain is added to the local Caddy instance's Caddyfile. Caddy provisions a Let's Encrypt cert via DNS-01 ACME challenge (using the orama DNS provider). TURN reads the cert from Caddy's storage.
+2. **Self-signed (fallback)**: If Caddy cert provisioning fails (timeout, Caddy not running), a self-signed cert is generated with the node's public IP as SAN.
+
+Caddy auto-renews Let's Encrypt certs at ~60 days. TURN picks up renewed certs on restart.
 
 ## Monitoring
 
@@ -226,19 +254,20 @@ systemctl status orama-namespace-turn@myapp
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side. Clients cannot bypass TURN.
 - **HMAC credentials**: Per-namespace TURN shared secret. Credentials expire after 10 minutes.
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
-- **Authentication required**: All WebRTC endpoints require JWT or API key (not in `isPublicPath()`).
+- **Authentication required**: All WebRTC endpoints require API key or JWT (`X-API-Key` header, `Authorization: ApiKey`, or `Authorization: Bearer`).
 - **Room management**: Creating/closing rooms requires namespace ownership.
 - **SFU on WireGuard only**: SFU binds to 10.0.0.x, never 0.0.0.0. Only reachable via TURN relay.
 - **Permissions-Policy**: `camera=(self), microphone=(self)` — only same-origin can access media devices.
 
 ## Firewall
 
-When WebRTC is enabled, the following ports are opened via UFW:
+When WebRTC is enabled, the following ports are opened via UFW on TURN nodes:
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 3478 | UDP | TURN standard |
-| 443 | UDP | TURN TLS (does not conflict with Caddy TCP 443) |
+| 3478 | TCP | TURN TCP fallback (for clients behind UDP-blocking firewalls) |
+| 5349 | TCP | TURNS — TURN over TLS (encrypted, works through strict firewalls/DPI) |
 | 49152-65535 | UDP | TURN relay range (allocated per namespace) |
 
 SFU ports are NOT opened in the firewall — they are WireGuard-internal only.

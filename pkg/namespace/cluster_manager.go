@@ -1965,6 +1965,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 					AuthSecret:      webrtcCfg.TURNSharedSecret,
 					RelayPortStart:  state.TURNRelayPortStart,
 					RelayPortEnd:    state.TURNRelayPortEnd,
+					TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
 				}
 				if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
 					cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))

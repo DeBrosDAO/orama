@@ -402,6 +402,7 @@ type TURNInstanceConfig struct {
 	AuthSecret      string // HMAC-SHA1 shared secret
 	RelayPortStart  int    // Start of relay port range
 	RelayPortEnd    int    // End of relay port range
+	TURNDomain      string // TURN domain for Let's Encrypt cert (e.g., "turn.ns-myapp.orama-devnet.network")
 }
 
 // SpawnTURN starts a TURN instance using systemd
@@ -420,20 +421,41 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
 
-	// Generate self-signed TLS cert for TURNS if not already present
+	// Provision TLS cert for TURNS — try Let's Encrypt via Caddy first, fall back to self-signed
 	certPath := filepath.Join(configDir, "turn-cert.pem")
 	keyPath := filepath.Join(configDir, "turn-key.pem")
 	if cfg.TURNSListenAddr != "" {
 		if _, err := os.Stat(certPath); os.IsNotExist(err) {
-			if err := turn.GenerateSelfSignedCert(certPath, keyPath, cfg.PublicIP); err != nil {
-				s.logger.Warn("Failed to generate TURNS self-signed cert, TURNS will be disabled",
-					zap.String("namespace", namespace),
-					zap.Error(err))
-				cfg.TURNSListenAddr = "" // Disable TURNS if cert generation fails
-			} else {
-				s.logger.Info("Generated TURNS self-signed certificate",
-					zap.String("namespace", namespace),
-					zap.String("cert_path", certPath))
+			// Try Let's Encrypt via Caddy first
+			if cfg.TURNDomain != "" {
+				acmeEndpoint := "http://localhost:6001/v1/internal/acme"
+				caddyCert, caddyKey, provErr := provisionTURNCertViaCaddy(cfg.TURNDomain, acmeEndpoint, 2*time.Minute)
+				if provErr == nil {
+					certPath = caddyCert
+					keyPath = caddyKey
+					s.logger.Info("Using Let's Encrypt cert from Caddy for TURNS",
+						zap.String("namespace", namespace),
+						zap.String("domain", cfg.TURNDomain),
+						zap.String("cert_path", certPath))
+				} else {
+					s.logger.Warn("Let's Encrypt cert provisioning failed, falling back to self-signed",
+						zap.String("namespace", namespace),
+						zap.String("domain", cfg.TURNDomain),
+						zap.Error(provErr))
+				}
+			}
+			// Fallback: generate self-signed cert if no cert is available yet
+			if _, statErr := os.Stat(certPath); os.IsNotExist(statErr) {
+				if err := turn.GenerateSelfSignedCert(certPath, keyPath, cfg.PublicIP); err != nil {
+					s.logger.Warn("Failed to generate TURNS self-signed cert, TURNS will be disabled",
+						zap.String("namespace", namespace),
+						zap.Error(err))
+					cfg.TURNSListenAddr = "" // Disable TURNS if cert generation fails
+				} else {
+					s.logger.Info("Generated TURNS self-signed certificate",
+						zap.String("namespace", namespace),
+						zap.String("cert_path", certPath))
+				}
 			}
 		}
 	}
@@ -516,6 +538,22 @@ func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string)
 		s.logger.Warn("Failed to remove WebRTC firewall rules",
 			zap.String("namespace", namespace),
 			zap.Error(fwErr))
+	}
+
+	// Remove TURN cert block from Caddyfile (if provisioned via Let's Encrypt)
+	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
+	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
+	if data, readErr := os.ReadFile(configPath); readErr == nil {
+		var turnCfg turn.Config
+		if yaml.Unmarshal(data, &turnCfg) == nil && turnCfg.Realm != "" {
+			turnDomain := fmt.Sprintf("turn.ns-%s.%s", namespace, turnCfg.Realm)
+			if removeErr := removeTURNCertFromCaddy(turnDomain); removeErr != nil {
+				s.logger.Warn("Failed to remove TURN cert from Caddyfile",
+					zap.String("namespace", namespace),
+					zap.String("domain", turnDomain),
+					zap.Error(removeErr))
+			}
+		}
 	}
 
 	return err
