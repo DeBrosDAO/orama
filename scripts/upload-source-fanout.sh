@@ -69,6 +69,22 @@ run_ssh() {
     fi
 }
 
+# Like run_ssh but without -n, so stdin can be piped through
+run_ssh_stdin() {
+    local user="$1" host="$2" pass="$3" key="$4"
+    shift 4
+    local opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+    if [ -n "$key" ]; then
+        ssh $opts -i "$key" "$user@$host" "$@"
+    elif [ -n "$pass" ]; then
+        sshpass -p "$pass" ssh $opts \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+            "$user@$host" "$@"
+    else
+        ssh $opts "$user@$host" "$@"
+    fi
+}
+
 run_scp() {
     local user="$1" host="$2" pass="$3" key="$4" src="$5" dst="$6"
     local opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
@@ -134,7 +150,7 @@ for ((j=1; j<TOTAL; j++)); do
 done
 
 # Upload targets file and fanout script to seed
-run_ssh "$SEED_USER" "$SEED_HOST" "$SEED_PASS" "$SEED_KEY" "cat > /tmp/fanout-targets.txt" <<< "$TARGETS_CONTENT"
+run_ssh_stdin "$SEED_USER" "$SEED_HOST" "$SEED_PASS" "$SEED_KEY" "cat > /tmp/fanout-targets.txt" <<< "$TARGETS_CONTENT"
 
 FANOUT='#!/bin/bash
 ARCHIVE="/tmp/network-source.tar.gz"
@@ -175,7 +191,7 @@ rm -f /tmp/fanout-targets.txt /tmp/fanout.sh
 exit $FAILED
 '
 
-run_ssh "$SEED_USER" "$SEED_HOST" "$SEED_PASS" "$SEED_KEY" "cat > /tmp/fanout.sh && chmod +x /tmp/fanout.sh" <<< "$FANOUT"
+run_ssh_stdin "$SEED_USER" "$SEED_HOST" "$SEED_PASS" "$SEED_KEY" "cat > /tmp/fanout.sh && chmod +x /tmp/fanout.sh" <<< "$FANOUT"
 
 # Run fanout (allocate tty for live output)
 run_ssh "$SEED_USER" "$SEED_HOST" "$SEED_PASS" "$SEED_KEY" "bash /tmp/fanout.sh"

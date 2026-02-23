@@ -39,6 +39,9 @@ func (h *ServerlessHandlers) handleFunctions(w http.ResponseWriter, r *http.Requ
 //   - POST   /v1/functions/{name}/triggers           - Add trigger
 //   - GET    /v1/functions/{name}/triggers           - List triggers
 //   - DELETE /v1/functions/{name}/triggers/{id}      - Remove trigger
+//   - PUT    /v1/functions/secrets                   - Set a secret
+//   - GET    /v1/functions/secrets                   - List secrets
+//   - DELETE /v1/functions/secrets/{name}            - Delete a secret
 func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /v1/functions/{name}[/{action}[/{subID}]]
 	path := strings.TrimPrefix(r.URL.Path, "/v1/functions/")
@@ -53,6 +56,22 @@ func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http
 	action := ""
 	if len(parts) > 1 {
 		action = parts[1]
+	}
+
+	// Handle secrets management: /v1/functions/secrets[/{secretName}]
+	if name == "secrets" {
+		secretName := action // empty for list/set, secret name for delete
+		switch {
+		case secretName != "" && r.Method == http.MethodDelete:
+			h.HandleDeleteSecret(w, r, secretName)
+		case secretName == "" && r.Method == http.MethodPut:
+			h.HandleSetSecret(w, r)
+		case secretName == "" && r.Method == http.MethodGet:
+			h.HandleListSecrets(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
 	}
 
 	// Parse version from name if present (e.g., "myfunction@2")

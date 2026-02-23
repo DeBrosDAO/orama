@@ -159,6 +159,8 @@ orama env use <name>        # Switch environment
 
 Orama supports high-performance serverless function execution using WebAssembly (WASM). Functions are isolated, secure, and can interact with network services like the distributed cache.
 
+> **Full guide:** See [docs/SERVERLESS.md](docs/SERVERLESS.md) for host functions API, secrets management, PubSub triggers, and examples.
+
 ### 1. Build Functions
 
 Functions must be compiled to WASM. We recommend using [TinyGo](https://tinygo.org/).
