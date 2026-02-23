@@ -179,11 +179,14 @@ func TestRoomBuildICEServers(t *testing.T) {
 	if len(servers) != 1 {
 		t.Fatalf("ICE servers count = %d, want 1", len(servers))
 	}
-	if len(servers[0].URLs) != 1 {
-		t.Fatalf("URLs count = %d, want 1", len(servers[0].URLs))
+	if len(servers[0].URLs) != 2 {
+		t.Fatalf("URLs count = %d, want 2", len(servers[0].URLs))
 	}
 	if servers[0].URLs[0] != "turn:1.2.3.4:3478?transport=udp" {
-		t.Errorf("URL = %q, want %q", servers[0].URLs[0], "turn:1.2.3.4:3478?transport=udp")
+		t.Errorf("URL[0] = %q, want %q", servers[0].URLs[0], "turn:1.2.3.4:3478?transport=udp")
+	}
+	if servers[0].URLs[1] != "turn:1.2.3.4:3478?transport=tcp" {
+		t.Errorf("URL[1] = %q, want %q", servers[0].URLs[1], "turn:1.2.3.4:3478?transport=tcp")
 	}
 	if servers[0].Username == "" {
 		t.Error("Username should not be empty")
@@ -222,8 +225,8 @@ func TestRoomBuildICEServersNoSecret(t *testing.T) {
 func TestRoomBuildICEServersMultipleTURN(t *testing.T) {
 	cfg := testConfig()
 	cfg.TURNServers = []TURNServerConfig{
-		{Host: "1.2.3.4", Port: 3478},
-		{Host: "5.6.7.8", Port: 443},
+		{Host: "1.2.3.4", Port: 3478},              // non-secure → UDP + TCP = 2 URIs
+		{Host: "5.6.7.8", Port: 5349, Secure: true}, // secure → 1 URI
 	}
 
 	rm := NewRoomManager(cfg, testLogger())
@@ -233,8 +236,9 @@ func TestRoomBuildICEServersMultipleTURN(t *testing.T) {
 	if len(servers) != 1 {
 		t.Fatalf("ICE servers count = %d, want 1", len(servers))
 	}
-	if len(servers[0].URLs) != 2 {
-		t.Fatalf("URLs count = %d, want 2", len(servers[0].URLs))
+	// 1 non-secure (UDP+TCP) + 1 secure (TURNS) = 3 URIs
+	if len(servers[0].URLs) != 3 {
+		t.Fatalf("URLs count = %d, want 3", len(servers[0].URLs))
 	}
 }
 

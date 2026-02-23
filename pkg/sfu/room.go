@@ -539,7 +539,12 @@ func (r *Room) buildICEServers() []webrtc.ICEServer {
 
 	var urls []string
 	for _, ts := range r.config.TURNServers {
-		urls = append(urls, fmt.Sprintf("turn:%s:%d?transport=udp", ts.Host, ts.Port))
+		if ts.Secure {
+			urls = append(urls, fmt.Sprintf("turns:%s:%d", ts.Host, ts.Port))
+		} else {
+			urls = append(urls, fmt.Sprintf("turn:%s:%d?transport=udp", ts.Host, ts.Port))
+			urls = append(urls, fmt.Sprintf("turn:%s:%d?transport=tcp", ts.Host, ts.Port))
+		}
 	}
 
 	ttl := time.Duration(r.config.TURNCredentialTTL) * time.Second

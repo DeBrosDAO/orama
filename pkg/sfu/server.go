@@ -257,7 +257,12 @@ func (s *Server) sendTURNCredentials(peer *Peer) {
 
 	var uris []string
 	for _, ts := range s.config.TURNServers {
-		uris = append(uris, fmt.Sprintf("turn:%s:%d?transport=udp", ts.Host, ts.Port))
+		if ts.Secure {
+			uris = append(uris, fmt.Sprintf("turns:%s:%d", ts.Host, ts.Port))
+		} else {
+			uris = append(uris, fmt.Sprintf("turn:%s:%d?transport=udp", ts.Host, ts.Port))
+			uris = append(uris, fmt.Sprintf("turn:%s:%d?transport=tcp", ts.Host, ts.Port))
+		}
 	}
 
 	peer.SendMessage(NewServerMessage(MessageTypeTURNCredentials, &TURNCredentialsData{

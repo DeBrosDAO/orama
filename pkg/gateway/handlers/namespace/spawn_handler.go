@@ -65,7 +65,7 @@ type SpawnRequest struct {
 
 	// TURN config (when action = "spawn-turn")
 	TURNListenAddr  string `json:"turn_listen_addr,omitempty"`
-	TURNTLSAddr     string `json:"turn_tls_addr,omitempty"`
+	TURNTURNSAddr   string `json:"turn_turns_addr,omitempty"`
 	TURNPublicIP    string `json:"turn_public_ip,omitempty"`
 	TURNRealm       string `json:"turn_realm,omitempty"`
 	TURNAuthSecret  string `json:"turn_auth_secret,omitempty"`
@@ -347,7 +347,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Namespace:      req.Namespace,
 			NodeID:         req.NodeID,
 			ListenAddr:     req.TURNListenAddr,
-			TLSListenAddr:  req.TURNTLSAddr,
+			TURNSListenAddr: req.TURNTURNSAddr,
 			PublicIP:       req.TURNPublicIP,
 			Realm:          req.TURNRealm,
 			AuthSecret:     req.TURNAuthSecret,

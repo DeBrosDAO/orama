@@ -102,8 +102,8 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// 9. Build TURN server list for SFU config
 	turnDomain := fmt.Sprintf("turn.ns-%s.%s", namespaceName, cm.baseDomain)
 	turnServers := []sfu.TURNServerConfig{
-		{Host: turnDomain, Port: TURNDefaultPort},
-		{Host: turnDomain, Port: TURNTLSPort},
+		{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
+		{Host: turnDomain, Port: TURNSPort, Secure: true},
 	}
 
 	// 10. Get port blocks for RQLite DSN
@@ -123,15 +123,15 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range turnNodes {
 		turnBlock := turnBlocks[node.NodeID]
 		turnCfg := TURNInstanceConfig{
-			Namespace:      namespaceName,
-			NodeID:         node.NodeID,
-			ListenAddr:     fmt.Sprintf("0.0.0.0:%d", turnBlock.TURNListenPort),
-			TLSListenAddr:  fmt.Sprintf("0.0.0.0:%d", turnBlock.TURNTLSPort),
-			PublicIP:       node.PublicIP,
-			Realm:          cm.baseDomain,
-			AuthSecret:     turnSecret,
-			RelayPortStart: turnBlock.TURNRelayPortStart,
-			RelayPortEnd:   turnBlock.TURNRelayPortEnd,
+			Namespace:       namespaceName,
+			NodeID:          node.NodeID,
+			ListenAddr:      fmt.Sprintf("0.0.0.0:%d", turnBlock.TURNListenPort),
+			TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", turnBlock.TURNTLSPort),
+			PublicIP:        node.PublicIP,
+			Realm:           cm.baseDomain,
+			AuthSecret:      turnSecret,
+			RelayPortStart:  turnBlock.TURNRelayPortStart,
+			RelayPortEnd:    turnBlock.TURNRelayPortEnd,
 		}
 
 		if err := cm.spawnTURNOnNode(ctx, node, namespaceName, turnCfg); err != nil {
@@ -184,9 +184,11 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 		turnIPs = append(turnIPs, node.PublicIP)
 	}
 	if err := cm.dnsManager.CreateTURNRecords(ctx, namespaceName, turnIPs); err != nil {
-		cm.logger.Warn("Failed to create TURN DNS records",
+		cm.logger.Error("Failed to create TURN DNS records, aborting WebRTC enablement",
 			zap.String("namespace", namespaceName),
 			zap.Error(err))
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		return fmt.Errorf("failed to create TURN DNS records: %w", err)
 	}
 
 	// 14. Update cluster-state.json on all nodes with WebRTC info
@@ -438,8 +440,9 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 	turnServers := make([]map[string]interface{}, len(cfg.TURNServers))
 	for i, ts := range cfg.TURNServers {
 		turnServers[i] = map[string]interface{}{
-			"host": ts.Host,
-			"port": ts.Port,
+			"host":   ts.Host,
+			"port":   ts.Port,
+			"secure": ts.Secure,
 		}
 	}
 
@@ -465,7 +468,7 @@ func (cm *ClusterManager) spawnTURNRemote(ctx context.Context, nodeIP string, cf
 		"namespace":         cfg.Namespace,
 		"node_id":           cfg.NodeID,
 		"turn_listen_addr":  cfg.ListenAddr,
-		"turn_tls_addr":     cfg.TLSListenAddr,
+		"turn_turns_addr":   cfg.TURNSListenAddr,
 		"turn_public_ip":    cfg.PublicIP,
 		"turn_realm":        cfg.Realm,
 		"turn_auth_secret":  cfg.AuthSecret,

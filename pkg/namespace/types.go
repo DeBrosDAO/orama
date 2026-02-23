@@ -110,8 +110,8 @@ const (
 	TURNRelayPortsPerNamespace = 800
 
 	// TURN listen ports (standard)
-	TURNDefaultPort    = 3478
-	TURNTLSPort        = 443
+	TURNDefaultPort = 3478
+	TURNSPort       = 5349 // TURNS (TURN over TLS on TCP)
 
 	// Default TURN credential TTL in seconds (10 minutes)
 	DefaultTURNCredentialTTL = 600

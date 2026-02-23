@@ -40,14 +40,16 @@ func parseTURNConfig(logger *logging.ColoredLogger) *turn.Config {
 	}
 
 	type yamlCfg struct {
-		ListenAddr     string `yaml:"listen_addr"`
-		TLSListenAddr  string `yaml:"tls_listen_addr"`
-		PublicIP       string `yaml:"public_ip"`
-		Realm          string `yaml:"realm"`
-		AuthSecret     string `yaml:"auth_secret"`
-		RelayPortStart int    `yaml:"relay_port_start"`
-		RelayPortEnd   int    `yaml:"relay_port_end"`
-		Namespace      string `yaml:"namespace"`
+		ListenAddr      string `yaml:"listen_addr"`
+		TURNSListenAddr string `yaml:"turns_listen_addr"`
+		PublicIP        string `yaml:"public_ip"`
+		Realm           string `yaml:"realm"`
+		AuthSecret      string `yaml:"auth_secret"`
+		RelayPortStart  int    `yaml:"relay_port_start"`
+		RelayPortEnd    int    `yaml:"relay_port_end"`
+		Namespace       string `yaml:"namespace"`
+		TLSCertPath     string `yaml:"tls_cert_path"`
+		TLSKeyPath      string `yaml:"tls_key_path"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -66,14 +68,16 @@ func parseTURNConfig(logger *logging.ColoredLogger) *turn.Config {
 	}
 
 	cfg := &turn.Config{
-		ListenAddr:     y.ListenAddr,
-		TLSListenAddr:  y.TLSListenAddr,
-		PublicIP:       y.PublicIP,
-		Realm:          y.Realm,
-		AuthSecret:     y.AuthSecret,
-		RelayPortStart: y.RelayPortStart,
-		RelayPortEnd:   y.RelayPortEnd,
-		Namespace:      y.Namespace,
+		ListenAddr:      y.ListenAddr,
+		TURNSListenAddr: y.TURNSListenAddr,
+		PublicIP:        y.PublicIP,
+		Realm:           y.Realm,
+		AuthSecret:      y.AuthSecret,
+		RelayPortStart:  y.RelayPortStart,
+		RelayPortEnd:    y.RelayPortEnd,
+		Namespace:       y.Namespace,
+		TLSCertPath:     y.TLSCertPath,
+		TLSKeyPath:      y.TLSKeyPath,
 	}
 
 	if errs := cfg.Validate(); len(errs) > 0 {

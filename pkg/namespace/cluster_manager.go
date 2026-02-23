@@ -1956,15 +1956,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {
 				turnCfg := TURNInstanceConfig{
-					Namespace:      state.NamespaceName,
-					NodeID:         cm.localNodeID,
-					ListenAddr:     fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
-					TLSListenAddr:  fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
-					PublicIP:       "", // Will be resolved by spawner or from node info
-					Realm:          cm.baseDomain,
-					AuthSecret:     webrtcCfg.TURNSharedSecret,
-					RelayPortStart: state.TURNRelayPortStart,
-					RelayPortEnd:   state.TURNRelayPortEnd,
+					Namespace:       state.NamespaceName,
+					NodeID:          cm.localNodeID,
+					ListenAddr:      fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
+					TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
+					PublicIP:        "", // Will be resolved by spawner or from node info
+					Realm:           cm.baseDomain,
+					AuthSecret:      webrtcCfg.TURNSharedSecret,
+					RelayPortStart:  state.TURNRelayPortStart,
+					RelayPortEnd:    state.TURNRelayPortEnd,
 				}
 				if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
 					cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
@@ -1992,8 +1992,8 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 					MediaPortStart: state.SFUMediaPortStart,
 					MediaPortEnd:   state.SFUMediaPortEnd,
 					TURNServers: []sfu.TURNServerConfig{
-						{Host: turnDomain, Port: TURNDefaultPort},
-						{Host: turnDomain, Port: TURNTLSPort},
+						{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
+						{Host: turnDomain, Port: TURNSPort, Secure: true},
 					},
 					TURNSecret:  webrtcCfg.TURNSharedSecret,
 					TURNCredTTL: webrtcCfg.TURNCredentialTTL,
