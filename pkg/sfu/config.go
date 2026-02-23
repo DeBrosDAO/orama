@@ -30,8 +30,9 @@ type Config struct {
 
 // TURNServerConfig represents a single TURN server endpoint
 type TURNServerConfig struct {
-	Host string `yaml:"host"` // IP or hostname
-	Port int    `yaml:"port"` // UDP port (3478 or 443)
+	Host   string `yaml:"host"`   // IP or hostname
+	Port   int    `yaml:"port"`   // Port number (3478 for TURN, 5349 for TURNS)
+	Secure bool   `yaml:"secure"` // true = TURNS (TLS over TCP), false = TURN (UDP)
 }
 
 // Validate checks the SFU configuration for errors

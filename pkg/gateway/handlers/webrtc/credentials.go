@@ -38,7 +38,8 @@ func (h *WebRTCHandlers) CredentialsHandler(w http.ResponseWriter, r *http.Reque
 	if h.turnDomain != "" {
 		uris = append(uris,
 			fmt.Sprintf("turn:%s:3478?transport=udp", h.turnDomain),
-			fmt.Sprintf("turn:%s:443?transport=udp", h.turnDomain),
+			fmt.Sprintf("turn:%s:3478?transport=tcp", h.turnDomain),
+			fmt.Sprintf("turns:%s:5349", h.turnDomain),
 		)
 	}
 

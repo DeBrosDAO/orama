@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	production "github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -392,15 +393,15 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 
 // TURNInstanceConfig holds configuration for spawning a TURN instance
 type TURNInstanceConfig struct {
-	Namespace      string
-	NodeID         string
-	ListenAddr     string // e.g., "0.0.0.0:3478"
-	TLSListenAddr  string // e.g., "0.0.0.0:443" (UDP, no conflict with Caddy TCP)
-	PublicIP       string // Public IP for TURN relay allocations
-	Realm          string // TURN realm (typically base domain)
-	AuthSecret     string // HMAC-SHA1 shared secret
-	RelayPortStart int    // Start of relay port range
-	RelayPortEnd   int    // End of relay port range
+	Namespace       string
+	NodeID          string
+	ListenAddr      string // e.g., "0.0.0.0:3478"
+	TURNSListenAddr string // e.g., "0.0.0.0:5349" (TURNS over TLS/TCP)
+	PublicIP        string // Public IP for TURN relay allocations
+	Realm           string // TURN realm (typically base domain)
+	AuthSecret      string // HMAC-SHA1 shared secret
+	RelayPortStart  int    // Start of relay port range
+	RelayPortEnd    int    // End of relay port range
 }
 
 // SpawnTURN starts a TURN instance using systemd
@@ -419,16 +420,38 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
 
+	// Generate self-signed TLS cert for TURNS if not already present
+	certPath := filepath.Join(configDir, "turn-cert.pem")
+	keyPath := filepath.Join(configDir, "turn-key.pem")
+	if cfg.TURNSListenAddr != "" {
+		if _, err := os.Stat(certPath); os.IsNotExist(err) {
+			if err := turn.GenerateSelfSignedCert(certPath, keyPath, cfg.PublicIP); err != nil {
+				s.logger.Warn("Failed to generate TURNS self-signed cert, TURNS will be disabled",
+					zap.String("namespace", namespace),
+					zap.Error(err))
+				cfg.TURNSListenAddr = "" // Disable TURNS if cert generation fails
+			} else {
+				s.logger.Info("Generated TURNS self-signed certificate",
+					zap.String("namespace", namespace),
+					zap.String("cert_path", certPath))
+			}
+		}
+	}
+
 	// Build TURN YAML config
 	turnConfig := turn.Config{
-		ListenAddr:     cfg.ListenAddr,
-		TLSListenAddr:  cfg.TLSListenAddr,
-		PublicIP:       cfg.PublicIP,
-		Realm:          cfg.Realm,
-		AuthSecret:     cfg.AuthSecret,
-		RelayPortStart: cfg.RelayPortStart,
-		RelayPortEnd:   cfg.RelayPortEnd,
-		Namespace:      cfg.Namespace,
+		ListenAddr:      cfg.ListenAddr,
+		TURNSListenAddr: cfg.TURNSListenAddr,
+		PublicIP:        cfg.PublicIP,
+		Realm:           cfg.Realm,
+		AuthSecret:      cfg.AuthSecret,
+		RelayPortStart:  cfg.RelayPortStart,
+		RelayPortEnd:    cfg.RelayPortEnd,
+		Namespace:       cfg.Namespace,
+	}
+	if cfg.TURNSListenAddr != "" {
+		turnConfig.TLSCertPath = certPath
+		turnConfig.TLSKeyPath = keyPath
 	}
 
 	configBytes, err := yaml.Marshal(turnConfig)
@@ -464,6 +487,14 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 		return fmt.Errorf("TURN service did not become active: %w", err)
 	}
 
+	// Add firewall rules for TURN ports
+	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
+	if err := fw.AddWebRTCRules(cfg.RelayPortStart, cfg.RelayPortEnd); err != nil {
+		s.logger.Warn("Failed to add WebRTC firewall rules (TURN service is running)",
+			zap.String("namespace", namespace),
+			zap.Error(err))
+	}
+
 	s.logger.Info("TURN spawned successfully via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
@@ -477,7 +508,17 @@ func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string)
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
 
-	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeTURN)
+	err := s.systemdMgr.StopService(namespace, systemd.ServiceTypeTURN)
+
+	// Remove firewall rules for standard TURN ports
+	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
+	if fwErr := fw.RemoveWebRTCRules(0, 0); fwErr != nil {
+		s.logger.Warn("Failed to remove WebRTC firewall rules",
+			zap.String("namespace", namespace),
+			zap.Error(fwErr))
+	}
+
+	return err
 }
 
 // SaveClusterState writes cluster state JSON to the namespace data directory.

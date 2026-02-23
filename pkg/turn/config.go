@@ -10,9 +10,14 @@ type Config struct {
 	// ListenAddr is the address to bind the TURN listener (e.g., "0.0.0.0:3478")
 	ListenAddr string `yaml:"listen_addr"`
 
-	// TLSListenAddr is the address for TURN over TLS/DTLS (e.g., "0.0.0.0:443")
-	// Uses UDP 443 — requires Caddy HTTP/3 (QUIC) to be disabled to avoid port conflict
-	TLSListenAddr string `yaml:"tls_listen_addr"`
+	// TURNSListenAddr is the address for TURNS (TURN over TLS on TCP, e.g., "0.0.0.0:5349")
+	TURNSListenAddr string `yaml:"turns_listen_addr"`
+
+	// TLSCertPath is the path to the TLS certificate PEM file (for TURNS)
+	TLSCertPath string `yaml:"tls_cert_path"`
+
+	// TLSKeyPath is the path to the TLS private key PEM file (for TURNS)
+	TLSKeyPath string `yaml:"tls_key_path"`
 
 	// PublicIP is the public IP address of this node, advertised in TURN allocations
 	PublicIP string `yaml:"public_ip"`

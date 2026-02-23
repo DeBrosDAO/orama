@@ -168,8 +168,8 @@ func TestWebRTCPortAllocator_AllocateTURNPorts(t *testing.T) {
 	if block.TURNListenPort != TURNDefaultPort {
 		t.Errorf("TURNListenPort = %d, want %d", block.TURNListenPort, TURNDefaultPort)
 	}
-	if block.TURNTLSPort != TURNTLSPort {
-		t.Errorf("TURNTLSPort = %d, want %d", block.TURNTLSPort, TURNTLSPort)
+	if block.TURNTLSPort != TURNSPort {
+		t.Errorf("TURNTLSPort = %d, want %d", block.TURNTLSPort, TURNSPort)
 	}
 	if block.TURNRelayPortStart != TURNRelayPortRangeStart {
 		t.Errorf("TURNRelayPortStart = %d, want %d", block.TURNRelayPortStart, TURNRelayPortRangeStart)
@@ -320,7 +320,7 @@ func TestWebRTCPortBlock_TURNFields(t *testing.T) {
 		NamespaceClusterID: "cluster-1",
 		ServiceType:        "turn",
 		TURNListenPort:     3478,
-		TURNTLSPort:        443,
+		TURNTLSPort:        5349,
 		TURNRelayPortStart: 49152,
 		TURNRelayPortEnd:   49951,
 	}

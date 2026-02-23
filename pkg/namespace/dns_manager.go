@@ -61,7 +61,7 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 		insertQuery := `
 			INSERT INTO dns_records (
 				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
 		`
 		now := time.Now()
 		_, err := drm.db.Exec(internalCtx, insertQuery,
@@ -72,7 +72,6 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 			60,                            // 60 second TTL for quick failover
 			"namespace:"+namespaceName,    // Track ownership with namespace prefix
 			"cluster-manager",             // Created by the cluster manager
-			true,                          // Active
 			now,
 			now,
 		)
@@ -96,7 +95,7 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 		insertQuery := `
 			INSERT INTO dns_records (
 				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
 		`
 		now := time.Now()
 		_, err := drm.db.Exec(internalCtx, insertQuery,
@@ -107,7 +106,6 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 			60,
 			"namespace:"+namespaceName,
 			"cluster-manager",
-			true,
 			now,
 			now,
 		)
@@ -230,11 +228,11 @@ func (drm *DNSRecordManager) AddNamespaceRecord(ctx context.Context, namespaceNa
 		insertQuery := `
 			INSERT INTO dns_records (
 				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
 		`
 		_, err := drm.db.Exec(internalCtx, insertQuery,
 			recordID, f, "A", ip, 60,
-			"namespace:"+namespaceName, "cluster-manager", true, now, now,
+			"namespace:"+namespaceName, "cluster-manager", now, now,
 		)
 		if err != nil {
 			return &ClusterError{
@@ -328,13 +326,13 @@ func (drm *DNSRecordManager) CreateTURNRecords(ctx context.Context, namespaceNam
 		insertQuery := `
 			INSERT INTO dns_records (
 				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
 		`
 		_, err := drm.db.Exec(internalCtx, insertQuery,
 			recordID, fqdn, "A", ip, 60,
 			"namespace-turn:"+namespaceName,
 			"cluster-manager",
-			true, now, now,
+			now, now,
 		)
 		if err != nil {
 			return &ClusterError{

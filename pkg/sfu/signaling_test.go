@@ -233,7 +233,7 @@ func TestTURNCredentialsDataSerialization(t *testing.T) {
 		Username: "1234567890:test-ns",
 		Password: "base64password==",
 		TTL:      600,
-		URIs:     []string{"turn:1.2.3.4:3478?transport=udp", "turn:5.6.7.8:443?transport=udp"},
+		URIs:     []string{"turn:1.2.3.4:3478?transport=udp", "turns:5.6.7.8:5349"},
 	}
 
 	data, err := json.Marshal(creds)

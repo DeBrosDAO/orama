@@ -61,8 +61,8 @@ func TestCredentialsHandler_Success(t *testing.T) {
 		t.Errorf("ttl = %v, want 600", result["ttl"])
 	}
 	uris, ok := result["uris"].([]interface{})
-	if !ok || len(uris) != 2 {
-		t.Errorf("uris count = %v, want 2", result["uris"])
+	if !ok || len(uris) != 3 {
+		t.Errorf("uris count = %v, want 3", result["uris"])
 	}
 }
 

@@ -96,6 +96,21 @@ func TestFirewallProvisioner_GenerateRules_FullConfig(t *testing.T) {
 	assertContainsRule(t, rules, "ufw allow 9001/tcp")
 }
 
+func TestFirewallProvisioner_GenerateRules_WithTURN(t *testing.T) {
+	fp := NewFirewallProvisioner(FirewallConfig{
+		TURNEnabled:    true,
+		TURNRelayStart: 49152,
+		TURNRelayEnd:   49951,
+	})
+
+	rules := fp.GenerateRules()
+
+	assertContainsRule(t, rules, "ufw allow 3478/udp")
+	assertContainsRule(t, rules, "ufw allow 3478/tcp")
+	assertContainsRule(t, rules, "ufw allow 5349/tcp")
+	assertContainsRule(t, rules, "ufw allow 49152:49951/udp")
+}
+
 func TestFirewallProvisioner_DefaultPorts(t *testing.T) {
 	fp := NewFirewallProvisioner(FirewallConfig{})
 

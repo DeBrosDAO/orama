@@ -3,6 +3,7 @@ package turn
 import (
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -16,11 +17,12 @@ import (
 
 // Server wraps a Pion TURN server with namespace-scoped HMAC-SHA1 authentication.
 type Server struct {
-	config     *Config
-	logger     *zap.Logger
-	turnServer *pionTurn.Server
-	conn       net.PacketConn // UDP listener on primary port (3478)
-	tlsConn    net.PacketConn // UDP listener on TLS port (443)
+	config      *Config
+	logger      *zap.Logger
+	turnServer  *pionTurn.Server
+	conn        net.PacketConn // UDP listener on primary port (3478)
+	tcpListener net.Listener   // Plain TCP listener on primary port (3478)
+	tlsListener net.Listener   // TLS TCP listener for TURNS (port 5349)
 }
 
 // NewServer creates and starts a TURN server.
@@ -58,18 +60,45 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		},
 	}
 
-	// Create TLS UDP listener (port 443) if configured
-	// Requires Caddy HTTP/3 (QUIC) to be disabled to avoid UDP 443 conflict
-	if cfg.TLSListenAddr != "" {
-		tlsConn, err := net.ListenPacket("udp4", cfg.TLSListenAddr)
+	// Plain TCP listener on same port as UDP (3478) for TCP TURN fallback
+	var listenerConfigs []pionTurn.ListenerConfig
+	tcpListener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to listen TCP on %s: %w", cfg.ListenAddr, err)
+	}
+	s.tcpListener = tcpListener
+
+	listenerConfigs = append(listenerConfigs, pionTurn.ListenerConfig{
+		Listener: tcpListener,
+		RelayAddressGenerator: &pionTurn.RelayAddressGeneratorPortRange{
+			RelayAddress: relayIP,
+			Address:      "0.0.0.0",
+			MinPort:      uint16(cfg.RelayPortStart),
+			MaxPort:      uint16(cfg.RelayPortEnd),
+		},
+	})
+
+	// TURNS: TLS over TCP listener (port 5349) if configured
+	if cfg.TURNSListenAddr != "" && cfg.TLSCertPath != "" && cfg.TLSKeyPath != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCertPath, cfg.TLSKeyPath)
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("failed to listen on %s: %w", cfg.TLSListenAddr, err)
+			return nil, fmt.Errorf("failed to load TLS cert/key: %w", err)
 		}
-		s.tlsConn = tlsConn
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		tlsListener, err := tls.Listen("tcp", cfg.TURNSListenAddr, tlsConfig)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to listen on %s: %w", cfg.TURNSListenAddr, err)
+		}
+		s.tlsListener = tlsListener
 
-		packetConfigs = append(packetConfigs, pionTurn.PacketConnConfig{
-			PacketConn: tlsConn,
+		listenerConfigs = append(listenerConfigs, pionTurn.ListenerConfig{
+			Listener: tlsListener,
 			RelayAddressGenerator: &pionTurn.RelayAddressGeneratorPortRange{
 				RelayAddress: relayIP,
 				Address:      "0.0.0.0",
@@ -80,13 +109,17 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 	}
 
 	// Create TURN server with HMAC-SHA1 auth
-	turnServer, err := pionTurn.NewServer(pionTurn.ServerConfig{
+	serverConfig := pionTurn.ServerConfig{
 		Realm: cfg.Realm,
 		AuthHandler: func(username, realm string, srcAddr net.Addr) ([]byte, bool) {
 			return s.authHandler(username, realm, srcAddr)
 		},
 		PacketConnConfigs: packetConfigs,
-	})
+	}
+	if len(listenerConfigs) > 0 {
+		serverConfig.ListenerConfigs = listenerConfigs
+	}
+	turnServer, err := pionTurn.NewServer(serverConfig)
 	if err != nil {
 		s.closeListeners()
 		return nil, fmt.Errorf("failed to create TURN server: %w", err)
@@ -94,8 +127,9 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 	s.turnServer = turnServer
 
 	s.logger.Info("TURN server started",
-		zap.String("listen_addr", cfg.ListenAddr),
-		zap.String("tls_listen_addr", cfg.TLSListenAddr),
+		zap.String("listen_addr_udp", cfg.ListenAddr),
+		zap.String("listen_addr_tcp", cfg.ListenAddr),
+		zap.String("turns_listen_addr", cfg.TURNSListenAddr),
 		zap.String("public_ip", cfg.PublicIP),
 		zap.String("realm", cfg.Realm),
 		zap.Int("relay_port_start", cfg.RelayPortStart),
@@ -178,9 +212,13 @@ func (s *Server) closeListeners() {
 		s.conn.Close()
 		s.conn = nil
 	}
-	if s.tlsConn != nil {
-		s.tlsConn.Close()
-		s.tlsConn = nil
+	if s.tcpListener != nil {
+		s.tcpListener.Close()
+		s.tcpListener = nil
+	}
+	if s.tlsListener != nil {
+		s.tlsListener.Close()
+		s.tlsListener = nil
 	}
 }
 

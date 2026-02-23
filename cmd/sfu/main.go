@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,7 +37,7 @@ func main() {
 
 	// Start HTTP server in background
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.ComponentError(logging.ComponentSFU, "SFU server error", zap.Error(err))
 			os.Exit(1)
 		}

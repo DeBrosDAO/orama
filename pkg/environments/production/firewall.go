@@ -12,7 +12,7 @@ type FirewallConfig struct {
 	IsNameserver  bool // enables port 53 TCP+UDP
 	AnyoneORPort  int  // 0 = disabled, typically 9001
 	WireGuardPort int  // default 51820
-	TURNEnabled   bool // enables TURN relay ports (3478/udp, 443/udp, relay range)
+	TURNEnabled   bool // enables TURN relay ports (3478/udp+tcp, 5349/tcp, relay range)
 	TURNRelayStart int // start of TURN relay port range (default 49152)
 	TURNRelayEnd   int // end of TURN relay port range (default 65535)
 }
@@ -89,8 +89,9 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 
 	// TURN relay (only for nodes running TURN servers)
 	if fp.config.TURNEnabled {
-		rules = append(rules, "ufw allow 3478/udp")  // TURN standard port
-		rules = append(rules, "ufw allow 443/udp")   // TURN TLS port (does not conflict with Caddy TCP 443)
+		rules = append(rules, "ufw allow 3478/udp")  // TURN standard port (UDP)
+		rules = append(rules, "ufw allow 3478/tcp")  // TURN standard port (TCP fallback)
+		rules = append(rules, "ufw allow 5349/tcp")  // TURNS (TURN over TLS/TCP)
 		if fp.config.TURNRelayStart > 0 && fp.config.TURNRelayEnd > 0 {
 			rules = append(rules, fmt.Sprintf("ufw allow %d:%d/udp", fp.config.TURNRelayStart, fp.config.TURNRelayEnd))
 		}
@@ -147,7 +148,8 @@ func (fp *FirewallProvisioner) IsActive() bool {
 func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
 	rules := []string{
 		"ufw allow 3478/udp",
-		"ufw allow 443/udp",
+		"ufw allow 3478/tcp",
+		"ufw allow 5349/tcp",
 	}
 	if relayStart > 0 && relayEnd > 0 {
 		rules = append(rules, fmt.Sprintf("ufw allow %d:%d/udp", relayStart, relayEnd))
@@ -168,7 +170,8 @@ func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
 func (fp *FirewallProvisioner) RemoveWebRTCRules(relayStart, relayEnd int) error {
 	rules := []string{
 		"ufw delete allow 3478/udp",
-		"ufw delete allow 443/udp",
+		"ufw delete allow 3478/tcp",
+		"ufw delete allow 5349/tcp",
 	}
 	if relayStart > 0 && relayEnd > 0 {
 		rules = append(rules, fmt.Sprintf("ufw delete allow %d:%d/udp", relayStart, relayEnd))

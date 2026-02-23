@@ -217,7 +217,7 @@ func (wpa *WebRTCPortAllocator) tryAllocateTURNPorts(ctx context.Context, nodeID
 		NamespaceClusterID: namespaceClusterID,
 		ServiceType:        "turn",
 		TURNListenPort:     TURNDefaultPort,
-		TURNTLSPort:        TURNTLSPort,
+		TURNTLSPort:        TURNSPort,
 		TURNRelayPortStart: relayStart,
 		TURNRelayPortEnd:   relayStart + TURNRelayPortsPerNamespace - 1,
 		AllocatedAt:        time.Now(),
