@@ -61,9 +61,9 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks redeploy-devnet redeploy-testnet release health
+.PHONY: build clean test deps tidy fmt vet lint install-hooks upload-devnet upload-testnet redeploy-devnet redeploy-testnet release health
 
-VERSION := 0.112.2
+VERSION := 0.112.4
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -104,6 +104,14 @@ clean:
 	rm -rf bin/
 	rm -rf data/
 	@echo "Clean complete!"
+
+# Upload source to devnet using fanout (upload to 1 node, parallel distribute to rest)
+upload-devnet:
+	@bash scripts/upload-source-fanout.sh --env devnet
+
+# Upload source to testnet using fanout
+upload-testnet:
+	@bash scripts/upload-source-fanout.sh --env testnet
 
 # Deploy to devnet (build + rolling upgrade all nodes)
 redeploy-devnet:
