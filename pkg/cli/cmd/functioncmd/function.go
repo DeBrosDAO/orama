@@ -33,4 +33,6 @@ func init() {
 	Cmd.AddCommand(functions.DeleteCmd)
 	Cmd.AddCommand(functions.LogsCmd)
 	Cmd.AddCommand(functions.VersionsCmd)
+	Cmd.AddCommand(functions.SecretsCmd)
+	Cmd.AddCommand(functions.TriggersCmd)
 }

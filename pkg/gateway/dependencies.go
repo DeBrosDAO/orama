@@ -459,6 +459,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		deps.ServerlessWSMgr,
 		triggerStore,
 		deps.PubSubDispatcher,
+		secretsMgr,
 		logger.Logger,
 	)
 

@@ -13,12 +13,13 @@ import (
 // ServerlessHandlers contains handlers for serverless function endpoints.
 // It's a separate struct to keep the Gateway struct clean.
 type ServerlessHandlers struct {
-	invoker      *serverless.Invoker
-	registry     serverless.FunctionRegistry
-	wsManager    *serverless.WSManager
-	triggerStore *triggers.PubSubTriggerStore
-	dispatcher   *triggers.PubSubDispatcher
-	logger       *zap.Logger
+	invoker        *serverless.Invoker
+	registry       serverless.FunctionRegistry
+	wsManager      *serverless.WSManager
+	triggerStore   *triggers.PubSubTriggerStore
+	dispatcher     *triggers.PubSubDispatcher
+	secretsManager serverless.SecretsManager
+	logger         *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
@@ -28,15 +29,17 @@ func NewServerlessHandlers(
 	wsManager *serverless.WSManager,
 	triggerStore *triggers.PubSubTriggerStore,
 	dispatcher *triggers.PubSubDispatcher,
+	secretsManager serverless.SecretsManager,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
 	return &ServerlessHandlers{
-		invoker:      invoker,
-		registry:     registry,
-		wsManager:    wsManager,
-		triggerStore: triggerStore,
-		dispatcher:   dispatcher,
-		logger:       logger,
+		invoker:        invoker,
+		registry:       registry,
+		wsManager:      wsManager,
+		triggerStore:   triggerStore,
+		dispatcher:     dispatcher,
+		secretsManager: secretsManager,
+		logger:         logger,
 	}
 }
 

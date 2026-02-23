@@ -94,6 +94,7 @@ func newTestHandlers(reg serverless.FunctionRegistry) *ServerlessHandlers {
 		wsManager,
 		nil, // triggerStore
 		nil, // dispatcher
+		nil, // secretsManager
 		logger,
 	)
 }
