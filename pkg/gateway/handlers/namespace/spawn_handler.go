@@ -71,6 +71,7 @@ type SpawnRequest struct {
 	TURNAuthSecret  string `json:"turn_auth_secret,omitempty"`
 	TURNRelayStart  int    `json:"turn_relay_start,omitempty"`
 	TURNRelayEnd    int    `json:"turn_relay_end,omitempty"`
+	TURNDomain      string `json:"turn_domain,omitempty"`
 
 	// Cluster state (when action = "save-cluster-state")
 	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
@@ -344,15 +345,16 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case "spawn-turn":
 		cfg := namespacepkg.TURNInstanceConfig{
-			Namespace:      req.Namespace,
-			NodeID:         req.NodeID,
-			ListenAddr:     req.TURNListenAddr,
+			Namespace:       req.Namespace,
+			NodeID:          req.NodeID,
+			ListenAddr:      req.TURNListenAddr,
 			TURNSListenAddr: req.TURNTURNSAddr,
-			PublicIP:       req.TURNPublicIP,
-			Realm:          req.TURNRealm,
-			AuthSecret:     req.TURNAuthSecret,
-			RelayPortStart: req.TURNRelayStart,
-			RelayPortEnd:   req.TURNRelayEnd,
+			PublicIP:        req.TURNPublicIP,
+			Realm:           req.TURNRealm,
+			AuthSecret:      req.TURNAuthSecret,
+			RelayPortStart:  req.TURNRelayStart,
+			RelayPortEnd:    req.TURNRelayEnd,
+			TURNDomain:      req.TURNDomain,
 		}
 		if err := h.systemdSpawner.SpawnTURN(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn TURN instance", zap.Error(err))

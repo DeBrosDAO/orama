@@ -132,6 +132,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 			AuthSecret:      turnSecret,
 			RelayPortStart:  turnBlock.TURNRelayPortStart,
 			RelayPortEnd:    turnBlock.TURNRelayPortEnd,
+			TURNDomain:      turnDomain,
 		}
 
 		if err := cm.spawnTURNOnNode(ctx, node, namespaceName, turnCfg); err != nil {
@@ -474,6 +475,7 @@ func (cm *ClusterManager) spawnTURNRemote(ctx context.Context, nodeIP string, cf
 		"turn_auth_secret":  cfg.AuthSecret,
 		"turn_relay_start":  cfg.RelayPortStart,
 		"turn_relay_end":    cfg.RelayPortEnd,
+		"turn_domain":       cfg.TURNDomain,
 	})
 	return err
 }
