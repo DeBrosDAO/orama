@@ -23,8 +23,7 @@ func (h *WebRTCHandlers) SignalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Proxy WebSocket to local SFU on WireGuard IP
-	// SFU binds to WireGuard IP, so we use 127.0.0.1 since we're on the same node
-	targetHost := fmt.Sprintf("127.0.0.1:%d", h.sfuPort)
+	targetHost := fmt.Sprintf("%s:%d", h.sfuHost, h.sfuPort)
 
 	h.logger.ComponentDebug(logging.ComponentGeneral, "Proxying WebRTC signal to SFU",
 		zap.String("namespace", ns),

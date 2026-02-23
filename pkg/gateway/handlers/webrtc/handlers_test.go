@@ -15,6 +15,7 @@ func testHandlers() *WebRTCHandlers {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
 	return NewWebRTCHandlers(
 		logger,
+		"", // defaults to 127.0.0.1 in tests
 		8443,
 		"turn.ns-test.dbrs.space",
 		"test-secret-key-32bytes-long!!!!",
@@ -91,7 +92,7 @@ func TestCredentialsHandler_NoNamespace(t *testing.T) {
 
 func TestCredentialsHandler_NoTURNSecret(t *testing.T) {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
-	h := NewWebRTCHandlers(logger, 8443, "turn.test.dbrs.space", "", nil)
+	h := NewWebRTCHandlers(logger, "", 8443, "turn.test.dbrs.space", "", nil)
 
 	req := requestWithNamespace("POST", "/v1/webrtc/turn/credentials", "test-ns")
 	w := httptest.NewRecorder()
@@ -119,7 +120,7 @@ func TestSignalHandler_NoNamespace(t *testing.T) {
 
 func TestSignalHandler_NoSFUPort(t *testing.T) {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
-	h := NewWebRTCHandlers(logger, 0, "", "secret", nil)
+	h := NewWebRTCHandlers(logger, "", 0, "", "secret", nil)
 
 	req := requestWithNamespace("GET", "/v1/webrtc/signal", "test-ns")
 	w := httptest.NewRecorder()
@@ -171,7 +172,7 @@ func TestRoomsHandler_NoNamespace(t *testing.T) {
 
 func TestRoomsHandler_NoSFUPort(t *testing.T) {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
-	h := NewWebRTCHandlers(logger, 0, "", "secret", nil)
+	h := NewWebRTCHandlers(logger, "", 0, "", "secret", nil)
 
 	req := requestWithNamespace("GET", "/v1/webrtc/rooms", "test-ns")
 	w := httptest.NewRecorder()
@@ -206,7 +207,7 @@ func TestRoomsHandler_SFUProxySuccess(t *testing.T) {
 		}
 	}
 
-	h := NewWebRTCHandlers(logger, port, "", "secret", nil)
+	h := NewWebRTCHandlers(logger, "", port, "", "secret", nil)
 	req := requestWithNamespace("GET", "/v1/webrtc/rooms", "test-ns")
 	w := httptest.NewRecorder()
 

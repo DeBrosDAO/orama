@@ -31,7 +31,7 @@ func (h *WebRTCHandlers) RoomsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Proxy to SFU health endpoint which returns room count
-	targetURL := fmt.Sprintf("http://127.0.0.1:%d/health", h.sfuPort)
+	targetURL := fmt.Sprintf("http://%s:%d/health", h.sfuHost, h.sfuPort)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(targetURL)

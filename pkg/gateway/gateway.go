@@ -340,6 +340,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
 		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(
 			logger,
+			gw.localWireGuardIP,
 			cfg.SFUPort,
 			cfg.TURNDomain,
 			cfg.TURNSecret,

@@ -12,6 +12,7 @@ import (
 // These run on the namespace gateway and proxy signaling to the local SFU.
 type WebRTCHandlers struct {
 	logger     *logging.ColoredLogger
+	sfuHost    string // SFU host IP (WireGuard IP) to proxy connections to
 	sfuPort    int    // Local SFU signaling port to proxy WebSocket connections to
 	turnDomain string // TURN server domain for building URIs
 	turnSecret string // HMAC-SHA1 shared secret for TURN credential generation
@@ -23,13 +24,18 @@ type WebRTCHandlers struct {
 // NewWebRTCHandlers creates a new WebRTCHandlers instance.
 func NewWebRTCHandlers(
 	logger *logging.ColoredLogger,
+	sfuHost string,
 	sfuPort int,
 	turnDomain string,
 	turnSecret string,
 	proxyWS func(w http.ResponseWriter, r *http.Request, targetHost string) bool,
 ) *WebRTCHandlers {
+	if sfuHost == "" {
+		sfuHost = "127.0.0.1"
+	}
 	return &WebRTCHandlers{
 		logger:         logger,
+		sfuHost:        sfuHost,
 		sfuPort:        sfuPort,
 		turnDomain:     turnDomain,
 		turnSecret:     turnSecret,
