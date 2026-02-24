@@ -229,15 +229,15 @@ func TestUpdateNamespaceRecord_SetsActiveTrue(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify the SQL contains is_active = TRUE for both FQDN and wildcard
+	// Verify the SQL contains is_active = 1 for both FQDN and wildcard
 	activeCount := 0
 	for _, call := range mockDB.execCalls {
-		if strings.Contains(call.Query, "is_active = TRUE") && strings.Contains(call.Query, "UPDATE dns_records") {
+		if strings.Contains(call.Query, "is_active = 1") && strings.Contains(call.Query, "UPDATE dns_records") {
 			activeCount++
 		}
 	}
 	if activeCount != 2 {
-		t.Fatalf("expected 2 UPDATE queries with is_active = TRUE (fqdn + wildcard), got %d", activeCount)
+		t.Fatalf("expected 2 UPDATE queries with is_active = 1 (fqdn + wildcard), got %d", activeCount)
 	}
 }
 
