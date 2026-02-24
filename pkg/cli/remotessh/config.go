@@ -4,24 +4,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
-// FindRemoteNodesConf searches for the remote-nodes.conf file
+// FindNodesConf searches for the nodes.conf file
 // in common locations relative to the current directory or project root.
-func FindRemoteNodesConf() string {
+func FindNodesConf() string {
 	candidates := []string{
-		"scripts/remote-nodes.conf",
-		"../scripts/remote-nodes.conf",
-		"network/scripts/remote-nodes.conf",
+		"scripts/nodes.conf",
+		"../scripts/nodes.conf",
+		"network/scripts/nodes.conf",
 	}
 
 	// Also check from home dir
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		candidates = append(candidates, filepath.Join(home, ".orama", "remote-nodes.conf"))
+		candidates = append(candidates, filepath.Join(home, ".orama", "nodes.conf"))
 	}
 
 	for _, c := range candidates {
@@ -32,11 +31,12 @@ func FindRemoteNodesConf() string {
 	return ""
 }
 
-// LoadEnvNodes loads all nodes for a given environment from remote-nodes.conf.
+// LoadEnvNodes loads all nodes for a given environment from nodes.conf.
+// SSHKey fields are NOT set — caller must call PrepareNodeKeys() after this.
 func LoadEnvNodes(env string) ([]inspector.Node, error) {
-	confPath := FindRemoteNodesConf()
+	confPath := FindNodesConf()
 	if confPath == "" {
-		return nil, fmt.Errorf("remote-nodes.conf not found (checked scripts/, ../scripts/, network/scripts/)")
+		return nil, fmt.Errorf("nodes.conf not found (checked scripts/, ../scripts/, network/scripts/)")
 	}
 
 	nodes, err := inspector.LoadNodes(confPath)
@@ -47,14 +47,6 @@ func LoadEnvNodes(env string) ([]inspector.Node, error) {
 	filtered := inspector.FilterByEnv(nodes, env)
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("no nodes found for environment %q in %s", env, confPath)
-	}
-
-	// Expand ~ in SSH key paths
-	home, _ := os.UserHomeDir()
-	for i := range filtered {
-		if filtered[i].SSHKey != "" && strings.HasPrefix(filtered[i].SSHKey, "~") {
-			filtered[i].SSHKey = filepath.Join(home, filtered[i].SSHKey[1:])
-		}
 	}
 
 	return filtered, nil

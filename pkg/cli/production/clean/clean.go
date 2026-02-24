@@ -63,6 +63,12 @@ func execute(flags *Flags) error {
 		return err
 	}
 
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	if flags.Node != "" {
 		nodes = remotessh.FilterByIP(nodes, flags.Node)
 		if len(nodes) == 0 {

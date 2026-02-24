@@ -25,6 +25,12 @@ func (r *RemoteUpgrader) Execute() error {
 		return err
 	}
 
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	// Filter to single node if specified
 	if r.flags.NodeFilter != "" {
 		nodes = remotessh.FilterByIP(nodes, r.flags.NodeFilter)

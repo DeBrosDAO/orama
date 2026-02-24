@@ -8,31 +8,34 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
+// SSHOption configures SSH command behavior.
+type SSHOption func(*sshOptions)
+
+type sshOptions struct {
+	agentForward bool
+}
+
+// WithAgentForward enables SSH agent forwarding (-A flag).
+// Used by push fanout so the hub can reach targets via the forwarded agent.
+func WithAgentForward() SSHOption {
+	return func(o *sshOptions) { o.agentForward = true }
+}
+
 // UploadFile copies a local file to a remote host via SCP.
+// Requires node.SSHKey to be set (via PrepareNodeKeys).
 func UploadFile(node inspector.Node, localPath, remotePath string) error {
+	if node.SSHKey == "" {
+		return fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
+	}
+
 	dest := fmt.Sprintf("%s@%s:%s", node.User, node.Host, remotePath)
 
-	var cmd *exec.Cmd
-	if node.SSHKey != "" {
-		cmd = exec.Command("scp",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=10",
-			"-i", node.SSHKey,
-			localPath, dest,
-		)
-	} else {
-		if _, err := exec.LookPath("sshpass"); err != nil {
-			return fmt.Errorf("sshpass not found — install it: brew install hudochenkov/sshpass/sshpass")
-		}
-		cmd = exec.Command("sshpass", "-p", node.Password,
-			"scp",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=10",
-			"-o", "PreferredAuthentications=password",
-			"-o", "PubkeyAuthentication=no",
-			localPath, dest,
-		)
-	}
+	cmd := exec.Command("scp",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		"-i", node.SSHKey,
+		localPath, dest,
+	)
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -45,28 +48,28 @@ func UploadFile(node inspector.Node, localPath, remotePath string) error {
 
 // RunSSHStreaming executes a command on a remote host via SSH,
 // streaming stdout/stderr to the local terminal in real-time.
-func RunSSHStreaming(node inspector.Node, command string) error {
-	var cmd *exec.Cmd
-	if node.SSHKey != "" {
-		cmd = exec.Command("ssh",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=10",
-			"-i", node.SSHKey,
-			fmt.Sprintf("%s@%s", node.User, node.Host),
-			command,
-		)
-	} else {
-		cmd = exec.Command("sshpass", "-p", node.Password,
-			"ssh",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=10",
-			"-o", "PreferredAuthentications=password",
-			"-o", "PubkeyAuthentication=no",
-			fmt.Sprintf("%s@%s", node.User, node.Host),
-			command,
-		)
+// Requires node.SSHKey to be set (via PrepareNodeKeys).
+func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) error {
+	if node.SSHKey == "" {
+		return fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
 	}
 
+	var cfg sshOptions
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	args := []string{
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		"-i", node.SSHKey,
+	}
+	if cfg.agentForward {
+		args = append(args, "-A")
+	}
+	args = append(args, fmt.Sprintf("%s@%s", node.User, node.Host), command)
+
+	cmd := exec.Command("ssh", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
