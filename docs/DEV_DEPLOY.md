@@ -27,87 +27,64 @@ make test
 
 ## Deploying to VPS
 
-Source is always deployed via SCP (no git on VPS). The CLI is the only binary cross-compiled locally; everything else is built from source on the VPS.
+All binaries are pre-compiled locally and shipped as a binary archive. Zero compilation on the VPS.
 
 ### Deploy Workflow
 
 ```bash
-# 1. Cross-compile the CLI for Linux
-make build-linux
+# One-command: build + push + rolling upgrade
+orama node rollout --env testnet
 
-# 2. Generate a source archive (includes CLI binary + full source)
-./scripts/generate-source-archive.sh
-# Creates: /tmp/network-source.tar.gz
+# Or step by step:
 
-# 3. Install on a new VPS (handles SCP, extract, and remote install automatically)
-./bin/orama node install --vps-ip <ip> --nameserver --domain <domain> --base-domain <domain>
+# 1. Build binary archive (cross-compiles all binaries for linux/amd64)
+orama build
+# Creates: /tmp/orama-<version>-linux-amd64.tar.gz
 
-# Or upgrade an existing VPS
-./bin/orama node upgrade --restart
+# 2. Push archive to all nodes (fanout via hub node)
+orama node push --env testnet
+
+# 3. Rolling upgrade (one node at a time, followers first, leader last)
+orama node upgrade --env testnet
 ```
 
-The `orama node install` command automatically:
-1. Uploads the source archive via SCP
-2. Extracts source to `/opt/orama/src` and installs the CLI to `/usr/local/bin/orama`
-3. Runs `orama node install` on the VPS which builds all binaries from source (Go, CoreDNS, Caddy, Olric, etc.)
+### Fresh Node Install
+
+```bash
+# Build the archive first (if not already built)
+orama build
+
+# Install on a new VPS (auto-uploads binary archive, zero compilation)
+orama node install --vps-ip <ip> --nameserver --domain <domain> --base-domain <domain>
+```
+
+The installer auto-detects the binary archive at `/opt/orama/manifest.json` and copies pre-built binaries instead of compiling from source.
 
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
-**NEVER restart all nodes simultaneously.** RQLite uses Raft consensus and requires a majority (quorum) to function. Restarting all nodes at once can cause cluster splits where nodes elect different leaders or form isolated clusters.
+**NEVER restart all nodes simultaneously.** RQLite uses Raft consensus and requires a majority (quorum) to function.
 
-#### Safe Upgrade Procedure (Rolling Restart)
-
-Always upgrade nodes **one at a time**, waiting for each to rejoin before proceeding:
+#### Safe Upgrade Procedure
 
 ```bash
-# 1. Build CLI + generate archive
-make build-linux
-./scripts/generate-source-archive.sh
-# Creates: /tmp/network-source.tar.gz
+# Full rollout (build + push + rolling upgrade, one command)
+orama node rollout --env testnet
 
-# 2. Upload to ONE node first (the "hub" node)
-sshpass -p '<password>' scp /tmp/network-source.tar.gz ubuntu@<hub-ip>:/tmp/
+# Or with more control:
+orama node push --env testnet                     # Push archive to all nodes
+orama node upgrade --env testnet                  # Rolling upgrade (auto-detects leader)
+orama node upgrade --env testnet --node 1.2.3.4   # Single node only
+orama node upgrade --env testnet --delay 60       # 60s between nodes
+```
 
-# 3. Fan out from hub to all other nodes (server-to-server is faster)
-ssh ubuntu@<hub-ip>
-for ip in <ip2> <ip3> <ip4> <ip5> <ip6>; do
-  scp /tmp/network-source.tar.gz ubuntu@$ip:/tmp/
-done
-exit
+The rolling upgrade automatically:
+1. Upgrades **follower** nodes first
+2. Upgrades the **leader** last
+3. Waits a configurable delay between nodes (default: 30s)
 
-# 4. Extract on ALL nodes (can be done in parallel, no restart yet)
-for ip in <ip1> <ip2> <ip3> <ip4> <ip5> <ip6>; do
-  ssh ubuntu@$ip 'sudo bash -s' < scripts/extract-deploy.sh
-done
-
-# 5. Find the RQLite leader (upgrade this one LAST)
-orama monitor report --env <env>
-# Check "rqlite_leader" in summary output
-
-# 6. Upgrade FOLLOWER nodes one at a time
-ssh ubuntu@<follower-ip> 'sudo orama node stop && sudo orama node upgrade --restart'
-
-# IMPORTANT: Verify FULL health before proceeding to next node:
-orama monitor report --env <env> --node <follower-ip>
-# Check:
-#   - All services active, 0 restart loops
-#   - RQLite: Follower state, applied_index matches cluster
-#   - All RQLite peers reachable (no partition alerts)
-#   - WireGuard peers connected with recent handshakes
-# Only proceed to next node after ALL checks pass.
-#
-# NOTE: After restarting a node, other nodes may briefly report it as
-# "unreachable" with "broken pipe" errors. This is normal — Raft TCP
-# connections need ~1-2 minutes to re-establish. Wait and re-check
-# before escalating.
-
-# Repeat for each follower...
-
-# 7. Upgrade the LEADER node last
-ssh ubuntu@<leader-ip> 'sudo orama node stop && sudo orama node upgrade --restart'
-
-# Verify the new leader was elected and cluster is fully healthy:
-orama monitor report --env <env>
+After each node, verify health:
+```bash
+orama monitor report --env testnet
 ```
 
 #### What NOT to Do
@@ -121,31 +98,38 @@ orama monitor report --env <env>
 
 If nodes get stuck in "Candidate" state or show "leader not found" errors:
 
-1. Identify which node has the most recent data (usually the old leader)
-2. Keep that node running as the new leader
-3. On each other node, clear RQLite data and restart:
-   ```bash
-   sudo orama node stop
-   sudo rm -rf /opt/orama/.orama/data/rqlite
-   sudo systemctl start orama-node
-   ```
-4. The node should automatically rejoin using its configured `rqlite_join_address`
-
-If automatic rejoin fails, the node may have started without the `-join` flag. Check:
 ```bash
-ps aux | grep rqlited
-# Should include: -join 10.0.0.1:7001 (or similar)
+# Recover the Raft cluster (specify the node with highest commit index as leader)
+orama node recover-raft --env testnet --leader 1.2.3.4
 ```
 
-If `-join` is missing, the node bootstrapped standalone. You'll need to either:
-- Restart orama-node (it should detect empty data and use join)
-- Or do a full cluster rebuild from CLEAN_NODE.md
+This will:
+1. Stop orama-node on ALL nodes
+2. Backup + delete raft/ on non-leader nodes
+3. Start the leader, wait for Leader state
+4. Start remaining nodes in batches
+5. Verify cluster health
 
-### Deploying to Multiple Nodes
+### Cleaning Nodes for Reinstallation
 
-To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS IP.
+```bash
+# Wipe all data and services (preserves Anyone relay keys)
+orama node clean --env testnet --force
 
-**Important:** When using `--restart`, do nodes one at a time (see "Upgrading a Multi-Node Cluster" above).
+# Also remove shared binaries (rqlited, ipfs, caddy, etc.)
+orama node clean --env testnet --nuclear --force
+
+# Single node only
+orama node clean --env testnet --node 1.2.3.4 --force
+```
+
+### Push Options
+
+```bash
+orama node push --env devnet                     # Fanout via hub (default, fastest)
+orama node push --env testnet --node 1.2.3.4     # Single node
+orama node push --env testnet --direct            # Sequential, no fanout
+```
 
 ### CLI Flags Reference
 
@@ -189,10 +173,55 @@ To deploy to all nodes, repeat steps 3-5 (dev) or 3-4 (production) for each VPS 
 
 | Flag | Description |
 |------|-------------|
-| `--restart` | Restart all services after upgrade |
+| `--restart` | Restart all services after upgrade (local mode) |
+| `--env <env>` | Target environment for remote rolling upgrade |
+| `--node <ip>` | Upgrade a single node only |
+| `--delay <seconds>` | Delay between nodes during rolling upgrade (default: 30) |
 | `--anyone-relay` | Enable Anyone relay (same flags as install) |
 | `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited) |
 | `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
+
+#### `orama build`
+
+| Flag | Description |
+|------|-------------|
+| `--arch <arch>` | Target architecture (default: amd64) |
+| `--output <path>` | Output archive path |
+| `--verbose` | Verbose build output |
+
+#### `orama node push`
+
+| Flag | Description |
+|------|-------------|
+| `--env <env>` | Target environment (required) |
+| `--node <ip>` | Push to a single node only |
+| `--direct` | Sequential upload (no hub fanout) |
+
+#### `orama node rollout`
+
+| Flag | Description |
+|------|-------------|
+| `--env <env>` | Target environment (required) |
+| `--no-build` | Skip the build step |
+| `--yes` | Skip confirmation |
+| `--delay <seconds>` | Delay between nodes (default: 30) |
+
+#### `orama node clean`
+
+| Flag | Description |
+|------|-------------|
+| `--env <env>` | Target environment (required) |
+| `--node <ip>` | Clean a single node only |
+| `--nuclear` | Also remove shared binaries |
+| `--force` | Skip confirmation (DESTRUCTIVE) |
+
+#### `orama node recover-raft`
+
+| Flag | Description |
+|------|-------------|
+| `--env <env>` | Target environment (required) |
+| `--leader <ip>` | Leader node IP — highest commit index (required) |
+| `--force` | Skip confirmation (DESTRUCTIVE) |
 
 #### `orama node` (Service Management)
 

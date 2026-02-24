@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // IPFSClusterInstaller handles IPFS Cluster Service installation
@@ -42,7 +44,7 @@ func (ici *IPFSClusterInstaller) Install() error {
 		return fmt.Errorf("go not found - required to install IPFS Cluster. Please install Go first")
 	}
 
-	cmd := exec.Command("go", "install", "github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@latest")
+	cmd := exec.Command("go", "install", fmt.Sprintf("github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@%s", constants.IPFSClusterVersion))
 	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install IPFS Cluster: %w", err)

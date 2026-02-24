@@ -1,5 +1,11 @@
 #!/bin/bash
-# Extracts /tmp/network-source.tar.gz and places the CLI binary.
+# Extracts archives and places binaries on VPS nodes.
+#
+# Supports two archive formats:
+#   1. Binary archive (from `orama build`): contains bin/, systemd/, manifest.json
+#      → Extracts to /opt/orama/, installs CLI from /opt/orama/bin/orama
+#   2. Source archive (legacy): contains Go source code + bin-linux/orama
+#      → Extracts to /opt/orama/src/, installs CLI from bin-linux/orama
 #
 # Local mode (run directly on VPS):
 #   sudo bash /opt/orama/src/scripts/extract-deploy.sh
@@ -11,33 +17,85 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ARCHIVE="/tmp/network-source.tar.gz"
 SRC_DIR="/opt/orama/src"
 BIN_DIR="/opt/orama/bin"
 CONF="$SCRIPT_DIR/remote-nodes.conf"
 
+# Detect archive: binary archive has manifest.json at root
+detect_archive() {
+    local archive="$1"
+    if tar tzf "$archive" 2>/dev/null | grep -q "^manifest\.json$"; then
+        echo "binary"
+    else
+        echo "source"
+    fi
+}
+
+# Find archive: check for binary archive first, then source archive
+find_archive() {
+    # Check for binary archive (newest orama-*-linux-*.tar.gz in /tmp)
+    local binary_archive
+    binary_archive=$(ls -t /tmp/orama-*-linux-*.tar.gz 2>/dev/null | head -1)
+    if [ -n "$binary_archive" ]; then
+        echo "$binary_archive"
+        return
+    fi
+
+    # Fall back to source archive
+    if [ -f "/tmp/network-source.tar.gz" ]; then
+        echo "/tmp/network-source.tar.gz"
+        return
+    fi
+
+    echo ""
+}
+
 # --- Local mode (no args) ---
 if [ $# -eq 0 ]; then
-    if [ ! -f "$ARCHIVE" ]; then
-        echo "Error: $ARCHIVE not found"
+    ARCHIVE=$(find_archive)
+    if [ -z "$ARCHIVE" ]; then
+        echo "Error: No archive found in /tmp/"
+        echo "  Expected: /tmp/orama-*-linux-*.tar.gz (binary) or /tmp/network-source.tar.gz (source)"
         exit 1
     fi
 
-    echo "Extracting source..."
-    rm -rf "$SRC_DIR"
-    mkdir -p "$SRC_DIR" "$BIN_DIR"
-    tar xzf "$ARCHIVE" -C "$SRC_DIR"
+    FORMAT=$(detect_archive "$ARCHIVE")
+    echo "Archive: $ARCHIVE (format: $FORMAT)"
 
-    # Install CLI binary
-    if [ -f "$SRC_DIR/bin-linux/orama" ]; then
-        cp "$SRC_DIR/bin-linux/orama" /usr/local/bin/orama
-        chmod +x /usr/local/bin/orama
-        echo "  ✓ CLI installed: /usr/local/bin/orama"
+    if [ "$FORMAT" = "binary" ]; then
+        # Binary archive → extract to /opt/orama/
+        echo "Extracting binary archive..."
+        mkdir -p /opt/orama
+        tar xzf "$ARCHIVE" -C /opt/orama
+
+        # Install CLI binary
+        if [ -f "$BIN_DIR/orama" ]; then
+            cp "$BIN_DIR/orama" /usr/local/bin/orama
+            chmod +x /usr/local/bin/orama
+            echo "  ✓ CLI installed: /usr/local/bin/orama"
+        else
+            echo "  ⚠️  CLI binary not found in archive (bin/orama)"
+        fi
+
+        echo "Done. Ready for: sudo orama node install --vps-ip <ip> ..."
     else
-        echo "  ⚠️  CLI binary not found in archive (bin-linux/orama)"
-    fi
+        # Source archive → extract to /opt/orama/src/ (legacy)
+        echo "Extracting source archive..."
+        rm -rf "$SRC_DIR"
+        mkdir -p "$SRC_DIR" "$BIN_DIR"
+        tar xzf "$ARCHIVE" -C "$SRC_DIR"
 
-    echo "Done. Ready for: sudo orama install --vps-ip <ip> ..."
+        # Install CLI binary
+        if [ -f "$SRC_DIR/bin-linux/orama" ]; then
+            cp "$SRC_DIR/bin-linux/orama" /usr/local/bin/orama
+            chmod +x /usr/local/bin/orama
+            echo "  ✓ CLI installed: /usr/local/bin/orama"
+        else
+            echo "  ⚠️  CLI binary not found in archive (bin-linux/orama)"
+        fi
+
+        echo "Done. Ready for: sudo orama node install --vps-ip <ip> ..."
+    fi
     exit 0
 fi
 

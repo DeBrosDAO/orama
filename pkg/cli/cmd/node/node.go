@@ -26,4 +26,8 @@ func init() {
 	Cmd.AddCommand(migrateCmd)
 	Cmd.AddCommand(doctorCmd)
 	Cmd.AddCommand(reportCmd)
+	Cmd.AddCommand(pushCmd)
+	Cmd.AddCommand(rolloutCmd)
+	Cmd.AddCommand(cleanCmd)
+	Cmd.AddCommand(recoverRaftCmd)
 }

@@ -9,6 +9,7 @@ import (
 	// Command groups
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/app"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/authcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/buildcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/pkg/cli/cmd/deploy"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/envcmd"
@@ -82,6 +83,9 @@ and interacting with the Orama distributed network.`,
 
 	// Serverless function commands
 	rootCmd.AddCommand(functioncmd.Cmd)
+
+	// Build command (cross-compile binary archive)
+	rootCmd.AddCommand(buildcmd.Cmd)
 
 	return rootCmd
 }

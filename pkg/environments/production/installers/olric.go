@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // OlricInstaller handles Olric server installation
@@ -17,7 +19,7 @@ type OlricInstaller struct {
 func NewOlricInstaller(arch string, logWriter io.Writer) *OlricInstaller {
 	return &OlricInstaller{
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
-		version:       "v0.7.0",
+		version:       constants.OlricVersion,
 	}
 }
 

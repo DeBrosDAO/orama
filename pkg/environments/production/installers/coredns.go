@@ -10,11 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 const (
-	coreDNSVersion = "1.12.0"
-	coreDNSRepo    = "https://github.com/coredns/coredns.git"
+	coreDNSRepo = "https://github.com/coredns/coredns.git"
 )
 
 // CoreDNSInstaller handles CoreDNS installation with RQLite plugin
@@ -29,7 +30,7 @@ type CoreDNSInstaller struct {
 func NewCoreDNSInstaller(arch string, logWriter io.Writer, oramaHome string) *CoreDNSInstaller {
 	return &CoreDNSInstaller{
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
-		version:       coreDNSVersion,
+		version:       constants.CoreDNSVersion,
 		oramaHome:     oramaHome,
 		rqlitePlugin:  filepath.Join(oramaHome, "src", "pkg", "coredns", "rqlite"),
 	}
