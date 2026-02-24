@@ -72,6 +72,13 @@ func execute(flags *Flags) error {
 		return err
 	}
 
+	// Prepare wallet-derived SSH keys
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	// Filter to single node if specified
 	if flags.Node != "" {
 		nodes = remotessh.FilterByIP(nodes, flags.Node)
@@ -84,6 +91,11 @@ func execute(flags *Flags) error {
 
 	if flags.Direct || len(nodes) == 1 {
 		return pushDirect(archivePath, nodes)
+	}
+
+	// Load keys into ssh-agent for fanout forwarding
+	if err := remotessh.LoadAgentKeys(nodes); err != nil {
+		return fmt.Errorf("load agent keys for fanout: %w", err)
 	}
 
 	return pushFanout(archivePath, nodes)
@@ -111,7 +123,7 @@ func pushDirect(archivePath string, nodes []inspector.Node) error {
 	return nil
 }
 
-// pushFanout uploads to a hub node, then fans out to all others via server-to-server SCP.
+// pushFanout uploads to a hub node, then fans out to all others via agent forwarding.
 func pushFanout(archivePath string, nodes []inspector.Node) error {
 	hub := remotessh.PickHubNode(nodes)
 	remotePath := "/tmp/" + filepath.Base(archivePath)
@@ -127,7 +139,7 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 	}
 	fmt.Printf("  ✓ hub %s done\n\n", hub.Host)
 
-	// Step 2: Fan out from hub to remaining nodes in parallel
+	// Step 2: Fan out from hub to remaining nodes in parallel (via agent forwarding)
 	remaining := make([]inspector.Node, 0, len(nodes)-1)
 	for _, n := range nodes {
 		if n.Host != hub.Host {
@@ -150,11 +162,11 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 		go func(idx int, target inspector.Node) {
 			defer wg.Done()
 
-			// SCP from hub to target, then extract
-			scpCmd := fmt.Sprintf("sshpass -p '%s' scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o PreferredAuthentications=password -o PubkeyAuthentication=no %s %s@%s:%s",
-				target.Password, remotePath, target.User, target.Host, remotePath)
+			// SCP from hub to target (agent forwarding serves the key)
+			scpCmd := fmt.Sprintf("scp -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 %s %s@%s:%s",
+				remotePath, target.User, target.Host, remotePath)
 
-			if err := remotessh.RunSSHStreaming(hub, scpCmd); err != nil {
+			if err := remotessh.RunSSHStreaming(hub, scpCmd, remotessh.WithAgentForward()); err != nil {
 				errors[idx] = fmt.Errorf("fanout to %s failed: %w", target.Host, err)
 				return
 			}
@@ -196,16 +208,17 @@ func extractOnNode(node inspector.Node, remotePath string) error {
 }
 
 // extractOnNodeVia extracts the archive on a target node by SSHing through the hub.
+// Uses agent forwarding so the hub can authenticate to the target.
 func extractOnNodeVia(hub, target inspector.Node, remotePath string) error {
 	sudo := remotessh.SudoPrefix(target)
 	extractCmd := fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama && %srm -f %s",
 		sudo, sudo, remotePath, sudo, remotePath)
 
-	// SSH from hub to target to extract
-	sshCmd := fmt.Sprintf("sshpass -p '%s' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o PreferredAuthentications=password -o PubkeyAuthentication=no %s@%s '%s'",
-		target.Password, target.User, target.Host, extractCmd)
+	// SSH from hub to target to extract (agent forwarding serves the key)
+	sshCmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 %s@%s '%s'",
+		target.User, target.Host, extractCmd)
 
-	return remotessh.RunSSHStreaming(hub, sshCmd)
+	return remotessh.RunSSHStreaming(hub, sshCmd, remotessh.WithAgentForward())
 }
 
 // findNewestArchive finds the newest binary archive in /tmp/.

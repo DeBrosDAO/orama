@@ -70,6 +70,12 @@ func execute(flags *Flags) error {
 		return err
 	}
 
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	// Find leader node
 	leaderNodes := remotessh.FilterByIP(nodes, flags.Leader)
 	if len(leaderNodes) == 0 {

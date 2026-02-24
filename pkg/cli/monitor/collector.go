@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/production/report"
+	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -33,6 +34,13 @@ func CollectOnce(ctx context.Context, cfg CollectorConfig) (*ClusterSnapshot, er
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("no nodes found for env %q", cfg.Env)
 	}
+
+	// Prepare wallet-derived SSH keys
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return nil, fmt.Errorf("prepare SSH keys: %w", err)
+	}
+	defer cleanup()
 
 	timeout := cfg.Timeout
 	if timeout == 0 {
@@ -87,7 +95,7 @@ func collectNodeReport(ctx context.Context, node inspector.Node, timeout time.Du
 		return cs
 	}
 
-	// Enrich with node metadata from remote-nodes.conf
+	// Enrich with node metadata from nodes.conf
 	if rpt.Hostname == "" {
 		rpt.Hostname = node.Host
 	}
