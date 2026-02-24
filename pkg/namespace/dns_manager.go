@@ -7,7 +7,6 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -57,23 +56,16 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 
 	// Create A records for each node IP
 	for _, ip := range nodeIPs {
-		recordID := uuid.New().String()
 		insertQuery := `
 			INSERT INTO dns_records (
-				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`
 		now := time.Now()
 		_, err := drm.db.Exec(internalCtx, insertQuery,
-			recordID,
-			fqdn,
-			"A",
-			ip,
-			60,                            // 60 second TTL for quick failover
-			"namespace:"+namespaceName,    // Track ownership with namespace prefix
-			"cluster-manager",             // Created by the cluster manager
-			now,
-			now,
+			fqdn, "A", ip, 60,
+			"namespace:"+namespaceName, "cluster-manager",
+			now, now,
 		)
 		if err != nil {
 			return &ClusterError{
@@ -91,23 +83,16 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 	_, _ = drm.db.Exec(internalCtx, deleteQuery, wildcardFqdn, "namespace:"+namespaceName)
 
 	for _, ip := range nodeIPs {
-		recordID := uuid.New().String()
 		insertQuery := `
 			INSERT INTO dns_records (
-				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`
 		now := time.Now()
 		_, err := drm.db.Exec(internalCtx, insertQuery,
-			recordID,
-			wildcardFqdn,
-			"A",
-			ip,
-			60,
-			"namespace:"+namespaceName,
-			"cluster-manager",
-			now,
-			now,
+			wildcardFqdn, "A", ip, 60,
+			"namespace:"+namespaceName, "cluster-manager",
+			now, now,
 		)
 		if err != nil {
 			drm.logger.Warn("Failed to create wildcard DNS record",
@@ -224,14 +209,13 @@ func (drm *DNSRecordManager) AddNamespaceRecord(ctx context.Context, namespaceNa
 
 	now := time.Now()
 	for _, f := range []string{fqdn, wildcardFqdn} {
-		recordID := uuid.New().String()
 		insertQuery := `
 			INSERT INTO dns_records (
-				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`
 		_, err := drm.db.Exec(internalCtx, insertQuery,
-			recordID, f, "A", ip, 60,
+			f, "A", ip, 60,
 			"namespace:"+namespaceName, "cluster-manager", now, now,
 		)
 		if err != nil {
@@ -265,7 +249,7 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 
 	// Update both the main record and wildcard record
 	for _, f := range []string{fqdn, wildcardFqdn} {
-		updateQuery := `UPDATE dns_records SET value = ?, is_active = TRUE, updated_at = ? WHERE fqdn = ? AND value = ?`
+		updateQuery := `UPDATE dns_records SET value = ?, is_active = 1, updated_at = ? WHERE fqdn = ? AND value = ?`
 		_, err := drm.db.Exec(internalCtx, updateQuery, newIP, time.Now(), f, oldIP)
 		if err != nil {
 			drm.logger.Warn("Failed to update DNS record",
@@ -322,14 +306,13 @@ func (drm *DNSRecordManager) CreateTURNRecords(ctx context.Context, namespaceNam
 	// Create A records for each TURN node IP
 	now := time.Now()
 	for _, ip := range turnIPs {
-		recordID := uuid.New().String()
 		insertQuery := `
 			INSERT INTO dns_records (
-				id, fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`
 		_, err := drm.db.Exec(internalCtx, insertQuery,
-			recordID, fqdn, "A", ip, 60,
+			fqdn, "A", ip, 60,
 			"namespace-turn:"+namespaceName,
 			"cluster-manager",
 			now, now,
@@ -383,7 +366,7 @@ func (drm *DNSRecordManager) EnableNamespaceRecord(ctx context.Context, namespac
 	)
 
 	for _, f := range []string{fqdn, wildcardFqdn} {
-		updateQuery := `UPDATE dns_records SET is_active = TRUE, updated_at = ? WHERE fqdn = ? AND value = ?`
+		updateQuery := `UPDATE dns_records SET is_active = 1, updated_at = ? WHERE fqdn = ? AND value = ?`
 		_, _ = drm.db.Exec(internalCtx, updateQuery, time.Now(), f, ip)
 	}
 
