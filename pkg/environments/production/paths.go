@@ -11,4 +11,10 @@ const (
 	OramaSecrets = "/opt/orama/.orama/secrets"
 	OramaData    = "/opt/orama/.orama/data"
 	OramaLogs    = "/opt/orama/.orama/logs"
+
+	// Pre-built binary archive paths (created by `orama build`)
+	OramaManifest    = "/opt/orama/manifest.json"
+	OramaArchiveBin  = "/opt/orama/bin"       // Pre-built binaries
+	OramaSystemdDir  = "/opt/orama/systemd"   // Namespace service templates
+	OramaPackagesDir = "/opt/orama/packages"  // .deb packages (e.g., anon.deb)
 )

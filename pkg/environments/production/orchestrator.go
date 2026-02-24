@@ -259,10 +259,47 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	return nil
 }
 
-// Phase2bInstallBinaries installs external binaries and Orama components
+// Phase2bInstallBinaries installs external binaries and Orama components.
+// Auto-detects pre-built mode if /opt/orama/manifest.json exists.
 func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	ps.logf("Phase 2b: Installing binaries...")
 
+	// Auto-detect pre-built binary archive
+	if HasPreBuiltArchive() {
+		manifest, err := LoadPreBuiltManifest()
+		if err != nil {
+			ps.logf("  ⚠️  Pre-built manifest found but unreadable: %v", err)
+			ps.logf("  Falling back to source mode...")
+			if err := ps.installFromSource(); err != nil {
+				return err
+			}
+		} else {
+			if err := ps.installFromPreBuilt(manifest); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Source mode: compile everything on the VPS (original behavior)
+		if err := ps.installFromSource(); err != nil {
+			return err
+		}
+	}
+
+	// Anyone relay/client configuration runs after BOTH paths.
+	// Pre-built mode installs the anon binary via .deb/apt;
+	// source mode installs it via the relay installer's Install().
+	// Configuration (anonrc, bandwidth, migration) is always needed.
+	if err := ps.configureAnyone(); err != nil {
+		ps.logf("  ⚠️  Anyone configuration warning: %v", err)
+	}
+
+	ps.logf("  ✓ All binaries installed")
+	return nil
+}
+
+// installFromSource installs binaries by compiling from source on the VPS.
+// This is the original Phase2bInstallBinaries logic, preserved as fallback.
+func (ps *ProductionSetup) installFromSource() error {
 	// Install system dependencies (always needed for runtime libs)
 	if err := ps.binaryInstaller.InstallSystemDependencies(); err != nil {
 		ps.logf("  ⚠️  System dependencies warning: %v", err)
@@ -307,7 +344,12 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  IPFS Cluster install warning: %v", err)
 	}
 
-	// Install Anyone (client or relay based on configuration) — apt-based, not Go
+	return nil
+}
+
+// configureAnyone handles Anyone relay/client installation and configuration.
+// This runs after both pre-built and source mode binary installation.
+func (ps *ProductionSetup) configureAnyone() error {
 	if ps.IsAnyoneRelay() {
 		ps.logf("  Installing Anyone relay (operator mode)...")
 		relayConfig := installers.AnyoneRelayConfig{
@@ -351,7 +393,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 			}
 		}
 
-		// Install the relay
+		// Install the relay (apt-based, not Go — idempotent if already installed via .deb)
 		if err := relayInstaller.Install(); err != nil {
 			ps.logf("  ⚠️  Anyone relay install warning: %v", err)
 		}
@@ -364,7 +406,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  Installing Anyone client-only mode (SOCKS5 proxy)...")
 		clientInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, installers.AnyoneRelayConfig{})
 
-		// Install the anon binary (same apt package as relay)
+		// Install the anon binary (same apt package as relay — idempotent)
 		if err := clientInstaller.Install(); err != nil {
 			ps.logf("  ⚠️  Anyone client install warning: %v", err)
 		}
@@ -375,7 +417,6 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		}
 	}
 
-	ps.logf("  ✓ All binaries installed")
 	return nil
 }
 

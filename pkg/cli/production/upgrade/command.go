@@ -14,7 +14,17 @@ func Handle(args []string) {
 		os.Exit(1)
 	}
 
-	// Check root privileges
+	// Remote rolling upgrade when --env is specified
+	if flags.Env != "" {
+		remote := NewRemoteUpgrader(flags)
+		if err := remote.Execute(); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Local upgrade: requires root
 	if os.Geteuid() != 0 {
 		fmt.Fprintf(os.Stderr, "❌ Production upgrade must be run as root (use sudo)\n")
 		os.Exit(1)

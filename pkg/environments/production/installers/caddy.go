@@ -7,11 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 const (
-	caddyVersion = "2.10.2"
-	xcaddyRepo   = "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
+	xcaddyRepo = "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
 )
 
 // CaddyInstaller handles Caddy installation with custom DNS module
@@ -26,7 +27,7 @@ type CaddyInstaller struct {
 func NewCaddyInstaller(arch string, logWriter io.Writer, oramaHome string) *CaddyInstaller {
 	return &CaddyInstaller{
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
-		version:       caddyVersion,
+		version:       constants.CaddyVersion,
 		oramaHome:     oramaHome,
 		dnsModule:     filepath.Join(oramaHome, "src", "pkg", "caddy", "dns", "orama"),
 	}
@@ -356,7 +357,7 @@ func (ci *CaddyInstaller) generateGoMod() string {
 go 1.22
 
 require (
-	github.com/caddyserver/caddy/v2 v2.` + caddyVersion[2:] + `
+	github.com/caddyserver/caddy/v2 v2.` + constants.CaddyVersion[2:] + `
 	github.com/libdns/libdns v1.1.0
 )
 `
