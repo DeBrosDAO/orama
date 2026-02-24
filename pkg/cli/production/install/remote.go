@@ -40,7 +40,7 @@ func NewRemoteOrchestrator(flags *Flags) (*RemoteOrchestrator, error) {
 // Execute runs the remote install process.
 // If a binary archive exists locally, uploads and extracts it on the VPS
 // so Phase2b auto-detects pre-built mode. Otherwise, source must already
-// be uploaded via: ./scripts/upload-source.sh <vps-ip>
+// be present on the VPS.
 func (r *RemoteOrchestrator) Execute() error {
 	fmt.Printf("Installing on %s via SSH (%s@%s)...\n\n", r.flags.VpsIP, r.node.User, r.node.Host)
 
@@ -75,9 +75,9 @@ func (r *RemoteOrchestrator) uploadBinaryArchive() error {
 		return fmt.Errorf("failed to upload archive: %w", err)
 	}
 
-	// Extract to /opt/orama/ on VPS
+	// Extract to /opt/orama/ and install CLI to PATH
 	fmt.Printf("Extracting archive on VPS...\n")
-	extractCmd := fmt.Sprintf("%smkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s && echo '  ✓ Archive extracted to /opt/orama/'",
+	extractCmd := fmt.Sprintf("%smkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s && cp /opt/orama/bin/orama /usr/local/bin/orama && chmod +x /usr/local/bin/orama && echo '  ✓ Archive extracted, CLI installed'",
 		r.sudoPrefix(), remoteTmp, remoteTmp)
 	if err := runSSHStreaming(r.node, extractCmd); err != nil {
 		return fmt.Errorf("failed to extract archive on VPS: %w", err)
