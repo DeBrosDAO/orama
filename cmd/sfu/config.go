@@ -46,8 +46,9 @@ func parseSFUConfig(logger *logging.ColoredLogger) *sfu.Config {
 	}
 
 	type yamlTURNServer struct {
-		Host string `yaml:"host"`
-		Port int    `yaml:"port"`
+		Host   string `yaml:"host"`
+		Port   int    `yaml:"port"`
+		Secure bool   `yaml:"secure"`
 	}
 
 	type yamlCfg struct {
@@ -79,8 +80,9 @@ func parseSFUConfig(logger *logging.ColoredLogger) *sfu.Config {
 	var turnServers []sfu.TURNServerConfig
 	for _, ts := range y.TURNServers {
 		turnServers = append(turnServers, sfu.TURNServerConfig{
-			Host: ts.Host,
-			Port: ts.Port,
+			Host:   ts.Host,
+			Port:   ts.Port,
+			Secure: ts.Secure,
 		})
 	}
 
