@@ -101,6 +101,7 @@ type ParticipantLeftData struct {
 // TrackAddedData is sent when a new track is available
 type TrackAddedData struct {
 	PeerID   string `json:"peerId"`
+	UserID   string `json:"userId"`
 	TrackID  string `json:"trackId"`
 	StreamID string `json:"streamId"`
 	Kind     string `json:"kind"` // "audio" or "video"
@@ -108,9 +109,10 @@ type TrackAddedData struct {
 
 // TrackRemovedData is sent when a track is removed
 type TrackRemovedData struct {
-	PeerID   string `json:"peerId"`
-	TrackID  string `json:"trackId"`
-	Kind     string `json:"kind"`
+	PeerID  string `json:"peerId"`
+	UserID  string `json:"userId"`
+	TrackID string `json:"trackId"`
+	Kind    string `json:"kind"`
 }
 
 // TURNCredentialsData provides TURN server credentials

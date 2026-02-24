@@ -33,6 +33,7 @@ var (
 // publishedTrack holds a local track being forwarded from a remote source.
 type publishedTrack struct {
 	sourcePeerID    string
+	sourceUserID    string
 	localTrack      *webrtc.TrackLocalStaticRTP
 	remoteTrackSSRC uint32
 	kind            string
@@ -294,6 +295,7 @@ func (r *Room) RemovePeer(peerID string) {
 	for _, trackID := range removed {
 		r.broadcastMessage(peerID, NewServerMessage(MessageTypeTrackRemoved, &TrackRemovedData{
 			PeerID:  peerID,
+			UserID:  peer.UserID,
 			TrackID: trackID,
 		}))
 	}
@@ -348,10 +350,19 @@ func (r *Room) BroadcastTrack(sourcePeerID string, track *webrtc.TrackRemote) {
 		return
 	}
 
+	// Look up source peer's UserID
+	r.peersMu.RLock()
+	var sourceUserID string
+	if sourcePeer, ok := r.peers[sourcePeerID]; ok {
+		sourceUserID = sourcePeer.UserID
+	}
+	r.peersMu.RUnlock()
+
 	// Store for future joiners
 	r.publishedTracksMu.Lock()
 	r.publishedTracks[localTrack.ID()] = &publishedTrack{
 		sourcePeerID:    sourcePeerID,
+		sourceUserID:    sourceUserID,
 		localTrack:      localTrack,
 		remoteTrackSSRC: uint32(track.SSRC()),
 		kind:            track.Kind().String(),
@@ -385,6 +396,7 @@ func (r *Room) BroadcastTrack(sourcePeerID string, track *webrtc.TrackRemote) {
 		}
 		peer.SendMessage(NewServerMessage(MessageTypeTrackAdded, &TrackAddedData{
 			PeerID:   sourcePeerID,
+			UserID:   sourceUserID,
 			TrackID:  localTrack.ID(),
 			StreamID: localTrack.StreamID(),
 			Kind:     track.Kind().String(),
@@ -417,6 +429,7 @@ func (r *Room) SendExistingTracksTo(peer *Peer) {
 		}
 		peer.SendMessage(NewServerMessage(MessageTypeTrackAdded, &TrackAddedData{
 			PeerID:   pt.sourcePeerID,
+			UserID:   pt.sourceUserID,
 			TrackID:  pt.localTrack.ID(),
 			StreamID: pt.localTrack.StreamID(),
 			Kind:     pt.kind,
