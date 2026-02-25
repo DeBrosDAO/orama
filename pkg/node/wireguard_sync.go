@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
 
@@ -166,13 +167,13 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 	// Clean up stale entries for this public IP with a different node_id.
 	// This prevents ghost peers from previous installs or from the temporary
 	// "node-10.0.0.X" ID that the join handler creates.
-	if _, err := db.ExecContext(ctx,
+	if _, err := rqlite.SafeExecContext(db, ctx,
 		"DELETE FROM wireguard_peers WHERE public_ip = ? AND node_id != ?",
 		publicIP, nodeID); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to clean stale WG entries", zap.Error(err))
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err = rqlite.SafeExecContext(db, ctx,
 		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id) VALUES (?, ?, ?, ?, ?, ?)",
 		nodeID, wgIP, localPubKey, publicIP, 51820, ipfsPeerID)
 	if err != nil {
