@@ -63,7 +63,7 @@ test-e2e-quick:
 
 .PHONY: build clean test deps tidy fmt vet lint install-hooks upload-devnet upload-testnet redeploy-devnet redeploy-testnet release health
 
-VERSION := 0.112.7
+VERSION := 0.112.8
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
