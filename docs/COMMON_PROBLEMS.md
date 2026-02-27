@@ -32,7 +32,7 @@ wg set wg0 peer <NodeA-pubkey> remove
 wg set wg0 peer <NodeA-pubkey> endpoint <NodeA-public-ip>:51820 allowed-ips <NodeA-wg-ip>/32 persistent-keepalive 25
 ```
 
-Then restart services: `sudo orama prod restart`
+Then restart services: `sudo orama node restart`
 
 You can find peer public keys with `wg show wg0`.
 
@@ -46,7 +46,7 @@ cat /opt/orama/.orama/data/namespaces/<name>/configs/olric-*.yaml
 
 If `bindAddr` is `0.0.0.0`, the node will try to bind to IPv6 on dual-stack hosts, breaking memberlist gossip.
 
-**Fix:** Edit the YAML to use the node's WireGuard IP (run `ip addr show wg0` to find it), then restart: `sudo orama prod restart`
+**Fix:** Edit the YAML to use the node's WireGuard IP (run `ip addr show wg0` to find it), then restart: `sudo orama node restart`
 
 This was fixed in code (BindAddr validation in `SpawnOlric`), so new namespaces won't have this issue.
 
@@ -82,7 +82,7 @@ olric_servers:
   - "10.0.0.Z:10002"
 ```
 
-Then: `sudo orama prod restart`
+Then: `sudo orama node restart`
 
 This was fixed in code, so new namespaces get the correct config.
 
@@ -90,7 +90,7 @@ This was fixed in code, so new namespaces get the correct config.
 
 ## 3. Namespace not restoring after restart (missing cluster-state.json)
 
-**Symptom:** After `orama prod restart`, the namespace services don't come back because `RestoreLocalClustersFromDisk` has no state file.
+**Symptom:** After `orama node restart`, the namespace services don't come back because `RestoreLocalClustersFromDisk` has no state file.
 
 **Check:**
 
@@ -117,9 +117,9 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 ## 4. Namespace gateway processes not restarting after upgrade
 
-**Symptom:** After `orama upgrade --restart` or `orama prod restart`, namespace gateway/olric/rqlite services don't start.
+**Symptom:** After `orama upgrade --restart` or `orama node restart`, namespace gateway/olric/rqlite services don't start.
 
-**Cause:** `orama prod stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
+**Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
 
 **Fix:** Re-enable the services before restarting:
 
@@ -127,7 +127,7 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 systemctl enable orama-namespace-rqlite@<name>.service
 systemctl enable orama-namespace-olric@<name>.service
 systemctl enable orama-namespace-gateway@<name>.service
-sudo orama prod restart
+sudo orama node restart
 ```
 
 This was fixed in code — the upgrade orchestrator now re-enables `@` services before restarting.
@@ -152,7 +152,7 @@ ssh -n user@host 'command'
 
 ## General Debugging Tips
 
-- **Always use `sudo orama prod restart`** instead of raw `systemctl` commands
+- **Always use `sudo orama node restart`** instead of raw `systemctl` commands
 - **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
 - **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes

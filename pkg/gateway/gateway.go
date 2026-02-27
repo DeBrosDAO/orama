@@ -31,6 +31,7 @@ import (
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
 	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
+	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
@@ -161,6 +162,9 @@ type Gateway struct {
 
 	// Shared HTTP transport for proxy connections (connection pooling)
 	proxyTransport *http.Transport
+
+	// Vault proxy handlers
+	vaultHandlers *vaulthandlers.Handlers
 
 	// Namespace health state (local service probes + hourly reconciliation)
 	nsHealth *namespaceHealthState
@@ -395,6 +399,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	if deps.ORMClient != nil {
 		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
+		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
 	}
 
 	// Initialize deployment system

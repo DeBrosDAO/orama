@@ -573,6 +573,14 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 	ps.logf("  ✓ Olric config generated")
 
+	// Vault Guardian config
+	vaultConfig := ps.configGenerator.GenerateVaultConfig(vpsIP)
+	vaultConfigPath := filepath.Join(ps.oramaDir, "data", "vault", "vault.yaml")
+	if err := os.WriteFile(vaultConfigPath, []byte(vaultConfig), 0644); err != nil {
+		return fmt.Errorf("failed to save vault config: %w", err)
+	}
+	ps.logf("  ✓ Vault config generated")
+
 	// Configure CoreDNS (if baseDomain is provided - this is the zone name)
 	// CoreDNS uses baseDomain (e.g., "dbrs.space") as the authoritative zone
 	dnsZone := baseDomain
@@ -667,6 +675,13 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Node service created: orama-node.service (with embedded gateway)")
 
+	// Vault Guardian service
+	vaultUnit := ps.serviceGenerator.GenerateVaultService()
+	if err := ps.serviceController.WriteServiceUnit("orama-vault.service", vaultUnit); err != nil {
+		return fmt.Errorf("failed to write Vault service: %w", err)
+	}
+	ps.logf("  ✓ Vault service created: orama-vault.service")
+
 	// Anyone Relay service (only created when --anyone-relay flag is used)
 	// A node must run EITHER relay OR client, never both. When writing one
 	// mode's service, we remove the other to prevent conflicts (they share
@@ -725,7 +740,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
 	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-node.service"}
+	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -756,8 +771,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// services pick up new configs even if already running from a previous install)
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
-	infraServices := []string{"orama-ipfs.service", "orama-olric.service"}
+	// Start infrastructure first (IPFS, Olric, Vault, Anyone) - RQLite is managed internally by each node
+	infraServices := []string{"orama-ipfs.service", "orama-olric.service", "orama-vault.service"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -977,12 +992,13 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/olric.log", ps.oramaDir)
 	ps.logf("  %s/logs/node.log", ps.oramaDir)
 	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
+	ps.logf("  %s/logs/vault.log", ps.oramaDir)
 
 	// Anyone mode-specific logs and commands
 	if ps.IsAnyoneRelay() {
 		ps.logf("  /var/log/anon/notices.log (Anyone Relay)")
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-relay orama-node")
 		ps.logf("\nAnyone Relay Operator:")
 		ps.logf("  ORPort: %d", ps.anyoneRelayConfig.ORPort)
 		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
@@ -991,10 +1007,10 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
 	} else if ps.IsAnyoneClient() {
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-client orama-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-client orama-node")
 	} else {
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-node")
 	}
 
 	ps.logf("\nVerify Installation:")

@@ -417,6 +417,11 @@ func isPublicPath(p string) bool {
 		return true
 	}
 
+	// Vault proxy endpoints (no auth — rate-limited per identity hash within handler)
+	if strings.HasPrefix(p, "/v1/vault/") {
+		return true
+	}
+
 	// Phantom auth endpoints are public (session creation, status polling, completion)
 	if strings.HasPrefix(p, "/v1/auth/phantom/") {
 		return true

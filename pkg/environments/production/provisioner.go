@@ -34,6 +34,7 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		filepath.Join(fp.oramaDir, "data", "ipfs", "repo"),
 		filepath.Join(fp.oramaDir, "data", "ipfs-cluster"),
 		filepath.Join(fp.oramaDir, "data", "rqlite"),
+		filepath.Join(fp.oramaDir, "data", "vault"),
 		filepath.Join(fp.oramaDir, "logs"),
 		filepath.Join(fp.oramaDir, "tls-cache"),
 		filepath.Join(fp.oramaDir, "backups"),
@@ -65,6 +66,7 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		"ipfs.log",
 		"ipfs-cluster.log",
 		"node.log",
+		"vault.log",
 		"anyone-client.log",
 	}
 

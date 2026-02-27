@@ -71,48 +71,53 @@ func (b *Builder) Build() error {
 		return fmt.Errorf("failed to build orama binaries: %w", err)
 	}
 
-	// Step 2: Cross-compile Olric
+	// Step 2: Cross-compile Vault Guardian (Zig)
+	if err := b.buildVaultGuardian(); err != nil {
+		return fmt.Errorf("failed to build vault-guardian: %w", err)
+	}
+
+	// Step 3: Cross-compile Olric
 	if err := b.buildOlric(); err != nil {
 		return fmt.Errorf("failed to build olric: %w", err)
 	}
 
-	// Step 3: Cross-compile IPFS Cluster
+	// Step 4: Cross-compile IPFS Cluster
 	if err := b.buildIPFSCluster(); err != nil {
 		return fmt.Errorf("failed to build ipfs-cluster: %w", err)
 	}
 
-	// Step 4: Build CoreDNS with RQLite plugin
+	// Step 5: Build CoreDNS with RQLite plugin
 	if err := b.buildCoreDNS(); err != nil {
 		return fmt.Errorf("failed to build coredns: %w", err)
 	}
 
-	// Step 5: Build Caddy with Orama DNS module
+	// Step 6: Build Caddy with Orama DNS module
 	if err := b.buildCaddy(); err != nil {
 		return fmt.Errorf("failed to build caddy: %w", err)
 	}
 
-	// Step 6: Download pre-built IPFS Kubo
+	// Step 7: Download pre-built IPFS Kubo
 	if err := b.downloadIPFS(); err != nil {
 		return fmt.Errorf("failed to download ipfs: %w", err)
 	}
 
-	// Step 7: Download pre-built RQLite
+	// Step 8: Download pre-built RQLite
 	if err := b.downloadRQLite(); err != nil {
 		return fmt.Errorf("failed to download rqlite: %w", err)
 	}
 
-	// Step 8: Copy systemd templates
+	// Step 9: Copy systemd templates
 	if err := b.copySystemdTemplates(); err != nil {
 		return fmt.Errorf("failed to copy systemd templates: %w", err)
 	}
 
-	// Step 9: Generate manifest
+	// Step 10: Generate manifest
 	manifest, err := b.generateManifest()
 	if err != nil {
 		return fmt.Errorf("failed to generate manifest: %w", err)
 	}
 
-	// Step 10: Create archive
+	// Step 11: Create archive
 	outputPath := b.flags.Output
 	if outputPath == "" {
 		outputPath = fmt.Sprintf("/tmp/orama-%s-linux-%s.tar.gz", b.version, b.flags.Arch)
@@ -130,7 +135,7 @@ func (b *Builder) Build() error {
 }
 
 func (b *Builder) buildOramaBinaries() error {
-	fmt.Println("[1/7] Cross-compiling Orama binaries...")
+	fmt.Println("[1/8] Cross-compiling Orama binaries...")
 
 	ldflags := fmt.Sprintf("-s -w -X 'main.version=%s' -X 'main.commit=%s' -X 'main.date=%s'",
 		b.version, b.commit, b.date)
@@ -177,8 +182,79 @@ func (b *Builder) buildOramaBinaries() error {
 	return nil
 }
 
+func (b *Builder) buildVaultGuardian() error {
+	fmt.Println("[2/8] Cross-compiling Vault Guardian (Zig)...")
+
+	// Ensure zig is available
+	if _, err := exec.LookPath("zig"); err != nil {
+		return fmt.Errorf("zig not found in PATH — install from https://ziglang.org/download/")
+	}
+
+	// Vault source is sibling to orama project
+	vaultDir := filepath.Join(b.projectDir, "..", "orama-vault")
+	if _, err := os.Stat(filepath.Join(vaultDir, "build.zig")); err != nil {
+		return fmt.Errorf("vault source not found at %s — expected orama-vault as sibling directory: %w", vaultDir, err)
+	}
+
+	// Map Go arch to Zig target triple
+	var zigTarget string
+	switch b.flags.Arch {
+	case "amd64":
+		zigTarget = "x86_64-linux-musl"
+	case "arm64":
+		zigTarget = "aarch64-linux-musl"
+	default:
+		return fmt.Errorf("unsupported architecture for vault: %s", b.flags.Arch)
+	}
+
+	if b.flags.Verbose {
+		fmt.Printf("  zig build -Dtarget=%s -Doptimize=ReleaseSafe\n", zigTarget)
+	}
+
+	cmd := exec.Command("zig", "build",
+		fmt.Sprintf("-Dtarget=%s", zigTarget),
+		"-Doptimize=ReleaseSafe")
+	cmd.Dir = vaultDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("zig build failed: %w", err)
+	}
+
+	// Copy output binary to build bin dir
+	src := filepath.Join(vaultDir, "zig-out", "bin", "vault-guardian")
+	dst := filepath.Join(b.binDir, "vault-guardian")
+	if err := copyFile(src, dst); err != nil {
+		return fmt.Errorf("failed to copy vault-guardian binary: %w", err)
+	}
+
+	fmt.Println("  ✓ vault-guardian")
+	return nil
+}
+
+// copyFile copies a file from src to dst, preserving executable permissions.
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := srcFile.WriteTo(dstFile); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (b *Builder) buildOlric() error {
-	fmt.Printf("[2/7] Cross-compiling Olric %s...\n", constants.OlricVersion)
+	fmt.Printf("[3/8] Cross-compiling Olric %s...\n", constants.OlricVersion)
 
 	cmd := exec.Command("go", "install",
 		fmt.Sprintf("github.com/olric-data/olric/cmd/olric-server@%s", constants.OlricVersion))
@@ -197,7 +273,7 @@ func (b *Builder) buildOlric() error {
 }
 
 func (b *Builder) buildIPFSCluster() error {
-	fmt.Printf("[3/7] Cross-compiling IPFS Cluster %s...\n", constants.IPFSClusterVersion)
+	fmt.Printf("[4/8] Cross-compiling IPFS Cluster %s...\n", constants.IPFSClusterVersion)
 
 	cmd := exec.Command("go", "install",
 		fmt.Sprintf("github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@%s", constants.IPFSClusterVersion))
@@ -216,7 +292,7 @@ func (b *Builder) buildIPFSCluster() error {
 }
 
 func (b *Builder) buildCoreDNS() error {
-	fmt.Printf("[4/7] Building CoreDNS %s with RQLite plugin...\n", constants.CoreDNSVersion)
+	fmt.Printf("[5/8] Building CoreDNS %s with RQLite plugin...\n", constants.CoreDNSVersion)
 
 	buildDir := filepath.Join(b.tmpDir, "coredns-build")
 
@@ -363,7 +439,7 @@ rqlite:rqlite
 }
 
 func (b *Builder) buildCaddy() error {
-	fmt.Printf("[5/7] Building Caddy %s with Orama DNS module...\n", constants.CaddyVersion)
+	fmt.Printf("[6/8] Building Caddy %s with Orama DNS module...\n", constants.CaddyVersion)
 
 	// Ensure xcaddy is available
 	if _, err := exec.LookPath("xcaddy"); err != nil {
@@ -429,7 +505,7 @@ require (
 }
 
 func (b *Builder) downloadIPFS() error {
-	fmt.Printf("[6/7] Downloading IPFS Kubo %s...\n", constants.IPFSKuboVersion)
+	fmt.Printf("[7/8] Downloading IPFS Kubo %s...\n", constants.IPFSKuboVersion)
 
 	arch := b.flags.Arch
 	tarball := fmt.Sprintf("kubo_%s_linux-%s.tar.gz", constants.IPFSKuboVersion, arch)
@@ -450,7 +526,7 @@ func (b *Builder) downloadIPFS() error {
 }
 
 func (b *Builder) downloadRQLite() error {
-	fmt.Printf("[7/7] Downloading RQLite %s...\n", constants.RQLiteVersion)
+	fmt.Printf("[8/8] Downloading RQLite %s...\n", constants.RQLiteVersion)
 
 	arch := b.flags.Arch
 	tarball := fmt.Sprintf("rqlite-v%s-linux-%s.tar.gz", constants.RQLiteVersion, arch)
