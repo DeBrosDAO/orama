@@ -256,10 +256,39 @@ func copyFile(src, dst string) error {
 func (b *Builder) buildOlric() error {
 	fmt.Printf("[3/8] Cross-compiling Olric %s...\n", constants.OlricVersion)
 
-	cmd := exec.Command("go", "install",
+	// go install doesn't support cross-compilation with GOBIN set,
+	// so we create a temporary module and use go build -o instead.
+	tmpDir, err := os.MkdirTemp("", "olric-build-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	modInit := exec.Command("go", "mod", "init", "olric-build")
+	modInit.Dir = tmpDir
+	modInit.Stderr = os.Stderr
+	if err := modInit.Run(); err != nil {
+		return fmt.Errorf("go mod init: %w", err)
+	}
+
+	modGet := exec.Command("go", "get",
 		fmt.Sprintf("github.com/olric-data/olric/cmd/olric-server@%s", constants.OlricVersion))
+	modGet.Dir = tmpDir
+	modGet.Env = append(os.Environ(),
+		"GOPROXY=https://proxy.golang.org|direct",
+		"GONOSUMDB=*")
+	modGet.Stderr = os.Stderr
+	if err := modGet.Run(); err != nil {
+		return fmt.Errorf("go get olric: %w", err)
+	}
+
+	cmd := exec.Command("go", "build",
+		"-ldflags", "-s -w",
+		"-trimpath",
+		"-o", filepath.Join(b.binDir, "olric-server"),
+		fmt.Sprintf("github.com/olric-data/olric/cmd/olric-server"))
+	cmd.Dir = tmpDir
 	cmd.Env = append(b.crossEnv(),
-		"GOBIN="+b.binDir,
 		"GOPROXY=https://proxy.golang.org|direct",
 		"GONOSUMDB=*")
 	cmd.Stdout = os.Stdout
@@ -275,10 +304,37 @@ func (b *Builder) buildOlric() error {
 func (b *Builder) buildIPFSCluster() error {
 	fmt.Printf("[4/8] Cross-compiling IPFS Cluster %s...\n", constants.IPFSClusterVersion)
 
-	cmd := exec.Command("go", "install",
+	tmpDir, err := os.MkdirTemp("", "ipfs-cluster-build-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	modInit := exec.Command("go", "mod", "init", "ipfs-cluster-build")
+	modInit.Dir = tmpDir
+	modInit.Stderr = os.Stderr
+	if err := modInit.Run(); err != nil {
+		return fmt.Errorf("go mod init: %w", err)
+	}
+
+	modGet := exec.Command("go", "get",
 		fmt.Sprintf("github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@%s", constants.IPFSClusterVersion))
+	modGet.Dir = tmpDir
+	modGet.Env = append(os.Environ(),
+		"GOPROXY=https://proxy.golang.org|direct",
+		"GONOSUMDB=*")
+	modGet.Stderr = os.Stderr
+	if err := modGet.Run(); err != nil {
+		return fmt.Errorf("go get ipfs-cluster: %w", err)
+	}
+
+	cmd := exec.Command("go", "build",
+		"-ldflags", "-s -w",
+		"-trimpath",
+		"-o", filepath.Join(b.binDir, "ipfs-cluster-service"),
+		"github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service")
+	cmd.Dir = tmpDir
 	cmd.Env = append(b.crossEnv(),
-		"GOBIN="+b.binDir,
 		"GOPROXY=https://proxy.golang.org|direct",
 		"GONOSUMDB=*")
 	cmd.Stdout = os.Stdout
