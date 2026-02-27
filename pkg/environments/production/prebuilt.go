@@ -127,6 +127,8 @@ func (ps *ProductionSetup) deployPreBuiltBinaries(manifest *PreBuiltManifest) er
 		{name: "coredns", dest: "/usr/local/bin/coredns"},
 		{name: "caddy", dest: "/usr/bin/caddy"},
 	}
+	// Note: vault-guardian stays at /opt/orama/bin/ (from archive extraction)
+	// and is referenced by absolute path in the systemd service — no copy needed.
 
 	for _, bin := range binaries {
 		srcPath := filepath.Join(OramaArchiveBin, bin.name)

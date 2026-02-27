@@ -18,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sandboxcmd"
 )
 
 // version metadata populated via -ldflags at build time
@@ -86,6 +87,9 @@ and interacting with the Orama distributed network.`,
 
 	// Build command (cross-compile binary archive)
 	rootCmd.AddCommand(buildcmd.Cmd)
+
+	// Sandbox command (ephemeral Hetzner Cloud clusters)
+	rootCmd.AddCommand(sandboxcmd.Cmd)
 
 	return rootCmd
 }

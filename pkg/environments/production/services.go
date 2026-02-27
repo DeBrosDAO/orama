@@ -214,6 +214,43 @@ WantedBy=multi-user.target
 `, ssg.oramaHome, ssg.oramaDir, configFile, logFile)
 }
 
+// GenerateVaultService generates the Orama Vault Guardian systemd unit.
+// The vault guardian runs on every node, storing Shamir secret shares.
+// It binds to the WireGuard overlay only (no public exposure).
+func (ssg *SystemdServiceGenerator) GenerateVaultService() string {
+	logFile := filepath.Join(ssg.oramaDir, "logs", "vault.log")
+	dataDir := filepath.Join(ssg.oramaDir, "data", "vault")
+
+	return fmt.Sprintf(`[Unit]
+Description=Orama Vault Guardian
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+Requires=wg-quick@wg0.service
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+ExecStart=%[1]s/bin/vault-guardian --config %[2]s/vault.yaml
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%[3]s
+StandardError=append:%[3]s
+SyslogIdentifier=orama-vault
+
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%[2]s
+NoNewPrivileges=yes
+LimitMEMLOCK=67108864
+MemoryMax=512M
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+`, ssg.oramaHome, dataDir, logFile)
+}
+
 // GenerateGatewayService generates the Orama Gateway systemd unit
 func (ssg *SystemdServiceGenerator) GenerateGatewayService() string {
 	logFile := filepath.Join(ssg.oramaDir, "logs", "gateway.log")

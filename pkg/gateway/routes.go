@@ -114,6 +114,14 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/pubsub/presence", g.pubsubHandlers.PresenceHandler)
 	}
 
+	// vault proxy (public, rate-limited per identity within handler)
+	if g.vaultHandlers != nil {
+		mux.HandleFunc("/v1/vault/push", g.vaultHandlers.HandlePush)
+		mux.HandleFunc("/v1/vault/pull", g.vaultHandlers.HandlePull)
+		mux.HandleFunc("/v1/vault/health", g.vaultHandlers.HandleHealth)
+		mux.HandleFunc("/v1/vault/status", g.vaultHandlers.HandleStatus)
+	}
+
 	// webrtc
 	if g.webrtcHandlers != nil {
 		mux.HandleFunc("/v1/webrtc/turn/credentials", g.webrtcHandlers.CredentialsHandler)
