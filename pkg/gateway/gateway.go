@@ -29,6 +29,7 @@ import (
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
 	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
@@ -132,6 +133,9 @@ type Gateway struct {
 
 	// Node join handler
 	joinHandler *joinhandlers.Handler
+
+	// OramaOS node enrollment handler
+	enrollHandler *enrollhandlers.Handler
 
 	// Cluster provisioning for namespace clusters
 	clusterProvisioner authhandlers.ClusterProvisioner
@@ -399,6 +403,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	if deps.ORMClient != nil {
 		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
+		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
 	}
 

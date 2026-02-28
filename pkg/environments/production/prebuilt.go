@@ -48,7 +48,7 @@ func LoadPreBuiltManifest() (*PreBuiltManifest, error) {
 // OramaSignerAddress is the Ethereum address authorized to sign build archives.
 // Archives signed by any other address are rejected during install.
 // This is the DeBros deploy wallet — update if the signing key rotates.
-const OramaSignerAddress = "0x0000000000000000000000000000000000000000" // TODO: set real address
+const OramaSignerAddress = "0xb5d8a496c8b2412990d7D467E17727fdF5954afC"
 
 // VerifyArchiveSignature verifies that the pre-built archive was signed by the
 // authorized Orama signer. Returns nil if the signature is valid, or if no
