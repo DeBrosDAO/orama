@@ -357,11 +357,36 @@ Function Invocation:
 
 All inter-node communication is encrypted via a WireGuard VPN mesh:
 
-- **WireGuard IPs:** Each node gets a private IP (10.0.0.x) used for all cluster traffic
+- **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
+- **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
 - **Internal services** (RQLite 5001/7001, IPFS 4001/4501, Olric 3320/3322, Gateway 6001) are only accessible via WireGuard or localhost
 - **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
-- **Join flow:** New nodes authenticate via HTTPS (443), establish WireGuard tunnel, then join all services over the encrypted mesh
+- **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh
+
+### Service Authentication
+
+- **RQLite:** HTTP basic auth on all queries/executions — credentials generated at genesis, distributed via join response
+- **Olric:** Memberlist gossip encrypted with a shared 32-byte key
+- **IPFS Cluster:** TrustedPeers restricted to known cluster peer IDs (not `*`)
+- **Internal endpoints:** `/v1/internal/wg/peers` and `/v1/internal/wg/peer/remove` require cluster secret
+- **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
+- **WebSockets:** Origin header validated against the node's configured domain
+
+### Token & Key Security
+
+- **Refresh tokens:** Stored as SHA-256 hashes (never plaintext)
+- **API keys:** Stored as HMAC-SHA256 hashes with a server-side secret
+- **TURN secrets:** Encrypted at rest with AES-256-GCM (key derived from cluster secret)
+- **Binary signing:** Build archives signed with rootwallet EVM signature, verified on install
+
+### Process Isolation
+
+- **Dedicated user:** All services run as `orama` user (not root)
+- **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc.
+- **Capabilities:** Caddy and CoreDNS get `CAP_NET_BIND_SERVICE` for privileged ports
+
+See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 ### TLS/HTTPS
 
@@ -503,6 +528,31 @@ WebRTC uses a separate port allocation system from core namespace services:
 | TURN relay | 49152-65535/udp |
 
 See [docs/WEBRTC.md](WEBRTC.md) for full details including client integration, API reference, and debugging.
+
+## OramaOS
+
+For mainnet, devnet, and testnet environments, nodes run **OramaOS** — a custom minimal Linux image built with Buildroot.
+
+**Key properties:**
+- No SSH, no shell — operators cannot access the filesystem
+- LUKS full-disk encryption with Shamir key distribution across peers
+- Read-only rootfs (SquashFS + dm-verity)
+- A/B partition updates with cryptographic signature verification
+- Service sandboxing via Linux namespaces + seccomp
+- Single root process: the **orama-agent**
+
+**The orama-agent manages:**
+- Boot sequence and LUKS key reconstruction
+- WireGuard tunnel setup
+- Service lifecycle in sandboxed namespaces
+- Command reception from Gateway over WireGuard (port 9998)
+- OS updates (download, verify, A/B swap, reboot with rollback)
+
+**Node enrollment:** OramaOS nodes join via `orama node enroll` instead of `orama node install`. The enrollment flow uses a registration code + invite token + wallet verification.
+
+See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full deployment guide.
+
+Sandbox clusters remain on Ubuntu for development convenience.
 
 ## Future Enhancements
 

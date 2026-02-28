@@ -150,6 +150,62 @@ ssh -n user@host 'command'
 
 ---
 
+---
+
+## 6. RQLite returns 401 Unauthorized
+
+**Symptom:** RQLite queries fail with HTTP 401 after security hardening.
+
+**Cause:** RQLite now requires basic auth. The client isn't sending credentials.
+
+**Fix:** Ensure the RQLite client is configured with the credentials from `/opt/orama/.orama/secrets/rqlite-auth.json`. The central RQLite client wrapper (`pkg/rqlite/client.go`) handles this automatically. If using a standalone client (e.g., CoreDNS plugin), ensure it's also configured.
+
+---
+
+## 7. Olric cluster split after upgrade
+
+**Symptom:** Olric nodes can't gossip after enabling memberlist encryption.
+
+**Cause:** Olric memberlist encryption is all-or-nothing. Nodes with encryption can't communicate with nodes without it.
+
+**Fix:** All nodes must be restarted simultaneously when enabling Olric encryption. The cache will be lost (it rebuilds from DB). This is expected — Olric is a cache, not persistent storage.
+
+---
+
+## 8. OramaOS: LUKS unlock fails
+
+**Symptom:** OramaOS node can't reconstruct its LUKS key after reboot.
+
+**Cause:** Not enough peer vault-guardians are online to meet the Shamir threshold (K = max(3, N/3)).
+
+**Fix:** Ensure enough cluster nodes are online and reachable over WireGuard. The agent retries with exponential backoff. For genesis nodes before 5+ peers exist, use:
+
+```bash
+orama node unlock --genesis --node-ip <wg-ip>
+```
+
+---
+
+## 9. OramaOS: Enrollment timeout
+
+**Symptom:** `orama node enroll` hangs or times out.
+
+**Cause:** The OramaOS node's port 9999 isn't reachable, or the Gateway can't reach the node's WebSocket.
+
+**Fix:** Check that port 9999 is open in your VPS provider's external firewall (Hetzner firewall, AWS security groups, etc.). OramaOS opens it internally, but provider-level firewalls must be configured separately.
+
+---
+
+## 10. Binary signature verification fails
+
+**Symptom:** `orama node install` rejects the binary archive with a signature error.
+
+**Cause:** The archive was tampered with, or the manifest.sig file is missing/corrupted.
+
+**Fix:** Rebuild the archive with `orama build` and re-sign with `make sign` (in the orama-os repo). Ensure you're using the rootwallet that matches the embedded signer address.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
@@ -158,3 +214,4 @@ ssh -n user@host 'command'
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
 - **Node IPs:** Check `scripts/remote-nodes.conf` for credentials, `wg show wg0` for WG IPs
+- **OramaOS nodes:** No SSH access — use Gateway API endpoints (`/v1/node/status`, `/v1/node/logs`) for diagnostics

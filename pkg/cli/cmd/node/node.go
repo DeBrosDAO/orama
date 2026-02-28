@@ -30,4 +30,6 @@ func init() {
 	Cmd.AddCommand(rolloutCmd)
 	Cmd.AddCommand(cleanCmd)
 	Cmd.AddCommand(recoverRaftCmd)
+	Cmd.AddCommand(enrollCmd)
+	Cmd.AddCommand(unlockCmd)
 }

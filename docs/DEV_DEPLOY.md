@@ -320,7 +320,35 @@ is properly configured, always use the HTTPS domain URL.
 UFW from external access. The join request goes through Caddy on port 80 (HTTP) or 443 (HTTPS),
 which proxies to the gateway internally.
 
-## Pre-Install Checklist
+## OramaOS Enrollment
+
+For OramaOS nodes (mainnet, devnet, testnet), use the enrollment flow instead of `orama node install`:
+
+```bash
+# 1. Flash OramaOS image to VPS (via provider dashboard)
+# 2. Generate invite token on existing cluster node
+orama node invite --expiry 24h
+
+# 3. Enroll the OramaOS node
+orama node enroll --node-ip <vps-public-ip> --token <invite-token> --gateway <gateway-url>
+
+# 4. For genesis node reboots (before 5+ peers exist)
+orama node unlock --genesis --node-ip <wg-ip>
+```
+
+OramaOS nodes have no SSH access. All management happens through the Gateway API:
+
+```bash
+# Status, logs, commands — all via Gateway proxy
+curl "https://gateway.example.com/v1/node/status?node_id=<id>"
+curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway"
+```
+
+See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.
+
+**Note:** `orama node clean` does not work on OramaOS nodes (no SSH). Use `orama node leave` for graceful departure, or reflash the image for a factory reset.
+
+## Pre-Install Checklist (Ubuntu Only)
 
 Before running `orama node install` on a VPS, ensure:
 

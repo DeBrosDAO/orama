@@ -2,6 +2,8 @@
 
 How to completely remove all Orama Network state from a VPS so it can be reinstalled fresh.
 
+> **OramaOS nodes:** This guide applies to Ubuntu-based nodes only. OramaOS has no SSH or shell access. To remove an OramaOS node: use `POST /v1/node/leave` via the Gateway API for graceful departure, or reflash the OramaOS image via your VPS provider's dashboard for a factory reset. See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for details.
+
 ## Quick Clean (Copy-Paste)
 
 Run this as root or with sudo on the target VPS:
