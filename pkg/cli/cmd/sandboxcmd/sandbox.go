@@ -23,7 +23,8 @@ Usage:
   orama sandbox list                       List active sandboxes
   orama sandbox status [--name <name>]     Show cluster health
   orama sandbox rollout [--name <name>]    Build + push + rolling upgrade
-  orama sandbox ssh <node-number>          SSH into a sandbox node (1-5)`,
+  orama sandbox ssh <node-number>          SSH into a sandbox node (1-5)
+  orama sandbox reset                      Delete all infra and config to start fresh`,
 }
 
 var setupCmd = &cobra.Command{
@@ -79,6 +80,19 @@ var rolloutCmd = &cobra.Command{
 	},
 }
 
+var resetCmd = &cobra.Command{
+	Use:   "reset",
+	Short: "Delete all sandbox infrastructure and config to start fresh",
+	Long: `Deletes floating IPs, firewall, and SSH key from Hetzner Cloud,
+then removes the local config (~/.orama/sandbox.yaml) and SSH keys.
+
+Use this when you need to switch datacenter locations (floating IPs are
+location-bound) or to completely start over with sandbox setup.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return sandbox.Reset()
+	},
+}
+
 var sshCmd = &cobra.Command{
 	Use:   "ssh <node-number>",
 	Short: "SSH into a sandbox node (1-5)",
@@ -118,4 +132,5 @@ func init() {
 	Cmd.AddCommand(statusCmd)
 	Cmd.AddCommand(rolloutCmd)
 	Cmd.AddCommand(sshCmd)
+	Cmd.AddCommand(resetCmd)
 }

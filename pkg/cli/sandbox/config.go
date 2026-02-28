@@ -123,10 +123,10 @@ func (c *Config) validate() error {
 // Defaults fills in default values for optional fields.
 func (c *Config) Defaults() {
 	if c.Location == "" {
-		c.Location = "fsn1"
+		c.Location = "nbg1"
 	}
 	if c.ServerType == "" {
-		c.ServerType = "cx22"
+		c.ServerType = "cx23"
 	}
 }
 

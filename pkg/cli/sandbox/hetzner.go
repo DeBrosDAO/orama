@@ -344,6 +344,23 @@ func (c *HetznerClient) UploadSSHKey(name, publicKey string) (*HetznerSSHKey, er
 	return &resp.SSHKey, nil
 }
 
+// ListSSHKeysByFingerprint finds SSH keys matching a fingerprint.
+func (c *HetznerClient) ListSSHKeysByFingerprint(fingerprint string) ([]HetznerSSHKey, error) {
+	body, err := c.get("/ssh_keys?fingerprint=" + fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("list SSH keys: %w", err)
+	}
+
+	var resp struct {
+		SSHKeys []HetznerSSHKey `json:"ssh_keys"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse SSH keys response: %w", err)
+	}
+
+	return resp.SSHKeys, nil
+}
+
 // GetSSHKey retrieves an SSH key by ID.
 func (c *HetznerClient) GetSSHKey(id int64) (*HetznerSSHKey, error) {
 	body, err := c.get("/ssh_keys/" + strconv.FormatInt(id, 10))
@@ -406,6 +423,85 @@ func (c *HetznerClient) ListFirewallsByLabel(selector string) ([]HetznerFirewall
 // DeleteFirewall deletes a firewall by ID.
 func (c *HetznerClient) DeleteFirewall(id int64) error {
 	return c.delete("/firewalls/" + strconv.FormatInt(id, 10))
+}
+
+// DeleteFloatingIP deletes a floating IP by ID.
+func (c *HetznerClient) DeleteFloatingIP(id int64) error {
+	return c.delete("/floating_ips/" + strconv.FormatInt(id, 10))
+}
+
+// DeleteSSHKey deletes an SSH key by ID.
+func (c *HetznerClient) DeleteSSHKey(id int64) error {
+	return c.delete("/ssh_keys/" + strconv.FormatInt(id, 10))
+}
+
+// --- Location & Server Type operations ---
+
+// HetznerLocation represents a Hetzner datacenter location.
+type HetznerLocation struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`        // e.g., "fsn1", "nbg1", "hel1"
+	Description string `json:"description"` // e.g., "Falkenstein DC Park 1"
+	City        string `json:"city"`
+	Country     string `json:"country"` // ISO 3166-1 alpha-2
+}
+
+// HetznerServerType represents a Hetzner server type with pricing.
+type HetznerServerType struct {
+	ID          int64   `json:"id"`
+	Name        string  `json:"name"`        // e.g., "cx22", "cx23"
+	Description string  `json:"description"` // e.g., "CX23"
+	Cores       int     `json:"cores"`
+	Memory      float64 `json:"memory"` // GB
+	Disk        int     `json:"disk"`   // GB
+	Architecture string `json:"architecture"`
+	Deprecation *struct {
+		Announced    string `json:"announced"`
+		UnavailableAfter string `json:"unavailable_after"`
+	} `json:"deprecation"` // nil = not deprecated
+	Prices []struct {
+		Location string `json:"location"`
+		Hourly   struct {
+			Gross string `json:"gross"`
+		} `json:"price_hourly"`
+		Monthly struct {
+			Gross string `json:"gross"`
+		} `json:"price_monthly"`
+	} `json:"prices"`
+}
+
+// ListLocations returns all available Hetzner datacenter locations.
+func (c *HetznerClient) ListLocations() ([]HetznerLocation, error) {
+	body, err := c.get("/locations")
+	if err != nil {
+		return nil, fmt.Errorf("list locations: %w", err)
+	}
+
+	var resp struct {
+		Locations []HetznerLocation `json:"locations"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse locations response: %w", err)
+	}
+
+	return resp.Locations, nil
+}
+
+// ListServerTypes returns all available server types.
+func (c *HetznerClient) ListServerTypes() ([]HetznerServerType, error) {
+	body, err := c.get("/server_types?per_page=50")
+	if err != nil {
+		return nil, fmt.Errorf("list server types: %w", err)
+	}
+
+	var resp struct {
+		ServerTypes []HetznerServerType `json:"server_types"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse server types response: %w", err)
+	}
+
+	return resp.ServerTypes, nil
 }
 
 // --- Validation ---
