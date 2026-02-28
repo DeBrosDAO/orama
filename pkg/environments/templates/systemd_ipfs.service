@@ -5,6 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths={{.IPFSRepoPath}} {{.OramaDir}}
 Environment=HOME={{.HomeDir}}
 Environment=IPFS_PATH={{.IPFSRepoPath}}
 ExecStartPre=/bin/bash -c 'if [ -f {{.SecretsDir}}/swarm.key ] && [ ! -f {{.IPFSRepoPath}}/swarm.key ]; then cp {{.SecretsDir}}/swarm.key {{.IPFSRepoPath}}/swarm.key && chmod 600 {{.IPFSRepoPath}}/swarm.key; fi'

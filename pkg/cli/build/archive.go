@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -106,6 +107,14 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
 		return err
 	}
 
+	// Add manifest.sig if it exists (created by --sign)
+	sigPath := filepath.Join(b.tmpDir, "manifest.sig")
+	if _, err := os.Stat(sigPath); err == nil {
+		if err := addFileToTar(tw, sigPath, "manifest.sig"); err != nil {
+			return err
+		}
+	}
+
 	// Print summary
 	fmt.Printf("  bin/:      %d binaries\n", len(manifest.Checksums))
 	fmt.Printf("  systemd/:  namespace templates\n")
@@ -116,6 +125,46 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
 		fmt.Printf("  size:      %s\n", formatBytes(info.Size()))
 	}
 
+	return nil
+}
+
+// signManifest signs the manifest hash using rootwallet CLI.
+// Produces manifest.sig containing the hex-encoded EVM signature.
+func (b *Builder) signManifest(manifest *Manifest) error {
+	fmt.Printf("\nSigning manifest with rootwallet...\n")
+
+	// Serialize manifest deterministically (compact JSON, sorted keys via json.Marshal)
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	// Hash the manifest JSON
+	hash := sha256.Sum256(manifestData)
+	hashHex := hex.EncodeToString(hash[:])
+
+	// Call rw sign <hash> --chain evm
+	cmd := exec.Command("rw", "sign", hashHex, "--chain", "evm")
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("rw sign failed: %w\n%s", err, stderr.String())
+	}
+
+	signature := strings.TrimSpace(stdout.String())
+	if signature == "" {
+		return fmt.Errorf("rw sign produced empty signature")
+	}
+
+	// Write signature file
+	sigPath := filepath.Join(b.tmpDir, "manifest.sig")
+	if err := os.WriteFile(sigPath, []byte(signature), 0644); err != nil {
+		return fmt.Errorf("failed to write manifest.sig: %w", err)
+	}
+
+	fmt.Printf("  Manifest signed (SHA256: %s...)\n", hashHex[:16])
 	return nil
 }
 

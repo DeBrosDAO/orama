@@ -39,8 +39,17 @@ type Config struct {
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 	IPFSEnableEncryption  bool          // Enable client-side encryption before upload (default: true, discovered from node configs)
 
+	// RQLite authentication (basic auth credentials embedded in DSN)
+	RQLiteUsername string // RQLite HTTP basic auth username (default: "orama")
+	RQLitePassword string // RQLite HTTP basic auth password
+
 	// WireGuard mesh configuration
 	ClusterSecret string // Cluster secret for authenticating internal WireGuard peer exchange
+
+	// API key HMAC secret for hashing API keys before storage.
+	// When set, API keys are stored as HMAC-SHA256(key, secret) in the database.
+	// Loaded from ~/.orama/secrets/api-key-hmac-secret.
+	APIKeyHMACSecret string
 
 	// WebRTC configuration (set when namespace has WebRTC enabled)
 	WebRTCEnabled bool   // Whether WebRTC endpoints are active on this gateway

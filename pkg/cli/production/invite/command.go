@@ -3,9 +3,12 @@ package invite
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -59,11 +62,41 @@ func Handle(args []string) {
 		os.Exit(1)
 	}
 
+	// Get TLS certificate fingerprint for TOFU verification
+	certFingerprint := getTLSCertFingerprint(domain)
+
 	// Print the invite command
 	fmt.Printf("\nInvite token created (expires in %s)\n\n", expiry)
 	fmt.Printf("Run this on the new node:\n\n")
-	fmt.Printf("  sudo orama install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
+	if certFingerprint != "" {
+		fmt.Printf("  sudo orama install --join https://%s --token %s --ca-fingerprint %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token, certFingerprint)
+	} else {
+		fmt.Printf("  sudo orama install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
+	}
 	fmt.Printf("Replace <NEW_NODE_IP> with the new node's public IP address.\n")
+}
+
+// getTLSCertFingerprint connects to the domain over TLS and returns the
+// SHA-256 fingerprint of the leaf certificate. Returns empty string on failure.
+func getTLSCertFingerprint(domain string) string {
+	conn, err := tls.DialWithDialer(
+		&net.Dialer{Timeout: 5 * time.Second},
+		"tcp",
+		domain+":443",
+		&tls.Config{InsecureSkipVerify: true},
+	)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return ""
+	}
+
+	hash := sha256.Sum256(certs[0].Raw)
+	return hex.EncodeToString(hash[:])
 }
 
 // readNodeDomain reads the domain from the node config file

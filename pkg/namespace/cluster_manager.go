@@ -34,6 +34,11 @@ type ClusterManagerConfig struct {
 	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:4501")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // IPFS replication factor (default: 3)
+
+	// TurnEncryptionKey is a 32-byte AES-256 key for encrypting TURN shared secrets
+	// in RQLite. Derived from cluster secret via HKDF(clusterSecret, "turn-encryption").
+	// If nil, TURN secrets are stored in plaintext (backward compatibility).
+	TurnEncryptionKey []byte
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -57,6 +62,9 @@ type ClusterManager struct {
 
 	// Local node identity for distributed spawning
 	localNodeID string
+
+	// AES-256 key for encrypting TURN secrets in RQLite (nil = plaintext)
+	turnEncryptionKey []byte
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -108,6 +116,7 @@ func NewClusterManager(
 		ipfsAPIURL:            ipfsAPIURL,
 		ipfsTimeout:           ipfsTimeout,
 		ipfsReplicationFactor: ipfsReplicationFactor,
+		turnEncryptionKey:     cfg.TurnEncryptionKey,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 	}
@@ -154,6 +163,7 @@ func NewClusterManagerWithComponents(
 		ipfsAPIURL:            ipfsAPIURL,
 		ipfsTimeout:           ipfsTimeout,
 		ipfsReplicationFactor: ipfsReplicationFactor,
+		turnEncryptionKey:     cfg.TurnEncryptionKey,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 	}

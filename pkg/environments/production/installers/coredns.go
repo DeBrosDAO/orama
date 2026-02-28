@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -323,8 +324,18 @@ rqlite:rqlite
 `
 }
 
-// generateCorefile creates the CoreDNS configuration (RQLite only)
+// generateCorefile creates the CoreDNS configuration (RQLite only).
+// If RQLite credentials exist on disk, they are included in the config.
 func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
+	// Read RQLite credentials from secrets if available
+	authBlock := ""
+	if data, err := os.ReadFile("/opt/orama/.orama/secrets/rqlite-password"); err == nil {
+		password := strings.TrimSpace(string(data))
+		if password != "" {
+			authBlock = fmt.Sprintf("        username orama\n        password %s\n", password)
+		}
+	}
+
 	return fmt.Sprintf(`# CoreDNS configuration for %s
 # Uses RQLite for ALL DNS records (static + dynamic)
 # Static records (SOA, NS, A) are seeded into RQLite during installation
@@ -336,7 +347,7 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
         refresh 5s
         ttl 30
         cache_size 10000
-    }
+%s    }
 
     # Enable logging and error reporting
     log
@@ -351,7 +362,7 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
     cache 300
     errors
 }
-`, domain, domain, rqliteDSN)
+`, domain, domain, rqliteDSN, authBlock)
 }
 
 // seedStaticRecords inserts static zone records into RQLite (non-destructive)

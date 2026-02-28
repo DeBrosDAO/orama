@@ -15,6 +15,8 @@ import (
 // RQLiteClient is a simple HTTP client for RQLite
 type RQLiteClient struct {
 	baseURL    string
+	username   string // HTTP basic auth username (empty = no auth)
+	password   string // HTTP basic auth password
 	httpClient *http.Client
 	logger     *zap.Logger
 }
@@ -32,10 +34,13 @@ type QueryResult struct {
 	Error   string          `json:"error"`
 }
 
-// NewRQLiteClient creates a new RQLite HTTP client
-func NewRQLiteClient(dsn string, logger *zap.Logger) (*RQLiteClient, error) {
+// NewRQLiteClient creates a new RQLite HTTP client.
+// Optional username/password enable HTTP basic auth on all requests.
+func NewRQLiteClient(dsn string, logger *zap.Logger, username, password string) (*RQLiteClient, error) {
 	return &RQLiteClient{
-		baseURL: dsn,
+		baseURL:  dsn,
+		username: username,
+		password: password,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -65,6 +70,9 @@ func (c *RQLiteClient) Query(ctx context.Context, query string, args ...interfac
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if c.username != "" && c.password != "" {
+		req.SetBasicAuth(c.username, c.password)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

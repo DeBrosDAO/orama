@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -129,6 +130,11 @@ func (h *Handler) HandleListPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.validateInternalRequest(r) {
+		http.Error(w, "unauthorized", http.StatusForbidden)
+		return
+	}
+
 	peers, err := h.ListPeers(r.Context())
 	if err != nil {
 		h.logger.Error("failed to list WG peers", zap.Error(err))
@@ -144,6 +150,11 @@ func (h *Handler) HandleListPeers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleRemovePeer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !h.validateInternalRequest(r) {
+		http.Error(w, "unauthorized", http.StatusForbidden)
 		return
 	}
 
@@ -163,6 +174,18 @@ func (h *Handler) HandleRemovePeer(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	h.logger.Info("removed WireGuard peer", zap.String("node_id", nodeID))
+}
+
+// validateInternalRequest checks that the request comes from a WireGuard peer
+// and includes a valid cluster secret. Both conditions must be met.
+func (h *Handler) validateInternalRequest(r *http.Request) bool {
+	if !auth.IsWireGuardPeer(r.RemoteAddr) {
+		return false
+	}
+	if h.clusterSecret == "" {
+		return true
+	}
+	return r.Header.Get("X-Cluster-Secret") == h.clusterSecret
 }
 
 // ListPeers returns all registered WireGuard peers

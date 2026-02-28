@@ -28,7 +28,8 @@ type Flags struct {
 	IPFSClusterAddrs  string
 
 	// Security flags
-	SkipFirewall bool // Skip UFW firewall setup (for users who manage their own firewall)
+	SkipFirewall    bool   // Skip UFW firewall setup (for users who manage their own firewall)
+	CAFingerprint   string // SHA-256 fingerprint of server TLS cert for TOFU verification
 
 	// Anyone flags
 	AnyoneClient     bool   // Run Anyone as client-only (SOCKS5 proxy on port 9050, no relay)
@@ -74,6 +75,7 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	// Security flags
 	fs.BoolVar(&flags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
+	fs.StringVar(&flags.CAFingerprint, "ca-fingerprint", "", "SHA-256 fingerprint of server TLS cert (from orama invite output)")
 
 	// Anyone flags
 	fs.BoolVar(&flags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")

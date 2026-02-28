@@ -16,8 +16,13 @@ type RQLiteAdapter struct {
 
 // NewRQLiteAdapter creates a new adapter that provides sql.DB interface for RQLite
 func NewRQLiteAdapter(manager *RQLiteManager) (*RQLiteAdapter, error) {
-	// Use the gorqlite database/sql driver
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true&level=none", manager.config.RQLitePort))
+	// Build DSN with optional basic auth credentials
+	dsn := fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true&level=none", manager.config.RQLitePort)
+	if manager.config.RQLiteUsername != "" && manager.config.RQLitePassword != "" {
+		dsn = fmt.Sprintf("http://%s:%s@localhost:%d?disableClusterDiscovery=true&level=none",
+			manager.config.RQLiteUsername, manager.config.RQLitePassword, manager.config.RQLitePort)
+	}
+	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open RQLite SQL connection: %w", err)
 	}
