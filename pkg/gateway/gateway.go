@@ -313,7 +313,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 		// Create client config for global namespace
 		authCfg := client.DefaultClientConfig("default") // Use "default" namespace for global
-		authCfg.DatabaseEndpoints = []string{cfg.GlobalRQLiteDSN}
+		authCfg.DatabaseEndpoints = []string{injectRQLiteAuth(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)}
 		if len(cfg.BootstrapPeers) > 0 {
 			authCfg.BootstrapPeers = cfg.BootstrapPeers
 		}

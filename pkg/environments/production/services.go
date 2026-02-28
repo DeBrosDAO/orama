@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+// oramaServiceHardening contains common systemd security directives for orama services.
+const oramaServiceHardening = `User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes`
+
 // SystemdServiceGenerator generates systemd unit files
 type SystemdServiceGenerator struct {
 	oramaHome string
@@ -34,6 +45,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+%[6]s
+ReadWritePaths=%[3]s
 Environment=HOME=%[1]s
 Environment=IPFS_PATH=%[2]s
 ExecStartPre=/bin/bash -c 'if [ -f %[3]s/secrets/swarm.key ] && [ ! -f %[2]s/swarm.key ]; then cp %[3]s/secrets/swarm.key %[2]s/swarm.key && chmod 600 %[2]s/swarm.key; fi'
@@ -52,7 +65,7 @@ MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, logFile, ipfsBinary)
+`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, logFile, ipfsBinary, oramaServiceHardening)
 }
 
 // GenerateIPFSClusterService generates the IPFS Cluster systemd unit
@@ -75,6 +88,8 @@ Requires=orama-ipfs.service
 
 [Service]
 Type=simple
+%[6]s
+ReadWritePaths=%[7]s
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
@@ -96,7 +111,7 @@ MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret)
+`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret, oramaServiceHardening, ssg.oramaDir)
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
@@ -128,6 +143,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+%[6]s
+ReadWritePaths=%[7]s
 Environment=HOME=%[1]s
 ExecStart=%[5]s %[2]s
 Restart=always
@@ -143,7 +160,7 @@ KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, args, logFile, dataDir, rqliteBinary)
+`, ssg.oramaHome, args, logFile, dataDir, rqliteBinary, oramaServiceHardening, ssg.oramaDir)
 }
 
 // GenerateOlricService generates the Olric systemd unit
@@ -158,6 +175,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+%[6]s
+ReadWritePaths=%[4]s
 Environment=HOME=%[1]s
 Environment=OLRIC_SERVER_CONFIG=%[2]s
 ExecStart=%[5]s
@@ -175,7 +194,7 @@ MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, olricConfigPath, logFile, ssg.oramaDir, olricBinary)
+`, ssg.oramaHome, olricConfigPath, logFile, ssg.oramaDir, olricBinary, oramaServiceHardening)
 }
 
 // GenerateNodeService generates the Orama Node systemd unit
@@ -193,6 +212,8 @@ Requires=wg-quick@wg0.service
 
 [Service]
 Type=simple
+%[5]s
+ReadWritePaths=%[2]s
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/orama-node --config %[2]s/configs/%[3]s
@@ -211,7 +232,7 @@ OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, ssg.oramaDir, configFile, logFile)
+`, ssg.oramaHome, ssg.oramaDir, configFile, logFile, oramaServiceHardening)
 }
 
 // GenerateVaultService generates the Orama Vault Guardian systemd unit.
@@ -230,6 +251,16 @@ PartOf=orama-node.service
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths=%[2]s
 ExecStart=%[1]s/bin/vault-guardian --config %[2]s/vault.yaml
 Restart=on-failure
 RestartSec=5
@@ -238,9 +269,6 @@ StandardError=append:%[3]s
 SyslogIdentifier=orama-vault
 
 PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=%[2]s
-NoNewPrivileges=yes
 LimitMEMLOCK=67108864
 MemoryMax=512M
 TimeoutStopSec=30
@@ -261,6 +289,8 @@ Wants=orama-node.service orama-olric.service
 
 [Service]
 Type=simple
+%[4]s
+ReadWritePaths=%[2]s
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/gateway --config %[2]s/data/gateway.yaml
@@ -278,7 +308,7 @@ MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, ssg.oramaDir, logFile)
+`, ssg.oramaHome, ssg.oramaDir, logFile, oramaServiceHardening)
 }
 
 // GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit.
@@ -353,7 +383,7 @@ WantedBy=multi-user.target
 
 // GenerateCoreDNSService generates the CoreDNS systemd unit
 func (ssg *SystemdServiceGenerator) GenerateCoreDNSService() string {
-	return `[Unit]
+	return fmt.Sprintf(`[Unit]
 Description=CoreDNS DNS Server with RQLite backend
 Documentation=https://coredns.io
 After=network-online.target orama-node.service
@@ -361,11 +391,16 @@ Wants=network-online.target orama-node.service
 
 [Service]
 Type=simple
+%[1]s
+ReadWritePaths=%[2]s
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/coredns -conf /etc/coredns/Corefile
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=coredns
 
+PrivateTmp=yes
 LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
@@ -373,12 +408,12 @@ MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target
-`
+`, oramaServiceHardening, ssg.oramaDir)
 }
 
 // GenerateCaddyService generates the Caddy systemd unit for SSL/TLS
 func (ssg *SystemdServiceGenerator) GenerateCaddyService() string {
-	return `[Unit]
+	return fmt.Sprintf(`[Unit]
 Description=Caddy HTTP/2 Server
 Documentation=https://caddyserver.com/docs/
 After=network-online.target orama-node.service coredns.service
@@ -387,6 +422,10 @@ Wants=orama-node.service
 
 [Service]
 Type=simple
+%[1]s
+ReadWritePaths=%[2]s /var/lib/caddy /etc/caddy
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
 TimeoutStopSec=5s
@@ -401,7 +440,7 @@ MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target
-`
+`, oramaServiceHardening, ssg.oramaDir)
 }
 
 // SystemdController manages systemd service operations

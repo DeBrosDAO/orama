@@ -117,8 +117,8 @@ func (wp *WireGuardProvisioner) GenerateConfig() string {
 
 	// Accept all WireGuard subnet traffic before UFW's conntrack "invalid" drop.
 	// Without this, packets reordered by the tunnel get silently dropped.
-	sb.WriteString("PostUp = iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT\n")
-	sb.WriteString("PostDown = iptables -D INPUT -i wg0 -s 10.0.0.0/8 -j ACCEPT\n")
+	sb.WriteString("PostUp = iptables -I INPUT 1 -i wg0 -s 10.0.0.0/24 -j ACCEPT\n")
+	sb.WriteString("PostDown = iptables -D INPUT -i wg0 -s 10.0.0.0/24 -j ACCEPT\n")
 
 	for _, peer := range wp.config.Peers {
 		sb.WriteString("\n[Peer]\n")

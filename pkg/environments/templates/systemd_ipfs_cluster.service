@@ -6,6 +6,16 @@ Requires=orama-ipfs-{{.NodeType}}.service
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths={{.ClusterPath}} {{.OramaDir}}
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 Environment=CLUSTER_PATH={{.ClusterPath}}

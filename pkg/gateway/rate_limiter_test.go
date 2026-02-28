@@ -98,7 +98,9 @@ func TestIsInternalIP(t *testing.T) {
 	}{
 		{"10.0.0.1", true},
 		{"10.0.0.254", true},
-		{"10.255.255.255", true},
+		{"10.0.0.255", true},
+		{"10.0.1.1", false},      // outside /24 — VPS provider's internal range, not our WG mesh
+		{"10.255.255.255", false}, // outside /24
 		{"127.0.0.1", true},
 		{"192.168.1.1", false},
 		{"8.8.8.8", false},

@@ -18,9 +18,11 @@ func TestFirewallProvisioner_GenerateRules_StandardNode(t *testing.T) {
 	assertContainsRule(t, rules, "ufw allow 51820/udp")
 	assertContainsRule(t, rules, "ufw allow 80/tcp")
 	assertContainsRule(t, rules, "ufw allow 443/tcp")
-	assertContainsRule(t, rules, "ufw allow from 10.0.0.0/8")
+	assertContainsRule(t, rules, "ufw allow from 10.0.0.0/24")
+	assertContainsRule(t, rules, "sysctl -w net.ipv6.conf.all.disable_ipv6=1")
+	assertContainsRule(t, rules, "sysctl -w net.ipv6.conf.default.disable_ipv6=1")
 	assertContainsRule(t, rules, "ufw --force enable")
-	assertContainsRule(t, rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT")
+	assertContainsRule(t, rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/24 -j ACCEPT")
 
 	// Should NOT contain DNS or Anyone relay
 	for _, rule := range rules {
@@ -76,7 +78,7 @@ func TestFirewallProvisioner_GenerateRules_WireGuardSubnetAllowed(t *testing.T) 
 
 	rules := fp.GenerateRules()
 
-	assertContainsRule(t, rules, "ufw allow from 10.0.0.0/8")
+	assertContainsRule(t, rules, "ufw allow from 10.0.0.0/24")
 }
 
 func TestFirewallProvisioner_GenerateRules_FullConfig(t *testing.T) {

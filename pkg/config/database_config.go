@@ -22,6 +22,13 @@ type DatabaseConfig struct {
 	NodeCACert   string `yaml:"node_ca_cert"`   // Path to CA certificate (optional, uses system CA if not set)
 	NodeNoVerify bool   `yaml:"node_no_verify"` // Skip certificate verification (for testing/self-signed certs)
 
+	// RQLite HTTP Basic Auth credentials.
+	// When RQLiteAuthFile is set, rqlited is launched with `-auth <file>`.
+	// Username/password are embedded in all client DSNs (harmless when auth not enforced).
+	RQLiteUsername string `yaml:"rqlite_username"`
+	RQLitePassword string `yaml:"rqlite_password"`
+	RQLiteAuthFile string `yaml:"rqlite_auth_file"` // Path to RQLite auth JSON file. Empty = auth not enforced.
+
 	// Raft tuning (passed through to rqlited CLI flags).
 	// Higher defaults than rqlited's 1s suit WireGuard latency.
 	RaftElectionTimeout    time.Duration `yaml:"raft_election_timeout"`     // default: 5s

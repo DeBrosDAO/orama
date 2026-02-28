@@ -2,8 +2,12 @@ package install
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -366,12 +370,35 @@ func (o *Orchestrator) callJoinEndpoint(wgPubKey string) (*joinhandlers.JoinResp
 	}
 
 	url := strings.TrimRight(o.flags.JoinAddress, "/") + "/v1/internal/join"
+
+	tlsConfig := &tls.Config{}
+	if o.flags.CAFingerprint != "" {
+		// TOFU: verify the server's TLS cert fingerprint matches the one from the invite
+		expectedFP, err := hex.DecodeString(o.flags.CAFingerprint)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --ca-fingerprint: must be hex-encoded SHA-256: %w", err)
+		}
+		tlsConfig.InsecureSkipVerify = true
+		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("server presented no TLS certificates")
+			}
+			hash := sha256.Sum256(rawCerts[0])
+			if !bytes.Equal(hash[:], expectedFP) {
+				return fmt.Errorf("TLS certificate fingerprint mismatch: expected %s, got %x (possible MITM attack)",
+					o.flags.CAFingerprint, hash[:])
+			}
+			return nil
+		}
+	} else {
+		// No fingerprint provided — fall back to insecure for backward compatibility
+		tlsConfig.InsecureSkipVerify = true
+	}
+
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Self-signed certs during initial setup
-			},
+			TLSClientConfig: tlsConfig,
 		},
 	}
 
@@ -416,6 +443,40 @@ func (o *Orchestrator) saveSecretsFromJoinResponse(resp *joinhandlers.JoinRespon
 	if resp.SwarmKey != "" {
 		if err := os.WriteFile(filepath.Join(secretsDir, "swarm.key"), []byte(resp.SwarmKey), 0600); err != nil {
 			return fmt.Errorf("failed to write swarm.key: %w", err)
+		}
+	}
+
+	// Write API key HMAC secret
+	if resp.APIKeyHMACSecret != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "api-key-hmac-secret"), []byte(resp.APIKeyHMACSecret), 0600); err != nil {
+			return fmt.Errorf("failed to write api-key-hmac-secret: %w", err)
+		}
+	}
+
+	// Write RQLite password and generate auth JSON file
+	if resp.RQLitePassword != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "rqlite-password"), []byte(resp.RQLitePassword), 0600); err != nil {
+			return fmt.Errorf("failed to write rqlite-password: %w", err)
+		}
+		// Also generate the auth JSON file that rqlited uses with -auth flag
+		authJSON := fmt.Sprintf(`[{"username": "orama", "password": "%s", "perms": ["all"]}]`, resp.RQLitePassword)
+		if err := os.WriteFile(filepath.Join(secretsDir, "rqlite-auth.json"), []byte(authJSON), 0600); err != nil {
+			return fmt.Errorf("failed to write rqlite-auth.json: %w", err)
+		}
+	}
+
+	// Write Olric encryption key
+	if resp.OlricEncryptionKey != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "olric-encryption-key"), []byte(resp.OlricEncryptionKey), 0600); err != nil {
+			return fmt.Errorf("failed to write olric-encryption-key: %w", err)
+		}
+	}
+
+	// Write IPFS Cluster trusted peer IDs
+	if len(resp.IPFSClusterPeerIDs) > 0 {
+		content := strings.Join(resp.IPFSClusterPeerIDs, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(secretsDir, "ipfs-cluster-trusted-peers"), []byte(content), 0600); err != nil {
+			return fmt.Errorf("failed to write ipfs-cluster-trusted-peers: %w", err)
 		}
 	}
 

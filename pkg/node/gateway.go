@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
@@ -13,6 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/namespace"
+	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"go.uber.org/zap"
 )
 
@@ -44,6 +46,18 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		clusterSecret = string(secretBytes)
 	}
 
+	// Read API key HMAC secret for hashing API keys before storage
+	apiKeyHMACSecret := ""
+	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "api-key-hmac-secret")); err == nil {
+		apiKeyHMACSecret = strings.TrimSpace(string(secretBytes))
+	}
+
+	// Read RQLite credentials for authenticated DB connections
+	rqlitePassword := ""
+	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "rqlite-password")); err == nil {
+		rqlitePassword = strings.TrimSpace(string(secretBytes))
+	}
+
 	gwCfg := &gateway.Config{
 		ListenAddr:           n.config.HTTPGateway.ListenAddr,
 		ClientNamespace:      n.config.HTTPGateway.ClientNamespace,
@@ -57,7 +71,10 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		IPFSTimeout:          n.config.HTTPGateway.IPFSTimeout,
 		BaseDomain:           n.config.HTTPGateway.BaseDomain,
 		DataDir:              oramaDir,
+		RQLiteUsername:       "orama",
+		RQLitePassword:       rqlitePassword,
 		ClusterSecret:        clusterSecret,
+		APIKeyHMACSecret:     apiKeyHMACSecret,
 		WebRTCEnabled:        n.config.HTTPGateway.WebRTC.Enabled,
 		SFUPort:              n.config.HTTPGateway.WebRTC.SFUPort,
 		TURNDomain:           n.config.HTTPGateway.WebRTC.TURNDomain,
@@ -73,6 +90,14 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 	// Wire up ClusterManager for per-namespace cluster provisioning
 	if ormClient := apiGateway.GetORMClient(); ormClient != nil {
 		baseDataDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "data", "namespaces")
+		// Derive TURN encryption key from cluster secret (nil if no secret available)
+		var turnEncKey []byte
+		if clusterSecret != "" {
+			if key, keyErr := secrets.DeriveKey(clusterSecret, "turn-encryption"); keyErr == nil {
+				turnEncKey = key
+			}
+		}
+
 		clusterCfg := namespace.ClusterManagerConfig{
 			BaseDomain:            n.config.HTTPGateway.BaseDomain,
 			BaseDataDir:           baseDataDir,
@@ -81,6 +106,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			IPFSAPIURL:            gwCfg.IPFSAPIURL,
 			IPFSTimeout:           gwCfg.IPFSTimeout,
 			IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
+			TurnEncryptionKey:     turnEncKey,
 		}
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)

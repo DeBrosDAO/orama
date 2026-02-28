@@ -1,6 +1,7 @@
 package production
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -256,6 +257,13 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	}
 	ps.logf("  ✓ Directory structure created")
 
+	// Create dedicated orama user for running services (non-root)
+	if err := ps.fsProvisioner.EnsureOramaUser(); err != nil {
+		ps.logf("  ⚠️  Could not create orama user: %v (services will run as root)", err)
+	} else {
+		ps.logf("  ✓ orama user ensured")
+	}
+
 	return nil
 }
 
@@ -477,6 +485,11 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
+	// After init, save own IPFS Cluster peer ID to trusted peers file
+	if err := ps.saveOwnClusterPeerID(clusterPath); err != nil {
+		ps.logf("  ⚠️  Could not save IPFS Cluster peer ID to trusted peers: %v", err)
+	}
+
 	// Initialize RQLite data directory
 	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	if err := ps.binaryInstaller.InitializeRQLiteDataDir(rqliteDataDir); err != nil {
@@ -484,6 +497,50 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	}
 
 	ps.logf("  ✓ Services initialized")
+	return nil
+}
+
+// saveOwnClusterPeerID reads this node's IPFS Cluster peer ID from identity.json
+// and appends it to the trusted-peers file so EnsureConfig() can use it.
+func (ps *ProductionSetup) saveOwnClusterPeerID(clusterPath string) error {
+	identityPath := filepath.Join(clusterPath, "identity.json")
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		return fmt.Errorf("failed to read identity.json: %w", err)
+	}
+
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &identity); err != nil {
+		return fmt.Errorf("failed to parse identity.json: %w", err)
+	}
+	if identity.ID == "" {
+		return fmt.Errorf("peer ID not found in identity.json")
+	}
+
+	// Read existing trusted peers
+	trustedPeersPath := filepath.Join(ps.oramaDir, "secrets", "ipfs-cluster-trusted-peers")
+	var existing []string
+	if fileData, err := os.ReadFile(trustedPeersPath); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(fileData)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				if line == identity.ID {
+					return nil // already present
+				}
+				existing = append(existing, line)
+			}
+		}
+	}
+
+	existing = append(existing, identity.ID)
+	content := strings.Join(existing, "\n") + "\n"
+	if err := os.WriteFile(trustedPeersPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("failed to write trusted peers file: %w", err)
+	}
+
+	ps.logf("  ✓ IPFS Cluster peer ID saved to trusted peers: %s", identity.ID)
 	return nil
 }
 
@@ -502,6 +559,24 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 		return fmt.Errorf("failed to ensure swarm key: %w", err)
 	}
 	ps.logf("  ✓ IPFS swarm key ensured")
+
+	// RQLite auth credentials
+	if _, _, err := ps.secretGenerator.EnsureRQLiteAuth(); err != nil {
+		return fmt.Errorf("failed to ensure RQLite auth: %w", err)
+	}
+	ps.logf("  ✓ RQLite auth credentials ensured")
+
+	// Olric gossip encryption key
+	if _, err := ps.secretGenerator.EnsureOlricEncryptionKey(); err != nil {
+		return fmt.Errorf("failed to ensure Olric encryption key: %w", err)
+	}
+	ps.logf("  ✓ Olric encryption key ensured")
+
+	// API key HMAC secret
+	if _, err := ps.secretGenerator.EnsureAPIKeyHMACSecret(); err != nil {
+		return fmt.Errorf("failed to ensure API key HMAC secret: %w", err)
+	}
+	ps.logf("  ✓ API key HMAC secret ensured")
 
 	// Node identity (unified architecture)
 	peerID, err := ps.secretGenerator.EnsureNodeIdentity()

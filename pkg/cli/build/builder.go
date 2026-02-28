@@ -117,7 +117,14 @@ func (b *Builder) Build() error {
 		return fmt.Errorf("failed to generate manifest: %w", err)
 	}
 
-	// Step 11: Create archive
+	// Step 11: Sign manifest (optional)
+	if b.flags.Sign {
+		if err := b.signManifest(manifest); err != nil {
+			return fmt.Errorf("failed to sign manifest: %w", err)
+		}
+	}
+
+	// Step 12: Create archive
 	outputPath := b.flags.Output
 	if outputPath == "" {
 		outputPath = fmt.Sprintf("/tmp/orama-%s-linux-%s.tar.gz", b.version, b.flags.Arch)

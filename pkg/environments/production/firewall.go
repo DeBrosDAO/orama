@@ -98,7 +98,12 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 	}
 
 	// Allow all traffic from WireGuard subnet (inter-node encrypted traffic)
-	rules = append(rules, "ufw allow from 10.0.0.0/8")
+	rules = append(rules, "ufw allow from 10.0.0.0/24")
+
+	// Disable IPv6 — no ip6tables rules exist, so services bound to 0.0.0.0
+	// may be reachable via IPv6. Disable it entirely at the kernel level.
+	rules = append(rules, "sysctl -w net.ipv6.conf.all.disable_ipv6=1")
+	rules = append(rules, "sysctl -w net.ipv6.conf.default.disable_ipv6=1")
 
 	// Enable firewall
 	rules = append(rules, "ufw --force enable")
@@ -109,7 +114,7 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 	// can be misclassified as "invalid" by conntrack due to reordering/jitter
 	// (especially between high-latency peers), causing silent packet drops.
 	// Inserting at position 1 in INPUT ensures this runs before UFW chains.
-	rules = append(rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/8 -j ACCEPT")
+	rules = append(rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/24 -j ACCEPT")
 
 	return rules
 }
@@ -130,6 +135,22 @@ func (fp *FirewallProvisioner) Setup() error {
 		}
 	}
 
+	// Persist IPv6 disable across reboots
+	if err := fp.persistIPv6Disable(); err != nil {
+		return fmt.Errorf("failed to persist IPv6 disable: %w", err)
+	}
+
+	return nil
+}
+
+// persistIPv6Disable writes a sysctl config to disable IPv6 on boot.
+func (fp *FirewallProvisioner) persistIPv6Disable() error {
+	content := "# Orama Network: disable IPv6 (no ip6tables rules configured)\nnet.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n"
+	cmd := exec.Command("tee", "/etc/sysctl.d/99-orama-disable-ipv6.conf")
+	cmd.Stdin = strings.NewReader(content)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to write sysctl config: %w\n%s", err, string(output))
+	}
 	return nil
 }
 

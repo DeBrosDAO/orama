@@ -1,12 +1,17 @@
 package production
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
 // PreBuiltManifest describes the contents of a pre-built binary archive.
@@ -40,6 +45,74 @@ func LoadPreBuiltManifest() (*PreBuiltManifest, error) {
 	return &manifest, nil
 }
 
+// OramaSignerAddress is the Ethereum address authorized to sign build archives.
+// Archives signed by any other address are rejected during install.
+// This is the DeBros deploy wallet — update if the signing key rotates.
+const OramaSignerAddress = "0x0000000000000000000000000000000000000000" // TODO: set real address
+
+// VerifyArchiveSignature verifies that the pre-built archive was signed by the
+// authorized Orama signer. Returns nil if the signature is valid, or if no
+// signature file exists (unsigned archives are allowed but logged as a warning).
+func VerifyArchiveSignature(manifest *PreBuiltManifest) error {
+	sigData, err := os.ReadFile(OramaManifestSig)
+	if os.IsNotExist(err) {
+		return nil // unsigned archive — caller decides whether to proceed
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read manifest.sig: %w", err)
+	}
+
+	// Reproduce the same hash used during signing: SHA256 of compact JSON
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+	manifestHash := sha256.Sum256(manifestJSON)
+	hashHex := hex.EncodeToString(manifestHash[:])
+
+	// EVM personal_sign: keccak256("\x19Ethereum Signed Message:\n" + len + message)
+	msg := []byte(hashHex)
+	prefix := []byte("\x19Ethereum Signed Message:\n" + fmt.Sprintf("%d", len(msg)))
+	ethHash := ethcrypto.Keccak256(prefix, msg)
+
+	// Decode signature
+	sigHex := strings.TrimSpace(string(sigData))
+	if strings.HasPrefix(sigHex, "0x") || strings.HasPrefix(sigHex, "0X") {
+		sigHex = sigHex[2:]
+	}
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != 65 {
+		return fmt.Errorf("invalid signature format in manifest.sig")
+	}
+
+	// Normalize recovery ID
+	if sig[64] >= 27 {
+		sig[64] -= 27
+	}
+
+	// Recover public key from signature
+	pub, err := ethcrypto.SigToPub(ethHash, sig)
+	if err != nil {
+		return fmt.Errorf("signature recovery failed: %w", err)
+	}
+
+	recovered := ethcrypto.PubkeyToAddress(*pub).Hex()
+	expected := strings.ToLower(OramaSignerAddress)
+	got := strings.ToLower(recovered)
+
+	if got != expected {
+		return fmt.Errorf("archive signed by %s, expected %s — refusing to install", recovered, OramaSignerAddress)
+	}
+
+	return nil
+}
+
+// IsArchiveSigned returns true if a manifest.sig file exists alongside the manifest.
+func IsArchiveSigned() bool {
+	_, err := os.Stat(OramaManifestSig)
+	return err == nil
+}
+
 // installFromPreBuilt installs all binaries from a pre-built archive.
 // The archive must already be extracted at /opt/orama/ with:
 //   - /opt/orama/bin/ — all pre-compiled binaries
@@ -48,6 +121,16 @@ func LoadPreBuiltManifest() (*PreBuiltManifest, error) {
 //   - /opt/orama/manifest.json — archive metadata
 func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error {
 	ps.logf("  Using pre-built binary archive v%s (%s) linux/%s", manifest.Version, manifest.Commit, manifest.Arch)
+
+	// Verify archive signature if present
+	if IsArchiveSigned() {
+		if err := VerifyArchiveSignature(manifest); err != nil {
+			return fmt.Errorf("archive signature verification failed: %w", err)
+		}
+		ps.logf("  ✓ Archive signature verified")
+	} else {
+		ps.logf("  ⚠️  Archive is unsigned — consider using 'orama build --sign'")
+	}
 
 	// Install minimal system dependencies (no build tools needed)
 	if err := ps.installMinimalSystemDeps(); err != nil {

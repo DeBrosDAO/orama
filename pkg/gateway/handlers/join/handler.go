@@ -32,14 +32,18 @@ type JoinResponse struct {
 	WGPeers []WGPeerInfo `json:"wg_peers"`
 
 	// Secrets
-	ClusterSecret string `json:"cluster_secret"`
-	SwarmKey      string `json:"swarm_key"`
+	ClusterSecret    string `json:"cluster_secret"`
+	SwarmKey         string `json:"swarm_key"`
+	APIKeyHMACSecret string `json:"api_key_hmac_secret,omitempty"`
+	RQLitePassword      string `json:"rqlite_password,omitempty"`
+	OlricEncryptionKey  string `json:"olric_encryption_key,omitempty"`
 
 	// Cluster join info (all using WG IPs)
-	RQLiteJoinAddress string   `json:"rqlite_join_address"`
-	IPFSPeer          PeerInfo `json:"ipfs_peer"`
-	IPFSClusterPeer   PeerInfo `json:"ipfs_cluster_peer"`
-	BootstrapPeers    []string `json:"bootstrap_peers"`
+	RQLiteJoinAddress  string   `json:"rqlite_join_address"`
+	IPFSPeer           PeerInfo `json:"ipfs_peer"`
+	IPFSClusterPeer    PeerInfo `json:"ipfs_cluster_peer"`
+	IPFSClusterPeerIDs []string `json:"ipfs_cluster_peer_ids,omitempty"`
+	BootstrapPeers     []string `json:"bootstrap_peers"`
 
 	// Olric seed peers (WG IP:port for memberlist)
 	OlricPeers []string `json:"olric_peers,omitempty"`
@@ -155,6 +159,24 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read API key HMAC secret (optional — may not exist on older clusters)
+	apiKeyHMACSecret := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/api-key-hmac-secret"); err == nil {
+		apiKeyHMACSecret = strings.TrimSpace(string(data))
+	}
+
+	// Read RQLite password (optional — may not exist on older clusters)
+	rqlitePassword := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/rqlite-password"); err == nil {
+		rqlitePassword = strings.TrimSpace(string(data))
+	}
+
+	// Read Olric encryption key (optional — may not exist on older clusters)
+	olricEncryptionKey := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/olric-encryption-key"); err == nil {
+		olricEncryptionKey = strings.TrimSpace(string(data))
+	}
+
 	// 7. Get all WG peers
 	wgPeers, err := h.getWGPeers(ctx, req.WGPublicKey)
 	if err != nil {
@@ -181,6 +203,9 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// 11. Read base domain from config
 	baseDomain := h.readBaseDomain()
 
+	// 12. Read IPFS Cluster trusted peer IDs
+	ipfsClusterPeerIDs := h.readIPFSClusterTrustedPeers()
+
 	// Build Olric seed peers from all existing WG peer IPs (memberlist port 3322)
 	var olricPeers []string
 	for _, p := range wgPeers {
@@ -191,16 +216,20 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", myWGIP))
 
 	resp := JoinResponse{
-		WGIP:              wgIP,
-		WGPeers:           wgPeers,
-		ClusterSecret:     strings.TrimSpace(string(clusterSecret)),
-		SwarmKey:          strings.TrimSpace(string(swarmKey)),
-		RQLiteJoinAddress: fmt.Sprintf("%s:7001", myWGIP),
-		IPFSPeer:          ipfsPeer,
-		IPFSClusterPeer:   ipfsClusterPeer,
-		BootstrapPeers:    bootstrapPeers,
-		OlricPeers:        olricPeers,
-		BaseDomain:        baseDomain,
+		WGIP:               wgIP,
+		WGPeers:            wgPeers,
+		ClusterSecret:      strings.TrimSpace(string(clusterSecret)),
+		SwarmKey:            strings.TrimSpace(string(swarmKey)),
+		APIKeyHMACSecret:   apiKeyHMACSecret,
+		RQLitePassword:     rqlitePassword,
+		OlricEncryptionKey: olricEncryptionKey,
+		RQLiteJoinAddress:  fmt.Sprintf("%s:7001", myWGIP),
+		IPFSPeer:           ipfsPeer,
+		IPFSClusterPeer:    ipfsClusterPeer,
+		IPFSClusterPeerIDs: ipfsClusterPeerIDs,
+		BootstrapPeers:     bootstrapPeers,
+		OlricPeers:         olricPeers,
+		BaseDomain:         baseDomain,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -452,6 +481,22 @@ func (h *Handler) buildBootstrapPeers(myWGIP, ipfsPeerID string) []string {
 	return []string{
 		fmt.Sprintf("/ip4/%s/tcp/4001/p2p/%s", myWGIP, peerID.String()),
 	}
+}
+
+// readIPFSClusterTrustedPeers reads IPFS Cluster trusted peer IDs from the secrets file
+func (h *Handler) readIPFSClusterTrustedPeers() []string {
+	data, err := os.ReadFile(h.oramaDir + "/secrets/ipfs-cluster-trusted-peers")
+	if err != nil {
+		return nil
+	}
+	var peers []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			peers = append(peers, line)
+		}
+	}
+	return peers
 }
 
 // readBaseDomain reads the base domain from node config
