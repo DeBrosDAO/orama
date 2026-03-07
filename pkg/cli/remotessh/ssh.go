@@ -12,7 +12,8 @@ import (
 type SSHOption func(*sshOptions)
 
 type sshOptions struct {
-	agentForward bool
+	agentForward   bool
+	noHostKeyCheck bool
 }
 
 // WithAgentForward enables SSH agent forwarding (-A flag).
@@ -21,22 +22,35 @@ func WithAgentForward() SSHOption {
 	return func(o *sshOptions) { o.agentForward = true }
 }
 
+// WithNoHostKeyCheck disables host key verification and uses /dev/null as known_hosts.
+// Use for ephemeral servers (sandbox) where IPs are frequently recycled.
+func WithNoHostKeyCheck() SSHOption {
+	return func(o *sshOptions) { o.noHostKeyCheck = true }
+}
+
 // UploadFile copies a local file to a remote host via SCP.
 // Requires node.SSHKey to be set (via PrepareNodeKeys).
-func UploadFile(node inspector.Node, localPath, remotePath string) error {
+func UploadFile(node inspector.Node, localPath, remotePath string, opts ...SSHOption) error {
 	if node.SSHKey == "" {
 		return fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
 	}
 
+	var cfg sshOptions
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	dest := fmt.Sprintf("%s@%s:%s", node.User, node.Host, remotePath)
 
-	cmd := exec.Command("scp",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "ConnectTimeout=10",
-		"-i", node.SSHKey,
-		localPath, dest,
-	)
+	args := []string{"-o", "ConnectTimeout=10", "-i", node.SSHKey}
+	if cfg.noHostKeyCheck {
+		args = append([]string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}, args...)
+	} else {
+		args = append([]string{"-o", "StrictHostKeyChecking=accept-new"}, args...)
+	}
+	args = append(args, localPath, dest)
 
+	cmd := exec.Command("scp", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -59,10 +73,11 @@ func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) err
 		o(&cfg)
 	}
 
-	args := []string{
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "ConnectTimeout=10",
-		"-i", node.SSHKey,
+	args := []string{"-o", "ConnectTimeout=10", "-i", node.SSHKey}
+	if cfg.noHostKeyCheck {
+		args = append([]string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}, args...)
+	} else {
+		args = append([]string{"-o", "StrictHostKeyChecking=accept-new"}, args...)
 	}
 	if cfg.agentForward {
 		args = append(args, "-A")

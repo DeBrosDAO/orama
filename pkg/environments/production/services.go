@@ -424,6 +424,7 @@ Wants=orama-node.service
 Type=simple
 %[1]s
 ReadWritePaths=%[2]s /var/lib/caddy /etc/caddy
+Environment=XDG_DATA_HOME=/var/lib/caddy
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile

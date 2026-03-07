@@ -706,6 +706,20 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
+	// Re-chown all orama directories to the orama user.
+	// Phases 2b-4 create files as root (IPFS repo, configs, secrets, etc.)
+	// that must be readable/writable by the orama service user.
+	if err := exec.Command("id", "orama").Run(); err == nil {
+		for _, dir := range []string{ps.oramaDir, filepath.Join(ps.oramaHome, "bin")} {
+			if _, statErr := os.Stat(dir); statErr == nil {
+				if output, chownErr := exec.Command("chown", "-R", "orama:orama", dir).CombinedOutput(); chownErr != nil {
+					ps.logf("  ⚠️  Failed to chown %s: %v\n%s", dir, chownErr, string(output))
+				}
+			}
+		}
+		ps.logf("  ✓ File ownership updated for orama user")
+	}
+
 	// Validate all required binaries are available before creating services
 	ipfsBinary, err := ps.binaryInstaller.ResolveBinaryPath("ipfs", "/usr/local/bin/ipfs", "/usr/bin/ipfs")
 	if err != nil {
@@ -795,8 +809,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 
 	// Caddy service on ALL nodes (any node may host namespaces and need TLS)
 	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		// Create caddy data directory
+		// Create caddy data directory and ensure orama user can write to it
 		exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
+		exec.Command("chown", "-R", "orama:orama", "/var/lib/caddy").Run()
 
 		caddyUnit := ps.serviceGenerator.GenerateCaddyService()
 		if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
