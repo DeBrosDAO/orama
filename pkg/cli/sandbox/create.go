@@ -138,10 +138,14 @@ func phase1ProvisionServers(client *HetznerClient, cfg *Config, state *SandboxSt
 	}
 
 	servers := make([]ServerState, 5)
+	var firstErr error
 	for i := 0; i < 5; i++ {
 		r := <-results
 		if r.err != nil {
-			return fmt.Errorf("server %d: %w", r.index+1, r.err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("server %d: %w", r.index+1, r.err)
+			}
+			continue
 		}
 		fmt.Printf("  Created %s (ID: %d, initializing...)\n", r.server.Name, r.server.ID)
 		role := "node"
@@ -153,6 +157,10 @@ func phase1ProvisionServers(client *HetznerClient, cfg *Config, state *SandboxSt
 			Name: r.server.Name,
 			Role: role,
 		}
+	}
+	state.Servers = servers // populate before returning so cleanup can delete created servers
+	if firstErr != nil {
+		return firstErr
 	}
 
 	// Wait for all servers to reach "running"
@@ -210,12 +218,12 @@ func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxS
 		}
 
 		// Wait for SSH to be ready on freshly booted servers
-		if err := waitForSSH(node, 2*time.Minute); err != nil {
+		if err := waitForSSH(node, 5*time.Minute); err != nil {
 			return fmt.Errorf("SSH not ready on %s: %w", srv.Name, err)
 		}
 
 		cmd := fmt.Sprintf("ip addr add %s/32 dev lo 2>/dev/null || true", fip.IP)
-		if err := remotessh.RunSSHStreaming(node, cmd); err != nil {
+		if err := remotessh.RunSSHStreaming(node, cmd, remotessh.WithNoHostKeyCheck()); err != nil {
 			return fmt.Errorf("configure loopback on %s: %w", srv.Name, err)
 		}
 	}
@@ -236,9 +244,9 @@ func waitForSSH(node inspector.Node, timeout time.Duration) error {
 	return fmt.Errorf("timeout after %s", timeout)
 }
 
-// phase3UploadArchive builds (if needed) and uploads the binary archive to all nodes.
+// phase3UploadArchive uploads the binary archive to the genesis node, then fans out
+// to the remaining nodes server-to-server (much faster than uploading from local machine).
 func phase3UploadArchive(cfg *Config, state *SandboxState) error {
-	// Find existing archive
 	archivePath := findNewestArchive()
 	if archivePath == "" {
 		fmt.Println("  No binary archive found, run `orama build` first")
@@ -250,40 +258,73 @@ func phase3UploadArchive(cfg *Config, state *SandboxState) error {
 
 	sshKeyPath := cfg.ExpandedPrivateKeyPath()
 	remotePath := "/tmp/" + filepath.Base(archivePath)
+	extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s",
+		remotePath, remotePath)
 
-	// Upload to all 5 nodes in parallel
-	var wg sync.WaitGroup
-	errs := make([]error, len(state.Servers))
+	// Step 1: Upload from local machine to genesis node
+	genesis := state.Servers[0]
+	genesisNode := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
-	for i, srv := range state.Servers {
-		wg.Add(1)
-		go func(idx int, srv ServerState) {
-			defer wg.Done()
-			node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-
-			if err := remotessh.UploadFile(node, archivePath, remotePath); err != nil {
-				errs[idx] = fmt.Errorf("upload to %s: %w", srv.Name, err)
-				return
-			}
-
-			// Extract + install CLI
-			extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s && cp /opt/orama/bin/orama /usr/local/bin/orama && chmod +x /usr/local/bin/orama",
-				remotePath, remotePath)
-			if err := remotessh.RunSSHStreaming(node, extractCmd); err != nil {
-				errs[idx] = fmt.Errorf("extract on %s: %w", srv.Name, err)
-				return
-			}
-			fmt.Printf("  Uploaded to %s\n", srv.Name)
-		}(i, srv)
+	fmt.Printf("  Uploading to %s (genesis)...\n", genesis.Name)
+	if err := remotessh.UploadFile(genesisNode, archivePath, remotePath, remotessh.WithNoHostKeyCheck()); err != nil {
+		return fmt.Errorf("upload to %s: %w", genesis.Name, err)
 	}
-	wg.Wait()
 
-	for _, err := range errs {
-		if err != nil {
-			return err
+	// Step 2: Fan out from genesis to remaining nodes in parallel (server-to-server)
+	if len(state.Servers) > 1 {
+		fmt.Printf("  Fanning out from %s to %d nodes...\n", genesis.Name, len(state.Servers)-1)
+
+		// Temporarily upload SSH key to genesis for server-to-server SCP
+		remoteKeyPath := "/tmp/.sandbox_key"
+		if err := remotessh.UploadFile(genesisNode, sshKeyPath, remoteKeyPath, remotessh.WithNoHostKeyCheck()); err != nil {
+			return fmt.Errorf("upload SSH key to genesis: %w", err)
+		}
+		// Always clean up the temporary key, even on panic/early return
+		defer remotessh.RunSSHStreaming(genesisNode, fmt.Sprintf("rm -f %s", remoteKeyPath), remotessh.WithNoHostKeyCheck())
+
+		if err := remotessh.RunSSHStreaming(genesisNode, fmt.Sprintf("chmod 600 %s", remoteKeyPath), remotessh.WithNoHostKeyCheck()); err != nil {
+			return fmt.Errorf("chmod SSH key on genesis: %w", err)
+		}
+
+		var wg sync.WaitGroup
+		errs := make([]error, len(state.Servers))
+
+		for i := 1; i < len(state.Servers); i++ {
+			wg.Add(1)
+			go func(idx int, srv ServerState) {
+				defer wg.Done()
+				// SCP from genesis to target using the uploaded key
+				scpCmd := fmt.Sprintf("scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i %s %s root@%s:%s",
+					remoteKeyPath, remotePath, srv.IP, remotePath)
+				if err := remotessh.RunSSHStreaming(genesisNode, scpCmd, remotessh.WithNoHostKeyCheck()); err != nil {
+					errs[idx] = fmt.Errorf("fanout to %s: %w", srv.Name, err)
+					return
+				}
+				// Extract on target
+				targetNode := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
+				if err := remotessh.RunSSHStreaming(targetNode, extractCmd, remotessh.WithNoHostKeyCheck()); err != nil {
+					errs[idx] = fmt.Errorf("extract on %s: %w", srv.Name, err)
+					return
+				}
+				fmt.Printf("  Distributed to %s\n", srv.Name)
+			}(i, state.Servers[i])
+		}
+		wg.Wait()
+
+		for _, err := range errs {
+			if err != nil {
+				return err
+			}
 		}
 	}
 
+	// Step 3: Extract on genesis
+	fmt.Printf("  Extracting on %s...\n", genesis.Name)
+	if err := remotessh.RunSSHStreaming(genesisNode, extractCmd, remotessh.WithNoHostKeyCheck()); err != nil {
+		return fmt.Errorf("extract on %s: %w", genesis.Name, err)
+	}
+
+	fmt.Println("  All nodes ready")
 	return nil
 }
 
@@ -294,10 +335,10 @@ func phase4InstallGenesis(cfg *Config, state *SandboxState) ([]string, error) {
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Install genesis
-	installCmd := fmt.Sprintf("orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
+	installCmd := fmt.Sprintf("/opt/orama/bin/orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
 		genesis.IP, cfg.Domain, cfg.Domain)
 	fmt.Printf("  Installing on %s (%s)...\n", genesis.Name, genesis.IP)
-	if err := remotessh.RunSSHStreaming(node, installCmd); err != nil {
+	if err := remotessh.RunSSHStreaming(node, installCmd, remotessh.WithNoHostKeyCheck()); err != nil {
 		return nil, fmt.Errorf("install genesis: %w", err)
 	}
 
@@ -338,15 +379,15 @@ func phase5JoinNodes(cfg *Config, state *SandboxState, tokens []string) error {
 
 		var installCmd string
 		if srv.Role == "nameserver" {
-			installCmd = fmt.Sprintf("orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
+			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
 				genesisIP, token, srv.IP, cfg.Domain, cfg.Domain)
 		} else {
-			installCmd = fmt.Sprintf("orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --skip-checks",
+			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --skip-checks",
 				genesisIP, token, srv.IP, cfg.Domain)
 		}
 
 		fmt.Printf("  [%d/%d] Joining %s (%s, %s)...\n", i, len(state.Servers)-1, srv.Name, srv.IP, srv.Role)
-		if err := remotessh.RunSSHStreaming(node, installCmd); err != nil {
+		if err := remotessh.RunSSHStreaming(node, installCmd, remotessh.WithNoHostKeyCheck()); err != nil {
 			return fmt.Errorf("join %s: %w", srv.Name, err)
 		}
 
@@ -402,7 +443,7 @@ func waitForRQLiteHealth(node inspector.Node, timeout time.Duration) error {
 
 // generateInviteToken runs `orama node invite` on the node and parses the token.
 func generateInviteToken(node inspector.Node) (string, error) {
-	out, err := runSSHOutput(node, "orama node invite --expiry 1h 2>&1")
+	out, err := runSSHOutput(node, "/opt/orama/bin/orama node invite --expiry 1h 2>&1")
 	if err != nil {
 		return "", fmt.Errorf("invite command failed: %w", err)
 	}
@@ -451,10 +492,12 @@ func isHex(s string) bool {
 }
 
 // runSSHOutput runs a command via SSH and returns stdout as a string.
+// Uses StrictHostKeyChecking=no because sandbox IPs are frequently recycled.
 func runSSHOutput(node inspector.Node, command string) (string, error) {
 	args := []string{
 		"ssh", "-n",
-		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
 		"-i", node.SSHKey,

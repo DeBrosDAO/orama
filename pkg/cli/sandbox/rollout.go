@@ -42,14 +42,14 @@ func Rollout(name string) error {
 		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
 
 		fmt.Printf("  [%d/%d] Uploading to %s...\n", i+1, len(state.Servers), srv.Name)
-		if err := remotessh.UploadFile(node, archivePath, remotePath); err != nil {
+		if err := remotessh.UploadFile(node, archivePath, remotePath, remotessh.WithNoHostKeyCheck()); err != nil {
 			return fmt.Errorf("upload to %s: %w", srv.Name, err)
 		}
 
 		// Extract archive
 		extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s",
 			remotePath, remotePath)
-		if err := remotessh.RunSSHStreaming(node, extractCmd); err != nil {
+		if err := remotessh.RunSSHStreaming(node, extractCmd, remotessh.WithNoHostKeyCheck()); err != nil {
 			return fmt.Errorf("extract on %s: %w", srv.Name, err)
 		}
 	}
@@ -107,7 +107,7 @@ func upgradeNode(srv ServerState, sshKeyPath string, current, total int) error {
 	node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
 
 	fmt.Printf("  [%d/%d] Upgrading %s (%s)...\n", current, total, srv.Name, srv.IP)
-	if err := remotessh.RunSSHStreaming(node, "orama node upgrade --restart"); err != nil {
+	if err := remotessh.RunSSHStreaming(node, "orama node upgrade --restart", remotessh.WithNoHostKeyCheck()); err != nil {
 		return fmt.Errorf("upgrade %s: %w", srv.Name, err)
 	}
 

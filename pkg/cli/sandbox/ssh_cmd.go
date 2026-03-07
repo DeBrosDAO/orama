@@ -36,7 +36,8 @@ func SSHInto(name string, nodeNum int) error {
 	// Replace current process with SSH
 	args := []string{
 		"ssh",
-		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
 		"-i", sshKeyPath,
 		fmt.Sprintf("root@%s", srv.IP),
 	}
