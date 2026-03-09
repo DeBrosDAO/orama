@@ -213,6 +213,7 @@ Requires=wg-quick@wg0.service
 [Service]
 Type=simple
 %[5]s
+AmbientCapabilities=CAP_NET_ADMIN
 ReadWritePaths=%[2]s
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s

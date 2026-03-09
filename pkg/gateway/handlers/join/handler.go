@@ -2,8 +2,10 @@ package join
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -100,6 +102,24 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate public IP format
+	if net.ParseIP(req.PublicIP) == nil || net.ParseIP(req.PublicIP).To4() == nil {
+		http.Error(w, "public_ip must be a valid IPv4 address", http.StatusBadRequest)
+		return
+	}
+
+	// Validate WireGuard public key: must be base64-encoded 32 bytes (Curve25519)
+	// Also reject control characters (newlines) to prevent config injection
+	if strings.ContainsAny(req.WGPublicKey, "\n\r") {
+		http.Error(w, "wg_public_key contains invalid characters", http.StatusBadRequest)
+		return
+	}
+	wgKeyBytes, err := base64.StdEncoding.DecodeString(req.WGPublicKey)
+	if err != nil || len(wgKeyBytes) != 32 {
+		http.Error(w, "wg_public_key must be a valid base64-encoded 32-byte key", http.StatusBadRequest)
+		return
+	}
+
 	ctx := r.Context()
 
 	// 1. Validate and consume the invite token (atomic single-use)
@@ -177,7 +197,15 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		olricEncryptionKey = strings.TrimSpace(string(data))
 	}
 
-	// 7. Get all WG peers
+	// 7. Get this node's WG IP (needed before peer list to check self-inclusion)
+	myWGIP, err := h.getMyWGIP()
+	if err != nil {
+		h.logger.Error("failed to get local WG IP", zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// 8. Get all WG peers
 	wgPeers, err := h.getWGPeers(ctx, req.WGPublicKey)
 	if err != nil {
 		h.logger.Error("failed to list WG peers", zap.Error(err))
@@ -185,12 +213,29 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 8. Get this node's WG IP
-	myWGIP, err := h.getMyWGIP()
-	if err != nil {
-		h.logger.Error("failed to get local WG IP", zap.Error(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+	// Ensure this node (the join handler's host) is in the peer list.
+	// On a fresh genesis node, the WG sync loop may not have self-registered
+	// into wireguard_peers yet, causing 0 peers to be returned.
+	if !wgPeersContainsIP(wgPeers, myWGIP) {
+		myPubKey, err := h.getMyWGPublicKey()
+		if err != nil {
+			h.logger.Error("failed to get local WG public key", zap.Error(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		myPublicIP, err := h.getMyPublicIP()
+		if err != nil {
+			h.logger.Error("failed to get local public IP", zap.Error(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		wgPeers = append([]WGPeerInfo{{
+			PublicKey: myPubKey,
+			Endpoint:  fmt.Sprintf("%s:%d", myPublicIP, 51820),
+			AllowedIP: fmt.Sprintf("%s/32", myWGIP),
+		}}, wgPeers...)
+		h.logger.Info("self-injected into WG peer list (sync loop hasn't registered yet)",
+			zap.String("wg_ip", myWGIP))
 	}
 
 	// 9. Query IPFS and IPFS Cluster peer info
@@ -346,6 +391,17 @@ func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
 	return nil
 }
 
+// wgPeersContainsIP checks if any peer in the list has the given WG IP
+func wgPeersContainsIP(peers []WGPeerInfo, wgIP string) bool {
+	target := fmt.Sprintf("%s/32", wgIP)
+	for _, p := range peers {
+		if p.AllowedIP == target {
+			return true
+		}
+	}
+	return false
+}
+
 // getWGPeers returns all WG peers except the requesting node
 func (h *Handler) getWGPeers(ctx context.Context, excludePubKey string) ([]WGPeerInfo, error) {
 	type peerRow struct {
@@ -401,6 +457,32 @@ func (h *Handler) getMyWGIP() (string, error) {
 	}
 
 	return "", fmt.Errorf("could not find wg0 IP address")
+}
+
+// getMyWGPublicKey reads the local WireGuard public key from the orama secrets
+// directory. The key is saved there during install by Phase6SetupWireGuard.
+// This avoids needing root/CAP_NET_ADMIN permissions that `wg show wg0` requires.
+func (h *Handler) getMyWGPublicKey() (string, error) {
+	data, err := os.ReadFile(h.oramaDir + "/secrets/wg-public-key")
+	if err != nil {
+		return "", fmt.Errorf("failed to read WG public key from %s/secrets/wg-public-key: %w", h.oramaDir, err)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("WG public key file is empty")
+	}
+	return key, nil
+}
+
+// getMyPublicIP determines this node's public IP by connecting to a public server
+func (h *Handler) getMyPublicIP() (string, error) {
+	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 3*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("failed to determine public IP: %w", err)
+	}
+	defer conn.Close()
+	addr := conn.LocalAddr().(*net.UDPAddr)
+	return addr.IP.String(), nil
 }
 
 // queryIPFSPeerInfo gets the local IPFS node's peer ID and builds addrs with WG IP

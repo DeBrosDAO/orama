@@ -997,6 +997,13 @@ func (ps *ProductionSetup) Phase6SetupWireGuard(isFirstNode bool) (privateKey, p
 	}
 	ps.logf("  ✓ WireGuard keypair generated")
 
+	// Save public key to orama secrets so the gateway (running as orama user)
+	// can read it without needing root access to /etc/wireguard/wg0.conf
+	pubKeyPath := filepath.Join(ps.oramaDir, "secrets", "wg-public-key")
+	if err := os.WriteFile(pubKeyPath, []byte(pubKey), 0600); err != nil {
+		return "", "", fmt.Errorf("failed to save WG public key: %w", err)
+	}
+
 	if isFirstNode {
 		// First node: self-assign 10.0.0.1, no peers yet
 		wp.config = WireGuardConfig{

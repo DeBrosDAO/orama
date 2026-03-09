@@ -291,11 +291,19 @@ func (ps *ProductionSetup) installAnyonFromPreBuilt() error {
 }
 
 // copyBinary copies a file from src to dest, preserving executable permissions.
+// It removes the destination first to avoid ETXTBSY ("text file busy") errors
+// when overwriting a binary that is currently running.
 func copyBinary(src, dest string) error {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return err
 	}
+
+	// Remove the old binary first. On Linux, if the binary is running,
+	// rm unlinks the filename while the kernel keeps the inode alive for
+	// the running process. Writing a new file at the same path creates a
+	// fresh inode — no ETXTBSY conflict.
+	_ = os.Remove(dest)
 
 	srcFile, err := os.Open(src)
 	if err != nil {

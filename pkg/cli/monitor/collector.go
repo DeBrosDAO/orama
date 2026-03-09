@@ -9,6 +9,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/cli/production/report"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/cli/sandbox"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -23,22 +24,9 @@ type CollectorConfig struct {
 // CollectOnce runs `sudo orama node report --json` on all matching nodes
 // in parallel and returns a ClusterSnapshot.
 func CollectOnce(ctx context.Context, cfg CollectorConfig) (*ClusterSnapshot, error) {
-	nodes, err := inspector.LoadNodes(cfg.ConfigPath)
+	nodes, cleanup, err := loadNodes(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("load nodes: %w", err)
-	}
-	nodes = inspector.FilterByEnv(nodes, cfg.Env)
-	if cfg.NodeFilter != "" {
-		nodes = filterByHost(nodes, cfg.NodeFilter)
-	}
-	if len(nodes) == 0 {
-		return nil, fmt.Errorf("no nodes found for env %q", cfg.Env)
-	}
-
-	// Prepare wallet-derived SSH keys
-	cleanup, err := remotessh.PrepareNodeKeys(nodes)
-	if err != nil {
-		return nil, fmt.Errorf("prepare SSH keys: %w", err)
+		return nil, err
 	}
 	defer cleanup()
 
@@ -120,4 +108,62 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// loadNodes resolves the node list and SSH keys based on the environment.
+// For "sandbox", nodes are loaded from the active sandbox state file with
+// the sandbox SSH key already set. For other environments, nodes come from
+// nodes.conf and use wallet-derived SSH keys.
+func loadNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
+	noop := func() {}
+
+	if cfg.Env == "sandbox" {
+		return loadSandboxNodes(cfg)
+	}
+
+	nodes, err := inspector.LoadNodes(cfg.ConfigPath)
+	if err != nil {
+		return nil, noop, fmt.Errorf("load nodes: %w", err)
+	}
+	nodes = inspector.FilterByEnv(nodes, cfg.Env)
+	if cfg.NodeFilter != "" {
+		nodes = filterByHost(nodes, cfg.NodeFilter)
+	}
+	if len(nodes) == 0 {
+		return nil, noop, fmt.Errorf("no nodes found for env %q", cfg.Env)
+	}
+
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return nil, noop, fmt.Errorf("prepare SSH keys: %w", err)
+	}
+	return nodes, cleanup, nil
+}
+
+// loadSandboxNodes loads nodes from the active sandbox state file.
+func loadSandboxNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
+	noop := func() {}
+
+	sbxCfg, err := sandbox.LoadConfig()
+	if err != nil {
+		return nil, noop, fmt.Errorf("load sandbox config: %w", err)
+	}
+
+	state, err := sandbox.FindActiveSandbox()
+	if err != nil {
+		return nil, noop, fmt.Errorf("find active sandbox: %w", err)
+	}
+	if state == nil {
+		return nil, noop, fmt.Errorf("no active sandbox found")
+	}
+
+	nodes := state.ToNodes(sbxCfg.ExpandedPrivateKeyPath())
+	if cfg.NodeFilter != "" {
+		nodes = filterByHost(nodes, cfg.NodeFilter)
+	}
+	if len(nodes) == 0 {
+		return nil, noop, fmt.Errorf("no nodes found for sandbox %q", state.Name)
+	}
+
+	return nodes, noop, nil
 }
