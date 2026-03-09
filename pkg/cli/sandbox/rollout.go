@@ -34,24 +34,10 @@ func Rollout(name string) error {
 	info, _ := os.Stat(archivePath)
 	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), formatBytes(info.Size()))
 
-	// Step 2: Push archive to all nodes
+	// Step 2: Push archive to all nodes (upload to first, fan out server-to-server)
 	fmt.Println("Pushing archive to all nodes...")
-	remotePath := "/tmp/" + filepath.Base(archivePath)
-
-	for i, srv := range state.Servers {
-		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-
-		fmt.Printf("  [%d/%d] Uploading to %s...\n", i+1, len(state.Servers), srv.Name)
-		if err := remotessh.UploadFile(node, archivePath, remotePath, remotessh.WithNoHostKeyCheck()); err != nil {
-			return fmt.Errorf("upload to %s: %w", srv.Name, err)
-		}
-
-		// Extract archive
-		extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s",
-			remotePath, remotePath)
-		if err := remotessh.RunSSHStreaming(node, extractCmd, remotessh.WithNoHostKeyCheck()); err != nil {
-			return fmt.Errorf("extract on %s: %w", srv.Name, err)
-		}
+	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
+		return err
 	}
 
 	// Step 3: Rolling upgrade — followers first, leader last
@@ -103,10 +89,22 @@ func findLeaderIndex(state *SandboxState, sshKeyPath string) int {
 }
 
 // upgradeNode performs `orama node upgrade --restart` on a single node.
+// It pre-replaces the orama CLI binary before running the upgrade command
+// to avoid ETXTBSY ("text file busy") errors when the old binary doesn't
+// have the os.Remove fix in copyBinary().
 func upgradeNode(srv ServerState, sshKeyPath string, current, total int) error {
 	node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
 
 	fmt.Printf("  [%d/%d] Upgrading %s (%s)...\n", current, total, srv.Name, srv.IP)
+
+	// Pre-replace the orama CLI so the upgrade runs the NEW binary (with ETXTBSY fix).
+	// rm unlinks the old inode (kernel keeps it alive for the running process),
+	// cp creates a fresh inode at the same path.
+	preReplace := "rm -f /usr/local/bin/orama && cp /opt/orama/bin/orama /usr/local/bin/orama"
+	if err := remotessh.RunSSHStreaming(node, preReplace, remotessh.WithNoHostKeyCheck()); err != nil {
+		return fmt.Errorf("pre-replace orama binary on %s: %w", srv.Name, err)
+	}
+
 	if err := remotessh.RunSSHStreaming(node, "orama node upgrade --restart", remotessh.WithNoHostKeyCheck()); err != nil {
 		return fmt.Errorf("upgrade %s: %w", srv.Name, err)
 	}

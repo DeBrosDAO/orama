@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
@@ -257,71 +256,8 @@ func phase3UploadArchive(cfg *Config, state *SandboxState) error {
 	fmt.Printf("  Archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
 
 	sshKeyPath := cfg.ExpandedPrivateKeyPath()
-	remotePath := "/tmp/" + filepath.Base(archivePath)
-	extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s",
-		remotePath, remotePath)
-
-	// Step 1: Upload from local machine to genesis node
-	genesis := state.Servers[0]
-	genesisNode := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
-
-	fmt.Printf("  Uploading to %s (genesis)...\n", genesis.Name)
-	if err := remotessh.UploadFile(genesisNode, archivePath, remotePath, remotessh.WithNoHostKeyCheck()); err != nil {
-		return fmt.Errorf("upload to %s: %w", genesis.Name, err)
-	}
-
-	// Step 2: Fan out from genesis to remaining nodes in parallel (server-to-server)
-	if len(state.Servers) > 1 {
-		fmt.Printf("  Fanning out from %s to %d nodes...\n", genesis.Name, len(state.Servers)-1)
-
-		// Temporarily upload SSH key to genesis for server-to-server SCP
-		remoteKeyPath := "/tmp/.sandbox_key"
-		if err := remotessh.UploadFile(genesisNode, sshKeyPath, remoteKeyPath, remotessh.WithNoHostKeyCheck()); err != nil {
-			return fmt.Errorf("upload SSH key to genesis: %w", err)
-		}
-		// Always clean up the temporary key, even on panic/early return
-		defer remotessh.RunSSHStreaming(genesisNode, fmt.Sprintf("rm -f %s", remoteKeyPath), remotessh.WithNoHostKeyCheck())
-
-		if err := remotessh.RunSSHStreaming(genesisNode, fmt.Sprintf("chmod 600 %s", remoteKeyPath), remotessh.WithNoHostKeyCheck()); err != nil {
-			return fmt.Errorf("chmod SSH key on genesis: %w", err)
-		}
-
-		var wg sync.WaitGroup
-		errs := make([]error, len(state.Servers))
-
-		for i := 1; i < len(state.Servers); i++ {
-			wg.Add(1)
-			go func(idx int, srv ServerState) {
-				defer wg.Done()
-				// SCP from genesis to target using the uploaded key
-				scpCmd := fmt.Sprintf("scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i %s %s root@%s:%s",
-					remoteKeyPath, remotePath, srv.IP, remotePath)
-				if err := remotessh.RunSSHStreaming(genesisNode, scpCmd, remotessh.WithNoHostKeyCheck()); err != nil {
-					errs[idx] = fmt.Errorf("fanout to %s: %w", srv.Name, err)
-					return
-				}
-				// Extract on target
-				targetNode := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-				if err := remotessh.RunSSHStreaming(targetNode, extractCmd, remotessh.WithNoHostKeyCheck()); err != nil {
-					errs[idx] = fmt.Errorf("extract on %s: %w", srv.Name, err)
-					return
-				}
-				fmt.Printf("  Distributed to %s\n", srv.Name)
-			}(i, state.Servers[i])
-		}
-		wg.Wait()
-
-		for _, err := range errs {
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// Step 3: Extract on genesis
-	fmt.Printf("  Extracting on %s...\n", genesis.Name)
-	if err := remotessh.RunSSHStreaming(genesisNode, extractCmd, remotessh.WithNoHostKeyCheck()); err != nil {
-		return fmt.Errorf("extract on %s: %w", genesis.Name, err)
+	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
+		return err
 	}
 
 	fmt.Println("  All nodes ready")

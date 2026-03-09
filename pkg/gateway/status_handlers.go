@@ -129,7 +129,10 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 			if anyoneproxy.Running() {
 				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
 			} else {
-				nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: "SOCKS5 proxy not reachable at " + anyoneproxy.Address()}
+				// SOCKS5 port not reachable — Anyone relay is not installed/running.
+				// Treat as "unavailable" rather than "error" so nodes without Anyone
+				// don't report as degraded.
+				nr.result = checkResult{Status: "unavailable"}
 			}
 		}
 		ch <- nr
@@ -142,25 +145,7 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		checks[nr.name] = nr.result
 	}
 
-	// Aggregate status.
-	// Critical: rqlite down → "unhealthy"
-	// Non-critical (olric, ipfs, libp2p) error → "degraded"
-	// "unavailable" means the client was never configured — not an error.
-	overallStatus := "healthy"
-	if c := checks["rqlite"]; c.Status == "error" {
-		overallStatus = "unhealthy"
-	}
-	if overallStatus == "healthy" {
-		for name, c := range checks {
-			if name == "rqlite" {
-				continue
-			}
-			if c.Status == "error" {
-				overallStatus = "degraded"
-				break
-			}
-		}
-	}
+	overallStatus := aggregateHealthStatus(checks)
 
 	httpStatus := http.StatusOK
 	if overallStatus != "healthy" {
@@ -234,6 +219,27 @@ func (g *Gateway) versionHandler(w http.ResponseWriter, r *http.Request) {
 		"started_at": g.startedAt,
 		"uptime":     time.Since(g.startedAt).String(),
 	})
+}
+
+// aggregateHealthStatus determines the overall health status from individual checks.
+// Critical: rqlite down → "unhealthy"
+// Non-critical (olric, ipfs, libp2p, anyone) error → "degraded"
+// "unavailable" means the client was never configured — not an error.
+func aggregateHealthStatus(checks map[string]checkResult) string {
+	status := "healthy"
+	if c := checks["rqlite"]; c.Status == "error" {
+		return "unhealthy"
+	}
+	for name, c := range checks {
+		if name == "rqlite" {
+			continue
+		}
+		if c.Status == "error" {
+			status = "degraded"
+			break
+		}
+	}
+	return status
 }
 
 // tlsCheckHandler validates if a domain should receive a TLS certificate

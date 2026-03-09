@@ -9,6 +9,31 @@ import (
 	"github.com/rqlite/gorqlite"
 )
 
+// safeWriteOne wraps gorqlite's WriteOneParameterized to recover from panics.
+// gorqlite's WriteOne* functions access wra[0] without checking if the slice
+// is empty, which panics when the server returns an error (e.g. "leader not found")
+// with no result rows.
+func safeWriteOne(conn *gorqlite.Connection, stmt gorqlite.ParameterizedStatement) (wr gorqlite.WriteResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("rqlite write failed (recovered panic): %v", r)
+		}
+	}()
+	wr, err = conn.WriteOneParameterized(stmt)
+	return
+}
+
+// safeWriteOneRaw wraps gorqlite's WriteOne to recover from panics.
+func safeWriteOneRaw(conn *gorqlite.Connection, sql string) (wr gorqlite.WriteResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("rqlite write failed (recovered panic): %v", r)
+		}
+	}()
+	wr, err = conn.WriteOne(sql)
+	return
+}
+
 // DatabaseClientImpl implements DatabaseClient
 type DatabaseClientImpl struct {
 	client     *Client
@@ -79,7 +104,7 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 
 		if isWriteOperation {
 			// Execute write operation with parameters
-			_, err := conn.WriteOneParameterized(gorqlite.ParameterizedStatement{
+			_, err := safeWriteOne(conn, gorqlite.ParameterizedStatement{
 				Query:     sql,
 				Arguments: args,
 			})
@@ -293,7 +318,7 @@ func (d *DatabaseClientImpl) Transaction(ctx context.Context, queries []string) 
 		// Execute all queries in the transaction
 		success := true
 		for _, query := range queries {
-			_, err := conn.WriteOne(query)
+			_, err := safeWriteOneRaw(conn, query)
 			if err != nil {
 				lastErr = err
 				success = false
@@ -321,7 +346,7 @@ func (d *DatabaseClientImpl) CreateTable(ctx context.Context, schema string) err
 	}
 
 	return d.withRetry(func(conn *gorqlite.Connection) error {
-		_, err := conn.WriteOne(schema)
+		_, err := safeWriteOneRaw(conn, schema)
 		return err
 	})
 }
@@ -334,7 +359,7 @@ func (d *DatabaseClientImpl) DropTable(ctx context.Context, tableName string) er
 
 	return d.withRetry(func(conn *gorqlite.Connection) error {
 		dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
-		_, err := conn.WriteOne(dropSQL)
+		_, err := safeWriteOneRaw(conn, dropSQL)
 		return err
 	})
 }
