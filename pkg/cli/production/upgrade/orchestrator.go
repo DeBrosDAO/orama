@@ -41,7 +41,8 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(isNameserver)
 
-	// Configure Anyone mode (flag > saved preference > auto-detect)
+	// Configure Anyone mode (explicit flags > saved preferences > auto-detect)
+	// Explicit flags always win — they represent the user's current intent.
 	if flags.AnyoneRelay {
 		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
 			Enabled:       true,
@@ -55,6 +56,9 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 			BandwidthPct:  flags.AnyoneBandwidth,
 			AccountingMax: flags.AnyoneAccounting,
 		})
+	} else if flags.AnyoneClient {
+		// Explicit --anyone-client flag overrides saved relay prefs and auto-detect.
+		setup.SetAnyoneClient(true)
 	} else if prefs.AnyoneRelay {
 		// Restore relay config from saved preferences (for firewall rules)
 		orPort := prefs.AnyoneORPort
@@ -65,6 +69,8 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 			Enabled: true,
 			ORPort:  orPort,
 		})
+	} else if prefs.AnyoneClient {
+		setup.SetAnyoneClient(true)
 	} else if detectAnyoneRelay(oramaDir) {
 		// Auto-detect: relay is installed but preferences weren't saved.
 		// This happens when upgrading from older versions that didn't persist
@@ -79,8 +85,6 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 		prefs.AnyoneORPort = orPort
 		_ = production.SavePreferences(oramaDir, prefs)
 		fmt.Printf("  Auto-detected Anyone relay (ORPort: %d), saved to preferences\n", orPort)
-	} else if flags.AnyoneClient || prefs.AnyoneClient {
-		setup.SetAnyoneClient(true)
 	}
 
 	return &Orchestrator{
@@ -207,15 +211,15 @@ func (o *Orchestrator) handleBranchPreferences() error {
 		fmt.Printf("  Nameserver mode: enabled (CoreDNS + Caddy)\n")
 	}
 
-	// If anyone-client was explicitly provided, update it
+	// Anyone client and relay are mutually exclusive — setting one clears the other.
 	if o.flags.AnyoneClient {
 		prefs.AnyoneClient = true
+		prefs.AnyoneRelay = false
+		prefs.AnyoneORPort = 0
 		prefsChanged = true
-	}
-
-	// If anyone-relay was explicitly provided, update it
-	if o.flags.AnyoneRelay {
+	} else if o.flags.AnyoneRelay {
 		prefs.AnyoneRelay = true
+		prefs.AnyoneClient = false
 		prefs.AnyoneORPort = o.flags.AnyoneORPort
 		if prefs.AnyoneORPort == 0 {
 			prefs.AnyoneORPort = 9001

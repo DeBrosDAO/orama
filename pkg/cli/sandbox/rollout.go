@@ -4,14 +4,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
+// RolloutFlags holds optional flags passed through to `orama node upgrade`.
+type RolloutFlags struct {
+	AnyoneClient bool
+}
+
 // Rollout builds, pushes, and performs a rolling upgrade on a sandbox cluster.
-func Rollout(name string) error {
+func Rollout(name string, flags RolloutFlags) error {
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err
@@ -34,6 +40,9 @@ func Rollout(name string) error {
 	info, _ := os.Stat(archivePath)
 	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), formatBytes(info.Size()))
 
+	// Build extra flags string for upgrade command
+	extraFlags := flags.upgradeFlags()
+
 	// Step 2: Push archive to all nodes (upload to first, fan out server-to-server)
 	fmt.Println("Pushing archive to all nodes...")
 	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
@@ -54,7 +63,7 @@ func Rollout(name string) error {
 		if i == leaderIdx {
 			continue // skip leader, do it last
 		}
-		if err := upgradeNode(srv, sshKeyPath, i+1, len(state.Servers)); err != nil {
+		if err := upgradeNode(srv, sshKeyPath, i+1, len(state.Servers), extraFlags); err != nil {
 			return err
 		}
 		// Wait between nodes
@@ -67,13 +76,22 @@ func Rollout(name string) error {
 	// Upgrade leader last
 	if leaderIdx >= 0 {
 		srv := state.Servers[leaderIdx]
-		if err := upgradeNode(srv, sshKeyPath, len(state.Servers), len(state.Servers)); err != nil {
+		if err := upgradeNode(srv, sshKeyPath, len(state.Servers), len(state.Servers), extraFlags); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("\nRollout complete for sandbox %q\n", state.Name)
 	return nil
+}
+
+// upgradeFlags builds the extra CLI flags string for `orama node upgrade`.
+func (f RolloutFlags) upgradeFlags() string {
+	var parts []string
+	if f.AnyoneClient {
+		parts = append(parts, "--anyone-client")
+	}
+	return strings.Join(parts, " ")
 }
 
 // findLeaderIndex returns the index of the RQLite leader node, or -1 if unknown.
@@ -92,7 +110,7 @@ func findLeaderIndex(state *SandboxState, sshKeyPath string) int {
 // It pre-replaces the orama CLI binary before running the upgrade command
 // to avoid ETXTBSY ("text file busy") errors when the old binary doesn't
 // have the os.Remove fix in copyBinary().
-func upgradeNode(srv ServerState, sshKeyPath string, current, total int) error {
+func upgradeNode(srv ServerState, sshKeyPath string, current, total int, extraFlags string) error {
 	node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
 
 	fmt.Printf("  [%d/%d] Upgrading %s (%s)...\n", current, total, srv.Name, srv.IP)
@@ -105,7 +123,11 @@ func upgradeNode(srv ServerState, sshKeyPath string, current, total int) error {
 		return fmt.Errorf("pre-replace orama binary on %s: %w", srv.Name, err)
 	}
 
-	if err := remotessh.RunSSHStreaming(node, "orama node upgrade --restart", remotessh.WithNoHostKeyCheck()); err != nil {
+	upgradeCmd := "orama node upgrade --restart"
+	if extraFlags != "" {
+		upgradeCmd += " " + extraFlags
+	}
+	if err := remotessh.RunSSHStreaming(node, upgradeCmd, remotessh.WithNoHostKeyCheck()); err != nil {
 		return fmt.Errorf("upgrade %s: %w", srv.Name, err)
 	}
 
