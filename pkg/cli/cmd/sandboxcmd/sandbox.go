@@ -76,7 +76,10 @@ var rolloutCmd = &cobra.Command{
 	Short: "Build + push + rolling upgrade to sandbox cluster",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
-		return sandbox.Rollout(name)
+		anyoneClient, _ := cmd.Flags().GetBool("anyone-client")
+		return sandbox.Rollout(name, sandbox.RolloutFlags{
+			AnyoneClient: anyoneClient,
+		})
 	},
 }
 
@@ -121,6 +124,7 @@ func init() {
 
 	// rollout flags
 	rolloutCmd.Flags().String("name", "", "Sandbox name (uses active if not specified)")
+	rolloutCmd.Flags().Bool("anyone-client", false, "Enable Anyone client (SOCKS5 proxy) on all nodes")
 
 	// ssh flags
 	sshCmd.Flags().String("name", "", "Sandbox name (uses active if not specified)")
