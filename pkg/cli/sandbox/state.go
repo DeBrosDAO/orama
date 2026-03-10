@@ -165,8 +165,8 @@ func FindActiveSandbox() (*SandboxState, error) {
 }
 
 // ToNodes converts sandbox servers to inspector.Node structs for SSH operations.
-// Sets SSHKey to the provided key path on each node.
-func (s *SandboxState) ToNodes(sshKeyPath string) []inspector.Node {
+// Sets VaultTarget on each node so PrepareNodeKeys resolves from the wallet.
+func (s *SandboxState) ToNodes(vaultTarget string) []inspector.Node {
 	nodes := make([]inspector.Node, len(s.Servers))
 	for i, srv := range s.Servers {
 		nodes[i] = inspector.Node{
@@ -174,7 +174,7 @@ func (s *SandboxState) ToNodes(sshKeyPath string) []inspector.Node {
 			User:        "root",
 			Host:        srv.IP,
 			Role:        srv.Role,
-			SSHKey:      sshKeyPath,
+			VaultTarget: vaultTarget,
 		}
 	}
 	return nodes

@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -52,7 +54,8 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		name   string
 		result checkResult
 	}
-	ch := make(chan namedResult, 5)
+	const numChecks = 7
+	ch := make(chan namedResult, numChecks)
 
 	// RQLite
 	go func() {
@@ -138,9 +141,37 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		ch <- nr
 	}()
 
+	// Vault Guardian (TCP connect to localhost:7500)
+	go func() {
+		nr := namedResult{name: "vault"}
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", "localhost:7500", 2*time.Second)
+		if err != nil {
+			nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: fmt.Sprintf("vault-guardian unreachable on port 7500: %v", err)}
+		} else {
+			conn.Close()
+			nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
+		}
+		ch <- nr
+	}()
+
+	// WireGuard (check wg0 interface exists and has an IP)
+	go func() {
+		nr := namedResult{name: "wireguard"}
+		iface, err := net.InterfaceByName("wg0")
+		if err != nil {
+			nr.result = checkResult{Status: "error", Error: "wg0 interface not found"}
+		} else if addrs, err := iface.Addrs(); err != nil || len(addrs) == 0 {
+			nr.result = checkResult{Status: "error", Error: "wg0 has no addresses"}
+		} else {
+			nr.result = checkResult{Status: "ok"}
+		}
+		ch <- nr
+	}()
+
 	// Collect
-	checks := make(map[string]checkResult, 5)
-	for i := 0; i < 5; i++ {
+	checks := make(map[string]checkResult, numChecks)
+	for i := 0; i < numChecks; i++ {
 		nr := <-ch
 		checks[nr.name] = nr.result
 	}
@@ -222,24 +253,26 @@ func (g *Gateway) versionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // aggregateHealthStatus determines the overall health status from individual checks.
-// Critical: rqlite down → "unhealthy"
-// Non-critical (olric, ipfs, libp2p, anyone) error → "degraded"
+// Critical: rqlite or vault down → "unhealthy"
+// Non-critical (olric, ipfs, libp2p, anyone, wireguard) error → "degraded"
 // "unavailable" means the client was never configured — not an error.
 func aggregateHealthStatus(checks map[string]checkResult) string {
-	status := "healthy"
-	if c := checks["rqlite"]; c.Status == "error" {
-		return "unhealthy"
+	// Critical services — any error means unhealthy
+	for _, name := range []string{"rqlite", "vault"} {
+		if c := checks[name]; c.Status == "error" {
+			return "unhealthy"
+		}
 	}
+	// Non-critical services — any error means degraded
 	for name, c := range checks {
-		if name == "rqlite" {
+		if name == "rqlite" || name == "vault" {
 			continue
 		}
 		if c.Status == "error" {
-			status = "degraded"
-			break
+			return "degraded"
 		}
 	}
-	return status
+	return "healthy"
 }
 
 // tlsCheckHandler validates if a domain should receive a TLS certificate

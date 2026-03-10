@@ -77,7 +77,12 @@ func Status(name string) error {
 		return err
 	}
 
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
+	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
+	if err != nil {
+		return fmt.Errorf("prepare SSH key: %w", err)
+	}
+	defer cleanup()
+
 	fmt.Printf("Sandbox: %s (status: %s)\n\n", state.Name, state.Status)
 
 	for _, srv := range state.Servers {

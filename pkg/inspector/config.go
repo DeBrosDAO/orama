@@ -14,6 +14,7 @@ type Node struct {
 	Host        string // IP or hostname
 	Role        string // node, nameserver-ns1, nameserver-ns2, nameserver-ns3
 	SSHKey      string // populated at runtime by PrepareNodeKeys()
+	VaultTarget string // optional: override wallet key lookup (e.g. "sandbox/root")
 }
 
 // Name returns a short display name for the node (user@host).

@@ -25,11 +25,10 @@ type FloatIP struct {
 	IP string `yaml:"ip"`
 }
 
-// SSHKeyConfig holds SSH key paths and the Hetzner resource ID.
+// SSHKeyConfig holds the wallet vault target and Hetzner resource ID.
 type SSHKeyConfig struct {
-	HetznerID      int64  `yaml:"hetzner_id"`
-	PrivateKeyPath string `yaml:"private_key_path"`
-	PublicKeyPath  string `yaml:"public_key_path"`
+	HetznerID   int64  `yaml:"hetzner_id"`
+	VaultTarget string `yaml:"vault_target"` // e.g. "sandbox/root"
 }
 
 // configDir returns ~/.orama/, creating it if needed.
@@ -114,8 +113,8 @@ func (c *Config) validate() error {
 	if len(c.FloatingIPs) < 2 {
 		return fmt.Errorf("2 floating IPs required, got %d", len(c.FloatingIPs))
 	}
-	if c.SSHKey.PrivateKeyPath == "" {
-		return fmt.Errorf("ssh_key.private_key_path is required")
+	if c.SSHKey.VaultTarget == "" {
+		return fmt.Errorf("ssh_key.vault_target is required (run: orama sandbox setup)")
 	}
 	return nil
 }
@@ -128,26 +127,7 @@ func (c *Config) Defaults() {
 	if c.ServerType == "" {
 		c.ServerType = "cx23"
 	}
-}
-
-// ExpandedPrivateKeyPath returns the absolute path to the SSH private key.
-func (c *Config) ExpandedPrivateKeyPath() string {
-	return expandHome(c.SSHKey.PrivateKeyPath)
-}
-
-// ExpandedPublicKeyPath returns the absolute path to the SSH public key.
-func (c *Config) ExpandedPublicKeyPath() string {
-	return expandHome(c.SSHKey.PublicKeyPath)
-}
-
-// expandHome replaces a leading ~ with the user's home directory.
-func expandHome(path string) string {
-	if len(path) < 2 || path[:2] != "~/" {
-		return path
+	if c.SSHKey.VaultTarget == "" {
+		c.SSHKey.VaultTarget = "sandbox/root"
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	return filepath.Join(home, path[2:])
 }

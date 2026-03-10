@@ -157,7 +157,7 @@ func loadSandboxNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
 		return nil, noop, fmt.Errorf("no active sandbox found")
 	}
 
-	nodes := state.ToNodes(sbxCfg.ExpandedPrivateKeyPath())
+	nodes := state.ToNodes(sbxCfg.SSHKey.VaultTarget)
 	if cfg.NodeFilter != "" {
 		nodes = filterByHost(nodes, cfg.NodeFilter)
 	}
@@ -165,5 +165,10 @@ func loadSandboxNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
 		return nil, noop, fmt.Errorf("no nodes found for sandbox %q", state.Name)
 	}
 
-	return nodes, noop, nil
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return nil, noop, fmt.Errorf("prepare SSH keys: %w", err)
+	}
+
+	return nodes, cleanup, nil
 }

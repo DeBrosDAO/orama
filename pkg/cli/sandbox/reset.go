@@ -42,8 +42,6 @@ func Reset() error {
 	fmt.Println()
 	fmt.Println("Local files to remove:")
 	fmt.Println("  ~/.orama/sandbox.yaml")
-	fmt.Println("  ~/.orama/sandbox_key")
-	fmt.Println("  ~/.orama/sandbox_key.pub")
 	fmt.Println()
 
 	reader := bufio.NewReader(os.Stdin)
@@ -100,29 +98,21 @@ func Reset() error {
 	return nil
 }
 
-// resetLocalFiles removes the sandbox config and SSH key files.
+// resetLocalFiles removes the sandbox config file.
 func resetLocalFiles() error {
 	dir, err := configDir()
 	if err != nil {
 		return err
 	}
 
-	files := []string{
-		dir + "/sandbox.yaml",
-		dir + "/sandbox_key",
-		dir + "/sandbox_key.pub",
-	}
-
+	configFile := dir + "/sandbox.yaml"
 	fmt.Println("Removing local files...")
-	for _, f := range files {
-		if err := os.Remove(f); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "  Warning: could not remove %s: %v\n", f, err)
-		} else {
-			fmt.Printf("  Removed %s\n", f)
+	if err := os.Remove(configFile); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "  Warning: could not remove %s: %v\n", configFile, err)
 		}
+	} else {
+		fmt.Printf("  Removed %s\n", configFile)
 	}
 
 	return nil

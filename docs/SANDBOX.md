@@ -69,8 +69,8 @@ This will:
 2. Ask for your sandbox domain
 3. Create or reuse 2 Hetzner Floating IPs (~$0.005/hr each)
 4. Create a firewall with sandbox rules
-5. Generate an SSH keypair at `~/.orama/sandbox_key`
-6. Upload the public key to Hetzner
+5. Create a rootwallet SSH entry (`sandbox/root`) if it doesn't exist
+6. Upload the wallet-derived public key to Hetzner
 7. Display DNS configuration instructions
 
 Config is saved to `~/.orama/sandbox.yaml`.
@@ -143,7 +143,7 @@ Hetzner Floating IPs are persistent IPv4 addresses that can be reassigned betwee
 
 ### SSH Authentication
 
-Sandbox uses a standalone ed25519 keypair at `~/.orama/sandbox_key`, separate from the production wallet-derived keys. The public key is uploaded to Hetzner during setup and injected into every server at creation time.
+Sandbox uses a rootwallet-derived SSH key (`sandbox/root` vault entry), the same mechanism as production. The wallet must be unlocked (`rw unlock`) before running sandbox commands that use SSH. The public key is uploaded to Hetzner during setup and injected into every server at creation time.
 
 ### Server Naming
 
