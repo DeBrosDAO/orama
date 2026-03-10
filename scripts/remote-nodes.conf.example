@@ -1,26 +1,27 @@
 # Remote node configuration
-# Format: environment|user@host|password|role|ssh_key (optional)
+# Format: environment|user@host|role
 # environment: devnet, testnet
 # role: node, nameserver-ns1, nameserver-ns2, nameserver-ns3
-# ssh_key: optional path to SSH key (if node requires key-based auth instead of sshpass)
 #
-# Copy this file to remote-nodes.conf and fill in your credentials.
-# The first node with an SSH key will be used as the hub (fan-out relay).
+# SSH keys are resolved from rootwallet (rw vault ssh get <host>/<user> --priv).
+# Ensure wallet entries exist: rw vault ssh add <host>/<user>
+#
+# Copy this file to remote-nodes.conf and fill in your node details.
 
 # --- Devnet nameservers ---
-devnet|root@1.2.3.4|your_password_here|nameserver-ns1
-devnet|ubuntu@1.2.3.5|your_password_here|nameserver-ns2
-devnet|root@1.2.3.6|your_password_here|nameserver-ns3
+devnet|root@1.2.3.4|nameserver-ns1
+devnet|ubuntu@1.2.3.5|nameserver-ns2
+devnet|root@1.2.3.6|nameserver-ns3
 
 # --- Devnet nodes ---
-devnet|ubuntu@1.2.3.7|your_password_here|node
-devnet|ubuntu@1.2.3.8|your_password_here|node|~/.ssh/my_key/id_ed25519
+devnet|ubuntu@1.2.3.7|node
+devnet|ubuntu@1.2.3.8|node
 
 # --- Testnet nameservers ---
-testnet|ubuntu@2.3.4.5|your_password_here|nameserver-ns1
-testnet|ubuntu@2.3.4.6|your_password_here|nameserver-ns2
-testnet|ubuntu@2.3.4.7|your_password_here|nameserver-ns3
+testnet|ubuntu@2.3.4.5|nameserver-ns1
+testnet|ubuntu@2.3.4.6|nameserver-ns2
+testnet|ubuntu@2.3.4.7|nameserver-ns3
 
 # --- Testnet nodes ---
-testnet|root@2.3.4.8|your_password_here|node
-testnet|ubuntu@2.3.4.9|your_password_here|node
+testnet|root@2.3.4.8|node
+testnet|ubuntu@2.3.4.9|node

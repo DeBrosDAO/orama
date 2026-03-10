@@ -36,14 +36,21 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 	var allKeyPaths []string
 
 	for i := range nodes {
-		key := nodes[i].Host + "/" + nodes[i].User
+		// Use VaultTarget if set, otherwise default to Host/User
+		var key string
+		if nodes[i].VaultTarget != "" {
+			key = nodes[i].VaultTarget
+		} else {
+			key = nodes[i].Host + "/" + nodes[i].User
+		}
 		if existing, ok := keyPaths[key]; ok {
 			nodes[i].SSHKey = existing
 			continue
 		}
 
 		// Call rw to get the private key PEM
-		pem, err := resolveWalletKey(rw, nodes[i].Host, nodes[i].User)
+		host, user := parseVaultTarget(key)
+		pem, err := resolveWalletKey(rw, host, user)
 		if err != nil {
 			// Cleanup any keys already written before returning error
 			cleanupKeys(tmpDir, allKeyPaths)
@@ -81,7 +88,12 @@ func LoadAgentKeys(nodes []inspector.Node) error {
 	seen := make(map[string]bool)
 	var targets []string
 	for _, n := range nodes {
-		key := n.Host + "/" + n.User
+		var key string
+		if n.VaultTarget != "" {
+			key = n.VaultTarget
+		} else {
+			key = n.Host + "/" + n.User
+		}
 		if seen[key] {
 			continue
 		}
@@ -102,6 +114,78 @@ func LoadAgentKeys(nodes []inspector.Node) error {
 		return fmt.Errorf("rw vault ssh agent-load failed: %w", err)
 	}
 	return nil
+}
+
+// EnsureVaultEntry creates a wallet SSH entry if it doesn't already exist.
+// Checks existence via `rw vault ssh get <target> --pub`, and if missing,
+// runs `rw vault ssh add <target>` to create it.
+func EnsureVaultEntry(vaultTarget string) error {
+	rw, err := rwBinary()
+	if err != nil {
+		return err
+	}
+
+	// Check if entry exists by trying to get the public key
+	cmd := exec.Command(rw, "vault", "ssh", "get", vaultTarget, "--pub")
+	if err := cmd.Run(); err == nil {
+		return nil // entry already exists
+	}
+
+	// Entry doesn't exist — try to create it
+	addCmd := exec.Command(rw, "vault", "ssh", "add", vaultTarget)
+	addCmd.Stdin = os.Stdin
+	addCmd.Stdout = os.Stderr
+	addCmd.Stderr = os.Stderr
+	if err := addCmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if strings.Contains(stderr, "not unlocked") || strings.Contains(stderr, "session") {
+				return fmt.Errorf("wallet is locked — run: rw unlock")
+			}
+		}
+		return fmt.Errorf("rw vault ssh add %s failed: %w", vaultTarget, err)
+	}
+	return nil
+}
+
+// ResolveVaultPublicKey returns the OpenSSH public key string for a vault entry.
+// Calls `rw vault ssh get <target> --pub`.
+func ResolveVaultPublicKey(vaultTarget string) (string, error) {
+	rw, err := rwBinary()
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command(rw, "vault", "ssh", "get", vaultTarget, "--pub")
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if strings.Contains(stderr, "No SSH entry") {
+				return "", fmt.Errorf("no vault SSH entry for %s — run: rw vault ssh add %s", vaultTarget, vaultTarget)
+			}
+			if strings.Contains(stderr, "not unlocked") || strings.Contains(stderr, "session") {
+				return "", fmt.Errorf("wallet is locked — run: rw unlock")
+			}
+			return "", fmt.Errorf("%s", stderr)
+		}
+		return "", fmt.Errorf("rw command failed: %w", err)
+	}
+
+	pubKey := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(pubKey, "ssh-") {
+		return "", fmt.Errorf("rw returned invalid public key for %s", vaultTarget)
+	}
+	return pubKey, nil
+}
+
+// parseVaultTarget splits a "host/user" vault target string into host and user.
+func parseVaultTarget(target string) (host, user string) {
+	idx := strings.Index(target, "/")
+	if idx < 0 {
+		return target, ""
+	}
+	return target[:idx], target[idx+1:]
 }
 
 // resolveWalletKey calls `rw vault ssh get <host>/<user> --priv`

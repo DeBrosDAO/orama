@@ -28,7 +28,12 @@ func Rollout(name string, flags RolloutFlags) error {
 		return err
 	}
 
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
+	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
+	if err != nil {
+		return fmt.Errorf("prepare SSH key: %w", err)
+	}
+	defer cleanup()
+
 	fmt.Printf("Rolling out to sandbox %q (%d nodes)\n\n", state.Name, len(state.Servers))
 
 	// Step 1: Find or require binary archive

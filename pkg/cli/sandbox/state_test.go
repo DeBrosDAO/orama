@@ -156,7 +156,7 @@ func TestToNodes(t *testing.T) {
 		},
 	}
 
-	nodes := state.ToNodes("/tmp/key")
+	nodes := state.ToNodes("sandbox/root")
 	if len(nodes) != 2 {
 		t.Fatalf("ToNodes() returned %d nodes, want 2", len(nodes))
 	}
@@ -166,8 +166,11 @@ func TestToNodes(t *testing.T) {
 	if nodes[0].User != "root" {
 		t.Errorf("node[0].User = %s, want root", nodes[0].User)
 	}
-	if nodes[0].SSHKey != "/tmp/key" {
-		t.Errorf("node[0].SSHKey = %s, want /tmp/key", nodes[0].SSHKey)
+	if nodes[0].VaultTarget != "sandbox/root" {
+		t.Errorf("node[0].VaultTarget = %s, want sandbox/root", nodes[0].VaultTarget)
+	}
+	if nodes[0].SSHKey != "" {
+		t.Errorf("node[0].SSHKey = %s, want empty (set by PrepareNodeKeys)", nodes[0].SSHKey)
 	}
 	if nodes[0].Environment != "sandbox" {
 		t.Errorf("node[0].Environment = %s, want sandbox", nodes[0].Environment)

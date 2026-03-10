@@ -167,18 +167,18 @@ The inspector reads node definitions from a pipe-delimited config file (default:
 ### Format
 
 ```
-# environment|user@host|password|role|ssh_key
-devnet|ubuntu@1.2.3.4|mypassword|node|
-devnet|ubuntu@5.6.7.8|mypassword|nameserver-ns1|/path/to/key
+# environment|user@host|role
+devnet|ubuntu@1.2.3.4|node
+devnet|ubuntu@5.6.7.8|nameserver-ns1
 ```
 
 | Field | Description |
 |-------|-------------|
 | `environment` | Cluster name (`devnet`, `testnet`) |
 | `user@host` | SSH credentials |
-| `password` | SSH password |
 | `role` | `node` or `nameserver-ns1`, `nameserver-ns2`, etc. |
-| `ssh_key` | Optional path to SSH private key |
+
+SSH keys are resolved from rootwallet (`rw vault ssh get <host>/<user> --priv`).
 
 Blank lines and lines starting with `#` are ignored.
 

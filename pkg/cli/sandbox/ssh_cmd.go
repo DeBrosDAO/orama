@@ -3,7 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
-	"syscall"
+	"os/exec"
 )
 
 // SSHInto opens an interactive SSH session to a sandbox node.
@@ -23,26 +23,35 @@ func SSHInto(name string, nodeNum int) error {
 	}
 
 	srv := state.Servers[nodeNum-1]
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
+
+	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
+	if err != nil {
+		return fmt.Errorf("prepare SSH key: %w", err)
+	}
 
 	fmt.Printf("Connecting to %s (%s, %s)...\n", srv.Name, srv.IP, srv.Role)
 
 	// Find ssh binary
 	sshBin, err := findSSHBinary()
 	if err != nil {
+		cleanup()
 		return err
 	}
 
-	// Replace current process with SSH
-	args := []string{
-		"ssh",
+	// Run SSH as a child process so cleanup runs after the session ends
+	cmd := exec.Command(sshBin,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-i", sshKeyPath,
 		fmt.Sprintf("root@%s", srv.IP),
-	}
+	)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	return syscall.Exec(sshBin, args, os.Environ())
+	err = cmd.Run()
+	cleanup()
+	return err
 }
 
 // findSSHBinary locates the ssh binary in PATH.

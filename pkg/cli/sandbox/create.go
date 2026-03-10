@@ -19,6 +19,13 @@ func Create(name string) error {
 		return err
 	}
 
+	// Resolve wallet SSH key once for all phases
+	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
+	if err != nil {
+		return fmt.Errorf("prepare SSH key: %w", err)
+	}
+	defer cleanup()
+
 	// Check for existing active sandbox
 	active, err := FindActiveSandbox()
 	if err != nil {
@@ -55,20 +62,20 @@ func Create(name string) error {
 
 	// Phase 2: Assign floating IPs
 	fmt.Println("\nPhase 2: Assigning floating IPs...")
-	if err := phase2AssignFloatingIPs(client, cfg, state); err != nil {
+	if err := phase2AssignFloatingIPs(client, cfg, state, sshKeyPath); err != nil {
 		return fmt.Errorf("assign floating IPs: %w", err)
 	}
 	SaveState(state)
 
 	// Phase 3: Upload binary archive
 	fmt.Println("\nPhase 3: Uploading binary archive...")
-	if err := phase3UploadArchive(cfg, state); err != nil {
+	if err := phase3UploadArchive(state, sshKeyPath); err != nil {
 		return fmt.Errorf("upload archive: %w", err)
 	}
 
 	// Phase 4: Install genesis node
 	fmt.Println("\nPhase 4: Installing genesis node...")
-	tokens, err := phase4InstallGenesis(cfg, state)
+	tokens, err := phase4InstallGenesis(cfg, state, sshKeyPath)
 	if err != nil {
 		state.Status = StatusError
 		SaveState(state)
@@ -77,7 +84,7 @@ func Create(name string) error {
 
 	// Phase 5: Join remaining nodes
 	fmt.Println("\nPhase 5: Joining remaining nodes...")
-	if err := phase5JoinNodes(cfg, state, tokens); err != nil {
+	if err := phase5JoinNodes(cfg, state, tokens, sshKeyPath); err != nil {
 		state.Status = StatusError
 		SaveState(state)
 		return fmt.Errorf("join nodes: %w", err)
@@ -85,13 +92,25 @@ func Create(name string) error {
 
 	// Phase 6: Verify cluster
 	fmt.Println("\nPhase 6: Verifying cluster...")
-	phase6Verify(cfg, state)
+	phase6Verify(cfg, state, sshKeyPath)
 
 	state.Status = StatusRunning
 	SaveState(state)
 
 	printCreateSummary(cfg, state)
 	return nil
+}
+
+// resolveVaultKeyOnce resolves a wallet SSH key to a temp file.
+// Returns the key path, cleanup function, and any error.
+func resolveVaultKeyOnce(vaultTarget string) (string, func(), error) {
+	node := inspector.Node{User: "root", Host: "resolve-only", VaultTarget: vaultTarget}
+	nodes := []inspector.Node{node}
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return "", func() {}, err
+	}
+	return nodes[0].SSHKey, cleanup, nil
 }
 
 // phase1ProvisionServers creates 5 Hetzner servers in parallel.
@@ -190,9 +209,7 @@ func phase1ProvisionServers(client *HetznerClient, cfg *Config, state *SandboxSt
 }
 
 // phase2AssignFloatingIPs assigns floating IPs and configures loopback.
-func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxState) error {
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
-
+func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxState, sshKeyPath string) error {
 	for i := 0; i < 2 && i < len(cfg.FloatingIPs) && i < len(state.Servers); i++ {
 		fip := cfg.FloatingIPs[i]
 		srv := state.Servers[i]
@@ -245,7 +262,7 @@ func waitForSSH(node inspector.Node, timeout time.Duration) error {
 
 // phase3UploadArchive uploads the binary archive to the genesis node, then fans out
 // to the remaining nodes server-to-server (much faster than uploading from local machine).
-func phase3UploadArchive(cfg *Config, state *SandboxState) error {
+func phase3UploadArchive(state *SandboxState, sshKeyPath string) error {
 	archivePath := findNewestArchive()
 	if archivePath == "" {
 		fmt.Println("  No binary archive found, run `orama build` first")
@@ -255,7 +272,6 @@ func phase3UploadArchive(cfg *Config, state *SandboxState) error {
 	info, _ := os.Stat(archivePath)
 	fmt.Printf("  Archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
 
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
 	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
 		return err
 	}
@@ -265,9 +281,8 @@ func phase3UploadArchive(cfg *Config, state *SandboxState) error {
 }
 
 // phase4InstallGenesis installs the genesis node and generates invite tokens.
-func phase4InstallGenesis(cfg *Config, state *SandboxState) ([]string, error) {
+func phase4InstallGenesis(cfg *Config, state *SandboxState, sshKeyPath string) ([]string, error) {
 	genesis := state.GenesisServer()
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Install genesis
@@ -304,9 +319,8 @@ func phase4InstallGenesis(cfg *Config, state *SandboxState) ([]string, error) {
 }
 
 // phase5JoinNodes joins the remaining 4 nodes to the cluster (serial).
-func phase5JoinNodes(cfg *Config, state *SandboxState, tokens []string) error {
+func phase5JoinNodes(cfg *Config, state *SandboxState, tokens []string, sshKeyPath string) error {
 	genesisIP := state.GenesisServer().IP
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
 
 	for i := 1; i < len(state.Servers); i++ {
 		srv := state.Servers[i]
@@ -340,8 +354,7 @@ func phase5JoinNodes(cfg *Config, state *SandboxState, tokens []string) error {
 }
 
 // phase6Verify runs a basic cluster health check.
-func phase6Verify(cfg *Config, state *SandboxState) {
-	sshKeyPath := cfg.ExpandedPrivateKeyPath()
+func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 	genesis := state.GenesisServer()
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 

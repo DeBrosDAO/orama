@@ -2,9 +2,6 @@ package sandbox
 
 import (
 	"bufio"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/ssh"
+	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 )
 
 // Setup runs the interactive sandbox setup wizard.
@@ -386,103 +383,53 @@ func setupFirewall(client *HetznerClient) (int64, error) {
 	return fw.ID, nil
 }
 
-// setupSSHKey generates an SSH keypair and uploads it to Hetzner.
+// setupSSHKey ensures a wallet SSH entry exists and uploads its public key to Hetzner.
 func setupSSHKey(client *HetznerClient) (SSHKeyConfig, error) {
-	dir, err := configDir()
-	if err != nil {
-		return SSHKeyConfig{}, err
-	}
+	const vaultTarget = "sandbox/root"
 
-	privPath := dir + "/sandbox_key"
-	pubPath := privPath + ".pub"
-
-	// Check for existing key
-	if _, err := os.Stat(privPath); err == nil {
-		fmt.Printf("  SSH key already exists: %s\n", privPath)
-
-		// Read public key and check if it's on Hetzner
-		pubData, err := os.ReadFile(pubPath)
-		if err != nil {
-			return SSHKeyConfig{}, fmt.Errorf("read public key: %w", err)
-		}
-
-		// Try to upload (will fail with uniqueness error if already exists)
-		key, err := client.UploadSSHKey("orama-sandbox", strings.TrimSpace(string(pubData)))
-		if err != nil {
-			// Key already exists on Hetzner — find it by fingerprint
-			sshPubKey, _, _, _, parseErr := ssh.ParseAuthorizedKey(pubData)
-			if parseErr != nil {
-				return SSHKeyConfig{}, fmt.Errorf("parse public key to find fingerprint: %w", parseErr)
-			}
-			fingerprint := ssh.FingerprintLegacyMD5(sshPubKey)
-
-			existing, listErr := client.ListSSHKeysByFingerprint(fingerprint)
-			if listErr == nil && len(existing) > 0 {
-				fmt.Printf("  Found existing SSH key on Hetzner (ID: %d)\n", existing[0].ID)
-				return SSHKeyConfig{
-					HetznerID:      existing[0].ID,
-					PrivateKeyPath: "~/.orama/sandbox_key",
-					PublicKeyPath:  "~/.orama/sandbox_key.pub",
-				}, nil
-			}
-
-			return SSHKeyConfig{}, fmt.Errorf("SSH key exists locally but could not find it on Hetzner (fingerprint: %s): %w", fingerprint, err)
-		}
-
-		fmt.Printf("  Uploaded to Hetzner (ID: %d)\n", key.ID)
-		return SSHKeyConfig{
-			HetznerID:      key.ID,
-			PrivateKeyPath: "~/.orama/sandbox_key",
-			PublicKeyPath:  "~/.orama/sandbox_key.pub",
-		}, nil
-	}
-
-	// Generate new ed25519 keypair
-	fmt.Print("  Generating ed25519 keypair... ")
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
+	// Ensure wallet entry exists (creates if missing)
+	fmt.Print("  Ensuring wallet SSH entry... ")
+	if err := remotessh.EnsureVaultEntry(vaultTarget); err != nil {
 		fmt.Println("FAILED")
-		return SSHKeyConfig{}, fmt.Errorf("generate key: %w", err)
-	}
-
-	// Marshal private key to OpenSSH format
-	pemBlock, err := ssh.MarshalPrivateKey(privKey, "")
-	if err != nil {
-		fmt.Println("FAILED")
-		return SSHKeyConfig{}, fmt.Errorf("marshal private key: %w", err)
-	}
-
-	privPEM := pem.EncodeToMemory(pemBlock)
-	if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
-		fmt.Println("FAILED")
-		return SSHKeyConfig{}, fmt.Errorf("write private key: %w", err)
-	}
-
-	// Marshal public key to authorized_keys format
-	sshPubKey, err := ssh.NewPublicKey(pubKey)
-	if err != nil {
-		return SSHKeyConfig{}, fmt.Errorf("convert public key: %w", err)
-	}
-	pubStr := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPubKey)))
-
-	if err := os.WriteFile(pubPath, []byte(pubStr+"\n"), 0644); err != nil {
-		return SSHKeyConfig{}, fmt.Errorf("write public key: %w", err)
+		return SSHKeyConfig{}, fmt.Errorf("ensure vault entry: %w", err)
 	}
 	fmt.Println("OK")
 
-	// Upload to Hetzner
+	// Get public key from wallet
+	fmt.Print("  Resolving public key from wallet... ")
+	pubStr, err := remotessh.ResolveVaultPublicKey(vaultTarget)
+	if err != nil {
+		fmt.Println("FAILED")
+		return SSHKeyConfig{}, fmt.Errorf("resolve public key: %w", err)
+	}
+	fmt.Println("OK")
+
+	// Upload to Hetzner (will fail with uniqueness error if already exists)
 	fmt.Print("  Uploading to Hetzner... ")
 	key, err := client.UploadSSHKey("orama-sandbox", pubStr)
 	if err != nil {
+		// Key may already exist on Hetzner — try to find by fingerprint
+		existing, listErr := client.ListSSHKeysByFingerprint("") // empty = list all
+		if listErr == nil {
+			for _, k := range existing {
+				if strings.TrimSpace(k.PublicKey) == pubStr {
+					fmt.Printf("already exists (ID: %d)\n", k.ID)
+					return SSHKeyConfig{
+						HetznerID:   k.ID,
+						VaultTarget: vaultTarget,
+					}, nil
+				}
+			}
+		}
+
 		fmt.Println("FAILED")
 		return SSHKeyConfig{}, fmt.Errorf("upload SSH key: %w", err)
 	}
 	fmt.Printf("OK (ID: %d)\n", key.ID)
 
 	return SSHKeyConfig{
-		HetznerID:      key.ID,
-		PrivateKeyPath: "~/.orama/sandbox_key",
-		PublicKeyPath:  "~/.orama/sandbox_key.pub",
+		HetznerID:   key.ID,
+		VaultTarget: vaultTarget,
 	}, nil
 }
 
