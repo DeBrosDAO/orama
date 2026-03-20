@@ -338,6 +338,7 @@ func (ari *AnyoneRelayInstaller) ConfigureClient() error {
 	config := `# Anyone Client Configuration (Managed by Orama Network)
 # Client-only mode — no relay traffic, no ORPort
 
+AgreeToTerms 1
 SocksPort 9050
 
 Log notice file /var/log/anon/notices.log
@@ -359,6 +360,8 @@ func (ari *AnyoneRelayInstaller) generateAnonrc() string {
 
 	sb.WriteString("# Anyone Relay Configuration (Managed by Orama Network)\n")
 	sb.WriteString("# Generated automatically - manual edits may be overwritten\n\n")
+
+	sb.WriteString("AgreeToTerms 1\n\n")
 
 	// Nickname
 	sb.WriteString(fmt.Sprintf("Nickname %s\n", ari.config.Nickname))

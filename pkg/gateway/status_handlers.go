@@ -141,11 +141,15 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		ch <- nr
 	}()
 
-	// Vault Guardian (TCP connect to localhost:7500)
+	// Vault Guardian (TCP connect on WireGuard IP:7500)
 	go func() {
 		nr := namedResult{name: "vault"}
 		start := time.Now()
-		conn, err := net.DialTimeout("tcp", "localhost:7500", 2*time.Second)
+		vaultAddr := "localhost:7500"
+		if g.localWireGuardIP != "" {
+			vaultAddr = g.localWireGuardIP + ":7500"
+		}
+		conn, err := net.DialTimeout("tcp", vaultAddr, 2*time.Second)
 		if err != nil {
 			nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: fmt.Sprintf("vault-guardian unreachable on port 7500: %v", err)}
 		} else {
