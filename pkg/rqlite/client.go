@@ -35,7 +35,14 @@ func (c *client) Query(ctx context.Context, dest any, query string, args ...any)
 }
 
 // Exec runs a write statement (INSERT/UPDATE/DELETE).
-func (c *client) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+// Includes panic recovery because the gorqlite stdlib driver can panic
+// with "index out of range" when RQLite is temporarily unavailable.
+func (c *client) Exec(ctx context.Context, query string, args ...any) (result sql.Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("gorqlite panic (ExecContext): %v", r)
+		}
+	}()
 	return c.db.ExecContext(ctx, query, args...)
 }
 
