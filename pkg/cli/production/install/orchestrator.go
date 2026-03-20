@@ -597,7 +597,11 @@ func promptForBaseDomain() string {
 
 // installNamespaceTemplates installs systemd template unit files for namespace services
 func (o *Orchestrator) installNamespaceTemplates() error {
-	sourceDir := filepath.Join(o.oramaHome, "src", "systemd")
+	// Check pre-built archive path first, fall back to source path
+	sourceDir := production.OramaSystemdDir
+	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
+		sourceDir = filepath.Join(o.oramaHome, "src", "systemd")
+	}
 	systemdDir := "/etc/systemd/system"
 
 	templates := []string{

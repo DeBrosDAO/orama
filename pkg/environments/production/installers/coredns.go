@@ -356,8 +356,12 @@ func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
     # CoreDNS cache would cache NXDOMAIN and break ACME DNS-01 challenges.
 }
 
-# Forward all other queries to upstream DNS
+# Forward non-authoritative queries to upstream DNS (localhost only).
+# The bind directive restricts this block to 127.0.0.1 so the node itself
+# can resolve external domains (apt, github, etc.) but external clients
+# cannot use this server as an open recursive resolver (BSI/CERT-Bund).
 . {
+    bind 127.0.0.1
     forward . 8.8.8.8 8.8.4.4 1.1.1.1
     cache 300
     errors

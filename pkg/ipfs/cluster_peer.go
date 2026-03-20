@@ -109,9 +109,10 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 
 		info := h.Peerstore().PeerInfo(p)
 		for _, addr := range info.Addrs {
-			// Extract IP from multiaddr
+			// Extract IP from multiaddr — only use WireGuard IPs (10.0.0.x)
+			// for inter-node queries since port 6001 is blocked on public interfaces by UFW
 			ip := extractIPFromMultiaddr(addr)
-			if ip != "" && !strings.HasPrefix(ip, "127.") && !strings.HasPrefix(ip, "::1") {
+			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
 				peerIPs[ip] = true
 			}
 		}

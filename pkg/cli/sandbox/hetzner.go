@@ -346,7 +346,11 @@ func (c *HetznerClient) UploadSSHKey(name, publicKey string) (*HetznerSSHKey, er
 
 // ListSSHKeysByFingerprint finds SSH keys matching a fingerprint.
 func (c *HetznerClient) ListSSHKeysByFingerprint(fingerprint string) ([]HetznerSSHKey, error) {
-	body, err := c.get("/ssh_keys?fingerprint=" + fingerprint)
+	path := "/ssh_keys"
+	if fingerprint != "" {
+		path += "?fingerprint=" + fingerprint
+	}
+	body, err := c.get(path)
 	if err != nil {
 		return nil, fmt.Errorf("list SSH keys: %w", err)
 	}
