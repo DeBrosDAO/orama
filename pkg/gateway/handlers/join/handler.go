@@ -2,8 +2,10 @@ package join
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,14 +34,18 @@ type JoinResponse struct {
 	WGPeers []WGPeerInfo `json:"wg_peers"`
 
 	// Secrets
-	ClusterSecret string `json:"cluster_secret"`
-	SwarmKey      string `json:"swarm_key"`
+	ClusterSecret    string `json:"cluster_secret"`
+	SwarmKey         string `json:"swarm_key"`
+	APIKeyHMACSecret string `json:"api_key_hmac_secret,omitempty"`
+	RQLitePassword      string `json:"rqlite_password,omitempty"`
+	OlricEncryptionKey  string `json:"olric_encryption_key,omitempty"`
 
 	// Cluster join info (all using WG IPs)
-	RQLiteJoinAddress string   `json:"rqlite_join_address"`
-	IPFSPeer          PeerInfo `json:"ipfs_peer"`
-	IPFSClusterPeer   PeerInfo `json:"ipfs_cluster_peer"`
-	BootstrapPeers    []string `json:"bootstrap_peers"`
+	RQLiteJoinAddress  string   `json:"rqlite_join_address"`
+	IPFSPeer           PeerInfo `json:"ipfs_peer"`
+	IPFSClusterPeer    PeerInfo `json:"ipfs_cluster_peer"`
+	IPFSClusterPeerIDs []string `json:"ipfs_cluster_peer_ids,omitempty"`
+	BootstrapPeers     []string `json:"bootstrap_peers"`
 
 	// Olric seed peers (WG IP:port for memberlist)
 	OlricPeers []string `json:"olric_peers,omitempty"`
@@ -93,6 +99,24 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 
 	if req.Token == "" || req.WGPublicKey == "" || req.PublicIP == "" {
 		http.Error(w, "token, wg_public_key, and public_ip are required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate public IP format
+	if net.ParseIP(req.PublicIP) == nil || net.ParseIP(req.PublicIP).To4() == nil {
+		http.Error(w, "public_ip must be a valid IPv4 address", http.StatusBadRequest)
+		return
+	}
+
+	// Validate WireGuard public key: must be base64-encoded 32 bytes (Curve25519)
+	// Also reject control characters (newlines) to prevent config injection
+	if strings.ContainsAny(req.WGPublicKey, "\n\r") {
+		http.Error(w, "wg_public_key contains invalid characters", http.StatusBadRequest)
+		return
+	}
+	wgKeyBytes, err := base64.StdEncoding.DecodeString(req.WGPublicKey)
+	if err != nil || len(wgKeyBytes) != 32 {
+		http.Error(w, "wg_public_key must be a valid base64-encoded 32-byte key", http.StatusBadRequest)
 		return
 	}
 
@@ -155,7 +179,33 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Get all WG peers
+	// Read API key HMAC secret (optional — may not exist on older clusters)
+	apiKeyHMACSecret := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/api-key-hmac-secret"); err == nil {
+		apiKeyHMACSecret = strings.TrimSpace(string(data))
+	}
+
+	// Read RQLite password (optional — may not exist on older clusters)
+	rqlitePassword := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/rqlite-password"); err == nil {
+		rqlitePassword = strings.TrimSpace(string(data))
+	}
+
+	// Read Olric encryption key (optional — may not exist on older clusters)
+	olricEncryptionKey := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/olric-encryption-key"); err == nil {
+		olricEncryptionKey = strings.TrimSpace(string(data))
+	}
+
+	// 7. Get this node's WG IP (needed before peer list to check self-inclusion)
+	myWGIP, err := h.getMyWGIP()
+	if err != nil {
+		h.logger.Error("failed to get local WG IP", zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// 8. Get all WG peers
 	wgPeers, err := h.getWGPeers(ctx, req.WGPublicKey)
 	if err != nil {
 		h.logger.Error("failed to list WG peers", zap.Error(err))
@@ -163,12 +213,29 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 8. Get this node's WG IP
-	myWGIP, err := h.getMyWGIP()
-	if err != nil {
-		h.logger.Error("failed to get local WG IP", zap.Error(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+	// Ensure this node (the join handler's host) is in the peer list.
+	// On a fresh genesis node, the WG sync loop may not have self-registered
+	// into wireguard_peers yet, causing 0 peers to be returned.
+	if !wgPeersContainsIP(wgPeers, myWGIP) {
+		myPubKey, err := h.getMyWGPublicKey()
+		if err != nil {
+			h.logger.Error("failed to get local WG public key", zap.Error(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		myPublicIP, err := h.getMyPublicIP()
+		if err != nil {
+			h.logger.Error("failed to get local public IP", zap.Error(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		wgPeers = append([]WGPeerInfo{{
+			PublicKey: myPubKey,
+			Endpoint:  fmt.Sprintf("%s:%d", myPublicIP, 51820),
+			AllowedIP: fmt.Sprintf("%s/32", myWGIP),
+		}}, wgPeers...)
+		h.logger.Info("self-injected into WG peer list (sync loop hasn't registered yet)",
+			zap.String("wg_ip", myWGIP))
 	}
 
 	// 9. Query IPFS and IPFS Cluster peer info
@@ -181,6 +248,9 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// 11. Read base domain from config
 	baseDomain := h.readBaseDomain()
 
+	// 12. Read IPFS Cluster trusted peer IDs
+	ipfsClusterPeerIDs := h.readIPFSClusterTrustedPeers()
+
 	// Build Olric seed peers from all existing WG peer IPs (memberlist port 3322)
 	var olricPeers []string
 	for _, p := range wgPeers {
@@ -191,16 +261,20 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", myWGIP))
 
 	resp := JoinResponse{
-		WGIP:              wgIP,
-		WGPeers:           wgPeers,
-		ClusterSecret:     strings.TrimSpace(string(clusterSecret)),
-		SwarmKey:          strings.TrimSpace(string(swarmKey)),
-		RQLiteJoinAddress: fmt.Sprintf("%s:7001", myWGIP),
-		IPFSPeer:          ipfsPeer,
-		IPFSClusterPeer:   ipfsClusterPeer,
-		BootstrapPeers:    bootstrapPeers,
-		OlricPeers:        olricPeers,
-		BaseDomain:        baseDomain,
+		WGIP:               wgIP,
+		WGPeers:            wgPeers,
+		ClusterSecret:      strings.TrimSpace(string(clusterSecret)),
+		SwarmKey:            strings.TrimSpace(string(swarmKey)),
+		APIKeyHMACSecret:   apiKeyHMACSecret,
+		RQLitePassword:     rqlitePassword,
+		OlricEncryptionKey: olricEncryptionKey,
+		RQLiteJoinAddress:  fmt.Sprintf("%s:7001", myWGIP),
+		IPFSPeer:           ipfsPeer,
+		IPFSClusterPeer:    ipfsClusterPeer,
+		IPFSClusterPeerIDs: ipfsClusterPeerIDs,
+		BootstrapPeers:     bootstrapPeers,
+		OlricPeers:         olricPeers,
+		BaseDomain:         baseDomain,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -317,6 +391,17 @@ func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
 	return nil
 }
 
+// wgPeersContainsIP checks if any peer in the list has the given WG IP
+func wgPeersContainsIP(peers []WGPeerInfo, wgIP string) bool {
+	target := fmt.Sprintf("%s/32", wgIP)
+	for _, p := range peers {
+		if p.AllowedIP == target {
+			return true
+		}
+	}
+	return false
+}
+
 // getWGPeers returns all WG peers except the requesting node
 func (h *Handler) getWGPeers(ctx context.Context, excludePubKey string) ([]WGPeerInfo, error) {
 	type peerRow struct {
@@ -372,6 +457,32 @@ func (h *Handler) getMyWGIP() (string, error) {
 	}
 
 	return "", fmt.Errorf("could not find wg0 IP address")
+}
+
+// getMyWGPublicKey reads the local WireGuard public key from the orama secrets
+// directory. The key is saved there during install by Phase6SetupWireGuard.
+// This avoids needing root/CAP_NET_ADMIN permissions that `wg show wg0` requires.
+func (h *Handler) getMyWGPublicKey() (string, error) {
+	data, err := os.ReadFile(h.oramaDir + "/secrets/wg-public-key")
+	if err != nil {
+		return "", fmt.Errorf("failed to read WG public key from %s/secrets/wg-public-key: %w", h.oramaDir, err)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("WG public key file is empty")
+	}
+	return key, nil
+}
+
+// getMyPublicIP determines this node's public IP by connecting to a public server
+func (h *Handler) getMyPublicIP() (string, error) {
+	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 3*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("failed to determine public IP: %w", err)
+	}
+	defer conn.Close()
+	addr := conn.LocalAddr().(*net.UDPAddr)
+	return addr.IP.String(), nil
 }
 
 // queryIPFSPeerInfo gets the local IPFS node's peer ID and builds addrs with WG IP
@@ -452,6 +563,22 @@ func (h *Handler) buildBootstrapPeers(myWGIP, ipfsPeerID string) []string {
 	return []string{
 		fmt.Sprintf("/ip4/%s/tcp/4001/p2p/%s", myWGIP, peerID.String()),
 	}
+}
+
+// readIPFSClusterTrustedPeers reads IPFS Cluster trusted peer IDs from the secrets file
+func (h *Handler) readIPFSClusterTrustedPeers() []string {
+	data, err := os.ReadFile(h.oramaDir + "/secrets/ipfs-cluster-trusted-peers")
+	if err != nil {
+		return nil
+	}
+	var peers []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			peers = append(peers, line)
+		}
+	}
+	return peers
 }
 
 // readBaseDomain reads the base domain from node config

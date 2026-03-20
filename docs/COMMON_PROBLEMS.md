@@ -32,7 +32,7 @@ wg set wg0 peer <NodeA-pubkey> remove
 wg set wg0 peer <NodeA-pubkey> endpoint <NodeA-public-ip>:51820 allowed-ips <NodeA-wg-ip>/32 persistent-keepalive 25
 ```
 
-Then restart services: `sudo orama prod restart`
+Then restart services: `sudo orama node restart`
 
 You can find peer public keys with `wg show wg0`.
 
@@ -46,7 +46,7 @@ cat /opt/orama/.orama/data/namespaces/<name>/configs/olric-*.yaml
 
 If `bindAddr` is `0.0.0.0`, the node will try to bind to IPv6 on dual-stack hosts, breaking memberlist gossip.
 
-**Fix:** Edit the YAML to use the node's WireGuard IP (run `ip addr show wg0` to find it), then restart: `sudo orama prod restart`
+**Fix:** Edit the YAML to use the node's WireGuard IP (run `ip addr show wg0` to find it), then restart: `sudo orama node restart`
 
 This was fixed in code (BindAddr validation in `SpawnOlric`), so new namespaces won't have this issue.
 
@@ -82,7 +82,7 @@ olric_servers:
   - "10.0.0.Z:10002"
 ```
 
-Then: `sudo orama prod restart`
+Then: `sudo orama node restart`
 
 This was fixed in code, so new namespaces get the correct config.
 
@@ -90,7 +90,7 @@ This was fixed in code, so new namespaces get the correct config.
 
 ## 3. Namespace not restoring after restart (missing cluster-state.json)
 
-**Symptom:** After `orama prod restart`, the namespace services don't come back because `RestoreLocalClustersFromDisk` has no state file.
+**Symptom:** After `orama node restart`, the namespace services don't come back because `RestoreLocalClustersFromDisk` has no state file.
 
 **Check:**
 
@@ -117,9 +117,9 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 ## 4. Namespace gateway processes not restarting after upgrade
 
-**Symptom:** After `orama upgrade --restart` or `orama prod restart`, namespace gateway/olric/rqlite services don't start.
+**Symptom:** After `orama upgrade --restart` or `orama node restart`, namespace gateway/olric/rqlite services don't start.
 
-**Cause:** `orama prod stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
+**Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
 
 **Fix:** Re-enable the services before restarting:
 
@@ -127,7 +127,7 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 systemctl enable orama-namespace-rqlite@<name>.service
 systemctl enable orama-namespace-olric@<name>.service
 systemctl enable orama-namespace-gateway@<name>.service
-sudo orama prod restart
+sudo orama node restart
 ```
 
 This was fixed in code — the upgrade orchestrator now re-enables `@` services before restarting.
@@ -150,11 +150,68 @@ ssh -n user@host 'command'
 
 ---
 
+---
+
+## 6. RQLite returns 401 Unauthorized
+
+**Symptom:** RQLite queries fail with HTTP 401 after security hardening.
+
+**Cause:** RQLite now requires basic auth. The client isn't sending credentials.
+
+**Fix:** Ensure the RQLite client is configured with the credentials from `/opt/orama/.orama/secrets/rqlite-auth.json`. The central RQLite client wrapper (`pkg/rqlite/client.go`) handles this automatically. If using a standalone client (e.g., CoreDNS plugin), ensure it's also configured.
+
+---
+
+## 7. Olric cluster split after upgrade
+
+**Symptom:** Olric nodes can't gossip after enabling memberlist encryption.
+
+**Cause:** Olric memberlist encryption is all-or-nothing. Nodes with encryption can't communicate with nodes without it.
+
+**Fix:** All nodes must be restarted simultaneously when enabling Olric encryption. The cache will be lost (it rebuilds from DB). This is expected — Olric is a cache, not persistent storage.
+
+---
+
+## 8. OramaOS: LUKS unlock fails
+
+**Symptom:** OramaOS node can't reconstruct its LUKS key after reboot.
+
+**Cause:** Not enough peer vault-guardians are online to meet the Shamir threshold (K = max(3, N/3)).
+
+**Fix:** Ensure enough cluster nodes are online and reachable over WireGuard. The agent retries with exponential backoff. For genesis nodes before 5+ peers exist, use:
+
+```bash
+orama node unlock --genesis --node-ip <wg-ip>
+```
+
+---
+
+## 9. OramaOS: Enrollment timeout
+
+**Symptom:** `orama node enroll` hangs or times out.
+
+**Cause:** The OramaOS node's port 9999 isn't reachable, or the Gateway can't reach the node's WebSocket.
+
+**Fix:** Check that port 9999 is open in your VPS provider's external firewall (Hetzner firewall, AWS security groups, etc.). OramaOS opens it internally, but provider-level firewalls must be configured separately.
+
+---
+
+## 10. Binary signature verification fails
+
+**Symptom:** `orama node install` rejects the binary archive with a signature error.
+
+**Cause:** The archive was tampered with, or the manifest.sig file is missing/corrupted.
+
+**Fix:** Rebuild the archive with `orama build` and re-sign with `make sign` (in the orama-os repo). Ensure you're using the rootwallet that matches the embedded signer address.
+
+---
+
 ## General Debugging Tips
 
-- **Always use `sudo orama prod restart`** instead of raw `systemctl` commands
+- **Always use `sudo orama node restart`** instead of raw `systemctl` commands
 - **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
 - **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
 - **Node IPs:** Check `scripts/remote-nodes.conf` for credentials, `wg show wg0` for WG IPs
+- **OramaOS nodes:** No SSH access — use Gateway API endpoints (`/v1/node/status`, `/v1/node/logs`) for diagnostics

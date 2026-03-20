@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // GatewayInstaller handles Orama binary installation (including gateway)
@@ -124,7 +126,7 @@ func (gi *GatewayInstaller) InstallDeBrosBinaries(oramaHome string) error {
 
 // InstallGo downloads and installs Go toolchain
 func (gi *GatewayInstaller) InstallGo() error {
-	requiredVersion := "1.24.6"
+	requiredVersion := constants.GoVersion
 	if goPath, err := exec.LookPath("go"); err == nil {
 		// Check version - upgrade if too old
 		out, _ := exec.Command(goPath, "version").Output()

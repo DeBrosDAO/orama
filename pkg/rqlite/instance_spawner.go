@@ -31,6 +31,7 @@ type InstanceConfig struct {
 	JoinAddresses  []string // Addresses to join (e.g., ["192.168.1.2:10001"])
 	DataDir        string   // Data directory for this instance
 	IsLeader       bool     // Whether this is the first node (creates cluster)
+	AuthFile       string   // Path to RQLite auth JSON file. Empty = no auth enforcement.
 }
 
 // Instance represents a running RQLite instance
@@ -90,6 +91,11 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		"-raft-apply-timeout", "30s",
 		"-raft-leader-lease-timeout", "2s",
 	)
+
+	// RQLite HTTP Basic Auth
+	if cfg.AuthFile != "" {
+		args = append(args, "-auth", cfg.AuthFile)
+	}
 
 	// Add join addresses if not the leader (must be before data directory)
 	if !cfg.IsLeader && len(cfg.JoinAddresses) > 0 {

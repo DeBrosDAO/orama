@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -14,8 +16,29 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// For early development we accept any origin; tighten later.
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin:     checkWSOrigin,
+}
+
+// checkWSOrigin validates WebSocket origins against the request's Host header.
+// Non-browser clients (no Origin) are allowed. Browser clients must match the host.
+func checkWSOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	host := r.Host
+	if host == "" {
+		return false
+	}
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	originHost := parsed.Hostname()
+	return originHost == host || strings.HasSuffix(originHost, "."+host)
 }
 
 // wsClient wraps a WebSocket connection with message handling

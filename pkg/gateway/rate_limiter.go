@@ -6,13 +6,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
 // wireGuardNet is the WireGuard mesh subnet, parsed once at init.
 var wireGuardNet *net.IPNet
 
 func init() {
-	_, wireGuardNet, _ = net.ParseCIDR("10.0.0.0/8")
+	_, wireGuardNet, _ = net.ParseCIDR(auth.WireGuardSubnet)
 }
 
 // RateLimiter implements a token-bucket rate limiter per client IP.
@@ -126,7 +128,7 @@ func (nrl *NamespaceRateLimiter) Allow(namespace string) bool {
 }
 
 // rateLimitMiddleware returns 429 when a client exceeds the rate limit.
-// Internal traffic from the WireGuard subnet (10.0.0.0/8) is exempt.
+// Internal traffic from the WireGuard subnet is exempt.
 func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 	if g.rateLimiter == nil {
 		return next
@@ -170,7 +172,7 @@ func (g *Gateway) namespaceRateLimitMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isInternalIP returns true if the IP is in the WireGuard 10.0.0.0/8 subnet
+// isInternalIP returns true if the IP is in the WireGuard subnet
 // or is a loopback address.
 func isInternalIP(ipStr string) bool {
 	// Strip port if present
@@ -187,6 +189,5 @@ func isInternalIP(ipStr string) bool {
 	if ip.IsLoopback() {
 		return true
 	}
-	// 10.0.0.0/8 — WireGuard mesh
 	return wireGuardNet.Contains(ip)
 }

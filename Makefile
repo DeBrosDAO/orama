@@ -61,9 +61,9 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks upload-devnet upload-testnet redeploy-devnet redeploy-testnet release health
+.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release
 
-VERSION := 0.112.8
+VERSION := 0.115.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -89,9 +89,13 @@ build-linux: deps
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama ./cmd/cli/
 	@echo "✓ CLI built at bin-linux/orama"
 	@echo ""
-	@echo "Next steps:"
-	@echo "  ./scripts/generate-source-archive.sh"
-	@echo "  ./bin/orama install --vps-ip <ip> --nameserver --domain ..."
+	@echo "Prefer 'make build-archive' for full pre-built binary archive."
+
+# Build pre-compiled binary archive for deployment (all binaries + deps)
+build-archive: deps
+	@echo "Building binary archive (version=$(VERSION))..."
+	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/cli/
+	./bin/orama build --output /tmp/orama-$(VERSION)-linux-amd64.tar.gz
 
 # Install git hooks
 install-hooks:
@@ -105,29 +109,21 @@ clean:
 	rm -rf data/
 	@echo "Clean complete!"
 
-# Upload source to devnet using fanout (upload to 1 node, parallel distribute to rest)
-upload-devnet:
-	@bash scripts/upload-source-fanout.sh --env devnet
+# Push binary archive to devnet nodes (fanout distribution)
+push-devnet:
+	./bin/orama node push --env devnet
 
-# Upload source to testnet using fanout
-upload-testnet:
-	@bash scripts/upload-source-fanout.sh --env testnet
+# Push binary archive to testnet nodes (fanout distribution)
+push-testnet:
+	./bin/orama node push --env testnet
 
-# Deploy to devnet (build + rolling upgrade all nodes)
-redeploy-devnet:
-	@bash scripts/redeploy.sh --devnet
+# Full rollout to devnet (build + push + rolling upgrade)
+rollout-devnet:
+	./bin/orama node rollout --env devnet --yes
 
-# Deploy to devnet without rebuilding
-redeploy-devnet-quick:
-	@bash scripts/redeploy.sh --devnet --no-build
-
-# Deploy to testnet (build + rolling upgrade all nodes)
-redeploy-testnet:
-	@bash scripts/redeploy.sh --testnet
-
-# Deploy to testnet without rebuilding
-redeploy-testnet-quick:
-	@bash scripts/redeploy.sh --testnet --no-build
+# Full rollout to testnet (build + push + rolling upgrade)
+rollout-testnet:
+	./bin/orama node rollout --env testnet --yes
 
 # Interactive release workflow (tag + push)
 release:
@@ -140,14 +136,7 @@ health:
 		echo "Usage: make health ENV=devnet|testnet"; \
 		exit 1; \
 	fi
-	@while IFS='|' read -r env host pass role key; do \
-		[ -z "$$env" ] && continue; \
-		case "$$env" in \#*) continue;; esac; \
-		env="$$(echo "$$env" | xargs)"; \
-		[ "$$env" != "$(ENV)" ] && continue; \
-		role="$$(echo "$$role" | xargs)"; \
-		bash scripts/check-node-health.sh "$$host" "$$pass" "$$host ($$role)"; \
-	done < scripts/remote-nodes.conf
+	./bin/orama monitor report --env $(ENV)
 
 # Help
 help:
@@ -170,10 +159,11 @@ help:
 	@echo "    ORAMA_GATEWAY_URL=https://orama-devnet.network make test-e2e-prod"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  make redeploy-devnet       - Build + rolling deploy to all devnet nodes"
-	@echo "  make redeploy-devnet-quick - Deploy to devnet without rebuilding"
-	@echo "  make redeploy-testnet      - Build + rolling deploy to all testnet nodes"
-	@echo "  make redeploy-testnet-quick- Deploy to testnet without rebuilding"
+	@echo "  make build-archive         - Build pre-compiled binary archive for deployment"
+	@echo "  make push-devnet           - Push binary archive to devnet nodes"
+	@echo "  make push-testnet          - Push binary archive to testnet nodes"
+	@echo "  make rollout-devnet        - Full rollout: build + push + rolling upgrade (devnet)"
+	@echo "  make rollout-testnet       - Full rollout: build + push + rolling upgrade (testnet)"
 	@echo "  make health ENV=devnet     - Check health of all nodes in an environment"
 	@echo "  make release               - Interactive release workflow (tag + push)"
 	@echo ""

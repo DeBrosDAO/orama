@@ -74,7 +74,11 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 // lookupAPIKeyNamespace resolves an API key to its namespace using cache and DB.
 // dbClient controls which database is queried (global vs namespace-specific).
 // Returns the namespace name or an error if the key is invalid.
+//
+// Dual lookup strategy for rolling upgrade: tries HMAC-hashed key first (new keys),
+// then falls back to raw key lookup (existing unhashed keys during transition).
 func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, dbClient client.NetworkClient) (string, error) {
+	// Cache uses raw key as cache key (in-memory only, never persisted)
 	if g.mwCache != nil {
 		if cachedNS, ok := g.mwCache.GetAPIKeyNamespace(key); ok {
 			return cachedNS, nil
@@ -84,20 +88,33 @@ func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, dbClien
 	db := dbClient.Database()
 	internalCtx := client.WithInternalAuth(ctx)
 	q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
-	res, err := db.Query(internalCtx, q, key)
-	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
-		return "", fmt.Errorf("invalid API key")
+
+	// Try HMAC-hashed lookup first (new keys stored as hashes)
+	hashedKey := g.authService.HashAPIKey(key)
+	res, err := db.Query(internalCtx, q, hashedKey)
+	if err == nil && res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+		if ns := getString(res.Rows[0][0]); ns != "" {
+			if g.mwCache != nil {
+				g.mwCache.SetAPIKeyNamespace(key, ns)
+			}
+			return ns, nil
+		}
 	}
 
-	ns := getString(res.Rows[0][0])
-	if ns == "" {
-		return "", fmt.Errorf("invalid API key")
+	// Fallback: try raw key lookup (existing unhashed keys during rolling upgrade)
+	if hashedKey != key {
+		res, err = db.Query(internalCtx, q, key)
+		if err == nil && res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+			if ns := getString(res.Rows[0][0]); ns != "" {
+				if g.mwCache != nil {
+					g.mwCache.SetAPIKeyNamespace(key, ns)
+				}
+				return ns, nil
+			}
+		}
 	}
 
-	if g.mwCache != nil {
-		g.mwCache.SetAPIKeyNamespace(key, ns)
-	}
-	return ns, nil
+	return "", fmt.Errorf("invalid API key")
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request
@@ -414,6 +431,11 @@ func isPublicPath(p string) bool {
 
 	// Namespace cluster repair endpoint (auth handled by internal auth header)
 	if p == "/v1/internal/namespace/repair" {
+		return true
+	}
+
+	// Vault proxy endpoints (no auth — rate-limited per identity hash within handler)
+	if strings.HasPrefix(p, "/v1/vault/") {
 		return true
 	}
 

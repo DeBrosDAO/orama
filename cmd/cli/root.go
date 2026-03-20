@@ -9,6 +9,7 @@ import (
 	// Command groups
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/app"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/authcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/buildcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/pkg/cli/cmd/deploy"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/envcmd"
@@ -17,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sandboxcmd"
 )
 
 // version metadata populated via -ldflags at build time
@@ -82,6 +84,12 @@ and interacting with the Orama distributed network.`,
 
 	// Serverless function commands
 	rootCmd.AddCommand(functioncmd.Cmd)
+
+	// Build command (cross-compile binary archive)
+	rootCmd.AddCommand(buildcmd.Cmd)
+
+	// Sandbox command (ephemeral Hetzner Cloud clusters)
+	rootCmd.AddCommand(sandboxcmd.Cmd)
 
 	return rootCmd
 }

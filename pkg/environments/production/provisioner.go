@@ -34,6 +34,7 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		filepath.Join(fp.oramaDir, "data", "ipfs", "repo"),
 		filepath.Join(fp.oramaDir, "data", "ipfs-cluster"),
 		filepath.Join(fp.oramaDir, "data", "rqlite"),
+		filepath.Join(fp.oramaDir, "data", "vault"),
 		filepath.Join(fp.oramaDir, "logs"),
 		filepath.Join(fp.oramaDir, "tls-cache"),
 		filepath.Join(fp.oramaDir, "backups"),
@@ -65,6 +66,7 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		"ipfs.log",
 		"ipfs-cluster.log",
 		"node.log",
+		"vault.log",
 		"anyone-client.log",
 	}
 
@@ -81,6 +83,38 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 	return nil
 }
 
+// EnsureOramaUser creates the 'orama' system user and group for running services.
+// Sets ownership of the orama data directory to the new user.
+func (fp *FilesystemProvisioner) EnsureOramaUser() error {
+	// Check if user already exists
+	if err := exec.Command("id", "orama").Run(); err == nil {
+		return nil // user already exists
+	}
+
+	// Create system user with no login shell and home at /opt/orama
+	cmd := exec.Command("useradd", "--system", "--no-create-home",
+		"--home-dir", fp.oramaHome, "--shell", "/usr/sbin/nologin", "orama")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to create orama user: %w\n%s", err, string(output))
+	}
+
+	// Set ownership of orama directories
+	chown := exec.Command("chown", "-R", "orama:orama", fp.oramaDir)
+	if output, err := chown.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to chown %s: %w\n%s", fp.oramaDir, err, string(output))
+	}
+
+	// Also chown the bin directory
+	binDir := filepath.Join(fp.oramaHome, "bin")
+	if _, err := os.Stat(binDir); err == nil {
+		chown = exec.Command("chown", "-R", "orama:orama", binDir)
+		if output, err := chown.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to chown %s: %w\n%s", binDir, err, string(output))
+		}
+	}
+
+	return nil
+}
 
 // StateDetector checks for existing production state
 type StateDetector struct {

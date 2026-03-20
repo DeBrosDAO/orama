@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // IPFSInstaller handles IPFS (Kubo) installation
@@ -19,7 +21,7 @@ type IPFSInstaller struct {
 func NewIPFSInstaller(arch string, logWriter io.Writer) *IPFSInstaller {
 	return &IPFSInstaller{
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
-		version:       "v0.38.2",
+		version:       constants.IPFSKuboVersion,
 	}
 }
 

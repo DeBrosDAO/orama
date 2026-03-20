@@ -5,6 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths={{.OramaDir}}
 Environment=HOME={{.HomeDir}}
 Environment=OLRIC_SERVER_CONFIG={{.ConfigPath}}
 ExecStart=/usr/local/bin/olric-server

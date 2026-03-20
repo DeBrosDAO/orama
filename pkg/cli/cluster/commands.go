@@ -61,7 +61,7 @@ func ShowHelp() {
 	fmt.Printf("Subcommands:\n")
 	fmt.Printf("  status                    - Show cluster node status (RQLite + Olric)\n")
 	fmt.Printf("    Options:\n")
-	fmt.Printf("      --all                 - SSH into all nodes from remote-nodes.conf (TODO)\n")
+	fmt.Printf("      --all                 - SSH into all nodes from nodes.conf (TODO)\n")
 	fmt.Printf("  health                    - Run cluster health checks\n")
 	fmt.Printf("  rqlite <subcommand>       - RQLite-specific commands\n")
 	fmt.Printf("    status                  - Show detailed Raft state for local node\n")

@@ -9,6 +9,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
+	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -51,13 +52,23 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	}
 	turnSecret := base64.StdEncoding.EncodeToString(secretBytes)
 
+	// Encrypt TURN secret before storing in RQLite
+	storedSecret := turnSecret
+	if cm.turnEncryptionKey != nil {
+		encrypted, encErr := secrets.Encrypt(turnSecret, cm.turnEncryptionKey)
+		if encErr != nil {
+			return fmt.Errorf("failed to encrypt TURN secret: %w", encErr)
+		}
+		storedSecret = encrypted
+	}
+
 	// 4. Insert namespace_webrtc_config
 	webrtcConfigID := uuid.New().String()
 	_, err = cm.db.Exec(internalCtx,
 		`INSERT INTO namespace_webrtc_config (id, namespace_cluster_id, namespace_name, enabled, turn_shared_secret, turn_credential_ttl, sfu_node_count, turn_node_count, enabled_by, enabled_at)
 		 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
 		webrtcConfigID, cluster.ID, namespaceName,
-		turnSecret, DefaultTURNCredentialTTL,
+		storedSecret, DefaultTURNCredentialTTL,
 		DefaultSFUNodeCount, DefaultTURNNodeCount,
 		enabledBy, time.Now(),
 	)
@@ -297,6 +308,7 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 }
 
 // GetWebRTCConfig returns the WebRTC configuration for a namespace.
+// Transparently decrypts the TURN shared secret if it was encrypted at rest.
 func (cm *ClusterManager) GetWebRTCConfig(ctx context.Context, namespaceName string) (*WebRTCConfig, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
@@ -309,6 +321,16 @@ func (cm *ClusterManager) GetWebRTCConfig(ctx context.Context, namespaceName str
 	if len(configs) == 0 {
 		return nil, nil
 	}
+
+	// Decrypt TURN secret if encrypted (handles plaintext passthrough for backward compat)
+	if cm.turnEncryptionKey != nil && secrets.IsEncrypted(configs[0].TURNSharedSecret) {
+		decrypted, decErr := secrets.Decrypt(configs[0].TURNSharedSecret, cm.turnEncryptionKey)
+		if decErr != nil {
+			return nil, fmt.Errorf("failed to decrypt TURN secret: %w", decErr)
+		}
+		configs[0].TURNSharedSecret = decrypted
+	}
+
 	return &configs[0], nil
 }
 

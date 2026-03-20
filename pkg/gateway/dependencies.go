@@ -86,6 +86,7 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 		if dsn == "" {
 			dsn = "http://localhost:5001"
 		}
+		dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
 		cliCfg.DatabaseEndpoints = []string{dsn}
 	}
 
@@ -135,6 +136,9 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	if dsn == "" {
 		dsn = "http://localhost:5001"
 	}
+
+	// Inject basic auth credentials into DSN if available
+	dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
 
 	if strings.Contains(dsn, "?") {
 		dsn += "&disableClusterDiscovery=true&level=none"
@@ -483,6 +487,12 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.ComponentInfo(logging.ComponentGeneral, "EdDSA signing key loaded; new JWTs will use EdDSA")
 	}
 
+	// Configure API key HMAC secret if available
+	if cfg.APIKeyHMACSecret != "" {
+		authService.SetAPIKeyHMACSecret(cfg.APIKeyHMACSecret)
+		logger.ComponentInfo(logging.ComponentGeneral, "API key HMAC secret loaded; new API keys will be hashed")
+	}
+
 	deps.AuthService = authService
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
@@ -659,4 +669,20 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 	}
 
 	return ipfsDiscoveryResult{}
+}
+
+// injectRQLiteAuth injects HTTP basic auth credentials into a RQLite DSN URL.
+// If username or password is empty, the DSN is returned unchanged.
+// Input: "http://localhost:5001" → Output: "http://orama:secret@localhost:5001"
+func injectRQLiteAuth(dsn, username, password string) string {
+	if username == "" || password == "" {
+		return dsn
+	}
+	// Insert user:pass@ after the scheme (http:// or https://)
+	for _, scheme := range []string{"https://", "http://"} {
+		if strings.HasPrefix(dsn, scheme) {
+			return scheme + username + ":" + password + "@" + dsn[len(scheme):]
+		}
+	}
+	return dsn
 }

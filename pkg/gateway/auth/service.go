@@ -24,14 +24,15 @@ import (
 
 // Service handles authentication business logic
 type Service struct {
-	logger       *logging.ColoredLogger
-	orm          client.NetworkClient
-	signingKey   *rsa.PrivateKey
-	keyID        string
-	edSigningKey ed25519.PrivateKey
-	edKeyID      string
-	preferEdDSA  bool
-	defaultNS    string
+	logger           *logging.ColoredLogger
+	orm              client.NetworkClient
+	signingKey       *rsa.PrivateKey
+	keyID            string
+	edSigningKey     ed25519.PrivateKey
+	edKeyID          string
+	preferEdDSA      bool
+	defaultNS        string
+	apiKeyHMACSecret string // HMAC secret for hashing API keys before storage
 }
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
@@ -59,6 +60,21 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 	}
 
 	return s, nil
+}
+
+// SetAPIKeyHMACSecret configures the HMAC secret used to hash API keys before storage.
+// When set, API keys are stored as HMAC-SHA256(key, secret) in the database.
+func (s *Service) SetAPIKeyHMACSecret(secret string) {
+	s.apiKeyHMACSecret = secret
+}
+
+// HashAPIKey returns the HMAC-SHA256 hash of an API key if the HMAC secret is set,
+// or returns the raw key for backward compatibility during rolling upgrade.
+func (s *Service) HashAPIKey(key string) string {
+	if s.apiKeyHMACSecret == "" {
+		return key
+	}
+	return HmacSHA256Hex(key, s.apiKeyHMACSecret)
 }
 
 // SetEdDSAKey configures an Ed25519 signing key for EdDSA JWT support.
@@ -207,9 +223,10 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.orm.Database()
+	hashedRefresh := sha256Hex(refresh)
 	if _, err := db.Query(internalCtx,
 		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+30 days'))",
-		nsID, wallet, refresh, "gateway",
+		nsID, wallet, hashedRefresh, "gateway",
 	); err != nil {
 		return "", "", 0, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -227,8 +244,9 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		return "", "", 0, err
 	}
 
+	hashedRefresh := sha256Hex(refreshToken)
 	q := "SELECT subject FROM refresh_tokens WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) LIMIT 1"
-	res, err := db.Query(internalCtx, q, nsID, refreshToken)
+	res, err := db.Query(internalCtx, q, nsID, hashedRefresh)
 	if err != nil || res == nil || res.Count == 0 {
 		return "", "", 0, fmt.Errorf("invalid or expired refresh token")
 	}
@@ -262,7 +280,8 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	}
 
 	if token != "" {
-		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, token)
+		hashedToken := sha256Hex(token)
+		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, hashedToken)
 		return err
 	}
 
@@ -335,19 +354,21 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	}
 	apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + namespace
 
-	if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", apiKey, "", nsID); err != nil {
+	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured
+	hashedKey := s.HashAPIKey(apiKey)
+	if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", hashedKey, "", nsID); err != nil {
 		return "", fmt.Errorf("failed to store api key: %w", err)
 	}
 
 	// Link wallet -> api_key
-	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", apiKey)
+	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
 	if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
 		apiKeyID := rid.Rows[0][0]
 		_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, strings.ToLower(wallet), apiKeyID)
 	}
 
-	// Record ownerships
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, apiKey)
+	// Record ownerships — store the hash in ownership too
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, hashedKey)
 	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, wallet)
 
 	return apiKey, nil

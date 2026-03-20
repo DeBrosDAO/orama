@@ -39,6 +39,15 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/internal/join", g.joinHandler.HandleJoin)
 	}
 
+	// OramaOS node management (handler does its own auth)
+	if g.enrollHandler != nil {
+		mux.HandleFunc("/v1/node/enroll", g.enrollHandler.HandleEnroll)
+		mux.HandleFunc("/v1/node/status", g.enrollHandler.HandleNodeStatus)
+		mux.HandleFunc("/v1/node/command", g.enrollHandler.HandleNodeCommand)
+		mux.HandleFunc("/v1/node/logs", g.enrollHandler.HandleNodeLogs)
+		mux.HandleFunc("/v1/node/leave", g.enrollHandler.HandleNodeLeave)
+	}
+
 	// Namespace instance spawn/stop (internal, handler does its own auth)
 	if g.spawnHandler != nil {
 		mux.Handle("/v1/internal/namespace/spawn", g.spawnHandler)
@@ -112,6 +121,14 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/pubsub/publish", g.pubsubHandlers.PublishHandler)
 		mux.HandleFunc("/v1/pubsub/topics", g.pubsubHandlers.TopicsHandler)
 		mux.HandleFunc("/v1/pubsub/presence", g.pubsubHandlers.PresenceHandler)
+	}
+
+	// vault proxy (public, rate-limited per identity within handler)
+	if g.vaultHandlers != nil {
+		mux.HandleFunc("/v1/vault/push", g.vaultHandlers.HandlePush)
+		mux.HandleFunc("/v1/vault/pull", g.vaultHandlers.HandlePull)
+		mux.HandleFunc("/v1/vault/health", g.vaultHandlers.HandleHealth)
+		mux.HandleFunc("/v1/vault/status", g.vaultHandlers.HandleStatus)
 	}
 
 	// webrtc
