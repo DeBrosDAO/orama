@@ -367,15 +367,13 @@ require (
 // If baseDomain is provided and different from domain, Caddy also serves
 // the base domain and its wildcard (e.g., *.dbrs.space alongside *.node1.dbrs.space).
 func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDomain string) string {
-	// Primary: Let's Encrypt via ACME DNS-01 challenge
-	// Fallback: Caddy's internal CA (self-signed, trust root on clients)
+	// Let's Encrypt via ACME DNS-01 challenge (no fallback to self-signed)
 	tlsBlock := fmt.Sprintf(`    tls {
         issuer acme {
             dns orama {
                 endpoint %s
             }
         }
-        issuer internal
     }`, acmeEndpoint)
 
 	var sb strings.Builder

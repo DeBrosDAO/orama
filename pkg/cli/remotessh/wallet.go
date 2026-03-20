@@ -1,6 +1,7 @@
 package remotessh
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,11 +9,40 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
+// vaultClient is the interface used by wallet functions to talk to the agent.
+// Defaults to the real rwagent.Client; tests replace it with a mock.
+type vaultClient interface {
+	GetSSHKey(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error)
+	CreateSSHEntry(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error)
+}
+
+// newClient creates the default vaultClient. Package-level var for test injection.
+var newClient func() vaultClient = func() vaultClient {
+	return rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+}
+
+// wrapAgentError wraps rwagent errors with user-friendly messages.
+// When the agent is locked, it also triggers the RootWallet desktop app
+// to show the unlock dialog via deep link (best-effort, fire-and-forget).
+func wrapAgentError(err error, action string) error {
+	if rwagent.IsNotRunning(err) {
+		return fmt.Errorf("%s: rootwallet agent is not running — start with: rw agent start && rw agent unlock", action)
+	}
+	if rwagent.IsLocked(err) {
+		return fmt.Errorf("%s: rootwallet agent is locked — unlock timed out after waiting. Unlock via the RootWallet app or run: rw agent unlock", action)
+	}
+	if rwagent.IsApprovalDenied(err) {
+		return fmt.Errorf("%s: rootwallet access denied — approve this app in the RootWallet desktop app", action)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 // PrepareNodeKeys resolves wallet-derived SSH keys for all nodes.
-// Calls `rw vault ssh get <host>/<user> --priv` for each unique host/user,
-// writes PEMs to temp files, and sets node.SSHKey for each node.
+// Retrieves private keys from the rootwallet agent daemon, writes PEMs to
+// temp files, and sets node.SSHKey for each node.
 //
 // The nodes slice is modified in place — each node.SSHKey is set to
 // the path of the temporary key file.
@@ -20,10 +50,8 @@ import (
 // Returns a cleanup function that zero-overwrites and removes all temp files.
 // Caller must defer cleanup().
 func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
-	rw, err := rwBinary()
-	if err != nil {
-		return nil, err
-	}
+	client := newClient()
+	ctx := context.Background()
 
 	// Create temp dir for all keys
 	tmpDir, err := os.MkdirTemp("", "orama-ssh-")
@@ -31,12 +59,11 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 
-	// Track resolved keys by host/user to avoid duplicate rw calls
+	// Track resolved keys by host/user to avoid duplicate agent calls
 	keyPaths := make(map[string]string) // "host/user" → temp file path
 	var allKeyPaths []string
 
 	for i := range nodes {
-		// Use VaultTarget if set, otherwise default to Host/User
 		var key string
 		if nodes[i].VaultTarget != "" {
 			key = nodes[i].VaultTarget
@@ -48,18 +75,21 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 			continue
 		}
 
-		// Call rw to get the private key PEM
 		host, user := parseVaultTarget(key)
-		pem, err := resolveWalletKey(rw, host, user)
+		data, err := client.GetSSHKey(ctx, host, user, "priv")
 		if err != nil {
-			// Cleanup any keys already written before returning error
 			cleanupKeys(tmpDir, allKeyPaths)
-			return nil, fmt.Errorf("resolve key for %s: %w", nodes[i].Name(), err)
+			return nil, wrapAgentError(err, fmt.Sprintf("resolve key for %s", nodes[i].Name()))
+		}
+
+		if !strings.Contains(data.PrivateKey, "BEGIN OPENSSH PRIVATE KEY") {
+			cleanupKeys(tmpDir, allKeyPaths)
+			return nil, fmt.Errorf("agent returned invalid key for %s", nodes[i].Name())
 		}
 
 		// Write PEM to temp file with restrictive perms
 		keyFile := filepath.Join(tmpDir, fmt.Sprintf("id_%d", i))
-		if err := os.WriteFile(keyFile, []byte(pem), 0600); err != nil {
+		if err := os.WriteFile(keyFile, []byte(data.PrivateKey), 0600); err != nil {
 			cleanupKeys(tmpDir, allKeyPaths)
 			return nil, fmt.Errorf("write key for %s: %w", nodes[i].Name(), err)
 		}
@@ -77,12 +107,10 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 
 // LoadAgentKeys loads SSH keys for the given nodes into the system ssh-agent.
 // Used by push fanout to enable agent forwarding.
-// Calls `rw vault ssh agent-load <host1/user1> <host2/user2> ...`
+// Retrieves private keys from the rootwallet agent and pipes them to ssh-add.
 func LoadAgentKeys(nodes []inspector.Node) error {
-	rw, err := rwBinary()
-	if err != nil {
-		return err
-	}
+	client := newClient()
+	ctx := context.Background()
 
 	// Deduplicate host/user pairs
 	seen := make(map[string]bool)
@@ -105,76 +133,65 @@ func LoadAgentKeys(nodes []inspector.Node) error {
 		return nil
 	}
 
-	args := append([]string{"vault", "ssh", "agent-load"}, targets...)
-	cmd := exec.Command(rw, args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stderr // info messages go to stderr
+	for _, target := range targets {
+		host, user := parseVaultTarget(target)
+		data, err := client.GetSSHKey(ctx, host, user, "priv")
+		if err != nil {
+			return wrapAgentError(err, fmt.Sprintf("get key for %s", target))
+		}
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("rw vault ssh agent-load failed: %w", err)
+		// Pipe private key to ssh-add via stdin
+		cmd := exec.Command("ssh-add", "-")
+		cmd.Stdin = strings.NewReader(data.PrivateKey)
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("ssh-add failed for %s: %w", target, err)
+		}
 	}
+
 	return nil
 }
 
 // EnsureVaultEntry creates a wallet SSH entry if it doesn't already exist.
-// Checks existence via `rw vault ssh get <target> --pub`, and if missing,
-// runs `rw vault ssh add <target>` to create it.
+// Checks the rootwallet agent for an existing entry, creates one if not found.
 func EnsureVaultEntry(vaultTarget string) error {
-	rw, err := rwBinary()
-	if err != nil {
-		return err
+	client := newClient()
+	ctx := context.Background()
+
+	host, user := parseVaultTarget(vaultTarget)
+
+	// Check if entry already exists
+	_, err := client.GetSSHKey(ctx, host, user, "pub")
+	if err == nil {
+		return nil // entry exists
 	}
 
-	// Check if entry exists by trying to get the public key
-	cmd := exec.Command(rw, "vault", "ssh", "get", vaultTarget, "--pub")
-	if err := cmd.Run(); err == nil {
-		return nil // entry already exists
-	}
-
-	// Entry doesn't exist — try to create it
-	addCmd := exec.Command(rw, "vault", "ssh", "add", vaultTarget)
-	addCmd.Stdin = os.Stdin
-	addCmd.Stdout = os.Stderr
-	addCmd.Stderr = os.Stderr
-	if err := addCmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if strings.Contains(stderr, "not unlocked") || strings.Contains(stderr, "session") {
-				return fmt.Errorf("wallet is locked — run: rw unlock")
-			}
+	// If not found, create it
+	if rwagent.IsNotFound(err) {
+		_, createErr := client.CreateSSHEntry(ctx, host, user)
+		if createErr != nil {
+			return wrapAgentError(createErr, fmt.Sprintf("create vault entry %s", vaultTarget))
 		}
-		return fmt.Errorf("rw vault ssh add %s failed: %w", vaultTarget, err)
+		return nil
 	}
-	return nil
+
+	return wrapAgentError(err, fmt.Sprintf("check vault entry %s", vaultTarget))
 }
 
 // ResolveVaultPublicKey returns the OpenSSH public key string for a vault entry.
-// Calls `rw vault ssh get <target> --pub`.
 func ResolveVaultPublicKey(vaultTarget string) (string, error) {
-	rw, err := rwBinary()
+	client := newClient()
+	ctx := context.Background()
+
+	host, user := parseVaultTarget(vaultTarget)
+	data, err := client.GetSSHKey(ctx, host, user, "pub")
 	if err != nil {
-		return "", err
+		return "", wrapAgentError(err, fmt.Sprintf("get public key for %s", vaultTarget))
 	}
 
-	cmd := exec.Command(rw, "vault", "ssh", "get", vaultTarget, "--pub")
-	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if strings.Contains(stderr, "No SSH entry") {
-				return "", fmt.Errorf("no vault SSH entry for %s — run: rw vault ssh add %s", vaultTarget, vaultTarget)
-			}
-			if strings.Contains(stderr, "not unlocked") || strings.Contains(stderr, "session") {
-				return "", fmt.Errorf("wallet is locked — run: rw unlock")
-			}
-			return "", fmt.Errorf("%s", stderr)
-		}
-		return "", fmt.Errorf("rw command failed: %w", err)
-	}
-
-	pubKey := strings.TrimSpace(string(out))
+	pubKey := strings.TrimSpace(data.PublicKey)
 	if !strings.HasPrefix(pubKey, "ssh-") {
-		return "", fmt.Errorf("rw returned invalid public key for %s", vaultTarget)
+		return "", fmt.Errorf("agent returned invalid public key for %s", vaultTarget)
 	}
 	return pubKey, nil
 }
@@ -186,49 +203,6 @@ func parseVaultTarget(target string) (host, user string) {
 		return target, ""
 	}
 	return target[:idx], target[idx+1:]
-}
-
-// resolveWalletKey calls `rw vault ssh get <host>/<user> --priv`
-// and returns the PEM string. Requires an active rw session.
-func resolveWalletKey(rw string, host, user string) (string, error) {
-	target := host + "/" + user
-	cmd := exec.Command(rw, "vault", "ssh", "get", target, "--priv")
-	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if strings.Contains(stderr, "No SSH entry") {
-				return "", fmt.Errorf("no vault SSH entry for %s — run: rw vault ssh add %s", target, target)
-			}
-			if strings.Contains(stderr, "not unlocked") || strings.Contains(stderr, "session") {
-				return "", fmt.Errorf("wallet is locked — run: rw unlock")
-			}
-			return "", fmt.Errorf("%s", stderr)
-		}
-		return "", fmt.Errorf("rw command failed: %w", err)
-	}
-	pem := string(out)
-	if !strings.Contains(pem, "BEGIN OPENSSH PRIVATE KEY") {
-		return "", fmt.Errorf("rw returned invalid key for %s", target)
-	}
-	return pem, nil
-}
-
-// rwBinary returns the path to the `rw` binary.
-// Checks RW_PATH env var first, then PATH.
-func rwBinary() (string, error) {
-	if p := os.Getenv("RW_PATH"); p != "" {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-		return "", fmt.Errorf("RW_PATH=%q not found", p)
-	}
-
-	p, err := exec.LookPath("rw")
-	if err != nil {
-		return "", fmt.Errorf("rw not found in PATH — install rootwallet CLI: https://github.com/DeBrosOfficial/rootwallet")
-	}
-	return p, nil
 }
 
 // cleanupKeys zero-overwrites and removes all key files, then removes the temp dir.

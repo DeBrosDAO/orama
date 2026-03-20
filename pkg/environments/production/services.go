@@ -419,7 +419,7 @@ Description=Caddy HTTP/2 Server
 Documentation=https://caddyserver.com/docs/
 After=network-online.target orama-node.service coredns.service
 Wants=network-online.target
-Wants=orama-node.service
+Requires=orama-node.service
 
 [Service]
 Type=simple
@@ -428,6 +428,9 @@ ReadWritePaths=%[2]s /var/lib/caddy /etc/caddy
 Environment=XDG_DATA_HOME=/var/lib/caddy
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStartPre=/bin/sh -c 'for i in $$(seq 1 30); do curl -so /dev/null http://localhost:6001/health 2>/dev/null && exit 0; sleep 2; done; echo "Gateway not ready after 60s"; exit 1'
+ExecStartPre=/bin/sh -c 'DOMAIN=$$(grep -oP "^\*\\.\K[^ {]+" /etc/caddy/Caddyfile | tail -1); [ -z "$$DOMAIN" ] && exit 0; for i in $$(seq 1 30); do dig +short +timeout=2 "$$DOMAIN" SOA 2>/dev/null | grep -q . && exit 0; sleep 2; done; echo "DNS not resolving $$DOMAIN after 60s (ACME may fail)"; exit 0'
+TimeoutStartSec=180
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
 TimeoutStopSec=5s

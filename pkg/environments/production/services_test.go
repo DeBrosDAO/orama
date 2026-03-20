@@ -78,6 +78,39 @@ func TestGenerateRQLiteService(t *testing.T) {
 	}
 }
 
+// TestGenerateCaddyService_GatewayReadinessCheck verifies Caddy waits for gateway before starting
+func TestGenerateCaddyService_GatewayReadinessCheck(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+
+	unit := ssg.GenerateCaddyService()
+
+	// Must have ExecStartPre that polls gateway health
+	if !strings.Contains(unit, "ExecStartPre=") {
+		t.Error("missing ExecStartPre directive for gateway readiness check")
+	}
+	if !strings.Contains(unit, "localhost:6001/health") {
+		t.Error("ExecStartPre should poll localhost:6001/health")
+	}
+
+	// Must use Requires= (hard dependency), not Wants= (soft dependency)
+	if !strings.Contains(unit, "Requires=orama-node.service") {
+		t.Error("missing Requires=orama-node.service (hard dependency)")
+	}
+	if strings.Contains(unit, "Wants=orama-node.service") {
+		t.Error("should use Requires= not Wants= for orama-node.service dependency")
+	}
+
+	// ExecStartPre must appear before ExecStart
+	preIdx := strings.Index(unit, "ExecStartPre=")
+	startIdx := strings.Index(unit, "ExecStart=/usr/bin/caddy")
+	if preIdx < 0 || startIdx < 0 || preIdx >= startIdx {
+		t.Error("ExecStartPre must appear before ExecStart")
+	}
+}
+
 // TestGenerateRQLiteServiceArgs verifies the ExecStart command arguments
 func TestGenerateRQLiteServiceArgs(t *testing.T) {
 	ssg := &SystemdServiceGenerator{

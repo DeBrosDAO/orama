@@ -408,14 +408,35 @@ func setupSSHKey(client *HetznerClient) (SSHKeyConfig, error) {
 	fmt.Print("  Uploading to Hetzner... ")
 	key, err := client.UploadSSHKey("orama-sandbox", pubStr)
 	if err != nil {
-		// Key may already exist on Hetzner — try to find by fingerprint
-		existing, listErr := client.ListSSHKeysByFingerprint("") // empty = list all
+		// Key may already exist on Hetzner — check if it matches the current vault key
+		existing, listErr := client.ListSSHKeysByFingerprint("")
 		if listErr == nil {
 			for _, k := range existing {
-				if strings.TrimSpace(k.PublicKey) == pubStr {
+				if sshKeyDataEqual(k.PublicKey, pubStr) {
+					// Key data matches — safe to reuse regardless of name
 					fmt.Printf("already exists (ID: %d)\n", k.ID)
 					return SSHKeyConfig{
 						HetznerID:   k.ID,
+						VaultTarget: vaultTarget,
+					}, nil
+				}
+				if k.Name == "orama-sandbox" {
+					// Name matches but key data differs — vault key was rotated.
+					// Delete the stale Hetzner key so we can re-upload the current one.
+					fmt.Print("stale key detected, replacing... ")
+					if delErr := client.DeleteSSHKey(k.ID); delErr != nil {
+						fmt.Println("FAILED")
+						return SSHKeyConfig{}, fmt.Errorf("delete stale SSH key (ID %d): %w", k.ID, delErr)
+					}
+					// Re-upload with current vault key
+					newKey, uploadErr := client.UploadSSHKey("orama-sandbox", pubStr)
+					if uploadErr != nil {
+						fmt.Println("FAILED")
+						return SSHKeyConfig{}, fmt.Errorf("re-upload SSH key: %w", uploadErr)
+					}
+					fmt.Printf("OK (ID: %d)\n", newKey.ID)
+					return SSHKeyConfig{
+						HetznerID:   newKey.ID,
 						VaultTarget: vaultTarget,
 					}, nil
 				}
@@ -431,6 +452,17 @@ func setupSSHKey(client *HetznerClient) (SSHKeyConfig, error) {
 		HetznerID:   key.ID,
 		VaultTarget: vaultTarget,
 	}, nil
+}
+
+// sshKeyDataEqual compares two SSH public key strings by their key type and
+// data, ignoring the optional comment field.
+func sshKeyDataEqual(a, b string) bool {
+	partsA := strings.Fields(strings.TrimSpace(a))
+	partsB := strings.Fields(strings.TrimSpace(b))
+	if len(partsA) < 2 || len(partsB) < 2 {
+		return false
+	}
+	return partsA[0] == partsB[0] && partsA[1] == partsB[1]
 }
 
 // verifyDNS checks if glue records for the sandbox domain are configured.
