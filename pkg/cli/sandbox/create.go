@@ -75,8 +75,7 @@ func Create(name string) error {
 
 	// Phase 4: Install genesis node
 	fmt.Println("\nPhase 4: Installing genesis node...")
-	tokens, err := phase4InstallGenesis(cfg, state, sshKeyPath)
-	if err != nil {
+	if err := phase4InstallGenesis(cfg, state, sshKeyPath); err != nil {
 		state.Status = StatusError
 		SaveState(state)
 		return fmt.Errorf("install genesis: %w", err)
@@ -84,7 +83,7 @@ func Create(name string) error {
 
 	// Phase 5: Join remaining nodes
 	fmt.Println("\nPhase 5: Joining remaining nodes...")
-	if err := phase5JoinNodes(cfg, state, tokens, sshKeyPath); err != nil {
+	if err := phase5JoinNodes(cfg, state, sshKeyPath); err != nil {
 		state.Status = StatusError
 		SaveState(state)
 		return fmt.Errorf("join nodes: %w", err)
@@ -280,60 +279,52 @@ func phase3UploadArchive(state *SandboxState, sshKeyPath string) error {
 	return nil
 }
 
-// phase4InstallGenesis installs the genesis node and generates invite tokens.
-func phase4InstallGenesis(cfg *Config, state *SandboxState, sshKeyPath string) ([]string, error) {
+// phase4InstallGenesis installs the genesis node.
+func phase4InstallGenesis(cfg *Config, state *SandboxState, sshKeyPath string) error {
 	genesis := state.GenesisServer()
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Install genesis
-	installCmd := fmt.Sprintf("/opt/orama/bin/orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
+	installCmd := fmt.Sprintf("/opt/orama/bin/orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --anyone-client --skip-checks",
 		genesis.IP, cfg.Domain, cfg.Domain)
 	fmt.Printf("  Installing on %s (%s)...\n", genesis.Name, genesis.IP)
 	if err := remotessh.RunSSHStreaming(node, installCmd, remotessh.WithNoHostKeyCheck()); err != nil {
-		return nil, fmt.Errorf("install genesis: %w", err)
+		return fmt.Errorf("install genesis: %w", err)
 	}
 
 	// Wait for RQLite leader
 	fmt.Print("  Waiting for RQLite leader...")
 	if err := waitForRQLiteHealth(node, 3*time.Minute); err != nil {
-		return nil, fmt.Errorf("genesis health: %w", err)
+		return fmt.Errorf("genesis health: %w", err)
 	}
 	fmt.Println(" OK")
 
-	// Generate invite tokens (one per remaining node)
-	fmt.Print("  Generating invite tokens...")
-	remaining := len(state.Servers) - 1
-	tokens := make([]string, remaining)
-
-	for i := 0; i < remaining; i++ {
-		token, err := generateInviteToken(node)
-		if err != nil {
-			return nil, fmt.Errorf("generate invite token %d: %w", i+1, err)
-		}
-		tokens[i] = token
-		fmt.Print(".")
-	}
-	fmt.Println(" OK")
-
-	return tokens, nil
+	return nil
 }
 
 // phase5JoinNodes joins the remaining 4 nodes to the cluster (serial).
-func phase5JoinNodes(cfg *Config, state *SandboxState, tokens []string, sshKeyPath string) error {
-	genesisIP := state.GenesisServer().IP
+// Generates invite tokens just-in-time to avoid expiry during long installs.
+func phase5JoinNodes(cfg *Config, state *SandboxState, sshKeyPath string) error {
+	genesis := state.GenesisServer()
+	genesisNode := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	for i := 1; i < len(state.Servers); i++ {
 		srv := state.Servers[i]
 		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-		token := tokens[i-1]
+
+		// Generate token just before use to avoid expiry
+		token, err := generateInviteToken(genesisNode)
+		if err != nil {
+			return fmt.Errorf("generate invite token for %s: %w", srv.Name, err)
+		}
 
 		var installCmd string
 		if srv.Role == "nameserver" {
-			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
-				genesisIP, token, srv.IP, cfg.Domain, cfg.Domain)
+			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --anyone-client --skip-checks",
+				genesis.IP, token, srv.IP, cfg.Domain, cfg.Domain)
 		} else {
-			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --skip-checks",
-				genesisIP, token, srv.IP, cfg.Domain)
+			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --anyone-client --skip-checks",
+				genesis.IP, token, srv.IP, cfg.Domain)
 		}
 
 		fmt.Printf("  [%d/%d] Joining %s (%s, %s)...\n", i, len(state.Servers)-1, srv.Name, srv.IP, srv.Role)
