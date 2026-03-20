@@ -31,7 +31,7 @@ func (r SSHResult) OK() bool {
 }
 
 // RunSSH executes a command on a remote node via SSH with retry on connection failure.
-// Uses sshpass for password auth, falls back to -i for key-based auth.
+// Requires node.SSHKey to be set (via PrepareNodeKeys).
 // The -n flag is used to prevent SSH from reading stdin.
 func RunSSH(ctx context.Context, node Node, command string) SSHResult {
 	var result SSHResult
@@ -76,28 +76,21 @@ func RunSSH(ctx context.Context, node Node, command string) SSHResult {
 func runSSHOnce(ctx context.Context, node Node, command string) SSHResult {
 	start := time.Now()
 
-	var args []string
-	if node.SSHKey != "" {
-		// Key-based auth
-		args = []string{
-			"ssh", "-n",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=10",
-			"-o", "BatchMode=yes",
-			"-i", node.SSHKey,
-			fmt.Sprintf("%s@%s", node.User, node.Host),
-			command,
+	if node.SSHKey == "" {
+		return SSHResult{
+			Duration: 0,
+			Err:      fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name()),
 		}
-	} else {
-		// Password auth via sshpass
-		args = []string{
-			"sshpass", "-p", node.Password,
-			"ssh", "-n",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "ConnectTimeout=10",
-			fmt.Sprintf("%s@%s", node.User, node.Host),
-			command,
-		}
+	}
+
+	args := []string{
+		"ssh", "-n",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		"-o", "BatchMode=yes",
+		"-i", node.SSHKey,
+		fmt.Sprintf("%s@%s", node.User, node.Host),
+		command,
 	}
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
@@ -130,8 +123,6 @@ func runSSHOnce(ctx context.Context, node Node, command string) SSHResult {
 // isSSHConnectionError returns true if the failure looks like an SSH connection
 // problem (timeout, refused, network unreachable) rather than a remote command error.
 func isSSHConnectionError(r SSHResult) bool {
-	// sshpass exit code 5 = invalid/incorrect password (not retriable)
-	// sshpass exit code 6 = host key verification failed (not retriable)
 	// SSH exit code 255 = SSH connection error (retriable)
 	if r.ExitCode == 255 {
 		return true

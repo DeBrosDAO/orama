@@ -9,26 +9,29 @@ import (
 	"github.com/rqlite/gorqlite"
 )
 
-// safeWriteOneParameterized wraps conn.WriteOneParameterized with panic recovery.
-// gorqlite panics with "index out of range" when RQLite returns empty results
-// during temporary unavailability. This converts the panic to a normal error.
-func safeWriteOneParameterized(conn *gorqlite.Connection, stmt gorqlite.ParameterizedStatement) (result gorqlite.WriteResult, err error) {
+// safeWriteOne wraps gorqlite's WriteOneParameterized to recover from panics.
+// gorqlite's WriteOne* functions access wra[0] without checking if the slice
+// is empty, which panics when the server returns an error (e.g. "leader not found")
+// with no result rows.
+func safeWriteOne(conn *gorqlite.Connection, stmt gorqlite.ParameterizedStatement) (wr gorqlite.WriteResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("gorqlite panic (WriteOneParameterized): %v", r)
+			err = fmt.Errorf("rqlite write failed (recovered panic): %v", r)
 		}
 	}()
-	return conn.WriteOneParameterized(stmt)
+	wr, err = conn.WriteOneParameterized(stmt)
+	return
 }
 
-// safeWriteOne wraps conn.WriteOne with panic recovery.
-func safeWriteOne(conn *gorqlite.Connection, query string) (result gorqlite.WriteResult, err error) {
+// safeWriteOneRaw wraps gorqlite's WriteOne to recover from panics.
+func safeWriteOneRaw(conn *gorqlite.Connection, sql string) (wr gorqlite.WriteResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("gorqlite panic (WriteOne): %v", r)
+			err = fmt.Errorf("rqlite write failed (recovered panic): %v", r)
 		}
 	}()
-	return conn.WriteOne(query)
+	wr, err = conn.WriteOne(sql)
+	return
 }
 
 // DatabaseClientImpl implements DatabaseClient
@@ -101,7 +104,7 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 
 		if isWriteOperation {
 			// Execute write operation with parameters
-			_, err := safeWriteOneParameterized(conn, gorqlite.ParameterizedStatement{
+			_, err := safeWriteOne(conn, gorqlite.ParameterizedStatement{
 				Query:     sql,
 				Arguments: args,
 			})
@@ -315,7 +318,7 @@ func (d *DatabaseClientImpl) Transaction(ctx context.Context, queries []string) 
 		// Execute all queries in the transaction
 		success := true
 		for _, query := range queries {
-			_, err := safeWriteOne(conn, query)
+			_, err := safeWriteOneRaw(conn, query)
 			if err != nil {
 				lastErr = err
 				success = false
@@ -343,7 +346,7 @@ func (d *DatabaseClientImpl) CreateTable(ctx context.Context, schema string) err
 	}
 
 	return d.withRetry(func(conn *gorqlite.Connection) error {
-		_, err := safeWriteOne(conn, schema)
+		_, err := safeWriteOneRaw(conn, schema)
 		return err
 	})
 }
@@ -356,7 +359,7 @@ func (d *DatabaseClientImpl) DropTable(ctx context.Context, tableName string) er
 
 	return d.withRetry(func(conn *gorqlite.Connection) error {
 		dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
-		_, err := safeWriteOne(conn, dropSQL)
+		_, err := safeWriteOneRaw(conn, dropSQL)
 		return err
 	})
 }

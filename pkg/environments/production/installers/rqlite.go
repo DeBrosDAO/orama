@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // RQLiteInstaller handles RQLite installation
@@ -17,7 +19,7 @@ type RQLiteInstaller struct {
 func NewRQLiteInstaller(arch string, logWriter io.Writer) *RQLiteInstaller {
 	return &RQLiteInstaller{
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
-		version:       "8.43.0",
+		version:       constants.RQLiteVersion,
 	}
 }
 

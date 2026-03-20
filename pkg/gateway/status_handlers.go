@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -52,7 +54,8 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		name   string
 		result checkResult
 	}
-	ch := make(chan namedResult, 5)
+	const numChecks = 7
+	ch := make(chan namedResult, numChecks)
 
 	// RQLite
 	go func() {
@@ -129,38 +132,51 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 			if anyoneproxy.Running() {
 				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
 			} else {
-				nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: "SOCKS5 proxy not reachable at " + anyoneproxy.Address()}
+				// SOCKS5 port not reachable — Anyone relay is not installed/running.
+				// Treat as "unavailable" rather than "error" so nodes without Anyone
+				// don't report as degraded.
+				nr.result = checkResult{Status: "unavailable"}
 			}
 		}
 		ch <- nr
 	}()
 
+	// Vault Guardian (TCP connect to localhost:7500)
+	go func() {
+		nr := namedResult{name: "vault"}
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", "localhost:7500", 2*time.Second)
+		if err != nil {
+			nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: fmt.Sprintf("vault-guardian unreachable on port 7500: %v", err)}
+		} else {
+			conn.Close()
+			nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
+		}
+		ch <- nr
+	}()
+
+	// WireGuard (check wg0 interface exists and has an IP)
+	go func() {
+		nr := namedResult{name: "wireguard"}
+		iface, err := net.InterfaceByName("wg0")
+		if err != nil {
+			nr.result = checkResult{Status: "error", Error: "wg0 interface not found"}
+		} else if addrs, err := iface.Addrs(); err != nil || len(addrs) == 0 {
+			nr.result = checkResult{Status: "error", Error: "wg0 has no addresses"}
+		} else {
+			nr.result = checkResult{Status: "ok"}
+		}
+		ch <- nr
+	}()
+
 	// Collect
-	checks := make(map[string]checkResult, 5)
-	for i := 0; i < 5; i++ {
+	checks := make(map[string]checkResult, numChecks)
+	for i := 0; i < numChecks; i++ {
 		nr := <-ch
 		checks[nr.name] = nr.result
 	}
 
-	// Aggregate status.
-	// Critical: rqlite down → "unhealthy"
-	// Non-critical (olric, ipfs, libp2p) error → "degraded"
-	// "unavailable" means the client was never configured — not an error.
-	overallStatus := "healthy"
-	if c := checks["rqlite"]; c.Status == "error" {
-		overallStatus = "unhealthy"
-	}
-	if overallStatus == "healthy" {
-		for name, c := range checks {
-			if name == "rqlite" {
-				continue
-			}
-			if c.Status == "error" {
-				overallStatus = "degraded"
-				break
-			}
-		}
-	}
+	overallStatus := aggregateHealthStatus(checks)
 
 	httpStatus := http.StatusOK
 	if overallStatus != "healthy" {
@@ -234,6 +250,29 @@ func (g *Gateway) versionHandler(w http.ResponseWriter, r *http.Request) {
 		"started_at": g.startedAt,
 		"uptime":     time.Since(g.startedAt).String(),
 	})
+}
+
+// aggregateHealthStatus determines the overall health status from individual checks.
+// Critical: rqlite or vault down → "unhealthy"
+// Non-critical (olric, ipfs, libp2p, anyone, wireguard) error → "degraded"
+// "unavailable" means the client was never configured — not an error.
+func aggregateHealthStatus(checks map[string]checkResult) string {
+	// Critical services — any error means unhealthy
+	for _, name := range []string{"rqlite", "vault"} {
+		if c := checks[name]; c.Status == "error" {
+			return "unhealthy"
+		}
+	}
+	// Non-critical services — any error means degraded
+	for name, c := range checks {
+		if name == "rqlite" || name == "vault" {
+			continue
+		}
+		if c.Status == "error" {
+			return "degraded"
+		}
+	}
+	return "healthy"
 }
 
 // tlsCheckHandler validates if a domain should receive a TLS certificate

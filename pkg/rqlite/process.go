@@ -137,6 +137,13 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 		"-raft-leader-lease-timeout", raftLeaderLease.String(),
 	)
 
+	// RQLite HTTP Basic Auth — when auth file exists, enforce authentication
+	if r.config.RQLiteAuthFile != "" {
+		r.logger.Info("Enabling RQLite HTTP Basic Auth",
+			zap.String("auth_file", r.config.RQLiteAuthFile))
+		args = append(args, "-auth", r.config.RQLiteAuthFile)
+	}
+
 	if r.config.RQLiteJoinAddress != "" && !r.hasExistingState(rqliteDataDir) {
 		r.logger.Info("First-time join to RQLite cluster", zap.String("join_address", r.config.RQLiteJoinAddress))
 

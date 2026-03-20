@@ -13,6 +13,11 @@ type Flags struct {
 	SkipChecks      bool
 	Nameserver      *bool  // Pointer so we can detect if explicitly set vs default
 
+	// Remote upgrade flags
+	Env        string // Target environment for remote rolling upgrade
+	NodeFilter string // Single node IP to upgrade (optional)
+	Delay      int    // Delay in seconds between nodes during rolling upgrade
+
 	// Anyone flags
 	AnyoneClient     bool
 	AnyoneRelay      bool
@@ -37,6 +42,11 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.BoolVar(&flags.Force, "force", false, "Reconfigure all settings")
 	fs.BoolVar(&flags.RestartServices, "restart", false, "Automatically restart services after upgrade")
 	fs.BoolVar(&flags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
+
+	// Remote upgrade flags
+	fs.StringVar(&flags.Env, "env", "", "Target environment for remote rolling upgrade (devnet, testnet)")
+	fs.StringVar(&flags.NodeFilter, "node", "", "Upgrade a single node IP only")
+	fs.IntVar(&flags.Delay, "delay", 30, "Delay in seconds between nodes during rolling upgrade")
 
 	// Nameserver flag - use pointer to detect if explicitly set
 	nameserver := fs.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")

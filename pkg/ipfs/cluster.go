@@ -1,6 +1,7 @@
 package ipfs
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,10 +16,11 @@ import (
 
 // ClusterConfigManager manages IPFS Cluster configuration files
 type ClusterConfigManager struct {
-	cfg         *config.Config
-	logger      *zap.Logger
-	clusterPath string
-	secret      string
+	cfg              *config.Config
+	logger           *zap.Logger
+	clusterPath      string
+	secret           string
+	trustedPeersPath string // path to ipfs-cluster-trusted-peers file
 }
 
 // NewClusterConfigManager creates a new IPFS Cluster config manager
@@ -46,12 +48,14 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	secretPath := filepath.Join(dataDir, "..", "cluster-secret")
+	trustedPeersPath := ""
 	if strings.Contains(dataDir, ".orama") {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			secretsDir := filepath.Join(home, ".orama", "secrets")
 			if err := os.MkdirAll(secretsDir, 0700); err == nil {
 				secretPath = filepath.Join(secretsDir, "cluster-secret")
+				trustedPeersPath = filepath.Join(secretsDir, "ipfs-cluster-trusted-peers")
 			}
 		}
 	}
@@ -62,10 +66,11 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	return &ClusterConfigManager{
-		cfg:         cfg,
-		logger:      logger,
-		clusterPath: clusterPath,
-		secret:      secret,
+		cfg:              cfg,
+		logger:           logger,
+		clusterPath:      clusterPath,
+		secret:           secret,
+		trustedPeersPath: trustedPeersPath,
 	}, nil
 }
 
@@ -114,7 +119,15 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 	cfg.Cluster.Secret = cm.secret
 	cfg.Cluster.ListenMultiaddress = []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", clusterListenPort)}
 	cfg.Consensus.CRDT.ClusterName = "orama-cluster"
-	cfg.Consensus.CRDT.TrustedPeers = []string{"*"}
+
+	// Use trusted peers from file if available, otherwise fall back to "*" (open trust)
+	trustedPeers := cm.loadTrustedPeersWithSelf()
+	if len(trustedPeers) > 0 {
+		cfg.Consensus.CRDT.TrustedPeers = trustedPeers
+	} else {
+		cfg.Consensus.CRDT.TrustedPeers = []string{"*"}
+	}
+
 	cfg.API.RestAPI.HTTPListenMultiaddress = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", restAPIPort)
 	cfg.API.IPFSProxy.ListenMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", proxyPort)
 	cfg.API.IPFSProxy.NodeMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", ipfsPort)
@@ -197,4 +210,90 @@ func (cm *ClusterConfigManager) createTemplateConfig() *ClusterServiceConfig {
 	cfg.Consensus.CRDT.RepairInterval = "1h0m0s"
 	cfg.Raw = make(map[string]interface{})
 	return cfg
+}
+
+// readClusterPeerID reads this node's IPFS Cluster peer ID from identity.json
+func (cm *ClusterConfigManager) readClusterPeerID() (string, error) {
+	identityPath := filepath.Join(cm.clusterPath, "identity.json")
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read identity.json: %w", err)
+	}
+
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &identity); err != nil {
+		return "", fmt.Errorf("failed to parse identity.json: %w", err)
+	}
+	if identity.ID == "" {
+		return "", fmt.Errorf("peer ID not found in identity.json")
+	}
+	return identity.ID, nil
+}
+
+// loadTrustedPeers reads trusted peer IDs from the trusted-peers file (one per line)
+func (cm *ClusterConfigManager) loadTrustedPeers() []string {
+	if cm.trustedPeersPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(cm.trustedPeersPath)
+	if err != nil {
+		return nil
+	}
+	var peers []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			peers = append(peers, line)
+		}
+	}
+	return peers
+}
+
+// addTrustedPeer appends a peer ID to the trusted-peers file if not already present
+func (cm *ClusterConfigManager) addTrustedPeer(peerID string) error {
+	if cm.trustedPeersPath == "" || peerID == "" {
+		return nil
+	}
+	existing := cm.loadTrustedPeers()
+	for _, p := range existing {
+		if p == peerID {
+			return nil // already present
+		}
+	}
+	existing = append(existing, peerID)
+	return os.WriteFile(cm.trustedPeersPath, []byte(strings.Join(existing, "\n")+"\n"), 0600)
+}
+
+// loadTrustedPeersWithSelf loads trusted peers from file and ensures this node's
+// own peer ID is included. Returns nil if no trusted peers file exists.
+func (cm *ClusterConfigManager) loadTrustedPeersWithSelf() []string {
+	peers := cm.loadTrustedPeers()
+
+	// Try to read own peer ID and add it
+	ownID, err := cm.readClusterPeerID()
+	if err != nil {
+		cm.logger.Debug("Could not read own IPFS Cluster peer ID", zap.Error(err))
+		return peers
+	}
+
+	if ownID != "" {
+		if err := cm.addTrustedPeer(ownID); err != nil {
+			cm.logger.Warn("Failed to persist own peer ID to trusted peers file", zap.Error(err))
+		}
+		// Check if already in the list
+		found := false
+		for _, p := range peers {
+			if p == ownID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			peers = append(peers, ownID)
+		}
+	}
+
+	return peers
 }

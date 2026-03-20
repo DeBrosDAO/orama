@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	// Import checks package so init() registers the checkers
 	_ "github.com/DeBrosOfficial/network/pkg/inspector/checks"
@@ -49,7 +50,7 @@ func HandleInspectCommand(args []string) {
 
 	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
 
-	configPath := fs.String("config", "scripts/remote-nodes.conf", "Path to remote-nodes.conf")
+	configPath := fs.String("config", "scripts/nodes.conf", "Path to nodes.conf")
 	env := fs.String("env", "", "Environment to inspect (devnet, testnet)")
 	subsystem := fs.String("subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,anyone,all)")
 	format := fs.String("format", "table", "Output format (table, json)")
@@ -97,6 +98,14 @@ func HandleInspectCommand(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: no nodes found for environment %q\n", *env)
 		os.Exit(1)
 	}
+
+	// Prepare wallet-derived SSH keys
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error preparing SSH keys: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
 
 	// Parse subsystems
 	var subsystems []string

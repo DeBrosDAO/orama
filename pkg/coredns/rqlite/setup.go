@@ -38,11 +38,13 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 	}
 
 	var (
-		dsn         = "http://localhost:5001"
-		refreshRate = 10 * time.Second
-		cacheTTL    = 30 * time.Second
-		cacheSize   = 10000
-		zones       []string
+		dsn            = "http://localhost:5001"
+		refreshRate    = 10 * time.Second
+		cacheTTL       = 30 * time.Second
+		cacheSize      = 10000
+		rqliteUsername string
+		rqlitePassword string
+		zones          []string
 	)
 
 	// Parse zone arguments
@@ -90,6 +92,18 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 				}
 				cacheSize = size
 
+			case "username":
+				if !c.NextArg() {
+					return nil, c.ArgErr()
+				}
+				rqliteUsername = c.Val()
+
+			case "password":
+				if !c.NextArg() {
+					return nil, c.ArgErr()
+				}
+				rqlitePassword = c.Val()
+
 			default:
 				return nil, c.Errf("unknown property '%s'", c.Val())
 			}
@@ -101,7 +115,7 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 	}
 
 	// Create backend
-	backend, err := NewBackend(dsn, refreshRate, logger)
+	backend, err := NewBackend(dsn, refreshRate, logger, rqliteUsername, rqlitePassword)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create backend: %w", err)
 	}

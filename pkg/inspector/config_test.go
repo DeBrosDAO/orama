@@ -8,9 +8,9 @@ import (
 
 func TestLoadNodes(t *testing.T) {
 	content := `# Comment line
-devnet|ubuntu@1.2.3.4|pass123|node
-devnet|ubuntu@1.2.3.5|pass456|node
-devnet|ubuntu@5.6.7.8|pass789|nameserver-ns1|/path/to/key
+devnet|ubuntu@1.2.3.4|node
+devnet|ubuntu@1.2.3.5|node
+devnet|ubuntu@5.6.7.8|nameserver-ns1
 `
 	path := writeTempFile(t, content)
 
@@ -33,23 +33,17 @@ devnet|ubuntu@5.6.7.8|pass789|nameserver-ns1|/path/to/key
 	if n.Host != "1.2.3.4" {
 		t.Errorf("node[0].Host = %q, want 1.2.3.4", n.Host)
 	}
-	if n.Password != "pass123" {
-		t.Errorf("node[0].Password = %q, want pass123", n.Password)
-	}
 	if n.Role != "node" {
 		t.Errorf("node[0].Role = %q, want node", n.Role)
 	}
 	if n.SSHKey != "" {
-		t.Errorf("node[0].SSHKey = %q, want empty", n.SSHKey)
+		t.Errorf("node[0].SSHKey = %q, want empty (set at runtime)", n.SSHKey)
 	}
 
-	// Third node with SSH key
+	// Third node with nameserver role
 	n3 := nodes[2]
 	if n3.Role != "nameserver-ns1" {
 		t.Errorf("node[2].Role = %q, want nameserver-ns1", n3.Role)
-	}
-	if n3.SSHKey != "/path/to/key" {
-		t.Errorf("node[2].SSHKey = %q, want /path/to/key", n3.SSHKey)
 	}
 }
 
@@ -57,10 +51,10 @@ func TestLoadNodes_EmptyLines(t *testing.T) {
 	content := `
 # Full line comment
 
-devnet|ubuntu@1.2.3.4|pass|node
+devnet|ubuntu@1.2.3.4|node
 
 # Another comment
-devnet|ubuntu@1.2.3.5|pass|node
+devnet|ubuntu@1.2.3.5|node
 `
 	path := writeTempFile(t, content)
 
@@ -78,8 +72,8 @@ func TestLoadNodes_InvalidFormat(t *testing.T) {
 		name    string
 		content string
 	}{
-		{"too few fields", "devnet|ubuntu@1.2.3.4|pass\n"},
-		{"no @ in userhost", "devnet|localhost|pass|node\n"},
+		{"too few fields", "devnet|ubuntu@1.2.3.4\n"},
+		{"no @ in userhost", "devnet|localhost|node\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -349,13 +349,13 @@ All configuration lives in `~/.orama/`:
 
 ```bash
 # Check status
-systemctl status orama-node
+sudo orama node status
 
 # View logs
-journalctl -u orama-node -f
+orama node logs node --follow
 
 # Check log files
-tail -f /opt/orama/.orama/logs/node.log
+sudo orama node doctor
 ```
 
 ### Port Conflicts
@@ -417,9 +417,11 @@ See `openapi/gateway.yaml` for complete API specification.
 - **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)** - Deploy React, Next.js, Go apps and manage databases
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - System architecture and design patterns
 - **[Client SDK](docs/CLIENT_SDK.md)** - Go SDK documentation and examples
-- **[Gateway API](docs/GATEWAY_API.md)** - Complete HTTP API reference
-- **[Security Deployment](docs/SECURITY_DEPLOYMENT_GUIDE.md)** - Production security hardening
-- **[Testing Plan](docs/TESTING_PLAN.md)** - Comprehensive testing strategy and implementation
+- **[Monitoring](docs/MONITORING.md)** - Cluster monitoring and health checks
+- **[Inspector](docs/INSPECTOR.md)** - Deep subsystem health inspection
+- **[Serverless Functions](docs/SERVERLESS.md)** - WASM serverless with host functions
+- **[WebRTC](docs/WEBRTC.md)** - Real-time communication setup
+- **[Common Problems](docs/COMMON_PROBLEMS.md)** - Troubleshooting known issues
 
 ## Resources
 

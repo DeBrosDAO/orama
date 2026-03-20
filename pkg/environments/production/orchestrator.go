@@ -1,6 +1,7 @@
 package production
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -256,13 +257,57 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	}
 	ps.logf("  ✓ Directory structure created")
 
+	// Create dedicated orama user for running services (non-root)
+	if err := ps.fsProvisioner.EnsureOramaUser(); err != nil {
+		ps.logf("  ⚠️  Could not create orama user: %v (services will run as root)", err)
+	} else {
+		ps.logf("  ✓ orama user ensured")
+	}
+
 	return nil
 }
 
-// Phase2bInstallBinaries installs external binaries and Orama components
+// Phase2bInstallBinaries installs external binaries and Orama components.
+// Auto-detects pre-built mode if /opt/orama/manifest.json exists.
 func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	ps.logf("Phase 2b: Installing binaries...")
 
+	// Auto-detect pre-built binary archive
+	if HasPreBuiltArchive() {
+		manifest, err := LoadPreBuiltManifest()
+		if err != nil {
+			ps.logf("  ⚠️  Pre-built manifest found but unreadable: %v", err)
+			ps.logf("  Falling back to source mode...")
+			if err := ps.installFromSource(); err != nil {
+				return err
+			}
+		} else {
+			if err := ps.installFromPreBuilt(manifest); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Source mode: compile everything on the VPS (original behavior)
+		if err := ps.installFromSource(); err != nil {
+			return err
+		}
+	}
+
+	// Anyone relay/client configuration runs after BOTH paths.
+	// Pre-built mode installs the anon binary via .deb/apt;
+	// source mode installs it via the relay installer's Install().
+	// Configuration (anonrc, bandwidth, migration) is always needed.
+	if err := ps.configureAnyone(); err != nil {
+		ps.logf("  ⚠️  Anyone configuration warning: %v", err)
+	}
+
+	ps.logf("  ✓ All binaries installed")
+	return nil
+}
+
+// installFromSource installs binaries by compiling from source on the VPS.
+// This is the original Phase2bInstallBinaries logic, preserved as fallback.
+func (ps *ProductionSetup) installFromSource() error {
 	// Install system dependencies (always needed for runtime libs)
 	if err := ps.binaryInstaller.InstallSystemDependencies(); err != nil {
 		ps.logf("  ⚠️  System dependencies warning: %v", err)
@@ -307,7 +352,12 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  ⚠️  IPFS Cluster install warning: %v", err)
 	}
 
-	// Install Anyone (client or relay based on configuration) — apt-based, not Go
+	return nil
+}
+
+// configureAnyone handles Anyone relay/client installation and configuration.
+// This runs after both pre-built and source mode binary installation.
+func (ps *ProductionSetup) configureAnyone() error {
 	if ps.IsAnyoneRelay() {
 		ps.logf("  Installing Anyone relay (operator mode)...")
 		relayConfig := installers.AnyoneRelayConfig{
@@ -351,7 +401,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 			}
 		}
 
-		// Install the relay
+		// Install the relay (apt-based, not Go — idempotent if already installed via .deb)
 		if err := relayInstaller.Install(); err != nil {
 			ps.logf("  ⚠️  Anyone relay install warning: %v", err)
 		}
@@ -364,7 +414,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		ps.logf("  Installing Anyone client-only mode (SOCKS5 proxy)...")
 		clientInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, installers.AnyoneRelayConfig{})
 
-		// Install the anon binary (same apt package as relay)
+		// Install the anon binary (same apt package as relay — idempotent)
 		if err := clientInstaller.Install(); err != nil {
 			ps.logf("  ⚠️  Anyone client install warning: %v", err)
 		}
@@ -375,7 +425,6 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		}
 	}
 
-	ps.logf("  ✓ All binaries installed")
 	return nil
 }
 
@@ -436,6 +485,11 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
+	// After init, save own IPFS Cluster peer ID to trusted peers file
+	if err := ps.saveOwnClusterPeerID(clusterPath); err != nil {
+		ps.logf("  ⚠️  Could not save IPFS Cluster peer ID to trusted peers: %v", err)
+	}
+
 	// Initialize RQLite data directory
 	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	if err := ps.binaryInstaller.InitializeRQLiteDataDir(rqliteDataDir); err != nil {
@@ -443,6 +497,50 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	}
 
 	ps.logf("  ✓ Services initialized")
+	return nil
+}
+
+// saveOwnClusterPeerID reads this node's IPFS Cluster peer ID from identity.json
+// and appends it to the trusted-peers file so EnsureConfig() can use it.
+func (ps *ProductionSetup) saveOwnClusterPeerID(clusterPath string) error {
+	identityPath := filepath.Join(clusterPath, "identity.json")
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		return fmt.Errorf("failed to read identity.json: %w", err)
+	}
+
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &identity); err != nil {
+		return fmt.Errorf("failed to parse identity.json: %w", err)
+	}
+	if identity.ID == "" {
+		return fmt.Errorf("peer ID not found in identity.json")
+	}
+
+	// Read existing trusted peers
+	trustedPeersPath := filepath.Join(ps.oramaDir, "secrets", "ipfs-cluster-trusted-peers")
+	var existing []string
+	if fileData, err := os.ReadFile(trustedPeersPath); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(fileData)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				if line == identity.ID {
+					return nil // already present
+				}
+				existing = append(existing, line)
+			}
+		}
+	}
+
+	existing = append(existing, identity.ID)
+	content := strings.Join(existing, "\n") + "\n"
+	if err := os.WriteFile(trustedPeersPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("failed to write trusted peers file: %w", err)
+	}
+
+	ps.logf("  ✓ IPFS Cluster peer ID saved to trusted peers: %s", identity.ID)
 	return nil
 }
 
@@ -461,6 +559,24 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 		return fmt.Errorf("failed to ensure swarm key: %w", err)
 	}
 	ps.logf("  ✓ IPFS swarm key ensured")
+
+	// RQLite auth credentials
+	if _, _, err := ps.secretGenerator.EnsureRQLiteAuth(); err != nil {
+		return fmt.Errorf("failed to ensure RQLite auth: %w", err)
+	}
+	ps.logf("  ✓ RQLite auth credentials ensured")
+
+	// Olric gossip encryption key
+	if _, err := ps.secretGenerator.EnsureOlricEncryptionKey(); err != nil {
+		return fmt.Errorf("failed to ensure Olric encryption key: %w", err)
+	}
+	ps.logf("  ✓ Olric encryption key ensured")
+
+	// API key HMAC secret
+	if _, err := ps.secretGenerator.EnsureAPIKeyHMACSecret(); err != nil {
+		return fmt.Errorf("failed to ensure API key HMAC secret: %w", err)
+	}
+	ps.logf("  ✓ API key HMAC secret ensured")
 
 	// Node identity (unified architecture)
 	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
@@ -532,6 +648,14 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 	ps.logf("  ✓ Olric config generated")
 
+	// Vault Guardian config
+	vaultConfig := ps.configGenerator.GenerateVaultConfig(vpsIP)
+	vaultConfigPath := filepath.Join(ps.oramaDir, "data", "vault", "vault.yaml")
+	if err := os.WriteFile(vaultConfigPath, []byte(vaultConfig), 0644); err != nil {
+		return fmt.Errorf("failed to save vault config: %w", err)
+	}
+	ps.logf("  ✓ Vault config generated")
+
 	// Configure CoreDNS (if baseDomain is provided - this is the zone name)
 	// CoreDNS uses baseDomain (e.g., "dbrs.space") as the authoritative zone
 	dnsZone := baseDomain
@@ -582,6 +706,20 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
+	// Re-chown all orama directories to the orama user.
+	// Phases 2b-4 create files as root (IPFS repo, configs, secrets, etc.)
+	// that must be readable/writable by the orama service user.
+	if err := exec.Command("id", "orama").Run(); err == nil {
+		for _, dir := range []string{ps.oramaDir, filepath.Join(ps.oramaHome, "bin")} {
+			if _, statErr := os.Stat(dir); statErr == nil {
+				if output, chownErr := exec.Command("chown", "-R", "orama:orama", dir).CombinedOutput(); chownErr != nil {
+					ps.logf("  ⚠️  Failed to chown %s: %v\n%s", dir, chownErr, string(output))
+				}
+			}
+		}
+		ps.logf("  ✓ File ownership updated for orama user")
+	}
+
 	// Validate all required binaries are available before creating services
 	ipfsBinary, err := ps.binaryInstaller.ResolveBinaryPath("ipfs", "/usr/local/bin/ipfs", "/usr/bin/ipfs")
 	if err != nil {
@@ -626,6 +764,13 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Node service created: orama-node.service (with embedded gateway)")
 
+	// Vault Guardian service
+	vaultUnit := ps.serviceGenerator.GenerateVaultService()
+	if err := ps.serviceController.WriteServiceUnit("orama-vault.service", vaultUnit); err != nil {
+		return fmt.Errorf("failed to write Vault service: %w", err)
+	}
+	ps.logf("  ✓ Vault service created: orama-vault.service")
+
 	// Anyone Relay service (only created when --anyone-relay flag is used)
 	// A node must run EITHER relay OR client, never both. When writing one
 	// mode's service, we remove the other to prevent conflicts (they share
@@ -664,8 +809,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 
 	// Caddy service on ALL nodes (any node may host namespaces and need TLS)
 	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		// Create caddy data directory
+		// Create caddy data directory and ensure orama user can write to it
 		exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
+		exec.Command("chown", "-R", "orama:orama", "/var/lib/caddy").Run()
 
 		caddyUnit := ps.serviceGenerator.GenerateCaddyService()
 		if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
@@ -684,7 +830,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
 	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-node.service"}
+	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -715,8 +861,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// services pick up new configs even if already running from a previous install)
 	ps.logf("  Starting services...")
 
-	// Start infrastructure first (IPFS, Olric, Anyone) - RQLite is managed internally by each node
-	infraServices := []string{"orama-ipfs.service", "orama-olric.service"}
+	// Start infrastructure first (IPFS, Olric, Vault, Anyone) - RQLite is managed internally by each node
+	infraServices := []string{"orama-ipfs.service", "orama-olric.service", "orama-vault.service"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -851,6 +997,13 @@ func (ps *ProductionSetup) Phase6SetupWireGuard(isFirstNode bool) (privateKey, p
 	}
 	ps.logf("  ✓ WireGuard keypair generated")
 
+	// Save public key to orama secrets so the gateway (running as orama user)
+	// can read it without needing root access to /etc/wireguard/wg0.conf
+	pubKeyPath := filepath.Join(ps.oramaDir, "secrets", "wg-public-key")
+	if err := os.WriteFile(pubKeyPath, []byte(pubKey), 0600); err != nil {
+		return "", "", fmt.Errorf("failed to save WG public key: %w", err)
+	}
+
 	if isFirstNode {
 		// First node: self-assign 10.0.0.1, no peers yet
 		wp.config = WireGuardConfig{
@@ -936,12 +1089,13 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/olric.log", ps.oramaDir)
 	ps.logf("  %s/logs/node.log", ps.oramaDir)
 	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
+	ps.logf("  %s/logs/vault.log", ps.oramaDir)
 
 	// Anyone mode-specific logs and commands
 	if ps.IsAnyoneRelay() {
 		ps.logf("  /var/log/anon/notices.log (Anyone Relay)")
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-relay orama-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-relay orama-node")
 		ps.logf("\nAnyone Relay Operator:")
 		ps.logf("  ORPort: %d", ps.anyoneRelayConfig.ORPort)
 		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
@@ -950,10 +1104,10 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
 	} else if ps.IsAnyoneClient() {
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-anyone-client orama-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-client orama-node")
 	} else {
 		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-node")
+		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-node")
 	}
 
 	ps.logf("\nVerify Installation:")

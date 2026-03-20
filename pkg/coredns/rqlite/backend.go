@@ -31,9 +31,10 @@ type Backend struct {
 	healthy     bool
 }
 
-// NewBackend creates a new RQLite backend
-func NewBackend(dsn string, refreshRate time.Duration, logger *zap.Logger) (*Backend, error) {
-	client, err := NewRQLiteClient(dsn, logger)
+// NewBackend creates a new RQLite backend.
+// Optional username/password enable HTTP basic auth for RQLite connections.
+func NewBackend(dsn string, refreshRate time.Duration, logger *zap.Logger, username, password string) (*Backend, error) {
+	client, err := NewRQLiteClient(dsn, logger, username, password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RQLite client: %w", err)
 	}

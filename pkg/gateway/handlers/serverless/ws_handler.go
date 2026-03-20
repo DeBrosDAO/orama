@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
@@ -11,6 +13,29 @@ import (
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
+
+// checkWSOrigin validates WebSocket origins against the request's Host header.
+// Non-browser clients (no Origin) are allowed. Browser clients must match the host.
+func checkWSOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	host := r.Host
+	if host == "" {
+		return false
+	}
+	// Strip port from host if present
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	originHost := parsed.Hostname()
+	return originHost == host || strings.HasSuffix(originHost, "."+host)
+}
 
 // HandleWebSocket handles WebSocket connections for function streaming.
 // It upgrades HTTP connections to WebSocket and manages bi-directional communication
@@ -28,7 +53,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 
 	// Upgrade to WebSocket
 	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
+		CheckOrigin: checkWSOrigin,
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)

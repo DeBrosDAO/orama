@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-// Node represents a remote node parsed from remote-nodes.conf.
+// Node represents a remote node parsed from nodes.conf.
 type Node struct {
 	Environment string // devnet, testnet
 	User        string // SSH user
 	Host        string // IP or hostname
-	Password    string // SSH password
 	Role        string // node, nameserver-ns1, nameserver-ns2, nameserver-ns3
-	SSHKey      string // optional path to SSH key
+	SSHKey      string // populated at runtime by PrepareNodeKeys()
+	VaultTarget string // optional: override wallet key lookup (e.g. "sandbox/root")
 }
 
 // Name returns a short display name for the node (user@host).
@@ -27,8 +27,8 @@ func (n Node) IsNameserver() bool {
 	return strings.HasPrefix(n.Role, "nameserver")
 }
 
-// LoadNodes parses a remote-nodes.conf file into a slice of Nodes.
-// Format: environment|user@host|password|role|ssh_key (ssh_key optional)
+// LoadNodes parses a nodes.conf file into a slice of Nodes.
+// Format: environment|user@host|role
 func LoadNodes(path string) ([]Node, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -46,20 +46,14 @@ func LoadNodes(path string) ([]Node, error) {
 			continue
 		}
 
-		parts := strings.SplitN(line, "|", 5)
-		if len(parts) < 4 {
-			return nil, fmt.Errorf("line %d: expected at least 4 pipe-delimited fields, got %d", lineNum, len(parts))
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("line %d: expected 3 pipe-delimited fields (env|user@host|role), got %d", lineNum, len(parts))
 		}
 
 		env := parts[0]
 		userHost := parts[1]
-		password := parts[2]
-		role := parts[3]
-
-		var sshKey string
-		if len(parts) == 5 {
-			sshKey = parts[4]
-		}
+		role := parts[2]
 
 		// Parse user@host
 		at := strings.LastIndex(userHost, "@")
@@ -73,9 +67,7 @@ func LoadNodes(path string) ([]Node, error) {
 			Environment: env,
 			User:        user,
 			Host:        host,
-			Password:    password,
 			Role:        role,
-			SSHKey:      sshKey,
 		})
 	}
 	if err := scanner.Err(); err != nil {

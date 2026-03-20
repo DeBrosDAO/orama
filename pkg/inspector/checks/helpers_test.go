@@ -13,7 +13,6 @@ func makeNode(host, role string) inspector.Node {
 		Environment: "devnet",
 		User:        "ubuntu",
 		Host:        host,
-		Password:    "test",
 		Role:        role,
 	}
 }

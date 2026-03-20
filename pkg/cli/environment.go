@@ -26,16 +26,16 @@ type EnvironmentConfig struct {
 // Default environments
 var DefaultEnvironments = []Environment{
 	{
-		Name:        "production",
+		Name:        "sandbox",
 		GatewayURL:  "https://dbrs.space",
-		Description: "Production network (dbrs.space)",
-		IsActive:    false,
+		Description: "Sandbox cluster (dbrs.space)",
+		IsActive:    true,
 	},
 	{
 		Name:        "devnet",
 		GatewayURL:  "https://orama-devnet.network",
-		Description: "Development network (testnet)",
-		IsActive:    true,
+		Description: "Development network",
+		IsActive:    false,
 	},
 	{
 		Name:        "testnet",
@@ -65,7 +65,7 @@ func LoadEnvironmentConfig() (*EnvironmentConfig, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return &EnvironmentConfig{
 			Environments:      DefaultEnvironments,
-			ActiveEnvironment: "devnet",
+			ActiveEnvironment: "sandbox",
 		}, nil
 	}
 
@@ -120,9 +120,9 @@ func GetActiveEnvironment() (*Environment, error) {
 		}
 	}
 
-	// Fallback to devnet if active environment not found
+	// Fallback to sandbox if active environment not found
 	for _, env := range envConfig.Environments {
-		if env.Name == "devnet" {
+		if env.Name == "sandbox" {
 			return &env, nil
 		}
 	}
@@ -184,7 +184,7 @@ func InitializeEnvironments() error {
 
 	envConfig := &EnvironmentConfig{
 		Environments:      DefaultEnvironments,
-		ActiveEnvironment: "devnet",
+		ActiveEnvironment: "sandbox",
 	}
 
 	return SaveEnvironmentConfig(envConfig)
