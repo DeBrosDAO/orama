@@ -1,56 +1,4 @@
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-bin/
-bin-linux/
-dist/
-orama-cli-linux
-
-# Build artifacts
-*.deb
-*.rpm
-*.tar.gz
-*.zip
-
-# Go
-go.work
-.gocache/
-
-# Dependencies
-# vendor/
-
-# Environment & credentials
-.env
-.env.*
-.env.local
-.env.*.local
-scripts/remote-nodes.conf
-keys_backup/
-e2e/config.yaml
-
-# Config (generated/local)
-configs/
-
-# Data & databases
-data/*
-*.db
-
-# IDE & editor files
-.vscode/
-.idea/
-.cursor/
-.claude/
-.mcp.json
-*.swp
-*.swo
-*~
-
-# OS generated files
+# === Global ===
 .DS_Store
 .DS_Store?
 ._*
@@ -58,39 +6,80 @@ data/*
 .Trashes
 ehthumbs.db
 Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# Environment & credentials
+.env
+.env.*
+!.env.example
+.mcp.json
+.claude/
+.codex/
+
+# === Core (Go) ===
+core/phantom-auth/
+core/bin/
+core/bin-linux/
+core/dist/
+core/orama-cli-linux
+core/keys_backup/
+core/.gocache/
+core/configs/
+core/data/*
+core/tmp/
+core/temp/
+core/results/
+core/rnd/
+core/vps.txt
+core/coverage.txt
+core/coverage.html
+core/profile.out
+core/e2e/config.yaml
+core/scripts/remote-nodes.conf
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+go.work
 
 # Logs
 *.log
 
-# Temporary files
-tmp/
-temp/
-*.tmp
+# Databases
+*.db
 
-# Coverage & profiling
-coverage.txt
-coverage.html
-profile.out
+# === Website ===
+website/node_modules/
+website/dist/
+website/invest-api/invest-api
+website/invest-api/*.db
+website/invest-api/*.db-shm
+website/invest-api/*.db-wal
 
-# Local development
+# === Vault (Zig) ===
+vault/.zig-cache/
+vault/zig-out/
+
+# === OS ===
+os/output/
+
+# === Local development ===
 .dev/
 .local/
 local/
-.codex/
-results/
-rnd/
-vps.txt
-
-# Project subdirectories (managed separately)
-website/
-phantom-auth/
-
-# One-off scripts & tools
-redeploy-6.sh
-terms-agreement
-./bootstrap
-./node
-./cli
-./inspector
-docs/later_todos/
-sim/
