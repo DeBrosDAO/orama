@@ -1,0 +1,179 @@
+# Development Environment Setup
+
+This guide walks you through setting up a local development environment for contributing to the Orama ecosystem.
+
+## Prerequisites
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Go | 1.24+ | Core network services (go.mod requires 1.24.6) |
+| Node.js | 18+ | SDK, website, tooling |
+| pnpm | Latest | Node.js package management |
+| Git | Latest | Version control |
+| Make | Latest | Build automation |
+
+Zig and WireGuard tools are only needed if you're working on the Vault guardian binary or deploying to production nodes — they are not required for general development.
+
+### Installing Prerequisites
+
+```bash
+# macOS (via Homebrew)
+brew install go node pnpm git make
+
+# Ubuntu/Debian
+sudo apt install -y golang-go nodejs npm git make
+npm install -g pnpm
+
+# Verify installations
+go version    # must be 1.24+
+node --version
+pnpm --version
+```
+
+## Cloning the Repository
+
+The Orama codebase lives in a single repository that includes the network services, CLI, Go SDK, and TypeScript SDK:
+
+```bash
+git clone https://github.com/DeBrosOfficial/network.git
+cd network
+```
+
+## Building from Source
+
+### Network (Go)
+
+```bash
+# Install dependencies
+go mod download
+
+# Build all binaries (CLI, gateway, node, SFU, TURN, identity)
+make build
+
+# Run tests
+make test
+
+# The main CLI binary is built from cmd/cli/
+# After make build, binaries are in ./bin/
+./bin/orama version
+```
+
+`make build` produces these binaries in `./bin/`:
+
+| Binary | Entry Point | Purpose |
+|--------|-------------|---------|
+| `orama` | `cmd/cli/` | CLI tool for all operations |
+| `gateway` | `cmd/gateway/` | API gateway / reverse proxy |
+| `orama-node` | `cmd/node/` | P2P node (RQLite + libp2p) |
+| `sfu` | `cmd/sfu/` | WebRTC Selective Forwarding Unit |
+| `turn` | `cmd/turn/` | TURN relay server for WebRTC |
+| `identity` | `cmd/identity/` | P2P identity key generator |
+
+### SDK (TypeScript)
+
+The TypeScript SDK is inside the same repo at `sdk/`:
+
+```bash
+cd sdk
+pnpm install
+pnpm build
+pnpm test
+```
+
+## Connecting to Devnet
+
+For testing against a live network, connect to the devnet environment:
+
+```bash
+# Set active environment to devnet (this is the default)
+./bin/orama env use devnet
+
+# Verify current environment
+./bin/orama env current
+
+# Login to the network (opens browser for wallet authentication)
+./bin/orama auth login
+```
+
+Available environments:
+
+| Name | Gateway URL | Description |
+|------|-------------|-------------|
+| `devnet` | `https://orama-devnet.network` | Development (default) |
+| `testnet` | `https://orama-testnet.network` | Staging |
+| `production` | `https://dbrs.space` | Production |
+
+## IDE Setup
+
+### VS Code (Recommended)
+
+Install the following extensions:
+
+- **Go** — Go language support
+- **ESLint** — TypeScript linting
+- **Prettier** — Code formatting
+
+### GoLand / IntelliJ
+
+Import the `network` directory as a Go module project. The Go module configuration is in `go.mod` at the repository root.
+
+## Project Structure
+
+```
+network/
+  cmd/           # Binary entry points
+    cli/         # CLI (orama command)
+    gateway/     # API gateway
+    node/        # P2P node
+    sfu/         # WebRTC SFU
+    turn/        # TURN relay
+    identity/    # Key generator
+    inspector/   # SSH health inspector
+  pkg/           # All Go packages
+    gateway/     # Gateway core + handlers
+    cli/         # CLI command implementations
+    auth/        # Authentication (wallet, JWT)
+    rqlite/      # RQLite ORM layer
+    serverless/  # WASM runtime + host functions
+    config/      # Configuration management
+    anyoneproxy/ # Anyone Protocol integration
+  sdk/           # TypeScript SDK + Go function SDK
+  e2e/           # End-to-end tests
+  systemd/       # Service templates
+  scripts/       # Build and deployment scripts
+  docs/          # Internal documentation
+  Makefile       # Build targets
+  go.mod         # Go module definition
+```
+
+## Sandbox Clusters
+
+For testing against a full multi-node cluster without production infrastructure, use the sandbox system. Sandboxes create 5-node Hetzner Cloud clusters:
+
+```bash
+# One-time setup (Hetzner API key, domain, SSH key)
+orama sandbox setup
+
+# Create a 5-node ephemeral cluster
+orama sandbox create --name my-test
+
+# List running sandbox clusters
+orama sandbox list
+
+# Check sandbox status
+orama sandbox status --name my-test
+
+# SSH into a sandbox node (1-5)
+orama sandbox ssh 1 --name my-test
+
+# Deploy code to sandbox
+orama sandbox rollout --name my-test
+
+# Destroy when done
+orama sandbox destroy --name my-test
+
+# Nuclear reset (delete all infra and config)
+orama sandbox reset
+```
+
+Sandboxes are disposable — create one for testing, destroy it when done.

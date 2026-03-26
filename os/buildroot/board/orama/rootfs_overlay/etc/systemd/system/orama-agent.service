@@ -1,0 +1,24 @@
+[Unit]
+Description=Orama Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/orama-agent
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# The agent is the only root process on OramaOS.
+# It manages all services in sandboxed namespaces.
+# No hardening directives — the agent needs full root access for:
+#   - cryptsetup (LUKS key management)
+#   - mount/umount (data partition)
+#   - wg-quick (WireGuard interface)
+#   - clone(CLONE_NEWNS|CLONE_NEWUTS) (namespace creation)
+#   - setting uid/gid for child processes
+
+[Install]
+WantedBy=multi-user.target

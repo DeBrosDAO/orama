@@ -1,0 +1,504 @@
+# Functions
+
+Orama Functions lets you run serverless code on the decentralized network using WebAssembly (WASM). Write functions in Go, compile to WASM with TinyGo, and deploy them to execute on Orama nodes in a sandboxed wazero runtime with configurable memory limits and timeouts.
+
+## Overview
+
+Functions are written in Go, compiled to WASM using [TinyGo](https://tinygo.org/), and executed in an isolated wazero sandbox on Orama nodes. Each function receives JSON input via **stdin** and returns JSON output via **stdout**. Functions can access Orama platform services -- database, cache, storage, HTTP, secrets, PubSub, WebSocket, and logging -- through **host functions** injected by the runtime.
+
+Key characteristics:
+
+- **Go + TinyGo** -- Write standard Go, compile to a portable WASM binary
+- **Sandboxed execution** -- Each invocation runs in an isolated wazero instance with memory and timeout limits
+- **Platform integration** -- Host functions provide direct access to RQLite, Olric, IPFS, PubSub, WebSocket, secrets, and outbound HTTP
+- **Event-driven** -- Functions can be invoked via HTTP, WebSocket, or triggered automatically by PubSub messages
+
+## Writing Functions
+
+### Project Structure
+
+A function consists of two files:
+
+```
+my-function/
+├── function.go      # Handler code (Go)
+└── function.yaml    # Configuration
+```
+
+### function.yaml
+
+The configuration file defines the function's name, resource limits, and environment variables.
+
+```yaml
+name: my-function       # Required. Letters, digits, hyphens, underscores.
+public: false           # Allow unauthenticated invocation (default: false)
+memory: 64              # Memory limit in MB (1-256, default: 64)
+timeout: 30             # Execution timeout in seconds (1-300, default: 30)
+retry:
+  count: 0              # Retry attempts on failure (default: 0)
+  delay: 5              # Seconds between retries (default: 5)
+env:                    # Environment variables (accessible via get_env)
+  MY_VAR: "value"
+```
+
+### function.go
+
+The SDK provides a helper package that handles stdin/stdout boilerplate. When you scaffold a new function with `orama function init`, this is the generated template:
+
+```go
+package main
+
+import "github.com/DeBrosOfficial/network/sdk/fn"
+
+func main() {
+	fn.Run(func(input []byte) ([]byte, error) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		fn.ParseJSON(input, &req)
+		if req.Name == "" {
+			req.Name = "World"
+		}
+		return fn.JSON(map[string]string{
+			"greeting": "Hello, " + req.Name + "!",
+		})
+	})
+}
+```
+
+The `fn` package provides:
+
+| Function | Description |
+|----------|-------------|
+| `fn.Run(handler)` | Reads input from stdin, calls the handler, writes output to stdout |
+| `fn.JSON(v)` | Marshals a value to JSON bytes |
+| `fn.ParseJSON(data, v)` | Unmarshals JSON bytes into a value |
+
+You can also write functions without the SDK, reading from `os.Stdin` and writing to `os.Stdout` directly:
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "io"
+    "os"
+)
+
+func main() {
+    input, _ := io.ReadAll(os.Stdin)
+
+    var payload struct {
+        Name string `json:"name"`
+    }
+    json.Unmarshal(input, &payload)
+
+    response := map[string]string{
+        "message": "Hello, " + payload.Name + "!",
+    }
+    output, _ := json.Marshal(response)
+    os.Stdout.Write(output)
+}
+```
+
+### Building
+
+Functions are compiled to WASM using TinyGo:
+
+```bash
+# Using the CLI (recommended -- validates the output)
+orama function build
+
+# Build from a specific directory
+orama function build ./my-function
+
+# Or manually
+tinygo build -o function.wasm -target wasi function.go
+```
+
+## Deployment
+
+### CLI
+
+```bash
+# Scaffold a new function
+orama function init my-function
+
+# Build and deploy from the function directory
+cd my-function
+orama function build
+orama function deploy
+
+# Deploy from a specific directory
+orama function deploy ./my-function
+```
+
+If no `function.wasm` file exists when you run `deploy`, it is built automatically.
+
+Each deploy creates a new version. The WASM binary is stored on IPFS (content-addressed) and metadata is stored in RQLite.
+
+### REST API
+
+Deploy by uploading a multipart form with the compiled WASM binary and configuration:
+
+```bash
+curl -X POST https://gateway.example.com/v1/functions \
+  -H "Authorization: Bearer <token>" \
+  -F "name=hello-world" \
+  -F "is_public=false" \
+  -F "memory_limit_mb=64" \
+  -F "timeout_seconds=30" \
+  -F "retry_count=0" \
+  -F "retry_delay_seconds=5" \
+  -F "wasm=@./function.wasm"
+```
+
+## Invocation
+
+### SDK
+
+The TypeScript SDK invokes functions via the `/v1/invoke/{namespace}/{name}` endpoint:
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://gateway.example.com",
+  apiKey: "ak_your_key:namespace",
+  functionsConfig: {
+    namespace: "my-namespace",
+  },
+});
+
+interface GreetInput {
+  name: string;
+}
+
+interface GreetOutput {
+  greeting: string;
+}
+
+const result = await client.functions.invoke<GreetInput, GreetOutput>(
+  "hello-world",
+  { name: "World" }
+);
+
+console.log(result.greeting); // "Hello, World!"
+```
+
+### CLI
+
+```bash
+orama function invoke hello-world --data '{"name": "World"}'
+```
+
+The `--data` flag accepts a JSON string (defaults to `"{}"`).
+
+### REST API
+
+```bash
+# Via the function-specific invoke endpoint
+curl -X POST https://gateway.example.com/v1/functions/hello-world/invoke \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "World"}'
+
+# Via the direct invoke endpoint (used by the SDK)
+curl -X POST https://gateway.example.com/v1/invoke/my-namespace/hello-world \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "World"}'
+```
+
+### WebSocket Invoke
+
+Functions can also be invoked over WebSocket for streaming use cases:
+
+```
+WS /v1/functions/{name}/ws
+```
+
+You can also invoke a specific version by appending `@version` to the name (e.g., `hello-world@2`).
+
+## Host Functions API
+
+Host functions let your WASM code interact with Orama platform services. They are available to every function without additional configuration.
+
+### Context
+
+| Function | Description |
+|----------|-------------|
+| `get_caller_wallet()` | Returns the wallet address of the caller (from JWT). |
+| `get_request_id()` | Returns the unique invocation ID. |
+| `get_env(key)` | Returns an environment variable from function.yaml. |
+| `get_secret(name)` | Returns a decrypted secret value. See [Secrets Management](#secrets-management). |
+
+### Database (RQLite)
+
+Read and write to the distributed RQLite database.
+
+| Function | Description |
+|----------|-------------|
+| `db_query(sql, argsJSON)` | Execute a SELECT query. Args as JSON array. Returns JSON array of row objects. |
+| `db_execute(sql, argsJSON)` | Execute INSERT/UPDATE/DELETE. Returns affected row count. |
+
+### Cache (Olric)
+
+Read and write to the distributed Olric cache. Cache operations use a fixed dmap (`serverless_cache`).
+
+| Function | Description |
+|----------|-------------|
+| `cache_get(key)` | Get cached value by key. Returns empty on miss. |
+| `cache_set(key, value, ttlSeconds)` | Store value with TTL in seconds. |
+| `cache_delete(key)` | Delete a cached value. |
+| `cache_incr(key)` | Atomically increment by 1 (initializes to 0 if missing). |
+| `cache_incr_by(key, delta)` | Atomically increment by delta. |
+
+### Storage (IPFS)
+
+Upload and retrieve data from IPFS.
+
+| Function | Description |
+|----------|-------------|
+| `storage_put(data)` | Upload data to IPFS. Returns the CID. |
+| `storage_get(cid)` | Retrieve data from IPFS by CID. |
+
+### HTTP
+
+Make outbound HTTP requests from within your function.
+
+| Function | Description |
+|----------|-------------|
+| `http_fetch(method, url, headersJSON, body)` | Make an outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. |
+
+### PubSub
+
+Publish messages to PubSub topics.
+
+| Function | Description |
+|----------|-------------|
+| `pubsub_publish(topic, data)` | Publish a message to a PubSub topic. |
+
+### WebSocket
+
+Send messages to WebSocket clients (only available when the function is invoked via WebSocket).
+
+| Function | Description |
+|----------|-------------|
+| `ws_send(clientID, data)` | Send data to a specific WebSocket client. |
+| `ws_broadcast(topic, data)` | Broadcast data to all WebSocket clients on a topic. |
+
+### Logging
+
+Structured logging captured in invocation logs.
+
+| Function | Description |
+|----------|-------------|
+| `log_info(message)` | Log an info-level message. |
+| `log_error(message)` | Log an error-level message. |
+
+## Secrets Management
+
+Secrets are encrypted at rest (AES-256-GCM) and scoped to your namespace. Functions read them at runtime via `get_secret("name")`.
+
+### Setting Secrets
+
+```bash
+# Set a secret (inline value)
+orama function secrets set APNS_KEY_ID "ABC123DEF"
+
+# Set a secret from a file (useful for PEM keys, certificates)
+orama function secrets set APNS_AUTH_KEY --from-file ./AuthKey_ABC123.p8
+
+# List all secret names (values are never shown)
+orama function secrets list
+
+# Delete a secret
+orama function secrets delete APNS_KEY_ID
+
+# Delete without confirmation
+orama function secrets delete APNS_KEY_ID --force
+```
+
+### Secrets via REST API
+
+```bash
+# Set a secret
+curl -X PUT https://gateway.example.com/v1/functions/secrets \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "MY_SECRET", "value": "secret-value"}'
+
+# List secret names
+curl https://gateway.example.com/v1/functions/secrets \
+  -H "Authorization: Bearer <token>"
+
+# Delete a secret
+curl -X DELETE https://gateway.example.com/v1/functions/secrets/MY_SECRET \
+  -H "Authorization: Bearer <token>"
+```
+
+### How It Works
+
+1. **You set secrets** via the CLI or API -- they are encrypted and stored in the database
+2. **Functions read secrets** at runtime via `get_secret("name")` -- decrypted on demand
+3. **Namespace isolation** -- each namespace has its own secret store; functions in namespace A cannot read secrets from namespace B
+
+## PubSub Triggers
+
+Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously.
+
+### Managing Triggers
+
+```bash
+# Add a trigger: invoke "my-function" when messages hit "events:incoming"
+orama function triggers add my-function --topic events:incoming
+
+# List triggers for a function
+orama function triggers list my-function
+
+# Delete a trigger
+orama function triggers delete my-function <trigger-id>
+```
+
+### Triggers via REST API
+
+```bash
+# Add a trigger
+curl -X POST https://gateway.example.com/v1/functions/my-function/triggers \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "events:incoming"}'
+
+# List triggers
+curl https://gateway.example.com/v1/functions/my-function/triggers \
+  -H "Authorization: Bearer <token>"
+
+# Delete a trigger
+curl -X DELETE https://gateway.example.com/v1/functions/my-function/triggers/<id> \
+  -H "Authorization: Bearer <token>"
+```
+
+### Trigger Event Payload
+
+When triggered via PubSub, the function receives this JSON via stdin:
+
+```json
+{
+  "topic": "events:incoming",
+  "data": { "key": "value" },
+  "namespace": "my-namespace",
+  "trigger_depth": 1,
+  "timestamp": 1708972800
+}
+```
+
+### Depth Limiting
+
+To prevent infinite loops (function A publishes to a topic that triggers function A again), trigger depth is tracked. The maximum depth is **5**. If a function's output triggers another function, `trigger_depth` increments. At depth 5, no further triggers fire.
+
+## Managing Functions
+
+### List Functions
+
+```bash
+# CLI
+orama function list
+
+# REST API
+curl https://gateway.example.com/v1/functions \
+  -H "Authorization: Bearer <token>"
+```
+
+### Get Function Details
+
+```bash
+# CLI
+orama function get my-function
+
+# REST API
+curl https://gateway.example.com/v1/functions/my-function \
+  -H "Authorization: Bearer <token>"
+```
+
+### Delete a Function
+
+```bash
+# CLI (prompts for confirmation)
+orama function delete my-function
+
+# CLI (skip confirmation)
+orama function delete my-function --force
+
+# REST API
+curl -X DELETE https://gateway.example.com/v1/functions/my-function \
+  -H "Authorization: Bearer <token>"
+```
+
+### List Versions
+
+Each deploy creates a new version. You can list all versions of a function.
+
+```bash
+# CLI
+orama function versions my-function
+
+# REST API
+curl https://gateway.example.com/v1/functions/my-function/versions \
+  -H "Authorization: Bearer <token>"
+```
+
+### Invocation Logs
+
+```bash
+# CLI (default: last 50 entries)
+orama function logs my-function
+
+# CLI (custom limit)
+orama function logs my-function --limit 100
+
+# REST API
+curl "https://gateway.example.com/v1/functions/my-function/logs?limit=50" \
+  -H "Authorization: Bearer <token>"
+```
+
+## REST API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/functions` | Deploy function (multipart/form-data) |
+| `GET` | `/v1/functions` | List functions |
+| `GET` | `/v1/functions/{name}` | Get function info |
+| `DELETE` | `/v1/functions/{name}` | Delete function |
+| `POST` | `/v1/functions/{name}/invoke` | Invoke function |
+| `GET` | `/v1/functions/{name}/versions` | List versions |
+| `GET` | `/v1/functions/{name}/logs` | Get invocation logs |
+| `WS` | `/v1/functions/{name}/ws` | WebSocket invoke (streaming) |
+| `PUT` | `/v1/functions/secrets` | Set a secret |
+| `GET` | `/v1/functions/secrets` | List secret names |
+| `DELETE` | `/v1/functions/secrets/{name}` | Delete a secret |
+| `POST` | `/v1/functions/{name}/triggers` | Add PubSub trigger |
+| `GET` | `/v1/functions/{name}/triggers` | List triggers |
+| `DELETE` | `/v1/functions/{name}/triggers/{id}` | Delete trigger |
+| `POST` | `/v1/invoke/{namespace}/{name}` | Direct invoke (used by SDK) |
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `orama function init <name>` | Scaffold a new function project |
+| `orama function build [directory]` | Compile Go to WASM via TinyGo |
+| `orama function deploy [directory]` | Deploy WASM to the network |
+| `orama function invoke <name> --data <json>` | Invoke a function |
+| `orama function list` | List deployed functions |
+| `orama function get <name>` | Get function details |
+| `orama function delete <name> [--force]` | Delete a function |
+| `orama function logs <name> [--limit N]` | View invocation logs (default: 50) |
+| `orama function versions <name>` | List function versions |
+| `orama function secrets set <name> [value]` | Set an encrypted secret |
+| `orama function secrets set <name> --from-file <path>` | Set a secret from file |
+| `orama function secrets list` | List secret names |
+| `orama function secrets delete <name> [--force]` | Delete a secret |
+| `orama function triggers add <fn> --topic <topic>` | Add PubSub trigger |
+| `orama function triggers list <fn>` | List triggers |
+| `orama function triggers delete <fn> <id>` | Delete a trigger |

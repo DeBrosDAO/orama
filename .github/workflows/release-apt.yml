@@ -46,6 +46,7 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Build binary
+        working-directory: core
         env:
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 0
@@ -71,7 +72,7 @@ jobs:
           mkdir -p ${PKG_NAME}/usr/local/bin
 
           # Copy binaries
-          cp build/usr/local/bin/* ${PKG_NAME}/usr/local/bin/
+          cp core/build/usr/local/bin/* ${PKG_NAME}/usr/local/bin/
           chmod 755 ${PKG_NAME}/usr/local/bin/*
 
           # Create control file

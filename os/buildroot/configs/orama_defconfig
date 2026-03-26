@@ -1,0 +1,74 @@
+# OramaOS Buildroot defconfig
+# Minimal, locked-down Linux image for Orama Network nodes.
+# No SSH, no shell, no operator access. Only the orama-agent runs as root.
+
+# Architecture
+BR2_x86_64=y
+
+# Toolchain
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+
+# Kernel
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.70"
+BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
+BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="board/orama/kernel.config"
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+
+# Init system: systemd
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_BOOTD=y
+
+# Rootfs: SquashFS (read-only, used with dm-verity)
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS_4_0=y
+
+# Required packages for LUKS + boot
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_UTIL_LINUX_MOUNT=y
+BR2_PACKAGE_UTIL_LINUX_UMOUNT=y
+BR2_PACKAGE_KMOD=y
+BR2_PACKAGE_CRYPTSETUP=y
+BR2_PACKAGE_LVM2=y
+
+# Busybox: keep for systemd compatibility, but shell removed in post_build.sh
+BR2_PACKAGE_BUSYBOX=y
+
+# WireGuard tools (kernel module is built-in since 6.6)
+BR2_PACKAGE_WIREGUARD_TOOLS=y
+
+# Network utilities
+BR2_PACKAGE_IPROUTE2=y
+BR2_PACKAGE_IPTABLES=y
+
+# Certificate authorities for HTTPS
+BR2_PACKAGE_CA_CERTIFICATES=y
+
+# No SSH — this is intentional. Operators must not have shell access.
+# BR2_PACKAGE_OPENSSH is not set
+# BR2_PACKAGE_DROPBEAR is not set
+
+# No package manager
+# BR2_PACKAGE_OPKG is not set
+
+# Post-build scripts
+BR2_ROOTFS_POST_BUILD_SCRIPT="board/orama/post_build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="board/orama/post_image.sh"
+BR2_ROOTFS_POST_SCRIPT_ARGS=""
+
+# Overlay
+BR2_ROOTFS_OVERLAY="board/orama/rootfs_overlay"
+
+# Image generation
+BR2_ROOTFS_POST_IMAGE_SCRIPT="board/orama/post_image.sh"
+
+# Host tools needed for image generation
+BR2_PACKAGE_HOST_GENIMAGE=y
+BR2_PACKAGE_HOST_MTOOLS=y
+
+# Timezone
+BR2_TARGET_TZ_INFO=y
+BR2_TARGET_LOCALTIME="UTC"

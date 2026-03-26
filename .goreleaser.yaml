@@ -9,11 +9,13 @@ env:
 
 before:
   hooks:
-    - go mod tidy
+    - cmd: go mod tidy
+      dir: core
 
 builds:
   # orama CLI binary
   - id: orama
+    dir: core
     main: ./cmd/cli
     binary: orama
     goos:
@@ -31,6 +33,7 @@ builds:
 
   # orama-node binary (Linux only for apt)
   - id: orama-node
+    dir: core
     main: ./cmd/node
     binary: orama-node
     goos:
@@ -84,7 +87,7 @@ nfpms:
     section: utils
     priority: optional
     contents:
-      - src: ./README.md
+      - src: ./core/README.md
         dst: /usr/share/doc/orama/README.md
     deb:
       lintian_overrides:
@@ -106,7 +109,7 @@ nfpms:
     section: net
     priority: optional
     contents:
-      - src: ./README.md
+      - src: ./core/README.md
         dst: /usr/share/doc/orama-node/README.md
     deb:
       lintian_overrides:
