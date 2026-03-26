@@ -102,6 +102,10 @@ install-hooks:
 	@echo "Installing git hooks..."
 	@bash scripts/install-hooks.sh
 
+# Install orama CLI to ~/.local/bin and configure PATH
+install: build
+	@bash scripts/install.sh
+
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
@@ -142,6 +146,7 @@ health:
 help:
 	@echo "Available targets:"
 	@echo "  build         - Build all executables"
+	@echo "  install       - Build and install 'orama' CLI to ~/.local/bin"
 	@echo "  clean         - Clean build artifacts"
 	@echo "  test          - Run unit tests"
 	@echo ""

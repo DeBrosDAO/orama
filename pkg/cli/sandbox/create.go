@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
 // Create orchestrates the creation of a new sandbox cluster.
@@ -19,14 +21,10 @@ func Create(name string) error {
 		return err
 	}
 
-	// Resolve wallet SSH key once for all phases
-	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
-	if err != nil {
-		return fmt.Errorf("prepare SSH key: %w", err)
-	}
-	defer cleanup()
+	// --- Preflight: validate everything BEFORE spending money ---
+	fmt.Println("Preflight checks:")
 
-	// Check for existing active sandbox
+	// 1. Check for existing active sandbox
 	active, err := FindActiveSandbox()
 	if err != nil {
 		return err
@@ -35,6 +33,52 @@ func Create(name string) error {
 		return fmt.Errorf("sandbox %q is already active (status: %s)\nDestroy it first: orama sandbox destroy --name %s",
 			active.Name, active.Status, active.Name)
 	}
+	fmt.Println("  [ok] No active sandbox")
+
+	// 2. Check rootwallet agent is running and unlocked before the slow SSH key call
+	if err := checkAgentReady(); err != nil {
+		return err
+	}
+	fmt.Println("  [ok] Rootwallet agent running and unlocked")
+
+	// 3. Resolve SSH key (may trigger approval prompt in RootWallet app)
+	fmt.Print("  [..] Resolving SSH key from vault...")
+	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
+	if err != nil {
+		fmt.Println(" FAILED")
+		return fmt.Errorf("prepare SSH key: %w", err)
+	}
+	defer cleanup()
+	fmt.Println(" ok")
+
+	// 4. Check binary archive — auto-build if missing
+	archivePath := findNewestArchive()
+	if archivePath == "" {
+		fmt.Println("  [--] No binary archive found, building...")
+		if err := autoBuildArchive(); err != nil {
+			return fmt.Errorf("auto-build archive: %w", err)
+		}
+		archivePath = findNewestArchive()
+		if archivePath == "" {
+			return fmt.Errorf("build succeeded but no archive found in /tmp/")
+		}
+	}
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return fmt.Errorf("stat archive %s: %w", archivePath, err)
+	}
+	fmt.Printf("  [ok] Binary archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
+
+	// 5. Verify Hetzner API token works
+	client := NewHetznerClient(cfg.HetznerAPIToken)
+	if err := client.ValidateToken(); err != nil {
+		return fmt.Errorf("hetzner API: %w\n     Check your token in ~/.orama/sandbox.yaml", err)
+	}
+	fmt.Println("  [ok] Hetzner API token valid")
+
+	fmt.Println()
+
+	// --- All preflight checks passed, proceed ---
 
 	// Generate name if not provided
 	if name == "" {
@@ -42,8 +86,6 @@ func Create(name string) error {
 	}
 
 	fmt.Printf("Creating sandbox %q (%s, %d nodes)\n\n", name, cfg.Domain, 5)
-
-	client := NewHetznerClient(cfg.HetznerAPIToken)
 
 	state := &SandboxState{
 		Name:      name,
@@ -58,18 +100,22 @@ func Create(name string) error {
 		cleanupFailedCreate(client, state)
 		return fmt.Errorf("provision servers: %w", err)
 	}
-	SaveState(state)
+	if err := SaveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: save state after provisioning: %v\n", err)
+	}
 
 	// Phase 2: Assign floating IPs
 	fmt.Println("\nPhase 2: Assigning floating IPs...")
 	if err := phase2AssignFloatingIPs(client, cfg, state, sshKeyPath); err != nil {
 		return fmt.Errorf("assign floating IPs: %w", err)
 	}
-	SaveState(state)
+	if err := SaveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: save state after floating IPs: %v\n", err)
+	}
 
 	// Phase 3: Upload binary archive
 	fmt.Println("\nPhase 3: Uploading binary archive...")
-	if err := phase3UploadArchive(state, sshKeyPath); err != nil {
+	if err := phase3UploadArchive(state, sshKeyPath, archivePath); err != nil {
 		return fmt.Errorf("upload archive: %w", err)
 	}
 
@@ -77,7 +123,7 @@ func Create(name string) error {
 	fmt.Println("\nPhase 4: Installing genesis node...")
 	if err := phase4InstallGenesis(cfg, state, sshKeyPath); err != nil {
 		state.Status = StatusError
-		SaveState(state)
+		_ = SaveState(state)
 		return fmt.Errorf("install genesis: %w", err)
 	}
 
@@ -85,7 +131,7 @@ func Create(name string) error {
 	fmt.Println("\nPhase 5: Joining remaining nodes...")
 	if err := phase5JoinNodes(cfg, state, sshKeyPath); err != nil {
 		state.Status = StatusError
-		SaveState(state)
+		_ = SaveState(state)
 		return fmt.Errorf("join nodes: %w", err)
 	}
 
@@ -94,9 +140,46 @@ func Create(name string) error {
 	phase6Verify(cfg, state, sshKeyPath)
 
 	state.Status = StatusRunning
-	SaveState(state)
+	if err := SaveState(state); err != nil {
+		return fmt.Errorf("save final state: %w", err)
+	}
 
 	printCreateSummary(cfg, state)
+	return nil
+}
+
+// checkAgentReady verifies the rootwallet agent is running, unlocked, and
+// that the desktop app is connected (required for first-time app approval).
+func checkAgentReady() error {
+	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	status, err := client.Status(ctx)
+	if err != nil {
+		if rwagent.IsNotRunning(err) {
+			return fmt.Errorf("rootwallet agent is not running\n\n  Start it with:\n    rw agent start && rw agent unlock")
+		}
+		return fmt.Errorf("rootwallet agent: %w", err)
+	}
+
+	return validateAgentStatus(status)
+}
+
+// validateAgentStatus checks that the agent status indicates readiness.
+// Separated from checkAgentReady for testability.
+func validateAgentStatus(status *rwagent.StatusResponse) error {
+	if status.Locked {
+		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it with:\n    rw agent unlock")
+	}
+
+	if status.ConnectedApps == 0 {
+		fmt.Println("  [!!] RootWallet desktop app is not open")
+		fmt.Println("       First-time use requires the desktop app to approve access.")
+		fmt.Println("       Open the RootWallet app, then re-run this command.")
+		return fmt.Errorf("RootWallet desktop app required for approval — open it and retry")
+	}
+
 	return nil
 }
 
@@ -259,17 +342,46 @@ func waitForSSH(node inspector.Node, timeout time.Duration) error {
 	return fmt.Errorf("timeout after %s", timeout)
 }
 
-// phase3UploadArchive uploads the binary archive to the genesis node, then fans out
-// to the remaining nodes server-to-server (much faster than uploading from local machine).
-func phase3UploadArchive(state *SandboxState, sshKeyPath string) error {
-	archivePath := findNewestArchive()
-	if archivePath == "" {
-		fmt.Println("  No binary archive found, run `orama build` first")
-		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
+// autoBuildArchive runs `make build-archive` from the project root.
+func autoBuildArchive() error {
+	// Find project root by looking for go.mod
+	dir, err := findProjectRoot()
+	if err != nil {
+		return fmt.Errorf("find project root: %w", err)
 	}
 
-	info, _ := os.Stat(archivePath)
-	fmt.Printf("  Archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	cmd := exec.Command("make", "build-archive")
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("make build-archive failed: %w", err)
+	}
+	return nil
+}
+
+// findProjectRoot walks up from the current working directory to find go.mod.
+func findProjectRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("could not find go.mod in any parent directory")
+		}
+		dir = parent
+	}
+}
+
+// phase3UploadArchive uploads the binary archive to the genesis node, then fans out
+// to the remaining nodes server-to-server (much faster than uploading from local machine).
+func phase3UploadArchive(state *SandboxState, sshKeyPath, archivePath string) error {
+	fmt.Printf("  Archive: %s\n", filepath.Base(archivePath))
 
 	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
 		return err
