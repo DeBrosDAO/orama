@@ -1,0 +1,236 @@
+# Getting Started
+
+Welcome to the **Orama Network** developer documentation. Orama is a decentralized infrastructure platform that provides distributed databases, caching, file storage, real-time messaging, serverless functions, encrypted vault storage, and application deployments -- all accessible through a unified SDK and CLI.
+
+## Core Services
+
+| Service | Description |
+|---------|-------------|
+| **Deployments** | Deploy static sites, Next.js apps, Go backends, and Node.js backends |
+| **Databases** | Distributed SQL databases (RQLite) with replication across nodes |
+| **SQLite** | Per-namespace SQLite databases with IPFS-backed backups |
+| **Cache** | Distributed key-value caching powered by Olric |
+| **Storage** | Decentralized file storage on IPFS with automatic pinning |
+| **PubSub** | Real-time messaging over WebSockets with presence tracking |
+| **Functions** | Serverless WebAssembly function execution |
+| **Vault** | Encrypted secret storage distributed across guardian nodes via Shamir splitting |
+| **Proxy** | Anonymous HTTP proxying through the Anyone privacy relay network |
+
+## Architecture Overview
+
+The Orama Network is a mesh of VPS nodes connected via WireGuard tunnels. Each node runs a gateway that handles request routing, authentication, and service orchestration.
+
+| Component | Purpose |
+|-----------|---------|
+| Gateway | API routing, authentication, rate limiting |
+| RQLite | Distributed SQL database (Raft consensus) |
+| Olric | Distributed cache and DMap |
+| IPFS + IPFS Cluster | Decentralized file storage with replication |
+| CoreDNS | Authoritative DNS for deployment subdomains |
+| Caddy | TLS termination and reverse proxy |
+| WASM Runtime | Serverless function execution |
+| Anyone Relay | Privacy proxy network |
+
+## Install the SDK
+
+```bash
+npm install @debros/network-ts-sdk
+# or
+pnpm add @debros/network-ts-sdk
+```
+
+## Initialize the Client
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://your-node.orama-devnet.network",
+  apiKey: "your-api-key",
+});
+```
+
+The `baseURL` is the HTTPS URL of any Orama gateway node. API keys are obtained through wallet-based authentication (see below).
+
+## Authentication
+
+Orama uses wallet-based cryptographic authentication. The flow is:
+
+1. Request a challenge nonce from the gateway
+2. Sign the nonce with your wallet (EVM or Solana)
+3. Submit the signature to receive a JWT and API key
+4. Use the API key for subsequent requests
+
+### SDK Authentication Flow
+
+```typescript
+const client = createClient({
+  baseURL: "https://your-node.orama-devnet.network",
+});
+
+// Step 1: Request challenge
+const challenge = await client.auth.challenge({
+  wallet: "0xYourWalletAddress",
+  namespace: "my-namespace",
+});
+
+// Step 2: Sign the nonce with your wallet (app-specific signing logic)
+const signature = await signMessage(challenge.nonce);
+
+// Step 3: Verify and get tokens
+const session = await client.auth.verify({
+  wallet: "0xYourWalletAddress",
+  nonce: challenge.nonce,
+  signature,
+  namespace: "my-namespace",
+  chain_type: "ETH", // or "SOL" for Solana
+});
+
+// session.access_token — JWT for authenticated requests
+// session.api_key — persistent API key for your namespace
+```
+
+After verification, the SDK automatically stores the JWT and API key for subsequent requests.
+
+### CLI Authentication
+
+The Orama CLI (`orama`) supports interactive authentication with RootWallet (EVM) or Phantom (Solana):
+
+```bash
+# Set your target environment
+orama env use devnet
+
+# Authenticate (interactive wallet selection)
+orama auth login
+
+# Check who you are logged in as
+orama auth whoami
+
+# View detailed auth status
+orama auth status
+
+# List all stored credentials for the current environment
+orama auth list
+
+# Switch between stored credentials
+orama auth switch
+
+# Clear all credentials
+orama auth logout
+```
+
+#### Login Flags
+
+| Flag | Description |
+|------|-------------|
+| `--namespace <name>` | Target namespace |
+| `--simple` | Use simple auth without signature (dev only) |
+| `--wallet <0x...>` | Wallet address (implies `--simple`) |
+
+## Environment Management
+
+The CLI supports multiple environments. Each environment points to a different gateway cluster.
+
+```bash
+# List all environments
+orama env list
+
+# Show current active environment
+orama env current
+
+# Switch environment
+orama env use devnet
+orama env use testnet
+
+# Add a custom environment
+orama env add my-env https://my-gateway.example.com "My custom environment"
+
+# Remove a custom environment
+orama env remove my-env
+```
+
+Default environments:
+
+| Environment | Gateway URL |
+|-------------|-------------|
+| `production` | `https://dbrs.space` |
+| `devnet` | `https://orama-devnet.network` |
+| `testnet` | `https://orama-testnet.network` |
+
+The default active environment is `devnet`. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
+
+## Quick Example: Deploy a Static Site
+
+```bash
+# Authenticate
+orama auth login
+
+# Deploy a built React/Vue/static site
+orama deploy static ./dist --name my-app
+
+# Check deployment status
+orama app get my-app
+
+# List all deployments
+orama app list
+```
+
+Your app will be available at a URL like `https://my-app-f3o4if.orama-devnet.network`.
+
+## Quick Example: Use the Database
+
+```typescript
+const client = createClient({
+  baseURL: "https://your-node.orama-devnet.network",
+  apiKey: "your-api-key",
+});
+
+// Create a table
+await client.db.createTable(
+  "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
+);
+
+// Insert data
+await client.db.exec(
+  "INSERT INTO users (name, email) VALUES (?, ?)",
+  ["Alice", "alice@example.com"]
+);
+
+// Query data
+const users = await client.db.query("SELECT * FROM users WHERE name = ?", ["Alice"]);
+```
+
+## CLI Command Overview
+
+The `orama` CLI provides these top-level commands:
+
+| Command | Description |
+|---------|-------------|
+| `orama auth` | Authentication management (login, logout, whoami, status, list, switch) |
+| `orama env` | Environment management (list, current, use, add, remove) |
+| `orama deploy` | Deploy applications (static, nextjs, go, nodejs) |
+| `orama app` | Manage deployed applications (list, get, delete, rollback, logs, stats) |
+| `orama db` | Manage SQLite databases (create, query, list, backup, backups) |
+| `orama function` | Manage serverless functions (init, build, deploy, invoke, list, get, delete, logs, versions, secrets, triggers) |
+| `orama namespace` | Manage namespaces (list, delete, repair, enable, disable, webrtc-status) |
+| `orama inspect` | SSH-based cluster health inspection (operator tool) |
+| `orama monitor` | Real-time cluster monitoring (operator tool) |
+| `orama build` | Cross-compile binary archive for deployment (operator tool) |
+| `orama sandbox` | Manage ephemeral Hetzner Cloud clusters for testing (operator tool) |
+| `orama version` | Show CLI version |
+
+## Next Steps
+
+- [SDK Reference](/docs/developer/sdk-reference) -- Full API reference for the TypeScript SDK
+- [Deployments](/docs/developer/deployments) -- Deploy static sites, Next.js apps, Go and Node.js backends
+- [Databases](/docs/developer/databases) -- Distributed SQL with RQLite
+- [Cache](/docs/developer/cache) -- Distributed caching with Olric
+- [Storage](/docs/developer/storage) -- Decentralized file storage on IPFS
+- [PubSub](/docs/developer/pubsub) -- Real-time messaging with WebSockets
+- [Functions](/docs/developer/functions) -- Serverless WebAssembly execution
+- [Vault](/docs/developer/vault) -- Encrypted distributed secret storage
+- [CLI Reference](/docs/developer/cli-reference) -- Full CLI command reference
+
+---
+
+> **Note:** For node operator documentation (installation, monitoring, upgrades), switch to the **OPS** persona using the toggle in the sidebar.

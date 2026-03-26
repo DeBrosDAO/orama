@@ -1,0 +1,175 @@
+# Upgrades
+
+Orama nodes must be kept up to date with the latest releases to maintain compatibility with the network and benefit from performance improvements and security patches. This guide covers the upgrade process, rolling upgrades, and health verification.
+
+## Upgrade Command
+
+The `orama node upgrade` command handles downloading, extracting, and optionally restarting services. It supports both local (on-VPS) and remote (from your machine) execution.
+
+### Local Upgrade (on VPS)
+
+Run directly on a VPS node with root privileges:
+
+```bash
+# Upgrade binary only (does not restart services)
+sudo orama node upgrade
+
+# Upgrade and automatically restart services
+sudo orama node upgrade --restart
+
+# Reconfigure all settings during upgrade
+sudo orama node upgrade --force
+
+# Skip minimum resource checks (RAM/CPU)
+sudo orama node upgrade --skip-checks
+```
+
+### Remote Rolling Upgrade
+
+Run from your local machine to upgrade all nodes in an environment sequentially:
+
+```bash
+# Upgrade all nodes in an environment (rolling, one at a time)
+orama node upgrade --env testnet
+
+# Upgrade a single node only
+orama node upgrade --env testnet --node 1.2.3.4
+
+# Custom delay between nodes (default: 30 seconds)
+orama node upgrade --env testnet --delay 60
+
+# Upgrade with automatic restart
+orama node upgrade --env testnet --restart
+```
+
+### All Upgrade Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Reconfigure all settings during upgrade |
+| `--restart` | `false` | Automatically restart services after upgrade |
+| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--env` | | Target environment for remote rolling upgrade (`devnet`, `testnet`, `mainnet`) |
+| `--node` | | Upgrade a single node IP only (requires `--env`) |
+| `--delay` | `30` | Seconds to wait between nodes during rolling upgrade |
+| `--nameserver` | `false` | Make this node a nameserver |
+| `--anyone-relay` | `false` | Run as Anyone relay operator |
+| `--anyone-exit` | `false` | Run as exit relay (requires `--anyone-relay`) |
+| `--anyone-client` | `false` | Install Anyone as client-only (SOCKS5 proxy) |
+| `--anyone-migrate` | `false` | Migrate existing Anyone installation |
+| `--anyone-nickname` | | Relay nickname (1-19 alphanumeric chars) |
+| `--anyone-contact` | | Contact info (email or @telegram) |
+| `--anyone-wallet` | | Ethereum wallet address for rewards |
+| `--anyone-orport` | `9001` | ORPort for relay |
+| `--anyone-family` | | Comma-separated fingerprints of other relays you operate |
+| `--anyone-bandwidth` | `30` | Limit relay to N% of VPS bandwidth (0=unlimited) |
+| `--anyone-accounting` | `0` | Monthly data cap in GB (0=unlimited) |
+
+---
+
+## Rolling Upgrade Process
+
+Orama uses a rolling upgrade strategy — nodes are upgraded one at a time to maintain cluster availability. RQLite requires a majority of voter nodes (quorum) to function, so upgrading multiple nodes simultaneously risks losing quorum and causing a cluster outage.
+
+### Upgrade Order
+
+1. **Upgrade followers first** — Start with RQLite follower nodes
+2. **Upgrade the leader last** — This triggers a leader election, which is normal
+3. **Never upgrade more than one node at a time** — Wait for full verification between each
+
+### Per-Node Process
+
+1. Verify cluster health before starting
+2. Download the new binary to the node
+3. Stop services in reverse dependency order (Gateway → Olric → RQLite → WireGuard)
+4. Replace the binary with the new version
+5. Start services in correct dependency order (WireGuard → RQLite → Olric → Gateway)
+6. Verify node health after restart
+7. Verify cluster health before proceeding to the next node
+
+---
+
+## Health Verification
+
+After upgrading each node, always verify health before moving to the next:
+
+```bash
+# Check the upgraded node
+orama monitor report --env <environment> --node <node-ip>
+
+# Check the full cluster
+orama monitor report --env <environment>
+```
+
+What to verify:
+
+| Check | Expected State |
+|-------|---------------|
+| All services | `active (running)` |
+| RQLite state | `Leader` or `Follower` |
+| Raft log index | In sync with other nodes |
+| WireGuard peers | All connected, recent handshakes |
+
+Do not proceed to the next node until all checks pass. If a node shows issues after upgrade, investigate before continuing.
+
+---
+
+## Rollout Command
+
+The `orama node rollout` command builds the binary locally and performs a full rolling upgrade in one step. This is the preferred method for deploying code changes.
+
+```bash
+# Build and deploy to all nodes
+orama node rollout --env testnet
+
+# Skip the build step (use existing archive)
+orama node rollout --env testnet --no-build
+
+# Skip confirmation prompt
+orama node rollout --env testnet --yes
+
+# Custom delay between nodes
+orama node rollout --env testnet --delay 60
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | *(required)* | Target environment (`devnet`, `testnet`) |
+| `--no-build` | `false` | Skip build step (use existing archive) |
+| `--yes` | `false` | Skip confirmation prompt |
+| `--delay` | `30` | Seconds between nodes during rolling upgrade |
+
+---
+
+## Push Command
+
+The `orama node push` command uploads the binary to nodes without restarting services. Useful for pre-staging a binary before a maintenance window.
+
+```bash
+# Push to all nodes in an environment
+orama node push --env devnet
+
+# Push to a single node
+orama node push --env testnet --node 1.2.3.4
+
+# Upload directly to each node (no hub fanout)
+orama node push --env testnet --direct
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | *(required)* | Target environment |
+| `--node` | | Push to a single node IP only |
+| `--direct` | `false` | Upload directly to each node |
+
+---
+
+## Version Compatibility
+
+The Orama network requires all nodes in an environment to run compatible versions. When a new version is released:
+
+- Operators receive a notification with the target upgrade window
+- All nodes should be upgraded within the specified window
+- Nodes running incompatible versions may be temporarily excluded from the mesh
+
+Use `orama monitor alerts --env <env>` to check for binary version mismatch warnings across the cluster.
