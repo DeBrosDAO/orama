@@ -72,6 +72,11 @@ website/invest-api/*.db
 website/invest-api/*.db-shm
 website/invest-api/*.db-wal
 
+# === SDK (TypeScript) ===
+sdk/node_modules/
+sdk/dist/
+sdk/coverage/
+
 # === Vault (Zig) ===
 vault/.zig-cache/
 vault/zig-out/
