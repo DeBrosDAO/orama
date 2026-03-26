@@ -1,2 +1,9 @@
 onlyBuiltDependencies:
+  - '@stellar/stellar-sdk'
+  - blake-hash
+  - bufferutil
   - esbuild
+  - protobufjs
+  - tiny-secp256k1
+  - usb
+  - utf-8-validate

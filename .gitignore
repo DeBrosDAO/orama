@@ -65,6 +65,7 @@ go.work
 *.db
 
 # === Website ===
+website/remote.conf
 website/node_modules/
 website/dist/
 website/invest-api/invest-api
