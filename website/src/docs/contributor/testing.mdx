@@ -1,0 +1,222 @@
+# Testing Guide
+
+Testing is a critical part of contributing to Orama. All logic changes require tests, and all bug fixes require a test that reproduces the bug before the fix. This guide covers the testing tools, patterns, and CI pipeline.
+
+## Running Tests
+
+### Go (Network)
+
+```bash
+# Run all tests
+make test
+
+# Run tests for a specific package
+go test ./pkg/gateway/...
+
+# Run a specific test
+go test ./pkg/gateway/... -run TestHandleDeployment
+
+# Run with verbose output
+go test -v ./pkg/...
+
+# Run with race detection
+go test -race ./pkg/...
+
+# Run with coverage
+go test -cover ./pkg/...
+go test -coverprofile=coverage.out ./pkg/...
+go tool cover -html=coverage.out
+```
+
+### TypeScript (SDK)
+
+```bash
+cd sdk
+
+# Run all tests
+pnpm test
+
+# Run in watch mode
+pnpm test --watch
+
+# Run with coverage
+pnpm test --coverage
+```
+
+## Test Structure
+
+### Go Test Files
+
+Test files live alongside the code they test, following Go conventions:
+
+```
+pkg/
+  gateway/
+    handler.go          # Implementation
+    handler_test.go     # Tests for handler.go
+    middleware.go
+    middleware_test.go
+  handlers/
+    auth/
+      auth.go
+      auth_test.go
+    storage/
+      storage.go
+      storage_test.go
+```
+
+### Test Naming
+
+Name tests descriptively using the pattern `Test<Function>_<Scenario>`:
+
+```go
+func TestCreateDeployment_ValidInput(t *testing.T) {
+    // Test that a deployment is created successfully with valid input
+}
+
+func TestCreateDeployment_MissingName(t *testing.T) {
+    // Test that an error is returned when the name is missing
+}
+
+func TestCreateDeployment_DuplicateName(t *testing.T) {
+    // Test that a conflict error is returned for duplicate names
+}
+```
+
+### Table-Driven Tests
+
+Use table-driven tests for testing multiple input/output scenarios:
+
+```go
+func TestValidateConfig(t *testing.T) {
+    tests := []struct {
+        name    string
+        config  Config
+        wantErr bool
+    }{
+        {
+            name:    "valid config",
+            config:  Config{Name: "app", Env: "devnet"},
+            wantErr: false,
+        },
+        {
+            name:    "missing name",
+            config:  Config{Env: "devnet"},
+            wantErr: true,
+        },
+        {
+            name:    "invalid environment",
+            config:  Config{Name: "app", Env: "invalid"},
+            wantErr: true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            err := ValidateConfig(tt.config)
+            if (err != nil) != tt.wantErr {
+                t.Errorf("ValidateConfig() error = %v, wantErr %v", err, tt.wantErr)
+            }
+        })
+    }
+}
+```
+
+## Mocking Patterns
+
+### Interfaces for Dependencies
+
+Design code with interface dependencies to make testing straightforward:
+
+```go
+// Define an interface for the dependency
+type CacheStore interface {
+    Get(key string) ([]byte, error)
+    Set(key string, value []byte, ttl time.Duration) error
+}
+
+// In tests, use a mock implementation
+type mockCache struct {
+    data map[string][]byte
+}
+
+func (m *mockCache) Get(key string) ([]byte, error) {
+    v, ok := m.data[key]
+    if !ok {
+        return nil, ErrNotFound
+    }
+    return v, nil
+}
+
+func (m *mockCache) Set(key string, value []byte, ttl time.Duration) error {
+    m.data[key] = value
+    return nil
+}
+```
+
+### Test Helpers
+
+Create reusable test helpers for common setup patterns:
+
+```go
+func newTestServer(t *testing.T) *httptest.Server {
+    t.Helper()
+    handler := setupRoutes(newMockServices())
+    return httptest.NewServer(handler)
+}
+```
+
+## End-to-End Tests
+
+E2E tests verify that components work together against a real cluster. They are organized by scope:
+
+```bash
+# Run all E2E tests (auto-discovers config)
+make test-e2e
+
+# Quick smoke tests (static deploys, health checks)
+make test-e2e-quick
+
+# Specific scopes
+make test-e2e-deployments    # Deployment lifecycle
+make test-e2e-fullstack      # Full-stack (frontend + backend + DB)
+make test-e2e-https          # HTTPS and external access
+make test-e2e-shared         # Shared services (cache, storage, pubsub, auth)
+make test-e2e-cluster        # Cluster operations (libp2p, olric, rqlite, namespace)
+make test-e2e-integration    # Integration (fullstack, persistence, concurrency)
+
+# Production-only tests (requires ORAMA_GATEWAY_URL env var)
+make test-e2e-production     # DNS, HTTPS, cross-node routing
+make test-e2e-prod           # All E2E including production-only
+```
+
+E2E tests are slower and require a running cluster (sandbox or real environment). They are run in CI but can be skipped locally if you are only working on unit-tested logic.
+
+## CI/CD Pipeline
+
+Every pull request triggers the CI pipeline, which runs:
+
+1. **Lint** — `go vet` and `go fmt` for Go, ESLint for TypeScript
+2. **Unit tests** — Full test suite via `make test`
+3. **Build** — Verify all binaries compile successfully
+4. **E2E tests** — Run against a test environment
+
+All checks must pass before a PR can be merged. If CI fails, fix the issue locally and push the fix — do not ask to skip checks.
+
+## Sandbox Testing
+
+For full E2E testing against a real multi-node cluster:
+
+```bash
+# Create a 5-node sandbox cluster
+orama sandbox create --name my-test
+
+# Deploy your changes to the sandbox
+orama sandbox rollout --name my-test
+
+# Run E2E tests against the sandbox
+make test-e2e
+
+# Tear down when done
+orama sandbox destroy --name my-test
+```

@@ -1,0 +1,195 @@
+# Deployment Guide for Contributors
+
+How Orama releases are built, tested, and deployed to the network. Understanding this process is important for contributors who need to test changes against live infrastructure or participate in the release cycle.
+
+## Release Process Overview
+
+1. **Feature development** on feature branches
+2. **Code review and merge** to the main branch
+3. **Binary building** — Cross-compile for target architectures
+4. **Rolling deployment** — One node at a time across the environment
+
+## Building Binaries
+
+The `orama build` command cross-compiles all Go binaries into a deployment archive:
+
+```bash
+# Build for Linux amd64 (default, target platform for VPS nodes)
+orama build
+
+# Build for a specific architecture
+orama build --arch arm64
+
+# Custom output path
+orama build --output ./release/orama-v1.0.0.tar.gz
+
+# Verbose output
+orama build --verbose
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--arch` | `amd64` | Target architecture (`amd64`, `arm64`) |
+| `--output` | `/tmp/orama-<version>-linux-<arch>.tar.gz` | Output archive path |
+| `--verbose` | `false` | Verbose output |
+
+The build pipeline:
+1. Cross-compiles all Go binaries for `linux/<arch>` (CLI, gateway, node, SFU, TURN, identity)
+2. Bundles third-party dependencies (RQLite, Olric, IPFS, CoreDNS, Caddy)
+3. Includes systemd service templates
+4. Packages everything into a tar.gz archive with a `manifest.json` (checksums)
+
+## Deploying to Nodes
+
+### Push (Upload Only)
+
+Upload the binary archive to nodes without restarting services:
+
+```bash
+# Push to all nodes in an environment
+orama node push --env devnet
+
+# Push to a single node
+orama node push --env devnet --node 1.2.3.4
+
+# Direct upload (no hub fanout)
+orama node push --env devnet --direct
+```
+
+### Rollout (Build + Deploy)
+
+Build and deploy in one step with automatic rolling restart:
+
+```bash
+# Build and deploy to all nodes
+orama node rollout --env devnet
+
+# Skip the build step (use existing archive)
+orama node rollout --env devnet --no-build
+
+# Skip confirmation
+orama node rollout --env devnet --yes
+```
+
+### Upgrade (Restart Only)
+
+When the binary is already on the node, restart services with the new code:
+
+```bash
+# Rolling upgrade of all nodes in an environment
+orama node upgrade --env devnet
+
+# Upgrade a single node
+orama node upgrade --env devnet --node 1.2.3.4
+
+# Also restart services after upgrade
+orama node upgrade --env devnet --restart
+```
+
+## Other Node Management Commands
+
+```bash
+# Diagnose common node issues (8 automated checks)
+orama node doctor
+
+# Generate invite tokens for new nodes to join the cluster
+orama node invite --expiry 24h
+
+# Wipe a node for reinstallation
+orama node clean --env devnet --node 1.2.3.4
+orama node clean --env devnet --nuclear    # Also removes shared binaries
+
+# Recover RQLite from a cluster split
+orama node recover-raft --env devnet --leader 1.2.3.4
+
+# Service management (on-node)
+orama node start
+orama node stop
+orama node restart
+orama node status
+```
+
+## Cluster Inspection and Monitoring
+
+Two tools for verifying cluster health:
+
+```bash
+# Deep SSH-based health inspection (runs checks on each node)
+orama inspect --env devnet
+orama inspect --env devnet --subsystem rqlite    # Specific subsystem
+orama inspect --env devnet --format json         # JSON output
+
+# Real-time cluster monitoring (interactive TUI)
+orama monitor --env devnet
+
+# One-shot reports
+orama monitor cluster --env devnet       # Cluster overview
+orama monitor node --env devnet          # Per-node health
+orama monitor service --env devnet       # Service status
+orama monitor mesh --env devnet          # WireGuard mesh
+orama monitor dns --env devnet           # DNS health
+orama monitor namespaces --env devnet    # Namespace usage
+orama monitor alerts --env devnet        # Active alerts
+orama monitor report --env devnet        # Full JSON report
+```
+
+## Rolling Upgrade Process
+
+Deploying to the network follows a strict rolling upgrade process to maintain cluster availability:
+
+1. Verify cluster health (all nodes, quorum OK)
+2. Upload new binary to the node
+3. Stop services (reverse dependency order: Gateway -> Olric -> RQLite)
+4. Replace binary
+5. Start services (correct dependency order: WireGuard -> RQLite -> Olric -> Gateway)
+6. Verify node health
+7. Verify cluster health
+8. Proceed to next node
+
+### Deployment Order
+
+1. **Followers first** — Upgrade RQLite follower nodes before the leader
+2. **Leader last** — Upgrading the leader triggers a leader election; do this last
+3. **One at a time** — Never upgrade multiple nodes simultaneously
+
+## Health Verification Between Nodes
+
+After each node upgrade, both node-level and cluster-level health must be confirmed:
+
+```bash
+# Node health
+orama monitor report --env <environment> --node <node-ip>
+
+# Cluster health
+orama monitor report --env <environment>
+```
+
+Do not proceed to the next node until:
+
+- All services on the upgraded node are `active`
+- RQLite shows `Leader` or `Follower` state
+- Raft log indices are in sync across the cluster
+- WireGuard peers are all connected
+
+## Environment Promotion
+
+Changes flow through environments in this order:
+
+```
+devnet → testnet → production
+```
+
+- **devnet** — First deployment target, used for active development and testing
+- **testnet** — Staging environment, mirrors production configuration
+- **production** — Production (`dbrs.space`), requires extra verification and approval
+
+## CI/CD Pipeline
+
+The CI pipeline runs on every push and PR:
+
+| Stage | What It Does |
+|-------|-------------|
+| Lint | Code style and static analysis (`go vet`, `go fmt`) |
+| Test | Unit tests via `make test` |
+| Build | Compile all 6 binaries for target platforms |
+| E2E | Run against a test environment |

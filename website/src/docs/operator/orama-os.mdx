@@ -1,0 +1,195 @@
+# OramaOS
+
+OramaOS is a custom minimal Linux image purpose-built for running Orama nodes. It replaces the standard Ubuntu deployment for mainnet, devnet, and testnet environments, providing a locked-down system where operators cannot access node data.
+
+## Why OramaOS?
+
+Standard Ubuntu nodes give operators root access — meaning they can read all stored data, modify binaries, or tamper with the system. OramaOS eliminates this attack surface:
+
+| Feature | Ubuntu | OramaOS |
+|---------|--------|---------|
+| SSH access | Yes | No |
+| Shell access | Yes | No |
+| Disk encryption | No | LUKS2 (Shamir) |
+| OS updates | Manual rolling upgrade | Automatic signed A/B swap |
+| Service isolation | systemd only | Namespaces + seccomp |
+| Rootfs integrity | None | dm-verity |
+| Binary signing | Optional | Required |
+| Operator data access | Full | None |
+
+Sandbox clusters remain on Ubuntu for development convenience.
+
+## How It Works
+
+OramaOS is built with Buildroot — a minimal Linux containing only systemd, cryptsetup, WireGuard (built into the 6.6 LTS kernel), and the **orama-agent**. The agent is the only root process and manages everything.
+
+### Partition Layout
+
+```
+/dev/sda1 — ESP (EFI, systemd-boot)
+/dev/sda2 — rootfs-A (SquashFS + dm-verity, read-only)
+/dev/sda3 — rootfs-B (standby partition for updates)
+/dev/sda4 — data (LUKS2 encrypted, ext4)
+```
+
+The root filesystem is read-only and integrity-verified. All mutable state lives on the LUKS-encrypted data partition.
+
+## Enrollment
+
+OramaOS nodes join the cluster through an enrollment flow (replacing `orama node install`):
+
+### 1. Flash the Image
+
+Download the OramaOS image and flash it to your VPS via your hosting provider's custom image upload (Hetzner, Vultr, OVH, etc.).
+
+### 2. First Boot
+
+On first boot, the agent enters enrollment mode:
+- Generates a random 8-character registration code
+- Opens a temporary HTTP server on port 9999
+- Waits for enrollment to complete
+
+### 3. Enroll from CLI
+
+On your local machine with the `orama` CLI and rootwallet:
+
+```bash
+# Generate an invite token on any existing cluster node
+orama node invite --expiry 24h
+
+# Enroll the new OramaOS node
+orama node enroll \
+  --node-ip <vps-public-ip> \
+  --token <invite-token> \
+  --gateway <gateway-url>
+```
+
+This fetches the registration code, validates it with the Gateway, assigns a WireGuard IP, pushes the cluster config to the node, and triggers LUKS encryption of the data partition. The LUKS key is split via Shamir's Secret Sharing and distributed to peer vault-guardians. Port 9999 closes permanently after enrollment.
+
+### 4. Verify
+
+```bash
+orama monitor report --env <env>
+```
+
+## LUKS Encryption
+
+The data partition is encrypted with LUKS2 (AES-XTS-Plain64). The encryption key is never stored on the node itself — it's split into shares and distributed across peer vault-guardians using Shamir's Secret Sharing over GF(256).
+
+### Normal Reboot
+
+When an enrolled node reboots:
+
+1. Agent starts, brings up WireGuard
+2. Contacts peer vault-guardians over WireGuard
+3. Fetches K shares (threshold = max(3, N/3))
+4. Reconstructs the LUKS key via Lagrange interpolation
+5. Decrypts and mounts the data partition
+6. Zeros the key from memory
+7. Starts all services
+
+If not enough peers are available, the agent retries with exponential backoff and enters a degraded "waiting for peers" state.
+
+### Genesis Node
+
+The first node has no peers for Shamir distribution. Instead:
+
+- The LUKS key is encrypted with a rootwallet-derived key and stored on the rootfs
+- On reboot, the operator unlocks manually:
+
+```bash
+orama node unlock --genesis --node-ip <wg-ip>
+```
+
+Once 5+ peers join, the genesis node distributes Shamir shares, deletes the local key, and transitions to normal Shamir-based unlock. The unlock command is no longer needed after this.
+
+## Node Management
+
+Since OramaOS has no SSH, all management goes through the Gateway API, which proxies requests to the agent over WireGuard (port 9998):
+
+### Check Status
+
+```bash
+curl "https://gateway.example.com/v1/node/status?node_id=<id>"
+```
+
+### Restart a Service
+
+```bash
+curl -X POST "https://gateway.example.com/v1/node/command?node_id=<id>" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"restart","service":"rqlite"}'
+```
+
+### View Logs
+
+```bash
+curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway&lines=100"
+```
+
+### Graceful Departure
+
+```bash
+curl -X POST "https://gateway.example.com/v1/node/leave" \
+  -H "Content-Type: application/json" \
+  -d '{"node_id":"<id>"}'
+```
+
+This stops services, redistributes Shamir shares, and removes the WireGuard peer.
+
+## Automatic Updates
+
+OramaOS uses an A/B partition scheme for safe, automatic updates:
+
+1. Agent checks for new versions periodically
+2. Downloads the signed image (P2P over WireGuard)
+3. Verifies the rootwallet EVM signature
+4. Writes to the standby partition
+5. Reboots with boot counting enabled (`tries_left=3`)
+6. If the new version boots successfully: marked as "good"
+7. If it fails 3 times: systemd-boot rolls back to the previous version
+
+No operator intervention is needed. Failed updates are automatically rolled back.
+
+## Service Sandboxing
+
+Each service runs in its own isolated environment:
+
+- **Mount namespace** — only the service's data directory is writable; everything else is read-only
+- **UTS namespace** — isolated hostname
+- **Dedicated UID/GID** — each service runs as a different non-root user
+- **Seccomp filtering** — per-service syscall allowlist
+
+| Service | Extra Syscalls Allowed |
+|---------|----------------------|
+| RQLite | fsync, fdatasync, ftruncate, rename (Raft + SQLite WAL) |
+| Olric | sendmmsg, recvmmsg (memberlist gossip) |
+| IPFS | sendfile, splice (data transfer) |
+| Gateway | sendfile, splice (HTTP serving) |
+| CoreDNS | sendmmsg, recvmmsg (DNS) |
+
+## Factory Reset
+
+OramaOS nodes cannot be cleaned with `orama node clean` (no SSH). Options:
+
+- **Graceful departure:** Use the `/v1/node/leave` API endpoint
+- **Factory reset:** Reflash the OramaOS image via your hosting provider's dashboard
+- **Data is unrecoverable:** LUKS key is distributed across peers — reflashing destroys all data permanently
+
+## Troubleshooting
+
+### Enrollment doesn't complete
+
+Check that port 9999 is open in your VPS provider's external firewall (Hetzner firewall, AWS security groups). OramaOS opens it internally, but provider-level firewalls need manual configuration.
+
+### LUKS unlock fails after reboot
+
+Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(3, N/3)). Ensure cluster nodes are running. For genesis nodes before 5+ peers exist, use `orama node unlock --genesis`.
+
+### Update rolled back
+
+Check agent logs via `GET /v1/node/logs?service=agent`. Common causes: corrupted download (signature check should catch this), hardware issue, or incompatible configuration.
+
+### Services unhealthy after reboot
+
+Use `GET /v1/node/status` to identify which services are down, then try restarting: `POST /v1/node/command` with `{"action":"restart","service":"<name>"}`.
