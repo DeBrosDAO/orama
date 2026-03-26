@@ -7,6 +7,7 @@ A decentralized infrastructure platform combining distributed SQL, IPFS storage,
 | Package | Language | Description |
 |---------|----------|-------------|
 | [core/](core/) | Go | API gateway, distributed node, CLI, and client SDK |
+| [sdk/](sdk/) | TypeScript | `@debros/orama` — JavaScript/TypeScript SDK ([npm](https://www.npmjs.com/package/@debros/orama)) |
 | [website/](website/) | TypeScript | Marketing website and invest portal |
 | [vault/](vault/) | Zig | Distributed secrets vault (Shamir's Secret Sharing) |
 | [os/](os/) | Go + Buildroot | OramaOS — hardened minimal Linux for network nodes |

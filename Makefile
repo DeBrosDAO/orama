@@ -27,6 +27,16 @@ website-dev:
 website-build:
 	cd website && pnpm build
 
+# === SDK (TypeScript) ===
+.PHONY: sdk sdk-build sdk-test
+sdk: sdk-build
+
+sdk-build:
+	cd sdk && pnpm install && pnpm build
+
+sdk-test:
+	cd sdk && pnpm test
+
 # === Vault (Zig) ===
 .PHONY: vault vault-build vault-test
 vault-build:

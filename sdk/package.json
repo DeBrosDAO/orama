@@ -1,0 +1,82 @@
+{
+  "name": "@debros/orama",
+  "version": "1.0.0",
+  "description": "TypeScript SDK for Orama Network - Database, PubSub, Cache, Storage, Vault, and more",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "license": "MIT",
+  "author": "DeBrosOfficial",
+  "keywords": [
+    "debros",
+    "network",
+    "sdk",
+    "typescript",
+    "database",
+    "rqlite",
+    "pubsub",
+    "websocket",
+    "cache",
+    "olric",
+    "ipfs",
+    "storage",
+    "wasm",
+    "serverless",
+    "distributed",
+    "gateway",
+    "vault",
+    "secrets",
+    "shamir",
+    "encryption",
+    "guardian"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DeBrosOfficial/network",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/DeBrosOfficial/network/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "vitest",
+    "test:e2e": "vitest run tests/e2e",
+    "release:npm": "npm publish --access public --registry=https://registry.npmjs.org/",
+    "release:gh": "npm publish --registry=https://npm.pkg.github.com"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^0.5.3",
+    "@noble/hashes": "^1.4.0",
+    "isomorphic-ws": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "dotenv": "^17.2.3",
+    "eslint": "^8.0.0",
+    "tsup": "^8.0.0",
+    "typedoc": "^0.25.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  }
+}
