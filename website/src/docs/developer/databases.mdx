@@ -1,0 +1,359 @@
+# Databases
+
+Orama provides two database systems for your applications: **per-namespace SQLite databases** for isolated, node-local storage, and a **distributed RQLite ORM** for replicated relational data. Both are accessible via the CLI, SDK, and REST API.
+
+## SQLite Databases
+
+Per-namespace isolated SQLite databases stored on the node's local filesystem. Each database is created on a specific node (the "home node") and queries are routed to that node. Databases use WAL mode for concurrent read/write access.
+
+### Creating a Database
+
+#### CLI
+
+```bash
+orama db create my-database
+```
+
+#### REST API
+
+```bash
+curl -X POST https://gateway.example.com/v1/db/sqlite/create \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"database_name": "my-database"}'
+```
+
+Database names must contain only alphanumeric characters, underscores, and hyphens (max 64 characters).
+
+### Querying a Database
+
+The SQLite endpoint accepts any SQL statement. It automatically detects whether a query is a read (SELECT) or write (INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, TRUNCATE, REPLACE) and returns the appropriate response format.
+
+#### CLI
+
+```bash
+# Read query
+orama db query my-database "SELECT * FROM users"
+
+# Write query
+orama db query my-database "INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')"
+
+# DDL query
+orama db query my-database "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
+```
+
+#### REST API
+
+```bash
+curl -X POST https://gateway.example.com/v1/db/sqlite/query \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "database_name": "my-database",
+    "query": "SELECT * FROM users WHERE email = ?",
+    "params": ["alice@example.com"]
+  }'
+```
+
+**Read response:**
+
+```json
+{
+  "columns": ["id", "name", "email"],
+  "rows": [[1, "Alice", "alice@example.com"]]
+}
+```
+
+**Write response:**
+
+```json
+{
+  "rows_affected": 1,
+  "last_insert_id": 1
+}
+```
+
+### Listing Databases
+
+#### CLI
+
+```bash
+orama db list
+```
+
+Outputs a table with columns: NAME, SIZE, BACKUP CID, CREATED.
+
+#### REST API
+
+```bash
+curl https://gateway.example.com/v1/db/sqlite/list \
+  -H "Authorization: Bearer <token>"
+```
+
+### Backups
+
+Databases can be backed up to IPFS for disaster recovery. Backups are content-addressed and immutable.
+
+#### CLI
+
+```bash
+# Create a backup
+orama db backup my-database
+
+# List all backups for a database
+orama db backups my-database
+```
+
+#### REST API
+
+```bash
+# Create a backup
+curl -X POST https://gateway.example.com/v1/db/sqlite/backup \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"database_name": "my-database"}'
+
+# List backups
+curl "https://gateway.example.com/v1/db/sqlite/backups?database_name=my-database" \
+  -H "Authorization: Bearer <token>"
+```
+
+### SQLite CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `orama db create <name>` | Create a new SQLite database |
+| `orama db query <name> <sql>` | Execute a SQL query |
+| `orama db list` | List all databases |
+| `orama db backup <name>` | Backup database to IPFS |
+| `orama db backups <name>` | List backups for a database |
+
+### SQLite REST API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/db/sqlite/create` | Create a new database |
+| `POST` | `/v1/db/sqlite/query` | Execute a SQL query |
+| `GET` | `/v1/db/sqlite/list` | List all databases |
+| `POST` | `/v1/db/sqlite/backup` | Backup database to IPFS |
+| `GET` | `/v1/db/sqlite/backups` | List backups for a database |
+
+---
+
+## RQLite ORM
+
+The distributed RQLite database is the cluster-wide database powering Orama's internal state. It is also exposed to applications through an ORM-style HTTP gateway and the TypeScript SDK. RQLite uses the Raft consensus protocol for replication -- writes go through the elected leader and are replicated to followers.
+
+The RQLite ORM supports raw SQL (`exec`/`query`), a fluent query builder, a repository pattern, transactions, and schema management.
+
+### SDK Setup
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://gateway.example.com",
+  apiKey: "ak_your_key:namespace",
+});
+```
+
+### Creating Tables
+
+```typescript
+await client.db.createTable(
+  "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
+);
+```
+
+### Writes with `exec`
+
+Use `exec` for INSERT, UPDATE, DELETE, and DDL statements:
+
+```typescript
+const result = await client.db.exec(
+  "INSERT INTO users (name, email) VALUES (?, ?)",
+  ["Alice", "alice@example.com"]
+);
+
+console.log(result.rows_affected);
+console.log(result.last_insert_id);
+```
+
+### Reads with `query`
+
+Use `query` for SELECT statements:
+
+```typescript
+const users = await client.db.query(
+  "SELECT * FROM users WHERE email = ?",
+  ["alice@example.com"]
+);
+```
+
+### Find
+
+Map-based criteria search without writing raw SQL:
+
+```typescript
+// Find multiple records
+const users = await client.db.find("users", { active: 1 });
+
+// Find a single record (returns null if not found)
+const user = await client.db.findOne("users", { email: "alice@example.com" });
+```
+
+`find` supports options for ordering, grouping, pagination, and joins:
+
+```typescript
+const users = await client.db.find(
+  "users",
+  { active: 1 },
+  { order_by: ["name ASC"], limit: 10, offset: 0 }
+);
+```
+
+### Transactions
+
+Group multiple operations into a sequence. Each statement specifies its `kind` (`exec` or `query`) along with the SQL and arguments:
+
+```typescript
+const results = await client.db.transaction([
+  {
+    kind: "exec",
+    sql: "INSERT INTO logs (msg) VALUES (?)",
+    args: ["Event A"],
+  },
+  {
+    kind: "query",
+    sql: "SELECT COUNT(*) AS count FROM logs",
+    args: [],
+  },
+]);
+```
+
+### QueryBuilder
+
+The SDK includes a fluent query builder for constructing SELECT queries:
+
+```typescript
+const activeUsers = await client.db
+  .createQueryBuilder("users")
+  .select("id", "name", "email")
+  .where("active = ?", [1])
+  .andWhere("age > ?", [18])
+  .orderBy("name DESC")
+  .limit(10)
+  .offset(0)
+  .getMany();
+
+const singleUser = await client.db
+  .createQueryBuilder("users")
+  .where("id = ?", [1])
+  .getOne();
+
+const count = await client.db
+  .createQueryBuilder("users")
+  .where("active = ?", [1])
+  .count();
+```
+
+The query builder supports:
+
+| Method | Description |
+|--------|-------------|
+| `select(...columns)` | Specify columns to select |
+| `where(expr, args?)` | Add a WHERE clause (AND) |
+| `andWhere(expr, args?)` | Add an AND WHERE clause |
+| `orWhere(expr, args?)` | Add an OR WHERE clause |
+| `innerJoin(table, on)` | Add an INNER JOIN |
+| `leftJoin(table, on)` | Add a LEFT JOIN |
+| `rightJoin(table, on)` | Add a RIGHT JOIN |
+| `groupBy(...columns)` | Group results |
+| `orderBy(...columns)` | Order results (e.g., `"name DESC"`) |
+| `limit(n)` | Limit result count |
+| `offset(n)` | Skip first N results |
+| `getMany()` | Execute and return all matching rows |
+| `getOne()` | Execute and return the first matching row (or null) |
+| `count()` | Execute and return the count of matching rows |
+
+### Repository Pattern
+
+For entity-oriented CRUD operations:
+
+```typescript
+interface User {
+  id?: number;
+  name: string;
+  email: string;
+}
+
+const repo = client.db.repository<User>("users");
+
+// Find multiple records
+const users = await repo.find({ active: 1 });
+
+// Find a single record (returns null if not found)
+const user = await repo.findOne({ email: "alice@example.com" });
+
+// Save a record (INSERT if no primary key, UPDATE if primary key exists)
+await repo.save({ name: "Bob", email: "bob@example.com" });
+
+// Remove a record (requires primary key)
+await repo.remove({ id: 1 });
+```
+
+By default, the primary key is `"id"`. You can specify a different primary key:
+
+```typescript
+const repo = client.db.repository<Session>("sessions", "session_id");
+```
+
+### Schema Management
+
+```typescript
+// Get the full schema for all tables and views
+const schema = await client.db.getSchema();
+
+// Drop a table
+await client.db.dropTable("old_table");
+```
+
+### RQLite ORM REST API Reference
+
+All endpoints are under `/v1/rqlite` and accept POST with JSON body (except `schema` which is GET).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/rqlite/query` | Execute a SELECT query. Body: `{sql, args}` |
+| `POST` | `/v1/rqlite/exec` | Execute a write/DDL statement. Body: `{sql, args}` |
+| `POST` | `/v1/rqlite/find` | Find rows by criteria. Body: `{table, criteria, options?}` |
+| `POST` | `/v1/rqlite/find-one` | Find one row by criteria. Body: `{table, criteria}` |
+| `POST` | `/v1/rqlite/select` | Fluent SELECT builder. Body: `{table, select?, where?, joins?, order_by?, group_by?, limit?, offset?, one?}` |
+| `POST` | `/v1/rqlite/transaction` | Execute multiple ops atomically. Body: `{ops: [{kind, sql, args}], return_results?}` |
+| `GET` | `/v1/rqlite/schema` | Get database schema (tables, views, CREATE SQL) |
+| `POST` | `/v1/rqlite/create-table` | Create a table. Body: `{schema: "CREATE TABLE ..."}` |
+| `POST` | `/v1/rqlite/drop-table` | Drop a table. Body: `{table: "name"}` |
+
+### RQLite Native Backup/Restore
+
+For full cluster-level backup and restore of the RQLite database:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/rqlite/export` | Export a raw RQLite backup |
+| `POST` | `/v1/rqlite/import` | Import a RQLite backup |
+
+### SDK Method Reference
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `exec` | `exec(sql, args?)` | Execute a write/DDL SQL statement |
+| `query` | `query(sql, args?)` | Execute a SELECT query |
+| `find` | `find(table, criteria?, options?)` | Find rows by criteria map |
+| `findOne` | `findOne(table, criteria)` | Find a single row by criteria |
+| `createQueryBuilder` | `createQueryBuilder(table)` | Create a fluent query builder |
+| `repository` | `repository(table, primaryKey?)` | Create an entity repository |
+| `transaction` | `transaction(ops, returnResults?)` | Execute multiple operations |
+| `createTable` | `createTable(schema)` | Create a table from DDL SQL |
+| `dropTable` | `dropTable(table)` | Drop a table |
+| `getSchema` | `getSchema()` | Get the database schema |

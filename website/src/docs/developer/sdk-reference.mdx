@@ -1,0 +1,911 @@
+# SDK Reference
+
+The Orama TypeScript SDK (`@debros/network-ts-sdk`) provides a unified interface for interacting with all Orama Network services. This reference covers client initialization, all service modules, and their methods.
+
+## Installation
+
+```bash
+npm install @debros/network-ts-sdk
+# or
+pnpm add @debros/network-ts-sdk
+```
+
+## Client Initialization
+
+All interactions with Orama start by calling `createClient()`:
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://orama-devnet.network",
+  apiKey: "your-api-key",
+});
+```
+
+### ClientConfig
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `baseURL` | `string` | Yes | -- | Gateway HTTPS URL |
+| `apiKey` | `string` | No | -- | API key for authentication (sent as `X-API-Key` header) |
+| `jwt` | `string` | No | -- | Pre-existing JWT token (sent as `Authorization: Bearer` header) |
+| `timeout` | `number` | No | `60000` | Request timeout in milliseconds |
+| `maxRetries` | `number` | No | `3` | Maximum retry attempts for retryable errors (408, 429, 500, 502, 503, 504) |
+| `retryDelayMs` | `number` | No | `1000` | Base delay between retries (multiplied by attempt number) |
+| `debug` | `boolean` | No | `false` | Enable debug logging (includes SQL queries and args) |
+| `storage` | `StorageAdapter` | No | `MemoryStorage` | Token storage adapter for persisting auth state |
+| `fetch` | `typeof fetch` | No | `globalThis.fetch` | Custom fetch implementation |
+| `wsConfig` | `Partial<WSClientConfig>` | No | -- | WebSocket configuration for PubSub |
+| `functionsConfig` | `FunctionsClientConfig` | No | -- | Functions module configuration (requires `namespace`) |
+| `vaultConfig` | `VaultConfig` | No | -- | Vault module configuration (required for vault access) |
+| `onNetworkError` | `NetworkErrorCallback` | No | -- | Callback invoked on network errors after all retries are exhausted |
+
+### Return Value
+
+`createClient()` returns a `Client` object with service modules:
+
+```typescript
+interface Client {
+  auth: AuthClient;
+  db: DBClient;
+  pubsub: PubSubClient;
+  network: NetworkClient;
+  cache: CacheClient;
+  storage: StorageClient;
+  functions: FunctionsClient;
+  vault: VaultClient | null; // null if no vaultConfig provided
+}
+```
+
+---
+
+## auth
+
+Authentication and token lifecycle management.
+
+### `auth.setApiKey(apiKey: string): void`
+
+Set the API key for all subsequent requests.
+
+### `auth.setJwt(jwt: string): void`
+
+Set the JWT for all subsequent requests.
+
+### `auth.getToken(): string | undefined`
+
+Get the current active auth token (JWT or API key).
+
+### `auth.challenge(params): Promise<ChallengeResponse>`
+
+Request a challenge nonce for wallet-based authentication.
+
+```typescript
+const challenge = await client.auth.challenge({
+  wallet: "0x1234...",
+  purpose: "authentication", // optional, default: "authentication"
+  namespace: "my-namespace", // optional, default: "default"
+});
+// Returns: { nonce, wallet, namespace, expires_at }
+```
+
+### `auth.verify(params): Promise<VerifyResponse>`
+
+Verify a wallet signature and receive JWT + API key.
+
+```typescript
+const session = await client.auth.verify({
+  wallet: "0x1234...",
+  nonce: challenge.nonce,
+  signature: "0xsigned...",
+  namespace: "my-namespace", // optional, default: "default"
+  chain_type: "ETH",         // "ETH" or "SOL", default: "ETH"
+});
+// Returns: { access_token, refresh_token?, subject, namespace, api_key?, expires_in?, token_type? }
+```
+
+The SDK automatically stores the JWT and API key after verification.
+
+### `auth.getApiKey(params): Promise<ApiKeyResponse>`
+
+Get or create an API key for a wallet/namespace. Requires a signed challenge.
+
+```typescript
+const result = await client.auth.getApiKey({
+  wallet: "0x1234...",
+  nonce: challenge.nonce,
+  signature: "0xsigned...",
+  namespace: "my-namespace",
+  chain_type: "ETH",
+});
+// Returns: { api_key, namespace, wallet }
+```
+
+### `auth.whoami(): Promise<WhoAmI>`
+
+Get the currently authenticated user info. Returns `{ authenticated: false }` on failure.
+
+### `auth.refresh(): Promise<string>`
+
+Refresh the current JWT token. Returns the new token.
+
+### `auth.logoutUser(): Promise<void>`
+
+Logout the current user (clears JWT but preserves API key). Use this for user-level logout in apps where the API key is an app-level credential.
+
+### `auth.logout(): Promise<void>`
+
+Full logout -- clears both JWT and API key.
+
+### `auth.clear(): Promise<void>`
+
+Clear all local auth state without making server calls.
+
+---
+
+## db
+
+Interact with distributed RQLite databases.
+
+### `db.exec(sql, args?): Promise<ExecResult>`
+
+Execute a write or DDL SQL statement.
+
+```typescript
+await client.db.exec(
+  "INSERT INTO users (name, email) VALUES (?, ?)",
+  ["Alice", "alice@example.com"]
+);
+// Returns: { rows_affected: number, last_insert_id?: number }
+```
+
+### `db.query<T>(sql, args?): Promise<T[]>`
+
+Execute a SELECT query and return rows.
+
+```typescript
+const users = await client.db.query<User>(
+  "SELECT * FROM users WHERE name = ?",
+  ["Alice"]
+);
+```
+
+### `db.find<T>(table, criteria?, options?): Promise<T[]>`
+
+Find rows using map-based criteria.
+
+```typescript
+const users = await client.db.find<User>("users", { name: "Alice" }, { limit: 10 });
+```
+
+### `db.findOne<T>(table, criteria): Promise<T | null>`
+
+Find a single row. Returns `null` if not found.
+
+```typescript
+const user = await client.db.findOne<User>("users", { id: 1 });
+```
+
+### `db.createTable(schema): Promise<void>`
+
+Create a table from a DDL SQL string.
+
+```typescript
+await client.db.createTable(
+  "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
+);
+```
+
+### `db.dropTable(table): Promise<void>`
+
+Drop a table.
+
+```typescript
+await client.db.dropTable("users");
+```
+
+### `db.getSchema(): Promise<any>`
+
+Get the current database schema.
+
+### `db.transaction(ops, returnResults?): Promise<any[]>`
+
+Execute multiple operations atomically.
+
+```typescript
+const results = await client.db.transaction([
+  { kind: "exec", sql: "INSERT INTO logs (msg) VALUES (?)", args: ["entry"] },
+  { kind: "exec", sql: "UPDATE counters SET count = count + 1 WHERE id = ?", args: [1] },
+]);
+```
+
+Each operation requires a `kind` field: `"exec"` for writes (INSERT, UPDATE, DELETE) or `"query"` for reads (SELECT).
+
+### `db.createQueryBuilder(table): QueryBuilder`
+
+Create a fluent query builder for complex SELECT queries.
+
+```typescript
+const qb = client.db.createQueryBuilder("users");
+const results = await qb
+  .select("id", "name", "email")
+  .where("name = ?", ["Alice"])
+  .leftJoin("orders", "orders.user_id = users.id")
+  .orderBy("name ASC")
+  .limit(10)
+  .offset(0)
+  .getMany<User>();
+```
+
+**QueryBuilder methods:**
+
+| Method | Description |
+|--------|-------------|
+| `.select(...columns)` | Select specific columns |
+| `.where(expr, args?)` | Add a WHERE clause (AND) |
+| `.andWhere(expr, args?)` | Alias for `.where()` |
+| `.orWhere(expr, args?)` | Add a WHERE clause (OR) |
+| `.innerJoin(table, on)` | Add an INNER JOIN |
+| `.leftJoin(table, on)` | Add a LEFT JOIN |
+| `.rightJoin(table, on)` | Add a RIGHT JOIN |
+| `.groupBy(...columns)` | Group by columns |
+| `.orderBy(...columns)` | Order by columns |
+| `.limit(n)` | Limit results |
+| `.offset(n)` | Offset results |
+| `.getMany<T>()` | Execute and return all matching rows |
+| `.getOne<T>()` | Execute and return the first row or `null` |
+| `.count()` | Return the count of matching rows |
+
+### `db.repository<T>(tableName, primaryKey?): Repository<T>`
+
+Create a Repository for entity-based CRUD operations.
+
+```typescript
+const repo = client.db.repository<User>("users", "id");
+
+// Find all
+const users = await repo.find({ name: "Alice" });
+
+// Find one
+const user = await repo.findOne({ id: 1 });
+
+// Save (insert or update based on primary key)
+await repo.save({ name: "Alice", email: "alice@example.com" });
+
+// Remove
+await repo.remove({ id: 1 });
+
+// Use query builder
+const qb = repo.createQueryBuilder();
+```
+
+---
+
+## pubsub
+
+Real-time messaging over WebSockets.
+
+### `pubsub.publish(topic, data): Promise<void>`
+
+Publish a message to a topic via HTTP. Data can be a `string` or `Uint8Array`.
+
+```typescript
+await client.pubsub.publish("chat:room1", JSON.stringify({ text: "Hello!" }));
+```
+
+### `pubsub.topics(): Promise<string[]>`
+
+List active topics in the current namespace.
+
+```typescript
+const topicList = await client.pubsub.topics();
+```
+
+### `pubsub.getPresence(topic): Promise<PresenceResponse>`
+
+Get current presence members for a topic without subscribing.
+
+```typescript
+const presence = await client.pubsub.getPresence("chat:room1");
+// Returns: { members: PresenceMember[] }
+```
+
+### `pubsub.subscribe(topic, options?): Promise<Subscription>`
+
+Subscribe to a topic via WebSocket. Creates one WebSocket connection per topic.
+
+```typescript
+const sub = await client.pubsub.subscribe("chat:room1", {
+  onMessage: (msg) => {
+    console.log(msg.topic, msg.data, msg.timestamp);
+  },
+  onError: (err) => console.error(err),
+  onClose: (code, reason) => console.log("Closed:", code, reason),
+  presence: {
+    enabled: true,
+    memberId: "user-123",
+    meta: { name: "Alice" },
+    onJoin: (member) => console.log("Joined:", member.memberId),
+    onLeave: (member) => console.log("Left:", member.memberId),
+  },
+});
+
+// Later:
+sub.close();
+```
+
+**Subscription methods:**
+
+| Method | Description |
+|--------|-------------|
+| `.onMessage(handler)` | Register a message handler (returns unsubscribe function) |
+| `.onError(handler)` | Register an error handler |
+| `.onClose(handler)` | Register a close handler |
+| `.getPresence()` | Get current presence members (requires `presence.enabled`) |
+| `.hasPresence()` | Check if presence is enabled |
+| `.isConnected()` | Check if the WebSocket is still connected |
+| `.close()` | Close the subscription and WebSocket |
+
+---
+
+## network
+
+Network health and connectivity.
+
+### `network.health(): Promise<boolean>`
+
+Check if the gateway is healthy. Returns `true` or `false`.
+
+### `network.status(): Promise<NetworkStatus>`
+
+Get network status information.
+
+```typescript
+const status = await client.network.status();
+// Returns: { node_id, connected, peer_count, database_size, uptime }
+```
+
+### `network.peers(): Promise<PeerInfo[]>`
+
+Get connected peers.
+
+```typescript
+const peers = await client.network.peers();
+// Each peer: { id, addresses, lastSeen? }
+```
+
+### `network.connect(peerAddr): Promise<void>`
+
+Connect to a peer by address.
+
+### `network.disconnect(peerId): Promise<void>`
+
+Disconnect from a peer by ID.
+
+### `network.proxyAnon(request): Promise<ProxyResponse>`
+
+Proxy an HTTP request through the Anyone privacy relay network. Requires authentication.
+
+```typescript
+const response = await client.network.proxyAnon({
+  url: "https://api.example.com/data",
+  method: "GET",
+  headers: { "Accept": "application/json" },
+  body: undefined, // optional string body for POST/PUT
+});
+
+console.log(response.status_code);
+console.log(response.headers);
+console.log(response.body);
+```
+
+---
+
+## cache
+
+Distributed caching powered by Olric. All operations require a `dmap` (distributed map) name and a key.
+
+### `cache.health(): Promise<CacheHealthResponse>`
+
+Check cache service health.
+
+### `cache.get(dmap, key): Promise<CacheGetResponse | null>`
+
+Get a value from cache. Returns `null` on cache miss (key not found or expired).
+
+```typescript
+const result = await client.cache.get("my-map", "user:123");
+// Returns: { key, value, dmap } or null
+```
+
+### `cache.put(dmap, key, value, ttl?): Promise<CachePutResponse>`
+
+Put a value into cache with an optional TTL.
+
+```typescript
+await client.cache.put("my-map", "user:123", { name: "Alice" }, "1h");
+// TTL format: "30s", "5m", "1h", "24h"
+```
+
+### `cache.delete(dmap, key): Promise<CacheDeleteResponse>`
+
+Delete a value from cache.
+
+### `cache.multiGet(dmap, keys): Promise<Map<string, any | null>>`
+
+Get multiple values in a single request. Returns a Map where missing keys have `null` values.
+
+```typescript
+const values = await client.cache.multiGet("my-map", ["key1", "key2", "key3"]);
+// values.get("key1") => value or null
+```
+
+### `cache.scan(dmap, match?): Promise<CacheScanResponse>`
+
+Scan keys in a distributed map, optionally matching a regex pattern.
+
+```typescript
+const result = await client.cache.scan("my-map", "user:.*");
+// Returns: { keys: string[], count: number, dmap: string }
+```
+
+---
+
+## storage
+
+Decentralized file storage on IPFS.
+
+### `storage.upload(file, name?, options?): Promise<StorageUploadResponse>`
+
+Upload content to IPFS. Files are automatically pinned by default.
+
+```typescript
+// Browser
+const result = await client.storage.upload(fileInput.files[0], "photo.jpg");
+
+// Node.js
+import { readFileSync } from "fs";
+const buffer = readFileSync("image.jpg");
+const result = await client.storage.upload(buffer, "image.jpg", { pin: true });
+// Returns: { cid, name, size }
+```
+
+Supported input types: `File`, `Blob`, `ArrayBuffer`, `Uint8Array`, `ReadableStream<Uint8Array>`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `pin` | `boolean` | `true` | Whether to pin the content on IPFS |
+
+### `storage.pin(cid, name?): Promise<StoragePinResponse>`
+
+Pin an existing CID.
+
+```typescript
+await client.storage.pin("QmHash...", "my-file");
+```
+
+### `storage.status(cid): Promise<StorageStatus>`
+
+Get the pin status for a CID.
+
+```typescript
+const status = await client.storage.status("QmHash...");
+// Returns: { cid, name, status, replication_min, replication_max, replication_factor, peers, error? }
+// status values: "pinned", "pinning", "queued", "unpinned", "error"
+```
+
+### `storage.get(cid): Promise<ReadableStream<Uint8Array>>`
+
+Retrieve content from IPFS as a readable stream. Includes automatic retry with exponential backoff for content that is still propagating.
+
+```typescript
+const stream = await client.storage.get("QmHash...");
+const reader = stream.getReader();
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  // process chunk
+}
+```
+
+### `storage.getBinary(cid): Promise<Response>`
+
+Retrieve content and return the full `Response` object (useful for headers like `content-length`).
+
+```typescript
+const response = await client.storage.getBinary("QmHash...");
+const contentLength = response.headers.get("content-length");
+```
+
+### `storage.unpin(cid): Promise<void>`
+
+Unpin a CID from IPFS.
+
+---
+
+## functions
+
+Serverless WASM function invocation.
+
+### Constructor Config
+
+The functions client requires a `functionsConfig` with a `namespace`:
+
+```typescript
+const client = createClient({
+  baseURL: "https://orama-devnet.network",
+  apiKey: "your-api-key",
+  functionsConfig: {
+    namespace: "my-namespace",
+    gatewayURL: undefined, // optional override, defaults to baseURL
+  },
+});
+```
+
+### `functions.invoke<TInput, TOutput>(functionName, input): Promise<TOutput>`
+
+Invoke a serverless function by name.
+
+```typescript
+const result = await client.functions.invoke("hello-world", {
+  name: "Alice",
+});
+```
+
+Functions are managed through the CLI (see [Functions](/docs/developer/functions) for the full workflow including `orama function init`, `build`, `deploy`, and `invoke`).
+
+---
+
+## vault
+
+Encrypted secret storage distributed across guardian nodes using Shamir secret sharing. Only available when `vaultConfig` is provided to `createClient()`.
+
+### VaultConfig
+
+```typescript
+interface VaultConfig {
+  guardians: GuardianEndpoint[]; // { address: string, port: number }
+  hmacKey: Uint8Array;           // HMAC key for authentication
+  identityHex: string;           // Identity hash (hex string, 64 chars)
+  timeoutMs?: number;            // Request timeout, default: 10000ms
+}
+```
+
+### `vault.store(name, data, version): Promise<StoreResult>`
+
+Store a secret across guardian nodes using Shamir splitting.
+
+```typescript
+const result = await client.vault.store(
+  "API_KEY",
+  new TextEncoder().encode("sk-secret-value"),
+  1 // monotonic version number, must be > previous
+);
+// Returns: { ackCount, totalContacted, failCount, quorumMet, guardianResults }
+```
+
+### `vault.retrieve(name): Promise<RetrieveResult>`
+
+Retrieve and reconstruct a secret from guardian nodes.
+
+```typescript
+const result = await client.vault.retrieve("API_KEY");
+const secret = new TextDecoder().decode(result.data);
+// Returns: { data: Uint8Array, sharesCollected: number }
+```
+
+### `vault.list(): Promise<ListResult>`
+
+List all secrets for the current identity.
+
+```typescript
+const result = await client.vault.list();
+// Returns: { secrets: [{ name, version, size }] }
+```
+
+### `vault.delete(name): Promise<DeleteResult>`
+
+Delete a secret from all guardian nodes.
+
+```typescript
+const result = await client.vault.delete("API_KEY");
+// Returns: { ackCount, totalContacted, quorumMet }
+```
+
+### `vault.clearSessions(): void`
+
+Clear all cached authentication sessions with guardians.
+
+---
+
+## Exports
+
+The SDK exports the following classes, utilities, and types:
+
+```typescript
+import {
+  // Core
+  createClient,
+  HttpClient,
+  WSClient,
+  SDKError,
+
+  // Auth
+  AuthClient,
+  MemoryStorage,
+  LocalStorageAdapter,
+
+  // Database
+  DBClient,
+  QueryBuilder,
+  Repository,
+
+  // PubSub
+  PubSubClient,
+  Subscription,
+
+  // Network
+  NetworkClient,
+
+  // Cache
+  CacheClient,
+
+  // Storage
+  StorageClient,
+
+  // Functions
+  FunctionsClient,
+
+  // Vault
+  VaultClient,
+  VaultAuthClient,
+  GuardianClient,
+  GuardianError,
+
+  // Vault crypto utilities
+  encrypt,
+  decrypt,
+  encryptString,
+  decryptString,
+  serializeEncrypted,
+  deserializeEncrypted,
+  encryptAndSerialize,
+  deserializeAndDecrypt,
+  encryptedToHex,
+  encryptedFromHex,
+  encryptedToBase64,
+  encryptedFromBase64,
+  generateKey,
+  generateNonce,
+  clearKey,
+  isValidEncryptedData,
+  shamirSplit,
+  shamirCombine,
+  deriveKeyHKDF,
+  KEY_SIZE,
+  NONCE_SIZE,
+  TAG_SIZE,
+
+  // Vault transport utilities
+  fanOut,
+  fanOutIndexed,
+  withTimeout,
+  withRetry,
+  adaptiveThreshold,
+  writeQuorum,
+} from "@debros/network-ts-sdk";
+```
+
+---
+
+## Error Handling
+
+The SDK throws `SDKError` for all failure scenarios:
+
+```typescript
+import { createClient, SDKError } from "@debros/network-ts-sdk";
+
+try {
+  await client.db.query("SELECT * FROM nonexistent");
+} catch (error) {
+  if (error instanceof SDKError) {
+    console.error(error.message);    // Human-readable message
+    console.error(error.httpStatus); // HTTP status code (0 for network errors)
+    console.error(error.code);       // Error code string
+    console.error(error.details);    // Additional error details (Record<string, any>)
+  }
+}
+```
+
+### Global Network Error Handler
+
+Handle network errors globally to implement gateway failover:
+
+```typescript
+const client = createClient({
+  baseURL: "https://orama-devnet.network",
+  onNetworkError: (error, context) => {
+    console.error(`Network error on ${context.method} ${context.path}`);
+    console.error(`Attempt: ${context.attempt}, isRetry: ${context.isRetry}`);
+    // Trigger failover to a different gateway node
+  },
+});
+```
+
+The `NetworkErrorContext` provides:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `method` | `"GET" \| "POST" \| "PUT" \| "DELETE" \| "WS"` | HTTP method |
+| `path` | `string` | Request path |
+| `isRetry` | `boolean` | Whether this was a retry attempt |
+| `attempt` | `number` | Attempt number |
+
+---
+
+## REST API Endpoints
+
+All SDK methods map to REST API endpoints on the gateway. For direct HTTP integration without the SDK:
+
+### Authentication
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/auth/challenge` | Request a challenge nonce |
+| POST | `/v1/auth/verify` | Verify wallet signature, get JWT |
+| POST | `/v1/auth/api-key` | Issue or return API key for a wallet |
+| POST | `/v1/auth/token` | Exchange API key for JWT |
+| POST | `/v1/auth/refresh` | Refresh JWT token |
+| POST | `/v1/auth/logout` | Invalidate session |
+| GET | `/v1/auth/whoami` | Get authenticated user info |
+| POST | `/v1/auth/register` | Register a new wallet |
+| GET | `/v1/auth/jwks` | Get JSON Web Key Set |
+| POST | `/v1/auth/phantom/session` | Start Phantom (Solana) auth session |
+| GET | `/v1/auth/phantom/session/{id}` | Check Phantom session status |
+| POST | `/v1/auth/phantom/complete` | Complete Phantom auth |
+
+### Database (RQLite)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/rqlite/exec` | Execute write/DDL statement |
+| POST | `/v1/rqlite/query` | Execute SELECT query |
+| POST | `/v1/rqlite/find` | Find rows by criteria |
+| POST | `/v1/rqlite/find-one` | Find a single row |
+| POST | `/v1/rqlite/select` | Advanced SELECT with joins, grouping |
+| POST | `/v1/rqlite/transaction` | Execute atomic transaction |
+| POST | `/v1/rqlite/create-table` | Create a table |
+| POST | `/v1/rqlite/drop-table` | Drop a table |
+| GET | `/v1/rqlite/schema` | Get database schema |
+| GET | `/v1/rqlite/export` | Export RQLite database |
+| POST | `/v1/rqlite/import` | Import RQLite database |
+
+### SQLite Databases
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/db/sqlite/create` | Create a SQLite database |
+| POST | `/v1/db/sqlite/query` | Execute a SQL query |
+| GET | `/v1/db/sqlite/list` | List databases |
+| POST | `/v1/db/sqlite/backup` | Backup database to IPFS |
+| GET | `/v1/db/sqlite/backups` | List backups for a database |
+
+### Cache (Olric)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/cache/health` | Cache service health |
+| POST | `/v1/cache/get` | Get a cached value |
+| POST | `/v1/cache/mget` | Batch get multiple values |
+| POST | `/v1/cache/put` | Put a value with optional TTL |
+| POST | `/v1/cache/delete` | Delete a cached value |
+| POST | `/v1/cache/scan` | Scan keys by regex pattern |
+
+### Storage (IPFS)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/storage/upload` | Upload a file (multipart) |
+| POST | `/v1/storage/pin` | Pin an existing CID |
+| GET | `/v1/storage/status/{cid}` | Get pin status |
+| GET | `/v1/storage/get/{cid}` | Download content by CID |
+| DELETE | `/v1/storage/unpin/{cid}` | Unpin a CID |
+
+### PubSub
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| WS | `/v1/pubsub/ws?topic={topic}` | WebSocket subscription |
+| POST | `/v1/pubsub/publish` | Publish a message |
+| GET | `/v1/pubsub/topics` | List active topics |
+| GET | `/v1/pubsub/presence?topic={topic}` | Get presence for a topic |
+
+### Deployments
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/deployments/static/upload` | Deploy a static site |
+| POST | `/v1/deployments/static/update` | Update a static site |
+| POST | `/v1/deployments/nextjs/upload` | Deploy a Next.js app |
+| POST | `/v1/deployments/nextjs/update` | Update a Next.js app |
+| POST | `/v1/deployments/go/upload` | Deploy a Go backend |
+| POST | `/v1/deployments/go/update` | Update a Go backend |
+| POST | `/v1/deployments/nodejs/upload` | Deploy a Node.js backend |
+| POST | `/v1/deployments/nodejs/update` | Update a Node.js backend |
+| GET | `/v1/deployments/list` | List all deployments |
+| GET | `/v1/deployments/get?name={name}` | Get deployment details |
+| DELETE | `/v1/deployments/delete?name={name}` | Delete a deployment |
+| POST | `/v1/deployments/rollback?name={name}` | Rollback a deployment |
+| GET | `/v1/deployments/versions?name={name}` | List deployment versions |
+| GET | `/v1/deployments/logs?name={name}` | Get deployment logs |
+| GET | `/v1/deployments/stats?name={name}` | Get deployment stats |
+| GET | `/v1/deployments/events?name={name}` | Get deployment events |
+
+### Custom Domains
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/deployments/domains/add` | Add a custom domain |
+| POST | `/v1/deployments/domains/verify` | Verify domain ownership |
+| GET | `/v1/deployments/domains/list` | List custom domains |
+| DELETE | `/v1/deployments/domains/remove` | Remove a custom domain |
+
+### Serverless Functions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/functions` | List all functions |
+| POST | `/v1/functions` | Deploy a function |
+| GET | `/v1/functions/{name}` | Get function info |
+| DELETE | `/v1/functions/{name}` | Delete a function |
+| POST | `/v1/functions/{name}/invoke` | Invoke a function |
+| GET | `/v1/functions/{name}/versions` | List function versions |
+| GET | `/v1/functions/{name}/logs` | Get function logs |
+| POST | `/v1/invoke/{namespace}/{name}` | Direct function invocation (used by SDK) |
+| PUT | `/v1/functions/secrets` | Set a secret |
+| GET | `/v1/functions/secrets` | List secrets |
+| DELETE | `/v1/functions/secrets/{name}` | Delete a secret |
+| POST | `/v1/functions/{name}/triggers` | Add a trigger |
+| GET | `/v1/functions/{name}/triggers` | List triggers |
+| DELETE | `/v1/functions/{name}/triggers/{id}` | Remove a trigger |
+
+### Network
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/health` | Gateway health check |
+| GET | `/v1/status` | Gateway status |
+| GET | `/v1/version` | Gateway version |
+| GET | `/v1/network/status` | Network status |
+| GET | `/v1/network/peers` | Connected peers |
+| POST | `/v1/network/connect` | Connect to a peer |
+| POST | `/v1/network/disconnect` | Disconnect from a peer |
+| POST | `/v1/proxy/anon` | Anonymous proxy request (via Anyone relay) |
+
+### Vault
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/vault/push` | Push secret share to guardian |
+| POST | `/v1/vault/pull` | Pull secret share from guardian |
+| GET | `/v1/vault/health` | Vault guardian health |
+| GET | `/v1/vault/status` | Vault guardian status |
+
+### Namespaces
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/namespace/status` | Namespace cluster provisioning status |
+| DELETE | `/v1/namespace/delete` | Delete a namespace |
+| GET | `/v1/namespace/list` | List namespaces owned by wallet |
+| POST | `/v1/namespace/webrtc/enable` | Enable WebRTC for a namespace |
+| POST | `/v1/namespace/webrtc/disable` | Disable WebRTC for a namespace |
+| GET | `/v1/namespace/webrtc/status` | Get WebRTC status for a namespace |
+
+### WebRTC
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/webrtc/turn/credentials` | Get TURN server credentials |
+| POST | `/v1/webrtc/signal` | WebRTC signaling |
+| GET | `/v1/webrtc/rooms` | List WebRTC rooms |

@@ -1,0 +1,184 @@
+# WireGuard Mesh Networking
+
+All inter-node communication in the Orama Network happens over a WireGuard mesh overlay. WireGuard provides encrypted, high-performance tunnels between every node in the cluster, creating a private network that is invisible to the public internet.
+
+## How the Overlay Works
+
+Each Orama node is assigned a private IP address on the `10.0.0.0/24` subnet. All service-to-service traffic (RQLite replication, Olric cache sync, IPFS peering, PubSub relay, etc.) uses these private IPs. The only traffic that traverses the public internet is:
+
+- **SSH** (port 22) -- for operator management access
+- **HTTPS** (port 443) -- for external client traffic to the gateway
+- **WireGuard** (UDP port 51820) -- the encrypted tunnel itself
+- **DNS** (port 53, TCP/UDP) -- only on nameserver nodes
+
+Internal service ports (RQLite on 4001/4002/5001, Olric on 3320/3322, IPFS on 4001/5001/9094/9095, gateway on 8443, etc.) are never exposed to the public internet.
+
+## Network Topology
+
+The mesh is a full-mesh topology -- every node has a direct WireGuard tunnel to every other node:
+
+```
+  Node A (10.0.0.1)
+    +-- tunnel --> Node B (10.0.0.2)
+    +-- tunnel --> Node C (10.0.0.3)
+    +-- tunnel --> Node D (10.0.0.4)
+
+  Node B (10.0.0.2)
+    +-- tunnel --> Node A (10.0.0.1)
+    +-- tunnel --> Node C (10.0.0.3)
+    +-- tunnel --> Node D (10.0.0.4)
+  ...
+```
+
+This ensures any node can communicate directly with any other node with minimal latency. There is no routing through intermediary nodes.
+
+## How WireGuard is Configured
+
+WireGuard configuration is fully automated during node installation. You do not need to manually configure WireGuard. The `orama node install` command handles everything:
+
+1. **Key generation** -- generates a WireGuard keypair for the node
+2. **Peer registration** -- registers the public key and endpoint with the cluster via the `/v1/internal/wg/peer` API
+3. **Peer discovery** -- downloads the peer list from the cluster via `/v1/internal/wg/peers`
+4. **Interface configuration** -- creates the WireGuard interface with all peer tunnels
+5. **Propagation** -- existing nodes are notified to add the new peer to their configurations
+
+When a new node joins, all existing nodes automatically update their WireGuard configurations to include the new peer. When a node is removed, its peer entry is cleaned up.
+
+### Internal API Endpoints
+
+The gateway provides these internal endpoints for WireGuard peer management (authenticated with the cluster secret):
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /v1/internal/wg/peer` | Register a new WireGuard peer |
+| `GET /v1/internal/wg/peers` | List all registered peers |
+| `POST /v1/internal/wg/peer/remove` | Remove a peer |
+
+These endpoints are for internal cluster coordination only. Operators do not call them directly.
+
+## Key Management
+
+Each node's WireGuard private key is generated during installation and stored on the node's filesystem. The corresponding public key is registered with the cluster for peer discovery. Private keys never leave the node.
+
+## Monitoring Mesh Health
+
+### Using orama monitor
+
+The `orama monitor mesh` command shows WireGuard mesh connectivity across the cluster:
+
+```bash
+# View mesh connectivity for all nodes
+orama monitor mesh --env devnet
+
+# JSON output
+orama monitor mesh --env devnet --json
+
+# Filter to a specific node
+orama monitor mesh --env devnet --node 1.2.3.4
+```
+
+This SSHs into each node and collects WireGuard peer status, showing which tunnels are healthy (recent handshakes) and which are stale.
+
+### Using orama inspect
+
+The `orama inspect` command with the `wg` subsystem performs deeper SSH-based WireGuard health checks:
+
+```bash
+# Inspect WireGuard on all nodes
+orama inspect --env devnet --subsystem wg
+
+# With AI analysis of failures
+orama inspect --env devnet --subsystem wg --ai
+```
+
+### Using orama node doctor
+
+On a single node, `orama node doctor` includes basic connectivity checks as part of its diagnostic sweep:
+
+```bash
+sudo orama node doctor
+```
+
+### Direct WireGuard Commands
+
+If you need to debug at a lower level, you can SSH into a node and use standard WireGuard tools:
+
+```bash
+# Show WireGuard interface status and peer handshakes
+sudo wg show
+
+# Check if the interface is up
+ip link show wg0
+
+# Ping another node on the mesh
+ping 10.0.0.2
+```
+
+A healthy peer connection shows a `latest handshake` within the last 2 minutes. If a peer's handshake is older or missing, the tunnel may be down.
+
+## Troubleshooting
+
+### Firewall Blocking UDP 51820
+
+**Symptoms:** No handshakes with any peers.
+
+**Resolution:** Ensure UDP port 51820 is open inbound and outbound on your VPS provider's firewall and on UFW:
+
+```bash
+sudo ufw allow 51820/udp
+```
+
+Some VPS providers have an external firewall (security groups, network policies) in addition to the OS-level firewall. Check both.
+
+### Stale Handshakes After IP Change
+
+**Symptoms:** Peer handshakes stop updating after a VPS IP change.
+
+**Resolution:** If your node's public IP changes, the WireGuard endpoint registered with the cluster becomes stale. The node's heartbeat system will attempt to update peers automatically, but you may need to restart the node:
+
+```bash
+sudo orama node restart
+```
+
+### NAT Issues
+
+**Symptoms:** Intermittent connectivity, some peers unreachable.
+
+**Resolution:** WireGuard uses UDP, which can be affected by NAT timeouts. The Orama WireGuard configuration includes persistent keepalive to maintain NAT mappings. If you are behind a particularly aggressive NAT, verify that your VPS has a direct public IP (not behind carrier-grade NAT).
+
+### All Peers Unreachable
+
+**Symptoms:** No mesh connectivity at all, `sudo wg show` shows no handshakes.
+
+**Resolution:**
+
+1. Verify the WireGuard interface is up: `ip link show wg0`
+2. Check that the WireGuard service is running: `sudo orama node status`
+3. Verify UDP 51820 is not blocked: `sudo ufw status`
+4. Check if the WireGuard configuration file exists and has peers listed
+5. Run `sudo orama node doctor` for a comprehensive diagnostic
+
+### Broken Pipe Errors During Rolling Upgrades
+
+**Symptoms:** Other nodes briefly report a restarted node as "unreachable" with "broken pipe" errors.
+
+**Resolution:** This is normal. Raft TCP connections re-establish within 1-2 minutes after a node restart. Wait and re-check before concluding there is a real problem.
+
+## Security
+
+The WireGuard mesh provides several security guarantees:
+
+- **Encryption** -- all inter-node traffic is encrypted with ChaCha20-Poly1305
+- **Authentication** -- peers are authenticated by their public keys
+- **No exposed services** -- internal service ports are only reachable via the mesh
+- **Forward secrecy** -- WireGuard provides forward secrecy through its Noise protocol framework
+
+The only ports that must be publicly accessible are:
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 22 | TCP | SSH management access |
+| 53 | TCP/UDP | DNS (nameserver nodes only) |
+| 443 | TCP | HTTPS client traffic |
+| 51820 | UDP | WireGuard tunnels |
+| 9001 | TCP | Anyone relay ORPort (if running a relay) |

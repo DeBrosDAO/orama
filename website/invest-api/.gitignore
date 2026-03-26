@@ -1,0 +1,5 @@
+invest-api
+*.db
+*.db-shm
+*.db-wal
+.env

@@ -1,0 +1,234 @@
+# Troubleshooting
+
+Common issues Orama node operators encounter, their root causes, and how to resolve them. Always use the `orama` CLI for diagnostics and service management — never use raw `systemctl` commands, as the CLI handles dependency ordering and safety checks.
+
+## Diagnostic Tools
+
+Before troubleshooting specific issues, know your tools:
+
+```bash
+# Quick node health check
+orama node doctor
+
+# Full cluster report
+orama monitor report --env <environment>
+
+# Single-node report
+orama monitor report --env <environment> --node <node-ip>
+
+# Deep inspection with pass/fail per check
+orama inspect --env <environment>
+
+# Deep inspection of specific subsystems
+orama inspect --env <environment> --subsystem rqlite,olric
+
+# Service logs (last 50 lines)
+orama node logs <service>
+
+# Stream logs in real-time
+orama node logs <service> --follow
+```
+
+Service aliases for `orama node logs`: `node`, `ipfs`, `cluster`, `gateway`, `olric`, or the full systemd name.
+
+---
+
+## Service Won't Start
+
+If a service fails to start or immediately exits:
+
+```bash
+# Check service logs
+orama node logs <service>
+
+# Run diagnostics
+orama node doctor
+```
+
+### Common Causes
+
+| Cause | Symptom | Resolution |
+|-------|---------|------------|
+| Dependency not ready | Service starts then exits | Ensure upstream services are running: WireGuard → RQLite → Olric → Gateway |
+| Port conflict | "address already in use" in logs | Check for rogue processes: `ss -tlnp \| grep <port>` |
+| Service masked | `systemctl start` silently fails | Use `orama node start` (handles unmasking automatically) |
+| Corrupted state | Service crashes on boot | Check logs for specifics, may need state directory cleanup |
+
+### Restart with Dependency Order
+
+```bash
+# Restart all services in the correct order
+orama node restart
+
+# Force restart (bypass quorum safety check)
+orama node restart --force
+```
+
+---
+
+## Raft Quorum Issues
+
+RQLite uses the Raft consensus protocol and requires a majority of voter nodes to be available. If quorum is lost, the database becomes read-only.
+
+### Diagnosing Quorum Loss
+
+```bash
+# Check cluster health
+orama monitor cluster --env <environment>
+
+# Deep inspect RQLite across all nodes
+orama inspect --env <environment> --subsystem rqlite
+
+# Check RQLite logs on the affected node
+orama node logs cluster
+```
+
+### Resolution
+
+1. **Identify which nodes are down** — Use `orama monitor report --env <env>` to see all node statuses
+2. **Bring nodes back online** — Start the offline nodes with `orama node start`
+3. **Wait for leader election** — Once a majority is available, Raft will elect a new leader automatically
+4. **Verify recovery** — Confirm leader election and log index sync with `orama monitor cluster --env <env>`
+
+### Raft Recovery (Last Resort)
+
+If quorum is permanently lost (e.g., majority of nodes destroyed), use the Raft recovery command. This is **destructive** — it rebuilds the cluster from a single node's data.
+
+```bash
+# Recover from the node with the highest commit index
+orama node recover-raft --env <environment> --leader <leader-node-ip>
+
+# Skip confirmation (use with caution)
+orama node recover-raft --env <environment> --leader <leader-node-ip> --force
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--env` | Yes | Target environment |
+| `--leader` | Yes | Node IP with the highest commit index (most up-to-date data) |
+| `--force` | No | Skip confirmation prompt |
+
+**Warning:** Only use this when normal quorum recovery is impossible. Always identify the node with the highest commit index first using `orama inspect --env <env> --subsystem rqlite`.
+
+---
+
+## WireGuard Connectivity
+
+### Symptoms
+
+- Services can't communicate between nodes
+- RQLite followers can't reach the leader
+- `ping 10.0.0.x` fails between nodes
+
+### Diagnosis
+
+```bash
+# Inspect WireGuard across all nodes
+orama inspect --env <environment> --subsystem wg
+
+# Check mesh connectivity
+orama monitor mesh --env <environment>
+```
+
+Look for recent handshakes (within last 2 minutes = healthy). Stale or missing handshakes indicate connectivity issues.
+
+### Resolution
+
+1. **Check firewall** — Ensure UDP port 51820 is open in both directions
+2. **Check provider firewall** — Some VPS providers have an external firewall panel separate from iptables/UFW
+3. **Restart WireGuard** — Use `orama node restart` which handles the full dependency chain
+4. **Verify recovery** — Run `orama monitor mesh --env <env>` to confirm all peers reconnected
+
+---
+
+## RQLite Sync Issues
+
+### Symptoms
+
+- Follower nodes have a lower Raft log index than the leader
+- Queries return stale data
+- Replication lag warnings in logs
+
+### Diagnosis
+
+```bash
+# Compare indices across nodes
+orama inspect --env <environment> --subsystem rqlite
+
+# Check the cluster overview
+orama monitor cluster --env <environment>
+```
+
+### Resolution
+
+- **Small lag** — Normal during high write load; the follower will catch up
+- **Large lag** — Check network connectivity between follower and leader with `orama monitor mesh --env <env>`
+- **Node fell too far behind** — May need to rejoin the cluster with a fresh snapshot
+
+---
+
+## Olric Cluster Problems
+
+### Symptoms
+
+- Cache misses on data that should be cached
+- "member not found" errors in gateway logs
+- Olric service restarts frequently
+
+### Diagnosis
+
+```bash
+# Inspect Olric across all nodes
+orama inspect --env <environment> --subsystem olric
+
+# Check Olric logs
+orama node logs olric
+```
+
+### Resolution
+
+- **Olric can't find peers** — Check WireGuard connectivity; Olric discovers peers over the mesh
+- **Olric crash loop** — Check if RQLite is healthy first (Olric depends on it)
+- **Stale cluster membership** — Restart with `orama node restart` (handles dependency ordering)
+
+---
+
+## Node Cleanup
+
+If a node is in a bad state and needs a fresh start:
+
+```bash
+# Clean namespace data from all nodes
+orama node clean --env <environment>
+
+# Clean a single node
+orama node clean --env <environment> --node <node-ip>
+
+# Nuclear clean (also removes shared binaries: rqlited, ipfs, caddy, etc.)
+orama node clean --env <environment> --nuclear
+
+# Skip confirmation
+orama node clean --env <environment> --force
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | *(required)* | Target environment |
+| `--node` | | Clean a single node IP only |
+| `--nuclear` | `false` | Also remove shared binaries |
+| `--force` | `false` | Skip confirmation (destructive) |
+
+---
+
+## General Debugging Workflow
+
+When something goes wrong, follow this sequence:
+
+1. Run `orama node doctor` for a quick local diagnostic
+2. Run `orama monitor report --env <env>` to get the full cluster picture
+3. Check logs for the affected service with `orama node logs <service>`
+4. Verify dependencies are healthy: WireGuard → RQLite → Olric → Gateway
+5. If the issue is network-related, check `orama monitor mesh --env <env>` and firewall rules
+6. For deep diagnostics, run `orama inspect --env <env>` or target a subsystem with `--subsystem`
+7. Restart the affected service with `orama node restart`
+8. If problems persist, save a full report with `orama inspect --env <env> --output ./results` and escalate

@@ -1,0 +1,300 @@
+# Cache
+
+Distributed caching powered by [Olric](https://github.com/buraksezer/olric) -- an in-memory key-value store designed for distributed systems. Cache data across the network with automatic partitioning, replication, and sub-millisecond access times.
+
+## Overview
+
+Olric distributes cache entries across nodes in the cluster using consistent hashing. Data is automatically partitioned and replicated, so cache lookups are fast and survive individual node failures.
+
+Cache data is organized into **distributed maps** (dmaps). A dmap is a named keyspace -- think of it as a namespace or a bucket. Every cache operation takes the dmap name as its first parameter, followed by the key.
+
+## SDK Setup
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://gateway.example.com",
+  apiKey: "ak_your_key:namespace",
+});
+```
+
+## Basic Operations
+
+### Put
+
+Store a value in a distributed map. Values can be any JSON-serializable type.
+
+```typescript
+await client.cache.put("sessions", "user:alice", {
+  role: "admin",
+  loginAt: Date.now(),
+});
+```
+
+### Get
+
+Retrieve a value from a distributed map. Returns `null` on a cache miss -- this is normal behavior, not an error.
+
+```typescript
+const result = await client.cache.get("sessions", "user:alice");
+
+if (result) {
+  console.log(result.value); // { role: "admin", loginAt: 1709000000000 }
+  console.log(result.key);   // "user:alice"
+  console.log(result.dmap);  // "sessions"
+}
+```
+
+### Delete
+
+Remove a value from a distributed map.
+
+```typescript
+await client.cache.delete("sessions", "user:alice");
+```
+
+## TTL (Time-To-Live)
+
+Set expiration times on cache entries to automatically evict stale data. TTL is specified as a **duration string** -- for example `"1h"`, `"30m"`, `"5s"`, or `"24h"`.
+
+Pass the TTL as the fourth argument to `put`:
+
+```typescript
+// Cache for 1 hour
+await client.cache.put("sessions", "user:alice", { role: "admin" }, "1h");
+
+// Cache for 30 minutes
+await client.cache.put("rate-limits", "ip:203.0.113.1", { count: 1 }, "30m");
+
+// Cache for 5 seconds (useful for hot-path deduplication)
+await client.cache.put("dedup", "request:abc123", true, "5s");
+```
+
+When TTL is omitted, the entry does not expire automatically.
+
+## Batch Operations
+
+### Multi-Get
+
+Fetch multiple keys from the same dmap in a single request. Returns a `Map<string, any | null>` where missing keys have a value of `null`.
+
+```typescript
+const results = await client.cache.multiGet("sessions", [
+  "user:alice",
+  "user:bob",
+  "user:charlie",
+]);
+
+for (const [key, value] of results) {
+  if (value !== null) {
+    console.log(`${key} is cached:`, value);
+  } else {
+    console.log(`${key} is a cache miss`);
+  }
+}
+```
+
+### Scan
+
+List keys in a distributed map, optionally filtering with a regex pattern.
+
+```typescript
+// Scan all keys in the dmap
+const all = await client.cache.scan("sessions");
+console.log(all.keys);  // ["user:alice", "user:bob", ...]
+console.log(all.count); // 2
+
+// Scan with a regex pattern
+const admins = await client.cache.scan("sessions", "admin:.*");
+console.log(admins.keys); // ["admin:alice", "admin:eve"]
+```
+
+## Health Check
+
+Verify that the cache service is reachable and healthy:
+
+```typescript
+const health = await client.cache.health();
+console.log(health.status);  // "ok"
+console.log(health.service); // "cache"
+```
+
+## REST API
+
+All cache operations use POST with a JSON body (except health which is GET).
+
+### Put
+
+```bash
+curl -X POST https://gateway.example.com/v1/cache/put \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dmap": "sessions", "key": "user:alice", "value": {"role": "admin"}, "ttl": "1h"}'
+```
+
+### Get
+
+```bash
+curl -X POST https://gateway.example.com/v1/cache/get \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dmap": "sessions", "key": "user:alice"}'
+```
+
+### Delete
+
+```bash
+curl -X POST https://gateway.example.com/v1/cache/delete \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dmap": "sessions", "key": "user:alice"}'
+```
+
+### Multi-Get
+
+```bash
+curl -X POST https://gateway.example.com/v1/cache/mget \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dmap": "sessions", "keys": ["user:alice", "user:bob"]}'
+```
+
+### Scan
+
+```bash
+curl -X POST https://gateway.example.com/v1/cache/scan \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dmap": "sessions", "match": "user:.*"}'
+```
+
+### Health
+
+```bash
+curl https://gateway.example.com/v1/cache/health \
+  -H "Authorization: Bearer <token>"
+```
+
+## CLI
+
+There are no dedicated CLI commands for cache operations. Use the SDK or REST API.
+
+## Patterns
+
+### Cache-Aside
+
+The most common caching pattern. Check the cache first; on a miss, fetch from the source and populate the cache.
+
+```typescript
+async function getUser(id: string) {
+  // Check cache first
+  const cached = await client.cache.get("users", `user:${id}`);
+  if (cached) {
+    return cached.value;
+  }
+
+  // Cache miss -- fetch from database
+  const user = await client.db.query(
+    "SELECT * FROM users WHERE id = ?", [id]
+  );
+
+  // Populate cache with a 1-hour TTL
+  await client.cache.put("users", `user:${id}`, user[0], "1h");
+
+  return user[0];
+}
+```
+
+### Write-Through
+
+Update the cache whenever you update the source data, so the cache stays fresh.
+
+```typescript
+async function updateUser(id: string, data: UserData) {
+  // Update the database
+  await client.db.exec(
+    "UPDATE users SET name = ? WHERE id = ?", [data.name, id]
+  );
+
+  // Update the cache
+  await client.cache.put("users", `user:${id}`, data, "1h");
+}
+```
+
+### Session Store
+
+Use a dmap as a lightweight session store with automatic expiration.
+
+```typescript
+async function createSession(userId: string, token: string) {
+  await client.cache.put("sessions", `session:${token}`, {
+    userId,
+    createdAt: Date.now(),
+  }, "24h");
+}
+
+async function validateSession(token: string) {
+  const session = await client.cache.get("sessions", `session:${token}`);
+  return session?.value ?? null;
+}
+
+async function destroySession(token: string) {
+  await client.cache.delete("sessions", `session:${token}`);
+}
+```
+
+## REST API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/cache/put` | Store a value. Body: `{dmap, key, value, ttl?}` |
+| `POST` | `/v1/cache/get` | Retrieve a value. Body: `{dmap, key}` |
+| `POST` | `/v1/cache/delete` | Remove a value. Body: `{dmap, key}` |
+| `POST` | `/v1/cache/mget` | Fetch multiple keys. Body: `{dmap, keys}` |
+| `POST` | `/v1/cache/scan` | List keys in a dmap. Body: `{dmap, match?}` |
+| `GET` | `/v1/cache/health` | Check cache service health |
+
+## SDK Method Reference
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `put` | `put(dmap, key, value, ttl?)` | Store a value. TTL is a duration string (`"1h"`, `"30m"`, `"5s"`). |
+| `get` | `get(dmap, key)` | Retrieve a value. Returns `null` on cache miss. |
+| `delete` | `delete(dmap, key)` | Remove a value. |
+| `multiGet` | `multiGet(dmap, keys)` | Fetch multiple keys. Returns `Map<string, any \| null>`. |
+| `scan` | `scan(dmap, match?)` | List keys in a dmap, optionally filtered by regex. |
+| `health` | `health()` | Check cache service health. |
+
+## Types
+
+```typescript
+interface CacheGetResponse {
+  key: string;
+  value: any;
+  dmap: string;
+}
+
+interface CachePutResponse {
+  status: string;
+  key: string;
+  dmap: string;
+}
+
+interface CacheDeleteResponse {
+  status: string;
+  key: string;
+  dmap: string;
+}
+
+interface CacheScanResponse {
+  keys: string[];
+  count: number;
+  dmap: string;
+}
+
+interface CacheHealthResponse {
+  status: string;
+  service: string;
+}
+```
