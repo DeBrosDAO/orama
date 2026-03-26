@@ -1,0 +1,26 @@
+[Unit]
+Description=Orama Vault Guardian
+Documentation=https://github.com/orama-network/debros
+After=network.target
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+ExecStart=/opt/orama/bin/vault-guardian --config /opt/orama/.orama/data/vault/vault.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/orama/.orama/data/vault
+NoNewPrivileges=yes
+
+# Allow mlock for secure memory
+LimitMEMLOCK=67108864
+
+# Resource limits
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
