@@ -1,0 +1,352 @@
+# Node Setup
+
+This guide walks you through the full process of setting up an Orama node on a fresh VPS — from system requirements through installation, verification, and day-to-day lifecycle management.
+
+## System Requirements
+
+Provision a VPS with the following minimum specifications:
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 2 vCPUs | 4 vCPUs (dedicated) |
+| RAM | 4 GB | 8 GB |
+| Storage | 80 GB SSD | 160 GB NVMe |
+| OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS (clean install) |
+| Network | Public static IPv4 | 1 Gbps, unmetered |
+
+### Required Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 22 | TCP | SSH access |
+| 443 | TCP | HTTPS (external traffic via Caddy) |
+| 51820 | UDP | WireGuard mesh tunnel |
+| 9001 | TCP | Anyone relay ORPort (only if running a relay) |
+
+All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure.
+
+## OS Preparation
+
+Start with a clean Ubuntu 22.04 installation. Update the system and install essential packages:
+
+```bash
+apt update && apt upgrade -y
+apt install -y curl wget unzip jq
+```
+
+## Installing the Orama Binary
+
+Transfer the Orama binary to your VPS:
+
+```bash
+# Download and extract (URL provided upon acceptance)
+wget <binary-url> -O orama
+chmod +x orama
+mv orama /usr/local/bin/
+
+# Verify installation
+orama --version
+```
+
+## Node Installation
+
+The `orama node install` command configures your VPS as a fully operational Orama node. It must be run as root (or with `sudo`). The behavior differs depending on whether you are bootstrapping a new network (genesis node) or joining an existing one.
+
+### Genesis Node
+
+A genesis node is the first node in an environment. It initializes the Raft cluster, creates the WireGuard mesh, and becomes the initial RQLite leader.
+
+```bash
+sudo orama node install \
+  --vps-ip 203.0.113.10 \
+  --base-domain dbrs.space \
+  --domain my-node.dbrs.space
+```
+
+When no `--join` flag is provided, the node bootstraps itself as a standalone cluster. Additional nodes can then join it.
+
+### Joining an Existing Node
+
+To add a node to an existing cluster, use `--join` with the HTTPS URL of any current cluster member, along with a valid invite token:
+
+```bash
+sudo orama node install \
+  --vps-ip 203.0.113.20 \
+  --base-domain dbrs.space \
+  --join https://existing-node.dbrs.space \
+  --token eyJhbGciOi...
+```
+
+The join process registers the new node with the cluster, exchanges WireGuard keys, and starts all services in the correct dependency order.
+
+### What Install Does
+
+1. Configures WireGuard keys and the mesh interface
+2. Sets up UFW firewall rules (unless `--skip-firewall` is passed)
+3. Runs system resource checks for RAM and CPU (unless `--skip-checks` is passed)
+4. Registers the node with the network (or bootstraps a new cluster)
+5. Creates systemd service units for all components
+6. Starts the service stack in dependency order
+
+### Install Flag Reference
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--vps-ip` | string | *required* | Public IPv4 address of the VPS |
+| `--base-domain` | string | *required* | Base domain used for routing (e.g., `dbrs.space`) |
+| `--domain` | string | auto-generated | Domain for this node's HTTPS endpoint |
+| `--join` | string | — | HTTPS URL of an existing node to join |
+| `--token` | string | — | Invite token for joining an existing cluster |
+| `--nameserver` | bool | `false` | Configure this node as a nameserver (installs CoreDNS + Caddy) |
+| `--force` | bool | `false` | Force reconfiguration even if already installed |
+| `--dry-run` | bool | `false` | Show what changes would be made without applying them |
+| `--skip-checks` | bool | `false` | Skip system resource checks (RAM/CPU) |
+| `--skip-firewall` | bool | `false` | Skip UFW firewall setup |
+
+## Anyone Protocol Integration
+
+Orama nodes can participate in the [Anyone Protocol](https://anyone.io) network, providing privacy relay capabilities. Anyone flags are passed to `orama node install` alongside the standard flags.
+
+### Relay Modes
+
+There are three mutually exclusive modes:
+
+- **Client only** (`--anyone-client`) — Installs Anyone as a local SOCKS5 proxy on port 9050. No relay traffic is served.
+- **Relay** (`--anyone-relay`) — Operates as a middle relay, forwarding encrypted traffic. This is the recommended mode for most operators.
+- **Exit relay** (`--anyone-exit`) — Operates as an exit relay, where traffic leaves the Anyone network. This has legal implications depending on your jurisdiction. Understand the risks before enabling.
+
+### Example: Installing with an Anyone Relay
+
+```bash
+sudo orama node install \
+  --vps-ip 203.0.113.10 \
+  --base-domain dbrs.space \
+  --join https://existing-node.dbrs.space \
+  --token eyJhbGciOi... \
+  --anyone-relay \
+  --anyone-nickname MyRelay01 \
+  --anyone-contact operator@example.com \
+  --anyone-wallet 0x1234...abcd \
+  --anyone-bandwidth 30
+```
+
+### Anyone Flag Reference
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--anyone-client` | bool | `false` | Install Anyone as SOCKS5 proxy only (port 9050) |
+| `--anyone-relay` | bool | `false` | Run as an Anyone relay operator |
+| `--anyone-exit` | bool | `false` | Run as an exit relay (legal implications apply) |
+| `--anyone-migrate` | bool | `false` | Migrate an existing Anyone installation |
+| `--anyone-nickname` | string | — | Relay nickname (1-19 alphanumeric characters) |
+| `--anyone-contact` | string | — | Contact info (email address or @telegram handle) |
+| `--anyone-wallet` | string | — | Ethereum wallet address for relay rewards |
+| `--anyone-orport` | int | `9001` | ORPort used for relay traffic |
+| `--anyone-family` | string | — | Comma-separated fingerprints for MyFamily directive |
+| `--anyone-bandwidth` | int | `30` | Limit relay to N% of VPS bandwidth (0 = unlimited) |
+| `--anyone-accounting` | int | `0` | Monthly data cap in GB (0 = unlimited) |
+
+Running an Anyone relay earns additional rewards in `$ANYONE` tokens alongside the standard `$ORAMA` node operator rewards.
+
+## Service Stack
+
+The Orama node runs the following services, managed by systemd:
+
+| Service | Purpose | Dependency |
+|---------|---------|------------|
+| WireGuard | Mesh network overlay | None (starts first) |
+| RQLite | Distributed SQLite database | WireGuard |
+| Olric | Distributed cache | RQLite |
+| Gateway | API routing and reverse proxy | Olric |
+
+Services must start in this exact order. The `orama` CLI handles dependency ordering automatically. Never start services manually with raw `systemctl` commands — the CLI includes quorum checks, port verification, and health validation that `systemctl` bypasses.
+
+## Node Lifecycle
+
+Once installed, use the following commands to manage your node.
+
+### Start, Stop, and Restart
+
+```bash
+# Start all services in dependency order
+orama node start
+
+# Stop all services and disable auto-start
+orama node stop
+
+# Force stop (skips graceful shutdown checks)
+orama node stop --force
+
+# Restart all services
+orama node restart
+
+# Force restart
+orama node restart --force
+```
+
+### Status and Diagnostics
+
+```bash
+# Show current service status
+orama node status
+
+# Run full diagnostics (checks services, ports, connectivity, Raft state)
+orama node doctor
+
+# Export health data as JSON (useful for monitoring integrations)
+orama node report
+
+# Export health data in JSON format
+orama node report --json
+```
+
+### Logs
+
+Stream logs from a specific service using shorthand aliases:
+
+```bash
+orama node logs node       # Node service logs
+orama node logs gateway    # Gateway logs
+orama node logs ipfs       # IPFS daemon logs
+orama node logs cluster    # RQLite cluster logs
+orama node logs olric      # Olric cache logs
+```
+
+### Invite Tokens
+
+Generate invite tokens so other operators can join the cluster through your node:
+
+```bash
+# Generate a token with default 1-hour expiry
+orama node invite
+
+# Generate a token with custom expiry
+orama node invite --expiry 24h
+```
+
+Share the generated token along with your node's HTTPS URL. The joining operator will use both with `--join` and `--token`.
+
+### Upgrades
+
+Upgrade the Orama binary on a node. The upgrade command downloads the latest binary and can optionally restart services.
+
+```bash
+# Upgrade binary only (no restart)
+orama node upgrade
+
+# Upgrade and restart services
+orama node upgrade --restart
+
+# Force upgrade (skip confirmation prompts)
+orama node upgrade --force
+
+# Skip resource checks during upgrade
+orama node upgrade --skip-checks
+```
+
+The upgrade command also accepts all `--anyone-*` flags to reconfigure the Anyone relay during an upgrade, plus `--env`, `--node`, and `--delay` for targeting specific environments and nodes.
+
+### Rolling Upgrades
+
+For operators managing multiple nodes, the rollout command automates the full build, push, and rolling upgrade process:
+
+```bash
+# Full rollout: build, push, and rolling restart across all nodes
+orama node rollout --env mainnet
+
+# Skip the build step (push pre-built binary)
+orama node rollout --env mainnet --no-build
+
+# Skip confirmation prompts
+orama node rollout --env mainnet --yes
+```
+
+### Pushing Binaries
+
+Push a binary archive to nodes without performing a restart:
+
+```bash
+# Push to all nodes in an environment
+orama node push --env mainnet
+
+# Push to a specific node
+orama node push --env mainnet --node 203.0.113.10
+
+# Push directly (bypass staging)
+orama node push --env mainnet --direct
+```
+
+### Uninstall
+
+Remove all Orama services, data, and configuration from a node:
+
+```bash
+orama node uninstall
+```
+
+This stops all services, removes systemd units, deletes data directories, and tears down the WireGuard interface. The node is deregistered from the cluster.
+
+## Recovery
+
+### Clean
+
+Wipe data and services from nodes. Useful for resetting a node to a clean state.
+
+```bash
+# Clean a specific node
+orama node clean --env mainnet --node 203.0.113.10
+
+# Clean all nodes in an environment
+orama node clean --env mainnet
+
+# Nuclear clean (removes everything including configuration)
+orama node clean --env mainnet --nuclear
+
+# Skip confirmation prompts
+orama node clean --env mainnet --force
+```
+
+### Raft Recovery
+
+If the RQLite cluster enters a split-brain state (multiple leaders, or no leader with quorum lost), use the recovery command:
+
+```bash
+# Recover Raft consensus by specifying the intended leader
+orama node recover-raft --env mainnet --leader 203.0.113.10
+
+# Force recovery (skip safety checks)
+orama node recover-raft --env mainnet --leader 203.0.113.10 --force
+```
+
+Raft recovery is a disruptive operation. It forces a single node to become the leader and re-bootstraps consensus. Only use this when the cluster cannot elect a leader on its own.
+
+## Verifying the Setup
+
+After installation, verify your node is healthy:
+
+```bash
+# Check all services are running
+orama node status
+
+# Run full diagnostics
+orama node doctor
+
+# Check the node's health report
+orama node report
+```
+
+| Check | Expected State |
+|-------|---------------|
+| All services | `active (running)` |
+| RQLite state | `Leader` or `Follower` |
+| WireGuard peers | All connected, recent handshakes |
+| Raft log index | In sync with other nodes |
+
+## Post-Setup
+
+Once your node is running:
+
+- Set up [monitoring](/docs/operator/monitoring) to track health and performance
+- Review the [upgrade process](/docs/operator/upgrades) to stay current with releases
+- Understand [WireGuard networking](/docs/operator/wireguard) and the mesh topology
+- Learn about [nameserver configuration](/docs/operator/nameserver) if your node serves DNS

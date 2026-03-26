@@ -1,122 +1,66 @@
-TEST?=./...
+# Orama Monorepo
+# Delegates to sub-project Makefiles
 
-.PHONY: test
-test:
-	@echo Running tests...
-	go test -v $(TEST)
+.PHONY: help build test clean
 
-# Gateway-focused E2E tests assume gateway and nodes are already running
-# Auto-discovers configuration from ~/.orama and queries database for API key
-# No environment variables required
-.PHONY: test-e2e
-test-e2e:
-	@echo "Running comprehensive E2E tests..."
-	@echo "Auto-discovering configuration from ~/.orama..."
-	go test -v -tags e2e ./e2e
+# === Core (Go network) ===
+.PHONY: core core-build core-test core-clean core-lint
+core: core-build
 
-# Network - Distributed P2P Database System
-# Makefile for development and build tasks
+core-build:
+	$(MAKE) -C core build
 
-.PHONY: build clean test run-node run-node2 run-node3 run-example deps tidy fmt vet lint clear-ports install-hooks kill
+core-test:
+	$(MAKE) -C core test
 
-VERSION := 0.90.0
-COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
+core-lint:
+	$(MAKE) -C core lint
 
-# Build targets
-build: deps
-	@echo "Building network executables (version=$(VERSION))..."
-	@mkdir -p bin
-	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
-	go build -ldflags "$(LDFLAGS)" -o bin/orama-node ./cmd/node
-	go build -ldflags "$(LDFLAGS)" -o bin/orama cmd/cli/main.go
-	go build -ldflags "$(LDFLAGS)" -o bin/rqlite-mcp ./cmd/rqlite-mcp
-	# Inject gateway build metadata via pkg path variables
-	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
-	@echo "Build complete! Run ./bin/orama version"
+core-clean:
+	$(MAKE) -C core clean
 
-# Install git hooks
-install-hooks:
-	@echo "Installing git hooks..."
-	@bash scripts/install-hooks.sh
+# === Website ===
+.PHONY: website website-dev website-build
+website-dev:
+	cd website && pnpm dev
 
-# Clean build artifacts
-clean:
-	@echo "Cleaning build artifacts..."
-	rm -rf bin/
-	rm -rf data/
-	@echo "Clean complete!"
+website-build:
+	cd website && pnpm build
 
-# Run bootstrap node (auto-selects identity and data dir)
-run-node:
-	@echo "Starting node..."
-	@echo "Config: ~/.orama/node.yaml"
-	go run ./cmd/orama-node --config node.yaml
+# === SDK (TypeScript) ===
+.PHONY: sdk sdk-build sdk-test
+sdk: sdk-build
 
-# Run second node - requires join address
-run-node2:
-	@echo "Starting second node..."
-	@echo "Config: ~/.orama/node2.yaml"
-	go run ./cmd/orama-node --config node2.yaml
+sdk-build:
+	cd sdk && pnpm install && pnpm build
 
-# Run third node - requires join address
-run-node3:
-	@echo "Starting third node..."
-	@echo "Config: ~/.orama/node3.yaml"
-	go run ./cmd/orama-node --config node3.yaml
+sdk-test:
+	cd sdk && pnpm test
 
-# Run gateway HTTP server
-run-gateway:
-	@echo "Starting gateway HTTP server..."
-	@echo "Note: Config must be in ~/.orama/data/gateway.yaml"
-	go run ./cmd/orama-gateway
+# === Vault (Zig) ===
+.PHONY: vault vault-build vault-test
+vault-build:
+	cd vault && zig build
 
-# Development environment target
-# Uses orama dev up to start full stack with dependency and port checking
-dev: build
-	@./bin/orama dev up
+vault-test:
+	cd vault && zig build test
 
-# Graceful shutdown of all dev services
-stop:
-	@if [ -f ./bin/orama ]; then \
-		./bin/orama dev down || true; \
-	fi
-	@bash scripts/dev-kill-all.sh
+# === OS ===
+.PHONY: os os-build
+os-build:
+	$(MAKE) -C os
 
-# Force kill all processes (immediate termination)
-kill:
-	@bash scripts/dev-kill-all.sh
+# === Aggregate ===
+build: core-build
+test: core-test
+clean: core-clean
 
-# Help
 help:
-	@echo "Available targets:"
-	@echo "  build         - Build all executables"
-	@echo "  clean         - Clean build artifacts"
-	@echo "  test          - Run tests"
+	@echo "Orama Monorepo"
 	@echo ""
-	@echo "Local Development (Recommended):"
-	@echo "  make dev      - Start full development stack with one command"
-	@echo "                 - Checks dependencies and available ports"
-	@echo "                 - Generates configs and starts all services"
-	@echo "                 - Validates cluster health"
-	@echo "  make stop     - Gracefully stop all development services"
-	@echo "  make kill     - Force kill all development services (use if stop fails)"
+	@echo "  Core (Go):     make core-build | core-test | core-lint | core-clean"
+	@echo "  Website:       make website-dev | website-build"
+	@echo "  Vault (Zig):   make vault-build | vault-test"
+	@echo "  OS:            make os-build"
 	@echo ""
-	@echo "Development Management (via orama):"
-	@echo "  ./bin/orama dev status  - Show status of all dev services"
-	@echo "  ./bin/orama dev logs <component> [--follow]"
-	@echo ""
-	@echo "Individual Node Targets (advanced):"
-	@echo "  run-node      - Start first node directly"
-	@echo "  run-node2     - Start second node directly"
-	@echo "  run-node3     - Start third node directly"
-	@echo "  run-gateway   - Start HTTP gateway directly"
-	@echo ""
-	@echo "Maintenance:"
-	@echo "  deps          - Download dependencies"
-	@echo "  tidy          - Tidy dependencies"
-	@echo "  fmt           - Format code"
-	@echo "  vet           - Vet code"
-	@echo "  lint          - Lint code (fmt + vet)"
-	@echo "  help          - Show this help"
+	@echo "  Aggregate:     make build | test | clean  (delegates to core)"

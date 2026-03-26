@@ -1,0 +1,33 @@
+[Unit]
+Description=Orama Namespace Olric Cache (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target orama-namespace-rqlite@%i.service
+Requires=orama-namespace-rqlite@%i.service
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/orama
+
+# Olric reads config from environment variable (set in env file)
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/olric.env
+
+ExecStart=/usr/local/bin/olric-server
+
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-olric-%i
+
+PrivateTmp=yes
+LimitNOFILE=65536
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

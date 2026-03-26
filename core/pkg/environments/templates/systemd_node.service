@@ -1,0 +1,34 @@
+[Unit]
+Description=Orama Network Node ({{.NodeType}})
+After=orama-ipfs-cluster-{{.NodeType}}.service
+Wants=orama-ipfs-cluster-{{.NodeType}}.service
+Requires=orama-ipfs-cluster-{{.NodeType}}.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths={{.OramaDir}}
+WorkingDirectory={{.HomeDir}}
+Environment=HOME={{.HomeDir}}
+ExecStart={{.HomeDir}}/bin/orama-node --config {{.OramaDir}}/configs/{{.ConfigFile}}
+Restart=always
+RestartSec=5
+TimeoutStopSec=45s
+KillMode=mixed
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-node-{{.NodeType}}
+
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

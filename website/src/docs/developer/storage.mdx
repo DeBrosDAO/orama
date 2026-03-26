@@ -1,0 +1,218 @@
+# Storage
+
+Orama Storage provides decentralized file storage built on IPFS (InterPlanetary File System). Upload, retrieve, pin, and manage files across the network using content-addressed storage -- every file is identified by its unique content hash (CID), ensuring integrity and deduplication.
+
+## Overview
+
+When you upload a file to Orama Storage, it is distributed across IPFS nodes via IPFS Cluster. Files are content-addressed: the same file always produces the same CID regardless of where or when it was uploaded. This provides built-in integrity verification and deduplication across the entire network.
+
+Pinning keeps your files available by preventing garbage collection from removing them. By default, uploads are pinned automatically.
+
+## SDK Setup
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://gateway.example.com",
+  apiKey: "ak_your_key:namespace",
+});
+```
+
+## Uploading Files
+
+The `upload` method accepts `File`, `Blob`, `ArrayBuffer`, `Uint8Array`, or `ReadableStream` as input. It works in both browser and Node.js environments. Uploads have a 5-minute timeout to accommodate large files.
+
+### Browser
+
+```typescript
+const fileInput = document.querySelector('input[type="file"]');
+const file = fileInput.files[0];
+
+const result = await client.storage.upload(file, file.name);
+
+console.log(result.cid);  // "Qm..."
+console.log(result.name); // filename
+console.log(result.size); // bytes
+```
+
+### Node.js
+
+```typescript
+import { readFileSync } from "fs";
+
+const buffer = readFileSync("image.jpg");
+const result = await client.storage.upload(buffer, "image.jpg");
+
+console.log(result.cid);  // "Qm..."
+console.log(result.name); // "image.jpg"
+console.log(result.size); // bytes
+```
+
+### Upload Options
+
+Files are pinned by default. To skip pinning, pass `{ pin: false }`:
+
+```typescript
+const result = await client.storage.upload(buffer, "temp-file.dat", {
+  pin: false,
+});
+```
+
+### REST API
+
+```bash
+curl -X POST https://gateway.example.com/v1/storage/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@./image.jpg" \
+  -F "pin=true"
+```
+
+## Retrieving Files
+
+### As a ReadableStream
+
+Use `get` to retrieve file content as a `ReadableStream`, useful for processing data incrementally:
+
+```typescript
+const stream = await client.storage.get("QmExampleCid");
+const reader = stream.getReader();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  // process chunk
+}
+```
+
+### As a Full Response
+
+Use `getBinary` when you need access to response headers (e.g., `content-length`):
+
+```typescript
+const response = await client.storage.getBinary("QmExampleCid");
+const contentLength = response.headers.get("content-length");
+const body = response.body; // ReadableStream
+```
+
+Both `get` and `getBinary` include retry logic -- up to 8 attempts with exponential backoff (max 3 seconds per retry) -- to handle eventual consistency across IPFS nodes.
+
+### REST API
+
+```bash
+curl https://gateway.example.com/v1/storage/get/<cid> \
+  -H "Authorization: Bearer <token>" \
+  -o output-file
+```
+
+## Pinning
+
+Pinning ensures a file stays available on the network. Uploaded files are pinned by default.
+
+### Pin an Existing CID
+
+```typescript
+await client.storage.pin("QmExampleCid", "my-file");
+```
+
+```bash
+curl -X POST https://gateway.example.com/v1/storage/pin \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"cid": "QmExampleCid", "name": "my-file"}'
+```
+
+### Check Pin Status
+
+```typescript
+const status = await client.storage.status("QmExampleCid");
+
+console.log(status.cid);
+console.log(status.status);
+// "pinned" | "pinning" | "queued" | "unpinned" | "error"
+
+console.log(status.replication_min);
+console.log(status.replication_max);
+console.log(status.replication_factor);
+console.log(status.peers);
+```
+
+```bash
+curl https://gateway.example.com/v1/storage/status/<cid> \
+  -H "Authorization: Bearer <token>"
+```
+
+### Unpin a CID
+
+Unpinning removes the pin. The file may eventually be garbage collected if no other pins reference it:
+
+```typescript
+await client.storage.unpin("QmExampleCid");
+```
+
+```bash
+curl -X DELETE https://gateway.example.com/v1/storage/unpin/<cid> \
+  -H "Authorization: Bearer <token>"
+```
+
+## CLI
+
+There are no dedicated CLI commands for storage file management. Use the SDK or REST API for uploads, downloads, and pin management.
+
+Database backups can be stored to IPFS via the `orama db backup` command -- see the [Databases](/docs/developer/databases) page.
+
+## REST API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/storage/upload` | Upload a file (multipart/form-data with `file` and optional `pin` fields) |
+| `GET` | `/v1/storage/get/{cid}` | Download a file by CID |
+| `POST` | `/v1/storage/pin` | Pin an existing CID. Body: `{cid, name?}` |
+| `GET` | `/v1/storage/status/{cid}` | Get pin status for a CID |
+| `DELETE` | `/v1/storage/unpin/{cid}` | Unpin a CID |
+
+## SDK Method Reference
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `upload` | `upload(file, name?, options?)` | Upload a file. Options: `{ pin?: boolean }` (default: true). |
+| `get` | `get(cid)` | Retrieve file content as a `ReadableStream`. Retries up to 8 times. |
+| `getBinary` | `getBinary(cid)` | Retrieve file as a full `Response` object with headers. Retries up to 8 times. |
+| `pin` | `pin(cid, name?)` | Pin an existing CID. |
+| `status` | `status(cid)` | Get pin status for a CID. |
+| `unpin` | `unpin(cid)` | Unpin a CID. |
+
+## Types
+
+```typescript
+interface StorageUploadResponse {
+  cid: string;
+  name: string;
+  size: number;
+}
+
+interface StoragePinResponse {
+  cid: string;
+  name: string;
+}
+
+interface StorageStatus {
+  cid: string;
+  name: string;
+  status: string; // "pinned" | "pinning" | "queued" | "unpinned" | "error"
+  replication_min: number;
+  replication_max: number;
+  replication_factor: number;
+  peers: string[];
+  error?: string;
+}
+```
+
+## Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| CID | Content Identifier -- a hash derived from the file's content. Same file always produces the same CID. |
+| Pinning | Tells IPFS nodes to keep the file. Without a pin, files may be garbage collected. |
+| IPFS Cluster | Orchestrates pinning across multiple IPFS nodes for redundancy. |
+| Content Addressing | Files are identified by what they contain, not where they are stored. |

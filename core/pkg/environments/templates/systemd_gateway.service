@@ -1,0 +1,30 @@
+[Unit]
+Description=Orama Gateway
+After=orama-node.service
+Wants=orama-node.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths={{.OramaDir}}
+WorkingDirectory={{.HomeDir}}
+Environment=HOME={{.HomeDir}}
+ExecStart={{.HomeDir}}/bin/gateway --config {{.OramaDir}}/data/gateway.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-gateway
+
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

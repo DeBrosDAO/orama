@@ -1,34 +1,4 @@
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-
-# Built binaries
-bin/
-dist/
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS generated files
+# === Global ===
 .DS_Store
 .DS_Store?
 ._*
@@ -36,48 +6,85 @@ dist/
 .Trashes
 ehthumbs.db
 Thumbs.db
+*.swp
+*.swo
+*~
 
-# Log files
-*.log
+# IDE
+.vscode/
+.idea/
+.cursor/
 
-# Environment variables
+# Environment & credentials
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+.mcp.json
+.claude/
+.codex/
 
-# Temporary files
-tmp/
-temp/
-*.tmp
+# === Core (Go) ===
+core/phantom-auth/
+core/bin/
+core/bin-linux/
+core/dist/
+core/orama-cli-linux
+core/keys_backup/
+core/.gocache/
+core/configs/
+core/data/*
+core/tmp/
+core/temp/
+core/results/
+core/rnd/
+core/vps.txt
+core/coverage.txt
+core/coverage.html
+core/profile.out
+core/e2e/config.yaml
+core/scripts/remote-nodes.conf
 
-# Coverage reports
-coverage.txt
-coverage.html
-profile.out
-
-# Build artifacts
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
 *.deb
 *.rpm
 *.tar.gz
 *.zip
+go.work
 
-# Local development files
+# Logs
+*.log
+
+# Databases
+*.db
+
+# === Website ===
+website/node_modules/
+website/dist/
+website/invest-api/invest-api
+website/invest-api/*.db
+website/invest-api/*.db-shm
+website/invest-api/*.db-wal
+
+# === SDK (TypeScript) ===
+sdk/node_modules/
+sdk/dist/
+sdk/coverage/
+
+# === Vault (Zig) ===
+vault/.zig-cache/
+vault/zig-out/
+
+# === OS ===
+os/output/
+
+# === Local development ===
+.dev/
 .local/
 local/
-
-data/*
-./bootstrap
-./node
-data/bootstrap/rqlite/
-
-.env.*
-
-configs/
-
-.dev/
-
-.gocache/
-
-.claude/
-.mcp.json
-.cursor/

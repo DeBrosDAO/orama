@@ -1,0 +1,350 @@
+package production
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+// OSInfo contains detected operating system information
+type OSInfo struct {
+	ID      string // ubuntu, debian, etc.
+	Version string // 22.04, 24.04, 12, etc.
+	Name    string // Full name: "ubuntu 24.04"
+}
+
+// PrivilegeChecker validates root access and user context
+type PrivilegeChecker struct{}
+
+// CheckRoot verifies the process is running as root
+func (pc *PrivilegeChecker) CheckRoot() error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("this command must be run as root (use sudo)")
+	}
+	return nil
+}
+
+// CheckLinuxOS verifies the process is running on Linux
+func (pc *PrivilegeChecker) CheckLinuxOS() error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("production setup is only supported on Linux (detected: %s)", runtime.GOOS)
+	}
+	return nil
+}
+
+// OSDetector detects the Linux distribution
+type OSDetector struct{}
+
+// Detect returns information about the detected OS
+func (od *OSDetector) Detect() (*OSInfo, error) {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return nil, fmt.Errorf("cannot detect operating system: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var id, version string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ID=") {
+			id = strings.Trim(strings.TrimPrefix(line, "ID="), "\"")
+		}
+		if strings.HasPrefix(line, "VERSION_ID=") {
+			version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+		}
+	}
+
+	if id == "" {
+		return nil, fmt.Errorf("could not detect OS ID from /etc/os-release")
+	}
+
+	name := id
+	if version != "" {
+		name = fmt.Sprintf("%s %s", id, version)
+	}
+
+	return &OSInfo{
+		ID:      id,
+		Version: version,
+		Name:    name,
+	}, nil
+}
+
+// IsSupportedOS checks if the OS is supported for production deployment
+func (od *OSDetector) IsSupportedOS(info *OSInfo) bool {
+	supported := map[string][]string{
+		"ubuntu": {"22.04", "24.04", "25.04"},
+		"debian": {"12"},
+	}
+
+	versions, ok := supported[info.ID]
+	if !ok {
+		return false
+	}
+
+	for _, v := range versions {
+		if info.Version == v {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ArchitectureDetector detects the system architecture
+type ArchitectureDetector struct{}
+
+// Detect returns the detected architecture as a string usable for downloads
+func (ad *ArchitectureDetector) Detect() (string, error) {
+	arch := runtime.GOARCH
+	switch arch {
+	case "amd64":
+		return "amd64", nil
+	case "arm64":
+		return "arm64", nil
+	case "arm":
+		return "arm", nil
+	default:
+		return "", fmt.Errorf("unsupported architecture: %s", arch)
+	}
+}
+
+// DependencyChecker validates external tool availability and auto-installs missing ones
+type DependencyChecker struct{}
+
+// NewDependencyChecker creates a new checker
+func NewDependencyChecker(_ bool) *DependencyChecker {
+	return &DependencyChecker{}
+}
+
+// Dependency represents an external binary dependency
+type Dependency struct {
+	Name    string
+	Command string
+	AptPkg  string // apt package name to install
+}
+
+// CheckAll validates all required dependencies, auto-installing any that are missing.
+func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
+	dependencies := []Dependency{
+		{Name: "curl", Command: "curl", AptPkg: "curl"},
+		{Name: "git", Command: "git", AptPkg: "git"},
+		{Name: "make", Command: "make", AptPkg: "make"},
+		{Name: "jq", Command: "jq", AptPkg: "jq"},
+		{Name: "speedtest", Command: "speedtest-cli", AptPkg: "speedtest-cli"},
+	}
+
+	var missing []Dependency
+	for _, dep := range dependencies {
+		if _, err := exec.LookPath(dep.Command); err != nil {
+			missing = append(missing, dep)
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil, nil
+	}
+
+	// Auto-install missing dependencies
+	var pkgs []string
+	var names []string
+	for _, dep := range missing {
+		pkgs = append(pkgs, dep.AptPkg)
+		names = append(names, dep.Name)
+	}
+
+	fmt.Fprintf(os.Stderr, "  Installing missing dependencies: %s\n", strings.Join(names, ", "))
+
+	// apt-get update first
+	update := exec.Command("apt-get", "update", "-qq")
+	update.Stdout = os.Stdout
+	update.Stderr = os.Stderr
+	update.Run() // best-effort, don't fail on update
+
+	// apt-get install
+	args := append([]string{"install", "-y", "-qq"}, pkgs...)
+	install := exec.Command("apt-get", args...)
+	install.Stdout = os.Stdout
+	install.Stderr = os.Stderr
+	if err := install.Run(); err != nil {
+		return missing, fmt.Errorf("failed to install dependencies (%s): %w", strings.Join(names, ", "), err)
+	}
+
+	// Verify after install
+	var stillMissing []Dependency
+	for _, dep := range missing {
+		if _, err := exec.LookPath(dep.Command); err != nil {
+			stillMissing = append(stillMissing, dep)
+		}
+	}
+
+	if len(stillMissing) > 0 {
+		errMsg := "dependencies still missing after install attempt:\n"
+		for _, dep := range stillMissing {
+			errMsg += fmt.Sprintf("  - %s\n", dep.Name)
+		}
+		return stillMissing, fmt.Errorf("%s", errMsg)
+	}
+
+	fmt.Fprintf(os.Stderr, "  ✓ Dependencies installed successfully\n")
+	return nil, nil
+}
+
+// ExternalToolChecker validates external tool versions and availability
+type ExternalToolChecker struct{}
+
+// CheckIPFSAvailable checks if IPFS is available in PATH
+func (etc *ExternalToolChecker) CheckIPFSAvailable() bool {
+	_, err := exec.LookPath("ipfs")
+	return err == nil
+}
+
+// CheckIPFSClusterAvailable checks if IPFS Cluster Service is available
+func (etc *ExternalToolChecker) CheckIPFSClusterAvailable() bool {
+	_, err := exec.LookPath("ipfs-cluster-service")
+	return err == nil
+}
+
+// CheckRQLiteAvailable checks if RQLite is available
+func (etc *ExternalToolChecker) CheckRQLiteAvailable() bool {
+	_, err := exec.LookPath("rqlited")
+	return err == nil
+}
+
+// CheckOlricAvailable checks if Olric Server is available
+func (etc *ExternalToolChecker) CheckOlricAvailable() bool {
+	_, err := exec.LookPath("olric-server")
+	return err == nil
+}
+
+// CheckAnonAvailable checks if Anon is available (optional)
+func (etc *ExternalToolChecker) CheckAnonAvailable() bool {
+	_, err := exec.LookPath("anon")
+	return err == nil
+}
+
+// CheckGoAvailable checks if Go is installed
+func (etc *ExternalToolChecker) CheckGoAvailable() bool {
+	_, err := exec.LookPath("go")
+	return err == nil
+}
+
+// ResourceChecker validates system resources for production deployment
+type ResourceChecker struct{}
+
+// NewResourceChecker creates a new resource checker
+func NewResourceChecker() *ResourceChecker {
+	return &ResourceChecker{}
+}
+
+// CheckDiskSpace validates sufficient disk space (minimum 10GB free)
+func (rc *ResourceChecker) CheckDiskSpace(path string) error {
+	checkPath := path
+
+	// If the path doesn't exist, check the parent directory instead
+	for checkPath != "/" {
+		if _, err := os.Stat(checkPath); err == nil {
+			break
+		}
+		checkPath = filepath.Dir(checkPath)
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(checkPath, &stat); err != nil {
+		return fmt.Errorf("failed to check disk space: %w", err)
+	}
+
+	// Available space in bytes
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	minRequiredBytes := uint64(10 * 1024 * 1024 * 1024) // 10GB
+
+	if availableBytes < minRequiredBytes {
+		availableGB := float64(availableBytes) / (1024 * 1024 * 1024)
+		return fmt.Errorf("insufficient disk space: %.1fGB available, minimum 10GB required", availableGB)
+	}
+
+	return nil
+}
+
+// CheckRAM validates sufficient RAM (minimum 2GB total)
+func (rc *ResourceChecker) CheckRAM() error {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return fmt.Errorf("failed to read memory info: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	totalKB := uint64(0)
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "MemTotal:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				if kb, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+					totalKB = kb
+					break
+				}
+			}
+		}
+	}
+
+	if totalKB == 0 {
+		return fmt.Errorf("could not determine total RAM")
+	}
+
+	minRequiredKB := uint64(2 * 1024 * 1024) // 2GB in KB
+	if totalKB < minRequiredKB {
+		totalGB := float64(totalKB) / (1024 * 1024)
+		return fmt.Errorf("insufficient RAM: %.1fGB total, minimum 2GB required", totalGB)
+	}
+
+	return nil
+}
+
+// CheckCPU validates sufficient CPU cores (minimum 2 cores)
+func (rc *ResourceChecker) CheckCPU() error {
+	cores := runtime.NumCPU()
+	if cores < 2 {
+		return fmt.Errorf("insufficient CPU cores: %d available, minimum 2 required", cores)
+	}
+	return nil
+}
+
+// PortChecker checks if ports are available or in use
+type PortChecker struct{}
+
+// NewPortChecker creates a new port checker
+func NewPortChecker() *PortChecker {
+	return &PortChecker{}
+}
+
+// IsPortInUse checks if a specific port is already in use
+func (pc *PortChecker) IsPortInUse(port int) bool {
+	addr := fmt.Sprintf("localhost:%d", port)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		// Port is not in use
+		return false
+	}
+	defer conn.Close()
+	// Port is in use
+	return true
+}
+
+// IsPortInUseOnHost checks if a port is in use on a specific host
+func (pc *PortChecker) IsPortInUseOnHost(host string, port int) bool {
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	return true
+}

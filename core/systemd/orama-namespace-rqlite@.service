@@ -1,0 +1,44 @@
+[Unit]
+Description=Orama Namespace RQLite (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target
+PartOf=orama-node.service
+StopWhenUnneeded=false
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/orama
+
+# Environment file contains namespace-specific config
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/rqlite.env
+
+# Start rqlited with args from environment (using shell to properly expand JOIN_ARGS)
+ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
+  -http-addr ${HTTP_ADDR} \
+  -raft-addr ${RAFT_ADDR} \
+  -http-adv-addr ${HTTP_ADV_ADDR} \
+  -raft-adv-addr ${RAFT_ADV_ADDR} \
+  ${JOIN_ARGS} \
+  /opt/orama/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
+
+# Graceful shutdown
+TimeoutStopSec=60s
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-rqlite-%i
+
+# Resource limits
+PrivateTmp=yes
+LimitNOFILE=65536
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

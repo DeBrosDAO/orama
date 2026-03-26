@@ -1,0 +1,103 @@
+# Orama Vault
+
+A distributed secrets store built on Shamir's Secret Sharing. Orama Vault splits sensitive data into cryptographic shares and distributes them across a network of guardian nodes. No single node ever holds enough information to reconstruct a secret — an attacker must compromise a threshold number of guardians simultaneously.
+
+## How It Works
+
+1. **You split.** The client splits a secret into N shares using Shamir's Secret Sharing over GF(2^8), with a threshold K.
+2. **Guardians store.** Each share is pushed to a different guardian node in the Orama Network.
+3. **You reconstruct.** To recover, pull shares from any K guardians and reconstruct the original via Lagrange interpolation.
+
+The security is **information-theoretic**: K-1 shares reveal exactly zero information about the secret, regardless of computing power. This is not a computational assumption — it is mathematically proven.
+
+## Key Properties
+
+- **Zero-knowledge storage** — Each guardian holds a single share that is meaningless on its own
+- **Fault tolerant** — Up to N-K nodes can go offline or be destroyed without data loss
+- **No central authority** — No master key, no trusted coordinator, no single point of failure
+- **Tamper-evident** — Every share is protected by HMAC-SHA256 integrity checksums
+- **Anti-rollback** — Monotonic version counters prevent downgrade attacks
+- **Proactive re-sharing** — Periodic share refresh (Herzberg protocol) invalidates old shares, providing forward secrecy
+- **Post-quantum ready** — Interfaces for ML-KEM-768 and ML-DSA-65 are defined, with hybrid X25519 + ML-KEM key exchange
+
+## Use Cases
+
+### Wallet Recovery
+Store a crypto wallet's seed phrase or private key across the guardian network. If you lose your device, reconstruct the seed from any K guardians using your username and passphrase — no single server ever sees the full key.
+
+### API Key & Credential Management
+Distribute API keys, database passwords, or service tokens across guardians. Applications pull shares from K nodes at runtime and reconstruct credentials in memory. Keys are never stored in plaintext on any single machine.
+
+### Multi-Party Key Custody
+Organizations can require M-of-N approval to access critical secrets. The Shamir threshold naturally enforces that no individual (or small group) can unilaterally access the data.
+
+### Disaster Recovery
+Back up encryption keys, TLS certificates, or signing keys to the guardian network as an off-site, tamper-evident backup layer. Even if your primary infrastructure is compromised, the distributed shares remain safe.
+
+### End-to-End Encrypted Backup
+Store encrypted data blobs where the decryption key is itself split across guardians. The encrypted payload can live on IPFS or any storage — only the key holders (the guardians collectively) can enable decryption.
+
+### Hardware Node Integration (Orama One)
+Pre-built Orama One hardware nodes run a vault guardian out of the box, contributing to the distributed secrets network. Node operators earn dual rewards ($ORAMA + $ANYONE) while strengthening the network's fault tolerance.
+
+## Tech Stack
+
+- **Language:** Zig 0.14+
+- **Crypto:** AES-256-GCM, HMAC-SHA256, HKDF-SHA256, GF(2^8) field arithmetic
+- **Storage:** File-per-user with atomic writes (no database dependency)
+- **Transport:** HTTP (port 7500, client-facing) + binary TCP protocol (port 7501, peer-to-peer over WireGuard)
+- **Security:** Secure memory (mlock, volatile zero), constant-time comparisons, systemd hardening
+
+## Architecture
+
+Each Orama Network node runs a `vault-guardian` daemon alongside the gateway:
+
+```
+Client ──▶ Gateway (443/TLS) ──▶ vault-guardian (7500/HTTP)
+                                       │
+                                  vault-guardian (7501/TCP, WireGuard)
+                                       │
+                                  Peer guardians
+```
+
+Guardians discover each other via RQLite (the cluster's membership source of truth) and maintain health through a heartbeat protocol with alive/suspect/dead state transitions.
+
+## API Overview
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/vault/health` | GET | Liveness check |
+| `/v1/vault/status` | GET | Guardian status and config |
+| `/v1/vault/guardians` | GET | List known guardian nodes |
+| `/v1/vault/push` | POST | Store a share (single share per identity) |
+| `/v1/vault/pull` | POST | Retrieve a share |
+| `/v2/vault/secrets/{name}` | PUT | Store a named secret (authenticated) |
+| `/v2/vault/secrets/{name}` | GET | Retrieve a named secret (authenticated) |
+| `/v2/vault/secrets/{name}` | DELETE | Delete a named secret (authenticated) |
+| `/v2/vault/secrets` | GET | List all secrets for an identity (authenticated) |
+
+V2 endpoints require session authentication via challenge-response (HMAC-based tokens, 1-hour expiry).
+
+See [docs/API.md](docs/API.md) for the full API reference.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — System design, data flow, and component overview
+- [Security Model](docs/SECURITY_MODEL.md) — Threat model, crypto rationale, and hardening measures
+- [API Reference](docs/API.md) — Complete endpoint documentation
+- [Deployment](docs/DEPLOYMENT.md) — Deploying vault guardians to production
+- [Operator Guide](docs/OPERATOR_GUIDE.md) — Running and maintaining guardian nodes
+- [Post-Quantum Integration](docs/PQ_INTEGRATION.md) — ML-KEM and ML-DSA roadmap
+
+## Building
+
+```bash
+zig build              # Build the vault-guardian binary
+zig build test         # Run all unit tests
+```
+
+Requires Zig 0.14.0 or later.
+
+## License
+
+Part of the Orama Network. See the root repository for license details.

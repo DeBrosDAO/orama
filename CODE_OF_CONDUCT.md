@@ -32,7 +32,7 @@ This Code applies within all project spaces and when an individual is officially
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainers at: security@debros.io
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainers at: security@orama.io
 
 All complaints will be reviewed and investigated promptly and fairly.
 

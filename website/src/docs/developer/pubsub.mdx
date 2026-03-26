@@ -1,0 +1,291 @@
+# PubSub
+
+Real-time, WebSocket-based messaging for the Orama Network. Publish and subscribe to topics for live event streaming, notifications, inter-service communication, and collaborative features. Built on LibP2P gossipsub internally, messages propagate through the mesh of connected nodes with no single point of failure.
+
+## SDK Setup
+
+```typescript
+import { createClient } from "@debros/network-ts-sdk";
+
+const client = createClient({
+  baseURL: "https://gateway.example.com",
+  apiKey: "ak_your_key:namespace",
+});
+```
+
+All topics are scoped to your namespace automatically.
+
+## Publishing Messages
+
+Publish string or binary payloads to any topic. Messages are base64-encoded on the wire and decoded transparently by the SDK.
+
+### SDK
+
+```typescript
+// Publish a string message
+await client.pubsub.publish("notifications", "Hello, Network!");
+
+// Publish binary data
+const binaryData = new Uint8Array([1, 2, 3, 4]);
+await client.pubsub.publish("binary-topic", binaryData);
+```
+
+### REST API
+
+```bash
+# Publish a message (data must be base64-encoded)
+curl -X POST https://gateway.example.com/v1/pubsub/publish \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "notifications", "data_base64": "SGVsbG8sIE5ldHdvcmsh"}'
+```
+
+## Subscribing to Topics
+
+Subscribe to a topic via WebSocket to receive messages in real time. Each call to `subscribe` opens a dedicated WebSocket connection and returns a `Subscription` object you can close when done.
+
+```typescript
+const subscription = await client.pubsub.subscribe("notifications", {
+  onMessage: (msg) => {
+    console.log("Topic:", msg.topic);
+    console.log("Data:", msg.data);
+    console.log("Server timestamp:", new Date(msg.timestamp));
+  },
+  onError: (err) => console.error("Subscription error:", err),
+  onClose: (code, reason) => console.log("Subscription closed:", code, reason),
+});
+
+// Close when done
+subscription.close();
+```
+
+### Multiple Subscribers
+
+Each subscriber gets its own WebSocket connection and its own copy of every message. You can attach as many subscribers to the same topic as you need.
+
+```typescript
+const sub1 = await client.pubsub.subscribe("events", {
+  onMessage: (msg) => console.log("Sub1:", msg.data),
+});
+
+const sub2 = await client.pubsub.subscribe("events", {
+  onMessage: (msg) => console.log("Sub2:", msg.data),
+});
+```
+
+### Subscription Methods
+
+| Method | Description |
+|--------|-------------|
+| `close()` | Close the subscription and underlying WebSocket |
+| `isConnected()` | Check if the subscription is still active |
+| `hasPresence()` | Check if presence is enabled for this subscription |
+| `getPresence()` | Get current presence members (requires presence enabled) |
+| `onMessage(handler)` | Register an additional message handler. Returns unsubscribe function. |
+| `onError(handler)` | Register an additional error handler. Returns unsubscribe function. |
+| `onClose(handler)` | Register an additional close handler. Returns unsubscribe function. |
+
+## Message Format
+
+Every message delivered to subscribers has the following shape:
+
+```typescript
+interface PubSubMessage {
+  data: string;      // The decoded message payload
+  topic: string;     // The topic the message was published to
+  timestamp: number; // Server-assigned Unix timestamp in milliseconds
+}
+```
+
+Server-side timestamps are applied to all messages, so you never need to rely on client clocks for ordering.
+
+## Listing Active Topics
+
+Retrieve all topics that currently have active subscribers in your namespace.
+
+### SDK
+
+```typescript
+const topics = await client.pubsub.topics();
+```
+
+### REST API
+
+```bash
+curl https://gateway.example.com/v1/pubsub/topics \
+  -H "Authorization: Bearer <token>"
+```
+
+## Presence Tracking
+
+Track who is online in a topic. Presence gives you real-time join/leave notifications and the ability to query current members at any time.
+
+### Subscribe with Presence
+
+Enable presence when subscribing to a topic. Each member provides a `memberId` and optional `meta` object.
+
+```typescript
+const subscription = await client.pubsub.subscribe("room.123", {
+  onMessage: (msg) => console.log("Message:", msg.data),
+  presence: {
+    enabled: true,
+    memberId: "user-alice",
+    meta: { displayName: "Alice", avatar: "https://..." },
+    onJoin: (member) => console.log(`${member.memberId} joined`),
+    onLeave: (member) => console.log(`${member.memberId} left`),
+  },
+});
+```
+
+When presence is enabled, `member_id` and optional `member_meta` are sent as WebSocket query parameters. The server broadcasts `presence.join` and `presence.leave` events to other subscribers with presence enabled.
+
+### Query Presence from a Subscription
+
+If the subscription has presence enabled, you can query the current member list at any time:
+
+```typescript
+if (subscription.hasPresence()) {
+  const members = await subscription.getPresence();
+  members.forEach((m) => console.log(`- ${m.memberId}`));
+}
+```
+
+### Query Presence Without Subscribing
+
+You do not need an active subscription to check who is present on a topic.
+
+#### SDK
+
+```typescript
+const presence = await client.pubsub.getPresence("room.123");
+console.log(`Total members: ${presence.count}`);
+presence.members.forEach((m) => console.log(`- ${m.memberId}`));
+```
+
+#### REST API
+
+```bash
+curl "https://gateway.example.com/v1/pubsub/presence?topic=room.123" \
+  -H "Authorization: Bearer <token>"
+```
+
+### Presence Types
+
+```typescript
+interface PresenceMember {
+  memberId: string;
+  joinedAt: number;
+  meta?: Record<string, unknown>;
+}
+
+interface PresenceResponse {
+  topic: string;
+  members: PresenceMember[];
+  count: number;
+}
+
+interface PresenceOptions {
+  enabled: boolean;
+  memberId: string;
+  meta?: Record<string, unknown>;
+  onJoin?: (member: PresenceMember) => void;
+  onLeave?: (member: PresenceMember) => void;
+}
+```
+
+## CLI
+
+There are no dedicated CLI commands for PubSub. Use the SDK or REST API.
+
+## Patterns
+
+### Fan-Out Broadcast
+
+Broadcast a message to all subscribers of a topic. Every subscriber receives its own copy.
+
+```typescript
+await client.pubsub.publish("announcements", "Scheduled maintenance in 1 hour");
+```
+
+### Request-Reply
+
+Implement request-reply by using a unique reply topic per request.
+
+```typescript
+// Requester
+const replyTopic = `reply:${crypto.randomUUID()}`;
+const replySub = await client.pubsub.subscribe(replyTopic, {
+  onMessage: (msg) => {
+    console.log("Got reply:", msg.data);
+    replySub.close();
+  },
+});
+
+await client.pubsub.publish("service:lookup", JSON.stringify({
+  query: "user-123",
+  replyTo: replyTopic,
+}));
+```
+
+### Live Collaboration
+
+Combine PubSub with presence to build collaborative features like shared cursors, typing indicators, or live editing.
+
+```typescript
+const collab = await client.pubsub.subscribe("doc.abc", {
+  onMessage: (msg) => {
+    const update = JSON.parse(msg.data);
+    applyRemoteChange(update);
+  },
+  presence: {
+    enabled: true,
+    memberId: currentUserId,
+    meta: { displayName: currentUser.name, color: "#3b82f6" },
+    onJoin: (member) => showCursor(member),
+    onLeave: (member) => removeCursor(member),
+  },
+});
+
+// Broadcast local changes
+function onLocalEdit(change: object) {
+  client.pubsub.publish("doc.abc", JSON.stringify(change));
+}
+```
+
+## REST API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/pubsub/publish` | Publish a message. Body: `{topic, data_base64}` |
+| `GET` | `/v1/pubsub/topics` | List active topics in the current namespace |
+| `GET` | `/v1/pubsub/presence?topic={topic}` | Get presence members for a topic |
+| `WS` | `/v1/pubsub/ws?topic={topic}` | Subscribe to a topic via WebSocket |
+
+WebSocket query parameters for presence:
+
+| Parameter | Description |
+|-----------|-------------|
+| `topic` | Topic to subscribe to (required) |
+| `presence` | Set to `"true"` to enable presence |
+| `member_id` | Your member ID (required when presence is enabled) |
+| `member_meta` | JSON-encoded metadata object (optional) |
+
+## SDK Method Reference
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `publish` | `publish(topic, data)` | Publish a string or binary message to a topic |
+| `subscribe` | `subscribe(topic, options?)` | Subscribe to a topic via WebSocket. Returns a `Subscription`. |
+| `topics` | `topics()` | List active topics in the current namespace |
+| `getPresence` | `getPresence(topic)` | Get current presence members for a topic |
+
+### SubscribeOptions
+
+```typescript
+interface SubscribeOptions {
+  onMessage?: (message: PubSubMessage) => void;
+  onError?: (error: Error) => void;
+  onClose?: (code: number, reason: string) => void;
+  presence?: PresenceOptions;
+}
+```

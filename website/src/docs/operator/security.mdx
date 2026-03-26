@@ -1,0 +1,144 @@
+# Security
+
+The Orama Network implements defense-in-depth security across network, authentication, data storage, and process isolation layers. This page covers the security architecture and hardening measures that protect your node and the cluster.
+
+## Network Isolation
+
+### WireGuard Mesh
+
+All inter-node communication travels over an encrypted WireGuard VPN mesh (`10.0.0.0/24`). No cluster ports are exposed publicly — only SSH (22), HTTPS (443), WireGuard (51820), and optionally Anyone relay (9001).
+
+Internal services (RQLite, Olric, IPFS, Gateway) bind to WireGuard IPs and are unreachable from the public internet.
+
+### IPv6
+
+IPv6 is disabled system-wide to prevent services bound to `0.0.0.0` from being reachable via IPv6, which would bypass the IPv4 firewall rules.
+
+### CIDR Enforcement
+
+The WireGuard subnet uses a strict `/24` mask across all components (firewall, rate limiter, auth module, iptables rules). This prevents other tenants on shared VPS providers from reaching cluster services via overlapping `10.x.x.x` address ranges.
+
+## Authentication
+
+### Wallet-Based Auth
+
+Client authentication uses cryptographic wallet signatures (EVM via RootWallet, Solana via Phantom):
+
+1. Client requests a challenge nonce
+2. Client signs the nonce with their wallet private key
+3. Server verifies the signature and issues a JWT
+4. JWT is used for subsequent requests (15-minute expiry, refresh token support)
+
+### API Keys
+
+API keys provide long-lived credentials scoped to a namespace. Keys are stored as **HMAC-SHA256 hashes** using a server-side secret — the raw key is never stored in the database and is only shown once at creation time. Save it securely.
+
+### Refresh Tokens
+
+Refresh tokens are stored as **SHA-256 hashes**. If the database is compromised, attackers cannot use the hashes to impersonate users.
+
+### Internal Service Auth
+
+All internal services require authentication:
+
+- **RQLite** — HTTP basic auth on all queries and writes
+- **Olric** — Memberlist gossip encrypted with a shared 32-byte key
+- **IPFS Cluster** — TrustedPeers restricted to known cluster peer IDs
+- **Internal WG endpoints** — Cluster secret required for peer management
+- **Vault** — Session token required for push/pull operations
+- **WebSockets** — Origin header validated against the node's domain
+
+## Data Protection
+
+### At Rest
+
+- **TURN secrets** encrypted with AES-256-GCM in the database (key derived from cluster secret)
+- **OramaOS nodes** — Full-disk LUKS2 encryption with Shamir key distribution (see the OramaOS page)
+- **Refresh tokens and API keys** — Stored as cryptographic hashes, not plaintext
+
+### In Transit
+
+- **Client ↔ Gateway** — TLS 1.3 via Caddy with automatic ACME certificates
+- **Node ↔ Node** — WireGuard (ChaCha20-Poly1305)
+- **Olric gossip** — Memberlist encryption key
+- **Node join** — TOFU certificate pinning (CA fingerprint embedded in invite token)
+
+## Process Isolation
+
+### Dedicated User
+
+All services run as the `orama` user instead of root. Services that need privileged ports (Caddy on 80/443, CoreDNS on 53) use Linux capabilities (`CAP_NET_BIND_SERVICE`) instead of running as root.
+
+### systemd Hardening
+
+Every service unit includes security directives:
+
+```
+ProtectSystem=strict       — read-only filesystem except explicit paths
+ProtectHome=yes            — no access to /home
+NoNewPrivileges=yes        — cannot escalate privileges
+PrivateDevices=yes         — no access to physical devices
+ProtectKernelTunables=yes  — cannot modify kernel parameters
+ProtectKernelModules=yes   — cannot load kernel modules
+RestrictNamespaces=yes     — cannot create new namespaces
+ReadWritePaths=/opt/orama/.orama  — only writable path
+```
+
+### OramaOS Sandboxing
+
+On OramaOS nodes, services get additional isolation via Linux namespaces and seccomp:
+
+- **Mount namespace** — each service only sees its own data directory as writable
+- **UTS namespace** — isolated hostname
+- **Seccomp filtering** — per-service syscall allowlist (e.g., RQLite gets fsync/fdatasync for WAL, Gateway gets sendfile for HTTP)
+
+## Supply Chain Security
+
+### Binary Signing
+
+All build archives are signed with the Orama rootwallet (EVM signature). During installation, the signature is verified against the embedded public key. Unsigned or tampered archives are rejected.
+
+### OramaOS Image Signing
+
+OramaOS images are signed with the same rootwallet. The agent verifies signatures before applying A/B partition updates. Failed signature verification prevents the update from being installed.
+
+### dm-verity
+
+OramaOS uses dm-verity on the root filesystem to detect any modification to the OS image at the block level. If the rootfs is tampered with, the kernel refuses to mount it.
+
+## WebSocket Security
+
+All WebSocket upgraders validate the `Origin` header against the node's configured domain. This prevents cross-site WebSocket hijacking — a malicious webpage cannot open a WebSocket connection to your Orama node on behalf of a logged-in user.
+
+Non-browser clients (which don't send an Origin header) are still allowed.
+
+## WebRTC Security
+
+- **SFU binds only to WireGuard IPs** — never exposed on public interfaces
+- **Forced relay mode** — `iceTransportPolicy: relay` enforced server-side, preventing direct peer connections
+- **HMAC credentials** — Per-namespace TURN shared secrets with 10-minute TTL
+- **TURN secrets encrypted at rest** — AES-256-GCM in the database
+
+## Secrets Management
+
+Cluster secrets are stored in `/opt/orama/.orama/secrets/`:
+
+| Secret | Purpose |
+|--------|---------|
+| `cluster-secret` | Cluster identity, used for internal endpoint auth |
+| `rqlite-auth.json` | RQLite HTTP basic auth credentials |
+| `api-key-hmac-secret` | HMAC key for API key hashing |
+| `olric-encryption-key` | Olric memberlist gossip encryption |
+
+These are generated at cluster genesis and distributed to joining nodes via the encrypted join response over WireGuard.
+
+## Security Checklist for Operators
+
+After setting up a node, verify:
+
+1. `ss -tlnp` — only expected ports are listening (22, 53, 80, 443, 51820)
+2. `ss -tlnp6` — no IPv6 listeners
+3. `curl http://10.0.0.x:5001/db/query` without auth — returns 401
+4. `wg show wg0` — recent handshakes with all peers
+5. `ps aux | grep orama` — services running as `orama` user, not root
+6. `orama monitor report --env <env>` — all health checks pass

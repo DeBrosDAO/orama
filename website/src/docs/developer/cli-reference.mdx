@@ -1,0 +1,524 @@
+# CLI Reference
+
+The Orama CLI is the command-line tool for deploying applications, managing databases, running serverless functions, and interacting with the Orama network. This page covers every developer-facing command.
+
+## Installation
+
+The CLI is a Go binary built from source:
+
+```bash
+git clone https://github.com/DeBrosOfficial/network.git
+cd network
+make build
+./bin/orama version
+```
+
+You can also add `./bin` to your `PATH` or copy the binary to `/usr/local/bin`.
+
+## Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `--help` | Show help for any command |
+
+---
+
+## Authentication
+
+Manage wallet-based authentication and credentials. Credentials are stored at `~/.orama/credentials.json`.
+
+```bash
+orama auth <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `login` | Authenticate with your wallet (opens browser) |
+| `logout` | Clear stored credentials |
+| `whoami` | Show current authentication status |
+| `status` | Show detailed authentication info |
+| `list` | List all stored credentials |
+| `switch` | Switch between stored credentials |
+
+### Login Flags
+
+| Flag | Description |
+|------|-------------|
+| `--wallet <0x...>` | Specify wallet address |
+| `--namespace <name>` | Target a specific namespace |
+| `--simple` | Use simple auth without signature (dev only) |
+
+### Examples
+
+```bash
+# Authenticate with your wallet
+orama auth login
+
+# Login to a specific namespace
+orama auth login --namespace my-namespace
+
+# Check who you're logged in as
+orama auth whoami
+
+# View detailed auth info (token expiry, environment, etc.)
+orama auth status
+
+# Switch to a different stored credential
+orama auth switch
+
+# Clear credentials and log out
+orama auth logout
+```
+
+---
+
+## Environment
+
+Manage which Orama environment the CLI targets.
+
+```bash
+orama env <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all available environments |
+| `current` | Show the active environment |
+| `use <name>` | Switch to a different environment (alias: `switch`) |
+| `add <name> <gateway_url> [description]` | Add a custom environment |
+| `remove <name>` | Remove an environment |
+
+Default environments:
+
+| Name | Gateway URL | Description |
+|------|-------------|-------------|
+| `devnet` | `https://orama-devnet.network` | Development (default) |
+| `testnet` | `https://orama-testnet.network` | Staging |
+| `production` | `https://dbrs.space` | Production |
+
+### Examples
+
+```bash
+# See all environments
+orama env list
+
+# Check which environment is active
+orama env current
+
+# Switch to testnet
+orama env use testnet
+
+# Add a custom environment pointing to a local gateway
+orama env add local http://localhost:8080 "Local development"
+
+# Remove a custom environment
+orama env remove local
+```
+
+---
+
+## Deploy
+
+Deploy applications to the Orama network. Each deployment type has its own subcommand.
+
+```bash
+orama deploy <type> <path> --name <name> [flags]
+```
+
+### Deployment Types
+
+#### Static Sites
+
+```bash
+orama deploy static <path> --name <name> [flags]
+```
+
+Deploy a directory of static files (HTML, CSS, JS, images).
+
+#### Next.js Applications
+
+```bash
+orama deploy nextjs <path> --name <name> [flags]
+```
+
+Deploy a Next.js application. Supports both static export and server-side rendering.
+
+#### Go Applications
+
+```bash
+orama deploy go <path> --name <name> [flags]
+```
+
+Deploy a compiled Go application.
+
+#### Node.js Applications
+
+```bash
+orama deploy nodejs <path> --name <name> [flags]
+```
+
+Deploy a Node.js application.
+
+### Deploy Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--name <name>` | string | required | Application name |
+| `--subdomain <domain>` | string | — | Custom subdomain for the deployment |
+| `--update` | boolean | `false` | Update an existing deployment instead of creating new |
+| `--ssr` | boolean | `false` | Enable server-side rendering (Next.js only) |
+
+### Examples
+
+```bash
+# Deploy a static site
+orama deploy static ./dist --name my-website
+
+# Deploy a static site with a custom subdomain
+orama deploy static ./build --name my-site --subdomain my-site
+
+# Deploy a Next.js app with SSR
+orama deploy nextjs ./my-next-app --name my-next-app --ssr
+
+# Update an existing deployment
+orama deploy static ./dist --name my-website --update
+
+# Deploy a Go application
+orama deploy go ./my-go-app --name my-api
+
+# Deploy a Node.js application
+orama deploy nodejs ./my-node-app --name my-service
+```
+
+---
+
+## App Management
+
+Manage deployed applications: inspect, delete, rollback, view logs, and check resource usage. Also accessible as `orama apps`.
+
+```bash
+orama app <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all your deployments |
+| `get <name>` | Get details about a specific deployment |
+| `delete <name>` | Delete a deployment (prompts for confirmation) |
+| `rollback <name> --version <n>` | Rollback to a previous version |
+| `logs <name>` | Stream deployment logs |
+| `stats <name>` | Show resource usage (CPU, RAM, disk) |
+
+### App Logs Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-f`, `--follow` | boolean | `false` | Stream logs in real-time |
+| `-n`, `--lines <n>` | integer | `100` | Number of log lines to show |
+
+### Examples
+
+```bash
+# List all deployments
+orama app list
+
+# Get details about a specific app
+orama app get my-website
+
+# View the last 50 log lines
+orama app logs my-website --lines 50
+
+# Stream logs in real-time
+orama app logs my-website --follow
+
+# Check resource usage
+orama app stats my-website
+
+# Rollback to version 3
+orama app rollback my-website --version 3
+
+# Delete an app (will prompt for confirmation)
+orama app delete my-website
+```
+
+---
+
+## Database
+
+Create and manage per-namespace SQLite databases.
+
+```bash
+orama db <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `create <name>` | Create a new SQLite database |
+| `list` | List all databases |
+| `query <name> "<sql>"` | Execute a SQL query |
+| `backup <name>` | Backup database to IPFS |
+| `backups <name>` | List available backups |
+
+### Examples
+
+```bash
+# Create a new database
+orama db create my-database
+
+# List all databases
+orama db list
+
+# Execute a SQL query
+orama db query my-database "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
+
+# Insert data
+orama db query my-database "INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')"
+
+# Query data
+orama db query my-database "SELECT * FROM users"
+
+# Backup database to IPFS
+orama db backup my-database
+
+# List all backups
+orama db backups my-database
+```
+
+---
+
+## Functions
+
+Create, build, deploy, and manage serverless WebAssembly (WASM) functions.
+
+```bash
+orama function <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `init <name>` | Initialize a new function project |
+| `build [directory]` | Build the function into a WASM binary |
+| `deploy [directory]` | Deploy the built function to the network |
+| `invoke <name>` | Invoke a deployed function |
+| `list` | List all deployed functions |
+| `get <name>` | Get details about a specific function |
+| `delete <name>` | Delete a function |
+| `logs <name>` | Get execution logs |
+| `versions <name>` | Show version history |
+
+### Function Flags
+
+| Flag | Command | Default | Description |
+|------|---------|---------|-------------|
+| `--data <json>` | `invoke` | `"{}"` | JSON payload to pass to the function |
+| `--limit <n>` | `logs` | `50` | Number of log entries to show |
+| `-f`, `--force` | `delete` | `false` | Skip confirmation prompt |
+
+### Function Secrets
+
+Manage encrypted secrets (AES-256-GCM) accessible from within functions:
+
+```bash
+orama function secrets <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `set <name> [value]` | Set a secret (or use `--from-file`) |
+| `list` | List all secret names (values are never shown) |
+| `delete <name>` | Delete a secret (`-f` to skip confirmation) |
+
+```bash
+# Set a secret value directly
+orama function secrets set MY_API_KEY sk-abc123
+
+# Set a secret from a file
+orama function secrets set TLS_CERT --from-file ./cert.pem
+
+# List all secrets
+orama function secrets list
+
+# Delete a secret
+orama function secrets delete MY_API_KEY
+```
+
+### Function Triggers
+
+Configure PubSub triggers that invoke functions when messages arrive on a topic:
+
+```bash
+orama function triggers <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `add <func-name> --topic <topic>` | Add a PubSub trigger |
+| `list <func-name>` | List triggers for a function |
+| `delete <func-name> <trigger-id>` | Delete a trigger |
+
+```bash
+# Add a PubSub trigger
+orama function triggers add my-function --topic user-events
+
+# List triggers
+orama function triggers list my-function
+
+# Delete a trigger
+orama function triggers delete my-function trigger-abc123
+```
+
+### Examples
+
+```bash
+# Initialize a new function project
+orama function init my-function
+
+# Build the WASM binary (from current directory or specified directory)
+orama function build
+orama function build ./my-function
+
+# Deploy to the network (auto-builds if no .wasm exists)
+orama function deploy
+orama function deploy ./my-function
+
+# Invoke a function with data
+orama function invoke my-function --data '{"key": "value"}'
+
+# Invoke a function without data (sends empty JSON object)
+orama function invoke my-function
+
+# List all functions
+orama function list
+
+# Get function details
+orama function get my-function
+
+# View execution logs
+orama function logs my-function
+orama function logs my-function --limit 100
+
+# Check version history
+orama function versions my-function
+
+# Delete a function (with confirmation)
+orama function delete my-function
+orama function delete my-function --force
+```
+
+---
+
+## Namespace
+
+Manage namespaces and their features.
+
+```bash
+orama namespace <subcommand>
+```
+
+The `ns` alias is also available: `orama ns <subcommand>`.
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all namespaces (alias: `ls`) |
+| `delete` | Delete a namespace |
+| `repair <name>` | Repair an under-provisioned namespace |
+| `enable <feature> --namespace <name>` | Enable a feature on a namespace |
+| `disable <feature> --namespace <name>` | Disable a feature on a namespace |
+| `webrtc-status --namespace <name>` | Check WebRTC status for a namespace |
+
+### Namespace Delete Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--force` | boolean | `false` | Skip confirmation prompt |
+
+### Examples
+
+```bash
+# List all namespaces
+orama namespace list
+orama ns ls
+
+# Delete a namespace (prompts for confirmation)
+orama namespace delete
+
+# Force delete without confirmation
+orama namespace delete --force
+
+# Repair an under-provisioned namespace
+orama namespace repair my-namespace
+
+# Enable WebRTC
+orama namespace enable webrtc --namespace my-namespace
+
+# Disable WebRTC
+orama namespace disable webrtc --namespace my-namespace
+
+# Check WebRTC status
+orama namespace webrtc-status --namespace my-namespace
+```
+
+---
+
+## Sandbox
+
+Spin up ephemeral test clusters for development and testing. Sandbox clusters run on Hetzner Cloud and provide a fully functional 5-node Orama environment.
+
+```bash
+orama sandbox <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `setup` | Interactive setup (configure Hetzner API credentials) |
+| `create` | Create a new 5-node sandbox cluster |
+| `destroy` | Tear down a sandbox cluster |
+| `list` | List all sandbox clusters |
+| `status` | Show cluster health report |
+| `rollout` | Build, push, and upgrade all nodes |
+| `ssh <node-number>` | SSH into a specific node (1-5) |
+| `reset` | Delete all sandbox infrastructure and config to start fresh |
+
+### Sandbox Flags
+
+| Flag | Commands | Default | Description |
+|------|----------|---------|-------------|
+| `--name <name>` | `create`, `destroy`, `status`, `rollout`, `ssh` | — | Target a specific sandbox cluster by name |
+| `--force` | `destroy` | `false` | Skip confirmation on destroy |
+
+### Examples
+
+```bash
+# One-time setup (configures Hetzner credentials)
+orama sandbox setup
+
+# Create a new sandbox cluster
+orama sandbox create
+orama sandbox create --name my-test-cluster
+
+# Check cluster health
+orama sandbox status
+orama sandbox status --name my-test-cluster
+
+# Build, push, and upgrade all nodes
+orama sandbox rollout
+orama sandbox rollout --name my-test-cluster
+
+# SSH into node 2
+orama sandbox ssh 2
+orama sandbox ssh 3 --name my-test-cluster
+
+# List all sandbox clusters
+orama sandbox list
+
+# Tear down a cluster
+orama sandbox destroy
+orama sandbox destroy --name my-test-cluster --force
+
+# Nuclear reset (delete all Hetzner infra and local config)
+orama sandbox reset
+```
+
+---
+
+Run `orama --help` or `orama <command> --help` for the latest available commands and flags.

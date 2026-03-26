@@ -1,0 +1,528 @@
+package installers
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+)
+
+const (
+	coreDNSRepo = "https://github.com/coredns/coredns.git"
+)
+
+// CoreDNSInstaller handles CoreDNS installation with RQLite plugin
+type CoreDNSInstaller struct {
+	*BaseInstaller
+	version      string
+	oramaHome    string
+	rqlitePlugin string // Path to the RQLite plugin source
+}
+
+// NewCoreDNSInstaller creates a new CoreDNS installer
+func NewCoreDNSInstaller(arch string, logWriter io.Writer, oramaHome string) *CoreDNSInstaller {
+	return &CoreDNSInstaller{
+		BaseInstaller: NewBaseInstaller(arch, logWriter),
+		version:       constants.CoreDNSVersion,
+		oramaHome:     oramaHome,
+		rqlitePlugin:  filepath.Join(oramaHome, "src", "pkg", "coredns", "rqlite"),
+	}
+}
+
+// IsInstalled checks if CoreDNS with RQLite plugin is already installed
+func (ci *CoreDNSInstaller) IsInstalled() bool {
+	// Check if coredns binary exists
+	corednsPath := "/usr/local/bin/coredns"
+	if _, err := os.Stat(corednsPath); os.IsNotExist(err) {
+		return false
+	}
+
+	// Verify it has the rqlite plugin
+	cmd := exec.Command(corednsPath, "-plugins")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	return containsLine(string(output), "rqlite")
+}
+
+// Install builds and installs CoreDNS with the custom RQLite plugin
+// DisableResolvedStubListener disables systemd-resolved's DNS stub listener
+// so CoreDNS can bind to port 53. This is required on Ubuntu/Debian systems
+// where systemd-resolved listens on 127.0.0.53:53 by default.
+func (ci *CoreDNSInstaller) DisableResolvedStubListener() error {
+	// Check if systemd-resolved is running
+	if err := exec.Command("systemctl", "is-active", "--quiet", "systemd-resolved").Run(); err != nil {
+		return nil // Not running, nothing to do
+	}
+
+	fmt.Fprintf(ci.logWriter, "  Disabling systemd-resolved DNS stub listener (for CoreDNS)...\n")
+
+	// Disable the stub listener
+	resolvedConf := "/etc/systemd/resolved.conf.d/no-stub.conf"
+	if err := os.MkdirAll("/etc/systemd/resolved.conf.d", 0755); err != nil {
+		return fmt.Errorf("failed to create resolved.conf.d: %w", err)
+	}
+	conf := "[Resolve]\nDNSStubListener=no\n"
+	if err := os.WriteFile(resolvedConf, []byte(conf), 0644); err != nil {
+		return fmt.Errorf("failed to write resolved config: %w", err)
+	}
+
+	// Point resolv.conf to localhost (CoreDNS) and a fallback
+	resolvConf := "nameserver 127.0.0.1\nnameserver 8.8.8.8\n"
+	if err := os.Remove("/etc/resolv.conf"); err != nil && !os.IsNotExist(err) {
+		// It might be a symlink
+		fmt.Fprintf(ci.logWriter, "    ⚠️  Could not remove /etc/resolv.conf: %v\n", err)
+	}
+	if err := os.WriteFile("/etc/resolv.conf", []byte(resolvConf), 0644); err != nil {
+		return fmt.Errorf("failed to write resolv.conf: %w", err)
+	}
+
+	// Restart systemd-resolved
+	if output, err := exec.Command("systemctl", "restart", "systemd-resolved").CombinedOutput(); err != nil {
+		fmt.Fprintf(ci.logWriter, "    ⚠️  Failed to restart systemd-resolved: %v (%s)\n", err, string(output))
+	}
+
+	fmt.Fprintf(ci.logWriter, "  ✓ systemd-resolved stub listener disabled\n")
+	return nil
+}
+
+func (ci *CoreDNSInstaller) Install() error {
+	if ci.IsInstalled() {
+		fmt.Fprintf(ci.logWriter, "  ✓ CoreDNS with RQLite plugin already installed\n")
+		return nil
+	}
+
+	fmt.Fprintf(ci.logWriter, "  Building CoreDNS with RQLite plugin...\n")
+
+	// Check if Go is available
+	if _, err := exec.LookPath("go"); err != nil {
+		return fmt.Errorf("go not found - required to build CoreDNS. Please install Go first")
+	}
+
+	// Check if RQLite plugin source exists
+	if _, err := os.Stat(ci.rqlitePlugin); os.IsNotExist(err) {
+		return fmt.Errorf("RQLite plugin source not found at %s - ensure the repository is cloned", ci.rqlitePlugin)
+	}
+
+	buildDir := "/tmp/coredns-build"
+
+	// Clean up any previous build
+	os.RemoveAll(buildDir)
+	if err := os.MkdirAll(buildDir, 0755); err != nil {
+		return fmt.Errorf("failed to create build directory: %w", err)
+	}
+	defer os.RemoveAll(buildDir)
+
+	// Clone CoreDNS
+	fmt.Fprintf(ci.logWriter, "    Cloning CoreDNS v%s...\n", ci.version)
+	cmd := exec.Command("git", "clone", "--depth", "1", "--branch", "v"+ci.version, coreDNSRepo, buildDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to clone CoreDNS: %w\n%s", err, string(output))
+	}
+
+	// Copy custom RQLite plugin
+	fmt.Fprintf(ci.logWriter, "    Copying RQLite plugin...\n")
+	pluginDir := filepath.Join(buildDir, "plugin", "rqlite")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		return fmt.Errorf("failed to create plugin directory: %w", err)
+	}
+
+	// Copy all .go files from the RQLite plugin
+	files, err := os.ReadDir(ci.rqlitePlugin)
+	if err != nil {
+		return fmt.Errorf("failed to read plugin source: %w", err)
+	}
+
+	for _, file := range files {
+		if file.IsDir() || filepath.Ext(file.Name()) != ".go" {
+			continue
+		}
+		srcPath := filepath.Join(ci.rqlitePlugin, file.Name())
+		dstPath := filepath.Join(pluginDir, file.Name())
+
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", file.Name(), err)
+		}
+		if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", file.Name(), err)
+		}
+	}
+
+	// Create plugin.cfg with our custom RQLite plugin
+	fmt.Fprintf(ci.logWriter, "    Configuring plugins...\n")
+	pluginCfg := ci.generatePluginConfig()
+	pluginCfgPath := filepath.Join(buildDir, "plugin.cfg")
+	if err := os.WriteFile(pluginCfgPath, []byte(pluginCfg), 0644); err != nil {
+		return fmt.Errorf("failed to write plugin.cfg: %w", err)
+	}
+
+	// Add dependencies
+	fmt.Fprintf(ci.logWriter, "    Adding dependencies...\n")
+	goPath := os.Getenv("PATH") + ":/usr/local/go/bin"
+
+	getCmd := exec.Command("go", "get", "github.com/miekg/dns@latest")
+	getCmd.Dir = buildDir
+	getCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
+	if output, err := getCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to get miekg/dns: %w\n%s", err, string(output))
+	}
+
+	getCmd = exec.Command("go", "get", "go.uber.org/zap@latest")
+	getCmd.Dir = buildDir
+	getCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
+	if output, err := getCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to get zap: %w\n%s", err, string(output))
+	}
+
+	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd.Dir = buildDir
+	tidyCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
+	if output, err := tidyCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to run go mod tidy: %w\n%s", err, string(output))
+	}
+
+	// Generate plugin code
+	fmt.Fprintf(ci.logWriter, "    Generating plugin code...\n")
+	genCmd := exec.Command("go", "generate")
+	genCmd.Dir = buildDir
+	genCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
+	if output, err := genCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to generate: %w\n%s", err, string(output))
+	}
+
+	// Build CoreDNS
+	fmt.Fprintf(ci.logWriter, "    Building CoreDNS binary...\n")
+	buildCmd := exec.Command("go", "build", "-o", "coredns")
+	buildCmd.Dir = buildDir
+	buildCmd.Env = append(os.Environ(), "PATH="+goPath, "CGO_ENABLED=0", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to build CoreDNS: %w\n%s", err, string(output))
+	}
+
+	// Verify the binary has rqlite plugin
+	verifyCmd := exec.Command(filepath.Join(buildDir, "coredns"), "-plugins")
+	output, err := verifyCmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to verify CoreDNS binary: %w", err)
+	}
+	if !containsLine(string(output), "rqlite") {
+		return fmt.Errorf("CoreDNS binary does not contain rqlite plugin")
+	}
+
+	// Install the binary
+	fmt.Fprintf(ci.logWriter, "    Installing CoreDNS binary...\n")
+	srcBinary := filepath.Join(buildDir, "coredns")
+	dstBinary := "/usr/local/bin/coredns"
+
+	data, err := os.ReadFile(srcBinary)
+	if err != nil {
+		return fmt.Errorf("failed to read built binary: %w", err)
+	}
+	if err := os.WriteFile(dstBinary, data, 0755); err != nil {
+		return fmt.Errorf("failed to install binary: %w", err)
+	}
+
+	fmt.Fprintf(ci.logWriter, "  ✓ CoreDNS with RQLite plugin installed\n")
+	return nil
+}
+
+// Configure creates CoreDNS configuration files and attempts to seed static DNS records
+func (ci *CoreDNSInstaller) Configure(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	configDir := "/etc/coredns"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Create Corefile (uses only RQLite plugin)
+	corefile := ci.generateCorefile(domain, rqliteDSN)
+	if err := os.WriteFile(filepath.Join(configDir, "Corefile"), []byte(corefile), 0644); err != nil {
+		return fmt.Errorf("failed to write Corefile: %w", err)
+	}
+
+	// Attempt to seed static DNS records into RQLite
+	// This may fail if RQLite is not running yet - that's OK, SeedDNS can be called later
+	fmt.Fprintf(ci.logWriter, "  Seeding static DNS records into RQLite...\n")
+	if err := ci.seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+		// Don't fail on seed errors - RQLite might not be up yet
+		fmt.Fprintf(ci.logWriter, "  ⚠️  Could not seed DNS records (RQLite may not be ready): %v\n", err)
+		fmt.Fprintf(ci.logWriter, "     DNS records will be seeded after services start\n")
+	} else {
+		fmt.Fprintf(ci.logWriter, "  ✓ Static DNS records seeded\n")
+	}
+
+	return nil
+}
+
+// SeedDNS seeds static DNS records into RQLite. Call this after RQLite is running.
+func (ci *CoreDNSInstaller) SeedDNS(domain string, rqliteDSN string, ns1IP, ns2IP, ns3IP string) error {
+	fmt.Fprintf(ci.logWriter, "  Seeding static DNS records into RQLite...\n")
+	if err := ci.seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
+		return err
+	}
+	fmt.Fprintf(ci.logWriter, "  ✓ Static DNS records seeded\n")
+	return nil
+}
+
+// generatePluginConfig creates the plugin.cfg for CoreDNS
+func (ci *CoreDNSInstaller) generatePluginConfig() string {
+	return `# CoreDNS plugins with RQLite support for dynamic DNS records
+metadata:metadata
+cancel:cancel
+tls:tls
+reload:reload
+nsid:nsid
+bufsize:bufsize
+root:root
+bind:bind
+debug:debug
+trace:trace
+ready:ready
+health:health
+pprof:pprof
+prometheus:metrics
+errors:errors
+log:log
+dnstap:dnstap
+local:local
+dns64:dns64
+acl:acl
+any:any
+chaos:chaos
+loadbalance:loadbalance
+cache:cache
+rewrite:rewrite
+header:header
+dnssec:dnssec
+autopath:autopath
+minimal:minimal
+template:template
+transfer:transfer
+hosts:hosts
+file:file
+auto:auto
+secondary:secondary
+loop:loop
+forward:forward
+grpc:grpc
+erratic:erratic
+whoami:whoami
+on:github.com/coredns/caddy/onevent
+sign:sign
+view:view
+rqlite:rqlite
+`
+}
+
+// generateCorefile creates the CoreDNS configuration (RQLite only).
+// If RQLite credentials exist on disk, they are included in the config.
+func (ci *CoreDNSInstaller) generateCorefile(domain, rqliteDSN string) string {
+	// Read RQLite credentials from secrets if available
+	authBlock := ""
+	if data, err := os.ReadFile("/opt/orama/.orama/secrets/rqlite-password"); err == nil {
+		password := strings.TrimSpace(string(data))
+		if password != "" {
+			authBlock = fmt.Sprintf("        username orama\n        password %s\n", password)
+		}
+	}
+
+	return fmt.Sprintf(`# CoreDNS configuration for %s
+# Uses RQLite for ALL DNS records (static + dynamic)
+# Static records (SOA, NS, A) are seeded into RQLite during installation
+
+%s {
+    # RQLite handles all records: SOA, NS, A, TXT (ACME), etc.
+    rqlite {
+        dsn %s
+        refresh 5s
+        ttl 30
+        cache_size 10000
+%s    }
+
+    # Enable logging and error reporting
+    log
+    errors
+    # NOTE: No cache here — the rqlite plugin has its own cache.
+    # CoreDNS cache would cache NXDOMAIN and break ACME DNS-01 challenges.
+}
+
+# Forward non-authoritative queries to upstream DNS (localhost only).
+# The bind directive restricts this block to 127.0.0.1 so the node itself
+# can resolve external domains (apt, github, etc.) but external clients
+# cannot use this server as an open recursive resolver (BSI/CERT-Bund).
+. {
+    bind 127.0.0.1
+    forward . 8.8.8.8 8.8.4.4 1.1.1.1
+    cache 300
+    errors
+}
+`, domain, domain, rqliteDSN, authBlock)
+}
+
+// seedStaticRecords inserts static zone records into RQLite (non-destructive)
+// Each node only adds its own IP to the round-robin. SOA and NS records are upserted idempotently.
+func (ci *CoreDNSInstaller) seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, ns3IP string) error {
+	// Generate serial based on current date
+	serial := fmt.Sprintf("%d", time.Now().Unix())
+
+	// SOA record format: "mname rname serial refresh retry expire minimum"
+	soaValue := fmt.Sprintf("ns1.%s. admin.%s. %s 3600 1800 604800 300", domain, domain, serial)
+
+	var statements []string
+
+	// SOA record — delete old and insert new (serial changes each time, so value differs)
+	statements = append(statements, fmt.Sprintf(
+		`DELETE FROM dns_records WHERE fqdn = '%s.' AND record_type = 'SOA' AND namespace = 'system'`,
+		domain,
+	))
+	statements = append(statements, fmt.Sprintf(
+		`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s.', 'SOA', '%s', 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))`,
+		domain, soaValue,
+	))
+
+	// NS records — idempotent insert
+	for i := 1; i <= 3; i++ {
+		statements = append(statements, fmt.Sprintf(
+			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s.', 'NS', 'ns%d.%s.', 300, 'system', 'system', TRUE, datetime('now'), datetime('now')) ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+			domain, i, domain,
+		))
+	}
+
+	// NOTE: Nameserver glue A records (ns1/ns2/ns3) are NOT seeded here.
+	// They are managed by each node's claimNameserverSlot() on the heartbeat loop,
+	// which correctly maps each NS hostname to exactly one node's IP.
+
+	// Round-robin A records — each unique IP is added once (no duplicates due to UNIQUE constraint)
+	uniqueIPs := make(map[string]bool)
+	for _, ip := range []string{ns1IP, ns2IP, ns3IP} {
+		if !uniqueIPs[ip] {
+			uniqueIPs[ip] = true
+			// Root domain A record
+			statements = append(statements, fmt.Sprintf(
+				`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('%s.', 'A', '%s', 300, 'system', 'system', TRUE, datetime('now'), datetime('now')) ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+				domain, ip,
+			))
+			// Wildcard A record
+			statements = append(statements, fmt.Sprintf(
+				`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at) VALUES ('*.%s.', 'A', '%s', 300, 'system', 'system', TRUE, datetime('now'), datetime('now')) ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
+				domain, ip,
+			))
+		}
+	}
+
+	// Execute via RQLite HTTP API
+	return ci.executeRQLiteStatements(rqliteDSN, statements)
+}
+
+
+// rqliteResult represents the response from RQLite execute endpoint
+type rqliteResult struct {
+	Results []struct {
+		Error        string `json:"error,omitempty"`
+		RowsAffected int    `json:"rows_affected,omitempty"`
+		LastInsertID int    `json:"last_insert_id,omitempty"`
+	} `json:"results"`
+}
+
+// executeRQLiteStatements executes SQL statements via RQLite HTTP API
+func (ci *CoreDNSInstaller) executeRQLiteStatements(rqliteDSN string, statements []string) error {
+	// RQLite execute endpoint
+	executeURL := rqliteDSN + "/db/execute?pretty&timings"
+
+	// Build request body
+	body, err := json.Marshal(statements)
+	if err != nil {
+		return fmt.Errorf("failed to marshal statements: %w", err)
+	}
+
+	// Log what we're sending for debugging
+	fmt.Fprintf(ci.logWriter, "    Executing %d SQL statements...\n", len(statements))
+
+	// Create request
+	req, err := http.NewRequest("POST", executeURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Execute with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("RQLite returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse response to check for SQL errors
+	var result rqliteResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return fmt.Errorf("failed to parse RQLite response: %w (body: %s)", err, string(respBody))
+	}
+
+	// Check each result for errors
+	var errors []string
+	successCount := 0
+	for i, r := range result.Results {
+		if r.Error != "" {
+			errors = append(errors, fmt.Sprintf("statement %d: %s", i+1, r.Error))
+		} else {
+			successCount++
+		}
+	}
+
+	if len(errors) > 0 {
+		fmt.Fprintf(ci.logWriter, "    ⚠️  %d/%d statements succeeded, %d failed\n", successCount, len(statements), len(errors))
+		return fmt.Errorf("SQL errors: %v", errors)
+	}
+
+	fmt.Fprintf(ci.logWriter, "    ✓ All %d statements executed successfully\n", successCount)
+	return nil
+}
+
+// containsLine checks if a string contains a specific line
+func containsLine(text, line string) bool {
+	for _, l := range splitLines(text) {
+		if l == line || l == "dns."+line {
+			return true
+		}
+	}
+	return false
+}
+
+// splitLines splits a string into lines
+func splitLines(text string) []string {
+	var lines []string
+	var current string
+	for _, c := range text {
+		if c == '\n' {
+			lines = append(lines, current)
+			current = ""
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}

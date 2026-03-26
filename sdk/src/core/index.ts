@@ -1,0 +1,10 @@
+export { HttpClient, type HttpClientConfig, type NetworkErrorCallback, type NetworkErrorContext } from "./http";
+export { WSClient, type WSClientConfig } from "./ws";
+export type { IHttpTransport, RequestOptions } from "./interfaces/IHttpTransport";
+export type { IWebSocketClient } from "./interfaces/IWebSocketClient";
+export type { IAuthStrategy, RequestContext } from "./interfaces/IAuthStrategy";
+export type { IRetryPolicy } from "./interfaces/IRetryPolicy";
+export { PathBasedAuthStrategy } from "./transport/AuthHeaderStrategy";
+export { ExponentialBackoffRetryPolicy } from "./transport/RequestRetryPolicy";
+export { RequestLogger } from "./transport/RequestLogger";
+export { TLSConfiguration } from "./transport/TLSConfiguration";

@@ -46,6 +46,7 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Build binary
+        working-directory: core
         env:
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 0
@@ -57,9 +58,9 @@ jobs:
 
           mkdir -p build/usr/local/bin
           go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama cmd/cli/main.go
-          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/debros-node cmd/node/main.go
+          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama-node cmd/node/main.go
           # Build the entire gateway package so helper files (e.g., config parsing) are included
-          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/debros-gateway ./cmd/gateway
+          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama-gateway ./cmd/gateway
 
       - name: Create Debian package structure
         run: |
@@ -71,7 +72,7 @@ jobs:
           mkdir -p ${PKG_NAME}/usr/local/bin
 
           # Copy binaries
-          cp build/usr/local/bin/* ${PKG_NAME}/usr/local/bin/
+          cp core/build/usr/local/bin/* ${PKG_NAME}/usr/local/bin/
           chmod 755 ${PKG_NAME}/usr/local/bin/*
 
           # Create control file
@@ -82,7 +83,7 @@ jobs:
           Priority: optional
           Architecture: ${ARCH}
           Depends: libc6
-          Maintainer: DeBros Team <team@debros.network>
+          Maintainer: DeBros Team <team@orama.network>
           Description: Orama Network - Distributed P2P Database System
            Orama is a distributed peer-to-peer network that combines
            RQLite for distributed SQL, IPFS for content-addressed storage,

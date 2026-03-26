@@ -1,0 +1,32 @@
+[Unit]
+Description=IPFS Cluster Service ({{.NodeType}})
+After=orama-ipfs-{{.NodeType}}.service
+Wants=orama-ipfs-{{.NodeType}}.service
+Requires=orama-ipfs-{{.NodeType}}.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths={{.ClusterPath}} {{.OramaDir}}
+WorkingDirectory={{.HomeDir}}
+Environment=HOME={{.HomeDir}}
+Environment=CLUSTER_PATH={{.ClusterPath}}
+ExecStart=/usr/local/bin/ipfs-cluster-service daemon --config {{.ClusterPath}}/service.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipfs-cluster-{{.NodeType}}
+
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
