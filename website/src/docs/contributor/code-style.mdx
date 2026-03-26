@@ -1,0 +1,117 @@
+# Code Style Guide
+
+Consistent code style makes the codebase easier to read, review, and maintain. This guide covers the conventions, patterns, and requirements for contributing to the Orama ecosystem.
+
+## Go Conventions
+
+The network codebase follows standard Go conventions with a few project-specific rules.
+
+### Formatting
+
+All Go code must be formatted with `gofmt`. This is non-negotiable.
+
+```bash
+# Format all files
+gofmt -w .
+
+# Or use go fmt
+go fmt ./...
+```
+
+### Naming
+
+- **Packages** — Short, lowercase, single-word names. No underscores or camelCase.
+- **Exported functions** — PascalCase, descriptive verbs: `CreateDeployment`, `GetCacheEntry`
+- **Unexported functions** — camelCase: `validateToken`, `buildResponse`
+- **Constants** — PascalCase for exported, camelCase for unexported. No `ALL_CAPS`.
+- **Interfaces** — Named by behavior, not by "I" prefix: `Reader`, `Deployer`, `CacheStore`
+
+### Error Handling
+
+Errors are first-class citizens. Follow these patterns:
+
+```go
+// Always check errors. Never use _ for error returns.
+result, err := doSomething()
+if err != nil {
+    return fmt.Errorf("failed to do something: %w", err)
+}
+
+// Wrap errors with context using %w for unwrapping support
+conn, err := db.Connect(config)
+if err != nil {
+    return fmt.Errorf("connect to database %q: %w", config.Name, err)
+}
+```
+
+**Actionable error messages** — Every error should tell the reader what went wrong and provide enough context to diagnose the issue. Not just `"connection failed"` but `"failed to connect to Olric on 10.0.0.3:3320, verify the service is running"`.
+
+### File Organization
+
+- **One responsibility per file** — A file should do one thing well
+- **Keep files under 300 lines** — If a file grows larger, split it
+- **Group handlers by domain** — `handlers/auth/`, `handlers/storage/`, `handlers/cache/` etc.
+- **No magic values** — Use named constants at the top of the file or in a shared constants package
+
+```go
+// Good: named constants
+const (
+    DefaultCacheTTL    = 300 * time.Second
+    MaxDeploymentSize  = 100 * 1024 * 1024 // 100 MB
+    HealthCheckTimeout = 10 * time.Second
+)
+```
+
+## TypeScript Conventions
+
+For the SDK, website, and playground:
+
+- **Strict mode** — `strict: true` in tsconfig, no exceptions
+- **Type imports** — Use `import type { Foo }` for type-only imports (required by `verbatimModuleSyntax`)
+- **No unused locals** — All imports and variables must be used
+- **Formatting** — Prettier with project defaults
+- **Naming** — camelCase for variables/functions, PascalCase for types/classes/components
+
+## PR Requirements
+
+All pull requests must:
+
+1. **Pass CI** — All tests pass, linting passes, build succeeds
+2. **Include tests** — Logic changes require unit tests; bug fixes require a regression test
+3. **Be focused** — One concern per PR. Don't mix refactoring with feature work
+4. **Have a clear description** — Explain what changed, why, and how to test it
+
+## Commit Message Format
+
+Write clear, imperative commit messages:
+
+```
+<type>: <short description>
+
+<optional body with more context>
+```
+
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
+
+Examples:
+
+```
+feat: add PubSub topic filtering by prefix
+
+fix: prevent Olric client initialization before service is ready
+
+refactor: extract JWT validation into middleware package
+
+test: add coverage for database transaction rollback
+```
+
+Keep the first line under 72 characters. Use the body to explain "why" when the change isn't self-evident.
+
+## Distributed System Rules
+
+When working on the network codebase, follow these rules:
+
+- **Health checks over sleeps** — Never use `time.Sleep()` to wait for a service. Poll the readiness indicator (TCP port, HTTP endpoint, file existence) with a timeout.
+- **Fail fast, fail loud** — If something is wrong, return an error immediately. Never swallow errors or log a warning and continue.
+- **Fix root causes** — Never add fallbacks that mask problems. If something fails, fix why it fails.
+- **Validate at boundaries** — Validate user input and external API responses. Trust internal code.

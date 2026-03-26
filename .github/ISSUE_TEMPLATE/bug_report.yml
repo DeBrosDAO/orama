@@ -1,0 +1,91 @@
+name: Bug Report
+description: Report a bug in Orama Network
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below.
+
+        **Security issues:** If this is a security vulnerability, do NOT open an issue. Email security@orama.io instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Orama version
+      description: "Run `orama version` to find this"
+      placeholder: "v0.18.0-beta"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Gateway / API
+        - CLI (orama command)
+        - WireGuard / Networking
+        - RQLite / Storage
+        - Olric / Caching
+        - IPFS / Pinning
+        - CoreDNS
+        - OramaOS
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior
+      placeholder: |
+        1. Run `orama ...`
+        2. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened (include error messages and logs if any)
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version, deployment environment, etc.
+      placeholder: |
+        - OS: Ubuntu 22.04
+        - Go: 1.23
+        - Environment: sandbox
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Logs, screenshots, monitor reports, or anything else that might help
+    validations:
+      required: false

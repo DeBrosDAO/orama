@@ -1,0 +1,298 @@
+# Monitoring
+
+Orama provides a two-component monitoring system for real-time cluster health visibility. A lightweight collector runs on each VPS node, while a local orchestrator on your machine SSHes into nodes, aggregates results, and presents them through an interactive TUI or structured output. A separate deep-inspection tool handles root-cause analysis when something is known to be broken.
+
+## Architecture
+
+The monitoring system is split into two parts:
+
+1. **`orama node report`** — Runs locally on each VPS node. Collects all system and service health data in parallel, outputs a single JSON blob. Requires root privileges.
+2. **`orama monitor`** — Runs on your local machine. SSHes into all nodes in parallel, collects their reports, then runs cross-node analysis to detect cluster-wide issues.
+
+Each node runs `orama node report --json` locally (no SSH to other nodes), collecting data via `os/exec` and `net/http` to localhost services. The monitor aggregates everything and derives alerts from cross-node analysis.
+
+## Quick Start
+
+```bash
+# Interactive TUI (auto-refreshes every 30s)
+orama monitor --env mainnet
+
+# Cluster overview table
+orama monitor cluster --env mainnet
+
+# Only show warnings and errors
+orama monitor alerts --env mainnet
+
+# Full JSON report (pipe to jq or feed to an LLM)
+orama monitor report --env mainnet
+```
+
+## The Monitor CLI
+
+### Usage
+
+```bash
+orama monitor [subcommand] --env <environment> [flags]
+```
+
+Without a subcommand, the interactive TUI launches automatically.
+
+### Global Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
+| `--json` | `false` | Machine-readable JSON output |
+| `--node` | | Filter to a specific node host or IP |
+| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `live` | Interactive TUI monitor (default when no subcommand given) |
+| `cluster` | Cluster overview: all nodes, roles, RQLite state, WireGuard peers |
+| `node` | Per-node health details (system, services, WireGuard, DNS) |
+| `service` | Service status matrix across all nodes |
+| `mesh` | WireGuard mesh connectivity and peer details |
+| `dns` | DNS health: CoreDNS, Caddy, TLS cert expiry, resolution tests |
+| `namespaces` | Namespace health across nodes |
+| `alerts` | Active alerts and warnings sorted by severity |
+| `report` | Full JSON dump optimized for LLM consumption |
+
+### Examples
+
+```bash
+# Cluster overview
+orama monitor cluster --env mainnet
+
+# Cluster overview as JSON
+orama monitor cluster --env mainnet --json
+
+# Single-node deep dive
+orama monitor node --env mainnet --node 51.195.109.238
+
+# Services for one node
+orama monitor service --env mainnet --node 51.195.109.238
+
+# WireGuard mesh details
+orama monitor mesh --env mainnet
+
+# DNS health
+orama monitor dns --env mainnet
+
+# Namespace health
+orama monitor namespaces --env mainnet
+
+# Full report for LLM analysis
+orama monitor report --env mainnet | jq .
+
+# Single-node report
+orama monitor report --env mainnet --node 51.195.109.238
+```
+
+## Interactive TUI
+
+The `live` subcommand (or running `orama monitor` with no subcommand) launches a full-screen terminal UI with auto-refresh every 30 seconds.
+
+**Tabs:** Overview | Nodes | Services | WG Mesh | DNS | Namespaces | Alerts
+
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Switch tabs |
+| `j` / `k` or Arrow keys | Scroll content |
+| `r` | Force refresh |
+| `q` / `Ctrl+C` | Quit |
+
+Colors indicate health status: green for healthy, red for critical, yellow for warning.
+
+## Node Report Collector
+
+The `orama node report` command runs locally on a VPS node and collects all system and service data in parallel. All 12 collectors run concurrently using goroutines, with typical collection time under 1 second per node.
+
+### What It Collects
+
+| Section | Data |
+|---------|------|
+| **system** | CPU count, load average, memory/disk/swap usage, OOM kills, kernel version, uptime |
+| **services** | Systemd service states, restart counts, memory and CPU per service, restart loop detection |
+| **rqlite** | Raft state, leader, term, applied/commit index, peers, strong read test, readiness check |
+| **olric** | Service state, memberlist health, member count, restarts, memory usage, log analysis |
+| **ipfs** | Daemon and cluster state, swarm/cluster peers, repo size, versions, swarm key |
+| **gateway** | HTTP health check, subsystem status |
+| **wireguard** | Interface state, WireGuard IP, peers, handshake ages, MTU, config permissions |
+| **dns** | CoreDNS and Caddy state, port bindings, resolution tests, TLS cert expiry |
+| **anyone** | Relay and client state, bootstrap progress, fingerprint |
+| **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
+| **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
+| **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
+
+## Alert System
+
+Alerts are derived from cross-node analysis of all collected reports. Each alert has a severity level and identifies the affected subsystem and node.
+
+### Alert Severities
+
+| Severity | Examples |
+|----------|----------|
+| **CRITICAL** | SSH collection failed (node unreachable), no RQLite leader, split brain, WireGuard interface down, WireGuard peer never handshaked, OOM kills, service failed, UFW inactive |
+| **WARNING** | Strong read failed, memory above 90%, disk above 85%, stale WireGuard handshake (over 3 minutes), Raft term inconsistency, applied index lag over 100, restart loop detected, TLS cert under 14 days, DNS down, namespace gateway down, Anyone not bootstrapped, clock skew over 5 seconds, binary version mismatch, internet unreachable, high TCP retransmission |
+| **INFO** | Zombie processes, orphan orama processes, swap usage above 30% |
+
+### Cross-Node Checks
+
+The monitor compares data across all nodes to detect cluster-wide issues:
+
+- **RQLite Leader** — Exactly one leader exists (detects split brain)
+- **Leader Agreement** — All nodes agree on the same leader address
+- **Raft Term Consistency** — Term values within 1 of each other
+- **Applied Index Lag** — Followers within 100 entries of the leader
+- **WireGuard Peer Symmetry** — Each node has the expected number of peers (N-1)
+- **Clock Skew** — Node clocks within 5 seconds of each other
+- **Binary Version** — All nodes running the same version
+
+### Per-Node Checks
+
+- **RQLite** — Responsive, ready, strong read passes
+- **WireGuard** — Interface up, handshake freshness for all peers
+- **System** — Memory, disk, load average, OOM kills, swap
+- **Services** — Systemd state for all services, restart loop detection
+- **DNS** — CoreDNS and Caddy running, TLS cert expiry, SOA resolution
+- **Anyone** — Bootstrap progress for the privacy relay
+- **Processes** — Zombies, orphans, panics in logs
+- **Namespaces** — Gateway and RQLite health per namespace
+- **Network** — UFW active, internet reachability, TCP retransmission rate
+
+## Deep Inspection
+
+For deeper diagnostics beyond real-time monitoring, the `orama inspect` command performs thorough SSH-based health checks with deterministic pass/fail/warn results per check.
+
+### Usage
+
+```bash
+orama inspect --env <environment> [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
+| `--subsystem` | `all` | Comma-separated subsystems to inspect |
+| `--format` | `table` | Output format: `table` or `json` |
+| `--timeout` | `30s` | SSH command timeout per node |
+| `--verbose` | `false` | Print collection progress |
+| `--ai` | `false` | Enable AI analysis of failures |
+| `--model` | `moonshotai/kimi-k2.5` | OpenRouter model for AI analysis |
+| `--output` | | Save results to directory as markdown (e.g., `./results`) |
+| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+
+### Subsystems
+
+`rqlite`, `olric`, `ipfs`, `dns`, `wg`, `system`, `network`, `anyone`
+
+Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
+
+### What Each Subsystem Checks
+
+| Subsystem | Checks |
+|-----------|--------|
+| **rqlite** | Raft state, leader election, readyz, commit/applied gap, FSM pending, strong reads, debug vars, cross-node leader agreement, term consistency, applied index convergence, quorum |
+| **olric** | Service active, memberlist up, restart count, memory usage, log analysis (suspects, flapping, errors), cross-node memberlist consistency |
+| **ipfs** | Daemon and cluster active, swarm and cluster peer count, repo usage, swarm key present, cross-node version consistency |
+| **dns** | CoreDNS and Caddy active, ports 53/80/443, memory, restart count, Corefile exists, SOA/NS/wildcard resolution, TLS cert expiry, cross-node nameserver availability |
+| **wg** | Interface up, correct 10.0.0.x IP, listen port 51820, peer count, MTU 1420, config permissions 600, handshake freshness, peer traffic, cross-node consistency |
+| **system** | Core service states, failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user, panic count, expected ports |
+| **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, retransmission rate, WireGuard mesh ping to all peers |
+| **anyone** | Anyone relay/client state, bootstrap progress, fingerprint, configuration validation |
+
+### Severity Levels
+
+| Level | When Used |
+|-------|-----------|
+| **CRITICAL** | Service completely down, Raft quorum lost, RQLite unresponsive, no leader |
+| **HIGH** | Service degraded: Olric down, gateway not responding, IPFS swarm key missing |
+| **MEDIUM** | Non-ideal but functional: stale handshakes, elevated memory, log suspects |
+| **LOW** | Informational: non-standard MTU, port mismatch, version skew |
+
+### Check Statuses
+
+| Status | Meaning |
+|--------|---------|
+| **pass** | Check passed |
+| **fail** | Check failed, action needed |
+| **warn** | Degraded, monitor or investigate |
+| **skip** | Check could not run due to insufficient data |
+
+### Examples
+
+```bash
+# Full cluster inspection
+orama inspect --env mainnet
+
+# Check only RQLite and Olric
+orama inspect --env mainnet --subsystem rqlite,olric
+
+# Check only networking
+orama inspect --env mainnet --subsystem wg,network
+
+# JSON output for scripting
+orama inspect --env mainnet --format json | jq '.checks[] | select(.status == "fail")'
+
+# Verbose mode (shows collection progress)
+orama inspect --env mainnet --verbose
+
+# Save results as markdown to a directory
+orama inspect --env mainnet --output ./results
+```
+
+### AI-Powered Analysis
+
+When `--ai` is enabled, failures and warnings are sent to an LLM via OpenRouter for root-cause analysis and suggested fixes.
+
+```bash
+# Default model
+orama inspect --env mainnet --ai
+
+# Custom model
+orama inspect --env mainnet --ai --model anthropic/claude-sonnet-4
+```
+
+The API key can be set via the `--api-key` flag, the `OPENROUTER_API_KEY` environment variable, or a `.env` file in the current directory.
+
+## Monitor vs Inspector
+
+Both tools check cluster health, but they serve different purposes:
+
+| | `orama monitor` | `orama inspect` |
+|---|---|---|
+| **Data source** | Single `orama node report` call per node | 15+ SSH commands per node per subsystem |
+| **Speed** | 3-5 seconds for full cluster | 4-10 seconds for full cluster |
+| **Output** | Interactive TUI, tables, JSON | Tables, JSON |
+| **Focus** | Real-time monitoring, alert detection | Deep diagnostic checks with pass/fail/warn |
+| **AI support** | `report` subcommand for LLM input | `--ai` flag for inline analysis |
+| **Best for** | "Is anything wrong right now?" | "What exactly is wrong and why?" |
+
+Use `monitor` for day-to-day health checks and the interactive TUI. Use `inspect` for deep diagnostics when something is already known to be broken.
+
+## Rolling Upgrade Monitoring Protocol
+
+After every node upgrade or restart, you must verify health before proceeding to the next node. This prevents cascading failures across the cluster.
+
+1. **Verify node health** — Run `orama monitor report --env <env> --node <ip>` and confirm all services are active, RQLite is in Leader or Follower state, and WireGuard peers are connected.
+2. **Verify cluster health** — Run `orama monitor report --env <env>` and confirm the leader is stable, quorum is intact, the WireGuard mesh is fully connected, and all node indices are in sync.
+3. **Only proceed** to the next node after both checks pass. If a node shows issues, investigate before continuing. Do not skip and hope it resolves itself.
+
+## Common Issues
+
+| Symptom | Likely Cause | Resolution |
+|---------|-------------|------------|
+| Service shows `inactive` | Crashed or failed to start | Check logs, then `orama node restart` |
+| RQLite shows no leader | Quorum lost | Verify majority of nodes are running |
+| High request latency | Resource contention | Check CPU and memory, consider upgrading VPS |
+| WireGuard handshake stale | Network or firewall issue | Check firewall rules, verify peer config |
+| Applied index lag | Follower falling behind leader | Check network between nodes, verify RQLite logs |
+| Restart loop detected | Service crashing repeatedly | Check service logs for the root cause |
+| TLS cert expiring soon | Certificate not auto-renewed | Check Caddy logs and DNS resolution |
+
+For detailed troubleshooting, see the [Troubleshooting](/docs/operator/troubleshooting) guide.

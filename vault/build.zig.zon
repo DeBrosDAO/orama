@@ -1,0 +1,12 @@
+.{
+    .name = .orama_vault,
+    .version = "0.1.0",
+    .fingerprint = 0xb3eae57574026b46,
+    .minimum_zig_version = "0.14.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+    },
+}
