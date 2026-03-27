@@ -6,7 +6,7 @@ import type { IChartApi, Time } from "lightweight-charts";
 import { Page } from "../components/layout/page";
 import { DashedPanel } from "../components/ui/dashed-panel";
 import { SponsorsShowcase } from "../components/landing/sponsors-showcase";
-import { SILVER, SilverBadge, SilverButton, SilverMetric } from "../components/ui/silver-theme";
+import { SILVER, SilverButton, SilverMetric } from "../components/ui/silver-theme";
 import {
   Wallet,
   Coins,
@@ -15,7 +15,6 @@ import {
   ArrowRight,
   Shield,
   Vote,
-  Lock,
   TrendingUp,
   Clock,
   ChevronDown,
@@ -43,16 +42,11 @@ import type {
 import {
   fetchStats,
 } from "../hooks/useInvestApi";
-import {
-  CURRENT_STATS,
-  formatBTC,
-} from "../data/fundraise";
-import { Redacted, ComingSoonOverlay } from "../components/ui/redacted";
+import { ComingSoonOverlay } from "../components/ui/redacted";
 
 
-function generateFundraiseHistory(): { time: Time; value: number }[] {
+function generateNetworkHistory(): { time: Time; value: number }[] {
   const data: { time: Time; value: number }[] = [];
-  const target = CURRENT_STATS.total_raised_btc;
   const now = new Date();
   const days = 90;
 
@@ -60,25 +54,22 @@ function generateFundraiseHistory(): { time: Time; value: number }[] {
     const date = new Date(now);
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split("T")[0] as unknown as Time;
-
-    // Simulate organic growth curve ending at actual total
     const progress = (days - i) / days;
-    const curve = Math.pow(progress, 1.8); // Slow start, accelerating
-    const noise = 1 + (Math.sin(i * 0.7) * 0.03); // Subtle variation
-    const value = target * curve * noise;
-
-    data.push({ time: dateStr, value: parseFloat(Math.min(value, target).toFixed(2)) });
+    const curve = Math.pow(progress, 1.5);
+    const noise = 1 + (Math.sin(i * 0.7) * 0.05);
+    const value = 50 * curve * noise;
+    data.push({ time: dateStr, value: parseFloat(Math.max(value, 1).toFixed(0)) });
   }
   return data;
 }
 
 /* ── Tab type ── */
-type Tab = "overview" | "presale" | "license" | "whitelist" | "sponsors";
+type Tab = "overview" | "bonding" | "license" | "whitelist" | "sponsors";
 
 /* ── Wallet state ── */
 interface WalletState {
   address: string;
-  chain: "sol" | "evm";
+  chain: "btc";
   connected: boolean;
 }
 
@@ -87,14 +78,6 @@ function truncateAddress(addr: string): string {
   if (addr.length <= 12) return addr;
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
-
-/* ── Helper: format number ── */
-
-function formatNumber(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
-}
-
-/* ── Helper: time ago ── */
 
 /* ══════════════════════════════════════════════
    WALLET CONNECTION MODAL
@@ -126,7 +109,7 @@ function WalletConnectModal({
               Wallet login via RootWallet is coming soon.
             </p>
             <span className="text-[10px] font-mono text-zinc-600 tracking-wider uppercase">
-              <span style={{ color: "#F7931A" }}>BTC</span> Only
+              RootWallet + Orama L1
             </span>
           </div>
         </Dialog.Content>
@@ -165,7 +148,7 @@ function WalletButton({
         >
           <span
             className="w-2 h-2 rounded-full"
-            style={{ background: wallet.chain === "sol" ? "#9945FF" : "#627EEA" }}
+            style={{ background: "#F7931A" }}
           />
           <span className="text-fg">{truncateAddress(wallet.address)}</span>
           <button
@@ -212,13 +195,10 @@ function StatsBar({ stats }: { stats: Stats | null }) {
       className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 p-3 sm:p-4 rounded-sm"
       style={{ border: `1px dashed ${SILVER.border}`, background: SILVER.bg }}
     >
-      <SilverMetric label="Total Raised" value={<Redacted />} />
-      <SilverMetric
-        label="Pre-Sale"
-        value={<Redacted />}
-      />
-      <SilverMetric label="Licenses Sold" value={<Redacted />} />
-      <SilverMetric label="Developers" value={<Redacted />} />
+      <SilverMetric label="Nodes Online" value="—" />
+      <SilverMetric label="Blocks Produced" value="—" />
+      <SilverMetric label="$ORAMA Mined" value="—" />
+      <SilverMetric label="Developers" value="—" />
     </div>
   );
 }
@@ -299,9 +279,9 @@ function FAQ({ items }: { items: { q: string; a: string }[] }) {
 }
 
 /* ══════════════════════════════════════════════
-   FUNDRAISE AREA CHART (lightweight-charts)
+   NETWORK ACTIVITY CHART (lightweight-charts)
    ══════════════════════════════════════════════ */
-function FundraiseChart() {
+function NetworkChart() {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -326,7 +306,7 @@ function FundraiseChart() {
       bottomColor: "rgba(161,161,170,0.02)",
       lineWidth: 2,
     });
-    series.setData(generateFundraiseHistory());
+    series.setData(generateNetworkHistory());
     chart.timeScale().fitContent();
     chartRef.current = chart;
   }, []);
@@ -410,7 +390,7 @@ function OverviewTab({
       <div className="flex flex-col gap-2">
         <h2 className="font-display font-bold text-2xl text-fg">Overview</h2>
         <p className="text-muted text-sm leading-relaxed max-w-xl">
-          Real-time fundraise progress across token pre-sale, node licenses, and developer waitlist.
+          Real-time network stats. 210M $ORAMA hard cap, 100% earned through mining.
         </p>
       </div>
 
@@ -418,71 +398,64 @@ function OverviewTab({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <DashedPanel withBackground>
           <div className="flex flex-col gap-1 p-2">
-            <span className="text-[10px] font-mono text-muted tracking-wider uppercase">Total Raised</span>
-            <span className="font-display font-bold text-xl text-fg"><Redacted /> <span style={{ color: "#F7931A" }}>BTC</span></span>
-            <Redacted />
-            <span className="text-[10px] font-mono text-muted">of <Redacted /> BTC target</span>
+            <span className="text-[10px] font-mono text-muted tracking-wider uppercase">Nodes Online</span>
+            <span className="font-display font-bold text-xl text-fg">—</span>
+            <span className="text-[10px] font-mono text-muted">300 genesis target</span>
           </div>
         </DashedPanel>
         <DashedPanel withBackground>
           <div className="flex flex-col gap-1 p-2">
-            <span className="text-[10px] font-mono text-muted tracking-wider uppercase">Tokens Sold</span>
-            <span className="font-display font-bold text-xl text-fg"><Redacted /></span>
-            <span className="text-[10px] font-mono text-muted">of <Redacted /> total</span>
+            <span className="text-[10px] font-mono text-muted tracking-wider uppercase">Blocks Produced</span>
+            <span className="font-display font-bold text-xl text-fg">—</span>
+            <span className="text-[10px] font-mono text-muted">6-second block time</span>
           </div>
         </DashedPanel>
         <DashedPanel withBackground>
           <div className="flex flex-col gap-1 p-2">
-            <span className="text-[10px] font-mono text-muted tracking-wider uppercase">Licenses Sold</span>
-            <span className="font-display font-bold text-xl text-fg"><Redacted /></span>
-            <span className="text-[10px] font-mono text-muted">of <Redacted /> available</span>
+            <span className="text-[10px] font-mono text-muted tracking-wider uppercase">$ORAMA Mined</span>
+            <span className="font-display font-bold text-xl text-fg">—</span>
+            <span className="text-[10px] font-mono text-muted">of 210,000,000 total</span>
           </div>
         </DashedPanel>
         <DashedPanel withBackground>
           <div className="flex flex-col gap-1 p-2">
             <span className="text-[10px] font-mono text-muted tracking-wider uppercase">Developers</span>
-            <span className="font-display font-bold text-xl text-fg"><Redacted /></span>
+            <span className="font-display font-bold text-xl text-fg">—</span>
             <span className="text-[10px] font-mono text-muted">on waitlist</span>
           </div>
         </DashedPanel>
       </div>
 
-      {/* Cumulative Fundraise Chart */}
+      {/* Network Activity Chart */}
       <DashedPanel withBackground withCorners>
         <div className="flex flex-col gap-4 p-2">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-mono text-muted tracking-wider uppercase">Cumulative Fundraise</h3>
+            <h3 className="text-xs font-mono text-muted tracking-wider uppercase">Network Activity</h3>
             <span className="text-xs font-mono text-fg">
-              <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
+              — nodes
             </span>
           </div>
           <ComingSoonOverlay>
-            <FundraiseChart />
+            <NetworkChart />
           </ComingSoonOverlay>
         </div>
       </DashedPanel>
 
-      {/* Progress Bars */}
+      {/* Emission Progress */}
       <DashedPanel withBackground withCorners>
         <div className="flex flex-col gap-6 p-2">
-          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">Fundraise Progress</h3>
+          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">Emission Progress</h3>
           <ProgressBar
             current={0}
-            total={1}
-            label="Total Fundraise"
-            sublabel="Coming Soon"
+            total={210000000}
+            label="$ORAMA Mined"
+            sublabel="Era 1 — 100 $ORAMA/block"
           />
           <ProgressBar
             current={0}
-            total={1}
-            label="Token Pre-Sale"
-            sublabel="Coming Soon"
-          />
-          <ProgressBar
-            current={0}
-            total={1}
-            label="Node Licenses"
-            sublabel="Coming Soon"
+            total={300}
+            label="Genesis Nodes"
+            sublabel="Target: 300"
           />
         </div>
       </DashedPanel>
@@ -497,31 +470,30 @@ function OverviewTab({
         </div>
       </DashedPanel>
 
-
       {/* Quick Links */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <DashedPanel withBackground>
           <div className="flex flex-col gap-3 p-2">
             <div className="flex items-center gap-2">
               <Coins className="w-4 h-4 text-muted" />
-              <span className="text-xs font-mono text-muted tracking-wider uppercase">Token Pre-Sale</span>
+              <span className="text-xs font-mono text-muted tracking-wider uppercase">Bonding Curve</span>
             </div>
             <p className="text-muted text-xs leading-relaxed">
-              Buy $ORAMA at <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> per token.
+              Buy $ORAMA from the protocol. Price = k x sqrt(n). BTC flows to protocol reserve.
             </p>
-            <span className="text-xs font-mono text-fg"><Redacted /> tokens remaining</span>
+            <span className="text-xs font-mono text-fg">Coming Soon</span>
           </div>
         </DashedPanel>
         <DashedPanel withBackground>
           <div className="flex flex-col gap-3 p-2">
             <div className="flex items-center gap-2">
               <Server className="w-4 h-4 text-muted" />
-              <span className="text-xs font-mono text-muted tracking-wider uppercase">Node Licenses</span>
+              <span className="text-xs font-mono text-muted tracking-wider uppercase">Node License</span>
             </div>
             <p className="text-muted text-xs leading-relaxed">
-              Operate an Orama node. Earn $ORAMA rewards.
+              Operate an Orama node. Details TBA.
             </p>
-            <span className="text-xs font-mono text-fg"><Redacted /> licenses remaining</span>
+            <span className="text-xs font-mono text-fg">Coming Soon</span>
           </div>
         </DashedPanel>
         <DashedPanel withBackground>
@@ -533,7 +505,7 @@ function OverviewTab({
             <p className="text-muted text-xs leading-relaxed">
               Join the waitlist for early access to deploy on the network.
             </p>
-            <span className="text-xs font-mono text-fg"><Redacted /> developers joined</span>
+            <span className="text-xs font-mono text-fg">— developers joined</span>
           </div>
         </DashedPanel>
       </div>
@@ -542,548 +514,109 @@ function OverviewTab({
 }
 
 /* ══════════════════════════════════════════════
-   TOKEN PRE-SALE TAB
+   BONDING CURVE TAB (replaces Token Pre-Sale)
    ══════════════════════════════════════════════ */
-function TokenPreSaleTab({
+function BondingCurveTab({
   wallet,
-  stats,
-  me,
 }: {
   wallet: WalletState | null;
   stats: Stats | null;
   me: MeResponse | null;
 }) {
-  const [amount, setAmount] = useState("");
-  const _parsedTokens = parseFloat(amount) || 0;
-  void _parsedTokens;
   const isConnected = wallet?.connected;
 
   return (
     <div className="flex flex-col gap-8">
       {/* Headline */}
       <div className="flex flex-col gap-2">
-        <h2 className="font-display font-bold text-2xl text-fg">$ORAMA Token Pre-Sale</h2>
+        <h2 className="font-display font-bold text-2xl text-fg">Bonding Curve</h2>
         <p className="text-muted text-sm leading-relaxed max-w-xl">
-          Buy $ORAMA at the pre-sale price of <Redacted /> BTC per token.
-          Tokens will be minted to your wallet when the Orama L1 mainnet launches.
+          The protocol itself is the first market maker. 20% of every block reward flows into the curve's
+          inventory (max 21M tokens). Buy $ORAMA by sending BTC. Price follows a square root function —
+          cheap early, expensive later. All BTC goes to the protocol reserve backing the bridge.
         </p>
       </div>
 
-
-      {/* Buy + Holdings */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Buy Panel */}
-        <DashedPanel withCorners withBackground>
-          <div className="flex flex-col gap-5 p-2">
-            <span className="text-xs font-mono text-muted tracking-wider uppercase">
-              Buy $ORAMA
-            </span>
-
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-mono text-muted">Amount ($ORAMA)</label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="e.g. 10000"
-                className="w-full px-4 py-3 bg-surface-2 border border-border text-fg text-lg font-mono placeholder:text-muted/40 focus:outline-none focus:border-accent/50 transition-colors rounded-sm"
-                disabled={!isConnected}
-              />
-            </div>
-
-            {_parsedTokens > 0 && (
-              <div className="flex flex-col gap-2">
-                <div
-                  className="flex items-center justify-between p-3 rounded-sm"
-                  style={{ border: `1px dashed ${SILVER.border}`, background: SILVER.bg }}
-                >
-                  <span className="text-xs font-mono text-muted">Cost</span>
-                  <span className="font-mono text-lg font-bold text-fg">
-                    <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                  </span>
-                </div>
-                <Redacted />
-              </div>
-            )}
-
-            <div className="flex items-center gap-2 text-xs font-mono text-muted">
-              <span><Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> / token</span>
-              <span className="text-zinc-600">·</span>
-              <span>Min: <Redacted /> $ORAMA</span>
-              <span className="text-zinc-600">·</span>
-              <span>Pay with <span style={{ color: "#F7931A" }}>BTC</span></span>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <SilverButton
-                size="lg"
-                className="w-full"
-                disabled
-              >
-                Coming Soon — Pay with RootWallet
-              </SilverButton>
-              <p className="text-[10px] font-mono text-zinc-600 text-center">
-                BTC payments via RootWallet are under development.
-              </p>
-            </div>
-          </div>
-        </DashedPanel>
-
-        {/* Holdings Panel */}
-        <DashedPanel withCorners withBackground>
-          <div className="flex flex-col gap-5 p-2">
-            <span className="text-xs font-mono text-muted tracking-wider uppercase">
-              Your Holdings
-            </span>
-
-            {!isConnected ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-3">
-                <Wallet className="w-8 h-8 text-zinc-700" />
-                <p className="text-sm text-zinc-600 font-mono">Connect wallet to view holdings</p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs font-mono text-muted">$ORAMA Purchased</span>
-                    <span
-                      className="text-2xl font-bold font-mono"
-                      style={{
-                        background: SILVER.gradient,
-                        WebkitBackgroundClip: "text",
-                        WebkitTextFillColor: "transparent",
-                      }}
-                    >
-                      {formatNumber(me?.tokens_purchased || 0)}
-                    </span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs font-mono text-muted">Total Invested</span>
-                    <span
-                      className="text-2xl font-bold font-mono"
-                      style={{
-                        background: SILVER.gradient,
-                        WebkitBackgroundClip: "text",
-                        WebkitTextFillColor: "transparent",
-                      }}
-                    >
-                      {formatBTC(me?.tokens_spent || 0)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Purchase history */}
-                {me && me.purchase_history.length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    <span className="text-xs font-mono text-muted">Purchase History</span>
-                    {me.purchase_history
-                      .filter((p) => p.type === "token")
-                      .map((p, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center justify-between text-xs font-mono p-2 rounded-sm"
-                          style={{ border: `1px dashed ${SILVER.border}` }}
-                        >
-                          <span className="text-fg">{formatBTC(p.amount)}</span>
-                          <span className="text-muted">{p.currency}</span>
-                          <span className="text-zinc-600">{truncateAddress(p.tx_hash)}</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-
-                {me && me.purchase_history.filter((p) => p.type === "token").length === 0 && (
-                  <p className="text-sm text-zinc-600 font-mono py-4 text-center">
-                    No purchases yet
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        </DashedPanel>
-      </div>
-
-      {/* Progress */}
-      {stats && (
-        <ProgressBar
-          current={0}
-          total={1}
-          label="Tokens sold"
-          sublabel="Coming Soon"
-        />
-      )}
-
-      {/* What You Get */}
-      <div className="flex flex-col gap-4">
-        <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-          What Exactly You Get
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[
-            {
-              icon: TrendingUp,
-              title: "Upside at Launch",
-              desc: "You buy at a discounted pre-sale price per token.",
-            },
-            {
-              icon: Vote,
-              title: "Governance Rights",
-              desc: "1 token = 1 vote. You get to vote on network proposals, protocol upgrades, and treasury decisions from day one.",
-            },
-            {
-              icon: Coins,
-              title: "Staking Rewards",
-              desc: "Once mainnet launches, stake your $ORAMA to earn a share of network revenue. Higher stake = higher multiplier.",
-            },
-          ].map((card) => (
-            <DashedPanel key={card.title} withBackground>
-              <div className="flex flex-col gap-2 p-3">
-                <card.icon className="w-4 h-4" style={{ color: SILVER.light }} />
-                <h4 className="font-display font-bold text-sm text-fg">{card.title}</h4>
-                <p className="text-xs text-muted leading-relaxed">{card.desc}</p>
-              </div>
-            </DashedPanel>
-          ))}
-        </div>
-      </div>
-
-      {/* How It Works */}
+      {/* Price Formula */}
       <DashedPanel withCorners withBackground>
-        <div className="flex flex-col gap-4 p-2">
-          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-            How It Works — Step by Step
-          </h3>
-          <div className="flex flex-col gap-4">
-            {[
-              {
-                step: "1",
-                title: "You pay BTC",
-                desc: "Your payment goes directly to our treasury wallet. The transaction is recorded on-chain (Solana or Ethereum).",
-              },
-              {
-                step: "2",
-                title: "We record your allocation",
-                desc: "There is no $ORAMA token on-chain yet. We record how many tokens you purchased in our database, linked to your wallet address.",
-              },
-              {
-                step: "3",
-                title: "Vesting begins at mainnet launch",
-                desc: "When the Orama L1 blockchain launches, your tokens are minted. Vesting terms are coming soon.",
-              },
-              {
-                step: "4",
-                title: "Use your tokens",
-                desc: "Once vested, trade on Orama DEX, stake for rewards, vote on governance proposals, or pay for compute services.",
-              },
-            ].map((item) => (
-              <div key={item.step} className="flex items-start gap-4">
-                <span
-                  className="font-mono text-xs shrink-0 w-6 h-6 flex items-center justify-center border border-dashed rounded-sm"
-                  style={{ borderColor: SILVER.dark, color: SILVER.light }}
-                >
-                  {item.step}
-                </span>
-                <div>
-                  <h4 className="font-display font-bold text-sm text-fg">{item.title}</h4>
-                  <p className="text-xs text-muted leading-relaxed mt-1">{item.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Vesting timeline visual */}
-          <div
-            className="flex flex-col gap-2 p-3 rounded-sm mt-2"
-            style={{ border: `1px dashed ${SILVER.border}`, background: SILVER.bg }}
-          >
-            <span className="text-xs font-mono text-muted">Vesting Timeline</span>
-            <div className="flex items-center gap-1 h-6">
-              <div className="flex-1 h-full rounded-sm bg-zinc-800 flex items-center justify-center">
-                <span className="text-[9px] font-mono text-zinc-500">Coming Soon</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between text-[9px] font-mono text-zinc-600">
-              <span>Vesting details TBA</span>
-            </div>
-          </div>
+        <div className="flex flex-col gap-4 p-4">
+          <code className="text-lg text-fg font-mono block text-center py-2">
+            Price = 0.0000000006 x sqrt(total_sold)
+          </code>
+          <p className="text-xs text-muted text-center">
+            k = 0.0000000006 BTC. Max 21,000,000 tokens. Total BTC to fill: ~38.5 BTC.
+          </p>
         </div>
       </DashedPanel>
 
-      {/* FAQ */}
-      <FAQ
-        items={[
-          {
-            q: "Is there a token on-chain right now?",
-            a: "No. $ORAMA does not exist on any blockchain yet. When you buy in the pre-sale, we record your allocation in our database linked to your wallet address. Tokens will be minted on the Orama L1 blockchain when it launches.",
-          },
-          {
-            q: "When does mainnet launch?",
-            a: "Target is 2028. The network is currently live on devnet with 50+ nodes across devnet and testnet. Progress is transparent — follow our changelog and GitHub.",
-          },
-          {
-            q: "What if mainnet is delayed?",
-            a: "Your allocation is recorded permanently. If mainnet is delayed, your tokens vest later but your allocation is guaranteed. Total supply details coming soon.",
-          },
-          {
-            q: "Can I buy more later?",
-            a: "Yes, as long as tokens remain in the pre-sale allocation. The price stays fixed until the allocation is sold out.",
-          },
-          {
-            q: "Is there a maximum I can buy?",
-            a: "No maximum per wallet. Minimum purchase details coming soon.",
-          },
-          {
-            q: "Where can I verify my allocation?",
-            a: "Connect the same wallet you used to purchase. Your holdings and transaction history are shown on this page. All payment transactions are verifiable on-chain (Solana or Ethereum).",
-          },
-        ]}
-      />
-
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════
-   NODE LICENSE TAB
-   ══════════════════════════════════════════════ */
-function NodeLicenseTab({
-  wallet,
-  stats,
-  me,
-}: {
-  wallet: WalletState | null;
-  stats: Stats | null;
-  me: MeResponse | null;
-}) {
-  const isConnected = wallet?.connected;
-  const licenses = me?.licenses || [];
-
-  return (
-    <div className="flex flex-col gap-8">
-      {/* Headline */}
-      <div className="flex flex-col gap-2">
-        <h2 className="font-display font-bold text-2xl text-fg">Node License</h2>
-        <p className="text-muted text-sm leading-relaxed max-w-xl">
-          Purchase the right to operate an Orama Network node. Earn $ORAMA rewards
-          for every request your node serves.
-        </p>
-      </div>
-
-
-      {/* Buy + Holdings */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Buy Panel */}
-        <DashedPanel withCorners withBackground>
-          <div className="flex flex-col gap-5 p-2">
-            <span className="text-xs font-mono text-muted tracking-wider uppercase">
-              Purchase License
-            </span>
-
-            {/* License card visual */}
-            <div
-              className="relative overflow-hidden rounded-sm p-6 flex flex-col items-center gap-4"
-              style={{
-                background: `linear-gradient(135deg, rgba(228,228,231,0.08) 0%, rgba(161,161,170,0.04) 100%)`,
-                border: `1px solid ${SILVER.border}`,
-              }}
-            >
-              <div className="absolute top-3 right-3">
-                <SilverBadge variant="outline">NODE LICENSE</SilverBadge>
-              </div>
-              <div
-                className="w-16 h-16 rounded-lg flex items-center justify-center"
-                style={{ border: `2px dashed ${SILVER.mid}` }}
-              >
-                <Server className="w-8 h-8" style={{ color: SILVER.light }} />
-              </div>
-              <div className="text-center">
-                <span
-                  className="font-display font-bold text-3xl"
-                  style={{
-                    background: SILVER.gradient,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                  }}
-                >
-                  <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                </span>
-                <Redacted />
-                <p className="text-[10px] font-mono text-zinc-500 mt-0.5">One-time purchase</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 text-xs font-mono text-muted">
-              <span>Pay with <span style={{ color: "#F7931A" }}>BTC</span></span>
-              <span className="text-zinc-600">·</span>
-              <span><Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> per license</span>
-            </div>
-
-
-            <SilverButton
-              size="lg"
-              className="w-full"
-              disabled
-            >
-              Coming Soon — Pay with RootWallet
-            </SilverButton>
-          </div>
-        </DashedPanel>
-
-        {/* Your Licenses */}
-        <DashedPanel withCorners withBackground>
-          <div className="flex flex-col gap-5 p-2">
-            <span className="text-xs font-mono text-muted tracking-wider uppercase">
-              Your Licenses
-            </span>
-
-            {!isConnected ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-3">
-                <Server className="w-8 h-8 text-zinc-700" />
-                <p className="text-sm text-zinc-600 font-mono">Connect wallet to view licenses</p>
-              </div>
-            ) : licenses.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-3">
-                <Server className="w-8 h-8 text-zinc-700" />
-                <p className="text-sm text-zinc-600 font-mono">No licenses yet</p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {licenses.map((l) => (
-                  <div
-                    key={l.license_number}
-                    className="flex items-center justify-between p-4 rounded-sm"
-                    style={{
-                      border: `1px solid ${SILVER.border}`,
-                      background: "rgba(228,228,231,0.04)",
-                    }}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Server className="w-5 h-5" style={{ color: SILVER.light }} />
-                      <div>
-                        <span className="font-mono text-sm font-bold text-fg">
-                          License #{l.license_number}
-                        </span>
-                        {l.claimed_via_nft && (
-                          <SilverBadge variant="outline" className="ml-2 text-[9px]">
-                            NFT CLAIM
-                          </SilverBadge>
-                        )}
-                      </div>
-                    </div>
-                    <span className="text-xs font-mono text-muted">{l.purchased_at}</span>
-                  </div>
+      {/* Price Table */}
+      <DashedPanel withCorners withBackground>
+        <div className="flex flex-col gap-4 p-4">
+          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">Price Schedule</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-dashed border-border">
+                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Tokens Sold</th>
+                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Price per $ORAMA</th>
+                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">USD (at $100K BTC)</th>
+                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3">Cumulative BTC</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { sold: "10,000", price: "0.00000006 BTC", usd: "$0.006", btc: "0.0004 BTC" },
+                  { sold: "100,000", price: "0.00000019 BTC", usd: "$0.019", btc: "0.013 BTC" },
+                  { sold: "1,000,000", price: "0.0000006 BTC", usd: "$0.06", btc: "0.4 BTC" },
+                  { sold: "5,000,000", price: "0.00000134 BTC", usd: "$0.134", btc: "4.47 BTC" },
+                  { sold: "10,000,000", price: "0.0000019 BTC", usd: "$0.19", btc: "12.65 BTC" },
+                  { sold: "21,000,000", price: "0.00000275 BTC", usd: "$0.275", btc: "~38.5 BTC" },
+                ].map((row) => (
+                  <tr key={row.sold} className="border-b border-border/50">
+                    <td className="text-sm text-fg py-3 pr-4 font-mono">{row.sold}</td>
+                    <td className="text-sm text-fg py-3 pr-4 font-mono">{row.price}</td>
+                    <td className="text-sm text-muted py-3 pr-4 font-mono">{row.usd}</td>
+                    <td className="text-sm text-muted py-3 font-mono">{row.btc}</td>
+                  </tr>
                 ))}
-              </div>
-            )}
+              </tbody>
+            </table>
           </div>
-        </DashedPanel>
-      </div>
+        </div>
+      </DashedPanel>
 
-      {/* Progress */}
-      {stats && (
-        <ProgressBar
-          current={0}
-          total={1}
-          label="Licenses sold"
-          sublabel="Coming Soon"
-        />
-      )}
-
-      {/* What You Get */}
+      {/* Buy Panel */}
       <DashedPanel withCorners withBackground>
-        <div className="flex flex-col gap-5 p-2">
-          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-            What Exactly You Get
-          </h3>
+        <div className="flex flex-col gap-5 p-4">
+          <span className="text-xs font-mono text-muted tracking-wider uppercase">
+            Buy $ORAMA from the Curve
+          </span>
 
-          <div className="flex flex-col gap-4">
-            {[
-              {
-                icon: Server,
-                title: "Right to Operate a Node",
-                desc: "You are purchasing the right to run one Orama Network node. This is the license — not the hardware. Think of it like a taxi medallion: you need it to operate.",
-              },
-              {
-                icon: Coins,
-                title: "Earn $ORAMA",
-                desc: "Your node earns $ORAMA tokens for every compute request, database query, and file served. The built-in Orama Proxy provides onion-routed privacy for all traffic.",
-              },
-              {
-                icon: TrendingUp,
-                title: "Staking Multipliers",
-                desc: "Rewards scale with how much $ORAMA you stake. Higher tiers unlock higher multipliers and governance power.",
-              },
-              {
-                icon: Cpu,
-                title: "Hardware Options",
-                desc: "Option A: Orama One (Q2 2026) — a pre-built plug-and-play hardware node. Compact, silent, always-on. No configuration needed. Option B: Self-hosted VPS — run on your own server (Ubuntu, 2 CPU, 4GB RAM minimum).",
-              },
-              {
-                icon: Lock,
-                title: "Transferable & Resellable",
-                desc: "Your license is yours. You can resell it on secondary markets at any time. It's tied to your wallet, transferable via a simple on-chain transaction once mainnet launches.",
-              },
-              {
-                icon: Shield,
-                title: "Priority Mainnet Access",
-                desc: "License holders are first in line when mainnet launches (target 2028). You'll be earning while others are still waiting for access.",
-              },
-            ].map((item) => (
-              <div key={item.title} className="flex gap-3">
-                <item.icon className="w-4 h-4 mt-0.5 shrink-0" style={{ color: SILVER.light }} />
-                <div>
-                  <h4 className="font-display font-bold text-sm text-fg">{item.title}</h4>
-                  <p className="text-xs text-muted leading-relaxed mt-1">{item.desc}</p>
-                </div>
-              </div>
-            ))}
+          <div className="flex flex-col items-center justify-center py-8 gap-3">
+            <Coins className="w-8 h-8 text-zinc-700" />
+            <p className="text-sm text-zinc-600 font-mono">
+              {isConnected ? "Bonding curve not yet live" : "Connect RootWallet to purchase"}
+            </p>
           </div>
 
-          {/* Staking tiers table */}
-          <div
-            className="mt-2 rounded-sm overflow-hidden"
-            style={{ border: `1px dashed ${SILVER.border}` }}
-          >
-            <div className="grid grid-cols-3 text-xs font-mono text-muted uppercase tracking-wider p-3 border-b border-dashed border-border">
-              <span>Tier</span>
-              <span>Stake Required</span>
-              <span>Multiplier</span>
-            </div>
-            {[
-              { tier: "Base", stake: "***", mult: "***" },
-              { tier: "Enhanced", stake: "***", mult: "***" },
-              { tier: "Governor", stake: "***", mult: "***" },
-            ].map((row) => (
-              <div
-                key={row.tier}
-                className="grid grid-cols-3 text-sm p-3 border-b border-border/50 last:border-b-0"
-              >
-                <span className="text-fg font-semibold">{row.tier}</span>
-                <span className="text-muted font-mono text-xs">{row.stake}</span>
-                <span
-                  className="font-mono font-bold"
-                  style={{ color: SILVER.light }}
-                >
-                  {row.mult}
-                </span>
-              </div>
-            ))}
-          </div>
+          <SilverButton size="lg" className="w-full" disabled>
+            Coming Soon — Buy with RootWallet
+          </SilverButton>
+          <p className="text-[10px] font-mono text-zinc-600 text-center">
+            BTC payments via RootWallet on Orama L1.
+          </p>
         </div>
       </DashedPanel>
 
       {/* How It Works */}
       <DashedPanel withCorners withBackground>
-        <div className="flex flex-col gap-4 p-2">
-          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-            What Happens After You Purchase
-          </h3>
+        <div className="flex flex-col gap-4 p-4">
+          <h3 className="text-xs font-mono text-muted tracking-wider uppercase">How It Works</h3>
           {[
-            { step: "1", title: "Pay with BTC", desc: "Transaction recorded on-chain. Your license is registered immediately." },
-            { step: "2", title: "Choose your hardware", desc: "Wait for Orama One to be announced to you, or set up a VPS yourself using our setup guide." },
-            { step: "3", title: "Your node joins the network", desc: "Once connected, your node starts serving compute, storage, and bandwidth to developers using the network." },
-            { step: "4", title: "Earn daily", desc: "Rewards are calculated daily based on uptime, bandwidth contributed, and compute served. Paid in $ORAMA tokens." },
+            { step: "1", title: "Bridge BTC onto Orama", desc: "Deposit BTC via the trust-minimized bridge. Receive native BTC on Orama L1 (1:1)." },
+            { step: "2", title: "Buy from the curve", desc: "Send BTC to the bonding curve. Receive $ORAMA at the current curve price. The more tokens sold, the higher the price." },
+            { step: "3", title: "BTC goes to protocol reserve", desc: "All BTC paid to the curve accumulates in the protocol reserve, directly backing the BTC bridge." },
+            { step: "4", title: "Use your $ORAMA", desc: "Stake for consensus, vote on governance, pay for compute, or trade on the native order book." },
           ].map((item) => (
             <div key={item.step} className="flex items-start gap-4">
               <span
@@ -1105,27 +638,98 @@ function NodeLicenseTab({
       <FAQ
         items={[
           {
-            q: "Do I need technical skills to run a node?",
-            a: "No — if you wait for Orama One, it's literally plug-in and go. If you want to self-host on a VPS, basic Linux terminal knowledge is helpful but our setup guide walks you through everything.",
+            q: "Is this a pre-sale?",
+            a: "No. The bonding curve is a protocol-level market maker, not a traditional pre-sale. There are no allocations, no vesting, and no special deals. Anyone can buy at any time at the mathematically determined price. Early buyers get a lower price because the curve starts cheap.",
           },
           {
-            q: "What are the hardware requirements for self-hosting?",
-            a: "Minimum: Ubuntu 22.04+, 2 CPU cores, 4GB RAM, 50GB SSD, static IP. Recommended: 4 CPU, 8GB RAM, 100GB SSD.",
+            q: "What happens to the BTC I pay?",
+            a: "It goes to the protocol reserve — not a team wallet. This reserve directly backs the BTC bridge, providing additional collateral beyond 1:1 deposits.",
           },
           {
-            q: "When does my node start earning?",
-            a: "As soon as it's online and serving traffic. On devnet, nodes are earning reputation and uptime scores now. Monetary rewards begin at mainnet launch.",
+            q: "Can the price go down?",
+            a: "The curve price only goes up as more tokens are sold. However, the order book price can be lower than the curve price if miners are selling below the curve. The free market determines the real price.",
           },
           {
-            q: "Can I run multiple nodes with one license?",
-            a: "No. One license = one node. If you want to run multiple nodes, purchase multiple licenses.",
-          },
-          {
-            q: "What if my node goes offline?",
-            a: "You stop earning during downtime. Extended downtime reduces your reputation score, which affects future reward allocation. There is no slashing or penalty — you just miss rewards.",
+            q: "When does the curve stop?",
+            a: "The curve is capped at 21M tokens total (10% of supply). When the order book achieves sufficient organic liquidity (defined by governance), the curve stops receiving new inventory. It remains available with whatever inventory it has.",
           },
         ]}
       />
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   NODE LICENSE TAB
+   ══════════════════════════════════════════════ */
+function NodeLicenseTab() {
+  return (
+    <div className="flex flex-col gap-8">
+      {/* Headline */}
+      <div className="flex flex-col gap-2">
+        <h2 className="font-display font-bold text-2xl text-fg">Node License</h2>
+        <p className="text-muted text-sm leading-relaxed max-w-xl">
+          Node licenses will provide the right to operate an Orama Network node with priority access
+          and additional benefits. Details are being finalized.
+        </p>
+      </div>
+
+      {/* Coming Soon */}
+      <DashedPanel withCorners withBackground>
+        <div className="flex flex-col items-center justify-center py-12 gap-4">
+          <Server className="w-10 h-10 text-zinc-700" />
+          <h3 className="font-display font-bold text-lg text-fg">Coming Soon</h3>
+          <p className="text-sm text-muted max-w-md text-center">
+            Node license details, pricing, and mechanics will be announced soon.
+            Join the Telegram community to be notified.
+          </p>
+          <a href="https://t.me/debrosportal" target="_blank" rel="noopener noreferrer">
+            <SilverButton size="lg">
+              Join Telegram
+              <ArrowRight className="w-3.5 h-3.5 ml-2" />
+            </SilverButton>
+          </a>
+        </div>
+      </DashedPanel>
+
+      {/* What We Know */}
+      <div className="flex flex-col gap-4">
+        <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
+          What We Know So Far
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {[
+            {
+              icon: Server,
+              title: "Run a Node",
+              desc: "License holders will operate Orama Network nodes, earning $ORAMA through block rewards.",
+            },
+            {
+              icon: Shield,
+              title: "OramaOS Support",
+              desc: "Nodes running OramaOS receive a 1.5x Infrastructure Multiplier for block rewards.",
+            },
+            {
+              icon: TrendingUp,
+              title: "Testnet Is Free",
+              desc: "During testnet, anyone can run a node with no license and no staking required. Tokens earned carry over to mainnet.",
+            },
+            {
+              icon: Vote,
+              title: "Details TBA",
+              desc: "License pricing, supply, and specific mechanics have not yet been announced.",
+            },
+          ].map((card) => (
+            <DashedPanel key={card.title} withBackground>
+              <div className="flex flex-col gap-2 p-3">
+                <card.icon className="w-4 h-4" style={{ color: SILVER.light }} />
+                <h4 className="font-display font-bold text-sm text-fg">{card.title}</h4>
+                <p className="text-xs text-muted leading-relaxed">{card.desc}</p>
+              </div>
+            </DashedPanel>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1147,7 +751,6 @@ function DevWhitelistTab({
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Headline */}
       <div className="flex flex-col gap-2">
         <h2 className="font-display font-bold text-2xl text-fg">Developer Waitlist</h2>
         <p className="text-muted text-sm leading-relaxed max-w-xl">
@@ -1156,7 +759,6 @@ function DevWhitelistTab({
         </p>
       </div>
 
-      {/* Join Panel */}
       <DashedPanel withCorners withBackground>
         <div className="flex flex-col items-center text-center gap-6 py-8 px-4">
           {!isConnected ? (
@@ -1205,47 +807,27 @@ function DevWhitelistTab({
         </div>
       </DashedPanel>
 
-      {/* Stats */}
       {stats && (
         <div
           className="flex items-center justify-center gap-2 p-4 rounded-sm"
           style={{ border: `1px dashed ${SILVER.border}`, background: SILVER.bg }}
         >
           <span className="font-mono text-2xl font-bold" style={{ color: SILVER.light }}>
-            <Redacted />
+            —
           </span>
           <span className="text-sm text-muted">developers have joined</span>
           <span className="text-xs font-mono text-zinc-600 ml-2">· no limit</span>
         </div>
       )}
 
-      {/* What You Get */}
       <div className="flex flex-col gap-4">
-        <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-          What You Get
-        </h3>
+        <h3 className="text-xs font-mono text-muted tracking-wider uppercase">What You Get</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {[
-            {
-              icon: Coins,
-              title: "Free Compute Credits",
-              desc: "Waitlist members receive compute credits to deploy apps at no cost when the platform opens.",
-            },
-            {
-              icon: Clock,
-              title: "Priority Access",
-              desc: "You'll be among the first developers to deploy on the decentralized cloud — before public launch.",
-            },
-            {
-              icon: Shield,
-              title: "Direct Support",
-              desc: "Direct line to the core engineering team for onboarding, debugging, and feedback.",
-            },
-            {
-              icon: Vote,
-              title: "Shape the Product",
-              desc: "Your feedback directly influences what we build next. Early members have outsized impact.",
-            },
+            { icon: Coins, title: "Free Compute Credits", desc: "Waitlist members receive compute credits to deploy apps at no cost when the platform opens." },
+            { icon: Clock, title: "Priority Access", desc: "You'll be among the first developers to deploy on the decentralized cloud." },
+            { icon: Shield, title: "Direct Support", desc: "Direct line to the core engineering team for onboarding, debugging, and feedback." },
+            { icon: Vote, title: "Shape the Product", desc: "Your feedback directly influences what we build next." },
           ].map((card) => (
             <DashedPanel key={card.title} withBackground>
               <div className="flex flex-col gap-2 p-3">
@@ -1258,11 +840,8 @@ function DevWhitelistTab({
         </div>
       </div>
 
-      {/* What You Can Deploy */}
       <div className="flex flex-col gap-4">
-        <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-          What You Can Deploy
-        </h3>
+        <h3 className="text-xs font-mono text-muted tracking-wider uppercase">What You Can Deploy</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {[
             { icon: Globe, label: "React / Static Sites" },
@@ -1270,7 +849,7 @@ function DevWhitelistTab({
             { icon: Cpu, label: "Go / Node.js APIs" },
             { icon: HardDrive, label: "File Storage (IPFS)" },
             { icon: Layers, label: "In-Memory Cache" },
-            { icon: Code, label: "Serverless Functions" },
+            { icon: Code, label: "WASM Functions" },
           ].map((s) => (
             <DashedPanel key={s.label} withBackground>
               <div className="flex items-center gap-3 p-3">
@@ -1282,83 +861,36 @@ function DevWhitelistTab({
         </div>
       </div>
 
-      {/* FAQ */}
       <FAQ
         items={[
-          {
-            q: "When will I get access?",
-            a: "Waitlist members will be onboarded in batches as we open the platform. Early signups get priority. Join our Telegram (t.me/debrosportal) for updates.",
-          },
-          {
-            q: "Is it really free?",
-            a: "Yes. The waitlist costs nothing. When the platform opens, there will be a free tier with generous compute limits. Waitlist members get bonus credits on top.",
-          },
-          {
-            q: "Can I also buy tokens or a license?",
-            a: "Absolutely. Switch to the Token Pre-Sale or Node License tab above. Many people join the waitlist AND invest.",
-          },
+          { q: "When will I get access?", a: "Waitlist members will be onboarded in batches as we open the platform. Early signups get priority. Join our Telegram (t.me/debrosportal) for updates." },
+          { q: "Is it really free?", a: "Yes. The waitlist costs nothing. When the platform opens, there will be a free tier with generous compute limits. Waitlist members get bonus credits on top." },
+          { q: "Can I also run a node?", a: "Absolutely. During testnet, anyone can run a node with no staking required and earn $ORAMA block rewards." },
         ]}
       />
     </div>
   );
 }
 
+/* ══════════════════════════════════════════════
+   SPONSORS TAB
+   ══════════════════════════════════════════════ */
 const SPONSOR_TIERS = [
   { tier: "Platinum", minInvestment: 25_000, color: "#5CE0D8", benefits: ["Featured on website & whitepaper", "Direct line to core team", "Priority validator set"] },
   { tier: "Gold", minInvestment: 10_000, color: "#FFD700", benefits: ["Listed on sponsors page", "Governance voting power", "Early feature access"] },
   { tier: "Silver", minInvestment: 0, color: "#C0C0C0", benefits: ["Listed on sponsors page", "Community recognition", "Sponsor badge on profile"] },
 ];
 
-function getUserTier(me: MeResponse | null): string {
-  if (!me) return "none";
-  const totalInvested = me.tokens_spent + me.licenses.length * 3000;
-  if (totalInvested >= 25_000) return "Platinum";
-  if (totalInvested >= 10_000) return "Gold";
-  if (totalInvested > 0) return "Silver";
-  return "none";
-}
-
-function SponsorsTab({ me }: { me: MeResponse | null }) {
-  const userTier = getUserTier(me);
-
+function SponsorsTab({ me: _me }: { me: MeResponse | null }) {
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
         <h2 className="font-display font-bold text-2xl text-fg">Sponsors</h2>
         <p className="text-muted text-sm leading-relaxed max-w-xl">
-          Back the Orama Network and earn sponsor recognition. Your tier is determined by
-          your total investment across token pre-sale and node licenses.
+          Back the Orama Network and earn sponsor recognition. Support development of
+          the decentralized cloud.
         </p>
       </div>
-
-      {/* User's current tier */}
-      {me && (
-        <DashedPanel withCorners withBackground>
-          <div className="flex items-center justify-between p-4">
-            <div>
-              <span className="text-xs font-mono text-muted tracking-wider uppercase">Your Sponsor Tier</span>
-              <p className="font-display font-bold text-xl text-fg mt-1">
-                {userTier === "none" ? "Not yet a sponsor" : userTier}
-              </p>
-              {userTier === "none" && (
-                <p className="text-xs text-muted mt-1">Make your first investment to become a Silver sponsor.</p>
-              )}
-            </div>
-            {userTier !== "none" && (
-              <span
-                className="px-3 py-1 text-xs font-mono font-bold tracking-widest uppercase rounded-full"
-                style={{
-                  background: `${SPONSOR_TIERS.find((t) => t.tier === userTier)?.color}20`,
-                  color: SPONSOR_TIERS.find((t) => t.tier === userTier)?.color,
-                  border: `1px solid ${SPONSOR_TIERS.find((t) => t.tier === userTier)?.color}50`,
-                }}
-              >
-                {userTier}
-              </span>
-            )}
-          </div>
-        </DashedPanel>
-      )}
 
       {/* Tier breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1373,7 +905,7 @@ function SponsorsTab({ me }: { me: MeResponse | null }) {
                   {tier.tier}
                 </span>
                 <span className="text-xs font-mono text-muted">
-                  {tier.minInvestment > 0 ? <Redacted /> : "Any investment"}
+                  {tier.minInvestment > 0 ? "—" : "Any contribution"}
                 </span>
               </div>
               <div className="flex flex-col gap-2">
@@ -1418,41 +950,6 @@ function SponsorsTab({ me }: { me: MeResponse | null }) {
         </div>
       </div>
 
-      {/* How to qualify table */}
-      <DashedPanel withBackground>
-        <div className="p-4">
-          <h3 className="text-xs font-mono text-muted tracking-wider uppercase mb-3">How to Qualify</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-dashed border-border">
-                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Tier</th>
-                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Min. Investment</th>
-                  <th className="text-xs font-mono text-muted tracking-wider uppercase py-3">Equivalent</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-b border-border/50">
-                  <td className="text-sm py-3 pr-4" style={{ color: "#5CE0D8" }}>Platinum</td>
-                  <td className="text-sm text-fg py-3 pr-4 font-mono"><Redacted /></td>
-                  <td className="text-sm text-muted py-3"><Redacted /></td>
-                </tr>
-                <tr className="border-b border-border/50">
-                  <td className="text-sm py-3 pr-4" style={{ color: "#FFD700" }}>Gold</td>
-                  <td className="text-sm text-fg py-3 pr-4 font-mono"><Redacted /></td>
-                  <td className="text-sm text-muted py-3"><Redacted /></td>
-                </tr>
-                <tr className="border-b border-border/50">
-                  <td className="text-sm py-3 pr-4" style={{ color: "#C0C0C0" }}>Silver</td>
-                  <td className="text-sm text-fg py-3 pr-4 font-mono">Any amount</td>
-                  <td className="text-sm text-muted py-3">Any token or license purchase</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </DashedPanel>
-
       {/* Donate */}
       <DashedPanel withBackground withCorners>
         <div className="p-4">
@@ -1486,7 +983,7 @@ export default function Invest() {
 
   const sidebarItems: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "overview", label: "Overview", icon: <LayoutDashboard className="w-4 h-4" /> },
-    { key: "presale", label: "Token Pre-Sale", icon: <Coins className="w-4 h-4" /> },
+    { key: "bonding", label: "Bonding Curve", icon: <Coins className="w-4 h-4" /> },
     { key: "license", label: "Node License", icon: <Server className="w-4 h-4" /> },
     { key: "whitelist", label: "Dev Waitlist", icon: <Code className="w-4 h-4" /> },
     { key: "sponsors", label: "Sponsors", icon: <Award className="w-4 h-4" /> },
@@ -1503,7 +1000,6 @@ export default function Invest() {
       <div className="flex min-h-screen">
         {/* ── Desktop Sidebar ── */}
         <aside className="hidden md:flex w-60 shrink-0 border-r border-dashed border-border bg-surface/50 flex-col h-screen sticky top-0 overflow-y-auto">
-          {/* Header: Logo + Wallet */}
           <div className="p-4 border-b border-dashed border-border flex flex-col gap-3">
             <Link to="/" className="flex items-center gap-2 group">
               <img src={oramaIcon} alt="Orama" className="h-6 w-6 shrink-0" />
@@ -1516,7 +1012,6 @@ export default function Invest() {
             />
           </div>
 
-          {/* Navigation */}
           <nav className="flex flex-col py-2">
             <span className="px-4 py-2 text-[10px] font-mono text-muted tracking-wider uppercase">
               Invest
@@ -1582,7 +1077,6 @@ export default function Invest() {
             </a>
           </nav>
 
-          {/* Back to site */}
           <div className="mt-auto p-4 border-t border-dashed border-border">
             <Link
               to="/"
@@ -1636,19 +1130,15 @@ export default function Invest() {
             {activeTab === "overview" && (
               <OverviewTab stats={stats} />
             )}
-            {activeTab === "presale" && (
-              <TokenPreSaleTab
+            {activeTab === "bonding" && (
+              <BondingCurveTab
                 wallet={wallet}
                 stats={stats}
                 me={me}
               />
             )}
             {activeTab === "license" && (
-              <NodeLicenseTab
-                wallet={wallet}
-                stats={stats}
-                me={me}
-              />
+              <NodeLicenseTab />
             )}
             {activeTab === "whitelist" && (
               <DevWhitelistTab

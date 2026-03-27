@@ -22,7 +22,6 @@ import { CrosshairDivider } from "../components/ui/crosshair-divider";
 import { AnimateIn } from "../components/ui/animate-in";
 import { StatusDot } from "../components/ui/status-dot";
 import { SILVER } from "../components/ui/silver-theme";
-import { Redacted } from "../components/ui/redacted";
 import {
   ArrowRight,
   ExternalLink,
@@ -107,7 +106,7 @@ function ComputeHero() {
 
         <div className="flex items-center gap-2 text-xs font-mono text-muted">
           <StatusDot status="active" />
-          <span>DEVNET LIVE — 50+ NODES ONLINE</span>
+          <span>TESTNET LIVE — 300 NODES REQUIRED FOR GENESIS</span>
         </div>
       </div>
     </Section>
@@ -124,7 +123,7 @@ function WhatYouCanDeploy() {
     { icon: Database, title: "Databases", desc: "Distributed databases with automatic replication and fault tolerance." },
     { icon: HardDrive, title: "Storage", desc: "Decentralized file storage with IPFS integration. Permanent, censorship-resistant." },
     { icon: Zap, title: "Serverless Functions", desc: "WASM-powered edge functions. Execute code at the closest node to your users." },
-    { icon: Brain, title: "AI Inference", desc: "Run ML models on distributed GPU/CPU resources across the network." },
+    { icon: Brain, title: "AI Marketplace", desc: "Native AI Marketplace with autonomous AI agents (Angels) that interact with on-chain primitives." },
   ];
 
   return (
@@ -178,15 +177,16 @@ function OramaOneSection() {
 
             <p className="text-muted text-sm max-w-lg leading-relaxed">
               Plug in. Connect. Start powering the decentralized cloud.
-              Every Orama One node contributes compute, storage, and bandwidth
-              to the network — earning $ORAMA rewards through Proof of Infrastructure.
+              Every Orama One node runs OramaOS — hardened, read-only, TPM-attested —
+              earning $ORAMA with a 1.5x Infrastructure Multiplier.
+              3D-printed, open-source hardware design. 4+ cores, 8GB RAM, 256GB NVMe.
             </p>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full max-w-lg">
               {[
-                { label: "Consensus", value: "PoI" },
-                { label: "Rewards", value: "$ORAMA" },
-                { label: "Privacy", value: "Built-in" },
+                { label: "Consensus", value: "Hybrid PoS+PoC+PoI" },
+                { label: "Block Time", value: "6 seconds" },
+                { label: "OramaOS", value: "1.5x Multiplier" },
                 { label: "Status", value: "Coming Soon" },
               ].map((stat) => (
                 <div key={stat.label} className="flex flex-col gap-1 text-center">
@@ -214,15 +214,15 @@ function OramaOneSection() {
 }
 
 /* ═══════════════════════════════════════════
-   4. NODE LICENSES
+   4. RUN A NODE
    ═══════════════════════════════════════════ */
-function NodeLicenses() {
+function RunANode() {
   return (
     <Section>
       <AnimateIn>
         <SectionHeader
-          title="Node Licenses"
-          subtitle={<>Secure your place in the network. Only <Redacted /> licenses available — early operators earn rewards before mainnet.</>}
+          title="Run a Node"
+          subtitle="No licenses. No gatekeeping. Run a node on testnet for free — stake 1,000 $ORAMA at mainnet."
         />
       </AnimateIn>
 
@@ -236,15 +236,15 @@ function NodeLicenses() {
           <div>
             <span className="text-sm font-semibold text-purple-300">DeBros Team NFT Holders</span>
             <p className="text-xs text-purple-400/80 mt-1">
-              All 100 DeBros Team NFT holders receive a <strong>free node license</strong> to deploy
-              their own nodes on the network.{" "}
+              100 Team NFTs: <strong>40% governance power</strong> (5 votes each) +{" "}
+              <strong>50% of BTC bridge fees</strong> auto-swapped to $ORAMA every epoch.{" "}
               <a
                 href="https://debros.io/nft"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline hover:text-purple-300"
               >
-                View the collection →
+                View the collection &rarr;
               </a>
             </p>
           </div>
@@ -263,15 +263,15 @@ function NodeLicenses() {
                 >
                   1
                 </span>
-                <span className="font-display font-bold text-fg">2027 — Scale Phase</span>
+                <span className="font-display font-bold text-fg">Testnet — Free to Join</span>
               </div>
               <p className="text-xs text-muted leading-relaxed">
-                Only license holders can run nodes. Start earning $ORAMA rewards
-                before anyone else. Proof of Infrastructure goes live — your uptime
-                and contribution directly determines your rewards.
+                No staking required. Run a node and start earning $ORAMA block rewards immediately.
+                Testnet tokens are real — they carry over to mainnet. Earn 3,840 $ORAMA/day per node
+                at 300 nodes in Era 1.
               </p>
               <div className="flex flex-wrap gap-2">
-                {["Exclusive Access", "Pre-Mainnet Rewards", "PoI Live"].map((tag) => (
+                {["Zero Stake", "Real Tokens", "Carry Over to Mainnet"].map((tag) => (
                   <span
                     key={tag}
                     className="text-[10px] font-mono px-2 py-0.5 rounded-sm"
@@ -295,15 +295,15 @@ function NodeLicenses() {
                 >
                   2
                 </span>
-                <span className="font-display font-bold text-fg">2028 — Mainnet Launch</span>
+                <span className="font-display font-bold text-fg">Mainnet — 300 Nodes Verified</span>
               </div>
               <p className="text-xs text-muted leading-relaxed">
-                The network opens to everyone. But license holders have been earning
-                since day one — with established uptime scores, accumulated rewards,
-                and priority positioning in the validator set.
+                Full production launch when 300 independent nodes are running and verified.
+                Staking activates at 1,000 $ORAMA. BTC bridge live. Native DEX live.
+                Every testnet node runner will have earned more than enough to stake.
               </p>
               <div className="flex flex-wrap gap-2">
-                {["Open Network", "Token Trading", "Full Rewards"].map((tag) => (
+                {["1,000 $ORAMA Stake", "BTC Bridge", "Native DEX"].map((tag) => (
                   <span
                     key={tag}
                     className="text-[10px] font-mono px-2 py-0.5 rounded-sm"
@@ -318,30 +318,20 @@ function NodeLicenses() {
         </AnimateIn>
       </div>
 
-      {/* License Card */}
+      {/* Hardware Specs */}
       <AnimateIn>
         <DashedPanel withCorners withBackground className="mt-6">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6 p-6">
-            <div className="flex flex-col gap-2">
-              <span className="font-display font-bold text-lg text-fg">Orama One Node License</span>
-              <p className="text-xs text-muted max-w-sm">
-                Right to operate a node on the Orama Network. Earn $ORAMA rewards through
-                Proof of Infrastructure. Limited to <Redacted /> licenses total.
-              </p>
-              <div className="flex items-center gap-3 mt-1 text-xs font-mono text-muted">
-                <span><Redacted /> Total</span>
-                <span style={{ color: SILVER.border }}>|</span>
-                <span style={{ color: "#F7931A", fontWeight: "bold" }}>BTC</span>
+          <div className="flex flex-col gap-4 p-6">
+            <span className="font-display font-bold text-lg text-fg">Hardware Requirements</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-mono text-muted uppercase tracking-wider">Standard Node</span>
+                <p className="text-xs text-muted">4+ cores, 8GB RAM, 256GB NVMe, 1Gbps, TPM 2.0</p>
               </div>
-            </div>
-            <div className="flex flex-col items-center gap-3">
-              <span className="text-3xl font-bold tabular-nums text-fg">
-                <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-              </span>
-              <Redacted />
-              <Button className="silver-button text-black font-mono font-semibold tracking-wider uppercase px-6 py-2.5 text-xs rounded-sm opacity-50 pointer-events-none">
-                COMING SOON <ArrowRight className="w-3 h-3 ml-1" />
-              </Button>
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-mono text-muted uppercase tracking-wider">Cloud Node (min)</span>
+                <p className="text-xs text-muted">2+ vCPU, 4GB RAM, 80GB SSD, OramaOS image</p>
+              </div>
             </div>
           </div>
         </DashedPanel>
@@ -364,13 +354,13 @@ function HowComputeWorks() {
     {
       num: "02",
       title: "Distribute",
-      desc: "Your application is compiled to WASM and distributed across Orama nodes worldwide. Replicated, fault-tolerant.",
+      desc: "Your application is compiled to pure WASM and distributed across Orama nodes. BFT consensus ensures fault tolerance with 6-second block times.",
       icon: Server,
     },
     {
       num: "03",
       title: "Serve",
-      desc: "Users hit the closest node. Fast, private, censorship-resistant. No single point of failure.",
+      desc: "Users hit the closest node. Per-transaction privacy via PLONK zk-SNARKs. No single point of failure. Censorship-resistant by design.",
       icon: Globe,
     },
   ];
@@ -591,31 +581,31 @@ function ComputeFAQ() {
   const faqs = [
     {
       question: "What can I deploy on Orama Compute?",
-      answer: "Static sites, APIs, backends (Go, Node, Python), databases, file storage via IPFS, serverless WASM functions, and AI inference workloads. If it runs on a traditional cloud, it can run on Orama.",
+      answer: "Static sites, APIs, backends (Go, Node, Python), databases, file storage via IPFS, serverless WASM functions, and AI workloads via the native AI Marketplace. Write smart contracts in any language that compiles to WebAssembly.",
     },
     {
-      question: "What's a node license?",
-      answer: "A node license gives you the right to operate an Orama One node on the network. During the Scale phase (2027), only license holders can run nodes and earn pre-mainnet $ORAMA rewards. After mainnet (2028), the network opens to everyone — but license holders have a year head start.",
+      question: "How do I run a node?",
+      answer: "During testnet, anyone can run a node with zero staking. Just get a VPS (2+ vCPU, 4GB RAM, 80GB SSD) or dedicated hardware (4+ cores, 8GB RAM, 256GB NVMe), install OramaOS, and start earning. Testnet tokens carry over to mainnet.",
     },
     {
-      question: "Do DeBros NFT holders get free licenses?",
-      answer: "Yes. DeBros Team NFT holders receive a free node license. This is our way of rewarding the earliest supporters of the ecosystem.",
+      question: "What is the staking requirement?",
+      answer: "On testnet: zero. At mainnet launch, the minimum stake is 1,000 $ORAMA. Every testnet node runner will have earned more than enough to stake by then.",
     },
     {
-      question: "How does Proof of Infrastructure work?",
-      answer: "Proof of Infrastructure (PoI) is Orama's primary consensus mechanism. Unlike Proof of Stake where the richest validators dominate, PoI rewards nodes for real work — uptime, compute served, storage provided, bandwidth contributed. A node with excellent uptime earns more than someone who just stakes capital.",
+      question: "What happens if my node goes down?",
+      answer: "Slashing is progressive: downtime over 20% results in a 5-30% slash. Double-signing is a 100% slash, and false infrastructure attestation is 50%. Slashed tokens are burned permanently.",
     },
     {
-      question: "Is this live now?",
-      answer: "The devnet is live with 50+ nodes. Developers can join the waitlist for early access to deploy on the testnet. The Scale phase (license holders only) begins in 2027, with full mainnet in 2028.",
+      question: "How does the consensus mechanism work?",
+      answer: "Orama uses hybrid PoS + Proof of Contribution + Proof of Infrastructure. Effective Power = Stake x (1 + Contribution Score) x Infrastructure Multiplier. OramaOS nodes get a 1.5x multiplier. Contribution is weighted: 40% uptime, 30% bandwidth, 20% compute, 10% reliability.",
     },
     {
       question: "How is this different from Akash or Filecoin?",
-      answer: "Orama is more than a compute marketplace. It's a full L1 blockchain fused with a decentralized cloud — meaning compute, storage, consensus, and on-chain logic all live on the same infrastructure. You don't need to bridge between chains or coordinate multiple protocols.",
+      answer: "Orama is a standalone L1 blockchain with compute as a native primitive — not a separate marketplace. BTC-only economy, native DEX, PLONK privacy, AI Marketplace, and on-chain governance all live on the same chain. No bridging between protocols.",
     },
     {
       question: "What payments are accepted?",
-      answer: "Node licenses and token pre-sales accept BTC. Once mainnet launches, all network services are paid in $ORAMA.",
+      answer: "Only BTC and $ORAMA. Gas is always paid in $ORAMA. Base fee is burned. This is a BTC-only economy by design — no stablecoins, no altcoins.",
     },
   ];
 
@@ -665,8 +655,8 @@ function ComputeCTA() {
               Ready to own your infrastructure?
             </h2>
             <p className="text-muted text-sm max-w-md">
-              Secure a node license to earn rewards before mainnet, or join the
-              developer waitlist for early access to the compute layer.
+              Run a node on testnet for free — no staking required. Tokens carry
+              over to mainnet. Or join the developer waitlist for early access.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3">
               <Button className="silver-button text-black font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm opacity-50 pointer-events-none">
@@ -700,7 +690,7 @@ export default function Compute() {
       <CrosshairDivider />
       <OramaOneSection />
       <CrosshairDivider />
-      <NodeLicenses />
+      <RunANode />
       <CrosshairDivider />
       <HowComputeWorks />
       <CrosshairDivider />

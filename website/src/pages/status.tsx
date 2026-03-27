@@ -10,7 +10,7 @@ import { AnimateIn } from "../components/ui/animate-in";
 
 /* ── Mock data ── */
 
-type ServiceStatus = "operational" | "degraded" | "down";
+type ServiceStatus = "operational" | "degraded" | "down" | "planned";
 
 interface Service {
   name: string;
@@ -25,9 +25,12 @@ const services: Service[] = [
   { name: "Olric", status: "operational", uptime: "99.98%", responseTime: "3ms" },
   { name: "IPFS", status: "operational", uptime: "99.95%", responseTime: "45ms" },
   { name: "WireGuard", status: "operational", uptime: "100%", responseTime: "1ms" },
-  { name: "Serverless", status: "operational", uptime: "99.97%", responseTime: "28ms" },
+  { name: "Serverless (WASM)", status: "operational", uptime: "99.97%", responseTime: "28ms" },
   { name: "Vault", status: "operational", uptime: "100%", responseTime: "5ms" },
   { name: "Deployments", status: "degraded", uptime: "99.90%", responseTime: "120ms" },
+  { name: "BTC Bridge", status: "planned", uptime: "—", responseTime: "—" },
+  { name: "Native DEX", status: "planned", uptime: "—", responseTime: "—" },
+  { name: "AI Marketplace", status: "planned", uptime: "—", responseTime: "—" },
 ];
 
 const nodeStats = { total: 12, healthy: 10, degraded: 1, offline: 1 };
@@ -37,12 +40,14 @@ const nodeStats = { total: 12, healthy: 10, degraded: 1, offline: 1 };
 function statusToDot(s: ServiceStatus) {
   if (s === "operational") return "active" as const;
   if (s === "degraded") return "warning" as const;
+  if (s === "planned") return "warning" as const;
   return "error" as const;
 }
 
 function statusLabel(s: ServiceStatus) {
   if (s === "operational") return "Operational";
   if (s === "degraded") return "Degraded";
+  if (s === "planned") return "Planned";
   return "Down";
 }
 
@@ -186,7 +191,9 @@ export default function Status() {
                           ? "text-accent-2"
                           : service.status === "degraded"
                             ? "text-amber-500"
-                            : "text-red-500")
+                            : service.status === "planned"
+                              ? "text-blue-400"
+                              : "text-red-500")
                       }
                     >
                       {statusLabel(service.status)}
