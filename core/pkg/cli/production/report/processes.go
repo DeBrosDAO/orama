@@ -89,6 +89,7 @@ func collectProcesses() *ProcessReport {
 var managedServiceUnits = []string{
 	"orama-node", "orama-olric",
 	"orama-ipfs", "orama-ipfs-cluster",
+	"orama-vault",
 	"orama-anyone-relay", "orama-anyone-client",
 	"coredns", "caddy", "rqlited",
 }

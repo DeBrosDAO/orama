@@ -133,7 +133,7 @@ func cleanNode(node inspector.Node, nuclear bool) error {
 %s
 
 # Stop services
-for svc in caddy coredns orama-node orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-anyone-relay orama-anyone-client; do
+for svc in caddy coredns orama-node orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-vault orama-anyone-relay orama-anyone-client; do
     systemctl stop "$svc" 2>/dev/null
     systemctl disable "$svc" 2>/dev/null
 done

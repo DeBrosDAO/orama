@@ -376,6 +376,7 @@ func (o *Orchestrator) stopServices() error {
 		"orama-ipfs-cluster.service",  // Depends on IPFS
 		"orama-ipfs.service",          // Base IPFS
 		"orama-olric.service",         // Independent
+		"orama-vault.service",         // Vault guardian
 		"orama-anyone-client.service", // Client mode
 		"orama-anyone-relay.service",  // Relay mode
 	}
@@ -683,6 +684,7 @@ func (o *Orchestrator) restartServices() error {
 		"orama-olric",        // Distributed cache
 		"orama-ipfs",         // IPFS daemon
 		"orama-ipfs-cluster", // IPFS cluster
+		"orama-vault",        // Vault guardian
 		"orama-gateway",      // Gateway (legacy)
 		"coredns",            // DNS server
 		"caddy",              // Reverse proxy

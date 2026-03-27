@@ -17,6 +17,7 @@ type NodeReport struct {
 	RQLite     *RQLiteReport      `json:"rqlite,omitempty"`
 	Olric      *OlricReport       `json:"olric,omitempty"`
 	IPFS       *IPFSReport        `json:"ipfs,omitempty"`
+	Vault      *VaultReport       `json:"vault,omitempty"`
 	Gateway    *GatewayReport     `json:"gateway,omitempty"`
 	WireGuard  *WireGuardReport   `json:"wireguard,omitempty"`
 	DNS        *DNSReport         `json:"dns,omitempty"`
@@ -148,6 +149,21 @@ type IPFSReport struct {
 	ClusterVersion   string `json:"cluster_version,omitempty"`
 	HasSwarmKey      bool   `json:"has_swarm_key"`
 	BootstrapEmpty   bool   `json:"bootstrap_empty"`
+}
+
+// --- Vault ---
+
+type VaultReport struct {
+	ServiceActive bool   `json:"service_active"`
+	Responsive    bool   `json:"responsive"`
+	Status        string `json:"status,omitempty"` // "healthy", "degraded", "unavailable"
+	Guardians     int    `json:"guardians,omitempty"`
+	Healthy       int    `json:"healthy,omitempty"`
+	Threshold     int    `json:"threshold,omitempty"`
+	WriteQuorum   int    `json:"write_quorum,omitempty"`
+	ProcessMemMB  int    `json:"process_mem_mb"`
+	RestartCount  int    `json:"restart_count"`
+	LogErrors     int    `json:"log_errors_1h"`
 }
 
 // --- Gateway ---

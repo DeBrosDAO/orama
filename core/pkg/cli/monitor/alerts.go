@@ -124,6 +124,7 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 		alerts = append(alerts, checkNodeNetwork(r, host)...)
 		alerts = append(alerts, checkNodeOlric(r, host)...)
 		alerts = append(alerts, checkNodeIPFS(r, host)...)
+		alerts = append(alerts, checkNodeVault(r, host)...)
 		alerts = append(alerts, checkNodeGateway(r, host)...)
 	}
 
@@ -861,6 +862,41 @@ func checkNodeIPFS(r *report.NodeReport, host string) []Alert {
 	if r.IPFS.ClusterErrors > 0 {
 		alerts = append(alerts, Alert{AlertWarning, "ipfs", host,
 			fmt.Sprintf("IPFS cluster peer errors: %d", r.IPFS.ClusterErrors)})
+	}
+
+	return alerts
+}
+
+func checkNodeVault(r *report.NodeReport, host string) []Alert {
+	if r.Vault == nil {
+		return nil
+	}
+	var alerts []Alert
+
+	if !r.Vault.ServiceActive {
+		alerts = append(alerts, Alert{AlertCritical, "vault", host, "Vault service not running"})
+		return alerts
+	}
+
+	if !r.Vault.Responsive {
+		alerts = append(alerts, Alert{AlertWarning, "vault", host, "Vault not responding to health queries"})
+		return alerts
+	}
+
+	switch r.Vault.Status {
+	case "unavailable":
+		alerts = append(alerts, Alert{AlertCritical, "vault", host,
+			fmt.Sprintf("Vault unavailable: %d/%d guardians healthy (need %d for reads)",
+				r.Vault.Healthy, r.Vault.Guardians, r.Vault.Threshold)})
+	case "degraded":
+		alerts = append(alerts, Alert{AlertWarning, "vault", host,
+			fmt.Sprintf("Vault degraded: %d/%d guardians healthy (need %d for writes)",
+				r.Vault.Healthy, r.Vault.Guardians, r.Vault.WriteQuorum)})
+	}
+
+	if r.Vault.RestartCount > 3 {
+		alerts = append(alerts, Alert{AlertWarning, "vault", host,
+			fmt.Sprintf("Vault restarted %d times", r.Vault.RestartCount)})
 	}
 
 	return alerts

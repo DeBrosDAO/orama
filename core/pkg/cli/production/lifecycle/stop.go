@@ -55,8 +55,9 @@ func HandleStopWithFlags(force bool) {
 		{"orama-node"},                          // 1. Stop node (includes gateway + RQLite with leadership transfer)
 		{"orama-olric"},                         // 2. Stop cache
 		{"orama-ipfs-cluster", "orama-ipfs"},    // 3. Stop storage
-		{"orama-anyone-relay", "orama-anyone-client"}, // 4. Stop privacy relay
-		{"coredns", "caddy"},                    // 5. Stop DNS/TLS last
+		{"orama-vault"},                         // 4. Stop vault
+		{"orama-anyone-relay", "orama-anyone-client"}, // 5. Stop privacy relay
+		{"coredns", "caddy"},                    // 6. Stop DNS/TLS last
 	}
 
 	// Mask all services to immediately prevent Restart=always from reviving them.

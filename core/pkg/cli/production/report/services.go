@@ -13,6 +13,7 @@ var coreServices = []string{
 	"orama-olric",
 	"orama-ipfs",
 	"orama-ipfs-cluster",
+	"orama-vault",
 	"orama-anyone-relay",
 	"orama-anyone-client",
 	"coredns",
