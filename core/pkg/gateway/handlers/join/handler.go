@@ -129,6 +129,9 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1b. Look up the operator wallet from the consumed token (may be empty for legacy tokens)
+	operatorWallet := h.tokenOperatorWallet(ctx, req.Token)
+
 	// 2. Clean up stale WG entries for this public IP (from previous installs).
 	//    This prevents ghost peers: old rows with different node_id/wg_key that
 	//    the sync loop would keep trying to reach.
@@ -150,8 +153,8 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// 4. Register WG peer in database
 	nodeID := fmt.Sprintf("node-%s", wgIP) // temporary ID based on WG IP
 	_, err = h.rqliteClient.Exec(ctx,
-		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port) VALUES (?, ?, ?, ?, ?)",
-		nodeID, wgIP, req.WGPublicKey, req.PublicIP, 51820)
+		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, operator_wallet) VALUES (?, ?, ?, ?, ?, ?)",
+		nodeID, wgIP, req.WGPublicKey, req.PublicIP, 51820, operatorWallet)
 	if err != nil {
 		h.logger.Error("failed to register WG peer", zap.Error(err))
 		http.Error(w, "failed to register peer", http.StatusInternalServerError)
@@ -305,6 +308,22 @@ func (h *Handler) consumeToken(ctx context.Context, token, usedByIP string) erro
 	}
 
 	return nil
+}
+
+// tokenOperatorWallet looks up the operator_wallet from a consumed invite token.
+// Returns empty string if the token has no operator (legacy tokens).
+func (h *Handler) tokenOperatorWallet(ctx context.Context, token string) string {
+	var rows []struct {
+		Wallet string `db:"operator_wallet"`
+	}
+	if err := h.rqliteClient.Query(ctx, &rows,
+		"SELECT COALESCE(operator_wallet, '') AS operator_wallet FROM invite_tokens WHERE token = ?", token); err != nil {
+		return ""
+	}
+	if len(rows) > 0 {
+		return rows[0].Wallet
+	}
+	return ""
 }
 
 // assignWGIP finds the next available 10.0.0.x IP by querying all peers and

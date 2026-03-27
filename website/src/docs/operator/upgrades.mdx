@@ -114,30 +114,36 @@ Do not proceed to the next node until all checks pass. If a node shows issues af
 
 ---
 
-## Rollout Command
+## Rollout Command (Recommended)
 
-The `orama node rollout` command builds the binary locally and performs a full rolling upgrade in one step. This is the preferred method for deploying code changes.
+The `orama rollout` command pushes a pre-built archive to all your nodes and performs a rolling upgrade. This is the preferred method for deploying code changes.
 
 ```bash
-# Build and deploy to all nodes
-orama node rollout --env testnet
+# Build the archive first
+orama build
 
-# Skip the build step (use existing archive)
-orama node rollout --env testnet --no-build
-
-# Skip confirmation prompt
-orama node rollout --env testnet --yes
+# Roll out to all your nodes (followers first, leader last)
+orama rollout --env devnet
 
 # Custom delay between nodes
-orama node rollout --env testnet --delay 60
+orama rollout --env devnet --delay 60
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--env` | *(required)* | Target environment (`devnet`, `testnet`) |
-| `--no-build` | `false` | Skip build step (use existing archive) |
-| `--yes` | `false` | Skip confirmation prompt |
+| `--env` | active env | Target environment |
 | `--delay` | `30` | Seconds between nodes during rolling upgrade |
+
+The rollout command discovers your nodes via wallet-based ownership (same nodes shown by `orama nodes`). It falls back to `nodes.conf` if the network API is unavailable.
+
+### Legacy Rollout
+
+The `orama node rollout` command is still available and uses `nodes.conf` directly:
+
+```bash
+orama node rollout --env testnet
+orama node rollout --env testnet --no-build --yes --delay 60
+```
 
 ---
 

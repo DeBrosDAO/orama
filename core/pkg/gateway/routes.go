@@ -123,6 +123,13 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/pubsub/presence", g.pubsubHandlers.PresenceHandler)
 	}
 
+	// operator node management (wallet JWT auth via middleware)
+	if g.operatorHandler != nil {
+		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
+		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
+		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
+	}
+
 	// vault proxy (public, rate-limited per identity within handler)
 	if g.vaultHandlers != nil {
 		mux.HandleFunc("/v1/vault/push", g.vaultHandlers.HandlePush)

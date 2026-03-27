@@ -1,0 +1,131 @@
+# Node Management
+
+The Orama CLI provides unified commands for managing all your nodes across environments. Your wallet identity (via RootWallet) links you to your nodes — the network tracks which nodes belong to which operator.
+
+## Prerequisites
+
+- **RootWallet** desktop app running and unlocked
+- **Authenticated** with the network: `orama auth login`
+- **Environment set**: `orama env switch devnet` (or your target environment)
+
+## Listing Your Nodes
+
+View all nodes registered to your wallet:
+
+```bash
+# List nodes in the active environment
+orama nodes
+
+# List nodes in a specific environment
+orama nodes --env devnet
+```
+
+Output:
+
+```
+IP              ROLE         USER   ENVIRONMENT
+1.2.3.4         nameserver   root   devnet
+5.6.7.8         node         root   devnet
+9.10.11.12      node         root   devnet
+
+3 node(s) in devnet
+```
+
+## SSH into a Node
+
+Connect to any of your nodes by IP:
+
+```bash
+# SSH into a node (resolves key from RootWallet automatically)
+orama ssh 1.2.3.4
+
+# Specify environment if needed
+orama ssh 5.6.7.8 --env devnet
+```
+
+No manual SSH key management required — RootWallet provides the key.
+
+## Rolling Upgrades
+
+Deploy new code to all your nodes with a single command:
+
+```bash
+# Build the archive first
+orama build
+
+# Roll out to all nodes (followers first, leader last)
+orama rollout --env devnet
+
+# Custom delay between nodes (default: 30 seconds)
+orama rollout --env devnet --delay 60
+```
+
+The rollout command:
+1. Finds the pre-built archive in `/tmp/`
+2. Pushes it to all your nodes
+3. Detects the RQLite leader
+4. Upgrades followers first, leader last
+5. Checks health between each node
+
+## Health Status
+
+Check the health of all your nodes:
+
+```bash
+# Quick status table
+orama status --env devnet
+
+# JSON output (for automation)
+orama status --env devnet --json
+```
+
+Output:
+
+```
+Checking 3 node(s) in devnet...
+
+IP              ROLE         STATUS    DETAILS
+1.2.3.4         nameserver   healthy
+5.6.7.8         node         healthy
+9.10.11.12      node         healthy
+
+3/3 nodes healthy
+```
+
+For detailed monitoring with alerts, use the full monitor:
+
+```bash
+orama monitor report --env devnet
+```
+
+## How Node Ownership Works
+
+When you install a node (via `orama node install` with an invite token), the network records your wallet address as the node's operator. This happens automatically through the invite token system:
+
+1. You generate an invite token (authenticated with your wallet)
+2. The new node joins using that token
+3. The network tags the node with your wallet address from the token
+
+This means `orama nodes` can query the network for "all nodes owned by my wallet" — no local files to maintain.
+
+## Migrating from nodes.conf
+
+If you have existing nodes configured in `scripts/nodes.conf`, migrate them to the wallet-based system:
+
+```bash
+orama node migrate-conf --env devnet
+```
+
+This reads your nodes.conf, then registers each node with your wallet via the gateway API. After migration, nodes appear in `orama nodes` output.
+
+The legacy `nodes.conf` continues to work as a fallback — you can migrate at your own pace.
+
+## Command Reference
+
+| Command | Description |
+|---------|-------------|
+| `orama nodes [--env]` | List your nodes |
+| `orama ssh <ip> [--env]` | SSH into a node |
+| `orama status [--env] [--json]` | Health check all nodes |
+| `orama rollout [--env] [--delay]` | Rolling upgrade all nodes |
+| `orama node migrate-conf [--env]` | Migrate nodes.conf to wallet-based tracking |

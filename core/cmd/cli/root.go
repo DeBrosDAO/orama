@@ -18,7 +18,11 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/nodescmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/rolloutcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sandboxcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sshcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/statuscmd"
 )
 
 // version metadata populated via -ldflags at build time
@@ -90,6 +94,12 @@ and interacting with the Orama distributed network.`,
 
 	// Sandbox command (ephemeral Hetzner Cloud clusters)
 	rootCmd.AddCommand(sandboxcmd.Cmd)
+
+	// Unified node management commands
+	rootCmd.AddCommand(nodescmd.Cmd)
+	rootCmd.AddCommand(rolloutcmd.Cmd)
+	rootCmd.AddCommand(statuscmd.Cmd)
+	rootCmd.AddCommand(sshcmd.Cmd)
 
 	return rootCmd
 }
