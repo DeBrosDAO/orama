@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/DeBrosOfficial/network/pkg/cli"
 )
 
 // Destroy tears down a sandbox cluster.
@@ -98,6 +100,11 @@ func Destroy(name string, force bool) error {
 	// Step 3: Remove state file
 	if err := DeleteState(state.Name); err != nil {
 		return fmt.Errorf("delete state: %w", err)
+	}
+
+	// Remove sandbox environment entry, fall back to devnet
+	if err := cli.RemoveEnvironment("sandbox"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to remove sandbox environment: %v\n", err)
 	}
 
 	fmt.Printf("\nSandbox %q destroyed (%d servers deleted)\n", state.Name, len(state.Servers))

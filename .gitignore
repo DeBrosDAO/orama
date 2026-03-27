@@ -89,3 +89,6 @@ os/output/
 .dev/
 .local/
 local/
+
+# Implementation plans (not committed)
+core/plans/

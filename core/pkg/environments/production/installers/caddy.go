@@ -390,7 +390,17 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:6001\n}\n", baseDomain, tlsBlock))
 	}
 
-	// HTTP fallback (handles plain HTTP and ACME challenges)
+	// HTTP blocks — serve traffic over plain HTTP so the gateway is reachable
+	// even when TLS certificates are unavailable (e.g., Let's Encrypt rate limits).
+	// Without these, Caddy auto-redirects HTTP→HTTPS for the named domain blocks above.
+	sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy localhost:6001\n}\n", domain))
+	sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy localhost:6001\n}\n", domain))
+	if baseDomain != "" && baseDomain != domain {
+		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy localhost:6001\n}\n", baseDomain))
+		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy localhost:6001\n}\n", baseDomain))
+	}
+
+	// HTTP catch-all fallback (handles remaining plain HTTP traffic)
 	sb.WriteString("\n:80 {\n    reverse_proxy localhost:6001\n}\n")
 
 	return sb.String()
