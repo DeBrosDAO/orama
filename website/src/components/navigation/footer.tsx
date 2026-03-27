@@ -146,8 +146,9 @@ export function Footer() {
               </span>
             </Link>
             <p className="text-muted text-sm leading-relaxed max-w-xs">
-              Decentralized cloud infrastructure. Deploy, store, and compute
-              without centralized providers.
+              Standalone Layer-1 blockchain. The eternal decentralized computer
+              and financial system. BTC-only economy, WASM smart contracts,
+              PLONK privacy.
             </p>
           </div>
 

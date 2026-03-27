@@ -20,7 +20,7 @@ export function WhitelistBanner() {
         }}
       >
         <a
-          href="https://t.me/debrosportal"
+          href="/whitelist"
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-3 flex-1 justify-center group"

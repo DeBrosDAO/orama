@@ -98,42 +98,37 @@ function SlashCanvas() {
 
 const terminalLines = [
   { prefix: "$", text: "rw init" },
-  { prefix: "→", text: "Generating BIP-39 mnemonic... done" },
-  { prefix: "→", text: "Deriving HD wallet... done" },
-  { prefix: "✓", text: "Wallet initialized: 0x7a3b...f29d" },
+  { prefix: "\u2192", text: "Generating BIP-39 mnemonic... done" },
+  { prefix: "\u2192", text: "Deriving HD wallet... done" },
+  { prefix: "\u2713", text: "Wallet initialized: orama1q7a3b...f29d" },
   { prefix: "", text: "" },
   { prefix: "$", text: "rw balance" },
-  { prefix: "→", text: "ETH:  1.247 ETH" },
-  { prefix: "→", text: "SOL:  42.5 SOL" },
-  { prefix: "→", text: "BASE: 0.89 ETH" },
+  { prefix: "\u2192", text: "ORAMA: 3,840.00 $ORAMA (Orama L1)" },
+  { prefix: "\u2192", text: "BTC:   0.025 BTC (bridged)" },
+  { prefix: "\u2192", text: "ETH:   1.247 ETH" },
+  { prefix: "\u2192", text: "SOL:   42.5 SOL" },
+  { prefix: "", text: "" },
+  { prefix: "$", text: "rw governance vote --proposal 42 --yes" },
+  { prefix: "\u2192", text: "Casting vote with NFT governance power..." },
+  { prefix: "\u2713", text: "Vote recorded on-chain (Tier 2 proposal)" },
   { prefix: "", text: "" },
   { prefix: "$", text: "rw password store database-prod" },
-  { prefix: "→", text: "Splitting secret with Shamir's SSS (K=3, N=5)" },
-  { prefix: "→", text: "Distributing to Orama Vault... done" },
-  { prefix: "✓", text: "Password stored: database-prod" },
-  { prefix: "", text: "" },
-  { prefix: "$", text: "rw password get database-prod" },
-  { prefix: "→", text: "Collecting shares from vault..." },
-  { prefix: "→", text: "Received 3/5 shares (threshold met)" },
-  { prefix: "✓", text: "Password retrieved" },
+  { prefix: "\u2192", text: "Splitting secret with Shamir's SSS (K=3, N=5)" },
+  { prefix: "\u2192", text: "Distributing to Orama Vault... done" },
+  { prefix: "\u2713", text: "Password stored: database-prod" },
   { prefix: "", text: "" },
   { prefix: "$", text: "rw ssh generate production-server" },
-  { prefix: "→", text: "Generating Ed25519 key pair... done" },
-  { prefix: "→", text: "Storing private key in vault... done" },
-  { prefix: "✓", text: "SSH key stored: production-server" },
-  { prefix: "", text: "" },
-  { prefix: "$", text: "rw ssh connect production-server" },
-  { prefix: "→", text: "Retrieving key from vault..." },
-  { prefix: "→", text: "Connecting to production-server..." },
-  { prefix: "✓", text: "Connected" },
+  { prefix: "\u2192", text: "Generating Ed25519 key pair... done" },
+  { prefix: "\u2192", text: "Storing private key in vault... done" },
+  { prefix: "\u2713", text: "SSH key stored: production-server" },
 ];
 
 const features = [
   {
     icon: <Wallet className="w-5 h-5 text-fg" />,
-    title: "Wallet",
+    title: "Orama L1 Native",
     description:
-      "BIP-39 HD wallet. EVM chains + Solana. Derive addresses from a single seed phrase.",
+      "The official wallet of Orama Network from day one. Send $ORAMA, bridge BTC, trade on the native DEX, and interact with WASM smart contracts.",
   },
   {
     icon: <Lock className="w-5 h-5 text-fg" />,
@@ -149,9 +144,9 @@ const features = [
   },
   {
     icon: <LinkIcon className="w-5 h-5 text-fg" />,
-    title: "WalletConnect",
+    title: "Governance & NFTs",
     description:
-      "Connect to any dApp via WalletConnect v2. Sign transactions from your terminal.",
+      "Cast governance votes, receive NFT bridge fee revenue, and manage DeBros NFTs — all from RootWallet.",
   },
   {
     icon: <TerminalIcon className="w-5 h-5 text-fg" />,
@@ -163,19 +158,21 @@ const features = [
     icon: <Layers className="w-5 h-5 text-fg" />,
     title: "Multi-Chain",
     description:
-      "Support for EVM chains (Ethereum, Base, Polygon, etc.) and Solana. One wallet, every chain.",
+      "Orama L1 (primary), Bitcoin, EVM chains (Ethereum, Base, Polygon), and Solana. One wallet, every chain.",
   },
 ];
 
 const sdkCode = `import { useWallet } from '@debros/rootwallet-sdk'
 
 function App() {
-  const { address, balance, signTransaction } = useWallet()
+  const { address, balance, signTransaction } = useWallet({
+    chain: 'orama' // Primary: Orama L1
+  })
 
   return (
     <div>
       <p>Connected: {address}</p>
-      <p>Balance: {balance} ETH</p>
+      <p>Balance: {balance} $ORAMA</p>
       <button onClick={() => signTransaction(tx)}>
         Sign Transaction
       </button>
@@ -252,7 +249,7 @@ export default function RootWallet() {
           <div className="flex flex-col gap-8">
             <SectionHeader
               title="What is RootWallet"
-              subtitle="One tool for wallets, passwords, and SSH keys — backed by decentralized secret storage."
+              subtitle="The official wallet of Orama Network from day one. Wallets, governance, passwords, and SSH keys — backed by decentralized secret storage."
             />
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
@@ -262,9 +259,9 @@ export default function RootWallet() {
                   <h3 className="font-display font-semibold text-fg">Crypto Wallet</h3>
                 </div>
                 <ul className="text-sm text-muted space-y-1.5 pl-8">
-                  <li>BIP-39 HD wallet from a single seed phrase</li>
-                  <li>Ethereum, Base, Polygon, Solana</li>
-                  <li>Send, receive, and sign transactions</li>
+                  <li>Orama L1 + Bitcoin (primary chains)</li>
+                  <li>EVM chains + Solana (secondary)</li>
+                  <li>Native DEX trading, BTC bridge, governance</li>
                 </ul>
               </div>
 

@@ -10,7 +10,6 @@ import { Button } from "../components/ui/button";
 import { SpecTable } from "../components/ui/spec-table";
 import { CrosshairDivider } from "../components/ui/crosshair-divider";
 import { AnimateIn } from "../components/ui/animate-in";
-import { Redacted } from "../components/ui/redacted";
 
 interface PricingPlan {
   name: string;
@@ -28,11 +27,11 @@ const PLANS: PricingPlan[] = [
     badge: "FREE",
     period: "/mo",
     features: [
-      <><Redacted /> requests/hour</>,
-      <><Redacted /> requests/day</>,
-      <><Redacted /> deployment (static only)</>,
-      <><Redacted /> storage (IPFS)</>,
-      <><Redacted /> database queries/min</>,
+      "100 requests/hour",
+      "2,400 requests/day",
+      "1 deployment (static only)",
+      "100 MB storage (IPFS)",
+      "10 database queries/min",
       "Community support",
     ],
     cta: "Start Free",
@@ -43,12 +42,12 @@ const PLANS: PricingPlan[] = [
     badge: "DEV",
     period: "/mo",
     features: [
-      <><Redacted /> requests/hour</>,
-      <><Redacted /> deployments (static + SSR)</>,
-      <><Redacted /> storage (IPFS)</>,
-      <><Redacted /> database queries/min</>,
-      <><Redacted /> cache (Olric)</>,
-      <><Redacted /> serverless invocations/min</>,
+      "1,000 requests/hour",
+      "3 deployments (static + SSR)",
+      "1 GB storage (IPFS)",
+      "100 database queries/min",
+      "256 MB cache (Olric)",
+      "100 serverless invocations/min",
       "Email support",
     ],
     cta: "Get Started",
@@ -60,12 +59,12 @@ const PLANS: PricingPlan[] = [
     period: "/mo",
     highlighted: true,
     features: [
-      <><Redacted /> requests/hour</>,
-      <><Redacted /> deployments (all types)</>,
-      <><Redacted /> storage (IPFS)</>,
-      <><Redacted /> database queries/min</>,
-      <><Redacted /> cache (Olric)</>,
-      <><Redacted /> serverless invocations/min</>,
+      "10,000 requests/hour",
+      "10 deployments (all types)",
+      "10 GB storage (IPFS)",
+      "1,000 database queries/min",
+      "1 GB cache (Olric)",
+      "1,000 serverless invocations/min",
       "Custom domains",
       "Priority support",
     ],
@@ -79,9 +78,9 @@ const PLANS: PricingPlan[] = [
     features: [
       "Unlimited requests",
       "Unlimited deployments",
-      <><Redacted /> storage</>,
+      "100 GB storage",
       "Unlimited queries",
-      <><Redacted /> cache</>,
+      "10 GB cache",
       "Unlimited serverless",
       "Dedicated nodes",
       "SLA guarantee",
@@ -92,12 +91,13 @@ const PLANS: PricingPlan[] = [
 ];
 
 const PAY_PER_USE_ROWS = [
-  { label: "Requests", value: <><Redacted /> per requests</> },
-  { label: "Storage", value: <><Redacted /> per GB/month</> },
-  { label: "Database", value: <><Redacted /> per queries</> },
-  { label: "Cache", value: <><Redacted /> per GB/month</> },
-  { label: "Serverless", value: <><Redacted /> per invocations</> },
-  { label: "Bandwidth", value: <><Redacted /> per GB</> },
+  { label: "$ORAMA / BTC Transfer", value: "1,000 rays (0.001 $ORAMA)" },
+  { label: "SQL Query", value: "500 rays" },
+  { label: "IPFS Storage", value: "10,000 rays per MB" },
+  { label: "KV Store Read/Write", value: "200 rays" },
+  { label: "WASM Execution", value: "1,000 rays per 1M instructions" },
+  { label: "DEX Order Book Trade", value: "1,000 rays" },
+  { label: "Private Transaction (zk-SNARK)", value: "4x the public equivalent" },
 ];
 
 interface FaqItem {
@@ -215,7 +215,7 @@ export default function Pricing() {
 
                   <div className="flex items-baseline gap-1">
                     <span className="font-mono text-3xl font-bold text-fg">
-                      <Redacted />
+                      {plan.name === "Free" ? "$0" : plan.name === "Developer" ? "$5" : plan.name === "Pro" ? "$25" : "Custom"}
                     </span>
                     {plan.period && (
                       <span className="text-muted text-sm">{plan.period}</span>
@@ -269,9 +269,26 @@ export default function Pricing() {
             <SpecTable rows={PAY_PER_USE_ROWS} />
           </AnimateIn>
           <p className="text-xs text-muted italic text-center">
-            All prices payable in $ORAMA or BTC. Payments processed
-            on-chain via smart contracts.
+            1 $ORAMA = 1,000,000 rays. All fees in $ORAMA. Base fee burned. Priority fee to block proposer.
           </p>
+          <AnimateIn>
+            <DashedPanel withBackground className="mt-4">
+              <div className="flex flex-col gap-3 p-4">
+                <span className="font-display font-semibold text-fg text-sm">Congestion Multiplier (EIP-1559 style)</span>
+                <p className="text-xs text-muted leading-relaxed">
+                  Fees adjust dynamically based on block fullness. At 50% capacity (~500 transactions per block),
+                  the multiplier is 1x. As blocks fill toward the 1,000 transaction limit, the multiplier rises
+                  (up to 10x). When blocks are under half full, it drops below 1x. This prevents spam during
+                  peak demand and keeps fees low during normal usage.
+                </p>
+                <div className="flex flex-wrap gap-4 text-xs font-mono text-muted">
+                  <span>Base fee &rarr; burned</span>
+                  <span>Priority fee &rarr; block proposer</span>
+                  <span>Fee schedule &rarr; governance-adjustable</span>
+                </div>
+              </div>
+            </DashedPanel>
+          </AnimateIn>
         </div>
       </Section>
 

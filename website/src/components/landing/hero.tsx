@@ -34,11 +34,11 @@ const heroContent: Record<
     titleLine1: "Earn by powering",
     titleLine2: "the decentralized cloud.",
     description:
-      "Run an Orama node on any VPS. Earn $ORAMA tokens for every request you serve. Join the infrastructure that replaces AWS.",
+      "Run an Orama node on any VPS. Earn $ORAMA through hybrid consensus — Effective Power = Stake x Contribution x Infrastructure. Testnet is free, no staking required. Tokens carry over to mainnet.",
     primaryCta: { text: "Become an Operator", to: "/dashboard" },
     secondaryCta: { text: "See Documentation", to: "/docs" },
     comingSoon: true,
-    badges: ["$ORAMA Rewards", "Deploy on Any VPS", "100+ Operators"],
+    badges: ["$ORAMA Rewards", "Testnet Free — No Staking", "300-Node Genesis Target"],
   },
   contributor: {
     label: "",
