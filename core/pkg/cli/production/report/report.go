@@ -71,6 +71,10 @@ func Handle(jsonFlag bool, version string) error {
 		rpt.IPFS = collectIPFS()
 	})
 
+	safeGo(&wg, "vault", func() {
+		rpt.Vault = collectVault()
+	})
+
 	safeGo(&wg, "gateway", func() {
 		rpt.Gateway = collectGateway()
 	})
