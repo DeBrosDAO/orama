@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
@@ -142,6 +143,15 @@ func Create(name string) error {
 	state.Status = StatusRunning
 	if err := SaveState(state); err != nil {
 		return fmt.Errorf("save final state: %w", err)
+	}
+
+	// Register sandbox as an environment and switch to it
+	gatewayURL := "https://" + cfg.Domain
+	desc := fmt.Sprintf("Sandbox cluster: %s (%s)", state.Name, cfg.Domain)
+	if err := cli.AddEnvironment("sandbox", gatewayURL, desc); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to register sandbox environment: %v\n", err)
+	} else if err := cli.SwitchEnvironment("sandbox"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to switch to sandbox environment: %v\n", err)
 	}
 
 	printCreateSummary(cfg, state)

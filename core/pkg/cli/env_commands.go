@@ -164,30 +164,8 @@ func handleEnvAdd(args []string) {
 		os.Exit(1)
 	}
 
-	envConfig, err := LoadEnvironmentConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to load environment config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Check if environment already exists
-	for _, env := range envConfig.Environments {
-		if env.Name == name {
-			fmt.Fprintf(os.Stderr, "❌ Environment '%s' already exists\n", name)
-			os.Exit(1)
-		}
-	}
-
-	// Add new environment
-	envConfig.Environments = append(envConfig.Environments, Environment{
-		Name:        name,
-		GatewayURL:  gatewayURL,
-		Description: description,
-		IsActive:    false,
-	})
-
-	if err := SaveEnvironmentConfig(envConfig); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to save environment config: %v\n", err)
+	if err := AddEnvironment(name, gatewayURL, description); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to add environment: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -206,37 +184,8 @@ func handleEnvRemove(args []string) {
 
 	name := args[0]
 
-	envConfig, err := LoadEnvironmentConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to load environment config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Find and remove environment
-	found := false
-	newEnvs := make([]Environment, 0, len(envConfig.Environments))
-	for _, env := range envConfig.Environments {
-		if env.Name == name {
-			found = true
-			continue
-		}
-		newEnvs = append(newEnvs, env)
-	}
-
-	if !found {
-		fmt.Fprintf(os.Stderr, "❌ Environment '%s' not found\n", name)
-		os.Exit(1)
-	}
-
-	envConfig.Environments = newEnvs
-
-	// If we removed the active environment, switch to devnet
-	if envConfig.ActiveEnvironment == name {
-		envConfig.ActiveEnvironment = "devnet"
-	}
-
-	if err := SaveEnvironmentConfig(envConfig); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to save environment config: %v\n", err)
+	if err := RemoveEnvironment(name); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to remove environment: %v\n", err)
 		os.Exit(1)
 	}
 
