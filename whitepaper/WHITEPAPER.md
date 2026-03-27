@@ -1,6 +1,6 @@
 # Orama Network: The Eternal Decentralized Computer and Financial System
 
-**Whitepaper Version 3.0**
+**Whitepaper Version 4.0**
 **Date:** March 2026
 **Author:** DeBros
 
@@ -9,10 +9,11 @@
 Orama Network is a standalone Layer-1 blockchain designed to serve as humanity's eternal decentralized computer and financial system. It combines the security and scarcity of Bitcoin with the full power of a global, censorship-resistant cloud infrastructure — all in one protocol.
 
 Built from first principles for a 1,000-year horizon, Orama delivers:
-- **Native BTC compatibility** from genesis (deposit, use, and withdraw BTC with Bitcoin-level security).
+- **Native BTC compatibility** from genesis (deposit, use, and withdraw BTC with progressively trust-minimized security).
+- **Namespace-based execution** — smart contracts deploy into isolated environments with dedicated SQL databases, caches, storage, and API gateways. No shared bottleneck. No external indexing infrastructure. The namespace IS the backend.
 - **Pure WASM smart contracts** so developers can write in any language they want (Rust, Go, TypeScript, C++, and any language that compiles to WebAssembly).
-- **Per-transaction public/private toggle** using PLONK zk-SNARKs for optional privacy.
-- **Hybrid consensus** (Proof-of-Stake + Proof of Contribution + Proof of Infrastructure) that gives real power to ordinary people running nodes with OramaOS.
+- **Per-transaction public/private toggle** using PLONK zk-SNARKs for optional privacy, built natively into the dual-state account model.
+- **HotStuff-based BFT consensus** with Hybrid PoS + Proof of Contribution + Proof of Infrastructure, giving real power to ordinary people running nodes with OramaOS.
 - **210 million $ORAMA** hard-capped supply with zero pre-mine — 100% of tokens are earned through mining, just like Bitcoin.
 
 Orama is not an upgrade to existing chains. It is the base layer that millions of people and billions of devices will rely on for compute, storage, payments, and data ownership for centuries to come.
@@ -24,21 +25,79 @@ Centralized cloud providers control the internet's infrastructure. They can cens
 Existing Layer-1 blockchains force developers into rigid languages, expensive gas models, or centralized validator sets. Most projects also suffer from unfair token launches, infinite inflation, or governance capture.
 
 Orama solves both problems at once:
-- It is the **decentralized world computer** — distributed SQL, KV store, IPFS, serverless functions, and compute — all running on a global mesh of real hardware.
+- It is the **decentralized world computer** — but unlike Ethereum's "one global computer" model where every validator executes every contract, Orama gives each application its own isolated execution environment (namespace) with dedicated databases, caches, storage, and APIs. No application can clog another. No external infrastructure needed.
 - It is the **Bitcoin-grade financial system** — BTC-only economy, native BTC bridge, scarce $ORAMA token, and per-transaction privacy.
 
 ## 3. Orama Network Solution & High-Level Architecture
 
-Orama is a single Layer-1 chain with two tightly integrated layers that can never be separated:
+Orama is a single Layer-1 chain with a unique two-layer architecture that solves the biggest problem in blockchain: **shared resource contention**. On Ethereum, a viral game clogs the entire network. On Orama, every application gets its own isolated infrastructure.
 
-1. **Immutable Financial Core** (BTC + $ORAMA economics) — designed to be unchangeable for 1,000 years.
-2. **Modular Decentralized Compute Layer** (WASM execution + primitives) — upgradable via governance but never able to break the money layer.
+### The Two Layers
+
+1. **Global Chain** (Immutable Financial Core) — all nodes participate. Handles $ORAMA and BTC balances, the native DEX, the BTC bridge, staking, slashing, and the namespace registry. Designed to be unchangeable for 1,000 years.
+
+2. **Namespaces** (Isolated Execution Environments) — smart contracts deploy into namespaces, not onto the global chain. Each namespace is a dedicated cluster of nodes with its own database, cache, storage, API gateway, and WASM execution engine. Namespaces periodically commit state roots to the global chain, providing cryptographic proof that their execution is correct.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  GLOBAL CHAIN (all nodes participate via HotStuff consensus) │
+│                                                              │
+│  • $ORAMA / BTC balances       • Namespace registry          │
+│  • Native DEX order book       • State root commitments      │
+│  • BTC bridge                  • Staking & slashing          │
+│  • Block rewards & emission    • Governance                  │
+└─────────────┬──────────────────┬──────────────────┬──────────┘
+              │                  │                  │
+     ┌────────▼───────┐ ┌───────▼────────┐ ┌──────▼─────────┐
+     │  Namespace A   │ │  Namespace B   │ │  Namespace C   │
+     │  "GameFi App"  │ │  "DeFi Proto"  │ │  "NFT Market"  │
+     │                │ │                │ │                │
+     │  Own DB        │ │  Own DB        │ │  Own DB        │
+     │  Own cache     │ │  Own cache     │ │  Own cache     │
+     │  Own gateway   │ │  Own gateway   │ │  Own gateway   │
+     │  Own WASM VM   │ │  Own WASM VM   │ │  Own WASM VM   │
+     │  Own IPFS      │ │  Own IPFS      │ │  Own IPFS      │
+     └────────────────┘ └────────────────┘ └────────────────┘
+```
+
+### Why This Architecture
+
+Every other Layer-1 blockchain uses a single global state machine — every validator executes every smart contract. This creates a fundamental bottleneck: all applications compete for the same block space, the same throughput, and the same compute. A popular NFT mint can make a DeFi protocol unusable.
+
+Orama's namespace model eliminates this problem by design:
+
+- **No shared bottleneck** — each namespace runs on its own cluster of nodes with dedicated resources. One namespace cannot affect another.
+- **Real developer infrastructure** — contracts in a namespace have access to a real SQL database (RQLite with Raft consensus), a real distributed cache (Olric), real IPFS storage, and a dedicated API gateway with rich query capabilities. No external indexing infrastructure needed.
+- **Natural scaling** — adding nodes to the network allows more namespaces to be provisioned. No sharding complexity, no rollup escape hatches.
+- **The global chain stays lean** — consensus only processes financial transactions and state commitments, not contract execution. This means higher throughput for the operations that matter most.
+
+### Namespace Trust Model
+
+Namespaces commit cryptographic state roots to the global chain every epoch. The global chain does not re-execute namespace transactions — it verifies that the committed state is correct.
+
+- **Testnet & Mainnet V1**: Namespace nodes are staked validators. If they commit an incorrect state root, they are slashed. The number of nodes per namespace scales with the value at stake (minimum 3, higher for high-value protocols).
+- **Mainnet V2 (future)**: Optimistic fraud proofs — a challenge period during which anyone can prove a state root is incorrect, triggering slashing.
+- **Long-term (future)**: ZK validity proofs — namespaces generate zero-knowledge proofs that their state transitions are correct. Trustless verification without re-execution.
 
 All nodes run on real hardware with OramaOS, creating true "power to the people" instead of stake-weighted whales.
 
 ## 4. Consensus Mechanism
 
-Orama uses a **Hybrid PoS + Proof of Contribution + Proof of Infrastructure** model.
+Orama uses a **HotStuff-based BFT consensus protocol** combined with a **Hybrid PoS + Proof of Contribution + Proof of Infrastructure** validator selection model. The consensus protocol determines how blocks are produced and agreed upon. The hybrid model determines who gets to participate and how rewards are distributed.
+
+### Consensus Protocol: HotStuff BFT
+
+The global chain uses a pipelined BFT (Byzantine Fault Tolerant) protocol based on HotStuff. Unlike classical BFT protocols (Tendermint/PBFT) that require O(n²) messages per block — where every validator talks to every other validator — HotStuff achieves O(n) message complexity through leader-driven voting. This scales cleanly to 300+ validators.
+
+**How a block is produced (every 6 seconds):**
+
+1. **Leader Selection** — a block proposer is selected deterministically, weighted by Effective Power. Every node computes the same leader independently.
+2. **Propose** — the leader collects transactions from the mempool, executes them against the current state, computes the new state root, and broadcasts the block.
+3. **Vote** — all validators verify the block (re-execute transactions, confirm the state root matches) and send a signed vote to the next leader.
+4. **Aggregate** — the next leader collects votes. When 2/3+ of Effective Power has voted, a Quorum Certificate (QC) is formed.
+5. **Finalize** — the QC is included in the next block, finalizing the block from 2 rounds ago.
+
+This pipelined approach means a new block is proposed every 6 seconds, with finality achieved in 18 seconds (3 blocks). There is no dead time between rounds.
 
 ### Effective Power Formula
 $$
@@ -58,12 +117,14 @@ A node runner with modest stake but perfect uptime, real contribution, and Orama
 ### Contribution Score (weighted every 1-hour epoch)
 - Uptime: 40%
 - Bandwidth served: 30%
-- Compute/storage/SQL queries served: 20%
+- Compute/storage/namespace queries served: 20%
 - Low latency & reliability: 10%
 
 **Block time**: 6 seconds (14,400 blocks per day)
 **Block capacity**: 1,000 transactions per block
 **Epoch length**: 1 hour (600 blocks per epoch)
+**Finality**: 18 seconds (3 blocks via HotStuff pipeline)
+**Epoch checkpoints**: Every epoch, an additional BFT checkpoint is signed by 2/3+ of Effective Power as an extra layer of irreversibility.
 **Minimum stake to validate**: 1,000 $ORAMA (mainnet only — see bootstrap below)
 **Slashing**:
 - Double-signing or cheating → 100% slash
@@ -72,9 +133,16 @@ A node runner with modest stake but perfect uptime, real contribution, and Orama
 
 OramaOS attestation uses TPM-based remote attestation — cryptographically verified on-chain.
 
-### Finality
+### Why HotStuff Over Other Protocols
 
-Orama achieves finality through **BFT checkpointing**: at the end of each epoch, validators holding at least two-thirds of total Effective Power sign a checkpoint. Once a checkpoint is signed, all transactions within that epoch are irreversible. This provides 1-hour finality with cryptographic guarantees — no epoch can be reorganized once checkpointed.
+| Protocol | Message Complexity | Finality | Max Validators | Used By |
+|---|---|---|---|---|
+| PBFT / Tendermint | O(n²) | 1 block (~6s) | ~200 | Cosmos |
+| **HotStuff (Orama)** | **O(n)** | **3 blocks (~18s)** | **1,000+** | **Orama, Aptos (variant)** |
+| Nakamoto (PoW) | O(n) | ~60 min (6 blocks) | Unlimited | Bitcoin |
+| DAG-based | O(n) | 1-2 rounds | 1,000+ | Sui |
+
+HotStuff gives Orama the best balance: linear scaling for 300+ validators today with room to grow to 1,000+, near-instant finality, and a clean leader rotation mechanism that integrates naturally with the Effective Power model.
 
 ### Staking Bootstrap
 
@@ -86,17 +154,92 @@ For new node runners joining after mainnet: acquire BTC, bridge it onto Orama, p
 
 ## 5. Network Primitives & Execution Environment
 
-**Execution VM**: Pure WebAssembly (WASM) from genesis.
-Developers can write smart contracts in **any language** that compiles to WebAssembly. No EVM, no Solidity required.
+### Dual-State Account Model
 
-First-class on-chain primitives (callable directly from WASM contracts):
-- Distributed SQL database
-- Key-Value + IPFS storage
-- Serverless compute functions
-- Native BTC bridge
-- AI Marketplace (see below)
+Every address on Orama has a single account with two compartments:
 
-Gas is always paid in $ORAMA. Base fee is burned. All primitives integrate seamlessly with the public/private toggle.
+```
+Account {
+    address:     0xABC...
+    nonce:       42
+
+    // Public compartment — visible to everyone
+    public: {
+        orama_balance: 500,000,000 rays
+        btc_balance:   50,000 sats
+        code_hash:     0x...        // for contract accounts
+        storage_root:  0x...        // Merkle root of contract storage
+    }
+
+    // Private compartment (Phase 2 — activated post-PLONK ceremony)
+    private: {
+        commitment_root: 0x...      // Merkle root of hidden value commitments
+        nullifier_root:  0x...      // Merkle root of spent-tracking nullifiers
+    }
+}
+```
+
+**Public transactions** operate on the public compartment — visible, fast, and cheap. **Private transactions** (Phase 2) operate on the private compartment using PLONK zk-SNARKs, with funds moved between compartments via explicit shield/unshield operations.
+
+This dual-state design is unique to Orama. Unlike hybrid approaches that bolt a separate "shielded pool" onto an account model, Orama's privacy is native to each account — one account, two views, no external pool contract. See Section 6 for details.
+
+### Smart Contract Execution: Namespace Model
+
+**Execution VM**: Pure WebAssembly (WASM) from genesis. Developers can write smart contracts in **any language** that compiles to WebAssembly — Rust, Go, TypeScript, C++, and more. No EVM, no Solidity required.
+
+Unlike other blockchains where every validator executes every contract on a single shared state machine, **Orama smart contracts deploy into namespaces** — isolated execution environments with dedicated infrastructure.
+
+**What a namespace provides to a smart contract:**
+
+| Primitive | Implementation | What It Gives Developers |
+|---|---|---|
+| **SQL Database** | RQLite (distributed SQL with Raft consensus) | Real SQL queries — SELECT, INSERT, UPDATE, DELETE with JOINs, indexes, and transactions |
+| **Key-Value Cache** | Olric (distributed, consistent hashing) | Sub-millisecond reads, TTL-based expiry, perfect for hot data |
+| **Object Storage** | IPFS (content-addressed, replicated) | Store files, images, metadata — addressed by content hash |
+| **API Gateway** | Dedicated HTTP/WebSocket gateway | Rich query API with filtering, pagination, sorting — no external indexer needed |
+| **WASM Runtime** | wazero (pure Go WebAssembly engine) | Sandboxed execution with host functions for all primitives |
+| **WebRTC** | Pion SFU + TURN (optional) | Real-time voice, video, and data channels |
+
+**This solves Ethereum's biggest developer pain point.** On Ethereum, deploying a contract is only the beginning — you then need The Graph for indexing, Alchemy for RPC, IPFS pinning services for storage, and a separate backend for anything that requires a database. On Orama, the namespace IS your backend. Deploy a contract and you immediately have a database, cache, storage, and a queryable API.
+
+### How Contract Deployment Works
+
+```
+1. Developer writes a WASM contract (Rust, Go, TypeScript, etc.)
+2. Developer deploys to a namespace (creates one or uses existing)
+3. The namespace provisions a dedicated cluster:
+   - 3+ nodes with RQLite, Olric, IPFS access, Gateway, WASM VM
+   - Dedicated ports, DNS subdomain, isolated from other namespaces
+4. The contract runs in the namespace's WASM engine
+5. The namespace commits state roots to the global chain every epoch
+6. The global chain records the commitment — it does not re-execute
+```
+
+### Rich Query RPC
+
+Every namespace's API gateway serves powerful, filterable queries over contract data — eliminating the need for external indexing infrastructure:
+
+```
+GET /v1/contracts/{address}/state/users?sort=created_at&order=desc&limit=20
+GET /v1/transactions?address=0xABC...&limit=50
+GET /v1/nfts?owner=0xABC...&collection=0xDEF...
+GET /v1/blocks/12345
+```
+
+The node indexes contract state changes locally and serves them through the RPC. No Graph. No subgraphs. No external infrastructure. One API call.
+
+### Global Chain Primitives
+
+The following primitives live on the global chain (not in namespaces) because they are part of the immutable financial core:
+
+- **$ORAMA and BTC transfers** — direct balance changes on the global state
+- **Native DEX order book** — the $ORAMA/BTC trading pair (see Section 9)
+- **BTC bridge** — deposit and withdrawal of BTC (see Section 7)
+- **Staking and slashing** — validator economics
+- **Governance** — on-chain voting (see Section 12)
+- **Namespace registry** — which namespaces exist, their owners, and their committed state roots
+
+Gas for global chain transactions is paid in $ORAMA. Base fee is burned. All global primitives integrate seamlessly with the public/private toggle.
 
 ### AI Marketplace & Angels
 
@@ -112,7 +255,7 @@ Orama has a native **AI Marketplace** — a protocol-level primitive for hosting
 - Pay per use in $ORAMA — transparent pricing, competitive marketplace.
 
 **For Angel builders:**
-- Deploy autonomous AI agents that can interact with Orama's on-chain primitives (SQL, storage, cache, BTC bridge, DEX).
+- Deploy autonomous AI agents that can interact with Orama's namespace primitives (SQL, storage, cache, BTC bridge, DEX).
 - Angels can hold $ORAMA, execute transactions, manage data, and interact with other Angels.
 - Revenue model: builders set per-request or subscription pricing in $ORAMA.
 
@@ -157,14 +300,45 @@ If someone wants to buy $ORAMA, they acquire BTC (anywhere in the world), bridge
 
 ### Trust-Minimized BTC Bridge
 
-Orama has a **trust-minimized BTC bridge built into the protocol from genesis**.
+Orama has a **native BTC bridge built into the protocol from genesis**, designed to progressively increase its trust guarantees as the network matures.
 
 - Deposit BTC → receive native BTC on Orama (1:1).
 - Use BTC to buy $ORAMA, pay for services, or use in smart contracts.
-- Withdraw back to Bitcoin mainnet with Bitcoin-level security.
-- Security model: Bitcoin light-client + zk-proofs + BitVM-style fraud proofs (1-of-N honest assumption).
+- Withdraw back to Bitcoin mainnet.
 
 The bridge is further backed by a **protocol reserve** — BTC accumulated from bonding curve sales (see Section 9). This reserve provides additional collateral beyond the 1:1 deposits, ensuring the bridge remains solvent even under extreme conditions.
+
+### Bridge Phases
+
+The bridge security model strengthens over time, from validator-secured to cryptographically verified:
+
+**Testnet → Mainnet V1: Validator Threshold Bridge**
+
+The top validators by Effective Power form a threshold signature group. Deposits are detected by validators watching the Bitcoin chain; withdrawals require a supermajority (e.g., 7-of-10) of the validator group to sign the Bitcoin transaction. Validators are staked — cheating means losing their entire stake. This model is proven, ships fast, and enables the full BTC economy (DEX, bonding curve, bridge fees) from day one.
+
+**Mainnet V2: Light Client + Optimistic Fraud Proofs**
+
+A Bitcoin SPV (Simple Payment Verification) light client is embedded in the Orama protocol. The chain verifies Bitcoin block headers and Merkle inclusion proofs natively — deposits are verified cryptographically with no human attestation required.
+
+Withdrawals use an optimistic model: a withdrawal is posted and enters a challenge period (e.g., 24 hours). If any validator can prove the withdrawal is invalid, it is reverted and the submitter is slashed. Security assumption: **1-of-N honest** — as long as one honest watcher exists in the entire world, fraud cannot succeed.
+
+**Long-term: Cryptographic Validity Proofs**
+
+As BTC bridge research matures (BitVM, ZK validity proofs), the bridge upgrades to fully cryptographic verification. No challenge period — the proof IS the verification. This is the ultimate trust-minimized design.
+
+**Each phase is a strict upgrade** — the bridge fee structure, user experience, and economic model remain identical. Only the trust model under the hood improves.
+
+### Testing
+
+The bridge code is environment-aware, connecting to different Bitcoin networks per Orama environment:
+
+| Orama Environment | Bitcoin Network | BTC Source |
+|---|---|---|
+| Devnet | Bitcoin Regtest (local) | Mine instantly, unlimited test BTC |
+| Testnet | Bitcoin Testnet4 (public) | Free from faucets, zero value |
+| Mainnet | Bitcoin Mainnet | Real BTC |
+
+The same bridge code runs across all environments — only the configuration changes.
 
 ### Bridge Fee
 
@@ -218,15 +392,13 @@ $ORAMA uses a fixed block reward with a Bitcoin-style halving:
 
 **Genesis fee schedule:**
 
-| Operation | Cost |
-|---|---|
-| $ORAMA / BTC transfer | 1,000 rays (0.001 $ORAMA) |
-| WASM contract execution | 1,000 rays per 1M instructions |
-| SQL query | 500 rays |
-| IPFS storage | 10,000 rays per MB |
-| KV store read/write | 200 rays |
-| Private transaction (zk-SNARK) | 4× the public equivalent |
-| DEX order book trade | 1,000 rays |
+| Operation | Cost | Layer |
+|---|---|---|
+| $ORAMA / BTC transfer | 1,000 rays (0.001 $ORAMA) | Global chain |
+| DEX order book trade | 1,000 rays | Global chain |
+| Namespace state commitment | 2,000 rays | Global chain |
+| Private transaction (zk-SNARK) | 4× the public equivalent | Global chain |
+| Namespace operations (SQL, KV, IPFS, WASM) | Paid via namespace billing in $ORAMA | Namespace |
 
 **Congestion multiplier:** Fees adjust dynamically based on block fullness (EIP-1559 model). When blocks are at 50% capacity (~500 transactions), the multiplier is 1×. As blocks fill toward the 1,000 transaction limit, the multiplier rises (up to 10×). When blocks are under half full, it drops below 1×. This prevents spam during peak demand and keeps fees low during normal usage.
 
@@ -241,7 +413,7 @@ As usage grows and emissions shrink, $ORAMA becomes increasingly deflationary �
 
 ## 9. Native DEX & Liquidity
 
-Orama does not rely on external exchanges. The chain has its own **protocol-native exchange** built in as a first-class primitive, the same way it has native SQL, IPFS, and compute.
+Orama does not rely on external exchanges. The chain has its own **protocol-native exchange** built into the global chain as a first-class primitive.
 
 ### The Bootstrap Problem
 
@@ -306,7 +478,7 @@ Any holder of $ORAMA can place sell orders. Any holder of BTC (bridged onto Oram
 
 ### Permissionless WASM DEX Contracts
 
-The protocol-native order book handles the core pair: **$ORAMA/BTC**. For tokens created on Orama via WASM contracts, anyone can deploy AMMs or order books as WASM smart contracts. Custom tokens trade against $ORAMA — creating a clear asset hierarchy:
+The protocol-native order book handles the core pair: **$ORAMA/BTC**. For tokens created on Orama via WASM contracts deployed in namespaces, anyone can deploy AMMs or order books as WASM smart contracts. Custom tokens trade against $ORAMA — creating a clear asset hierarchy:
 
 ```
 BTC (bridged from Bitcoin mainnet)
@@ -356,11 +528,36 @@ More bridge usage → more BTC fees collected
   → more attention on Orama → more users → more bridge usage
 ```
 
-## 11. Fungible Tokens & Native L2 Scaling
+## 11. Token Standards & Scaling
 
-- **NFTs**: Native WASM standards with privacy support. Metadata stored on Orama IPFS/KV. Anyone can mint and trade NFTs on Orama.
-- **Fungible tokens**: Issued via WASM smart contracts. $ORAMA remains the only gas token.
-- **L2 Scaling**: Native support for optimistic and zk-rollups. L2 tokens settle finality on Orama L1. Gas on L2 can be paid in L2 token or $ORAMA.
+### OTS-1: Orama Token Standard (Fungible Tokens)
+
+Fungible tokens are WASM contracts deployed in namespaces that implement the **OTS-1** interface. Designed from scratch to fix ERC-20's known problems:
+
+- **No unlimited approvals** — the operator model requires an explicit spending limit. No "approve MAX_UINT" footgun that leads to wallet drains.
+- **Memo field on transfers** — attach context (invoice ID, payment reason) to any transfer.
+- **Explicit revoke** — `revoke_operator()` is a first-class operation, not `approve(addr, 0)`.
+- **Global token registry** — tokens register on the global chain so wallets and explorers discover them. Symbol uniqueness is enforced (no impersonation).
+- **Queryable** — token balances, transfer history, and holder lists are queryable via the namespace RPC. No external indexer needed.
+
+$ORAMA and BTC are global chain native assets — they are not OTS-1 contracts.
+
+### ONS-1: Orama NFT Standard (Non-Fungible Tokens)
+
+NFTs are WASM contracts deployed in namespaces that implement the **ONS-1** interface. Designed from scratch to fix ERC-721's known problems:
+
+- **On-chain metadata** — stored in the namespace's database and IPFS. No external URLs that can break. Queryable by attribute via SQL.
+- **Batch operations** — `batch_transfer` and `batch_mint` are part of the standard. Moving 50 NFTs = 1 transaction.
+- **Built-in royalties** — `royalty_info()` is mandatory, not optional. Enforced by marketplaces.
+- **Enumerable by default** — `tokens_of(owner)` is part of the standard. List someone's NFTs without an indexer.
+- **Two-level operators** — collection-wide approval OR per-token approval.
+- **Global NFT registry** — collections register on the global chain for discovery.
+
+**DeBros NFTs** (100 Team + 700 Community) are a special case — they live on the global chain (not in a namespace) because they carry governance power and bridge revenue rights. They are minted once at mainnet genesis from the Solana snapshot.
+
+### Scaling
+
+Orama's namespace architecture provides natural horizontal scaling — each namespace is an isolated execution environment with dedicated resources. Adding nodes to the network allows more namespaces to be provisioned. No sharding, no rollup escape hatches. For extreme-scale use cases, namespaces can optionally implement optimistic or zk-rollup patterns internally, with finality settling on the global chain.
 
 ## 12. Governance
 
@@ -444,24 +641,35 @@ Most blockchains have governance captured by whales or controlled by a handful o
 
 - **51% attack**: Requires controlling a majority of Effective Power — which means real uptime, real contribution, and real stake. An attacker can't just buy tokens; they need physical infrastructure and months of contribution history. This makes attacks orders of magnitude more expensive than pure PoS chains.
 - **Nothing-at-stake**: Prevented by double-slashing — validators who sign conflicting blocks lose both their stake and their accumulated contribution score. The contribution score takes months to build, making it a meaningful deterrent.
-- **Long-range attacks**: BFT checkpoints are finalized every epoch (1 hour) by two-thirds of Effective Power. Reorganizing beyond the last checkpoint is impossible.
+- **Long-range attacks**: HotStuff BFT finalizes every block within 3 rounds (18 seconds). Additionally, epoch-level checkpoints are signed by 2/3+ of Effective Power every hour. Reorganizing beyond a finalized block is impossible.
 - **Sybil attacks**: OramaOS attestation is verified via TPM — an attacker can't fake infrastructure multipliers without the real hardware and software.
+- **Leader failure**: HotStuff's view-change mechanism handles unresponsive leaders cleanly — if the selected proposer fails to produce a block within the timeout, the next leader takes over without stalling the chain.
 
 ### BTC Bridge Security
 
-- **Bridge deposits**: Verified via Bitcoin light-client embedded in the Orama protocol. The chain validates Bitcoin block headers and Merkle proofs natively.
-- **Bridge withdrawals**: Protected by zk-proofs + BitVM-style fraud proofs with a 1-of-N honest assumption — if even one validator is honest, fraudulent withdrawals are caught and reverted.
+The bridge security model strengthens across phases (see Section 7):
+
+- **Phase 1 (testnet)**: Validator threshold signatures — staked validators sign bridge operations. Cheating means losing their entire stake.
+- **Phase 2 (mainnet)**: Bitcoin SPV light client verifies deposits cryptographically. Withdrawals use optimistic fraud proofs with a challenge period (1-of-N honest assumption).
+- **Phase 3 (future)**: Full cryptographic validity proofs — trustless verification with no challenge period.
 - **Protocol reserve**: BTC accumulated from bonding curve sales provides additional collateral beyond 1:1 deposits.
 - **Bridge halt**: If anomalous withdrawal patterns are detected (e.g., more than 10% of bridged BTC withdrawn in a single epoch), the bridge automatically pauses and requires a Tier 1 governance vote to resume.
 
+### Namespace Security
+
+- **Isolation**: Each namespace runs on a dedicated cluster with its own database, cache, and gateway. A compromised or malicious contract in one namespace cannot affect any other namespace or the global chain.
+- **State commitments**: Namespaces commit state roots to the global chain. Invalid state roots result in slashing of the namespace's validator nodes.
+- **Staked validators**: Namespace nodes are staked — the economic cost of attacking a namespace is proportional to the stake at risk.
+- **Scaling trust**: High-value namespaces can require more validator nodes (e.g., 5 or 10 instead of the default 3), increasing the cost of collusion.
+
 ### DEX & Order Book Security
 
-- **Front-running prevention**: Order book transactions within the same block are processed in a randomized order, not by gas price. This eliminates MEV (Miner Extractable Value) — block proposers cannot reorder transactions to front-run traders.
+- **Front-running prevention**: Order book transactions within the same block are processed in a randomized order (using the block hash as a deterministic seed), not by gas price. This eliminates MEV (Miner Extractable Value) — block proposers cannot reorder transactions to front-run traders.
 - **Price manipulation**: The bonding curve provides a reference price that cannot be manipulated by wash trading on the order book.
 
 ### Network Security
 
-- **Encrypted mesh**: All inter-node communication is encrypted via VPN tunnel. Internal services are never exposed on public IPs.
+- **Encrypted mesh**: All inter-node communication is encrypted via WireGuard VPN tunnel. Internal services (database, cache, gateways) are never exposed on public IPs.
 - **OramaOS hardening**: No SSH, read-only rootfs, service sandboxing — the attack surface per node is minimal (see Section 14).
 - **Forged attestation**: Nodes submitting fake infrastructure proofs are slashed 50% and permanently flagged.
 
@@ -542,12 +750,13 @@ Orama does not launch mainnet until a minimum of **300 independent nodes** are r
 | Risk | Severity | Mitigation |
 |---|---|---|
 | **51% attack** | High | Proof of Infrastructure requires real uptime + contribution, not just stake. TPM attestation prevents fake nodes. |
-| **BTC bridge exploit** | Critical | Bitcoin light-client verification, zk-proofs, BitVM fraud proofs, automatic bridge halt on anomalous withdrawals, protocol reserve as additional collateral. |
+| **BTC bridge exploit** | Critical | Phased security model: validator threshold signatures (testnet) → Bitcoin light-client + optimistic fraud proofs (mainnet) → cryptographic validity proofs (future). Automatic bridge halt on anomalous withdrawals. Protocol reserve as additional collateral. |
 | **Governance capture** | High | NFT holders control 75% of voting power. Quadratic voting for token holders prevents whale dominance. Immutable financial core cannot be changed by any vote. |
 | **Quantum computing** | Medium | Post-quantum signature upgrade on roadmap. PLONK proof system can be upgraded to quantum-resistant circuits via universal setup. |
 | **Regulatory risk** | Medium | Fully decentralized, no single legal entity. OramaOS nodes have no remote access — even the operator can't be compelled to modify the software. |
 | **AI Marketplace abuse** | Medium | Compute nodes capped at 10% of network. Marketplace is purely opt-in. Malicious models can be flagged via governance. |
 | **Bonding curve manipulation** | Low | Curve price is mathematical (√n) — cannot be manipulated. Order book has randomized transaction ordering to prevent front-running. |
+| **Namespace isolation failure** | Medium | Each namespace runs on a dedicated cluster with separate database, cache, and gateway. State roots are committed to the global chain and verified. Namespace validators are staked — incorrect state roots trigger slashing. |
 
 The protocol is designed to outlive any single person, company, or government.
 
@@ -571,3 +780,4 @@ Together we build the eternal system.
 - [Appendix D: PLONK Trusted Setup Ceremony Specification](APPENDIX_D_PLONK_SETUP.md)
 - [Appendix E: Sample WASM Contract](APPENDIX_E_SAMPLE_CONTRACT.md)
 - [Appendix F: Effective Power & Slashing Math](APPENDIX_F_MATH_PROOFS.md)
+- [Appendix G: Technical Architecture](APPENDIX_G_TECHNICAL_ARCHITECTURE.md)

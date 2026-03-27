@@ -32,6 +32,7 @@ import (
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
 	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
+	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
@@ -168,7 +169,8 @@ type Gateway struct {
 	proxyTransport *http.Transport
 
 	// Vault proxy handlers
-	vaultHandlers *vaulthandlers.Handlers
+	vaultHandlers    *vaulthandlers.Handlers
+	operatorHandler  *operatorhandlers.Handler
 
 	// Namespace health state (local service probes + hourly reconciliation)
 	nsHealth *namespaceHealthState
@@ -405,6 +407,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
+		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
 	}
 
 	// Initialize deployment system

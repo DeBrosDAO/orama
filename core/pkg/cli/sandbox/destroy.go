@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -107,8 +108,23 @@ func Destroy(name string, force bool) error {
 		fmt.Fprintf(os.Stderr, "Warning: failed to remove sandbox environment: %v\n", err)
 	}
 
+	// Clean up SSH known_hosts entries for destroyed server IPs.
+	// This prevents "REMOTE HOST IDENTIFICATION HAS CHANGED" errors
+	// when the same IPs are reused by a new sandbox.
+	cleanupKnownHosts(state)
+
 	fmt.Printf("\nSandbox %q destroyed (%d servers deleted)\n", state.Name, len(state.Servers))
 	return nil
+}
+
+// cleanupKnownHosts removes SSH known_hosts entries for all sandbox server IPs.
+func cleanupKnownHosts(state *SandboxState) {
+	for _, srv := range state.Servers {
+		cmd := exec.Command("ssh-keygen", "-R", srv.IP)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		cmd.Run() // best-effort, ignore errors
+	}
 }
 
 // resolveSandbox finds a sandbox by name or returns the active one.
