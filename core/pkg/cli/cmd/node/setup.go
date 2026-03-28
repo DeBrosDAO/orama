@@ -40,6 +40,7 @@ func init() {
 	setupCmd.Flags().StringVar(&setupOpts.User, "user", "root", "SSH user on the VPS")
 	setupCmd.Flags().StringVar(&setupOpts.Password, "password", "", "One-time password for initial SSH access")
 	setupCmd.Flags().StringVar(&setupOpts.BaseDomain, "base-domain", "", "Base domain for the network")
+	setupCmd.Flags().StringVar(&setupOpts.Gateway, "gateway", "", "Gateway URL for invite tokens (e.g., http://1.2.3.4)")
 	setupCmd.Flags().BoolVar(&setupOpts.Genesis, "genesis", false, "Create a new cluster (first node)")
 	setupCmd.Flags().BoolVar(&setupOpts.AnyoneRelay, "anyone-relay", false, "Run as Anyone relay operator")
 	setupCmd.MarkFlagRequired("ip")

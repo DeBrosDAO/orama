@@ -2,7 +2,30 @@
 
 This guide walks you through the full process of setting up an Orama node on a fresh VPS — from system requirements through installation, verification, and day-to-day lifecycle management.
 
-> **Tip:** After installation, manage your nodes with the unified CLI commands: `orama nodes`, `orama ssh`, `orama status`, `orama rollout`. See [Node Management](/docs/operator/node-management) for details.
+## Quick Start
+
+The fastest way to set up a node is with `orama node setup` from your local machine:
+
+```bash
+# First node (creates cluster)
+orama node setup --ip <IP> --password '<PASS>' --env devnet \
+  --base-domain orama-devnet.network --role nameserver --genesis
+
+# Authenticate with the new cluster
+orama auth login
+
+# Add more nodes (invite token handled automatically)
+orama node setup --ip <IP> --password '<PASS>' --env devnet \
+  --base-domain orama-devnet.network
+```
+
+This handles everything: SSH key management (via RootWallet), binary upload, invite tokens, and installation. See [Getting Started](/docs/operator/getting-started) for the full walkthrough.
+
+> **Tip:** After installation, manage your nodes with: `orama nodes`, `orama ssh`, `orama status`, `orama rollout`, `orama push`. See [Node Management](/docs/operator/node-management) for details.
+
+## Manual Setup
+
+The sections below describe the manual installation process for advanced users or environments where `orama node setup` is not suitable.
 
 ## System Requirements
 
