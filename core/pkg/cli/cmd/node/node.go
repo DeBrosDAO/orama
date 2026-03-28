@@ -33,4 +33,5 @@ func init() {
 	Cmd.AddCommand(enrollCmd)
 	Cmd.AddCommand(unlockCmd)
 	Cmd.AddCommand(migrateConfCmd)
+	Cmd.AddCommand(setupCmd)
 }

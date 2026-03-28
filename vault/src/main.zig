@@ -7,12 +7,13 @@ const guardian_mod = @import("guardian.zig");
 const heartbeat = @import("peer/heartbeat.zig");
 const posix = std.posix;
 
-/// Global shutdown flag — set by signal handlers.
-var shutdown_flag = std.atomic.Value(bool).init(false);
+/// Global running flag — true while the server should keep running.
+/// Signal handlers set this to false to trigger graceful shutdown.
+var running_flag = std.atomic.Value(bool).init(true);
 
 fn signalHandler(sig: i32) callconv(.c) void {
     _ = sig;
-    shutdown_flag.store(true, .release);
+    running_flag.store(false, .release);
 }
 
 pub fn main() !void {
@@ -97,7 +98,7 @@ pub fn main() !void {
 
     // Start heartbeat thread
     var hb_thread: ?std.Thread = blk: {
-        break :blk std.Thread.spawn(.{}, heartbeatLoop, .{ &guardian, &shutdown_flag }) catch |err| {
+        break :blk std.Thread.spawn(.{}, heartbeatLoop, .{ &guardian, &running_flag }) catch |err| {
             log.warn("failed to start heartbeat thread: {}, running without heartbeat", .{err});
             break :blk null;
         };
@@ -113,7 +114,7 @@ pub fn main() !void {
         .allocator = allocator,
         .guardian = &guardian,
     };
-    listener.serve(ctx, &shutdown_flag) catch |err| {
+    listener.serve(ctx, &running_flag) catch |err| {
         log.err("server failed: {}", .{err});
         std.process.exit(1);
     };
