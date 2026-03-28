@@ -78,6 +78,7 @@ func sshInto(node inspector.Node) error {
 	sshCmd := exec.Command(sshBin,
 		"-i", keyPath,
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "IdentitiesOnly=yes",
 		fmt.Sprintf("%s@%s", node.User, node.Host),
 	)
 	sshCmd.Stdin = os.Stdin

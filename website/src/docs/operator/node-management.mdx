@@ -98,13 +98,46 @@ For detailed monitoring with alerts, use the full monitor:
 orama monitor report --env devnet
 ```
 
+## Pushing Binary Updates
+
+Push a new binary archive to nodes without reinstalling:
+
+```bash
+# Build the archive first
+orama build
+
+# Push to a single node
+orama push --ip 1.2.3.4
+
+# Push to all nodes in an environment
+orama push --env devnet
+```
+
+## Adding New Nodes
+
+Add a new VPS to your cluster with one command:
+
+```bash
+orama node setup --ip <IP> --password '<PASS>' --env devnet --base-domain orama-devnet.network
+```
+
+This creates an SSH key in RootWallet, installs it on the VPS, uploads binaries, requests an invite token, and joins the node to the cluster. The `--password` is used once for initial SSH access — after that, RootWallet handles authentication.
+
+For the first node in a new cluster, add `--genesis`:
+
+```bash
+orama node setup --ip <IP> --password '<PASS>' --env devnet \
+  --base-domain orama-devnet.network --role nameserver --genesis
+```
+
 ## How Node Ownership Works
 
-When you install a node (via `orama node install` with an invite token), the network records your wallet address as the node's operator. This happens automatically through the invite token system:
+When you set up a node via `orama node setup`, the CLI:
 
-1. You generate an invite token (authenticated with your wallet)
-2. The new node joins using that token
-3. The network tags the node with your wallet address from the token
+1. Authenticates with the cluster using your wallet (via RootWallet)
+2. Requests an invite token tagged with your wallet address
+3. The new node joins using that token
+4. The network records your wallet as the node's operator
 
 This means `orama nodes` can query the network for "all nodes owned by my wallet" — no local files to maintain.
 
@@ -124,8 +157,10 @@ The legacy `nodes.conf` continues to work as a fallback — you can migrate at y
 
 | Command | Description |
 |---------|-------------|
+| `orama node setup --ip <ip>` | Set up a new node (SSH key + install + join) |
 | `orama nodes [--env]` | List your nodes |
 | `orama ssh <ip> [--env]` | SSH into a node |
 | `orama status [--env] [--json]` | Health check all nodes |
+| `orama push [--ip <ip>] [--env]` | Push binary archive to nodes |
 | `orama rollout [--env] [--delay]` | Rolling upgrade all nodes |
 | `orama node migrate-conf [--env]` | Migrate nodes.conf to wallet-based tracking |

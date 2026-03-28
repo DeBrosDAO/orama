@@ -38,7 +38,8 @@ type Options struct {
 	User        string // SSH user (default: "root")
 	Password    string // One-time password for initial SSH access
 	BaseDomain  string
-	Genesis     bool // If true, create a new cluster instead of joining
+	Gateway     string // Gateway URL to use for invite tokens (overrides env config)
+	Genesis     bool   // If true, create a new cluster instead of joining
 	AnyoneRelay bool
 }
 
@@ -154,6 +155,25 @@ func Run(opts Options) error {
 		return fmt.Errorf("install failed: %w", err)
 	}
 
+	// 9. After genesis install, update the environment gateway URL to this node's IP.
+	// This allows subsequent `node setup` calls to find the gateway automatically.
+	if opts.Genesis && opts.Env != "" {
+		gatewayURL := fmt.Sprintf("http://%s", opts.IP)
+		desc := fmt.Sprintf("%s (genesis: %s)", opts.Env, opts.IP)
+		if err := cli.AddEnvironment(opts.Env, gatewayURL, desc); err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: failed to update environment: %v\n", err)
+		} else {
+			if err := cli.SwitchEnvironment(opts.Env); err != nil {
+				fmt.Fprintf(os.Stderr, "  Warning: failed to switch environment: %v\n", err)
+			}
+			fmt.Printf("  Environment %q updated: gateway → %s\n", opts.Env, gatewayURL)
+			fmt.Printf("\n  To join more nodes, first authenticate:\n")
+			fmt.Printf("    orama auth login\n")
+			fmt.Printf("  Then:\n")
+			fmt.Printf("    orama node setup --ip <IP> --password '<PASS>' --env %s --base-domain %s\n", opts.Env, opts.BaseDomain)
+		}
+	}
+
 	fmt.Printf("\n  Node %s setup complete!\n", opts.IP)
 	return nil
 }
@@ -176,6 +196,8 @@ func installPublicKey(ip, user, password, pubKey string) error {
 		"ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ConnectTimeout=10",
+		"-o", "PreferredAuthentications=password",
+		"-o", "PubkeyAuthentication=no",
 		fmt.Sprintf("%s@%s", user, ip),
 		cmd,
 	}
@@ -212,22 +234,38 @@ func buildInstallCommand(opts Options, node inspector.Node, agentClient *rwagent
 		parts = append(parts, "--anyone-client")
 	}
 
-	if !opts.Genesis {
-		// Get gateway URL and invite token
-		env := opts.Env
-		if env == "" {
-			active, err := cli.GetActiveEnvironment()
-			if err != nil {
-				return "", fmt.Errorf("failed to get active environment: %w", err)
-			}
-			env = active.Name
-		}
+	// Pass operator metadata so the node registers with correct values
+	if opts.User != "" {
+		parts = append(parts, "--ssh-user", opts.User)
+	}
+	if opts.Env != "" {
+		parts = append(parts, "--environment", opts.Env)
+	}
 
-		envConfig, err := cli.GetEnvironmentByName(env)
-		if err != nil {
-			return "", fmt.Errorf("environment %q not found: %w", env, err)
+	// Get wallet address for operator tagging
+	ctx := context.Background()
+	if addrData, err := agentClient.GetAddress(ctx, "evm"); err == nil && addrData.Address != "" {
+		parts = append(parts, "--operator-wallet", addrData.Address)
+	}
+
+	if !opts.Genesis {
+		// Determine gateway URL for invite token request
+		gatewayURL := opts.Gateway
+		if gatewayURL == "" {
+			env := opts.Env
+			if env == "" {
+				active, err := cli.GetActiveEnvironment()
+				if err != nil {
+					return "", fmt.Errorf("failed to get active environment: %w", err)
+				}
+				env = active.Name
+			}
+			envConfig, err := cli.GetEnvironmentByName(env)
+			if err != nil {
+				return "", fmt.Errorf("environment %q not found (use --gateway to specify directly): %w", env, err)
+			}
+			gatewayURL = envConfig.GatewayURL
 		}
-		gatewayURL := envConfig.GatewayURL
 
 		// Request invite token via operator API
 		token, err := requestInviteToken(gatewayURL)
