@@ -12,34 +12,70 @@ import (
 )
 
 func TestWalletFromRequest_withClaims(t *testing.T) {
+	h := NewHandler(nil, nil)
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	claims := &auth.JWTClaims{Sub: "0xabc123"}
 	ctx := context.WithValue(r.Context(), ctxkeys.JWT, claims)
 	r = r.WithContext(ctx)
 
-	wallet := walletFromRequest(r)
+	wallet := h.walletFromRequest(r)
 	if wallet != "0xabc123" {
 		t.Errorf("wallet = %q, want %q", wallet, "0xabc123")
 	}
 }
 
 func TestWalletFromRequest_noClaims(t *testing.T) {
+	h := NewHandler(nil, nil)
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	wallet := walletFromRequest(r)
+	wallet := h.walletFromRequest(r)
 	if wallet != "" {
 		t.Errorf("wallet = %q, want empty", wallet)
 	}
 }
 
 func TestWalletFromRequest_nilClaims(t *testing.T) {
+	h := NewHandler(nil, nil)
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	ctx := context.WithValue(r.Context(), ctxkeys.JWT, (*auth.JWTClaims)(nil))
 	r = r.WithContext(ctx)
 
-	wallet := walletFromRequest(r)
+	wallet := h.walletFromRequest(r)
 	if wallet != "" {
 		t.Errorf("wallet = %q, want empty", wallet)
+	}
+}
+
+func TestWalletFromRequest_apiKeyContext(t *testing.T) {
+	// When auth middleware sets ctxkeys.APIKey (no JWT), walletFromRequest
+	// should try to resolve via the API key. With nil rqliteClient it returns
+	// empty (can't query DB), but it shouldn't panic.
+	h := NewHandler(nil, nil)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx := context.WithValue(r.Context(), ctxkeys.APIKey, "ak_test:myns")
+	r = r.WithContext(ctx)
+
+	// Should not panic — returns empty because no DB to query
+	wallet := h.walletFromRequest(r)
+	if wallet != "" {
+		t.Errorf("wallet = %q, want empty (no DB)", wallet)
+	}
+}
+
+func TestExtractNamespace(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"ak_abc123:myns", "myns"},
+		{"ak_abc123", "ak_abc123"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := extractNamespace(tt.input)
+		if got != tt.want {
+			t.Errorf("extractNamespace(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }
 
