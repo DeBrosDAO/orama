@@ -75,7 +75,7 @@ function HomeHero() {
           Decentralized Cloud + L1 Blockchain
         </span>
 
-        <h1 className="relative z-10 font-display font-bold text-4xl lg:text-6xl leading-tight">
+        <h1 className="relative z-10 font-display font-bold text-3xl md:text-4xl lg:text-6xl leading-tight">
           <SplitText
             text="Blockchain was step one."
             className="text-fg"
@@ -107,9 +107,7 @@ function HomeHero() {
         `}</style>
 
         <p className="relative z-10 text-muted text-sm leading-relaxed max-w-lg">
-          Bitcoin gave us decentralized money. Ethereum gave us decentralized
-          contracts. Orama gives us decentralized everything —
-          an L1 blockchain fused with a full cloud platform.
+          An L1 blockchain fused with a full cloud platform — decentralized everything.
         </p>
 
         <div className="relative z-10 flex flex-wrap gap-2 justify-center">
@@ -149,7 +147,7 @@ function HomeHero() {
         <div className="relative z-10 flex items-center gap-2 mt-2">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse-dot" />
           <span className="text-xs font-mono text-muted tracking-wider uppercase">
-            Testnet Live — 300 Nodes Required for Genesis
+            Testnet Live — WITH 50+ NODES
           </span>
         </div>
 

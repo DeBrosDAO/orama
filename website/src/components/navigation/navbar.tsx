@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link, useLocation } from "react-router";
 import { Menu, X, ExternalLink, ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -11,10 +11,11 @@ const linkClass = "px-3 py-1.5 text-xs tracking-wider uppercase font-mono rounde
 const activeClass = "text-fg bg-white/[0.06]";
 const inactiveClass = "text-muted hover:text-fg hover:bg-white/[0.04]";
 
-export function Navbar() {
+export function Navbar({ bannerVisible = true }: { bannerVisible?: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const { pathname } = useLocation();
+  const handleMobileClose = useCallback(() => setMobileOpen(false), []);
 
   useEffect(() => {
     setMoreOpen(false);
@@ -22,7 +23,7 @@ export function Navbar() {
 
   return (
     <>
-      <header className="fixed top-16 left-0 right-0 z-50 flex justify-center px-4 pt-2">
+      <header className={cn("fixed left-0 right-0 z-50 flex justify-center px-4 pt-2 transition-[top] duration-300", bannerVisible ? "top-16" : "top-4")}>
         <nav className="flex items-center justify-between w-full max-w-5xl h-12 px-5 bg-surface-2/80 backdrop-blur-xl border border-border/60 rounded-full shadow-[0_4px_24px_rgba(0,0,0,0.4)]">
           <Link to="/" className="flex items-center gap-2 group">
             <img src={oramaIcon} alt="Orama" className="h-8 w-8 shrink-0 transition-transform duration-700 ease-in-out group-hover:rotate-[360deg]" />
@@ -125,7 +126,7 @@ export function Navbar() {
 
       <MobileMenu
         open={mobileOpen}
-        onClose={() => setMobileOpen(false)}
+        onClose={handleMobileClose}
       />
     </>
   );

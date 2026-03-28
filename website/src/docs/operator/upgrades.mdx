@@ -158,15 +158,21 @@ orama push --ip 1.2.3.4
 # Push to all nodes in an environment
 orama push --env devnet
 
+# Fan out server-to-server (faster for many nodes)
+orama push --env devnet --fanout
+
 # Push with a specific SSH user
 orama push --ip 1.2.3.4 --user ubuntu
 ```
+
+Use `--fanout` to upload to the first node, then distribute server-to-server via SSH agent forwarding. Much faster when pushing to many nodes.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--ip` | | Push to a single node by IP |
 | `--env` | active env | Push to all nodes in environment |
 | `--user` | `root` | SSH user |
+| `--fanout` | `false` | Fan out from first node server-to-server (faster) |
 
 ### Legacy Push
 

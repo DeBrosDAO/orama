@@ -97,7 +97,7 @@ function BlockchainHero() {
             </a>
           </Button>
           <Button asChild variant="ghost" size="lg">
-            <Link to="/node">
+            <Link to="/investors#participate">
               Run a Node
               <ArrowRight className="w-3.5 h-3.5 ml-2" />
             </Link>
