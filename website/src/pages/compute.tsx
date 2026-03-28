@@ -92,9 +92,9 @@ function ComputeHero() {
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <Link to="/investors">
-            <Button size="lg" className="silver-button text-black font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm cursor-pointer opacity-50 pointer-events-none">
-              COMING SOON <ArrowRight className="w-4 h-4 ml-2" />
+          <Link to="/dashboard">
+            <Button size="lg" className="silver-button text-black font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm cursor-pointer">
+              Start Deploying <ArrowRight className="w-4 h-4 ml-2" />
             </Button>
           </Link>
           <a href="https://t.me/debrosportal" target="_blank" rel="noopener noreferrer">
@@ -106,7 +106,7 @@ function ComputeHero() {
 
         <div className="flex items-center gap-2 text-xs font-mono text-muted">
           <StatusDot status="active" />
-          <span>TESTNET LIVE — 300 NODES REQUIRED FOR GENESIS</span>
+          <span>TESTNET LIVE — WITH 50+ NODES</span>
         </div>
       </div>
     </Section>
@@ -187,7 +187,7 @@ function OramaOneSection() {
                 { label: "Consensus", value: "Hybrid PoS+PoC+PoI" },
                 { label: "Block Time", value: "6 seconds" },
                 { label: "OramaOS", value: "1.5x Multiplier" },
-                { label: "Status", value: "Coming Soon" },
+                { label: "Status", value: "Live" },
               ].map((stat) => (
                 <div key={stat.label} className="flex flex-col gap-1 text-center">
                   <span className="text-xs font-mono text-zinc-500 uppercase">{stat.label}</span>
@@ -196,8 +196,10 @@ function OramaOneSection() {
               ))}
             </div>
 
-            <Button className="silver-button text-black font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm opacity-50 pointer-events-none">
-              Coming Soon <ArrowRight className="w-4 h-4 ml-2" />
+            <Button asChild className="silver-button text-black font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm cursor-pointer">
+              <Link to="/dashboard">
+                Start Deploying <ArrowRight className="w-4 h-4 ml-2" />
+              </Link>
             </Button>
 
             {/* 3D Node */}

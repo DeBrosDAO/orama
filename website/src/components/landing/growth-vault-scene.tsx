@@ -334,7 +334,7 @@ function GrowthVaultNetwork() {
 
 export function GrowthVaultScene() {
   return (
-    <div className="w-full h-[550px] -mt-[400px]">
+    <div className="w-full h-[350px] md:h-[550px] -mt-[250px] md:-mt-[400px]">
       <Canvas
         camera={{ position: [0, 2, 3], fov: 40 }}
         dpr={[1, 2]}

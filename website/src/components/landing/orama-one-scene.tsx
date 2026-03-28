@@ -180,8 +180,8 @@ function OramaOneNode() {
 export function OramaOneScene() {
   return (
     <div
-      className="absolute left-0 right-0 bottom-0 pointer-events-none"
-      style={{ height: "70%", opacity: 0.75 }}
+      className="absolute left-0 right-0 bottom-0 pointer-events-none h-[50%] md:h-[70%]"
+      style={{ opacity: 0.75 }}
     >
       <Canvas
         camera={{ position: [2.2, 2.2, 2.2], fov: 28 }}

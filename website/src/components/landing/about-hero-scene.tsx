@@ -254,7 +254,7 @@ function AboutNetwork() {
 
 export function AboutHeroScene() {
   return (
-    <div className="w-full h-[550px] -mt-[400px]">
+    <div className="w-full h-[350px] md:h-[550px] -mt-[250px] md:-mt-[400px]">
       <Canvas
         camera={{ position: [0, 2, 2.5], fov: 42 }}
         dpr={[1, 2]}

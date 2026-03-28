@@ -111,7 +111,12 @@ orama push --ip 1.2.3.4
 
 # Push to all nodes in an environment
 orama push --env devnet
+
+# Fan out server-to-server (faster for many nodes)
+orama push --env devnet --fanout
 ```
+
+Use `--fanout` to upload to the first node, then fan out server-to-server via SSH agent forwarding. Much faster when you have many nodes.
 
 ## Adding New Nodes
 
