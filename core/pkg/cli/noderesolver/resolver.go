@@ -110,12 +110,17 @@ func resolveFromNetworkWithURL(gatewayURL, apiKey, env string) ([]inspector.Node
 		if user == "" {
 			user = "root"
 		}
+		// Sandbox nodes share a single SSH key; production nodes use per-host keys.
+		vaultTarget := fmt.Sprintf("%s/%s", n.IPAddress, user)
+		if n.Environment == "sandbox" {
+			vaultTarget = "sandbox/root"
+		}
 		nodes = append(nodes, inspector.Node{
 			Environment: n.Environment,
 			User:        user,
 			Host:        n.IPAddress,
 			Role:        n.Role,
-			VaultTarget: fmt.Sprintf("%s/%s", n.IPAddress, user),
+			VaultTarget: vaultTarget,
 		})
 	}
 

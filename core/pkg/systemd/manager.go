@@ -42,6 +42,15 @@ func (m *Manager) serviceName(namespace string, serviceType ServiceType) string 
 	return fmt.Sprintf("orama-namespace-%s@%s.service", serviceType, namespace)
 }
 
+// systemctl builds an exec.Command for systemctl, prepending sudo when
+// the current process is not running as root.
+func systemctl(args ...string) *exec.Cmd {
+	if os.Getuid() == 0 {
+		return exec.Command("systemctl", args...)
+	}
+	return exec.Command("sudo", append([]string{"systemctl"}, args...)...)
+}
+
 // StartService starts a namespace service
 func (m *Manager) StartService(namespace string, serviceType ServiceType) error {
 	svcName := m.serviceName(namespace, serviceType)
@@ -49,7 +58,7 @@ func (m *Manager) StartService(namespace string, serviceType ServiceType) error 
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := exec.Command("systemctl", "start", svcName)
+	cmd := systemctl("start", svcName)
 	m.logger.Debug("Executing systemctl command",
 		zap.String("cmd", cmd.String()),
 		zap.Strings("args", cmd.Args))
@@ -77,7 +86,7 @@ func (m *Manager) StopService(namespace string, serviceType ServiceType) error {
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := exec.Command("systemctl", "stop", svcName)
+	cmd := systemctl("stop", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Don't error if service is already stopped or doesn't exist
 		if strings.Contains(string(output), "not loaded") || strings.Contains(string(output), "inactive") {
@@ -98,7 +107,7 @@ func (m *Manager) RestartService(namespace string, serviceType ServiceType) erro
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := exec.Command("systemctl", "restart", svcName)
+	cmd := systemctl("restart", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to restart %s: %w; output: %s", svcName, err, string(output))
 	}
@@ -114,7 +123,7 @@ func (m *Manager) EnableService(namespace string, serviceType ServiceType) error
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := exec.Command("systemctl", "enable", svcName)
+	cmd := systemctl("enable", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to enable %s: %w; output: %s", svcName, err, string(output))
 	}
@@ -130,7 +139,7 @@ func (m *Manager) DisableService(namespace string, serviceType ServiceType) erro
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := exec.Command("systemctl", "disable", svcName)
+	cmd := systemctl("disable", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Don't error if service is already disabled or doesn't exist
 		if strings.Contains(string(output), "not loaded") {
@@ -187,7 +196,7 @@ func (m *Manager) IsServiceActive(namespace string, serviceType ServiceType) (bo
 // ReloadDaemon reloads systemd daemon configuration
 func (m *Manager) ReloadDaemon() error {
 	m.logger.Info("Reloading systemd daemon")
-	cmd := exec.Command("systemctl", "daemon-reload")
+	cmd := systemctl("daemon-reload")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to reload systemd daemon: %w; output: %s", err, string(output))
 	}
@@ -290,7 +299,7 @@ func (m *Manager) StopAllNamespaceServicesGlobally() error {
 
 	for _, svc := range services {
 		m.logger.Info("Stopping service", zap.String("service", svc))
-		cmd := exec.Command("systemctl", "stop", svc)
+		cmd := systemctl("stop", svc)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			m.logger.Warn("Failed to stop service",
 				zap.String("service", svc),
@@ -338,7 +347,7 @@ func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
 		svc := fields[0]
 
 		// Stop the service
-		if stopOut, stopErr := exec.Command("systemctl", "stop", svc).CombinedOutput(); stopErr != nil {
+		if stopOut, stopErr := systemctl("stop", svc).CombinedOutput(); stopErr != nil {
 			m.logger.Warn("Failed to stop deployment service",
 				zap.String("service", svc),
 				zap.Error(stopErr),
@@ -346,7 +355,7 @@ func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
 		}
 
 		// Disable the service
-		if disOut, disErr := exec.Command("systemctl", "disable", svc).CombinedOutput(); disErr != nil {
+		if disOut, disErr := systemctl("disable", svc).CombinedOutput(); disErr != nil {
 			m.logger.Warn("Failed to disable deployment service",
 				zap.String("service", svc),
 				zap.Error(disErr),

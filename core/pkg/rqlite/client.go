@@ -25,7 +25,15 @@ type client struct {
 }
 
 // Query runs an arbitrary SELECT and scans rows into dest.
-func (c *client) Query(ctx context.Context, dest any, query string, args ...any) error {
+// Query runs a SELECT and scans results into dest.
+// Includes panic recovery because the gorqlite stdlib driver can panic
+// with "index out of range" when RQLite is temporarily unavailable.
+func (c *client) Query(ctx context.Context, dest any, query string, args ...any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("gorqlite panic (QueryContext): %v", r)
+		}
+	}()
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err

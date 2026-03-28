@@ -35,7 +35,7 @@ func (h *Handler) HandleListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallet := walletFromRequest(r)
+	wallet := h.walletFromRequest(r)
 	if wallet == "" {
 		writeError(w, http.StatusUnauthorized, "wallet authentication required")
 		return

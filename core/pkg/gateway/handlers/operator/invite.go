@@ -31,7 +31,7 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallet := walletFromRequest(r)
+	wallet := h.walletFromRequest(r)
 	if wallet == "" {
 		writeError(w, http.StatusUnauthorized, "wallet authentication required")
 		return

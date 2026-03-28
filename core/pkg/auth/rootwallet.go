@@ -3,54 +3,58 @@ package auth
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
-// IsRootWalletInstalled checks if the `rw` CLI is available in PATH
+// IsRootWalletInstalled checks if the rootwallet agent is reachable.
 func IsRootWalletInstalled() bool {
-	_, err := exec.LookPath("rw")
-	return err == nil
+	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return client.IsRunning(ctx)
 }
 
-// getRootWalletAddress gets the EVM address from the RootWallet keystore
+// getRootWalletAddress gets the EVM address from the rootwallet agent.
 func getRootWalletAddress() (string, error) {
-	cmd := exec.Command("rw", "address", "--chain", "evm")
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	data, err := client.GetAddress(ctx, "evm")
 	if err != nil {
-		return "", fmt.Errorf("failed to get address from rw: %w", err)
+		return "", fmt.Errorf("failed to get address from rootwallet agent: %w", err)
 	}
-	addr := strings.TrimSpace(string(out))
-	if addr == "" {
-		return "", fmt.Errorf("rw returned empty address — run 'rw init' first")
+	if data.Address == "" {
+		return "", fmt.Errorf("rootwallet agent returned empty address")
 	}
-	return addr, nil
+	return data.Address, nil
 }
 
-// signWithRootWallet signs a message using RootWallet's EVM key.
-// Stdin is passed through so the user can enter their password if the session is expired.
+// signWithRootWallet signs a message using the rootwallet agent's EVM key.
+// The desktop app may prompt the user for approval.
 func signWithRootWallet(message string) (string, error) {
-	cmd := exec.Command("rw", "sign", message, "--chain", "evm")
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	data, err := client.Sign(ctx, message, "evm")
 	if err != nil {
-		return "", fmt.Errorf("failed to sign with rw: %w", err)
+		return "", fmt.Errorf("failed to sign with rootwallet agent: %w", err)
 	}
-	sig := strings.TrimSpace(string(out))
-	if sig == "" {
-		return "", fmt.Errorf("rw returned empty signature")
+	if data.Signature == "" {
+		return "", fmt.Errorf("rootwallet agent returned empty signature")
 	}
-	return sig, nil
+	return data.Signature, nil
 }
 
 // PerformRootWalletAuthentication performs a challenge-response authentication flow
