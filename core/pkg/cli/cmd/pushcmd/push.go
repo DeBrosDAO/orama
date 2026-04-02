@@ -1,6 +1,7 @@
 package pushcmd
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -142,7 +143,11 @@ func pushFanout(nodes []inspector.Node, archivePath string) error {
 	hub := nodes[0]
 	targets := nodes[1:]
 	remotePath := "/tmp/" + filepath.Base(archivePath)
-	extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s", remotePath, remotePath)
+	// Hub extraction keeps the archive so it can be fanned out to targets.
+	// The cleanup at the end removes it.
+	hubExtractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama", remotePath)
+	// Target extraction deletes the archive after extracting.
+	targetExtractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s", remotePath, remotePath)
 
 	// Load SSH keys into the system ssh-agent for agent forwarding
 	fmt.Println("  Loading SSH keys into agent...")
@@ -158,7 +163,7 @@ func pushFanout(nodes []inspector.Node, archivePath string) error {
 		return fmt.Errorf("failed to upload to hub %s: %w", hub.Host, err)
 	}
 	fmt.Printf(" extracting...")
-	if err := remotessh.RunSSHStreaming(hub, "sudo bash -c '"+extractCmd+"'"); err != nil {
+	if err := remotessh.RunSSHStreaming(hub, "sudo bash -c '"+hubExtractCmd+"'"); err != nil {
 		return fmt.Errorf("failed to extract on hub %s: %w", hub.Host, err)
 	}
 	fmt.Println(" OK")
@@ -169,7 +174,7 @@ func pushFanout(nodes []inspector.Node, archivePath string) error {
 		scpCmd := fmt.Sprintf(
 			"scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=no %s %s@%s:%s && ssh -o StrictHostKeyChecking=accept-new %s@%s 'sudo bash -c \"%s\"' && echo '%s: done'",
 			remotePath, t.User, t.Host, remotePath,
-			t.User, t.Host, extractCmd,
+			t.User, t.Host, targetExtractCmd,
 			t.Host,
 		)
 		fanoutParts = append(fanoutParts, "("+scpCmd+") &")
@@ -177,8 +182,13 @@ func pushFanout(nodes []inspector.Node, archivePath string) error {
 	fanoutParts = append(fanoutParts, "wait", "echo 'Fanout complete'")
 	fanoutScript := strings.Join(fanoutParts, "\n")
 
+	// Base64-encode the script to avoid shell quoting conflicts — the script
+	// contains single quotes (ssh '...') that would break a bash -c '...' wrapper.
+	encoded := base64.StdEncoding.EncodeToString([]byte(fanoutScript))
+	runCmd := fmt.Sprintf("echo %s | base64 -d | bash", encoded)
+
 	fmt.Printf("  Fanning out to %d nodes from %s...\n", len(targets), hub.Host)
-	if err := remotessh.RunSSHStreaming(hub, "bash -c '"+fanoutScript+"'", remotessh.WithAgentForward()); err != nil {
+	if err := remotessh.RunSSHStreaming(hub, runCmd, remotessh.WithAgentForward()); err != nil {
 		fmt.Printf("  Fanout failed: %v\n", err)
 		fmt.Println("  Some nodes may not have been updated")
 	}
