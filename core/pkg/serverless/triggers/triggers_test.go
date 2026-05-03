@@ -40,13 +40,6 @@ func TestDispatcher_DepthLimit(t *testing.T) {
 	d.Dispatch(context.Background(), "ns", "topic", []byte("data"), maxTriggerDepth+1)
 }
 
-func TestCacheKey(t *testing.T) {
-	key := cacheKey("my-namespace", "my-topic")
-	if key != "triggers:my-namespace:my-topic" {
-		t.Errorf("unexpected cache key: %s", key)
-	}
-}
-
 func TestPubSubEvent_Marshal(t *testing.T) {
 	event := PubSubEvent{
 		Topic:        "chat",

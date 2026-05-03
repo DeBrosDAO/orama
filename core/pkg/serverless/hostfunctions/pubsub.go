@@ -2,8 +2,11 @@ package hostfunctions
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
@@ -18,6 +21,64 @@ func (h *HostFunctions) PubSubPublish(ctx context.Context, topic string, data []
 		return &serverless.HostFunctionError{Function: "pubsub_publish", Cause: err}
 	}
 
+	return nil
+}
+
+// pubSubBatchEntry mirrors the JSON shape accepted by PubSubPublishBatch.
+type pubSubBatchEntry struct {
+	Topic   string `json:"topic"`
+	DataB64 string `json:"data_base64"`
+}
+
+// PubSubPublishBatch publishes multiple messages in parallel.
+//
+// Input is JSON: [{"topic":"...","data_base64":"..."}, ...]
+// Up to pubsub.MaxBatchSize entries per call.
+//
+// Default behavior is fail-fast (first publish error is returned). The
+// host function does not currently expose a best-effort flag — WASM
+// callers that need it should call this function multiple times in
+// chunks they're willing to retry independently.
+func (h *HostFunctions) PubSubPublishBatch(ctx context.Context, msgsJSON []byte) error {
+	if h.pubsub == nil {
+		return &serverless.HostFunctionError{Function: "pubsub_publish_batch", Cause: fmt.Errorf("pubsub not available")}
+	}
+
+	var entries []pubSubBatchEntry
+	if err := json.Unmarshal(msgsJSON, &entries); err != nil {
+		return &serverless.HostFunctionError{Function: "pubsub_publish_batch", Cause: fmt.Errorf("invalid json: %w", err)}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) > pubsub.MaxBatchSize {
+		return &serverless.HostFunctionError{
+			Function: "pubsub_publish_batch",
+			Cause:    fmt.Errorf("too many messages: max %d per batch", pubsub.MaxBatchSize),
+		}
+	}
+
+	msgs := make([]pubsub.TopicMessage, 0, len(entries))
+	for i, e := range entries {
+		if e.Topic == "" {
+			return &serverless.HostFunctionError{
+				Function: "pubsub_publish_batch",
+				Cause:    fmt.Errorf("entry %d: empty topic", i),
+			}
+		}
+		data, err := base64.StdEncoding.DecodeString(e.DataB64)
+		if err != nil {
+			return &serverless.HostFunctionError{
+				Function: "pubsub_publish_batch",
+				Cause:    fmt.Errorf("entry %d (topic %q): bad base64: %w", i, e.Topic, err),
+			}
+		}
+		msgs = append(msgs, pubsub.TopicMessage{Topic: e.Topic, Data: data})
+	}
+
+	if err := h.pubsub.PublishBatch(ctx, msgs, pubsub.PublishBatchOptions{}); err != nil {
+		return &serverless.HostFunctionError{Function: "pubsub_publish_batch", Cause: err}
+	}
 	return nil
 }
 

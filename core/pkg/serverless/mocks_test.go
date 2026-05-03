@@ -176,6 +176,14 @@ func (m *MockHostServices) PubSubPublish(ctx context.Context, topic string, data
 	return nil
 }
 
+func (m *MockHostServices) PubSubPublishBatch(ctx context.Context, msgsJSON []byte) error {
+	return nil
+}
+
+func (m *MockHostServices) PushSend(ctx context.Context, userID string, msgJSON []byte) error {
+	return nil
+}
+
 func (m *MockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }

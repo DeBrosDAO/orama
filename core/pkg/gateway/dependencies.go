@@ -19,6 +19,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/push"
+	pushexpo "github.com/DeBrosOfficial/network/pkg/push/providers/expo"
+	pushntfy "github.com/DeBrosOfficial/network/pkg/push/providers/ntfy"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/hostfunctions"
@@ -62,6 +65,11 @@ type Dependencies struct {
 
 	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
 	PubSubDispatcher *triggers.PubSubDispatcher
+
+	// Push notification dispatcher (nil when push isn't configured —
+	// hostfunc + HTTP handlers degrade to no-op / 503).
+	PushDispatcher  *push.PushDispatcher
+	PushDeviceStore push.PushDeviceStore
 
 	// Authentication service
 	AuthService *auth.Service
@@ -412,6 +420,19 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		secretsMgr = smImpl
 	}
 
+	// Initialize push notification dispatcher if any provider is configured.
+	// Devices are stored encrypted in RQLite (see migration 023). Providers
+	// are registered based on gateway config; missing config = provider absent.
+	pushDispatcher, pushStore, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
+	if err != nil {
+		// Non-fatal: log and continue. Functions calling push_send will get nil
+		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"push notifications disabled (init failed)", zap.Error(err))
+	}
+	deps.PushDispatcher = pushDispatcher
+	deps.PushDeviceStore = pushStore
+
 	// Create host functions provider (allows functions to call Orama services)
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
 		IPFSAPIURL:  cfg.IPFSAPIURL,
@@ -424,6 +445,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		pubsubAdapter, // pubsub adapter for serverless functions
 		deps.ServerlessWSMgr,
 		secretsMgr,
+		pushDispatcher, // may be nil — PushSend hostfunc handles that
 		hostFuncsCfg,
 		logger.Logger,
 	)
@@ -685,4 +707,41 @@ func injectRQLiteAuth(dsn, username, password string) string {
 		}
 	}
 	return dsn
+}
+
+// buildPushDispatcher constructs a push.PushDispatcher + device store with
+// all enabled providers. Returns (nil, nil, nil) when no provider is
+// configured — that's a supported state, not an error. Returns (nil, nil,
+// err) on hard init failures (e.g. cluster secret missing for the
+// encrypted device store).
+func buildPushDispatcher(cfg *Config, db rqlite.Client, logger *logging.ColoredLogger) (*push.PushDispatcher, push.PushDeviceStore, error) {
+	if cfg.NtfyBaseURL == "" && cfg.ExpoAccessToken == "" {
+		// No providers configured — push is disabled.
+		return nil, nil, nil
+	}
+	if cfg.ClusterSecret == "" {
+		// Devices are encrypted at rest using a cluster-secret-derived key.
+		// Without it we can't store anything safely.
+		return nil, nil, fmt.Errorf("push enabled but ClusterSecret is empty")
+	}
+	store, err := push.NewRqliteDeviceStore(db, cfg.ClusterSecret, logger.Logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("init push device store: %w", err)
+	}
+	d := push.New(store, logger.Logger)
+	if cfg.NtfyBaseURL != "" {
+		d.Register(pushntfy.New(pushntfy.Config{
+			BaseURL:   cfg.NtfyBaseURL,
+			AuthToken: cfg.NtfyAuthToken,
+		}, logger.Logger))
+		logger.ComponentInfo(logging.ComponentGeneral, "push provider registered: ntfy",
+			zap.String("base_url", cfg.NtfyBaseURL))
+	}
+	if cfg.ExpoAccessToken != "" {
+		d.Register(pushexpo.New(pushexpo.Config{
+			AccessToken: cfg.ExpoAccessToken,
+		}, logger.Logger))
+		logger.ComponentInfo(logging.ComponentGeneral, "push provider registered: expo")
+	}
+	return d, store, nil
 }

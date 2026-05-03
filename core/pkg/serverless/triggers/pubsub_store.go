@@ -16,30 +16,43 @@ import (
 
 // TriggerMatch contains the fields needed to dispatch a trigger invocation.
 // It's the result of JOINing function_pubsub_triggers with functions.
+//
+// Topic is the *resolved* topic that the published message was sent to,
+// not the pattern stored in the trigger. This lets aggregating functions
+// see which concrete topic each event came from.
+//
+// AggregationWindowMs > 0 indicates the dispatcher should buffer events
+// instead of invoking the function per event.
 type TriggerMatch struct {
-	TriggerID    string
-	FunctionID   string
-	FunctionName string
-	Namespace    string
-	Topic        string
+	TriggerID               string
+	FunctionID              string
+	FunctionName            string
+	Namespace               string
+	Topic                   string
+	AggregationWindowMs     int
+	AggregationMaxBatchSize int
 }
 
 // triggerRow maps to the function_pubsub_triggers table for query scanning.
 type triggerRow struct {
-	ID         string
-	FunctionID string
-	Topic      string
-	Enabled    bool
-	CreatedAt  time.Time
+	ID                      string
+	FunctionID              string
+	TopicPattern            string
+	Enabled                 bool
+	CreatedAt               time.Time
+	AggregationWindowMs     int
+	AggregationMaxBatchSize int
 }
 
 // triggerMatchRow maps to the JOIN query result for scanning.
 type triggerMatchRow struct {
-	TriggerID    string
-	FunctionID   string
-	FunctionName string
-	Namespace    string
-	Topic        string
+	TriggerID               string
+	FunctionID              string
+	FunctionName            string
+	Namespace               string
+	TopicPattern            string
+	AggregationWindowMs     int
+	AggregationMaxBatchSize int
 }
 
 // PubSubTriggerStore manages PubSub trigger persistence in RQLite.
@@ -57,30 +70,60 @@ func NewPubSubTriggerStore(db rqlite.Client, logger *zap.Logger) *PubSubTriggerS
 }
 
 // Add registers a new PubSub trigger for a function.
+// `topicPattern` may be an exact topic or a SQLite GLOB pattern (e.g. "presence:*").
 // Returns the trigger ID.
-func (s *PubSubTriggerStore) Add(ctx context.Context, functionID, topic string) (string, error) {
+//
+// For backward compatibility, aggregation defaults to disabled (windowMs=0).
+// Use AddWithAggregation to opt in.
+func (s *PubSubTriggerStore) Add(ctx context.Context, functionID, topicPattern string) (string, error) {
+	return s.AddWithAggregation(ctx, functionID, topicPattern, 0, 0)
+}
+
+// AddWithAggregation registers a trigger with optional aggregation.
+//   - aggregationWindowMs = 0 disables aggregation (per-event invocation, default).
+//   - aggregationMaxBatchSize = 0 uses the default (100) when aggregation is enabled.
+func (s *PubSubTriggerStore) AddWithAggregation(
+	ctx context.Context,
+	functionID, topicPattern string,
+	aggregationWindowMs, aggregationMaxBatchSize int,
+) (string, error) {
 	if functionID == "" {
 		return "", fmt.Errorf("function ID required")
 	}
-	if topic == "" {
-		return "", fmt.Errorf("topic required")
+	if err := ValidatePattern(topicPattern); err != nil {
+		return "", fmt.Errorf("invalid topic pattern: %w", err)
+	}
+	if aggregationWindowMs < 0 || aggregationWindowMs > 60_000 {
+		return "", fmt.Errorf("aggregation_window_ms must be between 0 and 60000")
+	}
+	if aggregationMaxBatchSize < 0 || aggregationMaxBatchSize > 1000 {
+		return "", fmt.Errorf("aggregation_max_batch_size must be between 0 and 1000")
+	}
+	if aggregationWindowMs > 0 && aggregationMaxBatchSize == 0 {
+		aggregationMaxBatchSize = 100
 	}
 
 	id := uuid.New().String()
 	now := time.Now()
 
+	// Write both `topic` (legacy) and `topic_pattern` (new). Keeping `topic`
+	// populated lets old binaries running concurrently during a rolling
+	// upgrade continue reading triggers. A future migration drops `topic`.
 	query := `
-		INSERT INTO function_pubsub_triggers (id, function_id, topic, enabled, created_at)
-		VALUES (?, ?, ?, TRUE, ?)
+		INSERT INTO function_pubsub_triggers (id, function_id, topic, topic_pattern, enabled, created_at, aggregation_window_ms, aggregation_max_batch_size)
+		VALUES (?, ?, ?, ?, TRUE, ?, ?, ?)
 	`
-	if _, err := s.db.Exec(ctx, query, id, functionID, topic, now); err != nil {
+	if _, err := s.db.Exec(ctx, query, id, functionID, topicPattern, topicPattern, now, aggregationWindowMs, aggregationMaxBatchSize); err != nil {
 		return "", fmt.Errorf("failed to add pubsub trigger: %w", err)
 	}
 
 	s.logger.Info("PubSub trigger added",
 		zap.String("trigger_id", id),
 		zap.String("function_id", functionID),
-		zap.String("topic", topic),
+		zap.String("topic_pattern", topicPattern),
+		zap.Bool("wildcard", IsWildcard(topicPattern)),
+		zap.Int("aggregation_window_ms", aggregationWindowMs),
+		zap.Int("aggregation_max_batch_size", aggregationMaxBatchSize),
 	)
 
 	return id, nil
@@ -129,7 +172,7 @@ func (s *PubSubTriggerStore) ListByFunction(ctx context.Context, functionID stri
 	}
 
 	query := `
-		SELECT id, function_id, topic, enabled, created_at
+		SELECT id, function_id, topic_pattern, enabled, created_at, aggregation_window_ms, aggregation_max_batch_size
 		FROM function_pubsub_triggers
 		WHERE function_id = ?
 	`
@@ -142,18 +185,22 @@ func (s *PubSubTriggerStore) ListByFunction(ctx context.Context, functionID stri
 	triggers := make([]serverless.PubSubTrigger, len(rows))
 	for i, row := range rows {
 		triggers[i] = serverless.PubSubTrigger{
-			ID:         row.ID,
-			FunctionID: row.FunctionID,
-			Topic:      row.Topic,
-			Enabled:    row.Enabled,
+			ID:                      row.ID,
+			FunctionID:              row.FunctionID,
+			Topic:                   row.TopicPattern,
+			Enabled:                 row.Enabled,
+			AggregationWindowMs:     row.AggregationWindowMs,
+			AggregationMaxBatchSize: row.AggregationMaxBatchSize,
 		}
 	}
 
 	return triggers, nil
 }
 
-// GetByTopicAndNamespace returns all enabled triggers for a topic within a namespace.
-// Only returns triggers for active functions.
+// GetByTopicAndNamespace returns all enabled triggers whose topic_pattern
+// matches `topic` within the namespace. Patterns are SQLite GLOB; the
+// post-filter enforces stricter segment-aware semantics.
+// Only triggers for active functions are returned.
 func (s *PubSubTriggerStore) GetByTopicAndNamespace(ctx context.Context, topic, namespace string) ([]TriggerMatch, error) {
 	if topic == "" || namespace == "" {
 		return nil, nil
@@ -161,10 +208,12 @@ func (s *PubSubTriggerStore) GetByTopicAndNamespace(ctx context.Context, topic, 
 
 	query := `
 		SELECT t.id AS trigger_id, t.function_id AS function_id,
-			f.name AS function_name, f.namespace AS namespace, t.topic AS topic
+			f.name AS function_name, f.namespace AS namespace, t.topic_pattern AS topic_pattern,
+			t.aggregation_window_ms AS aggregation_window_ms,
+			t.aggregation_max_batch_size AS aggregation_max_batch_size
 		FROM function_pubsub_triggers t
 		JOIN functions f ON t.function_id = f.id
-		WHERE t.topic = ? AND f.namespace = ? AND t.enabled = TRUE AND f.status = 'active'
+		WHERE ? GLOB t.topic_pattern AND f.namespace = ? AND t.enabled = TRUE AND f.status = 'active'
 	`
 
 	var rows []triggerMatchRow
@@ -172,15 +221,21 @@ func (s *PubSubTriggerStore) GetByTopicAndNamespace(ctx context.Context, topic, 
 		return nil, fmt.Errorf("failed to query triggers for topic: %w", err)
 	}
 
-	matches := make([]TriggerMatch, len(rows))
-	for i, row := range rows {
-		matches[i] = TriggerMatch{
-			TriggerID:    row.TriggerID,
-			FunctionID:   row.FunctionID,
-			FunctionName: row.FunctionName,
-			Namespace:    row.Namespace,
-			Topic:        row.Topic,
+	matches := make([]TriggerMatch, 0, len(rows))
+	for _, row := range rows {
+		// Post-filter to enforce strict segment boundaries on '*'.
+		if !PatternMatches(row.TopicPattern, topic) {
+			continue
 		}
+		matches = append(matches, TriggerMatch{
+			TriggerID:               row.TriggerID,
+			FunctionID:              row.FunctionID,
+			FunctionName:            row.FunctionName,
+			Namespace:               row.Namespace,
+			Topic:                   topic, // resolved topic, not the pattern
+			AggregationWindowMs:     row.AggregationWindowMs,
+			AggregationMaxBatchSize: row.AggregationMaxBatchSize,
+		})
 	}
 
 	return matches, nil
