@@ -57,6 +57,7 @@ const (
 	ComponentGateway  Component = "GATEWAY"
 	ComponentSFU      Component = "SFU"
 	ComponentTURN     Component = "TURN"
+	ComponentSNI      Component = "SNI"
 )
 
 // getComponentColor returns the color for a specific component

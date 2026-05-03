@@ -288,11 +288,21 @@ type DBTrigger struct {
 }
 
 // PubSubTrigger represents a pubsub trigger.
+//
+// Topic may be an exact topic name or a SQLite GLOB pattern (e.g.
+// "presence:*"). See pkg/serverless/triggers/pattern.go for matching rules.
+//
+// AggregationWindowMs > 0 enables event buffering: the dispatcher accumulates
+// events for at most that many milliseconds (or until AggregationMaxBatchSize
+// events have been collected, whichever comes first), then invokes the
+// function once with a batched payload of type BatchedPubSubEvent.
 type PubSubTrigger struct {
-	ID         string `json:"id"`
-	FunctionID string `json:"function_id"`
-	Topic      string `json:"topic"`
-	Enabled    bool   `json:"enabled"`
+	ID                      string `json:"id"`
+	FunctionID              string `json:"function_id"`
+	Topic                   string `json:"topic"`
+	Enabled                 bool   `json:"enabled"`
+	AggregationWindowMs     int    `json:"aggregation_window_ms,omitempty"`
+	AggregationMaxBatchSize int    `json:"aggregation_max_batch_size,omitempty"`
 }
 
 // Timer represents a one-time scheduled execution.
@@ -337,6 +347,14 @@ type HostServices interface {
 
 	// PubSub operations
 	PubSubPublish(ctx context.Context, topic string, data []byte) error
+	PubSubPublishBatch(ctx context.Context, msgsJSON []byte) error
+
+	// Push notifications. Sends to all of `userID`'s registered devices in
+	// the function's namespace. `msgJSON` is the JSON-encoded PushSendArgs
+	// shape (see hostfunctions.PushSend). Returns nil if push is not
+	// configured (silent no-op) so functions can be portable across
+	// namespaces with/without push enabled.
+	PushSend(ctx context.Context, userID string, msgJSON []byte) error
 
 	// WebSocket operations (only valid in WS context)
 	WSSend(ctx context.Context, clientID string, data []byte) error

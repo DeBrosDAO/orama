@@ -12,6 +12,23 @@ import (
 // It closes the serverless engine, network client, database connections,
 // Olric cache client, and IPFS client in sequence.
 func (g *Gateway) Close() {
+	// Flush PubSub aggregator buffers before tearing down the engine.
+	// Pending events are dispatched via the invoker which still needs the
+	// engine to be alive, so this MUST happen before the engine close.
+	// Aggregator state is local to this node — events not flushed here are
+	// lost (intended trade-off for high-frequency lossy streams).
+	if g.pubsubDispatcher != nil {
+		if agg := g.pubsubDispatcher.Aggregator(); agg != nil {
+			// 5s budget — same as the engine close timeout below.
+			// In-flight flushes call back into the invoker which still
+			// needs the engine to be alive.
+			if !agg.Shutdown(5 * time.Second) {
+				g.logger.ComponentWarn(logging.ComponentGeneral,
+					"PubSub aggregator shutdown timed out; some buffered events may be lost")
+			}
+		}
+	}
+
 	// Close serverless engine first
 	if g.serverlessEngine != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

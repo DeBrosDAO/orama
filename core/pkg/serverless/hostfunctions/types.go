@@ -7,6 +7,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	olriclib "github.com/olric-data/olric"
@@ -31,6 +32,10 @@ type HostFunctions struct {
 	secrets     serverless.SecretsManager
 	httpClient  *http.Client
 	logger      *zap.Logger
+
+	// pushDispatcher may be nil when push isn't configured for this gateway.
+	// In that case PushSend returns nil silently — see hostfunctions/push.go.
+	pushDispatcher *push.PushDispatcher
 
 	// Current invocation context (set per-execution)
 	invCtx     *serverless.InvocationContext

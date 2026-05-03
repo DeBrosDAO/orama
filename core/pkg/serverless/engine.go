@@ -328,6 +328,8 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
+			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
+			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -515,6 +517,46 @@ func (e *Engine) hPubSubPublish(ctx context.Context, mod api.Module, topicPtr, t
 		return 0
 	}
 	return 1 // Success
+}
+
+// hPubSubPublishBatch is the WASM-callable wrapper for PubSubPublishBatch.
+// Input: pointer/length of a JSON array of {topic, data_base64}.
+// Returns 1 on success, 0 on error.
+func (e *Engine) hPubSubPublishBatch(ctx context.Context, mod api.Module, msgsPtr, msgsLen uint32) uint32 {
+	msgsJSON, ok := e.executor.ReadFromGuest(mod, msgsPtr, msgsLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.PubSubPublishBatch(ctx, msgsJSON); err != nil {
+		e.logger.Error("host function pubsub_publish_batch failed", zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hPushSend is the WASM-callable wrapper for PushSend.
+// Inputs:
+//   userIDPtr/userIDLen — UTF-8 user ID to push to (within the function's
+//                         own namespace; the namespace is server-side trusted)
+//   msgPtr/msgLen       — JSON payload matching hostfunctions.PushSendArgs
+// Returns 1 on success, 0 on error.
+func (e *Engine) hPushSend(ctx context.Context, mod api.Module,
+	userIDPtr, userIDLen, msgPtr, msgLen uint32) uint32 {
+	userID, ok := e.executor.ReadFromGuest(mod, userIDPtr, userIDLen)
+	if !ok {
+		return 0
+	}
+	msgJSON, ok := e.executor.ReadFromGuest(mod, msgPtr, msgLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.PushSend(ctx, string(userID), msgJSON); err != nil {
+		e.logger.Error("host function push_send failed",
+			zap.String("user_id", string(userID)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
 }
 
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {

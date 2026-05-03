@@ -28,6 +28,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
+	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
@@ -43,6 +44,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 )
@@ -83,13 +85,15 @@ type Gateway struct {
 	mu               sync.RWMutex
 	presenceMu       sync.RWMutex
 	pubsubHandlers   *pubsubhandlers.PubSubHandlers
+	pushHandlers     *pushhandlers.Handlers
 
 	// Serverless function engine
-	serverlessEngine   *serverless.Engine
-	serverlessRegistry *serverless.Registry
-	serverlessInvoker  *serverless.Invoker
-	serverlessWSMgr    *serverless.WSManager
-	serverlessHandlers *serverlesshandlers.ServerlessHandlers
+	serverlessEngine     *serverless.Engine
+	serverlessRegistry   *serverless.Registry
+	serverlessInvoker    *serverless.Invoker
+	serverlessWSMgr      *serverless.WSManager
+	serverlessHandlers   *serverlesshandlers.ServerlessHandlers
+	pubsubDispatcher     *triggers.PubSubDispatcher
 
 	// Authentication service
 	authService  *auth.Service
@@ -342,9 +346,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	// Wire PubSub trigger dispatch if serverless is available
 	if deps.PubSubDispatcher != nil {
+		gw.pubsubDispatcher = deps.PubSubDispatcher
 		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
 			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
 		})
+	}
+
+	// Push notification handlers — disabled when no provider is configured.
+	// The handlers themselves return 503 if dispatcher/store is nil; we
+	// register them unconditionally so the routes always exist with a
+	// predictable shape.
+	if deps.PushDispatcher != nil {
+		gw.pushHandlers = pushhandlers.NewHandlers(deps.PushDispatcher, deps.PushDeviceStore, logger)
 	}
 
 	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {

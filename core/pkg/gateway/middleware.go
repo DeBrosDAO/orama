@@ -643,6 +643,9 @@ func requiresNamespaceOwnership(p string) bool {
 	if strings.HasPrefix(p, "/v1/webrtc/") {
 		return true
 	}
+	if strings.HasPrefix(p, "/v1/push/") {
+		return true
+	}
 	return false
 }
 

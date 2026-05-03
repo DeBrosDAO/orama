@@ -56,4 +56,15 @@ type Config struct {
 	SFUPort       int    // Local SFU signaling port to proxy WebSocket connections to
 	TURNDomain    string // TURN server domain for credential generation
 	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation
+
+	// StealthCDNDomain, when set, makes the WebRTC credentials handler
+	// advertise turns:<StealthCDNDomain>:443 (served by the SNI router).
+	StealthCDNDomain string
+
+	// Push notification configuration. Push is enabled when at least one
+	// provider URL/token is set. Tokens stored in the push_devices table
+	// are encrypted at rest via pkg/secrets using the cluster secret.
+	NtfyBaseURL     string // ntfy server URL (e.g. "http://localhost:8080")
+	NtfyAuthToken   string // optional bearer token for ntfy
+	ExpoAccessToken string // optional Expo access token
 }
