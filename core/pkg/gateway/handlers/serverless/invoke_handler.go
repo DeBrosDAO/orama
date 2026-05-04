@@ -2,7 +2,9 @@ package serverless
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +12,31 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
+
+// extractRemoteIP returns a best-effort source IP for the request.
+// Trusts X-Real-IP / X-Forwarded-For only when the immediate peer is loopback
+// or a private address (i.e. behind our own reverse proxy / SNI router).
+func extractRemoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	trustHeaders := peer != nil && (peer.IsLoopback() || peer.IsPrivate())
+	if trustHeaders {
+		if v := r.Header.Get("X-Real-IP"); v != "" {
+			return strings.TrimSpace(v)
+		}
+		if v := r.Header.Get("X-Forwarded-For"); v != "" {
+			// First entry is the original client.
+			if comma := strings.IndexByte(v, ','); comma >= 0 {
+				v = v[:comma]
+			}
+			return strings.TrimSpace(v)
+		}
+	}
+	return host
+}
 
 // InvokeFunction handles POST /v1/functions/{name}/invoke
 // Invokes a function with the provided input.
@@ -57,11 +84,27 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		Input:        input,
 		TriggerType:  serverless.TriggerTypeHTTP,
 		CallerWallet: callerWallet,
+		CallerIP:     extractRemoteIP(r),
+		CallerClaims: h.getCallerClaimsFromRequest(r),
 	}
 
 	resp, err := h.invoker.Invoke(ctx, req)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
+		// Tiered rate limiter returns *RateLimitedError with retry-after.
+		var rle *serverless.RateLimitedError
+		if errors.As(err, &rle) {
+			if rle.RetryAfter > 0 {
+				w.Header().Set("Retry-After",
+					strconv.FormatFloat(rle.RetryAfter.Seconds(), 'f', 1, 64))
+			}
+			writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+				"error":       err.Error(),
+				"scope":       rle.Scope,
+				"retry_after": rle.RetryAfter.Seconds(),
+			})
+			return
+		}
 		if serverless.IsNotFound(err) {
 			statusCode = http.StatusNotFound
 		} else if serverless.IsResourceExhausted(err) {

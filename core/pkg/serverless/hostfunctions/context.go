@@ -85,3 +85,30 @@ func (h *HostFunctions) GetCallerWallet(ctx context.Context) string {
 	}
 	return h.invCtx.CallerWallet
 }
+
+// GetWSClientID returns the WebSocket client ID for the current invocation,
+// or empty string if the function wasn't invoked via a WS connection.
+func (h *HostFunctions) GetWSClientID(ctx context.Context) string {
+	h.invCtxLock.RLock()
+	defer h.invCtxLock.RUnlock()
+
+	if h.invCtx == nil {
+		return ""
+	}
+	return h.invCtx.WSClientID
+}
+
+// GetCallerClaim returns the value of a custom JWT claim for the caller, or
+// empty string if the claim is missing or the request was not JWT-authenticated.
+//
+// "Custom" here means claims set on JWTClaims.Custom by the auth service —
+// standard claims (sub, namespace, etc.) have dedicated accessors.
+func (h *HostFunctions) GetCallerClaim(ctx context.Context, name string) string {
+	h.invCtxLock.RLock()
+	defer h.invCtxLock.RUnlock()
+
+	if h.invCtx == nil || h.invCtx.CallerClaims == nil {
+		return ""
+	}
+	return h.invCtx.CallerClaims[name]
+}

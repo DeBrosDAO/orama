@@ -14,6 +14,10 @@ func (h *ServerlessHandlers) RegisterRoutes(mux *http.ServeMux) {
 
 	// Direct invoke endpoint
 	mux.HandleFunc("/v1/invoke/", h.HandleInvoke)
+
+	// WS connection metrics (operator visibility)
+	mux.HandleFunc("/v1/serverless/ws/connections", h.WSConnections)
+	mux.HandleFunc("/v1/serverless/ws/connections/", h.WSConnections)
 }
 
 // handleFunctions handles GET /v1/functions (list) and POST /v1/functions (deploy)

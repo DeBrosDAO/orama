@@ -29,6 +29,12 @@ func (g *Gateway) Close() {
 		}
 	}
 
+	// Drain persistent WebSocket instances. Each instance gets a slice of
+	// the 30s budget; ws_close on each is best-effort.
+	if g.persistentWSManager != nil {
+		g.persistentWSManager.ShutdownAll(30 * time.Second)
+	}
+
 	// Close serverless engine first
 	if g.serverlessEngine != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

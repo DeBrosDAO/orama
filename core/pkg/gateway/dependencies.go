@@ -25,7 +25,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/hostfunctions"
+	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	"github.com/multiformats/go-multiaddr"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -65,6 +67,14 @@ type Dependencies struct {
 
 	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
 	PubSubDispatcher *triggers.PubSubDispatcher
+
+	// PersistentWSManager tracks long-lived WS function instances.
+	// Used by the WS handler when fn.WSPersistent=true; nil = disabled.
+	PersistentWSManager *persistent.Manager
+
+	// WSBridge wires PubSub topics directly to WS clients on this gateway.
+	// Used by the ws_pubsub_bridge host function. Nil = disabled.
+	WSBridge *wsbridge.Bridge
 
 	// Push notification dispatcher (nil when push isn't configured —
 	// hostfunc + HTTP handlers degrade to no-op / 503).
@@ -165,7 +175,17 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	db.SetConnMaxIdleTime(2 * time.Minute) // Maximum idle time before closing
 
 	deps.SQLDB = db
-	orm := rqlite.NewClient(db)
+	// Use the DSN-aware constructor so the ORM client also has a native
+	// *gorqlite.Connection for atomic Batch operations. If the native dial
+	// fails, fall back to the stdlib-only client (Batch will be unavailable
+	// but everything else works).
+	orm, ormErr := rqlite.NewClientWithDSN(db, dsn)
+	if ormErr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"native gorqlite dial failed, atomic Batch will be unavailable",
+			zap.Error(ormErr))
+		orm = rqlite.NewClient(db)
+	}
 	deps.ORMClient = orm
 	deps.ORMHTTP = rqlite.NewHTTPGateway(orm, "/v1/db")
 	// Set a reasonable timeout for HTTP requests (30 seconds)
@@ -438,6 +458,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		IPFSAPIURL:  cfg.IPFSAPIURL,
 		HTTPTimeout: 30 * time.Second,
 	}
+	// WS-PubSub bridge: wire PubSub topics directly to WS clients without
+	// per-event WASM invocation. The bridge is a thin layer over the
+	// pubsub adapter + WSManager.
+	deps.WSBridge = wsbridge.New(pubsubAdapter, deps.ServerlessWSMgr, logger.Logger)
+
 	hostFuncs := hostfunctions.NewHostFunctions(
 		deps.ORMClient,
 		olricClient,
@@ -446,12 +471,19 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		deps.ServerlessWSMgr,
 		secretsMgr,
 		pushDispatcher, // may be nil — PushSend hostfunc handles that
+		deps.WSBridge,  // may be nil; WSPubSubBridge returns explicit error
 		hostFuncsCfg,
 		logger.Logger,
 	)
 
-	// Create WASM engine with rate limiter
-	rateLimiter := serverless.NewTokenBucketLimiter(engineCfg.GlobalRateLimitPerMinute)
+	// Create WASM engine with multi-tier rate limiter (per-(ns, fn, wallet, ip),
+	// per-(ns, wallet), per-(ns)). The legacy global limit is honored as
+	// the per-namespace ceiling so no behavior regresses for existing deployments.
+	rlCfg := serverless.DefaultLimiterConfig()
+	if engineCfg.GlobalRateLimitPerMinute > 0 {
+		rlCfg.PerNamespacePerMinute = engineCfg.GlobalRateLimitPerMinute
+	}
+	rateLimiter := serverless.NewMultiTierLimiter(rlCfg)
 	engine, err := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger,
 		serverless.WithInvocationLogger(registry),
 		serverless.WithRateLimiter(rateLimiter),
@@ -478,13 +510,20 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
+	// Persistent WS instance manager. Cap from gateway config (TODO: surface
+	// the knob); 5000 is a sensible default per plan 06.
+	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
+
 	// Create HTTP handlers
 	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
 		deps.ServerlessInvoker,
+		deps.ServerlessEngine,
 		registry,
 		deps.ServerlessWSMgr,
 		triggerStore,
 		deps.PubSubDispatcher,
+		deps.PersistentWSManager,
+		deps.WSBridge,
 		secretsMgr,
 		logger.Logger,
 	)
