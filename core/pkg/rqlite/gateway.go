@@ -448,47 +448,65 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
-	results := make([]any, 0, len(body.Ops))
-	// Note: RQLite transactions don't work as expected (Begin/Commit are no-ops)
-	// Executing queries directly instead of wrapping in Tx()
+	// Convert wire ops into the typed BatchOp shape and run atomically.
+	batchOps := make([]BatchOp, 0, len(body.Ops))
 	for _, op := range body.Ops {
-		switch strings.ToLower(strings.TrimSpace(op.Kind)) {
-		case "exec":
-			res, err := g.Client.Exec(ctx, op.SQL, normalizeArgs(op.Args)...)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if body.ReturnResults {
-				li, _ := res.LastInsertId()
-				ra, _ := res.RowsAffected()
-				results = append(results, map[string]any{
-					"rows_affected":  ra,
-					"last_insert_id": li,
-				})
-			}
-		case "query":
-			var rows []map[string]any
-			if err := g.Client.Query(ctx, &rows, op.SQL, normalizeArgs(op.Args)...); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if body.ReturnResults {
-				results = append(results, rows)
-			}
-		default:
+		kind := BatchOpKind(strings.ToLower(strings.TrimSpace(op.Kind)))
+		if kind != BatchOpExec && kind != BatchOpQuery {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid op kind: %s", op.Kind))
 			return
 		}
+		batchOps = append(batchOps, BatchOp{
+			Kind: kind,
+			SQL:  op.SQL,
+			Args: normalizeArgs(op.Args),
+		})
 	}
-	if body.ReturnResults {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":  "ok",
-			"results": results,
+
+	batchRes, err := g.Client.Batch(ctx, batchOps)
+	if err != nil && batchRes == nil {
+		// Setup/transport failure (no native conn, oversized batch, etc.)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Rollback path: 4xx-style response so callers can branch.
+	if batchRes != nil && !batchRes.Committed {
+		failingErr := ""
+		if batchRes.FailedIndex < len(batchRes.Results) {
+			failingErr = batchRes.Results[batchRes.FailedIndex].Error
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status":       "rollback",
+			"failed_index": batchRes.FailedIndex,
+			"error":        failingErr,
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+
+	if !body.ReturnResults {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
+
+	// Translate BatchResult into the legacy wire shape that returns one
+	// entry per op (rows_affected/last_insert_id for exec, row list for query).
+	out := make([]any, 0, len(batchRes.Results))
+	for _, r := range batchRes.Results {
+		switch r.Kind {
+		case BatchOpExec:
+			out = append(out, map[string]any{
+				"rows_affected":  r.RowsAffected,
+				"last_insert_id": r.LastInsertID,
+			})
+		case BatchOpQuery:
+			out = append(out, r.Rows)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"results": out,
+	})
 }
 
 // --------------------

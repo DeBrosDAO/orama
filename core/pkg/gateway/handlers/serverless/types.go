@@ -6,7 +6,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	"go.uber.org/zap"
 )
 
@@ -14,30 +16,44 @@ import (
 // It's a separate struct to keep the Gateway struct clean.
 type ServerlessHandlers struct {
 	invoker        *serverless.Invoker
+	engine         *serverless.Engine // for persistent WS instantiation
 	registry       serverless.FunctionRegistry
 	wsManager      *serverless.WSManager
 	triggerStore   *triggers.PubSubTriggerStore
 	dispatcher     *triggers.PubSubDispatcher
+	persistentMgr  *persistent.Manager // optional; when nil persistent WS rejects 503
+	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
 	secretsManager serverless.SecretsManager
 	logger         *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
+//
+// engine, persistentMgr, and wsBridge may be nil — persistent-WS
+// functions then return 503 on upgrade, and bridged WS clients can't
+// be tracked (the host call returns "unknown client_id"). All other
+// endpoints continue to work via the invoker.
 func NewServerlessHandlers(
 	invoker *serverless.Invoker,
+	engine *serverless.Engine,
 	registry serverless.FunctionRegistry,
 	wsManager *serverless.WSManager,
 	triggerStore *triggers.PubSubTriggerStore,
 	dispatcher *triggers.PubSubDispatcher,
+	persistentMgr *persistent.Manager,
+	wsBridge *wsbridge.Bridge,
 	secretsManager serverless.SecretsManager,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
 	return &ServerlessHandlers{
 		invoker:        invoker,
+		engine:         engine,
 		registry:       registry,
 		wsManager:      wsManager,
 		triggerStore:   triggerStore,
 		dispatcher:     dispatcher,
+		persistentMgr:  persistentMgr,
+		wsBridge:       wsBridge,
 		secretsManager: secretsManager,
 		logger:         logger,
 	}
@@ -73,6 +89,25 @@ func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
 	}
 
 	return "default"
+}
+
+// getCallerClaimsFromRequest returns the JWT custom claims for the caller,
+// or nil if the request was not JWT-authenticated. The map is safe to share
+// (read-only on the engine side); we copy to avoid retaining the JWT struct.
+func (h *ServerlessHandlers) getCallerClaimsFromRequest(r *http.Request) map[string]string {
+	v := r.Context().Value(ctxkeys.JWT)
+	if v == nil {
+		return nil
+	}
+	claims, ok := v.(*auth.JWTClaims)
+	if !ok || claims == nil || len(claims.Custom) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(claims.Custom))
+	for k, val := range claims.Custom {
+		out[k] = val
+	}
+	return out
 }
 
 // getWalletFromRequest extracts wallet address from JWT.

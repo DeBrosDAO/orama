@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
@@ -36,6 +37,11 @@ type HostFunctions struct {
 	// pushDispatcher may be nil when push isn't configured for this gateway.
 	// In that case PushSend returns nil silently — see hostfunctions/push.go.
 	pushDispatcher *push.PushDispatcher
+
+	// wsBridge may be nil when the gateway doesn't run a bridge. In that
+	// case WSPubSubBridge returns an error rather than silently no-oping
+	// — bridging is a deliberate request whose absence should be visible.
+	wsBridge *wsbridge.Bridge
 
 	// Current invocation context (set per-execution)
 	invCtx     *serverless.InvocationContext

@@ -195,6 +195,14 @@ type FunctionDefinition struct {
 	CronExpressions   []string          `json:"cron_expressions,omitempty"`
 	DBTriggers        []DBTriggerConfig `json:"db_triggers,omitempty"`
 	PubSubTopics      []string          `json:"pubsub_topics,omitempty"`
+
+	// Persistent WebSocket settings — see plan 06_PERSISTENT_WS_FUNCTIONS.md
+	// When WSPersistent is true, the function exports ws_open/ws_frame/ws_close
+	// instead of using the default per-frame stateless model.
+	WSPersistent         bool `json:"ws_persistent,omitempty"`
+	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`     // 0 = no idle timeout
+	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`      // 0 = use default 256 KB
+	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"` // 0 = use default 64
 }
 
 // DBTriggerConfig defines a database trigger configuration.
@@ -222,6 +230,12 @@ type Function struct {
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
 	CreatedBy         string         `json:"created_by"`
+
+	// Persistent WebSocket settings — see plan 06_PERSISTENT_WS_FUNCTIONS.md
+	WSPersistent         bool `json:"ws_persistent,omitempty"`
+	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`
+	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`
+	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"`
 }
 
 // InvocationContext provides context for a function invocation.
@@ -231,9 +245,17 @@ type InvocationContext struct {
 	FunctionName string            `json:"function_name"`
 	Namespace    string            `json:"namespace"`
 	CallerWallet string            `json:"caller_wallet,omitempty"`
-	TriggerType  TriggerType       `json:"trigger_type"`
-	WSClientID   string            `json:"ws_client_id,omitempty"`
-	EnvVars      map[string]string `json:"env_vars,omitempty"`
+	// CallerIP is the source IP of the request, populated by HTTP/WS handlers.
+	// Used by the multi-tier rate limiter as a fallback bucket for anonymous
+	// (no-wallet) callers.
+	CallerIP    string            `json:"caller_ip,omitempty"`
+	TriggerType TriggerType       `json:"trigger_type"`
+	WSClientID  string            `json:"ws_client_id,omitempty"`
+	EnvVars     map[string]string `json:"env_vars,omitempty"`
+	// CallerClaims holds custom JWT claims set on the caller's token (beyond
+	// the standard sub/namespace fields). Read via host fn `get_caller_claim`.
+	// Populated by auth handlers from JWTClaims.Custom; empty for non-JWT auth.
+	CallerClaims map[string]string `json:"caller_claims,omitempty"`
 }
 
 // InvocationResult represents the result of a function invocation.
@@ -356,6 +378,45 @@ type HostServices interface {
 	// namespaces with/without push enabled.
 	PushSend(ctx context.Context, userID string, msgJSON []byte) error
 
+	// DBTransaction executes a batch of SQL statements atomically via the
+	// native RQLite transaction endpoint. opsJSON is the JSON-encoded
+	// {"ops": [{"kind":"exec"|"query","sql":"...","args":[...]}]} shape.
+	// Returns the JSON-encoded BatchResult; the boolean inside the result
+	// (committed) tells the caller whether the writes landed.
+	//
+	// Returns an error only on setup/validation failures (no DB, bad JSON,
+	// too many ops). A rollback is reported via committed=false in the
+	// returned JSON, NOT as a Go error.
+	DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error)
+
+	// ExecAndPublish runs ops atomically (like DBTransaction) and, ONLY
+	// if the batch commits, publishes data to the named topic with any
+	// occurrence of the literal string "{{seq}}" replaced by the assigned
+	// per-namespace sequence number.
+	//
+	// Subscribers can use the seq to detect cross-node replication-lag
+	// gaps ("I expected seq N+1, got N+3, must have missed two").
+	//
+	// Returns the JSON-encoded result with extra fields: seq, published,
+	// publish_error (in addition to the embedded BatchResult shape).
+	// Rollback or publish failure is reported in the JSON, NOT as Go error.
+	ExecAndPublish(ctx context.Context, opsJSON []byte, topic string, dataTemplate []byte) ([]byte, error)
+
+	// WSPubSubBridge wires a WebSocket client directly to a PubSub topic
+	// in the function's namespace. The gateway then auto-forwards every
+	// matching libp2p message to that client's WS without invoking this
+	// function per event. Idempotent.
+	//
+	// The function's namespace must match the client's namespace (set at
+	// WS upgrade time) — namespaces are server-trusted; functions cannot
+	// bridge clients in another namespace's topic.
+	WSPubSubBridge(ctx context.Context, clientID, topic string) error
+
+	// WSPubSubUnbridge removes a previously-established bridge. Idempotent.
+	// Auto-cleaned on WS disconnect, so functions don't have to call this
+	// in OnClose unless they want to dynamically unsubscribe.
+	WSPubSubUnbridge(ctx context.Context, clientID, topic string) error
+
 	// WebSocket operations (only valid in WS context)
 	WSSend(ctx context.Context, clientID string, data []byte) error
 	WSBroadcast(ctx context.Context, topic string, data []byte) error
@@ -368,6 +429,12 @@ type HostServices interface {
 	GetSecret(ctx context.Context, name string) (string, error)
 	GetRequestID(ctx context.Context) string
 	GetCallerWallet(ctx context.Context) string
+	// GetWSClientID returns the WebSocket client ID when the function was
+	// invoked via a WS connection, or empty string otherwise.
+	GetWSClientID(ctx context.Context) string
+	// GetCallerClaim returns a custom JWT claim's value, or empty if missing
+	// or the request was not JWT-authenticated.
+	GetCallerClaim(ctx context.Context, name string) string
 
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)

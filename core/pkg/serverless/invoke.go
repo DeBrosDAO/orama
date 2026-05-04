@@ -38,7 +38,12 @@ type InvokeRequest struct {
 	Input        []byte      `json:"input"`
 	TriggerType  TriggerType `json:"trigger_type"`
 	CallerWallet string      `json:"caller_wallet,omitempty"`
-	WSClientID   string      `json:"ws_client_id,omitempty"`
+	// CallerIP is the source IP of the request, used by the multi-tier
+	// rate limiter as a fallback bucket for anonymous (no-wallet) callers.
+	CallerIP   string `json:"caller_ip,omitempty"`
+	WSClientID string `json:"ws_client_id,omitempty"`
+	// CallerClaims holds custom JWT claims to expose via get_caller_claim.
+	CallerClaims map[string]string `json:"caller_claims,omitempty"`
 }
 
 // InvokeResponse contains the result of a function invocation.
@@ -102,9 +107,11 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		FunctionName: fn.Name,
 		Namespace:    fn.Namespace,
 		CallerWallet: req.CallerWallet,
+		CallerIP:     req.CallerIP,
 		TriggerType:  req.TriggerType,
 		WSClientID:   req.WSClientID,
 		EnvVars:      envVars,
+		CallerClaims: req.CallerClaims,
 	}
 
 	// Execute with retry logic

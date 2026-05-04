@@ -44,6 +44,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
@@ -94,6 +95,7 @@ type Gateway struct {
 	serverlessWSMgr      *serverless.WSManager
 	serverlessHandlers   *serverlesshandlers.ServerlessHandlers
 	pubsubDispatcher     *triggers.PubSubDispatcher
+	persistentWSManager  *persistent.Manager
 
 	// Authentication service
 	authService  *auth.Service
@@ -350,6 +352,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
 			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
 		})
+	}
+	if deps.PersistentWSManager != nil {
+		gw.persistentWSManager = deps.PersistentWSManager
 	}
 
 	// Push notification handlers — disabled when no provider is configured.

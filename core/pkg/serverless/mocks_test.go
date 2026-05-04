@@ -184,6 +184,22 @@ func (m *MockHostServices) PushSend(ctx context.Context, userID string, msgJSON 
 	return nil
 }
 
+func (m *MockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	return []byte(`{"committed":true,"results":[]}`), nil
+}
+
+func (m *MockHostServices) ExecAndPublish(ctx context.Context, opsJSON []byte, topic string, dataTemplate []byte) ([]byte, error) {
+	return []byte(`{"committed":true,"published":true,"seq":1,"results":[]}`), nil
+}
+
+func (m *MockHostServices) WSPubSubBridge(ctx context.Context, clientID, topic string) error {
+	return nil
+}
+
+func (m *MockHostServices) WSPubSubUnbridge(ctx context.Context, clientID, topic string) error {
+	return nil
+}
+
 func (m *MockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }
@@ -210,6 +226,14 @@ func (m *MockHostServices) GetRequestID(ctx context.Context) string {
 
 func (m *MockHostServices) GetCallerWallet(ctx context.Context) string {
 	return "wallet-123"
+}
+
+func (m *MockHostServices) GetWSClientID(ctx context.Context) string {
+	return ""
+}
+
+func (m *MockHostServices) GetCallerClaim(ctx context.Context, name string) string {
+	return ""
 }
 
 func (m *MockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {
@@ -349,6 +373,19 @@ func (m *MockRQLite) CreateQueryBuilder(table string) *rqlite.QueryBuilder {
 
 func (m *MockRQLite) Tx(ctx context.Context, fn func(tx rqlite.Tx) error) error {
 	return nil
+}
+
+func (m *MockRQLite) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
+	results := make([]rqlite.OpResult, len(ops))
+	for i, op := range ops {
+		results[i] = rqlite.OpResult{Kind: op.Kind, RowsAffected: 1}
+	}
+	return &rqlite.BatchResult{Results: results, Committed: true}, nil
+}
+
+func (m *MockRQLite) BatchWithSeq(ctx context.Context, namespace string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error) {
+	res, err := m.Batch(ctx, ops)
+	return res, 1, err
 }
 
 type mockResult struct{}
