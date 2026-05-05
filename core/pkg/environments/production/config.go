@@ -20,7 +20,10 @@ import (
 
 // ConfigGenerator manages generation of node, gateway, and service configs
 type ConfigGenerator struct {
-	oramaDir string
+	oramaDir       string
+	SSHUser        string // Operator metadata
+	Environment    string
+	OperatorWallet string
 }
 
 // NewConfigGenerator creates a new config generator
@@ -191,6 +194,11 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	// This simplifies certificate management - RQLite uses plain TCP for internal Raft
 	// HTTPS is still used for client-facing gateway traffic via autocert
 	// TLS can be enabled manually later if needed for inter-node encryption
+
+	// Operator metadata (set by orama node setup via --ssh-user, --environment, --operator-wallet)
+	data.SSHUser = cg.SSHUser
+	data.Environment = cg.Environment
+	data.OperatorWallet = cg.OperatorWallet
 
 	return templates.RenderNodeConfig(data)
 }

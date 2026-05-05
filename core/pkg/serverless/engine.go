@@ -71,9 +71,19 @@ type InvocationRecord struct {
 	Logs         []LogEntry       `json:"logs,omitempty"`
 }
 
-// RateLimiter checks if a request should be rate limited.
+// RateLimiter is the legacy single-bucket rate-limit interface, kept for
+// backward compatibility with TokenBucketLimiter. New limiters should
+// implement TieredRateLimiter as well — the engine prefers the richer path
+// when available via type assertion.
 type RateLimiter interface {
 	Allow(ctx context.Context, key string) (bool, error)
+}
+
+// TieredRateLimiter is the rich interface that lets the engine pass
+// per-(namespace, function, wallet, ip) context for layered enforcement.
+// MultiTierLimiter implements both this and the legacy RateLimiter.
+type TieredRateLimiter interface {
+	AllowRequest(ctx context.Context, req RateLimitRequest) (Decision, error)
 }
 
 // EngineOption configures the Engine.
@@ -142,13 +152,30 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	invCtx = EnsureInvocationContext(invCtx, fn)
 	startTime := time.Now()
 
-	// Check rate limit
+	// Check rate limit. Prefer the tiered path when the limiter supports it
+	// — that gives per-(ns, fn, wallet, ip) enforcement with retry-after.
+	// Fall back to the legacy single-bucket interface otherwise.
 	if e.rateLimiter != nil {
-		allowed, err := e.rateLimiter.Allow(ctx, "global")
-		if err != nil {
-			e.logger.Warn("Rate limiter error", zap.Error(err))
-		} else if !allowed {
-			return nil, ErrRateLimited
+		if tl, ok := e.rateLimiter.(TieredRateLimiter); ok {
+			req := RateLimitRequest{
+				Namespace: invCtx.Namespace,
+				Function:  invCtx.FunctionName,
+				Wallet:    invCtx.CallerWallet,
+				IP:        invCtx.CallerIP,
+			}
+			d, err := tl.AllowRequest(ctx, req)
+			if err != nil {
+				e.logger.Warn("Rate limiter error", zap.Error(err))
+			} else if !d.Allowed {
+				return nil, &RateLimitedError{Scope: d.Scope, RetryAfter: d.RetryAfter}
+			}
+		} else {
+			allowed, err := e.rateLimiter.Allow(ctx, "global")
+			if err != nil {
+				e.logger.Warn("Rate limiter error", zap.Error(err))
+			} else if !allowed {
+				return nil, ErrRateLimited
+			}
 		}
 	}
 
@@ -253,6 +280,64 @@ func (e *Engine) checkMemoryLimits(compiled wazero.CompiledModule) error {
 }
 
 // getOrCompileModule retrieves a compiled module from cache or compiles it.
+// InstantiatePersistent creates a long-lived module instance for a
+// persistent WebSocket function. Unlike the per-frame stateless model,
+// this instance:
+//
+//   - is NOT closed after a single call
+//   - has its WASI _start hook DISABLED (the function's main() must be
+//     empty; the lifecycle exports ws_open/ws_frame/ws_close are called
+//     explicitly by the caller)
+//   - retains memory across frames
+//
+// Caller is responsible for calling Close() on the returned api.Module
+// (typically wrapped in persistent.Instance which handles this).
+func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx *InvocationContext) (api.Module, error) {
+	compiled, err := e.getOrCompileModule(ctx, fn.WASMCID)
+	if err != nil {
+		return nil, fmt.Errorf("InstantiatePersistent: compile: %w", err)
+	}
+
+	// Bind invocation context once at instantiation. Subsequent ws_open /
+	// ws_frame calls will see this same context (host services read from
+	// the bound invCtx). For multi-call lifecycles this is a sticky
+	// per-instance context, NOT a per-call context.
+	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
+		hf.SetInvocationContext(invCtx)
+	}
+
+	// Disable WASI _start by passing zero start functions. The TinyGo
+	// runtime's main() may still be present but will never be invoked.
+	moduleConfig := wazero.NewModuleConfig().
+		WithName(fn.Name + "-" + invCtx.WSClientID).
+		WithStartFunctions().
+		WithStdin(emptyReader{}).
+		WithStdout(discardWriter{}).
+		WithStderr(discardWriter{}).
+		WithArgs(fn.Name)
+
+	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
+	if err != nil {
+		if hf, ok := e.hostServices.(contextAwareHostServices); ok {
+			hf.ClearContext()
+		}
+		return nil, fmt.Errorf("InstantiatePersistent: instantiate: %w", err)
+	}
+	return instance, nil
+}
+
+// emptyReader satisfies io.Reader for persistent WASM stdin.
+type emptyReader struct{}
+
+func (emptyReader) Read(p []byte) (int, error) { return 0, nil }
+
+// discardWriter satisfies io.Writer for persistent WASM stdout/stderr.
+// Unlike io.Discard which has special handling, this is a typed value
+// suitable for the wazero ModuleConfig API.
+type discardWriter struct{}
+
+func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+
 func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero.CompiledModule, error) {
 	return e.moduleCache.GetOrCompute(wasmCID, func() (wazero.CompiledModule, error) {
 		// Fetch WASM bytes from registry
@@ -317,17 +402,28 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 	for _, moduleName := range []string{"env", "host"} {
 		_, err := e.runtime.NewHostModuleBuilder(moduleName).
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
+			NewFunctionBuilder().WithFunc(e.hGetWSClientID).Export("get_ws_client_id").
+			NewFunctionBuilder().WithFunc(e.hGetCallerClaim).Export("get_caller_claim").
 			NewFunctionBuilder().WithFunc(e.hGetRequestID).Export("get_request_id").
 			NewFunctionBuilder().WithFunc(e.hGetEnv).Export("get_env").
 			NewFunctionBuilder().WithFunc(e.hGetSecret).Export("get_secret").
 			NewFunctionBuilder().WithFunc(e.hDBQuery).Export("db_query").
 			NewFunctionBuilder().WithFunc(e.hDBExecute).Export("db_execute").
+			NewFunctionBuilder().WithFunc(e.hDBTransaction).Export("db_transaction").
+			NewFunctionBuilder().WithFunc(e.hExecAndPublish).Export("exec_and_publish").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
 			NewFunctionBuilder().WithFunc(e.hCacheIncr).Export("cache_incr").
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
+			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
+			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
+			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
+			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
+			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
+			NewFunctionBuilder().WithFunc(e.hWSBroadcast).Export("ws_broadcast").
+			NewFunctionBuilder().WithFunc(e.hFunctionInvoke).Export("function_invoke").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -350,6 +446,24 @@ func (e *Engine) hGetCallerWallet(ctx context.Context, mod api.Module) uint64 {
 func (e *Engine) hGetRequestID(ctx context.Context, mod api.Module) uint64 {
 	rid := e.hostServices.GetRequestID(ctx)
 	return e.executor.WriteToGuest(ctx, mod, []byte(rid))
+}
+
+// hGetWSClientID returns the current invocation's WebSocket client ID, or
+// empty string if the function wasn't invoked via WS.
+func (e *Engine) hGetWSClientID(ctx context.Context, mod api.Module) uint64 {
+	cid := e.hostServices.GetWSClientID(ctx)
+	return e.executor.WriteToGuest(ctx, mod, []byte(cid))
+}
+
+// hGetCallerClaim reads a claim name from guest memory, looks it up on the
+// caller's JWT custom claims, and writes the value (or empty string) back.
+func (e *Engine) hGetCallerClaim(ctx context.Context, mod api.Module, namePtr, nameLen uint32) uint64 {
+	name, ok := e.executor.ReadFromGuest(mod, namePtr, nameLen)
+	if !ok {
+		return 0
+	}
+	val := e.hostServices.GetCallerClaim(ctx, string(name))
+	return e.executor.WriteToGuest(ctx, mod, []byte(val))
 }
 
 func (e *Engine) hGetEnv(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
@@ -515,6 +629,223 @@ func (e *Engine) hPubSubPublish(ctx context.Context, mod api.Module, topicPtr, t
 		return 0
 	}
 	return 1 // Success
+}
+
+// hPubSubPublishBatch is the WASM-callable wrapper for PubSubPublishBatch.
+// Input: pointer/length of a JSON array of {topic, data_base64}.
+// Returns 1 on success, 0 on error.
+func (e *Engine) hPubSubPublishBatch(ctx context.Context, mod api.Module, msgsPtr, msgsLen uint32) uint32 {
+	msgsJSON, ok := e.executor.ReadFromGuest(mod, msgsPtr, msgsLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.PubSubPublishBatch(ctx, msgsJSON); err != nil {
+		e.logger.Error("host function pubsub_publish_batch failed", zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hDBTransaction is the WASM-callable wrapper for DBTransaction.
+// Input: pointer/length of opsJSON ({"ops":[{kind,sql,args},...]}).
+// Returns a packed uint64 (ptr<<32 | len) pointing to JSON BatchResult in
+// guest memory, or 0 on setup error.
+//
+// Note the result JSON's `committed` field tells the caller whether the
+// writes landed — a return of non-zero does NOT imply commit.
+func (e *Engine) hDBTransaction(ctx context.Context, mod api.Module, opsPtr, opsLen uint32) uint64 {
+	opsJSON, ok := e.executor.ReadFromGuest(mod, opsPtr, opsLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.DBTransaction(ctx, opsJSON)
+	if err != nil {
+		e.logger.Warn("host function db_transaction failed", zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hExecAndPublish is the WASM-callable wrapper for ExecAndPublish.
+// Inputs:
+//
+//	opsPtr/opsLen     — JSON {"ops":[{kind,sql,args},...]}
+//	topicPtr/topicLen — UTF-8 PubSub topic for the wake-up
+//	dataPtr/dataLen   — wake-up payload bytes; "{{seq}}" will be substituted
+//
+// Returns a packed uint64 (ptr<<32 | len) pointing to the JSON result in
+// guest memory, or 0 on setup error. The result JSON has fields
+// committed/seq/published/publish_error that the caller inspects.
+func (e *Engine) hExecAndPublish(ctx context.Context, mod api.Module,
+	opsPtr, opsLen, topicPtr, topicLen, dataPtr, dataLen uint32) uint64 {
+
+	opsJSON, ok := e.executor.ReadFromGuest(mod, opsPtr, opsLen)
+	if !ok {
+		return 0
+	}
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	data, ok := e.executor.ReadFromGuest(mod, dataPtr, dataLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.ExecAndPublish(ctx, opsJSON, string(topic), data)
+	if err != nil {
+		e.logger.Warn("host function exec_and_publish failed",
+			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hWSPubSubBridge is the WASM-callable wrapper for WSPubSubBridge.
+// Inputs: clientID + topic strings. Returns 1 on success, 0 on error.
+func (e *Engine) hWSPubSubBridge(ctx context.Context, mod api.Module,
+	cidPtr, cidLen, topicPtr, topicLen uint32) uint32 {
+	cid, ok := e.executor.ReadFromGuest(mod, cidPtr, cidLen)
+	if !ok {
+		return 0
+	}
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.WSPubSubBridge(ctx, string(cid), string(topic)); err != nil {
+		e.logger.Warn("ws_pubsub_bridge failed",
+			zap.String("client_id", string(cid)),
+			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hWSPubSubUnbridge is the WASM-callable wrapper for WSPubSubUnbridge.
+func (e *Engine) hWSPubSubUnbridge(ctx context.Context, mod api.Module,
+	cidPtr, cidLen, topicPtr, topicLen uint32) uint32 {
+	cid, ok := e.executor.ReadFromGuest(mod, cidPtr, cidLen)
+	if !ok {
+		return 0
+	}
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.WSPubSubUnbridge(ctx, string(cid), string(topic)); err != nil {
+		e.logger.Warn("ws_pubsub_unbridge failed",
+			zap.String("client_id", string(cid)),
+			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hFunctionInvoke is the WASM-callable wrapper for FunctionInvoke. Used by
+// the rpc-router persistent function (and any future dispatcher) to run
+// another function in the same namespace synchronously and forward its
+// output back to its caller.
+//
+// Inputs:
+//
+//	namePtr/nameLen       — UTF-8 target function name
+//	payloadPtr/payloadLen — raw input bytes for the target function
+//
+// Returns a packed uint64 (ptr<<32 | len) pointing to the target's output
+// bytes in guest memory, or 0 on error. The caller is expected to JSON-
+// decode the output (target functions ack with JSON envelopes).
+func (e *Engine) hFunctionInvoke(ctx context.Context, mod api.Module,
+	namePtr, nameLen, payloadPtr, payloadLen uint32) uint64 {
+	name, ok := e.executor.ReadFromGuest(mod, namePtr, nameLen)
+	if !ok {
+		return 0
+	}
+	payload, ok := e.executor.ReadFromGuest(mod, payloadPtr, payloadLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.FunctionInvoke(ctx, string(name), payload)
+	if err != nil {
+		e.logger.Warn("function_invoke failed",
+			zap.String("name", string(name)),
+			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hWSSend is the WASM-callable wrapper for WSSend.
+// Inputs: clientID + raw frame bytes. clientID may be empty — in that case
+// the host falls back to the current invocation's WS client (if any).
+// Returns 1 on success, 0 on error.
+func (e *Engine) hWSSend(ctx context.Context, mod api.Module,
+	cidPtr, cidLen, dataPtr, dataLen uint32) uint32 {
+	cid, ok := e.executor.ReadFromGuest(mod, cidPtr, cidLen)
+	if !ok {
+		return 0
+	}
+	data, ok := e.executor.ReadFromGuest(mod, dataPtr, dataLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.WSSend(ctx, string(cid), data); err != nil {
+		e.logger.Warn("ws_send failed",
+			zap.String("client_id", string(cid)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hWSBroadcast is the WASM-callable wrapper for WSBroadcast.
+// Inputs: topic + raw frame bytes. Sends `data` to every WS client currently
+// subscribed to `topic` in the function's namespace. Returns 1 on success,
+// 0 on error.
+func (e *Engine) hWSBroadcast(ctx context.Context, mod api.Module,
+	topicPtr, topicLen, dataPtr, dataLen uint32) uint32 {
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	data, ok := e.executor.ReadFromGuest(mod, dataPtr, dataLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.WSBroadcast(ctx, string(topic), data); err != nil {
+		e.logger.Warn("ws_broadcast failed",
+			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hPushSend is the WASM-callable wrapper for PushSend.
+// Inputs:
+//   userIDPtr/userIDLen — UTF-8 user ID to push to (within the function's
+//                         own namespace; the namespace is server-side trusted)
+//   msgPtr/msgLen       — JSON payload matching hostfunctions.PushSendArgs
+// Returns 1 on success, 0 on error.
+func (e *Engine) hPushSend(ctx context.Context, mod api.Module,
+	userIDPtr, userIDLen, msgPtr, msgLen uint32) uint32 {
+	userID, ok := e.executor.ReadFromGuest(mod, userIDPtr, userIDLen)
+	if !ok {
+		return 0
+	}
+	msgJSON, ok := e.executor.ReadFromGuest(mod, msgPtr, msgLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.PushSend(ctx, string(userID), msgJSON); err != nil {
+		e.logger.Error("host function push_send failed",
+			zap.String("user_id", string(userID)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
 }
 
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {

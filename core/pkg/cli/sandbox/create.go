@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
@@ -143,6 +144,18 @@ func Create(name string) error {
 	if err := SaveState(state); err != nil {
 		return fmt.Errorf("save final state: %w", err)
 	}
+
+	// Register sandbox as an environment and switch to it
+	gatewayURL := "https://" + cfg.Domain
+	desc := fmt.Sprintf("Sandbox cluster: %s (%s)", state.Name, cfg.Domain)
+	if err := cli.AddEnvironment("sandbox", gatewayURL, desc); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to register sandbox environment: %v\n", err)
+	} else if err := cli.SwitchEnvironment("sandbox"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to switch to sandbox environment: %v\n", err)
+	}
+
+	// Tag all nodes with operator wallet for unified node management
+	registerNodesWithOperator(state, sshKeyPath)
 
 	printCreateSummary(cfg, state)
 	return nil
@@ -631,6 +644,36 @@ func printCreateSummary(cfg *Config, state *SandboxState) {
 	fmt.Println()
 	fmt.Println("SSH:     orama sandbox ssh 1")
 	fmt.Println("Destroy: orama sandbox destroy")
+}
+
+// registerNodesWithOperator tags all sandbox nodes with the operator's wallet
+// via a direct RQLite UPDATE on the genesis node. This enables `orama nodes`
+// to discover sandbox nodes alongside production nodes.
+func registerNodesWithOperator(state *SandboxState, sshKeyPath string) {
+	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	addrData, err := client.GetAddress(ctx, "evm")
+	if err != nil || addrData == nil || addrData.Address == "" {
+		fmt.Fprintf(os.Stderr, "Warning: could not get operator wallet, nodes not tagged: %v\n", err)
+		return
+	}
+	wallet := addrData.Address
+
+	if len(state.Servers) == 0 {
+		return
+	}
+	genesis := state.Servers[0]
+
+	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
+	// Use RQLite's parameterized query to avoid any injection risk.
+	// The JSON payload has the wallet as a parameter, not interpolated into SQL.
+	payload := fmt.Sprintf(`[["UPDATE dns_nodes SET operator_wallet = ?, environment = 'sandbox' WHERE operator_wallet IS NULL OR operator_wallet = ''", %q]]`, wallet)
+	cmd := fmt.Sprintf(`curl -sf -X POST http://localhost:5001/db/execute -H 'Content-Type: application/json' -d '%s'`, payload)
+	if _, err := runSSHOutput(node, cmd); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to tag nodes with operator wallet: %v\n", err)
+	}
 }
 
 // cleanupFailedCreate deletes any servers that were created during a failed provision.

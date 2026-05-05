@@ -32,6 +32,12 @@ type FunctionDefinition struct {
 	RetryDelaySeconds int
 	DLQTopic          string
 	EnvVars           map[string]string
+
+	// Persistent WebSocket settings — see plan 06_PERSISTENT_WS_FUNCTIONS.md
+	WSPersistent         bool
+	WSIdleTimeoutSec     int
+	WSMaxFrameBytes      int
+	WSMaxInflightPerConn int
 }
 
 // Function represents a deployed serverless function.
@@ -52,6 +58,12 @@ type Function struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	CreatedBy         string
+
+	// Persistent WebSocket settings.
+	WSPersistent         bool
+	WSIdleTimeoutSec     int
+	WSMaxFrameBytes      int
+	WSMaxInflightPerConn int
 }
 
 // LogEntry represents a log message from a function.
@@ -107,22 +119,26 @@ func (e *DeployError) Unwrap() error {
 
 // Database row types (internal)
 type functionRow struct {
-	ID                string
-	Name              string
-	Namespace         string
-	Version           int
-	WASMCID           string
-	SourceCID         sql.NullString
-	MemoryLimitMB     int
-	TimeoutSeconds    int
-	IsPublic          bool
-	RetryCount        int
-	RetryDelaySeconds int
-	DLQTopic          sql.NullString
-	Status            string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	CreatedBy         string
+	ID                   string
+	Name                 string
+	Namespace            string
+	Version              int
+	WASMCID              string
+	SourceCID            sql.NullString
+	MemoryLimitMB        int
+	TimeoutSeconds       int
+	IsPublic             bool
+	RetryCount           int
+	RetryDelaySeconds    int
+	DLQTopic             sql.NullString
+	Status               string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	CreatedBy            string
+	WSPersistent         bool
+	WSIdleTimeoutSec     int
+	WSMaxFrameBytes      int
+	WSMaxInflightPerConn int
 }
 
 type envVarRow struct {

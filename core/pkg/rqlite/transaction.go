@@ -5,6 +5,7 @@ package rqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 // txClient implements Tx over *sql.Tx.
@@ -13,7 +14,13 @@ type txClient struct {
 }
 
 // Query executes a SELECT query within the transaction.
-func (t *txClient) Query(ctx context.Context, dest any, query string, args ...any) error {
+// Includes panic recovery for the gorqlite stdlib driver.
+func (t *txClient) Query(ctx context.Context, dest any, query string, args ...any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("gorqlite panic (QueryContext): %v", r)
+		}
+	}()
 	rows, err := t.tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -23,7 +30,13 @@ func (t *txClient) Query(ctx context.Context, dest any, query string, args ...an
 }
 
 // Exec executes a write statement within the transaction.
-func (t *txClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+// Includes panic recovery for the gorqlite stdlib driver.
+func (t *txClient) Exec(ctx context.Context, query string, args ...any) (result sql.Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("gorqlite panic (ExecContext): %v", r)
+		}
+	}()
 	return t.tx.ExecContext(ctx, query, args...)
 }
 

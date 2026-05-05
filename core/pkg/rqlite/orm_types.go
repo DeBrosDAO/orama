@@ -36,7 +36,26 @@ type Client interface {
 	CreateQueryBuilder(table string) *QueryBuilder
 
 	// Tx executes a function within a transaction.
+	//
+	// CAVEAT: against RQLite, the underlying database/sql Begin/Commit are
+	// NOT real transactions (the gorqlite stdlib driver doesn't support them).
+	// Use Batch for true atomicity.
 	Tx(ctx context.Context, fn func(tx Tx) error) error
+
+	// Batch executes ops as a single atomic transaction via the native
+	// RQLite /db/execute?transaction endpoint. All-or-nothing: any failing
+	// exec rolls the entire batch back. Query ops are sequenced after the
+	// commit and see the just-committed state.
+	//
+	// Requires the client to have been constructed with a *gorqlite.Connection
+	// (NewClientWithDSN or NewClientWithConn). Returns an error otherwise.
+	Batch(ctx context.Context, ops []BatchOp) (*BatchResult, error)
+
+	// BatchWithSeq executes the user's ops atomically AND, in the same atomic
+	// batch, increments the per-namespace publish sequence counter, returning
+	// the assigned sequence number. Used by exec_and_publish to attach a seq
+	// to wake-up messages so subscribers can detect replication-lag gaps.
+	BatchWithSeq(ctx context.Context, namespace string, userOps []BatchOp) (*BatchResult, int64, error)
 }
 
 // Tx mirrors Client but executes within a transaction.

@@ -7,8 +7,10 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
@@ -31,6 +33,21 @@ type HostFunctions struct {
 	secrets     serverless.SecretsManager
 	httpClient  *http.Client
 	logger      *zap.Logger
+
+	// pushDispatcher may be nil when push isn't configured for this gateway.
+	// In that case PushSend returns nil silently — see hostfunctions/push.go.
+	pushDispatcher *push.PushDispatcher
+
+	// wsBridge may be nil when the gateway doesn't run a bridge. In that
+	// case WSPubSubBridge returns an error rather than silently no-oping
+	// — bridging is a deliberate request whose absence should be visible.
+	wsBridge *wsbridge.Bridge
+
+	// invoker is set after construction (via SetInvoker) to break the
+	// engine ↔ host-functions circular dep. nil means FunctionInvoke
+	// returns ErrFunctionInvokeNotAvailable.
+	invoker     serverless.FunctionInvoker
+	invokerLock sync.RWMutex
 
 	// Current invocation context (set per-execution)
 	invCtx     *serverless.InvocationContext

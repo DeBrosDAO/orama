@@ -134,6 +134,21 @@ func (c *Client) GetAddress(ctx context.Context, chain string) (*WalletAddressDa
 	return &resp.Data, nil
 }
 
+// Sign signs a message with the wallet's private key.
+// The desktop app may prompt the user for approval on first use.
+func (c *Client) Sign(ctx context.Context, message, chain string) (*WalletSignData, error) {
+	body := map[string]any{"message": message, "chain": chain}
+
+	var resp apiResponse[WalletSignData]
+	if err := c.doJSON(ctx, "POST", "/v1/wallet/sign", body, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, c.apiError(resp.Error, resp.Code, 0)
+	}
+	return &resp.Data, nil
+}
+
 // Unlock sends the password to unlock the agent.
 func (c *Client) Unlock(ctx context.Context, password string, ttlMinutes int) error {
 	body := map[string]any{"password": password, "ttlMinutes": ttlMinutes}

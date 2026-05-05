@@ -133,7 +133,7 @@ func cleanNode(node inspector.Node, nuclear bool) error {
 %s
 
 # Stop services
-for svc in caddy coredns orama-node orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-anyone-relay orama-anyone-client; do
+for svc in caddy coredns orama-node orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-vault orama-anyone-relay orama-anyone-client; do
     systemctl stop "$svc" 2>/dev/null
     systemctl disable "$svc" 2>/dev/null
 done
@@ -171,7 +171,7 @@ rm -f /tmp/orama-*.sh /tmp/network-source.tar.gz /tmp/orama-*.tar.gz
 # Nuclear: remove binaries
 if [ -n "$NUCLEAR" ]; then
     rm -f /usr/local/bin/orama /usr/local/bin/orama-node /usr/local/bin/gateway
-    rm -f /usr/local/bin/identity /usr/local/bin/sfu /usr/local/bin/turn
+    rm -f /usr/local/bin/identity /usr/local/bin/sfu /usr/local/bin/turn /usr/local/bin/orama-sni-router
     rm -f /usr/local/bin/olric-server /usr/local/bin/ipfs /usr/local/bin/ipfs-cluster-service
     rm -f /usr/local/bin/rqlited /usr/local/bin/coredns
     rm -f /usr/bin/caddy

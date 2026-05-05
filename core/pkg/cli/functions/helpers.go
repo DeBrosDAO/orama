@@ -24,6 +24,14 @@ type FunctionConfig struct {
 	Timeout int               `yaml:"timeout"`
 	Retry   RetryConfig       `yaml:"retry"`
 	Env     map[string]string `yaml:"env"`
+
+	// Persistent WebSocket settings — when WSPersistent is true, the function
+	// must export ws_open / ws_frame / ws_close instead of running per-frame
+	// stateless. See core/plans/platform/06_PERSISTENT_WS_FUNCTIONS.md.
+	WSPersistent         bool `yaml:"ws_persistent"`
+	WSIdleTimeoutSec     int  `yaml:"ws_idle_timeout_sec"`
+	WSMaxFrameBytes      int  `yaml:"ws_max_frame_bytes"`
+	WSMaxInflightPerConn int  `yaml:"ws_max_inflight_per_conn"`
 }
 
 // RetryConfig holds retry settings.
@@ -198,11 +206,28 @@ func uploadWASMFunction(wasmPath string, cfg *FunctionConfig) (map[string]interf
 	writer.WriteField("retry_count", strconv.Itoa(cfg.Retry.Count))
 	writer.WriteField("retry_delay_seconds", strconv.Itoa(cfg.Retry.Delay))
 
-	// Add env vars as metadata JSON
+	// Build metadata JSON. The deploy handler json.Unmarshal()s this into
+	// FunctionDefinition first, then overlays the explicit form fields below.
+	// Any field that has no explicit form-field equivalent (env vars, the
+	// ws_* persistent settings) MUST live in this blob.
+	metaObj := map[string]interface{}{}
 	if len(cfg.Env) > 0 {
-		metadata, _ := json.Marshal(map[string]interface{}{
-			"env_vars": cfg.Env,
-		})
+		metaObj["env_vars"] = cfg.Env
+	}
+	if cfg.WSPersistent {
+		metaObj["ws_persistent"] = true
+	}
+	if cfg.WSIdleTimeoutSec > 0 {
+		metaObj["ws_idle_timeout_sec"] = cfg.WSIdleTimeoutSec
+	}
+	if cfg.WSMaxFrameBytes > 0 {
+		metaObj["ws_max_frame_bytes"] = cfg.WSMaxFrameBytes
+	}
+	if cfg.WSMaxInflightPerConn > 0 {
+		metaObj["ws_max_inflight_per_conn"] = cfg.WSMaxInflightPerConn
+	}
+	if len(metaObj) > 0 {
+		metadata, _ := json.Marshal(metaObj)
 		writer.WriteField("metadata", string(metadata))
 	}
 

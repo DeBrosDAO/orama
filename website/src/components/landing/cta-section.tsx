@@ -7,7 +7,6 @@ import { DashedPanel } from "../ui/dashed-panel";
 import { Button } from "../ui/button";
 import { AnimateIn } from "../ui/animate-in";
 import { StatusDot } from "../ui/status-dot";
-import { Redacted } from "../ui/redacted";
 
 const ctaContent: Record<
   Persona,
@@ -29,7 +28,7 @@ const ctaContent: Record<
   operator: {
     heading: "Start your node today.",
     description:
-      <>Minimal hardware. Maximum rewards. Join <Redacted /> operators powering the decentralized cloud.</>,
+      "Minimal hardware. Maximum rewards. Testnet is free — no staking required. Tokens carry over to mainnet.",
     buttonText: "Read Setup Guide",
     to: "/docs/operator/getting-started",
   },
@@ -53,7 +52,7 @@ export function CtaSection({ persona }: { persona: Persona }) {
         <div className="flex flex-col items-center text-center gap-6 py-8">
           <div className="flex items-center justify-center gap-2 mb-2">
             <StatusDot status="active" />
-            <span className="text-xs font-mono text-muted tracking-wider uppercase">50+ Nodes Online</span>
+            <span className="text-xs font-mono text-muted tracking-wider uppercase">Testnet Live — 300-Node Genesis Target</span>
           </div>
 
           <h2 className="font-display font-bold text-2xl lg:text-3xl text-fg">

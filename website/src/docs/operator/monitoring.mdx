@@ -11,7 +11,21 @@ The monitoring system is split into two parts:
 
 Each node runs `orama node report --json` locally (no SSH to other nodes), collecting data via `os/exec` and `net/http` to localhost services. The monitor aggregates everything and derives alerts from cross-node analysis.
 
-## Quick Start
+## Quick Status Check
+
+The fastest way to check your nodes:
+
+```bash
+# Health of all your nodes (uses wallet-based node discovery)
+orama status --env devnet
+
+# JSON output for automation
+orama status --env devnet --json
+```
+
+## Detailed Monitoring
+
+For cross-node analysis, alerts, and interactive TUI:
 
 ```bash
 # Interactive TUI (auto-refreshes every 30s)

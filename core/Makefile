@@ -63,7 +63,7 @@ test-e2e-quick:
 
 .PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release
 
-VERSION := 0.120.0
+VERSION := 0.122.0
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -80,6 +80,7 @@ build: deps
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	go build -ldflags "$(LDFLAGS)" -o bin/sfu ./cmd/sfu
 	go build -ldflags "$(LDFLAGS)" -o bin/turn ./cmd/turn
+	go build -ldflags "$(LDFLAGS)" -o bin/orama-sni-router ./cmd/sni-router
 	@echo "Build complete! Run ./bin/orama version"
 
 # Cross-compile CLI for Linux (only binary needed locally; VPS builds everything else from source)

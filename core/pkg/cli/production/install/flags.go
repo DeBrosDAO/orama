@@ -43,6 +43,11 @@ type Flags struct {
 	AnyoneFamily     string // Comma-separated fingerprints of other relays you operate
 	AnyoneBandwidth  int    // Percentage of VPS bandwidth for relay (default: 30, 0=unlimited)
 	AnyoneAccounting int    // Monthly data cap for relay in GB (0=unlimited)
+
+	// Operator metadata (set by orama node setup, written to node.yaml for registration)
+	SSHUser        string // SSH user for remote management
+	Environment    string // Environment name (devnet, testnet, etc.)
+	OperatorWallet string // Operator wallet address
 }
 
 // ParseFlags parses install command flags
@@ -89,6 +94,11 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.StringVar(&flags.AnyoneFamily, "anyone-family", "", "Comma-separated fingerprints of other relays you operate")
 	fs.IntVar(&flags.AnyoneBandwidth, "anyone-bandwidth", 30, "Limit relay to N% of VPS bandwidth (0=unlimited, runs speedtest)")
 	fs.IntVar(&flags.AnyoneAccounting, "anyone-accounting", 0, "Monthly data cap for relay in GB (0=unlimited)")
+
+	// Operator metadata (set by orama node setup)
+	fs.StringVar(&flags.SSHUser, "ssh-user", "", "SSH user for remote management")
+	fs.StringVar(&flags.Environment, "environment", "", "Environment name (devnet, testnet, etc.)")
+	fs.StringVar(&flags.OperatorWallet, "operator-wallet", "", "Operator wallet address")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {

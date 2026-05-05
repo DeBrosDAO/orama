@@ -56,14 +56,16 @@ func (s *FunctionStore) Save(ctx context.Context, fn *FunctionDefinition, wasmCI
 			id, name, namespace, version, wasm_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err := s.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
 		memoryLimit, timeout, fn.IsPublic,
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
+		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save function: %w", err)
@@ -76,24 +78,29 @@ func (s *FunctionStore) Save(ctx context.Context, fn *FunctionDefinition, wasmCI
 		zap.String("wasm_cid", wasmCID),
 		zap.Int("version", version),
 		zap.Bool("updated", existingFunc != nil),
+		zap.Bool("ws_persistent", fn.WSPersistent),
 	)
 
 	return &Function{
-		ID:                id,
-		Name:              fn.Name,
-		Namespace:         fn.Namespace,
-		Version:           version,
-		WASMCID:           wasmCID,
-		MemoryLimitMB:     memoryLimit,
-		TimeoutSeconds:    timeout,
-		IsPublic:          fn.IsPublic,
-		RetryCount:        fn.RetryCount,
-		RetryDelaySeconds: retryDelay,
-		DLQTopic:          fn.DLQTopic,
-		Status:            FunctionStatusActive,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-		CreatedBy:         fn.Namespace,
+		ID:                   id,
+		Name:                 fn.Name,
+		Namespace:            fn.Namespace,
+		Version:              version,
+		WASMCID:              wasmCID,
+		MemoryLimitMB:        memoryLimit,
+		TimeoutSeconds:       timeout,
+		IsPublic:             fn.IsPublic,
+		RetryCount:           fn.RetryCount,
+		RetryDelaySeconds:    retryDelay,
+		DLQTopic:             fn.DLQTopic,
+		Status:               FunctionStatusActive,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		CreatedBy:            fn.Namespace,
+		WSPersistent:         fn.WSPersistent,
+		WSIdleTimeoutSec:     fn.WSIdleTimeoutSec,
+		WSMaxFrameBytes:      fn.WSMaxFrameBytes,
+		WSMaxInflightPerConn: fn.WSMaxInflightPerConn,
 	}, nil
 }
 
@@ -107,7 +114,7 @@ func (s *FunctionStore) Get(ctx context.Context, namespace, name string, version
 
 	if version == 0 {
 		query = `
-			SELECT id, name, namespace, version, wasm_cid, source_cid,
+			SELECT id, name, namespace, version, wasm_cid, source_cid, ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by
@@ -119,7 +126,7 @@ func (s *FunctionStore) Get(ctx context.Context, namespace, name string, version
 		args = []interface{}{namespace, name, string(FunctionStatusActive)}
 	} else {
 		query = `
-			SELECT id, name, namespace, version, wasm_cid, source_cid,
+			SELECT id, name, namespace, version, wasm_cid, source_cid, ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by
@@ -147,7 +154,7 @@ func (s *FunctionStore) Get(ctx context.Context, namespace, name string, version
 // GetByID retrieves a function by its ID.
 func (s *FunctionStore) GetByID(ctx context.Context, id string) (*Function, error) {
 	query := `
-		SELECT id, name, namespace, version, wasm_cid, source_cid,
+		SELECT id, name, namespace, version, wasm_cid, source_cid, ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by
@@ -173,7 +180,7 @@ func (s *FunctionStore) GetByNameInternal(ctx context.Context, namespace, name s
 	name = strings.TrimSpace(name)
 
 	query := `
-		SELECT id, name, namespace, version, wasm_cid, source_cid,
+		SELECT id, name, namespace, version, wasm_cid, source_cid, ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by
@@ -199,6 +206,7 @@ func (s *FunctionStore) GetByNameInternal(ctx context.Context, namespace, name s
 func (s *FunctionStore) List(ctx context.Context, namespace string) ([]*Function, error) {
 	query := `
 		SELECT f.id, f.name, f.namespace, f.version, f.wasm_cid, f.source_cid,
+			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn,
 			f.memory_limit_mb, f.timeout_seconds, f.is_public,
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
 			f.status, f.created_at, f.updated_at, f.created_by
@@ -230,7 +238,7 @@ func (s *FunctionStore) List(ctx context.Context, namespace string) ([]*Function
 // ListVersions returns all versions of a function.
 func (s *FunctionStore) ListVersions(ctx context.Context, namespace, name string) ([]*Function, error) {
 	query := `
-		SELECT id, name, namespace, version, wasm_cid, source_cid,
+		SELECT id, name, namespace, version, wasm_cid, source_cid, ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by
@@ -332,21 +340,25 @@ func (s *FunctionStore) GetEnvVars(ctx context.Context, functionID string) (map[
 // rowToFunction converts a database row to a Function struct.
 func rowToFunction(row *functionRow) *Function {
 	return &Function{
-		ID:                row.ID,
-		Name:              row.Name,
-		Namespace:         row.Namespace,
-		Version:           row.Version,
-		WASMCID:           row.WASMCID,
-		SourceCID:         row.SourceCID.String,
-		MemoryLimitMB:     row.MemoryLimitMB,
-		TimeoutSeconds:    row.TimeoutSeconds,
-		IsPublic:          row.IsPublic,
-		RetryCount:        row.RetryCount,
-		RetryDelaySeconds: row.RetryDelaySeconds,
-		DLQTopic:          row.DLQTopic.String,
-		Status:            FunctionStatus(row.Status),
-		CreatedAt:         row.CreatedAt,
-		UpdatedAt:         row.UpdatedAt,
-		CreatedBy:         row.CreatedBy,
+		ID:                   row.ID,
+		Name:                 row.Name,
+		Namespace:            row.Namespace,
+		Version:              row.Version,
+		WASMCID:              row.WASMCID,
+		SourceCID:            row.SourceCID.String,
+		MemoryLimitMB:        row.MemoryLimitMB,
+		TimeoutSeconds:       row.TimeoutSeconds,
+		IsPublic:             row.IsPublic,
+		RetryCount:           row.RetryCount,
+		RetryDelaySeconds:    row.RetryDelaySeconds,
+		DLQTopic:             row.DLQTopic.String,
+		Status:               FunctionStatus(row.Status),
+		CreatedAt:            row.CreatedAt,
+		UpdatedAt:            row.UpdatedAt,
+		CreatedBy:            row.CreatedBy,
+		WSPersistent:         row.WSPersistent,
+		WSIdleTimeoutSec:     row.WSIdleTimeoutSec,
+		WSMaxFrameBytes:      row.WSMaxFrameBytes,
+		WSMaxInflightPerConn: row.WSMaxInflightPerConn,
 	}
 }

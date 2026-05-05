@@ -10,30 +10,42 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var triggerTopic string
+var (
+	triggerTopic    string
+	triggerSchedule string
+)
 
 // TriggersCmd is the parent command for trigger management.
 var TriggersCmd = &cobra.Command{
 	Use:   "triggers",
-	Short: "Manage function PubSub triggers",
-	Long: `Add, list, and delete PubSub triggers for your serverless functions.
+	Short: "Manage function PubSub and cron triggers",
+	Long: `Add, list, and delete triggers for your serverless functions.
 
-When a message is published to a topic, all functions with a trigger on
-that topic are automatically invoked with the message as input.
+PubSub: when a message is published to a topic, every function with a
+matching trigger is invoked with the message as input.
+
+Cron: a function is invoked on a schedule (5-field crontab, or 6-field
+crontab with a leading seconds column).
 
 Examples:
   orama function triggers add my-function --topic calls:invite
+  orama function triggers add my-function --schedule "0 3 * * *"
+  orama function triggers add my-function --schedule "*/30 * * * * *"
   orama function triggers list my-function
   orama function triggers delete my-function <trigger-id>`,
 }
 
-// TriggersAddCmd adds a PubSub trigger to a function.
+// TriggersAddCmd adds a PubSub or Cron trigger to a function.
 var TriggersAddCmd = &cobra.Command{
 	Use:   "add <function-name>",
-	Short: "Add a PubSub trigger",
-	Long:  "Registers a PubSub trigger so the function is invoked when a message is published to the topic.",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTriggersAdd,
+	Short: "Add a PubSub or Cron trigger",
+	Long: `Registers a trigger that invokes the function automatically.
+
+Pass exactly one of --topic (PubSub) or --schedule (cron). Schedules
+accept either 5-field crontab (minute hour dom month dow) or 6-field
+with seconds (sec minute hour dom month dow).`,
+	Args: cobra.ExactArgs(1),
+	RunE: runTriggersAdd,
 }
 
 // TriggersListCmd lists triggers for a function.
@@ -57,15 +69,18 @@ func init() {
 	TriggersCmd.AddCommand(TriggersListCmd)
 	TriggersCmd.AddCommand(TriggersDeleteCmd)
 
-	TriggersAddCmd.Flags().StringVar(&triggerTopic, "topic", "", "PubSub topic to trigger on (required)")
-	TriggersAddCmd.MarkFlagRequired("topic")
+	TriggersAddCmd.Flags().StringVar(&triggerTopic, "topic", "", "PubSub topic to trigger on")
+	TriggersAddCmd.Flags().StringVar(&triggerSchedule, "schedule", "", "Cron expression to trigger on (e.g. \"0 3 * * *\")")
+	TriggersAddCmd.MarkFlagsMutuallyExclusive("topic", "schedule")
+	TriggersAddCmd.MarkFlagsOneRequired("topic", "schedule")
 }
 
 func runTriggersAdd(cmd *cobra.Command, args []string) error {
 	funcName := args[0]
 
 	body, _ := json.Marshal(map[string]string{
-		"topic": triggerTopic,
+		"topic":           triggerTopic,
+		"cron_expression": triggerSchedule,
 	})
 
 	resp, err := apiRequest("POST", "/v1/functions/"+funcName+"/triggers", bytes.NewReader(body), "application/json")
@@ -88,7 +103,11 @@ func runTriggersAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	fmt.Printf("Trigger added: %s → %s (id: %s)\n", triggerTopic, funcName, result["trigger_id"])
+	if triggerSchedule != "" {
+		fmt.Printf("Trigger added: cron(%s) → %s (id: %s)\n", triggerSchedule, funcName, result["trigger_id"])
+	} else {
+		fmt.Printf("Trigger added: %s → %s (id: %s)\n", triggerTopic, funcName, result["trigger_id"])
+	}
 	return nil
 }
 

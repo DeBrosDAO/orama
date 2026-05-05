@@ -90,12 +90,40 @@ func (m *mockHostServices) PubSubPublish(ctx context.Context, topic string, data
 	return nil
 }
 
+func (m *mockHostServices) PubSubPublishBatch(ctx context.Context, msgsJSON []byte) error {
+	return nil
+}
+
+func (m *mockHostServices) PushSend(ctx context.Context, userID string, msgJSON []byte) error {
+	return nil
+}
+
+func (m *mockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	return []byte(`{"committed":true,"results":[]}`), nil
+}
+
+func (m *mockHostServices) ExecAndPublish(ctx context.Context, opsJSON []byte, topic string, dataTemplate []byte) ([]byte, error) {
+	return []byte(`{"committed":true,"published":true,"seq":1,"results":[]}`), nil
+}
+
+func (m *mockHostServices) WSPubSubBridge(ctx context.Context, clientID, topic string) error {
+	return nil
+}
+
+func (m *mockHostServices) WSPubSubUnbridge(ctx context.Context, clientID, topic string) error {
+	return nil
+}
+
 func (m *mockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }
 
 func (m *mockHostServices) WSBroadcast(ctx context.Context, topic string, data []byte) error {
 	return nil
+}
+
+func (m *mockHostServices) FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error) {
+	return nil, nil
 }
 
 func (m *mockHostServices) HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
@@ -115,6 +143,14 @@ func (m *mockHostServices) GetRequestID(ctx context.Context) string {
 }
 
 func (m *mockHostServices) GetCallerWallet(ctx context.Context) string {
+	return ""
+}
+
+func (m *mockHostServices) GetWSClientID(ctx context.Context) string {
+	return ""
+}
+
+func (m *mockHostServices) GetCallerClaim(ctx context.Context, name string) string {
 	return ""
 }
 

@@ -18,7 +18,7 @@ export function OpsOramaOne() {
                 Orama One
               </h2>
               <p className="text-lg text-accent font-mono tracking-wider">
-                Plug in. Connect. Earn.
+                3D-printed. Open-source. OramaOS pre-loaded.
               </p>
             </div>
 
@@ -73,26 +73,32 @@ export function OpsOramaOne() {
             </DashedPanel>
 
             {/* Specs */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-4xl mx-auto w-full">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-4xl mx-auto w-full">
               <DashedPanel className="p-4 text-center">
-                <span className="text-xs font-mono text-muted block mb-1">FORM FACTOR</span>
-                <span className="text-sm text-fg">Compact. Silent. Always-on.</span>
+                <span className="text-xs font-mono text-muted block mb-1">CPU</span>
+                <span className="text-sm text-fg">4+ cores, 2.0+ GHz</span>
               </DashedPanel>
               <DashedPanel className="p-4 text-center">
-                <span className="text-xs font-mono text-muted block mb-1">CONNECTIVITY</span>
-                <span className="text-sm text-fg">Ethernet + WiFi + WireGuard</span>
+                <span className="text-xs font-mono text-muted block mb-1">RAM</span>
+                <span className="text-sm text-fg">8 GB</span>
               </DashedPanel>
               <DashedPanel className="p-4 text-center">
-                <span className="text-xs font-mono text-muted block mb-1">SETUP</span>
-                <span className="text-sm text-fg">Plug in and start earning</span>
+                <span className="text-xs font-mono text-muted block mb-1">STORAGE</span>
+                <span className="text-sm text-fg">256 GB NVMe SSD</span>
+              </DashedPanel>
+              <DashedPanel className="p-4 text-center">
+                <span className="text-xs font-mono text-muted block mb-1">NETWORK</span>
+                <span className="text-sm text-fg">1 Gbps + TPM 2.0</span>
               </DashedPanel>
             </div>
 
             {/* Description + CTA */}
             <div className="flex flex-col items-center text-center gap-6 max-w-2xl mx-auto">
               <p className="text-muted leading-relaxed">
-                A pre-built hardware node. No VPS. No terminal. No configuration.
-                Just plug it in, connect to the network, and start earning $ORAMA.
+                A 3D-printed hardware node pre-loaded with OramaOS — the hardened
+                OS with no SSH, read-only rootfs, full-disk encryption, and TPM
+                attestation. Earns the 1.5x Infrastructure Multiplier automatically.
+                Open-source hardware design — build your own or buy one.
               </p>
               <Button variant="ghost" size="lg">
                 Notify Me When Available

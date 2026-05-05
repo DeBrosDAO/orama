@@ -2,7 +2,7 @@ import { useState } from "react";
 import { X, ArrowRight } from "lucide-react";
 import { cn } from "../../lib/utils";
 
-export function WhitelistBanner() {
+export function WhitelistBanner({ onDismiss }: { onDismiss?: () => void }) {
   const [dismissed, setDismissed] = useState(false);
 
   if (dismissed) return null;
@@ -20,7 +20,7 @@ export function WhitelistBanner() {
         }}
       >
         <a
-          href="https://t.me/debrosportal"
+          href="/whitelist"
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-3 flex-1 justify-center group"
@@ -33,7 +33,7 @@ export function WhitelistBanner() {
         </a>
         <button
           type="button"
-          onClick={() => setDismissed(true)}
+          onClick={() => { setDismissed(true); onDismiss?.(); }}
           className="flex items-center justify-center w-6 h-6 text-black/40 hover:text-black transition-colors cursor-pointer ml-2"
           aria-label="Dismiss banner"
         >

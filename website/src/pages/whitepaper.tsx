@@ -13,11 +13,29 @@ import { SILVER } from "../components/ui/silver-theme";
 
 const VERSIONS = [
   {
+    version: "v3.0",
+    title: "The Eternal Decentralized Computer and Financial System",
+    subtitle: "Standalone Layer-1 Blockchain — 1,000-Year Horizon",
+    date: "March 2026",
+    current: true,
+    file: "/orama-whitepaper-v3.pdf",
+    highlights: [
+      "Standalone L1 blockchain with pure WASM smart contracts",
+      "210M $ORAMA hard cap — zero pre-mine, 100% mined",
+      "BTC-only economy with native trust-minimized bridge",
+      "PLONK zk-SNARKs for per-transaction public/private toggle",
+      "Hybrid PoS + Proof of Contribution + Proof of Infrastructure consensus",
+      "AI Marketplace with autonomous Angels (AI agents on-chain)",
+      "OramaOS — hardened node OS with TPM attestation and 1.5x multiplier",
+      "300-node genesis requirement — mainnet when verified",
+    ],
+  },
+  {
     version: "v2.0",
     title: "Infrastructure Whitepaper",
     subtitle: "Decentralized Cloud Infrastructure & Governance",
     date: "2025",
-    current: true,
+    current: false,
     file: "/orama-whitepaper-v2.pdf",
     highlights: [
       "On-chain governance model",
@@ -70,7 +88,7 @@ export default function Whitepaper() {
           <Button asChild size="lg">
             <a href={VERSIONS[0].file} target="_blank" rel="noopener noreferrer">
               <Download className="w-4 h-4 mr-2" />
-              Download Latest (v2.0)
+              Download Latest (v3.0)
             </a>
           </Button>
         </div>

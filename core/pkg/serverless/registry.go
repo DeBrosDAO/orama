@@ -103,17 +103,19 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	// This handles both new registrations and overwriting existing (even inactive) functions.
 	query := `
 		INSERT OR REPLACE INTO functions (
-			id, name, namespace, version, wasm_cid, 
+			id, name, namespace, version, wasm_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
 		memoryLimit, timeout, fn.IsPublic,
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
+		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
 	)
 	if err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to register function: %w", err)}

@@ -19,10 +19,15 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/push"
+	pushexpo "github.com/DeBrosOfficial/network/pkg/push/providers/expo"
+	pushntfy "github.com/DeBrosOfficial/network/pkg/push/providers/ntfy"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/hostfunctions"
+	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	"github.com/multiformats/go-multiaddr"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -62,6 +67,25 @@ type Dependencies struct {
 
 	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
 	PubSubDispatcher *triggers.PubSubDispatcher
+
+	// Cron trigger store + scheduler. The scheduler is started by gateway
+	// lifecycle code after Dependencies is constructed; Stop is called
+	// during shutdown.
+	CronTriggerStore *triggers.CronTriggerStore
+	CronScheduler    *triggers.CronScheduler
+
+	// PersistentWSManager tracks long-lived WS function instances.
+	// Used by the WS handler when fn.WSPersistent=true; nil = disabled.
+	PersistentWSManager *persistent.Manager
+
+	// WSBridge wires PubSub topics directly to WS clients on this gateway.
+	// Used by the ws_pubsub_bridge host function. Nil = disabled.
+	WSBridge *wsbridge.Bridge
+
+	// Push notification dispatcher (nil when push isn't configured —
+	// hostfunc + HTTP handlers degrade to no-op / 503).
+	PushDispatcher  *push.PushDispatcher
+	PushDeviceStore push.PushDeviceStore
 
 	// Authentication service
 	AuthService *auth.Service
@@ -157,7 +181,17 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	db.SetConnMaxIdleTime(2 * time.Minute) // Maximum idle time before closing
 
 	deps.SQLDB = db
-	orm := rqlite.NewClient(db)
+	// Use the DSN-aware constructor so the ORM client also has a native
+	// *gorqlite.Connection for atomic Batch operations. If the native dial
+	// fails, fall back to the stdlib-only client (Batch will be unavailable
+	// but everything else works).
+	orm, ormErr := rqlite.NewClientWithDSN(db, dsn)
+	if ormErr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"native gorqlite dial failed, atomic Batch will be unavailable",
+			zap.Error(ormErr))
+		orm = rqlite.NewClient(db)
+	}
 	deps.ORMClient = orm
 	deps.ORMHTTP = rqlite.NewHTTPGateway(orm, "/v1/db")
 	// Set a reasonable timeout for HTTP requests (30 seconds)
@@ -412,11 +446,29 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		secretsMgr = smImpl
 	}
 
+	// Initialize push notification dispatcher if any provider is configured.
+	// Devices are stored encrypted in RQLite (see migration 023). Providers
+	// are registered based on gateway config; missing config = provider absent.
+	pushDispatcher, pushStore, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
+	if err != nil {
+		// Non-fatal: log and continue. Functions calling push_send will get nil
+		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"push notifications disabled (init failed)", zap.Error(err))
+	}
+	deps.PushDispatcher = pushDispatcher
+	deps.PushDeviceStore = pushStore
+
 	// Create host functions provider (allows functions to call Orama services)
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
 		IPFSAPIURL:  cfg.IPFSAPIURL,
 		HTTPTimeout: 30 * time.Second,
 	}
+	// WS-PubSub bridge: wire PubSub topics directly to WS clients without
+	// per-event WASM invocation. The bridge is a thin layer over the
+	// pubsub adapter + WSManager.
+	deps.WSBridge = wsbridge.New(pubsubAdapter, deps.ServerlessWSMgr, logger.Logger)
+
 	hostFuncs := hostfunctions.NewHostFunctions(
 		deps.ORMClient,
 		olricClient,
@@ -424,12 +476,20 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		pubsubAdapter, // pubsub adapter for serverless functions
 		deps.ServerlessWSMgr,
 		secretsMgr,
+		pushDispatcher, // may be nil — PushSend hostfunc handles that
+		deps.WSBridge,  // may be nil; WSPubSubBridge returns explicit error
 		hostFuncsCfg,
 		logger.Logger,
 	)
 
-	// Create WASM engine with rate limiter
-	rateLimiter := serverless.NewTokenBucketLimiter(engineCfg.GlobalRateLimitPerMinute)
+	// Create WASM engine with multi-tier rate limiter (per-(ns, fn, wallet, ip),
+	// per-(ns, wallet), per-(ns)). The legacy global limit is honored as
+	// the per-namespace ceiling so no behavior regresses for existing deployments.
+	rlCfg := serverless.DefaultLimiterConfig()
+	if engineCfg.GlobalRateLimitPerMinute > 0 {
+		rlCfg.PerNamespacePerMinute = engineCfg.GlobalRateLimitPerMinute
+	}
+	rateLimiter := serverless.NewMultiTierLimiter(rlCfg)
 	engine, err := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger,
 		serverless.WithInvocationLogger(registry),
 		serverless.WithRateLimiter(rateLimiter),
@@ -441,6 +501,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 
 	// Create invoker
 	deps.ServerlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
+
+	// Wire the invoker back into hostFuncs so the function_invoke host
+	// function can dispatch sub-invocations from inside a WASM function
+	// (e.g. rpc-router routing client RPCs to per-op handlers).
+	hostFuncs.SetInvoker(deps.ServerlessInvoker)
 
 	// Create PubSub trigger store and dispatcher
 	triggerStore := triggers.NewPubSubTriggerStore(deps.ORMClient, logger.Logger)
@@ -456,13 +521,34 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
+	// Cron trigger store + scheduler. The scheduler polls
+	// function_cron_triggers and invokes due rows via the same
+	// ServerlessInvoker used for PubSub triggers; the ↓ Start call wires
+	// the goroutine up — Stop is invoked from gateway lifecycle shutdown.
+	cronStore := triggers.NewCronTriggerStore(deps.ORMClient, logger.Logger)
+	deps.CronTriggerStore = cronStore
+	deps.CronScheduler = triggers.NewCronScheduler(
+		cronStore,
+		deps.ServerlessInvoker,
+		logger.Logger,
+		30*time.Second,
+	)
+
+	// Persistent WS instance manager. Cap from gateway config (TODO: surface
+	// the knob); 5000 is a sensible default per plan 06.
+	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
+
 	// Create HTTP handlers
 	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
 		deps.ServerlessInvoker,
+		deps.ServerlessEngine,
 		registry,
 		deps.ServerlessWSMgr,
 		triggerStore,
+		cronStore,
 		deps.PubSubDispatcher,
+		deps.PersistentWSManager,
+		deps.WSBridge,
 		secretsMgr,
 		logger.Logger,
 	)
@@ -685,4 +771,41 @@ func injectRQLiteAuth(dsn, username, password string) string {
 		}
 	}
 	return dsn
+}
+
+// buildPushDispatcher constructs a push.PushDispatcher + device store with
+// all enabled providers. Returns (nil, nil, nil) when no provider is
+// configured — that's a supported state, not an error. Returns (nil, nil,
+// err) on hard init failures (e.g. cluster secret missing for the
+// encrypted device store).
+func buildPushDispatcher(cfg *Config, db rqlite.Client, logger *logging.ColoredLogger) (*push.PushDispatcher, push.PushDeviceStore, error) {
+	if cfg.NtfyBaseURL == "" && cfg.ExpoAccessToken == "" {
+		// No providers configured — push is disabled.
+		return nil, nil, nil
+	}
+	if cfg.ClusterSecret == "" {
+		// Devices are encrypted at rest using a cluster-secret-derived key.
+		// Without it we can't store anything safely.
+		return nil, nil, fmt.Errorf("push enabled but ClusterSecret is empty")
+	}
+	store, err := push.NewRqliteDeviceStore(db, cfg.ClusterSecret, logger.Logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("init push device store: %w", err)
+	}
+	d := push.New(store, logger.Logger)
+	if cfg.NtfyBaseURL != "" {
+		d.Register(pushntfy.New(pushntfy.Config{
+			BaseURL:   cfg.NtfyBaseURL,
+			AuthToken: cfg.NtfyAuthToken,
+		}, logger.Logger))
+		logger.ComponentInfo(logging.ComponentGeneral, "push provider registered: ntfy",
+			zap.String("base_url", cfg.NtfyBaseURL))
+	}
+	if cfg.ExpoAccessToken != "" {
+		d.Register(pushexpo.New(pushexpo.Config{
+			AccessToken: cfg.ExpoAccessToken,
+		}, logger.Logger))
+		logger.ComponentInfo(logging.ComponentGeneral, "push provider registered: expo")
+	}
+	return d, store, nil
 }

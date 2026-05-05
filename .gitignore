@@ -25,6 +25,7 @@ Thumbs.db
 
 # === Core (Go) ===
 core/phantom-auth/
+bin/
 core/bin/
 core/bin-linux/
 core/dist/
@@ -89,3 +90,6 @@ os/output/
 .dev/
 .local/
 local/
+
+# Implementation plans (not committed)
+core/plans/
