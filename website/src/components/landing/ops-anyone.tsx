@@ -7,9 +7,9 @@ import { Badge } from "../ui/badge";
 import { AnimateIn } from "../ui/animate-in";
 const rewardSpec = [
   { label: "Reward token", value: "$ORAMA — uptime, bandwidth, compute" },
-  { label: "Privacy relay", value: "Orama Proxy on every node" },
-  { label: "Routing", value: "Onion-routed traffic for all requests" },
-  { label: "Payout", value: "Continuous, based on contribution metrics" },
+  { label: "Network privacy", value: "Orama Proxy — onion routing for traffic obfuscation" },
+  { label: "Transaction privacy", value: "PLONK zk-SNARKs — per-tx public/private toggle (core protocol)" },
+  { label: "Payout", value: "Continuous, based on Effective Power formula" },
 ];
 
 export function OpsAnyone() {
@@ -25,8 +25,11 @@ export function OpsAnyone() {
               <div className="flex flex-col gap-4">
                 <Badge variant="accent" className="w-fit">Privacy Layer</Badge>
                 <p className="text-muted leading-relaxed">
-                  Every Orama node runs the Orama Proxy privacy relay. As an operator,
-                  you earn $ORAMA rewards while providing onion-routed privacy for all network traffic.
+                  Every Orama node runs the Orama Proxy privacy relay for network-level traffic
+                  obfuscation via onion routing. This is the transport layer — it hides where traffic
+                  comes from. The core privacy feature is PLONK zk-SNARKs at the protocol level,
+                  which provides per-transaction public/private toggle (hiding sender, receiver, and
+                  amount). Private transactions cost 4x the public gas equivalent.
                 </p>
                 <SpecTable rows={rewardSpec} />
               </div>

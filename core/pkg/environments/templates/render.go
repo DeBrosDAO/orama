@@ -41,6 +41,11 @@ type NodeConfigData struct {
 	NodeKey      string // Path to X.509 private key for node-to-node communication
 	NodeCACert   string // Path to CA certificate (optional)
 	NodeNoVerify bool   // Skip certificate verification (for self-signed certs)
+
+	// Operator metadata — written to dns_nodes during registration
+	SSHUser        string // SSH user for remote management
+	Environment    string // Environment name (devnet, testnet, etc.)
+	OperatorWallet string // Operator wallet address
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering

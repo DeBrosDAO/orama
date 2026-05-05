@@ -47,8 +47,27 @@ type DatabaseClient interface {
 type PubSubClient interface {
 	Subscribe(ctx context.Context, topic string, handler MessageHandler) error
 	Publish(ctx context.Context, topic string, data []byte) error
+	// PublishBatch publishes multiple messages in parallel, one per topic.
+	// See pubsub.Manager.PublishBatch for semantics (fail-fast vs. best-effort).
+	PublishBatch(ctx context.Context, msgs []TopicMessage, opts PublishBatchOptions) error
+	// PublishSame sends the same payload to every topic in parallel.
+	PublishSame(ctx context.Context, topics []string, data []byte, opts PublishBatchOptions) error
 	Unsubscribe(ctx context.Context, topic string) error
 	ListTopics(ctx context.Context) ([]string, error)
+}
+
+// TopicMessage is one entry in a batch publish.
+// Mirrors pubsub.TopicMessage to avoid forcing client callers to import pkg/pubsub.
+type TopicMessage struct {
+	Topic string
+	Data  []byte
+}
+
+// PublishBatchOptions controls batch publish behavior.
+// Mirrors pubsub.PublishBatchOptions.
+type PublishBatchOptions struct {
+	BestEffort     bool
+	MaxConcurrency int
 }
 
 // NetworkInfo provides network status and peer information

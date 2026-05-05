@@ -181,6 +181,10 @@ func (m *mockHomeNodeDB) Tx(ctx context.Context, fn func(tx rqlite.Tx) error) er
 	return m.mockRQLiteClient.Tx(ctx, fn)
 }
 
+func (m *mockHomeNodeDB) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
+	return m.mockRQLiteClient.Batch(ctx, ops)
+}
+
 func (m *mockHomeNodeDB) addDeployment(nodeID, deploymentID, status string) {
 	m.deployments[nodeID] = append(m.deployments[nodeID], deploymentData{
 		id:     deploymentID,

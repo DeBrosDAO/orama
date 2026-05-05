@@ -74,9 +74,9 @@ function ContributorsHero() {
         `}</style>
 
         <p className="text-muted text-sm leading-relaxed max-w-lg">
-          Orama Network is open-source infrastructure built with Go and
-          TypeScript. Contribute to a distributed system that powers real
-          compute, storage, and networking across hundreds of nodes worldwide.
+          Orama Network is a standalone L1 blockchain built with Go and
+          TypeScript. Contribute to a distributed system powering real compute,
+          storage, WASM smart contracts, and AI agents — targeting 300 nodes for genesis.
         </p>
 
         <div className="flex flex-wrap items-center gap-3 justify-center pt-4">
@@ -109,7 +109,7 @@ function WhyContribute() {
     {
       icon: Rocket,
       title: "Shape the Future",
-      desc: "Your code runs on real infrastructure serving real users. This isn't a toy project — it's production distributed systems powering hundreds of nodes across three environments.",
+      desc: "Your code runs on real infrastructure serving real users. This is a standalone L1 blockchain — production distributed systems targeting 300 nodes for genesis across real hardware.",
     },
     {
       icon: GraduationCap,
@@ -119,7 +119,7 @@ function WhyContribute() {
     {
       icon: Award,
       title: "Earn Recognition",
-      desc: "Top contributors earn $ORAMA tokens and node licenses. Ship meaningful code, get recognized by the community, and earn a stake in the network you helped build.",
+      desc: "Top contributors earn $ORAMA tokens. Ship meaningful code, get recognized by the community, and earn a stake in the network you helped build. 100% mined — no pre-mine, no insider advantage.",
     },
   ];
 
@@ -191,12 +191,17 @@ function TechStack() {
     {
       icon: Cpu,
       name: "WebAssembly",
-      desc: "Sandboxed serverless function execution",
+      desc: "Pure WASM smart contracts — write in Rust, Go, TypeScript, C++",
     },
     {
       icon: Network,
       name: "Orama Proxy",
       desc: "Privacy relay layer running on every node",
+    },
+    {
+      icon: Globe,
+      name: "AI Marketplace",
+      desc: "Native protocol primitive for AI models and autonomous Angels",
     },
   ];
 

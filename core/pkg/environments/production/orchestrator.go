@@ -53,6 +53,11 @@ type ProductionSetup struct {
 	serviceController  *SystemdController
 	binaryInstaller    *BinaryInstaller
 	NodePeerID         string // Captured during Phase3 for later display
+
+	// Operator metadata (from --ssh-user, --environment, --operator-wallet flags)
+	SSHUser        string
+	Environment    string
+	OperatorWallet string
 }
 
 // ReadBranchPreference reads the stored branch preference from disk
@@ -598,6 +603,11 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	} else {
 		ps.logf("Phase 4: Generating configurations...")
 	}
+
+	// Propagate operator metadata to config generator
+	ps.configGenerator.SSHUser = ps.SSHUser
+	ps.configGenerator.Environment = ps.Environment
+	ps.configGenerator.OperatorWallet = ps.OperatorWallet
 
 	// Node config (unified architecture)
 	nodeConfig, err := ps.configGenerator.GenerateNodeConfig(peerAddresses, vpsIP, joinAddress, domain, baseDomain, enableHTTPS)

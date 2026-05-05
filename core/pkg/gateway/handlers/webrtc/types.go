@@ -17,8 +17,19 @@ type WebRTCHandlers struct {
 	turnDomain string // TURN server domain for building URIs
 	turnSecret string // HMAC-SHA1 shared secret for TURN credential generation
 
+	// stealthCDNDomain, when non-empty, causes CredentialsHandler to also
+	// advertise turns://<stealthCDNDomain>:443 — the stealth TURN URI served
+	// via the in-house SNI router. See pkg/sniproxy.
+	stealthCDNDomain string
+
 	// proxyWebSocket is injected from the gateway to reuse its WebSocket proxy logic
 	proxyWebSocket func(w http.ResponseWriter, r *http.Request, targetHost string) bool
+}
+
+// SetStealthCDNDomain enables the stealth TURN URI in CredentialsHandler.
+// Pass empty string to disable. Safe to call before serving begins.
+func (h *WebRTCHandlers) SetStealthCDNDomain(domain string) {
+	h.stealthCDNDomain = domain
 }
 
 // NewWebRTCHandlers creates a new WebRTCHandlers instance.

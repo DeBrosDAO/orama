@@ -31,6 +31,11 @@ type WalletAddressData struct {
 	Chain   string `json:"chain"`
 }
 
+// WalletSignData from POST /v1/wallet/sign.
+type WalletSignData struct {
+	Signature string `json:"signature"`
+}
+
 // AppPermission represents an approved app in the permission database.
 type AppPermission struct {
 	BinaryHash   string               `json:"binaryHash"`

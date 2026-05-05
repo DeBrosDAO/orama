@@ -119,8 +119,35 @@ func (g *Gateway) Routes() http.Handler {
 	if g.pubsubHandlers != nil {
 		mux.HandleFunc("/v1/pubsub/ws", g.pubsubHandlers.WebsocketHandler)
 		mux.HandleFunc("/v1/pubsub/publish", g.pubsubHandlers.PublishHandler)
+		mux.HandleFunc("/v1/pubsub/publish-batch", g.pubsubHandlers.PublishBatchHandler)
 		mux.HandleFunc("/v1/pubsub/topics", g.pubsubHandlers.TopicsHandler)
 		mux.HandleFunc("/v1/pubsub/presence", g.pubsubHandlers.PresenceHandler)
+	}
+
+	// push notifications
+	if g.pushHandlers != nil {
+		// GET + POST share the path; the handler dispatches by method.
+		mux.HandleFunc("/v1/push/devices", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				g.pushHandlers.ListDevicesHandler(w, r)
+			case http.MethodPost:
+				g.pushHandlers.RegisterDeviceHandler(w, r)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+		})
+		// DELETE /v1/push/devices/{id} — uses path-prefix routing because
+		// net/http mux doesn't extract path params; the handler parses {id}.
+		mux.HandleFunc("/v1/push/devices/", g.pushHandlers.DeleteDeviceHandler)
+		mux.HandleFunc("/v1/push/send", g.pushHandlers.SendHandler)
+	}
+
+	// operator node management (wallet JWT auth via middleware)
+	if g.operatorHandler != nil {
+		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
+		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
+		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
 	}
 
 	// vault proxy (public, rate-limited per identity within handler)

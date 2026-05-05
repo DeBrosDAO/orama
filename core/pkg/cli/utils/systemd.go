@@ -162,6 +162,7 @@ func GetProductionServices() []string {
 		"orama-olric",
 		"orama-ipfs-cluster",
 		"orama-ipfs",
+		"orama-vault",
 		"orama-anyone-client",
 		"orama-anyone-relay",
 	}

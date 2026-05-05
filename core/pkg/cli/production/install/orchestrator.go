@@ -68,6 +68,11 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 		setup.SetAnyoneClient(true)
 	}
 
+	// Set operator metadata (from orama node setup)
+	setup.SSHUser = flags.SSHUser
+	setup.Environment = flags.Environment
+	setup.OperatorWallet = flags.OperatorWallet
+
 	validator := NewValidator(flags, oramaDir)
 
 	return &Orchestrator{

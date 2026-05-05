@@ -44,21 +44,29 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 	// Determine region (defaulting to "local" for now, could be from cloud metadata in future)
 	region := "local"
 
+	// Read optional metadata from node config
+	sshUser := n.config.Node.SSHUser
+	environment := n.config.Node.Environment
+	operatorWallet := n.config.Node.OperatorWallet
+
 	// Insert or update node record
 	query := `
-		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, last_seen, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', datetime('now'), datetime('now'), datetime('now'))
+		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, last_seen, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			ip_address = excluded.ip_address,
 			internal_ip = excluded.internal_ip,
 			region = excluded.region,
 			status = 'active',
+			ssh_user = COALESCE(NULLIF(excluded.ssh_user, ''), dns_nodes.ssh_user),
+			environment = COALESCE(NULLIF(excluded.environment, ''), dns_nodes.environment),
+			operator_wallet = COALESCE(NULLIF(excluded.operator_wallet, ''), dns_nodes.operator_wallet),
 			last_seen = datetime('now'),
 			updated_at = datetime('now')
 	`
 
 	db := n.rqliteAdapter.GetSQLDB()
-	_, err = rqlite.SafeExecContext(db, ctx, query, nodeID, ipAddress, internalIP, region)
+	_, err = rqlite.SafeExecContext(db, ctx, query, nodeID, ipAddress, internalIP, region, sshUser, environment, operatorWallet)
 	if err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
 	}

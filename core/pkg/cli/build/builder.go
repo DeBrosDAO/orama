@@ -157,6 +157,7 @@ func (b *Builder) buildOramaBinaries() error {
 		{Name: "identity", Package: "./cmd/identity/"},
 		{Name: "sfu", Package: "./cmd/sfu/"},
 		{Name: "turn", Package: "./cmd/turn/"},
+		{Name: "orama-sni-router", Package: "./cmd/sni-router/"},
 	}
 
 	for _, bin := range binaries {
@@ -197,8 +198,8 @@ func (b *Builder) buildVaultGuardian() error {
 		return fmt.Errorf("zig not found in PATH — install from https://ziglang.org/download/")
 	}
 
-	// Vault source is sibling to orama project
-	vaultDir := filepath.Join(b.projectDir, "..", "orama-vault")
+	// Vault source is sibling to core/ within the orama monorepo
+	vaultDir := filepath.Join(b.projectDir, "..", "vault")
 	if _, err := os.Stat(filepath.Join(vaultDir, "build.zig")); err != nil {
 		return fmt.Errorf("vault source not found at %s — expected orama-vault as sibling directory: %w", vaultDir, err)
 	}

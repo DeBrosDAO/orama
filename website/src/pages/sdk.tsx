@@ -58,6 +58,34 @@ const url = await client.storage.getUrl('avatar.png')`,
   'resize-image', { width: 800 }
 )`,
   },
+  {
+    name: "ai",
+    label: "AI Marketplace",
+    code: `const response = await client.ai.call(
+  'model-name', { prompt: 'Hello' }
+)
+// Deploy an Angel (autonomous AI agent)
+await client.ai.deployAngel('my-agent', wasmBundle)`,
+  },
+  {
+    name: "bridge",
+    label: "BTC Bridge",
+    code: `// Deposit BTC to Orama
+const deposit = await client.bridge.deposit(
+  { amount: '0.01', from: 'btc' }
+)
+// Withdraw back to Bitcoin mainnet
+await client.bridge.withdraw({ amount: '0.005' })`,
+  },
+  {
+    name: "dex",
+    label: "Native DEX",
+    code: `await client.dex.placeOrder({
+  pair: 'ORAMA/BTC', side: 'buy',
+  amount: '100', price: '0.000001'
+})
+const book = await client.dex.getOrderbook('ORAMA/BTC')`,
+  },
 ];
 
 const quickstartLines = [

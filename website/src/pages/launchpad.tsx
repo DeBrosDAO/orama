@@ -8,7 +8,6 @@ import { DashedPanel } from "../components/ui/dashed-panel";
 import { AnimateIn } from "../components/ui/animate-in";
 import { CrosshairDivider } from "../components/ui/crosshair-divider";
 import { SILVER, SilverBadge, SilverButton, SilverMetric } from "../components/ui/silver-theme";
-import { Redacted } from "../components/ui/redacted";
 
 /* ── Types ── */
 interface LaunchToken {
@@ -93,13 +92,13 @@ function BondingBar() {
         />
       </div>
       <span className="text-[10px] font-mono text-zinc-500 w-8 text-right">
-        <Redacted />
+        —
       </span>
     </div>
   );
 }
 
-/* ── Token Card (pump.fun style) ── */
+/* ── Token Card ── */
 function TokenCard({ token }: { token: LaunchToken }) {
   return (
     <Link
@@ -108,7 +107,6 @@ function TokenCard({ token }: { token: LaunchToken }) {
       style={{ border: `1px dashed ${SILVER.border}` }}
     >
       <div className="flex flex-col gap-3">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg">{token.emoji}</span>
@@ -127,22 +125,19 @@ function TokenCard({ token }: { token: LaunchToken }) {
           )}
         </div>
 
-        {/* Price + Change */}
         <div className="flex items-baseline justify-between">
           <span className="font-mono text-lg font-semibold text-fg">
-            <Redacted />
+            —
           </span>
           <span className="text-sm font-mono font-semibold text-zinc-500">
-            <Redacted />
+            —
           </span>
         </div>
 
-        {/* Bonding curve */}
         {!token.graduated && <BondingBar />}
 
-        {/* Footer stats */}
         <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500">
-          <span>MCap <Redacted /></span>
+          <span>MCap —</span>
           <span className="flex items-center gap-1">
             <Users className="w-2.5 h-2.5" />
             {token.holders}
@@ -260,8 +255,8 @@ export default function Launchpad() {
               </span>
             </h1>
             <p className="text-muted text-lg leading-relaxed max-w-xl">
-              Create a token on Orama L1 in seconds. Bonding curve pricing,
-              automatic liquidity, instant DEX listing. No VCs, no gatekeepers.
+              Create a token on Orama L1 as a WASM smart contract. Bonding curve pricing,
+              automatic liquidity, trading against $ORAMA. No VCs, no gatekeepers.
             </p>
 
             {/* Live hero stats */}
@@ -272,13 +267,13 @@ export default function Launchpad() {
                 background: SILVER.bg,
               }}
             >
-              <SilverMetric label="Tokens Launched" value={<Redacted />} />
+              <SilverMetric label="Tokens Launched" value="—" />
               <div className="w-px h-10 bg-zinc-800 hidden sm:block" />
-              <SilverMetric label="Total Volume" value={<Redacted />} />
+              <SilverMetric label="Total Volume" value="—" />
               <div className="w-px h-10 bg-zinc-800 hidden sm:block" />
-              <SilverMetric label="Graduated" value={<Redacted />} />
+              <SilverMetric label="Graduated" value="—" />
               <div className="w-px h-10 bg-zinc-800 hidden sm:block" />
-              <SilverMetric label="Active Now" value={<Redacted />} />
+              <SilverMetric label="Active Now" value="—" />
             </div>
 
             <div className="flex flex-wrap gap-3 pt-2">
@@ -390,7 +385,7 @@ export default function Launchpad() {
           <div className="flex flex-col gap-8">
             <SectionHeader
               title="Launch Your Token"
-              subtitle={<>Deploy in seconds. Bonding curve pricing starts at <Redacted />. Graduates to DEX at <Redacted /> market cap.</>}
+              subtitle={<>Deploy a WASM smart contract in seconds. Trades against $ORAMA. Cost in rays.</>}
             />
 
             <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
@@ -426,7 +421,7 @@ export default function Launchpad() {
                       </div>
                       <div>
                         <label className="text-xs font-mono text-muted uppercase tracking-wider mb-2 block">
-                          Initial Buy
+                          Initial Buy ($ORAMA)
                         </label>
                         <input
                           type="text"
@@ -457,7 +452,7 @@ export default function Launchpad() {
                     </SilverButton>
 
                     <p className="text-xs text-muted text-center">
-                      Cost: <Redacted /> $ORAMA &middot; Requires wallet connection
+                      Cost: TBD &middot; Requires RootWallet connection
                     </p>
                   </div>
                 </DashedPanel>
@@ -474,32 +469,32 @@ export default function Launchpad() {
                       <div className="flex items-start gap-3">
                         <span className="font-mono text-xs text-zinc-500 shrink-0 w-5 h-5 flex items-center justify-center border border-dashed" style={{ borderColor: SILVER.dark }}>1</span>
                         <div>
-                          <span className="text-sm text-fg font-semibold block">Create</span>
-                          <span className="text-xs text-muted">Pick a name, ticker, and make an initial buy</span>
+                          <span className="text-sm text-fg font-semibold block">Create WASM Contract</span>
+                          <span className="text-xs text-muted">Pick a name, ticker, and make an initial buy in $ORAMA</span>
                         </div>
                       </div>
                       <div className="flex items-start gap-3">
                         <span className="font-mono text-xs text-zinc-500 shrink-0 w-5 h-5 flex items-center justify-center border border-dashed" style={{ borderColor: SILVER.dark }}>2</span>
                         <div>
-                          <span className="text-sm text-fg font-semibold block">Trade</span>
-                          <span className="text-xs text-muted">Anyone can buy/sell on the bonding curve immediately</span>
+                          <span className="text-sm text-fg font-semibold block">Trade Against $ORAMA</span>
+                          <span className="text-xs text-muted">Anyone can buy/sell on the bonding curve immediately, paying in $ORAMA</span>
                         </div>
                       </div>
                       <div className="flex items-start gap-3">
                         <span className="font-mono text-xs text-zinc-500 shrink-0 w-5 h-5 flex items-center justify-center border border-dashed" style={{ borderColor: SILVER.dark }}>3</span>
                         <div>
                           <span className="text-sm text-fg font-semibold block">Graduate</span>
-                          <span className="text-xs text-muted">At <Redacted /> market cap, liquidity auto-deposits to Orama DEX</span>
+                          <span className="text-xs text-muted">At graduation threshold, liquidity auto-deposits to permissionless WASM DEX</span>
                         </div>
                       </div>
                     </div>
 
                     <div className="border-t border-dashed pt-4 flex flex-col gap-2" style={{ borderColor: SILVER.border }}>
-                      <span className="text-xs font-mono text-zinc-500">BONDING CURVE</span>
+                      <span className="text-xs font-mono text-zinc-500">ASSET HIERARCHY</span>
                       <p className="text-xs text-muted leading-relaxed">
-                        Every token starts with a bonding curve. Price increases as
-                        more people buy. When market cap reaches <Redacted />, all liquidity
-                        is deposited into the Orama DEX and the token is freely tradable.
+                        Custom tokens trade against $ORAMA (not BTC directly).
+                        $ORAMA trades against BTC on the protocol-native order book.
+                        This creates a clear asset hierarchy: BTC &harr; $ORAMA &harr; Custom Tokens.
                       </p>
                     </div>
                   </div>
@@ -523,7 +518,7 @@ export default function Launchpad() {
                 Ready to launch?
               </h2>
               <p className="text-muted max-w-lg leading-relaxed">
-                The next 100x token is one click away.
+                Deploy your token as a WASM smart contract on Orama L1.
               </p>
               <Link to="/dashboard">
                 <SilverButton size="lg">Get Started</SilverButton>

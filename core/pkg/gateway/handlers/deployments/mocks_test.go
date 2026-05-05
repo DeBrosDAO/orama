@@ -162,6 +162,15 @@ func (m *mockRQLiteClient) Tx(ctx context.Context, fn func(tx rqlite.Tx) error) 
 	return nil
 }
 
+func (m *mockRQLiteClient) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
+	return &rqlite.BatchResult{Committed: true, Results: make([]rqlite.OpResult, len(ops))}, nil
+}
+
+func (m *mockRQLiteClient) BatchWithSeq(ctx context.Context, namespace string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error) {
+	res, err := m.Batch(ctx, ops)
+	return res, 1, err
+}
+
 // mockProcessManager implements a mock process manager for testing
 type mockProcessManager struct {
 	StartFunc   func(ctx context.Context, deployment *deployments.Deployment, workDir string) error

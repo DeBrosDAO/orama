@@ -72,6 +72,13 @@ func (m *recoveryMockDB) CreateQueryBuilder(_ string) *rqlite.QueryBuilder {
 	return nil
 }
 func (m *recoveryMockDB) Tx(_ context.Context, fn func(tx rqlite.Tx) error) error { return nil }
+func (m *recoveryMockDB) Batch(_ context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
+	return &rqlite.BatchResult{Committed: true, Results: make([]rqlite.OpResult, len(ops))}, nil
+}
+func (m *recoveryMockDB) BatchWithSeq(_ context.Context, _ string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error) {
+	res, _ := m.Batch(context.Background(), ops)
+	return res, 1, nil
+}
 
 var _ rqlite.Client = (*recoveryMockDB)(nil)
 

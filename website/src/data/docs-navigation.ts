@@ -131,6 +131,12 @@ export const OPERATOR_DOCS: DocLink[] = [
     description: "Install and configure a node",
   },
   {
+    title: "Node Management",
+    slug: "operator/node-management",
+    icon: LayoutDashboard,
+    description: "Unified commands for managing your nodes",
+  },
+  {
     title: "Monitoring",
     slug: "operator/monitoring",
     icon: Activity,

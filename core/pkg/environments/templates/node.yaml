@@ -5,6 +5,15 @@ node:
   data_dir: "{{.DataDir}}"
   max_connections: 50
   domain: "{{.Domain}}"
+{{- if .SSHUser}}
+  ssh_user: "{{.SSHUser}}"
+{{- end}}
+{{- if .Environment}}
+  environment: "{{.Environment}}"
+{{- end}}
+{{- if .OperatorWallet}}
+  operator_wallet: "{{.OperatorWallet}}"
+{{- end}}
 
 database:
   data_dir: "{{.DataDir}}/rqlite"

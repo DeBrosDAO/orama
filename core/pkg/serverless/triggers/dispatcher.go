@@ -6,14 +6,12 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/aggregator"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
 
 const (
-	// triggerCacheDMap is the Olric DMap name for caching trigger lookups.
-	triggerCacheDMap = "pubsub_triggers"
-
 	// maxTriggerDepth prevents infinite loops when triggered functions publish
 	// back to the same topic via the HTTP API.
 	maxTriggerDepth = 5
@@ -37,6 +35,7 @@ type PubSubDispatcher struct {
 	store       *PubSubTriggerStore
 	invoker     *serverless.Invoker
 	olricClient olriclib.Client // may be nil (cache disabled)
+	aggregator  *aggregator.Aggregator
 	logger      *zap.Logger
 }
 
@@ -51,8 +50,15 @@ func NewPubSubDispatcher(
 		store:       store,
 		invoker:     invoker,
 		olricClient: olricClient,
+		aggregator:  aggregator.New(logger, dispatchTimeout),
 		logger:      logger,
 	}
+}
+
+// Aggregator exposes the underlying aggregator so callers (gateway lifecycle)
+// can flush pending buffers on shutdown.
+func (d *PubSubDispatcher) Aggregator() *aggregator.Aggregator {
+	return d.aggregator
 }
 
 // Dispatch looks up all triggers registered for the given topic+namespace and
@@ -82,18 +88,13 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 		return
 	}
 
-	// Build the event payload once for all invocations
+	// Build the per-event payload once for non-aggregating dispatches.
 	event := PubSubEvent{
 		Topic:        topic,
 		Data:         json.RawMessage(data),
 		Namespace:    namespace,
 		TriggerDepth: depth + 1,
 		Timestamp:    time.Now().Unix(),
-	}
-	eventJSON, err := json.Marshal(event)
-	if err != nil {
-		d.logger.Error("Failed to marshal PubSub event", zap.Error(err))
-		return
 	}
 
 	d.logger.Debug("Dispatching PubSub triggers",
@@ -103,94 +104,81 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 		zap.Int("depth", depth),
 	)
 
+	var (
+		eventJSON []byte
+		marshalErr error
+	)
+
 	for _, match := range matches {
+		if match.AggregationWindowMs > 0 {
+			d.bufferEvent(match, event)
+			continue
+		}
+		// Lazily marshal — non-aggregating triggers need eventJSON.
+		if eventJSON == nil && marshalErr == nil {
+			eventJSON, marshalErr = json.Marshal(event)
+			if marshalErr != nil {
+				d.logger.Error("Failed to marshal PubSub event", zap.Error(marshalErr))
+				continue
+			}
+		}
+		if marshalErr != nil {
+			continue
+		}
 		go d.invokeFunction(match, eventJSON)
 	}
 }
 
-// InvalidateCache removes the cached trigger lookup for a namespace+topic.
-// Call this when triggers are added or removed.
-func (d *PubSubDispatcher) InvalidateCache(ctx context.Context, namespace, topic string) {
-	if d.olricClient == nil {
-		return
-	}
-
-	dm, err := d.olricClient.NewDMap(triggerCacheDMap)
-	if err != nil {
-		d.logger.Debug("Failed to get trigger cache DMap for invalidation", zap.Error(err))
-		return
-	}
-
-	key := cacheKey(namespace, topic)
-	if _, err := dm.Delete(ctx, key); err != nil {
-		d.logger.Debug("Failed to invalidate trigger cache", zap.String("key", key), zap.Error(err))
-	}
+// bufferEvent routes an event through the aggregator. The flush callback
+// invokes the function with the batched payload.
+func (d *PubSubDispatcher) bufferEvent(match TriggerMatch, event PubSubEvent) {
+	d.aggregator.Buffer(aggregator.BufferRequest{
+		Namespace:    match.Namespace,
+		FunctionID:   match.FunctionID,
+		TriggerID:    match.TriggerID,
+		WindowMs:     match.AggregationWindowMs,
+		MaxBatchSize: match.AggregationMaxBatchSize,
+		Event: aggregator.Event{
+			Topic:        event.Topic,
+			Data:         event.Data,
+			Namespace:    event.Namespace,
+			TriggerDepth: event.TriggerDepth,
+			Timestamp:    event.Timestamp,
+		},
+		FlushFn: func(ctx context.Context, payload []byte) {
+			req := &serverless.InvokeRequest{
+				Namespace:    match.Namespace,
+				FunctionName: match.FunctionName,
+				Input:        payload,
+				TriggerType:  serverless.TriggerTypePubSub,
+			}
+			if _, err := d.invoker.Invoke(ctx, req); err != nil {
+				d.logger.Warn("Aggregated PubSub invocation failed",
+					zap.String("function", match.FunctionName),
+					zap.String("trigger_id", match.TriggerID),
+					zap.Error(err),
+				)
+			}
+		},
+	})
 }
 
-// getMatches returns the trigger matches for a topic+namespace, using Olric cache when available.
+// InvalidateCache is now a no-op — the dispatcher no longer caches lookups.
+// Kept on the type so callers who used it still compile.
+func (d *PubSubDispatcher) InvalidateCache(ctx context.Context, namespace, topic string) {}
+
+// getMatches returns the trigger matches for a topic+namespace.
+//
+// Caching note: an earlier revision cached results in Olric keyed by
+// (namespace, topic). With wildcard triggers the cache becomes
+// inconsistent — a single trigger Add/Remove invalidates an unbounded
+// number of resolved-topic keys. The cache was removed; re-introducing
+// it requires a generation-counter (or TTL) scheme that handles
+// wildcard pattern changes.
 func (d *PubSubDispatcher) getMatches(ctx context.Context, namespace, topic string) ([]TriggerMatch, error) {
-	// Try cache first
-	if d.olricClient != nil {
-		if matches, ok := d.getCached(ctx, namespace, topic); ok {
-			return matches, nil
-		}
-	}
-
-	// Cache miss — query database
-	matches, err := d.store.GetByTopicAndNamespace(ctx, topic, namespace)
-	if err != nil {
-		return nil, err
-	}
-
-	// Populate cache
-	if d.olricClient != nil && matches != nil {
-		d.setCache(ctx, namespace, topic, matches)
-	}
-
-	return matches, nil
+	return d.store.GetByTopicAndNamespace(ctx, topic, namespace)
 }
 
-// getCached attempts to retrieve trigger matches from Olric cache.
-func (d *PubSubDispatcher) getCached(ctx context.Context, namespace, topic string) ([]TriggerMatch, bool) {
-	dm, err := d.olricClient.NewDMap(triggerCacheDMap)
-	if err != nil {
-		return nil, false
-	}
-
-	key := cacheKey(namespace, topic)
-	result, err := dm.Get(ctx, key)
-	if err != nil {
-		return nil, false
-	}
-
-	data, err := result.Byte()
-	if err != nil {
-		return nil, false
-	}
-
-	var matches []TriggerMatch
-	if err := json.Unmarshal(data, &matches); err != nil {
-		return nil, false
-	}
-
-	return matches, true
-}
-
-// setCache stores trigger matches in Olric cache.
-func (d *PubSubDispatcher) setCache(ctx context.Context, namespace, topic string, matches []TriggerMatch) {
-	dm, err := d.olricClient.NewDMap(triggerCacheDMap)
-	if err != nil {
-		return
-	}
-
-	data, err := json.Marshal(matches)
-	if err != nil {
-		return
-	}
-
-	key := cacheKey(namespace, topic)
-	_ = dm.Put(ctx, key, data)
-}
 
 // invokeFunction invokes a single function for a trigger match.
 func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte) {
@@ -224,7 +212,3 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte) 
 	)
 }
 
-// cacheKey returns the Olric cache key for a namespace+topic pair.
-func cacheKey(namespace, topic string) string {
-	return "triggers:" + namespace + ":" + topic
-}

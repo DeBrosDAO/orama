@@ -28,10 +28,12 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
+	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
 	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
+	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
@@ -42,6 +44,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
+	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 )
@@ -82,13 +86,17 @@ type Gateway struct {
 	mu               sync.RWMutex
 	presenceMu       sync.RWMutex
 	pubsubHandlers   *pubsubhandlers.PubSubHandlers
+	pushHandlers     *pushhandlers.Handlers
 
 	// Serverless function engine
-	serverlessEngine   *serverless.Engine
-	serverlessRegistry *serverless.Registry
-	serverlessInvoker  *serverless.Invoker
-	serverlessWSMgr    *serverless.WSManager
-	serverlessHandlers *serverlesshandlers.ServerlessHandlers
+	serverlessEngine     *serverless.Engine
+	serverlessRegistry   *serverless.Registry
+	serverlessInvoker    *serverless.Invoker
+	serverlessWSMgr      *serverless.WSManager
+	serverlessHandlers   *serverlesshandlers.ServerlessHandlers
+	pubsubDispatcher     *triggers.PubSubDispatcher
+	persistentWSManager  *persistent.Manager
+	cronScheduler        *triggers.CronScheduler
 
 	// Authentication service
 	authService  *auth.Service
@@ -168,7 +176,8 @@ type Gateway struct {
 	proxyTransport *http.Transport
 
 	// Vault proxy handlers
-	vaultHandlers *vaulthandlers.Handlers
+	vaultHandlers    *vaulthandlers.Handlers
+	operatorHandler  *operatorhandlers.Handler
 
 	// Namespace health state (local service probes + hourly reconciliation)
 	nsHealth *namespaceHealthState
@@ -340,9 +349,26 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	// Wire PubSub trigger dispatch if serverless is available
 	if deps.PubSubDispatcher != nil {
+		gw.pubsubDispatcher = deps.PubSubDispatcher
 		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
 			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
 		})
+	}
+	if deps.PersistentWSManager != nil {
+		gw.persistentWSManager = deps.PersistentWSManager
+	}
+	if deps.CronScheduler != nil {
+		gw.cronScheduler = deps.CronScheduler
+		// Background goroutine — Stop is called from gateway.Close.
+		gw.cronScheduler.Start(context.Background())
+	}
+
+	// Push notification handlers — disabled when no provider is configured.
+	// The handlers themselves return 503 if dispatcher/store is nil; we
+	// register them unconditionally so the routes always exist with a
+	// predictable shape.
+	if deps.PushDispatcher != nil {
+		gw.pushHandlers = pushhandlers.NewHandlers(deps.PushDispatcher, deps.PushDeviceStore, logger)
 	}
 
 	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
@@ -405,6 +431,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
+		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
 	}
 
 	// Initialize deployment system

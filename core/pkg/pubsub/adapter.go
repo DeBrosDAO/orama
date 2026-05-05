@@ -29,6 +29,18 @@ func (a *ClientAdapter) Publish(ctx context.Context, topic string, data []byte) 
 	return a.manager.Publish(ctx, topic, data)
 }
 
+// PublishBatch publishes multiple messages in parallel.
+// See Manager.PublishBatch for semantics.
+func (a *ClientAdapter) PublishBatch(ctx context.Context, msgs []TopicMessage, opts PublishBatchOptions) error {
+	return a.manager.PublishBatch(ctx, msgs, opts)
+}
+
+// PublishSame sends the same payload to every topic in parallel.
+// See Manager.PublishSame for semantics.
+func (a *ClientAdapter) PublishSame(ctx context.Context, topics []string, data []byte, opts PublishBatchOptions) error {
+	return a.manager.PublishSame(ctx, topics, data, opts)
+}
+
 // Unsubscribe unsubscribes from a topic
 func (a *ClientAdapter) Unsubscribe(ctx context.Context, topic string) error {
 	return a.manager.Unsubscribe(ctx, topic)
