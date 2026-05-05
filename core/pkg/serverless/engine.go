@@ -421,6 +421,8 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
+			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
+			NewFunctionBuilder().WithFunc(e.hWSBroadcast).Export("ws_broadcast").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -734,6 +736,52 @@ func (e *Engine) hWSPubSubUnbridge(ctx context.Context, mod api.Module,
 	if err := e.hostServices.WSPubSubUnbridge(ctx, string(cid), string(topic)); err != nil {
 		e.logger.Warn("ws_pubsub_unbridge failed",
 			zap.String("client_id", string(cid)),
+			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hWSSend is the WASM-callable wrapper for WSSend.
+// Inputs: clientID + raw frame bytes. clientID may be empty — in that case
+// the host falls back to the current invocation's WS client (if any).
+// Returns 1 on success, 0 on error.
+func (e *Engine) hWSSend(ctx context.Context, mod api.Module,
+	cidPtr, cidLen, dataPtr, dataLen uint32) uint32 {
+	cid, ok := e.executor.ReadFromGuest(mod, cidPtr, cidLen)
+	if !ok {
+		return 0
+	}
+	data, ok := e.executor.ReadFromGuest(mod, dataPtr, dataLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.WSSend(ctx, string(cid), data); err != nil {
+		e.logger.Warn("ws_send failed",
+			zap.String("client_id", string(cid)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hWSBroadcast is the WASM-callable wrapper for WSBroadcast.
+// Inputs: topic + raw frame bytes. Sends `data` to every WS client currently
+// subscribed to `topic` in the function's namespace. Returns 1 on success,
+// 0 on error.
+func (e *Engine) hWSBroadcast(ctx context.Context, mod api.Module,
+	topicPtr, topicLen, dataPtr, dataLen uint32) uint32 {
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	data, ok := e.executor.ReadFromGuest(mod, dataPtr, dataLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.WSBroadcast(ctx, string(topic), data); err != nil {
+		e.logger.Warn("ws_broadcast failed",
 			zap.String("topic", string(topic)),
 			zap.Error(err))
 		return 0
