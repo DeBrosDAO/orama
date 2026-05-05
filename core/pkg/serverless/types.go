@@ -421,6 +421,19 @@ type HostServices interface {
 	WSSend(ctx context.Context, clientID string, data []byte) error
 	WSBroadcast(ctx context.Context, topic string, data []byte) error
 
+	// FunctionInvoke synchronously invokes another function in the same
+	// namespace from inside a function (e.g. a persistent rpc-router
+	// dispatching client RPCs to per-op handlers). The caller's wallet,
+	// JWT claims, and WS client ID are inherited so the invoked function
+	// sees the same authenticated identity as the outer call.
+	//
+	// `name` is the target function name; `payload` is the raw input bytes
+	// to feed the function (typically JSON). Returns the function's output
+	// bytes on success. Errors (not found, unauthorized, runtime) are
+	// returned as Go errors and the caller should surface them as
+	// rpc_error to the client.
+	FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error)
+
 	// HTTP operations
 	HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 

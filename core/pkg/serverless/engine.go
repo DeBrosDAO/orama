@@ -423,6 +423,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
 			NewFunctionBuilder().WithFunc(e.hWSBroadcast).Export("ws_broadcast").
+			NewFunctionBuilder().WithFunc(e.hFunctionInvoke).Export("function_invoke").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -741,6 +742,39 @@ func (e *Engine) hWSPubSubUnbridge(ctx context.Context, mod api.Module,
 		return 0
 	}
 	return 1
+}
+
+// hFunctionInvoke is the WASM-callable wrapper for FunctionInvoke. Used by
+// the rpc-router persistent function (and any future dispatcher) to run
+// another function in the same namespace synchronously and forward its
+// output back to its caller.
+//
+// Inputs:
+//
+//	namePtr/nameLen       — UTF-8 target function name
+//	payloadPtr/payloadLen — raw input bytes for the target function
+//
+// Returns a packed uint64 (ptr<<32 | len) pointing to the target's output
+// bytes in guest memory, or 0 on error. The caller is expected to JSON-
+// decode the output (target functions ack with JSON envelopes).
+func (e *Engine) hFunctionInvoke(ctx context.Context, mod api.Module,
+	namePtr, nameLen, payloadPtr, payloadLen uint32) uint64 {
+	name, ok := e.executor.ReadFromGuest(mod, namePtr, nameLen)
+	if !ok {
+		return 0
+	}
+	payload, ok := e.executor.ReadFromGuest(mod, payloadPtr, payloadLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.FunctionInvoke(ctx, string(name), payload)
+	if err != nil {
+		e.logger.Warn("function_invoke failed",
+			zap.String("name", string(name)),
+			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
 }
 
 // hWSSend is the WASM-callable wrapper for WSSend.

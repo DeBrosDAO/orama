@@ -11,6 +11,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// FunctionInvoker is the minimal interface needed to invoke a function by
+// name. It exists so packages downstream of `serverless` (notably
+// `serverless/hostfunctions`) can hold a reference to the concrete
+// `*Invoker` without creating an import cycle.
+//
+// Implemented by `*Invoker`.
+type FunctionInvoker interface {
+	Invoke(ctx context.Context, req *InvokeRequest) (*InvokeResponse, error)
+}
+
 // Invoker handles function invocation with retry logic and DLQ support.
 // It wraps the Engine to provide higher-level invocation semantics.
 type Invoker struct {

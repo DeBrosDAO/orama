@@ -96,6 +96,7 @@ func newSecretsTestHandlers(sm serverless.SecretsManager) *ServerlessHandlers {
 		newMockRegistry(),
 		wsManager,
 		nil, // triggerStore
+		nil, // cronStore
 		nil, // dispatcher
 		nil, // persistentMgr
 		nil, // wsBridge

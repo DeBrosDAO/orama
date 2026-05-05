@@ -96,6 +96,7 @@ type Gateway struct {
 	serverlessHandlers   *serverlesshandlers.ServerlessHandlers
 	pubsubDispatcher     *triggers.PubSubDispatcher
 	persistentWSManager  *persistent.Manager
+	cronScheduler        *triggers.CronScheduler
 
 	// Authentication service
 	authService  *auth.Service
@@ -355,6 +356,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 	if deps.PersistentWSManager != nil {
 		gw.persistentWSManager = deps.PersistentWSManager
+	}
+	if deps.CronScheduler != nil {
+		gw.cronScheduler = deps.CronScheduler
+		// Background goroutine — Stop is called from gateway.Close.
+		gw.cronScheduler.Start(context.Background())
 	}
 
 	// Push notification handlers — disabled when no provider is configured.

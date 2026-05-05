@@ -29,6 +29,13 @@ func (g *Gateway) Close() {
 		}
 	}
 
+	// Stop the cron scheduler before tearing down the engine — pending
+	// invocations call back into the invoker which still needs the engine
+	// to be alive.
+	if g.cronScheduler != nil {
+		g.cronScheduler.Stop()
+	}
+
 	// Drain persistent WebSocket instances. Each instance gets a slice of
 	// the 30s budget; ws_close on each is best-effort.
 	if g.persistentWSManager != nil {

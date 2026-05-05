@@ -43,6 +43,12 @@ type HostFunctions struct {
 	// — bridging is a deliberate request whose absence should be visible.
 	wsBridge *wsbridge.Bridge
 
+	// invoker is set after construction (via SetInvoker) to break the
+	// engine ↔ host-functions circular dep. nil means FunctionInvoke
+	// returns ErrFunctionInvokeNotAvailable.
+	invoker     serverless.FunctionInvoker
+	invokerLock sync.RWMutex
+
 	// Current invocation context (set per-execution)
 	invCtx     *serverless.InvocationContext
 	invCtxLock sync.RWMutex

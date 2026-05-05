@@ -122,6 +122,10 @@ func (m *mockHostServices) WSBroadcast(ctx context.Context, topic string, data [
 	return nil
 }
 
+func (m *mockHostServices) FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error) {
+	return nil, nil
+}
+
 func (m *mockHostServices) HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }

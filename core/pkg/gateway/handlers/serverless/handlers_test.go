@@ -94,6 +94,7 @@ func newTestHandlers(reg serverless.FunctionRegistry) *ServerlessHandlers {
 		reg,
 		wsManager,
 		nil, // triggerStore
+		nil, // cronStore
 		nil, // dispatcher
 		nil, // persistentMgr
 		nil, // wsBridge
