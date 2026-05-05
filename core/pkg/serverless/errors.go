@@ -55,6 +55,11 @@ var (
 	// ErrWSNotAvailable is returned when WebSocket operations are used outside WS context.
 	ErrWSNotAvailable = errors.New("websocket operations not available in this context")
 
+	// ErrFunctionInvokeNotAvailable is returned when FunctionInvoke is called
+	// but no invoker has been wired into the host-services bag (e.g. unit
+	// tests, or before the gateway finishes bootstrap).
+	ErrFunctionInvokeNotAvailable = errors.New("function_invoke not available in this context")
+
 	// ErrWSClientNotFound is returned when a WebSocket client is not connected.
 	ErrWSClientNotFound = errors.New("websocket client not found")
 

@@ -20,6 +20,7 @@ type ServerlessHandlers struct {
 	registry       serverless.FunctionRegistry
 	wsManager      *serverless.WSManager
 	triggerStore   *triggers.PubSubTriggerStore
+	cronStore      *triggers.CronTriggerStore // optional; nil = cron triggers unavailable
 	dispatcher     *triggers.PubSubDispatcher
 	persistentMgr  *persistent.Manager // optional; when nil persistent WS rejects 503
 	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
@@ -39,6 +40,7 @@ func NewServerlessHandlers(
 	registry serverless.FunctionRegistry,
 	wsManager *serverless.WSManager,
 	triggerStore *triggers.PubSubTriggerStore,
+	cronStore *triggers.CronTriggerStore,
 	dispatcher *triggers.PubSubDispatcher,
 	persistentMgr *persistent.Manager,
 	wsBridge *wsbridge.Bridge,
@@ -51,6 +53,7 @@ func NewServerlessHandlers(
 		registry:       registry,
 		wsManager:      wsManager,
 		triggerStore:   triggerStore,
+		cronStore:      cronStore,
 		dispatcher:     dispatcher,
 		persistentMgr:  persistentMgr,
 		wsBridge:       wsBridge,

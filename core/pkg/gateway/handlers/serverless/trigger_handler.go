@@ -10,19 +10,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// addTriggerRequest is the request body for adding a PubSub trigger.
+// addTriggerRequest is the request body for adding a PubSub or Cron trigger.
+// Exactly one of `topic` or `cron_expression` must be set.
 type addTriggerRequest struct {
-	Topic string `json:"topic"`
+	Topic          string `json:"topic"`
+	CronExpression string `json:"cron_expression"`
 }
 
 // HandleAddTrigger handles POST /v1/functions/{name}/triggers
-// Adds a PubSub trigger that invokes this function when a message is published to the topic.
+// Branches between PubSub (topic) and Cron (cron_expression) based on the
+// request body. Both stores must be wired for their respective branches.
 func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Request, functionName string) {
-	if h.triggerStore == nil {
-		writeError(w, http.StatusNotImplemented, "PubSub triggers not available")
-		return
-	}
-
 	namespace := h.getNamespaceFromRequest(r)
 	if namespace == "" {
 		writeError(w, http.StatusBadRequest, "namespace required")
@@ -35,15 +33,18 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if req.Topic == "" {
-		writeError(w, http.StatusBadRequest, "topic required")
+	if req.Topic == "" && req.CronExpression == "" {
+		writeError(w, http.StatusBadRequest, "topic or cron_expression required")
+		return
+	}
+	if req.Topic != "" && req.CronExpression != "" {
+		writeError(w, http.StatusBadRequest, "topic and cron_expression are mutually exclusive")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Look up function to get its ID
 	fn, err := h.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {
 		if serverless.IsNotFound(err) {
@@ -54,6 +55,38 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if req.CronExpression != "" {
+		if h.cronStore == nil {
+			writeError(w, http.StatusNotImplemented, "Cron triggers not available")
+			return
+		}
+		triggerID, err := h.cronStore.Add(ctx, fn.ID, req.CronExpression)
+		if err != nil {
+			h.logger.Error("Failed to add Cron trigger",
+				zap.String("function", functionName),
+				zap.String("cron_expression", req.CronExpression),
+				zap.Error(err),
+			)
+			writeError(w, http.StatusBadRequest, "Failed to add trigger: "+err.Error())
+			return
+		}
+		h.logger.Info("Cron trigger added via API",
+			zap.String("function", functionName),
+			zap.String("cron_expression", req.CronExpression),
+			zap.String("trigger_id", triggerID),
+		)
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"trigger_id":      triggerID,
+			"function":        functionName,
+			"cron_expression": req.CronExpression,
+		})
+		return
+	}
+
+	if h.triggerStore == nil {
+		writeError(w, http.StatusNotImplemented, "PubSub triggers not available")
+		return
+	}
 	triggerID, err := h.triggerStore.Add(ctx, fn.ID, req.Topic)
 	if err != nil {
 		h.logger.Error("Failed to add PubSub trigger",
@@ -64,18 +97,14 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "Failed to add trigger: "+err.Error())
 		return
 	}
-
-	// Invalidate cache for this topic
 	if h.dispatcher != nil {
 		h.dispatcher.InvalidateCache(ctx, namespace, req.Topic)
 	}
-
 	h.logger.Info("PubSub trigger added via API",
 		zap.String("function", functionName),
 		zap.String("topic", req.Topic),
 		zap.String("trigger_id", triggerID),
 	)
-
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"trigger_id": triggerID,
 		"function":   functionName,
@@ -84,10 +113,12 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 }
 
 // HandleListTriggers handles GET /v1/functions/{name}/triggers
-// Lists all PubSub triggers for a function.
+// Returns the merged set of PubSub and Cron triggers for a function.
+// Each row carries enough metadata for the CLI's `triggers list` to render
+// it; the kind is implied by which fields are populated (Topic vs CronExpression).
 func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.Request, functionName string) {
-	if h.triggerStore == nil {
-		writeError(w, http.StatusNotImplemented, "PubSub triggers not available")
+	if h.triggerStore == nil && h.cronStore == nil {
+		writeError(w, http.StatusNotImplemented, "Triggers not available")
 		return
 	}
 
@@ -100,7 +131,6 @@ func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.R
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Look up function to get its ID
 	fn, err := h.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {
 		if serverless.IsNotFound(err) {
@@ -111,23 +141,53 @@ func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	triggers, err := h.triggerStore.ListByFunction(ctx, fn.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to list triggers")
-		return
+	merged := []map[string]interface{}{}
+	if h.triggerStore != nil {
+		pubsubTriggers, err := h.triggerStore.ListByFunction(ctx, fn.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to list pubsub triggers")
+			return
+		}
+		for _, t := range pubsubTriggers {
+			merged = append(merged, map[string]interface{}{
+				"id":      t.ID,
+				"kind":    "pubsub",
+				"topic":   t.Topic,
+				"enabled": t.Enabled,
+			})
+		}
+	}
+	if h.cronStore != nil {
+		cronTriggers, err := h.cronStore.ListByFunction(ctx, fn.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to list cron triggers")
+			return
+		}
+		for _, t := range cronTriggers {
+			merged = append(merged, map[string]interface{}{
+				"id":              t.ID,
+				"kind":            "cron",
+				"cron_expression": t.CronExpression,
+				"next_run_at":     t.NextRunAt,
+				"last_run_at":     t.LastRunAt,
+				"enabled":         t.Enabled,
+			})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"triggers": triggers,
-		"count":    len(triggers),
+		"triggers": merged,
+		"count":    len(merged),
 	})
 }
 
 // HandleDeleteTrigger handles DELETE /v1/functions/{name}/triggers/{triggerID}
-// Removes a PubSub trigger.
+// Removes either a PubSub or Cron trigger. Tries PubSub first (the more
+// common case) and falls back to Cron — trigger IDs are UUIDs and can't
+// collide between stores, so order is just an optimisation.
 func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.Request, functionName, triggerID string) {
-	if h.triggerStore == nil {
-		writeError(w, http.StatusNotImplemented, "PubSub triggers not available")
+	if h.triggerStore == nil && h.cronStore == nil {
+		writeError(w, http.StatusNotImplemented, "Triggers not available")
 		return
 	}
 
@@ -140,7 +200,6 @@ func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Look up the trigger's topic before deleting (for cache invalidation)
 	fn, err := h.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {
 		if serverless.IsNotFound(err) {
@@ -151,38 +210,47 @@ func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Get current triggers to find the topic for cache invalidation
-	triggers, err := h.triggerStore.ListByFunction(ctx, fn.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to look up triggers")
-		return
-	}
-
-	// Find the topic for the trigger being deleted
+	// Walk the PubSub list first to capture the topic for cache invalidation.
 	var triggerTopic string
-	for _, t := range triggers {
-		if t.ID == triggerID {
-			triggerTopic = t.Topic
-			break
+	if h.triggerStore != nil {
+		triggers, listErr := h.triggerStore.ListByFunction(ctx, fn.ID)
+		if listErr == nil {
+			for _, t := range triggers {
+				if t.ID == triggerID {
+					triggerTopic = t.Topic
+					break
+				}
+			}
 		}
 	}
 
-	if err := h.triggerStore.Remove(ctx, triggerID); err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to remove trigger: "+err.Error())
+	if triggerTopic != "" {
+		if err := h.triggerStore.Remove(ctx, triggerID); err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to remove trigger: "+err.Error())
+			return
+		}
+		if h.dispatcher != nil {
+			h.dispatcher.InvalidateCache(ctx, namespace, triggerTopic)
+		}
+		h.logger.Info("PubSub trigger removed via API",
+			zap.String("function", functionName),
+			zap.String("trigger_id", triggerID),
+		)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"message": "Trigger removed"})
 		return
 	}
 
-	// Invalidate cache for the topic
-	if h.dispatcher != nil && triggerTopic != "" {
-		h.dispatcher.InvalidateCache(ctx, namespace, triggerTopic)
+	// Not a PubSub trigger — try cron.
+	if h.cronStore != nil {
+		if err := h.cronStore.Remove(ctx, triggerID); err == nil {
+			h.logger.Info("Cron trigger removed via API",
+				zap.String("function", functionName),
+				zap.String("trigger_id", triggerID),
+			)
+			writeJSON(w, http.StatusOK, map[string]interface{}{"message": "Trigger removed"})
+			return
+		}
 	}
 
-	h.logger.Info("PubSub trigger removed via API",
-		zap.String("function", functionName),
-		zap.String("trigger_id", triggerID),
-	)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Trigger removed",
-	})
+	writeError(w, http.StatusNotFound, "Trigger not found")
 }

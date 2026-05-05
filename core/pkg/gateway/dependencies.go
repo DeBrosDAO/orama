@@ -68,6 +68,12 @@ type Dependencies struct {
 	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
 	PubSubDispatcher *triggers.PubSubDispatcher
 
+	// Cron trigger store + scheduler. The scheduler is started by gateway
+	// lifecycle code after Dependencies is constructed; Stop is called
+	// during shutdown.
+	CronTriggerStore *triggers.CronTriggerStore
+	CronScheduler    *triggers.CronScheduler
+
 	// PersistentWSManager tracks long-lived WS function instances.
 	// Used by the WS handler when fn.WSPersistent=true; nil = disabled.
 	PersistentWSManager *persistent.Manager
@@ -496,6 +502,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// Create invoker
 	deps.ServerlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
 
+	// Wire the invoker back into hostFuncs so the function_invoke host
+	// function can dispatch sub-invocations from inside a WASM function
+	// (e.g. rpc-router routing client RPCs to per-op handlers).
+	hostFuncs.SetInvoker(deps.ServerlessInvoker)
+
 	// Create PubSub trigger store and dispatcher
 	triggerStore := triggers.NewPubSubTriggerStore(deps.ORMClient, logger.Logger)
 
@@ -510,6 +521,19 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
+	// Cron trigger store + scheduler. The scheduler polls
+	// function_cron_triggers and invokes due rows via the same
+	// ServerlessInvoker used for PubSub triggers; the ↓ Start call wires
+	// the goroutine up — Stop is invoked from gateway lifecycle shutdown.
+	cronStore := triggers.NewCronTriggerStore(deps.ORMClient, logger.Logger)
+	deps.CronTriggerStore = cronStore
+	deps.CronScheduler = triggers.NewCronScheduler(
+		cronStore,
+		deps.ServerlessInvoker,
+		logger.Logger,
+		30*time.Second,
+	)
+
 	// Persistent WS instance manager. Cap from gateway config (TODO: surface
 	// the knob); 5000 is a sensible default per plan 06.
 	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
@@ -521,6 +545,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		registry,
 		deps.ServerlessWSMgr,
 		triggerStore,
+		cronStore,
 		deps.PubSubDispatcher,
 		deps.PersistentWSManager,
 		deps.WSBridge,
