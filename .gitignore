@@ -25,6 +25,7 @@ Thumbs.db
 
 # === Core (Go) ===
 core/phantom-auth/
+bin/
 core/bin/
 core/bin-linux/
 core/dist/
