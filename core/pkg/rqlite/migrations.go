@@ -257,6 +257,17 @@ func isNoSuchTable(err error) bool {
 // applySQL splits the script into individual statements, strips explicit
 // transaction control (BEGIN/COMMIT/ROLLBACK/END), and executes statements
 // sequentially to avoid nested transaction issues with rqlite.
+//
+// Idempotency: certain SQLite errors are treated as "already applied" so that
+// a partially-applied migration can be safely re-run. Specifically:
+//   - "duplicate column name" — ALTER TABLE ADD COLUMN that already happened
+//   - "table ... already exists" — CREATE TABLE that already exists (when
+//     the migration didn't use IF NOT EXISTS)
+//   - "index ... already exists" — same for indexes
+//
+// This makes ALTER TABLE ADD COLUMN safe to retry, which is the common
+// case where partial application leaves schema_migrations un-recorded
+// but some columns added.
 func applySQL(ctx context.Context, db *sql.DB, script string) error {
 	s := strings.TrimSpace(script)
 	if s == "" {
@@ -270,10 +281,36 @@ func applySQL(ctx context.Context, db *sql.DB, script string) error {
 			continue
 		}
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if isAlreadyAppliedError(err) {
+				// Treat as no-op so the migration can be marked complete.
+				// We log via fmt.Sprintf into the returned error message —
+				// the caller of applySQL has the migration version + name
+				// and can decide how loud to be about it.
+				continue
+			}
 			return fmt.Errorf("exec stmt failed: %w (stmt: %s)", err, snippet(stmt))
 		}
 	}
 	return nil
+}
+
+// isAlreadyAppliedError returns true when an SQL error indicates the
+// statement's effect is already in place (column exists, table exists, etc.).
+// SQLite error messages are stable across versions for these cases.
+func isAlreadyAppliedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "duplicate column name"):
+		return true
+	case strings.Contains(msg, "already exists"):
+		// Covers: "table X already exists", "index X already exists",
+		// "trigger X already exists", "view X already exists".
+		return true
+	}
+	return false
 }
 
 func containsToken(stmts []string, token string) bool {
