@@ -397,9 +397,23 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 }
 
 // registerHostModule registers the Orama host functions with the wazero runtime.
+//
+// We expose the SAME export set under three module names:
+//
+//   - "env"    — canonical. Matches the WASI / TinyGo convention. The
+//                official SDK examples and docs use this name.
+//   - "host"   — long-standing alias kept for backward compatibility.
+//   - "orama"  — alias added 2026-05-06 after multiple apps intuited the
+//                brand name as the import target and hit cryptic
+//                "module[orama] not instantiated" errors. Cheap insurance:
+//                a few KB of runtime metadata per alias, zero behavioral
+//                cost. Apps SHOULD prefer `env` going forward; `orama` is
+//                supported indefinitely to avoid breaking deployed code.
+//
+// All three names resolve to identical function tables — a WASM module
+// can mix imports across the three with no consequence.
 func (e *Engine) registerHostModule(ctx context.Context) error {
-	// Register under both "env" and "host" to support different import styles
-	for _, moduleName := range []string{"env", "host"} {
+	for _, moduleName := range []string{"env", "host", "orama"} {
 		_, err := e.runtime.NewHostModuleBuilder(moduleName).
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
 			NewFunctionBuilder().WithFunc(e.hGetWSClientID).Export("get_ws_client_id").
