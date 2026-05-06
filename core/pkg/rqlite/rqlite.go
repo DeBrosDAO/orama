@@ -2,6 +2,7 @@ package rqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,13 +85,26 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Apply embedded migrations - these are compiled into the binary
+	// Apply embedded migrations - these are compiled into the binary.
+	// We tolerate apply errors here (joining an existing cluster, transient
+	// leader election, etc.) — the gateway-process-side check is the
+	// authoritative gate for "is schema usable". See gateway.dependencies.
 	if err := r.ApplyEmbeddedMigrations(ctx, migrations.FS); err != nil {
 		r.logger.Error("Failed to apply embedded migrations", zap.Error(err))
-		// Don't fail startup - migrations may have already been applied by another node
-		// or we may be joining an existing cluster
 	} else {
 		r.logger.Info("Database migrations applied successfully")
+	}
+
+	// Schema-drift visibility: even when apply returned nil, log if the
+	// schema isn't at the binary's required version. Helps operators spot
+	// lag in the rolling-upgrade window before the gateway flips fatal.
+	if db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort)); err == nil {
+		defer db.Close()
+		if assertErr := migrations.AssertSchema(ctx, db); assertErr != nil {
+			r.logger.Warn("Schema below required version after apply",
+				zap.Int("required", migrations.RequiredVersion()),
+				zap.Error(assertErr))
+		}
 	}
 
 	return nil

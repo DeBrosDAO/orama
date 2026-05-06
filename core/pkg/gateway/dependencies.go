@@ -206,14 +206,32 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Apply embedded migrations to ensure schema is up-to-date.
 	// This is critical for namespace gateways whose RQLite instances
 	// don't get migrations from the main cluster RQLiteManager.
+	//
+	// Failures here are FATAL: a gateway that can't bring its schema up
+	// to the version its binary expects will silently corrupt deploys
+	// later (e.g. INSERTing into missing columns and surfacing as a
+	// cryptic SQL error to end users). Better to refuse to start with
+	// a clear actionable error.
 	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer migCancel()
 	if err := rqlite.ApplyEmbeddedMigrations(migCtx, db, migrations.FS, logger.Logger); err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "Failed to apply embedded migrations to gateway RQLite",
-			zap.Error(err))
-	} else {
-		logger.ComponentInfo(logging.ComponentGeneral, "Embedded migrations applied to gateway RQLite")
+		return fmt.Errorf("apply embedded migrations failed: %w "+
+			"(hint: this gateway can't safely run without its required schema; "+
+			"check the underlying RQLite cluster health and re-run startup)", err)
 	}
+	logger.ComponentInfo(logging.ComponentGeneral, "Embedded migrations applied to gateway RQLite")
+
+	// Schema-version contract: even if the apply call returned nil, verify
+	// that the highest migration the binary embeds is recorded as applied.
+	// Catches:
+	//   - silent partial-apply states where the marker row was never written
+	//   - clusters where the binary was upgraded but RQLite has stale schema
+	//   - operator manually deleted rows from schema_migrations
+	if err := migrations.AssertSchema(migCtx, db); err != nil {
+		return fmt.Errorf("schema contract violation: %w", err)
+	}
+	logger.ComponentInfo(logging.ComponentGeneral, "Schema contract satisfied",
+		zap.Int("required_version", migrations.RequiredVersion()))
 
 	return nil
 }
