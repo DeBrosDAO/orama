@@ -84,8 +84,34 @@ type FunctionRegistry interface {
 	// GetWASMBytes retrieves the compiled WASM bytecode for a function.
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
 
-	// GetLogs retrieves logs for a function.
+	// GetLogs returns WASM-emitted log entries (function_logs rows). Often
+	// empty because most functions don't call log_info / log_error. Use
+	// GetInvocations for the always-populated invocation-history view.
 	GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error)
+
+	// GetInvocations returns invocation history for a function in reverse
+	// chronological order, with any associated WASM log entries nested
+	// per record. Always populated when the function has been invoked.
+	GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error)
+}
+
+// Invocation is the record of one function invocation as seen by
+// `orama function logs`. Mirrors registry.Invocation; defined here at the
+// public package boundary so callers don't need to import the inner package.
+type Invocation struct {
+	ID           string     `json:"id"`
+	RequestID    string     `json:"request_id"`
+	TriggerType  string     `json:"trigger_type"`
+	CallerWallet string     `json:"caller_wallet,omitempty"`
+	InputSize    int        `json:"input_size"`
+	OutputSize   int        `json:"output_size"`
+	StartedAt    time.Time  `json:"started_at"`
+	CompletedAt  time.Time  `json:"completed_at"`
+	DurationMS   int64      `json:"duration_ms"`
+	Status       string     `json:"status"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	MemoryUsedMB float64    `json:"memory_used_mb,omitempty"`
+	WASMLogs     []LogEntry `json:"wasm_logs,omitempty"`
 }
 
 // FunctionExecutor handles the actual execution of WASM functions.
@@ -256,6 +282,14 @@ type InvocationContext struct {
 	// the standard sub/namespace fields). Read via host fn `get_caller_claim`.
 	// Populated by auth handlers from JWTClaims.Custom; empty for non-JWT auth.
 	CallerClaims map[string]string `json:"caller_claims,omitempty"`
+
+	// CallerJWTSubject is the `sub` claim of the Bearer JWT, if any.
+	// EXPLICITLY captured from the JWT independent of the API-key-vs-JWT
+	// wallet-resolution heuristic — so functions that must bind on the
+	// JWT-signed identity (signup flows) can do so reliably even when the
+	// caller also presents an API key. Empty string when the request was
+	// not JWT-authenticated. Bug #215.
+	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
 }
 
 // InvocationResult represents the result of a function invocation.
@@ -356,6 +390,27 @@ type HostServices interface {
 	DBQuery(ctx context.Context, query string, args []interface{}) ([]byte, error)
 	DBExecute(ctx context.Context, query string, args []interface{}) (int64, error)
 
+	// DBExecuteV2 is the typed equivalent of DBExecute that returns BOTH the
+	// rows-affected count AND a JSON envelope. The legacy DBExecute returns
+	// only uint32(rows) — collapsing real errors into "0 rows affected"
+	// (bug #218). New code should call DBExecuteV2 to detect real failures.
+	//
+	// Output JSON shape:
+	//   {"rows_affected": 1, "last_insert_id": 42, "error": ""}     // success
+	//   {"rows_affected": 0, "last_insert_id": 0,  "error": "..."}  // failure
+	//
+	// Returns a Go error only on host-side validation failures (no DB,
+	// bad JSON args). SQL execution errors are encoded in the JSON.
+	DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error)
+
+	// DBQueryV2 is the typed equivalent of DBQuery — returns a JSON envelope
+	// distinguishing "empty result" from "query failed".
+	//
+	// Output JSON shape:
+	//   {"rows": [...], "error": ""}     // success (rows may be [])
+	//   {"rows": [],     "error": "..."}  // failure
+	DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error)
+
 	// Cache operations
 	CacheGet(ctx context.Context, key string) ([]byte, error)
 	CacheSet(ctx context.Context, key string, value []byte, ttlSeconds int64) error
@@ -448,6 +503,12 @@ type HostServices interface {
 	// GetCallerClaim returns a custom JWT claim's value, or empty if missing
 	// or the request was not JWT-authenticated.
 	GetCallerClaim(ctx context.Context, name string) string
+	// GetCallerJWTSubject returns the JWT `sub` claim independent of the
+	// API-key-vs-JWT wallet-resolution heuristic. Empty when the request
+	// was not JWT-authenticated. Use this when a function must bind on
+	// the JWT-signed identity (e.g. signup-time wallet ownership checks)
+	// and the caller may ALSO present an API key. Bug #215.
+	GetCallerJWTSubject(ctx context.Context) string
 
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)

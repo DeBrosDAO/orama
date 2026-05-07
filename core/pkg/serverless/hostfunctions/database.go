@@ -31,6 +31,11 @@ func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interf
 }
 
 // DBExecute executes an INSERT/UPDATE/DELETE query and returns affected rows.
+//
+// IMPORTANT: this returns 0 for BOTH "0 rows affected" AND "SQL error"
+// — callers can't distinguish. That ambiguity caused bug #218 (AnChat's
+// migrate function silently dropped statements). For new code, prefer
+// DBExecuteV2 which returns a typed envelope.
 func (h *HostFunctions) DBExecute(ctx context.Context, query string, args []interface{}) (int64, error) {
 	if h.db == nil {
 		return 0, &serverless.HostFunctionError{Function: "db_execute", Cause: serverless.ErrDatabaseUnavailable}
@@ -43,6 +48,77 @@ func (h *HostFunctions) DBExecute(ctx context.Context, query string, args []inte
 
 	affected, _ := result.RowsAffected()
 	return affected, nil
+}
+
+// dbExecuteV2Result is the JSON wire shape returned by DBExecuteV2.
+type dbExecuteV2Result struct {
+	RowsAffected int64  `json:"rows_affected"`
+	LastInsertID int64  `json:"last_insert_id,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// DBExecuteV2 is the typed equivalent of DBExecute. Returns the same shape
+// regardless of success/failure so callers can distinguish "0 rows affected"
+// from "SQL error" — fixing the contract gap that caused bug #218.
+//
+// Returns a Go error only for host-side setup failures (no DB). SQL errors
+// are encoded in the JSON envelope's "error" field.
+func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	if h.db == nil {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_execute_v2",
+			Cause:    serverless.ErrDatabaseUnavailable,
+		}
+	}
+
+	out := dbExecuteV2Result{}
+	result, err := h.db.Exec(ctx, query, args...)
+	if err != nil {
+		out.Error = err.Error()
+		buf, mErr := json.Marshal(out)
+		if mErr != nil {
+			return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: mErr}
+		}
+		return buf, nil
+	}
+	if result != nil {
+		out.RowsAffected, _ = result.RowsAffected()
+		out.LastInsertID, _ = result.LastInsertId()
+	}
+	buf, mErr := json.Marshal(out)
+	if mErr != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: mErr}
+	}
+	return buf, nil
+}
+
+// dbQueryV2Result is the JSON wire shape returned by DBQueryV2.
+type dbQueryV2Result struct {
+	Rows  []map[string]interface{} `json:"rows"`
+	Error string                   `json:"error,omitempty"`
+}
+
+// DBQueryV2 is the typed equivalent of DBQuery. Distinguishes "empty
+// result set" from "query failed" via the "error" field.
+func (h *HostFunctions) DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	if h.db == nil {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_v2",
+			Cause:    serverless.ErrDatabaseUnavailable,
+		}
+	}
+
+	out := dbQueryV2Result{Rows: []map[string]interface{}{}}
+	if err := h.db.Query(ctx, &out.Rows, query, args...); err != nil {
+		out.Error = err.Error()
+		// Reset rows to non-nil empty on error so callers get a stable shape.
+		out.Rows = []map[string]interface{}{}
+	}
+	buf, mErr := json.Marshal(out)
+	if mErr != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_v2", Cause: mErr}
+	}
+	return buf, nil
 }
 
 // dbTransactionRequest is the WASM-side shape for db_transaction input.

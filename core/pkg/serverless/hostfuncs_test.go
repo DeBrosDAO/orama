@@ -56,6 +56,14 @@ func (m *mockHostServices) DBExecute(ctx context.Context, query string, args []i
 	return 0, nil
 }
 
+func (m *mockHostServices) DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	return []byte(`{"rows_affected":0}`), nil
+}
+
+func (m *mockHostServices) DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	return []byte(`{"rows":[]}`), nil
+}
+
 func (m *mockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }
@@ -151,6 +159,10 @@ func (m *mockHostServices) GetWSClientID(ctx context.Context) string {
 }
 
 func (m *mockHostServices) GetCallerClaim(ctx context.Context, name string) string {
+	return ""
+}
+
+func (m *mockHostServices) GetCallerJWTSubject(ctx context.Context) string {
 	return ""
 }
 

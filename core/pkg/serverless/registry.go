@@ -426,6 +426,104 @@ func (r *Registry) GetLogs(ctx context.Context, namespace, name string, limit in
 	return logs, nil
 }
 
+// GetInvocations returns invocation history for a function in reverse
+// chronological order, with any associated WASM log entries nested per
+// record. This is the right answer to "what happened when this function
+// was invoked" — `orama function logs <name>` consumes this view.
+//
+// Always populated when the function has been invoked at least once.
+// Two queries (invocations + nested WASM logs) batched into one map.
+func (r *Registry) GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	invQuery := `
+		SELECT i.id, i.request_id, i.trigger_type, i.caller_wallet,
+			i.input_size, i.output_size, i.started_at, i.completed_at,
+			i.duration_ms, i.status, i.error_message, i.memory_used_mb
+		FROM function_invocations i
+		JOIN functions f ON i.function_id = f.id
+		WHERE f.namespace = ? AND f.name = ?
+		ORDER BY i.started_at DESC
+		LIMIT ?
+	`
+	var rows []struct {
+		ID           string    `db:"id"`
+		RequestID    string    `db:"request_id"`
+		TriggerType  string    `db:"trigger_type"`
+		CallerWallet string    `db:"caller_wallet"`
+		InputSize    int       `db:"input_size"`
+		OutputSize   int       `db:"output_size"`
+		StartedAt    time.Time `db:"started_at"`
+		CompletedAt  time.Time `db:"completed_at"`
+		DurationMS   int64     `db:"duration_ms"`
+		Status       string    `db:"status"`
+		ErrorMessage string    `db:"error_message"`
+		MemoryUsedMB float64   `db:"memory_used_mb"`
+	}
+	if err := r.db.Query(ctx, &rows, invQuery, namespace, name, limit); err != nil {
+		return nil, fmt.Errorf("failed to query invocations: %w", err)
+	}
+	if len(rows) == 0 {
+		return []Invocation{}, nil
+	}
+
+	// Batched fetch of nested WASM logs.
+	invIDs := make([]interface{}, len(rows))
+	for i, r := range rows {
+		invIDs[i] = r.ID
+	}
+	placeholders := strings.Repeat("?,", len(invIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	logsQuery := `
+		SELECT invocation_id, level, message, timestamp
+		FROM function_logs
+		WHERE invocation_id IN (` + placeholders + `)
+		ORDER BY timestamp ASC
+	`
+	var logRows []struct {
+		InvocationID string    `db:"invocation_id"`
+		Level        string    `db:"level"`
+		Message      string    `db:"message"`
+		Timestamp    time.Time `db:"timestamp"`
+	}
+	logsByInv := map[string][]LogEntry{}
+	if err := r.db.Query(ctx, &logRows, logsQuery, invIDs...); err != nil {
+		// Don't fail the whole call — invocation summary is still useful.
+		r.logger.Warn("failed to fetch nested WASM logs; returning invocations without them",
+			zap.Error(err))
+	} else {
+		for _, lr := range logRows {
+			logsByInv[lr.InvocationID] = append(logsByInv[lr.InvocationID], LogEntry{
+				Level:     lr.Level,
+				Message:   lr.Message,
+				Timestamp: lr.Timestamp,
+			})
+		}
+	}
+
+	out := make([]Invocation, len(rows))
+	for i, row := range rows {
+		out[i] = Invocation{
+			ID:           row.ID,
+			RequestID:    row.RequestID,
+			TriggerType:  row.TriggerType,
+			CallerWallet: row.CallerWallet,
+			InputSize:    row.InputSize,
+			OutputSize:   row.OutputSize,
+			StartedAt:    row.StartedAt,
+			CompletedAt:  row.CompletedAt,
+			DurationMS:   row.DurationMS,
+			Status:       row.Status,
+			ErrorMessage: row.ErrorMessage,
+			MemoryUsedMB: row.MemoryUsedMB,
+			WASMLogs:     logsByInv[row.ID],
+		}
+	}
+	return out, nil
+}
+
 // -----------------------------------------------------------------------------
 // Private helpers
 // -----------------------------------------------------------------------------

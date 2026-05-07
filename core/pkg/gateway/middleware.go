@@ -2,11 +2,13 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,9 +17,47 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
+
+// isLongRunningProxyPath returns true for paths whose expected work bound
+// exceeds the default 30s proxy timeout. New classes go here, alphabetically.
+//
+//   - /v1/functions/.../invoke and /v1/invoke/...        — up to 300s per fn
+//   - /v1/functions/.../ws                                — long-lived WS
+//   - /v1/storage/upload, /v1/storage/pin                 — IPFS add can be slow
+//
+// Adding a path here is preferable to bumping the global timeout: each
+// path's bound is documented in one grep-able place.
+func isLongRunningProxyPath(p string) bool {
+	switch {
+	case strings.HasPrefix(p, "/v1/storage/upload"),
+		strings.HasPrefix(p, "/v1/storage/pin"),
+		strings.HasPrefix(p, "/v1/invoke/"),
+		strings.HasPrefix(p, "/v1/functions/") && (strings.HasSuffix(p, "/invoke") || strings.HasSuffix(p, "/ws")):
+		return true
+	}
+	return false
+}
+
+// isProxyTimeoutErr returns true when an HTTP client error is a timeout —
+// either the http.Client overall timeout or context.DeadlineExceeded
+// propagating from a parent context.
+func isProxyTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Timeout() {
+		return true
+	}
+	return false
+}
 
 // Note: context keys (ctxKeyAPIKey, ctxKeyJWT, CtxKeyNamespaceOverride) are now defined in context.go
 
@@ -1020,7 +1060,12 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		}
 	}
 	if selected.ip == "" {
-		http.Error(w, "Namespace gateway unavailable (all circuits open)", http.StatusServiceUnavailable)
+		// Bug #219: emit canonical envelope with retryable=true (transient).
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable,
+			"namespace gateway unavailable: all upstream circuits are open. "+
+				"Wait a few seconds and retry, or check `orama monitor report` for unhealthy nodes.",
+			httputil.WithRetryable())
 		return
 	}
 	gatewayIP := selected.ip
@@ -1082,9 +1127,18 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
 	}
 
-	// Use a longer timeout for upload paths (IPFS add can be slow for large files)
+	// Pick the proxy timeout based on the path's expected work bound.
+	// Defaults to 30s for fast paths; bumps to 300s for known long-running
+	// classes (uploads, function invocations) so we don't truncate before
+	// the namespace gateway's own per-function timeout fires.
+	//
+	// Bug #219: function invokes were truncated at 30s and surfaced as
+	// "Namespace gateway unavailable" — misleading because the gateway IS
+	// up, the FUNCTION just exceeded its budget. Aligning the proxy
+	// timeout with the function-level cap ensures the namespace gateway's
+	// proper TIMEOUT envelope reaches the client first.
 	proxyTimeout := 30 * time.Second
-	if strings.HasPrefix(r.URL.Path, "/v1/storage/upload") || strings.HasPrefix(r.URL.Path, "/v1/storage/pin") {
+	if isLongRunningProxyPath(r.URL.Path) {
 		proxyTimeout = 300 * time.Second
 	}
 
@@ -1098,7 +1152,22 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			zap.String("target", gatewayIP),
 			zap.Error(err),
 		)
-		http.Error(w, "Namespace gateway unavailable", http.StatusServiceUnavailable)
+		// Distinguish timeout from connection failure so clients get an
+		// actionable code (#219). "Namespace gateway unavailable" was
+		// emitted indiscriminately and sent operators down the wrong
+		// debug path.
+		if isProxyTimeoutErr(err) {
+			httputil.WriteRPCError(w, http.StatusGatewayTimeout,
+				httputil.ErrCodeTimeout,
+				"function or upstream call exceeded the proxy budget ("+
+					proxyTimeout.String()+
+					"). Increase the function's timeout: in function.yaml (max 300s) or split the work into smaller invocations.",
+			)
+			return
+		}
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable,
+			"namespace gateway unavailable: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()

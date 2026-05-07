@@ -93,6 +93,10 @@ func (m *MockRegistry) GetLogs(ctx context.Context, namespace, name string, limi
 	return []LogEntry{}, nil
 }
 
+func (m *MockRegistry) GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error) {
+	return []Invocation{}, nil
+}
+
 // MockHostServices is a mock implementation of HostServices
 type MockHostServices struct {
 	mu      sync.RWMutex
@@ -114,6 +118,14 @@ func (m *MockHostServices) DBQuery(ctx context.Context, query string, args []int
 
 func (m *MockHostServices) DBExecute(ctx context.Context, query string, args []interface{}) (int64, error) {
 	return 0, nil
+}
+
+func (m *MockHostServices) DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	return []byte(`{"rows_affected":0}`), nil
+}
+
+func (m *MockHostServices) DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	return []byte(`{"rows":[]}`), nil
 }
 
 func (m *MockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
@@ -237,6 +249,10 @@ func (m *MockHostServices) GetWSClientID(ctx context.Context) string {
 }
 
 func (m *MockHostServices) GetCallerClaim(ctx context.Context, name string) string {
+	return ""
+}
+
+func (m *MockHostServices) GetCallerJWTSubject(ctx context.Context) string {
 	return ""
 }
 

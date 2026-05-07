@@ -94,6 +94,46 @@ orama monitor report --env testnet
 - **DON'T** clear RQLite data directories unless doing a full cluster rebuild
 - **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously
 
+#### Schema-Migration Ordering Invariant
+
+The gateway binary embeds a set of SQL migrations. The highest-numbered migration is the schema version that binary REQUIRES — **the gateway will refuse to start if its required schema isn't applied** (the schema-version contract added after the 2026-05-06 incident).
+
+This means rolling upgrades have ONE invariant you must respect:
+
+> The new gateway binary's required migrations must be applied to RQLite **before or as part of** starting the new binary on a node.
+
+There are two acceptable patterns:
+
+**Pattern A — let the gateway apply migrations on startup (default).**
+The gateway calls `ApplyEmbeddedMigrations` during `NewDependencies` and asserts the schema is at the required version before serving traffic. If the apply succeeds, you're done. If a transient error blocks the apply, gateway startup aborts with a clear `schema mismatch: binary requires version N, database has M` error.
+
+This is the default for both the genesis startup flow and rolling upgrades. No operator action required when it works.
+
+**Pattern B — pre-apply migrations explicitly via the CLI.**
+On any node:
+```bash
+sudo orama node schema status      # show binary required vs applied
+sudo orama node schema apply --yes # apply pending migrations
+```
+Then start the new gateway. Useful when you want explicit control during a high-risk upgrade or when the auto-apply path is failing for reasons you want to debug separately.
+
+#### Verifying schema state remotely
+
+Tenants can self-check schema drift without SSH access via:
+```
+GET /v1/schema-status
+```
+Returns `{ok, required_version, applied_version, in_sync, pending: [...]}`. The same data is available via `orama node schema status` for operators with shell access.
+
+#### Build-time guard (CI)
+
+`go test ./migrations/` runs a roundtrip test that opens an in-memory SQLite, applies every embedded migration, and exercises representative SQL operations from the platform's Go code. If a Go handler is added that references a column no migration creates, the test fails — drift is caught at PR review time, not at production deploy.
+
+When adding a new platform table or column:
+1. Write the migration in `core/migrations/NNN_description.sql`
+2. Update the relevant Go code that reads/writes the new column
+3. Add an exemplar to `migrations/roundtrip_test.go` mirroring the new SQL — this enforces the contract permanently
+
 #### Recovery from Cluster Split
 
 If nodes get stuck in "Candidate" state or show "leader not found" errors:
@@ -448,6 +488,26 @@ Or double-click the `.crt` file > **Install Certificate** > **Local Machine** > 
 sudo cp caddy-root-ca.crt /usr/local/share/ca-certificates/caddy-root-ca.crt
 sudo update-ca-certificates
 ```
+
+## Push notifications (optional, per gateway)
+
+Push routes (`/v1/push/devices`, `/v1/push/send`) are always registered but
+return `503 SERVICE_UNAVAILABLE` until at least one provider is configured
+in the gateway config:
+
+```yaml
+# In your namespace gateway config:
+push:
+  ntfy_base_url: "http://localhost:8080"   # self-hosted ntfy (preferred for privacy)
+  expo_access_token: "..."                  # Expo push (alternative; client SDK lock-in)
+```
+
+Restart the gateway after editing. A `GET /v1/push/devices` call (with valid
+auth) will then return `200` instead of `503`.
+
+The 503 body explicitly names the config knobs operators need to set, so
+tenants getting "Push not configured" can self-diagnose without filing a
+ticket. (Bug #220 audit fix.)
 
 ## Project Structure
 

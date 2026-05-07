@@ -416,13 +416,16 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 	for _, moduleName := range []string{"env", "host", "orama"} {
 		_, err := e.runtime.NewHostModuleBuilder(moduleName).
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
+			NewFunctionBuilder().WithFunc(e.hGetCallerJWTSubject).Export("get_caller_jwt_subject").
 			NewFunctionBuilder().WithFunc(e.hGetWSClientID).Export("get_ws_client_id").
 			NewFunctionBuilder().WithFunc(e.hGetCallerClaim).Export("get_caller_claim").
 			NewFunctionBuilder().WithFunc(e.hGetRequestID).Export("get_request_id").
 			NewFunctionBuilder().WithFunc(e.hGetEnv).Export("get_env").
 			NewFunctionBuilder().WithFunc(e.hGetSecret).Export("get_secret").
 			NewFunctionBuilder().WithFunc(e.hDBQuery).Export("db_query").
+			NewFunctionBuilder().WithFunc(e.hDBQueryV2).Export("db_query_v2").
 			NewFunctionBuilder().WithFunc(e.hDBExecute).Export("db_execute").
+			NewFunctionBuilder().WithFunc(e.hDBExecuteV2).Export("db_execute_v2").
 			NewFunctionBuilder().WithFunc(e.hDBTransaction).Export("db_transaction").
 			NewFunctionBuilder().WithFunc(e.hExecAndPublish).Export("exec_and_publish").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
@@ -467,6 +470,13 @@ func (e *Engine) hGetRequestID(ctx context.Context, mod api.Module) uint64 {
 func (e *Engine) hGetWSClientID(ctx context.Context, mod api.Module) uint64 {
 	cid := e.hostServices.GetWSClientID(ctx)
 	return e.executor.WriteToGuest(ctx, mod, []byte(cid))
+}
+
+// hGetCallerJWTSubject returns the JWT `sub` claim explicitly. Empty
+// string if the request was not JWT-authenticated. See bug #215.
+func (e *Engine) hGetCallerJWTSubject(ctx context.Context, mod api.Module) uint64 {
+	sub := e.hostServices.GetCallerJWTSubject(ctx)
+	return e.executor.WriteToGuest(ctx, mod, []byte(sub))
 }
 
 // hGetCallerClaim reads a claim name from guest memory, looks it up on the
@@ -658,6 +668,51 @@ func (e *Engine) hPubSubPublishBatch(ctx context.Context, mod api.Module, msgsPt
 		return 0
 	}
 	return 1
+}
+
+// hDBExecuteV2 is the WASM-callable wrapper for DBExecuteV2 (bug #218).
+// Inputs: pointer/length of SQL + JSON args. Returns a packed uint64
+// (ptr<<32 | len) pointing to the JSON envelope in guest memory, or 0 on
+// host-side failure. The JSON envelope's "error" field carries SQL errors.
+func (e *Engine) hDBExecuteV2(ctx context.Context, mod api.Module, queryPtr, queryLen, argsPtr, argsLen uint32) uint64 {
+	query, ok := e.executor.ReadFromGuest(mod, queryPtr, queryLen)
+	if !ok {
+		return 0
+	}
+	var args []interface{}
+	if argsLen > 0 {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, argsPtr, argsLen, &args); err != nil {
+			e.logger.Warn("db_execute_v2: failed to unmarshal args", zap.Error(err))
+			return 0
+		}
+	}
+	out, err := e.hostServices.DBExecuteV2(ctx, string(query), args)
+	if err != nil {
+		e.logger.Warn("host function db_execute_v2 failed", zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hDBQueryV2 is the WASM-callable wrapper for DBQueryV2 (bug #218).
+func (e *Engine) hDBQueryV2(ctx context.Context, mod api.Module, queryPtr, queryLen, argsPtr, argsLen uint32) uint64 {
+	query, ok := e.executor.ReadFromGuest(mod, queryPtr, queryLen)
+	if !ok {
+		return 0
+	}
+	var args []interface{}
+	if argsLen > 0 {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, argsPtr, argsLen, &args); err != nil {
+			e.logger.Warn("db_query_v2: failed to unmarshal args", zap.Error(err))
+			return 0
+		}
+	}
+	out, err := e.hostServices.DBQueryV2(ctx, string(query), args)
+	if err != nil {
+		e.logger.Warn("host function db_query_v2 failed", zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
 }
 
 // hDBTransaction is the WASM-callable wrapper for DBTransaction.
