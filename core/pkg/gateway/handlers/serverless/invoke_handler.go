@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
@@ -78,54 +79,65 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 
 	req := &serverless.InvokeRequest{
-		Namespace:    namespace,
-		FunctionName: name,
-		Version:      version,
-		Input:        input,
-		TriggerType:  serverless.TriggerTypeHTTP,
-		CallerWallet: callerWallet,
-		CallerIP:     extractRemoteIP(r),
-		CallerClaims: h.getCallerClaimsFromRequest(r),
+		Namespace:        namespace,
+		FunctionName:     name,
+		Version:          version,
+		Input:            input,
+		TriggerType:      serverless.TriggerTypeHTTP,
+		CallerWallet:     callerWallet,
+		CallerIP:         extractRemoteIP(r),
+		CallerClaims:     h.getCallerClaimsFromRequest(r),
+		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
 	}
 
 	resp, err := h.invoker.Invoke(ctx, req)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		// Tiered rate limiter returns *RateLimitedError with retry-after.
+		// Bug #212: every error path here emits the canonical RPC
+		// envelope. error.message is always populated (falls back to
+		// err.Error() then to a default per code).
+
+		// Rate-limit errors carry a retry hint we surface as both the
+		// HTTP Retry-After header and the envelope field.
 		var rle *serverless.RateLimitedError
 		if errors.As(err, &rle) {
+			opts := []httputil.RPCErrorOption{}
 			if rle.RetryAfter > 0 {
-				w.Header().Set("Retry-After",
-					strconv.FormatFloat(rle.RetryAfter.Seconds(), 'f', 1, 64))
+				opts = append(opts, httputil.WithRetryAfter(rle.RetryAfter.Seconds()))
 			}
-			writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
-				"error":       err.Error(),
-				"scope":       rle.Scope,
-				"retry_after": rle.RetryAfter.Seconds(),
-			})
+			if resp != nil && resp.RequestID != "" {
+				opts = append(opts, httputil.WithRequestID(resp.RequestID))
+			}
+			writeRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited, err.Error(), opts...)
 			return
 		}
-		if serverless.IsNotFound(err) {
+
+		// Map domain-typed errors to (status, RPC code).
+		statusCode := http.StatusInternalServerError
+		errCode := httputil.ErrCodeFunctionExecution
+		switch {
+		case serverless.IsNotFound(err):
 			statusCode = http.StatusNotFound
-		} else if serverless.IsResourceExhausted(err) {
+			errCode = httputil.ErrCodeNotFound
+		case serverless.IsResourceExhausted(err):
 			statusCode = http.StatusTooManyRequests
-		} else if serverless.IsUnauthorized(err) {
+			errCode = httputil.ErrCodeRateLimited
+		case serverless.IsUnauthorized(err):
 			statusCode = http.StatusUnauthorized
+			errCode = httputil.ErrCodeUnauthorized
 		}
 
-		if resp == nil {
-			writeJSON(w, statusCode, map[string]interface{}{
-				"error": err.Error(),
-			})
-			return
+		// Pick the most informative message: function-side resp.Error
+		// (if set) is more actionable than the wrapping err.Error().
+		msg := err.Error()
+		if resp != nil && resp.Error != "" {
+			msg = resp.Error
 		}
-
-		writeJSON(w, statusCode, map[string]interface{}{
-			"request_id":  resp.RequestID,
-			"status":      resp.Status,
-			"error":       resp.Error,
-			"duration_ms": resp.DurationMS,
-		})
+		opts := []httputil.RPCErrorOption{}
+		if resp != nil && resp.RequestID != "" {
+			opts = append(opts, httputil.WithRequestID(resp.RequestID))
+		}
+		writeRPCError(w, statusCode, errCode, msg, opts...)
 		return
 	}
 

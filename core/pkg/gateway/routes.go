@@ -16,6 +16,9 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/health", g.healthHandler)
 	mux.HandleFunc("/v1/version", g.versionHandler)
 	mux.HandleFunc("/v1/status", g.statusHandler)
+	// Schema-version contract (bug #214 audit follow-up): tenants can
+	// self-check whether their gateway's required schema is applied.
+	mux.HandleFunc("/v1/schema-status", g.handleSchemaStatus)
 
 	// Internal ping for peer-to-peer health monitoring
 	mux.HandleFunc("/v1/internal/ping", g.pingHandler)
@@ -125,23 +128,16 @@ func (g *Gateway) Routes() http.Handler {
 	}
 
 	// push notifications
-	if g.pushHandlers != nil {
-		// GET + POST share the path; the handler dispatches by method.
-		mux.HandleFunc("/v1/push/devices", func(w http.ResponseWriter, r *http.Request) {
-			switch r.Method {
-			case http.MethodGet:
-				g.pushHandlers.ListDevicesHandler(w, r)
-			case http.MethodPost:
-				g.pushHandlers.RegisterDeviceHandler(w, r)
-			default:
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			}
-		})
-		// DELETE /v1/push/devices/{id} — uses path-prefix routing because
-		// net/http mux doesn't extract path params; the handler parses {id}.
-		mux.HandleFunc("/v1/push/devices/", g.pushHandlers.DeleteDeviceHandler)
-		mux.HandleFunc("/v1/push/send", g.pushHandlers.SendHandler)
-	}
+	//
+	// Routes are ALWAYS registered (bug #220). When no provider is
+	// configured, the handler returns a canonical 503 envelope explaining
+	// that push isn't enabled — far better UX than a bare 404 that sends
+	// operators down "is the gateway broken?" rabbit holes.
+	mux.HandleFunc("/v1/push/devices", g.pushDevicesHandler)
+	// DELETE /v1/push/devices/{id} — uses path-prefix routing because
+	// net/http mux doesn't extract path params; the handler parses {id}.
+	mux.HandleFunc("/v1/push/devices/", g.pushDevicesByIDHandler)
+	mux.HandleFunc("/v1/push/send", g.pushSendHandler)
 
 	// operator node management (wallet JWT auth via middleware)
 	if g.operatorHandler != nil {

@@ -66,11 +66,37 @@ type Function struct {
 	WSMaxInflightPerConn int
 }
 
-// LogEntry represents a log message from a function.
+// LogEntry represents a log message emitted from inside a WASM function
+// via the log_info / log_error host calls.
 type LogEntry struct {
 	Level     string
 	Message   string
 	Timestamp time.Time
+}
+
+// Invocation is a record of one function invocation, returned by
+// GetInvocations. It always populates regardless of whether the function
+// emitted any log_info/log_error calls — the WASM-emitted entries are
+// nested under WASMLogs (which may be empty).
+//
+// This is the right answer to "what happened on this invocation" — the
+// CLI's `function logs` and dashboard log views consume this. The
+// older GetLogs(LogEntry) returns ONLY WASM-emitted entries, which is
+// usually empty and confused users (bug #211).
+type Invocation struct {
+	ID           string     `json:"id"`
+	RequestID    string     `json:"request_id"`
+	TriggerType  string     `json:"trigger_type"`
+	CallerWallet string     `json:"caller_wallet,omitempty"`
+	InputSize    int        `json:"input_size"`
+	OutputSize   int        `json:"output_size"`
+	StartedAt    time.Time  `json:"started_at"`
+	CompletedAt  time.Time  `json:"completed_at"`
+	DurationMS   int64      `json:"duration_ms"`
+	Status       string     `json:"status"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	MemoryUsedMB float64    `json:"memory_used_mb,omitempty"`
+	WASMLogs     []LogEntry `json:"wasm_logs,omitempty"`
 }
 
 // FunctionRegistry interface
@@ -80,7 +106,16 @@ type FunctionRegistry interface {
 	List(ctx context.Context, namespace string) ([]*Function, error)
 	Delete(ctx context.Context, namespace, name string, version int) error
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
+
+	// GetLogs returns ONLY WASM-emitted log entries (rows in function_logs).
+	// This is rarely useful on its own — most functions don't emit any.
+	// Prefer GetInvocations for the complete invocation-history view.
 	GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error)
+
+	// GetInvocations returns invocation history (always populated when the
+	// function has been invoked at least once) with any associated WASM
+	// log entries nested per record. Sorted by started_at DESC.
+	GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error)
 }
 
 // Error types

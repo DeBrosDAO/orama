@@ -41,6 +41,10 @@ func (m *mockFunctionRegistry) GetLogs(ctx context.Context, namespace, name stri
 	return []serverless.LogEntry{}, nil
 }
 
+func (m *mockFunctionRegistry) GetInvocations(ctx context.Context, namespace, name string, limit int) ([]serverless.Invocation, error) {
+	return []serverless.Invocation{}, nil
+}
+
 func TestServerlessHandlers_ListFunctions(t *testing.T) {
 	logger := zap.NewNop()
 	registry := &mockFunctionRegistry{

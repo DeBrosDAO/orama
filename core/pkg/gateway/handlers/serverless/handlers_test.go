@@ -20,12 +20,13 @@ import (
 
 // mockRegistry implements serverless.FunctionRegistry for testing.
 type mockRegistry struct {
-	functions map[string]*serverless.Function
-	logs      []serverless.LogEntry
-	getErr    error
-	listErr   error
-	deleteErr error
-	logsErr   error
+	functions   map[string]*serverless.Function
+	logs        []serverless.LogEntry
+	invocations []serverless.Invocation
+	getErr      error
+	listErr     error
+	deleteErr   error
+	logsErr     error
 }
 
 func newMockRegistry() *mockRegistry {
@@ -76,6 +77,13 @@ func (m *mockRegistry) GetLogs(_ context.Context, _, _ string, _ int) ([]serverl
 		return nil, m.logsErr
 	}
 	return m.logs, nil
+}
+
+func (m *mockRegistry) GetInvocations(_ context.Context, _, _ string, _ int) ([]serverless.Invocation, error) {
+	if m.logsErr != nil {
+		return nil, m.logsErr
+	}
+	return m.invocations, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +588,7 @@ func TestDeployFunction_Base64WASMNotSupported(t *testing.T) {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 	respBody := decodeBody(t, rec)
-	errMsg, _ := respBody["error"].(string)
+	errMsg := errMessageFromEnvelope(respBody)
 	if !strings.Contains(errMsg, "Base64 WASM upload not supported") {
 		t.Errorf("expected base64 not supported error, got %q", errMsg)
 	}
@@ -600,10 +608,26 @@ func TestDeployFunction_JSONMissingWASM(t *testing.T) {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 	respBody := decodeBody(t, rec)
-	errMsg, _ := respBody["error"].(string)
+	errMsg := errMessageFromEnvelope(respBody)
 	if !strings.Contains(errMsg, "name") {
 		t.Errorf("expected name-related error, got %q", errMsg)
 	}
+}
+
+// errMessageFromEnvelope extracts the human-readable message from the
+// canonical RPC error envelope: {"ok": false, "error": {"message": "..."}}.
+// Returns "" if the envelope shape is unexpected; tests use Contains on
+// the result so a missing message will still fail loudly.
+func errMessageFromEnvelope(body map[string]interface{}) string {
+	if body == nil {
+		return ""
+	}
+	errObj, ok := body["error"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	msg, _ := errObj["message"].(string)
+	return msg
 }
 
 // ---------------------------------------------------------------------------
@@ -647,10 +671,14 @@ func TestDeleteFunction_NotFound(t *testing.T) {
 // Tests: GetFunctionLogs
 // ---------------------------------------------------------------------------
 
-func TestGetFunctionLogs_Success(t *testing.T) {
+// TestGetFunctionLogs_Success_DefaultInvocationsView locks in the bug-#211 fix:
+// the default endpoint returns invocation history (always populated when the
+// function has been invoked), NOT WASM-emitted log entries (often empty).
+func TestGetFunctionLogs_Success_DefaultInvocationsView(t *testing.T) {
 	reg := newMockRegistry()
-	reg.logs = []serverless.LogEntry{
-		{Level: "info", Message: "hello"},
+	reg.invocations = []serverless.Invocation{
+		{ID: "inv-1", RequestID: "req-A", Status: "success", DurationMS: 12},
+		{ID: "inv-2", RequestID: "req-B", Status: "error", ErrorMessage: "boom"},
 	}
 	h := newTestHandlers(reg)
 
@@ -667,8 +695,41 @@ func TestGetFunctionLogs_Success(t *testing.T) {
 		t.Errorf("expected name 'myFunc', got %v", body["name"])
 	}
 	count, ok := body["count"].(float64)
+	if !ok || int(count) != 2 {
+		t.Errorf("expected count=2, got %v", body["count"])
+	}
+	if _, ok := body["invocations"]; !ok {
+		t.Error("expected response to include 'invocations' key in default view")
+	}
+	if _, ok := body["logs"]; ok {
+		t.Error("default view should NOT return 'logs' key (legacy WASM-only)")
+	}
+}
+
+// TestGetFunctionLogs_WASMOnly preserves the legacy "raw WASM-emitted lines"
+// view via the wasm_only=1 query param.
+func TestGetFunctionLogs_WASMOnly(t *testing.T) {
+	reg := newMockRegistry()
+	reg.logs = []serverless.LogEntry{
+		{Level: "info", Message: "hello"},
+	}
+	h := newTestHandlers(reg)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test&wasm_only=1", nil)
+	rec := httptest.NewRecorder()
+
+	h.GetFunctionLogs(rec, req, "myFunc")
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	body := decodeBody(t, rec)
+	count, ok := body["count"].(float64)
 	if !ok || int(count) != 1 {
-		t.Errorf("expected count=1, got %v", body["count"])
+		t.Errorf("expected count=1 from logs, got %v", body["count"])
+	}
+	if _, ok := body["logs"]; !ok {
+		t.Error("wasm_only=1 should return 'logs' key")
 	}
 }
 
@@ -717,10 +778,24 @@ func TestWriteError(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
-	body := map[string]string{}
-	json.NewDecoder(rec.Body).Decode(&body)
-	if body["error"] != "something went wrong" {
-		t.Errorf("expected error message 'something went wrong', got %q", body["error"])
+	// writeError now emits the canonical RPC envelope (bug #212 fix).
+	// Shape: {"ok": false, "error": {"code": "VALIDATION_FAILED", "message": "...", "retryable": false}}
+	body := map[string]interface{}{}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ok, _ := body["ok"].(bool); ok {
+		t.Error("ok must be false on error envelope")
+	}
+	errObj, ok := body["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("error must be an object, got %T: %v", body["error"], body["error"])
+	}
+	if msg, _ := errObj["message"].(string); msg != "something went wrong" {
+		t.Errorf("expected message 'something went wrong', got %q", msg)
+	}
+	if code, _ := errObj["code"].(string); code != "VALIDATION_FAILED" {
+		t.Errorf("expected code VALIDATION_FAILED for 400, got %q", code)
 	}
 }
 

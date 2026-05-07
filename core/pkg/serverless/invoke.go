@@ -54,6 +54,10 @@ type InvokeRequest struct {
 	WSClientID string `json:"ws_client_id,omitempty"`
 	// CallerClaims holds custom JWT claims to expose via get_caller_claim.
 	CallerClaims map[string]string `json:"caller_claims,omitempty"`
+	// CallerJWTSubject carries the JWT `sub` claim explicitly so the
+	// engine can populate InvocationContext.CallerJWTSubject — fixes the
+	// bug-#215 case where API-key precedence buries the JWT identity.
+	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
 }
 
 // InvokeResponse contains the result of a function invocation.
@@ -112,16 +116,17 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 
 	// Build invocation context
 	invCtx := &InvocationContext{
-		RequestID:    requestID,
-		FunctionID:   fn.ID,
-		FunctionName: fn.Name,
-		Namespace:    fn.Namespace,
-		CallerWallet: req.CallerWallet,
-		CallerIP:     req.CallerIP,
-		TriggerType:  req.TriggerType,
-		WSClientID:   req.WSClientID,
-		EnvVars:      envVars,
-		CallerClaims: req.CallerClaims,
+		RequestID:        requestID,
+		FunctionID:       fn.ID,
+		FunctionName:     fn.Name,
+		Namespace:        fn.Namespace,
+		CallerWallet:     req.CallerWallet,
+		CallerIP:         req.CallerIP,
+		TriggerType:      req.TriggerType,
+		WSClientID:       req.WSClientID,
+		EnvVars:          envVars,
+		CallerClaims:     req.CallerClaims,
+		CallerJWTSubject: req.CallerJWTSubject,
 	}
 
 	// Execute with retry logic

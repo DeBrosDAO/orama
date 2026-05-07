@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -111,6 +112,27 @@ func (h *ServerlessHandlers) getCallerClaimsFromRequest(r *http.Request) map[str
 		out[k] = val
 	}
 	return out
+}
+
+// getJWTSubjectFromRequest returns the Bearer JWT's `sub` claim if present,
+// independent of the API-key-vs-JWT precedence used for general wallet
+// resolution. Returns "" when the request was not JWT-authenticated.
+//
+// This is the source of truth for `oh.GetCallerJWTSubject()` inside WASM
+// — bug #215. Functions that must bind on the JWT-signed identity (e.g.
+// signup paths verifying the registering wallet matches the auth-challenge
+// signer) read this instead of GetCallerWallet, which returns the namespace
+// pseudo-identifier when the API key is the resolved auth.
+func (h *ServerlessHandlers) getJWTSubjectFromRequest(r *http.Request) string {
+	v := r.Context().Value(ctxkeys.JWT)
+	if v == nil {
+		return ""
+	}
+	claims, ok := v.(*auth.JWTClaims)
+	if !ok || claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.Sub)
 }
 
 // getWalletFromRequest extracts wallet address from JWT.

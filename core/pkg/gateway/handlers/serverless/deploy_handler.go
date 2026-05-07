@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -126,7 +127,11 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 			zap.String("name", def.Name),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to deploy: "+err.Error())
+		// Use the typed function-deploy code so clients can distinguish
+		// "registry rejected this binary" from generic 500s.
+		writeRPCError(w, http.StatusInternalServerError,
+			httputil.ErrCodeFunctionDeploy,
+			"Failed to deploy: "+err.Error())
 		return
 	}
 
@@ -181,7 +186,51 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeError writes a standardized JSON error
-func writeError(w http.ResponseWriter, code int, msg string) {
-	writeJSON(w, code, map[string]any{"error": msg})
+// writeError emits the canonical RPC error envelope (bug #212 fix).
+//
+// Derives the typed RPCErrorCode from the HTTP status — sufficient for
+// most call sites. Callers that need to surface a specific code (e.g.
+// FUNCTION_EXECUTION_FAILED on a 500 from the invoker) should use
+// writeRPCError directly.
+//
+// Wire shape (always):
+//
+//	{"ok": false, "error": {"code": "...", "message": "...", "retryable": ...}}
+func writeError(w http.ResponseWriter, status int, msg string) {
+	httputil.WriteRPCError(w, status, codeForStatus(status), msg)
+}
+
+// writeRPCError is the typed helper for call sites that need to set a
+// specific error code (e.g. distinguishing FUNCTION_EXECUTION_FAILED
+// from a generic INTERNAL on a 500).
+func writeRPCError(w http.ResponseWriter, status int, code httputil.RPCErrorCode, msg string, opts ...httputil.RPCErrorOption) {
+	httputil.WriteRPCError(w, status, code, msg, opts...)
+}
+
+// codeForStatus maps HTTP status to the canonical RPCErrorCode. For
+// statuses that map to multiple codes (500 → INTERNAL or
+// FUNCTION_EXECUTION_FAILED), the caller picks via writeRPCError.
+func codeForStatus(status int) httputil.RPCErrorCode {
+	switch status {
+	case http.StatusBadRequest:
+		return httputil.ErrCodeValidationFailed
+	case http.StatusUnauthorized:
+		return httputil.ErrCodeUnauthorized
+	case http.StatusForbidden:
+		return httputil.ErrCodeForbidden
+	case http.StatusNotFound:
+		return httputil.ErrCodeNotFound
+	case http.StatusConflict:
+		return httputil.ErrCodeConflict
+	case http.StatusRequestEntityTooLarge:
+		return httputil.ErrCodePayloadTooLarge
+	case http.StatusTooManyRequests:
+		return httputil.ErrCodeRateLimited
+	case http.StatusServiceUnavailable:
+		return httputil.ErrCodeServiceUnavailable
+	case http.StatusGatewayTimeout:
+		return httputil.ErrCodeTimeout
+	default:
+		return httputil.ErrCodeInternal
+	}
 }

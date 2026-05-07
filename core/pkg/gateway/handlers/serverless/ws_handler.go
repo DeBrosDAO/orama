@@ -125,6 +125,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	// Capture custom claims at upgrade time and reuse for every frame —
 	// the JWT context is request-scoped and won't survive past upgrade.
 	callerClaims := h.getCallerClaimsFromRequest(r)
+	callerJWTSubject := h.getJWTSubjectFromRequest(r)
 
 	// Message loop
 	for {
@@ -141,15 +142,16 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
 		req := &serverless.InvokeRequest{
-			Namespace:    namespace,
-			FunctionName: name,
-			Version:      version,
-			Input:        message,
-			TriggerType:  serverless.TriggerTypeWebSocket,
-			CallerWallet: callerWallet,
-			CallerIP:     callerIP,
-			CallerClaims: callerClaims,
-			WSClientID:   clientID,
+			Namespace:        namespace,
+			FunctionName:     name,
+			Version:          version,
+			Input:            message,
+			TriggerType:      serverless.TriggerTypeWebSocket,
+			CallerWallet:     callerWallet,
+			CallerIP:         callerIP,
+			CallerClaims:     callerClaims,
+			CallerJWTSubject: callerJWTSubject,
+			WSClientID:       clientID,
 		}
 
 		resp, err := h.invoker.Invoke(ctx, req)

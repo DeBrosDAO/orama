@@ -68,14 +68,15 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 	}
 
 	req := &serverless.InvokeRequest{
-		Namespace:    cur.Namespace,
-		FunctionName: name,
-		Input:        payload,
-		TriggerType:  serverless.TriggerTypeWebSocket,
-		CallerWallet: cur.CallerWallet,
-		CallerIP:     cur.CallerIP,
-		WSClientID:   cur.WSClientID,
-		CallerClaims: cur.CallerClaims,
+		Namespace:        cur.Namespace,
+		FunctionName:     name,
+		Input:            payload,
+		TriggerType:      serverless.TriggerTypeWebSocket,
+		CallerWallet:     cur.CallerWallet,
+		CallerIP:         cur.CallerIP,
+		WSClientID:       cur.WSClientID,
+		CallerClaims:     cur.CallerClaims,
+		CallerJWTSubject: cur.CallerJWTSubject,
 	}
 	resp, err := inv.Invoke(ctx, req)
 	if err != nil {
@@ -164,4 +165,22 @@ func (h *HostFunctions) GetCallerClaim(ctx context.Context, name string) string 
 		return ""
 	}
 	return h.invCtx.CallerClaims[name]
+}
+
+// GetCallerJWTSubject returns the JWT `sub` claim explicitly, independent
+// of the API-key-vs-JWT precedence used by GetCallerWallet. Empty when the
+// request was not JWT-authenticated. Bug #215.
+//
+// Use this when a function MUST bind on the JWT-signed identity (e.g. a
+// signup flow that verifies the wallet the caller is registering matches
+// the wallet that signed the auth challenge). GetCallerWallet may return
+// the namespace pseudo-identifier if the caller also presents an API key.
+func (h *HostFunctions) GetCallerJWTSubject(ctx context.Context) string {
+	h.invCtxLock.RLock()
+	defer h.invCtxLock.RUnlock()
+
+	if h.invCtx == nil {
+		return ""
+	}
+	return h.invCtx.CallerJWTSubject
 }
