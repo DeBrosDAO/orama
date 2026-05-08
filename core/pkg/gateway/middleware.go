@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -70,27 +72,114 @@ const (
 	HeaderInternalAuthNamespace = "X-Internal-Auth-Namespace"
 	// HeaderInternalAuthValidated indicates the request was pre-authenticated by main gateway
 	HeaderInternalAuthValidated = "X-Internal-Auth-Validated"
+	// HeaderInternalAuthJWTSub carries the validated JWT `sub` claim across the
+	// internal proxy hop. Bug #215: without this, namespace gateways received
+	// only the namespace and host functions saw empty `caller_jwt_subject`.
+	// Trusted only when X-Internal-Auth-Validated=true AND the source IP is
+	// internal (WireGuard mesh / loopback) — same trust model as the
+	// namespace header.
+	HeaderInternalAuthJWTSub = "X-Internal-Auth-JWT-Sub"
+	// HeaderInternalAuthJWTCustom carries the validated JWT custom-claims map
+	// as a base64(JSON) blob. Optional; absent means the original token had
+	// no custom claims. Same trust gate as HeaderInternalAuthJWTSub.
+	HeaderInternalAuthJWTCustom = "X-Internal-Auth-JWT-Custom"
 )
 
+// setInternalAuthJWTHeaders writes the validated JWT subject and custom claims
+// onto an outbound proxy request so the destination gateway can hydrate
+// ctxKeyJWT. Called only after auth has been validated AND we're proxying over
+// the WireGuard mesh (the destination still gates trust by source IP).
+//
+// No-op when claims is nil (caller authenticated with API key, not JWT).
+func setInternalAuthJWTHeaders(h http.Header, claims *auth.JWTClaims) {
+	if claims == nil {
+		return
+	}
+	if sub := strings.TrimSpace(claims.Sub); sub != "" {
+		h.Set(HeaderInternalAuthJWTSub, sub)
+	}
+	if len(claims.Custom) > 0 {
+		buf, err := json.Marshal(claims.Custom)
+		if err == nil {
+			h.Set(HeaderInternalAuthJWTCustom, base64.StdEncoding.EncodeToString(buf))
+		}
+	}
+}
+
+// stripInboundInternalAuthHeaders deletes the X-Internal-Auth-* headers from
+// the supplied header set. MUST be called on every outbound request the main
+// gateway proxies to a namespace gateway BEFORE we (conditionally) re-set
+// them with the validated values.
+//
+// SECURITY (bug #215 follow-up — critical): without this, an external client
+// could send `X-Internal-Auth-Validated: true` + `X-Internal-Auth-JWT-Sub:
+// <victim-wallet>` directly. The header-copy loop at the proxy hop would
+// forward those headers verbatim. The namespace gateway, seeing the request
+// arrive from the main gateway's WireGuard IP, would trust them and hydrate
+// ctxKeyJWT with attacker-controlled subject — full cross-namespace identity
+// spoofing on every public path.
+//
+// Stripping FIRST and conditionally setting AFTER closes that hole regardless
+// of which auth path won (JWT, API key, or no creds on a public path).
+func stripInboundInternalAuthHeaders(h http.Header) {
+	h.Del(HeaderInternalAuthValidated)
+	h.Del(HeaderInternalAuthNamespace)
+	h.Del(HeaderInternalAuthJWTSub)
+	h.Del(HeaderInternalAuthJWTCustom)
+}
+
+// claimsFromInternalAuthHeaders rebuilds a *auth.JWTClaims from the trusted
+// internal-auth headers. Returns nil if no JWT subject was forwarded (the
+// caller used an API key, or the request didn't carry validated JWT data).
+//
+// SECURITY: this MUST only be called after the caller has confirmed
+// HeaderInternalAuthValidated == "true" AND the source IP is internal AND
+// the proxy hop has stripped any inbound copies of these headers (see
+// stripInboundInternalAuthHeaders). Skipping any of those would let any
+// client forge JWT identities.
+func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTClaims {
+	sub := strings.TrimSpace(h.Get(HeaderInternalAuthJWTSub))
+	if sub == "" {
+		return nil
+	}
+	claims := &auth.JWTClaims{
+		Sub:       sub,
+		Namespace: namespace,
+	}
+	if raw := strings.TrimSpace(h.Get(HeaderInternalAuthJWTCustom)); raw != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil {
+			var custom map[string]string
+			if json.Unmarshal(decoded, &custom) == nil && len(custom) > 0 {
+				claims.Custom = custom
+			}
+		}
+	}
+	return claims
+}
+
 // validateAuthForNamespaceProxy validates the request's auth credentials against the MAIN
-// cluster RQLite and returns the namespace the credentials belong to.
+// cluster RQLite and returns the namespace the credentials belong to plus the
+// JWT claims when the caller authenticated with a Bearer JWT.
 // This is used by handleNamespaceGatewayRequest to pre-authenticate before proxying to
 // namespace gateways (which have isolated RQLites without API keys).
 //
 // Returns:
-//   - (namespace, "") if auth is valid
-//   - ("", errorMessage) if auth is invalid
-//   - ("", "") if no auth credentials provided (for public paths)
-func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, errMsg string) {
+//   - (namespace, claims, "") if auth is valid via JWT — claims may be used to
+//     populate internal-auth headers so the namespace gateway can hydrate
+//     `caller_jwt_subject` for serverless host functions (bug #215).
+//   - (namespace, nil, "") if auth is valid via API key.
+//   - ("", nil, errorMessage) if auth is invalid.
+//   - ("", nil, "") if no auth credentials provided (for public paths).
+func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, claims *auth.JWTClaims, errMsg string) {
 	// 1) Try JWT Bearer first
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		lower := strings.ToLower(auth)
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		lower := strings.ToLower(authHeader)
 		if strings.HasPrefix(lower, "bearer ") {
-			tok := strings.TrimSpace(auth[len("Bearer "):])
+			tok := strings.TrimSpace(authHeader[len("Bearer "):])
 			if strings.Count(tok, ".") == 2 {
-				if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
-					if ns := strings.TrimSpace(claims.Namespace); ns != "" {
-						return ns, ""
+				if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+					if ns := strings.TrimSpace(c.Namespace); ns != "" {
+						return ns, c, ""
 					}
 				}
 				// JWT verification failed - fall through to API key check
@@ -101,14 +190,14 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 	// 2) Try API key
 	key := extractAPIKey(r)
 	if key == "" {
-		return "", "" // No credentials provided
+		return "", nil, "" // No credentials provided
 	}
 
 	ns, err := g.lookupAPIKeyNamespace(r.Context(), key, g.client)
 	if err != nil {
-		return "", "invalid API key"
+		return "", nil, "invalid API key"
 	}
-	return ns, ""
+	return ns, nil, ""
 }
 
 // lookupAPIKeyNamespace resolves an API key to its namespace using cache and DB.
@@ -325,6 +414,17 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				if ns != "" {
 					// Pre-authenticated by main gateway - trust the namespace
 					reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
+					// Bug #215: also rebuild ctxKeyJWT from the trusted
+					// internal-auth headers (subject + custom claims) so
+					// serverless host functions see a non-empty
+					// caller_jwt_subject. We deliberately do NOT re-verify
+					// the JWT here — namespace gateways may not share the
+					// signing key with the main gateway, and the main gateway
+					// already verified before forwarding. Trust gate is the
+					// source-IP check above.
+					if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
+						reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
+					}
 					next.ServeHTTP(w, r.WithContext(reqCtx))
 					return
 				}
@@ -916,7 +1016,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
 	// Validate auth against main cluster RQLite BEFORE proxying
 	// This ensures API keys work even though they're not in the namespace's RQLite
-	validatedNamespace, authErr := g.validateAuthForNamespaceProxy(r)
+	validatedNamespace, validatedClaims, authErr := g.validateAuthForNamespaceProxy(r)
 	if authErr != "" && !isPublicPath(r.URL.Path) {
 		w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 		writeError(w, http.StatusUnauthorized, authErr)
@@ -1078,10 +1178,19 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		r.Header.Set("X-Forwarded-For", getClientIP(r))
 		r.Header.Set("X-Forwarded-Proto", "https")
 		r.Header.Set("X-Forwarded-Host", r.Host)
+		// SECURITY (bug #215 follow-up): drop any X-Internal-Auth-* headers
+		// the external client may have set BEFORE applying the trusted
+		// values from this gateway. Prevents identity spoofing on the
+		// namespace gateway, which gates on source IP only.
+		stripInboundInternalAuthHeaders(r.Header)
 		// Set internal auth headers if auth was validated
 		if validatedNamespace != "" {
 			r.Header.Set(HeaderInternalAuthValidated, "true")
 			r.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
+			// Bug #215: forward validated JWT subject + custom claims so the
+			// namespace gateway's auth middleware can hydrate ctxKeyJWT and
+			// host functions see a non-empty caller_jwt_subject.
+			setInternalAuthJWTHeaders(r.Header, validatedClaims)
 		}
 		r.URL.Scheme = "http"
 		r.URL.Host = targetHost
@@ -1120,11 +1229,21 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	proxyReq.Header.Set("X-Forwarded-Host", r.Host)
 	proxyReq.Header.Set("X-Original-Host", r.Host)
 
+	// SECURITY (bug #215 follow-up): drop any X-Internal-Auth-* headers
+	// the header-copy loop above may have inherited from the inbound
+	// request BEFORE writing the trusted values. The namespace gateway
+	// gates on source IP only; without this strip, an external attacker
+	// could forge X-Internal-Auth-JWT-Sub and impersonate any wallet.
+	stripInboundInternalAuthHeaders(proxyReq.Header)
 	// Set internal auth headers if auth was validated by main gateway
 	// This allows the namespace gateway to trust the authentication
 	if validatedNamespace != "" {
 		proxyReq.Header.Set(HeaderInternalAuthValidated, "true")
 		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
+		// Bug #215: forward validated JWT subject + custom claims so the
+		// namespace gateway's auth middleware can hydrate ctxKeyJWT and
+		// host functions see a non-empty caller_jwt_subject.
+		setInternalAuthJWTHeaders(proxyReq.Header, validatedClaims)
 	}
 
 	// Pick the proxy timeout based on the path's expected work bound.
@@ -1353,6 +1472,11 @@ serveLocal:
 	targetHost := "localhost:" + strconv.Itoa(deployment.Port)
 	target := "http://" + targetHost
 
+	// SECURITY (bug #215 follow-up): drop X-Internal-Auth-* headers before
+	// forwarding to a customer-deployed app on localhost. The app has no
+	// reason to see Orama's internal-auth metadata, and stripping prevents
+	// any accidental leakage if the customer ever adds header-based trust.
+	stripInboundInternalAuthHeaders(r.Header)
 	// Set proxy headers
 	r.Header.Set("X-Forwarded-For", getClientIP(r))
 	r.Header.Set("X-Forwarded-Proto", "https")
@@ -1465,6 +1589,12 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 
 	// Handle WebSocket upgrade requests specially
 	if isWebSocketUpgrade(r) {
+		// SECURITY (bug #215 follow-up): drop X-Internal-Auth-* headers from
+		// the inbound request before forwarding to another node. The target
+		// node's authMiddleware gates internal-auth trust on source IP only;
+		// without this strip, an external attacker could forge JWT-Sub here
+		// and have the home node trust it after the cross-node hop.
+		stripInboundInternalAuthHeaders(r.Header)
 		r.Header.Set("X-Forwarded-For", getClientIP(r))
 		r.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
 		r.URL.Scheme = "http"
@@ -1490,6 +1620,9 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 			proxyReq.Header.Add(key, value)
 		}
 	}
+	// SECURITY (bug #215 follow-up): drop any X-Internal-Auth-* headers the
+	// inbound request may have carried. See WS branch above.
+	stripInboundInternalAuthHeaders(proxyReq.Header)
 	proxyReq.Host = r.Host // Keep original host for domain routing on target node
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID) // Prevent loops
@@ -1590,6 +1723,8 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 
 	// Handle WebSocket upgrade requests specially
 	if isWebSocketUpgrade(r) {
+		// SECURITY (bug #215 follow-up): see proxyCrossNode for rationale.
+		stripInboundInternalAuthHeaders(r.Header)
 		r.Header.Set("X-Forwarded-For", getClientIP(r))
 		r.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
 		r.URL.Scheme = "http"
@@ -1613,6 +1748,8 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 			proxyReq.Header.Add(key, value)
 		}
 	}
+	// SECURITY (bug #215 follow-up): see proxyCrossNode for rationale.
+	stripInboundInternalAuthHeaders(proxyReq.Header)
 	proxyReq.Host = r.Host
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)

@@ -16,10 +16,14 @@ import (
 
 // NewHostFunctions creates a new HostFunctions instance.
 //
-// pushDispatcher and wsBridge may be nil when those features aren't
-// configured on this gateway — in that case PushSend silently no-ops
-// (so functions stay portable) and WSPubSubBridge returns an explicit
-// error (because absence of a requested bridge should be visible).
+// pushDispatcher / pushManager / wsBridge may be nil when those features
+// aren't configured on this gateway. PushSend prefers pushManager when
+// present (per-namespace config takes effect), falls back to pushDispatcher,
+// and silently no-ops when both are nil — so functions stay portable
+// across deployments with/without push.
+//
+// WSPubSubBridge returns an explicit error when wsBridge is nil because
+// absence of a requested bridge should be visible (callers asked for it).
 func NewHostFunctions(
 	db rqlite.Client,
 	cacheClient olriclib.Client,
@@ -28,6 +32,7 @@ func NewHostFunctions(
 	wsManager serverless.WebSocketManager,
 	secrets serverless.SecretsManager,
 	pushDispatcher *push.PushDispatcher,
+	pushManager *push.Manager,
 	wsBridge *wsbridge.Bridge,
 	cfg HostFunctionsConfig,
 	logger *zap.Logger,
@@ -46,6 +51,7 @@ func NewHostFunctions(
 		wsManager:      wsManager,
 		secrets:        secrets,
 		pushDispatcher: pushDispatcher,
+		pushManager:    pushManager,
 		wsBridge:       wsBridge,
 		httpClient:     tlsutil.NewHTTPClient(httpTimeout),
 		logger:         logger,

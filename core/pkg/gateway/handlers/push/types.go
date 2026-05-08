@@ -26,19 +26,48 @@ import (
 
 // Handlers serves the /v1/push/* HTTP endpoints. Construct via NewHandlers;
 // it's safe for concurrent use.
+//
+// dispatcher is the legacy single-tier dispatcher (kept for the device
+// register/list/delete + send paths). manager is the per-namespace
+// dispatcher built on top of ConfigStore (new in bug #220 follow-up);
+// when both are present, send paths route through manager so per-namespace
+// config wins.
+//
+// configStore + manager may be nil on gateways with push fully disabled —
+// the corresponding endpoints return 503.
 type Handlers struct {
-	dispatcher *push.PushDispatcher
-	store      push.PushDeviceStore
-	logger     *logging.ColoredLogger
+	dispatcher  *push.PushDispatcher
+	manager     *push.Manager
+	store       push.PushDeviceStore
+	configStore push.ConfigStore
+	logger      *logging.ColoredLogger
 }
 
-// NewHandlers constructs a Handlers. Either argument may be nil — in which
-// case the corresponding endpoints return 503 Service Unavailable.
+// NewHandlers constructs a Handlers with the legacy single-namespace
+// dispatcher only. Use NewHandlersWithManager for per-namespace config
+// support (bug #220 follow-up).
 func NewHandlers(dispatcher *push.PushDispatcher, store push.PushDeviceStore, logger *logging.ColoredLogger) *Handlers {
 	return &Handlers{
 		dispatcher: dispatcher,
 		store:      store,
 		logger:     logger,
+	}
+}
+
+// NewHandlersWithManager constructs Handlers wired to a Manager + ConfigStore
+// for tenant-self-service per-namespace configuration. Send paths use the
+// manager when present so per-namespace ntfy/expo settings take effect.
+func NewHandlersWithManager(
+	manager *push.Manager,
+	configStore push.ConfigStore,
+	deviceStore push.PushDeviceStore,
+	logger *logging.ColoredLogger,
+) *Handlers {
+	return &Handlers{
+		manager:     manager,
+		configStore: configStore,
+		store:       deviceStore,
+		logger:      logger,
 	}
 }
 

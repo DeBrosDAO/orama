@@ -33,10 +33,16 @@ const MaxPushSendArgsBytes = 16 * 1024
 // namespace — the dispatcher reads the namespace from the invocation
 // context (set by the engine before invoking).
 //
-// If push is not configured on this gateway (no dispatcher), this returns
-// nil (silent no-op) so functions remain portable across environments.
+// If push is not configured on this gateway (no dispatcher AND no
+// manager), this returns nil (silent no-op) so functions remain portable
+// across environments.
+//
+// When the manager is present (bug #220 follow-up), it routes through
+// per-namespace config — tenants who have set their own ntfy / expo via
+// PUT /v1/push/config get their providers; namespaces with no config
+// fall back to the gateway YAML defaults via the manager's resolution.
 func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []byte) error {
-	if h.pushDispatcher == nil {
+	if h.pushManager == nil && h.pushDispatcher == nil {
 		// Silent no-op — push isn't configured on this gateway.
 		return nil
 	}
@@ -96,8 +102,24 @@ func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []b
 		Data:     args.Data,
 	}
 
-	if err := h.pushDispatcher.SendToUser(ctx, namespace, userID, msg); err != nil {
-		return &serverless.HostFunctionError{Function: "push_send", Cause: err}
+	// Route through Manager when present so per-namespace push config
+	// (set via PUT /v1/push/config) takes effect. The Manager itself
+	// falls back to YAML defaults if the namespace hasn't set anything.
+	var sendErr error
+	if h.pushManager != nil {
+		sendErr = h.pushManager.SendToUser(ctx, namespace, userID, msg)
+		// ErrPushNotConfigured here would mean: no per-namespace config
+		// AND no YAML defaults. Treat as silent no-op for portability —
+		// same contract as "no dispatcher at all". Functions can't depend
+		// on push being available.
+		if sendErr != nil && sendErr.Error() == push.ErrPushNotConfigured.Error() {
+			return nil
+		}
+	} else {
+		sendErr = h.pushDispatcher.SendToUser(ctx, namespace, userID, msg)
+	}
+	if sendErr != nil {
+		return &serverless.HostFunctionError{Function: "push_send", Cause: sendErr}
 	}
 	return nil
 }

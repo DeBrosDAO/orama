@@ -194,6 +194,49 @@ The legacy `db_execute` is kept indefinitely so existing functions don't break. 
 | `log_info(message)` | Log info-level message (captured in invocation logs). |
 | `log_error(message)` | Log error-level message. |
 
+## Configuring Push Notifications (per-namespace)
+
+Push providers (ntfy / Expo) are configured **per namespace** by the tenant —
+no operator involvement, no SSH access required. Set, read, or clear via:
+
+```bash
+# Set / update (sensitive credentials are encrypted at rest)
+curl -X PUT https://ns-myapp.example.com/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "ntfy_base_url":   "https://ntfy.sh",
+    "ntfy_auth_token": "tk_…"
+  }'
+
+# Read (sensitive fields redacted to booleans)
+curl https://ns-myapp.example.com/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+
+# Clear (push reverts to gateway-wide defaults if any, else 503)
+curl -X DELETE https://ns-myapp.example.com/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+```
+
+### Field semantics
+
+| Field | Sensitive? | Notes |
+|---|---|---|
+| `ntfy_base_url` | No | URL of the ntfy server. `https://ntfy.sh` works for testing. |
+| `ntfy_auth_token` | Yes | Optional bearer token sent to ntfy. Encrypted at rest. |
+| `expo_access_token` | Yes | Expo Push API access token. Encrypted at rest. |
+
+PUT semantics are **field-level** — a `null` (or omitted) field leaves the
+existing value alone; an explicit empty string clears just that field. To
+clear EVERYTHING use DELETE.
+
+After a PUT the next `push_send` (host call) or `POST /v1/push/send` uses
+the new providers — the cached dispatcher is invalidated automatically.
+
+If no per-namespace config is set AND the gateway has no YAML defaults, the
+push endpoints return **503 SERVICE_UNAVAILABLE** with a message naming the
+exact config to set.
+
 ## Managing Secrets
 
 Secrets are encrypted at rest (AES-256-GCM) and scoped to your namespace. Functions read them via `get_secret("name")` at runtime.

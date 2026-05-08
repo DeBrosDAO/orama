@@ -62,3 +62,27 @@ func (g *Gateway) pushSendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	g.pushHandlers.SendHandler(w, r)
 }
+
+// pushConfigHandler dispatches GET / PUT / DELETE on /v1/push/config — the
+// tenant-self-service entrypoint for per-namespace push provider config
+// (bug #220 follow-up). When push is fully disabled returns 503 with the
+// same actionable message as the device endpoints.
+func (g *Gateway) pushConfigHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		g.pushHandlers.GetConfigHandler(w, r)
+	case http.MethodPut, http.MethodPost:
+		g.pushHandlers.PutConfigHandler(w, r)
+	case http.MethodDelete:
+		g.pushHandlers.DeleteConfigHandler(w, r)
+	default:
+		httputil.WriteRPCError(w, http.StatusMethodNotAllowed,
+			httputil.ErrCodeValidationFailed,
+			"method not allowed: use GET to read, PUT to update, or DELETE to clear")
+	}
+}

@@ -34,9 +34,13 @@ type HostFunctions struct {
 	httpClient  *http.Client
 	logger      *zap.Logger
 
-	// pushDispatcher may be nil when push isn't configured for this gateway.
-	// In that case PushSend returns nil silently — see hostfunctions/push.go.
+	// pushDispatcher (legacy) and pushManager (per-namespace, bug #220
+	// follow-up) provide push send-paths. When pushManager is set, PushSend
+	// uses it so per-namespace config takes effect; pushDispatcher is the
+	// fallback. Both nil = push not configured anywhere on this gateway,
+	// PushSend returns nil silently for portability.
 	pushDispatcher *push.PushDispatcher
+	pushManager    *push.Manager
 
 	// wsBridge may be nil when the gateway doesn't run a bridge. In that
 	// case WSPubSubBridge returns an error rather than silently no-oping

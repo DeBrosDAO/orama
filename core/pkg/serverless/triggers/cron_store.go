@@ -43,6 +43,12 @@ type cronRow struct {
 
 // CronDueRow is the JOINed row returned by ListDue: trigger + the function
 // metadata the scheduler needs to invoke it.
+//
+// NextRunAt is captured at ListDue time and passed back into MarkRun as the
+// expected-old value for the compare-and-swap UPDATE. Two gateways racing
+// the same trigger will both see the same NextRunAt; only the first MarkRun
+// wins (1 row affected), the loser gets 0 rows affected and the scheduler
+// skips the duplicate invoke.
 type CronDueRow struct {
 	TriggerID      string
 	FunctionID     string
@@ -156,6 +162,11 @@ func (s *CronTriggerStore) ListDue(ctx context.Context, now time.Time, limit int
 	if limit <= 0 {
 		limit = 100
 	}
+	// `next_run_at IS NOT NULL` is defensive: the schema permits NULL and
+	// `Add` always populates it, but a manual DB poke or future migration
+	// could leave a NULL row that would otherwise sort first and behave
+	// unpredictably under `<=`. Guarding here keeps the scheduler's
+	// invariants explicit.
 	query := `
 		SELECT t.id AS trigger_id, t.function_id AS function_id,
 		       f.name AS function_name, f.namespace AS namespace,
@@ -164,6 +175,7 @@ func (s *CronTriggerStore) ListDue(ctx context.Context, now time.Time, limit int
 		JOIN functions f ON t.function_id = f.id
 		WHERE t.enabled = TRUE
 		  AND f.status = 'active'
+		  AND t.next_run_at IS NOT NULL
 		  AND t.next_run_at <= ?
 		ORDER BY t.next_run_at ASC
 		LIMIT ?
@@ -178,9 +190,20 @@ func (s *CronTriggerStore) ListDue(ctx context.Context, now time.Time, limit int
 // MarkRun updates next_run_at + last_run_at + last_status / last_error
 // after the scheduler invokes a trigger. Idempotent: if the row was
 // removed concurrently, the UPDATE is a no-op.
+//
+// expectedNextRunAt enables the soft-lease semantics promised by the
+// scheduler comment: the UPDATE is gated on the row's current next_run_at
+// matching what ListDue read. Two gateways racing the same tick will both
+// see the same expectedNextRunAt; only one's UPDATE matches a row, the
+// other gets RowsAffected==0 and ErrAlreadyRan back so the scheduler can
+// skip the duplicate invoke.
+//
+// Returns ErrAlreadyRan when the compare-and-swap missed (another node won
+// the race or the row was deleted). Other errors are wrapped DB errors.
 func (s *CronTriggerStore) MarkRun(
 	ctx context.Context,
 	triggerID string,
+	expectedNextRunAt time.Time,
 	ranAt time.Time,
 	nextRunAt time.Time,
 	status string,
@@ -189,8 +212,20 @@ func (s *CronTriggerStore) MarkRun(
 	query := `
 		UPDATE function_cron_triggers
 		SET last_run_at = ?, next_run_at = ?, last_status = ?, last_error = ?
-		WHERE id = ?
+		WHERE id = ? AND next_run_at = ?
 	`
-	_, err := s.db.Exec(ctx, query, ranAt, nextRunAt, status, errMsg, triggerID)
-	return err
+	res, err := s.db.Exec(ctx, query, ranAt, nextRunAt, status, errMsg, triggerID, expectedNextRunAt)
+	if err != nil {
+		return fmt.Errorf("failed to MarkRun cron trigger: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return ErrAlreadyRan
+	}
+	return nil
 }
+
+// ErrAlreadyRan is returned by MarkRun when the compare-and-swap on
+// next_run_at missed — either another gateway claimed this tick first, or
+// the trigger was deleted concurrently. The scheduler treats it as "skip
+// the duplicate invoke result" rather than a hard error.
+var ErrAlreadyRan = fmt.Errorf("cron trigger already advanced by another node")
