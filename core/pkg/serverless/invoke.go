@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -420,26 +421,55 @@ func (i *Invoker) BatchInvoke(ctx context.Context, req *BatchInvokeRequest) (*Ba
 // -----------------------------------------------------------------------------
 
 // CanInvoke checks if a caller is authorized to invoke a function.
+//
+// Authorization model:
+//   - Public functions (`is_public: true`): anyone can invoke, no auth needed.
+//     The auth middleware lets unauthenticated requests through to public
+//     paths.
+//   - Private functions: any caller that the auth middleware has already
+//     authenticated for THIS namespace can invoke. By the time we reach
+//     this function, the request has passed authMiddleware which validates
+//     EITHER a JWT-bearing token whose `namespace` claim matches the target
+//     namespace OR an API key resolved to the target namespace. So the
+//     non-empty `callerWallet` here is sufficient evidence of a verified
+//     in-namespace caller.
+//
+// History (bug #215 follow-up): the previous logic was a stub —
+//
+//	return callerWallet == namespace || fn.CreatedBy == callerWallet, nil
+//
+// — which only allowed namespace-name-as-wallet (the API-key fallback) or
+// the deploying wallet. Onboarding-style functions like `user-create`,
+// where a brand-new wallet calls in to register, were rejected with 401
+// because the new wallet was neither the namespace string nor the
+// deployer. They worked only as a side-effect of JWT verification
+// silently failing pre-#215, falling through to API-key auth, and
+// callerWallet collapsing to the namespace string. Once JWT verify was
+// fixed, the underlying flaw surfaced.
+//
+// Fine-grained per-function ACLs (group membership, roles) are deferred
+// until there's a concrete tenant requirement. Today, "private" means
+// "authenticated in-namespace caller required" and that's enforced
+// here + at authMiddleware.
 func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string, callerWallet string) (bool, error) {
 	fn, err := i.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {
 		return false, err
 	}
 
-	// Public functions can be invoked by anyone
+	// Public functions can be invoked by anyone (auth middleware allows
+	// the request through without credentials).
 	if fn.IsPublic {
 		return true, nil
 	}
 
-	// Non-public functions require the caller to be in the same namespace
-	// (simplified authorization - can be extended)
-	if callerWallet == "" {
-		return false, nil
-	}
-
-	// For now, just check if caller wallet matches namespace
-	// In production, you'd check group membership, roles, etc.
-	return callerWallet == namespace || fn.CreatedBy == callerWallet, nil
+	// Private function: require an authenticated caller. The auth
+	// middleware has already verified the caller belongs to this
+	// namespace (either via JWT `namespace` claim or via API-key
+	// namespace lookup) before this function ever runs, so the only
+	// thing we need to confirm here is that the caller has SOME
+	// identity at all (i.e. the request wasn't anonymous).
+	return strings.TrimSpace(callerWallet) != "", nil
 }
 
 // GetFunctionInfo returns basic info about a function for invocation.

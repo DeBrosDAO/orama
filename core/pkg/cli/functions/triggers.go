@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -126,30 +127,81 @@ func runTriggersList(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tTOPIC\tENABLED")
+	// Bug #65 audit: the previous CLI rendered only ID/TOPIC/ENABLED, so cron
+	// triggers appeared as mystery blank-topic rows. The handler returns a
+	// `kind` discriminator plus pubsub-only `topic` or cron-only
+	// `cron_expression` / `next_run_at` / `last_run_at`; the CLI now renders
+	// both kinds in a single unified table.
+	fmt.Fprintln(w, "ID\tKIND\tSCHEDULE/TOPIC\tNEXT RUN\tLAST RUN\tENABLED")
 	for _, t := range triggers {
 		tr, ok := t.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		id, _ := tr["ID"].(string)
-		if id == "" {
-			id, _ = tr["id"].(string)
+		id := stringField(tr, "id", "ID")
+		kind := stringField(tr, "kind", "Kind")
+		// Backward compat: pre-#65 servers returned only `topic` with no
+		// `kind` field. Treat those as pubsub.
+		if kind == "" {
+			kind = "pubsub"
 		}
-		topic, _ := tr["Topic"].(string)
-		if topic == "" {
-			topic, _ = tr["topic"].(string)
+
+		var what, nextRun, lastRun string
+		switch kind {
+		case "cron":
+			what = stringField(tr, "cron_expression", "CronExpression")
+			nextRun = formatCronTimestamp(tr["next_run_at"])
+			lastRun = formatCronTimestamp(tr["last_run_at"])
+		default: // pubsub or unknown
+			what = stringField(tr, "topic", "Topic")
+			nextRun = "-"
+			lastRun = "-"
 		}
+
 		enabled := true
 		if e, ok := tr["Enabled"].(bool); ok {
 			enabled = e
 		} else if e, ok := tr["enabled"].(bool); ok {
 			enabled = e
 		}
-		fmt.Fprintf(w, "%s\t%s\t%v\n", id, topic, enabled)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\n", id, kind, what, nextRun, lastRun, enabled)
 	}
 	w.Flush()
 	return nil
+}
+
+// stringField pulls a string from a JSON-decoded map under any of the
+// supplied keys, in order. The handler emits snake_case (`cron_expression`)
+// while older Go-tagged structs may surface PascalCase — try both.
+func stringField(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// formatCronTimestamp renders a JSON timestamp from the handler in a compact
+// human-readable form. Returns "-" for nil / unparseable values so the CLI
+// table stays aligned for never-run / pubsub rows.
+func formatCronTimestamp(v interface{}) string {
+	if v == nil {
+		return "-"
+	}
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return "-"
+	}
+	// Try RFC3339 first (Go's default time.Time JSON encoding); fall back to
+	// the raw string so unexpected formats don't disappear silently.
+	if ts, err := time.Parse(time.RFC3339, s); err == nil {
+		return ts.UTC().Format("2006-01-02 15:04:05 UTC")
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return ts.UTC().Format("2006-01-02 15:04:05 UTC")
+	}
+	return s
 }
 
 func runTriggersDelete(cmd *cobra.Command, args []string) error {

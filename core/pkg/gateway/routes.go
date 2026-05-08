@@ -139,6 +139,11 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/push/devices/", g.pushDevicesByIDHandler)
 	mux.HandleFunc("/v1/push/send", g.pushSendHandler)
 
+	// Per-namespace push provider configuration (bug #220 follow-up):
+	// GET / PUT / DELETE — tenants self-serve their ntfy/expo credentials
+	// instead of filing an ops ticket. Method dispatched in the handler.
+	mux.HandleFunc("/v1/push/config", g.pushConfigHandler)
+
 	// operator node management (wallet JWT auth via middleware)
 	if g.operatorHandler != nil {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)

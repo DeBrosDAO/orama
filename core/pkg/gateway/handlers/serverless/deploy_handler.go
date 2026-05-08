@@ -173,6 +173,43 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// Register Cron triggers from definition. Mirrors the PubSub branch above:
+	// stale rows (from a previous deploy whose manifest had different cron
+	// schedules) are cleared first, then the manifest's expressions are
+	// re-added. Without this, manifest-driven cron schedules silently never
+	// fired (feature #65 audit).
+	//
+	// We always run the RemoveByFunction even when CronExpressions is empty,
+	// otherwise editing a manifest from `cron_expressions: ["0 3 * * *"]` to
+	// `cron_expressions: []` would leave the old schedule in place.
+	if h.cronStore != nil && fn != nil {
+		if err := h.cronStore.RemoveByFunction(ctx, fn.ID); err != nil {
+			h.logger.Warn("Failed to clear stale cron triggers",
+				zap.String("function", def.Name),
+				zap.Error(err))
+		}
+		// Dedupe identical expressions so a manifest accident
+		// (`cron_expressions: ["0 3 * * *", "0 3 * * *"]`) doesn't fire the
+		// function twice every tick.
+		seen := make(map[string]struct{}, len(def.CronExpressions))
+		for _, expr := range def.CronExpressions {
+			if _, dup := seen[expr]; dup {
+				continue
+			}
+			seen[expr] = struct{}{}
+			if _, err := h.cronStore.Add(ctx, fn.ID, expr); err != nil {
+				// Bad expression in a manifest is a user error worth surfacing
+				// but not blocking the deploy — the function itself is fine,
+				// only the schedule is dropped. Logged at WARN so operators
+				// see it; the deploy response still reports success.
+				h.logger.Warn("Failed to register cron trigger from manifest",
+					zap.String("function", def.Name),
+					zap.String("cron_expression", expr),
+					zap.Error(err))
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"message":  "Function deployed successfully",
 		"function": fn,

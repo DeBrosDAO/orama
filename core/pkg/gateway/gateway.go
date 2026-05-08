@@ -367,7 +367,19 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// The handlers themselves return 503 if dispatcher/store is nil; we
 	// register them unconditionally so the routes always exist with a
 	// predictable shape.
-	if deps.PushDispatcher != nil {
+	//
+	// Prefer the Manager-backed constructor (bug #220 follow-up) so
+	// tenants can self-serve their push config via PUT /v1/push/config.
+	// Fall back to the legacy constructor when only the YAML-derived
+	// dispatcher is available (older deployments without ClusterSecret).
+	if deps.PushManager != nil {
+		gw.pushHandlers = pushhandlers.NewHandlersWithManager(
+			deps.PushManager,
+			deps.PushConfigStore,
+			deps.PushDeviceStore,
+			logger,
+		)
+	} else if deps.PushDispatcher != nil {
 		gw.pushHandlers = pushhandlers.NewHandlers(deps.PushDispatcher, deps.PushDeviceStore, logger)
 	}
 

@@ -82,10 +82,19 @@ type Dependencies struct {
 	// Used by the ws_pubsub_bridge host function. Nil = disabled.
 	WSBridge *wsbridge.Bridge
 
-	// Push notification dispatcher (nil when push isn't configured —
-	// hostfunc + HTTP handlers degrade to no-op / 503).
+	// Push notification dispatcher (legacy single-tier; nil when push
+	// isn't configured at all). When PushManager is also set, send paths
+	// route through the manager instead so per-namespace config wins.
 	PushDispatcher  *push.PushDispatcher
 	PushDeviceStore push.PushDeviceStore
+
+	// PushManager wraps the device store + per-namespace config store so
+	// tenants self-serve their push provider config via PUT /v1/push/config.
+	// Nil when push subsystem isn't initialized (cluster secret missing).
+	// When set, this is the canonical send path; PushDispatcher is the
+	// fallback used only if Manager is somehow missing.
+	PushManager     *push.Manager
+	PushConfigStore push.ConfigStore
 
 	// Authentication service
 	AuthService *auth.Service
@@ -464,10 +473,18 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		secretsMgr = smImpl
 	}
 
-	// Initialize push notification dispatcher if any provider is configured.
-	// Devices are stored encrypted in RQLite (see migration 023). Providers
-	// are registered based on gateway config; missing config = provider absent.
-	pushDispatcher, pushStore, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
+	// Initialize push notification subsystem.
+	//
+	// Bug #220 follow-up: the subsystem now ALWAYS initializes when the
+	// cluster secret is available (so tenants can register devices and
+	// PUT their per-namespace push config), regardless of whether the
+	// gateway YAML has a default provider configured. The Manager wraps
+	// the device store + per-namespace ConfigStore; Send paths route
+	// through Manager so per-namespace config takes effect.
+	//
+	// PushDispatcher (legacy) is set only when YAML defaults exist —
+	// kept for back-compat with code that hasn't migrated to Manager.
+	pushDispatcher, pushStore, pushManager, pushCfgStore, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
 	if err != nil {
 		// Non-fatal: log and continue. Functions calling push_send will get nil
 		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
@@ -476,6 +493,8 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	}
 	deps.PushDispatcher = pushDispatcher
 	deps.PushDeviceStore = pushStore
+	deps.PushManager = pushManager
+	deps.PushConfigStore = pushCfgStore
 
 	// Create host functions provider (allows functions to call Orama services)
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
@@ -494,7 +513,8 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		pubsubAdapter, // pubsub adapter for serverless functions
 		deps.ServerlessWSMgr,
 		secretsMgr,
-		pushDispatcher, // may be nil — PushSend hostfunc handles that
+		pushDispatcher, // legacy — fallback when manager isn't wired
+		pushManager,    // bug #220 follow-up — per-namespace config
 		deps.WSBridge,  // may be nil; WSPubSubBridge returns explicit error
 		hostFuncsCfg,
 		logger.Logger,
@@ -581,8 +601,21 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
 
-	// Load or create EdDSA key for new JWT tokens
-	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, logger)
+	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
+	// cfg.ClusterSecret is set, the key is derived deterministically from
+	// it via HKDF, so every gateway in the cluster shares the same Ed25519
+	// keypair and JWTs verify cross-node. With an empty ClusterSecret the
+	// per-node legacy behaviour is retained (single-node test deployments).
+	if cfg.ClusterSecret == "" {
+		// Loud warning: a multi-node cluster booted without a cluster
+		// secret reproduces bug #215 (per-gateway random keys, JWTs
+		// unverifiable cross-node). Single-node test rigs are the only
+		// legitimate case.
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"ClusterSecret is empty; JWT signing keys will be random per-node. "+
+				"Multi-node clusters MUST set ClusterSecret or JWTs will not verify across gateways (bug #215).")
+	}
+	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, cfg.ClusterSecret, logger)
 	if err != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "Failed to load EdDSA signing key; new JWTs will use RS256",
 			zap.Error(err))
@@ -791,39 +824,96 @@ func injectRQLiteAuth(dsn, username, password string) string {
 	return dsn
 }
 
-// buildPushDispatcher constructs a push.PushDispatcher + device store with
-// all enabled providers. Returns (nil, nil, nil) when no provider is
-// configured — that's a supported state, not an error. Returns (nil, nil,
-// err) on hard init failures (e.g. cluster secret missing for the
-// encrypted device store).
-func buildPushDispatcher(cfg *Config, db rqlite.Client, logger *logging.ColoredLogger) (*push.PushDispatcher, push.PushDeviceStore, error) {
-	if cfg.NtfyBaseURL == "" && cfg.ExpoAccessToken == "" {
-		// No providers configured — push is disabled.
-		return nil, nil, nil
-	}
+// buildPushDispatcher constructs the push subsystem.
+//
+// As of bug #220 follow-up, push always initializes when ClusterSecret is
+// available, regardless of whether any YAML provider config is set:
+//
+//   - Device store + ConfigStore always build (tenants need to register
+//     devices and set per-namespace push config even on gateways with no
+//     YAML defaults).
+//   - Manager wraps the stores + a YAML-derived Defaults fallback. Each
+//     namespace can override any default via PUT /v1/push/config.
+//   - The legacy single-tier dispatcher is built only when YAML defaults
+//     are non-empty — kept for back-compat with code paths that haven't
+//     migrated to Manager.
+//
+// Returns (nil, nil, nil, nil, nil) when ClusterSecret is missing
+// (push subsystem disabled — credentials can't be encrypted safely).
+// Returns hard error only on store-init failure.
+func buildPushDispatcher(
+	cfg *Config,
+	db rqlite.Client,
+	logger *logging.ColoredLogger,
+) (*push.PushDispatcher, push.PushDeviceStore, *push.Manager, push.ConfigStore, error) {
 	if cfg.ClusterSecret == "" {
-		// Devices are encrypted at rest using a cluster-secret-derived key.
-		// Without it we can't store anything safely.
-		return nil, nil, fmt.Errorf("push enabled but ClusterSecret is empty")
+		// Without the cluster secret we can't encrypt credentials at rest.
+		// Disable the whole push subsystem; HTTP routes return 503.
+		return nil, nil, nil, nil, nil
 	}
+
 	store, err := push.NewRqliteDeviceStore(db, cfg.ClusterSecret, logger.Logger)
 	if err != nil {
-		return nil, nil, fmt.Errorf("init push device store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
 	}
-	d := push.New(store, logger.Logger)
-	if cfg.NtfyBaseURL != "" {
-		d.Register(pushntfy.New(pushntfy.Config{
-			BaseURL:   cfg.NtfyBaseURL,
-			AuthToken: cfg.NtfyAuthToken,
-		}, logger.Logger))
-		logger.ComponentInfo(logging.ComponentGeneral, "push provider registered: ntfy",
-			zap.String("base_url", cfg.NtfyBaseURL))
+
+	cfgStore, err := push.NewRqliteConfigStore(db, cfg.ClusterSecret, logger.Logger)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("init push config store: %w", err)
 	}
-	if cfg.ExpoAccessToken != "" {
-		d.Register(pushexpo.New(pushexpo.Config{
-			AccessToken: cfg.ExpoAccessToken,
-		}, logger.Logger))
-		logger.ComponentInfo(logging.ComponentGeneral, "push provider registered: expo")
+
+	// ProviderFactory turns a resolved Config into the right set of
+	// provider instances. Lives here in dependencies.go because this is
+	// the only place that imports both the manager package and the
+	// concrete provider sub-packages — keeps push core dep-cycle-free.
+	factory := func(c push.Config) []push.PushProvider {
+		var ps []push.PushProvider
+		if c.NtfyBaseURL != "" {
+			ps = append(ps, pushntfy.New(pushntfy.Config{
+				BaseURL:   c.NtfyBaseURL,
+				AuthToken: c.NtfyAuthToken,
+			}, logger.Logger))
+		}
+		if c.ExpoAccessToken != "" {
+			ps = append(ps, pushexpo.New(pushexpo.Config{
+				AccessToken: c.ExpoAccessToken,
+			}, logger.Logger))
+		}
+		return ps
 	}
-	return d, store, nil
+
+	defaults := push.Defaults{
+		NtfyBaseURL:     cfg.NtfyBaseURL,
+		NtfyAuthToken:   cfg.NtfyAuthToken,
+		ExpoAccessToken: cfg.ExpoAccessToken,
+	}
+	manager := push.NewManager(store, cfgStore, defaults, factory, logger.Logger)
+
+	// Legacy single-tier dispatcher kept ONLY when YAML defaults exist —
+	// some non-Manager code paths (notably the WASM push_send hostfunc
+	// before its migration to Manager) still expect a populated
+	// PushDispatcher. New code routes via Manager.
+	var legacy *push.PushDispatcher
+	if !defaults.IsEmpty() {
+		legacy = push.New(store, logger.Logger)
+		for _, p := range factory(push.Config{
+			NtfyBaseURL:     defaults.NtfyBaseURL,
+			NtfyAuthToken:   defaults.NtfyAuthToken,
+			ExpoAccessToken: defaults.ExpoAccessToken,
+		}) {
+			legacy.Register(p)
+		}
+	}
+
+	if defaults.NtfyBaseURL != "" {
+		logger.ComponentInfo(logging.ComponentGeneral, "push default provider: ntfy",
+			zap.String("base_url", defaults.NtfyBaseURL))
+	}
+	if defaults.ExpoAccessToken != "" {
+		logger.ComponentInfo(logging.ComponentGeneral, "push default provider: expo configured")
+	}
+	logger.ComponentInfo(logging.ComponentGeneral,
+		"push subsystem initialized; tenants can self-serve via PUT /v1/push/config")
+
+	return legacy, store, manager, cfgStore, nil
 }

@@ -128,14 +128,35 @@ func (s *CronScheduler) dispatch(ctx context.Context, row CronDueRow, now time.T
 			zap.String("expr", row.CronExpression),
 			zap.Error(err))
 		// Push next_run_at far out so we don't keep looking at this row.
-		_ = s.store.MarkRun(ctx, row.TriggerID, now, now.Add(365*24*time.Hour),
+		// Best-effort; if the lease is lost (ErrAlreadyRan) another gateway
+		// already saw the same bad expression and is handling it.
+		_ = s.store.MarkRun(ctx, row.TriggerID, row.NextRunAt, now, now.Add(365*24*time.Hour),
 			"error", "bad cron expression: "+err.Error())
 		return
 	}
 	next, err := parsed.Next(now)
 	if err != nil {
-		_ = s.store.MarkRun(ctx, row.TriggerID, now, now.Add(365*24*time.Hour),
+		_ = s.store.MarkRun(ctx, row.TriggerID, row.NextRunAt, now, now.Add(365*24*time.Hour),
 			"error", "no next match: "+err.Error())
+		return
+	}
+
+	// Claim the lease BEFORE invoking. The compare-and-swap on next_run_at
+	// ensures only one gateway wins the race when multiple instances see
+	// the same trigger as due. Pre-emptive claim (advance to the new next
+	// + provisional "running" status) means we don't issue duplicate
+	// invokes; the loser bails here. We patch in the real status after the
+	// invoke completes via a follow-up unconditional UPDATE keyed on the
+	// new next_run_at — the loser can't accidentally clobber that because
+	// its expected-old next_run_at no longer matches anything.
+	if err := s.store.MarkRun(ctx, row.TriggerID, row.NextRunAt, now, next, "running", ""); err != nil {
+		if err == ErrAlreadyRan {
+			// Another gateway claimed this tick. Skip silently.
+			return
+		}
+		s.logger.Warn("cron scheduler: failed to claim lease",
+			zap.String("trigger_id", row.TriggerID),
+			zap.Error(err))
 		return
 	}
 
@@ -160,8 +181,12 @@ func (s *CronScheduler) dispatch(ctx context.Context, row CronDueRow, now time.T
 		status = "error"
 		errMsg = resp.Error
 	}
-	if err := s.store.MarkRun(ctx, row.TriggerID, now, next, status, errMsg); err != nil {
-		s.logger.Warn("cron scheduler: MarkRun failed",
+	// Patch the result over the provisional "running" row. We're CAS'd on
+	// the (now) post-claim next_run_at so a stale loser from another node
+	// can't overwrite — though by construction, only this gateway holds
+	// the lease at this point.
+	if err := s.store.MarkRun(ctx, row.TriggerID, next, now, next, status, errMsg); err != nil && err != ErrAlreadyRan {
+		s.logger.Warn("cron scheduler: failed to record run result",
 			zap.String("trigger_id", row.TriggerID),
 			zap.Error(err))
 	}

@@ -2,6 +2,7 @@ package push
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -221,7 +222,9 @@ func (h *Handlers) DeleteDeviceHandler(w http.ResponseWriter, r *http.Request) {
 // exposing this in production.** The WASM hostfunc bypasses this issue
 // because trigger registration already gates which functions exist.
 func (h *Handlers) SendHandler(w http.ResponseWriter, r *http.Request) {
-	if h.dispatcher == nil {
+	// Either the per-namespace manager (preferred) or the legacy single
+	// dispatcher must be present. Both nil = push not configured at all.
+	if h.manager == nil && h.dispatcher == nil {
 		writeError(w, http.StatusServiceUnavailable, "push: dispatcher not configured")
 		return
 	}
@@ -261,14 +264,27 @@ func (h *Handlers) SendHandler(w http.ResponseWriter, r *http.Request) {
 		Sound:    body.Sound,
 		Data:     body.Data,
 	}
-	if err := h.dispatcher.SendToUser(boundCtx(r), ns, body.UserID, msg); err != nil {
+	// Prefer the per-namespace Manager when present so per-namespace
+	// config (set via PUT /v1/push/config) takes effect. Fall back to the
+	// legacy single dispatcher only when no Manager is wired.
+	var sendErr error
+	if h.manager != nil {
+		sendErr = h.manager.SendToUser(boundCtx(r), ns, body.UserID, msg)
+		if errors.Is(sendErr, push.ErrPushNotConfigured) {
+			writeError(w, http.StatusServiceUnavailable, sendErr.Error())
+			return
+		}
+	} else {
+		sendErr = h.dispatcher.SendToUser(boundCtx(r), ns, body.UserID, msg)
+	}
+	if sendErr != nil {
 		// Treat as non-fatal: some devices may have failed but others may
 		// have succeeded. Surface as 502 to signal partial trouble; logs
 		// have the per-device detail.
 		h.logger.ComponentWarn("push", "send to user partially failed",
 			zap.String("namespace", ns),
 			zap.String("user_id", body.UserID),
-			zap.Error(err))
+			zap.Error(sendErr))
 		writeError(w, http.StatusBadGateway, "one or more devices failed")
 		return
 	}

@@ -98,7 +98,7 @@ Examples:
 			return pushDirect(nodes, archivePath)
 		}
 
-		// Multi-node with --fanout: use agent forwarding
+		// Multi-node with --fanout: upload to hub, fan out server-to-server
 		return pushFanout(nodes, archivePath)
 	},
 }
@@ -135,27 +135,35 @@ func pushDirect(nodes []inspector.Node, archivePath string) error {
 	return nil
 }
 
-// pushFanout uploads the archive to the first node, then fans out server-to-server
-// using SSH agent forwarding.
+// pushFanout uploads the archive to the first node (hub), then fans out
+// server-to-server: the hub SCPs the archive to all other nodes in parallel
+// and SSHes in to extract it.
+//
+// Key design — no SSH agent forwarding:
+//
+// The previous implementation loaded all N node keys into the system ssh-agent
+// and used agent forwarding (-A) so the hub could reach targets. That caused
+// "Too many authentication failures": when the hub connected to a target, the
+// forwarded agent offered all N keys sequentially; if N exceeds the server's
+// MaxAuthTries (default 6 on most distros), the server disconnects before the
+// correct key is tried.
+//
+// Fix: PrepareNodeKeys (called by the parent command) already fetched and wrote
+// each node's private key to a temp file (node.SSHKey). We base64-encode each
+// key and embed it directly in the fanout bash script. On the hub, the script
+// writes each key to its own mktemp file, uses -o IdentitiesOnly=yes -i $K
+// (only ONE key offered per connection), and deletes the temp file immediately.
+// No ssh-agent involved on either end; MaxAuthTries is irrelevant.
 func pushFanout(nodes []inspector.Node, archivePath string) error {
 	fmt.Printf("Pushing to %d node(s) (fanout)...\n\n", len(nodes))
 
 	hub := nodes[0]
 	targets := nodes[1:]
 	remotePath := "/tmp/" + filepath.Base(archivePath)
-	// Hub extraction keeps the archive so it can be fanned out to targets.
-	// The cleanup at the end removes it.
-	hubExtractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama", remotePath)
-	// Target extraction deletes the archive after extracting.
-	targetExtractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s", remotePath, remotePath)
 
-	// Load SSH keys into the system ssh-agent for agent forwarding
-	fmt.Println("  Loading SSH keys into agent...")
-	if err := remotessh.LoadAgentKeys(nodes); err != nil {
-		fmt.Printf("  Warning: failed to load agent keys: %v\n", err)
-		fmt.Println("  Falling back to direct push...")
-		return pushDirect(nodes, archivePath)
-	}
+	// Hub keeps the archive on disk after extracting — targets SCP it from here.
+	// The archive is removed from the hub at the end of this function.
+	hubExtractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama", remotePath)
 
 	// Upload archive to hub
 	fmt.Printf("  %s (hub): uploading...", hub.Host)
@@ -168,27 +176,53 @@ func pushFanout(nodes []inspector.Node, archivePath string) error {
 	}
 	fmt.Println(" OK")
 
-	// Build the fanout command — hub SCPs to all targets in parallel
+	// Build the fanout script. Each target gets its own shell subshell that:
+	//   1. Writes the target's SSH private key to a mktemp file ($K).
+	//   2. SCPs the archive from the hub's local path to the target.
+	//   3. SSHes into the target to extract it.
+	//   4. Deletes $K — key material never lingers on the hub.
+	//
+	// All subshells run in parallel (&); a final `wait` collects them.
+	// The entire script is base64-encoded before transmission to avoid shell
+	// quoting conflicts (the script contains both single and double quotes).
 	var fanoutParts []string
 	for _, t := range targets {
-		scpCmd := fmt.Sprintf(
-			"scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=no %s %s@%s:%s && ssh -o StrictHostKeyChecking=accept-new %s@%s 'sudo bash -c \"%s\"' && echo '%s: done'",
+		keyBytes, err := os.ReadFile(t.SSHKey)
+		if err != nil {
+			// SSHKey was populated by PrepareNodeKeys; this should never
+			// happen unless the temp file was somehow deleted mid-run.
+			fmt.Printf("  Warning: could not read key for %s: %v (skipping)\n", t.Host, err)
+			continue
+		}
+		// base64 alphabet is [A-Za-z0-9+/=] — no shell metacharacters —
+		// safe to embed in single-quoted strings inside the script.
+		keyB64 := base64.StdEncoding.EncodeToString(keyBytes)
+
+		part := fmt.Sprintf(
+			"(K=$(mktemp) && echo '%s' | base64 -d >\"$K\" && chmod 600 \"$K\" && "+
+				"scp -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o IdentitiesOnly=yes -i \"$K\" %s %s@%s:%s && "+
+				"ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o IdentitiesOnly=yes -i \"$K\" %s@%s "+
+				"'sudo bash -c \"mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s\"' && "+
+				"rm -f \"$K\" && echo '%s: done' || (rm -f \"$K\" 2>/dev/null; echo '%s: FAILED')) &",
+			keyB64,
 			remotePath, t.User, t.Host, remotePath,
-			t.User, t.Host, targetExtractCmd,
-			t.Host,
+			t.User, t.Host,
+			remotePath, remotePath,
+			t.Host, t.Host,
 		)
-		fanoutParts = append(fanoutParts, "("+scpCmd+") &")
+		fanoutParts = append(fanoutParts, part)
 	}
 	fanoutParts = append(fanoutParts, "wait", "echo 'Fanout complete'")
 	fanoutScript := strings.Join(fanoutParts, "\n")
 
-	// Base64-encode the script to avoid shell quoting conflicts — the script
-	// contains single quotes (ssh '...') that would break a bash -c '...' wrapper.
 	encoded := base64.StdEncoding.EncodeToString([]byte(fanoutScript))
 	runCmd := fmt.Sprintf("echo %s | base64 -d | bash", encoded)
 
 	fmt.Printf("  Fanning out to %d nodes from %s...\n", len(targets), hub.Host)
-	if err := remotessh.RunSSHStreaming(hub, runCmd, remotessh.WithAgentForward()); err != nil {
+	// No agent forwarding — hub authenticates to each target using only
+	// that target's key (embedded above). IdentitiesOnly=yes ensures the
+	// hub's own host key is never accidentally offered to other nodes.
+	if err := remotessh.RunSSHStreaming(hub, runCmd); err != nil {
 		fmt.Printf("  Fanout failed: %v\n", err)
 		fmt.Println("  Some nodes may not have been updated")
 	}

@@ -22,15 +22,28 @@ import (
 type SystemdSpawner struct {
 	systemdMgr    *systemd.Manager
 	namespaceBase string
-	logger        *zap.Logger
+	// clusterSecretPath is the host's cluster-secret file path; written
+	// into spawned namespace gateways' YAML so they can derive the
+	// cluster-wide JWT signing key (bug #215). Empty string means the host
+	// has no cluster secret available — namespace gateways will fall back
+	// to per-node random keys and JWTs won't verify cross-node.
+	clusterSecretPath string
+	logger            *zap.Logger
 }
 
-// NewSystemdSpawner creates a new systemd-based spawner
-func NewSystemdSpawner(namespaceBase string, logger *zap.Logger) *SystemdSpawner {
+// NewSystemdSpawner creates a new systemd-based spawner.
+//
+// clusterSecretPath should point to the host node's cluster-secret file
+// (typically `<oramaDir>/secrets/cluster-secret`). It is written into each
+// spawned namespace gateway's YAML config so the gateway can read it on
+// startup. Pass "" only if no cluster secret exists on this host (legacy
+// single-node test deployments).
+func NewSystemdSpawner(namespaceBase, clusterSecretPath string, logger *zap.Logger) *SystemdSpawner {
 	return &SystemdSpawner{
-		systemdMgr:    systemd.NewManager(namespaceBase, logger),
-		namespaceBase: namespaceBase,
-		logger:        logger.With(zap.String("component", "systemd-spawner")),
+		systemdMgr:        systemd.NewManager(namespaceBase, logger),
+		namespaceBase:     namespaceBase,
+		clusterSecretPath: clusterSecretPath,
+		logger:            logger.With(zap.String("component", "systemd-spawner")),
 	}
 }
 
@@ -209,6 +222,12 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		IPFSAPIURL:            cfg.IPFSAPIURL,
 		IPFSTimeout:           cfg.IPFSTimeout.String(),
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+		// Bug #215 fix: forward the host's cluster secret path so the
+		// spawned namespace gateway can derive the cluster-wide JWT
+		// signing key. Without this, namespace gateways used per-node
+		// random Ed25519 keys and host functions saw empty
+		// caller_jwt_subject.
+		ClusterSecretPath: s.clusterSecretPath,
 		WebRTC: gateway.GatewayYAMLWebRTC{
 			Enabled:    cfg.WebRTCEnabled,
 			SFUPort:    cfg.SFUPort,

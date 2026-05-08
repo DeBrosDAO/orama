@@ -110,21 +110,29 @@ type GatewayYAMLWebRTC struct {
 // This must match the yamlCfg struct in cmd/gateway/config.go exactly
 // because the gateway uses strict YAML decoding that rejects unknown fields
 type GatewayYAMLConfig struct {
-	ListenAddr            string             `yaml:"listen_addr"`
-	ClientNamespace       string             `yaml:"client_namespace"`
-	RQLiteDSN             string             `yaml:"rqlite_dsn"`
-	GlobalRQLiteDSN       string             `yaml:"global_rqlite_dsn,omitempty"`
-	BootstrapPeers        []string           `yaml:"bootstrap_peers,omitempty"`
-	EnableHTTPS           bool               `yaml:"enable_https,omitempty"`
-	DomainName            string             `yaml:"domain_name,omitempty"`
-	TLSCacheDir           string             `yaml:"tls_cache_dir,omitempty"`
-	OlricServers          []string           `yaml:"olric_servers"`
-	OlricTimeout          string             `yaml:"olric_timeout,omitempty"`
-	IPFSClusterAPIURL     string             `yaml:"ipfs_cluster_api_url,omitempty"`
-	IPFSAPIURL            string             `yaml:"ipfs_api_url,omitempty"`
-	IPFSTimeout           string             `yaml:"ipfs_timeout,omitempty"`
-	IPFSReplicationFactor int                `yaml:"ipfs_replication_factor,omitempty"`
-	WebRTC                GatewayYAMLWebRTC  `yaml:"webrtc,omitempty"`
+	ListenAddr            string            `yaml:"listen_addr"`
+	ClientNamespace       string            `yaml:"client_namespace"`
+	RQLiteDSN             string            `yaml:"rqlite_dsn"`
+	GlobalRQLiteDSN       string            `yaml:"global_rqlite_dsn,omitempty"`
+	BootstrapPeers        []string          `yaml:"bootstrap_peers,omitempty"`
+	EnableHTTPS           bool              `yaml:"enable_https,omitempty"`
+	DomainName            string            `yaml:"domain_name,omitempty"`
+	TLSCacheDir           string            `yaml:"tls_cache_dir,omitempty"`
+	OlricServers          []string          `yaml:"olric_servers"`
+	OlricTimeout          string            `yaml:"olric_timeout,omitempty"`
+	IPFSClusterAPIURL     string            `yaml:"ipfs_cluster_api_url,omitempty"`
+	IPFSAPIURL            string            `yaml:"ipfs_api_url,omitempty"`
+	IPFSTimeout           string            `yaml:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor int               `yaml:"ipfs_replication_factor,omitempty"`
+	WebRTC                GatewayYAMLWebRTC `yaml:"webrtc,omitempty"`
+	// ClusterSecretPath points to the host's cluster-secret file. Bug #215
+	// follow-up: namespace gateways spawned by systemd previously had no
+	// way to access the cluster secret, so they fell back to per-node
+	// random JWT signing keys and JWTs were unverifiable cross-node within
+	// the namespace cluster. Setting this path lets the standalone gateway
+	// binary read the secret on startup and derive the canonical Ed25519
+	// key shared with every other gateway in the cluster.
+	ClusterSecretPath string `yaml:"cluster_secret_path,omitempty"`
 }
 
 // NewInstanceSpawner creates a new Gateway instance spawner

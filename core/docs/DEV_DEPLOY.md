@@ -489,25 +489,59 @@ sudo cp caddy-root-ca.crt /usr/local/share/ca-certificates/caddy-root-ca.crt
 sudo update-ca-certificates
 ```
 
-## Push notifications (optional, per gateway)
+## Push notifications
 
-Push routes (`/v1/push/devices`, `/v1/push/send`) are always registered but
-return `503 SERVICE_UNAVAILABLE` until at least one provider is configured
-in the gateway config:
+Push provider configuration is **tenant-self-service** as of bug #220
+follow-up. Tenants set their own ntfy / Expo credentials via authenticated
+HTTP — operators no longer need to edit YAML and restart for every namespace
+that wants push.
 
-```yaml
-# In your namespace gateway config:
-push:
-  ntfy_base_url: "http://localhost:8080"   # self-hosted ntfy (preferred for privacy)
-  expo_access_token: "..."                  # Expo push (alternative; client SDK lock-in)
+### Tenant flow (no operator involvement)
+
+```bash
+# Set per-namespace config
+curl -X PUT https://ns-anchat-test.orama-devnet.network/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>' \
+  -H 'Content-Type: application/json' \
+  -d '{"ntfy_base_url": "https://ntfy.sh"}'
+
+# Read current config (secrets redacted to booleans)
+curl https://ns-anchat-test.orama-devnet.network/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+
+# Clear (push reverts to gateway YAML defaults, or 503 if no defaults)
+curl -X DELETE https://ns-anchat-test.orama-devnet.network/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
 ```
 
-Restart the gateway after editing. A `GET /v1/push/devices` call (with valid
-auth) will then return `200` instead of `503`.
+Per-namespace config takes effect on the NEXT push send (the cached
+dispatcher is invalidated on PUT/DELETE). No restart needed.
 
-The 503 body explicitly names the config knobs operators need to set, so
-tenants getting "Push not configured" can self-diagnose without filing a
-ticket. (Bug #220 audit fix.)
+### Operator flow (cluster-wide defaults — optional)
+
+Operators can still seed defaults in the gateway YAML. Per-namespace config
+OVERRIDES the defaults; namespaces with no row inherit them.
+
+```yaml
+# Cluster-wide push defaults (optional; tenants override per-namespace)
+push:
+  ntfy_base_url: "https://ntfy.sh"           # default for namespaces with no override
+  expo_access_token: "..."                    # default Expo token
+```
+
+### Encryption
+
+Sensitive credentials (`ntfy_auth_token`, `expo_access_token`) are
+AES-256-GCM-encrypted at rest in the `namespace_push_config` table using
+a key derived from the cluster secret. The GET endpoint returns boolean
+`has_X` flags only — credentials are NEVER echoed back over HTTP.
+
+### Disabling push entirely
+
+If `cluster_secret` isn't configured on the gateway, the push subsystem
+is disabled and `/v1/push/*` returns 503. To enable: set the cluster secret
+and restart. (This is the only operator-side restart still required, and
+it's a one-time action at gateway provisioning.)
 
 ## Project Structure
 

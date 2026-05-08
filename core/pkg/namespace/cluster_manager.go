@@ -39,6 +39,12 @@ type ClusterManagerConfig struct {
 	// in RQLite. Derived from cluster secret via HKDF(clusterSecret, "turn-encryption").
 	// If nil, TURN secrets are stored in plaintext (backward compatibility).
 	TurnEncryptionKey []byte
+
+	// ClusterSecretPath is the host's cluster-secret file path. Forwarded
+	// to spawned namespace gateways via YAML so they can derive the
+	// cluster-wide JWT signing key (bug #215 fix). Empty string disables
+	// cross-node JWT verification within namespace clusters.
+	ClusterSecretPath string
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -81,7 +87,7 @@ func NewClusterManager(
 	portAllocator := NewNamespacePortAllocator(db, logger)
 	webrtcPortAllocator := NewWebRTCPortAllocator(db, logger)
 	nodeSelector := NewClusterNodeSelector(db, portAllocator, logger)
-	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, logger)
+	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, cfg.ClusterSecretPath, logger)
 	dnsManager := NewDNSRecordManager(db, cfg.BaseDomain, logger)
 
 	// Set IPFS defaults
