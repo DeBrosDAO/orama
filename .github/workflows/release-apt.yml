@@ -58,8 +58,8 @@ jobs:
           LDFLAGS="-X 'main.version=$VERSION' -X 'main.commit=$COMMIT' -X 'main.date=$DATE'"
 
           mkdir -p build/usr/local/bin
-          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama cmd/cli/main.go
-          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama-node cmd/node/main.go
+          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama ./cmd/cli
+          go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama-node ./cmd/node
           # Build the entire gateway package so helper files (e.g., config parsing) are included
           go build -ldflags "$LDFLAGS" -o build/usr/local/bin/orama-gateway ./cmd/gateway
 
