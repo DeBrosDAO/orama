@@ -1,6 +1,8 @@
 name: Publish SDK to npm
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -41,8 +43,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Bump version
-        if: inputs.version != ''
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+            npm version "$VERSION" --no-git-tag-version
+          elif [ -n "${{ inputs.version }}" ]; then
+            npm version ${{ inputs.version }} --no-git-tag-version
+          fi
 
       - name: Typecheck
         run: pnpm typecheck
@@ -60,18 +68,18 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish
-        if: inputs.dry-run == false
+        if: github.event_name == 'release' || inputs.dry-run != true
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Get published version
-        if: inputs.dry-run == false
+        if: github.event_name == 'release' || inputs.dry-run != true
         id: version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Create git tag
-        if: inputs.dry-run == false
+        if: github.event_name != 'release' && inputs.dry-run != true
         working-directory: .
         run: |
           git config user.name "github-actions[bot]"
