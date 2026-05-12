@@ -80,10 +80,15 @@ type structWithEmbedded struct {
 func TestBuildFieldIndex(t *testing.T) {
 	t.Run("tagged struct", func(t *testing.T) {
 		idx := buildFieldIndex(reflect.TypeOf(taggedStruct{}))
+		// Keys are normalized via normalizeColumnKey: lowercased and
+		// underscores stripped. So `user_name` and `UserName` both
+		// resolve to `username` and the scanner can match snake_case SQL
+		// columns onto CamelCase struct fields without explicit `db:` tags
+		// (feature #65 cron-scheduler bug fix).
 		assert.Equal(t, 0, idx["id"])
-		assert.Equal(t, 1, idx["user_name"])
-		assert.Equal(t, 2, idx["email_addr"])
-		assert.Equal(t, 3, idx["created_at"])
+		assert.Equal(t, 1, idx["username"])
+		assert.Equal(t, 2, idx["emailaddr"])
+		assert.Equal(t, 3, idx["createdat"])
 		assert.Len(t, idx, 4)
 	})
 
@@ -99,7 +104,8 @@ func TestBuildFieldIndex(t *testing.T) {
 		idx := buildFieldIndex(reflect.TypeOf(mixedStruct{}))
 		assert.Equal(t, 0, idx["id"])
 		assert.Equal(t, 1, idx["name"])
-		assert.Equal(t, 3, idx["is_active"])
+		// `is_active` normalizes to `isactive`.
+		assert.Equal(t, 3, idx["isactive"])
 		// "-" tag means the first part of the tag is "-", so it maps with key "-"
 		// The actual behavior: tag="-" → col="-" → stored as "-"
 		// Let's verify what actually happens
@@ -157,6 +163,59 @@ func TestBuildFieldIndex(t *testing.T) {
 		_, hasLowerID := idx["id"]
 		assert.True(t, hasLowerID)
 	})
+
+	// REGRESSION (feature #65 cron-scheduler bug): a struct with CamelCase
+	// fields and NO `db:` tags must map onto snake_case SQL columns.
+	// Pre-fix, the cron scheduler read DB rows with valid `trigger_id` and
+	// `cron_expression` columns into a `CronDueRow` struct with `TriggerID`
+	// and `CronExpression` fields — and got back zero values for both,
+	// because `triggerid` (the lowercased struct field name) didn't match
+	// `trigger_id` (the lowercased column name) in the index lookup.
+	t.Run("camelCase field maps to snake_case column without db tag", func(t *testing.T) {
+		type cronDueRowLike struct {
+			TriggerID      string
+			FunctionID     string
+			FunctionName   string
+			Namespace      string
+			CronExpression string
+		}
+		idx := buildFieldIndex(reflect.TypeOf(cronDueRowLike{}))
+
+		// Both spellings of the same key must resolve to the same field
+		// because of normalizeColumnKey.
+		for _, sqlCol := range []string{"trigger_id", "TriggerID", "triggerid"} {
+			pos, ok := idx[normalizeColumnKey(sqlCol)]
+			assert.True(t, ok, "column %q should map to TriggerID", sqlCol)
+			assert.Equal(t, 0, pos)
+		}
+		for _, sqlCol := range []string{"cron_expression", "CronExpression"} {
+			pos, ok := idx[normalizeColumnKey(sqlCol)]
+			assert.True(t, ok, "column %q should map to CronExpression", sqlCol)
+			assert.Equal(t, 4, pos)
+		}
+	})
+}
+
+// TestNormalizeColumnKey exercises the central rule that snake_case ↔
+// CamelCase map to the same scanner key. Pre-fix, the absence of this
+// normalization silently broke struct scanning for any multi-word column
+// name (the cron scheduler in feature #65 was the canary).
+func TestNormalizeColumnKey(t *testing.T) {
+	cases := map[string]string{
+		"id":              "id",
+		"ID":              "id",
+		"trigger_id":      "triggerid",
+		"TriggerID":       "triggerid",
+		"triggerID":       "triggerid",
+		"cron_expression": "cronexpression",
+		"CronExpression":  "cronexpression",
+		"":                "",
+		"_":               "",
+		"___":             "",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, normalizeColumnKey(in), "normalizeColumnKey(%q)", in)
+	}
 }
 
 // ---------------------------------------------------------------------------
