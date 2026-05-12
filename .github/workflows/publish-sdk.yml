@@ -61,9 +61,13 @@ jobs:
           if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
             VERSION="${VERSION#v}"
-            npm version "$VERSION" --no-git-tag-version
+            # --allow-same-version: when /VERSION was already bumped on the
+            # source branch before tagging, package.json may already match
+            # the tag. npm version errors as 'Version not changed' without
+            # this flag.
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
           elif [ -n "${{ inputs.version }}" ]; then
-            npm version ${{ inputs.version }} --no-git-tag-version
+            npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
           fi
 
       - name: Typecheck
