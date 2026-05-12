@@ -111,7 +111,6 @@ jobs:
           PKG_NAME="orama_${VERSION}_${ARCH}"
 
           dpkg-deb --build ${PKG_NAME}
-          mv ${PKG_NAME}.deb orama_${VERSION}_${ARCH}.deb
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
