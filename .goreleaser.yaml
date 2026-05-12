@@ -9,7 +9,7 @@ env:
 
 before:
   hooks:
-    - cd core && go mod tidy
+    - go -C core mod tidy
 
 builds:
   # orama CLI binary
