@@ -1,0 +1,144 @@
+# DeBros canonical security CI workflow.
+#
+# Auto-detects the project's language and runs the appropriate
+# supply-chain + vulnerability checks. Drop this file into
+# .github/workflows/ in any DeBros-compliant repo.
+#
+# See: https://github.com/DeBrosDAO/rules/blob/main/DEBROS.md
+
+name: security
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  schedule:
+    # Weekly scan even on quiet repos — catches newly-published CVEs
+    # in existing dependencies.
+    - cron: "0 8 * * 1"
+
+jobs:
+  # ------------------------------------------------------------------
+  # JavaScript / TypeScript
+  # ------------------------------------------------------------------
+  npm-audit:
+    if: ${{ hashFiles('**/package.json') != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify lockfile committed
+        run: |
+          if [ ! -f pnpm-lock.yaml ] && [ ! -f package-lock.json ] && [ ! -f yarn.lock ] && [ ! -f bun.lockb ]; then
+            echo "::error::No lockfile committed. See DEBROS.md §1.2"
+            exit 1
+          fi
+
+      - name: Verify .npmrc blocks install scripts
+        run: |
+          if ! grep -q '^ignore-scripts=true' .npmrc 2>/dev/null; then
+            echo "::error::.npmrc must contain 'ignore-scripts=true' (DEBROS.md §1.3, JS/TS compliance)"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v3
+        if: ${{ hashFiles('pnpm-lock.yaml') != '' }}
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+
+      - name: Install (frozen lockfile)
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile
+          fi
+
+      - name: Audit (production deps)
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm audit --prod --audit-level=high
+          else
+            npm audit --omit=dev --audit-level=high
+          fi
+
+  # ------------------------------------------------------------------
+  # Go
+  # ------------------------------------------------------------------
+  go-vuln:
+    if: ${{ hashFiles('**/go.mod') != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify go.sum committed
+        run: |
+          if [ ! -f go.sum ]; then
+            echo "::error::go.sum must be committed (DEBROS.md §1.2)"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        run: staticcheck ./...
+
+  # ------------------------------------------------------------------
+  # Python
+  # ------------------------------------------------------------------
+  python-audit:
+    if: ${{ hashFiles('**/pyproject.toml') != '' || hashFiles('**/requirements*.txt') != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify lockfile committed
+        run: |
+          if [ ! -f poetry.lock ] && [ ! -f uv.lock ] && [ ! -f Pipfile.lock ]; then
+            echo "::warning::No lockfile detected. Consider Poetry or uv for reproducibility (DEBROS.md §1.2)"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          if [ -f poetry.lock ]; then
+            pip-audit --strict
+          elif [ -f requirements.txt ]; then
+            pip-audit --requirement requirements.txt --strict
+          else
+            pip-audit --strict
+          fi

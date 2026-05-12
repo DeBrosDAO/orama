@@ -1,0 +1,73 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommitTypeAll(chore)"
+  ],
+
+  "//": "30-day cooldown is the supply-chain defense — see DEBROS.md §1.1. Caught CVEs override via vulnerabilityAlerts below.",
+  "minimumReleaseAge": "30 days",
+
+  "//1": "Never auto-merge dependency upgrades. Humans review and merge per DEBROS.md §1.7.",
+  "automerge": false,
+
+  "//2": "Security findings bypass the cooldown — apply patched versions immediately.",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days",
+    "labels": ["security", "priority/high"],
+    "addLabels": ["security"]
+  },
+
+  "//3": "Group dev-only and lint dependencies — less PR noise. They go through the same cooldown.",
+  "packageRules": [
+    {
+      "matchDepTypes": ["devDependencies"],
+      "matchPackagePatterns": ["lint", "prettier", "biome", "eslint"],
+      "groupName": "lint and formatter (dev)",
+      "schedule": ["before 5am on monday"]
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "matchPackagePatterns": ["jest", "vitest", "playwright", "cypress"],
+      "groupName": "test tooling (dev)",
+      "schedule": ["before 5am on monday"]
+    },
+    {
+      "//": "Major version upgrades need a separate PR — easier to review the breaking-change diff",
+      "matchUpdateTypes": ["major"],
+      "labels": ["breaking-change"],
+      "schedule": ["before 5am on the first day of the month"]
+    }
+  ],
+
+  "//4": "Weekly lockfile maintenance — refreshes transitive dependencies under the same cooldown.",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on monday"],
+    "commitMessageAction": "lockfile-maintenance: refresh"
+  },
+
+  "//5": "Open at most 5 PRs at once — keeps the review queue manageable.",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+
+  "//6": "Ecosystem-specific tweaks — Go and Python use the same cooldown via their respective managers.",
+  "gomod": {
+    "enabled": true
+  },
+  "pep621": {
+    "enabled": true
+  },
+  "poetry": {
+    "enabled": true
+  },
+  "pip_requirements": {
+    "enabled": true
+  },
+
+  "//7": "Add a dashboard issue so dismissed updates are visible.",
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate Dependency Dashboard"
+}
