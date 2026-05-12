@@ -98,6 +98,17 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			}
 		}
 
+		// Bug #215 fix: tell the namespace cluster manager where the
+		// host's cluster-secret file lives. Spawned namespace gateways
+		// read it on startup to derive the cluster-wide Ed25519 JWT
+		// signing key. The path resolves to the same file the host
+		// gateway reads above (line ~45) — keeps the secret on disk
+		// once, just referenced from the namespace gateway YAML.
+		clusterSecretPath := ""
+		if clusterSecret != "" {
+			clusterSecretPath = filepath.Join(oramaDir, "secrets", "cluster-secret")
+		}
+
 		clusterCfg := namespace.ClusterManagerConfig{
 			BaseDomain:            n.config.HTTPGateway.BaseDomain,
 			BaseDataDir:           baseDataDir,
@@ -107,6 +118,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			IPFSTimeout:           gwCfg.IPFSTimeout,
 			IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
 			TurnEncryptionKey:     turnEncKey,
+			ClusterSecretPath:     clusterSecretPath,
 		}
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)
@@ -114,8 +126,11 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		apiGateway.SetNodeRecoverer(clusterManager)
 		apiGateway.SetWebRTCManager(clusterManager)
 
-		// Wire spawn handler for distributed namespace instance spawning
-		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, n.logger.Logger)
+		// Wire spawn handler for distributed namespace instance spawning.
+		// Forwards the host's cluster_secret_path through to spawned
+		// namespace gateways (bug #215 fix; same rationale as the
+		// ClusterManager spawner above).
+		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, clusterSecretPath, n.logger.Logger)
 		spawnHandler := namespacehandlers.NewSpawnHandler(systemdSpawner, n.logger.Logger)
 		apiGateway.SetSpawnHandler(spawnHandler)
 

@@ -15,7 +15,7 @@ export function OpsSetup() {
           <div className="flex flex-col gap-8">
             <SectionHeader
               title="From zero to earning in 5 minutes."
-              subtitle="Get your node running with just a VPS and an invite token."
+              subtitle="Testnet is free — no staking required. Get a VPS, install OramaOS, and start earning $ORAMA that carries over to mainnet."
             />
 
             <div className="flex flex-col gap-8 max-w-3xl mx-auto w-full">
@@ -25,7 +25,7 @@ export function OpsSetup() {
                 <div>
                   <h3 className="font-display font-semibold text-fg text-sm mb-1">Get a VPS</h3>
                   <p className="text-sm text-muted">
-                    Any Linux VPS with 4GB RAM, 2 cores, 40GB disk. Hetzner, DigitalOcean, Vultr — any provider works.
+                    Cloud: 2+ vCPU, 4GB RAM, 80GB SSD. Standard: 4+ cores, 8GB RAM, 256GB NVMe, TPM 2.0. Hetzner, DigitalOcean, Vultr — any provider works.
                   </p>
                 </div>
               </div>

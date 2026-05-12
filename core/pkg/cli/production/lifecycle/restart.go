@@ -53,6 +53,7 @@ func HandleRestartWithFlags(force bool) {
 		{"orama-node"},
 		{"orama-olric"},
 		{"orama-ipfs-cluster", "orama-ipfs"},
+		{"orama-vault"},
 		{"orama-anyone-relay", "orama-anyone-client"},
 		{"coredns", "caddy"},
 	}

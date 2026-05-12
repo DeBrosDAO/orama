@@ -2,14 +2,42 @@ package serverless
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
+
+// extractRemoteIP returns a best-effort source IP for the request.
+// Trusts X-Real-IP / X-Forwarded-For only when the immediate peer is loopback
+// or a private address (i.e. behind our own reverse proxy / SNI router).
+func extractRemoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	trustHeaders := peer != nil && (peer.IsLoopback() || peer.IsPrivate())
+	if trustHeaders {
+		if v := r.Header.Get("X-Real-IP"); v != "" {
+			return strings.TrimSpace(v)
+		}
+		if v := r.Header.Get("X-Forwarded-For"); v != "" {
+			// First entry is the original client.
+			if comma := strings.IndexByte(v, ','); comma >= 0 {
+				v = v[:comma]
+			}
+			return strings.TrimSpace(v)
+		}
+	}
+	return host
+}
 
 // InvokeFunction handles POST /v1/functions/{name}/invoke
 // Invokes a function with the provided input.
@@ -51,38 +79,65 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 
 	req := &serverless.InvokeRequest{
-		Namespace:    namespace,
-		FunctionName: name,
-		Version:      version,
-		Input:        input,
-		TriggerType:  serverless.TriggerTypeHTTP,
-		CallerWallet: callerWallet,
+		Namespace:        namespace,
+		FunctionName:     name,
+		Version:          version,
+		Input:            input,
+		TriggerType:      serverless.TriggerTypeHTTP,
+		CallerWallet:     callerWallet,
+		CallerIP:         extractRemoteIP(r),
+		CallerClaims:     h.getCallerClaimsFromRequest(r),
+		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
 	}
 
 	resp, err := h.invoker.Invoke(ctx, req)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		if serverless.IsNotFound(err) {
-			statusCode = http.StatusNotFound
-		} else if serverless.IsResourceExhausted(err) {
-			statusCode = http.StatusTooManyRequests
-		} else if serverless.IsUnauthorized(err) {
-			statusCode = http.StatusUnauthorized
-		}
+		// Bug #212: every error path here emits the canonical RPC
+		// envelope. error.message is always populated (falls back to
+		// err.Error() then to a default per code).
 
-		if resp == nil {
-			writeJSON(w, statusCode, map[string]interface{}{
-				"error": err.Error(),
-			})
+		// Rate-limit errors carry a retry hint we surface as both the
+		// HTTP Retry-After header and the envelope field.
+		var rle *serverless.RateLimitedError
+		if errors.As(err, &rle) {
+			opts := []httputil.RPCErrorOption{}
+			if rle.RetryAfter > 0 {
+				opts = append(opts, httputil.WithRetryAfter(rle.RetryAfter.Seconds()))
+			}
+			if resp != nil && resp.RequestID != "" {
+				opts = append(opts, httputil.WithRequestID(resp.RequestID))
+			}
+			writeRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited, err.Error(), opts...)
 			return
 		}
 
-		writeJSON(w, statusCode, map[string]interface{}{
-			"request_id":  resp.RequestID,
-			"status":      resp.Status,
-			"error":       resp.Error,
-			"duration_ms": resp.DurationMS,
-		})
+		// Map domain-typed errors to (status, RPC code).
+		statusCode := http.StatusInternalServerError
+		errCode := httputil.ErrCodeFunctionExecution
+		switch {
+		case serverless.IsNotFound(err):
+			statusCode = http.StatusNotFound
+			errCode = httputil.ErrCodeNotFound
+		case serverless.IsResourceExhausted(err):
+			statusCode = http.StatusTooManyRequests
+			errCode = httputil.ErrCodeRateLimited
+		case serverless.IsUnauthorized(err):
+			statusCode = http.StatusUnauthorized
+			errCode = httputil.ErrCodeUnauthorized
+		}
+
+		// Pick the most informative message: function-side resp.Error
+		// (if set) is more actionable than the wrapping err.Error().
+		msg := err.Error()
+		if resp != nil && resp.Error != "" {
+			msg = resp.Error
+		}
+		opts := []httputil.RPCErrorOption{}
+		if resp != nil && resp.RequestID != "" {
+			opts = append(opts, httputil.WithRequestID(resp.RequestID))
+		}
+		writeRPCError(w, statusCode, errCode, msg, opts...)
 		return
 	}
 

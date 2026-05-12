@@ -17,6 +17,7 @@ func Handle() {
 		"orama-ipfs-cluster",
 		// Note: RQLite is managed by node process, not as separate service
 		"orama-olric",
+		"orama-vault",
 		"orama-node",
 		// Note: gateway is embedded in orama-node, no separate service
 	}
@@ -26,6 +27,7 @@ func Handle() {
 		"orama-ipfs":         "IPFS Daemon",
 		"orama-ipfs-cluster": "IPFS Cluster",
 		"orama-olric":        "Olric Cache Server",
+		"orama-vault":        "Vault Guardian",
 		"orama-node":         "Orama Node (includes RQLite + Gateway)",
 	}
 

@@ -94,6 +94,46 @@ orama monitor report --env testnet
 - **DON'T** clear RQLite data directories unless doing a full cluster rebuild
 - **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously
 
+#### Schema-Migration Ordering Invariant
+
+The gateway binary embeds a set of SQL migrations. The highest-numbered migration is the schema version that binary REQUIRES — **the gateway will refuse to start if its required schema isn't applied** (the schema-version contract added after the 2026-05-06 incident).
+
+This means rolling upgrades have ONE invariant you must respect:
+
+> The new gateway binary's required migrations must be applied to RQLite **before or as part of** starting the new binary on a node.
+
+There are two acceptable patterns:
+
+**Pattern A — let the gateway apply migrations on startup (default).**
+The gateway calls `ApplyEmbeddedMigrations` during `NewDependencies` and asserts the schema is at the required version before serving traffic. If the apply succeeds, you're done. If a transient error blocks the apply, gateway startup aborts with a clear `schema mismatch: binary requires version N, database has M` error.
+
+This is the default for both the genesis startup flow and rolling upgrades. No operator action required when it works.
+
+**Pattern B — pre-apply migrations explicitly via the CLI.**
+On any node:
+```bash
+sudo orama node schema status      # show binary required vs applied
+sudo orama node schema apply --yes # apply pending migrations
+```
+Then start the new gateway. Useful when you want explicit control during a high-risk upgrade or when the auto-apply path is failing for reasons you want to debug separately.
+
+#### Verifying schema state remotely
+
+Tenants can self-check schema drift without SSH access via:
+```
+GET /v1/schema-status
+```
+Returns `{ok, required_version, applied_version, in_sync, pending: [...]}`. The same data is available via `orama node schema status` for operators with shell access.
+
+#### Build-time guard (CI)
+
+`go test ./migrations/` runs a roundtrip test that opens an in-memory SQLite, applies every embedded migration, and exercises representative SQL operations from the platform's Go code. If a Go handler is added that references a column no migration creates, the test fails — drift is caught at PR review time, not at production deploy.
+
+When adding a new platform table or column:
+1. Write the migration in `core/migrations/NNN_description.sql`
+2. Update the relevant Go code that reads/writes the new column
+3. Add an exemplar to `migrations/roundtrip_test.go` mirroring the new SQL — this enforces the contract permanently
+
 #### Recovery from Cluster Split
 
 If nodes get stuck in "Candidate" state or show "leader not found" errors:
@@ -448,6 +488,60 @@ Or double-click the `.crt` file > **Install Certificate** > **Local Machine** > 
 sudo cp caddy-root-ca.crt /usr/local/share/ca-certificates/caddy-root-ca.crt
 sudo update-ca-certificates
 ```
+
+## Push notifications
+
+Push provider configuration is **tenant-self-service** as of bug #220
+follow-up. Tenants set their own ntfy / Expo credentials via authenticated
+HTTP — operators no longer need to edit YAML and restart for every namespace
+that wants push.
+
+### Tenant flow (no operator involvement)
+
+```bash
+# Set per-namespace config
+curl -X PUT https://ns-anchat-test.orama-devnet.network/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>' \
+  -H 'Content-Type: application/json' \
+  -d '{"ntfy_base_url": "https://ntfy.sh"}'
+
+# Read current config (secrets redacted to booleans)
+curl https://ns-anchat-test.orama-devnet.network/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+
+# Clear (push reverts to gateway YAML defaults, or 503 if no defaults)
+curl -X DELETE https://ns-anchat-test.orama-devnet.network/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+```
+
+Per-namespace config takes effect on the NEXT push send (the cached
+dispatcher is invalidated on PUT/DELETE). No restart needed.
+
+### Operator flow (cluster-wide defaults — optional)
+
+Operators can still seed defaults in the gateway YAML. Per-namespace config
+OVERRIDES the defaults; namespaces with no row inherit them.
+
+```yaml
+# Cluster-wide push defaults (optional; tenants override per-namespace)
+push:
+  ntfy_base_url: "https://ntfy.sh"           # default for namespaces with no override
+  expo_access_token: "..."                    # default Expo token
+```
+
+### Encryption
+
+Sensitive credentials (`ntfy_auth_token`, `expo_access_token`) are
+AES-256-GCM-encrypted at rest in the `namespace_push_config` table using
+a key derived from the cluster secret. The GET endpoint returns boolean
+`has_X` flags only — credentials are NEVER echoed back over HTTP.
+
+### Disabling push entirely
+
+If `cluster_secret` isn't configured on the gateway, the push subsystem
+is disabled and `/v1/push/*` returns 503. To enable: set the cluster secret
+and restart. (This is the only operator-side restart still required, and
+it's a one-time action at gateway provisioning.)
 
 ## Project Structure
 

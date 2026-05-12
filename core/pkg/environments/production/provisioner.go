@@ -86,31 +86,44 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 // EnsureOramaUser creates the 'orama' system user and group for running services.
 // Sets ownership of the orama data directory to the new user.
 func (fp *FilesystemProvisioner) EnsureOramaUser() error {
-	// Check if user already exists
-	if err := exec.Command("id", "orama").Run(); err == nil {
-		return nil // user already exists
-	}
-
-	// Create system user with no login shell and home at /opt/orama
-	cmd := exec.Command("useradd", "--system", "--no-create-home",
-		"--home-dir", fp.oramaHome, "--shell", "/usr/sbin/nologin", "orama")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create orama user: %w\n%s", err, string(output))
-	}
-
-	// Set ownership of orama directories
-	chown := exec.Command("chown", "-R", "orama:orama", fp.oramaDir)
-	if output, err := chown.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to chown %s: %w\n%s", fp.oramaDir, err, string(output))
-	}
-
-	// Also chown the bin directory
-	binDir := filepath.Join(fp.oramaHome, "bin")
-	if _, err := os.Stat(binDir); err == nil {
-		chown = exec.Command("chown", "-R", "orama:orama", binDir)
-		if output, err := chown.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to chown %s: %w\n%s", binDir, err, string(output))
+	// Check if user already exists; create if not
+	if err := exec.Command("id", "orama").Run(); err != nil {
+		cmd := exec.Command("useradd", "--system", "--no-create-home",
+			"--home-dir", fp.oramaHome, "--shell", "/usr/sbin/nologin", "orama")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to create orama user: %w\n%s", err, string(output))
 		}
+
+		// Set ownership of orama directories (only on first create)
+		chown := exec.Command("chown", "-R", "orama:orama", fp.oramaDir)
+		if output, err := chown.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to chown %s: %w\n%s", fp.oramaDir, err, string(output))
+		}
+
+		binDir := filepath.Join(fp.oramaHome, "bin")
+		if _, err := os.Stat(binDir); err == nil {
+			chown = exec.Command("chown", "-R", "orama:orama", binDir)
+			if output, err := chown.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to chown %s: %w\n%s", binDir, err, string(output))
+			}
+		}
+	}
+
+	// Always ensure the sudoers rule is up-to-date (handles upgrades too).
+	// Resolve systemctl path to avoid hardcoding /bin vs /usr/bin.
+	systemctlPath, err := exec.LookPath("systemctl")
+	if err != nil {
+		systemctlPath = "/bin/systemctl" // fallback
+	}
+
+	// Grant orama user permission to manage namespace and deployment services.
+	sudoersRule := fmt.Sprintf(
+		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s daemon-reload\n",
+		systemctlPath,
+	)
+	sudoersPath := "/etc/sudoers.d/orama-namespaces"
+	if err := os.WriteFile(sudoersPath, []byte(sudoersRule), 0440); err != nil {
+		return fmt.Errorf("failed to write sudoers rule: %w", err)
 	}
 
 	return nil

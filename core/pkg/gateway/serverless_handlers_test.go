@@ -41,6 +41,10 @@ func (m *mockFunctionRegistry) GetLogs(ctx context.Context, namespace, name stri
 	return []serverless.LogEntry{}, nil
 }
 
+func (m *mockFunctionRegistry) GetInvocations(ctx context.Context, namespace, name string, limit int) ([]serverless.Invocation, error) {
+	return []serverless.Invocation{}, nil
+}
+
 func TestServerlessHandlers_ListFunctions(t *testing.T) {
 	logger := zap.NewNop()
 	registry := &mockFunctionRegistry{
@@ -50,7 +54,7 @@ func TestServerlessHandlers_ListFunctions(t *testing.T) {
 		},
 	}
 
-	h := serverlesshandlers.NewServerlessHandlers(nil, registry, nil, nil, nil, nil, logger)
+	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, nil, nil, nil, nil, nil, nil, logger)
 
 	req, _ := http.NewRequest("GET", "/v1/functions?namespace=ns1", nil)
 	rr := httptest.NewRecorder()
@@ -73,7 +77,7 @@ func TestServerlessHandlers_DeployFunction(t *testing.T) {
 	logger := zap.NewNop()
 	registry := &mockFunctionRegistry{}
 
-	h := serverlesshandlers.NewServerlessHandlers(nil, registry, nil, nil, nil, nil, logger)
+	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, nil, nil, nil, nil, nil, nil, logger)
 
 	// Test JSON deploy (which is partially supported according to code)
 	// Should be 400 because WASM is missing or base64 not supported

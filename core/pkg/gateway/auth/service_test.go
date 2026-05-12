@@ -416,3 +416,73 @@ func TestJWKSHandler_RSAOnly(t *testing.T) {
 		t.Errorf("expected RS256, got %s", result.Keys[0]["alg"])
 	}
 }
+
+// TestEdDSACrossServiceVerify is the regression test for bug #215. Two Service
+// instances configured with the SAME Ed25519 key (the cluster-shared scenario
+// produced by deterministic HKDF derivation in pkg/gateway/signing_key.go)
+// must be able to verify each other's tokens. Without this guarantee a JWT
+// minted on the main gateway is unverifiable on a namespace gateway and host
+// functions see an empty caller_jwt_subject.
+func TestEdDSACrossServiceVerify(t *testing.T) {
+	// Shared key — what HKDF would produce from the cluster secret.
+	_, shared, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate shared key: %v", err)
+	}
+
+	makeService := func() *Service {
+		s := createTestService(t) // RSA + mock client
+		s.SetEdDSAKey(shared)
+		return s
+	}
+
+	signer := makeService()   // simulates main gateway
+	verifier := makeService() // simulates namespace gateway (different process, same shared key)
+
+	// Sanity: both services must agree on edKeyID since it is derived from the
+	// public key. If they don't, kid-based verification will silently fail.
+	if signer.edKeyID != verifier.edKeyID {
+		t.Fatalf("edKeyID mismatch: signer=%q verifier=%q", signer.edKeyID, verifier.edKeyID)
+	}
+
+	const wantSub = "BNbN2RNQTsYrrywZCLnhV9j3hd38jwcRqfxBecZX7hDE"
+	const wantNS = "anchat-test"
+	token, _, err := signer.GenerateJWT(wantNS, wantSub, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("signer.GenerateJWT: %v", err)
+	}
+
+	claims, err := verifier.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("cross-service verify failed: %v", err)
+	}
+	if claims.Sub != wantSub {
+		t.Errorf("Sub = %q, want %q", claims.Sub, wantSub)
+	}
+	if claims.Namespace != wantNS {
+		t.Errorf("Namespace = %q, want %q", claims.Namespace, wantNS)
+	}
+}
+
+// TestEdDSACrossServiceVerify_differentKeysFail proves the verify gate is
+// real: when two services have different Ed25519 keys (the broken state
+// before bug #215 fix), tokens minted on one MUST NOT validate on the other.
+// If this test ever passes, the deterministic-derivation guarantee is
+// silently bypassed somewhere.
+func TestEdDSACrossServiceVerify_differentKeysFail(t *testing.T) {
+	signer := createTestService(t)
+	_, signKey, _ := ed25519.GenerateKey(rand.Reader)
+	signer.SetEdDSAKey(signKey)
+
+	verifier := createTestService(t)
+	_, verKey, _ := ed25519.GenerateKey(rand.Reader)
+	verifier.SetEdDSAKey(verKey)
+
+	token, _, err := signer.GenerateJWT("ns", "sub", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateJWT: %v", err)
+	}
+	if _, err := verifier.ParseAndVerifyJWT(token); err == nil {
+		t.Fatal("expected verification to fail with different signing keys, got nil error")
+	}
+}

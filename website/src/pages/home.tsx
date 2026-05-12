@@ -33,7 +33,6 @@ import {
   HardDrive,
 } from "lucide-react";
 import debrosIcon from "../assets/debrosnet.png";
-import { Redacted } from "../components/ui/redacted";
 
 const NetworkVisualization = lazy(() =>
   import("../components/landing/network-visualization").then((m) => ({
@@ -76,7 +75,7 @@ function HomeHero() {
           Decentralized Cloud + L1 Blockchain
         </span>
 
-        <h1 className="relative z-10 font-display font-bold text-4xl lg:text-6xl leading-tight">
+        <h1 className="relative z-10 font-display font-bold text-3xl md:text-4xl lg:text-6xl leading-tight">
           <SplitText
             text="Blockchain was step one."
             className="text-fg"
@@ -108,9 +107,7 @@ function HomeHero() {
         `}</style>
 
         <p className="relative z-10 text-muted text-sm leading-relaxed max-w-lg">
-          Bitcoin gave us decentralized money. Ethereum gave us decentralized
-          contracts. Orama gives us decentralized everything —
-          an L1 blockchain fused with a full cloud platform.
+          An L1 blockchain fused with a full cloud platform — decentralized everything.
         </p>
 
         <div className="relative z-10 flex flex-wrap gap-2 justify-center">
@@ -150,7 +147,7 @@ function HomeHero() {
         <div className="relative z-10 flex items-center gap-2 mt-2">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse-dot" />
           <span className="text-xs font-mono text-muted tracking-wider uppercase">
-            Devnet Live — 50+ Nodes Online
+            Testnet Live — WITH 50+ NODES
           </span>
         </div>
 
@@ -201,32 +198,10 @@ function InvestorSection() {
             </h2>
 
             <p className="text-muted leading-relaxed text-sm">
-              We're raising <Redacted /> BTC to bring Orama Network to mainnet —
-              <Redacted /> from node licenses and <Redacted /> from
-              a token pre-sale. Paid in BTC.
+              210M $ORAMA — zero pre-mine, 100% mined. Era 1 block reward is 100 $ORAMA
+              with Bitcoin-style halving every 2 years. BTC-only economy. No ETH, no SOL,
+              no stablecoins. Run a node, earn tokens — the only way to get $ORAMA.
             </p>
-
-            {/* Fundraise bar */}
-            <DashedPanel withCorners withBackground>
-              <div className="flex flex-col gap-3 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono text-muted tracking-wider uppercase">Total Fundraise</span>
-                  <span className="text-xs font-mono text-muted">
-                    <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> / <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                  </span>
-                </div>
-                <div className="h-2 bg-surface-2 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-1000"
-                    style={{ width: "1%", background: SILVER.gradient }}
-                  />
-                </div>
-                <div className="flex items-center justify-between text-xs font-mono text-muted">
-                  <span><Redacted /> raised</span>
-                  <span>Goal: Mainnet by 2028</span>
-                </div>
-              </div>
-            </DashedPanel>
 
             <div className="flex flex-wrap gap-3">
               <span className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-6 py-2.5 text-xs rounded-sm cursor-pointer text-black">
@@ -252,23 +227,14 @@ function InvestorSection() {
                 <div className="flex items-center justify-between">
                   <div>
                     <span className="text-xs font-mono text-muted tracking-wider uppercase block">Node Licenses</span>
-                    <span className="font-display font-bold text-fg"><Redacted /> available</span>
+                    <span className="font-display font-bold text-fg">Run a node, earn $ORAMA</span>
                   </div>
-                  <span
-                    className="font-display font-bold text-2xl"
-                    style={{ background: SILVER.gradient, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}
-                  >
-                    <Redacted /> BTC
-                  </span>
                 </div>
                 <p className="text-xs text-muted">
-                  Operate an Orama node. Earn $ORAMA rewards. Governance rights included.
+                  Operate an Orama node. Earn $ORAMA block rewards based on Effective Power
+                  (Stake x Contribution x Infrastructure). OramaOS nodes get a 1.5x multiplier.
                 </p>
-                <div className="flex items-center justify-between mt-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-muted">Pay with</span>
-                    <span className="px-2 py-0.5 text-xs font-mono font-bold border border-border rounded" style={{ color: "#F7931A", borderColor: "#F7931A40" }}>BTC</span>
-                  </div>
+                <div className="flex items-center justify-end mt-1">
                   <span className="inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-4 py-1.5 text-xs rounded-sm text-black opacity-50 pointer-events-none" style={{ background: SILVER.mid }}>
                     Coming Soon
                   </span>
@@ -276,29 +242,21 @@ function InvestorSection() {
               </div>
             </DashedPanel>
 
-            {/* Token presale */}
+            {/* Bonding curve */}
             <DashedPanel withCorners withBackground>
               <div className="flex flex-col gap-3 p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <span className="text-xs font-mono text-muted tracking-wider uppercase block">Token Pre-Sale</span>
-                    <span className="font-display font-bold text-fg"><Redacted /> $ORAMA</span>
+                    <span className="text-xs font-mono text-muted tracking-wider uppercase block">Protocol Bonding Curve</span>
+                    <span className="font-display font-bold text-fg">Buy $ORAMA with BTC</span>
                   </div>
-                  <span
-                    className="font-display font-bold text-2xl"
-                    style={{ background: SILVER.gradient, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}
-                  >
-                    <Redacted /> BTC
-                  </span>
                 </div>
                 <p className="text-xs text-muted">
-                  Buy $ORAMA before public launch. Trade from day 1 at mainnet. <Redacted /> vesting terms.
+                  20% of block rewards flow into the bonding curve (capped at 21M $ORAMA).
+                  Bridge BTC onto Orama and purchase $ORAMA at a mathematically determined price.
+                  Early buyers pay less — the price rises with demand.
                 </p>
-                <div className="flex items-center justify-between mt-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-muted">Pay with</span>
-                    <span className="px-2 py-0.5 text-xs font-mono font-bold border border-border rounded" style={{ color: "#F7931A", borderColor: "#F7931A40" }}>BTC</span>
-                  </div>
+                <div className="flex items-center justify-end mt-1">
                   <span className="inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-4 py-1.5 text-xs rounded-sm text-black opacity-50 pointer-events-none" style={{ background: SILVER.mid }}>
                     Coming Soon
                   </span>
@@ -406,14 +364,14 @@ function HowItWorks() {
       icon: Server,
       title: "Nodes power the network",
       description:
-        "Independent operators run nodes on servers worldwide. Each node contributes compute, storage, and bandwidth — and earns tokens for it.",
+        "Independent operators run nodes on servers worldwide. Each node contributes compute, storage, and bandwidth — and earns $ORAMA for it. OramaOS nodes get a 1.5x Infrastructure Multiplier.",
     },
     {
       number: "02",
       icon: Code,
       title: "Developers deploy apps",
       description:
-        "With one command, developers ship websites, APIs, databases, and functions to the network. Like Vercel or AWS, but decentralized and private.",
+        "With one command, developers ship websites, APIs, databases, and functions to the network. Write smart contracts in Rust, Go, TypeScript, or any WASM language.",
     },
     {
       number: "03",
@@ -572,32 +530,6 @@ function AnChatShowcase() {
               </span>
             </div>
 
-            <a
-              href="https://anchat.io/#token"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 px-4 py-3 rounded-lg transition-all group"
-              style={{ background: `${cyan}08`, border: `1px solid ${cyan}20` }}
-            >
-              <span className="w-2 h-2 rounded-full animate-pulse-dot shrink-0" style={{ background: cyan }} />
-              <span className="text-xs font-mono text-fg tracking-wider">
-                <span style={{ color: cyan }}>$ANCHAT</span> token is live — Staking available now
-              </span>
-              <ArrowRight className="w-3.5 h-3.5 ml-auto shrink-0 group-hover:translate-x-0.5 transition-all" style={{ color: `${cyan}80` }} />
-            </a>
-
-            <Link
-              to="/invest"
-              className="flex items-center gap-3 px-4 py-3 rounded-lg transition-all group"
-              style={{ background: SILVER.bg, border: `1px solid ${SILVER.border}` }}
-            >
-              <Coins className="w-4 h-4 shrink-0" style={{ color: SILVER.light }} />
-              <span className="text-xs font-mono text-fg tracking-wider">
-                <span style={{ color: SILVER.light }}>$ANCHAT holders</span> — Claim <Redacted /> of your holdings as $ORAMA
-              </span>
-              <ArrowRight className="w-3.5 h-3.5 ml-auto shrink-0 group-hover:translate-x-0.5 transition-all" style={{ color: SILVER.mid }} />
-            </Link>
-
             <div className="flex flex-wrap gap-3">
               <a
                 href="https://anchat.io"
@@ -655,14 +587,14 @@ function AnChatShowcase() {
    ═══════════════════════════════════════════ */
 function BlockchainSection() {
   const features = [
-    { icon: Coins, title: "Staking", description: "Operators stake $ORAMA to run nodes. Rewards based on uptime, compute, and bandwidth." },
-    { icon: Vote, title: "Governance", description: "Token holders vote on proposals, treasury, and protocol upgrades via on-chain DAO." },
-    { icon: Wallet, title: "AI Agent Payments", description: "Native payment rails between AI agents — autonomous transactions on the network." },
-    { icon: Shield, title: "Proof of Infrastructure", description: "Primary consensus: nodes earn by doing real work. Uptime and contribution beat capital. Power to the people." },
-    { icon: Users, title: "Proof of Angels", description: "AI agents (Angels) validated on-chain. Earn rewards for compute and intelligence." },
-    { icon: Repeat, title: "Launchpad & DEX", description: "Native swap and launchpad for projects building on Orama infrastructure." },
-    { icon: Lock, title: "Private Transactions", description: "Choose zero-knowledge or public transactions. Privacy is a choice, not a restriction." },
-    { icon: Code, title: "Developer Friendly", description: "Familiar tooling, EVM-compatible, powered by RootWallet for seamless onboarding." },
+    { icon: Shield, title: "Hybrid Consensus", description: "Proof of Stake + Proof of Contribution + Proof of Infrastructure. Effective Power = Stake x (1 + Contribution) x Infrastructure Multiplier." },
+    { icon: Vote, title: "On-Chain Governance", description: "NFT holders (75% voting power) + token holders (25% quadratic). Three governance tiers: emergency (24h), protocol (3 days), constitutional (14 days)." },
+    { icon: Wallet, title: "BTC-Only Economy", description: "Only two assets: BTC and $ORAMA. Native BTC bridge with 0.25% fee. Protocol-native order book for $ORAMA/BTC. No ETH, no SOL, no stablecoins." },
+    { icon: Coins, title: "210M Hard Cap", description: "Zero pre-mine, 100% mined. Era 1 = 100 $ORAMA/block. Bitcoin-style halving every 2 years. 80% to miner, 20% to bonding curve." },
+    { icon: Lock, title: "PLONK zk-SNARKs", description: "Per-transaction public/private toggle. Private mode hides sender, receiver, and amount. 4x gas for private transactions. Universal trusted setup." },
+    { icon: Code, title: "Pure WASM VM", description: "Write smart contracts in Rust, Go, TypeScript, C++, or any WASM language. No EVM, no Solidity required." },
+    { icon: Repeat, title: "Native DEX", description: "Protocol-native order book for $ORAMA/BTC. Not an AMM — pure price discovery. Randomized ordering prevents front-running." },
+    { icon: Users, title: "AI Marketplace", description: "Host AI models and Angels (autonomous agents) on-chain. Compute providers capped at 10% of network nodes. Pay per use in $ORAMA." },
   ];
 
   return (
@@ -681,18 +613,19 @@ function BlockchainSection() {
               Most blockchains are financial ledgers. Orama's L1 is built for
               <span className="text-fg font-semibold"> infrastructure and AI</span> — Proof of Infrastructure
               rewards real work over staked capital, Proof of Stake provides economic
-              security, and Proof of Angels adds AI-powered threat detection.
+              security, and Proof of Contribution measures uptime, bandwidth, and compute every epoch.
             </p>
             <p className="text-muted leading-relaxed">
-              Transactions can be zero-knowledge or public — your choice.
-              AI agents pay each other natively. Developers get familiar EVM tooling
-              powered by <span className="text-fg font-semibold">RootWallet</span> for
+              Transactions can be private (PLONK zk-SNARKs) or public — your choice.
+              AI agents transact natively. Developers write smart contracts in Rust, Go, TypeScript,
+              or any language that compiles to WASM. Powered by <span className="text-fg font-semibold">RootWallet</span> for
               seamless wallet onboarding.
             </p>
             <p className="text-muted leading-relaxed">
               The $ORAMA token coordinates everything: operators stake to run nodes,
-              developers pay for resources, AI agents transact autonomously, and the
-              DAO governs how the network evolves.
+              developers pay for resources, AI agents transact autonomously, and
+              on-chain governance decides how the network evolves. 6-second block time,
+              1-hour epoch finality via BFT checkpoints.
             </p>
             <Button asChild variant="ghost" size="default" className="w-fit">
               <Link to="/blockchain">
@@ -726,9 +659,9 @@ function BlockchainSection() {
    ═══════════════════════════════════════════ */
 function ComputeSection() {
   const services = [
-    { icon: Database, title: "Distributed SQL", description: "RQLite-backed database with Raft consensus and automatic replication." },
-    { icon: HardDrive, title: "File Storage", description: "IPFS-powered content-addressed storage distributed across the network." },
-    { icon: Cpu, title: "Serverless Functions", description: "Deploy WASM and Go functions that execute across the node mesh." },
+    { icon: Database, title: "Distributed SQL", description: "On-chain SQL database primitive with Raft consensus and automatic replication across the node mesh." },
+    { icon: HardDrive, title: "IPFS + KV Storage", description: "Content-addressed IPFS storage and key-value store distributed across the network. 10,000 rays/MB (IPFS), 200 rays/op (KV)." },
+    { icon: Cpu, title: "Serverless WASM", description: "Deploy WASM functions in Rust, Go, TypeScript, C++ — execute across the node mesh. 1,000 rays per 1M instructions." },
     { icon: Globe, title: "DNS", description: "Decentralized CoreDNS — your domains resolve through the network." },
     { icon: Layers, title: "In-Memory Cache", description: "Olric distributed cache with namespace isolation and auto-replication." },
     { icon: Users, title: "PubSub & WebRTC", description: "Real-time messaging and peer-to-peer communication built in." },
@@ -788,6 +721,15 @@ function ComputeSection() {
    8. ORAMA ONE — Hardware Node
    ═══════════════════════════════════════════ */
 function OramaOneSection() {
+  const specs = [
+    { label: "CPU", value: "4+ cores, 2.0+ GHz (ARM or x86)" },
+    { label: "RAM", value: "8 GB" },
+    { label: "Storage", value: "256 GB NVMe SSD" },
+    { label: "Network", value: "1 Gbps Ethernet" },
+    { label: "TPM", value: "TPM 2.0 for OramaOS attestation" },
+    { label: "Power", value: "Under 25W continuous" },
+  ];
+
   return (
     <Section>
       <AnimateIn>
@@ -812,13 +754,14 @@ function OramaOneSection() {
             </h2>
 
             <p className="text-muted text-sm leading-relaxed max-w-lg">
-              The heart of the blockchain and the compute layer. A purpose-built
+              The heart of the blockchain and the compute layer. A purpose-built, 3D-printed
               hardware node designed to power the Orama Network — plug in, connect,
-              and start contributing to the decentralized cloud.
+              and start earning $ORAMA. Fanless, compact, and silent. Open-source hardware
+              so anyone can build their own.
             </p>
 
             <div className="flex flex-wrap gap-2 justify-center">
-              {["Plug & Earn", "Silent Operation", "Built for 24/7"].map((label) => (
+              {["Plug & Earn", "Silent & Fanless", "Open-Source Hardware", "OramaOS 1.5x Multiplier"].map((label) => (
                 <span
                   key={label}
                   className="inline-flex items-center px-3 py-1 text-xs font-mono tracking-wider rounded-full"
@@ -826,6 +769,21 @@ function OramaOneSection() {
                 >
                   {label}
                 </span>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-lg w-full mt-2">
+              {specs.map((s) => (
+                <div
+                  key={s.label}
+                  className="flex flex-col gap-1 p-3 rounded-sm text-left"
+                  style={{ border: `1px solid ${SILVER.border}`, background: SILVER.bg }}
+                >
+                  <span className="text-[10px] font-mono tracking-wider uppercase" style={{ color: SILVER.mid }}>
+                    {s.label}
+                  </span>
+                  <span className="text-xs font-mono text-fg">{s.value}</span>
+                </div>
               ))}
             </div>
 
@@ -848,7 +806,7 @@ function OramaOneSection() {
 }
 
 /* ═══════════════════════════════════════════
-   9. ROADMAP — Interactive timeline
+   9. ROADMAP — Milestone-based (no specific years)
    ═══════════════════════════════════════════ */
 function Roadmap() {
   const [activeIndex, setActiveIndex] = useState(0);
@@ -856,49 +814,60 @@ function Roadmap() {
   const milestones = [
     {
       status: "live" as const,
-      phase: "Phase 1",
-      title: "Network Beta",
+      phase: "Testnet",
+      title: "Network Launch",
       items: [
-        "50+ nodes across devnet and testnet",
-        "AnChat Lite — closed beta for DeBros NFT holders",
+        "Network live — no staking required to run a node",
+        "Node runners begin earning $ORAMA block rewards",
         "Full infrastructure stack (SQL, Cache, Storage, PubSub, DNS)",
-        "Orama Proxy integration",
+        "PLONK trusted setup ceremony",
+        "Bug bounty program",
       ],
     },
     {
       status: "building" as const,
-      phase: "Phase 2",
-      title: "Devnet & L1 Blockchain",
+      phase: "Testnet Expansion",
+      title: "AI & Commerce",
       items: [
-        "Devnet and testnet deployment",
-        "L1 blockchain development — proof of infrastructure",
-        "$ORAMA token pre-sale",
-        "Node license sales",
-        "RootWallet integration",
+        "AI Marketplace beta — host and consume AI models",
+        "Angels framework — autonomous AI agents on-chain",
+        "Compute provider registration",
+        "Orama One pre-orders",
       ],
     },
     {
       status: "planned" as const,
-      phase: "Phase 3",
-      title: "Scale",
+      phase: "Testnet Maturity",
+      title: "300-Node Threshold",
       items: [
-        "Node license holders become operators",
-        "Operators start earning $ORAMA rewards",
-        "AI agent layer — proof of angels",
-        "Launchpad & DEX go live",
-        "Developer waitlist opens for deployment",
+        "Target 300 verified independent nodes for genesis",
+        "DeBros NFT migration preparation (Solana snapshot)",
+        "Bonding curve live on testnet",
+        "Native order book testing ($ORAMA/BTC)",
       ],
     },
     {
       status: "planned" as const,
-      phase: "Phase 4",
-      title: "Mainnet (2028)",
+      phase: "Mainnet",
+      title: "Full Production Launch",
       items: [
-        "Full mainnet launch",
-        "Token pre-sale holders can trade from day 1",
-        "Complete decentralization — no central authority",
-        "Cross-chain bridges",
-        "The cloud, replaced",
+        "BTC bridge live — deposit and withdraw BTC",
+        "Native DEX live — protocol order book for $ORAMA/BTC",
+        "Staking activated (1,000 $ORAMA minimum)",
+        "DeBros NFT bridge revenue begins",
+        "On-chain governance live",
+      ],
+    },
+    {
+      status: "planned" as const,
+      phase: "Post-Launch",
+      title: "Long-Term Evolution",
+      items: [
+        "L2 rollup support (optimistic and zk)",
+        "AI Marketplace expansion",
+        "Post-quantum signature upgrade",
+        "Orama One general availability",
+        "Bonding curve sunset when organic liquidity is sufficient",
       ],
     },
   ];
@@ -916,7 +885,7 @@ function Roadmap() {
       <AnimateIn>
         <SectionHeader
           title="Roadmap"
-          subtitle="Where we are and where we're going."
+          subtitle="Milestone-based — mainnet launches when 300 nodes are verified."
         />
       </AnimateIn>
 
@@ -1087,19 +1056,27 @@ function FAQ() {
   const faqs = [
     {
       question: "Is Orama Network live or still in development?",
-      answer: "The network is live with 50+ nodes running across three environments. AnChat, a fully decentralized messenger, is the first production app running on it. The developer platform, playground, and infrastructure stack (databases, caching, storage, DNS, serverless) are all operational. The L1 blockchain and public node onboarding are currently in development.",
+      answer: "The testnet is live with nodes running across multiple environments. AnChat, a fully decentralized messenger, is the first production app running on it. The developer platform, playground, and infrastructure stack (databases, caching, storage, DNS, serverless) are all operational. Mainnet launches when 300 independent nodes are verified — no shortcuts, no exceptions.",
     },
     {
       question: "How is Orama different from Akash, Filecoin, or other DePIN projects?",
-      answer: "Most decentralized infrastructure projects solve one piece — Filecoin does storage, Akash does compute. Orama is a full cloud platform: databases, caching, DNS, pub/sub, serverless, file storage, and compute — all in one network. Plus, it has its own L1 blockchain for coordination and a built-in privacy layer via Orama Proxy. Developers deploy real apps, not just smart contracts.",
+      answer: "Most decentralized infrastructure projects solve one piece — Filecoin does storage, Akash does compute. Orama is a full cloud platform: databases, caching, DNS, pub/sub, serverless, file storage, and compute — all in one network. Plus, it has its own L1 blockchain with pure WASM smart contracts, a native BTC bridge, per-transaction zk-SNARK privacy, and a built-in AI Marketplace. Developers deploy real apps, not just smart contracts.",
     },
     {
       question: "What is the $ORAMA token used for?",
-      answer: "$ORAMA is the coordination layer of the network. Operators stake it to run nodes and earn rewards. Developers use it to pay for compute, storage, and bandwidth. Token holders vote on governance proposals and treasury decisions. It's utility-first — the token exists because the network needs it, not the other way around.",
+      answer: "$ORAMA is the native token with a 210M hard cap and zero pre-mine — 100% mined by running nodes. Operators stake it (1,000 minimum at mainnet) to validate blocks. Developers pay for compute, storage, and bandwidth in $ORAMA. Base fees are burned, making the token increasingly deflationary as usage grows. The only way to acquire $ORAMA is to mine it by running a node or buy it with BTC on the native order book or bonding curve.",
     },
     {
       question: "Can I run a node today?",
-      answer: "Not yet publicly. Node onboarding is currently invite-only while we finalize the operator tooling and reward mechanics. Join the waitlist via our Telegram (t.me/debrosportal) to get notified when public onboarding opens — early operators will receive bonus reward multipliers.",
+      answer: "During testnet, no staking is required to run a node. Any operator can participate and earn $ORAMA block rewards with zero stake. Testnet tokens are real — they carry over to mainnet with no reset. Join the waitlist via our Telegram (t.me/debrosportal) to get notified when public onboarding opens.",
+    },
+    {
+      question: "What programming languages can I use for smart contracts?",
+      answer: "Orama uses a pure WASM virtual machine — no EVM, no Solidity. You can write smart contracts in any language that compiles to WebAssembly: Rust, Go, TypeScript, C++, and more. This gives developers full freedom to use the languages and tools they already know.",
+    },
+    {
+      question: "What is the BTC-only economy?",
+      answer: "Orama has exactly two assets: BTC and $ORAMA. No stablecoins, no wrapped altcoins, no fiat pegs. To acquire $ORAMA, you bridge BTC onto Orama and trade on the native order book or bonding curve. This creates zero counterparty risk beyond Bitcoin itself and makes Orama's economy entirely self-contained.",
     },
     {
       question: "Who is behind Orama Network?",
@@ -1163,7 +1140,7 @@ function FinalCTA() {
         <DashedPanel withCorners withBackground>
           <div className="flex flex-col items-center text-center gap-6 py-8">
             <Badge variant="outline" className="w-fit">
-              EARLY ACCESS
+              TESTNET LIVE
             </Badge>
 
             <h2 className="font-display font-bold text-2xl lg:text-3xl text-fg">
@@ -1173,8 +1150,8 @@ function FinalCTA() {
             </h2>
 
             <p className="text-muted max-w-lg leading-relaxed">
-              Whether you're an investor backing the future of infrastructure
-              or a developer ready to build on it — now is the time.
+              No tokens to buy beforehand. No presale to miss. Run a node, earn $ORAMA,
+              and be part of the only blockchain where everyone starts equal.
             </p>
 
             <div className="flex flex-wrap items-center gap-3 justify-center">

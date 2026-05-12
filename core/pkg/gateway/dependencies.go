@@ -19,10 +19,15 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
+	"github.com/DeBrosOfficial/network/pkg/push"
+	pushexpo "github.com/DeBrosOfficial/network/pkg/push/providers/expo"
+	pushntfy "github.com/DeBrosOfficial/network/pkg/push/providers/ntfy"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/hostfunctions"
+	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	"github.com/multiformats/go-multiaddr"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -62,6 +67,34 @@ type Dependencies struct {
 
 	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
 	PubSubDispatcher *triggers.PubSubDispatcher
+
+	// Cron trigger store + scheduler. The scheduler is started by gateway
+	// lifecycle code after Dependencies is constructed; Stop is called
+	// during shutdown.
+	CronTriggerStore *triggers.CronTriggerStore
+	CronScheduler    *triggers.CronScheduler
+
+	// PersistentWSManager tracks long-lived WS function instances.
+	// Used by the WS handler when fn.WSPersistent=true; nil = disabled.
+	PersistentWSManager *persistent.Manager
+
+	// WSBridge wires PubSub topics directly to WS clients on this gateway.
+	// Used by the ws_pubsub_bridge host function. Nil = disabled.
+	WSBridge *wsbridge.Bridge
+
+	// Push notification dispatcher (legacy single-tier; nil when push
+	// isn't configured at all). When PushManager is also set, send paths
+	// route through the manager instead so per-namespace config wins.
+	PushDispatcher  *push.PushDispatcher
+	PushDeviceStore push.PushDeviceStore
+
+	// PushManager wraps the device store + per-namespace config store so
+	// tenants self-serve their push provider config via PUT /v1/push/config.
+	// Nil when push subsystem isn't initialized (cluster secret missing).
+	// When set, this is the canonical send path; PushDispatcher is the
+	// fallback used only if Manager is somehow missing.
+	PushManager     *push.Manager
+	PushConfigStore push.ConfigStore
 
 	// Authentication service
 	AuthService *auth.Service
@@ -140,11 +173,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Inject basic auth credentials into DSN if available
 	dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
 
-	if strings.Contains(dsn, "?") {
-		dsn += "&disableClusterDiscovery=true&level=none"
-	} else {
-		dsn += "?disableClusterDiscovery=true&level=none"
-	}
+	dsn = appendRQLiteQueryParams(dsn)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open rqlite sql db: %w", err)
@@ -157,7 +186,17 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	db.SetConnMaxIdleTime(2 * time.Minute) // Maximum idle time before closing
 
 	deps.SQLDB = db
-	orm := rqlite.NewClient(db)
+	// Use the DSN-aware constructor so the ORM client also has a native
+	// *gorqlite.Connection for atomic Batch operations. If the native dial
+	// fails, fall back to the stdlib-only client (Batch will be unavailable
+	// but everything else works).
+	orm, ormErr := rqlite.NewClientWithDSN(db, dsn)
+	if ormErr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"native gorqlite dial failed, atomic Batch will be unavailable",
+			zap.Error(ormErr))
+		orm = rqlite.NewClient(db)
+	}
 	deps.ORMClient = orm
 	deps.ORMHTTP = rqlite.NewHTTPGateway(orm, "/v1/db")
 	// Set a reasonable timeout for HTTP requests (30 seconds)
@@ -172,14 +211,32 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Apply embedded migrations to ensure schema is up-to-date.
 	// This is critical for namespace gateways whose RQLite instances
 	// don't get migrations from the main cluster RQLiteManager.
+	//
+	// Failures here are FATAL: a gateway that can't bring its schema up
+	// to the version its binary expects will silently corrupt deploys
+	// later (e.g. INSERTing into missing columns and surfacing as a
+	// cryptic SQL error to end users). Better to refuse to start with
+	// a clear actionable error.
 	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer migCancel()
 	if err := rqlite.ApplyEmbeddedMigrations(migCtx, db, migrations.FS, logger.Logger); err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "Failed to apply embedded migrations to gateway RQLite",
-			zap.Error(err))
-	} else {
-		logger.ComponentInfo(logging.ComponentGeneral, "Embedded migrations applied to gateway RQLite")
+		return fmt.Errorf("apply embedded migrations failed: %w "+
+			"(hint: this gateway can't safely run without its required schema; "+
+			"check the underlying RQLite cluster health and re-run startup)", err)
 	}
+	logger.ComponentInfo(logging.ComponentGeneral, "Embedded migrations applied to gateway RQLite")
+
+	// Schema-version contract: even if the apply call returned nil, verify
+	// that the highest migration the binary embeds is recorded as applied.
+	// Catches:
+	//   - silent partial-apply states where the marker row was never written
+	//   - clusters where the binary was upgraded but RQLite has stale schema
+	//   - operator manually deleted rows from schema_migrations
+	if err := migrations.AssertSchema(migCtx, db); err != nil {
+		return fmt.Errorf("schema contract violation: %w", err)
+	}
+	logger.ComponentInfo(logging.ComponentGeneral, "Schema contract satisfied",
+		zap.Int("required_version", migrations.RequiredVersion()))
 
 	return nil
 }
@@ -412,11 +469,39 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		secretsMgr = smImpl
 	}
 
+	// Initialize push notification subsystem.
+	//
+	// Bug #220 follow-up: the subsystem now ALWAYS initializes when the
+	// cluster secret is available (so tenants can register devices and
+	// PUT their per-namespace push config), regardless of whether the
+	// gateway YAML has a default provider configured. The Manager wraps
+	// the device store + per-namespace ConfigStore; Send paths route
+	// through Manager so per-namespace config takes effect.
+	//
+	// PushDispatcher (legacy) is set only when YAML defaults exist —
+	// kept for back-compat with code that hasn't migrated to Manager.
+	pushDispatcher, pushStore, pushManager, pushCfgStore, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
+	if err != nil {
+		// Non-fatal: log and continue. Functions calling push_send will get nil
+		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"push notifications disabled (init failed)", zap.Error(err))
+	}
+	deps.PushDispatcher = pushDispatcher
+	deps.PushDeviceStore = pushStore
+	deps.PushManager = pushManager
+	deps.PushConfigStore = pushCfgStore
+
 	// Create host functions provider (allows functions to call Orama services)
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
 		IPFSAPIURL:  cfg.IPFSAPIURL,
 		HTTPTimeout: 30 * time.Second,
 	}
+	// WS-PubSub bridge: wire PubSub topics directly to WS clients without
+	// per-event WASM invocation. The bridge is a thin layer over the
+	// pubsub adapter + WSManager.
+	deps.WSBridge = wsbridge.New(pubsubAdapter, deps.ServerlessWSMgr, logger.Logger)
+
 	hostFuncs := hostfunctions.NewHostFunctions(
 		deps.ORMClient,
 		olricClient,
@@ -424,12 +509,21 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		pubsubAdapter, // pubsub adapter for serverless functions
 		deps.ServerlessWSMgr,
 		secretsMgr,
+		pushDispatcher, // legacy — fallback when manager isn't wired
+		pushManager,    // bug #220 follow-up — per-namespace config
+		deps.WSBridge,  // may be nil; WSPubSubBridge returns explicit error
 		hostFuncsCfg,
 		logger.Logger,
 	)
 
-	// Create WASM engine with rate limiter
-	rateLimiter := serverless.NewTokenBucketLimiter(engineCfg.GlobalRateLimitPerMinute)
+	// Create WASM engine with multi-tier rate limiter (per-(ns, fn, wallet, ip),
+	// per-(ns, wallet), per-(ns)). The legacy global limit is honored as
+	// the per-namespace ceiling so no behavior regresses for existing deployments.
+	rlCfg := serverless.DefaultLimiterConfig()
+	if engineCfg.GlobalRateLimitPerMinute > 0 {
+		rlCfg.PerNamespacePerMinute = engineCfg.GlobalRateLimitPerMinute
+	}
+	rateLimiter := serverless.NewMultiTierLimiter(rlCfg)
 	engine, err := serverless.NewEngine(engineCfg, registry, hostFuncs, logger.Logger,
 		serverless.WithInvocationLogger(registry),
 		serverless.WithRateLimiter(rateLimiter),
@@ -441,6 +535,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 
 	// Create invoker
 	deps.ServerlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
+
+	// Wire the invoker back into hostFuncs so the function_invoke host
+	// function can dispatch sub-invocations from inside a WASM function
+	// (e.g. rpc-router routing client RPCs to per-op handlers).
+	hostFuncs.SetInvoker(deps.ServerlessInvoker)
 
 	// Create PubSub trigger store and dispatcher
 	triggerStore := triggers.NewPubSubTriggerStore(deps.ORMClient, logger.Logger)
@@ -456,13 +555,34 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
+	// Cron trigger store + scheduler. The scheduler polls
+	// function_cron_triggers and invokes due rows via the same
+	// ServerlessInvoker used for PubSub triggers; the ↓ Start call wires
+	// the goroutine up — Stop is invoked from gateway lifecycle shutdown.
+	cronStore := triggers.NewCronTriggerStore(deps.ORMClient, logger.Logger)
+	deps.CronTriggerStore = cronStore
+	deps.CronScheduler = triggers.NewCronScheduler(
+		cronStore,
+		deps.ServerlessInvoker,
+		logger.Logger,
+		30*time.Second,
+	)
+
+	// Persistent WS instance manager. Cap from gateway config (TODO: surface
+	// the knob); 5000 is a sensible default per plan 06.
+	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
+
 	// Create HTTP handlers
 	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
 		deps.ServerlessInvoker,
+		deps.ServerlessEngine,
 		registry,
 		deps.ServerlessWSMgr,
 		triggerStore,
+		cronStore,
 		deps.PubSubDispatcher,
+		deps.PersistentWSManager,
+		deps.WSBridge,
 		secretsMgr,
 		logger.Logger,
 	)
@@ -477,8 +597,21 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
 
-	// Load or create EdDSA key for new JWT tokens
-	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, logger)
+	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
+	// cfg.ClusterSecret is set, the key is derived deterministically from
+	// it via HKDF, so every gateway in the cluster shares the same Ed25519
+	// keypair and JWTs verify cross-node. With an empty ClusterSecret the
+	// per-node legacy behaviour is retained (single-node test deployments).
+	if cfg.ClusterSecret == "" {
+		// Loud warning: a multi-node cluster booted without a cluster
+		// secret reproduces bug #215 (per-gateway random keys, JWTs
+		// unverifiable cross-node). Single-node test rigs are the only
+		// legitimate case.
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"ClusterSecret is empty; JWT signing keys will be random per-node. "+
+				"Multi-node clusters MUST set ClusterSecret or JWTs will not verify across gateways (bug #215).")
+	}
+	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, cfg.ClusterSecret, logger)
 	if err != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "Failed to load EdDSA signing key; new JWTs will use RS256",
 			zap.Error(err))
@@ -685,4 +818,120 @@ func injectRQLiteAuth(dsn, username, password string) string {
 		}
 	}
 	return dsn
+}
+
+// appendRQLiteQueryParams adds the standard query parameters to a RQLite DSN:
+//
+//   - `disableClusterDiscovery=true` — gorqlite's discovery /nodes call is
+//     unreliable when peers are unreachable; we manage topology ourselves.
+//   - `level=weak` — Bug #235. Reads route to the leader (the only node
+//     guaranteed to have all committed writes), so a SELECT after an UPDATE
+//     in the same serverless invocation sees the new state. Previously
+//     `level=none`, which read from the local follower's possibly-stale
+//     snapshot. gorqlite's upstream default is `weak`; we were overriding
+//     to `none` and that hid this bug.
+//
+// The cost of `weak` over `none` is one HTTP hop to the leader (~1-2ms over
+// the WireGuard mesh) and applies only to reads. Writes are unaffected
+// because rqlite always redirects them to the leader regardless of `level`.
+func appendRQLiteQueryParams(dsn string) string {
+	const params = "disableClusterDiscovery=true&level=weak"
+	if strings.Contains(dsn, "?") {
+		return dsn + "&" + params
+	}
+	return dsn + "?" + params
+}
+
+// buildPushDispatcher constructs the push subsystem.
+//
+// As of bug #220 follow-up, push always initializes when ClusterSecret is
+// available, regardless of whether any YAML provider config is set:
+//
+//   - Device store + ConfigStore always build (tenants need to register
+//     devices and set per-namespace push config even on gateways with no
+//     YAML defaults).
+//   - Manager wraps the stores + a YAML-derived Defaults fallback. Each
+//     namespace can override any default via PUT /v1/push/config.
+//   - The legacy single-tier dispatcher is built only when YAML defaults
+//     are non-empty — kept for back-compat with code paths that haven't
+//     migrated to Manager.
+//
+// Returns (nil, nil, nil, nil, nil) when ClusterSecret is missing
+// (push subsystem disabled — credentials can't be encrypted safely).
+// Returns hard error only on store-init failure.
+func buildPushDispatcher(
+	cfg *Config,
+	db rqlite.Client,
+	logger *logging.ColoredLogger,
+) (*push.PushDispatcher, push.PushDeviceStore, *push.Manager, push.ConfigStore, error) {
+	if cfg.ClusterSecret == "" {
+		// Without the cluster secret we can't encrypt credentials at rest.
+		// Disable the whole push subsystem; HTTP routes return 503.
+		return nil, nil, nil, nil, nil
+	}
+
+	store, err := push.NewRqliteDeviceStore(db, cfg.ClusterSecret, logger.Logger)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
+	}
+
+	cfgStore, err := push.NewRqliteConfigStore(db, cfg.ClusterSecret, logger.Logger)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("init push config store: %w", err)
+	}
+
+	// ProviderFactory turns a resolved Config into the right set of
+	// provider instances. Lives here in dependencies.go because this is
+	// the only place that imports both the manager package and the
+	// concrete provider sub-packages — keeps push core dep-cycle-free.
+	factory := func(c push.Config) []push.PushProvider {
+		var ps []push.PushProvider
+		if c.NtfyBaseURL != "" {
+			ps = append(ps, pushntfy.New(pushntfy.Config{
+				BaseURL:   c.NtfyBaseURL,
+				AuthToken: c.NtfyAuthToken,
+			}, logger.Logger))
+		}
+		if c.ExpoAccessToken != "" {
+			ps = append(ps, pushexpo.New(pushexpo.Config{
+				AccessToken: c.ExpoAccessToken,
+			}, logger.Logger))
+		}
+		return ps
+	}
+
+	defaults := push.Defaults{
+		NtfyBaseURL:     cfg.NtfyBaseURL,
+		NtfyAuthToken:   cfg.NtfyAuthToken,
+		ExpoAccessToken: cfg.ExpoAccessToken,
+	}
+	manager := push.NewManager(store, cfgStore, defaults, factory, logger.Logger)
+
+	// Legacy single-tier dispatcher kept ONLY when YAML defaults exist —
+	// some non-Manager code paths (notably the WASM push_send hostfunc
+	// before its migration to Manager) still expect a populated
+	// PushDispatcher. New code routes via Manager.
+	var legacy *push.PushDispatcher
+	if !defaults.IsEmpty() {
+		legacy = push.New(store, logger.Logger)
+		for _, p := range factory(push.Config{
+			NtfyBaseURL:     defaults.NtfyBaseURL,
+			NtfyAuthToken:   defaults.NtfyAuthToken,
+			ExpoAccessToken: defaults.ExpoAccessToken,
+		}) {
+			legacy.Register(p)
+		}
+	}
+
+	if defaults.NtfyBaseURL != "" {
+		logger.ComponentInfo(logging.ComponentGeneral, "push default provider: ntfy",
+			zap.String("base_url", defaults.NtfyBaseURL))
+	}
+	if defaults.ExpoAccessToken != "" {
+		logger.ComponentInfo(logging.ComponentGeneral, "push default provider: expo configured")
+	}
+	logger.ComponentInfo(logging.ComponentGeneral,
+		"push subsystem initialized; tenants can self-serve via PUT /v1/push/config")
+
+	return legacy, store, manager, cfgStore, nil
 }

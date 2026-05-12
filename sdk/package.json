@@ -1,6 +1,6 @@
 {
   "name": "@debros/orama",
-  "version": "1.0.0",
+  "version": "0.122.9",
   "description": "TypeScript SDK for Orama Network - Database, PubSub, Cache, Storage, Vault, and more",
   "type": "module",
   "main": "./dist/index.js",

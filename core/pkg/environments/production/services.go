@@ -19,6 +19,18 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes`
 
+// oramaNodeHardening is like oramaServiceHardening but WITHOUT NoNewPrivileges.
+// The node process (which includes the gateway) needs to use sudo to manage
+// namespace systemd services. NoNewPrivileges prevents sudo from working.
+const oramaNodeHardening = `User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes`
+
 // SystemdServiceGenerator generates systemd unit files
 type SystemdServiceGenerator struct {
 	oramaHome string
@@ -233,7 +245,7 @@ OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, ssg.oramaDir, configFile, logFile, oramaServiceHardening)
+`, ssg.oramaHome, ssg.oramaDir, configFile, logFile, oramaNodeHardening)
 }
 
 // GenerateVaultService generates the Orama Vault Guardian systemd unit.

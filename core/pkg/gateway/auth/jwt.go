@@ -73,6 +73,10 @@ type JWTClaims struct {
 	Nbf       int64  `json:"nbf"`
 	Exp       int64  `json:"exp"`
 	Namespace string `json:"namespace"`
+	// Custom holds app-defined claims (e.g. tier, subscription state).
+	// Read by serverless functions via the get_caller_claim host call.
+	// May be nil if the token has no custom claims.
+	Custom map[string]string `json:"custom,omitempty"`
 }
 
 // ParseAndVerifyJWT verifies a JWT created by this gateway using kid-based key

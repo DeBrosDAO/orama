@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils";
 const paddingVariants = {
   default: "py-16 sm:py-24",
   narrow: "py-8 sm:py-12",
-  wide: "py-24 sm:py-32",
+  wide: "py-12 sm:py-24 lg:py-32",
   none: "py-0",
 } as const;
 

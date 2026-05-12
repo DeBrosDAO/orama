@@ -16,6 +16,9 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/health", g.healthHandler)
 	mux.HandleFunc("/v1/version", g.versionHandler)
 	mux.HandleFunc("/v1/status", g.statusHandler)
+	// Schema-version contract (bug #214 audit follow-up): tenants can
+	// self-check whether their gateway's required schema is applied.
+	mux.HandleFunc("/v1/schema-status", g.handleSchemaStatus)
 
 	// Internal ping for peer-to-peer health monitoring
 	mux.HandleFunc("/v1/internal/ping", g.pingHandler)
@@ -119,8 +122,33 @@ func (g *Gateway) Routes() http.Handler {
 	if g.pubsubHandlers != nil {
 		mux.HandleFunc("/v1/pubsub/ws", g.pubsubHandlers.WebsocketHandler)
 		mux.HandleFunc("/v1/pubsub/publish", g.pubsubHandlers.PublishHandler)
+		mux.HandleFunc("/v1/pubsub/publish-batch", g.pubsubHandlers.PublishBatchHandler)
 		mux.HandleFunc("/v1/pubsub/topics", g.pubsubHandlers.TopicsHandler)
 		mux.HandleFunc("/v1/pubsub/presence", g.pubsubHandlers.PresenceHandler)
+	}
+
+	// push notifications
+	//
+	// Routes are ALWAYS registered (bug #220). When no provider is
+	// configured, the handler returns a canonical 503 envelope explaining
+	// that push isn't enabled — far better UX than a bare 404 that sends
+	// operators down "is the gateway broken?" rabbit holes.
+	mux.HandleFunc("/v1/push/devices", g.pushDevicesHandler)
+	// DELETE /v1/push/devices/{id} — uses path-prefix routing because
+	// net/http mux doesn't extract path params; the handler parses {id}.
+	mux.HandleFunc("/v1/push/devices/", g.pushDevicesByIDHandler)
+	mux.HandleFunc("/v1/push/send", g.pushSendHandler)
+
+	// Per-namespace push provider configuration (bug #220 follow-up):
+	// GET / PUT / DELETE — tenants self-serve their ntfy/expo credentials
+	// instead of filing an ops ticket. Method dispatched in the handler.
+	mux.HandleFunc("/v1/push/config", g.pushConfigHandler)
+
+	// operator node management (wallet JWT auth via middleware)
+	if g.operatorHandler != nil {
+		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
+		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
+		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
 	}
 
 	// vault proxy (public, rate-limited per identity within handler)

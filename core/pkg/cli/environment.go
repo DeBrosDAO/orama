@@ -45,13 +45,21 @@ var DefaultEnvironments = []Environment{
 	},
 }
 
-// GetEnvironmentConfigPath returns the path to the environment config file
-func GetEnvironmentConfigPath() (string, error) {
+// getEnvironmentConfigPathFn is the function used to resolve the config path.
+// Tests override this to point at a temp file.
+var getEnvironmentConfigPathFn = getEnvironmentConfigPathDefault
+
+func getEnvironmentConfigPathDefault() (string, error) {
 	configDir, err := config.ConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get config directory: %w", err)
 	}
 	return filepath.Join(configDir, "environments.json"), nil
+}
+
+// GetEnvironmentConfigPath returns the path to the environment config file
+func GetEnvironmentConfigPath() (string, error) {
+	return getEnvironmentConfigPathFn()
 }
 
 // LoadEnvironmentConfig loads the environment configuration
@@ -168,6 +176,63 @@ func GetEnvironmentByName(name string) (*Environment, error) {
 	}
 
 	return nil, fmt.Errorf("environment '%s' not found", name)
+}
+
+// AddEnvironment adds a new environment or updates an existing one.
+// If an environment with the same name already exists, its gateway URL and
+// description are updated in place.
+func AddEnvironment(name, gatewayURL, description string) error {
+	envConfig, err := LoadEnvironmentConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, env := range envConfig.Environments {
+		if env.Name == name {
+			envConfig.Environments[i].GatewayURL = gatewayURL
+			envConfig.Environments[i].Description = description
+			return SaveEnvironmentConfig(envConfig)
+		}
+	}
+
+	envConfig.Environments = append(envConfig.Environments, Environment{
+		Name:        name,
+		GatewayURL:  gatewayURL,
+		Description: description,
+	})
+
+	return SaveEnvironmentConfig(envConfig)
+}
+
+// RemoveEnvironment removes an environment by name. If the removed environment
+// was active, the active environment falls back to "devnet".
+func RemoveEnvironment(name string) error {
+	envConfig, err := LoadEnvironmentConfig()
+	if err != nil {
+		return err
+	}
+
+	newEnvs := make([]Environment, 0, len(envConfig.Environments))
+	found := false
+	for _, env := range envConfig.Environments {
+		if env.Name == name {
+			found = true
+			continue
+		}
+		newEnvs = append(newEnvs, env)
+	}
+
+	if !found {
+		return nil // already absent, nothing to do
+	}
+
+	envConfig.Environments = newEnvs
+
+	if envConfig.ActiveEnvironment == name {
+		envConfig.ActiveEnvironment = "devnet"
+	}
+
+	return SaveEnvironmentConfig(envConfig)
 }
 
 // InitializeEnvironments initializes the environment config with defaults

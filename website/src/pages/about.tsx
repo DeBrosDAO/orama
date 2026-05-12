@@ -26,7 +26,6 @@ import { CrosshairDivider } from "../components/ui/crosshair-divider";
 import { AnimateIn } from "../components/ui/animate-in";
 import { SplitText } from "../components/ui/split-text";
 import { SILVER } from "../components/ui/silver-theme";
-import { Redacted } from "../components/ui/redacted";
 
 const AboutHeroScene = lazy(() =>
   import("../components/landing/about-hero-scene").then((m) => ({
@@ -335,12 +334,12 @@ const VALUES = [
   {
     icon: <Coins className="w-5 h-5" />,
     title: "Fair Economics",
-    description: "Node operators earn, not middlemen. Developers pay only for what they use. No hidden fees, no markup, no rent-seeking.",
+    description: "210 million $ORAMA hard cap. Zero pre-mine, zero airdrop — 100% mined by node operators. No team allocation, no insider advantage.",
   },
   {
     icon: <Rocket className="w-5 h-5" />,
-    title: "Long-term Vision",
-    description: "Building for 2028 mainnet, not quick flips. Every decision optimizes for the network existing in 10 years, not 10 months.",
+    title: "1,000-Year Vision",
+    description: "Designed for a 1,000-year horizon, not quick flips. Immutable financial core that no governance vote can change. The protocol outlives any person, company, or government.",
   },
 ];
 
@@ -352,10 +351,10 @@ const TEAM_MEMBERS = [
 ];
 
 const TRUST_METRICS = [
-  { icon: <Server className="w-6 h-6" />, label: "Nodes Live", value: "50+" },
+  { icon: <Server className="w-6 h-6" />, label: "Genesis Target", value: "300 Nodes" },
   { icon: <AppWindow className="w-6 h-6" />, label: "Live Apps", value: "AnChat" },
   { icon: <Github className="w-6 h-6" />, label: "GitHub Repos", value: "Public" },
-  { icon: <Handshake className="w-6 h-6" />, label: "Privacy Layer", value: "Orama Proxy" },
+  { icon: <Handshake className="w-6 h-6" />, label: "Privacy Layer", value: "PLONK zk-SNARKs" },
 ];
 
 /* ═══════════════════════════════════════════
@@ -403,10 +402,10 @@ export default function About() {
           `}</style>
 
           <p className="text-muted text-sm leading-relaxed max-w-lg">
-            We're a small team of builders who got tired of handing our
-            infrastructure to corporations. So we built our own — open source,
-            community owned, running on a decentralized mesh of independent
-            operators. No pitch decks. No empty promises. Just working code.
+            We're a small team of builders creating the eternal decentralized
+            computer — a standalone Layer-1 blockchain designed for a 1,000-year
+            horizon. Open source, community owned, powered by real hardware
+            running OramaOS. No pitch decks. No empty promises. Just working code.
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 mt-2">
@@ -466,6 +465,9 @@ export default function About() {
                   So they built AnChat. A messaging app where no one can read
                   your messages. Not governments. Not corporations.{" "}
                   <span className="text-fg font-medium">Not even us.</span>
+                  {" "}But the vision grew beyond messaging. What if the entire
+                  infrastructure of the internet could be decentralized — compute,
+                  storage, databases, even money?
                 </p>
                 <p>
                   Then two more joined. Four people now. Still no investors. Still
@@ -473,16 +475,19 @@ export default function About() {
                   night. Faced attacks, legal threats, health problems. Invested
                   over{" "}
                   <span className="text-fg font-medium">
-                    <Redacted /> of their own money.
+                    everything they had.
                   </span>
                   {" "}Not because it was easy — because it mattered.
                 </p>
                 <p>
-                  From that sacrifice came the Orama Network. A decentralized
-                  cloud where your apps run on a mesh of independent nodes,
-                  connected by encrypted tunnels. No Amazon. No Google. No single
-                  point of failure. Fifty nodes are live today. Open source.
-                  Auditable.{" "}
+                  From that sacrifice came the Orama Network — a standalone
+                  Layer-1 blockchain designed for a{" "}
+                  <span className="text-fg font-medium">1,000-year horizon.</span>
+                  {" "}The eternal decentralized computer and financial system.
+                  BTC-only economy. 210 million $ORAMA — zero pre-mine, 100% mined.
+                  WASM smart contracts in any language. Per-transaction privacy
+                  with PLONK zk-SNARKs. Nodes are live today, earning toward the
+                  300-node genesis requirement. Open source. Auditable.{" "}
                   <span className="text-fg font-medium">
                     Owned by the community.
                   </span>

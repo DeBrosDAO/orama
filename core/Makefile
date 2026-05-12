@@ -61,9 +61,11 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release
+.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
 
-VERSION := 0.120.0
+# Single source of truth — repo-root VERSION file. Update with `make bump VER=X.Y.Z`
+# or by editing /VERSION directly. Release workflows verify this matches the tag.
+VERSION := $(shell cat ../VERSION 2>/dev/null | tr -d '[:space:]' || echo unknown)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -80,6 +82,7 @@ build: deps
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	go build -ldflags "$(LDFLAGS)" -o bin/sfu ./cmd/sfu
 	go build -ldflags "$(LDFLAGS)" -o bin/turn ./cmd/turn
+	go build -ldflags "$(LDFLAGS)" -o bin/orama-sni-router ./cmd/sni-router
 	@echo "Build complete! Run ./bin/orama version"
 
 # Cross-compile CLI for Linux (only binary needed locally; VPS builds everything else from source)
@@ -128,6 +131,17 @@ rollout-devnet:
 # Full rollout to testnet (build + push + rolling upgrade)
 rollout-testnet:
 	./bin/orama node rollout --env testnet --yes
+
+# Bump the repo-root VERSION file and sync sdk/package.json.
+# Usage: make bump VER=0.122.9
+bump:
+	@if [ -z "$(VER)" ]; then \
+		echo "Usage: make bump VER=X.Y.Z"; exit 1; \
+	fi
+	@echo "$(VER)" > ../VERSION
+	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
+	@echo "Bumped VERSION and sdk/package.json to $(VER)"
+	@echo "Next: git add ../VERSION ../sdk/package.json && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:

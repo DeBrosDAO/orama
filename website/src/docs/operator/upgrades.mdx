@@ -114,46 +114,73 @@ Do not proceed to the next node until all checks pass. If a node shows issues af
 
 ---
 
-## Rollout Command
+## Rollout Command (Recommended)
 
-The `orama node rollout` command builds the binary locally and performs a full rolling upgrade in one step. This is the preferred method for deploying code changes.
+The `orama rollout` command pushes a pre-built archive to all your nodes and performs a rolling upgrade. This is the preferred method for deploying code changes.
 
 ```bash
-# Build and deploy to all nodes
-orama node rollout --env testnet
+# Build the archive first
+orama build
 
-# Skip the build step (use existing archive)
-orama node rollout --env testnet --no-build
-
-# Skip confirmation prompt
-orama node rollout --env testnet --yes
+# Roll out to all your nodes (followers first, leader last)
+orama rollout --env devnet
 
 # Custom delay between nodes
-orama node rollout --env testnet --delay 60
+orama rollout --env devnet --delay 60
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--env` | *(required)* | Target environment (`devnet`, `testnet`) |
-| `--no-build` | `false` | Skip build step (use existing archive) |
-| `--yes` | `false` | Skip confirmation prompt |
+| `--env` | active env | Target environment |
 | `--delay` | `30` | Seconds between nodes during rolling upgrade |
+
+The rollout command discovers your nodes via wallet-based ownership (same nodes shown by `orama nodes`). It falls back to `nodes.conf` if the network API is unavailable.
+
+### Legacy Rollout
+
+The `orama node rollout` command is still available and uses `nodes.conf` directly:
+
+```bash
+orama node rollout --env testnet
+orama node rollout --env testnet --no-build --yes --delay 60
+```
 
 ---
 
-## Push Command
+## Push Command (Recommended)
 
-The `orama node push` command uploads the binary to nodes without restarting services. Useful for pre-staging a binary before a maintenance window.
+The `orama push` command uploads the binary archive to nodes without restarting services. Useful for pre-staging a binary before a maintenance window. Uses RootWallet for SSH authentication.
 
 ```bash
-# Push to all nodes in an environment
-orama node push --env devnet
-
 # Push to a single node
-orama node push --env testnet --node 1.2.3.4
+orama push --ip 1.2.3.4
 
-# Upload directly to each node (no hub fanout)
-orama node push --env testnet --direct
+# Push to all nodes in an environment
+orama push --env devnet
+
+# Fan out server-to-server (faster for many nodes)
+orama push --env devnet --fanout
+
+# Push with a specific SSH user
+orama push --ip 1.2.3.4 --user ubuntu
+```
+
+Use `--fanout` to upload to the first node, then distribute server-to-server via SSH agent forwarding. Much faster when pushing to many nodes.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ip` | | Push to a single node by IP |
+| `--env` | active env | Push to all nodes in environment |
+| `--user` | `root` | SSH user |
+| `--fanout` | `false` | Fan out from first node server-to-server (faster) |
+
+### Legacy Push
+
+The `orama node push` command is still available and uses `nodes.conf`:
+
+```bash
+orama node push --env devnet
+orama node push --env testnet --node 1.2.3.4
 ```
 
 | Flag | Default | Description |

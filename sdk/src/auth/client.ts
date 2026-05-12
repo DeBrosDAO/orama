@@ -53,13 +53,50 @@ export class AuthClient {
     }
   }
 
+  /**
+   * Exchange a stored refresh token for a fresh access token.
+   *
+   * Pulls the refresh token (and the namespace it was issued for) out of
+   * storage — both are persisted by `verify()` after a successful wallet
+   * sign-in. The gateway returns a new access token and may rotate the
+   * refresh token; we persist the rotated one if present.
+   *
+   * Bug #239: previously this method (a) sent no body and (b) read the
+   * wrong response field, so the call always 400-ed AND silently wrote
+   * `undefined` as the in-memory JWT. Both issues fixed.
+   */
   async refresh(): Promise<string> {
-    const response = await this.httpClient.post<{ token: string }>(
-      "/v1/auth/refresh"
-    );
-    const token = response.token;
-    this.setJwt(token);
-    return token;
+    const refreshToken = await this.storage.get("refreshToken");
+    if (!refreshToken) {
+      throw new Error(
+        "refresh failed: no refresh token in storage — call verify() first"
+      );
+    }
+    const namespace = (await this.storage.get("namespace")) ?? "default";
+
+    const response = await this.httpClient.post<{
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+      subject?: string;
+      namespace?: string;
+      token_type?: string;
+    }>("/v1/auth/refresh", { refresh_token: refreshToken, namespace });
+
+    if (!response?.access_token) {
+      throw new Error("refresh failed: server returned no access_token");
+    }
+
+    this.setJwt(response.access_token);
+
+    // Rotate the stored refresh token if the server returned a new one
+    // (rqlite-side gateway currently echoes the same token; future versions
+    // may rotate, so handle both shapes).
+    if (response.refresh_token && response.refresh_token !== refreshToken) {
+      await this.storage.set("refreshToken", response.refresh_token);
+    }
+
+    return response.access_token;
   }
 
   /**
@@ -197,6 +234,14 @@ export class AuthClient {
     if ((response as any).refresh_token) {
       await this.storage.set("refreshToken", (response as any).refresh_token);
     }
+
+    // Persist the namespace this JWT was issued for so refresh() can
+    // include it in the refresh request body (the gateway scopes refresh
+    // tokens to the issuing namespace). Bug #239 — without this, refresh
+    // would default to "default" and fail for namespace-scoped sessions.
+    const issuedNamespace =
+      (response as any).namespace || params.namespace || "default";
+    await this.storage.set("namespace", issuedNamespace);
 
     return response as any;
   }

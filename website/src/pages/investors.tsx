@@ -24,25 +24,19 @@ import {
   Server,
   Shield,
   Coins,
-  Wallet,
-  Lock,
-  Vote,
   ExternalLink,
   TrendingUp,
   Globe,
   Zap,
   ChevronRight,
-  Target,
-  DollarSign,
-  Clock,
   Award,
   Code,
+  Flame,
+  Lock,
 } from "lucide-react";
-import oramaIcon from "../assets/orama-icon.png";
-import { Redacted } from "../components/ui/redacted";
 
 /* ═══════════════════════════════════════════
-   1. HERO — Hook with dual investment paths
+   1. HERO — The base layer for 1,000 years
    ═══════════════════════════════════════════ */
 function InvestorHero() {
   return (
@@ -57,7 +51,7 @@ function InvestorHero() {
 
         <h1 className="font-display font-bold text-4xl lg:text-6xl leading-tight">
           <SplitText
-            text="The future runs on Orama."
+            text="The base layer for"
             className="text-fg"
             delay={30}
             duration={0.6}
@@ -67,7 +61,7 @@ function InvestorHero() {
           />
           <br />
           <SplitText
-            text="Be the one who funded it."
+            text="the next 1,000 years."
             delay={30}
             duration={0.6}
             splitType="chars"
@@ -86,38 +80,40 @@ function InvestorHero() {
         `}</style>
 
         <p className="text-muted text-sm leading-relaxed max-w-lg">
-          We're raising <Redacted /> BTC to bring Orama Network to mainnet —
-          <Redacted /> from node licenses and <Redacted /> from
-          a token pre-sale. Paid in BTC.
+          210,000,000 $ORAMA. Hard cap forever. Zero pre-mine. Zero team allocation.
+          Zero airdrop. 100% earned through mining — just like Bitcoin.
         </p>
 
-        {/* Fundraise progress */}
-        <div className="w-full max-w-md">
-          <div className="flex items-center justify-between text-xs font-mono text-muted mb-1">
-            <span><Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> raised</span>
-            <span><Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> goal</span>
-          </div>
-          <div className="h-3 bg-surface-2 rounded-full overflow-hidden border border-border">
-            <div
-              className="h-full rounded-full transition-all duration-1000"
-              style={{
-                width: "2%",
-                background: SILVER.gradient,
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-center gap-2 mt-2">
-            <StatusDot status="active" />
-            <span className="text-xs font-mono text-muted">
-              Fundraise in progress
-            </span>
-          </div>
+        {/* Key stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full max-w-lg">
+          {[
+            { label: "Hard Cap", value: "210M" },
+            { label: "Mined", value: "100%" },
+            { label: "Pre-mine", value: "0" },
+            { label: "Genesis Nodes", value: "300" },
+          ].map((s) => (
+            <div key={s.label} className="flex flex-col items-center gap-1">
+              <span
+                className="text-2xl font-bold font-mono tabular-nums"
+                style={{
+                  background: SILVER.gradient,
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                }}
+              >
+                {s.value}
+              </span>
+              <span className="text-[10px] font-mono text-muted tracking-wider uppercase">
+                {s.label}
+              </span>
+            </div>
+          ))}
         </div>
 
-        {/* Dual CTA */}
+        {/* CTA */}
         <div className="flex flex-wrap items-center gap-3 justify-center pt-2">
-          <a href="#invest" className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm cursor-pointer text-black">
-            View Investment Options
+          <a href="#participate" className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm cursor-pointer text-black">
+            How to Participate
             <ArrowRight className="w-3.5 h-3.5 ml-2" />
           </a>
           <Button asChild variant="ghost" size="lg">
@@ -145,7 +141,7 @@ function TheOpportunity() {
       <AnimateIn>
         <SectionHeader
           title="The Opportunity"
-          subtitle="Cloud infrastructure is a $600B market controlled by three companies. We're building the alternative."
+          subtitle="Cloud + money in one protocol. BTC-native. Real infrastructure live today."
         />
       </AnimateIn>
 
@@ -153,18 +149,18 @@ function TheOpportunity() {
         {[
           {
             icon: Globe,
-            title: "Centralized cloud is broken",
-            desc: "AWS, GCP, and Azure control 67% of the cloud market. Single points of failure, vendor lock-in, and rising costs. Developers deserve better.",
+            title: "Cloud + money in one protocol",
+            desc: "Orama is both a decentralized world computer (SQL, KV, IPFS, WASM, AI) and a Bitcoin-grade financial system. No other chain does both.",
           },
           {
             icon: Zap,
-            title: "Decentralized compute is inevitable",
-            desc: "Edge computing, AI workloads, and data sovereignty laws are pushing compute away from centralized data centers. The infrastructure needs to follow.",
+            title: "BTC-native economy",
+            desc: "Only two assets exist: BTC and $ORAMA. No stablecoins, no wrapped altcoins. Bridge BTC, buy $ORAMA, done. Zero counterparty risk beyond Bitcoin itself.",
           },
           {
             icon: TrendingUp,
-            title: "Early-stage with real product",
-            desc: "Orama Network isn't a whitepaper project. We have 50+ nodes running across 2 environments, a working CLI, container deployments, DNS, databases, and WASM functions — all live today.",
+            title: "Real infrastructure, live today",
+            desc: "Orama Network isn't a whitepaper project. Nodes are running across multiple environments with a working CLI, container deployments, DNS, databases, and WASM functions — all live.",
           },
         ].map((item) => (
           <AnimateIn key={item.title}>
@@ -182,705 +178,89 @@ function TheOpportunity() {
           </AnimateIn>
         ))}
       </div>
+    </Section>
+  );
+}
 
-      {/* Key metrics */}
+/* ═══════════════════════════════════════════
+   3. HOW $ORAMA IS CREATED — Mining model
+   ═══════════════════════════════════════════ */
+function HowOramaIsCreated() {
+  return (
+    <Section>
       <AnimateIn>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mt-8">
+        <SectionHeader
+          title="How $ORAMA Is Created"
+          subtitle="Bitcoin-style mining with halving every 2 years. 50% emitted in the first 2 years."
+        />
+      </AnimateIn>
+
+      {/* Explanation */}
+      <AnimateIn>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
           {[
-            { label: "Nodes Live", value: "50+" },
-            { label: "Environments", value: "3" },
-            { label: "Privacy Layer", value: "Orama Proxy" },
-            { label: "Target Mainnet", value: "2028" },
-          ].map((m) => (
-            <DashedPanel key={m.label} className="p-4">
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                  {m.label}
-                </span>
-                <span
-                  className="text-lg font-bold tabular-nums tracking-tight"
-                  style={{
-                    background: SILVER.gradient,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                  }}
-                >
-                  {m.value}
-                </span>
+            {
+              icon: Server,
+              title: "Block Rewards",
+              desc: "Every 6 seconds, a new block is produced. The block proposer receives 80% of the reward. 20% flows to the protocol bonding curve (capped at 21M tokens).",
+            },
+            {
+              icon: TrendingUp,
+              title: "Bitcoin-Style Halving",
+              desc: "Era 1 starts at 100 $ORAMA per block. Every 2 years, the reward halves. Predictable, verifiable at any block height. 50% emitted in year 1-2.",
+            },
+            {
+              icon: Flame,
+              title: "Deflationary Fees",
+              desc: "All base fees are burned permanently. Priority fees go to block proposers. The more the network is used, the more $ORAMA is removed from supply forever.",
+            },
+          ].map((item) => (
+            <DashedPanel key={item.title} withBackground className="h-full">
+              <div className="flex flex-col gap-3 p-3">
+                <item.icon className="w-5 h-5 text-accent" />
+                <h3 className="font-display font-bold text-fg">{item.title}</h3>
+                <p className="text-sm text-muted leading-relaxed">{item.desc}</p>
               </div>
             </DashedPanel>
           ))}
         </div>
       </AnimateIn>
-    </Section>
-  );
-}
 
-/* ═══════════════════════════════════════════
-   3. TWO WAYS TO INVEST — Side by side
-   ═══════════════════════════════════════════ */
-function TwoWaysToInvest() {
-  return (
-    <Section id="invest">
-      <AnimateIn>
-        <SectionHeader
-          title="Two Ways to Invest"
-          subtitle="Choose the investment that matches your involvement level."
-        />
-      </AnimateIn>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
-        {/* Node License */}
-        <AnimateIn>
-          <DashedPanel withCorners withBackground className="h-full">
-            <div className="flex flex-col gap-6 p-4">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 shrink-0 flex items-center justify-center bg-white/[0.03] border border-border rounded-lg p-2">
-                  <img
-                    src={oramaIcon}
-                    alt="Orama"
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <div>
-                  <h3 className="font-display font-bold text-xl text-fg">
-                    Node License
-                  </h3>
-                  <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                    Operate & Earn
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between py-4 border-t border-b border-dashed border-border">
-                <span className="text-sm font-mono text-muted">Price</span>
-                <span className="text-3xl font-display font-bold text-fg">
-                  <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                </span>
-              </div>
-
-              <div className="flex flex-col gap-3">
-                <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                  What you get
-                </span>
-                {[
-                  { icon: Server, text: "Right to operate an Orama Network node" },
-                  { icon: Coins, text: "Earn $ORAMA for every request served" },
-                  { icon: Shield, text: "Built-in Orama Proxy privacy relay" },
-                  { icon: Vote, text: "Governance voting rights" },
-                  { icon: Lock, text: "Priority mainnet access (2028)" },
-                  { icon: Wallet, text: "Transferable — resellable on secondary markets" },
-                ].map((item) => (
-                  <div key={item.text} className="flex items-start gap-3">
-                    <item.icon className="w-4 h-4 mt-0.5 shrink-0 text-accent" />
-                    <span className="text-sm text-muted">{item.text}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <span className="text-xs font-mono text-muted">Pay with</span>
-                {["BTC"].map((c) => (
-                  <span
-                    key={c}
-                    className="px-2 py-0.5 text-xs font-mono font-bold border border-border rounded" style={{ color: "#F7931A", borderColor: "#F7931A40" }}
-                  >
-                    {c}
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between text-xs font-mono text-muted border-t border-dashed border-border pt-4">
-                <span><Redacted /> licenses available</span>
-                <span><Redacted /> remaining</span>
-              </div>
-
-              <button disabled className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm text-black w-full opacity-50 cursor-not-allowed">
-                Coming Soon
-              </button>
-            </div>
-          </DashedPanel>
-        </AnimateIn>
-
-        {/* Token Pre-Sale */}
-        <AnimateIn>
-          <DashedPanel withCorners withBackground className="h-full">
-            <div className="flex flex-col gap-6 p-4">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 shrink-0 flex items-center justify-center bg-white/[0.03] border border-border rounded-lg p-2">
-                  <Coins className="w-8 h-8 text-accent" />
-                </div>
-                <div>
-                  <h3 className="font-display font-bold text-xl text-fg">
-                    Token Pre-Sale
-                  </h3>
-                  <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                    Buy $ORAMA Early
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between py-4 border-t border-b border-dashed border-border">
-                <span className="text-sm font-mono text-muted">
-                  Pre-Sale Price
-                </span>
-                <div className="text-right">
-                  <span className="text-3xl font-display font-bold text-fg">
-                    <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                  </span>
-                  <div className="text-xs font-mono text-muted mt-1">
-                    Launch price: <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-3">
-                <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                  What you get
-                </span>
-                {[
-                  { icon: TrendingUp, text: "Upside at launch — details coming soon" },
-                  { icon: Coins, text: "Tokens available at pre-sale price — details coming soon" },
-                  { icon: Vote, text: "Governance voting rights" },
-                  { icon: Wallet, text: "Stake tokens to earn rewards" },
-                  { icon: Clock, text: "Vesting schedule — details coming soon" },
-                  { icon: Lock, text: "Tradeable from day 1 after vesting" },
-                ].map((item) => (
-                  <div key={item.text} className="flex items-start gap-3">
-                    <item.icon className="w-4 h-4 mt-0.5 shrink-0 text-accent" />
-                    <span className="text-sm text-muted">{item.text}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <span className="text-xs font-mono text-muted">Pay with</span>
-                {["BTC"].map((c) => (
-                  <span
-                    key={c}
-                    className="px-2 py-0.5 text-xs font-mono font-bold border border-border rounded" style={{ color: "#F7931A", borderColor: "#F7931A40" }}
-                  >
-                    {c}
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between text-xs font-mono text-muted border-t border-dashed border-border pt-4">
-                <span><Redacted /> tokens at <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span></span>
-                <span><Redacted /> <span style={{ color: "#F7931A" }}>BTC</span> total raise</span>
-              </div>
-
-              <button disabled className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm text-black w-full opacity-50 cursor-not-allowed">
-                Coming Soon
-              </button>
-            </div>
-          </DashedPanel>
-        </AnimateIn>
-      </div>
-
-      {/* Quick comparison */}
-      <AnimateIn>
-        <div className="mt-8">
-          <SpecTable
-            rows={[
-              { label: "Minimum Investment", value: "Details coming soon" },
-              { label: "Earning Mechanism", value: "Node: $ORAMA rewards · Token: Staking + appreciation" },
-              { label: "Involvement", value: "Node: Run infrastructure · Token: Passive" },
-              { label: "Supply", value: "Details coming soon" },
-              { label: "Vesting", value: "Details coming soon" },
-            ]}
-          />
-        </div>
-      </AnimateIn>
-    </Section>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   4. DEBROS NFT HOLDERS — Free license callout
-   ═══════════════════════════════════════════ */
-function DebrosNftCallout() {
-  return (
-    <Section>
-      <AnimateIn>
-        <DashedPanel withCorners withBackground>
-          <div className="flex flex-col md:flex-row items-center gap-6 p-4">
-            <div className="w-16 h-16 shrink-0 flex items-center justify-center rounded-lg border border-dashed border-accent/30 bg-accent/[0.05]">
-              <Award className="w-8 h-8 text-accent" />
-            </div>
-            <div className="flex-1 text-center md:text-left">
-              <h3 className="font-display font-bold text-lg text-fg">
-                DeBros NFT Holders Get a Free Node License
-              </h3>
-              <p className="text-sm text-muted mt-2 leading-relaxed max-w-xl">
-                Already hold a DeBros Team NFT? You're entitled to a free Orama
-                Network node license — no purchase required. Connect your wallet
-                to claim yours and start earning $ORAMA rewards from day one.
-              </p>
-            </div>
-            <Button asChild size="lg">
-              <Link to="/invest" className="shrink-0">
-                Claim License
-                <ArrowRight className="w-3.5 h-3.5 ml-2" />
-              </Link>
-            </Button>
-          </div>
-        </DashedPanel>
-      </AnimateIn>
-    </Section>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   4b. $ANCHAT HOLDER BONUS
-   ═══════════════════════════════════════════ */
-function AnchatHolderCallout() {
-  return (
-    <Section>
-      <AnimateIn>
-        <DashedPanel withCorners withBackground>
-          <div className="flex flex-col md:flex-row items-center gap-6 p-4">
-            <div className="w-16 h-16 shrink-0 flex items-center justify-center rounded-lg border border-dashed border-accent/30 bg-accent/[0.05]">
-              <Coins className="w-8 h-8 text-accent" />
-            </div>
-            <div className="flex-1 text-center md:text-left">
-              <h3 className="font-display font-bold text-lg text-fg">
-                $ANCHAT Holders Get Free $ORAMA
-              </h3>
-              <p className="text-sm text-muted mt-2 leading-relaxed max-w-xl">
-                Hold $ANCHAT tokens from anchat.io? You're eligible to claim a portion
-                of your holdings as $ORAMA tokens. Conversion rate and claim details
-                coming soon. Connect your Solana wallet to check your balance
-                and claim.
-              </p>
-            </div>
-            <Button asChild size="lg">
-              <Link to="/invest" className="shrink-0">
-                Claim $ORAMA
-                <ArrowRight className="w-3.5 h-3.5 ml-2" />
-              </Link>
-            </Button>
-          </div>
-        </DashedPanel>
-      </AnimateIn>
-    </Section>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   5. WHERE THE MONEY GOES — Fund allocation
-   ═══════════════════════════════════════════ */
-function FundAllocation() {
-  const allocations = [
-    {
-      label: "Initial Liquidity Pool",
-      amount: "***",
-      pct: 20,
-      desc: "Seeding the $ORAMA liquidity pool. Deep liquidity from day 1 so holders can trade freely.",
-      color: SILVER.light,
-    },
-    {
-      label: "Core Development",
-      amount: "***",
-      pct: 20,
-      desc: "Engineering team salaries, infrastructure costs, security audits, and protocol development through mainnet launch.",
-      color: SILVER.mid,
-    },
-    {
-      label: "Marketing & Growth",
-      amount: "***",
-      pct: 20,
-      desc: "Developer relations, community building, partnerships, conference presence, and ecosystem grants.",
-      color: SILVER.dark,
-    },
-    {
-      label: "Legal & Compliance",
-      amount: "***",
-      pct: 20,
-      desc: "Token legal structure, regulatory compliance, entity setup, and ongoing counsel.",
-      color: "#52525b",
-    },
-    {
-      label: "Reserve",
-      amount: "***",
-      pct: 20,
-      desc: "Emergency fund for unexpected costs, security incidents, or strategic opportunities.",
-      color: "#3f3f46",
-    },
-  ];
-
-  return (
-    <Section>
-      <AnimateIn>
-        <SectionHeader
-          title="Where the Money Goes"
-          subtitle="Full transparency on fund allocation — details coming soon."
-        />
-      </AnimateIn>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
-        {/* Visual breakdown */}
-        <AnimateIn>
-          <DashedPanel withCorners withBackground>
-            <div className="flex flex-col gap-6 p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                  Total Raise
-                </span>
-                <span className="font-display font-bold text-2xl text-fg">
-                  <Redacted /> <span style={{ color: "#F7931A" }}>BTC</span>
-                </span>
-              </div>
-
-              {/* Horizontal bar */}
-              <div className="flex h-5 rounded-full overflow-hidden">
-                {allocations.map((a) => (
-                  <div
-                    key={a.label}
-                    className="h-full transition-all duration-500"
-                    style={{ width: `${a.pct}%`, background: a.color }}
-                    title={`${a.label}: ${a.pct}%`}
-                  />
-                ))}
-              </div>
-
-              {/* Legend */}
-              <div className="flex flex-col gap-3">
-                {allocations.map((a) => (
-                  <div
-                    key={a.label}
-                    className="flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="w-3 h-3 rounded-sm shrink-0"
-                        style={{ background: a.color }}
-                      />
-                      <span className="text-xs font-mono text-muted">
-                        {a.label}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-mono text-fg">
-                        {a.amount}
-                      </span>
-                      <span className="text-xs font-mono text-muted w-10 text-right">
-                        <Redacted />
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </DashedPanel>
-        </AnimateIn>
-
-        {/* Detailed descriptions */}
-        <AnimateIn>
-          <div className="flex flex-col gap-4">
-            {allocations.map((a) => (
-              <div
-                key={a.label}
-                className="border-l-2 pl-4 py-1"
-                style={{ borderColor: a.color }}
-              >
-                <div className="flex items-center justify-between">
-                  <h4 className="font-display font-bold text-sm text-fg">
-                    {a.label}
-                  </h4>
-                  <span className="text-xs font-mono text-muted">
-                    {a.amount}
-                  </span>
-                </div>
-                <p className="text-xs text-muted leading-relaxed mt-1">
-                  {a.desc}
-                </p>
-              </div>
-            ))}
-          </div>
-        </AnimateIn>
-      </div>
-
-      {/* Key callout */}
-      <AnimateIn>
-        <div
-          className="flex items-center gap-3 px-4 py-3 rounded-lg mt-8 max-w-2xl mx-auto"
-          style={{
-            background: "rgba(161,161,170,0.06)",
-            border: `1px solid ${SILVER.border}`,
-          }}
-        >
-          <Target className="w-4 h-4 shrink-0 text-accent" />
-          <span className="text-xs font-mono text-muted">
-            A significant portion of raised funds will go directly into liquidity — ensuring strong
-            market depth and tradability from launch day. Exact allocation coming soon.
-          </span>
-        </div>
-      </AnimateIn>
-    </Section>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   6. TOKENOMICS DEEP DIVE
-   ═══════════════════════════════════════════ */
-function TokenomicsDeepDive() {
-  const allocations = [
-    { label: "Node Operators & Staking", pct: 16.7, tokens: "***", color: SILVER.light },
-    { label: "Liquidity & DEX", pct: 16.7, tokens: "***", color: SILVER.mid },
-    { label: "Treasury (DAO)", pct: 16.7, tokens: "***", color: SILVER.dark },
-    { label: "Pre-Sale", pct: 16.7, tokens: "***", color: "#71717a" },
-    { label: "Core Team", pct: 16.6, tokens: "***", color: "#52525b" },
-    { label: "Marketing & Growth", pct: 16.6, tokens: "***", color: "#3f3f46" },
-  ];
-
-  const vestingSchedule = [
-    { allocation: "Node Operators", pct: "***", amount: "***", schedule: "***", cliff: "***", unlock: "***" },
-    { allocation: "Liquidity & DEX", pct: "***", amount: "***", schedule: "***", cliff: "***", unlock: "***" },
-    { allocation: "Treasury (DAO)", pct: "***", amount: "***", schedule: "***", cliff: "***", unlock: "***" },
-    { allocation: "Pre-Sale", pct: "***", amount: "***", schedule: "***", cliff: "***", unlock: "***" },
-    { allocation: "Core Team", pct: "***", amount: "***", schedule: "***", cliff: "***", unlock: "***" },
-    { allocation: "Marketing", pct: "***", amount: "***", schedule: "***", cliff: "***", unlock: "***" },
-  ];
-
-  return (
-    <Section>
-      <AnimateIn>
-        <SectionHeader
-          title="Tokenomics"
-          subtitle="$ORAMA — Fixed supply. No inflation. No additional minting. Details coming soon."
-        />
-      </AnimateIn>
-
-      {/* Supply overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-        <AnimateIn>
-          <DashedPanel withCorners withBackground>
-            <div className="flex flex-col gap-6 p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-muted tracking-wider uppercase">
-                  Total Supply
-                </span>
-                <span
-                  className="font-display font-bold text-xl"
-                  style={{
-                    background: SILVER.gradient,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                  }}
-                >
-                  <Redacted />
-                </span>
-              </div>
-
-              {/* Bar chart */}
-              <div className="flex h-4 rounded-full overflow-hidden">
-                {allocations.map((a) => (
-                  <div
-                    key={a.label}
-                    className="h-full transition-all duration-500"
-                    style={{ width: `${a.pct}%`, background: a.color }}
-                    title={`${a.label}: ${a.pct}%`}
-                  />
-                ))}
-              </div>
-
-              {/* Legend */}
-              <div className="flex flex-col gap-2">
-                {allocations.map((a) => (
-                  <div
-                    key={a.label}
-                    className="flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="w-3 h-3 rounded-sm shrink-0"
-                        style={{ background: a.color }}
-                      />
-                      <span className="text-xs font-mono text-muted">
-                        {a.label}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-mono text-fg">
-                        {a.tokens}
-                      </span>
-                      <span className="text-xs font-mono text-muted w-8 text-right">
-                        <Redacted />
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </DashedPanel>
-        </AnimateIn>
-
-        {/* Token utility */}
-        <AnimateIn>
-          <div className="flex flex-col gap-4">
-            <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
-              Token Utility
-            </h3>
-            {[
-              {
-                icon: Coins,
-                title: "Staking & Rewards",
-                desc: "Operators stake $ORAMA to run nodes. Rewards scale with uptime, bandwidth, and compute contribution. Higher stake = higher multiplier.",
-              },
-              {
-                icon: Vote,
-                title: "Governance",
-                desc: "Token holders vote on network proposals, treasury allocation, and protocol upgrades. 1 token = 1 vote.",
-              },
-              {
-                icon: DollarSign,
-                title: "Payments",
-                desc: "Developers pay for compute, storage, and bandwidth in $ORAMA. This creates constant buy pressure as the network grows.",
-              },
-              {
-                icon: Shield,
-                title: "Privacy Built In",
-                desc: "Node operators earn $ORAMA tokens for every request served — with built-in privacy via Orama Proxy.",
-              },
-            ].map((u) => (
-              <DashedPanel key={u.title} withBackground>
-                <div className="flex gap-3 p-2">
-                  <u.icon className="w-4 h-4 mt-0.5 shrink-0 text-accent" />
-                  <div>
-                    <h4 className="font-display font-bold text-sm text-fg">
-                      {u.title}
-                    </h4>
-                    <p className="text-xs text-muted leading-relaxed mt-1">
-                      {u.desc}
-                    </p>
-                  </div>
-                </div>
-              </DashedPanel>
-            ))}
-          </div>
-        </AnimateIn>
-      </div>
-
-      {/* Launch mechanics */}
+      {/* Emission table */}
       <AnimateIn>
         <div className="mt-8">
           <DashedPanel withBackground>
             <div className="p-4">
               <h3 className="text-xs font-mono text-muted tracking-wider uppercase mb-4">
-                Launch Mechanics
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs font-mono text-muted">Pre-Sale Price</span>
-                  <span className="text-xl font-bold font-mono text-fg"><Redacted /></span>
-                  <span className="text-xs text-muted"><Redacted /> tokens available</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs font-mono text-muted">LP Launch Price</span>
-                  <span className="text-xl font-bold font-mono text-fg"><Redacted /></span>
-                  <span className="text-xs text-muted"><Redacted /> seeded into LP</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs font-mono text-muted">Day-1 Upside</span>
-                  <span
-                    className="text-xl font-bold font-mono"
-                    style={{
-                      background: SILVER.gradient,
-                      WebkitBackgroundClip: "text",
-                      WebkitTextFillColor: "transparent",
-                    }}
-                  >
-                    <Redacted />
-                  </span>
-                  <span className="text-xs text-muted">Pre-sale vs launch price</span>
-                </div>
-              </div>
-            </div>
-          </DashedPanel>
-        </div>
-      </AnimateIn>
-
-      {/* $ANCHAT holder bonus alert */}
-      <AnimateIn>
-        <div
-          className="flex items-start gap-3 px-4 py-4 rounded-lg mt-8"
-          style={{ background: "rgba(161,161,170,0.08)", border: `1px solid ${SILVER.border}` }}
-        >
-          <Coins className="w-5 h-5 shrink-0 mt-0.5" style={{ color: SILVER.light }} />
-          <div>
-            <span className="text-sm font-display font-bold text-fg">
-              $ANCHAT Holder Bonus
-            </span>
-            <p className="text-xs text-muted leading-relaxed mt-1">
-              Hold $ANCHAT tokens from anchat.io? You're eligible to claim a portion of your holdings
-              as $ORAMA tokens at no cost. Conversion rate coming soon.
-              Connect your Solana wallet at the{" "}
-              <Link to="/invest" className="text-accent hover:text-fg transition-colors underline underline-offset-2">
-                Investor Dashboard
-              </Link>{" "}
-              to check your balance and claim.
-            </p>
-          </div>
-        </div>
-      </AnimateIn>
-
-      {/* Vesting table */}
-      <AnimateIn>
-        <div className="mt-8">
-          <DashedPanel withBackground>
-            <div className="p-4">
-              <h3 className="text-xs font-mono text-muted tracking-wider uppercase mb-4">
-                Vesting Schedule
+                Emission Schedule
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b border-dashed border-border">
-                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">
-                        Allocation
-                      </th>
-                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">
-                        %
-                      </th>
-                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">
-                        Tokens
-                      </th>
-                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">
-                        Cliff
-                      </th>
-                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">
-                        Vesting
-                      </th>
-                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3">
-                        Unlock
-                      </th>
+                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Era</th>
+                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Years</th>
+                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">Block Reward</th>
+                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">To Miners (80%)</th>
+                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3 pr-4">To Curve (20%)</th>
+                      <th className="text-xs font-mono text-muted tracking-wider uppercase py-3">Cumulative</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {vestingSchedule.map((row) => (
-                      <tr
-                        key={row.allocation}
-                        className="border-b border-border/50"
-                      >
-                        <td className="text-sm text-fg py-3 pr-4">
-                          {row.allocation}
-                        </td>
-                        <td className="text-sm text-fg py-3 pr-4 font-mono">
-                          {row.pct}
-                        </td>
-                        <td className="text-sm text-fg py-3 pr-4 font-mono">
-                          {row.amount}
-                        </td>
-                        <td className="text-sm text-muted py-3 pr-4">
-                          {row.cliff}
-                        </td>
-                        <td className="text-sm text-muted py-3 pr-4">
-                          {row.schedule}
-                        </td>
-                        <td className="text-sm text-muted py-3">
-                          {row.unlock}
-                        </td>
+                    {[
+                      { era: "1", years: "1-2", reward: "100", miners: "84.1M", curve: "21M", cumulative: "105.1M (50%)" },
+                      { era: "2", years: "3-4", reward: "50", miners: "42M", curve: "10.5M", cumulative: "157.7M (75%)" },
+                      { era: "3", years: "5-6", reward: "25", miners: "21M", curve: "5.3M", cumulative: "184M (87.5%)" },
+                      { era: "4", years: "7-8", reward: "12.5", miners: "10.5M", curve: "2.6M", cumulative: "197.1M (93.8%)" },
+                      { era: "5", years: "9-10", reward: "6.25", miners: "5.3M", curve: "1.3M", cumulative: "203.7M (96.9%)" },
+                    ].map((row) => (
+                      <tr key={row.era} className="border-b border-border/50">
+                        <td className="text-sm text-fg py-3 pr-4 font-mono font-bold">{row.era}</td>
+                        <td className="text-sm text-muted py-3 pr-4">{row.years}</td>
+                        <td className="text-sm text-fg py-3 pr-4 font-mono">{row.reward} $ORAMA</td>
+                        <td className="text-sm text-muted py-3 pr-4 font-mono">{row.miners}</td>
+                        <td className="text-sm text-muted py-3 pr-4 font-mono">{row.curve}</td>
+                        <td className="text-sm text-fg py-3 font-mono">{row.cumulative}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -895,133 +275,300 @@ function TokenomicsDeepDive() {
 }
 
 /* ═══════════════════════════════════════════
-   7. EARNINGS & ROI
+   4. THREE WAYS TO PARTICIPATE
    ═══════════════════════════════════════════ */
-function EarningsAndRoi() {
+function ThreeWaysToParticipate() {
+  return (
+    <Section id="participate">
+      <AnimateIn>
+        <SectionHeader
+          title="Three Ways to Participate"
+          subtitle="Run a node. Buy from the bonding curve. Or acquire a node license."
+        />
+      </AnimateIn>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
+        {/* Card A: Run a Node */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-5 p-4">
+              <div className="flex items-center gap-3">
+                <Server className="w-6 h-6 text-accent" />
+                <div>
+                  <h3 className="font-display font-bold text-lg text-fg">Run a Node</h3>
+                  <span className="text-xs font-mono text-muted tracking-wider uppercase">Mine $ORAMA</span>
+                </div>
+              </div>
+
+              <p className="text-sm text-muted leading-relaxed">
+                Mine $ORAMA by running a node. Testnet is free — no staking required. Tokens earned during
+                testnet are real and carry over to mainnet. The earlier you join, the more you earn.
+              </p>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-mono text-muted tracking-wider uppercase">
+                  Per-Node Earnings (Era 1)
+                </span>
+                <div className="flex flex-col gap-1">
+                  {[
+                    { nodes: "300 nodes", daily: "3,840 $ORAMA/day" },
+                    { nodes: "500 nodes", daily: "2,304 $ORAMA/day" },
+                    { nodes: "1,000 nodes", daily: "1,152 $ORAMA/day" },
+                  ].map((r) => (
+                    <div key={r.nodes} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border/30">
+                      <span className="text-muted">{r.nodes}</span>
+                      <span className="text-fg">{r.daily}</span>
+                    </div>
+                  ))}
+                </div>
+                <span className="text-[10px] text-muted">Assumes equal Effective Power. Actual earnings vary.</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <StatusDot status="active" />
+                <span className="text-xs font-mono text-accent">Testnet Live Now</span>
+              </div>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+
+        {/* Card B: Bonding Curve */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-5 p-4">
+              <div className="flex items-center gap-3">
+                <Coins className="w-6 h-6 text-accent" />
+                <div>
+                  <h3 className="font-display font-bold text-lg text-fg">Bonding Curve</h3>
+                  <span className="text-xs font-mono text-muted tracking-wider uppercase">Coming Soon</span>
+                </div>
+              </div>
+
+              <p className="text-sm text-muted leading-relaxed">
+                The protocol itself is the first market maker. 20% of every block reward flows into
+                the curve's inventory. Price follows a square root function — cheap early, expensive later.
+                BTC paid goes directly to the protocol reserve, backing the BTC bridge.
+              </p>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-mono text-muted tracking-wider uppercase">
+                  Price Schedule (Price = k x sqrt(n))
+                </span>
+                <div className="flex flex-col gap-1">
+                  {[
+                    { sold: "10K sold", price: "0.00000006 BTC" },
+                    { sold: "1M sold", price: "0.0000006 BTC" },
+                    { sold: "10M sold", price: "0.0000019 BTC" },
+                    { sold: "21M (max)", price: "0.00000275 BTC" },
+                  ].map((r) => (
+                    <div key={r.sold} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border/30">
+                      <span className="text-muted">{r.sold}</span>
+                      <span className="text-fg">{r.price}</span>
+                    </div>
+                  ))}
+                </div>
+                <span className="text-[10px] text-muted">Total BTC to fill curve: ~38.5 BTC. Max 21M tokens.</span>
+              </div>
+
+              <button disabled className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm text-black w-full opacity-50 cursor-not-allowed">
+                Coming Soon
+              </button>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+
+        {/* Card C: Node License */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-5 p-4">
+              <div className="flex items-center gap-3">
+                <Lock className="w-6 h-6 text-accent" />
+                <div>
+                  <h3 className="font-display font-bold text-lg text-fg">Node License</h3>
+                  <span className="text-xs font-mono text-muted tracking-wider uppercase">Coming Soon</span>
+                </div>
+              </div>
+
+              <p className="text-sm text-muted leading-relaxed">
+                Node licenses will provide the right to operate an Orama Network node with priority access
+                and additional benefits. Details are being finalized and will be announced soon.
+              </p>
+
+              <div className="flex-1 flex items-center justify-center py-8">
+                <span className="text-sm font-mono text-muted">Details TBA</span>
+              </div>
+
+              <button disabled className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm text-black w-full opacity-50 cursor-not-allowed">
+                Coming Soon
+              </button>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+      </div>
+    </Section>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   5. BTC BRIDGE REVENUE ENGINE
+   ═══════════════════════════════════════════ */
+function BtcBridgeRevenue() {
   return (
     <Section>
       <AnimateIn>
         <SectionHeader
-          title="Earnings & ROI"
-          subtitle="Node operators earn $ORAMA rewards for every request served."
+          title="BTC Bridge Revenue Engine"
+          subtitle="0.25% fee on every bridge transaction. A perpetual revenue flywheel."
         />
       </AnimateIn>
 
-      {/* How earnings work */}
-      <AnimateIn>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
-          {[
-            {
-              icon: Server,
-              title: "Run a Node",
-              desc: "Purchase a license, set up your Orama One hardware or VPS, and join the network. Your node serves compute, storage, and bandwidth to developers.",
-            },
-            {
-              icon: Coins,
-              title: "Earn $ORAMA",
-              desc: "Every request your node serves earns $ORAMA tokens. Your node also runs the Orama Proxy privacy relay, providing onion-routed traffic for the network.",
-            },
-            {
-              icon: TrendingUp,
-              title: "Stake for Multipliers",
-              desc: "Stake $ORAMA to boost your reward multiplier from 1x up to 5x. Higher stake signals commitment and earns proportionally more.",
-            },
-          ].map((item) => (
-            <DashedPanel key={item.title} withBackground className="h-full">
-              <div className="flex flex-col gap-3 p-3">
-                <item.icon className="w-5 h-5 text-accent" />
-                <h3 className="font-display font-bold text-fg">
-                  {item.title}
-                </h3>
-                <p className="text-sm text-muted leading-relaxed">
-                  {item.desc}
-                </p>
-              </div>
-            </DashedPanel>
-          ))}
-        </div>
-      </AnimateIn>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
+        {/* Fee split */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-5 p-4">
+              <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
+                Bridge Fee: 0.25%
+              </h3>
 
-      {/* Staking tiers */}
-      <AnimateIn>
-        <div className="mt-8">
-          <h3 className="text-xs font-mono text-muted tracking-wider uppercase mb-4">
-            Staking Tiers
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {[
-              {
-                tier: "Base",
-                stake: "1,000",
-                multiplier: "1x",
-                color: "#888",
-                desc: "Standard rewards for running a node with minimum stake.",
-              },
-              {
-                tier: "Enhanced",
-                stake: "10,000",
-                multiplier: "2.5x",
-                color: "#4169E1",
-                desc: "Higher stake unlocks enhanced reward multiplier and priority in job allocation.",
-              },
-              {
-                tier: "Governor",
-                stake: "50,000",
-                multiplier: "5x",
-                color: "#a855f7",
-                desc: "Top-tier rewards plus governance voting power. Shape the future of the network.",
-              },
-            ].map((t) => (
-              <DashedPanel key={t.tier} withBackground className="h-full">
-                <div
-                  className="flex flex-col gap-4 p-4"
-                  style={{ borderLeft: `2px solid ${t.color}` }}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-display font-bold text-fg">
-                      {t.tier}
-                    </span>
-                    <Badge variant="outline">{t.tier}</Badge>
-                  </div>
-                  <div className="flex items-baseline gap-2">
-                    <span
-                      className="font-mono text-3xl font-bold"
-                      style={{ color: t.color }}
-                    >
-                      {t.multiplier}
-                    </span>
-                    <span className="text-xs text-muted font-mono uppercase tracking-wider">
-                      Multiplier
-                    </span>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="font-mono text-lg font-bold text-fg">
-                      {t.stake}
-                    </span>
-                    <span className="text-xs text-muted font-mono">
-                      $ORAMA staked
-                    </span>
-                  </div>
-                  <p className="text-sm text-muted leading-relaxed">
-                    {t.desc}
-                  </p>
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between py-3 border-b border-dashed border-border">
+                  <span className="text-sm text-fg font-semibold">50% to Validators</span>
+                  <span className="text-xs font-mono text-muted">Paid directly in BTC, by Effective Power</span>
                 </div>
-              </DashedPanel>
-            ))}
-          </div>
-        </div>
+                <div className="flex items-center justify-between py-3 border-b border-dashed border-border">
+                  <span className="text-sm text-fg font-semibold">50% to Team NFT Holders</span>
+                  <span className="text-xs font-mono text-muted">Auto-swapped to $ORAMA on order book</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-mono text-muted">Min bridge: 0.001 BTC. No maximum.</span>
+                <span className="text-xs font-mono text-muted">Security: Bitcoin light-client + zk-proofs + BitVM fraud proofs</span>
+              </div>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+
+        {/* Flywheel */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-5 p-4">
+              <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
+                Revenue Flywheel
+              </h3>
+
+              <div className="flex flex-col gap-3">
+                {[
+                  "More bridge usage",
+                  "More BTC fees collected",
+                  "More $ORAMA auto-bought on order book (buy pressure)",
+                  "NFT holders receive more $ORAMA",
+                  "NFTs become more valuable",
+                  "More attention on Orama",
+                  "More users and bridge usage",
+                ].map((step, i) => (
+                  <div key={i} className="flex items-start gap-3">
+                    <span
+                      className="font-mono text-xs shrink-0 w-5 h-5 flex items-center justify-center border border-dashed rounded-sm mt-0.5"
+                      style={{ borderColor: SILVER.dark, color: SILVER.light }}
+                    >
+                      {i + 1}
+                    </span>
+                    <span className="text-sm text-muted">{step}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+      </div>
+    </Section>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   6. DEBROS NFTs — Governance + Revenue
+   ═══════════════════════════════════════════ */
+function DebrosNfts() {
+  return (
+    <Section>
+      <AnimateIn>
+        <SectionHeader
+          title="DeBros NFTs"
+          subtitle="NFT holders control 75% of governance. No whale capture — ever."
+        />
       </AnimateIn>
 
-      {/* Reward factors */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+        {/* Team NFTs */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-4 p-4">
+              <div className="flex items-center gap-3">
+                <Award className="w-6 h-6 text-accent" />
+                <div>
+                  <h3 className="font-display font-bold text-lg text-fg">DeBros Team NFTs</h3>
+                  <Badge variant="outline">100 Supply</Badge>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                {[
+                  "40% of total governance voting power (5 votes per NFT)",
+                  "50% of BTC bridge fees auto-swapped to $ORAMA every epoch",
+                  "Freely tradeable on Orama marketplace",
+                  "Migrated from Solana at mainnet via snapshot",
+                ].map((point) => (
+                  <div key={point} className="flex items-start gap-2">
+                    <span className="w-1 h-1 rounded-full bg-accent/50 mt-2 shrink-0" />
+                    <span className="text-sm text-muted">{point}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+
+        {/* Community NFTs */}
+        <AnimateIn>
+          <DashedPanel withCorners withBackground className="h-full">
+            <div className="flex flex-col gap-4 p-4">
+              <div className="flex items-center gap-3">
+                <Award className="w-6 h-6 text-accent" />
+                <div>
+                  <h3 className="font-display font-bold text-lg text-fg">DeBros Community NFTs</h3>
+                  <Badge variant="outline">700 Supply</Badge>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                {[
+                  "35% of total governance voting power (1 vote per NFT)",
+                  "Freely tradeable on Orama marketplace",
+                  "Migrated from Solana at mainnet via snapshot",
+                  "Together with Team NFTs: 75% of all governance",
+                ].map((point) => (
+                  <div key={point} className="flex items-start gap-2">
+                    <span className="w-1 h-1 rounded-full bg-accent/50 mt-2 shrink-0" />
+                    <span className="text-sm text-muted">{point}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </DashedPanel>
+        </AnimateIn>
+      </div>
+
+      {/* Governance breakdown */}
       <AnimateIn>
         <div className="mt-8">
           <SpecTable
             rows={[
-              { label: "Reward Distribution", value: "Daily" },
-              { label: "Based On", value: "Uptime + bandwidth + compute served" },
-              { label: "$ORAMA Source", value: "Details coming soon" },
-              { label: "Privacy Layer", value: "Orama Proxy onion routing" },
-              { label: "Payment Currency", value: "BTC, $ORAMA" },
+              { label: "Team NFTs (100)", value: "40% governance, 5 votes each, bridge fee revenue" },
+              { label: "Community NFTs (700)", value: "35% governance, 1 vote each" },
+              { label: "$ORAMA Token Holders", value: "25% governance, quadratic voting (sqrt of tokens held)" },
+              { label: "Emergency (Tier 1)", value: "Team NFTs only, 24h, 60% threshold" },
+              { label: "Protocol Upgrades (Tier 2)", value: "All vote, 3 days, 66% threshold" },
+              { label: "Constitutional (Tier 3)", value: "All vote, 14 days, 90% threshold" },
             ]}
           />
         </div>
@@ -1031,61 +578,162 @@ function EarningsAndRoi() {
 }
 
 /* ═══════════════════════════════════════════
-   8. ROADMAP — Detailed timeline
+   7. CONSENSUS & SECURITY
+   ═══════════════════════════════════════════ */
+function ConsensusAndSecurity() {
+  return (
+    <Section>
+      <AnimateIn>
+        <SectionHeader
+          title="Consensus & Security"
+          subtitle="Hybrid PoS + Proof of Contribution + Proof of Infrastructure. Real nodes, real work."
+        />
+      </AnimateIn>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
+        <AnimateIn>
+          <div className="flex flex-col gap-4">
+            <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
+              Effective Power Formula
+            </h3>
+            <DashedPanel withBackground>
+              <div className="p-4">
+                <code className="text-sm text-fg font-mono">
+                  Effective Power = Staked $ORAMA x (1 + Contribution Score) x Infrastructure Multiplier
+                </code>
+              </div>
+            </DashedPanel>
+
+            <div className="flex flex-col gap-3">
+              {[
+                { label: "Block Time", value: "6 seconds" },
+                { label: "Epoch", value: "1 hour (600 blocks)" },
+                { label: "Finality", value: "BFT checkpoints every epoch" },
+                { label: "Min Stake (Mainnet)", value: "1,000 $ORAMA" },
+                { label: "Testnet Staking", value: "Not required" },
+                { label: "OramaOS Multiplier", value: "1.5x (without = 1.0x)" },
+              ].map((row) => (
+                <div key={row.label} className="flex items-center justify-between text-sm py-1 border-b border-border/30">
+                  <span className="text-muted">{row.label}</span>
+                  <span className="text-fg font-mono">{row.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </AnimateIn>
+
+        <AnimateIn>
+          <div className="flex flex-col gap-4">
+            <h3 className="text-xs font-mono text-muted tracking-wider uppercase">
+              Slashing & Contribution
+            </h3>
+            <div className="flex flex-col gap-3">
+              {[
+                { icon: Shield, title: "Double-signing", desc: "100% slash. Zero tolerance for equivocation." },
+                { icon: Shield, title: "Downtime (20-80%)", desc: "5-30% progressive slash based on severity." },
+                { icon: Shield, title: "False attestation", desc: "50% slash for faking OramaOS infrastructure proofs." },
+              ].map((item) => (
+                <DashedPanel key={item.title} withBackground>
+                  <div className="flex gap-3 p-3">
+                    <item.icon className="w-4 h-4 mt-0.5 shrink-0 text-accent" />
+                    <div>
+                      <h4 className="font-display font-bold text-sm text-fg">{item.title}</h4>
+                      <p className="text-xs text-muted leading-relaxed mt-1">{item.desc}</p>
+                    </div>
+                  </div>
+                </DashedPanel>
+              ))}
+            </div>
+
+            <h3 className="text-xs font-mono text-muted tracking-wider uppercase mt-2">
+              Contribution Score (per epoch)
+            </h3>
+            <div className="flex flex-col gap-1">
+              {[
+                { factor: "Uptime", weight: "40%" },
+                { factor: "Bandwidth served", weight: "30%" },
+                { factor: "Compute/storage/SQL", weight: "20%" },
+                { factor: "Latency & reliability", weight: "10%" },
+              ].map((row) => (
+                <div key={row.factor} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border/30">
+                  <span className="text-muted">{row.factor}</span>
+                  <span className="text-fg">{row.weight}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </AnimateIn>
+      </div>
+    </Section>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   8. ROADMAP — Milestones not dates
    ═══════════════════════════════════════════ */
 function Roadmap() {
   const phases = [
     {
-      phase: "Phase 1",
+      phase: "Testnet",
       period: "NOW",
-      title: "Foundation",
+      title: "Testnet",
       status: "active" as const,
       items: [
-        "50+ nodes running across devnet and testnet",
-        "Node license pre-sale open",
-        "$ORAMA token pre-sale — details coming soon",
+        "Network live, no staking required",
+        "Node runners begin earning $ORAMA block rewards",
+        "PLONK trusted setup ceremony",
+        "Bug bounty program",
         "Core services live: containers, DNS, databases, WASM",
-        "Orama Proxy privacy relay integrated",
       ],
     },
     {
-      phase: "Phase 2",
-      period: "2025–2026",
-      title: "Growth",
+      phase: "Expansion",
+      period: "NEXT",
+      title: "Testnet Expansion",
       status: "pending" as const,
       items: [
-        "Token Generation Event (TGE) — LP launch details coming soon",
-        "DEX listings on Raydium",
-        "Node operator onboarding at scale",
-        "Developer waitlist opens for app deployment",
-        "Governance DAO launch",
+        "AI Marketplace beta with Angels framework",
+        "Compute provider registration",
         "Orama One hardware node pre-orders",
+        "Developer onboarding at scale",
       ],
     },
     {
-      phase: "Phase 3",
-      period: "2027",
-      title: "Expansion",
+      phase: "Maturity",
+      period: "UPCOMING",
+      title: "Testnet Maturity",
       status: "pending" as const,
       items: [
-        "Orama One hardware nodes shipping",
-        "CEX listing applications",
-        "Cross-chain bridges (ETH, SOL, ORAMA L1)",
-        "Enterprise partnership program",
-        "SDK and API v2 with AI compute support",
+        "300-node threshold target",
+        "DeBros NFT migration preparation",
+        "Bonding curve live on testnet",
+        "Native order book testing",
       ],
     },
     {
-      phase: "Phase 4",
-      period: "2028",
+      phase: "Mainnet",
+      period: "MILESTONE",
       title: "Mainnet",
       status: "pending" as const,
       items: [
-        "Orama L1 blockchain mainnet launch",
-        "Full decentralization — community-owned infrastructure",
-        "Proof of Infrastructure consensus live",
-        "Pre-sale token holders can trade from day 1",
-        "Node license holders migrate to mainnet validators",
+        "Full production launch with BTC bridge live",
+        "Native DEX live (order book + bonding curve)",
+        "Staking activated (1,000 $ORAMA minimum)",
+        "DeBros NFT bridge revenue begins",
+        "On-chain governance live",
+      ],
+    },
+    {
+      phase: "Post-Launch",
+      period: "LONG-TERM",
+      title: "Post-Launch",
+      status: "pending" as const,
+      items: [
+        "L2 rollup support",
+        "AI Marketplace expansion",
+        "Post-quantum signature upgrade",
+        "Orama One general availability",
+        "Bonding curve sunset when organic liquidity is sufficient",
       ],
     },
   ];
@@ -1095,7 +743,7 @@ function Roadmap() {
       <AnimateIn>
         <SectionHeader
           title="Roadmap"
-          subtitle="From pre-sale to full decentralization."
+          subtitle="Milestones, not dates. Each phase must be earned."
         />
       </AnimateIn>
 
@@ -1155,12 +803,11 @@ function TeamAndPartners() {
       <AnimateIn>
         <SectionHeader
           title="Team & Partners"
-          subtitle="Built by DeBros — a team of builders shipping decentralized infrastructure."
+          subtitle="Built by DeBros — shipping decentralized infrastructure."
         />
       </AnimateIn>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-        {/* Team */}
         <AnimateIn>
           <DashedPanel withBackground className="h-full">
             <div className="flex flex-col gap-4 p-4">
@@ -1169,16 +816,16 @@ function TeamAndPartners() {
                 <h3 className="font-display font-bold text-fg">DeBros Team</h3>
               </div>
               <p className="text-sm text-muted leading-relaxed">
-                We're not a whitepaper team. Orama Network has working
-                infrastructure — 50+ nodes across devnet and testnet, a production CLI,
-                container deployments, distributed databases, DNS, WASM functions,
-                and a WireGuard mesh overlay. All built and running today.
+                Not a whitepaper team. Orama Network has working infrastructure — nodes
+                running across multiple environments, a production CLI, container deployments,
+                distributed databases, DNS, WASM functions, and a WireGuard mesh overlay.
+                All built and running today.
               </p>
               <div className="flex flex-col gap-2 pt-2">
                 {[
                   "Open source — all code public on GitHub",
                   "Active development — shipping weekly",
-                  "DeBros NFT community — holders get free node licenses",
+                  "The creators earn $ORAMA the same way as everyone else: by running nodes",
                 ].map((point) => (
                   <div key={point} className="flex items-start gap-2">
                     <span className="w-1 h-1 rounded-full bg-accent/50 mt-2 shrink-0" />
@@ -1200,7 +847,6 @@ function TeamAndPartners() {
           </DashedPanel>
         </AnimateIn>
 
-        {/* ICXCNIKA */}
         <AnimateIn>
           <DashedPanel withBackground className="h-full">
             <div className="flex flex-col gap-4 p-4">
@@ -1224,51 +870,50 @@ function TeamAndPartners() {
           </DashedPanel>
         </AnimateIn>
       </div>
-
     </Section>
   );
 }
 
 /* ═══════════════════════════════════════════
-   10. FAQ
+   10. FAQ — Aligned with whitepaper
    ═══════════════════════════════════════════ */
 function Faq() {
   const faqs = [
     {
-      question: "What's the difference between a node license and the token pre-sale?",
-      answer: "A node license gives you the right to operate an Orama Network node and earn $ORAMA rewards for serving compute. The token pre-sale lets you buy $ORAMA tokens at a discount before the public launch. Node licenses are for active participants who want to run infrastructure. The pre-sale is for those who want token exposure without operating a node. Pricing details coming soon.",
+      question: "How is $ORAMA created?",
+      answer: "100% of $ORAMA is earned through mining — running a node and producing blocks. There is no pre-mine, no team allocation, no airdrop, and no investor round. The creators earn tokens the same way as everyone else: by running nodes.",
     },
     {
-      question: "What hardware do I need to run a node?",
-      answer: "You can run a node on any VPS with 4+ CPU cores, 8GB+ RAM, and 100GB+ SSD storage. Alternatively, we're developing Orama One — a pre-built hardware node that you plug in and forget. Orama One pre-orders open during Phase 2 (2025-2026).",
+      question: "What is the bonding curve?",
+      answer: "The protocol itself acts as the first market maker. 20% of every block reward flows into the bonding curve's inventory (capped at 21M tokens). Anyone can buy $ORAMA from the curve by sending BTC. The price follows a square root function: Price = k x sqrt(tokens_sold). The curve starts cheap and rises as demand grows. All BTC paid goes to the protocol reserve, backing the BTC bridge.",
     },
     {
-      question: "When can I trade my pre-sale tokens?",
-      answer: "Pre-sale tokens have a vesting period with a cliff. After the cliff, tokens unlock monthly over the remaining period. Once vested, tokens are fully tradeable on Orama DEX and any future CEX listings. Exact vesting schedule coming soon.",
+      question: "Why is it BTC-only?",
+      answer: "Orama has exactly two assets: BTC and $ORAMA. No stablecoins, no wrapped altcoins, no fiat pegs. This eliminates counterparty risk from stablecoin depegs, altcoin crashes, or centralized token issuers. Hard money priced in hard money.",
     },
     {
-      question: "What is the launch price based on?",
-      answer: "A portion of the raise is allocated to seed the initial liquidity pool on Raydium. The launch price includes a premium over the pre-sale price, giving early investors built-in upside at launch. Exact pricing details coming soon.",
+      question: "Do I need to stake to run a testnet node?",
+      answer: "No. During testnet, no staking is required. Any node operator can participate and earn $ORAMA block rewards with zero stake. Testnet tokens carry over to mainnet — there is no reset. At mainnet launch, the 1,000 $ORAMA minimum stake activates.",
     },
     {
-      question: "How do DeBros NFT holders claim their free node license?",
-      answer: "If you hold a DeBros Team NFT, visit debros.io/nft and connect your wallet. Your free node license will be issued automatically. One license per NFT. The license is identical to purchased licenses — same rights, same rewards.",
+      question: "What hardware do I need?",
+      answer: "You can run a node on any VPS with modest specs. Alternatively, Orama One is a purpose-built hardware node that ships pre-loaded with OramaOS — plug in and it joins the network automatically. Hardware specs are published in the whitepaper appendix.",
     },
     {
-      question: "How do node rewards work?",
-      answer: "Every Orama node runs Orama Network services (compute, storage, DNS) and the Orama Proxy privacy relay. You earn $ORAMA rewards from a single node with no extra configuration.",
+      question: "What is OramaOS?",
+      answer: "OramaOS is a custom hardened operating system for Orama nodes. No remote shell access, read-only root filesystem, full-disk encryption, atomic updates. Running OramaOS provides a 1.5x Infrastructure Multiplier for block rewards. Without OramaOS you still earn, but at 1.0x.",
     },
     {
-      question: "Is there a token vesting schedule for the team?",
-      answer: "Yes. The core team allocation has a multi-year vesting schedule with a cliff period. This means zero team tokens are liquid initially, and then they unlock monthly over the remaining period. This aligns team incentives with long-term network success. Exact schedule coming soon.",
+      question: "How does governance work?",
+      answer: "NFT holders (Team + Community) control 75% of governance voting power. Token holders get 25% with quadratic voting. Three tiers: Emergency (24h, Team NFTs only), Protocol upgrades (3 days, 66%), Constitutional changes (14 days, 90%). The immutable financial core (210M cap, emission schedule, BTC-only, 100% mining) cannot be changed by any vote.",
     },
     {
-      question: "What happens if the raise falls short of the target?",
-      answer: "DeBros will personally fund the LP if the raise falls short, ensuring the planned launch price and strong market depth regardless of pre-sale performance. We are committed to the success of Orama Network and will ensure a successful launch even if we don't hit the full raise target. That funding comes from revenue from DeBros Applications like AnChat.",
+      question: "Is there slashing?",
+      answer: "Yes. Double-signing = 100% slash. Downtime above 20% = 5-30% progressive slash. False infrastructure attestation = 50% slash. Slashing is essential for network security in a real proof-of-stake system.",
     },
     {
-      question: "Can I resell my node license?",
-      answer: "No — node licenses are non-transferable and tied to the purchaser's wallet. This ensures that all node operators are known entities, which is important for network security and integrity. If you want to exit your position, you can sell your $ORAMA tokens on the open market after they vest.",
+      question: "How does the native DEX work?",
+      answer: "Orama has a protocol-native order book (not an AMM) for the $ORAMA/BTC pair. Any holder can place limit orders, market orders, or cancel orders. The bonding curve acts as a guaranteed liquidity backstop. Custom tokens created via WASM contracts trade against $ORAMA on permissionless WASM DEX contracts.",
     },
   ];
 
@@ -1279,7 +924,7 @@ function Faq() {
       <AnimateIn>
         <SectionHeader
           title="FAQ"
-          subtitle="Everything you need to know before investing."
+          subtitle="Common questions about $ORAMA and the Orama Network."
         />
       </AnimateIn>
 
@@ -1321,36 +966,38 @@ function Faq() {
 }
 
 /* ═══════════════════════════════════════════
-   11. FINAL CTA + CONTACT
+   11. FINAL CTA
    ═══════════════════════════════════════════ */
 function FinalCta() {
   return (
     <Section padding="wide">
-      {/* Big CTA */}
       <AnimateIn>
         <DashedPanel withCorners withBackground>
           <div className="flex flex-col items-center text-center gap-6 py-8 px-4">
             <StatusDot status="active" />
             <h2 className="font-display font-bold text-2xl lg:text-3xl text-fg">
-              Ready to back the decentralized cloud?
+              The power belongs to the people.
             </h2>
             <p className="text-muted max-w-lg text-sm leading-relaxed">
-              Node licenses and token pre-sale details coming soon. Supply is limited.
+              No tokens to buy beforehand. No presale to miss. Just run a node, earn $ORAMA,
+              and be part of the only blockchain where everyone starts equal.
             </p>
             <div className="flex flex-wrap items-center gap-3 justify-center">
-              <span className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm text-black opacity-50 pointer-events-none">
-                Coming Soon
-              </span>
+              <Link to="/invest">
+                <span className="silver-button inline-flex items-center justify-center font-mono font-semibold tracking-wider uppercase px-8 py-3 text-sm rounded-sm text-black">
+                  Get Started
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </span>
+              </Link>
               <a href="https://t.me/debrosportal" target="_blank" rel="noopener noreferrer">
                 <Button variant="dashed" className="font-mono tracking-wider uppercase px-8 py-3 text-sm">
-                  JOIN WAITLIST <ArrowRight className="w-4 h-4 ml-2" />
+                  JOIN COMMUNITY <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </a>
             </div>
           </div>
         </DashedPanel>
       </AnimateIn>
-
     </Section>
   );
 }
@@ -1360,7 +1007,7 @@ function FinalCta() {
    ═══════════════════════════════════════════ */
 export default function Investors() {
   return (
-    <Page title="Invest in Orama Network — Node Licenses & Token Pre-Sale">
+    <Page title="Invest in Orama Network — 210M Hard Cap, 100% Mined, Zero Pre-mine">
       <InvestorHero />
       <Suspense fallback={null}>
         <GrowthVaultScene />
@@ -1368,17 +1015,15 @@ export default function Investors() {
       <Section padding="none"><CrosshairDivider /></Section>
       <TheOpportunity />
       <Section padding="none"><CrosshairDivider /></Section>
-      <TwoWaysToInvest />
+      <HowOramaIsCreated />
       <Section padding="none"><CrosshairDivider /></Section>
-      <DebrosNftCallout />
+      <ThreeWaysToParticipate />
       <Section padding="none"><CrosshairDivider /></Section>
-      <AnchatHolderCallout />
+      <BtcBridgeRevenue />
       <Section padding="none"><CrosshairDivider /></Section>
-      <FundAllocation />
+      <DebrosNfts />
       <Section padding="none"><CrosshairDivider /></Section>
-      <TokenomicsDeepDive />
-      <Section padding="none"><CrosshairDivider /></Section>
-      <EarningsAndRoi />
+      <ConsensusAndSecurity />
       <Section padding="none"><CrosshairDivider /></Section>
       <Roadmap />
       <Section padding="none"><CrosshairDivider /></Section>

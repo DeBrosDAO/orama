@@ -34,6 +34,20 @@ func NewExecutor(runtime wazero.Runtime, logger *zap.Logger, maxConcurrent int) 
 
 // ExecuteModule instantiates and runs a WASM module with the given input.
 // The contextSetter callback is used to set invocation context on host services.
+//
+// Bug #221 fix: each invocation gets an ANONYMOUS module instance (no name
+// in the wazero runtime registry). Previously we used the function name
+// as the module name, which made wazero refuse the second instantiation
+// with "module[<fn>] has already been instantiated" any time:
+//
+//   - Two invocations of the same function ran concurrently
+//   - A re-deploy happened while a previous invocation was still mid-flight
+//   - An instance.Close() raced with the next instantiation
+//
+// Anonymous instances eliminate the collision class entirely. The
+// function name is still surfaced via WithArgs(moduleName) so WASI
+// `argv[0]` shows it inside the function (matches the prior behavior
+// that user code may depend on).
 func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledModule, moduleName string, input []byte, contextSetter func(), contextClearer func()) ([]byte, error) {
 	// Set invocation context for host functions
 	if contextSetter != nil {
@@ -48,9 +62,14 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 
-	// Create module configuration with WASI stdio
+	// Create module configuration with WASI stdio.
+	//
+	// WithName("") = anonymous instance, NOT registered under the runtime's
+	// global module name table. argv[0] still carries the function name for
+	// WASI-consuming code that reads os.Args[0] (TinyGo's runtime + apps
+	// that log it). See doc comment above for the bug-#221 rationale.
 	moduleConfig := wazero.NewModuleConfig().
-		WithName(moduleName).
+		WithName("").
 		WithStdin(stdin).
 		WithStdout(stdout).
 		WithStderr(stderr).

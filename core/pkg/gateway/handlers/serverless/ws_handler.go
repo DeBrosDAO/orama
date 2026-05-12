@@ -40,6 +40,10 @@ func checkWSOrigin(r *http.Request) bool {
 // HandleWebSocket handles WebSocket connections for function streaming.
 // It upgrades HTTP connections to WebSocket and manages bi-directional communication
 // for real-time function invocation and streaming responses.
+//
+// Routes to one of two execution models based on function metadata:
+//   - WSPersistent=true: persistent per-connection WASM instance (plan 06)
+//   - WSPersistent=false (default): per-frame stateless invocation
 func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Request, name string, version int) {
 	namespace := r.URL.Query().Get("namespace")
 	if namespace == "" {
@@ -50,6 +54,15 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "namespace required", http.StatusBadRequest)
 		return
 	}
+
+	// Look up the function once to decide which execution model to use.
+	fn, lookupErr := h.registry.Get(r.Context(), namespace, name, version)
+	if lookupErr == nil && fn != nil && fn.WSPersistent {
+		h.handlePersistentWebSocket(w, r, fn, namespace)
+		return
+	}
+	// (lookup error not fatal — fall through; per-frame path's invoker will
+	// re-resolve and surface a proper error.)
 
 	// Upgrade to WebSocket
 	upgrader := websocket.Upgrader{
@@ -69,12 +82,50 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	h.wsManager.Register(clientID, wsConn)
 	defer h.wsManager.Unregister(clientID)
 
+	// Track client → namespace for ws_pubsub_bridge auth checks, and
+	// auto-clean any bridged topics when the connection ends.
+	if h.wsBridge != nil {
+		h.wsBridge.SetClientNamespace(clientID, namespace)
+		defer h.wsBridge.RemoveClient(context.Background(), clientID)
+	}
+
+	// Server-side keepalive: ping every 30s, expect pong within 60s.
+	// Without this, a half-open TCP can hang for 2h before the OS notices.
+	const (
+		pingInterval = 30 * time.Second
+		pongWait     = 60 * time.Second
+	)
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-ticker.C:
+				_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			}
+		}
+	}()
+	defer close(pingDone)
+
 	h.logger.Info("WebSocket connected",
 		zap.String("client_id", clientID),
 		zap.String("function", name),
 	)
 
 	callerWallet := h.getWalletFromRequest(r)
+	callerIP := extractRemoteIP(r)
+	// Capture custom claims at upgrade time and reuse for every frame —
+	// the JWT context is request-scoped and won't survive past upgrade.
+	callerClaims := h.getCallerClaimsFromRequest(r)
+	callerJWTSubject := h.getJWTSubjectFromRequest(r)
 
 	// Message loop
 	for {
@@ -85,18 +136,22 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 			}
 			break
 		}
+		h.wsManager.RecordInbound(clientID, len(message))
 
 		// Invoke function with WebSocket context
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
 		req := &serverless.InvokeRequest{
-			Namespace:    namespace,
-			FunctionName: name,
-			Version:      version,
-			Input:        message,
-			TriggerType:  serverless.TriggerTypeWebSocket,
-			CallerWallet: callerWallet,
-			WSClientID:   clientID,
+			Namespace:        namespace,
+			FunctionName:     name,
+			Version:          version,
+			Input:            message,
+			TriggerType:      serverless.TriggerTypeWebSocket,
+			CallerWallet:     callerWallet,
+			CallerIP:         callerIP,
+			CallerClaims:     callerClaims,
+			CallerJWTSubject: callerJWTSubject,
+			WSClientID:       clientID,
 		}
 
 		resp, err := h.invoker.Invoke(ctx, req)

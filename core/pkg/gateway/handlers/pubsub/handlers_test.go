@@ -21,15 +21,31 @@ import (
 
 // mockPubSubClient implements client.PubSubClient for testing
 type mockPubSubClient struct {
-	PublishFunc     func(ctx context.Context, topic string, data []byte) error
-	SubscribeFunc   func(ctx context.Context, topic string, handler client.MessageHandler) error
-	UnsubscribeFunc func(ctx context.Context, topic string) error
-	ListTopicsFunc  func(ctx context.Context) ([]string, error)
+	PublishFunc       func(ctx context.Context, topic string, data []byte) error
+	PublishBatchFunc  func(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error
+	PublishSameFunc   func(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error
+	SubscribeFunc     func(ctx context.Context, topic string, handler client.MessageHandler) error
+	UnsubscribeFunc   func(ctx context.Context, topic string) error
+	ListTopicsFunc    func(ctx context.Context) ([]string, error)
 }
 
 func (m *mockPubSubClient) Publish(ctx context.Context, topic string, data []byte) error {
 	if m.PublishFunc != nil {
 		return m.PublishFunc(ctx, topic, data)
+	}
+	return nil
+}
+
+func (m *mockPubSubClient) PublishBatch(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error {
+	if m.PublishBatchFunc != nil {
+		return m.PublishBatchFunc(ctx, msgs, opts)
+	}
+	return nil
+}
+
+func (m *mockPubSubClient) PublishSame(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error {
+	if m.PublishSameFunc != nil {
+		return m.PublishSameFunc(ctx, topics, data, opts)
 	}
 	return nil
 }

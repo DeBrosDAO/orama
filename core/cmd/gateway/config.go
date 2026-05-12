@@ -77,21 +77,26 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 
 	type yamlCfg struct {
-		ListenAddr            string   `yaml:"listen_addr"`
-		ClientNamespace       string   `yaml:"client_namespace"`
-		RQLiteDSN             string   `yaml:"rqlite_dsn"`
-		GlobalRQLiteDSN       string   `yaml:"global_rqlite_dsn"`
-		Peers                 []string `yaml:"bootstrap_peers"`
-		EnableHTTPS           bool     `yaml:"enable_https"`
-		DomainName            string   `yaml:"domain_name"`
-		TLSCacheDir           string   `yaml:"tls_cache_dir"`
-		OlricServers          []string `yaml:"olric_servers"`
-		OlricTimeout          string   `yaml:"olric_timeout"`
-		IPFSClusterAPIURL     string   `yaml:"ipfs_cluster_api_url"`
-		IPFSAPIURL            string   `yaml:"ipfs_api_url"`
-		IPFSTimeout           string   `yaml:"ipfs_timeout"`
-		IPFSReplicationFactor int      `yaml:"ipfs_replication_factor"`
+		ListenAddr            string        `yaml:"listen_addr"`
+		ClientNamespace       string        `yaml:"client_namespace"`
+		RQLiteDSN             string        `yaml:"rqlite_dsn"`
+		GlobalRQLiteDSN       string        `yaml:"global_rqlite_dsn"`
+		Peers                 []string      `yaml:"bootstrap_peers"`
+		EnableHTTPS           bool          `yaml:"enable_https"`
+		DomainName            string        `yaml:"domain_name"`
+		TLSCacheDir           string        `yaml:"tls_cache_dir"`
+		OlricServers          []string      `yaml:"olric_servers"`
+		OlricTimeout          string        `yaml:"olric_timeout"`
+		IPFSClusterAPIURL     string        `yaml:"ipfs_cluster_api_url"`
+		IPFSAPIURL            string        `yaml:"ipfs_api_url"`
+		IPFSTimeout           string        `yaml:"ipfs_timeout"`
+		IPFSReplicationFactor int           `yaml:"ipfs_replication_factor"`
 		WebRTC                yamlWebRTCCfg `yaml:"webrtc"`
+		// ClusterSecretPath: see GatewayYAMLConfig docstring. Optional;
+		// when set, the standalone gateway reads the file at this path
+		// and populates cfg.ClusterSecret so JWT signing keys can be
+		// derived deterministically (bug #215 fix).
+		ClusterSecretPath string `yaml:"cluster_secret_path"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -198,6 +203,30 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if y.IPFSReplicationFactor > 0 {
 		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
+	}
+
+	// Cluster secret — bug #215 fix. The host-managed gateway in
+	// pkg/node/gateway.go reads this from a known on-disk path; the
+	// standalone binary (used by namespace gateways via systemd) needs the
+	// same access so it can derive the cluster-wide Ed25519 JWT signing
+	// key. Without this, namespace gateways had per-node random keys and
+	// JWTs minted on one node were unverifiable on another, leaving
+	// `caller_jwt_subject` empty in serverless host functions.
+	if path := strings.TrimSpace(y.ClusterSecretPath); path != "" {
+		secretBytes, err := os.ReadFile(path)
+		if err != nil {
+			logger.ComponentError(logging.ComponentGeneral,
+				"cluster_secret_path is set but the file is unreadable; "+
+					"JWTs will use a per-node random signing key and will not "+
+					"verify cross-node — bug #215 will reproduce",
+				zap.String("path", path),
+				zap.Error(err))
+		} else {
+			cfg.ClusterSecret = strings.TrimSpace(string(secretBytes))
+			logger.ComponentInfo(logging.ComponentGeneral,
+				"Loaded cluster secret for cluster-wide JWT signing key derivation",
+				zap.String("path", path))
+		}
 	}
 
 	// WebRTC configuration

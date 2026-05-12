@@ -39,6 +39,12 @@ type ClusterManagerConfig struct {
 	// in RQLite. Derived from cluster secret via HKDF(clusterSecret, "turn-encryption").
 	// If nil, TURN secrets are stored in plaintext (backward compatibility).
 	TurnEncryptionKey []byte
+
+	// ClusterSecretPath is the host's cluster-secret file path. Forwarded
+	// to spawned namespace gateways via YAML so they can derive the
+	// cluster-wide JWT signing key (bug #215 fix). Empty string disables
+	// cross-node JWT verification within namespace clusters.
+	ClusterSecretPath string
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -81,7 +87,7 @@ func NewClusterManager(
 	portAllocator := NewNamespacePortAllocator(db, logger)
 	webrtcPortAllocator := NewWebRTCPortAllocator(db, logger)
 	nodeSelector := NewClusterNodeSelector(db, portAllocator, logger)
-	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, logger)
+	systemdSpawner := NewSystemdSpawner(cfg.BaseDataDir, cfg.ClusterSecretPath, logger)
 	dnsManager := NewDNSRecordManager(db, cfg.BaseDomain, logger)
 
 	// Set IPFS defaults
@@ -1199,12 +1205,26 @@ func (cm *ClusterManager) ProvisionNamespaceCluster(ctx context.Context, namespa
 // provisionClusterAsync performs the actual cluster provisioning in the background
 func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, namespaceID int, namespaceName, provisionedBy string) {
 	defer func() {
+		// Recover from panics (e.g., gorqlite index-out-of-range) so the
+		// goroutine doesn't die silently leaving status stuck at "provisioning".
+		if r := recover(); r != nil {
+			cm.logger.Error("Provisioning panicked",
+				zap.String("namespace", namespaceName),
+				zap.Any("panic", r),
+			)
+			bgCtx := context.Background()
+			cm.updateClusterStatus(bgCtx, cluster.ID, ClusterStatusFailed,
+				fmt.Sprintf("provisioning panicked: %v", r))
+		}
 		cm.provisioningMu.Lock()
 		delete(cm.provisioning, namespaceName)
 		cm.provisioningMu.Unlock()
 	}()
 
-	ctx := context.Background()
+	// Overall timeout — prevents the goroutine from hanging indefinitely
+	// if a remote spawn request or RQLite write blocks.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	cm.logger.Info("Starting async cluster provisioning",
 		zap.String("cluster_id", cluster.ID),

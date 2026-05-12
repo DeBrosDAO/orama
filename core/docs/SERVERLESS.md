@@ -42,6 +42,10 @@ name: my-function       # Required. Letters, digits, hyphens, underscores.
 public: false           # Allow unauthenticated invocation (default: false)
 memory: 64              # Memory limit in MB (1-256, default: 64)
 timeout: 30             # Execution timeout in seconds (1-300, default: 30)
+                        # Bump to 60-300 for batch DB ops, schema migrations,
+                        # or anything that does many sequential host calls.
+                        # Functions that exceed timeout return the canonical
+                        # TIMEOUT envelope: {ok:false, error:{code:"TIMEOUT",...}}.
 retry:
   count: 0              # Retry attempts on failure (default: 0)
   delay: 5              # Seconds between retries (default: 5)
@@ -99,15 +103,31 @@ tinygo build -o function.wasm -target wasi function.go
 
 ## Host Functions API
 
-Host functions let your WASM code interact with Orama services. They are imported from the `"env"` or `"host"` module (both work) and use a pointer/length ABI for string parameters.
+Host functions let your WASM code interact with Orama services. They use a pointer/length ABI for string parameters and are registered at runtime under three module-name aliases — all three resolve to the SAME function table:
 
-All host functions are registered at runtime by the engine. They are available to every function without additional configuration.
+| Module name | Status | Use |
+|---|---|---|
+| `env` | **canonical** | Recommended for new code. Matches the WASI / TinyGo convention used by every example in this doc and the `sdk/fn` package. |
+| `host` | alias (kept) | Long-standing alternative; supported indefinitely. |
+| `orama` | alias (kept) | Brand-name alias; supported indefinitely so existing code that intuited this name keeps working. |
+
+A function may import any host call from any of the three names interchangeably:
+
+```go
+//go:wasmimport env   db_query     // canonical (preferred)
+//go:wasmimport host  db_query     // identical
+//go:wasmimport orama db_query     // identical
+```
+
+If you see the runtime error `failed to instantiate module: module[X] not instantiated`, your function imported from a name other than the three above — fix the directive. Most functions written using the [`sdk/fn`](../sdk/fn) package don't need any `//go:wasmimport` directives at all (the SDK uses stdin/stdout for I/O).
 
 ### Context
 
 | Function | Description |
 |----------|-------------|
-| `get_caller_wallet()` → string | Wallet address of the caller (from JWT) |
+| `get_caller_wallet()` → string | Resolved caller wallet (JWT subject if Bearer auth, else namespace pseudo-id when API-key auth). |
+| `get_caller_jwt_subject()` → string | JWT `sub` claim explicitly. Empty when the request was not JWT-authenticated. Use this when binding on the JWT-signed identity matters (e.g. signup flows verifying the caller signed for the wallet they're registering). |
+| `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. |
 | `get_request_id()` → string | Unique invocation ID |
 | `get_env(key)` → string | Environment variable from function.yaml |
 | `get_secret(name)` → string | Decrypted secret value (see [Managing Secrets](#managing-secrets)) |
@@ -116,14 +136,35 @@ All host functions are registered at runtime by the engine. They are available t
 
 | Function | Description |
 |----------|-------------|
-| `db_query(sql, argsJSON)` → JSON | Execute SELECT query. Args as JSON array. Returns JSON array of row objects. |
-| `db_execute(sql, argsJSON)` → int | Execute INSERT/UPDATE/DELETE. Returns affected row count. |
+| `db_query_v2(sql, argsJSON)` → JSON | **Recommended.** Execute SELECT. Returns `{"rows": [...], "error": "..."}` — distinguishes empty result from query failure. |
+| `db_execute_v2(sql, argsJSON)` → JSON | **Recommended.** Execute INSERT/UPDATE/DELETE. Returns `{"rows_affected": N, "last_insert_id": M, "error": "..."}` — distinguishes 0-rows-affected from a real failure. |
+| `db_query(sql, argsJSON)` → JSON | Legacy. Execute SELECT, returns JSON array of rows. No way to surface query errors — prefer `db_query_v2`. |
+| `db_execute(sql, argsJSON)` → int | Legacy. Returns affected rows ONLY. **Returns 0 for both "0 rows" and "SQL error" — caller can't distinguish.** Prefer `db_execute_v2`. |
+| `db_transaction(opsJSON)` → JSON | Atomic batch — see "Database Transactions" below. |
 
-Example query from WASM:
+Example v2 usage from WASM:
+
+```go
+//go:wasmimport env db_execute_v2
+func dbExecuteV2(sqlPtr, sqlLen, argsPtr, argsLen uint32) uint64
+
+resultBytes := callDBExecuteV2(`INSERT INTO event_seq (topic, next_seq) VALUES (?, 0)
+                                ON CONFLICT(topic) DO NOTHING`,
+                                []any{"user/abc/account"})
+
+var res struct {
+    RowsAffected int64  `json:"rows_affected"`
+    Error        string `json:"error"`
+}
+json.Unmarshal(resultBytes, &res)
+if res.Error != "" {
+    // Real failure — bail out, don't mark migration applied.
+    return fmt.Errorf("event_seq INSERT failed: %s", res.Error)
+}
+// res.RowsAffected may legitimately be 0 (ON CONFLICT DO NOTHING) — that's not an error.
 ```
-db_query("SELECT push_token, device_type FROM devices WHERE user_id = ?", '["user123"]')
-→ [{"push_token": "abc...", "device_type": "ios"}]
-```
+
+The legacy `db_execute` is kept indefinitely so existing functions don't break. New code should use `db_execute_v2` for any path where distinguishing "no rows" from "SQL error" matters — most paths.
 
 ### Cache (Olric Distributed Cache)
 
@@ -152,6 +193,49 @@ db_query("SELECT push_token, device_type FROM devices WHERE user_id = ?", '["use
 |----------|-------------|
 | `log_info(message)` | Log info-level message (captured in invocation logs). |
 | `log_error(message)` | Log error-level message. |
+
+## Configuring Push Notifications (per-namespace)
+
+Push providers (ntfy / Expo) are configured **per namespace** by the tenant —
+no operator involvement, no SSH access required. Set, read, or clear via:
+
+```bash
+# Set / update (sensitive credentials are encrypted at rest)
+curl -X PUT https://ns-myapp.example.com/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "ntfy_base_url":   "https://ntfy.sh",
+    "ntfy_auth_token": "tk_…"
+  }'
+
+# Read (sensitive fields redacted to booleans)
+curl https://ns-myapp.example.com/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+
+# Clear (push reverts to gateway-wide defaults if any, else 503)
+curl -X DELETE https://ns-myapp.example.com/v1/push/config \
+  -H 'Authorization: Bearer <user-jwt>'
+```
+
+### Field semantics
+
+| Field | Sensitive? | Notes |
+|---|---|---|
+| `ntfy_base_url` | No | URL of the ntfy server. `https://ntfy.sh` works for testing. |
+| `ntfy_auth_token` | Yes | Optional bearer token sent to ntfy. Encrypted at rest. |
+| `expo_access_token` | Yes | Expo Push API access token. Encrypted at rest. |
+
+PUT semantics are **field-level** — a `null` (or omitted) field leaves the
+existing value alone; an explicit empty string clears just that field. To
+clear EVERYTHING use DELETE.
+
+After a PUT the next `push_send` (host call) or `POST /v1/push/send` uses
+the new providers — the cached dispatcher is invalidated automatically.
+
+If no per-namespace config is set AND the gateway has no YAML defaults, the
+push endpoints return **503 SERVICE_UNAVAILABLE** with a message naming the
+exact config to set.
 
 ## Managing Secrets
 

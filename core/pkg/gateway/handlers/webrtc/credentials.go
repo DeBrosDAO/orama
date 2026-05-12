@@ -42,6 +42,11 @@ func (h *WebRTCHandlers) CredentialsHandler(w http.ResponseWriter, r *http.Reque
 			fmt.Sprintf("turns:%s:5349", h.turnDomain),
 		)
 	}
+	// Stealth: TURNS via the SNI router on :443. Looks like ordinary HTTPS
+	// to a passive observer / DPI; usable in restricted regions.
+	if h.stealthCDNDomain != "" {
+		uris = append(uris, fmt.Sprintf("turns:%s:443", h.stealthCDNDomain))
+	}
 
 	h.logger.ComponentInfo(logging.ComponentGeneral, "Issued TURN credentials",
 		zap.String("namespace", ns),

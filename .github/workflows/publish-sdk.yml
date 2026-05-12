@@ -1,6 +1,8 @@
 name: Publish SDK to npm
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -26,6 +28,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Verify VERSION file matches release tag
+        if: github.event_name == 'release'
+        working-directory: .
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          EXPECTED="${TAG#v}"
+          EXPECTED="${EXPECTED%-nightly}"
+          ACTUAL=$(tr -d '[:space:]' < VERSION)
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Tag $TAG implies version '$EXPECTED' but /VERSION says '$ACTUAL'."
+            echo "::error::Run 'make -C core bump VER=$EXPECTED' and commit before tagging."
+            exit 1
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -41,8 +57,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Bump version
-        if: inputs.version != ''
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+            npm version "$VERSION" --no-git-tag-version
+          elif [ -n "${{ inputs.version }}" ]; then
+            npm version ${{ inputs.version }} --no-git-tag-version
+          fi
 
       - name: Typecheck
         run: pnpm typecheck
@@ -60,18 +82,23 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish
-        if: inputs.dry-run == false
-        run: npm publish --access public
+        if: github.event_name == 'release' || inputs.dry-run != true
+        run: |
+          if [[ "${{ github.event.release.target_commitish }}" != "main" && "${{ github.event_name }}" == "release" ]]; then
+            npm publish --access public --tag nightly
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Get published version
-        if: inputs.dry-run == false
+        if: github.event_name == 'release' || inputs.dry-run != true
         id: version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Create git tag
-        if: inputs.dry-run == false
+        if: github.event_name != 'release' && inputs.dry-run != true
         working-directory: .
         run: |
           git config user.name "github-actions[bot]"

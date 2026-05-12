@@ -61,14 +61,21 @@ orama node push --env devnet --direct
 Build and deploy in one step with automatic rolling restart:
 
 ```bash
-# Build and deploy to all nodes
+# Build the archive
+orama build
+
+# Roll out to all your nodes (recommended — uses wallet-based node discovery)
+orama rollout --env devnet
+
+# Custom delay between nodes
+orama rollout --env devnet --delay 60
+```
+
+The legacy `orama node rollout` command is still available and uses `nodes.conf` directly:
+
+```bash
 orama node rollout --env devnet
-
-# Skip the build step (use existing archive)
-orama node rollout --env devnet --no-build
-
-# Skip confirmation
-orama node rollout --env devnet --yes
+orama node rollout --env devnet --no-build --yes
 ```
 
 ### Upgrade (Restart Only)

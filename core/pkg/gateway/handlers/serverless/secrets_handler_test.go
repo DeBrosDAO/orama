@@ -91,11 +91,15 @@ func newSecretsTestHandlers(sm serverless.SecretsManager) *ServerlessHandlers {
 	logger := zap.NewNop()
 	wsManager := serverless.NewWSManager(logger)
 	return NewServerlessHandlers(
-		nil,
+		nil, // invoker
+		nil, // engine
 		newMockRegistry(),
 		wsManager,
-		nil,
-		nil,
+		nil, // triggerStore
+		nil, // cronStore
+		nil, // dispatcher
+		nil, // persistentMgr
+		nil, // wsBridge
 		sm,
 		logger,
 	)

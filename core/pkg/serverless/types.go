@@ -84,8 +84,34 @@ type FunctionRegistry interface {
 	// GetWASMBytes retrieves the compiled WASM bytecode for a function.
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
 
-	// GetLogs retrieves logs for a function.
+	// GetLogs returns WASM-emitted log entries (function_logs rows). Often
+	// empty because most functions don't call log_info / log_error. Use
+	// GetInvocations for the always-populated invocation-history view.
 	GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error)
+
+	// GetInvocations returns invocation history for a function in reverse
+	// chronological order, with any associated WASM log entries nested
+	// per record. Always populated when the function has been invoked.
+	GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error)
+}
+
+// Invocation is the record of one function invocation as seen by
+// `orama function logs`. Mirrors registry.Invocation; defined here at the
+// public package boundary so callers don't need to import the inner package.
+type Invocation struct {
+	ID           string     `json:"id"`
+	RequestID    string     `json:"request_id"`
+	TriggerType  string     `json:"trigger_type"`
+	CallerWallet string     `json:"caller_wallet,omitempty"`
+	InputSize    int        `json:"input_size"`
+	OutputSize   int        `json:"output_size"`
+	StartedAt    time.Time  `json:"started_at"`
+	CompletedAt  time.Time  `json:"completed_at"`
+	DurationMS   int64      `json:"duration_ms"`
+	Status       string     `json:"status"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	MemoryUsedMB float64    `json:"memory_used_mb,omitempty"`
+	WASMLogs     []LogEntry `json:"wasm_logs,omitempty"`
 }
 
 // FunctionExecutor handles the actual execution of WASM functions.
@@ -195,6 +221,14 @@ type FunctionDefinition struct {
 	CronExpressions   []string          `json:"cron_expressions,omitempty"`
 	DBTriggers        []DBTriggerConfig `json:"db_triggers,omitempty"`
 	PubSubTopics      []string          `json:"pubsub_topics,omitempty"`
+
+	// Persistent WebSocket settings — see plan 06_PERSISTENT_WS_FUNCTIONS.md
+	// When WSPersistent is true, the function exports ws_open/ws_frame/ws_close
+	// instead of using the default per-frame stateless model.
+	WSPersistent         bool `json:"ws_persistent,omitempty"`
+	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`     // 0 = no idle timeout
+	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`      // 0 = use default 256 KB
+	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"` // 0 = use default 64
 }
 
 // DBTriggerConfig defines a database trigger configuration.
@@ -222,6 +256,12 @@ type Function struct {
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
 	CreatedBy         string         `json:"created_by"`
+
+	// Persistent WebSocket settings — see plan 06_PERSISTENT_WS_FUNCTIONS.md
+	WSPersistent         bool `json:"ws_persistent,omitempty"`
+	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`
+	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`
+	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"`
 }
 
 // InvocationContext provides context for a function invocation.
@@ -231,9 +271,25 @@ type InvocationContext struct {
 	FunctionName string            `json:"function_name"`
 	Namespace    string            `json:"namespace"`
 	CallerWallet string            `json:"caller_wallet,omitempty"`
-	TriggerType  TriggerType       `json:"trigger_type"`
-	WSClientID   string            `json:"ws_client_id,omitempty"`
-	EnvVars      map[string]string `json:"env_vars,omitempty"`
+	// CallerIP is the source IP of the request, populated by HTTP/WS handlers.
+	// Used by the multi-tier rate limiter as a fallback bucket for anonymous
+	// (no-wallet) callers.
+	CallerIP    string            `json:"caller_ip,omitempty"`
+	TriggerType TriggerType       `json:"trigger_type"`
+	WSClientID  string            `json:"ws_client_id,omitempty"`
+	EnvVars     map[string]string `json:"env_vars,omitempty"`
+	// CallerClaims holds custom JWT claims set on the caller's token (beyond
+	// the standard sub/namespace fields). Read via host fn `get_caller_claim`.
+	// Populated by auth handlers from JWTClaims.Custom; empty for non-JWT auth.
+	CallerClaims map[string]string `json:"caller_claims,omitempty"`
+
+	// CallerJWTSubject is the `sub` claim of the Bearer JWT, if any.
+	// EXPLICITLY captured from the JWT independent of the API-key-vs-JWT
+	// wallet-resolution heuristic — so functions that must bind on the
+	// JWT-signed identity (signup flows) can do so reliably even when the
+	// caller also presents an API key. Empty string when the request was
+	// not JWT-authenticated. Bug #215.
+	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
 }
 
 // InvocationResult represents the result of a function invocation.
@@ -288,11 +344,21 @@ type DBTrigger struct {
 }
 
 // PubSubTrigger represents a pubsub trigger.
+//
+// Topic may be an exact topic name or a SQLite GLOB pattern (e.g.
+// "presence:*"). See pkg/serverless/triggers/pattern.go for matching rules.
+//
+// AggregationWindowMs > 0 enables event buffering: the dispatcher accumulates
+// events for at most that many milliseconds (or until AggregationMaxBatchSize
+// events have been collected, whichever comes first), then invokes the
+// function once with a batched payload of type BatchedPubSubEvent.
 type PubSubTrigger struct {
-	ID         string `json:"id"`
-	FunctionID string `json:"function_id"`
-	Topic      string `json:"topic"`
-	Enabled    bool   `json:"enabled"`
+	ID                      string `json:"id"`
+	FunctionID              string `json:"function_id"`
+	Topic                   string `json:"topic"`
+	Enabled                 bool   `json:"enabled"`
+	AggregationWindowMs     int    `json:"aggregation_window_ms,omitempty"`
+	AggregationMaxBatchSize int    `json:"aggregation_max_batch_size,omitempty"`
 }
 
 // Timer represents a one-time scheduled execution.
@@ -324,6 +390,27 @@ type HostServices interface {
 	DBQuery(ctx context.Context, query string, args []interface{}) ([]byte, error)
 	DBExecute(ctx context.Context, query string, args []interface{}) (int64, error)
 
+	// DBExecuteV2 is the typed equivalent of DBExecute that returns BOTH the
+	// rows-affected count AND a JSON envelope. The legacy DBExecute returns
+	// only uint32(rows) — collapsing real errors into "0 rows affected"
+	// (bug #218). New code should call DBExecuteV2 to detect real failures.
+	//
+	// Output JSON shape:
+	//   {"rows_affected": 1, "last_insert_id": 42, "error": ""}     // success
+	//   {"rows_affected": 0, "last_insert_id": 0,  "error": "..."}  // failure
+	//
+	// Returns a Go error only on host-side validation failures (no DB,
+	// bad JSON args). SQL execution errors are encoded in the JSON.
+	DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error)
+
+	// DBQueryV2 is the typed equivalent of DBQuery — returns a JSON envelope
+	// distinguishing "empty result" from "query failed".
+	//
+	// Output JSON shape:
+	//   {"rows": [...], "error": ""}     // success (rows may be [])
+	//   {"rows": [],     "error": "..."}  // failure
+	DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error)
+
 	// Cache operations
 	CacheGet(ctx context.Context, key string) ([]byte, error)
 	CacheSet(ctx context.Context, key string, value []byte, ttlSeconds int64) error
@@ -337,10 +424,70 @@ type HostServices interface {
 
 	// PubSub operations
 	PubSubPublish(ctx context.Context, topic string, data []byte) error
+	PubSubPublishBatch(ctx context.Context, msgsJSON []byte) error
+
+	// Push notifications. Sends to all of `userID`'s registered devices in
+	// the function's namespace. `msgJSON` is the JSON-encoded PushSendArgs
+	// shape (see hostfunctions.PushSend). Returns nil if push is not
+	// configured (silent no-op) so functions can be portable across
+	// namespaces with/without push enabled.
+	PushSend(ctx context.Context, userID string, msgJSON []byte) error
+
+	// DBTransaction executes a batch of SQL statements atomically via the
+	// native RQLite transaction endpoint. opsJSON is the JSON-encoded
+	// {"ops": [{"kind":"exec"|"query","sql":"...","args":[...]}]} shape.
+	// Returns the JSON-encoded BatchResult; the boolean inside the result
+	// (committed) tells the caller whether the writes landed.
+	//
+	// Returns an error only on setup/validation failures (no DB, bad JSON,
+	// too many ops). A rollback is reported via committed=false in the
+	// returned JSON, NOT as a Go error.
+	DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error)
+
+	// ExecAndPublish runs ops atomically (like DBTransaction) and, ONLY
+	// if the batch commits, publishes data to the named topic with any
+	// occurrence of the literal string "{{seq}}" replaced by the assigned
+	// per-namespace sequence number.
+	//
+	// Subscribers can use the seq to detect cross-node replication-lag
+	// gaps ("I expected seq N+1, got N+3, must have missed two").
+	//
+	// Returns the JSON-encoded result with extra fields: seq, published,
+	// publish_error (in addition to the embedded BatchResult shape).
+	// Rollback or publish failure is reported in the JSON, NOT as Go error.
+	ExecAndPublish(ctx context.Context, opsJSON []byte, topic string, dataTemplate []byte) ([]byte, error)
+
+	// WSPubSubBridge wires a WebSocket client directly to a PubSub topic
+	// in the function's namespace. The gateway then auto-forwards every
+	// matching libp2p message to that client's WS without invoking this
+	// function per event. Idempotent.
+	//
+	// The function's namespace must match the client's namespace (set at
+	// WS upgrade time) — namespaces are server-trusted; functions cannot
+	// bridge clients in another namespace's topic.
+	WSPubSubBridge(ctx context.Context, clientID, topic string) error
+
+	// WSPubSubUnbridge removes a previously-established bridge. Idempotent.
+	// Auto-cleaned on WS disconnect, so functions don't have to call this
+	// in OnClose unless they want to dynamically unsubscribe.
+	WSPubSubUnbridge(ctx context.Context, clientID, topic string) error
 
 	// WebSocket operations (only valid in WS context)
 	WSSend(ctx context.Context, clientID string, data []byte) error
 	WSBroadcast(ctx context.Context, topic string, data []byte) error
+
+	// FunctionInvoke synchronously invokes another function in the same
+	// namespace from inside a function (e.g. a persistent rpc-router
+	// dispatching client RPCs to per-op handlers). The caller's wallet,
+	// JWT claims, and WS client ID are inherited so the invoked function
+	// sees the same authenticated identity as the outer call.
+	//
+	// `name` is the target function name; `payload` is the raw input bytes
+	// to feed the function (typically JSON). Returns the function's output
+	// bytes on success. Errors (not found, unauthorized, runtime) are
+	// returned as Go errors and the caller should surface them as
+	// rpc_error to the client.
+	FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error)
 
 	// HTTP operations
 	HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
@@ -350,6 +497,18 @@ type HostServices interface {
 	GetSecret(ctx context.Context, name string) (string, error)
 	GetRequestID(ctx context.Context) string
 	GetCallerWallet(ctx context.Context) string
+	// GetWSClientID returns the WebSocket client ID when the function was
+	// invoked via a WS connection, or empty string otherwise.
+	GetWSClientID(ctx context.Context) string
+	// GetCallerClaim returns a custom JWT claim's value, or empty if missing
+	// or the request was not JWT-authenticated.
+	GetCallerClaim(ctx context.Context, name string) string
+	// GetCallerJWTSubject returns the JWT `sub` claim independent of the
+	// API-key-vs-JWT wallet-resolution heuristic. Empty when the request
+	// was not JWT-authenticated. Use this when a function must bind on
+	// the JWT-signed identity (e.g. signup-time wallet ownership checks)
+	// and the caller may ALSO present an API key. Bug #215.
+	GetCallerJWTSubject(ctx context.Context) string
 
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)

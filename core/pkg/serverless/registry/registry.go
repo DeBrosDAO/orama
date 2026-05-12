@@ -105,9 +105,18 @@ func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, er
 	return r.ipfsStore.Get(ctx, wasmCID)
 }
 
-// GetLogs retrieves logs for a function.
+// GetLogs retrieves WASM-emitted log entries for a function. Most functions
+// don't call log_info / log_error, so this is often empty — see
+// GetInvocations for the always-populated invocation-history view.
 func (r *Registry) GetLogs(ctx context.Context, namespace, name string, limit int) ([]LogEntry, error) {
 	return r.invocationLogger.GetLogs(ctx, namespace, name, limit)
+}
+
+// GetInvocations returns the invocation-history view for a function:
+// timestamp / status / duration / error_message per invocation, with any
+// associated WASM log entries nested per record.
+func (r *Registry) GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error) {
+	return r.invocationLogger.GetInvocations(ctx, namespace, name, limit)
 }
 
 // GetEnvVars retrieves environment variables for a function.

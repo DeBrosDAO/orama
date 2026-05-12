@@ -2,6 +2,8 @@ package serverless
 
 import (
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -24,12 +26,22 @@ type WSManager struct {
 	logger *zap.Logger
 }
 
-// wsConnection wraps a WebSocket connection with metadata.
+// wsConnection wraps a WebSocket connection with metadata + counters.
+// Metric counters are atomic so callers (read loop, send loop) can update
+// without acquiring the per-connection mutex.
 type wsConnection struct {
-	conn       WebSocketConn
-	clientID   string
-	topics     map[string]struct{} // Topics this client is subscribed to
-	mu         sync.Mutex
+	conn     WebSocketConn
+	clientID string
+	topics   map[string]struct{} // Topics this client is subscribed to
+	mu       sync.Mutex
+
+	// Metrics — read via GetConnStats / ListConnStats.
+	framesIn     atomic.Int64
+	framesOut    atomic.Int64
+	bytesIn      atomic.Int64
+	bytesOut     atomic.Int64
+	connectedAt  time.Time
+	lastActiveAt atomic.Int64 // unix nano
 }
 
 // GorillaWSConn wraps a gorilla/websocket.Conn to implement WebSocketConn.
@@ -75,11 +87,14 @@ func (m *WSManager) Register(clientID string, conn WebSocketConn) {
 		m.logger.Debug("Closed existing connection", zap.String("client_id", clientID))
 	}
 
-	m.connections[clientID] = &wsConnection{
-		conn:     conn,
-		clientID: clientID,
-		topics:   make(map[string]struct{}),
+	wc := &wsConnection{
+		conn:        conn,
+		clientID:    clientID,
+		topics:      make(map[string]struct{}),
+		connectedAt: time.Now(),
 	}
+	wc.lastActiveAt.Store(wc.connectedAt.UnixNano())
+	m.connections[clientID] = wc
 
 	m.logger.Debug("Registered WebSocket connection",
 		zap.String("client_id", clientID),
@@ -142,7 +157,76 @@ func (m *WSManager) Send(clientID string, data []byte) error {
 		return err
 	}
 
+	conn.framesOut.Add(1)
+	conn.bytesOut.Add(int64(len(data)))
+	conn.lastActiveAt.Store(time.Now().UnixNano())
 	return nil
+}
+
+// RecordInbound is called by the WS handler each time it reads a frame.
+// Lets per-connection metrics stay accurate without exposing the inbound
+// loop to the manager itself.
+func (m *WSManager) RecordInbound(clientID string, byteLen int) {
+	m.connectionsMu.RLock()
+	conn, ok := m.connections[clientID]
+	m.connectionsMu.RUnlock()
+	if !ok {
+		return
+	}
+	conn.framesIn.Add(1)
+	conn.bytesIn.Add(int64(byteLen))
+	conn.lastActiveAt.Store(time.Now().UnixNano())
+}
+
+// ConnStats is the per-connection metrics snapshot.
+type ConnStats struct {
+	ClientID     string `json:"client_id"`
+	FramesIn     int64  `json:"frames_in"`
+	FramesOut    int64  `json:"frames_out"`
+	BytesIn      int64  `json:"bytes_in"`
+	BytesOut     int64  `json:"bytes_out"`
+	ConnectedAt  int64  `json:"connected_at"`     // unix seconds
+	LastActiveAt int64  `json:"last_active_at"`   // unix seconds
+	DurationSec  int64  `json:"duration_seconds"` // server-now - connected_at
+	TopicsCount  int    `json:"topics_count"`
+}
+
+// GetConnStats returns the metrics snapshot for one client, or false if absent.
+func (m *WSManager) GetConnStats(clientID string) (*ConnStats, bool) {
+	m.connectionsMu.RLock()
+	conn, ok := m.connections[clientID]
+	m.connectionsMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	return snapshotConn(conn), true
+}
+
+// ListConnStats returns metrics snapshots for all active clients.
+func (m *WSManager) ListConnStats() []ConnStats {
+	m.connectionsMu.RLock()
+	defer m.connectionsMu.RUnlock()
+	out := make([]ConnStats, 0, len(m.connections))
+	for _, c := range m.connections {
+		out = append(out, *snapshotConn(c))
+	}
+	return out
+}
+
+func snapshotConn(c *wsConnection) *ConnStats {
+	now := time.Now()
+	connSec := c.connectedAt.Unix()
+	return &ConnStats{
+		ClientID:     c.clientID,
+		FramesIn:     c.framesIn.Load(),
+		FramesOut:    c.framesOut.Load(),
+		BytesIn:      c.bytesIn.Load(),
+		BytesOut:     c.bytesOut.Load(),
+		ConnectedAt:  connSec,
+		LastActiveAt: c.lastActiveAt.Load() / int64(time.Second),
+		DurationSec:  now.Unix() - connSec,
+		TopicsCount:  len(c.topics),
+	}
 }
 
 // Broadcast sends data to all clients subscribed to a topic.

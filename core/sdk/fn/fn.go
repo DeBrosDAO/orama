@@ -17,6 +17,33 @@
 //			return fn.JSON(map[string]string{"greeting": "Hello, " + req.Name + "!"})
 //		})
 //	}
+//
+// # Host functions and WASM imports
+//
+// Functions written using only this SDK do NOT need any //go:wasmimport
+// directives — input flows through stdin and output through stdout, both
+// of which the runtime provides via WASI.
+//
+// If you need direct access to host functions (db_query, pubsub_publish,
+// http_fetch, etc.) declare them via //go:wasmimport. The CANONICAL host
+// module name is "env":
+//
+//	//go:wasmimport env db_query
+//	func dbQuery(queryPtr, queryLen, argsPtr, argsLen uint32) uint64
+//
+// For backward compatibility, the runtime ALSO exposes the same export
+// set under the names "host" and "orama". You may use any of the three
+// interchangeably — they resolve to identical function tables. New code
+// should prefer "env" because it matches the WASI/TinyGo convention and
+// what every example in this SDK uses.
+//
+//	//go:wasmimport env   db_query  // canonical (preferred)
+//	//go:wasmimport host  db_query  // alias, supported indefinitely
+//	//go:wasmimport orama db_query  // alias, supported indefinitely
+//
+// All three names produce identical runtime behavior. If you see the
+// runtime error `module[X] not instantiated`, your function imported
+// from a name other than the three above — fix the directive.
 package fn
 
 import (

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { NAV_LINKS, MORE_LINKS } from "../../data/navigation";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
@@ -33,13 +33,22 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
   return (
     <div
       className={cn(
-        "fixed inset-0 z-40 bg-bg/95 backdrop-blur-md md:hidden flex flex-col transition-all duration-300",
+        "fixed inset-0 z-[60] bg-bg/95 backdrop-blur-md md:hidden flex flex-col transition-all duration-300",
         open
           ? "opacity-100 pointer-events-auto"
           : "opacity-0 pointer-events-none",
       )}
     >
-      <div className="h-20 shrink-0" />
+      <div className="flex items-center justify-end px-6 pt-5 pb-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex items-center justify-center w-10 h-10 text-muted hover:text-fg transition-colors"
+          aria-label="Close menu"
+        >
+          <X size={24} />
+        </button>
+      </div>
 
       <nav className="flex flex-col px-6 gap-1">
         {NAV_LINKS.map((link) => {
@@ -69,20 +78,18 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
           );
         })}
 
-        <div className="border-t border-border/30 mt-3 pt-3">
-          {MORE_LINKS.map((link) => {
-            const isActive = location.pathname === link.href;
-            return (
-              <Link
-                key={link.href}
-                to={link.href}
-                className={cn(menuLinkClass, "text-lg", isActive ? "text-fg" : "text-muted hover:text-fg")}
-              >
-                {link.label}
-              </Link>
-            );
-          })}
-        </div>
+        {MORE_LINKS.map((link) => {
+          const isActive = location.pathname === link.href;
+          return (
+            <Link
+              key={link.href}
+              to={link.href}
+              className={cn(menuLinkClass, isActive ? "text-fg" : "text-muted hover:text-fg")}
+            >
+              {link.label}
+            </Link>
+          );
+        })}
       </nav>
 
       <div className="mt-auto px-6 pb-8">

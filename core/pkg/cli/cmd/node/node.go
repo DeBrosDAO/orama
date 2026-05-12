@@ -32,4 +32,7 @@ func init() {
 	Cmd.AddCommand(recoverRaftCmd)
 	Cmd.AddCommand(enrollCmd)
 	Cmd.AddCommand(unlockCmd)
+	Cmd.AddCommand(migrateConfCmd)
+	Cmd.AddCommand(setupCmd)
+	Cmd.AddCommand(schemaCmd)
 }

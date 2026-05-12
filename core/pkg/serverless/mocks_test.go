@@ -93,6 +93,10 @@ func (m *MockRegistry) GetLogs(ctx context.Context, namespace, name string, limi
 	return []LogEntry{}, nil
 }
 
+func (m *MockRegistry) GetInvocations(ctx context.Context, namespace, name string, limit int) ([]Invocation, error) {
+	return []Invocation{}, nil
+}
+
 // MockHostServices is a mock implementation of HostServices
 type MockHostServices struct {
 	mu      sync.RWMutex
@@ -114,6 +118,14 @@ func (m *MockHostServices) DBQuery(ctx context.Context, query string, args []int
 
 func (m *MockHostServices) DBExecute(ctx context.Context, query string, args []interface{}) (int64, error) {
 	return 0, nil
+}
+
+func (m *MockHostServices) DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	return []byte(`{"rows_affected":0}`), nil
+}
+
+func (m *MockHostServices) DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
+	return []byte(`{"rows":[]}`), nil
 }
 
 func (m *MockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
@@ -176,12 +188,40 @@ func (m *MockHostServices) PubSubPublish(ctx context.Context, topic string, data
 	return nil
 }
 
+func (m *MockHostServices) PubSubPublishBatch(ctx context.Context, msgsJSON []byte) error {
+	return nil
+}
+
+func (m *MockHostServices) PushSend(ctx context.Context, userID string, msgJSON []byte) error {
+	return nil
+}
+
+func (m *MockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	return []byte(`{"committed":true,"results":[]}`), nil
+}
+
+func (m *MockHostServices) ExecAndPublish(ctx context.Context, opsJSON []byte, topic string, dataTemplate []byte) ([]byte, error) {
+	return []byte(`{"committed":true,"published":true,"seq":1,"results":[]}`), nil
+}
+
+func (m *MockHostServices) WSPubSubBridge(ctx context.Context, clientID, topic string) error {
+	return nil
+}
+
+func (m *MockHostServices) WSPubSubUnbridge(ctx context.Context, clientID, topic string) error {
+	return nil
+}
+
 func (m *MockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }
 
 func (m *MockHostServices) WSBroadcast(ctx context.Context, topic string, data []byte) error {
 	return nil
+}
+
+func (m *MockHostServices) FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error) {
+	return nil, nil
 }
 
 func (m *MockHostServices) HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
@@ -202,6 +242,18 @@ func (m *MockHostServices) GetRequestID(ctx context.Context) string {
 
 func (m *MockHostServices) GetCallerWallet(ctx context.Context) string {
 	return "wallet-123"
+}
+
+func (m *MockHostServices) GetWSClientID(ctx context.Context) string {
+	return ""
+}
+
+func (m *MockHostServices) GetCallerClaim(ctx context.Context, name string) string {
+	return ""
+}
+
+func (m *MockHostServices) GetCallerJWTSubject(ctx context.Context) string {
+	return ""
 }
 
 func (m *MockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {
@@ -341,6 +393,19 @@ func (m *MockRQLite) CreateQueryBuilder(table string) *rqlite.QueryBuilder {
 
 func (m *MockRQLite) Tx(ctx context.Context, fn func(tx rqlite.Tx) error) error {
 	return nil
+}
+
+func (m *MockRQLite) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
+	results := make([]rqlite.OpResult, len(ops))
+	for i, op := range ops {
+		results[i] = rqlite.OpResult{Kind: op.Kind, RowsAffected: 1}
+	}
+	return &rqlite.BatchResult{Results: results, Committed: true}, nil
+}
+
+func (m *MockRQLite) BatchWithSeq(ctx context.Context, namespace string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error) {
+	res, err := m.Batch(ctx, ops)
+	return res, 1, err
 }
 
 type mockResult struct{}
