@@ -76,7 +76,7 @@ nfpms:
     builds:
       - orama
     vendor: DeBros
-    homepage: https://github.com/DeBrosOfficial/network
+    homepage: https://github.com/DeBrosDAO/orama
     maintainer: DeBros <dev@debros.io>
     description: CLI tool for the Orama decentralized network
     license: MIT
@@ -98,7 +98,7 @@ nfpms:
     builds:
       - orama-node
     vendor: DeBros
-    homepage: https://github.com/DeBrosOfficial/network
+    homepage: https://github.com/DeBrosDAO/orama
     maintainer: DeBros <dev@debros.io>
     description: Node daemon for the Orama decentralized network
     license: MIT
@@ -120,11 +120,11 @@ brews:
     ids:
       - orama-archives
     repository:
-      owner: DeBrosOfficial
+      owner: DeBrosDAO
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     folder: Formula
-    homepage: https://github.com/DeBrosOfficial/network
+    homepage: https://github.com/DeBrosDAO/orama
     description: CLI tool for the Orama decentralized network
     license: MIT
     install: |
@@ -153,8 +153,8 @@ changelog:
 
 release:
   github:
-    owner: DeBrosOfficial
-    name: network
+    owner: DeBrosDAO
+    name: orama
   draft: false
   prerelease: auto
   name_template: "Release {{.Version}}"
