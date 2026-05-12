@@ -20,7 +20,6 @@ jobs:
   publish:
     name: Build & Publish @debros/orama
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.release.target_commitish == 'main'
     defaults:
       run:
         working-directory: sdk
@@ -70,7 +69,12 @@ jobs:
 
       - name: Publish
         if: github.event_name == 'release' || inputs.dry-run != true
-        run: npm publish --access public
+        run: |
+          if [[ "${{ github.event.release.target_commitish }}" != "main" && "${{ github.event_name }}" == "release" ]]; then
+            npm publish --access public --tag nightly
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
