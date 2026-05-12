@@ -1,0 +1,17 @@
+Package: orama
+Version: 0.122.5-nightly
+Architecture: amd64
+Maintainer: DeBros Team <team@orama.network>
+Depends: libc6
+Filename: pool/main/o/orama/orama_0.122.5-nightly_amd64.deb
+Size: 61724840
+MD5sum: 2ce5f87829b8f48ed42f721283049fb1
+SHA1: 33a5a69b9f1236b8dcd4105a0d7c7ae03f82fb1f
+SHA256: f38a9d982f56a6b502b01143d5d4507679a317ea2e44ad7a019b8090e8a4c1a1
+Section: net
+Priority: optional
+Description: Orama Network - Distributed P2P Database System
+ Orama is a distributed peer-to-peer network that combines
+ RQLite for distributed SQL, IPFS for content-addressed storage,
+ and LibP2P for peer discovery and communication.
+

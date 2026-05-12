@@ -1,0 +1,7 @@
+Origin: Orama
+Label: Orama
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: Orama Network APT Repository
