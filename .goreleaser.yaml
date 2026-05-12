@@ -86,7 +86,7 @@ nfpms:
     section: utils
     priority: optional
     contents:
-      - src: ./core/README.md
+      - src: ./README.md
         dst: /usr/share/doc/orama/README.md
     deb:
       lintian_overrides:
@@ -108,7 +108,7 @@ nfpms:
     section: net
     priority: optional
     contents:
-      - src: ./core/README.md
+      - src: ./README.md
         dst: /usr/share/doc/orama-node/README.md
     deb:
       lintian_overrides:
