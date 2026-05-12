@@ -13,29 +13,42 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Need full history for changelog
-      
+
+      - name: Verify VERSION file matches release tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          EXPECTED="${TAG#v}"
+          EXPECTED="${EXPECTED%-nightly}"
+          ACTUAL=$(tr -d '[:space:]' < VERSION)
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Tag $TAG implies version '$EXPECTED' but /VERSION says '$ACTUAL'."
+            echo "::error::Run 'make -C core bump VER=$EXPECTED' and commit before tagging."
+            exit 1
+          fi
+          echo "VERSION file matches tag: $ACTUAL"
+
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache-dependency-path: core/go.sum
-      
+
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-      
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

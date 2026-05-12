@@ -1,7 +1,8 @@
-# GoReleaser Configuration for DeBros Network
-# Builds and releases orama (CLI) and orama-node binaries
-# Publishes to: GitHub Releases, Homebrew, and apt (.deb packages)
+# GoReleaser v2 Configuration for DeBros Network
+# Builds and releases orama (CLI) and orama-node binaries.
+# Publishes to: GitHub Releases, Homebrew (stable only), and apt (.deb packages).
 
+version: 2
 project_name: orama-network
 
 env:
@@ -9,7 +10,8 @@ env:
 
 before:
   hooks:
-    - go -C core mod tidy
+    - cmd: go mod tidy
+      dir: core
 
 builds:
   # orama CLI binary
@@ -50,9 +52,9 @@ builds:
 archives:
   # Tar.gz archives for orama CLI
   - id: orama-archives
-    builds:
+    ids:
       - orama
-    format: tar.gz
+    formats: [tar.gz]
     name_template: "orama_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
@@ -60,9 +62,9 @@ archives:
 
   # Tar.gz archives for orama-node
   - id: orama-node-archives
-    builds:
+    ids:
       - orama-node
-    format: tar.gz
+    formats: [tar.gz]
     name_template: "orama-node_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
@@ -73,7 +75,7 @@ nfpms:
   # orama CLI .deb package
   - id: orama-deb
     package_name: orama
-    builds:
+    ids:
       - orama
     vendor: DeBros
     homepage: https://github.com/DeBrosDAO/orama
@@ -95,7 +97,7 @@ nfpms:
   # orama-node .deb package
   - id: orama-node-deb
     package_name: orama-node
-    builds:
+    ids:
       - orama-node
     vendor: DeBros
     homepage: https://github.com/DeBrosDAO/orama
@@ -114,7 +116,9 @@ nfpms:
       lintian_overrides:
         - statically-linked-binary
 
-# Homebrew tap for macOS (orama CLI only)
+# Homebrew tap for macOS (orama CLI only).
+# Stable releases only — prereleases (nightly) are skipped so we don't
+# pollute the tap or fight a 401 on a missing HOMEBREW_TAP_TOKEN.
 brews:
   - name: orama
     ids:
@@ -123,10 +127,11 @@ brews:
       owner: DeBrosDAO
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    folder: Formula
+    directory: Formula
     homepage: https://github.com/DeBrosDAO/orama
     description: CLI tool for the Orama decentralized network
     license: MIT
+    skip_upload: '{{ if .Prerelease }}true{{ else }}false{{ end }}'
     install: |
       bin.install "orama"
     test: |
@@ -137,7 +142,7 @@ checksum:
   algorithm: sha256
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
