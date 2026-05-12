@@ -20,6 +20,7 @@ jobs:
   publish:
     name: Build & Publish @debros/orama
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.release.target_commitish == 'main'
     defaults:
       run:
         working-directory: sdk
