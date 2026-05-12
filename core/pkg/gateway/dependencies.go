@@ -173,11 +173,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Inject basic auth credentials into DSN if available
 	dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
 
-	if strings.Contains(dsn, "?") {
-		dsn += "&disableClusterDiscovery=true&level=none"
-	} else {
-		dsn += "?disableClusterDiscovery=true&level=none"
-	}
+	dsn = appendRQLiteQueryParams(dsn)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open rqlite sql db: %w", err)
@@ -822,6 +818,28 @@ func injectRQLiteAuth(dsn, username, password string) string {
 		}
 	}
 	return dsn
+}
+
+// appendRQLiteQueryParams adds the standard query parameters to a RQLite DSN:
+//
+//   - `disableClusterDiscovery=true` — gorqlite's discovery /nodes call is
+//     unreliable when peers are unreachable; we manage topology ourselves.
+//   - `level=weak` — Bug #235. Reads route to the leader (the only node
+//     guaranteed to have all committed writes), so a SELECT after an UPDATE
+//     in the same serverless invocation sees the new state. Previously
+//     `level=none`, which read from the local follower's possibly-stale
+//     snapshot. gorqlite's upstream default is `weak`; we were overriding
+//     to `none` and that hid this bug.
+//
+// The cost of `weak` over `none` is one HTTP hop to the leader (~1-2ms over
+// the WireGuard mesh) and applies only to reads. Writes are unaffected
+// because rqlite always redirects them to the leader regardless of `level`.
+func appendRQLiteQueryParams(dsn string) string {
+	const params = "disableClusterDiscovery=true&level=weak"
+	if strings.Contains(dsn, "?") {
+		return dsn + "&" + params
+	}
+	return dsn + "?" + params
 }
 
 // buildPushDispatcher constructs the push subsystem.

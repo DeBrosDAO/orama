@@ -108,7 +108,12 @@ func scanCurrentRowIntoStruct(rows *sql.Rows, cols []string, destStruct reflect.
 	}
 	fieldIndex := buildFieldIndex(destStruct.Type())
 	for i, c := range cols {
-		if idx, ok := fieldIndex[strings.ToLower(c)]; ok {
+		// normalizeColumnKey strips underscores so snake_case SQL columns
+		// match CamelCase struct field names (bug found via feature #65:
+		// `trigger_id` column vs `TriggerID` field silently failed to map,
+		// leaving rows with empty IDs/expressions and a cron scheduler
+		// stuck in a tight retry loop on phantom triggers).
+		if idx, ok := fieldIndex[normalizeColumnKey(c)]; ok {
 			field := destStruct.Field(idx)
 			if field.CanSet() {
 				if err := setReflectValue(field, raw[i]); err != nil {
@@ -130,7 +135,17 @@ func normalizeSQLValue(v any) any {
 	}
 }
 
-// buildFieldIndex creates a map of lowercase column names to field indices.
+// buildFieldIndex creates a map of normalized column keys to field indices.
+//
+// Column keys are normalized (lowercase + underscores stripped) so a
+// SQL column named `trigger_id` matches a struct field named `TriggerID`
+// without requiring an explicit `db:"trigger_id"` tag. Explicit tags still
+// take precedence over the field name when present.
+//
+// Without this normalization, snake_case ↔ CamelCase silently failed to
+// map and the scanner returned rows with zero-valued fields — exactly the
+// failure mode that broke the cron scheduler in feature #65 (DB had valid
+// rows, scheduler saw empty `trigger_id` / `cron_expression` every tick).
 func buildFieldIndex(t reflect.Type) map[string]int {
 	m := make(map[string]int)
 	for i := 0; i < t.NumField(); i++ {
@@ -146,9 +161,23 @@ func buildFieldIndex(t reflect.Type) map[string]int {
 		if col == "" {
 			col = f.Name
 		}
-		m[strings.ToLower(col)] = i
+		m[normalizeColumnKey(col)] = i
 	}
 	return m
+}
+
+// normalizeColumnKey lowercases its input and strips underscores so
+// scanner lookups work across naming conventions:
+//
+//	column "trigger_id"  -> "triggerid"
+//	column "TriggerID"   -> "triggerid"
+//	column "triggerID"   -> "triggerid"
+//	column "id"          -> "id"
+//
+// This is the central rule that lets snake_case SQL columns map onto
+// CamelCase Go struct fields without explicit `db:` tags.
+func normalizeColumnKey(s string) string {
+	return strings.ReplaceAll(strings.ToLower(s), "_", "")
 }
 
 // setReflectValue sets a reflect.Value from a raw SQL value.
