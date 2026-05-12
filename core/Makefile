@@ -61,9 +61,11 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release
+.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
 
-VERSION := 0.122.7
+# Single source of truth — repo-root VERSION file. Update with `make bump VER=X.Y.Z`
+# or by editing /VERSION directly. Release workflows verify this matches the tag.
+VERSION := $(shell cat ../VERSION 2>/dev/null | tr -d '[:space:]' || echo unknown)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)'
@@ -129,6 +131,17 @@ rollout-devnet:
 # Full rollout to testnet (build + push + rolling upgrade)
 rollout-testnet:
 	./bin/orama node rollout --env testnet --yes
+
+# Bump the repo-root VERSION file and sync sdk/package.json.
+# Usage: make bump VER=0.122.9
+bump:
+	@if [ -z "$(VER)" ]; then \
+		echo "Usage: make bump VER=X.Y.Z"; exit 1; \
+	fi
+	@echo "$(VER)" > ../VERSION
+	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
+	@echo "Bumped VERSION and sdk/package.json to $(VER)"
+	@echo "Next: git add ../VERSION ../sdk/package.json && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:

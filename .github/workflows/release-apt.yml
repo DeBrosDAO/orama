@@ -25,6 +25,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Verify VERSION file matches release tag
+        if: github.event_name == 'release'
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          EXPECTED="${TAG#v}"
+          EXPECTED="${EXPECTED%-nightly}"
+          ACTUAL=$(tr -d '[:space:]' < VERSION)
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Tag $TAG implies version '$EXPECTED' but /VERSION says '$ACTUAL'."
+            echo "::error::Run 'make -C core bump VER=$EXPECTED' and commit before tagging."
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
