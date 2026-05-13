@@ -36,12 +36,14 @@ import (
 	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
+	ratelimithandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/ratelimit"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	nodehealth "github.com/DeBrosOfficial/network/pkg/node/health"
 	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/ratelimit"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
@@ -131,7 +133,14 @@ type Gateway struct {
 
 	// Rate limiters
 	rateLimiter          *RateLimiter
-	namespaceRateLimiter *NamespaceRateLimiter
+	namespaceRateLimiter *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
+	// rateLimitManager (feature #69) handles per-namespace rate limits with
+	// tenant self-service config via /v1/namespace/rate-limit. When set,
+	// namespaceRateLimitMiddleware uses it instead of the legacy
+	// hardcoded-defaults limiter above. nil = falls back to namespaceRateLimiter.
+	rateLimitManager       *ratelimit.Manager
+	rateLimitConfigStore   ratelimit.ConfigStore
+	rateLimitHandlers      *ratelimithandlers.Handlers
 
 	// WebRTC signaling and TURN credentials
 	webrtcHandlers *webrtchandlers.WebRTCHandlers
@@ -430,12 +439,40 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
 
-	// Initialize rate limiters
-	// Per-IP: 10000 req/min, burst 5000
+	// Initialize rate limiters.
+	//
+	// Per-IP: token bucket against the client IP. Generous so legitimate
+	// users behind shared NATs aren't squeezed.
 	gw.rateLimiter = NewRateLimiter(10000, 5000)
 	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
-	// Per-namespace: 60000 req/hr (1000/min), burst 500
-	gw.namespaceRateLimiter = NewNamespaceRateLimiter(1000, 500)
+
+	// Per-namespace: feature #69 — backed by an LRU manager with
+	// per-namespace overrides via /v1/namespace/rate-limit (config in
+	// `namespace_rate_limit_config`, populated by migration 027).
+	//
+	// Defaults: 10000/min, burst 5000 — matches per-IP so a single user
+	// can't saturate the namespace ceiling. Tenants tighten via PUT;
+	// operators can raise/lower the Max* ceiling in YAML config.
+	//
+	// When `deps.ORMClient` is nil (test/standalone modes), we still
+	// install a manager backed by a no-store ConfigStore so middleware
+	// flow stays uniform; it returns the defaults for every namespace.
+	rlDefaults := ratelimit.Defaults{
+		RequestsPerMinute:    10000,
+		Burst:                5000,
+		MaxRequestsPerMinute: 100000, // operator ceiling: tenants can't request more
+		MaxBurst:             50000,
+	}
+	if deps.ORMClient != nil {
+		gw.rateLimitConfigStore = ratelimit.NewRqliteConfigStore(deps.ORMClient, logger.Logger)
+	}
+	gw.rateLimitManager = ratelimit.NewManager(gw.rateLimitConfigStore, rlDefaults, logger.Logger)
+	gw.rateLimitHandlers = ratelimithandlers.NewHandlers(gw.rateLimitConfigStore, gw.rateLimitManager, logger)
+
+	// Legacy fallback kept for now in case the manager is ever nil. The
+	// middleware prefers rateLimitManager and only uses this if the
+	// manager is unset.
+	gw.namespaceRateLimiter = NewNamespaceRateLimiter(rlDefaults.RequestsPerMinute, rlDefaults.Burst)
 
 	// Initialize WireGuard peer exchange handler
 	if deps.ORMClient != nil {

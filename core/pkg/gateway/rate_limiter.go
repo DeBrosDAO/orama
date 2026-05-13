@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 // wireGuardNet is the WireGuard mesh subnet, parsed once at init.
@@ -153,20 +154,42 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 
 // namespaceRateLimitMiddleware enforces per-namespace rate limits.
 // It runs after auth middleware so the namespace is available in context.
+//
+// Feature #69: when g.rateLimitManager is set (production wiring), it's
+// preferred — supports per-namespace overrides via /v1/namespace/rate-limit
+// and emits the canonical RPC error envelope on 429 (so SDK clients see
+// a structured error code instead of plain text). The legacy
+// g.namespaceRateLimiter remains as a fallback for code paths that
+// haven't wired the manager yet.
 func (g *Gateway) namespaceRateLimitMiddleware(next http.Handler) http.Handler {
-	if g.namespaceRateLimiter == nil {
+	if g.rateLimitManager == nil && g.namespaceRateLimiter == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract namespace from context (set by auth middleware)
-		if v := r.Context().Value(CtxKeyNamespaceOverride); v != nil {
-			if ns, ok := v.(string); ok && ns != "" {
-				if !g.namespaceRateLimiter.Allow(ns) {
-					w.Header().Set("Retry-After", "60")
-					http.Error(w, "namespace rate limit exceeded", http.StatusTooManyRequests)
-					return
-				}
-			}
+		v := r.Context().Value(CtxKeyNamespaceOverride)
+		ns, _ := v.(string)
+		if ns == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		allowed := true
+		if g.rateLimitManager != nil {
+			allowed = g.rateLimitManager.Allow(r.Context(), ns)
+		} else if g.namespaceRateLimiter != nil {
+			allowed = g.namespaceRateLimiter.Allow(ns)
+		}
+		if !allowed {
+			// Canonical RPC error envelope (bug #212 contract) so SDKs
+			// parse the rate-limit hit instead of seeing plain text. The
+			// 60s retry hint maps to both the HTTP Retry-After header
+			// and the envelope's retry_after field.
+			httputil.WriteRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited,
+				"namespace rate limit exceeded — back off and retry in a few seconds",
+				httputil.WithRetryable(),
+				httputil.WithRetryAfter(60))
+			return
 		}
 		next.ServeHTTP(w, r)
 	})

@@ -3,9 +3,9 @@
   "schema_version": 1,
 
   "rules": {
-    "version": "v0.1.0",
-    "sha": "51ce3f8529f9269a80b22b384fa98de6431c04e8",
-    "synced_at": "2026-05-12T10:55:00Z"
+    "version": "v0.2.0",
+    "sha": "bb6e6ef604b420879a44f055af48d4acf57b86d5",
+    "synced_at": "2026-05-12T11:26:00Z"
   },
 
   "project": {

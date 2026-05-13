@@ -97,9 +97,18 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, subject, expUnix, err := h.authService.RefreshToken(r.Context(), req.RefreshToken, req.Namespace)
+	// Feature #68 / RFC 9700 §4.12: refresh-token rotation.
+	// Every successful refresh mints a NEW refresh token and revokes the
+	// supplied one atomically. The response carries the rotated value;
+	// the SDK persists it (bug #239 fix) and uses it on the next refresh.
+	token, newRefreshToken, subject, expUnix, err := h.authService.RefreshToken(r.Context(), req.RefreshToken, req.Namespace)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		// The service emits a WARN log on replay (ErrRefreshTokenReplay)
+		// so the operator can investigate. We surface a generic 401 here
+		// regardless — leaking "your token was already used" to the
+		// caller would help an attacker confirm a stolen token has been
+		// rotated.
+		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}
 
@@ -107,7 +116,7 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 		"access_token":  token,
 		"token_type":    "Bearer",
 		"expires_in":    int(expUnix - time.Now().Unix()),
-		"refresh_token": req.RefreshToken,
+		"refresh_token": newRefreshToken,
 		"subject":       subject,
 		"namespace":     req.Namespace,
 	})

@@ -128,6 +128,29 @@ func stripInboundInternalAuthHeaders(h http.Header) {
 	h.Del(HeaderInternalAuthJWTCustom)
 }
 
+// maxQueryJWTLength caps the size of a JWT accepted via `?jwt=` query
+// param. EdDSA + RS256 JWTs minted by this gateway are well under 2 KB;
+// 4 KB is a generous ceiling that still cheaply rejects DoS attempts
+// that try to feed multi-MB tokens through the verifier.
+const maxQueryJWTLength = 4096
+
+// stripJWTQueryParam removes the `jwt` key from the URL's query string
+// (if present), mutating r in place. Called after a successful WS-upgrade
+// JWT-via-query verification so the token doesn't propagate to:
+//   - the namespace-gateway proxy hop (`r.URL.RawQuery` is forwarded)
+//   - downstream handler logs that record `r.URL.RequestURI()`
+//   - any inner `r.URL.Query()` lookups in business logic
+//
+// Idempotent: safe to call on requests without a `jwt` param.
+func stripJWTQueryParam(r *http.Request) {
+	q := r.URL.Query()
+	if !q.Has("jwt") {
+		return
+	}
+	q.Del("jwt")
+	r.URL.RawQuery = q.Encode()
+}
+
 // claimsFromInternalAuthHeaders rebuilds a *auth.JWTClaims from the trusted
 // internal-auth headers. Returns nil if no JWT subject was forwarded (the
 // caller used an API key, or the request didn't carry validated JWT data).
@@ -183,6 +206,24 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 					}
 				}
 				// JWT verification failed - fall through to API key check
+			}
+		}
+	}
+
+	// 1b) WS upgrade fallback: JWT via `?jwt=` query. Same rationale as in
+	// authMiddleware — browser / React Native WS clients can't set custom
+	// headers reliably. Bug #240. Strip-after-verify is applied here too
+	// so the JWT doesn't propagate to the namespace gateway over the proxy
+	// hop (where it would otherwise live in the proxied request's RawQuery
+	// + the inner gateway's logs).
+	if isWebSocketUpgrade(r) {
+		tok := strings.TrimSpace(r.URL.Query().Get("jwt"))
+		if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
+			if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+				if ns := strings.TrimSpace(c.Namespace); ns != "" {
+					stripJWTQueryParam(r)
+					return ns, c, ""
+				}
 			}
 		}
 	}
@@ -389,9 +430,12 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 
 // authMiddleware enforces auth when enabled via config.
 // Accepts:
-//   - Authorization: Bearer <JWT> (RS256 issued by this gateway)
+//   - Authorization: Bearer <JWT> (RS256 / EdDSA issued by this gateway)
 //   - Authorization: Bearer <API key> or ApiKey <API key>
 //   - X-API-Key: <API key>
+//   - ?api_key=<key> or ?token=<key> query string (WebSocket upgrade only)
+//   - ?jwt=<token> query string (WebSocket upgrade only — bug #240; needed
+//     because browser/RN WS clients can't reliably set custom headers)
 //   - X-Internal-Auth-Validated: true (from internal IPs only - pre-authenticated by main gateway)
 func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +494,48 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 					}
 					// If it looked like a JWT but failed verification, fall through to API key check
 				}
+			}
+		}
+
+		// 1b) WebSocket-only fallback: JWT in the `?jwt=` query parameter.
+		//
+		// Browser and React Native WebSocket clients can't reliably set custom
+		// headers on the upgrade request — the WebSocket constructor either
+		// ignores the headers argument (browsers) or silently strips
+		// Authorization (RN iOS). Without a fallback, every authenticated WS
+		// endpoint is unreachable from those platforms. Bug #240.
+		//
+		// We gate this ONLY on WS upgrade requests to keep JWTs out of normal
+		// HTTP URLs (where they end up in access logs, referrer headers, and
+		// browser history). For WS, the upgrade URL is only emitted on
+		// connection establishment — much smaller exposure surface — and TLS
+		// (wss://) keeps it off the wire in transit.
+		//
+		// After a successful verify, we STRIP the `jwt` query param from the
+		// request before passing downstream (`stripJWTQueryParam`). This
+		// shrinks the replay window: the token doesn't propagate through the
+		// proxy hop to the namespace gateway, doesn't reach the backend
+		// handler's logs, and doesn't show up in any downstream `r.URL`
+		// inspection. Belt-and-suspenders given the trust we've already
+		// established by verifying the signature.
+		if isWebSocketUpgrade(r) {
+			tok := strings.TrimSpace(r.URL.Query().Get("jwt"))
+			// Cheap length sanity-check before invoking the verifier. Real
+			// EdDSA / RS256 JWTs issued by this gateway are well under 4 KB.
+			// Anything larger is either malformed or a DoS attempt.
+			if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
+				if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+					stripJWTQueryParam(r)
+					ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
+					if ns := strings.TrimSpace(claims.Namespace); ns != "" {
+						ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
+					}
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				// Invalid JWT in query — fall through to API key check
+				// rather than 401-ing here, in case the caller also supplied
+				// a valid api_key as belt-and-suspenders.
 			}
 		}
 

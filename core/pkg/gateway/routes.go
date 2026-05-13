@@ -144,6 +144,14 @@ func (g *Gateway) Routes() http.Handler {
 	// instead of filing an ops ticket. Method dispatched in the handler.
 	mux.HandleFunc("/v1/push/config", g.pushConfigHandler)
 
+	// Per-namespace rate-limit configuration (feature #69).
+	// GET / PUT / DELETE — tenants self-serve their gateway-level rate
+	// limit override (requests_per_minute, burst) up to an operator-set
+	// ceiling. Falls back to gateway YAML defaults when no override is set.
+	if g.rateLimitHandlers != nil {
+		mux.HandleFunc("/v1/namespace/rate-limit", g.rateLimitConfigDispatcher)
+	}
+
 	// operator node management (wallet JWT auth via middleware)
 	if g.operatorHandler != nil {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)

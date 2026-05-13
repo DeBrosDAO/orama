@@ -597,6 +597,14 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
 
+	// Inject the lower-level rqlite client for code paths that need
+	// rows-affected feedback. Feature #68 (atomic refresh-token rotation)
+	// uses this for the compare-and-swap UPDATE. Without it, RefreshToken
+	// returns ErrRotationNotConfigured rather than rotating non-atomically.
+	if deps.ORMClient != nil {
+		authService.SetRqliteClient(deps.ORMClient)
+	}
+
 	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
 	// cfg.ClusterSecret is set, the key is derived deterministically from
 	// it via HKDF, so every gateway in the cluster shares the same Ed25519
