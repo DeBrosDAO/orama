@@ -22,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/push"
+	"github.com/DeBrosOfficial/network/pkg/push/credentials"
 )
 
 // Handlers serves the /v1/push/* HTTP endpoints. Construct via NewHandlers;
@@ -36,11 +37,12 @@ import (
 // configStore + manager may be nil on gateways with push fully disabled —
 // the corresponding endpoints return 503.
 type Handlers struct {
-	dispatcher  *push.PushDispatcher
-	manager     *push.Manager
-	store       push.PushDeviceStore
-	configStore push.ConfigStore
-	logger      *logging.ColoredLogger
+	dispatcher         *push.PushDispatcher
+	manager            *push.Manager
+	store              push.PushDeviceStore
+	configStore        push.ConfigStore
+	credentialsManager *credentials.Manager // optional — feature #72 (set via SetCredentialsManager)
+	logger             *logging.ColoredLogger
 }
 
 // NewHandlers constructs a Handlers with the legacy single-namespace

@@ -46,6 +46,7 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(flags.Nameserver)
+	setup.SetNtfyHost(flags.NtfyHost)
 
 	// Configure Anyone mode
 	if flags.AnyoneRelay && flags.AnyoneClient {

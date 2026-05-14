@@ -15,6 +15,7 @@ type Flags struct {
 	DryRun     bool
 	SkipChecks bool
 	Nameserver    bool   // Make this node a nameserver (runs CoreDNS + Caddy)
+	NtfyHost      bool   // Host the self-hosted ntfy server on this node (feature #72)
 	JoinAddress   string // HTTPS URL of existing node (e.g., https://node1.dbrs.space)
 	Token         string // Invite token for joining (from orama invite)
 	ClusterSecret string // Deprecated: use --token instead
@@ -64,6 +65,7 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.BoolVar(&flags.DryRun, "dry-run", false, "Show what would be done without making changes")
 	fs.BoolVar(&flags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
 	fs.BoolVar(&flags.Nameserver, "nameserver", false, "Make this node a nameserver (runs CoreDNS + Caddy)")
+	fs.BoolVar(&flags.NtfyHost, "with-ntfy", false, "Host the self-hosted ntfy server (feature #72; usually colocated with --nameserver on devnet)")
 
 	// Cluster join flags
 	fs.StringVar(&flags.JoinAddress, "join", "", "Join existing cluster via HTTPS URL (e.g. https://node1.dbrs.space)")

@@ -391,6 +391,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	} else if deps.PushDispatcher != nil {
 		gw.pushHandlers = pushhandlers.NewHandlers(deps.PushDispatcher, deps.PushDeviceStore, logger)
 	}
+	// Wire the per-provider credentials manager (feature #72) if push is
+	// up. The handler nil-checks the manager internally so this is safe
+	// even when push is partially configured.
+	if gw.pushHandlers != nil && deps.PushCredentialsManager != nil {
+		gw.pushHandlers.SetCredentialsManager(deps.PushCredentialsManager)
+	}
 
 	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
 		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(

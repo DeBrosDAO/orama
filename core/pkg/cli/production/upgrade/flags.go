@@ -11,7 +11,8 @@ type Flags struct {
 	Force           bool
 	RestartServices bool
 	SkipChecks      bool
-	Nameserver      *bool  // Pointer so we can detect if explicitly set vs default
+	Nameserver      *bool // Pointer so we can detect if explicitly set vs default
+	NtfyHost        *bool // Feature #72: nil = use saved preference; non-nil = explicit override
 
 	// Remote upgrade flags
 	Env        string // Target environment for remote rolling upgrade
@@ -50,6 +51,8 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	// Nameserver flag - use pointer to detect if explicitly set
 	nameserver := fs.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
+	// Ntfy host flag (feature #72) — same pattern, sticks via preferences.yaml.
+	ntfyHost := fs.Bool("with-ntfy", false, "Host the self-hosted ntfy server on this node (uses saved preference if not specified)")
 
 	// Anyone flags
 	fs.BoolVar(&flags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")
@@ -75,6 +78,25 @@ func ParseFlags(args []string) (*Flags, error) {
 	if *nameserver {
 		flags.Nameserver = nameserver
 	}
+	// Set ntfy_host only when explicitly passed (default false != "use saved").
+	// Without explicit set, the orchestrator reads the saved preference.
+	if isFlagPassed(fs, "with-ntfy") {
+		flags.NtfyHost = ntfyHost
+	}
 
 	return flags, nil
+}
+
+// isFlagPassed reports whether the named flag was explicitly set on
+// the command line, not just defaulted. Used to distinguish "user
+// didn't say anything; honor saved preference" from "user wrote
+// --with-ntfy=false; turn it OFF".
+func isFlagPassed(fs *flag.FlagSet, name string) bool {
+	passed := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			passed = true
+		}
+	})
+	return passed
 }

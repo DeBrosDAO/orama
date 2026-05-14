@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -38,13 +39,18 @@ import (
 // The factory is called once per fresh dispatcher build (cache miss).
 // Empty slice is allowed and means "this config produces no providers";
 // Manager treats that as ErrPushNotConfigured.
-type ProviderFactory func(cfg Config) []PushProvider
+//
+// The ctx is the request context that triggered the (cold-path)
+// dispatcher build. Factories that need to look up per-namespace
+// credentials from the credentials manager (e.g. APNs) should use it
+// so cancellation propagates correctly. ctx is never nil.
+type ProviderFactory func(ctx context.Context, cfg Config) []PushProvider
 
 // ErrPushNotConfigured is returned by Send when the namespace has no
 // per-namespace config AND the gateway has no fallback defaults — i.e.
 // nothing to send through. Distinguish from ErrNoDevices (different
 // failure mode).
-var ErrPushNotConfigured = errors.New("push not configured for namespace; set ntfy_base_url or expo_access_token via PUT /v1/push/config")
+var ErrPushNotConfigured = errors.New("push not configured for namespace; set credentials via PUT /v1/namespace/push-credentials/{provider} or legacy /v1/push/config")
 
 // Defaults are the gateway-YAML fallback when a namespace hasn't set its
 // own config. Any field set here applies to every namespace that doesn't
@@ -63,12 +69,27 @@ func (d Defaults) IsEmpty() bool {
 
 // Manager is the top-level push entry point. Build with NewManager and
 // hand out via the gateway's dependencies. Safe for concurrent use.
+//
+// Cross-gateway invalidation: the per-namespace dispatcher is built
+// from BOTH the per-namespace push config (legacy 026) AND any
+// per-provider credentials (#72). If a tenant rotates an APNs p8 key
+// on gateway A, gateway B's CACHED dispatcher still holds an APNs
+// provider constructed from the OLD key — until either:
+//
+//   1. The dispatcher entry is evicted by LRU pressure (only when
+//      activeCacheCap namespaces are also active), or
+//   2. The entry's TTL elapses (cacheEntryTTL, default 30s).
+//
+// The TTL is the defense-in-depth bound — same model as pkg/ratelimit.
+// Without it, low-traffic namespaces would never see rotated creds on
+// gateway B without an explicit broadcast layer.
 type Manager struct {
 	store    ConfigStore
 	devices  PushDeviceStore
 	defaults Defaults
 	factory  ProviderFactory
 	logger   *zap.Logger
+	ttl      time.Duration // configurable for tests
 
 	// cache LRU of namespace → built dispatcher.
 	mu       sync.Mutex
@@ -81,12 +102,19 @@ type Manager struct {
 type cacheEntry struct {
 	namespace  string
 	dispatcher *PushDispatcher
+	builtAt    time.Time
 }
 
 // defaultCacheCap caps how many namespaces' dispatchers we hold in memory.
 // Each entry is small (~few hundred bytes); 256 is generous and bounds
 // memory under abuse.
 const defaultCacheCap = 256
+
+// cacheEntryTTL bounds how long a stale dispatcher can serve before the
+// next dispatcherFor call rebuilds it from store + credentials. 30s
+// matches pkg/ratelimit and pkg/push/credentials so config + creds
+// changes propagate across the cluster within the same bounded window.
+const cacheEntryTTL = 30 * time.Second
 
 // NewManager constructs a Manager with the given device store, config
 // store, fallback Defaults, and ProviderFactory.
@@ -105,10 +133,24 @@ func NewManager(devices PushDeviceStore, store ConfigStore, defaults Defaults, f
 		defaults: defaults,
 		factory:  factory,
 		logger:   logger,
+		ttl:      cacheEntryTTL,
 		cache:    make(map[string]*list.Element, defaultCacheCap),
 		lru:      list.New(),
 		cacheCap: defaultCacheCap,
 	}
+}
+
+// SetCacheTTL overrides the default dispatcher cache TTL. Intended
+// for tests (where 30s is too long) and for operators who want a
+// tighter cross-gateway propagation window. Non-positive values are
+// ignored.
+func (m *Manager) SetCacheTTL(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ttl = d
 }
 
 // SendToUser dispatches a push to every device registered for the user
@@ -165,15 +207,22 @@ func (m *Manager) Invalidate(namespace string) {
 }
 
 // dispatcherFor returns a (cached or freshly built) dispatcher with the
-// providers configured for the given namespace.
+// providers configured for the given namespace. Entries older than
+// `ttl` are evicted on access and rebuilt — this bounds the staleness
+// of credential changes that happened on another gateway.
 func (m *Manager) dispatcherFor(ctx context.Context, namespace string) (*PushDispatcher, error) {
-	// Fast path — already cached.
+	// Fast path — already cached AND not expired.
 	m.mu.Lock()
 	if elem, ok := m.cache[namespace]; ok {
-		m.lru.MoveToFront(elem)
 		entry := elem.Value.(*cacheEntry)
-		m.mu.Unlock()
-		return entry.dispatcher, nil
+		if time.Since(entry.builtAt) < m.ttl {
+			m.lru.MoveToFront(elem)
+			m.mu.Unlock()
+			return entry.dispatcher, nil
+		}
+		// Expired — drop the stale entry and fall through to rebuild.
+		m.lru.Remove(elem)
+		delete(m.cache, namespace)
 	}
 	m.mu.Unlock()
 
@@ -186,10 +235,16 @@ func (m *Manager) dispatcherFor(ctx context.Context, namespace string) (*PushDis
 	// Insert into cache (eviction if at capacity).
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Recheck under lock — another goroutine may have built one.
+	// Recheck under lock — another goroutine may have built one. Use it
+	// only if it's still fresh; otherwise our newly-built one replaces.
 	if elem, ok := m.cache[namespace]; ok {
-		m.lru.MoveToFront(elem)
-		return elem.Value.(*cacheEntry).dispatcher, nil
+		entry := elem.Value.(*cacheEntry)
+		if time.Since(entry.builtAt) < m.ttl {
+			m.lru.MoveToFront(elem)
+			return entry.dispatcher, nil
+		}
+		m.lru.Remove(elem)
+		delete(m.cache, namespace)
 	}
 	if m.lru.Len() >= m.cacheCap {
 		oldest := m.lru.Back()
@@ -199,7 +254,7 @@ func (m *Manager) dispatcherFor(ctx context.Context, namespace string) (*PushDis
 			delete(m.cache, old.namespace)
 		}
 	}
-	entry := &cacheEntry{namespace: namespace, dispatcher: d}
+	entry := &cacheEntry{namespace: namespace, dispatcher: d, builtAt: time.Now()}
 	m.cache[namespace] = m.lru.PushFront(entry)
 	return d, nil
 }
@@ -241,18 +296,19 @@ func (m *Manager) buildDispatcher(ctx context.Context, namespace string) (*PushD
 		}
 	}
 
-	// Refuse to build a dispatcher with no providers — caller gets a
-	// clear error instead of a silent no-op.
-	if eff.NtfyBaseURL == "" && eff.ExpoAccessToken == "" {
-		return nil, ErrPushNotConfigured
-	}
 	if m.factory == nil {
 		// Defensive: a Manager built without a factory can't produce
 		// providers. Programmer error; surface explicitly.
 		return nil, fmt.Errorf("manager: no provider factory configured")
 	}
 
-	providers := m.factory(eff)
+	// Authoritative provider-presence check is at the factory output —
+	// not at the resolved flat-field config — because providers can
+	// also be sourced from the per-namespace credentials store
+	// (feature #72: APNs is fully credentialed and has no flat field
+	// here). The factory returns an empty slice when nothing is
+	// configured, which we translate to ErrPushNotConfigured.
+	providers := m.factory(ctx, eff)
 	if len(providers) == 0 {
 		return nil, ErrPushNotConfigured
 	}

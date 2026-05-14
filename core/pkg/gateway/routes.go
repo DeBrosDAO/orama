@@ -144,6 +144,16 @@ func (g *Gateway) Routes() http.Handler {
 	// instead of filing an ops ticket. Method dispatched in the handler.
 	mux.HandleFunc("/v1/push/config", g.pushConfigHandler)
 
+	// Per-namespace, per-provider push credentials (feature #72 —
+	// full-privacy push with APNs-direct + self-hosted ntfy). Generic by
+	// design: any provider with a registered Validator plugs in here
+	// without changes. Method + provider segment dispatched in the handler.
+	//
+	// Summary endpoint (no provider segment) returns "what's configured"
+	// + "what's supported" in one round trip.
+	mux.HandleFunc("/v1/namespace/push-credentials", g.pushCredentialsSummaryHandler)
+	mux.HandleFunc("/v1/namespace/push-credentials/", g.pushCredentialsByProviderHandler)
+
 	// Per-namespace rate-limit configuration (feature #69).
 	// GET / PUT / DELETE — tenants self-serve their gateway-level rate
 	// limit override (requests_per_minute, burst) up to an operator-set

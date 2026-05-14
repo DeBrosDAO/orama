@@ -18,9 +18,15 @@ const (
 // CaddyInstaller handles Caddy installation with custom DNS module
 type CaddyInstaller struct {
 	*BaseInstaller
-	version       string
-	oramaHome     string
-	dnsModule     string // Path to the orama DNS module source
+	version   string
+	oramaHome string
+	dnsModule string // Path to the orama DNS module source
+
+	// withNtfy, when set, causes generateCaddyfile to emit a reverse-
+	// proxy block for `push.<dnsZone>` → localhost:<NtfyListenPort>.
+	// Enabled per-node via EnableNtfyProxy. Feature #72.
+	withNtfy     bool
+	ntfyHostname string // e.g. "push.dbrs.space" — fully-qualified public host
 }
 
 // NewCaddyInstaller creates a new Caddy installer
@@ -31,6 +37,19 @@ func NewCaddyInstaller(arch string, logWriter io.Writer, oramaHome string) *Cadd
 		oramaHome:     oramaHome,
 		dnsModule:     filepath.Join(oramaHome, "src", "pkg", "caddy", "dns", "orama"),
 	}
+}
+
+// EnableNtfyProxy tells the Caddy installer to emit a reverse-proxy
+// block for the self-hosted ntfy server (feature #72). hostname is the
+// public fully-qualified domain — e.g. "push.dbrs.space" — that Caddy
+// will obtain a Let's Encrypt cert for and route to the local ntfy
+// server on NtfyListenPort.
+//
+// Must be called BEFORE Configure so the generated Caddyfile includes
+// the block.
+func (ci *CaddyInstaller) EnableNtfyProxy(hostname string) {
+	ci.withNtfy = true
+	ci.ntfyHostname = hostname
 }
 
 // IsInstalled checks if Caddy with orama DNS module is already installed
@@ -418,6 +437,16 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	if baseDomain != "" && baseDomain != domain {
 		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy localhost:6001\n}\n", baseDomain))
 		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy localhost:6001\n}\n", baseDomain))
+	}
+
+	// Self-hosted ntfy reverse-proxy (feature #72). Emitted only when
+	// the orchestrator has called EnableNtfyProxy on this installer —
+	// i.e. this node was selected to host ntfy. The hostname is its
+	// own block so the cert lives separately from the namespace gateway
+	// cert (different rotation cadence, different blast radius).
+	if ci.withNtfy && ci.ntfyHostname != "" {
+		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:%d\n}\n",
+			ci.ntfyHostname, tlsBlock, NtfyListenPort))
 	}
 
 	// HTTP catch-all fallback (handles remaining plain HTTP traffic)
