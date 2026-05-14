@@ -648,7 +648,23 @@ func (b *Builder) crossEnv() []string {
 }
 
 func (b *Builder) readVersion() string {
-	// Try to read from Makefile
+	// Primary: read the repo-root VERSION file (single source of truth).
+	// The Makefile resolves $(shell cat ../VERSION) at make time, but this
+	// CLI builder is a separate Go binary that doesn't go through make, so
+	// we must read VERSION directly. Try ../VERSION first (when projectDir
+	// is core/), then VERSION in projectDir.
+	for _, p := range []string{
+		filepath.Join(b.projectDir, "..", "VERSION"),
+		filepath.Join(b.projectDir, "VERSION"),
+	} {
+		if data, err := os.ReadFile(p); err == nil {
+			if v := strings.TrimSpace(string(data)); v != "" {
+				return v
+			}
+		}
+	}
+	// Fallback: parse Makefile in case someone runs an older layout where
+	// VERSION is still hard-coded inline.
 	data, err := os.ReadFile(filepath.Join(b.projectDir, "Makefile"))
 	if err != nil {
 		return "dev"
@@ -658,7 +674,11 @@ func (b *Builder) readVersion() string {
 		if strings.HasPrefix(line, "VERSION") {
 			parts := strings.SplitN(line, ":=", 2)
 			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
+				v := strings.TrimSpace(parts[1])
+				// Ignore unevaluated make expressions like $(shell ...)
+				if !strings.Contains(v, "$(") {
+					return v
+				}
 			}
 		}
 	}

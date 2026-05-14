@@ -377,8 +377,28 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
     }`, acmeEndpoint)
 
 	var sb strings.Builder
-	// Disable HTTP/3 (QUIC) so Caddy doesn't bind UDP 443, which TURN needs for relay
-	sb.WriteString(fmt.Sprintf("{\n    email %s\n    servers {\n        protocols h1 h2\n    }\n}\n", email))
+	// Caddy protocol restrictions:
+	//   - HTTP/3 (QUIC) is disabled so Caddy doesn't bind UDP 443, which
+	//     TURN needs for relay.
+	//   - HTTP/2 is also disabled (bug #249). HTTP/2 forbids the
+	//     `Connection: Upgrade` and `Upgrade: websocket` headers per
+	//     RFC 7540 §8.1.2.2, so any WebSocket-upgrade request the
+	//     client sends over an h2 connection arrives at Caddy with
+	//     those headers stripped. Caddy then forwards a plain
+	//     HTTP/1.1 GET to the backend gateway, which no longer
+	//     recognises the request as a WS upgrade — its
+	//     `isWebSocketUpgrade(r)` check fails and the
+	//     query-string `?api_key=` / `?jwt=` WS-auth fallback is
+	//     ignored, producing 401. RFC 8441 ("Bootstrapping WebSockets
+	//     with HTTP/2") would fix this, but iOS RN and many other
+	//     mobile WS libraries don't implement it. Until they do, h1
+	//     is the only protocol that keeps WS auth working.
+	//   - Cost: lose h2 multiplexing on regular HTTP traffic.
+	//     Acceptable trade-off for an API gateway whose dominant
+	//     workload is REST + WebSocket (neither benefits much from
+	//     h2 stream multiplexing — REST is keep-alive over h1, and
+	//     WS is single-connection by design).
+	sb.WriteString(fmt.Sprintf("{\n    email %s\n    servers {\n        protocols h1\n    }\n}\n", email))
 
 	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
 	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))
