@@ -213,9 +213,14 @@ func (ni *NtfyInstaller) downloadBinary() error {
 	tarballURL := fmt.Sprintf(
 		"https://github.com/binwiederhier/ntfy/releases/download/v%s/%s",
 		ntfyVersion, tarballName)
+	// Upstream ntfy publishes the checksum file as plain "checksums.txt"
+	// at the release root — NOT "ntfy_<VER>_checksums.txt". Verified
+	// against the v2.11.0 release assets list. If a future ntfy version
+	// changes the naming convention, this URL will 404 loud at install
+	// time and the bump-ntfy-version PR should update it here.
 	checksumsURL := fmt.Sprintf(
-		"https://github.com/binwiederhier/ntfy/releases/download/v%s/ntfy_%s_checksums.txt",
-		ntfyVersion, ntfyVersion)
+		"https://github.com/binwiederhier/ntfy/releases/download/v%s/checksums.txt",
+		ntfyVersion)
 
 	fmt.Fprintf(ni.logWriter, "    Downloading %s...\n", tarballURL)
 	client := &http.Client{Timeout: 5 * time.Minute}
