@@ -1103,16 +1103,108 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	// Validate auth against main cluster RQLite BEFORE proxying
 	// This ensures API keys work even though they're not in the namespace's RQLite
 	validatedNamespace, validatedClaims, authErr := g.validateAuthForNamespaceProxy(r)
-	if authErr != "" && !isPublicPath(r.URL.Path) {
+	isWS := isWebSocketUpgrade(r)
+	isPublic := isPublicPath(r.URL.Path)
+
+	// Bug #240/#249 root-cause hardening: previously, when
+	// validateAuthForNamespaceProxy returned an empty namespace AND empty
+	// error (i.e. "no credentials found"), the request fell through to a
+	// silent forward to the namespace gateway WITHOUT internal-auth
+	// headers. The namespace gateway then rejected the request with 401
+	// "missing API key" in ~60µs. From the client's perspective the 401
+	// appeared opaque; from our side the failure was logged only on the
+	// namespace gateway (which itself can't validate API keys — they
+	// live in the main cluster RQLite). This created a confusing
+	// debugging experience and was the root cause of AnChat's
+	// "intermittent 401" reports on the WS path.
+	//
+	// Two parts to the fix:
+	//   1. Reject at MAIN when no credentials were extractable AND the
+	//      path requires auth. Surfaces the failure with a clear message
+	//      AT the gateway tier that actually knows about API keys.
+	//   2. Log every WS upgrade auth outcome with enough context to
+	//      diagnose the intermittent reports we've been seeing
+	//      (presence of relevant query params, headers we care about,
+	//      and the actor IP). Logged at debug level for success and
+	//      warn for the reject path so steady-state noise stays low.
+	if authErr != "" && !isPublic {
+		if isWS {
+			g.logger.ComponentWarn(logging.ComponentGeneral,
+				"namespace-proxy WS upgrade rejected: auth error",
+				zap.String("namespace_target", namespaceName),
+				zap.String("auth_err", authErr),
+				zap.String("path", r.URL.Path),
+				zap.String("client_ip", getClientIP(r)),
+				zap.Bool("has_api_key_query", r.URL.Query().Get("api_key") != ""),
+				zap.Bool("has_token_query", r.URL.Query().Get("token") != ""),
+				zap.Bool("has_jwt_query", r.URL.Query().Get("jwt") != ""),
+				zap.Bool("has_authz_header", r.Header.Get("Authorization") != ""),
+				zap.Bool("has_xapikey_header", r.Header.Get("X-API-Key") != ""),
+				zap.String("connection_header", r.Header.Get("Connection")),
+				zap.String("upgrade_header", r.Header.Get("Upgrade")),
+				zap.String("user_agent", r.Header.Get("User-Agent")),
+			)
+		}
 		w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 		writeError(w, http.StatusUnauthorized, authErr)
 		return
 	}
 
+	// No-credentials path: previously fell through to silent forward.
+	// Now: reject at main with diagnostic context. Namespace gateways
+	// cannot validate API keys themselves (no shared rqlite for them),
+	// so forwarding unauthenticated requests can only ever produce
+	// opaque 401s downstream.
+	if validatedNamespace == "" && !isPublic {
+		g.logger.ComponentWarn(logging.ComponentGeneral,
+			"namespace-proxy request rejected: no credentials extracted",
+			zap.String("namespace_target", namespaceName),
+			zap.String("path", r.URL.Path),
+			zap.Bool("is_ws_upgrade", isWS),
+			zap.String("client_ip", getClientIP(r)),
+			zap.Bool("has_api_key_query", r.URL.Query().Get("api_key") != ""),
+			zap.Bool("has_token_query", r.URL.Query().Get("token") != ""),
+			zap.Bool("has_jwt_query", r.URL.Query().Get("jwt") != ""),
+			zap.Bool("has_authz_header", r.Header.Get("Authorization") != ""),
+			zap.Bool("has_xapikey_header", r.Header.Get("X-API-Key") != ""),
+			zap.String("connection_header", r.Header.Get("Connection")),
+			zap.String("upgrade_header", r.Header.Get("Upgrade")),
+			zap.String("origin", r.Header.Get("Origin")),
+			zap.String("user_agent", r.Header.Get("User-Agent")),
+			zap.Int("raw_query_len", len(r.URL.RawQuery)),
+		)
+		w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\"")
+		writeError(w, http.StatusUnauthorized,
+			"authentication required for namespace endpoint (no api_key/token/jwt extracted)")
+		return
+	}
+
 	// If auth succeeded, ensure the API key belongs to the target namespace
 	if validatedNamespace != "" && validatedNamespace != namespaceName {
+		g.logger.ComponentWarn(logging.ComponentGeneral,
+			"namespace-proxy request rejected: API key namespace mismatch",
+			zap.String("namespace_target", namespaceName),
+			zap.String("validated_namespace", validatedNamespace),
+			zap.String("path", r.URL.Path),
+			zap.Bool("is_ws_upgrade", isWS),
+			zap.String("client_ip", getClientIP(r)),
+		)
 		writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
 		return
+	}
+
+	// Success-path diagnostic for WS upgrades. Logged at debug to keep
+	// the steady-state log volume low; flip the gateway log level to
+	// `debug` to capture per-upgrade audit trail when reproducing
+	// AnChat-style intermittent failures.
+	if isWS {
+		g.logger.ComponentDebug(logging.ComponentGeneral,
+			"namespace-proxy WS upgrade authenticated, forwarding",
+			zap.String("namespace", namespaceName),
+			zap.String("path", r.URL.Path),
+			zap.String("client_ip", getClientIP(r)),
+			zap.Bool("has_jwt_claims", validatedClaims != nil),
+		)
 	}
 
 	// Check middleware cache for namespace gateway targets
