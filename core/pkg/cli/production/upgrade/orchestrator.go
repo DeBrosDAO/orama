@@ -38,17 +38,8 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 		isNameserver = *flags.Nameserver
 	}
 
-	// Feature #72: ntfy-host preference survives upgrades the same way
-	// nameserver does — loaded from preferences.yaml unless the upgrade
-	// flags override it explicitly.
-	isNtfyHost := prefs.NtfyHost
-	if flags.NtfyHost != nil {
-		isNtfyHost = *flags.NtfyHost
-	}
-
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(isNameserver)
-	setup.SetNtfyHost(isNtfyHost)
 
 	// Configure Anyone mode (explicit flags > saved preferences > auto-detect)
 	// Explicit flags always win — they represent the user's current intent.
@@ -218,15 +209,6 @@ func (o *Orchestrator) handleBranchPreferences() error {
 	}
 	if o.setup.IsNameserver() {
 		fmt.Printf("  Nameserver mode: enabled (CoreDNS + Caddy)\n")
-	}
-
-	// If ntfy-host was explicitly provided, persist it (feature #72).
-	if o.flags.NtfyHost != nil {
-		prefs.NtfyHost = *o.flags.NtfyHost
-		prefsChanged = true
-	}
-	if o.setup.IsNtfyHost() {
-		fmt.Printf("  ntfy host: enabled (self-hosted ntfy on push.<dnsZone>)\n")
 	}
 
 	// Anyone client and relay are mutually exclusive — setting one clears the other.

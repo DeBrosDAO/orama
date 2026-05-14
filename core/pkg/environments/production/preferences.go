@@ -11,7 +11,6 @@ import (
 type NodePreferences struct {
 	Branch       string `yaml:"branch"`
 	Nameserver   bool   `yaml:"nameserver"`
-	NtfyHost     bool   `yaml:"ntfy_host"` // Feature #72: this node hosts self-hosted ntfy
 	AnyoneClient bool   `yaml:"anyone_client"`
 	AnyoneRelay  bool   `yaml:"anyone_relay"`
 	AnyoneORPort int    `yaml:"anyone_orport,omitempty"` // typically 9001

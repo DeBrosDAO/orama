@@ -38,7 +38,6 @@ type ProductionSetup struct {
 	skipOptionalDeps   bool
 	skipResourceChecks bool
 	isNameserver       bool               // Whether this node is a nameserver (runs CoreDNS + Caddy)
-	isNtfyHost         bool               // Feature #72: whether this node hosts the self-hosted ntfy server
 	isAnyoneClient     bool               // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	anyoneRelayConfig  *AnyoneRelayConfig // Configuration for Anyone relay mode
 	privChecker        *PrivilegeChecker
@@ -134,20 +133,6 @@ func (ps *ProductionSetup) SetNameserver(isNameserver bool) {
 // IsNameserver returns whether this node is configured as a nameserver
 func (ps *ProductionSetup) IsNameserver() bool {
 	return ps.isNameserver
-}
-
-// SetNtfyHost flags this node as the host for the self-hosted ntfy
-// server (feature #72). When set, Phase 2 installs ntfy and Phase 4
-// generates /etc/ntfy/server.yml plus a Caddy reverse-proxy block for
-// push.<dnsZone>. Requires isNameserver=true for devnet (ns1 also
-// runs Caddy); production deployments may colocate or split.
-func (ps *ProductionSetup) SetNtfyHost(isNtfy bool) {
-	ps.isNtfyHost = isNtfy
-}
-
-// IsNtfyHost returns whether this node hosts ntfy.
-func (ps *ProductionSetup) IsNtfyHost() bool {
-	return ps.isNtfyHost
 }
 
 // SetAnyoneRelayConfig sets the Anyone relay configuration
@@ -359,12 +344,14 @@ func (ps *ProductionSetup) installFromSource() error {
 		ps.logf("  ⚠️  Caddy install warning: %v", err)
 	}
 
-	// Install ntfy only on nodes flagged as the ntfy host (feature #72).
-	// On devnet this is ns1; on production it can be a dedicated node.
-	if ps.isNtfyHost {
-		if err := ps.binaryInstaller.InstallNtfy(); err != nil {
-			ps.logf("  ⚠️  ntfy install warning: %v", err)
-		}
+	// Install ntfy on every node (feature #72). ntfy listens on
+	// 127.0.0.1:NtfyListenPort and is only reachable via the local
+	// Caddy reverse-proxy block, so it's safe to run cluster-wide:
+	// nodes that don't host a public push.* DNS entry simply have
+	// an idle ntfy with no inbound traffic. Uniform install means no
+	// per-node toggling and no surprises when DNS topology changes.
+	if err := ps.binaryInstaller.InstallNtfy(); err != nil {
+		ps.logf("  ⚠️  ntfy install warning: %v", err)
 	}
 
 	// These are pre-built binary downloads (not Go compilation), always run them
@@ -725,20 +712,19 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 		email := "admin@" + caddyDomain
 		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
 
-		// Self-hosted ntfy (feature #72): when this node hosts ntfy,
-		// (a) tell the Caddy installer to emit a push.<dnsZone> block
-		// pointing at the local ntfy listen port, and (b) write the
-		// ntfy server.yml. Both must happen BEFORE ConfigureCaddy is
+		// Self-hosted ntfy (feature #72): always emit the Caddy
+		// push.<dnsZone> reverse-proxy block and write
+		// /etc/ntfy/server.yml. Must happen BEFORE ConfigureCaddy is
 		// called below so the generated Caddyfile picks up the block.
-		if ps.isNtfyHost {
-			ntfyHost := "push." + dnsZone
-			ps.binaryInstaller.EnableCaddyNtfyProxy(ntfyHost)
-			ntfyBaseURL := "https://" + ntfyHost
-			if err := ps.binaryInstaller.ConfigureNtfy(ntfyBaseURL); err != nil {
-				ps.logf("  ⚠️  ntfy config warning: %v", err)
-			} else {
-				ps.logf("  ✓ ntfy config generated (base_url: %s)", ntfyBaseURL)
-			}
+		// ntfy is installed unconditionally on every node (see Phase 2)
+		// so the local 127.0.0.1:NtfyListenPort target always exists.
+		ntfyHost := "push." + dnsZone
+		ps.binaryInstaller.EnableCaddyNtfyProxy(ntfyHost)
+		ntfyBaseURL := "https://" + ntfyHost
+		if err := ps.binaryInstaller.ConfigureNtfy(ntfyBaseURL); err != nil {
+			ps.logf("  ⚠️  ntfy config warning: %v", err)
+		} else {
+			ps.logf("  ✓ ntfy config generated (base_url: %s)", ntfyBaseURL)
 		}
 
 		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint, baseDomain); err != nil {
@@ -899,12 +885,10 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
 		services = append(services, "caddy.service")
 	}
-	// Add ntfy when this node hosts the self-hosted ntfy server (#72).
-	// The unit file is written by installers/ntfy.go::writeSystemdUnit.
-	if ps.isNtfyHost {
-		if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
-			services = append(services, "ntfy.service")
-		}
+	// Add ntfy on every node (#72). The unit file is written by
+	// installers/ntfy.go::writeSystemdUnit during Phase 2.
+	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
+		services = append(services, "ntfy.service")
 	}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
@@ -982,16 +966,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 
-	// Start ntfy when this node hosts it (#72). Caddy must already be
-	// up (it terminates TLS for push.<dnsZone>), which the order
-	// above guarantees.
-	if ps.isNtfyHost {
-		if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
-			if err := ps.serviceController.RestartService("ntfy.service"); err != nil {
-				ps.logf("  ⚠️  Failed to start ntfy.service: %v", err)
-			} else {
-				ps.logf("    - ntfy.service started")
-			}
+	// Start ntfy on every node (#72). Caddy must already be up (it
+	// terminates TLS for push.<dnsZone>), which the order above
+	// guarantees.
+	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
+		if err := ps.serviceController.RestartService("ntfy.service"); err != nil {
+			ps.logf("  ⚠️  Failed to start ntfy.service: %v", err)
+		} else {
+			ps.logf("    - ntfy.service started")
 		}
 	}
 

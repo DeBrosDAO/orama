@@ -68,24 +68,16 @@ func (r *RemoteUpgrader) Execute() error {
 }
 
 // upgradeNode runs `orama node upgrade --restart` on a single remote node,
-// forwarding the per-node flags the operator passed locally (--with-ntfy,
-// --nameserver, --force, --skip-checks) so the remote orchestrator sees the
-// same intent. Without this forwarding, the remote command would always use
-// the saved preference, silently dropping operator overrides like
-// `--with-ntfy` on the floor.
+// forwarding the per-node flags the operator passed locally (--nameserver,
+// --force, --skip-checks) so the remote orchestrator sees the same intent.
+// Without this forwarding, the remote command would always use the saved
+// preference, silently dropping operator overrides on the floor.
 func (r *RemoteUpgrader) upgradeNode(node inspector.Node) error {
 	sudo := remotessh.SudoPrefix(node)
 	cmd := fmt.Sprintf("%sorama node upgrade --restart", sudo)
 
-	// Tri-state pointer flags: forward only when explicitly set locally.
+	// Tri-state pointer flag: forward only when explicitly set locally.
 	// nil = "honor saved preference on the remote" — don't pass anything.
-	if r.flags.NtfyHost != nil {
-		if *r.flags.NtfyHost {
-			cmd += " --with-ntfy"
-		} else {
-			cmd += " --with-ntfy=false"
-		}
-	}
 	if r.flags.Nameserver != nil {
 		if *r.flags.Nameserver {
 			cmd += " --nameserver"
