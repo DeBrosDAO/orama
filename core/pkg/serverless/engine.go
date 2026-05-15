@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,11 +10,51 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/sys"
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless/cache"
 	"github.com/DeBrosOfficial/network/pkg/serverless/execution"
 )
+
+// persistentFriendlyProcExit is our override of WASI's `proc_exit`.
+//
+// Standard wazero proc_exit:
+//
+//	mod.CloseWithExitCode(ctx, exitCode)  // ← invalidates the module
+//	panic(sys.NewExitError(exitCode))
+//
+// This breaks TinyGo command-mode (target=wasi) functions that we want
+// to keep alive past `_start` for a persistent-instance lifecycle —
+// `_start` ends with `proc_exit(0)`, which kills the module and makes
+// the function's other exports (ws_open, ws_frame, ws_close,
+// orama_alloc) uncallable.
+//
+// Override semantics:
+//
+//   - exitCode == 0: panic with ExitError(0) but DO NOT close the
+//     module. This is TinyGo's "_start completed cleanly" signal; we
+//     want the module to stay live so the persistent instance can
+//     receive ws_open / ws_frame frames.
+//   - exitCode != 0: preserve standard WASI behavior — close + panic.
+//     A non-zero exit is a genuine application-signaled failure; we
+//     want it to behave exactly as upstream WASI does.
+//
+// The panic is mandatory in both cases — wasm code following proc_exit
+// is conventionally `unreachable` (LLVM emits this after exit calls),
+// and not panicking would let it execute. The CALLER (our
+// `InstantiatePersistent`) catches the ExitError and special-cases
+// code 0 as success.
+//
+// Affects ALL functions (stateless + persistent) on this runtime, but
+// safe for stateless because the stateless path closes its own module
+// after each invocation regardless.
+func persistentFriendlyProcExit(ctx context.Context, mod api.Module, exitCode uint32) {
+	if exitCode != 0 {
+		_ = mod.CloseWithExitCode(ctx, exitCode)
+	}
+	panic(sys.NewExitError(exitCode))
+}
 
 // contextAwareHostServices is an internal interface for services that need to know about
 // the current invocation context.
@@ -116,8 +157,45 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 
 	runtime := wazero.NewRuntimeWithConfig(context.Background(), runtimeConfig)
 
-	// Instantiate WASI - required for WASM modules compiled with TinyGo targeting WASI
-	wasi_snapshot_preview1.MustInstantiate(context.Background(), runtime)
+	// Instantiate WASI with a CUSTOM `proc_exit` that does NOT close the
+	// module on exit code 0 (#240/#249 follow-up #5).
+	//
+	// Background: TinyGo command-mode `_start` (target=wasi) runs the
+	// runtime init, calls `main()`, then calls `proc_exit(0)`. Wazero's
+	// stock proc_exit then calls `mod.CloseWithExitCode(0)` which
+	// invalidates the module — subsequent calls to `ws_open`, `ws_frame`,
+	// etc. return `ExitError(0)`. That breaks every TinyGo
+	// command-mode persistent function (anchat's rpc-router being the
+	// canary).
+	//
+	// Fix: override proc_exit. For exit code 0 (the "clean termination"
+	// case TinyGo emits at the end of `_start`), we panic with
+	// ExitError(0) but DO NOT close the module — letting the caller of
+	// `_start` see the ExitError as a "_start completed" signal while
+	// the module's exports stay live for ws_open/frame/close.
+	//
+	// For non-zero exit codes (genuine application-signaled errors), we
+	// preserve standard WASI behavior: close the module AND panic. This
+	// keeps `proc_exit(N != 0)` semantics intact.
+	//
+	// Override pattern documented in wazero v1.11+ at
+	// imports/wasi_snapshot_preview1/wasi.go:111-127:
+	//
+	//   wasiBuilder := r.NewHostModuleBuilder(ModuleName)
+	//   wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(wasiBuilder)
+	//   // Subsequent calls to NewFunctionBuilder override built-in exports.
+	//   wasiBuilder.NewFunctionBuilder().WithFunc(...).Export("proc_exit")
+	//
+	// This is the *only* way to bypass the close-on-exit behavior in
+	// wazero — there's no per-instance flag and no global toggle.
+	wasiBuilder := runtime.NewHostModuleBuilder(wasi_snapshot_preview1.ModuleName)
+	wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(wasiBuilder)
+	wasiBuilder.NewFunctionBuilder().
+		WithFunc(persistentFriendlyProcExit).
+		Export("proc_exit")
+	if _, err := wasiBuilder.Instantiate(context.Background()); err != nil {
+		panic("serverless: failed to instantiate WASI with custom proc_exit: " + err.Error())
+	}
 
 	engine := &Engine{
 		runtime:      runtime,
@@ -379,17 +457,41 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 		initName, initFn = "_start", hook
 	}
 	if initFn != nil {
-		if _, callErr := initFn.Call(initCtx); callErr != nil {
-			_ = instance.Close(ctx)
-			if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-				hf.ClearContext()
+		_, callErr := initFn.Call(initCtx)
+		if callErr != nil {
+			// ExitError(0) is the "command-mode _start completed cleanly"
+			// signal from TinyGo (target=wasi). Our custom proc_exit
+			// override (persistentFriendlyProcExit, registered at engine
+			// setup) keeps the module alive in this case — it just
+			// panics ExitError(0) without calling CloseWithExitCode.
+			// So the bootstrap is actually successful and the module's
+			// exports remain callable.
+			//
+			// Anything else is a real failure: ExitError(N != 0) means
+			// the function's main() returned non-zero (or proc_exit was
+			// called explicitly with non-zero), or the runtime trapped
+			// during init. Close + propagate.
+			var exitErr *sys.ExitError
+			if errors.As(callErr, &exitErr) && exitErr.ExitCode() == 0 {
+				e.logger.Debug("persistent instance bootstrapped via _start (command-mode normal exit)",
+					zap.String("function", fn.Name),
+					zap.String("client_id", invCtx.WSClientID),
+					zap.String("init_hook", initName))
+			} else {
+				_ = instance.Close(ctx)
+				if hf, ok := e.hostServices.(contextAwareHostServices); ok {
+					hf.ClearContext()
+				}
+				return nil, fmt.Errorf("InstantiatePersistent: %s: %w", initName, callErr)
 			}
-			return nil, fmt.Errorf("InstantiatePersistent: %s: %w", initName, callErr)
+		} else {
+			// _initialize-style clean return (no panic). wasi-reactor
+			// modules built with TinyGo `//go:wasmexport` go this path.
+			e.logger.Debug("persistent instance bootstrapped",
+				zap.String("function", fn.Name),
+				zap.String("client_id", invCtx.WSClientID),
+				zap.String("init_hook", initName))
 		}
-		e.logger.Debug("persistent instance bootstrapped",
-			zap.String("function", fn.Name),
-			zap.String("client_id", invCtx.WSClientID),
-			zap.String("init_hook", initName))
 	} else {
 		// Neither hook exported. The module may still work if it has
 		// no managed-memory operations — but that's rare in TinyGo.
