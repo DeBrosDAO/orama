@@ -306,8 +306,47 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 		hf.SetInvocationContext(invCtx)
 	}
 
-	// Disable WASI _start by passing zero start functions. The TinyGo
-	// runtime's main() may still be present but will never be invoked.
+	// Persistent-instance runtime-init policy. TinyGo emits one of two
+	// start hooks depending on the build target:
+	//
+	//   - wasi-reactor target → exports `_initialize` only
+	//   - wasi (command) target → exports `_start` only
+	//
+	// Both hooks run the runtime's initAll (heap, GC, package init).
+	// `_start` additionally calls `main()` — fine when main is an
+	// empty stub (which is the convention for persistent WS functions
+	// since the gateway drives lifecycle via ws_open / ws_frame /
+	// ws_close, NOT main()).
+	//
+	// Without one of them being called, TinyGo's runtime stays in an
+	// uninitialized state and the very first export call traps via
+	// `wasmExportCheckRun` — managed-memory operations (allocs,
+	// hashmap ops) panic immediately.
+	//
+	// History of this code path (bugs #240/#249 follow-ups):
+	//   - Original code: `WithStartFunctions()` with NO args
+	//     (explicitly disable both). Intent was to skip main(); side
+	//     effect was breaking TinyGo init. Persistent WS dead since
+	//     plan #06 landed.
+	//   - First fix: call `_initialize` manually. Worked for
+	//     wasi-reactor builds. Still broken for wasi (command) builds
+	//     like AnChat's rpc-router which only exports `_start`.
+	//   - This fix: try `_initialize` first; fall back to `_start`
+	//     if reactor hook isn't exported. Bounded by a 5s timeout so
+	//     a runaway main() can't hang instantiation forever.
+	//
+	// AnChat's wasm-objdump output that pinned this:
+	//   Export[15]:
+	//    - func[127] <_start>                          → "_start"
+	//    - func[414] <main.oramaAlloc#wasmexport>      → "orama_alloc"
+	//    - func[416] <main.wsOpen#wasmexport>          → "ws_open"
+	//    ...
+	//   (no `_initialize`)
+	//
+	// We still pass `WithStartFunctions()` (no args) so wazero doesn't
+	// auto-call `_start` during InstantiateModule — we want full
+	// control over which hook runs and to bound it with our own
+	// timeout.
 	moduleConfig := wazero.NewModuleConfig().
 		WithName(fn.Name + "-" + invCtx.WSClientID).
 		WithStartFunctions().
@@ -323,6 +362,44 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 		}
 		return nil, fmt.Errorf("InstantiatePersistent: instantiate: %w", err)
 	}
+
+	// Bootstrap the wasm runtime. Try reactor hook first (no main()),
+	// then command hook (assumes main() is an empty stub per
+	// persistent-function convention). Bounded by a short timeout so
+	// a buggy main() can't hang every connection.
+	const initTimeout = 5 * time.Second
+	initCtx, initCancel := context.WithTimeout(ctx, initTimeout)
+	defer initCancel()
+
+	var initName string
+	var initFn api.Function
+	if hook := instance.ExportedFunction("_initialize"); hook != nil {
+		initName, initFn = "_initialize", hook
+	} else if hook := instance.ExportedFunction("_start"); hook != nil {
+		initName, initFn = "_start", hook
+	}
+	if initFn != nil {
+		if _, callErr := initFn.Call(initCtx); callErr != nil {
+			_ = instance.Close(ctx)
+			if hf, ok := e.hostServices.(contextAwareHostServices); ok {
+				hf.ClearContext()
+			}
+			return nil, fmt.Errorf("InstantiatePersistent: %s: %w", initName, callErr)
+		}
+		e.logger.Debug("persistent instance bootstrapped",
+			zap.String("function", fn.Name),
+			zap.String("client_id", invCtx.WSClientID),
+			zap.String("init_hook", initName))
+	} else {
+		// Neither hook exported. The module may still work if it has
+		// no managed-memory operations — but that's rare in TinyGo.
+		// Log a warning so a function author who hits this can
+		// diagnose without filing a ticket.
+		e.logger.Warn("persistent module exports no _initialize or _start; runtime may be uninitialized",
+			zap.String("function", fn.Name),
+			zap.String("client_id", invCtx.WSClientID))
+	}
+
 	return instance, nil
 }
 
