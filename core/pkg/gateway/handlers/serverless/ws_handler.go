@@ -16,12 +16,29 @@ import (
 
 // checkWSOrigin validates WebSocket origins against the request's Host header.
 // Non-browser clients (no Origin) are allowed. Browser clients must match the host.
+//
+// Bug #240/#249 root cause: when this handler runs on a NAMESPACE gateway,
+// the request has been proxied through `handleNamespaceGatewayRequest`
+// which REWRITES `r.Host` to the backend target's IP:port (e.g.
+// "10.0.0.6:10004") before forwarding. The original public host (e.g.
+// "ns-anchat-test.orama-devnet.network") is preserved in the
+// `X-Forwarded-Host` header. If we only compare the Origin against
+// `r.Host`, browser/RN-iOS clients (which always send Origin) are
+// rejected with 403 because their Origin's `ns-anchat-test.orama-devnet.network`
+// will never match the proxied `10.0.0.6` target. Curl tests that don't
+// send Origin slip through, masking the bug.
+//
+// Prefer X-Forwarded-Host (the original public host) when present,
+// falling back to r.Host for direct (non-proxied) connections.
 func checkWSOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
 	}
-	host := r.Host
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
 	if host == "" {
 		return false
 	}

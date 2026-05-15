@@ -21,12 +21,25 @@ var wsUpgrader = websocket.Upgrader{
 
 // checkWSOrigin validates WebSocket origins against the request's Host header.
 // Non-browser clients (no Origin) are allowed. Browser clients must match the host.
+//
+// Bug #240/#249: when running on a NAMESPACE gateway, the request has been
+// proxied via `handleNamespaceGatewayRequest` which rewrites r.Host to the
+// backend target IP. The original public host is preserved in
+// X-Forwarded-Host. Without this fix, RN-iOS / browser clients (which always
+// send Origin) are rejected 403 because their Origin's public hostname will
+// never match the proxied IP. Curl tests without Origin slip through,
+// masking the bug. See namespace gateway log:
+//   E routes WebSocket upgrade failed
+//     {"error": "websocket: request origin not allowed by Upgrader.CheckOrigin"}
 func checkWSOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
 	}
-	host := r.Host
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
 	if host == "" {
 		return false
 	}
