@@ -153,7 +153,8 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
-				status, created_at, updated_at, created_by
+				status, created_at, updated_at, created_by,
+				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 			FROM functions
 			WHERE namespace = ? AND name = ? AND status = ?
 			ORDER BY version DESC
@@ -165,7 +166,8 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
-				status, created_at, updated_at, created_by
+				status, created_at, updated_at, created_by,
+				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 			FROM functions
 			WHERE namespace = ? AND name = ? AND version = ?
 		`
@@ -194,7 +196,8 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 		SELECT f.id, f.name, f.namespace, f.version, f.wasm_cid, f.source_cid,
 			f.memory_limit_mb, f.timeout_seconds, f.is_public,
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
-			f.status, f.created_at, f.updated_at, f.created_by
+			f.status, f.created_at, f.updated_at, f.created_by,
+			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn
 		FROM functions f
 		INNER JOIN (
 			SELECT namespace, name, MAX(version) as max_version
@@ -302,7 +305,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 		FROM functions
 		WHERE id = ?
 	`
@@ -325,7 +329,8 @@ func (r *Registry) ListVersions(ctx context.Context, namespace, name string) ([]
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -560,7 +565,8 @@ func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -621,6 +627,15 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		CreatedAt:         row.CreatedAt,
 		UpdatedAt:         row.UpdatedAt,
 		CreatedBy:         row.CreatedBy,
+
+		// WS persistent-instance fields (#240/#249 follow-up). Without
+		// these the WS handler's `if fn.WSPersistent` branch never
+		// fires and persistent functions silently run as per-frame
+		// stateless. See functionRow doc above for full history.
+		WSPersistent:         row.WSPersistent,
+		WSIdleTimeoutSec:     row.WSIdleTimeoutSec,
+		WSMaxFrameBytes:      row.WSMaxFrameBytes,
+		WSMaxInflightPerConn: row.WSMaxInflightPerConn,
 	}
 }
 
@@ -645,6 +660,30 @@ type functionRow struct {
 	CreatedAt         time.Time      `db:"created_at"`
 	UpdatedAt         time.Time      `db:"updated_at"`
 	CreatedBy         string         `db:"created_by"`
+
+	// WS persistent-instance metadata (#240/#249 follow-up).
+	//
+	// Pre-fix history: these columns existed in the schema (migration
+	// 011) and Register() at line 110+ wrote them, but every read path
+	// (Get, List, GetByID, GetByNameInternal) omitted them from the
+	// SELECT and functionRow had no fields for them. Result:
+	// `fn.WSPersistent` was always the zero value (false) regardless
+	// of what the DB said. Every WS function silently ran in
+	// per-frame stateless mode — not the persistent mode the
+	// `ws_persistent: true` config asks for.
+	//
+	// AnChat's rpc-router was the canary: it relies on per-connection
+	// instance state (request_id ↔ reply correlation, persistent
+	// subscription bookkeeping) that the stateless model destroys
+	// every frame. Symptom: gateway-side function invocations succeed
+	// (telemetry envelope `{request_id, status, duration_ms}` reaches
+	// the client) but the function's own `ws_send` frames don't carry
+	// the per-connection state the function expects. End-user impact
+	// was every RPC timing out at 15 s.
+	WSPersistent         bool `db:"ws_persistent"`
+	WSIdleTimeoutSec     int  `db:"ws_idle_timeout_sec"`
+	WSMaxFrameBytes      int  `db:"ws_max_frame_bytes"`
+	WSMaxInflightPerConn int  `db:"ws_max_inflight_per_conn"`
 }
 
 type envVarRow struct {
