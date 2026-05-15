@@ -58,20 +58,8 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 		defer h.wsBridge.RemoveClient(context.Background(), clientID)
 	}
 
-	callerWallet := h.getWalletFromRequest(r)
-	callerIP := extractRemoteIP(r)
-	callerClaims := h.getCallerClaimsFromRequest(r)
-
-	invCtx := &serverless.InvocationContext{
-		FunctionID:   fn.ID,
-		FunctionName: fn.Name,
-		Namespace:    fn.Namespace,
-		CallerWallet: callerWallet,
-		CallerIP:     callerIP,
-		CallerClaims: callerClaims,
-		WSClientID:   clientID,
-		TriggerType:  serverless.TriggerTypeWebSocket,
-	}
+	invCtx := h.buildPersistentInvocationContext(r, fn, clientID)
+	callerWallet := invCtx.CallerWallet
 
 	// Instantiate the persistent module. This compiles once (cached) and
 	// creates one wazero instance bound to this connection.
@@ -91,6 +79,13 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 		Namespace:         fn.Namespace,
 		FrameTimeoutSec:   fn.TimeoutSeconds,
 		MaxInflightFrames: fn.WSMaxInflightPerConn,
+		// Per-instance identity binding. The persistent.Instance attaches
+		// this to the ctx of every WASM-host call (ws_open / ws_frame /
+		// ws_close + nested function_invoke), so caller identity is
+		// race-free across concurrent persistent WS connections — fixes
+		// the cross-tenant identity-leak on the shared HostFunctions
+		// singleton (security audit follow-up to Layer 7 of Feature #73).
+		InvocationContext: invCtx,
 	}, h.logger)
 	if err != nil {
 		h.logger.Warn("persistent WS NewInstance failed",
@@ -174,4 +169,35 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 	runCancel()
 	inst.Close(context.Background(), persistent.CloseReasonClientDisconnect)
 	_ = conn.Close()
+}
+
+// buildPersistentInvocationContext constructs the per-connection InvocationContext
+// for a persistent WS instance. Extracted from handlePersistentWebSocket so the
+// auth-field plumbing can be unit-tested without doing a real WS upgrade.
+//
+// IMPORTANT: this context is sticky for the lifetime of the connection — it is
+// bound once at instantiation (pkg/serverless/engine.go InstantiatePersistent)
+// and reused for every ws_open / ws_frame / ws_close call, as well as for any
+// nested function_invoke call originating inside the WASM instance. Missing a
+// field here (notably CallerJWTSubject) means every sub-function invoked via
+// `oh.FunctionInvoke` sees an empty value for the missing field — Layer 7 of
+// the WS bug chain (Feature #73 on bugboard; AnChat sync-deltas was returning
+// AUTH_REQUIRED because oh.JwtSubjectUserID() was "" inside the sub-function).
+//
+// Keep this in sync with the stateless WS handler's InvokeRequest construction
+// in ws_handler.go — they must populate the same auth-identity fields.
+func (h *ServerlessHandlers) buildPersistentInvocationContext(
+	r *http.Request, fn *serverless.Function, clientID string,
+) *serverless.InvocationContext {
+	return &serverless.InvocationContext{
+		FunctionID:       fn.ID,
+		FunctionName:     fn.Name,
+		Namespace:        fn.Namespace,
+		CallerWallet:     h.getWalletFromRequest(r),
+		CallerIP:         extractRemoteIP(r),
+		CallerClaims:     h.getCallerClaimsFromRequest(r),
+		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
+		WSClientID:       clientID,
+		TriggerType:      serverless.TriggerTypeWebSocket,
+	}
 }

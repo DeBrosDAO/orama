@@ -376,13 +376,13 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 		return nil, fmt.Errorf("InstantiatePersistent: compile: %w", err)
 	}
 
-	// Bind invocation context once at instantiation. Subsequent ws_open /
-	// ws_frame calls will see this same context (host services read from
-	// the bound invCtx). For multi-call lifecycles this is a sticky
-	// per-instance context, NOT a per-call context.
-	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-		hf.SetInvocationContext(invCtx)
-	}
+	// Persistent WS uses per-call invCtx propagation through ctx —
+	// see pkg/serverless/invocation_context.go for the cross-tenant
+	// race rationale. The persistent.Instance wrapper attaches invCtx
+	// to every WASM-host call's ctx via WithInvocationContext, so we
+	// do NOT touch the HostFunctions singleton here. Two simultaneous
+	// persistent connections from different users now keep their
+	// caller identity isolated.
 
 	// Persistent-instance runtime-init policy. TinyGo emits one of two
 	// start hooks depending on the build target:
@@ -435,9 +435,6 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 
 	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
 	if err != nil {
-		if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-			hf.ClearContext()
-		}
 		return nil, fmt.Errorf("InstantiatePersistent: instantiate: %w", err)
 	}
 
@@ -445,8 +442,12 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 	// then command hook (assumes main() is an empty stub per
 	// persistent-function convention). Bounded by a short timeout so
 	// a buggy main() can't hang every connection.
+	//
+	// Wrap initCtx with invCtx so any host functions called from a TinyGo
+	// init() (e.g. early GetEnv / GetSecret reads) see this connection's
+	// caller identity, not whatever happens to be on the singleton.
 	const initTimeout = 5 * time.Second
-	initCtx, initCancel := context.WithTimeout(ctx, initTimeout)
+	initCtx, initCancel := context.WithTimeout(WithInvocationContext(ctx, invCtx), initTimeout)
 	defer initCancel()
 
 	var initName string
@@ -479,9 +480,6 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 					zap.String("init_hook", initName))
 			} else {
 				_ = instance.Close(ctx)
-				if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-					hf.ClearContext()
-				}
 				return nil, fmt.Errorf("InstantiatePersistent: %s: %w", initName, callErr)
 			}
 		} else {

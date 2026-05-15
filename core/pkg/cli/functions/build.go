@@ -9,6 +9,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// tinygoBuildArgs returns the argv (without the leading `tinygo`) used
+// to compile a function. Pure function — extracted from buildFunction
+// so the WS-persistent → `-buildmode=c-shared` policy can be unit
+// tested without invoking TinyGo.
+//
+// Persistent WS functions need the WASI-reactor variant (exports
+// `_initialize`, no `_start`) — see the comment on cfg loading in
+// buildFunction for the full rationale. Stateless (default) functions
+// stay on command mode for back-compat.
+func tinygoBuildArgs(outputPath string, wsPersistent bool) []string {
+	args := []string{"build", "-o", outputPath, "-target", "wasi"}
+	if wsPersistent {
+		args = append(args, "-buildmode=c-shared")
+	}
+	args = append(args, ".")
+	return args
+}
+
 // BuildCmd compiles a function to WASM using TinyGo.
 var BuildCmd = &cobra.Command{
 	Use:   "build [directory]",
@@ -46,6 +64,25 @@ func buildFunction(dir string) (string, error) {
 		return "", fmt.Errorf("function.yaml not found in %s", absDir)
 	}
 
+	// Load config so we can pick the right TinyGo build mode based on
+	// ws_persistent. Persistent functions need WASI-reactor semantics
+	// (`_initialize` export, no `_start`); command-mode functions stay
+	// on the default. See bug #240/#249 follow-up #6 for the full
+	// rationale — TL;DR: TinyGo command-mode `_start` doesn't set the
+	// runtime guard `wasmExportCheckRun` checks, so any export call
+	// from the host (e.g. orama_alloc → ws_open payload) traps with
+	// "wasm error: unreachable" inside the runtime hashmap path.
+	//
+	// `-buildmode=c-shared` flips TinyGo to reactor mode: the wasm
+	// exports `_initialize` instead of `_start`. The gateway's
+	// persistent-instance bootstrap (pkg/serverless/engine.go) calls
+	// `_initialize` first if exported, which sets the guard cleanly,
+	// and the function's exports become callable from the host loop.
+	cfg, cfgErr := LoadConfig(absDir)
+	if cfgErr != nil {
+		return "", fmt.Errorf("failed to load function.yaml: %w", cfgErr)
+	}
+
 	// Check TinyGo is installed
 	tinygoPath, err := exec.LookPath("tinygo")
 	if err != nil {
@@ -56,8 +93,15 @@ func buildFunction(dir string) (string, error) {
 
 	fmt.Printf("Building %s...\n", absDir)
 
-	// Run tinygo build
-	buildCmd := exec.Command(tinygoPath, "build", "-o", outputPath, "-target", "wasi", ".")
+	// Build args. Default = command mode. Persistent WS functions get
+	// reactor mode via `-buildmode=c-shared` so TinyGo emits
+	// `_initialize` and the runtime guard activates.
+	tinygoArgs := tinygoBuildArgs(outputPath, cfg.WSPersistent)
+	if cfg.WSPersistent {
+		fmt.Printf("  (ws_persistent=true → using -buildmode=c-shared for WASI-reactor semantics)\n")
+	}
+
+	buildCmd := exec.Command(tinygoPath, tinygoArgs...)
 	buildCmd.Dir = absDir
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr

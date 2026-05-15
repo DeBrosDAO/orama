@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/tetratelabs/wazero/api"
 	"go.uber.org/zap"
 )
@@ -52,12 +53,21 @@ type Instance struct {
 	functionName string
 	namespace    string
 
-	module       api.Module       // wazero instance, owned by this struct
-	openFn       api.Function     // exported ws_open
-	frameFn      api.Function     // exported ws_frame
-	closeFn      api.Function     // exported ws_close
-	allocFn      api.Function     // orama_alloc / malloc — for input bytes
-	memory       api.Memory
+	module   api.Module   // wazero instance, owned by this struct
+	openFn   api.Function // exported ws_open
+	frameFn  api.Function // exported ws_frame
+	closeFn  api.Function // exported ws_close
+	allocFn  api.Function // orama_alloc / malloc — for input bytes
+	memory   api.Memory
+
+	// Per-instance invocation context. Bound at NewInstance time and
+	// attached to every WASM-host call's ctx via
+	// hostfunctions.WithInvocationContext. This is what makes persistent
+	// WS function_invoke / GetCallerJWTSubject / GetSecret race-free
+	// across concurrent connections — each instance carries its own
+	// caller identity in the ctx, never reading the HostFunctions
+	// singleton field. See pkg/serverless/hostfunctions/invocation_context.go.
+	invCtx *serverless.InvocationContext
 
 	inbound chan []byte
 	logger  *zap.Logger
@@ -73,11 +83,21 @@ type Instance struct {
 // Config holds knobs for a persistent instance. Zero values use sensible
 // defaults; the gateway populates these from the function's metadata.
 type Config struct {
-	ClientID         string
-	FunctionName     string
-	Namespace        string
-	FrameTimeoutSec  int // 0 = 30s default
+	ClientID          string
+	FunctionName      string
+	Namespace         string
+	FrameTimeoutSec   int // 0 = 30s default
 	MaxInflightFrames int // 0 = 64 default
+
+	// InvocationContext is attached to every WASM-host call's ctx so the
+	// instance's caller identity (JWT subject, wallet, claims, ws client
+	// ID) is race-free across concurrent persistent WS connections.
+	//
+	// REQUIRED. NewInstance returns an error if nil — without it, host
+	// functions would fall back to the shared HostFunctions singleton
+	// field and re-open the cross-tenant identity leak this whole
+	// machinery exists to fix (see pkg/serverless/invocation_context.go).
+	InvocationContext *serverless.InvocationContext
 }
 
 // NewInstance wraps an already-instantiated wazero module as a persistent
@@ -87,6 +107,14 @@ type Config struct {
 // The caller retains ownership of the module's lifecycle outside of Close —
 // that is, when Close is invoked here, the wazero instance is closed.
 func NewInstance(module api.Module, cfg Config, logger *zap.Logger) (*Instance, error) {
+	// Reject nil invCtx loud and early. A persistent instance without
+	// per-call invCtx propagation falls back to the singleton field on
+	// every host call, which races across concurrent connections — the
+	// exact bug this design exists to prevent. Caller MUST populate.
+	if cfg.InvocationContext == nil {
+		return nil, fmt.Errorf("persistent: Config.InvocationContext is required (nil would re-open the cross-tenant identity-leak race; see pkg/serverless/invocation_context.go)")
+	}
+
 	openFn := module.ExportedFunction("ws_open")
 	if openFn == nil {
 		return nil, fmt.Errorf("persistent: module missing ws_open export")
@@ -130,10 +158,24 @@ func NewInstance(module api.Module, cfg Config, logger *zap.Logger) (*Instance, 
 		closeFn:      closeFn,
 		allocFn:      allocFn,
 		memory:       memory,
+		invCtx:       cfg.InvocationContext,
 		inbound:      make(chan []byte, maxInflight),
 		logger:       logger,
 		frameTimeout: frameTimeout,
 	}, nil
+}
+
+// withInvCtx returns a derived ctx carrying this instance's invocation
+// context. Used by every export call so host functions read identity from
+// the per-instance ctx instead of the shared HostFunctions singleton.
+//
+// Returns ctx unchanged when invCtx is nil — preserves backwards-compat
+// for callers that didn't populate Config.InvocationContext.
+func (i *Instance) withInvCtx(ctx context.Context) context.Context {
+	if i.invCtx == nil {
+		return ctx
+	}
+	return serverless.WithInvocationContext(ctx, i.invCtx)
 }
 
 // ClientID returns the WebSocket client ID this instance serves.
@@ -146,7 +188,7 @@ func (i *Instance) Open(ctx context.Context, input WSOpenInput) error {
 	if err != nil {
 		return fmt.Errorf("persistent.Open: marshal input: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, i.frameTimeout)
+	ctx, cancel := context.WithTimeout(i.withInvCtx(ctx), i.frameTimeout)
 	defer cancel()
 
 	rc, err := i.callExport(ctx, i.openFn, payload)
@@ -200,7 +242,7 @@ func (i *Instance) Run(ctx context.Context) {
 }
 
 func (i *Instance) handleFrame(ctx context.Context, frame []byte) error {
-	frameCtx, cancel := context.WithTimeout(ctx, i.frameTimeout)
+	frameCtx, cancel := context.WithTimeout(i.withInvCtx(ctx), i.frameTimeout)
 	defer cancel()
 
 	rc, err := i.callExport(frameCtx, i.frameFn, frame)
@@ -224,7 +266,7 @@ func (i *Instance) Close(ctx context.Context, reason CloseReason) {
 			}
 		}()
 		// Best-effort ws_close — don't propagate errors; we're shutting down.
-		closeCtx, cancel := context.WithTimeout(ctx, i.frameTimeout)
+		closeCtx, cancel := context.WithTimeout(i.withInvCtx(ctx), i.frameTimeout)
 		defer cancel()
 		if _, err := i.callExport(closeCtx, i.closeFn, []byte(reason)); err != nil {
 			i.logger.Debug("persistent ws_close ignored error",

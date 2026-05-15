@@ -6,8 +6,11 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
-// SetInvocationContext sets the current invocation context.
-// Must be called before executing a function.
+// SetInvocationContext sets the current invocation context on the
+// singleton field. STATELESS execution path uses this (paired with
+// ClearContext) for per-call binding via the executor's setter/clearer
+// hook. PERSISTENT WS uses ctx-propagation instead — see
+// invocation_context.go for the cross-tenant race rationale.
 func (h *HostFunctions) SetInvocationContext(invCtx *serverless.InvocationContext) {
 	h.invCtxLock.Lock()
 	defer h.invCtxLock.Unlock()
@@ -24,7 +27,9 @@ func (h *HostFunctions) GetLogs() []serverless.LogEntry {
 	return logsCopy
 }
 
-// ClearContext clears the invocation context after execution.
+// ClearContext clears the singleton invocation context after stateless
+// execution. No-op effect for persistent WS (which never uses the
+// singleton field).
 func (h *HostFunctions) ClearContext() {
 	h.invCtxLock.Lock()
 	defer h.invCtxLock.Unlock()
@@ -46,6 +51,10 @@ func (h *HostFunctions) SetInvoker(inv serverless.FunctionInvoker) {
 // ID are inherited from the current invocation so the inner function sees
 // the same authenticated identity. Returns ErrFunctionInvokeNotAvailable
 // when no invoker has been wired (e.g. tests).
+//
+// Identity propagation: ctx-attached invCtx wins over the singleton —
+// this is what makes persistent WS function_invoke calls race-free across
+// concurrent connections (see invocation_context.go).
 func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error) {
 	h.invokerLock.RLock()
 	inv := h.invoker
@@ -57,9 +66,7 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		}
 	}
 
-	h.invCtxLock.RLock()
-	cur := h.invCtx
-	h.invCtxLock.RUnlock()
+	cur := h.currentInvocationContext(ctx)
 	if cur == nil {
 		return nil, &serverless.HostFunctionError{
 			Function: "function_invoke",
@@ -87,14 +94,11 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 
 // GetEnv retrieves an environment variable for the function.
 func (h *HostFunctions) GetEnv(ctx context.Context, key string) (string, error) {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-
-	if h.invCtx == nil || h.invCtx.EnvVars == nil {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil || cur.EnvVars == nil {
 		return "", nil
 	}
-
-	return h.invCtx.EnvVars[key], nil
+	return cur.EnvVars[key], nil
 }
 
 // GetSecret retrieves a decrypted secret.
@@ -103,12 +107,10 @@ func (h *HostFunctions) GetSecret(ctx context.Context, name string) (string, err
 		return "", &serverless.HostFunctionError{Function: "get_secret", Cause: serverless.ErrDatabaseUnavailable}
 	}
 
-	h.invCtxLock.RLock()
 	namespace := ""
-	if h.invCtx != nil {
-		namespace = h.invCtx.Namespace
+	if cur := h.currentInvocationContext(ctx); cur != nil {
+		namespace = cur.Namespace
 	}
-	h.invCtxLock.RUnlock()
 
 	value, err := h.secrets.Get(ctx, namespace, name)
 	if err != nil {
@@ -120,36 +122,30 @@ func (h *HostFunctions) GetSecret(ctx context.Context, name string) (string, err
 
 // GetRequestID returns the current request ID.
 func (h *HostFunctions) GetRequestID(ctx context.Context) string {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-
-	if h.invCtx == nil {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
 		return ""
 	}
-	return h.invCtx.RequestID
+	return cur.RequestID
 }
 
 // GetCallerWallet returns the wallet address of the caller.
 func (h *HostFunctions) GetCallerWallet(ctx context.Context) string {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-
-	if h.invCtx == nil {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
 		return ""
 	}
-	return h.invCtx.CallerWallet
+	return cur.CallerWallet
 }
 
 // GetWSClientID returns the WebSocket client ID for the current invocation,
 // or empty string if the function wasn't invoked via a WS connection.
 func (h *HostFunctions) GetWSClientID(ctx context.Context) string {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-
-	if h.invCtx == nil {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
 		return ""
 	}
-	return h.invCtx.WSClientID
+	return cur.WSClientID
 }
 
 // GetCallerClaim returns the value of a custom JWT claim for the caller, or
@@ -158,13 +154,11 @@ func (h *HostFunctions) GetWSClientID(ctx context.Context) string {
 // "Custom" here means claims set on JWTClaims.Custom by the auth service —
 // standard claims (sub, namespace, etc.) have dedicated accessors.
 func (h *HostFunctions) GetCallerClaim(ctx context.Context, name string) string {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-
-	if h.invCtx == nil || h.invCtx.CallerClaims == nil {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil || cur.CallerClaims == nil {
 		return ""
 	}
-	return h.invCtx.CallerClaims[name]
+	return cur.CallerClaims[name]
 }
 
 // GetCallerJWTSubject returns the JWT `sub` claim explicitly, independent
@@ -176,11 +170,9 @@ func (h *HostFunctions) GetCallerClaim(ctx context.Context, name string) string 
 // the wallet that signed the auth challenge). GetCallerWallet may return
 // the namespace pseudo-identifier if the caller also presents an API key.
 func (h *HostFunctions) GetCallerJWTSubject(ctx context.Context) string {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-
-	if h.invCtx == nil {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
 		return ""
 	}
-	return h.invCtx.CallerJWTSubject
+	return cur.CallerJWTSubject
 }

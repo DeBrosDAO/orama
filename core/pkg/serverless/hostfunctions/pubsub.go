@@ -88,13 +88,13 @@ func (h *HostFunctions) WSSend(ctx context.Context, clientID string, data []byte
 		return &serverless.HostFunctionError{Function: "ws_send", Cause: serverless.ErrWSNotAvailable}
 	}
 
-	// If no clientID provided, use the current invocation's client
+	// If no clientID provided, use the current invocation's client.
+	// Reads ctx-attached invCtx first (per-call, race-free for persistent
+	// WS) then falls back to the singleton — see invocation_context.go.
 	if clientID == "" {
-		h.invCtxLock.RLock()
-		if h.invCtx != nil && h.invCtx.WSClientID != "" {
-			clientID = h.invCtx.WSClientID
+		if cur := h.currentInvocationContext(ctx); cur != nil && cur.WSClientID != "" {
+			clientID = cur.WSClientID
 		}
-		h.invCtxLock.RUnlock()
 	}
 
 	if clientID == "" {

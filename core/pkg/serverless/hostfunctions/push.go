@@ -70,12 +70,11 @@ func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []b
 	// Resolve namespace from the current invocation context. A function
 	// can NEVER push to another namespace's users — the namespace is
 	// trusted server-side, not from the WASM input.
-	h.invCtxLock.RLock()
+	// ctx-attached invCtx wins over singleton; see invocation_context.go.
 	var namespace string
-	if h.invCtx != nil {
-		namespace = h.invCtx.Namespace
+	if cur := h.currentInvocationContext(ctx); cur != nil {
+		namespace = cur.Namespace
 	}
-	h.invCtxLock.RUnlock()
 
 	if namespace == "" {
 		return &serverless.HostFunctionError{

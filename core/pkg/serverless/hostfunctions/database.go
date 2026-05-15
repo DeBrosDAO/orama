@@ -220,12 +220,11 @@ func (h *HostFunctions) ExecAndPublish(
 	}
 
 	// Resolve namespace from invocation context — server-trusted.
-	h.invCtxLock.RLock()
+	// ctx-attached invCtx wins over singleton; see invocation_context.go.
 	ns := ""
-	if h.invCtx != nil {
-		ns = h.invCtx.Namespace
+	if cur := h.currentInvocationContext(ctx); cur != nil {
+		ns = cur.Namespace
 	}
-	h.invCtxLock.RUnlock()
 	if ns == "" {
 		return nil, &serverless.HostFunctionError{
 			Function: "exec_and_publish",
