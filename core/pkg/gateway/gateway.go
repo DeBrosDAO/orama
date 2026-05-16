@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -647,24 +645,19 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// Get libp2p host from client
 		host := deps.Client.Host()
 		if host != nil {
-			// Parse listen port from ListenAddr (format: ":port" or "addr:port")
-			listenPort := 0
-			if cfg.ListenAddr != "" {
-				parts := strings.Split(cfg.ListenAddr, ":")
-				if len(parts) > 0 {
-					portStr := parts[len(parts)-1]
-					if p, err := strconv.Atoi(portStr); err == nil {
-						listenPort = p
-					}
-				}
-			}
+			// NOTE: we deliberately do NOT pass cfg.ListenAddr's port here
+			// anymore — that's the gateway's HTTP API port, NOT the libp2p
+			// port. Passing it caused every cross-node libp2p dial to land
+			// on the HTTP server and fail the multistream handshake,
+			// leaving the namespace mesh with 0 connected peers. The libp2p
+			// port is OS-assigned and lives on host.Addrs() — peer
+			// discovery extracts it from there at register time.
 
 			// Create peer discovery manager
 			gw.peerDiscovery = NewPeerDiscovery(
 				host,
 				deps.SQLDB,
 				cfg.NodePeerID,
-				listenPort,
 				cfg.ClientNamespace,
 				logger.Logger,
 			)
