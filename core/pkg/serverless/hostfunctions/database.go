@@ -6,10 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
+
+// dbQueryBatchTimeout caps the rqlite round-trip for a single
+// `oh.DBQueryBatch` host call. Tighter than the function's invocation
+// timeout (typically 15-30s) so a stalled leader doesn't burn the entire
+// budget on one batched read; the WASM function still has headroom to
+// do downstream work after the read returns. 10s is generous for the
+// 167ms-RTT cross-region devnet cluster (one round-trip ~340ms) while
+// catching genuine leader stalls quickly.
+const dbQueryBatchTimeout = 10 * time.Second
 
 // DBQuery executes a SELECT query and returns JSON-encoded results.
 func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interface{}) ([]byte, error) {
@@ -173,6 +183,93 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 	// Rollback errors are encoded in the JSON; do NOT propagate as Go error.
 	// Only true setup/transport errors after the result was built warrant returning err.
 	_ = err // intentionally swallowed — committed=false carries the signal
+	return out, nil
+}
+
+// dbQueryBatchRequest is the WASM-side shape for db_query_batch input.
+// Each op MUST be Kind=BatchOpQuery; mixing exec is rejected at the
+// rqlite layer.
+type dbQueryBatchRequest struct {
+	Ops []rqlite.BatchOp `json:"ops"`
+}
+
+// dbQueryBatchResult is the JSON wire shape returned to WASM callers.
+// `Results` is one entry per input op, in the same order. Per-op errors
+// are surfaced in `error`; transport/validation errors come back as a
+// Go error from the host fn.
+type dbQueryBatchResult struct {
+	Results []rqlite.OpResult `json:"results"`
+}
+
+// DBQueryBatch runs N SELECTs in one round-trip via RQLite's /db/query
+// bulk endpoint. Designed for read-heavy functions that gather state
+// from multiple tables before doing work (e.g. anchat's message-create
+// reads auth + participants + devices = 7-10 SELECTs).
+//
+// Wire shapes:
+//
+//	in:  {"ops": [{"sql":"...","args":[...]}, ...]}
+//	out: {"results": [{"kind":"query","rows":[...],"error":""}, ...]}
+//
+// Per-query errors are reported in the per-op `error` field; the host
+// fn only returns a Go error on setup/validation/transport failures.
+// Kind is auto-set to "query" on input — exec ops are rejected, since
+// mixing kinds in a query batch is meaningless and would silently
+// drop the writes (see bugboard #270).
+//
+// Empirical baseline on devnet's cross-region cluster (167ms RTT to
+// leader): 10 sequential DBQuery host calls = ~3.5s; one DBQueryBatch
+// with 10 statements = ~340ms. 10× speedup.
+func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	if h.db == nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: serverless.ErrDatabaseUnavailable}
+	}
+	var req dbQueryBatchRequest
+	if err := json.Unmarshal(opsJSON, &req); err != nil {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("invalid json: %w", err),
+		}
+	}
+	if len(req.Ops) == 0 {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("ops required"),
+		}
+	}
+	if len(req.Ops) > rqlite.MaxBatchOps {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("too many ops: max %d", rqlite.MaxBatchOps),
+		}
+	}
+	// Force kind=query for every op. Callers can omit the field; this
+	// makes the wire format more ergonomic AND prevents accidental exec
+	// ops from being silently dropped by the rqlite-side validator.
+	for i := range req.Ops {
+		req.Ops[i].Kind = rqlite.BatchOpQuery
+	}
+
+	// Explicit batch-level deadline. The caller's ctx already carries the
+	// function's invocation timeout (typically 15-30s), but we want a
+	// tighter cap on the rqlite round-trip itself so a stalled leader
+	// doesn't burn the entire invocation budget on one batched query.
+	// Leaves headroom for downstream WASM work after the read returns.
+	batchCtx, cancel := context.WithTimeout(ctx, dbQueryBatchTimeout)
+	defer cancel()
+
+	results, err := h.db.BatchQuery(batchCtx, req.Ops)
+	if err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: err}
+	}
+
+	out, mErr := json.Marshal(dbQueryBatchResult{Results: results})
+	if mErr != nil {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("marshal result: %w", mErr),
+		}
+	}
 	return out, nil
 }
 

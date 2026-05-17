@@ -171,6 +171,16 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 				h.dispatcher.InvalidateCache(ctx, def.Namespace, topic)
 			}
 		}
+		// One Refresh after the batch — subscribes the dispatcher to libp2p
+		// for every newly-added literal topic so WASM publishes from other
+		// functions trigger this handler (bugboard #282). The periodic
+		// refresh loop catches the rare add we miss here.
+		if h.dispatcher != nil {
+			if rerr := h.dispatcher.Refresh(ctx); rerr != nil {
+				h.logger.Warn("PubSubDispatcher Refresh after deploy auto-register failed (periodic loop will retry)",
+					zap.Error(rerr))
+			}
+		}
 	}
 
 	// Register Cron triggers from definition. Mirrors the PubSub branch above:

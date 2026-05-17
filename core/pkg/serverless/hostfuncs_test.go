@@ -64,6 +64,10 @@ func (m *mockHostServices) DBQueryV2(ctx context.Context, query string, args []i
 	return []byte(`{"rows":[]}`), nil
 }
 
+func (m *mockHostServices) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	return []byte(`{"results":[]}`), nil
+}
+
 func (m *mockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }

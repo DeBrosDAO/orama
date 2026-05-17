@@ -128,6 +128,13 @@ func (m *MockHostServices) DBQueryV2(ctx context.Context, query string, args []i
 	return []byte(`{"rows":[]}`), nil
 }
 
+func (m *MockHostServices) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	// Bare stub — returns the empty results shape. Tests that need per-op
+	// behavior should mock at the HostFunctions level (see fakeBatchClient
+	// in pkg/serverless/hostfunctions/database_test.go).
+	return []byte(`{"results":[]}`), nil
+}
+
 func (m *MockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -406,6 +413,15 @@ func (m *MockRQLite) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.B
 func (m *MockRQLite) BatchWithSeq(ctx context.Context, namespace string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error) {
 	res, err := m.Batch(ctx, ops)
 	return res, 1, err
+}
+
+func (m *MockRQLite) BatchQuery(ctx context.Context, ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+	// Bare stub mirroring Batch: one empty-row result per op.
+	results := make([]rqlite.OpResult, len(ops))
+	for i := range ops {
+		results[i] = rqlite.OpResult{Kind: rqlite.BatchOpQuery, Rows: nil}
+	}
+	return results, nil
 }
 
 type mockResult struct{}

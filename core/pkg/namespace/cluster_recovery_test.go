@@ -79,6 +79,13 @@ func (m *recoveryMockDB) BatchWithSeq(_ context.Context, _ string, ops []rqlite.
 	res, _ := m.Batch(context.Background(), ops)
 	return res, 1, nil
 }
+func (m *recoveryMockDB) BatchQuery(_ context.Context, ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+	out := make([]rqlite.OpResult, len(ops))
+	for i := range ops {
+		out[i] = rqlite.OpResult{Kind: rqlite.BatchOpQuery}
+	}
+	return out, nil
+}
 
 var _ rqlite.Client = (*recoveryMockDB)(nil)
 

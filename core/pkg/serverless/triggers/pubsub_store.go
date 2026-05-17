@@ -197,6 +197,54 @@ func (s *PubSubTriggerStore) ListByFunction(ctx context.Context, functionID stri
 	return triggers, nil
 }
 
+// DistinctTopicSubscription is a (namespace, topic_pattern) pair used by
+// the dispatcher to know which libp2p pubsub topics to subscribe to.
+// Wildcard patterns are flagged so the caller can skip subscribing (libp2p
+// has no native wildcard support — see bugboard #282 implementation notes).
+type DistinctTopicSubscription struct {
+	Namespace    string
+	TopicPattern string
+	Wildcard     bool
+}
+
+// ListDistinctTopicPatterns returns the unique (namespace, topic_pattern)
+// pairs across all enabled triggers attached to active functions. Used by
+// PubSubDispatcher.Start to decide which libp2p pubsub topics to subscribe
+// to so WASM-published events actually reach trigger handlers (bugboard
+// #282 — dispatcher previously only fired from HTTP publishes, so WASM
+// publishes from message-create silently dropped every handler invocation).
+//
+// The dispatcher subscribes to each NON-wildcard pattern at startup and on
+// trigger add/remove. Wildcard patterns are returned with Wildcard=true so
+// callers can log/skip them — handling those cross-node properly requires
+// a different mechanism (per-namespace fan-out topic or publish-side hook)
+// that's not in scope for this fix.
+func (s *PubSubTriggerStore) ListDistinctTopicPatterns(ctx context.Context) ([]DistinctTopicSubscription, error) {
+	query := `
+		SELECT DISTINCT f.namespace AS namespace, t.topic_pattern AS topic_pattern
+		FROM function_pubsub_triggers t
+		JOIN functions f ON t.function_id = f.id
+		WHERE t.enabled = TRUE AND f.status = 'active'
+		ORDER BY f.namespace, t.topic_pattern
+	`
+	var rows []struct {
+		Namespace    string
+		TopicPattern string
+	}
+	if err := s.db.Query(ctx, &rows, query); err != nil {
+		return nil, fmt.Errorf("ListDistinctTopicPatterns: %w", err)
+	}
+	out := make([]DistinctTopicSubscription, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, DistinctTopicSubscription{
+			Namespace:    r.Namespace,
+			TopicPattern: r.TopicPattern,
+			Wildcard:     IsWildcard(r.TopicPattern),
+		})
+	}
+	return out, nil
+}
+
 // GetByTopicAndNamespace returns all enabled triggers whose topic_pattern
 // matches `topic` within the namespace. Patterns are SQLite GLOB; the
 // post-filter enforces stricter segment-aware semantics.

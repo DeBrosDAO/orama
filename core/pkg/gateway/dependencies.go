@@ -558,10 +558,15 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	if deps.OlricClient != nil {
 		olricUnderlying = deps.OlricClient.UnderlyingClient()
 	}
+	// Pass the pubsub adapter so the dispatcher can subscribe to libp2p
+	// for every literal trigger pattern (bugboard #282 fix). nil-safe:
+	// dispatcher's Start/Refresh become no-ops when adapter is unavailable,
+	// preserving the legacy HTTP-only Dispatch hook.
 	deps.PubSubDispatcher = triggers.NewPubSubDispatcher(
 		triggerStore,
 		deps.ServerlessInvoker,
 		olricUnderlying,
+		pubsubAdapter,
 		logger.Logger,
 	)
 

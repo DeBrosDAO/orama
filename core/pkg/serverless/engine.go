@@ -604,6 +604,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hDBExecute).Export("db_execute").
 			NewFunctionBuilder().WithFunc(e.hDBExecuteV2).Export("db_execute_v2").
 			NewFunctionBuilder().WithFunc(e.hDBTransaction).Export("db_transaction").
+			NewFunctionBuilder().WithFunc(e.hDBQueryBatch).Export("db_query_batch").
 			NewFunctionBuilder().WithFunc(e.hExecAndPublish).Export("exec_and_publish").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
@@ -907,6 +908,27 @@ func (e *Engine) hDBTransaction(ctx context.Context, mod api.Module, opsPtr, ops
 	out, err := e.hostServices.DBTransaction(ctx, opsJSON)
 	if err != nil {
 		e.logger.Warn("host function db_transaction failed", zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hDBQueryBatch is the WASM-callable wrapper for DBQueryBatch.
+// Input: pointer/length of opsJSON ({"ops":[{"sql":"...","args":[...]}, ...]}).
+// Returns a packed uint64 (ptr<<32 | len) pointing to JSON result in guest
+// memory, or 0 on setup/transport error.
+//
+// Per-query errors are surfaced inside the JSON result (one entry per op
+// has its own `error` field). A return of 0 means the whole call failed
+// before per-op results could be built.
+func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsLen uint32) uint64 {
+	opsJSON, ok := e.executor.ReadFromGuest(mod, opsPtr, opsLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.DBQueryBatch(ctx, opsJSON)
+	if err != nil {
+		e.logger.Warn("host function db_query_batch failed", zap.Error(err))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)

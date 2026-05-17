@@ -444,6 +444,21 @@ type HostServices interface {
 	// returned JSON, NOT as a Go error.
 	DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error)
 
+	// DBQueryBatch runs N SELECT statements in ONE round-trip to the leader
+	// (via RQLite's /db/query bulk endpoint). All queries see the same
+	// committed snapshot. opsJSON shape: {"ops":[{"sql":"...","args":[...]}, ...]}.
+	// Returns JSON {"results":[{"rows":[...], "error":""}, ...]} with one
+	// entry per input op, in the same order. Per-query errors are surfaced
+	// in the per-op `error` field; the call only returns a Go error on
+	// transport/validation failures.
+	//
+	// Use this for read-heavy functions that gather state from many tables
+	// before doing work — e.g. anchat's message-create reads auth +
+	// participants + devices (7-10 SELECTs) before writing. Empirically on
+	// devnet's cross-region cluster: 10 sequential DBQuery = ~3.5s; one
+	// DBQueryBatch with 10 statements = ~340ms. See bugboard #270.
+	DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error)
+
 	// ExecAndPublish runs ops atomically (like DBTransaction) and, ONLY
 	// if the batch commits, publishes data to the named topic with any
 	// occurrence of the literal string "{{seq}}" replaced by the assigned

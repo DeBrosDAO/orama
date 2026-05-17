@@ -33,7 +33,7 @@ type mockInvokeCall struct {
 func TestDispatcher_DepthLimit(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	store := NewPubSubTriggerStore(nil, logger) // store won't be called
-	d := NewPubSubDispatcher(store, nil, nil, logger)
+	d := NewPubSubDispatcher(store, nil, nil, nil, logger)
 
 	// Dispatch at max depth should be a no-op (no panic, no store call)
 	d.Dispatch(context.Background(), "ns", "topic", []byte("data"), maxTriggerDepth)

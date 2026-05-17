@@ -11,18 +11,21 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
-// fakeBatchClient is a tiny rqlite.Client stub that only implements Batch
-// and BatchWithSeq. Other methods rely on the embedded Client which is nil —
-// any test that calls them will panic, which is intentional.
+// fakeBatchClient is a tiny rqlite.Client stub that only implements Batch,
+// BatchWithSeq, and BatchQuery. Other methods rely on the embedded Client
+// which is nil — any test that calls them will panic, which is intentional.
 type fakeBatchClient struct {
 	rqlite.Client
-	calls       int
-	lastOps     []rqlite.BatchOp
-	seqCalls    int
-	lastSeqNS   string
-	respond     func(ops []rqlite.BatchOp) (*rqlite.BatchResult, error)
-	respondSeq  func(ns string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error)
-	nextSeq     int64
+	calls           int
+	lastOps         []rqlite.BatchOp
+	seqCalls        int
+	lastSeqNS       string
+	queryCalls      int
+	lastQueryOps    []rqlite.BatchOp
+	respond         func(ops []rqlite.BatchOp) (*rqlite.BatchResult, error)
+	respondSeq      func(ns string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error)
+	respondQuery    func(ops []rqlite.BatchOp) ([]rqlite.OpResult, error)
+	nextSeq         int64
 }
 
 func (f *fakeBatchClient) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
@@ -48,6 +51,23 @@ func (f *fakeBatchClient) BatchWithSeq(ctx context.Context, namespace string, op
 	res, err := f.Batch(ctx, ops)
 	atomic.AddInt64(&f.nextSeq, 1)
 	return res, atomic.LoadInt64(&f.nextSeq), err
+}
+
+func (f *fakeBatchClient) BatchQuery(ctx context.Context, ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+	f.queryCalls++
+	f.lastQueryOps = ops
+	if f.respondQuery != nil {
+		return f.respondQuery(ops)
+	}
+	// Default: echo one OpResult per input with a single row {ok:1}.
+	results := make([]rqlite.OpResult, len(ops))
+	for i := range ops {
+		results[i] = rqlite.OpResult{
+			Kind: rqlite.BatchOpQuery,
+			Rows: []map[string]interface{}{{"ok": int64(1)}},
+		}
+	}
+	return results, nil
 }
 
 func newHFWithDB(db rqlite.Client) *HostFunctions {
@@ -349,3 +369,158 @@ func TestDBTransaction_rollback_returns_committed_false_no_go_error(t *testing.T
 		t.Errorf("expected UNIQUE error in result, got: %q", res.Results[1].Error)
 	}
 }
+
+// =============================================================================
+// DBQueryBatch tests (bugboard #270 — batched-reads host fn)
+// =============================================================================
+
+// TestDBQueryBatch_happy_path verifies the wire shape and that ops flow
+// through to rqlite.Client.BatchQuery in order.
+func TestDBQueryBatch_happy_path(t *testing.T) {
+	fake := &fakeBatchClient{}
+	h := newHFWithDB(fake)
+
+	in := `{"ops":[
+		{"sql":"SELECT 1"},
+		{"sql":"SELECT 2 WHERE x = ?","args":[42]},
+		{"sql":"SELECT 3"}
+	]}`
+	out, err := h.DBQueryBatch(context.Background(), []byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fake.queryCalls != 1 {
+		t.Errorf("expected 1 BatchQuery call, got %d", fake.queryCalls)
+	}
+	if len(fake.lastQueryOps) != 3 {
+		t.Errorf("expected 3 ops forwarded, got %d", len(fake.lastQueryOps))
+	}
+	// Each op MUST have kind force-set to "query" by the host fn,
+	// regardless of what the caller sent. This prevents accidental exec
+	// from being dropped silently (see bugboard #270).
+	for i, op := range fake.lastQueryOps {
+		if op.Kind != rqlite.BatchOpQuery {
+			t.Errorf("op[%d] kind = %q; want %q", i, op.Kind, rqlite.BatchOpQuery)
+		}
+	}
+	var res dbQueryBatchResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(res.Results) != 3 {
+		t.Errorf("expected 3 results, got %d", len(res.Results))
+	}
+}
+
+// TestDBQueryBatch_forces_kind_query is the regression guard against the
+// "silent exec drop" failure mode. The bugboard #270 fix explicitly sets
+// every input op's kind to BatchOpQuery so callers can't accidentally
+// pass `{"kind":"exec"}` into a query batch and have it disappear.
+func TestDBQueryBatch_forces_kind_query(t *testing.T) {
+	fake := &fakeBatchClient{}
+	h := newHFWithDB(fake)
+
+	// Caller maliciously/accidentally sends kind=exec — host fn must coerce.
+	in := `{"ops":[{"kind":"exec","sql":"DELETE FROM users"}]}`
+	if _, err := h.DBQueryBatch(context.Background(), []byte(in)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.lastQueryOps) != 1 {
+		t.Fatalf("expected 1 op forwarded, got %d", len(fake.lastQueryOps))
+	}
+	if fake.lastQueryOps[0].Kind != rqlite.BatchOpQuery {
+		t.Errorf("kind = %q; want %q (must coerce, NOT silently let exec through)",
+			fake.lastQueryOps[0].Kind, rqlite.BatchOpQuery)
+	}
+}
+
+func TestDBQueryBatch_invalid_json_rejected(t *testing.T) {
+	h := newHFWithDB(&fakeBatchClient{})
+	_, err := h.DBQueryBatch(context.Background(), []byte(`not json`))
+	if err == nil {
+		t.Fatal("expected error for invalid json, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid json") {
+		t.Errorf("expected 'invalid json' in error, got: %v", err)
+	}
+}
+
+func TestDBQueryBatch_no_ops_rejected(t *testing.T) {
+	h := newHFWithDB(&fakeBatchClient{})
+	_, err := h.DBQueryBatch(context.Background(), []byte(`{"ops":[]}`))
+	if err == nil {
+		t.Fatal("expected error for empty ops, got nil")
+	}
+	if !strings.Contains(err.Error(), "ops required") {
+		t.Errorf("expected 'ops required' in error, got: %v", err)
+	}
+}
+
+func TestDBQueryBatch_oversize_batch_rejected(t *testing.T) {
+	h := newHFWithDB(&fakeBatchClient{})
+
+	var sb strings.Builder
+	sb.WriteString(`{"ops":[`)
+	for i := 0; i <= rqlite.MaxBatchOps; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(`{"sql":"SELECT 1"}`)
+	}
+	sb.WriteString(`]}`)
+
+	_, err := h.DBQueryBatch(context.Background(), []byte(sb.String()))
+	if err == nil {
+		t.Fatal("expected error for oversize batch, got nil")
+	}
+	if !strings.Contains(err.Error(), "too many ops") {
+		t.Errorf("expected 'too many ops' in error, got: %v", err)
+	}
+}
+
+func TestDBQueryBatch_no_db_returns_error(t *testing.T) {
+	h := &HostFunctions{db: nil}
+	_, err := h.DBQueryBatch(context.Background(), []byte(`{"ops":[{"sql":"SELECT 1"}]}`))
+	if err == nil {
+		t.Fatal("expected error when db is nil")
+	}
+}
+
+// TestDBQueryBatch_per_op_errors_surface_in_json verifies that a per-op
+// SQL error (e.g. table doesn't exist) appears in the per-op `error`
+// field instead of failing the whole call. This matches DBTransaction's
+// "structured error" contract.
+func TestDBQueryBatch_per_op_errors_surface_in_json(t *testing.T) {
+	fake := &fakeBatchClient{
+		respondQuery: func(ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+			return []rqlite.OpResult{
+				{Kind: rqlite.BatchOpQuery, Rows: []map[string]interface{}{{"x": int64(1)}}},
+				{Kind: rqlite.BatchOpQuery, Error: "no such table: missing"},
+			}, nil
+		},
+	}
+	h := newHFWithDB(fake)
+
+	in := `{"ops":[{"sql":"SELECT 1"},{"sql":"SELECT * FROM missing"}]}`
+	out, err := h.DBQueryBatch(context.Background(), []byte(in))
+	if err != nil {
+		t.Fatalf("per-op errors must NOT surface as Go errors: %v", err)
+	}
+	var res dbQueryBatchResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(res.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(res.Results))
+	}
+	if res.Results[0].Error != "" {
+		t.Errorf("op 0 should have no error, got: %q", res.Results[0].Error)
+	}
+	if res.Results[1].Error == "" {
+		t.Errorf("op 1 should carry SQL error in JSON, got empty")
+	}
+}
+
+// Silence the "imported and not used" warning if sql isn't needed elsewhere
+// in test additions — kept here as a guard in case future tests need it.
+var _ = sql.ErrNoRows

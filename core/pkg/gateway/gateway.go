@@ -360,6 +360,17 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
 			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
 		})
+		// Subscribe the dispatcher to libp2p pubsub for every literal
+		// trigger pattern so WASM `oh.PubSubPublish` calls reach trigger
+		// handlers (bugboard #282 — pre-fix, the dispatcher only fired
+		// from the HTTP publish hook above, so internal WASM publishes
+		// silently dropped every subscriber). Stop is called from
+		// lifecycle.Close.
+		if err := deps.PubSubDispatcher.Start(context.Background()); err != nil {
+			logger.ComponentWarn(logging.ComponentGeneral,
+				"PubSubDispatcher Start failed (libp2p subscribe path disabled — HTTP-publish triggers still work)",
+				zap.Error(err))
+		}
 	}
 	if deps.PersistentWSManager != nil {
 		gw.persistentWSManager = deps.PersistentWSManager
