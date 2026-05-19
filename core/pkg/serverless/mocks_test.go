@@ -203,6 +203,13 @@ func (m *MockHostServices) PushSend(ctx context.Context, userID string, msgJSON 
 	return nil
 }
 
+func (m *MockHostServices) PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error) {
+	// Return the empty-no-op envelope to match the silent no-op contract
+	// when no provider is configured. Tests that need per-device behavior
+	// mock at the HostFunctions level (fakeBatchClient-style).
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
 func (m *MockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
 	return []byte(`{"committed":true,"results":[]}`), nil
 }

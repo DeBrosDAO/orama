@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/sideshow/apns2"
+	"go.uber.org/zap"
 )
 
 // fakePushClient implements pushClient for unit tests so we don't have
@@ -44,6 +45,7 @@ func newTestProvider(t *testing.T, bundle string, fake *fakePushClient) *Provide
 	return &Provider{
 		bundleID: bundle,
 		client:   fake,
+		logger:   zap.NewNop(),
 	}
 }
 
@@ -368,5 +370,145 @@ func TestParseCredentials_RejectsBadConfig(t *testing.T) {
 	raw := []byte(`{"team_id":"too-short"}`)
 	if _, err := ParseCredentials(raw); err == nil {
 		t.Error("expected error on bad config")
+	}
+}
+
+// ---- Bugboard #348 hardening: empty-content + structured PushError -------
+
+// TestSend_EmptyContentRejected verifies the bugboard #348 root-cause
+// guard: a message with no title, body, badge, sound, or
+// content_available marker MUST fail upfront — not silently 200 from
+// Apple and look like delivery success.
+func TestSend_EmptyContentRejected(t *testing.T) {
+	p := newTestProvider(t, "com.example.app", &fakePushClient{})
+	err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "ABCDEF1234",
+		// No Title, Body, Badge, Sound, or content_available in Data.
+	})
+	if !errors.Is(err, push.ErrEmptyContent) {
+		t.Errorf("expected push.ErrEmptyContent for empty payload; got %v", err)
+	}
+}
+
+// TestSend_ContentAvailableAccepted ensures background-only pushes
+// (content_available without alert) ARE allowed — iOS uses this for
+// silent data pushes that wake the app without UI. Bugboard #348:
+// don't over-reject; only reject pushes that have NOTHING.
+func TestSend_ContentAvailableAccepted(t *testing.T) {
+	fake := &fakePushClient{
+		resp: &apns2.Response{StatusCode: http.StatusOK, ApnsID: "ok-1"},
+	}
+	p := newTestProvider(t, "com.example.app", fake)
+	err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "ABCDEF1234",
+		Data:        map[string]interface{}{"content_available": true},
+	})
+	if err != nil {
+		t.Fatalf("content-available push should be allowed: %v", err)
+	}
+	if fake.lastSent == nil {
+		t.Fatal("Send didn't dispatch to client")
+	}
+	// Verify content-available landed in the aps dict.
+	var payload map[string]interface{}
+	if err := json.Unmarshal(fake.lastSent.Payload.([]byte), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	aps, _ := payload["aps"].(map[string]interface{})
+	if aps["content-available"] != float64(1) {
+		t.Errorf("aps.content-available = %v; want 1", aps["content-available"])
+	}
+}
+
+// TestSend_Non200ReturnsPushError verifies non-200 responses return a
+// structured *push.PushError with the HTTP status, reason, and (for
+// 410) the Unregistered flag — so SendToUserDetailed can extract them
+// for the WASM caller. Bugboard #348.
+func TestSend_Non200ReturnsPushError(t *testing.T) {
+	cases := []struct {
+		name             string
+		status           int
+		reason           string
+		wantUnregistered bool
+	}{
+		{"410_unregistered", http.StatusGone, "Unregistered", true},
+		{"400_bad_device_token", http.StatusBadRequest, "BadDeviceToken", false},
+		{"403_invalid_provider_token", http.StatusForbidden, "InvalidProviderToken", false},
+		{"500_internal_apple_error", http.StatusInternalServerError, "InternalServerError", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakePushClient{
+				resp: &apns2.Response{StatusCode: tc.status, Reason: tc.reason, ApnsID: "x"},
+			}
+			p := newTestProvider(t, "com.example.app", fake)
+			err := p.Send(context.Background(), push.PushMessage{
+				DeviceToken: "tok",
+				Title:       "x",
+			})
+			if err == nil {
+				t.Fatal("expected error for non-200 response")
+			}
+			var perr *push.PushError
+			if !errors.As(err, &perr) {
+				t.Fatalf("expected *push.PushError; got %T: %v", err, err)
+			}
+			if perr.HTTPStatus != tc.status {
+				t.Errorf("HTTPStatus = %d; want %d", perr.HTTPStatus, tc.status)
+			}
+			if perr.Reason != tc.reason {
+				t.Errorf("Reason = %q; want %q", perr.Reason, tc.reason)
+			}
+			if perr.Unregistered != tc.wantUnregistered {
+				t.Errorf("Unregistered = %v; want %v", perr.Unregistered, tc.wantUnregistered)
+			}
+		})
+	}
+}
+
+// TestSend_410StillCompatibleWithLegacySentinel ensures the structured
+// PushError for 410 ALSO satisfies errors.Is(ErrDeviceUnregistered) so
+// existing callers using the sentinel keep working.
+func TestSend_410StillCompatibleWithLegacySentinel(t *testing.T) {
+	fake := &fakePushClient{
+		resp: &apns2.Response{StatusCode: http.StatusGone, Reason: "Unregistered", ApnsID: "x"},
+	}
+	p := newTestProvider(t, "com.example.app", fake)
+	err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "tok",
+		Title:       "x",
+	})
+	if !errors.Is(err, ErrDeviceUnregistered) {
+		t.Errorf("expected errors.Is(err, ErrDeviceUnregistered) to be true; got %v", err)
+	}
+}
+
+// TestHasVisibleContent exercises every accepted shape so the guard
+// matches the WASM caller's mental model.
+func TestHasVisibleContent(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  push.PushMessage
+		want bool
+	}{
+		{"empty", push.PushMessage{}, false},
+		{"title only", push.PushMessage{Title: "hi"}, true},
+		{"body only", push.PushMessage{Body: "hi"}, true},
+		{"badge only", push.PushMessage{Badge: 1}, true},
+		{"sound only", push.PushMessage{Sound: "ping.aiff"}, true},
+		{"content_available bool true", push.PushMessage{Data: map[string]interface{}{"content_available": true}}, true},
+		{"content_available bool false", push.PushMessage{Data: map[string]interface{}{"content_available": false}}, false},
+		{"content_available int 1", push.PushMessage{Data: map[string]interface{}{"content_available": 1}}, true},
+		{"content_available string 1", push.PushMessage{Data: map[string]interface{}{"content_available": "1"}}, true},
+		{"content_available string true", push.PushMessage{Data: map[string]interface{}{"content_available": "true"}}, true},
+		{"data without content_available", push.PushMessage{Data: map[string]interface{}{"other_key": "value"}}, false},
+		{"title and badge", push.PushMessage{Title: "x", Badge: 5}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasVisibleContent(tc.msg); got != tc.want {
+				t.Errorf("hasVisibleContent(%+v) = %v; want %v", tc.msg, got, tc.want)
+			}
+		})
 	}
 }

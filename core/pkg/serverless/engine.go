@@ -614,6 +614,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
+			NewFunctionBuilder().WithFunc(e.hPushSendV2).Export("push_send_v2").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
@@ -1114,6 +1115,38 @@ func (e *Engine) hPushSend(ctx context.Context, mod api.Module,
 		return 0
 	}
 	return 1
+}
+
+// hPushSendV2 is the WASM-callable wrapper for PushSendV2 — the
+// rich-result push host function. Returns a packed uint64
+// (ptr<<32 | len) pointing to a JSON envelope in guest memory, or 0
+// on setup/validation error.
+//
+// The JSON envelope is push.SendDetailedResult: top-level Ok bool,
+// per-device Results with HTTP status / reason / unregistered flag.
+// Callers MUST parse it — a non-zero return does NOT mean every
+// device succeeded (read result.ok or iterate results[]).
+//
+// Bugboard #348: replaces the binary success/fail of PushSend with
+// the full per-device truth so WASM callers can react granularly.
+func (e *Engine) hPushSendV2(ctx context.Context, mod api.Module,
+	userIDPtr, userIDLen, msgPtr, msgLen uint32) uint64 {
+	userID, ok := e.executor.ReadFromGuest(mod, userIDPtr, userIDLen)
+	if !ok {
+		return 0
+	}
+	msgJSON, ok := e.executor.ReadFromGuest(mod, msgPtr, msgLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.PushSendV2(ctx, string(userID), msgJSON)
+	if err != nil {
+		e.logger.Warn("host function push_send_v2 failed",
+			zap.String("user_id", string(userID)),
+			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
 }
 
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {

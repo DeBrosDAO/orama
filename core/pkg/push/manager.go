@@ -170,6 +170,17 @@ func (m *Manager) SendToUser(ctx context.Context, namespace, userID string, msg 
 	return d.SendToUser(ctx, namespace, userID, msg)
 }
 
+// SendToUserDetailed mirrors SendToUser but returns the per-device
+// outcome shape. Used by the WASM `oh.PushSendV2` host fn so callers
+// can react to per-device failures (bugboard #348).
+func (m *Manager) SendToUserDetailed(ctx context.Context, namespace, userID string, msg PushMessage) (*SendDetailedResult, error) {
+	d, err := m.dispatcherFor(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	return d.SendToUserDetailed(ctx, namespace, userID, msg)
+}
+
 // DeviceStore exposes the underlying device store so HTTP handlers
 // (register/list/delete) can use it directly without going through the
 // dispatcher path.

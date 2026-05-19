@@ -313,6 +313,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	// Wire the JWT verifier so the persistent WS handler can apply
+	// mid-session auth refresh on the open WS (bugboard #321 control
+	// frame). Skipped when either dep is nil — the handler then acks
+	// "not supported" and the client falls back to legacy reconnect.
+	if gw.serverlessHandlers != nil && gw.authService != nil {
+		gw.serverlessHandlers.SetJWTVerifier(gw.authService)
+	}
 
 	// Resolve local WireGuard IP for local namespace gateway preference
 	if wgIP, err := GetWireGuardIP(); err == nil {

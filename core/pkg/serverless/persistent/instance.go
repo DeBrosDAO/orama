@@ -67,7 +67,12 @@ type Instance struct {
 	// across concurrent connections — each instance carries its own
 	// caller identity in the ctx, never reading the HostFunctions
 	// singleton field. See pkg/serverless/hostfunctions/invocation_context.go.
-	invCtx *serverless.InvocationContext
+	//
+	// MUTABLE: bug #321 added mid-session re-auth — the WS handler can
+	// swap invCtx via UpdateInvocationContext when the client rotates
+	// its JWT. invCtxMu guards reads/writes; withInvCtx() takes RLock.
+	invCtx   *serverless.InvocationContext
+	invCtxMu sync.RWMutex
 
 	inbound chan []byte
 	logger  *zap.Logger
@@ -172,10 +177,51 @@ func NewInstance(module api.Module, cfg Config, logger *zap.Logger) (*Instance, 
 // Returns ctx unchanged when invCtx is nil — preserves backwards-compat
 // for callers that didn't populate Config.InvocationContext.
 func (i *Instance) withInvCtx(ctx context.Context) context.Context {
-	if i.invCtx == nil {
+	i.invCtxMu.RLock()
+	cur := i.invCtx
+	i.invCtxMu.RUnlock()
+	if cur == nil {
 		return ctx
 	}
-	return serverless.WithInvocationContext(ctx, i.invCtx)
+	return serverless.WithInvocationContext(ctx, cur)
+}
+
+// UpdateInvocationContext atomically swaps the per-instance invocation
+// context. Used by the WS handler to apply a mid-session JWT rotation
+// (bugboard #321 — `__orama:auth.refresh` control frame) so the
+// client's new JWT subject / wallet / claims propagate to every
+// subsequent host call WITHOUT tearing down the WS.
+//
+// Thread-safe: callers can call this from the WS read loop while the
+// frame-processing goroutine is concurrently reading the field via
+// withInvCtx. The swap is a single pointer-write under a write lock;
+// in-flight host calls that already wrapped their ctx with the OLD
+// invCtx keep using the old identity until they return — that's
+// correct (an in-flight invocation should complete under the identity
+// it started with, not get swapped mid-call).
+//
+// Rejects nil to preserve the "invCtx is required" invariant baked in
+// at NewInstance. A nil swap would silently re-open the cross-tenant
+// race documented in pkg/serverless/invocation_context.go.
+func (i *Instance) UpdateInvocationContext(newInvCtx *serverless.InvocationContext) error {
+	if newInvCtx == nil {
+		return fmt.Errorf("persistent: UpdateInvocationContext: nil invCtx (would re-open the cross-tenant identity-leak race)")
+	}
+	i.invCtxMu.Lock()
+	i.invCtx = newInvCtx
+	i.invCtxMu.Unlock()
+	return nil
+}
+
+// CurrentInvocationContext returns the per-instance invocation context
+// snapshot (the same pointer withInvCtx would attach to the next host
+// call's ctx). Used by the WS handler to audit identity transitions on
+// mid-session JWT refresh (bug #321) without re-reading from the lock.
+// May return nil if the instance was constructed without an invCtx.
+func (i *Instance) CurrentInvocationContext() *serverless.InvocationContext {
+	i.invCtxMu.RLock()
+	defer i.invCtxMu.RUnlock()
+	return i.invCtx
 }
 
 // ClientID returns the WebSocket client ID this instance serves.

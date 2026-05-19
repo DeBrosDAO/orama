@@ -459,6 +459,32 @@ type HostServices interface {
 	// DBQueryBatch with 10 statements = ~340ms. See bugboard #270.
 	DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error)
 
+	// PushSendV2 dispatches a push notification with PER-DEVICE result
+	// reporting. Returns JSON-encoded push.SendDetailedResult:
+	//
+	//   {
+	//     "ok": false,
+	//     "devices_attempted": 2,
+	//     "devices_succeeded": 1,
+	//     "results": [
+	//       {"device_id":"ios-A", "provider":"apns", "success":true},
+	//       {"device_id":"ios-B", "provider":"apns", "success":false,
+	//        "http_status":410, "reason":"Unregistered",
+	//        "message":"...", "unregistered":true}
+	//     ]
+	//   }
+	//
+	// Unlike the legacy PushSend (which returns success/fail and discards
+	// every provider's HTTP status), this lets WASM callers auto-clean
+	// stale tokens, retry transient failures, and surface real reasons.
+	// Bugboard #348.
+	//
+	// Returns a Go error only on setup failures (no manager, invalid JSON,
+	// no namespace in invocation context). A per-device failure goes into
+	// the JSON `results[]` array, NOT as a Go error — callers parse the
+	// envelope. Same shape as DBTransaction's "structured per-op result".
+	PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error)
+
 	// ExecAndPublish runs ops atomically (like DBTransaction) and, ONLY
 	// if the batch commits, publishes data to the named topic with any
 	// occurrence of the literal string "{{seq}}" replaced by the assigned

@@ -110,6 +110,10 @@ func (m *mockHostServices) PushSend(ctx context.Context, userID string, msgJSON 
 	return nil
 }
 
+func (m *mockHostServices) PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
 func (m *mockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
 	return []byte(`{"committed":true,"results":[]}`), nil
 }
