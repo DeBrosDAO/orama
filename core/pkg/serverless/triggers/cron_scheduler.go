@@ -38,6 +38,14 @@ type CronScheduler struct {
 
 // NewCronScheduler builds a scheduler. Reasonable defaults: poll every
 // 30 seconds, dispatch up to 100 triggers per tick.
+//
+// Sub-second pollInterval is permitted (down to the engine config's
+// MinCronPollInterval) for typing/presence-style ephemeral state prune
+// workloads — see bugboard #109. Each tick costs ~1 rqlite ListDue
+// + ~2 MarkRun writes per dispatched trigger (per-call ~340-450ms on
+// a cross-region cluster), so picking faster than that on average
+// queues ticks. Logged as a warning when the operator goes below 1s
+// so the trade-off is visible.
 func NewCronScheduler(
 	store *CronTriggerStore,
 	invoker CronInvoker,
@@ -46,6 +54,10 @@ func NewCronScheduler(
 ) *CronScheduler {
 	if pollInterval <= 0 {
 		pollInterval = 30 * time.Second
+	}
+	if pollInterval < time.Second {
+		logger.Warn("cron scheduler: sub-second poll interval; ensure per-tick rqlite cost is bounded or scheduler will queue ticks indefinitely (bugboard #109)",
+			zap.Duration("poll_interval", pollInterval))
 	}
 	return &CronScheduler{
 		store:        store,

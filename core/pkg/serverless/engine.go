@@ -261,10 +261,20 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	execCtx, cancel := CreateTimeoutContext(ctx, fn, e.config.MaxTimeoutSeconds)
 	defer cancel()
 
+	// Attach a fresh per-invocation LogBuffer to the ctx that wazero
+	// passes through to host-fn callbacks. host.LogInfo / host.LogError
+	// extract this buffer and append to it instead of writing to the
+	// HostFunctions singleton slice — which would cross-contaminate
+	// concurrent invocations (bugboard #108: push-fanout's invocation
+	// record was capturing rpc-router and message-push-handler log
+	// lines because every WASM call shared one h.logs slice).
+	logBuf := NewLogBuffer()
+	execCtx = WithLogBuffer(execCtx, logBuf)
+
 	// Get compiled module (from cache or compile)
 	module, err := e.getOrCompileModule(execCtx, fn.WASMCID)
 	if err != nil {
-		e.logInvocation(ctx, fn, invCtx, startTime, 0, InvocationStatusError, err)
+		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, 0, InvocationStatusError, err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
 
@@ -281,11 +291,11 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 			status = InvocationStatusTimeout
 			err = ErrTimeout
 		}
-		e.logInvocation(ctx, fn, invCtx, startTime, len(output), status, err)
+		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), status, err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
 
-	e.logInvocation(ctx, fn, invCtx, startTime, len(output), InvocationStatusSuccess, nil)
+	e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), InvocationStatusSuccess, nil)
 	return output, nil
 }
 
@@ -540,7 +550,14 @@ func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero
 }
 
 // logInvocation logs an invocation record.
-func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *InvocationContext, startTime time.Time, outputSize int, status InvocationStatus, err error) {
+//
+// `logBuf` is the per-invocation LogBuffer attached to ctx at Execute
+// start (bugboard #108 fix). When non-nil, the record's Logs field is
+// populated from the buffer's snapshot — invocation-local, no
+// cross-contamination. When nil (legacy callers that haven't been
+// updated), falls back to the HostFunctions singleton via the
+// GetLogs() interface check — same behavior as pre-#108.
+func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *InvocationContext, logBuf *LogBuffer, startTime time.Time, outputSize int, status InvocationStatus, err error) {
 	if e.invocationLogger == nil || !e.config.LogInvocations {
 		return
 	}
@@ -563,8 +580,15 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 		record.ErrorMessage = err.Error()
 	}
 
-	// Collect logs from host services if supported
-	if hf, ok := e.hostServices.(interface{ GetLogs() []LogEntry }); ok {
+	// Collect logs: prefer the per-invocation LogBuffer (bugboard #108),
+	// fall back to the legacy singleton for callers that haven't been
+	// migrated yet. The singleton path was the source of the
+	// cross-contamination bug; once every Execute path passes a real
+	// buffer here, the GetLogs() singleton read is dead code that
+	// can be removed in a future cleanup.
+	if logBuf != nil {
+		record.Logs = logBuf.Snapshot()
+	} else if hf, ok := e.hostServices.(interface{ GetLogs() []LogEntry }); ok {
 		record.Logs = hf.GetLogs()
 	}
 

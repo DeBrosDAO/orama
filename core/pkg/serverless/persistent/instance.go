@@ -180,10 +180,18 @@ func (i *Instance) withInvCtx(ctx context.Context) context.Context {
 	i.invCtxMu.RLock()
 	cur := i.invCtx
 	i.invCtxMu.RUnlock()
-	if cur == nil {
-		return ctx
+	if cur != nil {
+		ctx = serverless.WithInvocationContext(ctx, cur)
 	}
-	return serverless.WithInvocationContext(ctx, cur)
+	// Attach a fresh per-call LogBuffer so oh.LogInfo / oh.LogError from
+	// inside this ws_open / ws_frame / ws_close call write to a
+	// scoped slice instead of the HostFunctions singleton (bugboard
+	// #108 fix). Persistent WS doesn't currently persist these logs to
+	// function_logs (no logInvocation for persistent frames), so the
+	// buffer is discarded when the call returns — the point is to
+	// avoid leaking entries into the singleton where a concurrent
+	// stateless Execute would otherwise see them.
+	return serverless.WithLogBuffer(ctx, serverless.NewLogBuffer())
 }
 
 // UpdateInvocationContext atomically swaps the per-instance invocation

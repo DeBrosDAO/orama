@@ -1,6 +1,7 @@
 package serverless
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -28,7 +29,22 @@ type Config struct {
 	JobMaxQueueSize   int           `yaml:"job_max_queue_size"`
 	JobMaxPayloadSize int           `yaml:"job_max_payload_size"` // bytes
 
-	// Scheduler configuration
+	// Scheduler configuration.
+	//
+	// CronPollInterval is the cadence at which the cron scheduler scans
+	// `function_cron_triggers` for due rows. Lower = finer dispatch
+	// granularity (useful for sub-second cron expressions like
+	// `*/1 * * * * *` — the 6-field grammar accepted by ParseCron),
+	// higher = less rqlite/CPU spend.
+	//
+	// Hard floor: MinCronPollInterval (rejected at Validate). Below the
+	// floor the scheduler can't keep up — each tick costs ~1 rqlite
+	// ListDue + N MarkRun writes, ~340-450ms per call on a
+	// cross-region anchat-test-style cluster. Polling faster than the
+	// per-tick cost queues ticks indefinitely and starves the namespace.
+	//
+	// Default: 1 minute. Set to 1s for typing/presence-style ephemeral
+	// state prune workloads (bugboard #109).
 	CronPollInterval  time.Duration `yaml:"cron_poll_interval"`
 	TimerPollInterval time.Duration `yaml:"timer_poll_interval"`
 	DBPollInterval    time.Duration `yaml:"db_poll_interval"`
@@ -47,6 +63,21 @@ type Config struct {
 	LogInvocations bool `yaml:"log_invocations"` // Log all invocations to database
 	LogRetention   int  `yaml:"log_retention"`   // Days to retain logs
 }
+
+// MinCronPollInterval is the hard floor on CronPollInterval. Below
+// this the cron scheduler can't keep up with itself — each tick costs
+// at minimum one rqlite ListDue (a network round-trip + query), so
+// polling much faster than the per-tick cost would queue ticks
+// indefinitely and starve the namespace gateway. 100ms is generous
+// (it allows ~10 ticks/sec) while still preventing the runaway
+// configuration that would cripple the gateway.
+//
+// Operators wanting sub-second cron dispatch (e.g. typing/presence
+// ephemeral state prune jobs per bugboard #109) should set 1s — this
+// gives comfortable headroom over per-tick rqlite latency even on
+// cross-region clusters and allows 6-field cron expressions like
+// `*/1 * * * * *` to fire on every-second cadence.
+const MinCronPollInterval = 100 * time.Millisecond
 
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
@@ -115,6 +146,17 @@ func (c *Config) Validate() []error {
 	}
 	if c.ModuleCacheSize <= 0 {
 		errs = append(errs, &ConfigError{Field: "ModuleCacheSize", Message: "must be positive"})
+	}
+	// CronPollInterval floor — see MinCronPollInterval doc. Zero means
+	// "use the default" (ApplyDefaults handles it); a non-zero value
+	// below the floor would silently let the operator paint themselves
+	// into a runaway-scheduler corner.
+	if c.CronPollInterval != 0 && c.CronPollInterval < MinCronPollInterval {
+		errs = append(errs, &ConfigError{
+			Field:   "CronPollInterval",
+			Message: fmt.Sprintf("must be >= %s (current=%s); see bugboard #109 — below this the scheduler can't keep up with per-tick rqlite cost and queues ticks indefinitely",
+				MinCronPollInterval, c.CronPollInterval),
+		})
 	}
 
 	return errs
