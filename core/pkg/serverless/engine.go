@@ -271,6 +271,23 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	logBuf := NewLogBuffer()
 	execCtx = WithLogBuffer(execCtx, logBuf)
 
+	// Attach this invocation's InvocationContext to execCtx so host
+	// functions resolve identity/namespace from ctx instead of the
+	// process-wide HostFunctions singleton. Closes the stateless race
+	// that bugboard #348 surfaced via AnChat's message-push-handler:
+	// two concurrent pubsub-triggered invocations would overwrite each
+	// other's singleton invCtx, and the loser's push_send_v2 call would
+	// read either a cross-tenant namespace (silent identity leak) or a
+	// nil singleton ("no namespace in invocation context" error — the
+	// observable empty-envelope symptom AnChat reported).
+	//
+	// The singleton SetInvocationContext/ClearContext block below
+	// stays as defense-in-depth — host fns prefer ctx via
+	// currentInvocationContext (hostfunctions/invocation_context.go),
+	// so this is the live source; the singleton path serves any future
+	// caller that hasn't been migrated yet.
+	execCtx = WithInvocationContext(execCtx, invCtx)
+
 	// Get compiled module (from cache or compile)
 	module, err := e.getOrCompileModule(execCtx, fn.WASMCID)
 	if err != nil {

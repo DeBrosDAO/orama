@@ -32,10 +32,19 @@ type invCtxKey struct{}
 // shared field.
 //
 // Persistent WS uses this exclusively (see persistent.Instance, which
-// wraps every export call's ctx with the per-instance invCtx). Stateless
-// continues to use the singleton-field path for now — its race window
-// is microseconds, has been latent since the host-functions split, and
-// migrating it is a separate scoped change.
+// wraps every export call's ctx with the per-instance invCtx).
+//
+// Stateless Engine.Execute also attaches invCtx via this helper since
+// bugboard #348 — AnChat's pubsub-triggered message-push-handler
+// confirmed the "microseconds" race window was actually observable
+// under production fan-out load: concurrent invocations either
+// cross-tenant-leaked the namespace (silent) or saw a nil singleton
+// during the brief window between contextSetter on one goroutine and
+// contextClearer on another, producing "no namespace in invocation
+// context" errors at host-fn entry. The singleton SetInvocationContext
+// path remains in place as defense-in-depth — every host fn resolves
+// via currentInvocationContext, which prefers ctx-attached over the
+// singleton field, so the race is closed for the live path.
 func WithInvocationContext(ctx context.Context, invCtx *InvocationContext) context.Context {
 	if invCtx == nil {
 		return ctx
