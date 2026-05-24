@@ -28,15 +28,25 @@ const (
 // DeviceToken is the provider-specific identifier (e.g. an ntfy topic,
 // an Expo push token, an APNs device token). The PushDispatcher fills
 // it in per-device before calling Send.
+//
+// TargetProvider is consumed by the DISPATCHER (not by providers) to
+// filter the device list pre-send. Empty = fan out to all registered
+// devices regardless of provider (back-compat default). Non-empty =
+// dispatcher skips any device whose Provider field doesn't equal this
+// value. Bugboard #408 — needed so a chat-alert message-push-handler
+// can target "apns" only and avoid waking the user's "apns_voip"
+// (PushKit/CallKit) device on every text. Providers themselves ignore
+// this field.
 type PushMessage struct {
-	DeviceToken string
-	Title       string
-	Body        string
-	Data        map[string]interface{}
-	Badge       int
-	Sound       string
-	Channel     string // "messages", "calls", etc — provider may map to its own channel concept
-	Priority    PushPriority
+	DeviceToken    string
+	Title          string
+	Body           string
+	Data           map[string]interface{}
+	Badge          int
+	Sound          string
+	Channel        string // "messages", "calls", etc — provider may map to its own channel concept
+	Priority       PushPriority
+	TargetProvider string // dispatcher-side filter; "" = fanout. See type doc.
 }
 
 // PushProvider is implemented by each backend (ntfy, expo, apns).

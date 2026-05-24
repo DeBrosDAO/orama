@@ -33,6 +33,38 @@ const (
 	EnvProduction Environment = "production"
 )
 
+// Kind selects the APNs delivery mode for a Provider instance. The same
+// (Team ID, Key ID, p8 key, Bundle ID, Environment) tuple supports BOTH
+// kinds — they differ only in the per-Send wire format (topic suffix,
+// apns-push-type header, empty-payload acceptance).
+//
+//   - KindAlert: standard user-visible alerts. Topic = bundle_id,
+//     apns-push-type = "alert", REQUIRES visible content. Provider
+//     name "apns".
+//   - KindVoIP:  PushKit / CallKit incoming-call signals. Topic =
+//     bundle_id + ".voip", apns-push-type = "voip", ALLOWS empty
+//     content (iOS renders CallKit UI from data dict alone). Provider
+//     name "apns_voip".
+//
+// Bugboard #408. A single PUT of APNs credentials enables both kinds
+// when the gateway factory spawns both Provider instances.
+type Kind string
+
+const (
+	KindAlert Kind = "alert"
+	KindVoIP  Kind = "voip"
+)
+
+// providerNameForKind returns the dispatcher-registered name for a
+// given Kind. Keep in sync with the validProviders allowlist in
+// pkg/gateway/handlers/push/handlers.go.
+func providerNameForKind(k Kind) string {
+	if k == KindVoIP {
+		return "apns_voip"
+	}
+	return "apns"
+}
+
 // Config is the per-namespace APNs credential record. JSON tags mirror
 // the public schema tenants PUT to /v1/namespace/push-credentials/apns.
 //

@@ -12,14 +12,23 @@ import (
 // PushSendArgs is the JSON payload format the WASM caller marshals into
 // the `msgJSON` argument of PushSend. Mirrors push.PushMessage minus the
 // device-token (which is filled in per-device by the dispatcher).
+//
+// TargetProvider (bugboard #408) is the dispatcher-side device filter.
+// Empty = fan out to every registered device for the user (back-compat
+// default). Set to a provider name ("apns", "apns_voip", "ntfy",
+// "expo") = dispatcher only attempts devices whose Provider field
+// matches. Required by call-push-handler (set to "apns_voip") to avoid
+// CallKit-ring on every chat message, and by message-push-handler (set
+// to "apns") so VoIP-only pushes don't show as a silent alert.
 type PushSendArgs struct {
-	Title    string                 `json:"title,omitempty"`
-	Body     string                 `json:"body,omitempty"`
-	Channel  string                 `json:"channel,omitempty"`
-	Priority string                 `json:"priority,omitempty"` // "high" | "normal" | ""
-	Badge    int                    `json:"badge,omitempty"`
-	Sound    string                 `json:"sound,omitempty"`
-	Data     map[string]interface{} `json:"data,omitempty"`
+	Title          string                 `json:"title,omitempty"`
+	Body           string                 `json:"body,omitempty"`
+	Channel        string                 `json:"channel,omitempty"`
+	Priority       string                 `json:"priority,omitempty"` // "high" | "normal" | ""
+	Badge          int                    `json:"badge,omitempty"`
+	Sound          string                 `json:"sound,omitempty"`
+	Data           map[string]interface{} `json:"data,omitempty"`
+	TargetProvider string                 `json:"target_provider,omitempty"`
 }
 
 // MaxPushSendArgsBytes caps the JSON arg size to a few KB. Push payloads
@@ -92,13 +101,14 @@ func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []b
 	}
 
 	msg := push.PushMessage{
-		Title:    args.Title,
-		Body:     args.Body,
-		Channel:  args.Channel,
-		Priority: priority,
-		Badge:    args.Badge,
-		Sound:    args.Sound,
-		Data:     args.Data,
+		Title:          args.Title,
+		Body:           args.Body,
+		Channel:        args.Channel,
+		Priority:       priority,
+		Badge:          args.Badge,
+		Sound:          args.Sound,
+		Data:           args.Data,
+		TargetProvider: args.TargetProvider,
 	}
 
 	// Route through Manager when present so per-namespace push config
@@ -187,13 +197,14 @@ func (h *HostFunctions) PushSendV2(ctx context.Context, userID string, msgJSON [
 	}
 
 	msg := push.PushMessage{
-		Title:    args.Title,
-		Body:     args.Body,
-		Channel:  args.Channel,
-		Priority: priority,
-		Badge:    args.Badge,
-		Sound:    args.Sound,
-		Data:     args.Data,
+		Title:          args.Title,
+		Body:           args.Body,
+		Channel:        args.Channel,
+		Priority:       priority,
+		Badge:          args.Badge,
+		Sound:          args.Sound,
+		Data:           args.Data,
+		TargetProvider: args.TargetProvider,
 	}
 
 	// Prefer the Manager (per-namespace config); fall back to the legacy

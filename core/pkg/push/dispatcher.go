@@ -97,6 +97,22 @@ func (d *PushDispatcher) SendToUserDetailed(
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
+	// Bugboard #408 — target_provider filter. When the caller sets
+	// msg.TargetProvider, drop every device whose Provider doesn't match
+	// BEFORE we attempt sends or count anything. This lets a chat-alert
+	// path send only to "apns" devices while a call-push path sends only
+	// to "apns_voip" devices, even though both are registered on the
+	// same iPhone. Unset = fanout (back-compat for every existing
+	// caller, including unmigrated functions in other namespaces).
+	if msg.TargetProvider != "" {
+		filtered := devs[:0]
+		for _, dev := range devs {
+			if dev.Provider == msg.TargetProvider {
+				filtered = append(filtered, dev)
+			}
+		}
+		devs = filtered
+	}
 	out := &SendDetailedResult{
 		Ok:               true, // flipped to false on the first failure
 		DevicesAttempted: len(devs),

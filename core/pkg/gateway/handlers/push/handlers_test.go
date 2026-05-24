@@ -131,6 +131,45 @@ func TestRegister_unknown_provider_rejected(t *testing.T) {
 	}
 }
 
+// TestRegister_validProviders_allowlist locks in the supported provider
+// names so a future allowlist regression breaks immediately at test
+// time instead of at AnChat's deploy time. Bugboard #408 added
+// "apns_voip" to enable the PushKit/CallKit registration path —
+// without this entry, every voipPushToken registration would fail
+// with "unknown provider" at /v1/push/devices and no incoming-call
+// signal could ever be delivered to an iPhone.
+func TestRegister_validProviders_allowlist(t *testing.T) {
+	cases := []struct {
+		provider string
+		want     int
+	}{
+		{"ntfy", http.StatusOK},
+		{"expo", http.StatusOK},
+		{"apns", http.StatusOK},
+		{"apns_voip", http.StatusOK}, // bugboard #408
+		{"fcm", http.StatusBadRequest},
+		{"", http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			h := newHandlers(&fakeStore{}, nil)
+			body, _ := json.Marshal(RegisterDeviceRequest{
+				DeviceID: "iphone-x",
+				Provider: tc.provider,
+				Token:    "device-token",
+				Platform: "ios",
+			})
+			req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/devices", bytes.NewReader(body)), "ns", "u")
+			rr := httptest.NewRecorder()
+			h.RegisterDeviceHandler(rr, req)
+			if rr.Code != tc.want {
+				t.Errorf("provider=%q: status=%d; want %d (body: %s)",
+					tc.provider, rr.Code, tc.want, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestRegister_oversize_token_rejected(t *testing.T) {
 	h := newHandlers(&fakeStore{}, nil)
 	huge := make([]byte, MaxTokenBytes+1)

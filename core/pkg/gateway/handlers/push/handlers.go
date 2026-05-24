@@ -13,10 +13,18 @@ import (
 
 // validProviders is the allowlist for the `provider` field on RegisterDevice.
 // Keep in sync with what the dispatcher actually has registered at startup.
+//
+// "apns_voip" (bugboard #408) is the PushKit/CallKit variant of "apns" —
+// same underlying credentials, distinct dispatcher entry. Tenants
+// register a second PushDevice row per iPhone with the PushKit
+// voipPushToken to enable CallKit-triggering incoming-call pushes,
+// keyed by a distinct device_id (typically `<base>:voip`) so the
+// `device_id` PK doesn't collide with the alert-path row.
 var validProviders = map[string]struct{}{
-	"ntfy": {},
-	"expo": {},
-	"apns": {}, // future — accepted at registration so apps can pre-flight
+	"ntfy":      {},
+	"expo":      {},
+	"apns":      {},
+	"apns_voip": {},
 }
 
 // MaxTokenBytes caps the device-token length to prevent abuse.

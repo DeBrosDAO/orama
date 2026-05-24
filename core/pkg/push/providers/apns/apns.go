@@ -21,10 +21,13 @@ import (
 const defaultSendTimeout = 10 * time.Second
 
 // Provider is the APNs push.PushProvider implementation, scoped to one
-// (Team ID, Key ID, p8 key, Bundle ID, Environment) tuple. Construct
-// one per namespace via the gateway dependency factory.
+// (Team ID, Key ID, p8 key, Bundle ID, Environment, Kind) tuple.
+// Construct one per (namespace, kind) via the gateway dependency
+// factory — typically one KindAlert + one KindVoIP instance per
+// namespace, both sharing the same JWT signer.
 type Provider struct {
 	bundleID string
+	kind     Kind
 	client   pushClient
 	logger   *zap.Logger
 }
@@ -45,10 +48,28 @@ type pushClient interface {
 	PushWithContext(ctx apns2.Context, notification *apns2.Notification) (*apns2.Response, error)
 }
 
-// New constructs a Provider from a parsed Config. Returns an error if
-// the p8 key fails to parse — this surfaces config errors at gateway
-// startup / first-send rather than at every Push call.
+// New constructs a KindAlert Provider — the standard user-visible-alert
+// APNs path. Back-compat constructor: callers that want VoIP/PushKit
+// behavior should use NewVoIP. Returns an error if the p8 key fails to
+// parse so config errors surface at gateway startup rather than at
+// every Push call.
 func New(c Config, logger *zap.Logger) (*Provider, error) {
+	return buildProvider(c, KindAlert, logger)
+}
+
+// NewVoIP constructs a KindVoIP Provider — the PushKit/CallKit path for
+// incoming-call signals. Same credentials (Team ID, Key ID, p8 key,
+// Bundle ID, Environment) as the alert Provider; the wire-format
+// differences (topic = bundle_id+".voip", apns-push-type = "voip",
+// empty-content payloads allowed) are handled in Send. Bugboard #408.
+func NewVoIP(c Config, logger *zap.Logger) (*Provider, error) {
+	return buildProvider(c, KindVoIP, logger)
+}
+
+// buildProvider is the shared constructor for both kinds. The kind
+// field gates Send's per-kind branching; everything else (JWT signer,
+// HTTP/2 client, timeout) is identical.
+func buildProvider(c Config, kind Kind, logger *zap.Logger) (*Provider, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -79,13 +100,17 @@ func New(c Config, logger *zap.Logger) (*Provider, error) {
 	client.HTTPClient.Timeout = defaultSendTimeout
 	return &Provider{
 		bundleID: c.BundleID,
+		kind:     kind,
 		client:   client,
-		logger:   logger.Named("apns"),
+		logger:   logger.Named(providerNameForKind(kind)),
 	}, nil
 }
 
-// Name implements push.PushProvider.
-func (p *Provider) Name() string { return "apns" }
+// Name implements push.PushProvider. Returns "apns" for KindAlert and
+// "apns_voip" for KindVoIP — these are the names the dispatcher routes
+// devices against (device.Provider field) and the validProviders
+// allowlist at the registration handler accepts.
+func (p *Provider) Name() string { return providerNameForKind(p.kind) }
 
 // ErrDeviceUnregistered is returned by Send when APNs responds with
 // "Unregistered" (HTTP 410) — the token is no longer valid because the
@@ -116,7 +141,12 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	if msg.DeviceToken == "" {
 		return push.ErrEmptyToken
 	}
-	if !hasVisibleContent(msg) {
+	// VoIP/PushKit pushes legally have no visible alert content — iOS
+	// renders the CallKit UI from the `data` dict alone. Skipping the
+	// hasVisibleContent guard ONLY on the VoIP kind keeps the bugboard
+	// #348 silent-drop protection in place for the alert path while
+	// unblocking incoming-call signals on the VoIP path (#408).
+	if p.kind != KindVoIP && !hasVisibleContent(msg) {
 		return push.ErrEmptyContent
 	}
 	payload, err := buildAPSPayload(msg)
@@ -125,11 +155,15 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	}
 	n := &apns2.Notification{
 		DeviceToken: msg.DeviceToken,
-		Topic:       p.bundleID,
+		Topic:       p.topicForKind(),
 		Payload:     payload,
+		PushType:    p.pushTypeForKind(),
 	}
 	// Priority mapping: APNs uses 10 (immediate) / 5 (power-saving).
-	if msg.Priority == push.PriorityHigh {
+	// VoIP MUST use immediate (10) — Apple rejects "5" for voip pushes
+	// with `BadPriority`. We honor msg.Priority for alert; force high
+	// for voip regardless of what the caller passed.
+	if p.kind == KindVoIP || msg.Priority == push.PriorityHigh {
 		n.Priority = apns2.PriorityHigh
 	} else {
 		n.Priority = apns2.PriorityLow
@@ -180,6 +214,27 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 			Message:    fmt.Sprintf("apns: http %d: reason=%s apns_id=%s", resp.StatusCode, resp.Reason, resp.ApnsID),
 		}
 	}
+}
+
+// topicForKind returns the APNs `apns-topic` header value for this
+// Provider's kind. PushKit / VoIP pushes MUST target the bundle ID
+// suffixed with `.voip` — Apple routes those to the PushKit delivery
+// path that wakes the app via CallKit. Alert pushes use the bare bundle.
+func (p *Provider) topicForKind() string {
+	if p.kind == KindVoIP {
+		return p.bundleID + ".voip"
+	}
+	return p.bundleID
+}
+
+// pushTypeForKind returns the APNs `apns-push-type` header value.
+// Required since iOS 13 — Apple rejects pushes lacking this header at
+// the edge with `MissingTopic`/`InvalidPushType` errors.
+func (p *Provider) pushTypeForKind() apns2.EPushType {
+	if p.kind == KindVoIP {
+		return apns2.PushTypeVOIP
+	}
+	return apns2.PushTypeAlert
 }
 
 // hasVisibleContent reports whether the message has any payload field

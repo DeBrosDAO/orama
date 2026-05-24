@@ -969,7 +969,14 @@ func buildPushDispatcher(
 			}, logger.Logger))
 		}
 		// APNs is fully credentialed — no YAML fallback. The presence of
-		// per-namespace credentials is the trigger.
+		// per-namespace credentials is the trigger. Bugboard #408: a
+		// single set of APNs credentials spawns BOTH an alert-kind
+		// provider (registered as "apns") AND a VoIP/PushKit provider
+		// (registered as "apns_voip"). Both share the same JWT signer +
+		// HTTP/2 client pool — VoIP only differs in the per-Send wire
+		// format (topic suffix, apns-push-type header, empty-payload
+		// acceptance). Tenants register PushKit voipPushTokens against
+		// provider="apns_voip" and the dispatcher routes accordingly.
 		if c.Namespace != "" && credManager != nil {
 			if cred, err := credManager.Get(ctx, c.Namespace, "apns"); err == nil && cred != nil {
 				if apnsCfg, perr := pushapns.ParseCredentials(cred.JSON); perr == nil {
@@ -978,6 +985,14 @@ func buildPushDispatcher(
 					} else {
 						logger.ComponentWarn(logging.ComponentGeneral,
 							"apns provider construction failed",
+							zap.String("namespace", c.Namespace),
+							zap.Error(nerr))
+					}
+					if voipProvider, nerr := pushapns.NewVoIP(apnsCfg, logger.Logger); nerr == nil {
+						ps = append(ps, voipProvider)
+					} else {
+						logger.ComponentWarn(logging.ComponentGeneral,
+							"apns_voip provider construction failed",
 							zap.String("namespace", c.Namespace),
 							zap.Error(nerr))
 					}

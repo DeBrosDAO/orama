@@ -38,12 +38,21 @@ func (f *fakePushClient) PushWithContext(ctx apns2.Context, n *apns2.Notificatio
 	return f.resp, f.err
 }
 
-// newTestProvider constructs a Provider with a stub pushClient,
-// bypassing real APNs.
+// newTestProvider constructs an alert-kind Provider with a stub
+// pushClient, bypassing real APNs. Existing call sites get the same
+// behavior as pre-#408 — no need to thread a Kind through every test.
 func newTestProvider(t *testing.T, bundle string, fake *fakePushClient) *Provider {
+	t.Helper()
+	return newTestProviderKind(t, bundle, KindAlert, fake)
+}
+
+// newTestProviderKind constructs a Provider of the given kind for
+// VoIP-path coverage. Bugboard #408.
+func newTestProviderKind(t *testing.T, bundle string, kind Kind, fake *fakePushClient) *Provider {
 	t.Helper()
 	return &Provider{
 		bundleID: bundle,
+		kind:     kind,
 		client:   fake,
 		logger:   zap.NewNop(),
 	}
