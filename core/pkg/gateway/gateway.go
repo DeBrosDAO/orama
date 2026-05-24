@@ -414,7 +414,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.pushHandlers.SetCredentialsManager(deps.PushCredentialsManager)
 	}
 
-	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
+	// WebRTC route registration. See shouldRegisterWebRTCRoutes for the
+	// gate's full rationale (bugboard #411).
+	if shouldRegisterWebRTCRoutes(cfg) {
 		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(
 			logger,
 			gw.localWireGuardIP,
@@ -424,7 +426,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.proxyWebSocket,
 		)
 		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
-			zap.Int("sfu_port", cfg.SFUPort))
+			zap.Int("sfu_port", cfg.SFUPort),
+			zap.Bool("turn_secret_set", cfg.TURNSecret != ""),
+			zap.Bool("legacy_webrtc_enabled_flag", cfg.WebRTCEnabled))
 	}
 
 	if deps.OlricClient != nil {
@@ -738,6 +742,37 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed")
 	return gw, nil
+}
+
+// shouldRegisterWebRTCRoutes decides whether `/v1/webrtc/*` routes
+// (turn/credentials, signal, rooms) get wired up in the request mux.
+//
+// Bugboard #411 — pre-fix this required BOTH cfg.WebRTCEnabled AND
+// cfg.SFUPort > 0. The boolean flag was a silent-404 footgun: spawn-
+// handler-provisioned namespace gateways defaulted to
+// WebRTCEnabled=false even when their SFU service was up and SFUPort
+// was set. AnChat hit 404 on /v1/webrtc/turn/credentials for ~3
+// months because of this even though TURN was operationally usable.
+//
+// Post-fix: SFUPort > 0 alone gates registration. SFUPort is the
+// actual operational prerequisite — the SFU proxy can't function
+// without it, and operators who set SFUPort have already opted in.
+// cfg.WebRTCEnabled is kept on the Config struct for back-compat with
+// operator YAML and the spawn-handler request shape, but ignored at
+// this gate.
+//
+// TURNSecret intentionally NOT in the gate. /v1/webrtc/signal and
+// /v1/webrtc/rooms work without TURN (the SFU proxy alone). The
+// credentials endpoint internally 503s "TURN not configured" when
+// TURNSecret is empty — that's an ACTIONABLE error operators can
+// trace, unlike the silent 404 that #411 reported.
+//
+// Extracted to a named function so the route-gate test can exercise
+// the EXACT runtime logic without spinning up a full Gateway. If you
+// change this function, update the gate's call site at the same time
+// — or the test passes while live behavior diverges.
+func shouldRegisterWebRTCRoutes(cfg *Config) bool {
+	return cfg.SFUPort > 0
 }
 
 // getLocalSubscribers returns all local subscribers for a given topic and namespace
