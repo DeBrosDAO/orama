@@ -81,6 +81,14 @@ type FunctionRegistry interface {
 	// Delete removes a function. If version is 0, removes all versions.
 	Delete(ctx context.Context, namespace, name string, version int) error
 
+	// SetEnabled toggles a function's status between active and inactive
+	// without redeploying. Plan 11.5 — lets operators pause a misbehaving
+	// function during an incident response. Existing in-flight invocations
+	// finish; new ones see the function as missing/inactive and the
+	// invoker rejects them upstream. Returns ErrFunctionNotFound if the
+	// name doesn't exist in the namespace.
+	SetEnabled(ctx context.Context, namespace, name string, enabled bool) error
+
 	// GetWASMBytes retrieves the compiled WASM bytecode for a function.
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
 

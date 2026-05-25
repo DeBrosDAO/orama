@@ -10,11 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 )
+
+// newOramaBinaryPath is the on-disk path Phase 2b installs the new
+// orama binary to. Re-exec target for bugboard #15 chicken-and-egg fix.
+const newOramaBinaryPath = "/opt/orama/bin/orama"
 
 // Orchestrator manages the upgrade process
 type Orchestrator struct {
@@ -98,50 +103,85 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 // Execute runs the upgrade process
 func (o *Orchestrator) Execute() error {
 	fmt.Printf("🔄 Upgrading production installation...\n")
-	fmt.Printf("  This will preserve existing configurations and data\n")
-	fmt.Printf("  Configurations will be updated to latest format\n\n")
-
-	// Handle branch preferences
-	if err := o.handleBranchPreferences(); err != nil {
-		return err
+	if o.flags.ReexecedAfterBinarySwap {
+		fmt.Printf("  (Resumed under newly-installed binary — bug #15 chicken-and-egg fix.)\n")
+		fmt.Printf("  Skipping Phase 1/2/2b (already done by previous process); Phase 3+ runs here.\n")
+	} else {
+		fmt.Printf("  This will preserve existing configurations and data\n")
+		fmt.Printf("  Configurations will be updated to latest format\n\n")
 	}
 
-	// Phase 1: Check prerequisites
-	fmt.Printf("\n📋 Phase 1: Checking prerequisites...\n")
-	if err := o.setup.Phase1CheckPrerequisites(); err != nil {
-		return fmt.Errorf("prerequisites check failed: %w", err)
-	}
-
-	// Phase 2: Provision environment
-	fmt.Printf("\n🛠️  Phase 2: Provisioning environment...\n")
-	if err := o.setup.Phase2ProvisionEnvironment(); err != nil {
-		return fmt.Errorf("environment provisioning failed: %w", err)
-	}
-
-	// Stop services before upgrading binaries
-	if o.setup.IsUpdate() {
-		if err := o.stopServices(); err != nil {
+	// Phases 1, 2, 2b are skipped on the re-execed run — already
+	// performed by the prior (old-binary) process. Phase 3 (secrets)
+	// onward runs here, deliberately under the new binary so Phase 4
+	// (config regen, the actual point of the re-exec) uses current code.
+	if !o.flags.ReexecedAfterBinarySwap {
+		// Handle branch preferences
+		if err := o.handleBranchPreferences(); err != nil {
 			return err
+		}
+
+		// Phase 1: Check prerequisites
+		fmt.Printf("\n📋 Phase 1: Checking prerequisites...\n")
+		if err := o.setup.Phase1CheckPrerequisites(); err != nil {
+			return fmt.Errorf("prerequisites check failed: %w", err)
+		}
+
+		// Phase 2: Provision environment
+		fmt.Printf("\n🛠️  Phase 2: Provisioning environment...\n")
+		if err := o.setup.Phase2ProvisionEnvironment(); err != nil {
+			return fmt.Errorf("environment provisioning failed: %w", err)
+		}
+
+		// Stop services before upgrading binaries
+		if o.setup.IsUpdate() {
+			if err := o.stopServices(); err != nil {
+				return err
+			}
+		}
+
+		// Check port availability after stopping services
+		if err := utils.EnsurePortsAvailable("prod upgrade", utils.DefaultPorts()); err != nil {
+			return err
+		}
+
+		// Phase 2b: Install/update binaries
+		fmt.Printf("\nPhase 2b: Installing/updating binaries...\n")
+		if err := o.setup.Phase2bInstallBinaries(); err != nil {
+			return fmt.Errorf("binary installation failed: %w", err)
+		}
+
+		// Detect existing installation
+		if o.setup.IsUpdate() {
+			fmt.Printf("  Detected existing installation\n")
+		} else {
+			fmt.Printf("  ⚠️  No existing installation detected, treating as fresh install\n")
+			fmt.Printf("  Use 'orama install' for fresh installation\n")
 		}
 	}
 
-	// Check port availability after stopping services
-	if err := utils.EnsurePortsAvailable("prod upgrade", utils.DefaultPorts()); err != nil {
-		return err
-	}
-
-	// Phase 2b: Install/update binaries
-	fmt.Printf("\nPhase 2b: Installing/updating binaries...\n")
-	if err := o.setup.Phase2bInstallBinaries(); err != nil {
-		return fmt.Errorf("binary installation failed: %w", err)
-	}
-
-	// Detect existing installation
-	if o.setup.IsUpdate() {
-		fmt.Printf("  Detected existing installation\n")
-	} else {
-		fmt.Printf("  ⚠️  No existing installation detected, treating as fresh install\n")
-		fmt.Printf("  Use 'orama install' for fresh installation\n")
+	// Bugboard #15 fix — chicken-and-egg.
+	//
+	// Up to here we are still running the OLD orama binary's compiled
+	// code. The next phases (3 secrets, 4 configs, 5 systemd) include
+	// Phase4GenerateConfigs which is COMPILED into this process. If we
+	// keep running, those phases use OLD logic and any config-shape
+	// changes shipped in this release only take effect on the NEXT
+	// upgrade.
+	//
+	// Re-exec the just-installed binary with the same args + a hidden
+	// marker so it skips the pre-binary phases (already done above) and
+	// runs Phase 3+ with its OWN up-to-date code. syscall.Exec replaces
+	// this process — control never returns past it on success.
+	if !o.flags.ReexecedAfterBinarySwap {
+		if err := o.reexecAfterBinarySwap(); err != nil {
+			// Soft-fail: log and continue with old-binary phases as a
+			// fallback. Operator gets a clear warning that the chicken-
+			// and-egg fix didn't apply for this run.
+			fmt.Fprintf(os.Stderr, "⚠️  Could not re-exec post-binary-swap (%v); "+
+				"continuing with current binary — config changes from this release "+
+				"may only take effect on the NEXT upgrade. See bugboard #15.\n", err)
+		}
 	}
 
 	// Phase 3: Ensure secrets exist
@@ -602,6 +642,45 @@ func (o *Orchestrator) extractGatewayConfig() (enableHTTPS bool, domain string, 
 	}
 
 	return enableHTTPS, domain, baseDomain
+}
+
+// reexecAfterBinarySwap replaces this process with the newly-installed
+// orama binary at /opt/orama/bin/orama, preserving all original CLI args
+// and appending --reexeced-after-binary-swap so the new process knows
+// to skip the pre-binary phases. Bugboard #15 chicken-and-egg fix.
+//
+// Returns nil only when syscall.Exec is about to take effect; on success
+// the function never actually returns (the process image is replaced).
+// On any failure before the exec syscall, returns the wrapping error so
+// the caller can fall back to running the rest of the upgrade with the
+// old binary (with a warning).
+func (o *Orchestrator) reexecAfterBinarySwap() error {
+	if _, err := os.Stat(newOramaBinaryPath); err != nil {
+		return fmt.Errorf("new binary not found at %s: %w", newOramaBinaryPath, err)
+	}
+	// Defensive: don't re-exec ourselves into a loop if the install
+	// somehow placed our currently-running binary at that path. Compare
+	// inode-stable identity via os.Stat.
+	if cur, err := os.Executable(); err == nil {
+		curInfo, e1 := os.Stat(cur)
+		newInfo, e2 := os.Stat(newOramaBinaryPath)
+		if e1 == nil && e2 == nil && os.SameFile(curInfo, newInfo) {
+			// Already running the new binary (e.g. someone manually pre-
+			// installed it). No re-exec needed.
+			fmt.Printf("  (current binary already matches installed binary; skipping re-exec)\n")
+			return nil
+		}
+	}
+
+	args := append([]string{newOramaBinaryPath}, os.Args[1:]...)
+	args = append(args, "--reexeced-after-binary-swap")
+	fmt.Printf("\n🔁 Re-executing with newly-installed binary to run remaining phases with current code (#15 fix)...\n")
+	// syscall.Exec replaces this process image; argv[0] is the binary
+	// path, env inherited as-is. On success we never return.
+	if err := syscall.Exec(newOramaBinaryPath, args, os.Environ()); err != nil {
+		return fmt.Errorf("syscall.Exec %s: %w", newOramaBinaryPath, err)
+	}
+	return nil
 }
 
 func (o *Orchestrator) regenerateConfigs() error {

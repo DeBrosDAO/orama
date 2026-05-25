@@ -29,6 +29,12 @@ type PushSendArgs struct {
 	Sound          string                 `json:"sound,omitempty"`
 	Data           map[string]interface{} `json:"data,omitempty"`
 	TargetProvider string                 `json:"target_provider,omitempty"`
+	// ExcludeProvider is the inverse of TargetProvider — drops devices
+	// whose provider equals this value. Cleaner semantic than listing
+	// every included provider for the "fan out to everyone EXCEPT VoIP"
+	// pattern (chat-handler wants ntfy+apns+expo but never apns_voip).
+	// If both are set, TargetProvider wins. Bugboard feat-10.
+	ExcludeProvider string `json:"exclude_provider,omitempty"`
 }
 
 // MaxPushSendArgsBytes caps the JSON arg size to a few KB. Push payloads
@@ -101,14 +107,15 @@ func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []b
 	}
 
 	msg := push.PushMessage{
-		Title:          args.Title,
-		Body:           args.Body,
-		Channel:        args.Channel,
-		Priority:       priority,
-		Badge:          args.Badge,
-		Sound:          args.Sound,
-		Data:           args.Data,
-		TargetProvider: args.TargetProvider,
+		Title:           args.Title,
+		Body:            args.Body,
+		Channel:         args.Channel,
+		Priority:        priority,
+		Badge:           args.Badge,
+		Sound:           args.Sound,
+		Data:            args.Data,
+		TargetProvider:  args.TargetProvider,
+		ExcludeProvider: args.ExcludeProvider,
 	}
 
 	// Route through Manager when present so per-namespace push config
@@ -197,14 +204,15 @@ func (h *HostFunctions) PushSendV2(ctx context.Context, userID string, msgJSON [
 	}
 
 	msg := push.PushMessage{
-		Title:          args.Title,
-		Body:           args.Body,
-		Channel:        args.Channel,
-		Priority:       priority,
-		Badge:          args.Badge,
-		Sound:          args.Sound,
-		Data:           args.Data,
-		TargetProvider: args.TargetProvider,
+		Title:           args.Title,
+		Body:            args.Body,
+		Channel:         args.Channel,
+		Priority:        priority,
+		Badge:           args.Badge,
+		Sound:           args.Sound,
+		Data:            args.Data,
+		TargetProvider:  args.TargetProvider,
+		ExcludeProvider: args.ExcludeProvider,
 	}
 
 	// Prefer the Manager (per-namespace config); fall back to the legacy

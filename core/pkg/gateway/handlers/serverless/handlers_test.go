@@ -68,6 +68,10 @@ func (m *mockRegistry) Delete(_ context.Context, _, _ string, _ int) error {
 	return m.deleteErr
 }
 
+func (m *mockRegistry) SetEnabled(_ context.Context, _, _ string, _ bool) error {
+	return nil
+}
+
 func (m *mockRegistry) GetWASMBytes(_ context.Context, _ string) ([]byte, error) {
 	return nil, nil
 }

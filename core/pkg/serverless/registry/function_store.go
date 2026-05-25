@@ -298,6 +298,45 @@ func (s *FunctionStore) Delete(ctx context.Context, namespace, name string, vers
 	return nil
 }
 
+// SetStatus updates the status column for the latest version of a
+// function within a namespace. Used by the disable/enable admin
+// endpoints so operators can pause a misbehaving function during an
+// incident without redeploying (plan 11.5).
+//
+// Caller passes the desired FunctionStatus directly so this method
+// stays generic for "active" / "inactive" / "error" alike. Returns
+// ErrFunctionNotFound if no row matches.
+func (s *FunctionStore) SetStatus(ctx context.Context, namespace, name string, status FunctionStatus) error {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" {
+		return fmt.Errorf("namespace and name required")
+	}
+	switch status {
+	case FunctionStatusActive, FunctionStatusInactive, FunctionStatusError:
+		// ok
+	default:
+		return fmt.Errorf("invalid status %q (must be active/inactive/error)", status)
+	}
+
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
+	result, err := s.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	if err != nil {
+		return fmt.Errorf("failed to set function status: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return ErrFunctionNotFound
+	}
+
+	s.logger.Info("Function status updated",
+		zap.String("namespace", namespace),
+		zap.String("name", name),
+		zap.String("status", string(status)),
+	)
+	return nil
+}
+
 // SaveEnvVars saves environment variables for a function.
 func (s *FunctionStore) SaveEnvVars(ctx context.Context, functionID string, envVars map[string]string) error {
 	deleteQuery := `DELETE FROM function_env_vars WHERE function_id = ?`

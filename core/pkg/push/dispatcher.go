@@ -104,10 +104,27 @@ func (d *PushDispatcher) SendToUserDetailed(
 	// to "apns_voip" devices, even though both are registered on the
 	// same iPhone. Unset = fanout (back-compat for every existing
 	// caller, including unmigrated functions in other namespaces).
+	//
+	// Bugboard feat-10 — exclude_provider filter. The inverse: drop
+	// devices whose Provider EQUALS msg.ExcludeProvider. Useful for the
+	// "fan out to everyone EXCEPT VoIP" pattern (chat handler that wants
+	// ntfy+apns+expo but never apns_voip — cleaner than listing every
+	// included provider). If both are set, TargetProvider wins —
+	// combining them is ambiguous (e.g. target=apns + exclude=apns is
+	// empty by construction), so we pick the safer positive filter and
+	// ignore the exclusion. Unset = no exclusion.
 	if msg.TargetProvider != "" {
 		filtered := devs[:0]
 		for _, dev := range devs {
 			if dev.Provider == msg.TargetProvider {
+				filtered = append(filtered, dev)
+			}
+		}
+		devs = filtered
+	} else if msg.ExcludeProvider != "" {
+		filtered := devs[:0]
+		for _, dev := range devs {
+			if dev.Provider != msg.ExcludeProvider {
 				filtered = append(filtered, dev)
 			}
 		}

@@ -223,6 +223,38 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 	return functions, nil
 }
 
+// SetEnabled flips a function's status between active and inactive
+// without redeploying (plan 11.5 disable/enable). Targets ALL versions
+// of the function by name so a disable call pauses the whole function,
+// not a single version — operators use this during incident response.
+// Returns ErrFunctionNotFound when no row matches.
+func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabled bool) error {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" {
+		return fmt.Errorf("namespace and name required")
+	}
+	status := FunctionStatusInactive
+	if enabled {
+		status = FunctionStatusActive
+	}
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
+	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	if err != nil {
+		return fmt.Errorf("failed to set function enabled state: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return ErrFunctionNotFound
+	}
+	r.logger.Info("Function enabled-state updated",
+		zap.String("namespace", namespace),
+		zap.String("name", name),
+		zap.String("status", string(status)),
+	)
+	return nil
+}
+
 // Delete removes a function. If version is 0, removes all versions.
 func (r *Registry) Delete(ctx context.Context, namespace, name string, version int) error {
 	namespace = strings.TrimSpace(namespace)

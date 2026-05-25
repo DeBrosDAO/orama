@@ -79,6 +79,21 @@ func (m *MockRegistry) Delete(ctx context.Context, namespace, name string, versi
 	return nil
 }
 
+func (m *MockRegistry) SetEnabled(ctx context.Context, namespace, name string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fn, ok := m.functions[namespace+"/"+name]
+	if !ok {
+		return ErrFunctionNotFound
+	}
+	if enabled {
+		fn.Status = FunctionStatusActive
+	} else {
+		fn.Status = FunctionStatusInactive
+	}
+	return nil
+}
+
 func (m *MockRegistry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

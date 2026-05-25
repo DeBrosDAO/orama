@@ -37,16 +37,27 @@ const (
 // can target "apns" only and avoid waking the user's "apns_voip"
 // (PushKit/CallKit) device on every text. Providers themselves ignore
 // this field.
+//
+// ExcludeProvider is the inverse filter (bugboard feat-10). Empty =
+// no exclusion. Non-empty = dispatcher skips any device whose Provider
+// EQUALS this value. Useful for the "fan out to everyone EXCEPT VoIP"
+// pattern — a chat message handler that wants ntfy + apns + expo but
+// never apns_voip. When BOTH TargetProvider and ExcludeProvider are
+// set, TargetProvider wins and Exclude is ignored (positive filter is
+// strictly narrower than negative; combining them is ambiguous so we
+// pick the safer one — see dispatcher comment for rationale). Providers
+// themselves ignore this field.
 type PushMessage struct {
-	DeviceToken    string
-	Title          string
-	Body           string
-	Data           map[string]interface{}
-	Badge          int
-	Sound          string
-	Channel        string // "messages", "calls", etc — provider may map to its own channel concept
-	Priority       PushPriority
-	TargetProvider string // dispatcher-side filter; "" = fanout. See type doc.
+	DeviceToken     string
+	Title           string
+	Body            string
+	Data            map[string]interface{}
+	Badge           int
+	Sound           string
+	Channel         string // "messages", "calls", etc — provider may map to its own channel concept
+	Priority        PushPriority
+	TargetProvider  string // dispatcher-side positive filter; "" = fanout. See type doc.
+	ExcludeProvider string // dispatcher-side negative filter; "" = no exclusion. See type doc.
 }
 
 // PushProvider is implemented by each backend (ntfy, expo, apns).

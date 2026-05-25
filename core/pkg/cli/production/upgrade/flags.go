@@ -18,6 +18,19 @@ type Flags struct {
 	NodeFilter string // Single node IP to upgrade (optional)
 	Delay      int    // Delay in seconds between nodes during rolling upgrade
 
+	// ReexecedAfterBinarySwap is set by the orchestrator when it re-execs
+	// itself with the NEWLY-INSTALLED binary, post Phase 2b. The new
+	// process detects this flag, skips the pre-binary phases (1, 2, 2b)
+	// already done by the old binary, and runs Phase 3+ using its OWN
+	// up-to-date compiled config-generation logic. Closes bugboard #15
+	// chicken-and-egg: pre-fix, Phase 4 ran with the old binary's
+	// compiled Phase4GenerateConfigs, so config changes only took effect
+	// on the NEXT rollout.
+	//
+	// Hidden flag — set programmatically by orchestrator.go via os.Args,
+	// not a documented user-facing option.
+	ReexecedAfterBinarySwap bool
+
 	// Anyone flags
 	AnyoneClient     bool
 	AnyoneRelay      bool
@@ -42,6 +55,11 @@ func ParseFlags(args []string) (*Flags, error) {
 	fs.BoolVar(&flags.Force, "force", false, "Reconfigure all settings")
 	fs.BoolVar(&flags.RestartServices, "restart", false, "Automatically restart services after upgrade")
 	fs.BoolVar(&flags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
+
+	// Hidden flag — see Flags.ReexecedAfterBinarySwap doc. The fs.Bool
+	// registers it without exposing in help output (no .Usage doc text
+	// that operators would normally search for).
+	fs.BoolVar(&flags.ReexecedAfterBinarySwap, "reexeced-after-binary-swap", false, "")
 
 	// Remote upgrade flags
 	fs.StringVar(&flags.Env, "env", "", "Target environment for remote rolling upgrade (devnet, testnet)")
