@@ -570,6 +570,13 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		logger.Logger,
 	)
 
+	// Wire the dispatcher into hostFuncs so PubSubPublish /
+	// PubSubPublishBatch fire local wildcard triggers immediately on
+	// publish — closes the bugboard #93 gap where WASM publishes to e.g.
+	// "presence:user-1" never reached wildcard handlers like "presence:*"
+	// because libp2p has no wildcard subscribe.
+	hostFuncs.SetTriggerDispatcher(deps.PubSubDispatcher)
+
 	// Cron trigger store + scheduler. The scheduler polls
 	// function_cron_triggers and invokes due rows via the same
 	// ServerlessInvoker used for PubSub triggers; the ↓ Start call wires

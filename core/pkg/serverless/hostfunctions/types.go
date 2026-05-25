@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -52,6 +53,16 @@ type HostFunctions struct {
 	// returns ErrFunctionInvokeNotAvailable.
 	invoker     serverless.FunctionInvoker
 	invokerLock sync.RWMutex
+
+	// triggerDispatcher is set after construction (via SetTriggerDispatcher).
+	// When non-nil, PubSubPublish / PubSubPublishBatch synchronously fire
+	// wildcard triggers on the local gateway so functions like
+	// presence-aggregator with trigger "presence:*" actually receive
+	// WASM-published events (bugboard #93, plan-3 wildcard delivery gap).
+	// nil leaves the existing behavior (libp2p-only delivery; wildcards
+	// silently dropped on WASM publishes).
+	triggerDispatcher     *triggers.PubSubDispatcher
+	triggerDispatcherLock sync.RWMutex
 
 	// Current invocation context (set per-execution)
 	invCtx     *serverless.InvocationContext

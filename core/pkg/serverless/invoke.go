@@ -59,6 +59,12 @@ type InvokeRequest struct {
 	// engine can populate InvocationContext.CallerJWTSubject — fixes the
 	// bug-#215 case where API-key precedence buries the JWT identity.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+	// TriggerDepth is the recursion-depth bucket at which this invocation
+	// runs. 0 means top-level (HTTP/WS/cron source); each trigger-driven
+	// invocation increments it. The dispatcher's host-fn wildcard path
+	// (bugboard #93) uses this to bound local recursion that otherwise
+	// would not round-trip through libp2p network latency.
+	TriggerDepth int `json:"trigger_depth,omitempty"`
 }
 
 // InvokeResponse contains the result of a function invocation.
@@ -137,6 +143,7 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		EnvVars:          envVars,
 		CallerClaims:     req.CallerClaims,
 		CallerJWTSubject: req.CallerJWTSubject,
+		TriggerDepth:     req.TriggerDepth,
 	}
 
 	// Execute with retry logic

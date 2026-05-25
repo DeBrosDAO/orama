@@ -29,6 +29,13 @@ type TriggerMatch struct {
 	FunctionName            string
 	Namespace               string
 	Topic                   string
+	// TopicPattern is the trigger's stored pattern (may be a glob).
+	// Carried alongside the resolved Topic so callers like
+	// PubSubDispatcher.DispatchLocalPublish can distinguish wildcard
+	// matches from concrete-topic matches WITHOUT a second lookup
+	// (used to avoid double-firing concrete triggers that already get
+	// delivered via the libp2p subscribe-loopback path).
+	TopicPattern            string
 	AggregationWindowMs     int
 	AggregationMaxBatchSize int
 }
@@ -281,6 +288,7 @@ func (s *PubSubTriggerStore) GetByTopicAndNamespace(ctx context.Context, topic, 
 			FunctionName:            row.FunctionName,
 			Namespace:               row.Namespace,
 			Topic:                   topic, // resolved topic, not the pattern
+			TopicPattern:            row.TopicPattern,
 			AggregationWindowMs:     row.AggregationWindowMs,
 			AggregationMaxBatchSize: row.AggregationMaxBatchSize,
 		})

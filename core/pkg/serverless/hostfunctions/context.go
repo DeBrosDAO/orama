@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 )
 
 // SetInvocationContext sets the current invocation context on the
@@ -46,6 +47,21 @@ func (h *HostFunctions) SetInvoker(inv serverless.FunctionInvoker) {
 	h.invoker = inv
 }
 
+// SetTriggerDispatcher wires the PubSubDispatcher used by PubSubPublish /
+// PubSubPublishBatch to synchronously fire wildcard triggers for
+// WASM-published topics on this gateway (bugboard #93). nil disables
+// local wildcard dispatch — only libp2p subscribe delivery applies, and
+// wildcard triggers will be silent for WASM publishes.
+//
+// Wired after both HostFunctions and PubSubDispatcher exist; the
+// dispatcher depends on the engine (which depends on HostFunctions), so
+// the cycle is broken via this setter — same pattern as SetInvoker.
+func (h *HostFunctions) SetTriggerDispatcher(d *triggers.PubSubDispatcher) {
+	h.triggerDispatcherLock.Lock()
+	defer h.triggerDispatcherLock.Unlock()
+	h.triggerDispatcher = d
+}
+
 // FunctionInvoke synchronously runs another function in the same namespace
 // and returns its output bytes. Caller wallet, JWT claims, and WS client
 // ID are inherited from the current invocation so the inner function sees
@@ -84,6 +100,13 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		WSClientID:       cur.WSClientID,
 		CallerClaims:     cur.CallerClaims,
 		CallerJWTSubject: cur.CallerJWTSubject,
+		// Propagate trigger depth so a wildcard-triggered handler that
+		// calls function_invoke(B) — and B then publishes a topic that
+		// matches A's own wildcard — still hits the maxTriggerDepth
+		// guard. Without this, depth resets to 0 on every
+		// function_invoke hop and the recursion bound reopens.
+		// Bugboard #93 follow-up (audit C7).
+		TriggerDepth: cur.TriggerDepth,
 	}
 	resp, err := inv.Invoke(ctx, req)
 	if err != nil {

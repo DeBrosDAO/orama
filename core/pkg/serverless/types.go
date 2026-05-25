@@ -290,6 +290,16 @@ type InvocationContext struct {
 	// caller also presents an API key. Empty string when the request was
 	// not JWT-authenticated. Bug #215.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+
+	// TriggerDepth is the recursion-depth bucket for trigger-driven
+	// invocations. 0 means a top-level (HTTP/WS/cron) invocation; each
+	// PubSub-trigger-driven invocation increments it. The host-fn
+	// wildcard-publish path (`oh.PubSubPublish` → DispatchLocalPublish)
+	// reads this and refuses to fire wildcards once depth ≥
+	// maxTriggerDepth, preventing local-only recursion loops a function
+	// could create by publishing topics that match its own wildcard
+	// trigger (bugboard #93 follow-up).
+	TriggerDepth int `json:"trigger_depth,omitempty"`
 }
 
 // InvocationResult represents the result of a function invocation.

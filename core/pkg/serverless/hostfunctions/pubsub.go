@@ -11,6 +11,16 @@ import (
 )
 
 // PubSubPublish publishes a message to a topic.
+//
+// After a successful libp2p publish, also synchronously fires local
+// wildcard triggers via the dispatcher (bugboard #93). Concrete-topic
+// triggers are skipped here — they get delivered by the libp2p
+// subscribe-loopback path and would double-invoke if fired locally too.
+// See dispatcher.DispatchLocalPublish for the filter rationale.
+//
+// When no triggerDispatcher is wired (tests, or a future deployment
+// without serverless triggers), this is just the plain libp2p publish
+// — behavior unchanged from before #93.
 func (h *HostFunctions) PubSubPublish(ctx context.Context, topic string, data []byte) error {
 	if h.pubsub == nil {
 		return &serverless.HostFunctionError{Function: "pubsub_publish", Cause: fmt.Errorf("pubsub not available")}
@@ -21,7 +31,38 @@ func (h *HostFunctions) PubSubPublish(ctx context.Context, topic string, data []
 		return &serverless.HostFunctionError{Function: "pubsub_publish", Cause: err}
 	}
 
+	h.dispatchLocalWildcards(ctx, topic, data)
 	return nil
+}
+
+// dispatchLocalWildcards calls the trigger dispatcher's wildcard-only
+// local-dispatch path for the given topic. Safe no-op when the
+// dispatcher isn't wired or there's no namespace in the invocation
+// context (e.g. when called from a non-serverless caller).
+//
+// Same-gateway publishes cover ~100% of namespace-gateway architecture
+// (single gateway process per namespace). Cross-gateway wildcard
+// delivery is plan-6/plan-10 territory and out of scope.
+func (h *HostFunctions) dispatchLocalWildcards(ctx context.Context, topic string, data []byte) {
+	h.triggerDispatcherLock.RLock()
+	d := h.triggerDispatcher
+	h.triggerDispatcherLock.RUnlock()
+	if d == nil {
+		return
+	}
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil || cur.Namespace == "" {
+		// No namespace = nothing to look up; skip silently.
+		return
+	}
+	// Pass the CURRENT invocation's depth so DispatchLocalPublish's
+	// own check (`if depth >= maxTriggerDepth { return }`) eventually
+	// trips after enough self-recursive WASM publishes (function on
+	// "events:*" publishes "events:done" → loops). Without this thread,
+	// every WASM publish reset depth to 0 and the local-recursion loop
+	// was only bounded by dispatchTimeout + the rate limiter — much
+	// weaker (security audit MEDIUM, bugboard #93 follow-up).
+	d.DispatchLocalPublish(ctx, cur.Namespace, topic, data, cur.TriggerDepth)
 }
 
 // pubSubBatchEntry mirrors the JSON shape accepted by PubSubPublishBatch.
@@ -79,7 +120,46 @@ func (h *HostFunctions) PubSubPublishBatch(ctx context.Context, msgsJSON []byte)
 	if err := h.pubsub.PublishBatch(ctx, msgs, pubsub.PublishBatchOptions{}); err != nil {
 		return &serverless.HostFunctionError{Function: "pubsub_publish_batch", Cause: err}
 	}
+
+	// Fire local wildcard triggers per UNIQUE topic — same rationale as
+	// PubSubPublish above. Done after the batch succeeds so we don't
+	// fire phantom dispatches for messages that didn't actually publish.
+	for _, e := range dedupBatchByTopic(msgs) {
+		h.dispatchLocalWildcards(ctx, e.Topic, e.Data)
+	}
 	return nil
+}
+
+// dedupBatchByTopic collapses a batch to one entry per unique topic,
+// keeping insertion order and most-recent-wins semantics on the data
+// payload.
+//
+// A batch with 100 entries on the same topic should only run ONE
+// trigger lookup + dispatch — otherwise the same wildcard-matching
+// handler gets invoked 100 times for what is semantically one logical
+// wakeup. Most-recent-wins matches what a downstream subscriber would
+// see after libp2p coalescing in practice. Bounds the fan-out from
+// len(batch) × N wildcard handlers to distinct-topics × N (security
+// audit MEDIUM, bug #93 follow-up).
+//
+// Pure function so the batch-dedup logic pins exactly.
+func dedupBatchByTopic(msgs []pubsub.TopicMessage) []pubsub.TopicMessage {
+	if len(msgs) <= 1 {
+		return msgs
+	}
+	lastByTopic := make(map[string][]byte, len(msgs))
+	order := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		if _, seen := lastByTopic[m.Topic]; !seen {
+			order = append(order, m.Topic)
+		}
+		lastByTopic[m.Topic] = m.Data
+	}
+	out := make([]pubsub.TopicMessage, 0, len(order))
+	for _, topic := range order {
+		out = append(out, pubsub.TopicMessage{Topic: topic, Data: lastByTopic[topic]})
+	}
+	return out
 }
 
 // WSSend sends data to a specific WebSocket client.

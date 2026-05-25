@@ -372,8 +372,111 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 		if marshalErr != nil {
 			continue
 		}
-		go d.invokeFunction(match, eventJSON)
+		go d.invokeFunction(match, eventJSON, depth+1)
 	}
+}
+
+// DispatchLocalPublish is the wildcard-trigger half-fix for the
+// "WASM publish never reaches wildcard handlers" gap documented at
+// PubSubDispatcher's type doc (bugboard #93, plan-3 follow-up).
+//
+// The libp2p Refresh path subscribes only to CONCRETE trigger patterns
+// (wildcards skipped — libp2p has no wildcard subscribe). For a function
+// that calls `oh.PubSubPublish("presence:user-1", ...)`:
+//
+//   - Concrete trigger "presence:user-1" → fires via libp2p subscribe
+//     loopback. Works today; we MUST NOT fire it locally too (would
+//     double-invoke the function).
+//   - Wildcard trigger "presence:*" → never subscribed via libp2p →
+//     never fires today. This method closes that gap by dispatching the
+//     wildcard-matching triggers synchronously on the publishing gateway.
+//
+// Concrete-match rows are filtered out (TopicPattern == resolved Topic)
+// so we never double-invoke. Wildcard-match rows are dispatched via the
+// same Dispatch path as the libp2p subscribe handler — same depth
+// tracking, same aggregator buffering, same goroutine spawn.
+//
+// Same-gateway publishes cover ~100% of namespace-gateway architecture
+// (one gateway per namespace per node, publishers and triggers run in
+// the same process). Cross-gateway wildcard delivery is a separate,
+// larger problem (plan 6 / plan 10) and out of scope here.
+func (d *PubSubDispatcher) DispatchLocalPublish(ctx context.Context, namespace, topic string, data []byte, depth int) {
+	if depth >= maxTriggerDepth {
+		d.logger.Warn("PubSub trigger depth limit reached, skipping local-publish dispatch",
+			zap.String("namespace", namespace),
+			zap.String("topic", topic),
+			zap.Int("depth", depth),
+		)
+		return
+	}
+
+	matches, err := d.getMatches(ctx, namespace, topic)
+	if err != nil {
+		d.logger.Error("DispatchLocalPublish: failed to look up triggers",
+			zap.String("namespace", namespace),
+			zap.String("topic", topic),
+			zap.Error(err),
+		)
+		return
+	}
+
+	wildcardMatches := filterWildcardMatches(matches, topic)
+	if len(wildcardMatches) == 0 {
+		return
+	}
+
+	event := PubSubEvent{
+		Topic:        topic,
+		Data:         json.RawMessage(data),
+		Namespace:    namespace,
+		TriggerDepth: depth + 1,
+		Timestamp:    time.Now().Unix(),
+	}
+
+	d.logger.Debug("DispatchLocalPublish: firing wildcard-only triggers",
+		zap.String("namespace", namespace),
+		zap.String("topic", topic),
+		zap.Int("wildcard_matches", len(wildcardMatches)),
+		zap.Int("depth", depth),
+	)
+
+	var (
+		eventJSON  []byte
+		marshalErr error
+	)
+	for _, match := range wildcardMatches {
+		if match.AggregationWindowMs > 0 {
+			d.bufferEvent(match, event)
+			continue
+		}
+		if eventJSON == nil && marshalErr == nil {
+			eventJSON, marshalErr = json.Marshal(event)
+			if marshalErr != nil {
+				d.logger.Error("DispatchLocalPublish: failed to marshal PubSub event", zap.Error(marshalErr))
+				continue
+			}
+		}
+		if marshalErr != nil {
+			continue
+		}
+		go d.invokeFunction(match, eventJSON, depth+1)
+	}
+}
+
+// filterWildcardMatches drops matches whose TopicPattern equals the
+// resolved Topic — those are concrete-pattern matches that already get
+// delivered via the libp2p subscribe-loopback path (see Refresh).
+// Returns matches whose pattern is a true glob (e.g. "presence:*"
+// matching "presence:user-1"). Pure function so the bug-93 fix-logic
+// pins exactly.
+func filterWildcardMatches(matches []TriggerMatch, resolvedTopic string) []TriggerMatch {
+	out := matches[:0]
+	for _, m := range matches {
+		if m.TopicPattern != resolvedTopic {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // bufferEvent routes an event through the aggregator. The flush callback
@@ -398,6 +501,7 @@ func (d *PubSubDispatcher) bufferEvent(match TriggerMatch, event PubSubEvent) {
 				FunctionName: match.FunctionName,
 				Input:        payload,
 				TriggerType:  serverless.TriggerTypePubSub,
+				TriggerDepth: event.TriggerDepth, // event was built with depth+1 by the caller
 			}
 			if _, err := d.invoker.Invoke(ctx, req); err != nil {
 				d.logger.Warn("Aggregated PubSub invocation failed",
@@ -428,7 +532,12 @@ func (d *PubSubDispatcher) getMatches(ctx context.Context, namespace, topic stri
 
 
 // invokeFunction invokes a single function for a trigger match.
-func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte) {
+//
+// `handlerDepth` is the depth at which the INVOKED handler runs (the
+// source depth + 1). Carried via InvokeRequest.TriggerDepth so the
+// handler's invocation context sees it; the wildcard-publish host-fn
+// path uses it to bound local recursion (bugboard #93 follow-up).
+func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, handlerDepth int) {
 	ctx, cancel := context.WithTimeout(context.Background(), dispatchTimeout)
 	defer cancel()
 
@@ -437,6 +546,7 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte) 
 		FunctionName: match.FunctionName,
 		Input:        eventJSON,
 		TriggerType:  serverless.TriggerTypePubSub,
+		TriggerDepth: handlerDepth,
 	}
 
 	resp, err := d.invoker.Invoke(ctx, req)
