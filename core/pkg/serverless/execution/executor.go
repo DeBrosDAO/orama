@@ -73,7 +73,14 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		WithStdin(stdin).
 		WithStdout(stdout).
 		WithStderr(stderr).
-		WithArgs(moduleName) // argv[0] is the program name
+		WithArgs(moduleName). // argv[0] is the program name
+		// Bugboard #27 — wazero defaults to fake/sentinel clocks. Without
+		// these opt-ins, TinyGo's time.Now() returns ~2022-01-01T00:00:00.001Z
+		// frozen on every read, silently poisoning timestamps in every
+		// invocation that uses time.Now() (receipts, audit rows, cursor cmp).
+		// Same fix applied at engine.go for the persistent-WS path.
+		WithSysWalltime().
+		WithSysNanotime()
 
 	// Acquire concurrency slot
 	if e.sem != nil {

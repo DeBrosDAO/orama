@@ -458,7 +458,16 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 		WithStdin(emptyReader{}).
 		WithStdout(discardWriter{}).
 		WithStderr(discardWriter{}).
-		WithArgs(fn.Name)
+		WithArgs(fn.Name).
+		// Bugboard #27 — wazero defaults to fake/sentinel clocks (deterministic
+		// fixtures for unit testing). TinyGo wasm calls WASI clock_time_get
+		// from time.Now() and gets a frozen ~2022-01-01T00:00:00.001Z back
+		// for every reading, silently poisoning any serverless function that
+		// embeds timestamps (receipts, audit rows, cursor cmp logic). Opt
+		// into real clocks via the documented wazero hook — same effect as
+		// the runtime would get on a normal Go process.
+		WithSysWalltime().
+		WithSysNanotime()
 
 	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
 	if err != nil {
