@@ -172,6 +172,26 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		}
 
 		resp, err := h.invoker.Invoke(ctx, req)
+		// Bugboard #24 diagnostic — when the 30s WS-handler timeout
+		// actually fires, log a structured warning so AnChat's next
+		// "signaling.relay timed out" report includes request_id +
+		// function + namespace + duration. Pre-fix this surfaced as
+		// opaque "RPC timeout after 30s" with no way to correlate to a
+		// specific invocation in engine logs.
+		if err != nil && ctx.Err() == context.DeadlineExceeded {
+			fields := []zap.Field{
+				zap.String("namespace", namespace),
+				zap.String("function", name),
+				zap.String("ws_client_id", clientID),
+				zap.Int64("duration_ms", resp.DurationMS),
+				zap.Int("timeout_ms", 30000),
+				zap.String("caller_wallet", callerWallet),
+			}
+			if resp.RequestID != "" {
+				fields = append(fields, zap.String("request_id", resp.RequestID))
+			}
+			h.logger.Warn("WS function-invoke hit 30s ceiling (bug-24)", fields...)
+		}
 		cancel()
 
 		// Send response back

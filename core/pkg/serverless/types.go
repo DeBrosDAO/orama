@@ -503,6 +503,30 @@ type HostServices interface {
 	// envelope. Same shape as DBTransaction's "structured per-op result".
 	PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error)
 
+	// TurnCredentials mints per-namespace TURN HMAC credentials for the
+	// caller's namespace (derived from invocation context — caller
+	// cannot spoof). Returns a JSON envelope matching the HTTP endpoint
+	// at /v1/webrtc/turn/credentials:
+	//
+	//   {
+	//     "configured": true,
+	//     "username": "<unix-ts>:<namespace>",
+	//     "password": "<hmac>",
+	//     "ttl": 600,
+	//     "uris": ["turn:...", "turns:...:443"],
+	//     "namespace": "<ns>"
+	//   }
+	//
+	// When TURN isn't configured on this gateway (TURNSecret empty),
+	// returns {configured:false, namespace:<ns>} as a structured envelope
+	// — NOT a Go error. This matches PushSend's silent-noop semantics so
+	// functions stay portable across deployments with/without TURN.
+	//
+	// Bugboard feat-9 — removes the round-trip through HTTP for WASM
+	// functions that need to inject TURN credentials into a peer's
+	// RTCConfiguration without going back out to the gateway.
+	TurnCredentials(ctx context.Context) ([]byte, error)
+
 	// ExecAndPublish runs ops atomically (like DBTransaction) and, ONLY
 	// if the batch commits, publishes data to the named topic with any
 	// occurrence of the literal string "{{seq}}" replaced by the assigned

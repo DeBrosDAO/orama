@@ -506,6 +506,12 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
 		IPFSAPIURL:  cfg.IPFSAPIURL,
 		HTTPTimeout: 30 * time.Second,
+		// feat-9 — TURN config for the turn_credentials host fn.
+		// Empty TURNSecret → host fn returns {configured:false} envelope
+		// (same shape as the HTTP endpoint's 503 semantically).
+		TURNDomain:       cfg.TURNDomain,
+		TURNSecret:       cfg.TURNSecret,
+		StealthCDNDomain: cfg.StealthCDNDomain,
 	}
 	// WS-PubSub bridge: wire PubSub topics directly to WS clients without
 	// per-event WASM invocation. The bridge is a thin layer over the

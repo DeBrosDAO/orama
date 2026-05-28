@@ -20,6 +20,15 @@ import (
 type HostFunctionsConfig struct {
 	IPFSAPIURL  string
 	HTTPTimeout time.Duration
+
+	// TURN configuration — feat-9. Plumbed in from the gateway so the
+	// `turn_credentials` host fn can mint per-namespace TURN credentials
+	// without a round-trip back through HTTP. Mirrors the HTTP endpoint
+	// at /v1/webrtc/turn/credentials. TURNSecret empty → host fn returns
+	// a structured "TURN not configured" envelope (no error).
+	TURNDomain       string
+	TURNSecret       string
+	StealthCDNDomain string // optional; non-empty adds turns:<domain>:443 URI
 }
 
 // HostFunctions provides the bridge between WASM functions and Orama services.
@@ -53,6 +62,15 @@ type HostFunctions struct {
 	// returns ErrFunctionInvokeNotAvailable.
 	invoker     serverless.FunctionInvoker
 	invokerLock sync.RWMutex
+
+	// TURN config — feat-9. Cached at NewHostFunctions; immutable for
+	// the gateway's lifetime so no lock needed. Empty TURNSecret means
+	// `turn_credentials` host fn returns a configured=false envelope
+	// instead of an error (same shape as PushSend's silent-noop when
+	// push isn't configured — keeps functions portable).
+	turnDomain       string
+	turnSecret       string
+	stealthCDNDomain string
 
 	// triggerDispatcher is set after construction (via SetTriggerDispatcher).
 	// When non-nil, PubSubPublish / PubSubPublishBatch synchronously fire

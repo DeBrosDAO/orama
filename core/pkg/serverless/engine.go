@@ -221,7 +221,20 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 	return engine, nil
 }
 
+// slowInvokeThreshold is the wall-clock duration above which Execute
+// emits a structured "slow invocation" warning with per-phase
+// breakdown. Picked to be well below the WS-handler's 30s ceiling
+// (bugboard #24) so we get diagnostic logs BEFORE the timeout actually
+// fires, surfacing which phase is the sink.
+const slowInvokeThreshold = 5 * time.Second
+
 // Execute runs a function with the given input and returns the output.
+//
+// Emits per-phase timing telemetry when total duration exceeds
+// slowInvokeThreshold — bugboard #24 diagnostic. Without this, slow
+// invocations only surfaced as opaque "RPC timeout after 30s" at the
+// WS handler, with no way to tell whether the sink was rate-limit
+// checks, module compile, or WASM execution itself.
 func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx *InvocationContext) ([]byte, error) {
 	if fn == nil {
 		return nil, &ValidationError{Field: "function", Message: "cannot be nil"}
@@ -229,6 +242,15 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 
 	invCtx = EnsureInvocationContext(invCtx, fn)
 	startTime := time.Now()
+	// Per-phase timestamps for the slow-invoke log (bugboard #24
+	// diagnostic). Zero values mean the phase was never entered, which
+	// itself is signal (e.g. ratelimitMs=0 with totalMs=30000 means we
+	// blocked entirely in module-load or execution).
+	var (
+		ratelimitDoneAt time.Time
+		moduleLoadedAt  time.Time
+		executeDoneAt   time.Time
+	)
 
 	// Check rate limit. Prefer the tiered path when the limiter supports it
 	// — that gives per-(ns, fn, wallet, ip) enforcement with retry-after.
@@ -256,6 +278,8 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 			}
 		}
 	}
+
+	ratelimitDoneAt = time.Now()
 
 	// Create timeout context
 	execCtx, cancel := CreateTimeoutContext(ctx, fn, e.config.MaxTimeoutSeconds)
@@ -292,8 +316,10 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	module, err := e.getOrCompileModule(execCtx, fn.WASMCID)
 	if err != nil {
 		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, 0, InvocationStatusError, err)
+		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, "module-load-failed", err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
+	moduleLoadedAt = time.Now()
 
 	// Execute the module with context setters
 	var contextSetter, contextClearer func()
@@ -302,6 +328,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 		contextClearer = func() { hf.ClearContext() }
 	}
 	output, err := e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
+	executeDoneAt = time.Now()
 	if err != nil {
 		status := InvocationStatusError
 		if execCtx.Err() == context.DeadlineExceeded {
@@ -309,11 +336,58 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 			err = ErrTimeout
 		}
 		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), status, err)
+		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, string(status), err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
 
 	e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), InvocationStatusSuccess, nil)
+	e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, "success", nil)
 	return output, nil
+}
+
+// logSlowInvocation emits a structured warning when total wall-clock
+// exceeds slowInvokeThreshold (bugboard #24 diagnostic). Per-phase
+// timestamps let operators see WHICH layer was the sink — pre-fix the
+// only signal was an opaque WS-handler "timeout after 30s" with no way
+// to tell whether rate-limit, module-load, or WASM-execute consumed
+// the budget.
+//
+// Zero-valued phase timestamps mean the phase was never reached, which
+// is itself signal — e.g. moduleLoadedAt=zero + executeDoneAt=zero with
+// large totalMs means we blocked in rate-limit OR module-load.
+func (e *Engine) logSlowInvocation(invCtx *InvocationContext, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt time.Time, status string, err error) {
+	totalMs := time.Since(startTime).Milliseconds()
+	if totalMs < slowInvokeThreshold.Milliseconds() {
+		return
+	}
+	// Compute phase deltas. Use 0 for unreached phases so the log line
+	// columns are stable.
+	var ratelimitMs, moduleLoadMs, executeMs int64
+	if !ratelimitDoneAt.IsZero() {
+		ratelimitMs = ratelimitDoneAt.Sub(startTime).Milliseconds()
+	}
+	if !moduleLoadedAt.IsZero() && !ratelimitDoneAt.IsZero() {
+		moduleLoadMs = moduleLoadedAt.Sub(ratelimitDoneAt).Milliseconds()
+	}
+	if !executeDoneAt.IsZero() && !moduleLoadedAt.IsZero() {
+		executeMs = executeDoneAt.Sub(moduleLoadedAt).Milliseconds()
+	}
+	fields := []zap.Field{
+		zap.String("namespace", invCtx.Namespace),
+		zap.String("function", invCtx.FunctionName),
+		zap.String("request_id", invCtx.RequestID),
+		zap.String("trigger_type", string(invCtx.TriggerType)),
+		zap.String("ws_client_id", invCtx.WSClientID),
+		zap.Int64("total_ms", totalMs),
+		zap.Int64("ratelimit_ms", ratelimitMs),
+		zap.Int64("module_load_ms", moduleLoadMs),
+		zap.Int64("execute_ms", executeMs),
+		zap.String("invocation_status", status),
+	}
+	if err != nil {
+		fields = append(fields, zap.Error(err))
+	}
+	e.logger.Warn("slow serverless invocation (bug-24 diagnostic)", fields...)
 }
 
 // Precompile compiles a WASM module and caches it for faster execution.
@@ -665,6 +739,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
 			NewFunctionBuilder().WithFunc(e.hPushSendV2).Export("push_send_v2").
+			NewFunctionBuilder().WithFunc(e.hTurnCredentials).Export("turn_credentials").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
@@ -1193,6 +1268,24 @@ func (e *Engine) hPushSendV2(ctx context.Context, mod api.Module,
 	if err != nil {
 		e.logger.Warn("host function push_send_v2 failed",
 			zap.String("user_id", string(userID)),
+			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hTurnCredentials is the WASM-callable wrapper for TurnCredentials —
+// feat-9. Takes no args (namespace derived from invocation context),
+// returns packed uint64 (ptr<<32 | len) pointing to a JSON envelope in
+// guest memory, or 0 on setup error.
+//
+// The envelope shape is documented at turn.go:turnCredentialsEnvelope.
+// Callers MUST parse it — a non-zero return doesn't imply TURN is
+// configured (check envelope.configured before using credentials).
+func (e *Engine) hTurnCredentials(ctx context.Context, mod api.Module) uint64 {
+	out, err := e.hostServices.TurnCredentials(ctx)
+	if err != nil {
+		e.logger.Warn("host function turn_credentials failed",
 			zap.Error(err))
 		return 0
 	}
