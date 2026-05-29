@@ -263,6 +263,10 @@ func (m *MockHostServices) HTTPFetch(ctx context.Context, method, url string, he
 	return nil, nil
 }
 
+func (m *MockHostServices) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+	return nil, nil
+}
+
 func (m *MockHostServices) GetEnv(ctx context.Context, key string) (string, error) {
 	return "", nil
 }

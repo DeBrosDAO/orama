@@ -1,8 +1,10 @@
 package hostfunctions
 
 import (
+	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/push"
@@ -42,6 +44,19 @@ func NewHostFunctions(
 		httpTimeout = 30 * time.Second
 	}
 
+	// Build the Anyone-routed HTTP client only when Anyone routing is
+	// enabled on this gateway (feat-11). When disabled, leave it nil so
+	// AnyoneFetch returns a typed error instead of silently using the
+	// direct path. anyoneproxy.NewHTTPClient() returns a fresh client
+	// with a SOCKS transport when enabled — safe to set Timeout on it
+	// (when disabled it returns the shared http.DefaultClient, which we
+	// must NOT mutate; the Enabled() guard ensures we never reach that).
+	var anyoneHTTPClient *http.Client
+	if anyoneproxy.Enabled() {
+		anyoneHTTPClient = anyoneproxy.NewHTTPClient()
+		anyoneHTTPClient.Timeout = httpTimeout
+	}
+
 	return &HostFunctions{
 		db:               db,
 		cacheClient:      cacheClient,
@@ -53,6 +68,7 @@ func NewHostFunctions(
 		pushDispatcher:   pushDispatcher,
 		pushManager:      pushManager,
 		wsBridge:         wsBridge,
+		anyoneHTTPClient: anyoneHTTPClient,
 		turnDomain:       cfg.TURNDomain,
 		turnSecret:       cfg.TURNSecret,
 		stealthCDNDomain: cfg.StealthCDNDomain,

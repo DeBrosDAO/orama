@@ -42,7 +42,13 @@ type HostFunctions struct {
 	wsManager   serverless.WebSocketManager
 	secrets     serverless.SecretsManager
 	httpClient  *http.Client
-	logger      *zap.Logger
+	// anyoneHTTPClient routes outbound requests through the Anyone SOCKS5
+	// proxy (feat-11). nil when Anyone routing is disabled on this
+	// gateway — AnyoneFetch returns a typed error in that case rather
+	// than falling back to the direct httpClient (no silent privacy
+	// regression).
+	anyoneHTTPClient *http.Client
+	logger           *zap.Logger
 
 	// pushDispatcher (legacy) and pushManager (per-namespace, bug #220
 	// follow-up) provide push send-paths. When pushManager is set, PushSend

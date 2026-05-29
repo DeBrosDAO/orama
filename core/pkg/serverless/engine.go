@@ -735,6 +735,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hCacheIncr).Export("cache_incr").
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
+			NewFunctionBuilder().WithFunc(e.hAnyoneFetch).Export("anyone_fetch").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
@@ -935,6 +936,43 @@ func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, meth
 	resp, err := e.hostServices.HTTPFetch(ctx, string(method), string(u), headers, body)
 	if err != nil {
 		e.logger.Error("host function http_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, resp)
+}
+
+// hAnyoneFetch is the WASM-callable wrapper for AnyoneFetch — feat-11.
+// Identical ABI to hHTTPFetch (method, url, headers JSON, body), routes
+// through the Anyone SOCKS5 proxy. Returns packed (ptr<<32 | len) to the
+// JSON response envelope, or 0 on a setup error (the typed
+// proxy-unavailable / transport-error cases come back inside the
+// envelope with status 0, NOT as a 0 return).
+func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
+	method, ok := e.executor.ReadFromGuest(mod, methodPtr, methodLen)
+	if !ok {
+		return 0
+	}
+	u, ok := e.executor.ReadFromGuest(mod, urlPtr, urlLen)
+	if !ok {
+		return 0
+	}
+
+	var headers map[string]string
+	if headersLen > 0 {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, headersPtr, headersLen, &headers); err != nil {
+			e.logger.Error("failed to unmarshal anyone_fetch headers", zap.Error(err))
+			return 0
+		}
+	}
+
+	body, ok := e.executor.ReadFromGuest(mod, bodyPtr, bodyLen)
+	if !ok {
+		return 0
+	}
+
+	resp, err := e.hostServices.AnyoneFetch(ctx, string(method), string(u), headers, body)
+	if err != nil {
+		e.logger.Error("host function anyone_fetch failed", zap.Error(err), zap.String("url", string(u)))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)
