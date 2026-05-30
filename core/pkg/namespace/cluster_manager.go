@@ -1815,6 +1815,52 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 	return restored, nil
 }
 
+// restoreWebRTC is the resolved WebRTC gateway config for a restored
+// namespace gateway.
+type restoreWebRTC struct {
+	enabled    bool
+	sfuPort    int
+	turnDomain string
+	turnSecret string
+}
+
+// chooseRestoreWebRTC decides the WebRTC fields for a restored namespace
+// gateway. The local state file wins when it carries a complete WebRTC
+// block; otherwise the DB (consulted lazily via dbFetch — only when the
+// state file is incomplete) is the source of truth. Returns a disabled
+// result when neither source has a usable block.
+//
+// Bugboard #25: namespaces that had WebRTC enabled AFTER their state file
+// was written carry no SFU/TURN fields in state. Without the DB fallback,
+// the from-disk restore regenerates the gateway config without the webrtc
+// block on every restart — SFU/TURN keep running but the gateway loses
+// turn_secret + sfu_port (credentials configured:false, routes 404).
+//
+// Extracted as a pure function so the precedence is unit-testable without
+// standing up the full restore path (systemd spawner + DB + port store).
+func chooseRestoreWebRTC(
+	stateHasSFU bool, stateSFUPort int, stateTURNDomain, stateTURNSecret string,
+	dbFetch func() (enabled bool, sfuPort int, turnDomain, turnSecret string),
+) restoreWebRTC {
+	if stateHasSFU && stateSFUPort > 0 && stateTURNSecret != "" {
+		return restoreWebRTC{
+			enabled:    true,
+			sfuPort:    stateSFUPort,
+			turnDomain: stateTURNDomain,
+			turnSecret: stateTURNSecret,
+		}
+	}
+	if enabled, sfuPort, turnDomain, turnSecret := dbFetch(); enabled && sfuPort > 0 && turnSecret != "" {
+		return restoreWebRTC{
+			enabled:    true,
+			sfuPort:    sfuPort,
+			turnDomain: turnDomain,
+			turnSecret: turnSecret,
+		}
+	}
+	return restoreWebRTC{}
+}
+
 // restoreClusterFromState restores all processes for a cluster using local state (no DB queries).
 func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *ClusterLocalState) error {
 	cm.logger.Info("Restoring namespace cluster from local state",
@@ -1961,12 +2007,44 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			}
 
-			// Add WebRTC config from persisted local state
-			if state.HasSFU && state.SFUSignalingPort > 0 && state.TURNSharedSecret != "" {
+			// Resolve WebRTC config for the restored gateway. Prefer the
+			// local state file; fall back to the DB (source of truth) to
+			// self-heal stale state. Bugboard #25 — the state file is NOT
+			// updated by EnableWebRTC, so a namespace enabled AFTER its state
+			// file was written carries no SFU/TURN fields here. Because this
+			// from-disk restore runs BEFORE the DB-backed restore and
+			// succeeds, the gateway config would otherwise be regenerated
+			// WITHOUT the webrtc block on every restart — SFU/TURN services
+			// keep running but the gateway has empty turn_secret + sfu_port=0
+			// (credentials return configured:false / 404, routes don't
+			// register). The lazy dbFetch only hits the DB when the state
+			// file is incomplete.
+			wr := chooseRestoreWebRTC(
+				state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret,
+				func() (bool, int, string, string) {
+					webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+					if err != nil || webrtcCfg == nil {
+						return false, 0, "", ""
+					}
+					sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID)
+					if err != nil || sfuBlock == nil {
+						return false, 0, "", ""
+					}
+					return true, sfuBlock.SFUSignalingPort,
+						fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
+						webrtcCfg.TURNSharedSecret
+				},
+			)
+			if wr.enabled {
 				gwCfg.WebRTCEnabled = true
-				gwCfg.SFUPort = state.SFUSignalingPort
-				gwCfg.TURNDomain = state.TURNDomain
-				gwCfg.TURNSecret = state.TURNSharedSecret
+				gwCfg.SFUPort = wr.sfuPort
+				gwCfg.TURNDomain = wr.turnDomain
+				gwCfg.TURNSecret = wr.turnSecret
+				if !state.HasSFU {
+					cm.logger.Info("Re-materialized WebRTC gateway config from DB (state file was stale)",
+						zap.String("namespace", state.NamespaceName),
+						zap.Int("sfu_port", wr.sfuPort))
+				}
 			}
 
 			if err := cm.spawnGatewayWithSystemd(ctx, gwCfg); err != nil {

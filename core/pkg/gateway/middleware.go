@@ -660,6 +660,18 @@ func isPublicPath(p string) bool {
 		return true
 	}
 
+	// Namespace WebRTC management endpoints (enable/disable/status). Auth is
+	// handled INSIDE the handlers by the X-Orama-Internal-Auth header +
+	// WireGuard-peer source check (same as spawn/repair above). Without this
+	// exemption the API-key middleware rejects them with "missing API key"
+	// before the handler's internal-auth check runs, making the internal
+	// endpoints unreachable — so `orama namespace enable webrtc` had no
+	// working path (the public endpoint hits a gateway without the WebRTC
+	// manager wired). Bugboard: internal webrtc mgmt endpoints unreachable.
+	if strings.HasPrefix(p, "/v1/internal/namespace/webrtc/") {
+		return true
+	}
+
 	// Vault proxy endpoints (no auth — rate-limited per identity hash within handler)
 	if strings.HasPrefix(p, "/v1/vault/") {
 		return true
