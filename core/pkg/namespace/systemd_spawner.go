@@ -321,6 +321,66 @@ func (s *SystemdSpawner) RestartGateway(ctx context.Context, namespace, nodeID s
 	return s.SpawnGateway(ctx, namespace, nodeID, cfg)
 }
 
+// gatewayWebRTCInSync reports whether the WebRTC block already on disk
+// matches the desired gateway config — i.e. no restart is needed.
+// Compares only the WebRTC-relevant fields (bugboard #25 drift surface).
+// Pure function so the reconcile decision is unit-testable without files
+// or systemd.
+func gatewayWebRTCInSync(onDisk gateway.GatewayYAMLWebRTC, cfg gateway.InstanceConfig) bool {
+	return onDisk.Enabled == cfg.WebRTCEnabled &&
+		onDisk.SFUPort == cfg.SFUPort &&
+		onDisk.TURNSecret == cfg.TURNSecret &&
+		onDisk.TURNDomain == cfg.TURNDomain
+}
+
+// ReconcileGateway is the WARM counterpart to SpawnGateway: when a
+// namespace gateway is already running, this compares its on-disk config
+// against the desired `cfg` and restarts it ONLY if the WebRTC block has
+// drifted (enabled / sfu_port / turn_secret / turn_domain differ).
+//
+// Bugboard #25: the from-disk restore skips healthy gateways, so a
+// gateway that lost its webrtc block on a prior restart (while staying
+// healthy) never gets its config regenerated — leaving SFU/TURN services
+// running but the gateway with no turn_secret/sfu_port (credentials
+// configured:false, /v1/webrtc/turn/credentials 404). The cold-spawn
+// self-heal only fires when the gateway happens to be down during
+// restore. This closes that gap for the healthy case.
+//
+// Idempotent: returns nil WITHOUT restarting when the on-disk WebRTC
+// block already matches the desired config — so it does not cause a
+// restart loop on every node boot. WebRTC is the only known config-drift
+// surface (bugboard #25); other fields are intentionally not compared to
+// avoid spurious restarts from harmless differences (e.g. olric server
+// ordering).
+func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID string, cfg gateway.InstanceConfig) error {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("gateway-%s.yaml", nodeID))
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		// No readable config to compare against — don't blindly restart a
+		// healthy gateway; absence of the config file is a different
+		// problem the caller's cold-spawn path handles.
+		return fmt.Errorf("read gateway config for reconcile: %w", err)
+	}
+	var onDisk gateway.GatewayYAMLConfig
+	if err := yaml.Unmarshal(existing, &onDisk); err != nil {
+		return fmt.Errorf("parse gateway config for reconcile: %w", err)
+	}
+
+	if gatewayWebRTCInSync(onDisk.WebRTC, cfg) {
+		// Already in sync — nothing to do, no restart.
+		return nil
+	}
+
+	s.logger.Info("Gateway WebRTC config drifted from desired; reconciling (rewrite + restart)",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.Bool("ondisk_enabled", onDisk.WebRTC.Enabled),
+		zap.Int("ondisk_sfu_port", onDisk.WebRTC.SFUPort),
+		zap.Bool("desired_enabled", cfg.WebRTCEnabled),
+		zap.Int("desired_sfu_port", cfg.SFUPort))
+	return s.RestartGateway(ctx, namespace, nodeID, cfg)
+}
+
 // SFUInstanceConfig holds configuration for spawning an SFU instance
 type SFUInstanceConfig struct {
 	Namespace      string

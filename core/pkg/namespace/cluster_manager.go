@@ -1983,70 +1983,78 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 3. Restore Gateway
 	if state.HasGateway {
+		// Build the desired gateway config up front (incl. WebRTC resolved
+		// from state→DB) so it drives BOTH the cold-spawn (gateway down)
+		// and the warm-reconcile (gateway up but config drifted) paths.
+		var olricServers []string // WireGuard IPs (Olric binds to the WG interface)
+		for _, np := range state.AllNodes {
+			olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
+		}
+		gwCfg := gateway.InstanceConfig{
+			Namespace:             state.NamespaceName,
+			NodeID:                cm.localNodeID,
+			HTTPPort:              pb.GatewayHTTPPort,
+			BaseDomain:            state.BaseDomain,
+			RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
+			OlricServers:          olricServers,
+			OlricTimeout:          30 * time.Second,
+			IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
+			IPFSAPIURL:            cm.ipfsAPIURL,
+			IPFSTimeout:           cm.ipfsTimeout,
+			IPFSReplicationFactor: cm.ipfsReplicationFactor,
+		}
+
+		// Resolve WebRTC config. Prefer the local state file; fall back to
+		// the DB (source of truth) to self-heal stale state. Bugboard #25 —
+		// the state file is NOT updated by EnableWebRTC, so a namespace
+		// enabled AFTER its state file was written carries no SFU/TURN
+		// fields here. The lazy dbFetch only hits the DB when the state
+		// file is incomplete.
+		wr := chooseRestoreWebRTC(
+			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret,
+			func() (bool, int, string, string) {
+				webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+				if err != nil || webrtcCfg == nil {
+					return false, 0, "", ""
+				}
+				sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID)
+				if err != nil || sfuBlock == nil {
+					return false, 0, "", ""
+				}
+				return true, sfuBlock.SFUSignalingPort,
+					fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
+					webrtcCfg.TURNSharedSecret
+			},
+		)
+		if wr.enabled {
+			gwCfg.WebRTCEnabled = true
+			gwCfg.SFUPort = wr.sfuPort
+			gwCfg.TURNDomain = wr.turnDomain
+			gwCfg.TURNSecret = wr.turnSecret
+		}
+
 		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
+			// Gateway is already up. Reconcile config drift (bugboard #25 —
+			// the WARM case): if the running gateway's on-disk config has a
+			// WebRTC block that differs from the desired (e.g. it lost the
+			// block on a prior restart where it stayed healthy and the
+			// cold-spawn path below never ran), rewrite the config + restart.
+			// ReconcileGateway is a no-op when the on-disk block already
+			// matches, so this does NOT cause a restart loop on every boot.
+			if rerr := cm.systemdSpawner.ReconcileGateway(ctx, state.NamespaceName, cm.localNodeID, gwCfg); rerr != nil {
+				cm.logger.Warn("Gateway WebRTC reconcile failed (leaving running config as-is)",
+					zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+			}
 		} else {
-			// Build olric server addresses — always use WireGuard IPs (Olric binds to WireGuard interface)
-			var olricServers []string
-			for _, np := range state.AllNodes {
-				olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
+			// Gateway is down → cold spawn with the resolved config.
+			if wr.enabled && !state.HasSFU {
+				cm.logger.Info("Re-materialized WebRTC gateway config from DB (state file was stale)",
+					zap.String("namespace", state.NamespaceName),
+					zap.Int("sfu_port", wr.sfuPort))
 			}
-			gwCfg := gateway.InstanceConfig{
-				Namespace:             state.NamespaceName,
-				NodeID:                cm.localNodeID,
-				HTTPPort:              pb.GatewayHTTPPort,
-				BaseDomain:            state.BaseDomain,
-				RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
-				GlobalRQLiteDSN:       cm.globalRQLiteDSN,
-				OlricServers:          olricServers,
-				OlricTimeout:          30 * time.Second,
-				IPFSClusterAPIURL:     cm.ipfsClusterAPIURL,
-				IPFSAPIURL:            cm.ipfsAPIURL,
-				IPFSTimeout:           cm.ipfsTimeout,
-				IPFSReplicationFactor: cm.ipfsReplicationFactor,
-			}
-
-			// Resolve WebRTC config for the restored gateway. Prefer the
-			// local state file; fall back to the DB (source of truth) to
-			// self-heal stale state. Bugboard #25 — the state file is NOT
-			// updated by EnableWebRTC, so a namespace enabled AFTER its state
-			// file was written carries no SFU/TURN fields here. Because this
-			// from-disk restore runs BEFORE the DB-backed restore and
-			// succeeds, the gateway config would otherwise be regenerated
-			// WITHOUT the webrtc block on every restart — SFU/TURN services
-			// keep running but the gateway has empty turn_secret + sfu_port=0
-			// (credentials return configured:false / 404, routes don't
-			// register). The lazy dbFetch only hits the DB when the state
-			// file is incomplete.
-			wr := chooseRestoreWebRTC(
-				state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret,
-				func() (bool, int, string, string) {
-					webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-					if err != nil || webrtcCfg == nil {
-						return false, 0, "", ""
-					}
-					sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID)
-					if err != nil || sfuBlock == nil {
-						return false, 0, "", ""
-					}
-					return true, sfuBlock.SFUSignalingPort,
-						fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
-						webrtcCfg.TURNSharedSecret
-				},
-			)
-			if wr.enabled {
-				gwCfg.WebRTCEnabled = true
-				gwCfg.SFUPort = wr.sfuPort
-				gwCfg.TURNDomain = wr.turnDomain
-				gwCfg.TURNSecret = wr.turnSecret
-				if !state.HasSFU {
-					cm.logger.Info("Re-materialized WebRTC gateway config from DB (state file was stale)",
-						zap.String("namespace", state.NamespaceName),
-						zap.Int("sfu_port", wr.sfuPort))
-				}
-			}
-
 			if err := cm.spawnGatewayWithSystemd(ctx, gwCfg); err != nil {
 				cm.logger.Error("Failed to restore Gateway from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
 			} else {
