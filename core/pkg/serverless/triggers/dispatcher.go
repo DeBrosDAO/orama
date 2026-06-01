@@ -2,7 +2,10 @@ package triggers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +23,19 @@ const (
 
 	// dispatchTimeout is the timeout for each triggered function invocation.
 	dispatchTimeout = 60 * time.Second
+
+	// dispatchDedupDMap / dispatchDedupTTL implement cluster-wide
+	// once-per-publish trigger dispatch (bugboard #30). gossipsub delivers
+	// the SAME published message to EVERY gateway node subscribed to a
+	// concrete trigger topic, so without dedup an N-gateway cluster fires
+	// the handler ~N times for one publish (AnChat saw exactly 2 on a
+	// 3-gateway cluster → 2 pushes per message). The first node to claim
+	// the (namespace, topic, payload-hash) key in the per-namespace Olric
+	// dispatches; the others skip. TTL bounds the claim to cover gossip
+	// fan-out jitter without de-duplicating legitimately-repeated publishes
+	// seconds apart.
+	dispatchDedupDMap = "pubsub_dispatch_dedup"
+	dispatchDedupTTL  = 30 * time.Second
 
 	// dispatcherRefreshInterval is the safety-net cadence for re-syncing
 	// libp2p subscriptions against the trigger store. Trigger add/remove
@@ -321,6 +337,18 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 		return
 	}
 
+	// Cluster-wide once-per-publish dedup (bugboard #30). gossipsub
+	// delivers a publish to every subscribed gateway node; only the node
+	// that wins the Olric claim for this (namespace, topic, payload)
+	// proceeds, so the trigger fires once cluster-wide instead of once
+	// per gateway node.
+	if !d.claimDispatch(ctx, namespace, topic, data) {
+		d.logger.Debug("PubSub dispatch deduped (claimed by another node)",
+			zap.String("namespace", namespace),
+			zap.String("topic", topic))
+		return
+	}
+
 	matches, err := d.getMatches(ctx, namespace, topic)
 	if err != nil {
 		d.logger.Error("Failed to look up PubSub triggers",
@@ -512,6 +540,63 @@ func (d *PubSubDispatcher) bufferEvent(match TriggerMatch, event PubSubEvent) {
 			}
 		},
 	})
+}
+
+// dispatchDedupKey is the Olric key for the once-per-publish claim. Pure
+// function of (namespace, topic, payload) so the SAME message produces
+// the SAME key on every gateway node (that's what makes the cross-node
+// claim work), while different messages/topics/namespaces don't collide.
+// Pure → unit-testable.
+//
+// Keyed on the payload hash because the gossipsub message-ID isn't
+// plumbed through the subscribe handler. Real payloads carry a unique id
+// (messageId/seq), so byte-identical distinct messages within the TTL are
+// not a practical concern. Known limitation (LOW, in-namespace only): an
+// authorized in-namespace publisher could pre-claim a key by publishing
+// byte-identical bytes first, suppressing a legitimate identical publish
+// for the TTL window. Follow-up hardening: fold the gossipsub message-ID
+// into the key once the subscribe handler exposes it.
+func dispatchDedupKey(namespace, topic string, data []byte) string {
+	sum := sha256.Sum256(data)
+	// 16 bytes of the hash is ample collision resistance for a 30s window.
+	return fmt.Sprintf("%s|%s|%x", namespace, topic, sum[:16])
+}
+
+// claimDispatch returns true if THIS node should dispatch the given
+// (namespace, topic, payload) — i.e. it won the cluster-wide claim.
+// Bugboard #30.
+//
+// Uses an Olric NX ("set if not exists") write with a short TTL. The
+// first node to write the key wins (returns true); concurrent writers
+// from the gossipsub fan-out get ErrKeyFound and return false (skip).
+//
+// FAIL-OPEN: when Olric is unavailable (nil client, DMap error, or any
+// non-"key found" error) this returns true. Dedup is a de-duplication
+// optimization, not a correctness gate — a rare duplicate dispatch is
+// far better than silently dropping a wake-up across the whole cluster.
+func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic string, data []byte) bool {
+	if d.olricClient == nil {
+		return true // no shared store → can't coordinate → fire
+	}
+	dm, err := d.olricClient.NewDMap(dispatchDedupDMap)
+	if err != nil {
+		d.logger.Debug("dispatch dedup: NewDMap failed, firing (fail-open)", zap.Error(err))
+		return true
+	}
+	key := dispatchDedupKey(namespace, topic, data)
+	err = dm.Put(ctx, key, 1, olriclib.NX(), olriclib.EX(dispatchDedupTTL))
+	if err == nil {
+		return true // we claimed it → dispatch
+	}
+	if errors.Is(err, olriclib.ErrKeyFound) {
+		return false // another node already claimed it → skip
+	}
+	// Any other (transient) error: fail-open and fire rather than risk a
+	// dropped wake. Worst case is a duplicate, which is what #30 already
+	// had — never worse.
+	d.logger.Debug("dispatch dedup: claim errored, firing (fail-open)",
+		zap.String("topic", topic), zap.Error(err))
+	return true
 }
 
 // InvalidateCache is now a no-op — the dispatcher no longer caches lookups.

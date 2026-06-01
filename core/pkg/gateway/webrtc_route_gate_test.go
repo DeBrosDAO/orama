@@ -100,3 +100,43 @@ func TestWebRTCRouteGate_TURNSecretMissingStillRegisters(t *testing.T) {
 			"the credentials endpoint surfaces 503 internally for the missing secret")
 	}
 }
+
+// Bugboard #25 — TURN-credentials gate decoupled from the SFU gate.
+// shouldServeTURNCredentials must register /v1/webrtc/turn/credentials
+// whenever the namespace TURN secret is set, INDEPENDENT of whether this
+// node runs a local SFU. SFU signal/rooms stay gated on SFUPort>0.
+
+func TestTURNCredentialsGate_servesWithSecretEvenWithoutSFU(t *testing.T) {
+	// Node 57's exact case: TURN secret present, no local SFU (SFUPort=0).
+	// Credentials MUST register (it's a namespace-wide HMAC; TURN servers
+	// are remote). Pre-fix the single SFUPort>0 gate 404'd this.
+	cfg := &Config{TURNSecret: "ns-shared-secret", SFUPort: 0}
+	if !shouldServeTURNCredentials(cfg) {
+		t.Error("BUG #25 REGRESSION: TURN credentials must register on a non-SFU gateway that has the namespace secret")
+	}
+	if shouldRegisterWebRTCRoutes(cfg) {
+		t.Error("SFU routes (signal/rooms) must NOT register without a local SFU port")
+	}
+}
+
+func TestTURNCredentialsGate_noSecretNoCredentials(t *testing.T) {
+	// No TURN secret → don't register credentials (the handler would 503
+	// anyway; not registering keeps a clean 404 vs. an actionable 503 —
+	// matches the documented behavior).
+	cfg := &Config{TURNSecret: "", SFUPort: 7800}
+	if shouldServeTURNCredentials(cfg) {
+		t.Error("no TURN secret: credentials route must not register")
+	}
+	// But SFU routes still register (SFU is independent).
+	if !shouldRegisterWebRTCRoutes(cfg) {
+		t.Error("SFU port set: signal/rooms must register independent of TURN")
+	}
+}
+
+func TestTURNCredentialsGate_sfuNodeServesBoth(t *testing.T) {
+	// An SFU node with the secret serves everything.
+	cfg := &Config{TURNSecret: "s", SFUPort: 30000}
+	if !shouldServeTURNCredentials(cfg) || !shouldRegisterWebRTCRoutes(cfg) {
+		t.Error("SFU node with TURN secret must serve both credentials and SFU routes")
+	}
+}

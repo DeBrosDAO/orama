@@ -142,6 +142,14 @@ type Gateway struct {
 
 	// WebRTC signaling and TURN credentials
 	webrtcHandlers *webrtchandlers.WebRTCHandlers
+	// webrtcServeTURNCredentials gates the /v1/webrtc/turn/credentials
+	// route; webrtcServeSFURoutes gates /v1/webrtc/signal + /rooms.
+	// Decoupled (bugboard #25): TURN credentials only need the namespace
+	// TURN secret (the actual TURN servers are remote), so a gateway node
+	// that doesn't run a local SFU can still mint credentials. SFU
+	// signaling/rooms require a local SFU port to proxy to.
+	webrtcServeTURNCredentials bool
+	webrtcServeSFURoutes       bool
 
 	// WireGuard peer exchange
 	wireguardHandler *wireguardhandlers.Handler
@@ -414,9 +422,15 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.pushHandlers.SetCredentialsManager(deps.PushCredentialsManager)
 	}
 
-	// WebRTC route registration. See shouldRegisterWebRTCRoutes for the
-	// gate's full rationale (bugboard #411).
-	if shouldRegisterWebRTCRoutes(cfg) {
+	// WebRTC route registration. Construct the handler when EITHER a
+	// local SFU is configured (for signal/rooms) OR a TURN secret is set
+	// (for credentials) — the two are decoupled (bugboard #25). A gateway
+	// node that isn't an SFU node but has the namespace TURN secret can
+	// still serve /v1/webrtc/turn/credentials (the TURN servers are
+	// remote; credentials are just an HMAC of the shared secret).
+	gw.webrtcServeSFURoutes = shouldRegisterWebRTCRoutes(cfg)
+	gw.webrtcServeTURNCredentials = shouldServeTURNCredentials(cfg)
+	if gw.webrtcServeSFURoutes || gw.webrtcServeTURNCredentials {
 		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(
 			logger,
 			gw.localWireGuardIP,
@@ -428,6 +442,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
 			zap.Int("sfu_port", cfg.SFUPort),
 			zap.Bool("turn_secret_set", cfg.TURNSecret != ""),
+			zap.Bool("serve_turn_credentials", gw.webrtcServeTURNCredentials),
+			zap.Bool("serve_sfu_routes", gw.webrtcServeSFURoutes),
 			zap.Bool("legacy_webrtc_enabled_flag", cfg.WebRTCEnabled))
 	}
 
@@ -773,6 +789,21 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 // — or the test passes while live behavior diverges.
 func shouldRegisterWebRTCRoutes(cfg *Config) bool {
 	return cfg.SFUPort > 0
+}
+
+// shouldServeTURNCredentials gates ONLY the /v1/webrtc/turn/credentials
+// route, decoupled from the SFU gate above (bugboard #25).
+//
+// TURN credentials are a namespace-wide HMAC of the shared TURN secret;
+// the actual TURN servers are remote (the namespace's TURN nodes), so a
+// gateway node that runs NO local SFU can still mint valid credentials.
+// Tying credentials to SFUPort>0 (the old single gate) meant non-SFU
+// gateways 404'd on credentials even though they had the secret — that's
+// the bug-25 symptom node 57 hit (~1/3 of requests routed to a non-SFU
+// gateway). SFU signaling/rooms remain gated on SFUPort>0 because they
+// proxy to a local SFU.
+func shouldServeTURNCredentials(cfg *Config) bool {
+	return cfg.TURNSecret != ""
 }
 
 // getLocalSubscribers returns all local subscribers for a given topic and namespace

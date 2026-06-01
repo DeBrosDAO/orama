@@ -1824,41 +1824,60 @@ type restoreWebRTC struct {
 	turnSecret string
 }
 
-// chooseRestoreWebRTC decides the WebRTC fields for a restored namespace
-// gateway. The local state file wins when it carries a complete WebRTC
-// block; otherwise the DB (consulted lazily via dbFetch — only when the
-// state file is incomplete) is the source of truth. Returns a disabled
-// result when neither source has a usable block.
+// chooseRestoreWebRTC resolves a restored gateway's WebRTC config. TWO
+// independent aspects (bugboard #25 decouple):
 //
-// Bugboard #25: namespaces that had WebRTC enabled AFTER their state file
-// was written carry no SFU/TURN fields in state. Without the DB fallback,
-// the from-disk restore regenerates the gateway config without the webrtc
-// block on every restart — SFU/TURN keep running but the gateway loses
-// turn_secret + sfu_port (credentials configured:false, routes 404).
+//   - TURN (turnSecret + turnDomain) is NAMESPACE-WIDE. Any gateway with
+//     the namespace TURN secret can mint /v1/webrtc/turn/credentials (the
+//     credentials are an HMAC; the actual TURN servers are remote). So a
+//     gateway node that runs NO local SFU still gets the TURN secret.
+//   - SFU (sfuPort) is PER-NODE — non-zero only when this node runs a
+//     local SFU (for /v1/webrtc/signal + /rooms proxying).
+//
+// Precedence: prefer the local state file; fall back to the DB (source of
+// truth) when the state file lacks the TURN secret (the namespace-wide
+// "webrtc is enabled" marker). dbFetch is lazy — only hit when needed.
+//
+// `enabled` is true when EITHER a TURN secret OR an SFU port is present,
+// so the caller knows to write a webrtc block. A non-SFU gateway gets
+// {sfuPort:0, turnSecret:set} — credentials route registers, signal/rooms
+// don't.
 //
 // Extracted as a pure function so the precedence is unit-testable without
 // standing up the full restore path (systemd spawner + DB + port store).
 func chooseRestoreWebRTC(
 	stateHasSFU bool, stateSFUPort int, stateTURNDomain, stateTURNSecret string,
-	dbFetch func() (enabled bool, sfuPort int, turnDomain, turnSecret string),
+	dbFetch func() (turnSecret, turnDomain string, sfuPort int),
 ) restoreWebRTC {
-	if stateHasSFU && stateSFUPort > 0 && stateTURNSecret != "" {
-		return restoreWebRTC{
-			enabled:    true,
-			sfuPort:    stateSFUPort,
-			turnDomain: stateTURNDomain,
-			turnSecret: stateTURNSecret,
+	turnSecret := stateTURNSecret
+	turnDomain := stateTURNDomain
+	sfuPort := 0
+	if stateHasSFU && stateSFUPort > 0 {
+		sfuPort = stateSFUPort
+	}
+
+	// Fall back to the DB when the state file has no TURN secret — that's
+	// the marker that the namespace has WebRTC enabled at all. The state
+	// file is not updated by EnableWebRTC, so a namespace enabled after
+	// the state file was written reaches here with an empty secret.
+	if turnSecret == "" {
+		if dbSecret, dbDomain, dbSFU := dbFetch(); dbSecret != "" {
+			turnSecret = dbSecret
+			if turnDomain == "" {
+				turnDomain = dbDomain
+			}
+			if sfuPort == 0 {
+				sfuPort = dbSFU
+			}
 		}
 	}
-	if enabled, sfuPort, turnDomain, turnSecret := dbFetch(); enabled && sfuPort > 0 && turnSecret != "" {
-		return restoreWebRTC{
-			enabled:    true,
-			sfuPort:    sfuPort,
-			turnDomain: turnDomain,
-			turnSecret: turnSecret,
-		}
+
+	return restoreWebRTC{
+		enabled:    turnSecret != "" || sfuPort > 0,
+		sfuPort:    sfuPort,
+		turnDomain: turnDomain,
+		turnSecret: turnSecret,
 	}
-	return restoreWebRTC{}
 }
 
 // restoreClusterFromState restores all processes for a cluster using local state (no DB queries).
@@ -2013,22 +2032,28 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		// file is incomplete.
 		wr := chooseRestoreWebRTC(
 			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret,
-			func() (bool, int, string, string) {
+			func() (turnSecret, turnDomain string, sfuPort int) {
 				webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 				if err != nil || webrtcCfg == nil {
-					return false, 0, "", ""
+					return "", "", 0
 				}
-				sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID)
-				if err != nil || sfuBlock == nil {
-					return false, 0, "", ""
+				// TURN is namespace-wide; SFU port is per-node and may be
+				// absent on a gateway-only (non-SFU) node — that's fine,
+				// the gateway still serves TURN credentials.
+				sfu := 0
+				if sfuBlock, serr := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID); serr == nil && sfuBlock != nil {
+					sfu = sfuBlock.SFUSignalingPort
 				}
-				return true, sfuBlock.SFUSignalingPort,
+				return webrtcCfg.TURNSharedSecret,
 					fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
-					webrtcCfg.TURNSharedSecret
+					sfu
 			},
 		)
 		if wr.enabled {
-			gwCfg.WebRTCEnabled = true
+			// WebRTCEnabled is the legacy flag (ignored by the route gate
+			// now — bugboard #25/#411); set it to SFU presence for
+			// config-shape consistency with how EnableWebRTC writes nodes.
+			gwCfg.WebRTCEnabled = wr.sfuPort > 0
 			gwCfg.SFUPort = wr.sfuPort
 			gwCfg.TURNDomain = wr.turnDomain
 			gwCfg.TURNSecret = wr.turnSecret

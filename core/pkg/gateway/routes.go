@@ -177,11 +177,17 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/vault/status", g.vaultHandlers.HandleStatus)
 	}
 
-	// webrtc
+	// webrtc — TURN credentials and SFU signaling are gated independently
+	// (bugboard #25). A non-SFU gateway with the namespace TURN secret
+	// serves credentials but not signal/rooms; an SFU gateway serves all.
 	if g.webrtcHandlers != nil {
-		mux.HandleFunc("/v1/webrtc/turn/credentials", g.webrtcHandlers.CredentialsHandler)
-		mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
-		mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
+		if g.webrtcServeTURNCredentials {
+			mux.HandleFunc("/v1/webrtc/turn/credentials", g.webrtcHandlers.CredentialsHandler)
+		}
+		if g.webrtcServeSFURoutes {
+			mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
+			mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
+		}
 	}
 
 	// anon proxy (authenticated users only)
