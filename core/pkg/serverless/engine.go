@@ -746,6 +746,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
 			NewFunctionBuilder().WithFunc(e.hWSBroadcast).Export("ws_broadcast").
 			NewFunctionBuilder().WithFunc(e.hFunctionInvoke).Export("function_invoke").
+			NewFunctionBuilder().WithFunc(e.hFunctionInvokeAsync).Export("function_invoke_async").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
 			NewFunctionBuilder().WithFunc(e.hLogError).Export("log_error").
 			Instantiate(ctx)
@@ -1207,6 +1208,35 @@ func (e *Engine) hFunctionInvoke(ctx context.Context, mod api.Module,
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hFunctionInvokeAsync is the WASM-callable wrapper for FunctionInvokeAsync.
+// Fire-and-forget: it dispatches the target function to run concurrently and
+// returns immediately so the caller's frame loop isn't blocked on the target's
+// I/O. The target inherits the caller's identity (incl. WS client ID) and is
+// expected to deliver its own result to the client via ws_send.
+//
+// Inputs mirror hFunctionInvoke (name + payload pointers). Returns 1 when the
+// invocation was ACCEPTED (queued), 0 on a read failure or backpressure
+// rejection — the guest can fall back to a synchronous function_invoke or
+// surface "busy" to the client.
+func (e *Engine) hFunctionInvokeAsync(ctx context.Context, mod api.Module,
+	namePtr, nameLen, payloadPtr, payloadLen uint32) uint32 {
+	name, ok := e.executor.ReadFromGuest(mod, namePtr, nameLen)
+	if !ok {
+		return 0
+	}
+	payload, ok := e.executor.ReadFromGuest(mod, payloadPtr, payloadLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.FunctionInvokeAsync(ctx, string(name), payload); err != nil {
+		e.logger.Warn("function_invoke_async rejected",
+			zap.String("name", string(name)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
 }
 
 // hWSSend is the WASM-callable wrapper for WSSend.

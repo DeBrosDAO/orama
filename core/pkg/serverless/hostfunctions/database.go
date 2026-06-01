@@ -191,6 +191,39 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 // rqlite layer.
 type dbQueryBatchRequest struct {
 	Ops []rqlite.BatchOp `json:"ops"`
+	// Consistency is the optional rqlite read level for this batch.
+	// "" / "weak" (default): leader-routed, always fresh. "none": fast LOCAL
+	// read (~1ms, no leader hop) — ONLY safe for reads that don't need
+	// read-your-own-writes freshness (see rqlite.ReadConsistency / bug #235).
+	// feat-6: lets read-heavy functions skip the cross-region weak-read hop.
+	Consistency string `json:"consistency,omitempty"`
+}
+
+// batchQueryConsistencyClient is the optional capability a Client exposes when
+// it can serve reads at an explicit consistency level. The production
+// *rqlite.client implements it; bare test mocks don't. Kept OFF the
+// rqlite.Client interface so the none-read path doesn't churn every mock.
+type batchQueryConsistencyClient interface {
+	BatchQueryConsistency(ctx context.Context, ops []rqlite.BatchOp, rc rqlite.ReadConsistency) ([]rqlite.OpResult, error)
+}
+
+// resolveBatchQuery runs the batched read at the requested consistency.
+// Empty or "weak" → the default leader-routed read. "none" → a fast local read
+// via the consistency-capable client (degrading to weak only when the client
+// can't serve an explicit level — weak is always correct). Unknown values are
+// rejected here at the boundary rather than silently downgraded.
+func (h *HostFunctions) resolveBatchQuery(ctx context.Context, ops []rqlite.BatchOp, consistency string) ([]rqlite.OpResult, error) {
+	switch consistency {
+	case "", string(rqlite.ReadConsistencyWeak):
+		return h.db.BatchQuery(ctx, ops)
+	case string(rqlite.ReadConsistencyNone):
+		if ext, ok := h.db.(batchQueryConsistencyClient); ok {
+			return ext.BatchQueryConsistency(ctx, ops, rqlite.ReadConsistencyNone)
+		}
+		return h.db.BatchQuery(ctx, ops)
+	default:
+		return nil, fmt.Errorf("invalid consistency %q (allowed: \"none\", \"weak\")", consistency)
+	}
 }
 
 // dbQueryBatchResult is the JSON wire shape returned to WASM callers.
@@ -258,7 +291,7 @@ func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byt
 	batchCtx, cancel := context.WithTimeout(ctx, dbQueryBatchTimeout)
 	defer cancel()
 
-	results, err := h.db.BatchQuery(batchCtx, req.Ops)
+	results, err := h.resolveBatchQuery(batchCtx, req.Ops, req.Consistency)
 	if err != nil {
 		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: err}
 	}

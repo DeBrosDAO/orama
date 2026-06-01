@@ -236,13 +236,28 @@ func coerceInt64(v interface{}) (int64, error) {
 //   - Rows arrive as []map[string]interface{} just like c.Query — columns
 //     are populated via the rqlite "associative" response shape.
 func (c *client) BatchQuery(ctx context.Context, ops []BatchOp) ([]OpResult, error) {
+	return c.BatchQueryConsistency(ctx, ops, ReadConsistencyWeak)
+}
+
+// BatchQueryConsistency is BatchQuery with an explicit read-consistency level.
+//
+// ReadConsistencyWeak (what BatchQuery passes) routes the batch to the leader
+// so every row reflects the latest committed write — at the cost of a leader
+// round-trip. ReadConsistencyNone routes to the serving node's LOCAL SQLite
+// (~1ms, no leader hop) and is ONLY safe for reads that don't need
+// read-your-own-writes freshness — see ReadConsistency and bug #235.
+//
+// none-level reads run on connNone; if that connection isn't configured the
+// batch transparently uses the weak connection (correct, just slower).
+func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc ReadConsistency) ([]OpResult, error) {
 	if len(ops) == 0 {
 		return []OpResult{}, nil
 	}
 	if len(ops) > MaxBatchOps {
 		return nil, fmt.Errorf("rqlite.BatchQuery: too many ops (%d > max %d)", len(ops), MaxBatchOps)
 	}
-	if c.conn == nil {
+	conn := c.queryConn(rc)
+	if conn == nil {
 		return nil, fmt.Errorf("rqlite.BatchQuery: native gorqlite connection not configured (use NewClientWithDSN or NewClientWithConn)")
 	}
 
@@ -261,7 +276,7 @@ func (c *client) BatchQuery(ctx context.Context, ops []BatchOp) ([]OpResult, err
 		}
 	}
 
-	qrs, err := c.conn.QueryParameterizedContext(ctx, stmts)
+	qrs, err := conn.QueryParameterizedContext(ctx, stmts)
 	if err != nil {
 		// gorqlite returns a slice of QueryResult even on partial failure;
 		// extract per-op errors if available, else surface the joined err.

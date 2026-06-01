@@ -572,6 +572,22 @@ type HostServices interface {
 	// rpc_error to the client.
 	FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error)
 
+	// FunctionInvokeAsync invokes another function in the same namespace
+	// CONCURRENTLY and returns immediately — it does NOT wait for or return
+	// the target's output. The target runs in the engine's execution pool
+	// inheriting the caller's identity (wallet, JWT claims, WS client ID),
+	// and is expected to deliver any result to the client itself via ws_send
+	// (it has the same WS client ID).
+	//
+	// This is the non-blocking counterpart to FunctionInvoke, for a
+	// persistent dispatcher (rpc-router) that must not freeze its single
+	// stateful instance for the full duration of a slow target invocation.
+	// Returns an error only when the invocation could not be ACCEPTED (no
+	// invoker wired, no invocation context, or in-flight cap reached) — not
+	// for failures inside the target, which surface via the target's own
+	// logging/ws_send.
+	FunctionInvokeAsync(ctx context.Context, name string, payload []byte) error
+
 	// HTTP operations
 	HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 

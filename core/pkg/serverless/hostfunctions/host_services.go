@@ -75,5 +75,6 @@ func NewHostFunctions(
 		httpClient:       tlsutil.NewHTTPClient(httpTimeout),
 		logger:           logger,
 		logs:             make([]serverless.LogEntry, 0),
+		asyncInvokeSem:   make(chan struct{}, asyncInvokeMaxInFlight),
 	}
 }

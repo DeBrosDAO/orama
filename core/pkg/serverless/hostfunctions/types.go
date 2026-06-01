@@ -69,6 +69,15 @@ type HostFunctions struct {
 	invoker     serverless.FunctionInvoker
 	invokerLock sync.RWMutex
 
+	// asyncInvokeSem bounds the number of concurrently-running
+	// FunctionInvokeAsync goroutines across the gateway. A buffered channel
+	// used as a counting semaphore: a slot is taken before spawning and
+	// released when the goroutine finishes. When full, FunctionInvokeAsync
+	// rejects (backpressure to the guest) instead of spawning unbounded
+	// goroutines under a frame flood. Built in NewHostFunctions; nil only in
+	// bare test construction (treated as unbounded there).
+	asyncInvokeSem chan struct{}
+
 	// TURN config — feat-9. Cached at NewHostFunctions; immutable for
 	// the gateway's lifetime so no lock needed. Empty TURNSecret means
 	// `turn_credentials` host fn returns a configured=false envelope

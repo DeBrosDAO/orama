@@ -2,10 +2,27 @@ package hostfunctions
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"go.uber.org/zap"
 )
+
+// asyncInvokeMaxInFlight bounds concurrently-running FunctionInvokeAsync
+// goroutines across the whole gateway. Each async invocation still passes
+// through the engine's own execution semaphore; this cap bounds the GOROUTINES
+// so a client flooding WS frames can't spawn an unbounded number of pending
+// invocations. When hit, FunctionInvokeAsync rejects so the guest applies
+// backpressure (e.g. falls back to a synchronous invoke or returns "busy").
+const asyncInvokeMaxInFlight = 256
+
+// asyncInvokeTimeout bounds a single async invocation. Detached from the frame
+// ctx (which is cancelled when ws_frame returns), so it carries its own
+// deadline — generous enough for cross-region work, tight enough that a stuck
+// invocation eventually frees its in-flight slot.
+const asyncInvokeTimeout = 30 * time.Second
 
 // SetInvocationContext sets the current invocation context on the
 // singleton field. STATELESS execution path uses this (paired with
@@ -113,6 +130,99 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		return nil, &serverless.HostFunctionError{Function: "function_invoke", Cause: err}
 	}
 	return resp.Output, nil
+}
+
+// FunctionInvokeAsync runs another function in the same namespace CONCURRENTLY
+// and returns immediately, WITHOUT blocking the caller or returning the
+// target's output. It exists so a persistent dispatcher (rpc-router) — a
+// single stateful instance that must process frames serially — can fan out
+// slow per-RPC handlers without freezing its frame loop for the full
+// (cross-region) duration of each one. The handlers run in the engine's
+// execution pool and deliver their own results to the client via ws_send
+// (they inherit the same WS client ID).
+//
+// The target inherits the caller's identity exactly like FunctionInvoke.
+// Returns an error only when the call can't be ACCEPTED: no invoker wired, no
+// invocation context, or the in-flight cap is reached (backpressure). Failures
+// INSIDE the target are not reported here — they surface via the target's own
+// logging / ws_send, because the caller has already moved on.
+func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, payload []byte) error {
+	h.invokerLock.RLock()
+	inv := h.invoker
+	h.invokerLock.RUnlock()
+	if inv == nil {
+		return &serverless.HostFunctionError{
+			Function: "function_invoke_async",
+			Cause:    serverless.ErrFunctionInvokeNotAvailable,
+		}
+	}
+
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
+		return &serverless.HostFunctionError{
+			Function: "function_invoke_async",
+			Cause:    serverless.ErrFunctionInvokeNotAvailable,
+		}
+	}
+
+	// Bound in-flight goroutines. nil sem = bare test construction → unbounded
+	// (production always builds it in NewHostFunctions). A full channel means
+	// we're saturated; reject so the guest applies backpressure.
+	if h.asyncInvokeSem != nil {
+		select {
+		case h.asyncInvokeSem <- struct{}{}:
+		default:
+			return &serverless.HostFunctionError{
+				Function: "function_invoke_async",
+				Cause:    fmt.Errorf("too many in-flight async invocations (max %d)", asyncInvokeMaxInFlight),
+			}
+		}
+	}
+
+	// Copy identity AND payload before returning: the invocation context can
+	// be swapped (auth.refresh) and `payload` is a VIEW into guest memory that
+	// the next frame may overwrite — the goroutine outlives this call, so it
+	// must own its inputs.
+	//
+	// The struct copy is shallow: snapshot.CallerClaims / EnvVars share the
+	// source maps. That is safe because an InvocationContext's maps are
+	// immutable after construction (auth.refresh swaps the whole pointer via
+	// UpdateInvocationContext rather than mutating in place); no code writes
+	// these maps on a live context. Keep that invariant if you touch the
+	// refresh path, or clone the maps here.
+	snapshot := *cur
+	payloadCopy := make([]byte, len(payload))
+	copy(payloadCopy, payload)
+	logger := h.logger
+
+	go func() {
+		if h.asyncInvokeSem != nil {
+			defer func() { <-h.asyncInvokeSem }()
+		}
+		bgCtx := serverless.WithInvocationContext(context.Background(), &snapshot)
+		bgCtx, cancel := context.WithTimeout(bgCtx, asyncInvokeTimeout)
+		defer cancel()
+
+		req := &serverless.InvokeRequest{
+			Namespace:        snapshot.Namespace,
+			FunctionName:     name,
+			Input:            payloadCopy,
+			TriggerType:      serverless.TriggerTypeWebSocket,
+			CallerWallet:     snapshot.CallerWallet,
+			CallerIP:         snapshot.CallerIP,
+			WSClientID:       snapshot.WSClientID,
+			CallerClaims:     snapshot.CallerClaims,
+			CallerJWTSubject: snapshot.CallerJWTSubject,
+			TriggerDepth:     snapshot.TriggerDepth,
+		}
+		if _, err := inv.Invoke(bgCtx, req); err != nil && logger != nil {
+			logger.Warn("function_invoke_async target failed",
+				zap.String("name", name),
+				zap.String("namespace", snapshot.Namespace),
+				zap.Error(err))
+		}
+	}()
+	return nil
 }
 
 // GetEnv retrieves an environment variable for the function.

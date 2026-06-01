@@ -259,6 +259,10 @@ func (m *MockHostServices) FunctionInvoke(ctx context.Context, name string, payl
 	return nil, nil
 }
 
+func (m *MockHostServices) FunctionInvokeAsync(ctx context.Context, name string, payload []byte) error {
+	return nil
+}
+
 func (m *MockHostServices) HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }
