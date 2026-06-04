@@ -10,6 +10,16 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
+// maxPublishesPerInvocation caps how many pubsub messages a single function
+// invocation (or persistent WS frame) may publish. This is a safety bound, not
+// a normal-path limit: legitimate functions publish a handful (message-create
+// does 3). It exists because the WASM runtime has no fuel metering and the
+// request rate limiter gates invocation FREQUENCY, not per-invocation host-call
+// volume — so without it a buggy/hostile `for { publish() }` could flood the
+// shared gossipsub router, amplified to every peer by FloodPublish. 1000 is far
+// above any real workload while bounding the blast radius ~1000x.
+const maxPublishesPerInvocation = 1000
+
 // PubSubPublish publishes a message to a topic.
 //
 // After a successful libp2p publish, also synchronously fires local
@@ -24,6 +34,13 @@ import (
 func (h *HostFunctions) PubSubPublish(ctx context.Context, topic string, data []byte) error {
 	if h.pubsub == nil {
 		return &serverless.HostFunctionError{Function: "pubsub_publish", Cause: fmt.Errorf("pubsub not available")}
+	}
+
+	if n := serverless.AddPublishCount(ctx, 1); n > maxPublishesPerInvocation {
+		return &serverless.HostFunctionError{
+			Function: "pubsub_publish",
+			Cause:    fmt.Errorf("publish budget exceeded (max %d per invocation)", maxPublishesPerInvocation),
+		}
 	}
 
 	// The pubsub adapter handles namespacing internally
@@ -115,6 +132,13 @@ func (h *HostFunctions) PubSubPublishBatch(ctx context.Context, msgsJSON []byte)
 			}
 		}
 		msgs = append(msgs, pubsub.TopicMessage{Topic: e.Topic, Data: data})
+	}
+
+	if n := serverless.AddPublishCount(ctx, len(msgs)); n > maxPublishesPerInvocation {
+		return &serverless.HostFunctionError{
+			Function: "pubsub_publish_batch",
+			Cause:    fmt.Errorf("publish budget exceeded (max %d per invocation)", maxPublishesPerInvocation),
+		}
 	}
 
 	if err := h.pubsub.PublishBatch(ctx, msgs, pubsub.PublishBatchOptions{}); err != nil {

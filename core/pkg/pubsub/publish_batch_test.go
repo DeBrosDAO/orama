@@ -84,10 +84,31 @@ func TestPublishBatch_context_cancel_returns_error(t *testing.T) {
 	}
 }
 
+// TestPublish_does_not_block_on_empty_mesh is a regression guard for feat-6.
+// Publish must NOT wait for gossipsub mesh formation: it previously polled
+// ListPeers() for up to 2s, so every publish to a topic with no remote
+// subscribers (the common namespace-gateway case, where wakeup topics are
+// delivered to LOCAL WS clients) cost the full 2s — a 3-publish message-create
+// paid ~6s server-side. FloodPublish delivers without the mesh, so a publish
+// against an empty mesh must return promptly.
+func TestPublish_does_not_block_on_empty_mesh(t *testing.T) {
+	mgr, cleanup := createTestManager(t, "test-ns")
+	defer cleanup()
+
+	start := time.Now()
+	if err := mgr.Publish(context.Background(), "no-subscribers", []byte("d")); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	// Old code: ~2000ms. New code: ~ms. 500ms is a generous ceiling that
+	// avoids CI flakiness while still catching a re-introduced multi-second
+	// mesh-wait.
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("Publish blocked %v on an empty mesh — the mesh-wait must stay removed (feat-6)", elapsed)
+	}
+}
+
 func TestPublishBatch_concurrency_limit(t *testing.T) {
 	// Verify PublishBatch with low MaxConcurrency completes without deadlocking.
-	// Each Publish in a no-peer test environment waits up to 2s for mesh formation,
-	// so we use a small batch size to keep wall time bounded.
 	mgr, cleanup := createTestManager(t, "test-ns")
 	defer cleanup()
 

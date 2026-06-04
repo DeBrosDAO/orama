@@ -1,6 +1,9 @@
 package serverless
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // invCtxKey is the unexported context-value key used to attach an
 // InvocationContext to a Go context. The empty struct is the standard
@@ -62,4 +65,38 @@ func InvocationContextFromCtx(ctx context.Context) *InvocationContext {
 	}
 	v, _ := ctx.Value(invCtxKey{}).(*InvocationContext)
 	return v
+}
+
+// publishCounterKey is the unexported context-value key for the per-invocation
+// pubsub publish counter.
+type publishCounterKey struct{}
+
+// publishCounter tracks how many pubsub messages a single invocation has
+// published, so the host layer can cap intra-invocation publish volume. It
+// rides the invocation's context (same per-call propagation model as
+// InvocationContext) so concurrent invocations each get their own counter.
+type publishCounter struct{ n atomic.Int64 }
+
+// WithPublishCounter returns a derived ctx carrying a FRESH per-invocation
+// publish counter. Engine.Execute (stateless) and the persistent WS frame
+// handler attach this so the pubsub host functions can bound how many messages
+// one invocation publishes — the WASM runtime has no fuel metering and the
+// rate limiter only gates invocation FREQUENCY, not per-invocation host-call
+// volume, so without this a single admitted invocation could flood the shared
+// gossipsub router (amplified to every peer by FloodPublish).
+func WithPublishCounter(ctx context.Context) context.Context {
+	return context.WithValue(ctx, publishCounterKey{}, &publishCounter{})
+}
+
+// AddPublishCount adds n to the invocation's publish counter and returns the
+// new running total. Returns -1 when the ctx carries no counter (an untracked
+// path) so callers can skip enforcement rather than reject.
+func AddPublishCount(ctx context.Context, n int) int64 {
+	if ctx == nil || n <= 0 {
+		return -1
+	}
+	if pc, ok := ctx.Value(publishCounterKey{}).(*publishCounter); ok {
+		return pc.n.Add(int64(n))
+	}
+	return -1
 }

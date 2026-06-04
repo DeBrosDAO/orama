@@ -312,6 +312,12 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// caller that hasn't been migrated yet.
 	execCtx = WithInvocationContext(execCtx, invCtx)
 
+	// Fresh per-invocation pubsub publish counter so the pubsub host
+	// functions can cap how many messages one invocation floods onto the
+	// shared gossipsub router (no WASM fuel metering exists; the rate limiter
+	// gates invocation frequency, not per-invocation host-call volume).
+	execCtx = WithPublishCounter(execCtx)
+
 	// Get compiled module (from cache or compile)
 	module, err := e.getOrCompileModule(execCtx, fn.WASMCID)
 	if err != nil {

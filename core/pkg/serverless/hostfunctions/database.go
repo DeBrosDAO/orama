@@ -376,6 +376,17 @@ func (h *HostFunctions) ExecAndPublish(
 		}
 	}
 
+	// exec_and_publish reaches the same shared gossipsub publish path as
+	// pubsub_publish, so it must charge the same per-invocation publish budget
+	// (it publishes exactly one wake-up message on commit). Checked before the
+	// write so an over-budget call has no side effects.
+	if n := serverless.AddPublishCount(ctx, 1); n > maxPublishesPerInvocation {
+		return nil, &serverless.HostFunctionError{
+			Function: "exec_and_publish",
+			Cause:    fmt.Errorf("publish budget exceeded (max %d per invocation)", maxPublishesPerInvocation),
+		}
+	}
+
 	batchRes, seq, batchErr := h.db.BatchWithSeq(ctx, ns, req.Ops)
 	out := execAndPublishResult{}
 	if batchRes != nil {

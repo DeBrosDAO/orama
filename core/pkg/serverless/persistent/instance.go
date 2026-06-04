@@ -183,6 +183,10 @@ func (i *Instance) withInvCtx(ctx context.Context) context.Context {
 	if cur != nil {
 		ctx = serverless.WithInvocationContext(ctx, cur)
 	}
+	// Fresh per-frame pubsub publish counter so the pubsub host functions can
+	// bound how many messages one frame floods onto the shared gossipsub
+	// router (scoped per export call, like the rest of withInvCtx).
+	ctx = serverless.WithPublishCounter(ctx)
 	// Attach a fresh per-call LogBuffer so oh.LogInfo / oh.LogError from
 	// inside this ws_open / ws_frame / ws_close call write to a
 	// scoped slice instead of the HostFunctions singleton (bugboard
