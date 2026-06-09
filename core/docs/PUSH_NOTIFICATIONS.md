@@ -214,6 +214,43 @@ your client computes locally from `(namespace, userId, topic_secret)`.
 
 For `ntfy` with `topic_mode=path`, the token is `ns/<namespace>/<userId>`.
 
+### UnifiedPush (Android / GrapheneOS, no Google Play Services)
+
+ntfy is a [UnifiedPush](https://unifiedpush.org) distributor, so Android
+devices — including de-Googled **GrapheneOS** — can receive push **without
+Firebase / Google Play Services**. The flow:
+
+1. The device runs a UnifiedPush **distributor** (the ntfy Android app, or an
+   embedded distributor library) pointed at your push host
+   (`https://push.<your-zone>`).
+2. The app registers with the distributor and is handed an **endpoint URL**,
+   e.g. `https://push.<your-zone>/upXXXXXXXX`.
+3. Register that endpoint as a push device:
+
+   ```http
+   POST /v1/push/devices
+   {
+     "device_id": "<unique per-device ID>",
+     "provider":  "ntfy",
+     "token":     "https://push.<your-zone>/upXXXXXXXX",   // the full endpoint
+     "platform":  "android"
+   }
+   ```
+
+The gateway POSTs to the endpoint **verbatim** (per the UnifiedPush spec), so
+you don't have to deconstruct it. As a safety measure the endpoint's
+scheme+host **must match your configured ntfy push host** — a device token can
+only ever publish to your own push server, never an arbitrary host.
+
+You may instead register just the bare **topic** (the endpoint's last path
+segment) as the token — both forms work; use whichever your UnifiedPush library
+makes convenient.
+
+**GrapheneOS notes:** works under both "No Google Play" and "Sandboxed Google
+Play" profiles. The distributor holds the persistent connection (not your app),
+so battery impact is the distributor's; high-priority messages
+(`priority: "high"`) wake the app from Doze.
+
 ---
 
 ## Step 6 — Send pushes

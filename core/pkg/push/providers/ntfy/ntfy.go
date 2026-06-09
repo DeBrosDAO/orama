@@ -74,15 +74,10 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		return fmt.Errorf("ntfy: base URL not configured")
 	}
 
-	// URL-escape each path segment of the device token. ntfy topics can be
-	// hierarchical (e.g. "ns/myapp/user-1") and we want to preserve those
-	// '/' separators while escaping any other special characters that
-	// could let a malicious token escape the topic path.
-	parts := strings.Split(msg.DeviceToken, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(p)
+	endpointURL, err := p.resolveEndpoint(msg.DeviceToken)
+	if err != nil {
+		return err
 	}
-	endpointURL := p.baseURL + "/" + strings.Join(parts, "/")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, strings.NewReader(msg.Body))
 	if err != nil {
@@ -129,4 +124,59 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	// Drain body to allow connection reuse.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
+}
+
+// resolveEndpoint maps a device token to the ntfy publish URL.
+//
+// The token is one of two shapes:
+//
+//   - A plain ntfy topic (possibly hierarchical, e.g. "ns/myapp/user-1") —
+//     published to "<baseURL>/<topic>", with each path segment escaped so a
+//     crafted token can't break out of the topic path.
+//   - A full UnifiedPush endpoint URL handed to the client by the ntfy
+//     distributor (e.g. "https://push.example.com/up<random>"). UnifiedPush
+//     requires the application server to POST to that endpoint verbatim, so we
+//     use it as-is — but ONLY after verifying its scheme+host match the
+//     configured base URL. That check turns a device-supplied token into an
+//     SSRF only against our own push host, never an arbitrary one.
+func (p *Provider) resolveEndpoint(token string) (string, error) {
+	topic := token
+	if isAbsoluteHTTPURL(token) {
+		u, err := url.Parse(token)
+		if err != nil {
+			return "", fmt.Errorf("ntfy: invalid endpoint url: %w", err)
+		}
+		base, err := url.Parse(p.baseURL)
+		if err != nil {
+			return "", fmt.Errorf("ntfy: invalid base url %q: %w", p.baseURL, err)
+		}
+		if !strings.EqualFold(u.Scheme, base.Scheme) || !strings.EqualFold(u.Host, base.Host) {
+			// Reject an endpoint pointing anywhere other than the configured
+			// push host — a device token must never become an SSRF vector.
+			return "", fmt.Errorf("ntfy: endpoint host %q does not match configured push host %q", u.Host, base.Host)
+		}
+		// Confine the URL form to the SAME publish surface as a bare topic:
+		// take only the path as the topic and re-build through the per-segment
+		// escaping below, dropping any query/fragment. So a UnifiedPush
+		// endpoint token can publish a topic but can't gain arbitrary path or
+		// query control on the push host beyond what a plain topic already has.
+		topic = strings.TrimPrefix(u.Path, "/")
+		if topic == "" {
+			return "", fmt.Errorf("ntfy: endpoint url %q has no topic path", token)
+		}
+	}
+
+	// Escape each path segment, preserving the '/' hierarchy.
+	parts := strings.Split(topic, "/")
+	for i, seg := range parts {
+		parts[i] = url.PathEscape(seg)
+	}
+	return p.baseURL + "/" + strings.Join(parts, "/"), nil
+}
+
+// isAbsoluteHTTPURL reports whether s looks like an absolute http(s) URL (the
+// UnifiedPush endpoint form) rather than a bare ntfy topic.
+func isAbsoluteHTTPURL(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }

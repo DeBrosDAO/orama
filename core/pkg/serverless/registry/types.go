@@ -38,6 +38,9 @@ type FunctionDefinition struct {
 	WSIdleTimeoutSec     int
 	WSMaxFrameBytes      int
 	WSMaxInflightPerConn int
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835).
+	RawHTTPResponse bool
 }
 
 // Function represents a deployed serverless function.
@@ -64,6 +67,9 @@ type Function struct {
 	WSIdleTimeoutSec     int
 	WSMaxFrameBytes      int
 	WSMaxInflightPerConn int
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835).
+	RawHTTPResponse bool
 }
 
 // LogEntry represents a log message emitted from inside a WASM function
@@ -180,6 +186,7 @@ type functionRow struct {
 	WSIdleTimeoutSec     int
 	WSMaxFrameBytes      int
 	WSMaxInflightPerConn int
+	RawHTTPResponse      bool
 }
 
 type envVarRow struct {

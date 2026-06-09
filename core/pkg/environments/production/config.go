@@ -200,6 +200,18 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	data.Environment = cg.Environment
 	data.OperatorWallet = cg.OperatorWallet
 
+	// Serverless function secrets encryption key (bugboard #837). Read the
+	// persisted key (generated in Phase3 / received via join) so it is
+	// rendered into node.yaml under http_gateway. If the file is missing the
+	// key is left empty and omitted from the rendered config — get_secret then
+	// stays disabled until the operator provisions the key. We deliberately do
+	// NOT generate here: generation/distribution is owned by SecretGenerator
+	// and the join flow so every node in a cluster shares one key.
+	secretsKeyPath := filepath.Join(cg.oramaDir, "secrets", "secrets-encryption-key")
+	if keyBytes, err := os.ReadFile(secretsKeyPath); err == nil {
+		data.SecretsEncryptionKey = strings.TrimSpace(string(keyBytes))
+	}
+
 	return templates.RenderNodeConfig(data)
 }
 
@@ -469,6 +481,55 @@ func (sg *SecretGenerator) EnsureAPIKeyHMACSecret() (string, error) {
 	}
 
 	return secret, nil
+}
+
+// EnsureSecretsEncryptionKey gets or generates the AES-256 key used to
+// encrypt serverless function secrets at rest (the function_secrets table).
+// The key is a 32-byte random value stored as 64 hex characters.
+//
+// It MUST be identical on every namespace-gateway node in a cluster and
+// stable across restarts — otherwise secrets encrypted by one process can't
+// be decrypted by another (bugboard #837). Like api-key-hmac-secret, joining
+// nodes receive this value through the join flow rather than generating their
+// own; this method only generates on the genesis node (or returns the
+// existing key if a joining node already wrote it to disk).
+func (sg *SecretGenerator) EnsureSecretsEncryptionKey() (string, error) {
+	secretPath := filepath.Join(sg.oramaDir, "secrets", "secrets-encryption-key")
+	secretDir := filepath.Dir(secretPath)
+
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
+	}
+
+	// Try to read existing key
+	if data, err := os.ReadFile(secretPath); err == nil {
+		key := strings.TrimSpace(string(data))
+		if len(key) == 64 {
+			if err := ensureSecretFilePermissions(secretPath); err != nil {
+				return "", err
+			}
+			return key, nil
+		}
+	}
+
+	// Generate new key (32 bytes = 64 hex chars)
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return "", fmt.Errorf("failed to generate secrets encryption key: %w", err)
+	}
+	key := hex.EncodeToString(keyBytes)
+
+	if err := os.WriteFile(secretPath, []byte(key), 0600); err != nil {
+		return "", fmt.Errorf("failed to save secrets encryption key: %w", err)
+	}
+	if err := ensureSecretFilePermissions(secretPath); err != nil {
+		return "", err
+	}
+
+	return key, nil
 }
 
 func ensureSecretFilePermissions(secretPath string) error {

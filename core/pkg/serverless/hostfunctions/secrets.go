@@ -14,6 +14,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// secretsKeyBytes is the required length of the AES-256 encryption key.
+const secretsKeyBytes = 32
+
 // DBSecretsManager implements SecretsManager using the database.
 type DBSecretsManager struct {
 	db            rqlite.Client
@@ -25,21 +28,34 @@ type DBSecretsManager struct {
 var _ serverless.SecretsManager = (*DBSecretsManager)(nil)
 
 // NewDBSecretsManager creates a secrets manager backed by the database.
-func NewDBSecretsManager(db rqlite.Client, encryptionKeyHex string, logger *zap.Logger) (*DBSecretsManager, error) {
+//
+// encryptionKeyHex must be a 32-byte AES-256 key, hex-encoded (64 chars).
+//
+// When encryptionKeyHex is empty the behaviour depends on allowEphemeral:
+//   - allowEphemeral=false (production): returns an error. A misconfigured
+//     node must fail loudly rather than silently generate a per-process
+//     ephemeral key. With an ephemeral key, secrets encrypted by one
+//     process cannot be decrypted by another (or after a restart), which
+//     makes get_secret return garbage/errors (bugboard #837).
+//   - allowEphemeral=true (tests/dev): generates a random per-process key
+//     and logs a warning. Secrets will not persist across restarts.
+func NewDBSecretsManager(db rqlite.Client, encryptionKeyHex string, allowEphemeral bool, logger *zap.Logger) (*DBSecretsManager, error) {
 	var key []byte
 	if encryptionKeyHex != "" {
 		var err error
 		key, err = hex.DecodeString(encryptionKeyHex)
-		if err != nil || len(key) != 32 {
-			return nil, fmt.Errorf("invalid encryption key: must be 32 bytes hex-encoded")
+		if err != nil || len(key) != secretsKeyBytes {
+			return nil, fmt.Errorf("invalid secrets encryption key: must be %d bytes hex-encoded (%d hex chars)", secretsKeyBytes, secretsKeyBytes*2)
 		}
-	} else {
-		// Generate a random key if none provided
-		key = make([]byte, 32)
+	} else if allowEphemeral {
+		// Generate a random per-process key (dev/test only).
+		key = make([]byte, secretsKeyBytes)
 		if _, err := rand.Read(key); err != nil {
-			return nil, fmt.Errorf("failed to generate encryption key: %w", err)
+			return nil, fmt.Errorf("failed to generate ephemeral secrets encryption key: %w", err)
 		}
-		logger.Warn("Generated random secrets encryption key - secrets will not persist across restarts")
+		logger.Warn("Generated random ephemeral secrets encryption key - secrets will NOT persist across restarts (dev/test only)")
+	} else {
+		return nil, fmt.Errorf("secrets encryption key is required: set secrets_encryption_key (see %s/secrets/secrets-encryption-key); without it secrets cannot be decrypted across processes or restarts (bugboard #837)", "~/.orama")
 	}
 
 	return &DBSecretsManager{

@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/push"
@@ -136,13 +135,13 @@ func (h *Handlers) PutConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate URL fields look reasonable. We don't do hostname resolution
-	// here (slow, flaky); just reject obviously-wrong schemes.
+	// Reject a base URL that targets an internal/reserved host — a tenant must
+	// not be able to turn the gateway's push sender into an SSRF proxy (cloud
+	// metadata, WireGuard mesh, loopback). This is the config-SET path, so the
+	// DNS-resolving check is fine here; the hot send path never runs it.
 	if body.NtfyBaseURL != nil && *body.NtfyBaseURL != "" {
-		if !strings.HasPrefix(*body.NtfyBaseURL, "http://") &&
-			!strings.HasPrefix(*body.NtfyBaseURL, "https://") {
-			writeError(w, http.StatusBadRequest,
-				"ntfy_base_url must start with http:// or https://")
+		if err := push.CheckBaseURLResolvable(r.Context(), *body.NtfyBaseURL); err != nil {
+			writeError(w, http.StatusBadRequest, "ntfy_base_url rejected: "+err.Error())
 			return
 		}
 	}

@@ -3,6 +3,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 
@@ -80,7 +81,15 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		// invocation that uses time.Now() (receipts, audit rows, cursor cmp).
 		// Same fix applied at engine.go for the persistent-WS path.
 		WithSysWalltime().
-		WithSysNanotime()
+		WithSysNanotime().
+		// Bugboard #120 — same class as #27. Without WithRandSource, wazero
+		// uses a deterministic zero-seed RNG, so TinyGo's crypto/rand.Read
+		// returns IDENTICAL bytes on every fresh instance (and every
+		// invocation is a fresh instance). That makes any unguessable ID /
+		// code / nonce / token constant. Wire in the host CSPRNG so
+		// crypto/rand (and auto-seeded math/rand) work. Same fix at
+		// engine.go for the persistent-WS path.
+		WithRandSource(cryptorand.Reader)
 
 	// Acquire concurrency slot
 	if e.sem != nil {

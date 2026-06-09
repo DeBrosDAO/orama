@@ -58,6 +58,15 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		rqlitePassword = strings.TrimSpace(string(secretBytes))
 	}
 
+	// Read the serverless secrets encryption key (bugboard #837). Must be the
+	// SAME value on every namespace-gateway node so a secret encrypted by one
+	// process decrypts on another; an empty value makes get_secret fail loudly
+	// (the manager refuses an ephemeral key in production).
+	secretsEncryptionKey := ""
+	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "secrets-encryption-key")); err == nil {
+		secretsEncryptionKey = strings.TrimSpace(string(secretBytes))
+	}
+
 	gwCfg := &gateway.Config{
 		ListenAddr:           n.config.HTTPGateway.ListenAddr,
 		ClientNamespace:      n.config.HTTPGateway.ClientNamespace,
@@ -75,6 +84,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		RQLitePassword:       rqlitePassword,
 		ClusterSecret:        clusterSecret,
 		APIKeyHMACSecret:     apiKeyHMACSecret,
+		SecretsEncryptionKey: secretsEncryptionKey,
 		WebRTCEnabled:        n.config.HTTPGateway.WebRTC.Enabled,
 		SFUPort:              n.config.HTTPGateway.WebRTC.SFUPort,
 		TURNDomain:           n.config.HTTPGateway.WebRTC.TURNDomain,

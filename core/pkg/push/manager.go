@@ -296,7 +296,17 @@ func (m *Manager) buildDispatcher(ctx context.Context, namespace string) (*PushD
 			// (DELETE) — there's no "set this field to empty to clear"
 			// half-state, by design.
 			if nc.NtfyBaseURL != "" {
-				eff.NtfyBaseURL = nc.NtfyBaseURL
+				// Defense-in-depth: a base URL stored before the SSRF guard
+				// existed (or via any path that skipped it) must not point at an
+				// internal/reserved literal IP. Drop the override and fall back
+				// to the gateway default if it does. Literal-only (no DNS, no
+				// syntax re-validation) so this stays safe on the hot build path.
+				if IsInternalBaseURL(nc.NtfyBaseURL) {
+					m.logger.Warn("push: ignoring namespace ntfy_base_url override (internal address)",
+						zap.String("namespace", namespace), zap.String("base_url", nc.NtfyBaseURL))
+				} else {
+					eff.NtfyBaseURL = nc.NtfyBaseURL
+				}
 			}
 			if nc.NtfyAuthToken != "" {
 				eff.NtfyAuthToken = nc.NtfyAuthToken

@@ -41,6 +41,32 @@ func TestRenderNodeConfig(t *testing.T) {
 	}
 }
 
+func TestRenderNodeConfig_secretsEncryptionKey(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	// Happy path: key present → rendered under http_gateway.
+	withKey, err := RenderNodeConfig(NodeConfigData{
+		NodeID:               "node1",
+		SecretsEncryptionKey: key,
+	})
+	if err != nil {
+		t.Fatalf("RenderNodeConfig failed: %v", err)
+	}
+	want := "secrets_encryption_key: \"" + key + "\""
+	if !strings.Contains(withKey, want) {
+		t.Errorf("rendered node config missing secrets key line %q\n---\n%s", want, withKey)
+	}
+
+	// Edge case: empty key → line omitted entirely (no empty value rendered).
+	withoutKey, err := RenderNodeConfig(NodeConfigData{NodeID: "node1"})
+	if err != nil {
+		t.Fatalf("RenderNodeConfig failed: %v", err)
+	}
+	if strings.Contains(withoutKey, "secrets_encryption_key") {
+		t.Errorf("empty key should omit secrets_encryption_key line, got:\n%s", withoutKey)
+	}
+}
+
 func TestRenderGatewayConfig(t *testing.T) {
 	bootstrapMultiaddr := "/ip4/127.0.0.1/tcp/4001/p2p/Qm1234567890"
 	data := GatewayConfigData{

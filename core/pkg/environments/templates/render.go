@@ -46,6 +46,15 @@ type NodeConfigData struct {
 	SSHUser        string // SSH user for remote management
 	Environment    string // Environment name (devnet, testnet, etc.)
 	OperatorWallet string // Operator wallet address
+
+	// SecretsEncryptionKey is the AES-256 key (hex, 64 chars) used to encrypt
+	// serverless function secrets at rest. Rendered under http_gateway in
+	// node.yaml. Sourced from ~/.orama/secrets/secrets-encryption-key — must
+	// be identical across all namespace-gateway nodes in a cluster and stable
+	// across restarts (bugboard #837). Empty → key omitted from the rendered
+	// config (the gateway then reads the secret file directly / get_secret
+	// stays disabled until the key is configured).
+	SecretsEncryptionKey string
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering

@@ -1,6 +1,7 @@
 package hostfunctions
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -57,7 +58,7 @@ func NewHostFunctions(
 		anyoneHTTPClient.Timeout = httpTimeout
 	}
 
-	return &HostFunctions{
+	hf := &HostFunctions{
 		db:               db,
 		cacheClient:      cacheClient,
 		storage:          storage,
@@ -77,4 +78,28 @@ func NewHostFunctions(
 		logs:             make([]serverless.LogEntry, 0),
 		asyncInvokeSem:   make(chan struct{}, asyncInvokeMaxInFlight),
 	}
+
+	// Ephemeral-state store (bugboard #710). Publishes synthetic set/clear
+	// events through the same pubsub adapter the pubsub_publish host fn uses,
+	// and registers a WS disconnect hook so a client's owned state auto-clears
+	// the instant its WebSocket drops — zero cron lag. Only wired when a
+	// concrete WSManager is present (the disconnect hook + sweeper need it);
+	// otherwise ephemeral_state_set returns an error.
+	if wsm, ok := wsManager.(*serverless.WSManager); ok && wsm != nil {
+		var publish func(ctx context.Context, namespace, topic string, data []byte) error
+		if pubsubAdapter != nil {
+			publish = func(ctx context.Context, _ string, topic string, data []byte) error {
+				// The adapter namespaces internally (same as PubSubPublish), so
+				// the namespace arg is informational only here.
+				return pubsubAdapter.Publish(ctx, topic, data)
+			}
+		}
+		hf.ephemeralStore = serverless.NewEphemeralStore(publish)
+		wsm.AddDisconnectHook(func(clientID string) {
+			hf.ephemeralStore.ClearClient(context.Background(), clientID)
+		})
+		hf.ephemeralStore.StartSweeper()
+	}
+
+	return hf
 }

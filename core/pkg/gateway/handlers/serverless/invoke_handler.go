@@ -145,6 +145,27 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("X-Request-ID", resp.RequestID)
 	w.Header().Set("X-Duration-Ms", strconv.FormatInt(resp.DurationMS, 10))
 
+	// Raw-HTTP-response mode (bugboard #835): when a function deployed with
+	// raw_http_response actually set a response via set_http_response, replay
+	// it verbatim (status + headers + body) and skip the sniff/wrap path. If
+	// the function set nothing, RawHTTP is nil and we fall through to the
+	// normal behavior unchanged.
+	if resp.RawHTTP != nil {
+		for k, v := range resp.RawHTTP.Headers {
+			// A tenant function must not overwrite gateway-owned trace/auth
+			// headers or framing-control (hop-by-hop) headers via its raw
+			// response — that would let it forge request IDs, leak/spoof
+			// internal-auth headers, or corrupt response framing.
+			if isReservedResponseHeader(k) {
+				continue
+			}
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(resp.RawHTTP.Status)
+		w.Write(resp.RawHTTP.Body)
+		return
+	}
+
 	// Try to detect if output is JSON
 	if len(resp.Output) > 0 && (resp.Output[0] == '{' || resp.Output[0] == '[') {
 		w.Header().Set("Content-Type", "application/json")
@@ -255,4 +276,33 @@ func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request
 		"versions": versions,
 		"count":    len(versions),
 	})
+}
+
+// reservedResponseHeaders are response headers a raw-HTTP-response tenant
+// function (bugboard #835) must not be able to set or overwrite: gateway-owned
+// trace/auth headers and hop-by-hop / framing-control headers. Compared
+// case-insensitively; the X-Internal- prefix is matched separately.
+var reservedResponseHeaders = map[string]struct{}{
+	"x-request-id":        {},
+	"x-duration-ms":       {},
+	"content-length":      {},
+	"transfer-encoding":   {},
+	"connection":          {},
+	"keep-alive":          {},
+	"proxy-authenticate":  {},
+	"proxy-authorization": {},
+	"te":                  {},
+	"trailer":             {},
+	"upgrade":             {},
+}
+
+// isReservedResponseHeader reports whether a tenant-supplied response header key
+// is reserved for the gateway and must be ignored in raw-HTTP-response mode.
+func isReservedResponseHeader(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	if _, ok := reservedResponseHeaders[k]; ok {
+		return true
+	}
+	// Any internal-auth header the gateway uses for inter-service trust.
+	return strings.HasPrefix(k, "x-internal-")
 }

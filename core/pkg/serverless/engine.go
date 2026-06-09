@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -318,6 +319,15 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// gates invocation frequency, not per-invocation host-call volume).
 	execCtx = WithPublishCounter(execCtx)
 
+	// Raw-HTTP-response mode (bugboard #835). Only RawHTTPResponse functions
+	// get a collector attached — set_http_response is a validated no-op for
+	// every other function (no collector → host call returns an error). The
+	// collector rides execCtx so concurrent invocations never cross-write,
+	// matching the publish-counter / log-buffer per-call model.
+	if fn.RawHTTPResponse {
+		execCtx = WithRawHTTPCollector(execCtx)
+	}
+
 	// Get compiled module (from cache or compile)
 	module, err := e.getOrCompileModule(execCtx, fn.WASMCID)
 	if err != nil {
@@ -344,6 +354,14 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), status, err)
 		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, string(status), err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
+	}
+
+	// Surface any verbatim HTTP response the function set (bugboard #835)
+	// onto invCtx so the Invoker → HTTP handler can replay it. Only
+	// RawHTTPResponse functions have a collector attached; TakeRawHTTPResponse
+	// returns (_, false) otherwise.
+	if res, ok := TakeRawHTTPResponse(execCtx); ok {
+		invCtx.RawHTTP = &res
 	}
 
 	e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), InvocationStatusSuccess, nil)
@@ -547,7 +565,13 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 		// into real clocks via the documented wazero hook — same effect as
 		// the runtime would get on a normal Go process.
 		WithSysWalltime().
-		WithSysNanotime()
+		WithSysNanotime().
+		// Bugboard #120 — same class as #27. Without WithRandSource, wazero's
+		// default RNG is deterministic (zero seed), so TinyGo crypto/rand.Read
+		// returns identical bytes on every fresh instance — constant codes /
+		// nonces / tokens. Wire in the host CSPRNG. Same fix at
+		// execution/executor.go for the stateless path.
+		WithRandSource(cryptorand.Reader)
 
 	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
 	if err != nil {
@@ -742,6 +766,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
 			NewFunctionBuilder().WithFunc(e.hAnyoneFetch).Export("anyone_fetch").
+			NewFunctionBuilder().WithFunc(e.hSetHTTPResponse).Export("set_http_response").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
@@ -751,6 +776,8 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
 			NewFunctionBuilder().WithFunc(e.hWSBroadcast).Export("ws_broadcast").
+			NewFunctionBuilder().WithFunc(e.hEphemeralStateSet).Export("ephemeral_state_set").
+			NewFunctionBuilder().WithFunc(e.hEphemeralStateClear).Export("ephemeral_state_clear").
 			NewFunctionBuilder().WithFunc(e.hFunctionInvoke).Export("function_invoke").
 			NewFunctionBuilder().WithFunc(e.hFunctionInvokeAsync).Export("function_invoke_async").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
@@ -946,6 +973,40 @@ func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, meth
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)
+}
+
+// hSetHTTPResponse is the WASM-callable wrapper for SetHTTPResponse —
+// bugboard #835 raw-HTTP-response mode.
+//
+// ABI: set_http_response(status i32, headersJSONPtr, headersJSONLen,
+// bodyPtr, bodyLen uint32) -> uint32. headersJSON (when non-empty) is a JSON
+// object of string→string. Returns 1 on success, 0 on failure (function not
+// deployed with raw_http_response, bad status, oversized headers/body, or a
+// guest-memory read error).
+func (e *Engine) hSetHTTPResponse(ctx context.Context, mod api.Module,
+	status, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint32 {
+	var headers map[string]string
+	if headersLen > 0 {
+		if err := e.executor.UnmarshalJSONFromGuest(mod, headersPtr, headersLen, &headers); err != nil {
+			e.logger.Warn("set_http_response: failed to unmarshal headers", zap.Error(err))
+			return 0
+		}
+	}
+
+	var body []byte
+	if bodyLen > 0 {
+		b, ok := e.executor.ReadFromGuest(mod, bodyPtr, bodyLen)
+		if !ok {
+			return 0
+		}
+		body = b
+	}
+
+	if err := e.hostServices.SetHTTPResponse(ctx, int(status), headers, body); err != nil {
+		e.logger.Warn("host function set_http_response failed", zap.Error(err))
+		return 0
+	}
+	return 1
 }
 
 // hAnyoneFetch is the WASM-callable wrapper for AnyoneFetch — feat-11.
@@ -1285,6 +1346,67 @@ func (e *Engine) hWSBroadcast(ctx context.Context, mod api.Module,
 	if err := e.hostServices.WSBroadcast(ctx, string(topic), data); err != nil {
 		e.logger.Warn("ws_broadcast failed",
 			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hEphemeralStateSet is the WASM-callable wrapper for EphemeralStateSet —
+// bugboard #710 WS-subscribe-tracked ephemeral state.
+//
+// ABI: ephemeral_state_set(topicPtr, topicLen, keyPtr, keyLen, payloadPtr,
+// payloadLen uint32, ttlMs int64) -> uint32. Returns 1 on success, 0 on
+// failure (no WS client in context, empty topic/key, oversized payload,
+// per-client key cap, or a guest-memory read error).
+func (e *Engine) hEphemeralStateSet(ctx context.Context, mod api.Module,
+	topicPtr, topicLen, keyPtr, keyLen, payloadPtr, payloadLen uint32, ttlMs int64) uint32 {
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	var payload []byte
+	if payloadLen > 0 {
+		p, ok := e.executor.ReadFromGuest(mod, payloadPtr, payloadLen)
+		if !ok {
+			return 0
+		}
+		payload = p
+	}
+	if err := e.hostServices.EphemeralStateSet(ctx, string(topic), string(key), payload, ttlMs); err != nil {
+		e.logger.Warn("host function ephemeral_state_set failed",
+			zap.String("topic", string(topic)),
+			zap.String("key", string(key)),
+			zap.Error(err))
+		return 0
+	}
+	return 1
+}
+
+// hEphemeralStateClear is the WASM-callable wrapper for EphemeralStateClear.
+//
+// ABI: ephemeral_state_clear(topicPtr, topicLen, keyPtr, keyLen uint32) ->
+// uint32. Returns 1 on success (including idempotent clears of a missing key),
+// 0 on failure (no WS client in context, empty topic/key, or a guest-memory
+// read error).
+func (e *Engine) hEphemeralStateClear(ctx context.Context, mod api.Module,
+	topicPtr, topicLen, keyPtr, keyLen uint32) uint32 {
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.EphemeralStateClear(ctx, string(topic), string(key)); err != nil {
+		e.logger.Warn("host function ephemeral_state_clear failed",
+			zap.String("topic", string(topic)),
+			zap.String("key", string(key)),
 			zap.Error(err))
 		return 0
 	}

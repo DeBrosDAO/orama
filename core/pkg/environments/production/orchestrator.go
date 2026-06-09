@@ -593,6 +593,12 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	}
 	ps.logf("  ✓ API key HMAC secret ensured")
 
+	// Serverless function secrets encryption key (bugboard #837)
+	if _, err := ps.secretGenerator.EnsureSecretsEncryptionKey(); err != nil {
+		return fmt.Errorf("failed to ensure secrets encryption key: %w", err)
+	}
+	ps.logf("  ✓ Secrets encryption key ensured")
+
 	// Node identity (unified architecture)
 	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
 	if err != nil {

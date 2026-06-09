@@ -134,7 +134,23 @@ type PubSubDispatcher struct {
 	// stopCh signals the periodic Refresh goroutine to exit.
 	stopCh   chan struct{}
 	stopOnce sync.Once
+
+	// localDedup guards against a SINGLE node invoking the same publish
+	// twice (e.g. gossipsub self-delivery), independent of Olric health.
+	// Bugboard #555. Always non-nil after NewPubSubDispatcher.
+	localDedup *localDedupCache
+
+	// degradedDedupWarn rate-limits the "Olric dedup degraded" WARN so a
+	// misconfigured cluster doesn't flood the log on every publish.
+	// Bugboard #555.
+	degradedDedupMu       sync.Mutex
+	degradedDedupLastWarn time.Time
 }
+
+// degradedDedupWarnInterval rate-limits the cross-node dedup-degraded WARN
+// (bugboard #555). One warning per interval is enough to alert operators
+// without flooding the log under high publish volume.
+const degradedDedupWarnInterval = 60 * time.Second
 
 // NewPubSubDispatcher creates a new PubSub trigger dispatcher.
 //
@@ -158,6 +174,7 @@ func NewPubSubDispatcher(
 		logger:         logger,
 		subscribedKeys: make(map[string]bool),
 		stopCh:         make(chan struct{}),
+		localDedup:     newLocalDedupCache(),
 	}
 }
 
@@ -334,6 +351,20 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 			zap.String("topic", topic),
 			zap.Int("depth", depth),
 		)
+		return
+	}
+
+	// Local once-per-publish dedup (bugboard #555). gossipsub can deliver
+	// the SAME publish to this node's subscribe handler more than once
+	// (self-delivery / fan-out), and the cross-node Olric claim below is a
+	// no-op when Olric is down. This in-process guard ensures a SINGLE node
+	// never invokes the same (namespace, topic, payload) twice, regardless
+	// of Olric health.
+	dedupKey := dispatchDedupKey(namespace, topic, data)
+	if !d.localDedup.claim(dedupKey) {
+		d.logger.Debug("PubSub dispatch deduped (local duplicate on this node)",
+			zap.String("namespace", namespace),
+			zap.String("topic", topic))
 		return
 	}
 
@@ -580,7 +611,7 @@ func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic s
 	}
 	dm, err := d.olricClient.NewDMap(dispatchDedupDMap)
 	if err != nil {
-		d.logger.Debug("dispatch dedup: NewDMap failed, firing (fail-open)", zap.Error(err))
+		d.warnDedupDegraded("NewDMap failed", namespace, topic, err)
 		return true
 	}
 	key := dispatchDedupKey(namespace, topic, data)
@@ -594,9 +625,37 @@ func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic s
 	// Any other (transient) error: fail-open and fire rather than risk a
 	// dropped wake. Worst case is a duplicate, which is what #30 already
 	// had — never worse.
-	d.logger.Debug("dispatch dedup: claim errored, firing (fail-open)",
-		zap.String("topic", topic), zap.Error(err))
+	d.warnDedupDegraded("claim Put errored", namespace, topic, err)
 	return true
+}
+
+// warnDedupDegraded emits a rate-limited WARN announcing that cross-node
+// dispatch dedup is degraded (Olric unavailable), so the cluster has fallen
+// back to firing on every node that receives the publish. The local cache
+// still prevents same-node duplicates, but cross-node duplicate pushes are
+// possible until Olric recovers — operators need visibility, not silence
+// (bugboard #555). Rate-limited so a sustained outage doesn't flood logs.
+func (d *PubSubDispatcher) warnDedupDegraded(reason, namespace, topic string, err error) {
+	d.degradedDedupMu.Lock()
+	now := time.Now()
+	shouldWarn := now.Sub(d.degradedDedupLastWarn) >= degradedDedupWarnInterval
+	if shouldWarn {
+		d.degradedDedupLastWarn = now
+	}
+	d.degradedDedupMu.Unlock()
+
+	if !shouldWarn {
+		return
+	}
+	d.logger.Warn("PubSub dispatch dedup degraded: Olric unavailable, "+
+		"falling back to fire-on-every-node — cross-node duplicate pushes "+
+		"possible until the shared store recovers",
+		zap.String("reason", reason),
+		zap.String("namespace", namespace),
+		zap.String("topic", topic),
+		zap.Duration("warn_interval", degradedDedupWarnInterval),
+		zap.Error(err),
+	)
 }
 
 // InvalidateCache is now a no-op — the dispatcher no longer caches lookups.

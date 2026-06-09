@@ -469,9 +469,17 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	engineCfg.MaxTimeoutSeconds = 60
 	engineCfg.ModuleCacheSize = 100
 
-	// Create secrets manager for serverless functions (AES-256-GCM encrypted)
+	// Create secrets manager for serverless functions (AES-256-GCM encrypted).
+	//
+	// The encryption key comes from the gateway Config (loaded from
+	// ~/.orama/secrets/secrets-encryption-key), NOT from engineCfg — engineCfg
+	// never has the key set, so passing it always produced a per-process
+	// ephemeral key and made get_secret return undecryptable values
+	// (bugboard #837). allowEphemeral=false: a missing/invalid key fails
+	// loudly here and disables get_secret rather than silently corrupting
+	// secrets.
 	var secretsMgr serverless.SecretsManager
-	if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, engineCfg.SecretsEncryptionKey, logger.Logger); secretsErr != nil {
+	if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, cfg.SecretsEncryptionKey, false, logger.Logger); secretsErr != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "Failed to initialize secrets manager; get_secret will be unavailable",
 			zap.Error(secretsErr))
 	} else {

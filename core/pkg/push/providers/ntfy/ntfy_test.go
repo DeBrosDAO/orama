@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,108 @@ func TestSend_no_baseURL_returns_error(t *testing.T) {
 	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"})
 	if err == nil {
 		t.Fatal("expected error for missing base URL")
+	}
+}
+
+// feat-32: an Android/GrapheneOS UnifiedPush device registers the full endpoint
+// URL its distributor hands it. UnifiedPush requires the app server to POST to
+// that endpoint verbatim, and we must do so ONLY when the host matches our
+// configured push server (never an arbitrary host → no SSRF).
+
+func TestSend_unifiedPush_endpoint_published(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := New(Config{BaseURL: srv.URL}, nil)
+	// The distributor hands the client a full endpoint on the SAME (push) host.
+	endpoint := srv.URL + "/upAbc123"
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: endpoint, Body: "payload"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotPath != "/upAbc123" {
+		t.Errorf("UnifiedPush endpoint must publish to its topic path; got %q", gotPath)
+	}
+	if gotBody != "payload" {
+		t.Errorf("body not delivered; got %q", gotBody)
+	}
+}
+
+func TestSend_unifiedPush_endpoint_confined_to_topic(t *testing.T) {
+	// A URL token must be confined to the same publish surface as a bare topic:
+	// the path becomes the topic, and any query string is dropped — so it can't
+	// gain arbitrary path/query control on the push host.
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := New(Config{BaseURL: srv.URL}, nil)
+	endpoint := srv.URL + "/uptopic?admin=1&x=y"
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: endpoint, Body: "x"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotPath != "/uptopic" {
+		t.Errorf("path must be the topic only; got %q", gotPath)
+	}
+	if gotQuery != "" {
+		t.Errorf("query string must be dropped (no arbitrary query on push host); got %q", gotQuery)
+	}
+}
+
+func TestSend_unifiedPush_endpoint_rejects_userinfo_bypass(t *testing.T) {
+	// Classic SSRF guard bypass: smuggle the real host into userinfo. url.Parse
+	// resolves the authority to the attacker host, so it must be rejected.
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// base host = srv host; token tries "<srvhost>@attacker.example.com".
+	base, _ := url.Parse(srv.URL)
+	p := New(Config{BaseURL: srv.URL}, nil)
+	token := base.Scheme + "://" + base.Host + "@attacker.example.com/x"
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: token, Body: "x"}); err == nil {
+		t.Fatal("expected rejection of a userinfo-smuggled host")
+	}
+	if hit {
+		t.Error("no request must be sent for a userinfo-bypass token")
+	}
+}
+
+func TestSend_unifiedPush_endpoint_rejects_foreign_host(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := New(Config{BaseURL: srv.URL}, nil)
+	// A device token pointing at a DIFFERENT host must be rejected before any
+	// request is made — a device token must never become an SSRF vector.
+	err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "https://attacker.example.com/steal",
+		Body:        "x",
+	})
+	if err == nil {
+		t.Fatal("expected an error for an endpoint whose host doesn't match the push host")
+	}
+	if hit {
+		t.Error("no request must be sent when the endpoint host doesn't match")
+	}
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Errorf("error should explain the host mismatch; got %v", err)
 	}
 }
 

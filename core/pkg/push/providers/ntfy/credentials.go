@@ -16,10 +16,11 @@ package ntfy
 // migration window, with the new credentials store taking precedence.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/push/credentials"
 )
 
@@ -87,7 +88,17 @@ func (Validator) Validate(raw []byte) error {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("ntfy credentials: invalid JSON: %w", err)
 	}
-	return validateCredentials(c)
+	if err := validateCredentials(c); err != nil {
+		return err
+	}
+	// Validate is the config-SET path (the hot build path uses ParseCredentials,
+	// which skips DNS), so the resolving SSRF check is safe here: reject a
+	// base_url whose host resolves to an internal/reserved address. Fail-open on
+	// resolution error — see push.CheckBaseURLResolvable.
+	if err := push.CheckBaseURLResolvable(context.Background(), c.BaseURL); err != nil {
+		return fmt.Errorf("ntfy credentials: %w", err)
+	}
+	return nil
 }
 
 // Redact returns a JSON-safe view that never echoes the auth token or
@@ -127,10 +138,12 @@ func ParseCredentials(raw []byte) (Credentials, error) {
 // validateCredentials is the shared validator used by both Validate and
 // ParseCredentials.
 func validateCredentials(c Credentials) error {
-	if c.BaseURL != "" {
-		if !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
-			return fmt.Errorf("ntfy credentials: base_url must start with http:// or https:// (got %q)", c.BaseURL)
-		}
+	// Literal-IP SSRF guard + scheme check. Runs on BOTH the set and the hot
+	// build path (no DNS), so a stored internal-literal base_url is also
+	// rejected when the dispatcher is (re)built. The DNS-resolving check lives
+	// in Validate (set path only).
+	if err := push.CheckBaseURLSyntax(c.BaseURL); err != nil {
+		return fmt.Errorf("ntfy credentials: %w", err)
 	}
 	if c.TopicMode != "" {
 		switch c.TopicMode {

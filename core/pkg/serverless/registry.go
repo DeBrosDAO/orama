@@ -107,8 +107,9 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
@@ -116,6 +117,7 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
 		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
+		fn.RawHTTPResponse,
 	)
 	if err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to register function: %w", err)}
@@ -154,7 +156,8 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
-				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response
 			FROM functions
 			WHERE namespace = ? AND name = ? AND status = ?
 			ORDER BY version DESC
@@ -167,7 +170,8 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
-				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response
 			FROM functions
 			WHERE namespace = ? AND name = ? AND version = ?
 		`
@@ -197,7 +201,8 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 			f.memory_limit_mb, f.timeout_seconds, f.is_public,
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
 			f.status, f.created_at, f.updated_at, f.created_by,
-			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn
+			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn,
+			f.raw_http_response
 		FROM functions f
 		INNER JOIN (
 			SELECT namespace, name, MAX(version) as max_version
@@ -668,6 +673,11 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		WSIdleTimeoutSec:     row.WSIdleTimeoutSec,
 		WSMaxFrameBytes:      row.WSMaxFrameBytes,
 		WSMaxInflightPerConn: row.WSMaxInflightPerConn,
+
+		// Raw-HTTP-response mode (bugboard #835). Without reading this back
+		// the invoke handler's `if fn.RawHTTPResponse` engine branch never
+		// fires and set_http_response is a no-op for every function.
+		RawHTTPResponse: row.RawHTTPResponse,
 	}
 }
 
@@ -716,6 +726,11 @@ type functionRow struct {
 	WSIdleTimeoutSec     int  `db:"ws_idle_timeout_sec"`
 	WSMaxFrameBytes      int  `db:"ws_max_frame_bytes"`
 	WSMaxInflightPerConn int  `db:"ws_max_inflight_per_conn"`
+
+	// Raw-HTTP-response mode (bugboard #835). Backed by migration
+	// 029_raw_http_response.sql; defaults to false so existing functions
+	// keep the JSON/Ack-wrapped behavior.
+	RawHTTPResponse bool `db:"raw_http_response"`
 }
 
 type envVarRow struct {

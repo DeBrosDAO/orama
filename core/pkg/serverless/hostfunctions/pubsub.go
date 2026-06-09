@@ -186,6 +186,40 @@ func dedupBatchByTopic(msgs []pubsub.TopicMessage) []pubsub.TopicMessage {
 	return out
 }
 
+// EphemeralStateSet records WS-subscribe-tracked ephemeral state for the
+// current invocation's WS client and publishes a "set" event (bugboard #710).
+// The owning client ID and namespace are derived from the invocation context —
+// the function cannot spoof them. Auto-clears on the client's WS disconnect.
+func (h *HostFunctions) EphemeralStateSet(ctx context.Context, topic, key string, payload []byte, ttlMs int64) error {
+	if h.ephemeralStore == nil {
+		return &serverless.HostFunctionError{Function: "ephemeral_state_set", Cause: fmt.Errorf("ephemeral state not available on this gateway")}
+	}
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
+		return &serverless.HostFunctionError{Function: "ephemeral_state_set", Cause: fmt.Errorf("no invocation context")}
+	}
+	if err := h.ephemeralStore.Set(ctx, cur.Namespace, cur.WSClientID, topic, key, payload, ttlMs); err != nil {
+		return &serverless.HostFunctionError{Function: "ephemeral_state_set", Cause: err}
+	}
+	return nil
+}
+
+// EphemeralStateClear removes ephemeral state the current WS client owns and
+// publishes a "clear" event (bugboard #710). Idempotent.
+func (h *HostFunctions) EphemeralStateClear(ctx context.Context, topic, key string) error {
+	if h.ephemeralStore == nil {
+		return &serverless.HostFunctionError{Function: "ephemeral_state_clear", Cause: fmt.Errorf("ephemeral state not available on this gateway")}
+	}
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
+		return &serverless.HostFunctionError{Function: "ephemeral_state_clear", Cause: fmt.Errorf("no invocation context")}
+	}
+	if err := h.ephemeralStore.Clear(ctx, cur.Namespace, cur.WSClientID, topic, key); err != nil {
+		return &serverless.HostFunctionError{Function: "ephemeral_state_clear", Cause: err}
+	}
+	return nil
+}
+
 // WSSend sends data to a specific WebSocket client.
 func (h *HostFunctions) WSSend(ctx context.Context, clientID string, data []byte) error {
 	if h.wsManager == nil {

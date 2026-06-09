@@ -247,6 +247,18 @@ func (m *MockHostServices) WSPubSubUnbridge(ctx context.Context, clientID, topic
 	return nil
 }
 
+func (m *MockHostServices) SetHTTPResponse(ctx context.Context, status int, headers map[string]string, body []byte) error {
+	return SetRawHTTPResponse(ctx, status, headers, body)
+}
+
+func (m *MockHostServices) EphemeralStateSet(ctx context.Context, topic, key string, payload []byte, ttlMs int64) error {
+	return nil
+}
+
+func (m *MockHostServices) EphemeralStateClear(ctx context.Context, topic, key string) error {
+	return nil
+}
+
 func (m *MockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }

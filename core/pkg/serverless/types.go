@@ -237,6 +237,11 @@ type FunctionDefinition struct {
 	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`     // 0 = no idle timeout
 	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`      // 0 = use default 256 KB
 	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"` // 0 = use default 64
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835): the
+	// function may call set_http_response to emit a verbatim status/headers/
+	// body instead of the JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
+	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
 }
 
 // DBTriggerConfig defines a database trigger configuration.
@@ -270,6 +275,11 @@ type Function struct {
 	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`
 	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`
 	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"`
+
+	// RawHTTPResponse — bugboard #835. When true, the function may emit a
+	// verbatim HTTP response via set_http_response instead of the
+	// JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
+	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
 }
 
 // InvocationContext provides context for a function invocation.
@@ -308,6 +318,14 @@ type InvocationContext struct {
 	// could create by publishing topics that match its own wildcard
 	// trigger (bugboard #93 follow-up).
 	TriggerDepth int `json:"trigger_depth,omitempty"`
+
+	// RawHTTP carries a verbatim HTTP response set by a RawHTTPResponse
+	// function (bugboard #835). The engine populates this from the
+	// per-invocation collector after Execute returns; the Invoker surfaces
+	// it on InvokeResponse so the HTTP handler can replay it. nil/unset for
+	// normal functions and functions that didn't call set_http_response.
+	// Not serialized — internal plumbing only.
+	RawHTTP *RawHTTPResult `json:"-"`
 }
 
 // InvocationResult represents the result of a function invocation.
@@ -554,6 +572,28 @@ type HostServices interface {
 	// Auto-cleaned on WS disconnect, so functions don't have to call this
 	// in OnClose unless they want to dynamically unsubscribe.
 	WSPubSubUnbridge(ctx context.Context, clientID, topic string) error
+
+	// SetHTTPResponse records a verbatim HTTP response (status, headers, body)
+	// for a RawHTTPResponse function (bugboard #835). The HTTP invoke handler
+	// replays it byte-for-byte instead of the JSON/Ack-wrapped output, so a
+	// function can transparently proxy an upstream RPC. Returns an error when
+	// the function is NOT deployed with raw_http_response, or when the status /
+	// header count / body size fail validation. headers may be nil.
+	SetHTTPResponse(ctx context.Context, status int, headers map[string]string, body []byte) error
+
+	// EphemeralStateSet records WS-subscribe-tracked ephemeral state owned by
+	// the current invocation's WS client (bugboard #710) and publishes a "set"
+	// event on the topic so subscribers observe it. The state auto-clears (with
+	// a synthetic "clear" event) when the owning WS client disconnects, and
+	// also expires after ttlMs (clamped to a max; <=0 uses a default). Returns
+	// an error when there is no WS client in context, on empty topic/key, on an
+	// oversized payload, or when the client's per-connection key cap is hit.
+	EphemeralStateSet(ctx context.Context, topic, key string, payload []byte, ttlMs int64) error
+
+	// EphemeralStateClear removes ephemeral state the current WS client owns
+	// and publishes a "clear" event. Idempotent: clearing a missing or
+	// non-owned key is a no-op. Errors only on no-WS-client / empty topic-key.
+	EphemeralStateClear(ctx context.Context, topic, key string) error
 
 	// WebSocket operations (only valid in WS context)
 	WSSend(ctx context.Context, clientID string, data []byte) error

@@ -17,6 +17,18 @@ func (h *HostFunctions) HTTPFetch(ctx context.Context, method, url string, heade
 	return h.doFetch(ctx, "http_fetch", h.httpClient, method, url, headers, body)
 }
 
+// SetHTTPResponse records a verbatim HTTP response for a RawHTTPResponse
+// function (bugboard #835). It delegates to the per-invocation collector
+// attached on ctx by the engine; the HTTP invoke handler replays the result
+// byte-for-byte. Validation (raw mode enabled, status range, header/body caps)
+// lives in serverless.SetRawHTTPResponse.
+func (h *HostFunctions) SetHTTPResponse(ctx context.Context, status int, headers map[string]string, body []byte) error {
+	if err := serverless.SetRawHTTPResponse(ctx, status, headers, body); err != nil {
+		return &serverless.HostFunctionError{Function: "set_http_response", Cause: err}
+	}
+	return nil
+}
+
 // AnyoneFetch makes an outbound HTTP request routed through the Anyone
 // (ANyONe protocol) SOCKS5 proxy, so the third-party endpoint sees an
 // Anyone exit IP instead of the gateway IP and the gateway can't

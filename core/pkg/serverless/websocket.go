@@ -23,6 +23,14 @@ type WSManager struct {
 	subscriptions   map[string]map[string]struct{}
 	subscriptionsMu sync.RWMutex
 
+	// disconnectHooks run (synchronously) on Unregister for each client,
+	// AFTER the connection + subscriptions are torn down. Used by the
+	// ephemeral-state store (bugboard #710) to auto-clear a client's owned
+	// state on disconnect. Both the stateless and persistent WS handlers
+	// call Unregister, so a single hook covers both paths.
+	disconnectHooks   []func(clientID string)
+	disconnectHooksMu sync.RWMutex
+
 	logger *zap.Logger
 }
 
@@ -102,6 +110,20 @@ func (m *WSManager) Register(clientID string, conn WebSocketConn) {
 	)
 }
 
+// AddDisconnectHook registers a callback fired (synchronously) for every
+// client passed to Unregister, after its connection + subscriptions are torn
+// down. Used to auto-clear WS-subscribe-tracked ephemeral state on disconnect
+// (bugboard #710). Hooks must be cheap and non-blocking — they run inline on
+// the WS read loop's teardown path. Register once at gateway init.
+func (m *WSManager) AddDisconnectHook(hook func(clientID string)) {
+	if hook == nil {
+		return
+	}
+	m.disconnectHooksMu.Lock()
+	m.disconnectHooks = append(m.disconnectHooks, hook)
+	m.disconnectHooksMu.Unlock()
+}
+
 // Unregister removes a WebSocket connection and its subscriptions.
 func (m *WSManager) Unregister(clientID string) {
 	m.connectionsMu.Lock()
@@ -129,6 +151,14 @@ func (m *WSManager) Unregister(clientID string) {
 
 	// Close the connection
 	_ = conn.conn.Close()
+
+	// Fire disconnect hooks (ephemeral-state auto-clear, bugboard #710).
+	m.disconnectHooksMu.RLock()
+	hooks := m.disconnectHooks
+	m.disconnectHooksMu.RUnlock()
+	for _, hook := range hooks {
+		hook(clientID)
+	}
 
 	m.logger.Debug("Unregistered WebSocket connection",
 		zap.String("client_id", clientID),

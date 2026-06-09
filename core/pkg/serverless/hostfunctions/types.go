@@ -97,6 +97,13 @@ type HostFunctions struct {
 	triggerDispatcher     *triggers.PubSubDispatcher
 	triggerDispatcherLock sync.RWMutex
 
+	// ephemeralStore backs ephemeral_state_set / ephemeral_state_clear
+	// (bugboard #710). Constructed in NewHostFunctions when a WS manager is
+	// present; nil otherwise (host fns then return an error). The store
+	// registers a disconnect hook on the WS manager so a client's owned state
+	// auto-clears the instant its WebSocket disconnects.
+	ephemeralStore *serverless.EphemeralStore
+
 	// Current invocation context (set per-execution)
 	invCtx     *serverless.InvocationContext
 	invCtxLock sync.RWMutex

@@ -26,10 +26,28 @@ func TestValidator_RejectsBadBaseURL(t *testing.T) {
 }
 
 func TestValidator_AcceptsHttpAndHttps(t *testing.T) {
-	for _, base := range []string{"http://push.local:8080", "https://push.example.com"} {
+	// Literal public (documentation-range) IPs so the test is deterministic and
+	// never hits real DNS — Validate now does a set-time SSRF resolve for
+	// hostname base URLs.
+	for _, base := range []string{"http://203.0.113.10:8080", "https://203.0.113.10"} {
 		body, _ := json.Marshal(Credentials{BaseURL: base})
 		if err := NewValidator().Validate(body); err != nil {
 			t.Errorf("base_url=%q rejected: %v", base, err)
+		}
+	}
+}
+
+func TestValidator_RejectsInternalBaseURL(t *testing.T) {
+	// SSRF guard: a tenant must not point the push base URL at an internal /
+	// reserved address. Literal IPs are rejected without DNS.
+	for _, base := range []string{
+		"http://169.254.169.254", // cloud metadata
+		"http://127.0.0.1:8090",  // loopback (the operator's local ntfy)
+		"http://10.0.0.5",        // WireGuard mesh
+	} {
+		body, _ := json.Marshal(Credentials{BaseURL: base})
+		if err := NewValidator().Validate(body); err == nil {
+			t.Errorf("internal base_url %q must be rejected (SSRF)", base)
 		}
 	}
 }

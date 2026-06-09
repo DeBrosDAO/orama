@@ -88,6 +88,12 @@ http_gateway:
   ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
   ipfs_api_url: "http://localhost:{{.IPFSAPIPort}}"
   ipfs_timeout: "60s"
+{{- if .SecretsEncryptionKey}}
+  # Serverless function secrets encryption key (AES-256, hex). Must be
+  # identical on every namespace-gateway node and stable across restarts
+  # (bugboard #837). Sourced from ~/.orama/secrets/secrets-encryption-key.
+  secrets_encryption_key: "{{.SecretsEncryptionKey}}"
+{{- end}}
   
   # Routes for internal service reverse proxy (kept for backwards compatibility but not used by full gateway)
   routes: {}

@@ -141,11 +141,27 @@ func resolveNamespace(r *http.Request) string {
 	return ""
 }
 
-// resolveCallerUserID extracts the JWT subject (typically the wallet) of
-// the caller, or empty if the request was authenticated by API key only.
+// rootIDClaim is the custom JWT claim an app may set to carry the stable
+// identity (rootId) that a device should be keyed on, independent of which
+// wallet credential authenticated the session. See bugboard #548.
+const rootIDClaim = "root_id"
+
+// resolveCallerUserID extracts the identity a push device should be keyed on.
+//
+// In a multi-credential app (anchat), the JWT subject is the *wallet* — a
+// credential, not the identity. A single user (rootId) with N linked wallets
+// would otherwise register N device rows and receive N duplicate pushes
+// (bugboard #548). When the app includes a stable `root_id` custom claim, we
+// key on that; otherwise we fall back to the subject (wallet) so single-
+// credential apps and older tokens keep working unchanged.
+//
+// Returns empty if the request was authenticated by API key only (no JWT).
 func resolveCallerUserID(r *http.Request) string {
 	if v := r.Context().Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			if rootID, ok := claims.Custom[rootIDClaim]; ok && rootID != "" {
+				return rootID
+			}
 			return claims.Sub
 		}
 	}

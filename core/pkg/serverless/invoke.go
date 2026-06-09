@@ -75,6 +75,13 @@ type InvokeResponse struct {
 	Error      string           `json:"error,omitempty"`
 	DurationMS int64            `json:"duration_ms"`
 	Retries    int              `json:"retries,omitempty"`
+
+	// RawHTTP carries a verbatim HTTP response set by a RawHTTPResponse
+	// function via set_http_response (bugboard #835). nil for normal
+	// functions and for raw functions that never called set_http_response —
+	// the HTTP handler falls back to the standard JSON/Ack path in that case.
+	// Not serialized; consumed directly by the HTTP invoke handler.
+	RawHTTP *RawHTTPResult `json:"-"`
 }
 
 // Invoke executes a function with automatic retry logic.
@@ -169,6 +176,8 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	}
 
 	response.Status = InvocationStatusSuccess
+	// Surface any verbatim HTTP response the function set (bugboard #835).
+	response.RawHTTP = invCtx.RawHTTP
 	return response, nil
 }
 
