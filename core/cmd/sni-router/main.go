@@ -90,10 +90,29 @@ func main() {
 		zap.String("version", version),
 		zap.String("commit", commit))
 
-	cfg := parseConfig(logger)
+	cfg, configPath := parseConfig(logger)
 
 	router := sniproxy.NewRouter(toBackend(cfg.Fallback))
-	router.Replace(toRoutes(cfg.Routes), toBackend(cfg.Fallback))
+
+	// Hot-reload the route table from the config file so a namespace's
+	// cdn/turn SNI routes can be added or removed without restarting the
+	// router (Router.Replace swaps atomically under in-flight connections).
+	reloader := sniproxy.NewFileRouteReloader(configPath,
+		func() ([]sniproxy.Route, sniproxy.Backend, error) {
+			y, err := loadConfig(configPath)
+			if err != nil {
+				return nil, sniproxy.Backend{}, err
+			}
+			return toRoutes(y.Routes), toBackend(y.Fallback), nil
+		}, router, logger.Logger)
+	if err := reloader.Apply(); err != nil {
+		logger.ComponentError(logging.ComponentSNI, "Failed to install initial routes",
+			zap.Error(err))
+		os.Exit(1)
+	}
+	routeStop := make(chan struct{})
+	defer close(routeStop)
+	go reloader.Watch(sniproxy.DefaultRouteReloadInterval, routeStop)
 
 	srv := sniproxy.NewServer(router, sniproxy.Config{
 		ClientHelloTimeout: cfg.ClientHelloTimeout,
@@ -140,7 +159,7 @@ func main() {
 	logger.ComponentInfo(logging.ComponentSNI, "SNI router shutdown complete")
 }
 
-func parseConfig(logger *logging.ColoredLogger) yamlConfig {
+func parseConfig(logger *logging.ColoredLogger) (yamlConfig, string) {
 	configFlag := flag.String("config", "", "Config file path (absolute or filename in ~/.orama)")
 	flag.Parse()
 
@@ -166,28 +185,11 @@ func parseConfig(logger *logging.ColoredLogger) yamlConfig {
 		}
 	}
 
-	data, err := os.ReadFile(configPath)
+	y, err := loadConfig(configPath)
 	if err != nil {
-		logger.ComponentError(logging.ComponentSNI, "Config file not found",
+		logger.ComponentError(logging.ComponentSNI, "Failed to load SNI router config",
 			zap.String("path", configPath), zap.Error(err))
-		fmt.Fprintf(os.Stderr, "\nConfig file not found at %s\n", configPath)
-		os.Exit(1)
-	}
-
-	var y yamlConfig
-	if err := config.DecodeStrict(strings.NewReader(string(data)), &y); err != nil {
-		logger.ComponentError(logging.ComponentSNI, "Failed to parse SNI router config",
-			zap.Error(err))
-		fmt.Fprintf(os.Stderr, "Configuration parse error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if errs := validateConfig(&y); len(errs) > 0 {
-		fmt.Fprintf(os.Stderr, "\nSNI router configuration errors (%d):\n", len(errs))
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "  - %s\n", e)
-		}
-		fmt.Fprintf(os.Stderr, "\nPlease fix the configuration and try again.\n")
+		fmt.Fprintf(os.Stderr, "\nSNI router configuration error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -195,7 +197,25 @@ func parseConfig(logger *logging.ColoredLogger) yamlConfig {
 		zap.String("path", configPath),
 	)
 
-	return y
+	return y, configPath
+}
+
+// loadConfig reads, decodes, and validates the SNI router config file. Shared
+// by the initial parse and every hot-reload, so it returns an error instead of
+// exiting the process.
+func loadConfig(path string) (yamlConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return yamlConfig{}, fmt.Errorf("read config %s: %w", path, err)
+	}
+	var y yamlConfig
+	if err := config.DecodeStrict(strings.NewReader(string(data)), &y); err != nil {
+		return yamlConfig{}, fmt.Errorf("parse config: %w", err)
+	}
+	if errs := validateConfig(&y); len(errs) > 0 {
+		return yamlConfig{}, fmt.Errorf("invalid config: %s", strings.Join(errs, "; "))
+	}
+	return y, nil
 }
 
 // validateConfig returns a non-empty slice of human-readable errors on misconfig.

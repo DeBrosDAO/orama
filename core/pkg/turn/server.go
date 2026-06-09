@@ -23,6 +23,9 @@ type Server struct {
 	conn        net.PacketConn // UDP listener on primary port (3478)
 	tcpListener net.Listener   // Plain TCP listener on primary port (3478)
 	tlsListener net.Listener   // TLS TCP listener for TURNS (port 5349)
+
+	certReloader *certReloader // hot-reloads the TURNS cert; nil when TURNS disabled
+	certStop     chan struct{} // closed to stop the cert-reload watcher goroutine
 }
 
 // NewServer creates and starts a TURN server.
@@ -79,23 +82,31 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		},
 	})
 
-	// TURNS: TLS over TCP listener (port 5349) if configured
+	// TURNS: TLS over TCP listener (port 5349) if configured.
+	//
+	// The cert is served via a hot-reloading GetCertificate callback rather
+	// than a static Certificates slice, so a Caddy-renewed cert is picked up
+	// in-process without restarting TURN (a restart drops every active relay
+	// ~30s). See certReloader / plans/platform/04_STEALTH_TURN.md.
 	if cfg.TURNSListenAddr != "" && cfg.TLSCertPath != "" && cfg.TLSKeyPath != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLSCertPath, cfg.TLSKeyPath)
+		reloader, err := newCertReloader(cfg.TLSCertPath, cfg.TLSKeyPath, s.logger)
 		if err != nil {
-			conn.Close()
+			s.closeListeners()
 			return nil, fmt.Errorf("failed to load TLS cert/key: %w", err)
 		}
 		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
+			GetCertificate: reloader.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
 		}
 		tlsListener, err := tls.Listen("tcp", cfg.TURNSListenAddr, tlsConfig)
 		if err != nil {
-			conn.Close()
+			s.closeListeners()
 			return nil, fmt.Errorf("failed to listen on %s: %w", cfg.TURNSListenAddr, err)
 		}
 		s.tlsListener = tlsListener
+		s.certReloader = reloader
+		s.certStop = make(chan struct{})
+		go reloader.watch(turnCertReloadInterval, s.certStop)
 
 		listenerConfigs = append(listenerConfigs, pionTurn.ListenerConfig{
 			Listener: tlsListener,
@@ -207,7 +218,15 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// closeListeners stops the cert watcher and closes all listeners. It is
+// idempotent (every field is nil-guarded and nil'd after use) but is NOT
+// mutex-protected — it relies on its call sites being single-threaded relative
+// to each other (sequential construction, plus a single Close() from main).
 func (s *Server) closeListeners() {
+	if s.certStop != nil {
+		close(s.certStop)
+		s.certStop = nil
+	}
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
