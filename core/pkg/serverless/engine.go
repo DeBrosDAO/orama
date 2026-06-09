@@ -222,12 +222,17 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 	return engine, nil
 }
 
-// slowInvokeThreshold is the wall-clock duration above which Execute
-// emits a structured "slow invocation" warning with per-phase
-// breakdown. Picked to be well below the WS-handler's 30s ceiling
-// (bugboard #24) so we get diagnostic logs BEFORE the timeout actually
-// fires, surfacing which phase is the sink.
-const slowInvokeThreshold = 5 * time.Second
+// slowInvokeThreshold returns the wall-clock duration above which Execute
+// emits a structured "slow invocation" warning with per-phase breakdown.
+// Sourced from config (SlowInvokeThresholdMs) so a cluster under
+// investigation can lower it to surface the sub-second cold-start floor that
+// the 5s default hides (bugboard #27). Defaults to 5s when unset.
+func (e *Engine) slowInvokeThreshold() time.Duration {
+	if e.config != nil && e.config.SlowInvokeThresholdMs > 0 {
+		return time.Duration(e.config.SlowInvokeThresholdMs) * time.Millisecond
+	}
+	return defaultSlowInvokeThresholdMs * time.Millisecond
+}
 
 // Execute runs a function with the given input and returns the output.
 //
@@ -332,7 +337,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	module, err := e.getOrCompileModule(execCtx, fn.WASMCID)
 	if err != nil {
 		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, 0, InvocationStatusError, err)
-		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, "module-load-failed", err)
+		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, 0, "module-load-failed", err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
 	moduleLoadedAt = time.Now()
@@ -343,6 +348,10 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 		contextSetter = func() { hf.SetInvocationContext(invCtx) }
 		contextClearer = func() { hf.ClearContext() }
 	}
+	// Attach a collector so ExecuteModule reports how long instantiate (TinyGo
+	// _start cold-start) took, letting the slow-invoke diagnostic split the
+	// execute phase into cold-start vs handler work (bugboard #27).
+	execCtx, instTiming := execution.WithInstantiateTiming(execCtx)
 	output, err := e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
 	executeDoneAt = time.Now()
 	if err != nil {
@@ -352,7 +361,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 			err = ErrTimeout
 		}
 		e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), status, err)
-		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, string(status), err)
+		e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, instTiming.InstantiateNs, string(status), err)
 		return nil, &ExecutionError{FunctionName: fn.Name, RequestID: invCtx.RequestID, Cause: err}
 	}
 
@@ -365,7 +374,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	}
 
 	e.logInvocation(ctx, fn, invCtx, logBuf, startTime, len(output), InvocationStatusSuccess, nil)
-	e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, "success", nil)
+	e.logSlowInvocation(invCtx, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt, instTiming.InstantiateNs, "success", nil)
 	return output, nil
 }
 
@@ -379,9 +388,9 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 // Zero-valued phase timestamps mean the phase was never reached, which
 // is itself signal — e.g. moduleLoadedAt=zero + executeDoneAt=zero with
 // large totalMs means we blocked in rate-limit OR module-load.
-func (e *Engine) logSlowInvocation(invCtx *InvocationContext, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt time.Time, status string, err error) {
+func (e *Engine) logSlowInvocation(invCtx *InvocationContext, startTime, ratelimitDoneAt, moduleLoadedAt, executeDoneAt time.Time, instantiateNs int64, status string, err error) {
 	totalMs := time.Since(startTime).Milliseconds()
-	if totalMs < slowInvokeThreshold.Milliseconds() {
+	if totalMs < e.slowInvokeThreshold().Milliseconds() {
 		return
 	}
 	// Compute phase deltas. Use 0 for unreached phases so the log line
@@ -396,6 +405,15 @@ func (e *Engine) logSlowInvocation(invCtx *InvocationContext, startTime, ratelim
 	if !executeDoneAt.IsZero() && !moduleLoadedAt.IsZero() {
 		executeMs = executeDoneAt.Sub(moduleLoadedAt).Milliseconds()
 	}
+	// Split execute into instantiate (TinyGo _start cold-start) vs run
+	// (handler logic). A count=0 read with instantiate_ms ≈ execute_ms and
+	// run_ms ≈ 0 is the bugboard #27 cold-start floor — the per-call fresh
+	// instantiation, not the handler, is the sink.
+	instantiateMs := instantiateNs / int64(time.Millisecond)
+	runMs := executeMs - instantiateMs
+	if runMs < 0 {
+		runMs = 0
+	}
 	fields := []zap.Field{
 		zap.String("namespace", invCtx.Namespace),
 		zap.String("function", invCtx.FunctionName),
@@ -406,6 +424,8 @@ func (e *Engine) logSlowInvocation(invCtx *InvocationContext, startTime, ratelim
 		zap.Int64("ratelimit_ms", ratelimitMs),
 		zap.Int64("module_load_ms", moduleLoadMs),
 		zap.Int64("execute_ms", executeMs),
+		zap.Int64("instantiate_ms", instantiateMs),
+		zap.Int64("run_ms", runMs),
 		zap.String("invocation_status", status),
 	}
 	if err != nil {

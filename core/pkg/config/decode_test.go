@@ -207,3 +207,30 @@ key2: value2
 		t.Errorf("expected key2='value2', got %q", result["key2"])
 	}
 }
+
+// TestDecodeStrict_secretsEncryptionKey is the regression guard for the
+// v0.122.42 boot crash: Phase 4 config generation writes
+// `secrets_encryption_key` into node.yaml under the http_gateway section,
+// but HTTPGatewayConfig had no matching field. With KnownFields(true)
+// strict decoding, the unknown field made DecodeStrict fail and
+// orama-node crash-looped (exit 1) on every start. The field must parse.
+func TestDecodeStrict_secretsEncryptionKey(t *testing.T) {
+	yamlInput := `
+node:
+  id: "test-node"
+  data_dir: "./data"
+http_gateway:
+  enabled: true
+  client_namespace: "default"
+  rqlite_dsn: "http://localhost:5001"
+  secrets_encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+`
+	var cfg Config
+	if err := DecodeStrict(strings.NewReader(yamlInput), &cfg); err != nil {
+		t.Fatalf("node.yaml with secrets_encryption_key must parse (v0.122.42 regression), got: %v", err)
+	}
+	want := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if cfg.HTTPGateway.SecretsEncryptionKey != want {
+		t.Errorf("SecretsEncryptionKey = %q, want %q", cfg.HTTPGateway.SecretsEncryptionKey, want)
+	}
+}

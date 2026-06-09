@@ -56,6 +56,14 @@ type Config struct {
 	ModuleCacheSize int  `yaml:"module_cache_size"` // Number of compiled modules to cache
 	EnablePrewarm   bool `yaml:"enable_prewarm"`    // Pre-compile frequently used functions
 
+	// SlowInvokeThresholdMs is the wall-clock (ms) above which Execute emits the
+	// per-phase "slow invocation" diagnostic (bugboard #24/#27). Default 5000.
+	// Lower it (e.g. 750) to surface the sub-second cold-start floor that the
+	// 5s default hides — async-dispatched stateless handlers pay a fresh
+	// instantiate + TinyGo _start per call, which a count=0 read makes visible
+	// as ~1s of execute time with ~0 module-load (compile is cached). See #27.
+	SlowInvokeThresholdMs int `yaml:"slow_invoke_threshold_ms"`
+
 	// Secrets encryption
 	SecretsEncryptionKey string `yaml:"secrets_encryption_key"` // AES-256 key (32 bytes, hex-encoded)
 
@@ -78,6 +86,12 @@ type Config struct {
 // cross-region clusters and allows 6-field cron expressions like
 // `*/1 * * * * *` to fire on every-second cadence.
 const MinCronPollInterval = 100 * time.Millisecond
+
+// defaultSlowInvokeThresholdMs is the default wall-clock (ms) above which the
+// per-phase slow-invocation diagnostic fires. 5s keeps normal traffic quiet
+// while still firing before the 30s WS ceiling; lower it on a cluster under
+// investigation to surface sub-second cold-start floors.
+const defaultSlowInvokeThresholdMs = 5000
 
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
@@ -113,8 +127,9 @@ func DefaultConfig() *Config {
 		MaxConcurrentExecutions: 10,
 
 		// WASM cache
-		ModuleCacheSize: 100,
-		EnablePrewarm:   true,
+		ModuleCacheSize:       100,
+		EnablePrewarm:         true,
+		SlowInvokeThresholdMs: defaultSlowInvokeThresholdMs,
 
 		// Logging
 		LogInvocations: true,
@@ -207,6 +222,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.ModuleCacheSize == 0 {
 		c.ModuleCacheSize = defaults.ModuleCacheSize
+	}
+	if c.SlowInvokeThresholdMs == 0 {
+		c.SlowInvokeThresholdMs = defaults.SlowInvokeThresholdMs
 	}
 	if c.LogRetention == 0 {
 		c.LogRetention = defaults.LogRetention

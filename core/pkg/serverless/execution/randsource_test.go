@@ -8,6 +8,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"go.uber.org/zap"
 )
 
 // Bugboard #120 — wazero defaults to a DETERMINISTIC (zero-seed) RNG source.
@@ -178,4 +179,32 @@ func TestModuleConfig_randWithoutFix_demoDeterministic(t *testing.T) {
 			"if real-by-default upstream, the bug-#120 fix may be redundant; review", a, b)
 	}
 	// Determinism confirmed → fix is meaningful.
+}
+
+// Bugboard #27 instrumentation: ExecuteModule must record how long the
+// per-invocation InstantiateModule (TinyGo _start cold-start) took into the
+// ctx-attached collector, so the engine can split the execute phase into
+// cold-start vs handler work. Without an attached collector it must be a no-op.
+func TestExecuteModule_recordsInstantiateTiming(t *testing.T) {
+	ctx := context.Background()
+	runtime := wazero.NewRuntime(ctx)
+	defer runtime.Close(ctx)
+	if _, err := wasi_snapshot_preview1.Instantiate(ctx, runtime); err != nil {
+		t.Fatalf("instantiate WASI: %v", err)
+	}
+	compiled, err := runtime.CompileModule(ctx, randProbeWasm)
+	if err != nil {
+		t.Fatalf("compile probe wasm: %v", err)
+	}
+	defer compiled.Close(ctx)
+
+	ex := NewExecutor(runtime, zap.NewNop(), 0)
+
+	tctx, timing := WithInstantiateTiming(ctx)
+	if _, err := ex.ExecuteModule(tctx, compiled, "probe", nil, nil, nil); err != nil {
+		t.Fatalf("ExecuteModule: %v", err)
+	}
+	if timing.InstantiateNs <= 0 {
+		t.Errorf("InstantiateNs = %d; want > 0 (instantiate duration must be recorded)", timing.InstantiateNs)
+	}
 }

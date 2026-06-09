@@ -468,6 +468,13 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	engineCfg.DefaultTimeoutSeconds = 30
 	engineCfg.MaxTimeoutSeconds = 60
 	engineCfg.ModuleCacheSize = 100
+	// Surface the per-phase slow-invoke diagnostic (instantiate_ms / run_ms)
+	// above 1s instead of the 5s default — a >1s serverless invocation is
+	// genuinely slow (well-built handlers are <300ms), and this makes the
+	// cold-start floor (bugboard #27: async-dispatched stateless handlers pay a
+	// fresh instantiate + TinyGo _start per call) visible for correlation
+	// against client-side request_ids.
+	engineCfg.SlowInvokeThresholdMs = 1000
 
 	// Create secrets manager for serverless functions (AES-256-GCM encrypted).
 	//

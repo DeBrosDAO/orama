@@ -30,7 +30,7 @@ func TestLogSlowInvocation_belowThresholdEmitsNothing(t *testing.T) {
 	invCtx := &InvocationContext{Namespace: "ns", FunctionName: "fast-fn"}
 
 	now := time.Now()
-	e.logSlowInvocation(invCtx, now, now.Add(1*time.Millisecond), now.Add(2*time.Millisecond), now.Add(100*time.Millisecond), "success", nil)
+	e.logSlowInvocation(invCtx, now, now.Add(1*time.Millisecond), now.Add(2*time.Millisecond), now.Add(100*time.Millisecond), 0, "success", nil)
 
 	if got := observed.Len(); got != 0 {
 		t.Errorf("fast invocation (100ms < 5s threshold) emitted %d log lines; want 0", got)
@@ -51,12 +51,15 @@ func TestLogSlowInvocation_aboveThresholdEmitsBreakdown(t *testing.T) {
 		WSClientID:   "ws-client-xyz",
 	}
 
-	// Simulate a 30s-class invocation that spent the bulk in execute.
+	// Simulate a 30s-class invocation that spent the bulk in execute, of which
+	// nearly all was cold-start instantiation (the bugboard #27 floor pattern):
+	// instantiate_ms ≈ execute_ms, run_ms ≈ 0.
 	start := time.Now().Add(-30 * time.Second)
 	ratelimitDone := start.Add(50 * time.Millisecond)
 	moduleLoaded := start.Add(150 * time.Millisecond)
 	executeDone := start.Add(30 * time.Second)
-	e.logSlowInvocation(invCtx, start, ratelimitDone, moduleLoaded, executeDone, "timeout", nil)
+	instantiateNs := (29*time.Second + 800*time.Millisecond).Nanoseconds()
+	e.logSlowInvocation(invCtx, start, ratelimitDone, moduleLoaded, executeDone, instantiateNs, "timeout", nil)
 
 	logs := observed.All()
 	if len(logs) != 1 {
@@ -96,6 +99,18 @@ func TestLogSlowInvocation_aboveThresholdEmitsBreakdown(t *testing.T) {
 	if executeMs < 29000 || executeMs > 30000 {
 		t.Errorf("execute_ms = %d; want ~29900 (proves the phase-breakdown points at execute)", executeMs)
 	}
+
+	// The #27 cold-start split: instantiate dominates execute, run ≈ 0. This is
+	// the field AnChat needs to distinguish "fresh instantiate is the sink"
+	// from "the handler is slow".
+	instantiateMs, _ := contextMap["instantiate_ms"].(int64)
+	runMs, _ := contextMap["run_ms"].(int64)
+	if instantiateMs < 29000 || instantiateMs > 30000 {
+		t.Errorf("instantiate_ms = %d; want ~29800 (cold-start dominates execute)", instantiateMs)
+	}
+	if runMs < 0 || runMs > 500 {
+		t.Errorf("run_ms = %d; want ~100 (handler logic is trivial; cold-start is the sink)", runMs)
+	}
 }
 
 func TestLogSlowInvocation_zeroPhaseTimestampsMeanUnreached(t *testing.T) {
@@ -112,7 +127,7 @@ func TestLogSlowInvocation_zeroPhaseTimestampsMeanUnreached(t *testing.T) {
 	start := time.Now().Add(-10 * time.Second)
 	ratelimitDone := start.Add(100 * time.Millisecond)
 	// moduleLoadedAt and executeDoneAt left as zero — module-load failed
-	e.logSlowInvocation(invCtx, start, ratelimitDone, time.Time{}, time.Time{}, "module-load-failed", nil)
+	e.logSlowInvocation(invCtx, start, ratelimitDone, time.Time{}, time.Time{}, 0, "module-load-failed", nil)
 
 	logs := observed.All()
 	if len(logs) != 1 {

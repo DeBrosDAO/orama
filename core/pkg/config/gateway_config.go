@@ -21,6 +21,15 @@ type HTTPGatewayConfig struct {
 	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
 	BaseDomain        string        `yaml:"base_domain"`          // Base domain for deployments (e.g., "dbrs.space"). Defaults to "dbrs.space"
 
+	// SecretsEncryptionKey is the AES-256 key (hex, 64 chars) used to encrypt
+	// serverless function secrets at rest. Generated per-cluster and written
+	// into node.yaml by Phase 4 config generation. This field MUST exist or
+	// strict YAML unmarshal rejects node.yaml entirely and orama-node fails
+	// to boot (regression that shipped in v0.122.42: template + secret
+	// generator + gateway.Config consumer all landed, but this parse field
+	// and the node→gateway mapping were missed).
+	SecretsEncryptionKey string `yaml:"secrets_encryption_key"`
+
 	// WebRTC configuration (optional, enabled per-namespace)
 	WebRTC WebRTCConfig `yaml:"webrtc"`
 }

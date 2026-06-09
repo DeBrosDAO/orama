@@ -6,11 +6,35 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"go.uber.org/zap"
 )
+
+// InstantiateTiming captures how long the per-invocation wazero
+// InstantiateModule call took (running TinyGo _start / package init). It rides
+// the ctx so the engine's slow-invoke diagnostic can split the execute phase
+// into cold-start (instantiate) vs handler work (run) — the distinction that
+// pins the bugboard #27 cold-start floor. Nil collector = not measured.
+type InstantiateTiming struct {
+	InstantiateNs int64
+}
+
+type instantiateTimingKey struct{}
+
+// WithInstantiateTiming returns a ctx carrying a fresh InstantiateTiming that
+// ExecuteModule will fill in. The caller reads it back after ExecuteModule.
+func WithInstantiateTiming(ctx context.Context) (context.Context, *InstantiateTiming) {
+	t := &InstantiateTiming{}
+	return context.WithValue(ctx, instantiateTimingKey{}, t), t
+}
+
+func instantiateTimingFrom(ctx context.Context) *InstantiateTiming {
+	t, _ := ctx.Value(instantiateTimingKey{}).(*InstantiateTiming)
+	return t
+}
 
 // Executor handles WASM module execution.
 type Executor struct {
@@ -101,8 +125,14 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		}
 	}
 
-	// Instantiate and run the module (WASI _start will be called automatically)
+	// Instantiate and run the module (WASI _start will be called automatically).
+	// Time the instantiate so the engine can attribute cold-start vs handler
+	// work (bugboard #27 cold-start floor); no-op when no collector is attached.
+	instStart := time.Now()
 	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
+	if t := instantiateTimingFrom(ctx); t != nil {
+		t.InstantiateNs = time.Since(instStart).Nanoseconds()
+	}
 	if err != nil {
 		// Check if stderr has any output
 		if stderr.Len() > 0 {
