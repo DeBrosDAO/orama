@@ -228,6 +228,11 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		// random Ed25519 keys and host functions saw empty
 		// caller_jwt_subject.
 		ClusterSecretPath: s.clusterSecretPath,
+		// Bugboard #837 follow-up: forward the host's serverless secrets
+		// encryption key so the spawned namespace gateway can manage function
+		// secrets. Without this, `function secrets list` returned 501 on
+		// namespace gateways even though the host gateway had the key.
+		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
 		WebRTC: gateway.GatewayYAMLWebRTC{
 			Enabled:    cfg.WebRTCEnabled,
 			SFUPort:    cfg.SFUPort,
@@ -241,8 +246,16 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		return fmt.Errorf("failed to marshal Gateway config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+	// 0600: the gateway YAML embeds the secrets encryption key (bugboard
+	// #837), so it must not be world/group readable.
+	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write Gateway config: %w", err)
+	}
+	// WriteFile's mode only applies on CREATE — converge perms explicitly so
+	// a file written 0644 by an older release doesn't stay world-readable
+	// after an in-place rewrite.
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return fmt.Errorf("failed to set Gateway config permissions: %w", err)
 	}
 
 	s.logger.Info("Created Gateway config file",
@@ -333,6 +346,23 @@ func gatewayWebRTCInSync(onDisk gateway.GatewayYAMLWebRTC, cfg gateway.InstanceC
 		onDisk.TURNDomain == cfg.TURNDomain
 }
 
+// gatewayConfigInSync reports whether the full reconcile-relevant config on
+// disk matches the desired config — i.e. no rewrite+restart is needed.
+// Combines the WebRTC drift surface (bugboard #25) with the secrets
+// encryption key (bugboard #837): a gateway that was spawned before the key
+// was plumbed has an empty on-disk key and `function secrets list` returns
+// 501; once the desired key is non-empty we want a rewrite+restart so the
+// running gateway picks it up.
+//
+// Plain string equality keeps the "both empty → in sync" case a no-op: a
+// namespace on a host with no secrets key (empty desired) whose on-disk key
+// is also empty is in-sync, so it never restart-loops. Only a genuine
+// difference (empty on-disk vs non-empty desired, or a rotated key) drifts.
+func gatewayConfigInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig) bool {
+	return gatewayWebRTCInSync(onDisk.WebRTC, cfg) &&
+		onDisk.SecretsEncryptionKey == cfg.SecretsEncryptionKey
+}
+
 // ReconcileGateway is the WARM counterpart to SpawnGateway: when a
 // namespace gateway is already running, this compares its on-disk config
 // against the desired `cfg` and restarts it ONLY if the WebRTC block has
@@ -366,18 +396,22 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 		return fmt.Errorf("parse gateway config for reconcile: %w", err)
 	}
 
-	if gatewayWebRTCInSync(onDisk.WebRTC, cfg) {
+	if gatewayConfigInSync(onDisk, cfg) {
 		// Already in sync — nothing to do, no restart.
 		return nil
 	}
 
-	s.logger.Info("Gateway WebRTC config drifted from desired; reconciling (rewrite + restart)",
+	// secretsKeyDrifted is logged (as a bool, never the key material) so
+	// operators can see when a #837 rewrite fires vs a #25 WebRTC rewrite.
+	secretsKeyDrifted := onDisk.SecretsEncryptionKey != cfg.SecretsEncryptionKey
+	s.logger.Info("Gateway config drifted from desired; reconciling (rewrite + restart)",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID),
 		zap.Bool("ondisk_enabled", onDisk.WebRTC.Enabled),
 		zap.Int("ondisk_sfu_port", onDisk.WebRTC.SFUPort),
 		zap.Bool("desired_enabled", cfg.WebRTCEnabled),
-		zap.Int("desired_sfu_port", cfg.SFUPort))
+		zap.Int("desired_sfu_port", cfg.SFUPort),
+		zap.Bool("secrets_key_drifted", secretsKeyDrifted))
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
@@ -385,13 +419,13 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 type SFUInstanceConfig struct {
 	Namespace      string
 	NodeID         string
-	ListenAddr     string              // WireGuard IP:port (e.g., "10.0.0.1:30000")
-	MediaPortStart int                 // Start of RTP media port range
-	MediaPortEnd   int                 // End of RTP media port range
+	ListenAddr     string                 // WireGuard IP:port (e.g., "10.0.0.1:30000")
+	MediaPortStart int                    // Start of RTP media port range
+	MediaPortEnd   int                    // End of RTP media port range
 	TURNServers    []sfu.TURNServerConfig // TURN servers to advertise to peers
-	TURNSecret     string              // HMAC-SHA1 shared secret
-	TURNCredTTL    int                 // Credential TTL in seconds
-	RQLiteDSN      string              // Namespace-local RQLite DSN
+	TURNSecret     string                 // HMAC-SHA1 shared secret
+	TURNCredTTL    int                    // Credential TTL in seconds
+	RQLiteDSN      string                 // Namespace-local RQLite DSN
 }
 
 // SpawnSFU starts an SFU instance using systemd

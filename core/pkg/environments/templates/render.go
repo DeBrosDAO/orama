@@ -55,6 +55,17 @@ type NodeConfigData struct {
 	// config (the gateway then reads the secret file directly / get_secret
 	// stays disabled until the key is configured).
 	SecretsEncryptionKey string
+
+	// WebRTC/TURN configuration, rendered under http_gateway.webrtc when
+	// WebRTCEnabled is true (feat-124 #913). TURNSecret is sourced from
+	// ~/.orama/secrets/turn-secret so it survives Phase4 config regeneration;
+	// TURNDomain/SFUPort are operator-set values carried forward from the
+	// existing node.yaml. The whole block is conditional on TURNSecret being
+	// set — clusters without TURN render nothing.
+	WebRTCEnabled bool   // Whether to emit the webrtc block
+	SFUPort       int    // Local SFU signaling port the gateway proxies to
+	TURNDomain    string // TURN domain (e.g., "turn.ns-myapp.dbrs.space")
+	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering

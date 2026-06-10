@@ -129,6 +129,11 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
 			TurnEncryptionKey:     turnEncKey,
 			ClusterSecretPath:     clusterSecretPath,
+			// Bugboard #837 follow-up: forward the host's serverless secrets
+			// encryption key (read once above) so spawned namespace gateways
+			// can manage function secrets. Reuses the same variable the host
+			// gateway uses — no second file read.
+			SecretsEncryptionKey: secretsEncryptionKey,
 		}
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)

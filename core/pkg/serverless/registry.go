@@ -409,26 +409,60 @@ func (r *Registry) Log(ctx context.Context, inv *InvocationRecord) error {
 		return fmt.Errorf("failed to insert invocation record: %w", err)
 	}
 
-	// Insert logs if any
-	if len(inv.Logs) > 0 {
-		for _, entry := range inv.Logs {
-			logID := uuid.New().String()
-			logQuery := `
-				INSERT INTO function_logs (
-					id, function_id, invocation_id, level, message, timestamp
-				) VALUES (?, ?, ?, ?, ?, ?)
-			`
-			_, err := r.db.Exec(ctx, logQuery,
-				logID, inv.FunctionID, inv.ID, entry.Level, entry.Message, entry.Timestamp,
-			)
-			if err != nil {
-				r.logger.Warn("Failed to insert function log", zap.Error(err))
-				// Continue with other logs
-			}
+	// Insert logs in batched multi-row INSERTs rather than one Exec per line.
+	// Pre-fix this loop paid one cross-region Raft write PER log line (N+1):
+	// a handler emitting 5 lines cost 6 sequential writes. Now a record's
+	// lines collapse into ceil(N/maxLogRowsPerInsert) writes (bugboard feat-27).
+	for _, chunk := range chunkLogEntries(inv.Logs, maxLogRowsPerInsert) {
+		query, args := buildFunctionLogsInsert(inv.FunctionID, inv.ID, chunk)
+		if _, err := r.db.Exec(ctx, query, args...); err != nil {
+			r.logger.Warn("Failed to insert function logs batch", zap.Error(err))
+			// Continue with remaining chunks — telemetry is best-effort.
 		}
 	}
 
 	return nil
+}
+
+// maxLogRowsPerInsert caps how many function_logs rows go into a single
+// multi-row INSERT statement. Keeps any one statement bounded (placeholder
+// count, statement size) while still collapsing the per-line N+1 into a
+// handful of writes for the common case.
+const maxLogRowsPerInsert = 100
+
+// chunkLogEntries splits entries into slices of at most size. Returns no
+// chunks for an empty input.
+func chunkLogEntries(entries []LogEntry, size int) [][]LogEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	var chunks [][]LogEntry
+	for i := 0; i < len(entries); i += size {
+		end := i + size
+		if end > len(entries) {
+			end = len(entries)
+		}
+		chunks = append(chunks, entries[i:end])
+	}
+	return chunks
+}
+
+// buildFunctionLogsInsert constructs a single multi-row INSERT for the given
+// log entries: one VALUES tuple per entry, args flattened in column order
+// (id, function_id, invocation_id, level, message, timestamp). Each row gets a
+// fresh UUID id, matching the per-row behavior of the old loop.
+func buildFunctionLogsInsert(functionID, invocationID string, entries []LogEntry) (string, []interface{}) {
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO function_logs (id, function_id, invocation_id, level, message, timestamp) VALUES ")
+	args := make([]interface{}, 0, len(entries)*6)
+	for i, entry := range entries {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(?, ?, ?, ?, ?, ?)")
+		args = append(args, uuid.New().String(), functionID, invocationID, entry.Level, entry.Message, entry.Timestamp)
+	}
+	return sb.String(), args
 }
 
 // GetLogs retrieves logs for a function.

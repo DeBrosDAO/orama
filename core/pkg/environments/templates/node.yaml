@@ -94,6 +94,16 @@ http_gateway:
   # (bugboard #837). Sourced from ~/.orama/secrets/secrets-encryption-key.
   secrets_encryption_key: "{{.SecretsEncryptionKey}}"
 {{- end}}
-  
+{{- if .TURNSecret}}
+  # WebRTC/TURN config (feat-124 #913). turn_secret is sourced from
+  # ~/.orama/secrets/turn-secret so it survives config regeneration;
+  # turn_domain/sfu_port are carried forward from the previous node.yaml.
+  webrtc:
+    enabled: true
+    sfu_port: {{.SFUPort}}
+    turn_domain: "{{.TURNDomain}}"
+    turn_secret: "{{.TURNSecret}}"
+{{- end}}
+
   # Routes for internal service reverse proxy (kept for backwards compatibility but not used by full gateway)
   routes: {}

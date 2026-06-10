@@ -599,6 +599,14 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	}
 	ps.logf("  ✓ Secrets encryption key ensured")
 
+	// WebRTC TURN shared secret (feat-124 #913). Persisting it here lets the
+	// TURN config survive Phase4 config regeneration so namespace gateways are
+	// never restarted with an empty turn_secret (the AnChat outage).
+	if _, err := ps.secretGenerator.EnsureTURNSecret(); err != nil {
+		return fmt.Errorf("failed to ensure TURN secret: %w", err)
+	}
+	ps.logf("  ✓ TURN secret ensured")
+
 	// Node identity (unified architecture)
 	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
 	if err != nil {

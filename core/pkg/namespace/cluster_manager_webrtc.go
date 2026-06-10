@@ -470,16 +470,16 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 	}
 
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":           "spawn-sfu",
-		"namespace":        cfg.Namespace,
-		"node_id":          cfg.NodeID,
-		"sfu_listen_addr":  cfg.ListenAddr,
-		"sfu_media_start":  cfg.MediaPortStart,
-		"sfu_media_end":    cfg.MediaPortEnd,
-		"turn_servers":     turnServers,
-		"turn_secret":      cfg.TURNSecret,
-		"turn_cred_ttl":    cfg.TURNCredTTL,
-		"rqlite_dsn":       cfg.RQLiteDSN,
+		"action":          "spawn-sfu",
+		"namespace":       cfg.Namespace,
+		"node_id":         cfg.NodeID,
+		"sfu_listen_addr": cfg.ListenAddr,
+		"sfu_media_start": cfg.MediaPortStart,
+		"sfu_media_end":   cfg.MediaPortEnd,
+		"turn_servers":    turnServers,
+		"turn_secret":     cfg.TURNSecret,
+		"turn_cred_ttl":   cfg.TURNCredTTL,
+		"rqlite_dsn":      cfg.RQLiteDSN,
 	})
 	return err
 }
@@ -487,17 +487,17 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 // spawnTURNRemote sends a spawn-turn request to a remote node
 func (cm *ClusterManager) spawnTURNRemote(ctx context.Context, nodeIP string, cfg TURNInstanceConfig) error {
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":            "spawn-turn",
-		"namespace":         cfg.Namespace,
-		"node_id":           cfg.NodeID,
-		"turn_listen_addr":  cfg.ListenAddr,
-		"turn_turns_addr":   cfg.TURNSListenAddr,
-		"turn_public_ip":    cfg.PublicIP,
-		"turn_realm":        cfg.Realm,
-		"turn_auth_secret":  cfg.AuthSecret,
-		"turn_relay_start":  cfg.RelayPortStart,
-		"turn_relay_end":    cfg.RelayPortEnd,
-		"turn_domain":       cfg.TURNDomain,
+		"action":           "spawn-turn",
+		"namespace":        cfg.Namespace,
+		"node_id":          cfg.NodeID,
+		"turn_listen_addr": cfg.ListenAddr,
+		"turn_turns_addr":  cfg.TURNSListenAddr,
+		"turn_public_ip":   cfg.PublicIP,
+		"turn_realm":       cfg.Realm,
+		"turn_auth_secret": cfg.AuthSecret,
+		"turn_relay_start": cfg.RelayPortStart,
+		"turn_relay_end":   cfg.RelayPortEnd,
+		"turn_domain":      cfg.TURNDomain,
 	})
 	return err
 }
@@ -716,6 +716,9 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 			SFUPort:               sfuPort,
 			TURNDomain:            turnDomain,
 			TURNSecret:            turnSecret,
+			// Bugboard #837 follow-up: preserve the secrets key on WebRTC
+			// restarts so enabling WebRTC doesn't drop secrets management.
+			SecretsEncryptionKey: cm.secretsEncryptionKey,
 		}
 
 		if node.NodeID == cm.localNodeID {
@@ -764,6 +767,8 @@ func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP strin
 		"gateway_sfu_port":          cfg.SFUPort,
 		"gateway_turn_domain":       cfg.TURNDomain,
 		"gateway_turn_secret":       cfg.TURNSecret,
+		// Bugboard #837 follow-up: preserve the secrets key on WebRTC restarts.
+		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
 	})
 	if err != nil {
 		cm.logger.Error("Failed to restart remote gateway with WebRTC config",

@@ -41,12 +41,24 @@ func NewLogBuffer() *LogBuffer {
 	return &LogBuffer{}
 }
 
-// Append adds one log entry. Thread-safe — wazero modules aren't
-// goroutine-safe in practice, but the lock makes the invariant explicit
-// rather than relying on call-site discipline.
+// maxLogEntriesPerInvocation caps how many log lines one invocation can
+// buffer. Telemetry is best-effort; without a cap a tenant function looping
+// oh.LogInfo could balloon gateway memory — amplified now that records sit
+// in the async invocation-log queue (up to invocationLogQueueSize records
+// resident) instead of being written and freed synchronously.
+const maxLogEntriesPerInvocation = 1000
+
+// Append adds one log entry, dropping silently once the per-invocation cap
+// is reached (telemetry best-effort; bounds memory against log floods).
+// Thread-safe — wazero modules aren't goroutine-safe in practice, but the
+// lock makes the invariant explicit rather than relying on call-site
+// discipline.
 func (b *LogBuffer) Append(entry LogEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(b.entries) >= maxLogEntriesPerInvocation {
+		return
+	}
 	b.entries = append(b.entries, entry)
 }
 

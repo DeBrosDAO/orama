@@ -86,6 +86,11 @@ type Engine struct {
 	// Invocation logger for metrics/debugging
 	invocationLogger InvocationLogger
 
+	// logQueue moves invocation telemetry writes OFF the reply critical path
+	// (bugboard feat-27). Non-nil only when invocationLogger is set; logInvocation
+	// enqueues into it instead of calling invocationLogger.Log synchronously.
+	logQueue *invocationLogQueue
+
 	// Rate limiter
 	rateLimiter RateLimiter
 }
@@ -212,6 +217,14 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 	// Apply options
 	for _, opt := range opts {
 		opt(engine)
+	}
+
+	// Start the async telemetry queue once we know whether a logger was wired
+	// in. Invocation logging is now OFF the reply critical path (bugboard
+	// feat-27): logInvocation enqueues, a single worker drains and writes with
+	// its own context. Without a logger there's nothing to queue.
+	if engine.invocationLogger != nil {
+		engine.logQueue = newInvocationLogQueue(engine.invocationLogger, logger)
 	}
 
 	// Register host functions
@@ -473,6 +486,13 @@ func (e *Engine) Invalidate(wasmCID string) {
 
 // Close shuts down the engine and releases resources.
 func (e *Engine) Close(ctx context.Context) error {
+	// Flush any pending invocation telemetry first (best-effort, bounded —
+	// see invocationLogQueue.Close). Losing a few records at shutdown is
+	// acceptable; blocking the process on telemetry is not.
+	if e.logQueue != nil {
+		e.logQueue.Close()
+	}
+
 	// Close all cached modules
 	e.moduleCache.Clear(ctx)
 
@@ -699,7 +719,16 @@ func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero
 	})
 }
 
-// logInvocation logs an invocation record.
+// logInvocation records an invocation's telemetry.
+//
+// IMPORTANT behavior note (bugboard feat-27): the record is now ENQUEUED for
+// asynchronous writing — it is NOT written on the reply path. A single worker
+// goroutine drains the queue and writes with its own context, so a
+// function_invocations row may lag the response by up to the queue drain time.
+// That lag is acceptable for telemetry and is worth it: it removes ~500ms-3s
+// of cross-region Raft write latency from every serverless RPC round-trip.
+// `ctx` is therefore unused for the write (the request ctx dies when Execute
+// returns); it is retained only to keep the call-site signature stable.
 //
 // `logBuf` is the per-invocation LogBuffer attached to ctx at Execute
 // start (bugboard #108 fix). When non-nil, the record's Logs field is
@@ -708,7 +737,8 @@ func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero
 // updated), falls back to the HostFunctions singleton via the
 // GetLogs() interface check — same behavior as pre-#108.
 func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *InvocationContext, logBuf *LogBuffer, startTime time.Time, outputSize int, status InvocationStatus, err error) {
-	if e.invocationLogger == nil || !e.config.LogInvocations {
+	_ = ctx // request context is intentionally not used for the async write
+	if e.logQueue == nil || !e.config.LogInvocations {
 		return
 	}
 
@@ -742,9 +772,9 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 		record.Logs = hf.GetLogs()
 	}
 
-	if logErr := e.invocationLogger.Log(ctx, record); logErr != nil {
-		e.logger.Warn("Failed to log invocation", zap.Error(logErr))
-	}
+	// Enqueue is non-blocking: a full queue drops the record (counted) rather
+	// than stalling the reply path. See invocationLogQueue.enqueue.
+	e.logQueue.enqueue(record)
 }
 
 // registerHostModule registers the Orama host functions with the wazero runtime.
@@ -752,14 +782,14 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 // We expose the SAME export set under three module names:
 //
 //   - "env"    — canonical. Matches the WASI / TinyGo convention. The
-//                official SDK examples and docs use this name.
+//     official SDK examples and docs use this name.
 //   - "host"   — long-standing alias kept for backward compatibility.
 //   - "orama"  — alias added 2026-05-06 after multiple apps intuited the
-//                brand name as the import target and hit cryptic
-//                "module[orama] not instantiated" errors. Cheap insurance:
-//                a few KB of runtime metadata per alias, zero behavioral
-//                cost. Apps SHOULD prefer `env` going forward; `orama` is
-//                supported indefinitely to avoid breaking deployed code.
+//     brand name as the import target and hit cryptic
+//     "module[orama] not instantiated" errors. Cheap insurance:
+//     a few KB of runtime metadata per alias, zero behavioral
+//     cost. Apps SHOULD prefer `env` going forward; `orama` is
+//     supported indefinitely to avoid breaking deployed code.
 //
 // All three names resolve to identical function tables — a WASM module
 // can mix imports across the three with no consequence.
@@ -1435,9 +1465,11 @@ func (e *Engine) hEphemeralStateClear(ctx context.Context, mod api.Module,
 
 // hPushSend is the WASM-callable wrapper for PushSend.
 // Inputs:
-//   userIDPtr/userIDLen — UTF-8 user ID to push to (within the function's
-//                         own namespace; the namespace is server-side trusted)
-//   msgPtr/msgLen       — JSON payload matching hostfunctions.PushSendArgs
+//
+//	userIDPtr/userIDLen — UTF-8 user ID to push to (within the function's
+//	                      own namespace; the namespace is server-side trusted)
+//	msgPtr/msgLen       — JSON payload matching hostfunctions.PushSendArgs
+//
 // Returns 1 on success, 0 on error.
 func (e *Engine) hPushSend(ctx context.Context, mod api.Module,
 	userIDPtr, userIDLen, msgPtr, msgLen uint32) uint32 {
@@ -1508,7 +1540,16 @@ func (e *Engine) hTurnCredentials(ctx context.Context, mod api.Module) uint64 {
 	return e.executor.WriteToGuest(ctx, mod, out)
 }
 
+// maxLogMessageBytes caps a single oh.LogInfo/LogError message. A guest could
+// otherwise pass its entire linear memory as one "log line", ballooning the
+// per-invocation buffer (and the async invocation-log queue holding it).
+// Truncation, not rejection — telemetry is best-effort.
+const maxLogMessageBytes = 16 * 1024
+
 func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32) {
+	if size > maxLogMessageBytes {
+		size = maxLogMessageBytes
+	}
 	msg, ok := e.executor.ReadFromGuest(mod, ptr, size)
 	if ok {
 		e.hostServices.LogInfo(ctx, string(msg))
@@ -1516,6 +1557,9 @@ func (e *Engine) hLogInfo(ctx context.Context, mod api.Module, ptr, size uint32)
 }
 
 func (e *Engine) hLogError(ctx context.Context, mod api.Module, ptr, size uint32) {
+	if size > maxLogMessageBytes {
+		size = maxLogMessageBytes
+	}
 	msg, ok := e.executor.ReadFromGuest(mod, ptr, size)
 	if ok {
 		e.hostServices.LogError(ctx, string(msg))

@@ -10,9 +10,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 )
 
-// Bugboard #548 — a push device must be keyed on the stable identity (rootId)
+// Bugboard #548 — a push device must be keyed on the stable identity (accountId)
 // when the app provides one, not the wallet credential that authenticated the
-// session. resolveCallerUserID prefers the `root_id` custom claim and falls
+// session. resolveCallerUserID prefers the `account_id` custom claim and falls
 // back to the JWT subject so single-credential apps keep working.
 
 func reqWithClaims(t *testing.T, claims *authsvc.JWTClaims) *http.Request {
@@ -28,10 +28,10 @@ func reqWithClaims(t *testing.T, claims *authsvc.JWTClaims) *http.Request {
 func TestResolveCallerUserID_prefersRootIDClaim(t *testing.T) {
 	r := reqWithClaims(t, &authsvc.JWTClaims{
 		Sub:    "0xWALLET",
-		Custom: map[string]string{rootIDClaim: "root-uuid-123"},
+		Custom: map[string]string{accountIDClaim: "root-uuid-123"},
 	})
 	if got := resolveCallerUserID(r); got != "root-uuid-123" {
-		t.Errorf("want rootId from claim, got %q", got)
+		t.Errorf("want accountId from claim, got %q", got)
 	}
 }
 
@@ -44,13 +44,13 @@ func TestResolveCallerUserID_fallsBackToSubject(t *testing.T) {
 }
 
 func TestResolveCallerUserID_emptyRootIDFallsBack(t *testing.T) {
-	// An empty root_id must not collapse identity to "" — fall back to subject.
+	// An empty account_id must not collapse identity to "" — fall back to subject.
 	r := reqWithClaims(t, &authsvc.JWTClaims{
 		Sub:    "0xWALLET",
-		Custom: map[string]string{rootIDClaim: ""},
+		Custom: map[string]string{accountIDClaim: ""},
 	})
 	if got := resolveCallerUserID(r); got != "0xWALLET" {
-		t.Errorf("want wallet fallback on empty root_id, got %q", got)
+		t.Errorf("want wallet fallback on empty account_id, got %q", got)
 	}
 }
 

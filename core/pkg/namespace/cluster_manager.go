@@ -45,6 +45,13 @@ type ClusterManagerConfig struct {
 	// cluster-wide JWT signing key (bug #215 fix). Empty string disables
 	// cross-node JWT verification within namespace clusters.
 	ClusterSecretPath string
+
+	// SecretsEncryptionKey is the host's serverless secrets encryption key
+	// (AES-256, hex-encoded), read once from secrets/secrets-encryption-key.
+	// Forwarded to spawned namespace gateways so `function secrets ...`
+	// works there (bugboard #837 follow-up). Empty leaves namespace-gateway
+	// secrets management disabled (fail-loud).
+	SecretsEncryptionKey string
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -56,9 +63,9 @@ type ClusterManager struct {
 	systemdSpawner      *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
 	dnsManager          *DNSRecordManager
 	logger              *zap.Logger
-	baseDomain      string
-	baseDataDir     string
-	globalRQLiteDSN string // Global RQLite DSN for namespace gateway auth
+	baseDomain          string
+	baseDataDir         string
+	globalRQLiteDSN     string // Global RQLite DSN for namespace gateway auth
 
 	// IPFS configuration for namespace gateways
 	ipfsClusterAPIURL     string
@@ -71,6 +78,10 @@ type ClusterManager struct {
 
 	// AES-256 key for encrypting TURN secrets in RQLite (nil = plaintext)
 	turnEncryptionKey []byte
+
+	// Host's serverless secrets encryption key, forwarded to spawned
+	// namespace gateways (bugboard #837 follow-up). Empty = disabled.
+	secretsEncryptionKey string
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -123,6 +134,7 @@ func NewClusterManager(
 		ipfsTimeout:           ipfsTimeout,
 		ipfsReplicationFactor: ipfsReplicationFactor,
 		turnEncryptionKey:     cfg.TurnEncryptionKey,
+		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 	}
@@ -170,6 +182,7 @@ func NewClusterManagerWithComponents(
 		ipfsTimeout:           ipfsTimeout,
 		ipfsReplicationFactor: ipfsReplicationFactor,
 		turnEncryptionKey:     cfg.TurnEncryptionKey,
+		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 	}
@@ -566,6 +579,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			IPFSAPIURL:            cm.ipfsAPIURL,
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
+			SecretsEncryptionKey:  cm.secretsEncryptionKey,
 		}
 
 		var instance *gateway.GatewayInstance
@@ -681,6 +695,9 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 		"gateway_sfu_port":          cfg.SFUPort,
 		"gateway_turn_domain":       cfg.TURNDomain,
 		"gateway_turn_secret":       cfg.TURNSecret,
+		// Bugboard #837 follow-up: carry the host secrets encryption key to
+		// the remote node so its spawned namespace gateway can manage secrets.
+		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
 	})
 	if err != nil {
 		return nil, err
@@ -1587,6 +1604,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				IPFSAPIURL:            cm.ipfsAPIURL,
 				IPFSTimeout:           cm.ipfsTimeout,
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
+				SecretsEncryptionKey:  cm.secretsEncryptionKey,
 			}
 
 			// Add WebRTC config if enabled for this namespace
@@ -1659,18 +1677,18 @@ type ClusterLocalState struct {
 	SavedAt       time.Time               `json:"saved_at"`
 
 	// WebRTC fields (zero values when WebRTC not enabled — backward compatible)
-	HasSFU              bool   `json:"has_sfu,omitempty"`
-	HasTURN             bool   `json:"has_turn,omitempty"`
-	TURNSharedSecret    string `json:"turn_shared_secret,omitempty"` // Needed for gateway to generate TURN credentials on cold start
-	TURNDomain          string `json:"turn_domain,omitempty"`        // TURN server domain for gateway config
-	TURNCredentialTTL   int    `json:"turn_credential_ttl,omitempty"`
-	SFUSignalingPort    int    `json:"sfu_signaling_port,omitempty"`
-	SFUMediaPortStart   int    `json:"sfu_media_port_start,omitempty"`
-	SFUMediaPortEnd     int    `json:"sfu_media_port_end,omitempty"`
-	TURNListenPort      int    `json:"turn_listen_port,omitempty"`
-	TURNTLSPort         int    `json:"turn_tls_port,omitempty"`
-	TURNRelayPortStart  int    `json:"turn_relay_port_start,omitempty"`
-	TURNRelayPortEnd    int    `json:"turn_relay_port_end,omitempty"`
+	HasSFU             bool   `json:"has_sfu,omitempty"`
+	HasTURN            bool   `json:"has_turn,omitempty"`
+	TURNSharedSecret   string `json:"turn_shared_secret,omitempty"` // Needed for gateway to generate TURN credentials on cold start
+	TURNDomain         string `json:"turn_domain,omitempty"`        // TURN server domain for gateway config
+	TURNCredentialTTL  int    `json:"turn_credential_ttl,omitempty"`
+	SFUSignalingPort   int    `json:"sfu_signaling_port,omitempty"`
+	SFUMediaPortStart  int    `json:"sfu_media_port_start,omitempty"`
+	SFUMediaPortEnd    int    `json:"sfu_media_port_end,omitempty"`
+	TURNListenPort     int    `json:"turn_listen_port,omitempty"`
+	TURNTLSPort        int    `json:"turn_tls_port,omitempty"`
+	TURNRelayPortStart int    `json:"turn_relay_port_start,omitempty"`
+	TURNRelayPortEnd   int    `json:"turn_relay_port_end,omitempty"`
 }
 
 type ClusterLocalStatePorts struct {
@@ -2022,6 +2040,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			IPFSAPIURL:            cm.ipfsAPIURL,
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
+			SecretsEncryptionKey:  cm.secretsEncryptionKey,
 		}
 
 		// Resolve WebRTC config. Prefer the local state file; fall back to

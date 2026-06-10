@@ -73,9 +73,12 @@ func TestLogBufferFromCtx_nilCtxIsSafe(t *testing.T) {
 // the race detector would flag this.
 func TestLogBuffer_concurrentAppendIsSafe(t *testing.T) {
 	b := NewLogBuffer()
+	// Keep total below maxLogEntriesPerInvocation — this test pins
+	// race-safety (no lost writes), not the cap (covered separately in
+	// log_buffer_cap_test.go).
 	const (
-		writers     = 16
-		writesPerW  = 100
+		writers    = 16
+		writesPerW = 50
 	)
 	var wg sync.WaitGroup
 	for w := 0; w < writers; w++ {

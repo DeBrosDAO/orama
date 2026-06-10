@@ -67,6 +67,42 @@ func TestRenderNodeConfig_secretsEncryptionKey(t *testing.T) {
 	}
 }
 
+func TestRenderNodeConfig_webRTC(t *testing.T) {
+	const secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	// Happy path: TURN secret present → full webrtc block rendered.
+	withWebRTC, err := RenderNodeConfig(NodeConfigData{
+		NodeID:        "node1",
+		WebRTCEnabled: true,
+		SFUPort:       30007,
+		TURNDomain:    "turn.ns-anchat.dbrs.space",
+		TURNSecret:    secret,
+	})
+	if err != nil {
+		t.Fatalf("RenderNodeConfig failed: %v", err)
+	}
+	for _, want := range []string{
+		"webrtc:",
+		"enabled: true",
+		"sfu_port: 30007",
+		"turn_domain: \"turn.ns-anchat.dbrs.space\"",
+		"turn_secret: \"" + secret + "\"",
+	} {
+		if !strings.Contains(withWebRTC, want) {
+			t.Errorf("rendered node config missing webrtc line %q\n---\n%s", want, withWebRTC)
+		}
+	}
+
+	// Edge case: no TURN secret → block omitted entirely.
+	withoutWebRTC, err := RenderNodeConfig(NodeConfigData{NodeID: "node1"})
+	if err != nil {
+		t.Fatalf("RenderNodeConfig failed: %v", err)
+	}
+	if strings.Contains(withoutWebRTC, "webrtc:") {
+		t.Errorf("empty TURN secret should omit webrtc block, got:\n%s", withoutWebRTC)
+	}
+}
+
 func TestRenderGatewayConfig(t *testing.T) {
 	bootstrapMultiaddr := "/ip4/127.0.0.1/tcp/4001/p2p/Qm1234567890"
 	data := GatewayConfigData{

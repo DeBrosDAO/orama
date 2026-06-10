@@ -45,33 +45,36 @@ type SpawnRequest struct {
 	GatewayOlricServers    []string `json:"gateway_olric_servers,omitempty"`
 	GatewayOlricTimeout    string   `json:"gateway_olric_timeout,omitempty"`
 	IPFSClusterAPIURL      string   `json:"ipfs_cluster_api_url,omitempty"`
-	IPFSAPIURL            string          `json:"ipfs_api_url,omitempty"`
-	IPFSTimeout           string          `json:"ipfs_timeout,omitempty"`
-	IPFSReplicationFactor int             `json:"ipfs_replication_factor,omitempty"`
+	IPFSAPIURL             string   `json:"ipfs_api_url,omitempty"`
+	IPFSTimeout            string   `json:"ipfs_timeout,omitempty"`
+	IPFSReplicationFactor  int      `json:"ipfs_replication_factor,omitempty"`
 	// Gateway WebRTC config (when action = "spawn-gateway" and WebRTC is enabled)
 	GatewayWebRTCEnabled bool   `json:"gateway_webrtc_enabled,omitempty"`
 	GatewaySFUPort       int    `json:"gateway_sfu_port,omitempty"`
 	GatewayTURNDomain    string `json:"gateway_turn_domain,omitempty"`
 	GatewayTURNSecret    string `json:"gateway_turn_secret,omitempty"`
+	// Host serverless secrets encryption key forwarded to the spawned
+	// namespace gateway (bugboard #837 follow-up). Same value on every node.
+	GatewaySecretsEncryptionKey string `json:"gateway_secrets_encryption_key,omitempty"`
 
 	// SFU config (when action = "spawn-sfu")
-	SFUListenAddr  string                    `json:"sfu_listen_addr,omitempty"`
-	SFUMediaStart  int                       `json:"sfu_media_start,omitempty"`
-	SFUMediaEnd    int                       `json:"sfu_media_end,omitempty"`
-	TURNServers    []sfu.TURNServerConfig    `json:"turn_servers,omitempty"`
-	TURNSecret     string                    `json:"turn_secret,omitempty"`
-	TURNCredTTL    int                       `json:"turn_cred_ttl,omitempty"`
-	RQLiteDSN      string                    `json:"rqlite_dsn,omitempty"`
+	SFUListenAddr string                 `json:"sfu_listen_addr,omitempty"`
+	SFUMediaStart int                    `json:"sfu_media_start,omitempty"`
+	SFUMediaEnd   int                    `json:"sfu_media_end,omitempty"`
+	TURNServers   []sfu.TURNServerConfig `json:"turn_servers,omitempty"`
+	TURNSecret    string                 `json:"turn_secret,omitempty"`
+	TURNCredTTL   int                    `json:"turn_cred_ttl,omitempty"`
+	RQLiteDSN     string                 `json:"rqlite_dsn,omitempty"`
 
 	// TURN config (when action = "spawn-turn")
-	TURNListenAddr  string `json:"turn_listen_addr,omitempty"`
-	TURNTURNSAddr   string `json:"turn_turns_addr,omitempty"`
-	TURNPublicIP    string `json:"turn_public_ip,omitempty"`
-	TURNRealm       string `json:"turn_realm,omitempty"`
-	TURNAuthSecret  string `json:"turn_auth_secret,omitempty"`
-	TURNRelayStart  int    `json:"turn_relay_start,omitempty"`
-	TURNRelayEnd    int    `json:"turn_relay_end,omitempty"`
-	TURNDomain      string `json:"turn_domain,omitempty"`
+	TURNListenAddr string `json:"turn_listen_addr,omitempty"`
+	TURNTURNSAddr  string `json:"turn_turns_addr,omitempty"`
+	TURNPublicIP   string `json:"turn_public_ip,omitempty"`
+	TURNRealm      string `json:"turn_realm,omitempty"`
+	TURNAuthSecret string `json:"turn_auth_secret,omitempty"`
+	TURNRelayStart int    `json:"turn_relay_start,omitempty"`
+	TURNRelayEnd   int    `json:"turn_relay_end,omitempty"`
+	TURNDomain     string `json:"turn_domain,omitempty"`
 
 	// Cluster state (when action = "save-cluster-state")
 	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
@@ -235,6 +238,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			SFUPort:               req.GatewaySFUPort,
 			TURNDomain:            req.GatewayTURNDomain,
 			TURNSecret:            req.GatewayTURNSecret,
+			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
 		}
 		if err := h.systemdSpawner.SpawnGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
@@ -288,6 +292,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			SFUPort:               req.GatewaySFUPort,
 			TURNDomain:            req.GatewayTURNDomain,
 			TURNSecret:            req.GatewayTURNSecret,
+			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
 		}
 		if err := h.systemdSpawner.RestartGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to restart Gateway instance", zap.Error(err))

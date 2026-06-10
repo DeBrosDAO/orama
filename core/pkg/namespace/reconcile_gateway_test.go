@@ -90,6 +90,62 @@ func TestGatewayWebRTCInSync_bothDisabled_returnsTrue(t *testing.T) {
 	}
 }
 
+// Bugboard #837 follow-up (drift on the secrets encryption key) —
+// gatewayConfigInSync extends the bug-25 WebRTC drift check with the
+// serverless secrets key. A namespace gateway spawned before the key was
+// plumbed has an empty on-disk key; once the desired key is non-empty we
+// want a rewrite+restart so secrets management turns on. But both-empty must
+// stay a no-op so non-secrets hosts don't restart-loop.
+
+func TestGatewayConfigInSync_secretsKeyMissingOnDisk_returnsFalse(t *testing.T) {
+	// On-disk YAML has no secrets key (pre-#837 gateway), desired has one.
+	// MUST drift so ReconcileGateway rewrites + restarts to enable secrets.
+	onDisk := gateway.GatewayYAMLConfig{} // empty secrets_encryption_key
+	desired := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
+	if gatewayConfigInSync(onDisk, desired) {
+		t.Fatal("empty on-disk secrets key vs non-empty desired must be out-of-sync (needs restart to enable secrets)")
+	}
+}
+
+func TestGatewayConfigInSync_secretsKeyMatches_returnsTrue(t *testing.T) {
+	// After a reconcile, on-disk key matches desired. MUST be in-sync so the
+	// next boot does not restart again (no loop).
+	onDisk := gateway.GatewayYAMLConfig{SecretsEncryptionKey: "the-key"}
+	desired := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
+	if !gatewayConfigInSync(onDisk, desired) {
+		t.Error("matching secrets key must be in-sync (no restart) — else restart loop on every boot")
+	}
+}
+
+func TestGatewayConfigInSync_bothSecretsKeysEmpty_returnsTrue(t *testing.T) {
+	// A host with no secrets key (empty desired) and an on-disk config also
+	// without one MUST be in-sync — otherwise every boot would restart a
+	// namespace gateway that legitimately has no secrets key.
+	if !gatewayConfigInSync(gateway.GatewayYAMLConfig{}, gateway.InstanceConfig{}) {
+		t.Error("empty on-disk + empty desired secrets key must be in-sync (no restart loop)")
+	}
+}
+
+func TestGatewayConfigInSync_secretsKeyRotated_returnsFalse(t *testing.T) {
+	// A rotated key (both non-empty but different) must drift so the rewrite
+	// propagates the new key.
+	onDisk := gateway.GatewayYAMLConfig{SecretsEncryptionKey: "old-key"}
+	desired := gateway.InstanceConfig{SecretsEncryptionKey: "new-key"}
+	if gatewayConfigInSync(onDisk, desired) {
+		t.Error("rotated secrets key (old != new) must be out-of-sync")
+	}
+}
+
+func TestGatewayConfigInSync_webrtcDriftStillDetected(t *testing.T) {
+	// The combined check must not lose the bug-25 WebRTC surface: WebRTC
+	// drift with matching (empty) secrets keys must still report out-of-sync.
+	onDisk := gateway.GatewayYAMLConfig{WebRTC: gateway.GatewayYAMLWebRTC{}}
+	desired := gateway.InstanceConfig{WebRTCEnabled: true, SFUPort: 30000}
+	if gatewayConfigInSync(onDisk, desired) {
+		t.Error("WebRTC drift must still be detected by the combined in-sync check")
+	}
+}
+
 // ReconcileGateway I/O paths that DON'T restart (the restart path needs
 // real systemd, so it's covered by the pure helper above). These pin
 // that a matching config is a clean no-op and that an unreadable config
