@@ -118,8 +118,8 @@ func TestIsSingleLabelSubdomain(t *testing.T) {
 	}{
 		{"cdn-a1b2c3d4e5f6.orama-devnet.network", "orama-devnet.network", true},
 		{"turn.ns-anchat-test.orama-devnet.network", "orama-devnet.network", false}, // multi-label
-		{"orama-devnet.network", "orama-devnet.network", false},                      // empty label
-		{"cdn-x.other.network", "orama-devnet.network", false},                       // wrong base
+		{"orama-devnet.network", "orama-devnet.network", false},                     // empty label
+		{"cdn-x.other.network", "orama-devnet.network", false},                      // wrong base
 		{"cdn-x.example.com", "example.com", true},
 	}
 	for _, c := range cases {
