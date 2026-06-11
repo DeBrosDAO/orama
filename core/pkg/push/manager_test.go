@@ -77,7 +77,7 @@ func TestManager_namespace_with_no_config_uses_defaults(t *testing.T) {
 	defaults := Defaults{NtfyBaseURL: "http://default-ntfy"}
 
 	var providerCalls atomic.Int32
-	factory := func(c Config) []PushProvider {
+	factory := func(_ context.Context, c Config) []PushProvider {
 		providerCalls.Add(1)
 		// Verify the manager passed defaults through to the factory.
 		if c.NtfyBaseURL != "http://default-ntfy" {
@@ -108,7 +108,7 @@ func TestManager_namespace_config_overrides_defaults(t *testing.T) {
 	defaults := Defaults{NtfyBaseURL: "http://default-ntfy"}
 
 	var seenURL string
-	factory := func(c Config) []PushProvider {
+	factory := func(_ context.Context, c Config) []PushProvider {
 		seenURL = c.NtfyBaseURL
 		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
 	}
@@ -124,7 +124,7 @@ func TestManager_namespace_config_overrides_defaults(t *testing.T) {
 
 func TestManager_no_config_no_defaults_returns_ErrPushNotConfigured(t *testing.T) {
 	store := newFakeConfigStore()
-	factory := func(_ Config) []PushProvider { return nil }
+	factory := func(_ context.Context, _ Config) []PushProvider { return nil }
 
 	m := NewManager(&fakeDeviceStore{}, store, Defaults{}, factory, zap.NewNop())
 	_, err := m.dispatcherFor(context.Background(), "ns-A")
@@ -138,7 +138,7 @@ func TestManager_caches_dispatchers_per_namespace(t *testing.T) {
 	store.Upsert(context.Background(), Config{Namespace: "ns-A", NtfyBaseURL: "u"})
 
 	var factoryCalls atomic.Int32
-	factory := func(_ Config) []PushProvider {
+	factory := func(_ context.Context, _ Config) []PushProvider {
 		factoryCalls.Add(1)
 		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
 	}
@@ -160,7 +160,7 @@ func TestManager_invalidate_forces_rebuild(t *testing.T) {
 	store.Upsert(context.Background(), Config{Namespace: "ns-A", NtfyBaseURL: "v1"})
 
 	var seenURLs []string
-	factory := func(c Config) []PushProvider {
+	factory := func(_ context.Context, c Config) []PushProvider {
 		seenURLs = append(seenURLs, c.NtfyBaseURL)
 		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
 	}
@@ -190,7 +190,7 @@ func TestManager_per_namespace_isolation(t *testing.T) {
 
 	urlByNS := make(map[string]string)
 	var mu sync.Mutex
-	factory := func(c Config) []PushProvider {
+	factory := func(_ context.Context, c Config) []PushProvider {
 		mu.Lock()
 		urlByNS[c.Namespace] = c.NtfyBaseURL
 		mu.Unlock()
@@ -238,7 +238,7 @@ func TestManager_concurrent_dispatcherFor_no_race(t *testing.T) {
 	// Run with -race.
 	store := newFakeConfigStore()
 	store.Upsert(context.Background(), Config{Namespace: "ns", NtfyBaseURL: "u"})
-	factory := func(_ Config) []PushProvider { return []PushProvider{&managerFakeProvider{name: "ntfy"}} }
+	factory := func(_ context.Context, _ Config) []PushProvider { return []PushProvider{&managerFakeProvider{name: "ntfy"}} }
 
 	m := NewManager(&fakeDeviceStore{}, store, Defaults{}, factory, zap.NewNop())
 

@@ -171,6 +171,15 @@ func TestIsPublicPath(t *testing.T) {
 		{"internal join", "/v1/internal/join", true},
 		{"internal namespace spawn", "/v1/internal/namespace/spawn", true},
 		{"internal namespace repair", "/v1/internal/namespace/repair", true},
+		// Internal WebRTC mgmt endpoints — exempt from API-key middleware
+		// (handler enforces internal-auth header + WireGuard peer). Without
+		// these, `orama namespace enable webrtc` had no working path.
+		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", true},
+		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", true},
+		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", true},
+		// Guard: the PUBLIC webrtc mgmt path must STILL require auth (only
+		// the /internal/ variant is exempt).
+		{"public webrtc enable still requires auth", "/v1/namespace/webrtc/enable", false},
 		{"phantom session", "/v1/auth/phantom/session", true},
 		{"phantom complete", "/v1/auth/phantom/complete", true},
 

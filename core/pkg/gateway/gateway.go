@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -36,12 +34,14 @@ import (
 	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
+	ratelimithandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/ratelimit"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	nodehealth "github.com/DeBrosOfficial/network/pkg/node/health"
 	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/ratelimit"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
@@ -131,10 +131,25 @@ type Gateway struct {
 
 	// Rate limiters
 	rateLimiter          *RateLimiter
-	namespaceRateLimiter *NamespaceRateLimiter
+	namespaceRateLimiter *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
+	// rateLimitManager (feature #69) handles per-namespace rate limits with
+	// tenant self-service config via /v1/namespace/rate-limit. When set,
+	// namespaceRateLimitMiddleware uses it instead of the legacy
+	// hardcoded-defaults limiter above. nil = falls back to namespaceRateLimiter.
+	rateLimitManager       *ratelimit.Manager
+	rateLimitConfigStore   ratelimit.ConfigStore
+	rateLimitHandlers      *ratelimithandlers.Handlers
 
 	// WebRTC signaling and TURN credentials
 	webrtcHandlers *webrtchandlers.WebRTCHandlers
+	// webrtcServeTURNCredentials gates the /v1/webrtc/turn/credentials
+	// route; webrtcServeSFURoutes gates /v1/webrtc/signal + /rooms.
+	// Decoupled (bugboard #25): TURN credentials only need the namespace
+	// TURN secret (the actual TURN servers are remote), so a gateway node
+	// that doesn't run a local SFU can still mint credentials. SFU
+	// signaling/rooms require a local SFU port to proxy to.
+	webrtcServeTURNCredentials bool
+	webrtcServeSFURoutes       bool
 
 	// WireGuard peer exchange
 	wireguardHandler *wireguardhandlers.Handler
@@ -306,6 +321,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	// Wire the JWT verifier so the persistent WS handler can apply
+	// mid-session auth refresh on the open WS (bugboard #321 control
+	// frame). Skipped when either dep is nil — the handler then acks
+	// "not supported" and the client falls back to legacy reconnect.
+	if gw.serverlessHandlers != nil && gw.authService != nil {
+		gw.serverlessHandlers.SetJWTVerifier(gw.authService)
+	}
 
 	// Resolve local WireGuard IP for local namespace gateway preference
 	if wgIP, err := GetWireGuardIP(); err == nil {
@@ -353,6 +375,17 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
 			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
 		})
+		// Subscribe the dispatcher to libp2p pubsub for every literal
+		// trigger pattern so WASM `oh.PubSubPublish` calls reach trigger
+		// handlers (bugboard #282 — pre-fix, the dispatcher only fired
+		// from the HTTP publish hook above, so internal WASM publishes
+		// silently dropped every subscriber). Stop is called from
+		// lifecycle.Close.
+		if err := deps.PubSubDispatcher.Start(context.Background()); err != nil {
+			logger.ComponentWarn(logging.ComponentGeneral,
+				"PubSubDispatcher Start failed (libp2p subscribe path disabled — HTTP-publish triggers still work)",
+				zap.Error(err))
+		}
 	}
 	if deps.PersistentWSManager != nil {
 		gw.persistentWSManager = deps.PersistentWSManager
@@ -382,8 +415,22 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	} else if deps.PushDispatcher != nil {
 		gw.pushHandlers = pushhandlers.NewHandlers(deps.PushDispatcher, deps.PushDeviceStore, logger)
 	}
+	// Wire the per-provider credentials manager (feature #72) if push is
+	// up. The handler nil-checks the manager internally so this is safe
+	// even when push is partially configured.
+	if gw.pushHandlers != nil && deps.PushCredentialsManager != nil {
+		gw.pushHandlers.SetCredentialsManager(deps.PushCredentialsManager)
+	}
 
-	if cfg.WebRTCEnabled && cfg.SFUPort > 0 {
+	// WebRTC route registration. Construct the handler when EITHER a
+	// local SFU is configured (for signal/rooms) OR a TURN secret is set
+	// (for credentials) — the two are decoupled (bugboard #25). A gateway
+	// node that isn't an SFU node but has the namespace TURN secret can
+	// still serve /v1/webrtc/turn/credentials (the TURN servers are
+	// remote; credentials are just an HMAC of the shared secret).
+	gw.webrtcServeSFURoutes = shouldRegisterWebRTCRoutes(cfg)
+	gw.webrtcServeTURNCredentials = shouldServeTURNCredentials(cfg)
+	if gw.webrtcServeSFURoutes || gw.webrtcServeTURNCredentials {
 		gw.webrtcHandlers = webrtchandlers.NewWebRTCHandlers(
 			logger,
 			gw.localWireGuardIP,
@@ -393,7 +440,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.proxyWebSocket,
 		)
 		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
-			zap.Int("sfu_port", cfg.SFUPort))
+			zap.Int("sfu_port", cfg.SFUPort),
+			zap.Bool("turn_secret_set", cfg.TURNSecret != ""),
+			zap.Bool("serve_turn_credentials", gw.webrtcServeTURNCredentials),
+			zap.Bool("serve_sfu_routes", gw.webrtcServeSFURoutes),
+			zap.Bool("legacy_webrtc_enabled_flag", cfg.WebRTCEnabled))
 	}
 
 	if deps.OlricClient != nil {
@@ -430,12 +481,40 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
 
-	// Initialize rate limiters
-	// Per-IP: 10000 req/min, burst 5000
+	// Initialize rate limiters.
+	//
+	// Per-IP: token bucket against the client IP. Generous so legitimate
+	// users behind shared NATs aren't squeezed.
 	gw.rateLimiter = NewRateLimiter(10000, 5000)
 	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
-	// Per-namespace: 60000 req/hr (1000/min), burst 500
-	gw.namespaceRateLimiter = NewNamespaceRateLimiter(1000, 500)
+
+	// Per-namespace: feature #69 — backed by an LRU manager with
+	// per-namespace overrides via /v1/namespace/rate-limit (config in
+	// `namespace_rate_limit_config`, populated by migration 027).
+	//
+	// Defaults: 10000/min, burst 5000 — matches per-IP so a single user
+	// can't saturate the namespace ceiling. Tenants tighten via PUT;
+	// operators can raise/lower the Max* ceiling in YAML config.
+	//
+	// When `deps.ORMClient` is nil (test/standalone modes), we still
+	// install a manager backed by a no-store ConfigStore so middleware
+	// flow stays uniform; it returns the defaults for every namespace.
+	rlDefaults := ratelimit.Defaults{
+		RequestsPerMinute:    10000,
+		Burst:                5000,
+		MaxRequestsPerMinute: 100000, // operator ceiling: tenants can't request more
+		MaxBurst:             50000,
+	}
+	if deps.ORMClient != nil {
+		gw.rateLimitConfigStore = ratelimit.NewRqliteConfigStore(deps.ORMClient, logger.Logger)
+	}
+	gw.rateLimitManager = ratelimit.NewManager(gw.rateLimitConfigStore, rlDefaults, logger.Logger)
+	gw.rateLimitHandlers = ratelimithandlers.NewHandlers(gw.rateLimitConfigStore, gw.rateLimitManager, logger)
+
+	// Legacy fallback kept for now in case the manager is ever nil. The
+	// middleware prefers rateLimitManager and only uses this if the
+	// manager is unset.
+	gw.namespaceRateLimiter = NewNamespaceRateLimiter(rlDefaults.RequestsPerMinute, rlDefaults.Burst)
 
 	// Initialize WireGuard peer exchange handler
 	if deps.ORMClient != nil {
@@ -604,24 +683,19 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// Get libp2p host from client
 		host := deps.Client.Host()
 		if host != nil {
-			// Parse listen port from ListenAddr (format: ":port" or "addr:port")
-			listenPort := 0
-			if cfg.ListenAddr != "" {
-				parts := strings.Split(cfg.ListenAddr, ":")
-				if len(parts) > 0 {
-					portStr := parts[len(parts)-1]
-					if p, err := strconv.Atoi(portStr); err == nil {
-						listenPort = p
-					}
-				}
-			}
+			// NOTE: we deliberately do NOT pass cfg.ListenAddr's port here
+			// anymore — that's the gateway's HTTP API port, NOT the libp2p
+			// port. Passing it caused every cross-node libp2p dial to land
+			// on the HTTP server and fail the multistream handshake,
+			// leaving the namespace mesh with 0 connected peers. The libp2p
+			// port is OS-assigned and lives on host.Addrs() — peer
+			// discovery extracts it from there at register time.
 
 			// Create peer discovery manager
 			gw.peerDiscovery = NewPeerDiscovery(
 				host,
 				deps.SQLDB,
 				cfg.NodePeerID,
-				listenPort,
 				cfg.ClientNamespace,
 				logger.Logger,
 			)
@@ -684,6 +758,52 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway creation completed")
 	return gw, nil
+}
+
+// shouldRegisterWebRTCRoutes decides whether `/v1/webrtc/*` routes
+// (turn/credentials, signal, rooms) get wired up in the request mux.
+//
+// Bugboard #411 — pre-fix this required BOTH cfg.WebRTCEnabled AND
+// cfg.SFUPort > 0. The boolean flag was a silent-404 footgun: spawn-
+// handler-provisioned namespace gateways defaulted to
+// WebRTCEnabled=false even when their SFU service was up and SFUPort
+// was set. AnChat hit 404 on /v1/webrtc/turn/credentials for ~3
+// months because of this even though TURN was operationally usable.
+//
+// Post-fix: SFUPort > 0 alone gates registration. SFUPort is the
+// actual operational prerequisite — the SFU proxy can't function
+// without it, and operators who set SFUPort have already opted in.
+// cfg.WebRTCEnabled is kept on the Config struct for back-compat with
+// operator YAML and the spawn-handler request shape, but ignored at
+// this gate.
+//
+// TURNSecret intentionally NOT in the gate. /v1/webrtc/signal and
+// /v1/webrtc/rooms work without TURN (the SFU proxy alone). The
+// credentials endpoint internally 503s "TURN not configured" when
+// TURNSecret is empty — that's an ACTIONABLE error operators can
+// trace, unlike the silent 404 that #411 reported.
+//
+// Extracted to a named function so the route-gate test can exercise
+// the EXACT runtime logic without spinning up a full Gateway. If you
+// change this function, update the gate's call site at the same time
+// — or the test passes while live behavior diverges.
+func shouldRegisterWebRTCRoutes(cfg *Config) bool {
+	return cfg.SFUPort > 0
+}
+
+// shouldServeTURNCredentials gates ONLY the /v1/webrtc/turn/credentials
+// route, decoupled from the SFU gate above (bugboard #25).
+//
+// TURN credentials are a namespace-wide HMAC of the shared TURN secret;
+// the actual TURN servers are remote (the namespace's TURN nodes), so a
+// gateway node that runs NO local SFU can still mint valid credentials.
+// Tying credentials to SFUPort>0 (the old single gate) meant non-SFU
+// gateways 404'd on credentials even though they had the secret — that's
+// the bug-25 symptom node 57 hit (~1/3 of requests routed to a non-SFU
+// gateway). SFU signaling/rooms remain gated on SFUPort>0 because they
+// proxy to a local SFU.
+func shouldServeTURNCredentials(cfg *Config) bool {
+	return cfg.TURNSecret != ""
 }
 
 // getLocalSubscribers returns all local subscribers for a given topic and namespace
@@ -991,6 +1111,48 @@ func (g *Gateway) namespaceWebRTCDisablePublicHandler(w http.ResponseWriter, r *
 		"status":    "ok",
 		"namespace": namespaceName,
 		"message":   "WebRTC disabled successfully",
+	})
+}
+
+// namespaceWebRTCStealthPublicHandler handles POST /v1/namespace/webrtc/stealth/{enable|disable}
+// (feat-124). Public: authenticated by JWT/API key via auth middleware;
+// namespace from context. `enable` is true for the enable route.
+func (g *Gateway) namespaceWebRTCStealthPublicHandler(w http.ResponseWriter, r *http.Request, enable bool) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	var err error
+	action := "disabled"
+	if enable {
+		action = "enabled"
+		err = g.webrtcManager.EnableWebRTCStealth(r.Context(), namespaceName)
+	} else {
+		err = g.webrtcManager.DisableWebRTCStealth(r.Context(), namespaceName)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC stealth " + action + " successfully",
 	})
 }
 

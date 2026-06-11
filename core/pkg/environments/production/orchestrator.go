@@ -344,6 +344,16 @@ func (ps *ProductionSetup) installFromSource() error {
 		ps.logf("  ⚠️  Caddy install warning: %v", err)
 	}
 
+	// Install ntfy on every node (feature #72). ntfy listens on
+	// 127.0.0.1:NtfyListenPort and is only reachable via the local
+	// Caddy reverse-proxy block, so it's safe to run cluster-wide:
+	// nodes that don't host a public push.* DNS entry simply have
+	// an idle ntfy with no inbound traffic. Uniform install means no
+	// per-node toggling and no surprises when DNS topology changes.
+	if err := ps.binaryInstaller.InstallNtfy(); err != nil {
+		ps.logf("  ⚠️  ntfy install warning: %v", err)
+	}
+
 	// These are pre-built binary downloads (not Go compilation), always run them
 	if err := ps.binaryInstaller.InstallRQLite(); err != nil {
 		ps.logf("  ⚠️  RQLite install warning: %v", err)
@@ -583,6 +593,20 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	}
 	ps.logf("  ✓ API key HMAC secret ensured")
 
+	// Serverless function secrets encryption key (bugboard #837)
+	if _, err := ps.secretGenerator.EnsureSecretsEncryptionKey(); err != nil {
+		return fmt.Errorf("failed to ensure secrets encryption key: %w", err)
+	}
+	ps.logf("  ✓ Secrets encryption key ensured")
+
+	// WebRTC TURN shared secret (feat-124 #913). Persisting it here lets the
+	// TURN config survive Phase4 config regeneration so namespace gateways are
+	// never restarted with an empty turn_secret (the AnChat outage).
+	if _, err := ps.secretGenerator.EnsureTURNSecret(); err != nil {
+		return fmt.Errorf("failed to ensure TURN secret: %w", err)
+	}
+	ps.logf("  ✓ TURN secret ensured")
+
 	// Node identity (unified architecture)
 	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
 	if err != nil {
@@ -701,10 +725,50 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 		}
 		email := "admin@" + caddyDomain
 		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
+
+		// Self-hosted ntfy (feature #72): always emit the Caddy
+		// push.<dnsZone> reverse-proxy block and write
+		// /etc/ntfy/server.yml. Must happen BEFORE ConfigureCaddy is
+		// called below so the generated Caddyfile picks up the block.
+		// ntfy is installed unconditionally on every node (see Phase 2)
+		// so the local 127.0.0.1:NtfyListenPort target always exists.
+		ntfyHost := "push." + dnsZone
+		ps.binaryInstaller.EnableCaddyNtfyProxy(ntfyHost)
+		ntfyBaseURL := "https://" + ntfyHost
+		if err := ps.binaryInstaller.ConfigureNtfy(ntfyBaseURL); err != nil {
+			ps.logf("  ⚠️  ntfy config warning: %v", err)
+		} else {
+			ps.logf("  ✓ ntfy config generated (base_url: %s)", ntfyBaseURL)
+		}
+
+		// Stealth TURN-over-443 (feat-124): when the node opted in
+		// (sni_router.enabled in the node.yaml just written above), Caddy
+		// must vacate :443 so the orama-sni-router can own it. Move Caddy's
+		// HTTPS listener to :8443 BEFORE ConfigureCaddy renders the Caddyfile.
+		// When not opted in, the Caddyfile is byte-identical to before.
+		if ps.configGenerator.SNIRouterEnabled() {
+			ps.binaryInstaller.EnableCaddySNIRouterMode()
+			ps.logf("  ✓ SNI router enabled — Caddy HTTPS will bind :8443")
+		}
+
 		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint, baseDomain); err != nil {
 			ps.logf("  ⚠️  Caddy config warning: %v", err)
 		} else {
 			ps.logf("  ✓ Caddy config generated")
+		}
+
+		// Stealth TURN-over-443 (feat-124): when opted in, write the
+		// orama-sni-router config (listen :443, fallback Caddy :8443,
+		// turn_discovery scanning this node's namespaces dir for the cluster's
+		// base domain). The unit lifecycle is driven in Phase5 after Caddy has
+		// moved to :8443. The router uses the base domain as the zone for
+		// stealth/turn.ns-* hostnames.
+		if ps.configGenerator.SNIRouterEnabled() {
+			if err := ps.binaryInstaller.ConfigureSNIRouter(dnsZone); err != nil {
+				ps.logf("  ⚠️  SNI router config warning: %v", err)
+			} else {
+				ps.logf("  ✓ SNI router config generated (zone: %s)", dnsZone)
+			}
 		}
 	}
 
@@ -831,6 +895,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 
+	// SNI router unit (feat-124). Write the unit whenever the binary is present
+	// so the daemon-reload below picks it up; the enable/start vs stop/disable
+	// decision (based on sni_router.enabled) happens after Caddy has moved to
+	// :8443, in the start section.
+	if ps.binaryInstaller.WriteSNIRouterUnit() == nil {
+		ps.logf("  ✓ SNI router service unit created: %s", ps.binaryInstaller.SNIRouterServiceName())
+	}
+
 	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %w", err)
@@ -858,6 +930,11 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Add Caddy on ALL nodes (any node may host namespaces and need TLS)
 	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
 		services = append(services, "caddy.service")
+	}
+	// Add ntfy on every node (#72). The unit file is written by
+	// installers/ntfy.go::writeSystemdUnit during Phase 2.
+	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
+		services = append(services, "ntfy.service")
 	}
 	for _, svc := range services {
 		if err := ps.serviceController.EnableService(svc); err != nil {
@@ -932,6 +1009,42 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
 		} else {
 			ps.logf("    - caddy.service started")
+		}
+	}
+
+	// Stealth TURN-over-443 (feat-124) cutover. Caddy has just been
+	// reconfigured to :8443 and restarted above, so :443 is now free for the
+	// SNI router. When opted in, enable+start the router; when not, stop+disable
+	// it so a node that flipped the flag off cleanly returns :443 to Caddy.
+	sniSvc := ps.binaryInstaller.SNIRouterServiceName()
+	if ps.configGenerator.SNIRouterEnabled() {
+		if err := ps.serviceController.EnableService(sniSvc); err != nil {
+			ps.logf("  ⚠️  Failed to enable %s: %v", sniSvc, err)
+		}
+		if err := ps.serviceController.RestartService(sniSvc); err != nil {
+			ps.logf("  ⚠️  Failed to start %s: %v", sniSvc, err)
+		} else {
+			ps.logf("    - %s started (owns :443)", sniSvc)
+		}
+	} else {
+		// Not opted in: ensure the router is not holding :443. Errors are
+		// non-fatal — the unit may simply not be loaded on this node.
+		if err := ps.serviceController.StopService(sniSvc); err != nil {
+			ps.logf("  ℹ️  %s not running (expected when disabled): %v", sniSvc, err)
+		}
+		if err := ps.serviceController.DisableService(sniSvc); err != nil {
+			ps.logf("  ℹ️  %s not enabled (expected when disabled): %v", sniSvc, err)
+		}
+	}
+
+	// Start ntfy on every node (#72). Caddy must already be up (it
+	// terminates TLS for push.<dnsZone>), which the order above
+	// guarantees.
+	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
+		if err := ps.serviceController.RestartService("ntfy.service"); err != nil {
+			ps.logf("  ⚠️  Failed to start ntfy.service: %v", err)
+		} else {
+			ps.logf("    - ntfy.service started")
 		}
 	}
 

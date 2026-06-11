@@ -79,6 +79,21 @@ func (m *MockRegistry) Delete(ctx context.Context, namespace, name string, versi
 	return nil
 }
 
+func (m *MockRegistry) SetEnabled(ctx context.Context, namespace, name string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fn, ok := m.functions[namespace+"/"+name]
+	if !ok {
+		return ErrFunctionNotFound
+	}
+	if enabled {
+		fn.Status = FunctionStatusActive
+	} else {
+		fn.Status = FunctionStatusInactive
+	}
+	return nil
+}
+
 func (m *MockRegistry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -126,6 +141,13 @@ func (m *MockHostServices) DBExecuteV2(ctx context.Context, query string, args [
 
 func (m *MockHostServices) DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
 	return []byte(`{"rows":[]}`), nil
+}
+
+func (m *MockHostServices) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	// Bare stub — returns the empty results shape. Tests that need per-op
+	// behavior should mock at the HostFunctions level (see fakeBatchClient
+	// in pkg/serverless/hostfunctions/database_test.go).
+	return []byte(`{"results":[]}`), nil
 }
 
 func (m *MockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
@@ -196,6 +218,19 @@ func (m *MockHostServices) PushSend(ctx context.Context, userID string, msgJSON 
 	return nil
 }
 
+func (m *MockHostServices) PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error) {
+	// Return the empty-no-op envelope to match the silent no-op contract
+	// when no provider is configured. Tests that need per-device behavior
+	// mock at the HostFunctions level (fakeBatchClient-style).
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
+func (m *MockHostServices) TurnCredentials(ctx context.Context) ([]byte, error) {
+	// Mirror PushSendV2's silent-noop-style envelope when not configured —
+	// matches the documented host-fn contract for TURN being absent.
+	return []byte(`{"configured":false}`), nil
+}
+
 func (m *MockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
 	return []byte(`{"committed":true,"results":[]}`), nil
 }
@@ -212,6 +247,22 @@ func (m *MockHostServices) WSPubSubUnbridge(ctx context.Context, clientID, topic
 	return nil
 }
 
+func (m *MockHostServices) SetHTTPResponse(ctx context.Context, status int, headers map[string]string, body []byte) error {
+	return SetRawHTTPResponse(ctx, status, headers, body)
+}
+
+func (m *MockHostServices) EphemeralStateSet(ctx context.Context, topic, key string, payload []byte, ttlMs int64) error {
+	return nil
+}
+
+func (m *MockHostServices) EphemeralStateClear(ctx context.Context, topic, key string) error {
+	return nil
+}
+
+func (m *MockHostServices) EphemeralStateList(ctx context.Context, topic string) ([]byte, error) {
+	return []byte(`{"entries":[]}`), nil
+}
+
 func (m *MockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }
@@ -224,7 +275,15 @@ func (m *MockHostServices) FunctionInvoke(ctx context.Context, name string, payl
 	return nil, nil
 }
 
+func (m *MockHostServices) FunctionInvokeAsync(ctx context.Context, name string, payload []byte) error {
+	return nil
+}
+
 func (m *MockHostServices) HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *MockHostServices) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
@@ -406,6 +465,15 @@ func (m *MockRQLite) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.B
 func (m *MockRQLite) BatchWithSeq(ctx context.Context, namespace string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error) {
 	res, err := m.Batch(ctx, ops)
 	return res, 1, err
+}
+
+func (m *MockRQLite) BatchQuery(ctx context.Context, ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+	// Bare stub mirroring Batch: one empty-row result per op.
+	results := make([]rqlite.OpResult, len(ops))
+	for i := range ops {
+		results[i] = rqlite.OpResult{Kind: rqlite.BatchOpQuery, Rows: nil}
+	}
+	return results, nil
 }
 
 type mockResult struct{}

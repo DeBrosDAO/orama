@@ -107,8 +107,9 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
@@ -116,6 +117,7 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
 		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
+		fn.RawHTTPResponse,
 	)
 	if err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to register function: %w", err)}
@@ -153,7 +155,9 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
-				status, created_at, updated_at, created_by
+				status, created_at, updated_at, created_by,
+				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response
 			FROM functions
 			WHERE namespace = ? AND name = ? AND status = ?
 			ORDER BY version DESC
@@ -165,7 +169,9 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
 				memory_limit_mb, timeout_seconds, is_public,
 				retry_count, retry_delay_seconds, dlq_topic,
-				status, created_at, updated_at, created_by
+				status, created_at, updated_at, created_by,
+				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response
 			FROM functions
 			WHERE namespace = ? AND name = ? AND version = ?
 		`
@@ -194,7 +200,9 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 		SELECT f.id, f.name, f.namespace, f.version, f.wasm_cid, f.source_cid,
 			f.memory_limit_mb, f.timeout_seconds, f.is_public,
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
-			f.status, f.created_at, f.updated_at, f.created_by
+			f.status, f.created_at, f.updated_at, f.created_by,
+			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn,
+			f.raw_http_response
 		FROM functions f
 		INNER JOIN (
 			SELECT namespace, name, MAX(version) as max_version
@@ -218,6 +226,38 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 	}
 
 	return functions, nil
+}
+
+// SetEnabled flips a function's status between active and inactive
+// without redeploying (plan 11.5 disable/enable). Targets ALL versions
+// of the function by name so a disable call pauses the whole function,
+// not a single version — operators use this during incident response.
+// Returns ErrFunctionNotFound when no row matches.
+func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabled bool) error {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" {
+		return fmt.Errorf("namespace and name required")
+	}
+	status := FunctionStatusInactive
+	if enabled {
+		status = FunctionStatusActive
+	}
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
+	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	if err != nil {
+		return fmt.Errorf("failed to set function enabled state: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return ErrFunctionNotFound
+	}
+	r.logger.Info("Function enabled-state updated",
+		zap.String("namespace", namespace),
+		zap.String("name", name),
+		zap.String("status", string(status)),
+	)
+	return nil
 }
 
 // Delete removes a function. If version is 0, removes all versions.
@@ -302,7 +342,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 		FROM functions
 		WHERE id = ?
 	`
@@ -325,7 +366,8 @@ func (r *Registry) ListVersions(ctx context.Context, namespace, name string) ([]
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -367,26 +409,60 @@ func (r *Registry) Log(ctx context.Context, inv *InvocationRecord) error {
 		return fmt.Errorf("failed to insert invocation record: %w", err)
 	}
 
-	// Insert logs if any
-	if len(inv.Logs) > 0 {
-		for _, entry := range inv.Logs {
-			logID := uuid.New().String()
-			logQuery := `
-				INSERT INTO function_logs (
-					id, function_id, invocation_id, level, message, timestamp
-				) VALUES (?, ?, ?, ?, ?, ?)
-			`
-			_, err := r.db.Exec(ctx, logQuery,
-				logID, inv.FunctionID, inv.ID, entry.Level, entry.Message, entry.Timestamp,
-			)
-			if err != nil {
-				r.logger.Warn("Failed to insert function log", zap.Error(err))
-				// Continue with other logs
-			}
+	// Insert logs in batched multi-row INSERTs rather than one Exec per line.
+	// Pre-fix this loop paid one cross-region Raft write PER log line (N+1):
+	// a handler emitting 5 lines cost 6 sequential writes. Now a record's
+	// lines collapse into ceil(N/maxLogRowsPerInsert) writes (bugboard feat-27).
+	for _, chunk := range chunkLogEntries(inv.Logs, maxLogRowsPerInsert) {
+		query, args := buildFunctionLogsInsert(inv.FunctionID, inv.ID, chunk)
+		if _, err := r.db.Exec(ctx, query, args...); err != nil {
+			r.logger.Warn("Failed to insert function logs batch", zap.Error(err))
+			// Continue with remaining chunks — telemetry is best-effort.
 		}
 	}
 
 	return nil
+}
+
+// maxLogRowsPerInsert caps how many function_logs rows go into a single
+// multi-row INSERT statement. Keeps any one statement bounded (placeholder
+// count, statement size) while still collapsing the per-line N+1 into a
+// handful of writes for the common case.
+const maxLogRowsPerInsert = 100
+
+// chunkLogEntries splits entries into slices of at most size. Returns no
+// chunks for an empty input.
+func chunkLogEntries(entries []LogEntry, size int) [][]LogEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	var chunks [][]LogEntry
+	for i := 0; i < len(entries); i += size {
+		end := i + size
+		if end > len(entries) {
+			end = len(entries)
+		}
+		chunks = append(chunks, entries[i:end])
+	}
+	return chunks
+}
+
+// buildFunctionLogsInsert constructs a single multi-row INSERT for the given
+// log entries: one VALUES tuple per entry, args flattened in column order
+// (id, function_id, invocation_id, level, message, timestamp). Each row gets a
+// fresh UUID id, matching the per-row behavior of the old loop.
+func buildFunctionLogsInsert(functionID, invocationID string, entries []LogEntry) (string, []interface{}) {
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO function_logs (id, function_id, invocation_id, level, message, timestamp) VALUES ")
+	args := make([]interface{}, 0, len(entries)*6)
+	for i, entry := range entries {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(?, ?, ?, ?, ?, ?)")
+		args = append(args, uuid.New().String(), functionID, invocationID, entry.Level, entry.Message, entry.Timestamp)
+	}
+	return sb.String(), args
 }
 
 // GetLogs retrieves logs for a function.
@@ -560,7 +636,8 @@ func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
 			memory_limit_mb, timeout_seconds, is_public,
 			retry_count, retry_delay_seconds, dlq_topic,
-			status, created_at, updated_at, created_by
+			status, created_at, updated_at, created_by,
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -621,6 +698,20 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		CreatedAt:         row.CreatedAt,
 		UpdatedAt:         row.UpdatedAt,
 		CreatedBy:         row.CreatedBy,
+
+		// WS persistent-instance fields (#240/#249 follow-up). Without
+		// these the WS handler's `if fn.WSPersistent` branch never
+		// fires and persistent functions silently run as per-frame
+		// stateless. See functionRow doc above for full history.
+		WSPersistent:         row.WSPersistent,
+		WSIdleTimeoutSec:     row.WSIdleTimeoutSec,
+		WSMaxFrameBytes:      row.WSMaxFrameBytes,
+		WSMaxInflightPerConn: row.WSMaxInflightPerConn,
+
+		// Raw-HTTP-response mode (bugboard #835). Without reading this back
+		// the invoke handler's `if fn.RawHTTPResponse` engine branch never
+		// fires and set_http_response is a no-op for every function.
+		RawHTTPResponse: row.RawHTTPResponse,
 	}
 }
 
@@ -645,6 +736,35 @@ type functionRow struct {
 	CreatedAt         time.Time      `db:"created_at"`
 	UpdatedAt         time.Time      `db:"updated_at"`
 	CreatedBy         string         `db:"created_by"`
+
+	// WS persistent-instance metadata (#240/#249 follow-up).
+	//
+	// Pre-fix history: these columns existed in the schema (migration
+	// 011) and Register() at line 110+ wrote them, but every read path
+	// (Get, List, GetByID, GetByNameInternal) omitted them from the
+	// SELECT and functionRow had no fields for them. Result:
+	// `fn.WSPersistent` was always the zero value (false) regardless
+	// of what the DB said. Every WS function silently ran in
+	// per-frame stateless mode — not the persistent mode the
+	// `ws_persistent: true` config asks for.
+	//
+	// AnChat's rpc-router was the canary: it relies on per-connection
+	// instance state (request_id ↔ reply correlation, persistent
+	// subscription bookkeeping) that the stateless model destroys
+	// every frame. Symptom: gateway-side function invocations succeed
+	// (telemetry envelope `{request_id, status, duration_ms}` reaches
+	// the client) but the function's own `ws_send` frames don't carry
+	// the per-connection state the function expects. End-user impact
+	// was every RPC timing out at 15 s.
+	WSPersistent         bool `db:"ws_persistent"`
+	WSIdleTimeoutSec     int  `db:"ws_idle_timeout_sec"`
+	WSMaxFrameBytes      int  `db:"ws_max_frame_bytes"`
+	WSMaxInflightPerConn int  `db:"ws_max_inflight_per_conn"`
+
+	// Raw-HTTP-response mode (bugboard #835). Backed by migration
+	// 029_raw_http_response.sql; defaults to false so existing functions
+	// keep the JSON/Ack-wrapped behavior.
+	RawHTTPResponse bool `db:"raw_http_response"`
 }
 
 type envVarRow struct {

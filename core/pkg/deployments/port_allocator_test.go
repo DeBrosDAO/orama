@@ -158,6 +158,14 @@ func (m *mockRQLiteClient) BatchWithSeq(ctx context.Context, namespace string, o
 	return res, 1, err
 }
 
+func (m *mockRQLiteClient) BatchQuery(ctx context.Context, ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+	out := make([]rqlite.OpResult, len(ops))
+	for i := range ops {
+		out[i] = rqlite.OpResult{Kind: rqlite.BatchOpQuery}
+	}
+	return out, nil
+}
+
 func TestPortAllocator_AllocatePort(t *testing.T) {
 	logger := zap.NewNop()
 	mockDB := newMockRQLiteClient()

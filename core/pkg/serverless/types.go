@@ -81,6 +81,14 @@ type FunctionRegistry interface {
 	// Delete removes a function. If version is 0, removes all versions.
 	Delete(ctx context.Context, namespace, name string, version int) error
 
+	// SetEnabled toggles a function's status between active and inactive
+	// without redeploying. Plan 11.5 — lets operators pause a misbehaving
+	// function during an incident response. Existing in-flight invocations
+	// finish; new ones see the function as missing/inactive and the
+	// invoker rejects them upstream. Returns ErrFunctionNotFound if the
+	// name doesn't exist in the namespace.
+	SetEnabled(ctx context.Context, namespace, name string, enabled bool) error
+
 	// GetWASMBytes retrieves the compiled WASM bytecode for a function.
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
 
@@ -229,6 +237,11 @@ type FunctionDefinition struct {
 	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`     // 0 = no idle timeout
 	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`      // 0 = use default 256 KB
 	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"` // 0 = use default 64
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835): the
+	// function may call set_http_response to emit a verbatim status/headers/
+	// body instead of the JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
+	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
 }
 
 // DBTriggerConfig defines a database trigger configuration.
@@ -262,6 +275,11 @@ type Function struct {
 	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`
 	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`
 	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"`
+
+	// RawHTTPResponse — bugboard #835. When true, the function may emit a
+	// verbatim HTTP response via set_http_response instead of the
+	// JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
+	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
 }
 
 // InvocationContext provides context for a function invocation.
@@ -290,6 +308,24 @@ type InvocationContext struct {
 	// caller also presents an API key. Empty string when the request was
 	// not JWT-authenticated. Bug #215.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+
+	// TriggerDepth is the recursion-depth bucket for trigger-driven
+	// invocations. 0 means a top-level (HTTP/WS/cron) invocation; each
+	// PubSub-trigger-driven invocation increments it. The host-fn
+	// wildcard-publish path (`oh.PubSubPublish` → DispatchLocalPublish)
+	// reads this and refuses to fire wildcards once depth ≥
+	// maxTriggerDepth, preventing local-only recursion loops a function
+	// could create by publishing topics that match its own wildcard
+	// trigger (bugboard #93 follow-up).
+	TriggerDepth int `json:"trigger_depth,omitempty"`
+
+	// RawHTTP carries a verbatim HTTP response set by a RawHTTPResponse
+	// function (bugboard #835). The engine populates this from the
+	// per-invocation collector after Execute returns; the Invoker surfaces
+	// it on InvokeResponse so the HTTP handler can replay it. nil/unset for
+	// normal functions and functions that didn't call set_http_response.
+	// Not serialized — internal plumbing only.
+	RawHTTP *RawHTTPResult `json:"-"`
 }
 
 // InvocationResult represents the result of a function invocation.
@@ -444,6 +480,71 @@ type HostServices interface {
 	// returned JSON, NOT as a Go error.
 	DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error)
 
+	// DBQueryBatch runs N SELECT statements in ONE round-trip to the leader
+	// (via RQLite's /db/query bulk endpoint). All queries see the same
+	// committed snapshot. opsJSON shape: {"ops":[{"sql":"...","args":[...]}, ...]}.
+	// Returns JSON {"results":[{"rows":[...], "error":""}, ...]} with one
+	// entry per input op, in the same order. Per-query errors are surfaced
+	// in the per-op `error` field; the call only returns a Go error on
+	// transport/validation failures.
+	//
+	// Use this for read-heavy functions that gather state from many tables
+	// before doing work — e.g. anchat's message-create reads auth +
+	// participants + devices (7-10 SELECTs) before writing. Empirically on
+	// devnet's cross-region cluster: 10 sequential DBQuery = ~3.5s; one
+	// DBQueryBatch with 10 statements = ~340ms. See bugboard #270.
+	DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error)
+
+	// PushSendV2 dispatches a push notification with PER-DEVICE result
+	// reporting. Returns JSON-encoded push.SendDetailedResult:
+	//
+	//   {
+	//     "ok": false,
+	//     "devices_attempted": 2,
+	//     "devices_succeeded": 1,
+	//     "results": [
+	//       {"device_id":"ios-A", "provider":"apns", "success":true},
+	//       {"device_id":"ios-B", "provider":"apns", "success":false,
+	//        "http_status":410, "reason":"Unregistered",
+	//        "message":"...", "unregistered":true}
+	//     ]
+	//   }
+	//
+	// Unlike the legacy PushSend (which returns success/fail and discards
+	// every provider's HTTP status), this lets WASM callers auto-clean
+	// stale tokens, retry transient failures, and surface real reasons.
+	// Bugboard #348.
+	//
+	// Returns a Go error only on setup failures (no manager, invalid JSON,
+	// no namespace in invocation context). A per-device failure goes into
+	// the JSON `results[]` array, NOT as a Go error — callers parse the
+	// envelope. Same shape as DBTransaction's "structured per-op result".
+	PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error)
+
+	// TurnCredentials mints per-namespace TURN HMAC credentials for the
+	// caller's namespace (derived from invocation context — caller
+	// cannot spoof). Returns a JSON envelope matching the HTTP endpoint
+	// at /v1/webrtc/turn/credentials:
+	//
+	//   {
+	//     "configured": true,
+	//     "username": "<unix-ts>:<namespace>",
+	//     "password": "<hmac>",
+	//     "ttl": 600,
+	//     "uris": ["turn:...", "turns:...:443"],
+	//     "namespace": "<ns>"
+	//   }
+	//
+	// When TURN isn't configured on this gateway (TURNSecret empty),
+	// returns {configured:false, namespace:<ns>} as a structured envelope
+	// — NOT a Go error. This matches PushSend's silent-noop semantics so
+	// functions stay portable across deployments with/without TURN.
+	//
+	// Bugboard feat-9 — removes the round-trip through HTTP for WASM
+	// functions that need to inject TURN credentials into a peer's
+	// RTCConfiguration without going back out to the gateway.
+	TurnCredentials(ctx context.Context) ([]byte, error)
+
 	// ExecAndPublish runs ops atomically (like DBTransaction) and, ONLY
 	// if the batch commits, publishes data to the named topic with any
 	// occurrence of the literal string "{{seq}}" replaced by the assigned
@@ -472,6 +573,36 @@ type HostServices interface {
 	// in OnClose unless they want to dynamically unsubscribe.
 	WSPubSubUnbridge(ctx context.Context, clientID, topic string) error
 
+	// SetHTTPResponse records a verbatim HTTP response (status, headers, body)
+	// for a RawHTTPResponse function (bugboard #835). The HTTP invoke handler
+	// replays it byte-for-byte instead of the JSON/Ack-wrapped output, so a
+	// function can transparently proxy an upstream RPC. Returns an error when
+	// the function is NOT deployed with raw_http_response, or when the status /
+	// header count / body size fail validation. headers may be nil.
+	SetHTTPResponse(ctx context.Context, status int, headers map[string]string, body []byte) error
+
+	// EphemeralStateSet records WS-subscribe-tracked ephemeral state owned by
+	// the current invocation's WS client (bugboard #710) and publishes a "set"
+	// event on the topic so subscribers observe it. The state auto-clears (with
+	// a synthetic "clear" event) when the owning WS client disconnects, and
+	// also expires after ttlMs (clamped to a max; <=0 uses a default). Returns
+	// an error when there is no WS client in context, on empty topic/key, on an
+	// oversized payload, or when the client's per-connection key cap is hit.
+	EphemeralStateSet(ctx context.Context, topic, key string, payload []byte, ttlMs int64) error
+
+	// EphemeralStateClear removes ephemeral state the current WS client owns
+	// and publishes a "clear" event. Idempotent: clearing a missing or
+	// non-owned key is a no-op. Errors only on no-WS-client / empty topic-key.
+	EphemeralStateClear(ctx context.Context, topic, key string) error
+
+	// EphemeralStateList returns the live entries on a topic in the current
+	// invocation's namespace as a JSON envelope:
+	//   {"entries":[{"key":..,"client_id":..,"payload":<base64>,"expires_in_ms":..}, …]}
+	// The reconnect catch-up read (bugboard #710 acceptance): unlike
+	// Set/Clear it does NOT require a WS client in context — any function
+	// invocation may read. Errors on empty topic or no invocation context.
+	EphemeralStateList(ctx context.Context, topic string) ([]byte, error)
+
 	// WebSocket operations (only valid in WS context)
 	WSSend(ctx context.Context, clientID string, data []byte) error
 	WSBroadcast(ctx context.Context, topic string, data []byte) error
@@ -489,8 +620,33 @@ type HostServices interface {
 	// rpc_error to the client.
 	FunctionInvoke(ctx context.Context, name string, payload []byte) ([]byte, error)
 
+	// FunctionInvokeAsync invokes another function in the same namespace
+	// CONCURRENTLY and returns immediately — it does NOT wait for or return
+	// the target's output. The target runs in the engine's execution pool
+	// inheriting the caller's identity (wallet, JWT claims, WS client ID),
+	// and is expected to deliver any result to the client itself via ws_send
+	// (it has the same WS client ID).
+	//
+	// This is the non-blocking counterpart to FunctionInvoke, for a
+	// persistent dispatcher (rpc-router) that must not freeze its single
+	// stateful instance for the full duration of a slow target invocation.
+	// Returns an error only when the invocation could not be ACCEPTED (no
+	// invoker wired, no invocation context, or in-flight cap reached) — not
+	// for failures inside the target, which surface via the target's own
+	// logging/ws_send.
+	FunctionInvokeAsync(ctx context.Context, name string, payload []byte) error
+
 	// HTTP operations
 	HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
+
+	// AnyoneFetch is HTTPFetch routed through the Anyone (ANyONe
+	// protocol) SOCKS5 proxy so the external endpoint sees an Anyone
+	// exit IP, not the gateway's. Feat-11 — server-side analog of the
+	// client-side proxy, for serverless functions fronting third-party
+	// APIs (e.g. wallet RPC) that shouldn't expose a gateway↔upstream
+	// metadata trail. NO silent fallback to direct: returns a typed
+	// error envelope when Anyone routing is unavailable.
+	AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 
 	// Context operations
 	GetEnv(ctx context.Context, key string) (string, error)

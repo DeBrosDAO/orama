@@ -15,6 +15,14 @@ node:
   operator_wallet: "{{.OperatorWallet}}"
 {{- end}}
 
+# Stealth TURN-over-443 SNI router (feat-124). When enabled, the node runs
+# orama-sni-router on :443 and Caddy is moved to :8443; default-OFF so existing
+# nodes are byte-identical until an operator opts in. This block is preserved
+# across config regeneration (GenerateNodeConfig carries forward an existing
+# sni_router.enabled: true).
+sni_router:
+  enabled: {{if .SNIRouterEnabled}}true{{else}}false{{end}}
+
 database:
   data_dir: "{{.DataDir}}/rqlite"
   replication_factor: 3
@@ -88,6 +96,22 @@ http_gateway:
   ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
   ipfs_api_url: "http://localhost:{{.IPFSAPIPort}}"
   ipfs_timeout: "60s"
-  
+{{- if .SecretsEncryptionKey}}
+  # Serverless function secrets encryption key (AES-256, hex). Must be
+  # identical on every namespace-gateway node and stable across restarts
+  # (bugboard #837). Sourced from ~/.orama/secrets/secrets-encryption-key.
+  secrets_encryption_key: "{{.SecretsEncryptionKey}}"
+{{- end}}
+{{- if .TURNSecret}}
+  # WebRTC/TURN config (feat-124 #913). turn_secret is sourced from
+  # ~/.orama/secrets/turn-secret so it survives config regeneration;
+  # turn_domain/sfu_port are carried forward from the previous node.yaml.
+  webrtc:
+    enabled: true
+    sfu_port: {{.SFUPort}}
+    turn_domain: "{{.TURNDomain}}"
+    turn_secret: "{{.TURNSecret}}"
+{{- end}}
+
   # Routes for internal service reverse proxy (kept for backwards compatibility but not used by full gateway)
   routes: {}

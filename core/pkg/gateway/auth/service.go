@@ -19,13 +19,16 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"go.uber.org/zap"
 )
 
 // Service handles authentication business logic
 type Service struct {
 	logger           *logging.ColoredLogger
 	orm              client.NetworkClient
+	db               rqlite.Client // lower-level client; used where rows-affected is needed (e.g. refresh-token CAS rotation, feature #68)
 	signingKey       *rsa.PrivateKey
 	keyID            string
 	edSigningKey     ed25519.PrivateKey
@@ -67,6 +70,24 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 func (s *Service) SetAPIKeyHMACSecret(secret string) {
 	s.apiKeyHMACSecret = secret
 }
+
+// SetRqliteClient injects the lower-level rqlite client. Required for code
+// paths that need rows-affected feedback for compare-and-swap operations
+// (e.g. atomic refresh-token rotation, feature #68). The higher-level
+// `client.NetworkClient` interface in `s.orm` does not expose RowsAffected
+// on writes.
+//
+// Safe to call zero or one times; idempotent. Without it, methods that
+// depend on CAS semantics fall back to the previous less-atomic behaviour
+// (currently: RefreshToken returns ErrRotationNotConfigured).
+func (s *Service) SetRqliteClient(db rqlite.Client) {
+	s.db = db
+}
+
+// ErrRotationNotConfigured is returned by RefreshToken when the service
+// wasn't given an rqlite client — refusing to rotate without atomicity
+// guarantees is safer than rotating non-atomically.
+var ErrRotationNotConfigured = fmt.Errorf("auth service not configured for atomic refresh-token rotation (missing rqlite client)")
 
 // HashAPIKey returns the HMAC-SHA256 hash of an API key if the HMAC secret is set,
 // or returns the raw key for backward compatibility during rolling upgrade.
@@ -234,24 +255,76 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	return token, refresh, expUnix, nil
 }
 
-// RefreshToken validates a refresh token and issues a new access token
-func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace string) (string, string, int64, error) {
+// ErrRefreshTokenReplay is returned when a refresh token's CAS lock is lost —
+// the row was already revoked between our read and our write, meaning either
+// another concurrent request rotated it OR an attacker is replaying a stolen
+// token after the legitimate client refreshed. Callers should treat this as
+// a potential security event and surface 401 to the client; the service
+// itself emits a WARN log so operators can audit.
+//
+// This is the tripwire promised by RFC 9700 §4.12 (refresh-token rotation).
+var ErrRefreshTokenReplay = fmt.Errorf("refresh token already rotated or invalid")
+
+// RefreshToken validates the supplied refresh token, atomically rotates it
+// (revokes the old, mints a new), and returns a fresh access token alongside
+// the rotated refresh token.
+//
+// Rotation is the RFC 9700 BCP §4.12 / feature #68 behaviour:
+//
+//  1. SELECT the subject for the supplied token (must be unrevoked + unexpired)
+//  2. UPDATE revoked_at = now() WHERE token = ? AND revoked_at IS NULL
+//     -- this is the atomic CAS. If RowsAffected == 0, the race was lost
+//     -- (concurrent rotation or token-replay attack); we fail closed and
+//     -- emit a security log line so operators can investigate.
+//  3. Generate a fresh refresh-token + fresh access JWT
+//  4. INSERT the new refresh-token row
+//  5. Return both
+//
+// Failure modes:
+//   - Token invalid/expired at step 1 → standard "invalid or expired" error,
+//     no security event.
+//   - CAS lost at step 2 → ErrRefreshTokenReplay, WARN logged with subject +
+//     namespace. The client sees 401.
+//   - Crash between step 2 and step 4 → user is left with revoked old + no
+//     new, forcing re-login. Acceptable: degrades to re-auth, never enables
+//     double-use of a single refresh token.
+//
+// Returns:
+//
+//	accessToken     — newly minted short-lived JWT (15 min)
+//	newRefreshToken — newly minted long-lived refresh token (30 days)
+//	subject         — wallet/subject claim of the refreshed session
+//	expUnix         — access token expiry (unix seconds)
+//	err             — non-nil on any failure; ErrRefreshTokenReplay for CAS loss
+func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace string) (accessToken, newRefreshToken, subject string, expUnix int64, err error) {
+	// Atomic rotation requires the lower-level rqlite client (RowsAffected
+	// feedback isn't exposed by the higher-level client.NetworkClient).
+	// Refuse to rotate non-atomically — see ErrRotationNotConfigured.
+	if s.db == nil {
+		return "", "", "", 0, ErrRotationNotConfigured
+	}
+
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	ormDB := s.orm.Database()
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 
 	hashedRefresh := sha256Hex(refreshToken)
-	q := "SELECT subject FROM refresh_tokens WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) LIMIT 1"
-	res, err := db.Query(internalCtx, q, nsID, hashedRefresh)
-	if err != nil || res == nil || res.Count == 0 {
-		return "", "", 0, fmt.Errorf("invalid or expired refresh token")
-	}
 
-	subject := ""
+	// Step 1: read the subject. Tells us who the token belongs to AND
+	// validates that it's currently usable (not revoked, not expired).
+	selectQ := `SELECT subject FROM refresh_tokens
+	            WHERE namespace_id = ? AND token = ?
+	              AND revoked_at IS NULL
+	              AND (expires_at IS NULL OR expires_at > datetime('now'))
+	            LIMIT 1`
+	res, err := ormDB.Query(internalCtx, selectQ, nsID, hashedRefresh)
+	if err != nil || res == nil || res.Count == 0 {
+		return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
+	}
 	if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
 		if val, ok := res.Rows[0][0].(string); ok {
 			subject = val
@@ -261,12 +334,55 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		}
 	}
 
-	token, expUnix, err := s.GenerateJWT(namespace, subject, 15*time.Minute)
+	// Step 2: atomic CAS — revoke the old row. RowsAffected is the lock.
+	// Two concurrent calls with the same refresh token: exactly one wins
+	// the UPDATE (RowsAffected == 1); the other sees RowsAffected == 0
+	// and bails with the replay tripwire.
+	updRes, err := s.db.Exec(internalCtx,
+		`UPDATE refresh_tokens SET revoked_at = datetime('now')
+		 WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL`,
+		nsID, hashedRefresh)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, fmt.Errorf("revoke old refresh token: %w", err)
+	}
+	affected, _ := updRes.RowsAffected()
+	if affected == 0 {
+		// Race lost OR replay attempt: token was unrevoked at step 1 but
+		// already revoked by step 2, meaning a concurrent call rotated it
+		// in between. Could be benign (same client retrying due to a
+		// transient network error) or malicious (stolen token + race).
+		// Either way: fail closed, log it, let the operator investigate.
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"refresh token rotation: concurrent use detected (possible replay)",
+			zap.String("namespace", namespace),
+			zap.String("subject", subject))
+		return "", "", "", 0, ErrRefreshTokenReplay
 	}
 
-	return token, subject, expUnix, nil
+	// Step 3: mint the new access JWT.
+	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, 15*time.Minute)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	// Step 4: mint and persist a new refresh token (32-byte random,
+	// base64-url-encoded; stored hashed). 30-day TTL. Note: if this
+	// INSERT fails after the UPDATE succeeded (step 2), the user is left
+	// with revoked old + no new and must re-authenticate. Acceptable —
+	// degrades to re-auth, never to double-use of a single refresh token.
+	rbuf := make([]byte, 32)
+	if _, err := rand.Read(rbuf); err != nil {
+		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+	newRefreshToken = base64.RawURLEncoding.EncodeToString(rbuf)
+	hashedNew := sha256Hex(newRefreshToken)
+	if _, err := ormDB.Query(internalCtx,
+		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+30 days'))",
+		nsID, subject, hashedNew, "gateway"); err != nil {
+		return "", "", "", 0, fmt.Errorf("store rotated refresh token: %w", err)
+	}
+
+	return accessToken, newRefreshToken, subject, expUnix, nil
 }
 
 // RevokeToken revokes a specific refresh token or all tokens for a subject

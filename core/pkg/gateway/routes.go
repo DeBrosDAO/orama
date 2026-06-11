@@ -67,6 +67,12 @@ func (g *Gateway) Routes() http.Handler {
 	// Namespace WebRTC enable/disable/status (public, JWT/API key auth via middleware)
 	mux.HandleFunc("/v1/namespace/webrtc/enable", g.namespaceWebRTCEnablePublicHandler)
 	mux.HandleFunc("/v1/namespace/webrtc/disable", g.namespaceWebRTCDisablePublicHandler)
+	mux.HandleFunc("/v1/namespace/webrtc/stealth/enable", func(w http.ResponseWriter, r *http.Request) {
+		g.namespaceWebRTCStealthPublicHandler(w, r, true)
+	})
+	mux.HandleFunc("/v1/namespace/webrtc/stealth/disable", func(w http.ResponseWriter, r *http.Request) {
+		g.namespaceWebRTCStealthPublicHandler(w, r, false)
+	})
 	mux.HandleFunc("/v1/namespace/webrtc/status", g.namespaceWebRTCStatusPublicHandler)
 
 	// auth endpoints
@@ -144,6 +150,24 @@ func (g *Gateway) Routes() http.Handler {
 	// instead of filing an ops ticket. Method dispatched in the handler.
 	mux.HandleFunc("/v1/push/config", g.pushConfigHandler)
 
+	// Per-namespace, per-provider push credentials (feature #72 —
+	// full-privacy push with APNs-direct + self-hosted ntfy). Generic by
+	// design: any provider with a registered Validator plugs in here
+	// without changes. Method + provider segment dispatched in the handler.
+	//
+	// Summary endpoint (no provider segment) returns "what's configured"
+	// + "what's supported" in one round trip.
+	mux.HandleFunc("/v1/namespace/push-credentials", g.pushCredentialsSummaryHandler)
+	mux.HandleFunc("/v1/namespace/push-credentials/", g.pushCredentialsByProviderHandler)
+
+	// Per-namespace rate-limit configuration (feature #69).
+	// GET / PUT / DELETE — tenants self-serve their gateway-level rate
+	// limit override (requests_per_minute, burst) up to an operator-set
+	// ceiling. Falls back to gateway YAML defaults when no override is set.
+	if g.rateLimitHandlers != nil {
+		mux.HandleFunc("/v1/namespace/rate-limit", g.rateLimitConfigDispatcher)
+	}
+
 	// operator node management (wallet JWT auth via middleware)
 	if g.operatorHandler != nil {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
@@ -159,11 +183,17 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/vault/status", g.vaultHandlers.HandleStatus)
 	}
 
-	// webrtc
+	// webrtc — TURN credentials and SFU signaling are gated independently
+	// (bugboard #25). A non-SFU gateway with the namespace TURN secret
+	// serves credentials but not signal/rooms; an SFU gateway serves all.
 	if g.webrtcHandlers != nil {
-		mux.HandleFunc("/v1/webrtc/turn/credentials", g.webrtcHandlers.CredentialsHandler)
-		mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
-		mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
+		if g.webrtcServeTURNCredentials {
+			mux.HandleFunc("/v1/webrtc/turn/credentials", g.webrtcHandlers.CredentialsHandler)
+		}
+		if g.webrtcServeSFURoutes {
+			mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
+			mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
+		}
 	}
 
 	// anon proxy (authenticated users only)

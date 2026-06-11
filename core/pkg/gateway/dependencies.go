@@ -20,6 +20,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/push"
+	pushcreds "github.com/DeBrosOfficial/network/pkg/push/credentials"
+	pushapns "github.com/DeBrosOfficial/network/pkg/push/providers/apns"
 	pushexpo "github.com/DeBrosOfficial/network/pkg/push/providers/expo"
 	pushntfy "github.com/DeBrosOfficial/network/pkg/push/providers/ntfy"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -95,6 +97,13 @@ type Dependencies struct {
 	// fallback used only if Manager is somehow missing.
 	PushManager     *push.Manager
 	PushConfigStore push.ConfigStore
+
+	// PushCredentialsManager owns per-namespace, per-provider push
+	// credentials (feature #72). Used by provider factories to look up
+	// the right credential at send time, and by the HTTP credentials
+	// handlers for tenant self-service PUT/GET/DELETE. Nil when the
+	// cluster secret is unavailable.
+	PushCredentialsManager *pushcreds.Manager
 
 	// Authentication service
 	AuthService *auth.Service
@@ -459,10 +468,25 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	engineCfg.DefaultTimeoutSeconds = 30
 	engineCfg.MaxTimeoutSeconds = 60
 	engineCfg.ModuleCacheSize = 100
+	// Surface the per-phase slow-invoke diagnostic (instantiate_ms / run_ms)
+	// above 1s instead of the 5s default — a >1s serverless invocation is
+	// genuinely slow (well-built handlers are <300ms), and this makes the
+	// cold-start floor (bugboard #27: async-dispatched stateless handlers pay a
+	// fresh instantiate + TinyGo _start per call) visible for correlation
+	// against client-side request_ids.
+	engineCfg.SlowInvokeThresholdMs = 1000
 
-	// Create secrets manager for serverless functions (AES-256-GCM encrypted)
+	// Create secrets manager for serverless functions (AES-256-GCM encrypted).
+	//
+	// The encryption key comes from the gateway Config (loaded from
+	// ~/.orama/secrets/secrets-encryption-key), NOT from engineCfg — engineCfg
+	// never has the key set, so passing it always produced a per-process
+	// ephemeral key and made get_secret return undecryptable values
+	// (bugboard #837). allowEphemeral=false: a missing/invalid key fails
+	// loudly here and disables get_secret rather than silently corrupting
+	// secrets.
 	var secretsMgr serverless.SecretsManager
-	if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, engineCfg.SecretsEncryptionKey, logger.Logger); secretsErr != nil {
+	if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, cfg.SecretsEncryptionKey, false, logger.Logger); secretsErr != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "Failed to initialize secrets manager; get_secret will be unavailable",
 			zap.Error(secretsErr))
 	} else {
@@ -480,7 +504,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	//
 	// PushDispatcher (legacy) is set only when YAML defaults exist —
 	// kept for back-compat with code that hasn't migrated to Manager.
-	pushDispatcher, pushStore, pushManager, pushCfgStore, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
+	pushDispatcher, pushStore, pushManager, pushCfgStore, pushCredManager, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
 	if err != nil {
 		// Non-fatal: log and continue. Functions calling push_send will get nil
 		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
@@ -491,11 +515,18 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	deps.PushDeviceStore = pushStore
 	deps.PushManager = pushManager
 	deps.PushConfigStore = pushCfgStore
+	deps.PushCredentialsManager = pushCredManager
 
 	// Create host functions provider (allows functions to call Orama services)
 	hostFuncsCfg := hostfunctions.HostFunctionsConfig{
 		IPFSAPIURL:  cfg.IPFSAPIURL,
 		HTTPTimeout: 30 * time.Second,
+		// feat-9 — TURN config for the turn_credentials host fn.
+		// Empty TURNSecret → host fn returns {configured:false} envelope
+		// (same shape as the HTTP endpoint's 503 semantically).
+		TURNDomain:       cfg.TURNDomain,
+		TURNSecret:       cfg.TURNSecret,
+		StealthCDNDomain: cfg.StealthCDNDomain,
 	}
 	// WS-PubSub bridge: wire PubSub topics directly to WS clients without
 	// per-event WASM invocation. The bridge is a thin layer over the
@@ -548,12 +579,24 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	if deps.OlricClient != nil {
 		olricUnderlying = deps.OlricClient.UnderlyingClient()
 	}
+	// Pass the pubsub adapter so the dispatcher can subscribe to libp2p
+	// for every literal trigger pattern (bugboard #282 fix). nil-safe:
+	// dispatcher's Start/Refresh become no-ops when adapter is unavailable,
+	// preserving the legacy HTTP-only Dispatch hook.
 	deps.PubSubDispatcher = triggers.NewPubSubDispatcher(
 		triggerStore,
 		deps.ServerlessInvoker,
 		olricUnderlying,
+		pubsubAdapter,
 		logger.Logger,
 	)
+
+	// Wire the dispatcher into hostFuncs so PubSubPublish /
+	// PubSubPublishBatch fire local wildcard triggers immediately on
+	// publish — closes the bugboard #93 gap where WASM publishes to e.g.
+	// "presence:user-1" never reached wildcard handlers like "presence:*"
+	// because libp2p has no wildcard subscribe.
+	hostFuncs.SetTriggerDispatcher(deps.PubSubDispatcher)
 
 	// Cron trigger store + scheduler. The scheduler polls
 	// function_cron_triggers and invokes due rows via the same
@@ -595,6 +638,14 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	authService, err := auth.NewService(logger, networkClient, string(keyPEM), cfg.ClientNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to initialize auth service: %w", err)
+	}
+
+	// Inject the lower-level rqlite client for code paths that need
+	// rows-affected feedback. Feature #68 (atomic refresh-token rotation)
+	// uses this for the compare-and-swap UPDATE. Without it, RefreshToken
+	// returns ErrRotationNotConfigured rather than rotating non-atomically.
+	if deps.ORMClient != nil {
+		authService.SetRqliteClient(deps.ORMClient)
 	}
 
 	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
@@ -863,39 +914,123 @@ func buildPushDispatcher(
 	cfg *Config,
 	db rqlite.Client,
 	logger *logging.ColoredLogger,
-) (*push.PushDispatcher, push.PushDeviceStore, *push.Manager, push.ConfigStore, error) {
+) (*push.PushDispatcher, push.PushDeviceStore, *push.Manager, push.ConfigStore, *pushcreds.Manager, error) {
 	if cfg.ClusterSecret == "" {
 		// Without the cluster secret we can't encrypt credentials at rest.
 		// Disable the whole push subsystem; HTTP routes return 503.
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 
 	store, err := push.NewRqliteDeviceStore(db, cfg.ClusterSecret, logger.Logger)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
 	}
 
 	cfgStore, err := push.NewRqliteConfigStore(db, cfg.ClusterSecret, logger.Logger)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("init push config store: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("init push config store: %w", err)
 	}
+
+	// Per-namespace, per-provider credentials (feature #72). Generic
+	// store — used by APNs, ntfy (post-migration), FCM-direct (future).
+	// Provider packages register their Validator at gateway startup
+	// (see pushcreds.Register calls below).
+	credStore, err := pushcreds.NewRqliteStore(db, cfg.ClusterSecret, logger.Logger)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("init push credentials store: %w", err)
+	}
+	credManager := pushcreds.NewManager(credStore, logger.Logger)
+
+	// Register the Validators that this gateway accepts. Each provider
+	// package owns its own JSON schema + redactor; we tell the
+	// credentials package which ones to allow at PUT/GET time. Adding a
+	// new provider (FCM-direct, SMS, etc.) means a single new Register
+	// call here — no other code needs to know.
+	pushcreds.Register(pushapns.NewValidator())
+	pushcreds.Register(pushntfy.NewValidator())
 
 	// ProviderFactory turns a resolved Config into the right set of
 	// provider instances. Lives here in dependencies.go because this is
 	// the only place that imports both the manager package and the
 	// concrete provider sub-packages — keeps push core dep-cycle-free.
-	factory := func(c push.Config) []push.PushProvider {
+	//
+	// Per-namespace credentialed providers (APNs — feature #72) are
+	// constructed here by consulting the credentials manager. If a
+	// namespace has stored credentials for a provider, that provider is
+	// instantiated with those credentials and registered in the
+	// dispatcher; otherwise it's omitted.
+	factory := func(ctx context.Context, c push.Config) []push.PushProvider {
 		var ps []push.PushProvider
-		if c.NtfyBaseURL != "" {
-			ps = append(ps, pushntfy.New(pushntfy.Config{
-				BaseURL:   c.NtfyBaseURL,
-				AuthToken: c.NtfyAuthToken,
-			}, logger.Logger))
+
+		// ntfy provider — sourced from EITHER the new credentials store
+		// (#72, preferred) OR the legacy 026 push_config row. New table
+		// wins field-by-field; legacy fills any gap. ntfy is registered
+		// only if a BaseURL ends up set; auth_token alone is useless
+		// without a server to point at.
+		ntfyCfg := pushntfy.Config{
+			BaseURL:   c.NtfyBaseURL,
+			AuthToken: c.NtfyAuthToken,
+		}
+		if c.Namespace != "" && credManager != nil {
+			if cred, err := credManager.Get(ctx, c.Namespace, "ntfy"); err == nil && cred != nil {
+				if ov, perr := pushntfy.ParseCredentials(cred.JSON); perr == nil {
+					if ov.BaseURL != "" {
+						ntfyCfg.BaseURL = ov.BaseURL
+					}
+					if ov.AuthToken != "" {
+						ntfyCfg.AuthToken = ov.AuthToken
+					}
+				} else {
+					logger.ComponentWarn(logging.ComponentGeneral,
+						"ntfy credentials parse failed",
+						zap.String("namespace", c.Namespace),
+						zap.Error(perr))
+				}
+			}
+		}
+		if ntfyCfg.BaseURL != "" {
+			ps = append(ps, pushntfy.New(ntfyCfg, logger.Logger))
 		}
 		if c.ExpoAccessToken != "" {
 			ps = append(ps, pushexpo.New(pushexpo.Config{
 				AccessToken: c.ExpoAccessToken,
 			}, logger.Logger))
+		}
+		// APNs is fully credentialed — no YAML fallback. The presence of
+		// per-namespace credentials is the trigger. Bugboard #408: a
+		// single set of APNs credentials spawns BOTH an alert-kind
+		// provider (registered as "apns") AND a VoIP/PushKit provider
+		// (registered as "apns_voip"). Both share the same JWT signer +
+		// HTTP/2 client pool — VoIP only differs in the per-Send wire
+		// format (topic suffix, apns-push-type header, empty-payload
+		// acceptance). Tenants register PushKit voipPushTokens against
+		// provider="apns_voip" and the dispatcher routes accordingly.
+		if c.Namespace != "" && credManager != nil {
+			if cred, err := credManager.Get(ctx, c.Namespace, "apns"); err == nil && cred != nil {
+				if apnsCfg, perr := pushapns.ParseCredentials(cred.JSON); perr == nil {
+					if provider, nerr := pushapns.New(apnsCfg, logger.Logger); nerr == nil {
+						ps = append(ps, provider)
+					} else {
+						logger.ComponentWarn(logging.ComponentGeneral,
+							"apns provider construction failed",
+							zap.String("namespace", c.Namespace),
+							zap.Error(nerr))
+					}
+					if voipProvider, nerr := pushapns.NewVoIP(apnsCfg, logger.Logger); nerr == nil {
+						ps = append(ps, voipProvider)
+					} else {
+						logger.ComponentWarn(logging.ComponentGeneral,
+							"apns_voip provider construction failed",
+							zap.String("namespace", c.Namespace),
+							zap.Error(nerr))
+					}
+				} else {
+					logger.ComponentWarn(logging.ComponentGeneral,
+						"apns credentials parse failed",
+						zap.String("namespace", c.Namespace),
+						zap.Error(perr))
+				}
+			}
 		}
 		return ps
 	}
@@ -914,7 +1049,10 @@ func buildPushDispatcher(
 	var legacy *push.PushDispatcher
 	if !defaults.IsEmpty() {
 		legacy = push.New(store, logger.Logger)
-		for _, p := range factory(push.Config{
+		// Boot-time construction: no request context yet. Use Background
+		// — the credential lookups here are fast (in-memory cache miss
+		// reads rqlite once) and cancellation is irrelevant during boot.
+		for _, p := range factory(context.Background(), push.Config{
 			NtfyBaseURL:     defaults.NtfyBaseURL,
 			NtfyAuthToken:   defaults.NtfyAuthToken,
 			ExpoAccessToken: defaults.ExpoAccessToken,
@@ -933,5 +1071,5 @@ func buildPushDispatcher(
 	logger.ComponentInfo(logging.ComponentGeneral,
 		"push subsystem initialized; tenants can self-serve via PUT /v1/push/config")
 
-	return legacy, store, manager, cfgStore, nil
+	return legacy, store, manager, cfgStore, credManager, nil
 }

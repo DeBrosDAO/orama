@@ -32,6 +32,11 @@ type FunctionConfig struct {
 	WSIdleTimeoutSec     int  `yaml:"ws_idle_timeout_sec"`
 	WSMaxFrameBytes      int  `yaml:"ws_max_frame_bytes"`
 	WSMaxInflightPerConn int  `yaml:"ws_max_inflight_per_conn"`
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835) — the
+	// function may call set_http_response to emit a verbatim HTTP response
+	// (status/headers/body) instead of the JSON/Ack-wrapped output.
+	RawHTTPResponse bool `yaml:"raw_http_response"`
 }
 
 // RetryConfig holds retry settings.
@@ -225,6 +230,9 @@ func uploadWASMFunction(wasmPath string, cfg *FunctionConfig) (map[string]interf
 	}
 	if cfg.WSMaxInflightPerConn > 0 {
 		metaObj["ws_max_inflight_per_conn"] = cfg.WSMaxInflightPerConn
+	}
+	if cfg.RawHTTPResponse {
+		metaObj["raw_http_response"] = true
 	}
 	if len(metaObj) > 0 {
 		metadata, _ := json.Marshal(metaObj)

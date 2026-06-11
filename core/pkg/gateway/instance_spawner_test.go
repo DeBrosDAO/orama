@@ -1,9 +1,12 @@
 package gateway
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,6 +65,114 @@ func TestGatewayYAMLConfig_clusterSecretPathRoundTrip(t *testing.T) {
 	}
 	if parsed.ClusterSecretPath != cfg.ClusterSecretPath {
 		t.Errorf("round-trip mismatch: got %q, want %q", parsed.ClusterSecretPath, cfg.ClusterSecretPath)
+	}
+}
+
+// TestGatewayYAMLConfig_secretsEncryptionKeyRoundTrip is the regression test
+// for the bugboard #837 follow-up: the host gateway received the serverless
+// secrets encryption key but namespace gateways spawned via systemd did not,
+// because the YAML schema had no field to carry it — so `function secrets
+// list` returned 501 on those namespaces. This guards the yaml tag and that
+// the standalone gateway's yamlCfg mirror can read it back.
+func TestGatewayYAMLConfig_secretsEncryptionKeyRoundTrip(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cfg := GatewayYAMLConfig{
+		ListenAddr:           ":6001",
+		ClientNamespace:      "anchat-test",
+		RQLiteDSN:            "http://localhost:10000",
+		OlricServers:         []string{"localhost:3320"},
+		SecretsEncryptionKey: key,
+	}
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), "secrets_encryption_key: "+key) {
+		t.Fatalf("YAML output missing expected secrets_encryption_key line:\n%s", out)
+	}
+
+	// Mirror of cmd/gateway/config.go's yamlCfg so this test catches drift
+	// between the two declarations (the standalone gateway uses strict
+	// decoding and would reject an unknown field).
+	type webrtc struct {
+		Enabled    bool   `yaml:"enabled"`
+		SFUPort    int    `yaml:"sfu_port"`
+		TURNDomain string `yaml:"turn_domain"`
+		TURNSecret string `yaml:"turn_secret"`
+	}
+	type yamlCfgMirror struct {
+		ListenAddr           string `yaml:"listen_addr"`
+		ClientNamespace      string `yaml:"client_namespace"`
+		RQLiteDSN            string `yaml:"rqlite_dsn"`
+		OlricServers         []string `yaml:"olric_servers"`
+		WebRTC               webrtc `yaml:"webrtc"`
+		SecretsEncryptionKey string `yaml:"secrets_encryption_key"`
+		ClusterSecretPath    string `yaml:"cluster_secret_path"`
+	}
+	var parsed yamlCfgMirror
+	if err := yaml.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.SecretsEncryptionKey != key {
+		t.Errorf("round-trip mismatch: got %q, want %q", parsed.SecretsEncryptionKey, key)
+	}
+}
+
+// TestGatewayYAMLConfig_secretsKeyOmitWhenEmpty: a host with no secrets key
+// (legacy/test rigs) must not emit a stray secrets_encryption_key line that
+// operators could mistake for an empty-key directive.
+func TestGatewayYAMLConfig_secretsKeyOmitWhenEmpty(t *testing.T) {
+	cfg := GatewayYAMLConfig{
+		ListenAddr:      ":6001",
+		ClientNamespace: "ns",
+		RQLiteDSN:       "http://localhost:10000",
+		OlricServers:    []string{"localhost:3320"},
+		// SecretsEncryptionKey intentionally empty.
+	}
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), "secrets_encryption_key") {
+		t.Errorf("empty SecretsEncryptionKey should be omitted from YAML; got:\n%s", out)
+	}
+}
+
+// TestGenerateConfig_writesSecretsKeyWith0600 verifies the spawned namespace
+// gateway YAML carries the secrets key AND is written 0600 (the file now
+// holds key material — bugboard #837).
+func TestGenerateConfig_writesSecretsKeyWith0600(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	dir := t.TempDir()
+	is := NewInstanceSpawner(dir, zap.NewNop())
+	configPath := filepath.Join(dir, "gateway-node-1.yaml")
+
+	cfg := InstanceConfig{
+		Namespace:            "anchat-test",
+		NodeID:               "node-1",
+		HTTPPort:             6001,
+		RQLiteDSN:            "http://localhost:10000",
+		OlricServers:         []string{"localhost:3320"},
+		SecretsEncryptionKey: key,
+	}
+	if err := is.generateConfig(configPath, cfg, dir); err != nil {
+		t.Fatalf("generateConfig: %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("config perms = %o, want 0600 (file holds the secrets key)", perm)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(data), "secrets_encryption_key: "+key) {
+		t.Errorf("generated config missing secrets_encryption_key:\n%s", data)
 	}
 }
 

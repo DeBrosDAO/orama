@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	production "github.com/DeBrosOfficial/network/pkg/environments/production"
@@ -228,11 +229,17 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		// random Ed25519 keys and host functions saw empty
 		// caller_jwt_subject.
 		ClusterSecretPath: s.clusterSecretPath,
+		// Bugboard #837 follow-up: forward the host's serverless secrets
+		// encryption key so the spawned namespace gateway can manage function
+		// secrets. Without this, `function secrets list` returned 501 on
+		// namespace gateways even though the host gateway had the key.
+		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
 		WebRTC: gateway.GatewayYAMLWebRTC{
-			Enabled:    cfg.WebRTCEnabled,
-			SFUPort:    cfg.SFUPort,
-			TURNDomain: cfg.TURNDomain,
-			TURNSecret: cfg.TURNSecret,
+			Enabled:           cfg.WebRTCEnabled,
+			SFUPort:           cfg.SFUPort,
+			TURNDomain:        cfg.TURNDomain,
+			TURNSecret:        cfg.TURNSecret,
+			TURNStealthDomain: cfg.TURNStealthDomain,
 		},
 	}
 
@@ -241,8 +248,16 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		return fmt.Errorf("failed to marshal Gateway config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+	// 0600: the gateway YAML embeds the secrets encryption key (bugboard
+	// #837), so it must not be world/group readable.
+	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write Gateway config: %w", err)
+	}
+	// WriteFile's mode only applies on CREATE — converge perms explicitly so
+	// a file written 0644 by an older release doesn't stay world-readable
+	// after an in-place rewrite.
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return fmt.Errorf("failed to set Gateway config permissions: %w", err)
 	}
 
 	s.logger.Info("Created Gateway config file",
@@ -321,17 +336,99 @@ func (s *SystemdSpawner) RestartGateway(ctx context.Context, namespace, nodeID s
 	return s.SpawnGateway(ctx, namespace, nodeID, cfg)
 }
 
+// gatewayWebRTCInSync reports whether the WebRTC block already on disk
+// matches the desired gateway config — i.e. no restart is needed.
+// Compares only the WebRTC-relevant fields (bugboard #25 drift surface).
+// Pure function so the reconcile decision is unit-testable without files
+// or systemd.
+func gatewayWebRTCInSync(onDisk gateway.GatewayYAMLWebRTC, cfg gateway.InstanceConfig) bool {
+	return onDisk.Enabled == cfg.WebRTCEnabled &&
+		onDisk.SFUPort == cfg.SFUPort &&
+		onDisk.TURNSecret == cfg.TURNSecret &&
+		onDisk.TURNDomain == cfg.TURNDomain &&
+		onDisk.TURNStealthDomain == cfg.TURNStealthDomain
+}
+
+// gatewayConfigInSync reports whether the full reconcile-relevant config on
+// disk matches the desired config — i.e. no rewrite+restart is needed.
+// Combines the WebRTC drift surface (bugboard #25) with the secrets
+// encryption key (bugboard #837): a gateway that was spawned before the key
+// was plumbed has an empty on-disk key and `function secrets list` returns
+// 501; once the desired key is non-empty we want a rewrite+restart so the
+// running gateway picks it up.
+//
+// Plain string equality keeps the "both empty → in sync" case a no-op: a
+// namespace on a host with no secrets key (empty desired) whose on-disk key
+// is also empty is in-sync, so it never restart-loops. Only a genuine
+// difference (empty on-disk vs non-empty desired, or a rotated key) drifts.
+func gatewayConfigInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig) bool {
+	return gatewayWebRTCInSync(onDisk.WebRTC, cfg) &&
+		onDisk.SecretsEncryptionKey == cfg.SecretsEncryptionKey
+}
+
+// ReconcileGateway is the WARM counterpart to SpawnGateway: when a
+// namespace gateway is already running, this compares its on-disk config
+// against the desired `cfg` and restarts it ONLY if the WebRTC block has
+// drifted (enabled / sfu_port / turn_secret / turn_domain differ).
+//
+// Bugboard #25: the from-disk restore skips healthy gateways, so a
+// gateway that lost its webrtc block on a prior restart (while staying
+// healthy) never gets its config regenerated — leaving SFU/TURN services
+// running but the gateway with no turn_secret/sfu_port (credentials
+// configured:false, /v1/webrtc/turn/credentials 404). The cold-spawn
+// self-heal only fires when the gateway happens to be down during
+// restore. This closes that gap for the healthy case.
+//
+// Idempotent: returns nil WITHOUT restarting when the on-disk WebRTC
+// block already matches the desired config — so it does not cause a
+// restart loop on every node boot. WebRTC is the only known config-drift
+// surface (bugboard #25); other fields are intentionally not compared to
+// avoid spurious restarts from harmless differences (e.g. olric server
+// ordering).
+func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID string, cfg gateway.InstanceConfig) error {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("gateway-%s.yaml", nodeID))
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		// No readable config to compare against — don't blindly restart a
+		// healthy gateway; absence of the config file is a different
+		// problem the caller's cold-spawn path handles.
+		return fmt.Errorf("read gateway config for reconcile: %w", err)
+	}
+	var onDisk gateway.GatewayYAMLConfig
+	if err := yaml.Unmarshal(existing, &onDisk); err != nil {
+		return fmt.Errorf("parse gateway config for reconcile: %w", err)
+	}
+
+	if gatewayConfigInSync(onDisk, cfg) {
+		// Already in sync — nothing to do, no restart.
+		return nil
+	}
+
+	// secretsKeyDrifted is logged (as a bool, never the key material) so
+	// operators can see when a #837 rewrite fires vs a #25 WebRTC rewrite.
+	secretsKeyDrifted := onDisk.SecretsEncryptionKey != cfg.SecretsEncryptionKey
+	s.logger.Info("Gateway config drifted from desired; reconciling (rewrite + restart)",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.Bool("ondisk_enabled", onDisk.WebRTC.Enabled),
+		zap.Int("ondisk_sfu_port", onDisk.WebRTC.SFUPort),
+		zap.Bool("desired_enabled", cfg.WebRTCEnabled),
+		zap.Int("desired_sfu_port", cfg.SFUPort),
+		zap.Bool("secrets_key_drifted", secretsKeyDrifted))
+	return s.RestartGateway(ctx, namespace, nodeID, cfg)
+}
+
 // SFUInstanceConfig holds configuration for spawning an SFU instance
 type SFUInstanceConfig struct {
 	Namespace      string
 	NodeID         string
-	ListenAddr     string              // WireGuard IP:port (e.g., "10.0.0.1:30000")
-	MediaPortStart int                 // Start of RTP media port range
-	MediaPortEnd   int                 // End of RTP media port range
+	ListenAddr     string                 // WireGuard IP:port (e.g., "10.0.0.1:30000")
+	MediaPortStart int                    // Start of RTP media port range
+	MediaPortEnd   int                    // End of RTP media port range
 	TURNServers    []sfu.TURNServerConfig // TURN servers to advertise to peers
-	TURNSecret     string              // HMAC-SHA1 shared secret
-	TURNCredTTL    int                 // Credential TTL in seconds
-	RQLiteDSN      string              // Namespace-local RQLite DSN
+	TURNSecret     string                 // HMAC-SHA1 shared secret
+	TURNCredTTL    int                    // Credential TTL in seconds
+	RQLiteDSN      string                 // Namespace-local RQLite DSN
 }
 
 // SpawnSFU starts an SFU instance using systemd
@@ -422,6 +519,115 @@ type TURNInstanceConfig struct {
 	RelayPortStart  int    // Start of relay port range
 	RelayPortEnd    int    // End of relay port range
 	TURNDomain      string // TURN domain for Let's Encrypt cert (e.g., "turn.ns-myapp.orama-devnet.network")
+	// StealthDomain is the neutral stealth TURNS host (feat-124). When set,
+	// the TURN server carries a second Let's Encrypt cert for this name and
+	// serves it to TLS clients whose SNI matches — the path the SNI router
+	// forwards from :443. Stealth NEVER falls back to a self-signed cert: a
+	// cert clients reject is indistinguishable from being blocked.
+	StealthDomain string
+}
+
+// acmeInternalEndpoint is the gateway's internal ACME endpoint that the
+// Caddyfile TURN-cert blocks point the orama DNS provider at.
+const acmeInternalEndpoint = "http://localhost:6001/v1/internal/acme"
+
+// turnCertProvisionTimeout bounds how long a TURN spawn waits for Caddy to
+// provision a Let's Encrypt cert before falling back (primary domain) or
+// failing (stealth domain).
+const turnCertProvisionTimeout = 2 * time.Minute
+
+// resolveTURNSCert resolves the TURNS cert/key pair for a domain.
+//
+// Let's Encrypt via Caddy is tried FIRST whenever a domain is set — the call
+// is idempotent and instant when the cert is already in Caddy's storage. This
+// ordering also self-heals nodes stuck on the self-signed fallback from an
+// earlier failed provisioning (live devnet finding, feat-124): the old code
+// never retried Caddy once a self-signed pair existed on disk, so strict TLS
+// clients kept failing turns: validation forever.
+//
+// allowSelfSigned controls the fallback: the primary TURN domain may fall
+// back to (or reuse) a self-signed pair at <configDir>/turn-{cert,key}.pem so
+// baseline TURN stays up, while the stealth domain must hard-fail instead.
+func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, publicIP, configDir string, allowSelfSigned bool) (string, string, error) {
+	if domain != "" {
+		caddyCert, caddyKey, err := provisionTURNCertViaCaddy(domain, acmeInternalEndpoint, turnCertProvisionTimeout)
+		if err == nil {
+			s.logger.Info("Using Let's Encrypt cert from Caddy for TURNS",
+				zap.String("namespace", namespace),
+				zap.String("domain", domain),
+				zap.String("cert_path", caddyCert))
+			return caddyCert, caddyKey, nil
+		}
+		if !allowSelfSigned {
+			return "", "", fmt.Errorf("failed to provision Let's Encrypt cert for stealth TURNS domain %s (no self-signed fallback — clients must be able to validate it): %w", domain, err)
+		}
+		s.logger.Warn("Let's Encrypt cert provisioning failed, falling back to self-signed",
+			zap.String("namespace", namespace),
+			zap.String("domain", domain),
+			zap.Error(err))
+	}
+	if !allowSelfSigned {
+		return "", "", fmt.Errorf("no domain configured for TURNS cert in namespace %s", namespace)
+	}
+
+	certPath := filepath.Join(configDir, "turn-cert.pem")
+	keyPath := filepath.Join(configDir, "turn-key.pem")
+	if _, err := os.Stat(certPath); os.IsNotExist(err) {
+		if err := turn.GenerateSelfSignedCert(certPath, keyPath, publicIP); err != nil {
+			return "", "", fmt.Errorf("failed to generate TURNS self-signed cert for namespace %s: %w", namespace, err)
+		}
+		s.logger.Info("Generated TURNS self-signed certificate",
+			zap.String("namespace", namespace),
+			zap.String("cert_path", certPath))
+	}
+	return certPath, keyPath, nil
+}
+
+// resolveStealthCert resolves the TLS cert/key for the stealth TURNS host by
+// reusing Caddy's existing `*.<baseDomain>` wildcard certificate (feat-124).
+//
+// The stealth host is a single-label subdomain of the base domain
+// (cdn-<hash>.<baseDomain>), so the wildcard the gateway already provisions
+// for HTTPS covers it. This deliberately avoids the runtime
+// append-to-Caddyfile provisioning path: the orama-node service runs
+// ProtectSystem=strict as the orama user and cannot write /etc/caddy, so that
+// path fails with EROFS (and would silently fall back to a self-signed cert
+// that clients reject — indistinguishable from being blocked). Caddy renews
+// the wildcard; the TURN cert reloader hot-reloads it from storage.
+//
+// Hard error (never self-signed) when the wildcard is missing or the host is
+// not a single-label subdomain — a stealth endpoint with an unvalidatable
+// cert is worse than no stealth endpoint.
+func (s *SystemdSpawner) resolveStealthCert(stealthDomain, baseDomain string) (string, string, error) {
+	if baseDomain == "" {
+		return "", "", fmt.Errorf("stealth cert: base domain required")
+	}
+	if !isSingleLabelSubdomain(stealthDomain, baseDomain) {
+		return "", "", fmt.Errorf("stealth cert: %q is not a single-label subdomain of %q (the *.%s wildcard cert would not cover it)", stealthDomain, baseDomain, baseDomain)
+	}
+	certPath, keyPath := caddyWildcardCertPaths(baseDomain)
+	if _, err := os.Stat(certPath); err != nil {
+		return "", "", fmt.Errorf("stealth cert: Caddy wildcard cert for *.%s not found at %s (is the gateway HTTPS wildcard provisioned on this node?): %w", baseDomain, certPath, err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		return "", "", fmt.Errorf("stealth cert: Caddy wildcard key for *.%s not found at %s: %w", baseDomain, keyPath, err)
+	}
+	s.logger.Info("Using Caddy wildcard cert for stealth TURNS",
+		zap.String("stealth_domain", stealthDomain),
+		zap.String("cert_path", certPath))
+	return certPath, keyPath, nil
+}
+
+// isSingleLabelSubdomain reports whether host is exactly one DNS label below
+// base (e.g. "cdn-x.example.com" under "example.com"), which is the set a
+// `*.base` wildcard certificate covers.
+func isSingleLabelSubdomain(host, base string) bool {
+	suffix := "." + base
+	if !strings.HasSuffix(host, suffix) {
+		return false
+	}
+	label := strings.TrimSuffix(host, suffix)
+	return label != "" && !strings.Contains(label, ".")
 }
 
 // SpawnTURN starts a TURN instance using systemd
@@ -440,42 +646,46 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
 
-	// Provision TLS cert for TURNS — try Let's Encrypt via Caddy first, fall back to self-signed
-	certPath := filepath.Join(configDir, "turn-cert.pem")
-	keyPath := filepath.Join(configDir, "turn-key.pem")
+	// Provision TLS cert for TURNS — Let's Encrypt via Caddy first (idempotent,
+	// also upgrades nodes stuck on the self-signed fallback), self-signed as
+	// the primary-domain fallback only.
+	var certPath, keyPath string
 	if cfg.TURNSListenAddr != "" {
-		if _, err := os.Stat(certPath); os.IsNotExist(err) {
-			// Try Let's Encrypt via Caddy first
-			if cfg.TURNDomain != "" {
-				acmeEndpoint := "http://localhost:6001/v1/internal/acme"
-				caddyCert, caddyKey, provErr := provisionTURNCertViaCaddy(cfg.TURNDomain, acmeEndpoint, 2*time.Minute)
-				if provErr == nil {
-					certPath = caddyCert
-					keyPath = caddyKey
-					s.logger.Info("Using Let's Encrypt cert from Caddy for TURNS",
-						zap.String("namespace", namespace),
-						zap.String("domain", cfg.TURNDomain),
-						zap.String("cert_path", certPath))
-				} else {
-					s.logger.Warn("Let's Encrypt cert provisioning failed, falling back to self-signed",
-						zap.String("namespace", namespace),
-						zap.String("domain", cfg.TURNDomain),
-						zap.Error(provErr))
-				}
-			}
-			// Fallback: generate self-signed cert if no cert is available yet
-			if _, statErr := os.Stat(certPath); os.IsNotExist(statErr) {
-				if err := turn.GenerateSelfSignedCert(certPath, keyPath, cfg.PublicIP); err != nil {
-					s.logger.Warn("Failed to generate TURNS self-signed cert, TURNS will be disabled",
-						zap.String("namespace", namespace),
-						zap.Error(err))
-					cfg.TURNSListenAddr = "" // Disable TURNS if cert generation fails
-				} else {
-					s.logger.Info("Generated TURNS self-signed certificate",
-						zap.String("namespace", namespace),
-						zap.String("cert_path", certPath))
-				}
-			}
+		var certErr error
+		certPath, keyPath, certErr = s.resolveTURNSCert(namespace, cfg.TURNDomain, cfg.PublicIP, configDir, true)
+		if certErr != nil {
+			s.logger.Warn("Failed to resolve TURNS cert, TURNS will be disabled",
+				zap.String("namespace", namespace),
+				zap.Error(certErr))
+			cfg.TURNSListenAddr = "" // Disable TURNS if no cert is available
+		}
+	}
+
+	// Stealth TURNS cert (feat-124): requires a working TURNS listener and a
+	// CA-valid cert — hard error, never a silent downgrade, because the
+	// operator explicitly enabled stealth and a half-working stealth endpoint
+	// is invisible until a censored-region user fails to connect.
+	var stealthCertPath, stealthKeyPath string
+	if cfg.StealthDomain != "" {
+		// Security: the stealth domain arrives over the spawn protocol (mesh
+		// peers gated only by the static internal-auth header). Pin it to the
+		// deterministic derivation so a forged value can't select cert
+		// material for an attacker-chosen name. cfg.Realm is the base domain
+		// on every TURN spawn site.
+		if cfg.Realm == "" {
+			return fmt.Errorf("stealth TURNS for namespace %s requires a base domain (realm) to locate the wildcard cert", namespace)
+		}
+		want := turn.StealthHostForNamespace(cfg.Namespace, cfg.Realm)
+		if cfg.StealthDomain != want {
+			return fmt.Errorf("stealth domain %q does not match the derived host %q for namespace %s — refusing to provision", cfg.StealthDomain, want, cfg.Namespace)
+		}
+		if cfg.TURNSListenAddr == "" {
+			return fmt.Errorf("stealth TURNS for namespace %s requires an active TURNS listener (no TLS cert/listener available)", namespace)
+		}
+		var stealthErr error
+		stealthCertPath, stealthKeyPath, stealthErr = s.resolveStealthCert(cfg.StealthDomain, cfg.Realm)
+		if stealthErr != nil {
+			return fmt.Errorf("failed to resolve stealth TURNS cert for namespace %s: %w", namespace, stealthErr)
 		}
 	}
 
@@ -493,6 +703,11 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 	if cfg.TURNSListenAddr != "" {
 		turnConfig.TLSCertPath = certPath
 		turnConfig.TLSKeyPath = keyPath
+	}
+	if stealthCertPath != "" {
+		turnConfig.StealthDomain = cfg.StealthDomain
+		turnConfig.TLSStealthCertPath = stealthCertPath
+		turnConfig.TLSStealthKeyPath = stealthKeyPath
 	}
 
 	configBytes, err := yaml.Marshal(turnConfig)

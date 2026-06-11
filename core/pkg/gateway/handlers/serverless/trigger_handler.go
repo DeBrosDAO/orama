@@ -98,6 +98,16 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.dispatcher != nil {
+		// Refresh subscribes the dispatcher to libp2p for this newly-added
+		// trigger's topic so future WASM publishes reach the handler
+		// (bugboard #282). Best-effort — Refresh failures are logged
+		// inside; the periodic refresh loop will retry within 60s.
+		if rerr := h.dispatcher.Refresh(ctx); rerr != nil {
+			h.logger.Warn("PubSubDispatcher Refresh after trigger add failed (periodic loop will retry)",
+				zap.Error(rerr))
+		}
+		// Legacy no-op — kept for back-compat with anything still
+		// calling it; can be removed in a future cleanup.
 		h.dispatcher.InvalidateCache(ctx, namespace, req.Topic)
 	}
 	h.logger.Info("PubSub trigger added via API",
@@ -230,6 +240,12 @@ func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.
 			return
 		}
 		if h.dispatcher != nil {
+			// Refresh prunes the dispatcher's libp2p subscription if this
+			// was the last trigger on that topic (bugboard #282).
+			if rerr := h.dispatcher.Refresh(ctx); rerr != nil {
+				h.logger.Warn("PubSubDispatcher Refresh after trigger remove failed (periodic loop will retry)",
+					zap.Error(rerr))
+			}
 			h.dispatcher.InvalidateCache(ctx, namespace, triggerTopic)
 		}
 		h.logger.Info("PubSub trigger removed via API",

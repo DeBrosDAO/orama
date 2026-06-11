@@ -36,6 +36,12 @@ func (g *Gateway) Close() {
 		g.cronScheduler.Stop()
 	}
 
+	// Stop the pubsub dispatcher's periodic refresh goroutine. libp2p
+	// subscriptions die naturally with the client teardown below.
+	if g.pubsubDispatcher != nil {
+		g.pubsubDispatcher.Stop()
+	}
+
 	// Drain persistent WebSocket instances. Each instance gets a slice of
 	// the 30s budget; ws_close on each is best-effort.
 	if g.persistentWSManager != nil {

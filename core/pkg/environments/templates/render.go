@@ -46,6 +46,36 @@ type NodeConfigData struct {
 	SSHUser        string // SSH user for remote management
 	Environment    string // Environment name (devnet, testnet, etc.)
 	OperatorWallet string // Operator wallet address
+
+	// SecretsEncryptionKey is the AES-256 key (hex, 64 chars) used to encrypt
+	// serverless function secrets at rest. Rendered under http_gateway in
+	// node.yaml. Sourced from ~/.orama/secrets/secrets-encryption-key — must
+	// be identical across all namespace-gateway nodes in a cluster and stable
+	// across restarts (bugboard #837). Empty → key omitted from the rendered
+	// config (the gateway then reads the secret file directly / get_secret
+	// stays disabled until the key is configured).
+	SecretsEncryptionKey string
+
+	// WebRTC/TURN configuration, rendered under http_gateway.webrtc when
+	// WebRTCEnabled is true (feat-124 #913). TURNSecret is sourced from
+	// ~/.orama/secrets/turn-secret so it survives Phase4 config regeneration;
+	// TURNDomain/SFUPort are operator-set values carried forward from the
+	// existing node.yaml. The whole block is conditional on TURNSecret being
+	// set — clusters without TURN render nothing.
+	WebRTCEnabled bool   // Whether to emit the webrtc block
+	SFUPort       int    // Local SFU signaling port the gateway proxies to
+	TURNDomain    string // TURN domain (e.g., "turn.ns-myapp.dbrs.space")
+	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation
+
+	// SNIRouterEnabled gates the stealth TURN-over-443 SNI router (feat-124).
+	// Rendered as the top-level sni_router.enabled flag. Default false keeps
+	// existing nodes byte-identical (Caddy stays on :443); when true the node
+	// runs orama-sni-router on :443 and Caddy moves to :8443. This value is
+	// carried forward across config regeneration from the existing node.yaml
+	// (see production/config.go populateSNIRouterConfig) so a regen never wipes
+	// an operator's opt-in (the same preserve-from-existing discipline as the
+	// webrtc block, bugboard #259/#846).
+	SNIRouterEnabled bool
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering

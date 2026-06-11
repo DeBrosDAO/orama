@@ -23,7 +23,7 @@ func (h *HostFunctions) WSPubSubBridge(ctx context.Context, clientID, topic stri
 			Cause:    fmt.Errorf("bridge not configured on this gateway"),
 		}
 	}
-	fnNS := h.namespaceFromCtx()
+	fnNS := h.namespaceFromCtx(ctx)
 	if fnNS == "" {
 		return &serverless.HostFunctionError{
 			Function: "ws_pubsub_bridge",
@@ -57,7 +57,7 @@ func (h *HostFunctions) WSPubSubUnbridge(ctx context.Context, clientID, topic st
 			Cause:    fmt.Errorf("bridge not configured on this gateway"),
 		}
 	}
-	fnNS := h.namespaceFromCtx()
+	fnNS := h.namespaceFromCtx(ctx)
 	if fnNS == "" {
 		return &serverless.HostFunctionError{
 			Function: "ws_pubsub_unbridge",
@@ -71,12 +71,12 @@ func (h *HostFunctions) WSPubSubUnbridge(ctx context.Context, clientID, topic st
 }
 
 // namespaceFromCtx returns the current invocation's namespace, or "" if
-// no context is set.
-func (h *HostFunctions) namespaceFromCtx() string {
-	h.invCtxLock.RLock()
-	defer h.invCtxLock.RUnlock()
-	if h.invCtx == nil {
+// no context is set. ctx-attached invCtx wins over the singleton (see
+// invocation_context.go).
+func (h *HostFunctions) namespaceFromCtx(ctx context.Context) string {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
 		return ""
 	}
-	return h.invCtx.Namespace
+	return cur.Namespace
 }

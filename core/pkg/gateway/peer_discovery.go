@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,29 +17,33 @@ import (
 	"go.uber.org/zap"
 )
 
-// PeerDiscovery manages namespace gateway peer discovery via RQLite
+// PeerDiscovery manages namespace gateway peer discovery via RQLite.
+//
+// The libp2p listen port is NOT stored here — it's derived live from
+// pd.host.Addrs() at register time. Previously this struct held a
+// `listenPort` field populated from the gateway's HTTP API port (which
+// silently broke all cross-node libp2p connections — see comment on
+// registerSelf). Don't add it back.
 type PeerDiscovery struct {
-	host       host.Host
-	rqliteDB   *sql.DB
-	nodeID     string
-	listenPort int
-	namespace  string
-	logger     *zap.Logger
+	host      host.Host
+	rqliteDB  *sql.DB
+	nodeID    string
+	namespace string
+	logger    *zap.Logger
 
 	// Stop channel for background goroutines
 	stopCh chan struct{}
 }
 
-// NewPeerDiscovery creates a new peer discovery manager
-func NewPeerDiscovery(h host.Host, rqliteDB *sql.DB, nodeID string, listenPort int, namespace string, logger *zap.Logger) *PeerDiscovery {
+// NewPeerDiscovery creates a new peer discovery manager.
+func NewPeerDiscovery(h host.Host, rqliteDB *sql.DB, nodeID string, namespace string, logger *zap.Logger) *PeerDiscovery {
 	return &PeerDiscovery{
-		host:       h,
-		rqliteDB:   rqliteDB,
-		nodeID:     nodeID,
-		listenPort: listenPort,
-		namespace:  namespace,
-		logger:     logger,
-		stopCh:     make(chan struct{}),
+		host:      h,
+		rqliteDB:  rqliteDB,
+		nodeID:    nodeID,
+		namespace: namespace,
+		logger:    logger,
+		stopCh:    make(chan struct{}),
 	}
 }
 
@@ -129,8 +134,26 @@ func (pd *PeerDiscovery) registerSelf(ctx context.Context) error {
 		return fmt.Errorf("failed to get WireGuard IP: %w", err)
 	}
 
-	// Build multiaddr: /ip4/<wireguard_ip>/tcp/<port>/p2p/<peer_id>
-	multiaddr := fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", wireguardIP, pd.listenPort, peerID)
+	// CRITICAL: we used to publish `pd.listenPort` here, which is the gateway's
+	// HTTP API port (e.g. 10004). Other gateways would read this multiaddr from
+	// rqlite, dial /ip4/<wg>/tcp/10004, hit the HTTP server, receive
+	// `HTTP/1.1 400 Bad Request`, and fail the libp2p multistream handshake
+	// with "message did not have trailing newline". The result: cross-node
+	// libp2p mesh had 0 connected peers cluster-wide and cross-node pubsub
+	// silently dropped 100% of messages.
+	//
+	// The actual libp2p port is OS-assigned at startup (client.go listens on
+	// `/ip4/0.0.0.0/tcp/0`), so we must derive it from the live host instead
+	// of the gateway's HTTP config. The listener binds 0.0.0.0 so it accepts
+	// traffic on the WG interface even though libp2p only reports loopback +
+	// public-routable addresses in host.Addrs().
+	libp2pPort, err := extractLibp2pTCPPort(pd.host.Addrs())
+	if err != nil {
+		return fmt.Errorf("failed to extract libp2p TCP port from host addresses: %w", err)
+	}
+
+	// Build multiaddr: /ip4/<wireguard_ip>/tcp/<libp2p_port>/p2p/<peer_id>
+	multiaddr := fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", wireguardIP, libp2pPort, peerID)
 
 	query := `
 		INSERT OR REPLACE INTO _namespace_libp2p_peers
@@ -138,11 +161,14 @@ func (pd *PeerDiscovery) registerSelf(ctx context.Context) error {
 		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
+	// We persist libp2pPort in the listen_port column too — the column is
+	// informational metadata for operators (the multiaddr is authoritative),
+	// and keeping it consistent avoids future debugging confusion.
 	_, err = pd.rqliteDB.ExecContext(ctx, query,
 		peerID,
 		multiaddr,
 		pd.nodeID,
-		pd.listenPort,
+		libp2pPort,
 		pd.namespace,
 		time.Now().UTC())
 
@@ -153,9 +179,45 @@ func (pd *PeerDiscovery) registerSelf(ctx context.Context) error {
 	pd.logger.Info("Registered self in peer discovery",
 		zap.String("peer_id", peerID),
 		zap.String("multiaddr", multiaddr),
-		zap.String("node_id", pd.nodeID))
+		zap.String("node_id", pd.nodeID),
+		zap.Int("libp2p_port", libp2pPort))
 
 	return nil
+}
+
+// extractLibp2pTCPPort returns the TCP port the libp2p host is actually
+// listening on, by parsing the host's reported listen addresses.
+//
+// `host.Addrs()` returns multiaddrs like:
+//
+//	/ip4/127.0.0.1/tcp/43043
+//	/ip4/217.76.56.2/tcp/43043
+//
+// All entries share the same port (libp2p binds 0.0.0.0:RANDOM_PORT and
+// reports one entry per detected interface IP). We take the first `/tcp/`
+// component we find.
+//
+// Note: the WireGuard IP (10.0.0.x) does NOT appear in host.Addrs() because
+// libp2p filters its own address enumeration. The listener IS bound to all
+// interfaces including wg0, so the port is still reachable on the WG IP —
+// we just have to combine the port we extract here with the WG IP we get
+// separately (via getWireGuardIP).
+func extractLibp2pTCPPort(addrs []multiaddr.Multiaddr) (int, error) {
+	for _, a := range addrs {
+		port, err := a.ValueForProtocol(multiaddr.P_TCP)
+		if err != nil {
+			continue // not a TCP multiaddr (could be QUIC, etc.) — skip
+		}
+		n, parseErr := strconv.Atoi(port)
+		if parseErr != nil {
+			continue
+		}
+		if n <= 0 || n > 65535 {
+			continue
+		}
+		return n, nil
+	}
+	return 0, fmt.Errorf("no TCP port found in libp2p host addresses (got %d addrs)", len(addrs))
 }
 
 // unregisterSelf removes this gateway from the discovery table

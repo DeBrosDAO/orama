@@ -94,8 +94,8 @@ const (
 const (
 	// SFU media port range: 20000-29999
 	// Each namespace gets a 500-port sub-range for RTP media
-	SFUMediaPortRangeStart = 20000
-	SFUMediaPortRangeEnd   = 29999
+	SFUMediaPortRangeStart    = 20000
+	SFUMediaPortRangeEnd      = 29999
 	SFUMediaPortsPerNamespace = 500
 
 	// SFU signaling ports: 30000-30099
@@ -105,8 +105,8 @@ const (
 
 	// TURN relay port range: 49152-65535
 	// Each namespace gets an 800-port sub-range for TURN relay
-	TURNRelayPortRangeStart = 49152
-	TURNRelayPortRangeEnd   = 65535
+	TURNRelayPortRangeStart    = 49152
+	TURNRelayPortRangeEnd      = 65535
 	TURNRelayPortsPerNamespace = 800
 
 	// TURN listen ports (standard)
@@ -152,38 +152,38 @@ type NamespaceCluster struct {
 
 // ClusterNode represents a node participating in a namespace cluster
 type ClusterNode struct {
-	ID                 string     `json:"id" db:"id"`
-	NamespaceClusterID string     `json:"namespace_cluster_id" db:"namespace_cluster_id"`
-	NodeID             string     `json:"node_id" db:"node_id"`
-	Role               NodeRole   `json:"role" db:"role"`
-	RQLiteHTTPPort     int        `json:"rqlite_http_port,omitempty" db:"rqlite_http_port"`
-	RQLiteRaftPort     int        `json:"rqlite_raft_port,omitempty" db:"rqlite_raft_port"`
-	OlricHTTPPort      int        `json:"olric_http_port,omitempty" db:"olric_http_port"`
-	OlricMemberlistPort int       `json:"olric_memberlist_port,omitempty" db:"olric_memberlist_port"`
-	GatewayHTTPPort    int        `json:"gateway_http_port,omitempty" db:"gateway_http_port"`
-	Status             NodeStatus `json:"status" db:"status"`
-	ProcessPID         int        `json:"process_pid,omitempty" db:"process_pid"`
-	LastHeartbeat      *time.Time `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
-	ErrorMessage       string     `json:"error_message,omitempty" db:"error_message"`
-	RQLiteJoinAddress  string     `json:"rqlite_join_address,omitempty" db:"rqlite_join_address"`
-	OlricPeers         string     `json:"olric_peers,omitempty" db:"olric_peers"` // JSON array
-	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
+	ID                  string     `json:"id" db:"id"`
+	NamespaceClusterID  string     `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	NodeID              string     `json:"node_id" db:"node_id"`
+	Role                NodeRole   `json:"role" db:"role"`
+	RQLiteHTTPPort      int        `json:"rqlite_http_port,omitempty" db:"rqlite_http_port"`
+	RQLiteRaftPort      int        `json:"rqlite_raft_port,omitempty" db:"rqlite_raft_port"`
+	OlricHTTPPort       int        `json:"olric_http_port,omitempty" db:"olric_http_port"`
+	OlricMemberlistPort int        `json:"olric_memberlist_port,omitempty" db:"olric_memberlist_port"`
+	GatewayHTTPPort     int        `json:"gateway_http_port,omitempty" db:"gateway_http_port"`
+	Status              NodeStatus `json:"status" db:"status"`
+	ProcessPID          int        `json:"process_pid,omitempty" db:"process_pid"`
+	LastHeartbeat       *time.Time `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
+	ErrorMessage        string     `json:"error_message,omitempty" db:"error_message"`
+	RQLiteJoinAddress   string     `json:"rqlite_join_address,omitempty" db:"rqlite_join_address"`
+	OlricPeers          string     `json:"olric_peers,omitempty" db:"olric_peers"` // JSON array
+	CreatedAt           time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // PortBlock represents an allocated block of ports for a namespace on a node
 type PortBlock struct {
-	ID                 string    `json:"id" db:"id"`
-	NodeID             string    `json:"node_id" db:"node_id"`
-	NamespaceClusterID string    `json:"namespace_cluster_id" db:"namespace_cluster_id"`
-	PortStart          int       `json:"port_start" db:"port_start"`
-	PortEnd            int       `json:"port_end" db:"port_end"`
-	RQLiteHTTPPort     int       `json:"rqlite_http_port" db:"rqlite_http_port"`
-	RQLiteRaftPort     int       `json:"rqlite_raft_port" db:"rqlite_raft_port"`
-	OlricHTTPPort      int       `json:"olric_http_port" db:"olric_http_port"`
-	OlricMemberlistPort int      `json:"olric_memberlist_port" db:"olric_memberlist_port"`
-	GatewayHTTPPort    int       `json:"gateway_http_port" db:"gateway_http_port"`
-	AllocatedAt        time.Time `json:"allocated_at" db:"allocated_at"`
+	ID                  string    `json:"id" db:"id"`
+	NodeID              string    `json:"node_id" db:"node_id"`
+	NamespaceClusterID  string    `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	PortStart           int       `json:"port_start" db:"port_start"`
+	PortEnd             int       `json:"port_end" db:"port_end"`
+	RQLiteHTTPPort      int       `json:"rqlite_http_port" db:"rqlite_http_port"`
+	RQLiteRaftPort      int       `json:"rqlite_raft_port" db:"rqlite_raft_port"`
+	OlricHTTPPort       int       `json:"olric_http_port" db:"olric_http_port"`
+	OlricMemberlistPort int       `json:"olric_memberlist_port" db:"olric_memberlist_port"`
+	GatewayHTTPPort     int       `json:"gateway_http_port" db:"gateway_http_port"`
+	AllocatedAt         time.Time `json:"allocated_at" db:"allocated_at"`
 }
 
 // ClusterEvent represents an audit event for cluster lifecycle
@@ -238,33 +238,39 @@ func (e *ClusterError) Unwrap() error {
 }
 
 var (
-	ErrNoPortsAvailable      = &ClusterError{Message: "no ports available on node"}
-	ErrNodeAtCapacity        = &ClusterError{Message: "node has reached maximum namespace instances"}
-	ErrInsufficientNodes     = &ClusterError{Message: "insufficient nodes available for cluster"}
-	ErrClusterNotFound       = &ClusterError{Message: "namespace cluster not found"}
-	ErrClusterAlreadyExists  = &ClusterError{Message: "namespace cluster already exists"}
-	ErrProvisioningFailed    = &ClusterError{Message: "cluster provisioning failed"}
-	ErrNamespaceNotFound     = &ClusterError{Message: "namespace not found"}
-	ErrInvalidClusterStatus  = &ClusterError{Message: "invalid cluster status for operation"}
-	ErrRecoveryInProgress    = &ClusterError{Message: "recovery already in progress for this cluster"}
-	ErrWebRTCAlreadyEnabled  = &ClusterError{Message: "WebRTC is already enabled for this namespace"}
-	ErrWebRTCNotEnabled      = &ClusterError{Message: "WebRTC is not enabled for this namespace"}
-	ErrNoWebRTCPortsAvailable = &ClusterError{Message: "no WebRTC ports available on node"}
+	ErrNoPortsAvailable            = &ClusterError{Message: "no ports available on node"}
+	ErrNodeAtCapacity              = &ClusterError{Message: "node has reached maximum namespace instances"}
+	ErrInsufficientNodes           = &ClusterError{Message: "insufficient nodes available for cluster"}
+	ErrClusterNotFound             = &ClusterError{Message: "namespace cluster not found"}
+	ErrClusterAlreadyExists        = &ClusterError{Message: "namespace cluster already exists"}
+	ErrProvisioningFailed          = &ClusterError{Message: "cluster provisioning failed"}
+	ErrNamespaceNotFound           = &ClusterError{Message: "namespace not found"}
+	ErrInvalidClusterStatus        = &ClusterError{Message: "invalid cluster status for operation"}
+	ErrRecoveryInProgress          = &ClusterError{Message: "recovery already in progress for this cluster"}
+	ErrWebRTCAlreadyEnabled        = &ClusterError{Message: "WebRTC is already enabled for this namespace"}
+	ErrWebRTCNotEnabled            = &ClusterError{Message: "WebRTC is not enabled for this namespace"}
+	ErrWebRTCStealthAlreadyEnabled = &ClusterError{Message: "WebRTC stealth is already enabled for this namespace"}
+	ErrWebRTCStealthNotEnabled     = &ClusterError{Message: "WebRTC stealth is not enabled for this namespace"}
+	ErrNoWebRTCPortsAvailable      = &ClusterError{Message: "no WebRTC ports available on node"}
 )
 
 // WebRTCConfig represents the per-namespace WebRTC configuration stored in the database
 type WebRTCConfig struct {
-	ID                 string     `json:"id" db:"id"`
-	NamespaceClusterID string     `json:"namespace_cluster_id" db:"namespace_cluster_id"`
-	NamespaceName      string     `json:"namespace_name" db:"namespace_name"`
-	Enabled            bool       `json:"enabled" db:"enabled"`
-	TURNSharedSecret   string     `json:"-" db:"turn_shared_secret"` // Never serialize secret to JSON
-	TURNCredentialTTL  int        `json:"turn_credential_ttl" db:"turn_credential_ttl"`
-	SFUNodeCount       int        `json:"sfu_node_count" db:"sfu_node_count"`
-	TURNNodeCount      int        `json:"turn_node_count" db:"turn_node_count"`
-	EnabledBy          string     `json:"enabled_by" db:"enabled_by"`
-	EnabledAt          time.Time  `json:"enabled_at" db:"enabled_at"`
-	DisabledAt         *time.Time `json:"disabled_at,omitempty" db:"disabled_at"`
+	ID                 string `json:"id" db:"id"`
+	NamespaceClusterID string `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	NamespaceName      string `json:"namespace_name" db:"namespace_name"`
+	Enabled            bool   `json:"enabled" db:"enabled"`
+	TURNSharedSecret   string `json:"-" db:"turn_shared_secret"` // Never serialize secret to JSON
+	TURNCredentialTTL  int    `json:"turn_credential_ttl" db:"turn_credential_ttl"`
+	SFUNodeCount       int    `json:"sfu_node_count" db:"sfu_node_count"`
+	TURNNodeCount      int    `json:"turn_node_count" db:"turn_node_count"`
+	// StealthEnabled gates the censorship-resistant TURNS:443 path (feat-124):
+	// stealth cert on the TURN servers, SNI route on :443, and the
+	// `turns:<stealth-host>:443` rung in the turn.credentials URI ladder.
+	StealthEnabled bool       `json:"stealth_enabled" db:"stealth_enabled"`
+	EnabledBy      string     `json:"enabled_by" db:"enabled_by"`
+	EnabledAt      time.Time  `json:"enabled_at" db:"enabled_at"`
+	DisabledAt     *time.Time `json:"disabled_at,omitempty" db:"disabled_at"`
 }
 
 // WebRTCRoom represents an active WebRTC room tracked in the database
@@ -284,15 +290,15 @@ type WebRTCRoom struct {
 
 // WebRTCPortBlock represents allocated WebRTC ports for a namespace on a node
 type WebRTCPortBlock struct {
-	ID                 string    `json:"id" db:"id"`
-	NodeID             string    `json:"node_id" db:"node_id"`
-	NamespaceClusterID string    `json:"namespace_cluster_id" db:"namespace_cluster_id"`
-	ServiceType        string    `json:"service_type" db:"service_type"` // "sfu" or "turn"
+	ID                 string `json:"id" db:"id"`
+	NodeID             string `json:"node_id" db:"node_id"`
+	NamespaceClusterID string `json:"namespace_cluster_id" db:"namespace_cluster_id"`
+	ServiceType        string `json:"service_type" db:"service_type"` // "sfu" or "turn"
 
 	// SFU ports
-	SFUSignalingPort   int `json:"sfu_signaling_port,omitempty" db:"sfu_signaling_port"`
-	SFUMediaPortStart  int `json:"sfu_media_port_start,omitempty" db:"sfu_media_port_start"`
-	SFUMediaPortEnd    int `json:"sfu_media_port_end,omitempty" db:"sfu_media_port_end"`
+	SFUSignalingPort  int `json:"sfu_signaling_port,omitempty" db:"sfu_signaling_port"`
+	SFUMediaPortStart int `json:"sfu_media_port_start,omitempty" db:"sfu_media_port_start"`
+	SFUMediaPortEnd   int `json:"sfu_media_port_end,omitempty" db:"sfu_media_port_end"`
 
 	// TURN ports
 	TURNListenPort     int `json:"turn_listen_port,omitempty" db:"turn_listen_port"`

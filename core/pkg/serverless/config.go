@@ -1,6 +1,7 @@
 package serverless
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -28,7 +29,22 @@ type Config struct {
 	JobMaxQueueSize   int           `yaml:"job_max_queue_size"`
 	JobMaxPayloadSize int           `yaml:"job_max_payload_size"` // bytes
 
-	// Scheduler configuration
+	// Scheduler configuration.
+	//
+	// CronPollInterval is the cadence at which the cron scheduler scans
+	// `function_cron_triggers` for due rows. Lower = finer dispatch
+	// granularity (useful for sub-second cron expressions like
+	// `*/1 * * * * *` — the 6-field grammar accepted by ParseCron),
+	// higher = less rqlite/CPU spend.
+	//
+	// Hard floor: MinCronPollInterval (rejected at Validate). Below the
+	// floor the scheduler can't keep up — each tick costs ~1 rqlite
+	// ListDue + N MarkRun writes, ~340-450ms per call on a
+	// cross-region anchat-test-style cluster. Polling faster than the
+	// per-tick cost queues ticks indefinitely and starves the namespace.
+	//
+	// Default: 1 minute. Set to 1s for typing/presence-style ephemeral
+	// state prune workloads (bugboard #109).
 	CronPollInterval  time.Duration `yaml:"cron_poll_interval"`
 	TimerPollInterval time.Duration `yaml:"timer_poll_interval"`
 	DBPollInterval    time.Duration `yaml:"db_poll_interval"`
@@ -40,6 +56,14 @@ type Config struct {
 	ModuleCacheSize int  `yaml:"module_cache_size"` // Number of compiled modules to cache
 	EnablePrewarm   bool `yaml:"enable_prewarm"`    // Pre-compile frequently used functions
 
+	// SlowInvokeThresholdMs is the wall-clock (ms) above which Execute emits the
+	// per-phase "slow invocation" diagnostic (bugboard #24/#27). Default 5000.
+	// Lower it (e.g. 750) to surface the sub-second cold-start floor that the
+	// 5s default hides — async-dispatched stateless handlers pay a fresh
+	// instantiate + TinyGo _start per call, which a count=0 read makes visible
+	// as ~1s of execute time with ~0 module-load (compile is cached). See #27.
+	SlowInvokeThresholdMs int `yaml:"slow_invoke_threshold_ms"`
+
 	// Secrets encryption
 	SecretsEncryptionKey string `yaml:"secrets_encryption_key"` // AES-256 key (32 bytes, hex-encoded)
 
@@ -47,6 +71,27 @@ type Config struct {
 	LogInvocations bool `yaml:"log_invocations"` // Log all invocations to database
 	LogRetention   int  `yaml:"log_retention"`   // Days to retain logs
 }
+
+// MinCronPollInterval is the hard floor on CronPollInterval. Below
+// this the cron scheduler can't keep up with itself — each tick costs
+// at minimum one rqlite ListDue (a network round-trip + query), so
+// polling much faster than the per-tick cost would queue ticks
+// indefinitely and starve the namespace gateway. 100ms is generous
+// (it allows ~10 ticks/sec) while still preventing the runaway
+// configuration that would cripple the gateway.
+//
+// Operators wanting sub-second cron dispatch (e.g. typing/presence
+// ephemeral state prune jobs per bugboard #109) should set 1s — this
+// gives comfortable headroom over per-tick rqlite latency even on
+// cross-region clusters and allows 6-field cron expressions like
+// `*/1 * * * * *` to fire on every-second cadence.
+const MinCronPollInterval = 100 * time.Millisecond
+
+// defaultSlowInvokeThresholdMs is the default wall-clock (ms) above which the
+// per-phase slow-invocation diagnostic fires. 5s keeps normal traffic quiet
+// while still firing before the 30s WS ceiling; lower it on a cluster under
+// investigation to surface sub-second cold-start floors.
+const defaultSlowInvokeThresholdMs = 5000
 
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
@@ -82,8 +127,9 @@ func DefaultConfig() *Config {
 		MaxConcurrentExecutions: 10,
 
 		// WASM cache
-		ModuleCacheSize: 100,
-		EnablePrewarm:   true,
+		ModuleCacheSize:       100,
+		EnablePrewarm:         true,
+		SlowInvokeThresholdMs: defaultSlowInvokeThresholdMs,
 
 		// Logging
 		LogInvocations: true,
@@ -115,6 +161,17 @@ func (c *Config) Validate() []error {
 	}
 	if c.ModuleCacheSize <= 0 {
 		errs = append(errs, &ConfigError{Field: "ModuleCacheSize", Message: "must be positive"})
+	}
+	// CronPollInterval floor — see MinCronPollInterval doc. Zero means
+	// "use the default" (ApplyDefaults handles it); a non-zero value
+	// below the floor would silently let the operator paint themselves
+	// into a runaway-scheduler corner.
+	if c.CronPollInterval != 0 && c.CronPollInterval < MinCronPollInterval {
+		errs = append(errs, &ConfigError{
+			Field:   "CronPollInterval",
+			Message: fmt.Sprintf("must be >= %s (current=%s); see bugboard #109 — below this the scheduler can't keep up with per-tick rqlite cost and queues ticks indefinitely",
+				MinCronPollInterval, c.CronPollInterval),
+		})
 	}
 
 	return errs
@@ -165,6 +222,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.ModuleCacheSize == 0 {
 		c.ModuleCacheSize = defaults.ModuleCacheSize
+	}
+	if c.SlowInvokeThresholdMs == 0 {
+		c.SlowInvokeThresholdMs = defaults.SlowInvokeThresholdMs
 	}
 	if c.LogRetention == 0 {
 		c.LogRetention = defaults.LogRetention

@@ -28,15 +28,36 @@ const (
 // DeviceToken is the provider-specific identifier (e.g. an ntfy topic,
 // an Expo push token, an APNs device token). The PushDispatcher fills
 // it in per-device before calling Send.
+//
+// TargetProvider is consumed by the DISPATCHER (not by providers) to
+// filter the device list pre-send. Empty = fan out to all registered
+// devices regardless of provider (back-compat default). Non-empty =
+// dispatcher skips any device whose Provider field doesn't equal this
+// value. Bugboard #408 — needed so a chat-alert message-push-handler
+// can target "apns" only and avoid waking the user's "apns_voip"
+// (PushKit/CallKit) device on every text. Providers themselves ignore
+// this field.
+//
+// ExcludeProvider is the inverse filter (bugboard feat-10). Empty =
+// no exclusion. Non-empty = dispatcher skips any device whose Provider
+// EQUALS this value. Useful for the "fan out to everyone EXCEPT VoIP"
+// pattern — a chat message handler that wants ntfy + apns + expo but
+// never apns_voip. When BOTH TargetProvider and ExcludeProvider are
+// set, TargetProvider wins and Exclude is ignored (positive filter is
+// strictly narrower than negative; combining them is ambiguous so we
+// pick the safer one — see dispatcher comment for rationale). Providers
+// themselves ignore this field.
 type PushMessage struct {
-	DeviceToken string
-	Title       string
-	Body        string
-	Data        map[string]interface{}
-	Badge       int
-	Sound       string
-	Channel     string // "messages", "calls", etc — provider may map to its own channel concept
-	Priority    PushPriority
+	DeviceToken     string
+	Title           string
+	Body            string
+	Data            map[string]interface{}
+	Badge           int
+	Sound           string
+	Channel         string // "messages", "calls", etc — provider may map to its own channel concept
+	Priority        PushPriority
+	TargetProvider  string // dispatcher-side positive filter; "" = fanout. See type doc.
+	ExcludeProvider string // dispatcher-side negative filter; "" = no exclusion. See type doc.
 }
 
 // PushProvider is implemented by each backend (ntfy, expo, apns).
@@ -88,4 +109,90 @@ var (
 	// ErrEmptyToken is returned by providers when called with an empty
 	// DeviceToken.
 	ErrEmptyToken = errors.New("push: empty device token")
+	// ErrEmptyContent is returned by providers when the message has no
+	// title, body, badge, sound, or content-available marker. Apple
+	// silently accepts (HTTP 200) and drops such pushes — caught upfront
+	// so the failure surfaces instead of looking like success. Bugboard
+	// #348 root-cause class.
+	ErrEmptyContent = errors.New("push: empty visible-content payload (set title/body, badge, sound, or content_available)")
 )
+
+// PushError is the structured error type returned by providers when the
+// remote service (APNs, ntfy, etc.) responds with a failure. Carries the
+// HTTP status + provider-specific reason code so the caller can decide
+// how to react (e.g. delete stale tokens on 410, retry on 5xx).
+//
+// Used via errors.As at the dispatcher layer to build a per-device
+// result for the WASM-callable `oh.PushSendV2` host function.
+type PushError struct {
+	// HTTPStatus is the HTTP/2 :status from the remote (e.g. 400, 410,
+	// 500). 0 means the failure happened before the HTTP exchange
+	// (network, validation, etc.) — see Message for details.
+	HTTPStatus int
+	// Reason is the provider-specific machine-readable reason string
+	// (e.g. APNs `BadDeviceToken`, `Unregistered`). Empty for non-HTTP
+	// failures.
+	Reason string
+	// Message is the human-readable summary, suitable for logs.
+	Message string
+	// Unregistered is a shortcut for "the remote says this token is
+	// dead — delete the device row". Maps to APNs HTTP 410 with reason
+	// `Unregistered`. Other providers set this when they have an
+	// equivalent signal.
+	Unregistered bool
+	// Wrapped is the underlying error if this PushError wraps another
+	// error type. Allows errors.Is / errors.As traversal.
+	Wrapped error
+}
+
+// Error implements the error interface.
+func (e *PushError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+// Unwrap allows errors.Is / errors.As to traverse.
+func (e *PushError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Wrapped
+}
+
+// DeviceSendResult is the per-device outcome of a SendToUserDetailed
+// call. Used by the rich-result push host fn so WASM callers can see
+// exactly what happened per device — and react (e.g. delete the device
+// row on Unregistered, retry on 5xx, log unknowns).
+type DeviceSendResult struct {
+	DeviceID     string `json:"device_id"`
+	Provider     string `json:"provider"`
+	Success      bool   `json:"success"`
+	HTTPStatus   int    `json:"http_status,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Message      string `json:"message,omitempty"`
+	Unregistered bool   `json:"unregistered,omitempty"`
+
+	// err carries the underlying error (preserves the full chain for
+	// errors.Is / errors.As). Unexported so json.Marshal ignores it —
+	// only the structured fields above appear in the WASM-visible
+	// envelope. Used by the legacy SendToUser to preserve the sentinel
+	// errors.Is contract for callers built before SendToUserDetailed.
+	err error `json:"-"`
+}
+
+// Err returns the underlying error for this device's send attempt, or
+// nil if it succeeded. Exposed as a method so external callers can
+// still use errors.Is/As against per-device failures.
+func (r DeviceSendResult) Err() error { return r.err }
+
+// SendDetailedResult is the aggregate return from SendToUserDetailed.
+// One DeviceSendResult per device the user has registered in the
+// namespace. Ok is true when EVERY device succeeded.
+type SendDetailedResult struct {
+	Ok               bool               `json:"ok"`
+	DevicesAttempted int                `json:"devices_attempted"`
+	DevicesSucceeded int                `json:"devices_succeeded"`
+	Results          []DeviceSendResult `json:"results"`
+}

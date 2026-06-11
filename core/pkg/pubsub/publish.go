@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -75,30 +74,20 @@ func (m *Manager) Publish(ctx context.Context, topic string, data []byte) error 
 		return fmt.Errorf("failed to get topic for publishing: %w", err)
 	}
 
-	// Wait briefly for mesh formation if no peers are in the mesh yet
-	// GossipSub needs time to discover peers and form a mesh
-	// With FloodPublish enabled, messages will be flooded to all connected peers
-	// but we still want to give the mesh a chance to form for better delivery
-	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
-	defer waitCancel()
-
-	// Check if we have peers in the mesh, wait up to 2 seconds for mesh formation
-	meshFormed := false
-	for i := 0; i < 20 && !meshFormed; i++ {
-		peers := libp2pTopic.ListPeers()
-		if len(peers) > 0 {
-			meshFormed = true
-			break // Mesh has formed, proceed with publish
-		}
-		select {
-		case <-waitCtx.Done():
-			meshFormed = true // Timeout, proceed anyway (FloodPublish will handle it)
-		case <-time.After(100 * time.Millisecond):
-			// Continue waiting
-		}
-	}
-
-	// Publish message
+	// Publish immediately — do NOT wait for gossipsub mesh formation.
+	//
+	// The router runs with FloodPublish enabled (pkg/node/libp2p.go and
+	// pkg/client/client.go), so the message is sent directly to every
+	// connected peer subscribed to the topic without needing a mesh, and a
+	// same-gateway subscriber receives it via the local loopback regardless.
+	//
+	// A previous version polled ListPeers() for up to 2s here "to give the
+	// mesh a chance to form." On the namespace-gateway topology most
+	// application topics (per-conversation/wakeup) have no REMOTE mesh peers
+	// — they're delivered to local WS clients — so the loop timed out the
+	// full 2s on EVERY publish, making a 3-publish message-create cost ~6s
+	// server-side (feat-6, the dominant realtime latency). FloodPublish makes
+	// the wait redundant; removed.
 	if err := libp2pTopic.Publish(ctx, data); err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
 	}

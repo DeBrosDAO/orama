@@ -16,7 +16,15 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	"gopkg.in/yaml.v3"
 )
+
+// defaultSFUSignalingPort is the SFU signaling port the namespace gateway
+// proxies WebRTC traffic to when an existing node.yaml did not record one.
+// Mirrors pkg/namespace.SFUSignalingPortRangeStart (30000); kept as a local
+// constant to avoid importing the namespace package (which other agents own
+// and which would create a dependency cycle here).
+const defaultSFUSignalingPort = 30000
 
 // ConfigGenerator manages generation of node, gateway, and service configs
 type ConfigGenerator struct {
@@ -200,7 +208,182 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	data.Environment = cg.Environment
 	data.OperatorWallet = cg.OperatorWallet
 
+	// Serverless function secrets encryption key (bugboard #837). Read the
+	// persisted key (generated in Phase3 / received via join) so it is
+	// rendered into node.yaml under http_gateway. If the file is missing the
+	// key is left empty and omitted from the rendered config — get_secret then
+	// stays disabled until the operator provisions the key. We deliberately do
+	// NOT generate here: generation/distribution is owned by SecretGenerator
+	// and the join flow so every node in a cluster shares one key.
+	secretsKeyPath := filepath.Join(cg.oramaDir, "secrets", "secrets-encryption-key")
+	if keyBytes, err := os.ReadFile(secretsKeyPath); err == nil {
+		data.SecretsEncryptionKey = strings.TrimSpace(string(keyBytes))
+	}
+
+	// WebRTC/TURN config (feat-124 #913). The TURN secret lives in the secrets
+	// dir so it survives Phase4 config regeneration; turn_domain/sfu_port/enabled
+	// are operator-set values that only exist in the previous node.yaml, so we
+	// carry them forward from the existing on-disk config. Without this, a regen
+	// wipes the operator's manually-added webrtc block and the namespace
+	// reconciler restarts gateways with an empty TURN secret (the outage).
+	if err := cg.populateWebRTCConfig(&data); err != nil {
+		return "", fmt.Errorf("failed to populate webrtc config: %w", err)
+	}
+
+	// Stealth TURN SNI router (feat-124). Like the webrtc block, sni_router is
+	// an operator opt-in that only exists in the previous node.yaml, so carry
+	// it forward across regeneration. Without this, a Phase4 regen would reset
+	// sni_router.enabled to false, stop the :443 router and break stealth TURN
+	// for every region that relies on it (the same regen-wipe class of outage
+	// as bugboard #259/#846).
+	cg.populateSNIRouterConfig(&data)
+
 	return templates.RenderNodeConfig(data)
+}
+
+// populateSNIRouterConfig carries forward the operator-set sni_router.enabled
+// flag from the existing node.yaml so a config regeneration never silently
+// disables the stealth TURN-over-443 router. Absence of the file or block
+// leaves the flag at its default (false).
+func (cg *ConfigGenerator) populateSNIRouterConfig(data *templates.NodeConfigData) {
+	data.SNIRouterEnabled = cg.readExistingSNIRouterEnabled()
+}
+
+// SNIRouterEnabled reports whether the node's on-disk node.yaml has opted in to
+// the stealth TURN-over-443 SNI router. The orchestrator reads this AFTER
+// Phase4 has written node.yaml to decide whether to move Caddy to :8443 and
+// start the router unit. Returns false when the config or block is absent.
+func (cg *ConfigGenerator) SNIRouterEnabled() bool {
+	return cg.readExistingSNIRouterEnabled()
+}
+
+// readExistingSNIRouterEnabled parses just the top-level sni_router.enabled
+// flag out of the existing node.yaml. Returns false when the file is missing,
+// malformed, or has no sni_router block (fresh install / not opted in).
+func (cg *ConfigGenerator) readExistingSNIRouterEnabled() bool {
+	configPath := filepath.Join(cg.oramaDir, "configs", "node.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return false // No existing config (fresh install) — default off.
+	}
+
+	var parsed struct {
+		SNIRouter struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"sni_router"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return false // Malformed/old config — don't fail regen; default off.
+	}
+	return parsed.SNIRouter.Enabled
+}
+
+// existingWebRTC is the minimal shape parsed out of an existing node.yaml to
+// carry forward operator-set WebRTC fields across a config regeneration.
+type existingWebRTC struct {
+	Enabled    bool
+	SFUPort    int
+	TURNDomain string
+	TURNSecret string
+}
+
+// populateWebRTCConfig fills the WebRTC fields on data so the rendered node.yaml
+// preserves operator TURN configuration across regenerations.
+//
+// Sources, in order of authority:
+//   - turn_secret: the persisted secrets/turn-secret file (durable, survives
+//     regen). If absent but the existing node.yaml carried a secret, that secret
+//     is persisted to the file so it becomes durable from now on.
+//   - turn_domain / sfu_port / enabled: carried forward from the existing
+//     node.yaml's http_gateway.webrtc block (operator-set, not in secrets).
+//
+// If there is no persisted secret and no existing webrtc block, WebRTC is left
+// disabled and the template renders nothing.
+func (cg *ConfigGenerator) populateWebRTCConfig(data *templates.NodeConfigData) error {
+	existing := cg.readExistingWebRTC()
+
+	// Resolve the TURN secret: persisted file wins; otherwise adopt the secret
+	// from the existing node.yaml and persist it so it is durable.
+	secret := ""
+	secretPath := filepath.Join(cg.oramaDir, "secrets", "turn-secret")
+	if b, err := os.ReadFile(secretPath); err == nil {
+		secret = strings.TrimSpace(string(b))
+	}
+	if secret == "" && existing != nil && existing.TURNSecret != "" {
+		secret = existing.TURNSecret
+		if err := cg.persistTURNSecret(secret); err != nil {
+			return err
+		}
+	}
+
+	if secret == "" {
+		// No durable secret and nothing to adopt — leave WebRTC disabled.
+		return nil
+	}
+
+	data.TURNSecret = secret
+	data.WebRTCEnabled = true
+
+	if existing != nil {
+		data.TURNDomain = existing.TURNDomain
+		data.SFUPort = existing.SFUPort
+	}
+	if data.SFUPort == 0 {
+		data.SFUPort = defaultSFUSignalingPort
+	}
+
+	return nil
+}
+
+// readExistingWebRTC parses just the http_gateway.webrtc block out of the
+// existing node.yaml. Absence of the file or block is tolerated (returns nil).
+func (cg *ConfigGenerator) readExistingWebRTC() *existingWebRTC {
+	configPath := filepath.Join(cg.oramaDir, "configs", "node.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil // No existing config (fresh install) — nothing to carry forward.
+	}
+
+	var parsed struct {
+		HTTPGateway struct {
+			WebRTC struct {
+				Enabled    bool   `yaml:"enabled"`
+				SFUPort    int    `yaml:"sfu_port"`
+				TURNDomain string `yaml:"turn_domain"`
+				TURNSecret string `yaml:"turn_secret"`
+			} `yaml:"webrtc"`
+		} `yaml:"http_gateway"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return nil // Malformed/old config — don't fail regen; just nothing to carry.
+	}
+
+	wb := parsed.HTTPGateway.WebRTC
+	if !wb.Enabled && wb.SFUPort == 0 && wb.TURNDomain == "" && wb.TURNSecret == "" {
+		return nil // No webrtc block present.
+	}
+	return &existingWebRTC{
+		Enabled:    wb.Enabled,
+		SFUPort:    wb.SFUPort,
+		TURNDomain: wb.TURNDomain,
+		TURNSecret: wb.TURNSecret,
+	}
+}
+
+// persistTURNSecret writes the TURN secret to the secrets dir with 0600 perms
+// and correct ownership, making it durable across future config regenerations.
+func (cg *ConfigGenerator) persistTURNSecret(secret string) error {
+	secretPath := filepath.Join(cg.oramaDir, "secrets", "turn-secret")
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0700); err != nil {
+		return fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+		return fmt.Errorf("failed to persist TURN secret: %w", err)
+	}
+	if err := ensureSecretFilePermissions(secretPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GenerateVaultConfig generates vault.yaml configuration for the Vault Guardian.
@@ -463,6 +646,106 @@ func (sg *SecretGenerator) EnsureAPIKeyHMACSecret() (string, error) {
 
 	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return "", fmt.Errorf("failed to save API key HMAC secret: %w", err)
+	}
+	if err := ensureSecretFilePermissions(secretPath); err != nil {
+		return "", err
+	}
+
+	return secret, nil
+}
+
+// EnsureSecretsEncryptionKey gets or generates the AES-256 key used to
+// encrypt serverless function secrets at rest (the function_secrets table).
+// The key is a 32-byte random value stored as 64 hex characters.
+//
+// It MUST be identical on every namespace-gateway node in a cluster and
+// stable across restarts — otherwise secrets encrypted by one process can't
+// be decrypted by another (bugboard #837). Like api-key-hmac-secret, joining
+// nodes receive this value through the join flow rather than generating their
+// own; this method only generates on the genesis node (or returns the
+// existing key if a joining node already wrote it to disk).
+func (sg *SecretGenerator) EnsureSecretsEncryptionKey() (string, error) {
+	secretPath := filepath.Join(sg.oramaDir, "secrets", "secrets-encryption-key")
+	secretDir := filepath.Dir(secretPath)
+
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
+	}
+
+	// Try to read existing key
+	if data, err := os.ReadFile(secretPath); err == nil {
+		key := strings.TrimSpace(string(data))
+		if len(key) == 64 {
+			if err := ensureSecretFilePermissions(secretPath); err != nil {
+				return "", err
+			}
+			return key, nil
+		}
+	}
+
+	// Generate new key (32 bytes = 64 hex chars)
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return "", fmt.Errorf("failed to generate secrets encryption key: %w", err)
+	}
+	key := hex.EncodeToString(keyBytes)
+
+	if err := os.WriteFile(secretPath, []byte(key), 0600); err != nil {
+		return "", fmt.Errorf("failed to save secrets encryption key: %w", err)
+	}
+	if err := ensureSecretFilePermissions(secretPath); err != nil {
+		return "", err
+	}
+
+	return key, nil
+}
+
+// EnsureTURNSecret gets or generates the HMAC-SHA1 shared secret used to mint
+// TURN credentials for WebRTC (the http_gateway.webrtc.turn_secret field).
+// The secret is a 32-byte random value stored as 64 hex characters.
+//
+// It MUST be identical on every namespace-gateway node in a cluster and stable
+// across restarts AND config regenerations — otherwise the namespace reconciler
+// sees drift (desired vs on-disk) and restarts gateways with an empty secret,
+// which makes turn.credentials return namespace_not_configured (feat-124 #913,
+// the AnChat outage). Persisting the secret to the secrets dir is what lets it
+// survive Phase4 config regeneration: GenerateNodeConfig reads this file rather
+// than relying on the (regenerated-from-template) node.yaml. Joining nodes
+// receive the value through the join flow rather than generating their own.
+func (sg *SecretGenerator) EnsureTURNSecret() (string, error) {
+	secretPath := filepath.Join(sg.oramaDir, "secrets", "turn-secret")
+	secretDir := filepath.Dir(secretPath)
+
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
+	}
+
+	// Try to read existing secret
+	if data, err := os.ReadFile(secretPath); err == nil {
+		secret := strings.TrimSpace(string(data))
+		if len(secret) == 64 {
+			if err := ensureSecretFilePermissions(secretPath); err != nil {
+				return "", err
+			}
+			return secret, nil
+		}
+	}
+
+	// Generate new secret (32 bytes = 64 hex chars)
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		return "", fmt.Errorf("failed to generate TURN secret: %w", err)
+	}
+	secret := hex.EncodeToString(secretBytes)
+
+	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+		return "", fmt.Errorf("failed to save TURN secret: %w", err)
 	}
 	if err := ensureSecretFilePermissions(secretPath); err != nil {
 		return "", err

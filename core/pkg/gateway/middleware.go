@@ -128,6 +128,29 @@ func stripInboundInternalAuthHeaders(h http.Header) {
 	h.Del(HeaderInternalAuthJWTCustom)
 }
 
+// maxQueryJWTLength caps the size of a JWT accepted via `?jwt=` query
+// param. EdDSA + RS256 JWTs minted by this gateway are well under 2 KB;
+// 4 KB is a generous ceiling that still cheaply rejects DoS attempts
+// that try to feed multi-MB tokens through the verifier.
+const maxQueryJWTLength = 4096
+
+// stripJWTQueryParam removes the `jwt` key from the URL's query string
+// (if present), mutating r in place. Called after a successful WS-upgrade
+// JWT-via-query verification so the token doesn't propagate to:
+//   - the namespace-gateway proxy hop (`r.URL.RawQuery` is forwarded)
+//   - downstream handler logs that record `r.URL.RequestURI()`
+//   - any inner `r.URL.Query()` lookups in business logic
+//
+// Idempotent: safe to call on requests without a `jwt` param.
+func stripJWTQueryParam(r *http.Request) {
+	q := r.URL.Query()
+	if !q.Has("jwt") {
+		return
+	}
+	q.Del("jwt")
+	r.URL.RawQuery = q.Encode()
+}
+
 // claimsFromInternalAuthHeaders rebuilds a *auth.JWTClaims from the trusted
 // internal-auth headers. Returns nil if no JWT subject was forwarded (the
 // caller used an API key, or the request didn't carry validated JWT data).
@@ -183,6 +206,24 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 					}
 				}
 				// JWT verification failed - fall through to API key check
+			}
+		}
+	}
+
+	// 1b) WS upgrade fallback: JWT via `?jwt=` query. Same rationale as in
+	// authMiddleware — browser / React Native WS clients can't set custom
+	// headers reliably. Bug #240. Strip-after-verify is applied here too
+	// so the JWT doesn't propagate to the namespace gateway over the proxy
+	// hop (where it would otherwise live in the proxied request's RawQuery
+	// + the inner gateway's logs).
+	if isWebSocketUpgrade(r) {
+		tok := strings.TrimSpace(r.URL.Query().Get("jwt"))
+		if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
+			if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+				if ns := strings.TrimSpace(c.Namespace); ns != "" {
+					stripJWTQueryParam(r)
+					return ns, c, ""
+				}
 			}
 		}
 	}
@@ -389,9 +430,12 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 
 // authMiddleware enforces auth when enabled via config.
 // Accepts:
-//   - Authorization: Bearer <JWT> (RS256 issued by this gateway)
+//   - Authorization: Bearer <JWT> (RS256 / EdDSA issued by this gateway)
 //   - Authorization: Bearer <API key> or ApiKey <API key>
 //   - X-API-Key: <API key>
+//   - ?api_key=<key> or ?token=<key> query string (WebSocket upgrade only)
+//   - ?jwt=<token> query string (WebSocket upgrade only — bug #240; needed
+//     because browser/RN WS clients can't reliably set custom headers)
 //   - X-Internal-Auth-Validated: true (from internal IPs only - pre-authenticated by main gateway)
 func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +494,48 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 					}
 					// If it looked like a JWT but failed verification, fall through to API key check
 				}
+			}
+		}
+
+		// 1b) WebSocket-only fallback: JWT in the `?jwt=` query parameter.
+		//
+		// Browser and React Native WebSocket clients can't reliably set custom
+		// headers on the upgrade request — the WebSocket constructor either
+		// ignores the headers argument (browsers) or silently strips
+		// Authorization (RN iOS). Without a fallback, every authenticated WS
+		// endpoint is unreachable from those platforms. Bug #240.
+		//
+		// We gate this ONLY on WS upgrade requests to keep JWTs out of normal
+		// HTTP URLs (where they end up in access logs, referrer headers, and
+		// browser history). For WS, the upgrade URL is only emitted on
+		// connection establishment — much smaller exposure surface — and TLS
+		// (wss://) keeps it off the wire in transit.
+		//
+		// After a successful verify, we STRIP the `jwt` query param from the
+		// request before passing downstream (`stripJWTQueryParam`). This
+		// shrinks the replay window: the token doesn't propagate through the
+		// proxy hop to the namespace gateway, doesn't reach the backend
+		// handler's logs, and doesn't show up in any downstream `r.URL`
+		// inspection. Belt-and-suspenders given the trust we've already
+		// established by verifying the signature.
+		if isWebSocketUpgrade(r) {
+			tok := strings.TrimSpace(r.URL.Query().Get("jwt"))
+			// Cheap length sanity-check before invoking the verifier. Real
+			// EdDSA / RS256 JWTs issued by this gateway are well under 4 KB.
+			// Anything larger is either malformed or a DoS attempt.
+			if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
+				if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+					stripJWTQueryParam(r)
+					ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
+					if ns := strings.TrimSpace(claims.Namespace); ns != "" {
+						ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
+					}
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				// Invalid JWT in query — fall through to API key check
+				// rather than 401-ing here, in case the caller also supplied
+				// a valid api_key as belt-and-suspenders.
 			}
 		}
 
@@ -571,6 +657,18 @@ func isPublicPath(p string) bool {
 
 	// Namespace cluster repair endpoint (auth handled by internal auth header)
 	if p == "/v1/internal/namespace/repair" {
+		return true
+	}
+
+	// Namespace WebRTC management endpoints (enable/disable/status). Auth is
+	// handled INSIDE the handlers by the X-Orama-Internal-Auth header +
+	// WireGuard-peer source check (same as spawn/repair above). Without this
+	// exemption the API-key middleware rejects them with "missing API key"
+	// before the handler's internal-auth check runs, making the internal
+	// endpoints unreachable — so `orama namespace enable webrtc` had no
+	// working path (the public endpoint hits a gateway without the WebRTC
+	// manager wired). Bugboard: internal webrtc mgmt endpoints unreachable.
+	if strings.HasPrefix(p, "/v1/internal/namespace/webrtc/") {
 		return true
 	}
 
@@ -1017,16 +1115,108 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	// Validate auth against main cluster RQLite BEFORE proxying
 	// This ensures API keys work even though they're not in the namespace's RQLite
 	validatedNamespace, validatedClaims, authErr := g.validateAuthForNamespaceProxy(r)
-	if authErr != "" && !isPublicPath(r.URL.Path) {
+	isWS := isWebSocketUpgrade(r)
+	isPublic := isPublicPath(r.URL.Path)
+
+	// Bug #240/#249 root-cause hardening: previously, when
+	// validateAuthForNamespaceProxy returned an empty namespace AND empty
+	// error (i.e. "no credentials found"), the request fell through to a
+	// silent forward to the namespace gateway WITHOUT internal-auth
+	// headers. The namespace gateway then rejected the request with 401
+	// "missing API key" in ~60µs. From the client's perspective the 401
+	// appeared opaque; from our side the failure was logged only on the
+	// namespace gateway (which itself can't validate API keys — they
+	// live in the main cluster RQLite). This created a confusing
+	// debugging experience and was the root cause of AnChat's
+	// "intermittent 401" reports on the WS path.
+	//
+	// Two parts to the fix:
+	//   1. Reject at MAIN when no credentials were extractable AND the
+	//      path requires auth. Surfaces the failure with a clear message
+	//      AT the gateway tier that actually knows about API keys.
+	//   2. Log every WS upgrade auth outcome with enough context to
+	//      diagnose the intermittent reports we've been seeing
+	//      (presence of relevant query params, headers we care about,
+	//      and the actor IP). Logged at debug level for success and
+	//      warn for the reject path so steady-state noise stays low.
+	if authErr != "" && !isPublic {
+		if isWS {
+			g.logger.ComponentWarn(logging.ComponentGeneral,
+				"namespace-proxy WS upgrade rejected: auth error",
+				zap.String("namespace_target", namespaceName),
+				zap.String("auth_err", authErr),
+				zap.String("path", r.URL.Path),
+				zap.String("client_ip", getClientIP(r)),
+				zap.Bool("has_api_key_query", r.URL.Query().Get("api_key") != ""),
+				zap.Bool("has_token_query", r.URL.Query().Get("token") != ""),
+				zap.Bool("has_jwt_query", r.URL.Query().Get("jwt") != ""),
+				zap.Bool("has_authz_header", r.Header.Get("Authorization") != ""),
+				zap.Bool("has_xapikey_header", r.Header.Get("X-API-Key") != ""),
+				zap.String("connection_header", r.Header.Get("Connection")),
+				zap.String("upgrade_header", r.Header.Get("Upgrade")),
+				zap.String("user_agent", r.Header.Get("User-Agent")),
+			)
+		}
 		w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
 		writeError(w, http.StatusUnauthorized, authErr)
 		return
 	}
 
+	// No-credentials path: previously fell through to silent forward.
+	// Now: reject at main with diagnostic context. Namespace gateways
+	// cannot validate API keys themselves (no shared rqlite for them),
+	// so forwarding unauthenticated requests can only ever produce
+	// opaque 401s downstream.
+	if validatedNamespace == "" && !isPublic {
+		g.logger.ComponentWarn(logging.ComponentGeneral,
+			"namespace-proxy request rejected: no credentials extracted",
+			zap.String("namespace_target", namespaceName),
+			zap.String("path", r.URL.Path),
+			zap.Bool("is_ws_upgrade", isWS),
+			zap.String("client_ip", getClientIP(r)),
+			zap.Bool("has_api_key_query", r.URL.Query().Get("api_key") != ""),
+			zap.Bool("has_token_query", r.URL.Query().Get("token") != ""),
+			zap.Bool("has_jwt_query", r.URL.Query().Get("jwt") != ""),
+			zap.Bool("has_authz_header", r.Header.Get("Authorization") != ""),
+			zap.Bool("has_xapikey_header", r.Header.Get("X-API-Key") != ""),
+			zap.String("connection_header", r.Header.Get("Connection")),
+			zap.String("upgrade_header", r.Header.Get("Upgrade")),
+			zap.String("origin", r.Header.Get("Origin")),
+			zap.String("user_agent", r.Header.Get("User-Agent")),
+			zap.Int("raw_query_len", len(r.URL.RawQuery)),
+		)
+		w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\"")
+		writeError(w, http.StatusUnauthorized,
+			"authentication required for namespace endpoint (no api_key/token/jwt extracted)")
+		return
+	}
+
 	// If auth succeeded, ensure the API key belongs to the target namespace
 	if validatedNamespace != "" && validatedNamespace != namespaceName {
+		g.logger.ComponentWarn(logging.ComponentGeneral,
+			"namespace-proxy request rejected: API key namespace mismatch",
+			zap.String("namespace_target", namespaceName),
+			zap.String("validated_namespace", validatedNamespace),
+			zap.String("path", r.URL.Path),
+			zap.Bool("is_ws_upgrade", isWS),
+			zap.String("client_ip", getClientIP(r)),
+		)
 		writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
 		return
+	}
+
+	// Success-path diagnostic for WS upgrades. Logged at debug to keep
+	// the steady-state log volume low; flip the gateway log level to
+	// `debug` to capture per-upgrade audit trail when reproducing
+	// AnChat-style intermittent failures.
+	if isWS {
+		g.logger.ComponentDebug(logging.ComponentGeneral,
+			"namespace-proxy WS upgrade authenticated, forwarding",
+			zap.String("namespace", namespaceName),
+			zap.String("path", r.URL.Path),
+			zap.String("client_ip", getClientIP(r)),
+			zap.Bool("has_jwt_claims", validatedClaims != nil),
+		)
 	}
 
 	// Check middleware cache for namespace gateway targets

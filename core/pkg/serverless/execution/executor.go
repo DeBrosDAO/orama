@@ -3,13 +3,38 @@ package execution
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"go.uber.org/zap"
 )
+
+// InstantiateTiming captures how long the per-invocation wazero
+// InstantiateModule call took (running TinyGo _start / package init). It rides
+// the ctx so the engine's slow-invoke diagnostic can split the execute phase
+// into cold-start (instantiate) vs handler work (run) — the distinction that
+// pins the bugboard #27 cold-start floor. Nil collector = not measured.
+type InstantiateTiming struct {
+	InstantiateNs int64
+}
+
+type instantiateTimingKey struct{}
+
+// WithInstantiateTiming returns a ctx carrying a fresh InstantiateTiming that
+// ExecuteModule will fill in. The caller reads it back after ExecuteModule.
+func WithInstantiateTiming(ctx context.Context) (context.Context, *InstantiateTiming) {
+	t := &InstantiateTiming{}
+	return context.WithValue(ctx, instantiateTimingKey{}, t), t
+}
+
+func instantiateTimingFrom(ctx context.Context) *InstantiateTiming {
+	t, _ := ctx.Value(instantiateTimingKey{}).(*InstantiateTiming)
+	return t
+}
 
 // Executor handles WASM module execution.
 type Executor struct {
@@ -73,7 +98,22 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		WithStdin(stdin).
 		WithStdout(stdout).
 		WithStderr(stderr).
-		WithArgs(moduleName) // argv[0] is the program name
+		WithArgs(moduleName). // argv[0] is the program name
+		// Bugboard #27 — wazero defaults to fake/sentinel clocks. Without
+		// these opt-ins, TinyGo's time.Now() returns ~2022-01-01T00:00:00.001Z
+		// frozen on every read, silently poisoning timestamps in every
+		// invocation that uses time.Now() (receipts, audit rows, cursor cmp).
+		// Same fix applied at engine.go for the persistent-WS path.
+		WithSysWalltime().
+		WithSysNanotime().
+		// Bugboard #120 — same class as #27. Without WithRandSource, wazero
+		// uses a deterministic zero-seed RNG, so TinyGo's crypto/rand.Read
+		// returns IDENTICAL bytes on every fresh instance (and every
+		// invocation is a fresh instance). That makes any unguessable ID /
+		// code / nonce / token constant. Wire in the host CSPRNG so
+		// crypto/rand (and auto-seeded math/rand) work. Same fix at
+		// engine.go for the persistent-WS path.
+		WithRandSource(cryptorand.Reader)
 
 	// Acquire concurrency slot
 	if e.sem != nil {
@@ -85,8 +125,14 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		}
 	}
 
-	// Instantiate and run the module (WASI _start will be called automatically)
+	// Instantiate and run the module (WASI _start will be called automatically).
+	// Time the instantiate so the engine can attribute cold-start vs handler
+	// work (bugboard #27 cold-start floor); no-op when no collector is attached.
+	instStart := time.Now()
 	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
+	if t := instantiateTimingFrom(ctx); t != nil {
+		t.InstantiateNs = time.Since(instStart).Nanoseconds()
+	}
 	if err != nil {
 		// Check if stderr has any output
 		if stderr.Len() > 0 {

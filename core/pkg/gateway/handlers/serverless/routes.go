@@ -37,6 +37,8 @@ func (h *ServerlessHandlers) handleFunctions(w http.ResponseWriter, r *http.Requ
 //   - GET    /v1/functions/{name}                    - Get function info
 //   - DELETE /v1/functions/{name}                    - Delete function
 //   - POST   /v1/functions/{name}/invoke             - Invoke function
+//   - POST   /v1/functions/{name}/disable            - Pause without redeploy (plan 11.5)
+//   - POST   /v1/functions/{name}/enable             - Resume (plan 11.5)
 //   - GET    /v1/functions/{name}/versions           - List versions
 //   - GET    /v1/functions/{name}/logs               - Get logs
 //   - WS     /v1/functions/{name}/ws                 - WebSocket invoke
@@ -98,6 +100,10 @@ func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http
 	switch action {
 	case "invoke":
 		h.InvokeFunction(w, r, name, version)
+	case "disable":
+		h.SetEnabledFunction(w, r, name, false)
+	case "enable":
+		h.SetEnabledFunction(w, r, name, true)
 	case "ws":
 		h.HandleWebSocket(w, r, name, version)
 	case "versions":

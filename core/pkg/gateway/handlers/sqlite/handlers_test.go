@@ -107,6 +107,14 @@ func (m *mockRQLiteClient) BatchWithSeq(ctx context.Context, namespace string, o
 	return res, 1, err
 }
 
+func (m *mockRQLiteClient) BatchQuery(ctx context.Context, ops []rqlite.BatchOp) ([]rqlite.OpResult, error) {
+	out := make([]rqlite.OpResult, len(ops))
+	for i := range ops {
+		out[i] = rqlite.OpResult{Kind: rqlite.BatchOpQuery}
+	}
+	return out, nil
+}
+
 type mockIPFSClient struct {
 	AddFunc          func(ctx context.Context, r io.Reader, filename string) (*ipfs.AddResponse, error)
 	AddDirectoryFunc func(ctx context.Context, dirPath string) (*ipfs.AddResponse, error)

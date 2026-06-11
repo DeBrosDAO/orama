@@ -86,3 +86,30 @@ func (g *Gateway) pushConfigHandler(w http.ResponseWriter, r *http.Request) {
 			"method not allowed: use GET to read, PUT to update, or DELETE to clear")
 	}
 }
+
+// pushCredentialsSummaryHandler — GET /v1/namespace/push-credentials.
+// Returns the list of providers with credentials stored AND the list of
+// providers this gateway supports (feature #72). 503 when push isn't
+// configured at all.
+func (g *Gateway) pushCredentialsSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	g.pushHandlers.CredentialsSummaryHandler(w, r)
+}
+
+// pushCredentialsByProviderHandler dispatches GET / PUT / DELETE on
+// /v1/namespace/push-credentials/{provider} (feature #72 — generic
+// per-provider credential storage). The {provider} segment is parsed
+// inside the handler so unknown providers return a 400 with the list
+// of supported ones rather than a bare 404.
+func (g *Gateway) pushCredentialsByProviderHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	g.pushHandlers.CredentialsByProviderHandler(w, r)
+}

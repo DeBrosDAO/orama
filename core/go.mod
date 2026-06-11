@@ -25,12 +25,14 @@ require (
 	github.com/pion/turn/v4 v4.0.2
 	github.com/pion/webrtc/v4 v4.1.2
 	github.com/rqlite/gorqlite v0.0.0-20250609141355-ac86a4a1c9a8
+	github.com/sideshow/apns2 v0.25.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tetratelabs/wazero v1.11.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.47.0
 	golang.org/x/net v0.49.0
+	golang.org/x/sync v0.19.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -64,6 +66,7 @@ require (
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/pprof v0.0.0-20250208200701-d0013a598941 // indirect
@@ -167,7 +170,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792 // indirect
 	golang.org/x/mod v0.31.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251203150158-8fff8a5912fc // indirect
 	golang.org/x/term v0.39.0 // indirect

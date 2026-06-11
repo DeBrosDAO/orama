@@ -97,6 +97,16 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 	return r.functionStore.Delete(ctx, namespace, name, version)
 }
 
+// SetEnabled flips a function's enabled state across all versions
+// (plan 11.5). Thin pass-through to FunctionStore.SetStatus.
+func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabled bool) error {
+	status := FunctionStatusInactive
+	if enabled {
+		status = FunctionStatusActive
+	}
+	return r.functionStore.SetStatus(ctx, namespace, name, status)
+}
+
 // GetWASMBytes retrieves the compiled WASM bytecode for a function.
 func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error) {
 	if wasmCID == "" {

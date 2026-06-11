@@ -34,11 +34,17 @@ type JoinResponse struct {
 	WGPeers []WGPeerInfo `json:"wg_peers"`
 
 	// Secrets
-	ClusterSecret    string `json:"cluster_secret"`
-	SwarmKey         string `json:"swarm_key"`
-	APIKeyHMACSecret string `json:"api_key_hmac_secret,omitempty"`
-	RQLitePassword      string `json:"rqlite_password,omitempty"`
-	OlricEncryptionKey  string `json:"olric_encryption_key,omitempty"`
+	ClusterSecret      string `json:"cluster_secret"`
+	SwarmKey           string `json:"swarm_key"`
+	APIKeyHMACSecret   string `json:"api_key_hmac_secret,omitempty"`
+	RQLitePassword     string `json:"rqlite_password,omitempty"`
+	OlricEncryptionKey string `json:"olric_encryption_key,omitempty"`
+	// Serverless secrets encryption key (bugboard #837) — must be identical on
+	// every node so namespace function secrets decrypt cluster-wide.
+	SecretsEncryptionKey string `json:"secrets_encryption_key,omitempty"`
+	// TURN shared secret (feat-124 #913) — must be identical on every node so
+	// WebRTC TURN credentials validate cluster-wide.
+	TURNSecret string `json:"turn_secret,omitempty"`
 
 	// Cluster join info (all using WG IPs)
 	RQLiteJoinAddress  string   `json:"rqlite_join_address"`
@@ -200,6 +206,20 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		olricEncryptionKey = strings.TrimSpace(string(data))
 	}
 
+	// Read serverless secrets encryption key (optional — may not exist on
+	// older clusters; bugboard #837)
+	secretsEncryptionKey := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/secrets-encryption-key"); err == nil {
+		secretsEncryptionKey = strings.TrimSpace(string(data))
+	}
+
+	// Read TURN shared secret (optional — may not exist on older clusters;
+	// feat-124 #913)
+	turnSecret := ""
+	if data, err := os.ReadFile(h.oramaDir + "/secrets/turn-secret"); err == nil {
+		turnSecret = strings.TrimSpace(string(data))
+	}
+
 	// 7. Get this node's WG IP (needed before peer list to check self-inclusion)
 	myWGIP, err := h.getMyWGIP()
 	if err != nil {
@@ -264,20 +284,22 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", myWGIP))
 
 	resp := JoinResponse{
-		WGIP:               wgIP,
-		WGPeers:            wgPeers,
-		ClusterSecret:      strings.TrimSpace(string(clusterSecret)),
-		SwarmKey:            strings.TrimSpace(string(swarmKey)),
-		APIKeyHMACSecret:   apiKeyHMACSecret,
-		RQLitePassword:     rqlitePassword,
-		OlricEncryptionKey: olricEncryptionKey,
-		RQLiteJoinAddress:  fmt.Sprintf("%s:7001", myWGIP),
-		IPFSPeer:           ipfsPeer,
-		IPFSClusterPeer:    ipfsClusterPeer,
-		IPFSClusterPeerIDs: ipfsClusterPeerIDs,
-		BootstrapPeers:     bootstrapPeers,
-		OlricPeers:         olricPeers,
-		BaseDomain:         baseDomain,
+		WGIP:                 wgIP,
+		WGPeers:              wgPeers,
+		ClusterSecret:        strings.TrimSpace(string(clusterSecret)),
+		SwarmKey:             strings.TrimSpace(string(swarmKey)),
+		APIKeyHMACSecret:     apiKeyHMACSecret,
+		RQLitePassword:       rqlitePassword,
+		OlricEncryptionKey:   olricEncryptionKey,
+		SecretsEncryptionKey: secretsEncryptionKey,
+		TURNSecret:           turnSecret,
+		RQLiteJoinAddress:    fmt.Sprintf("%s:7001", myWGIP),
+		IPFSPeer:             ipfsPeer,
+		IPFSClusterPeer:      ipfsClusterPeer,
+		IPFSClusterPeerIDs:   ipfsClusterPeerIDs,
+		BootstrapPeers:       bootstrapPeers,
+		OlricPeers:           olricPeers,
+		BaseDomain:           baseDomain,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

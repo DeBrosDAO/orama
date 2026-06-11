@@ -55,17 +55,17 @@ type InstanceSpawner struct {
 
 // GatewayInstance represents a running Gateway instance for a namespace
 type GatewayInstance struct {
-	Namespace      string
-	NodeID         string
-	HTTPPort       int
-	BaseDomain     string
-	RQLiteDSN      string   // Connection to namespace RQLite
-	OlricServers   []string // Connection to namespace Olric
-	ConfigPath     string
-	PID            int
-	StartedAt      time.Time
-	cmd            *exec.Cmd
-	logger         *zap.Logger
+	Namespace    string
+	NodeID       string
+	HTTPPort     int
+	BaseDomain   string
+	RQLiteDSN    string   // Connection to namespace RQLite
+	OlricServers []string // Connection to namespace Olric
+	ConfigPath   string
+	PID          int
+	StartedAt    time.Time
+	cmd          *exec.Cmd
+	logger       *zap.Logger
 
 	// mu protects mutable state accessed concurrently by the monitor goroutine.
 	mu              sync.RWMutex
@@ -75,16 +75,16 @@ type GatewayInstance struct {
 
 // InstanceConfig holds configuration for spawning a Gateway instance
 type InstanceConfig struct {
-	Namespace      string   // Namespace name (e.g., "alice")
-	NodeID         string   // Physical node ID
-	HTTPPort       int      // HTTP API port
-	BaseDomain     string   // Base domain (e.g., "orama-devnet.network")
-	RQLiteDSN      string   // RQLite connection DSN (e.g., "http://localhost:10000")
-	GlobalRQLiteDSN string  // Global RQLite DSN for API key validation (empty = use RQLiteDSN)
-	OlricServers   []string // Olric server addresses
-	OlricTimeout   time.Duration // Timeout for Olric operations
-	NodePeerID     string   // Physical node's peer ID for home node management
-	DataDir        string   // Data directory for deployments, SQLite, etc.
+	Namespace       string        // Namespace name (e.g., "alice")
+	NodeID          string        // Physical node ID
+	HTTPPort        int           // HTTP API port
+	BaseDomain      string        // Base domain (e.g., "orama-devnet.network")
+	RQLiteDSN       string        // RQLite connection DSN (e.g., "http://localhost:10000")
+	GlobalRQLiteDSN string        // Global RQLite DSN for API key validation (empty = use RQLiteDSN)
+	OlricServers    []string      // Olric server addresses
+	OlricTimeout    time.Duration // Timeout for Olric operations
+	NodePeerID      string        // Physical node's peer ID for home node management
+	DataDir         string        // Data directory for deployments, SQLite, etc.
 	// IPFS configuration for storage endpoints
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (e.g., "http://localhost:9094")
 	IPFSAPIURL            string        // IPFS API URL (e.g., "http://localhost:5001")
@@ -95,15 +95,30 @@ type InstanceConfig struct {
 	SFUPort       int    // SFU signaling port on this node
 	TURNDomain    string // TURN server domain (e.g., "turn.ns-alice.orama-devnet.network")
 	TURNSecret    string // TURN shared secret for credential generation
+	// TURNStealthDomain is the neutral stealth TURNS host (feat-124,
+	// cdn-<hash>.<base-domain>). Non-empty only when webrtc stealth is
+	// enabled for the namespace; turn.credentials then advertises
+	// `turns:<TURNStealthDomain>:443` as the final URI-ladder rung.
+	TURNStealthDomain string
+	// SecretsEncryptionKey is the host-wide AES-256 serverless secrets
+	// encryption key (hex-encoded). Bugboard #837 follow-up: the host gateway
+	// receives this via gateway.Config but spawned namespace gateways never
+	// did, so `function secrets list` returned 501 on namespaces. It is the
+	// SAME value on every node — read once from the host's
+	// secrets/secrets-encryption-key file — and must be identical across the
+	// namespace cluster so a secret encrypted by one gateway decrypts on
+	// another. Empty means secrets management stays disabled (fail-loud).
+	SecretsEncryptionKey string
 }
 
 // GatewayYAMLWebRTC represents the webrtc section of the gateway YAML config.
 // Must match yamlWebRTCCfg in cmd/gateway/config.go.
 type GatewayYAMLWebRTC struct {
-	Enabled    bool   `yaml:"enabled"`
-	SFUPort    int    `yaml:"sfu_port,omitempty"`
-	TURNDomain string `yaml:"turn_domain,omitempty"`
-	TURNSecret string `yaml:"turn_secret,omitempty"`
+	Enabled           bool   `yaml:"enabled"`
+	SFUPort           int    `yaml:"sfu_port,omitempty"`
+	TURNDomain        string `yaml:"turn_domain,omitempty"`
+	TURNSecret        string `yaml:"turn_secret,omitempty"`
+	TURNStealthDomain string `yaml:"turn_stealth_domain,omitempty"`
 }
 
 // GatewayYAMLConfig represents the gateway YAML configuration structure
@@ -125,6 +140,13 @@ type GatewayYAMLConfig struct {
 	IPFSTimeout           string            `yaml:"ipfs_timeout,omitempty"`
 	IPFSReplicationFactor int               `yaml:"ipfs_replication_factor,omitempty"`
 	WebRTC                GatewayYAMLWebRTC `yaml:"webrtc,omitempty"`
+	// SecretsEncryptionKey carries the host's serverless secrets encryption
+	// key into the spawned namespace gateway so it can decrypt/encrypt
+	// function secrets (bugboard #837 follow-up). The standalone gateway
+	// binary loads this back into gateway.Config.SecretsEncryptionKey on
+	// startup. Because this is key material, generateConfig writes the file
+	// 0600. Empty omits the field (secrets management stays disabled).
+	SecretsEncryptionKey string `yaml:"secrets_encryption_key,omitempty"`
 	// ClusterSecretPath points to the host's cluster-secret file. Bug #215
 	// follow-up: namespace gateways spawned by systemd previously had no
 	// way to access the cluster secret, so they fell back to per-node
@@ -209,9 +231,9 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	// Find the gateway binary - look in common locations
 	var gatewayBinary string
 	possiblePaths := []string{
-		"./bin/gateway",                    // Development build
-		"/usr/local/bin/orama-gateway",     // System-wide install
-		"/opt/orama/bin/gateway",           // Package install
+		"./bin/gateway",                // Development build
+		"/usr/local/bin/orama-gateway", // System-wide install
+		"/opt/orama/bin/gateway",       // Package install
 	}
 
 	for _, path := range possiblePaths {
@@ -318,11 +340,13 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		IPFSAPIURL:            cfg.IPFSAPIURL,
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 		WebRTC: GatewayYAMLWebRTC{
-			Enabled:    cfg.WebRTCEnabled,
-			SFUPort:    cfg.SFUPort,
-			TURNDomain: cfg.TURNDomain,
-			TURNSecret: cfg.TURNSecret,
+			Enabled:           cfg.WebRTCEnabled,
+			SFUPort:           cfg.SFUPort,
+			TURNDomain:        cfg.TURNDomain,
+			TURNSecret:        cfg.TURNSecret,
+			TURNStealthDomain: cfg.TURNStealthDomain,
 		},
+		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
 	}
 	// Set Olric timeout if provided
 	if cfg.OlricTimeout > 0 {
@@ -341,9 +365,21 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		}
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	// 0600: this YAML now embeds the serverless secrets encryption key
+	// (bugboard #837), so it must not be world/group readable.
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return &InstanceError{
 			Message: "failed to write Gateway config",
+			Cause:   err,
+		}
+	}
+	// WriteFile's mode only applies on CREATE — a pre-existing file (e.g.
+	// written 0644 by an older release) keeps its old perms on rewrite.
+	// Converge explicitly so upgraded nodes don't leave the embedded
+	// secrets key group/world-readable.
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return &InstanceError{
+			Message: "failed to set Gateway config permissions",
 			Cause:   err,
 		}
 	}

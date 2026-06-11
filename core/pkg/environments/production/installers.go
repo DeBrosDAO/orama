@@ -23,6 +23,8 @@ type BinaryInstaller struct {
 	gateway     *installers.GatewayInstaller
 	coredns     *installers.CoreDNSInstaller
 	caddy       *installers.CaddyInstaller
+	ntfy        *installers.NtfyInstaller      // feature #72; installed only when EnableNtfy is set
+	sniRouter   *installers.SNIRouterInstaller // feat-124; configured only when sni_router.enabled
 }
 
 // NewBinaryInstaller creates a new binary installer
@@ -39,6 +41,8 @@ func NewBinaryInstaller(arch string, logWriter io.Writer) *BinaryInstaller {
 		gateway:     installers.NewGatewayInstaller(arch, logWriter),
 		coredns:     installers.NewCoreDNSInstaller(arch, logWriter, oramaHome),
 		caddy:       installers.NewCaddyInstaller(arch, logWriter, oramaHome),
+		ntfy:        installers.NewNtfyInstaller(arch, logWriter),
+		sniRouter:   installers.NewSNIRouterInstaller(arch, logWriter, OramaDir),
 	}
 }
 
@@ -145,6 +149,50 @@ func (bi *BinaryInstaller) InstallCaddy() error {
 // ConfigureCaddy creates Caddy configuration files
 func (bi *BinaryInstaller) ConfigureCaddy(domain string, email string, acmeEndpoint string, baseDomain string) error {
 	return bi.caddy.Configure(domain, email, acmeEndpoint, baseDomain)
+}
+
+// EnableCaddyNtfyProxy tells the Caddy installer to emit a reverse-
+// proxy block for `hostname` → localhost:<NtfyListenPort> on the next
+// ConfigureCaddy() call. Used together with InstallNtfy /
+// ConfigureNtfy when this node hosts the self-hosted ntfy server
+// (feature #72).
+func (bi *BinaryInstaller) EnableCaddyNtfyProxy(hostname string) {
+	bi.caddy.EnableNtfyProxy(hostname)
+}
+
+// EnableCaddySNIRouterMode moves Caddy's HTTPS listener off :443 to :8443 on
+// the next ConfigureCaddy() call, freeing :443 for the orama-sni-router
+// (feat-124). Must be called BEFORE ConfigureCaddy.
+func (bi *BinaryInstaller) EnableCaddySNIRouterMode() {
+	bi.caddy.EnableSNIRouterMode()
+}
+
+// ConfigureSNIRouter writes the orama-sni-router YAML config (listen :443,
+// fallback Caddy on :8443, turn_discovery for baseDomain). Feat-124.
+func (bi *BinaryInstaller) ConfigureSNIRouter(baseDomain string) error {
+	return bi.sniRouter.Configure(baseDomain)
+}
+
+// WriteSNIRouterUnit writes /etc/systemd/system/orama-sni-router.service.
+func (bi *BinaryInstaller) WriteSNIRouterUnit() error {
+	return bi.sniRouter.WriteSystemdUnit()
+}
+
+// SNIRouterServiceName returns the systemd unit name for lifecycle calls.
+func (bi *BinaryInstaller) SNIRouterServiceName() string {
+	return installers.SNIRouterServiceName
+}
+
+// InstallNtfy installs the self-hosted ntfy server (binary, user,
+// systemd unit, data directory). Feature #72. Idempotent.
+func (bi *BinaryInstaller) InstallNtfy() error {
+	return bi.ntfy.Install()
+}
+
+// ConfigureNtfy writes /etc/ntfy/server.yml with the given public base
+// URL (e.g. "https://push.dbrs.space"). Feature #72.
+func (bi *BinaryInstaller) ConfigureNtfy(publicBaseURL string) error {
+	return bi.ntfy.Configure(publicBaseURL)
 }
 
 // Mock system commands for testing (if needed)

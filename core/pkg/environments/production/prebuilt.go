@@ -147,6 +147,22 @@ func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error
 		return fmt.Errorf("failed to set capabilities: %w", err)
 	}
 
+	// Install ntfy on every node (feature #72). ntfy is not bundled in
+	// the pre-built archive — its installer downloads from upstream and
+	// verifies the SHA-256 checksum. ntfy listens on
+	// 127.0.0.1:NtfyListenPort only (no public exposure), so it's safe
+	// to run cluster-wide; nodes that don't serve a public push.* DNS
+	// entry just have an idle ntfy with no inbound traffic. Uniform
+	// install means no per-node toggling and no surprises when DNS
+	// topology changes.
+	//
+	// Note: this must run BEFORE Phase 4's ConfigureNtfy, otherwise the
+	// chown of /etc/ntfy/server.yml fails because the `ntfy` user
+	// doesn't exist yet.
+	if err := ps.binaryInstaller.InstallNtfy(); err != nil {
+		ps.logf("  ⚠️  ntfy install warning: %v", err)
+	}
+
 	// Disable systemd-resolved stub listener for nameserver nodes
 	// (needed even in pre-built mode so CoreDNS can bind port 53)
 	if ps.isNameserver {

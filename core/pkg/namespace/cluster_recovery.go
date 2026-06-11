@@ -527,6 +527,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			IPFSAPIURL:            cm.ipfsAPIURL,
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
+			SecretsEncryptionKey:  cm.secretsEncryptionKey,
 		}
 
 		// Add WebRTC config if enabled for this namespace
@@ -536,6 +537,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 				gwCfg.SFUPort = sfuBlock.SFUSignalingPort
 				gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
 				gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+				gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
 			}
 		}
 
@@ -1069,6 +1071,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		IPFSAPIURL:            cm.ipfsAPIURL,
 		IPFSTimeout:           cm.ipfsTimeout,
 		IPFSReplicationFactor: cm.ipfsReplicationFactor,
+		SecretsEncryptionKey:  cm.secretsEncryptionKey,
 	}
 
 	// Add WebRTC config if enabled for this namespace
@@ -1078,6 +1081,7 @@ func (cm *ClusterManager) addNodeToCluster(
 			gwCfg.SFUPort = sfuBlock.SFUSignalingPort
 			gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
 			gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+			gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
 		}
 	}
 

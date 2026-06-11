@@ -187,6 +187,69 @@ The legacy `db_execute` is kept indefinitely so existing functions don't break. 
 |----------|-------------|
 | `pubsub_publish(topic, dataJSON)` → bool | Publish message to a PubSub topic. Returns true on success. |
 
+### Ephemeral State (WS-subscribe-tracked)
+
+Short-lived per-subscriber state (typing indicators, presence, call ringing,
+live cursors) that the gateway **auto-clears the moment the owning WebSocket
+client disconnects** — no heartbeats, no prune crons. State also expires on a
+TTL backstop (default 60 s, max 30 min). The owning client ID and namespace
+come from the server-trusted invocation context; functions cannot spoof them.
+
+| Function | Description |
+|----------|-------------|
+| `ephemeral_state_set(topic, key, payload, ttlMs)` → u32 | Record state owned by the CURRENT invocation's WS client and publish an `ephemeral.set` event on the topic. 1 = ok, 0 = failure (no WS client, empty topic/key, payload > 16 KiB, > 256 keys/client). |
+| `ephemeral_state_clear(topic, key)` → u32 | Clear state this client owns; publishes `ephemeral.clear` (reason `explicit`). Idempotent — clearing a missing/non-owned key returns 1. |
+| `ephemeral_state_list(topic)` → u64 | Reconnect catch-up read: packed `ptr<<32\|len` of a JSON envelope with the live entries on the topic. Works without a WS client (read-only). 0 on failure. |
+
+Raw import signatures (pointer/length ABI — note `ttlMs` is **i64**):
+
+```go
+//go:wasmimport env ephemeral_state_set
+func ephemeralStateSet(topicPtr *byte, topicLen uint32, keyPtr *byte, keyLen uint32,
+	payloadPtr *byte, payloadLen uint32, ttlMs int64) uint32
+
+//go:wasmimport env ephemeral_state_clear
+func ephemeralStateClear(topicPtr *byte, topicLen uint32, keyPtr *byte, keyLen uint32) uint32
+
+//go:wasmimport env ephemeral_state_list
+func ephemeralStateList(topicPtr *byte, topicLen uint32) uint64 // ptr<<32|len of JSON
+```
+
+Synthetic events are published **on the same topic** the state lives on, with
+the `_orama` control-frame discriminator (same dispatch pattern as the
+`auth.refresh` frame). Subscribers update their local view from the stream:
+
+```json
+{"_orama":"ephemeral.set",  "topic":"typing:room1", "key":"user-7", "client_id":"ws-abc", "payload":"<base64>"}
+{"_orama":"ephemeral.clear","topic":"typing:room1", "key":"user-7", "client_id":"ws-abc", "reason":"disconnect"}
+```
+
+`reason` is `explicit` (function called clear), `disconnect` (owning WS client
+went away — the zero-lag path), or `expired` (TTL backstop). `payload` is
+base64 (Go `[]byte` JSON encoding) and present only on `ephemeral.set`.
+
+`ephemeral_state_list` returns:
+
+```json
+{"entries":[{"key":"user-7","client_id":"ws-abc","payload":"<base64>","expires_in_ms":48211}]}
+```
+
+Typing-indicator shape (called from a `ws_persistent` rpc-router function):
+
+```go
+// Client sends {"op":"typing.start","room":"room1","user":"user-7"} → handler:
+ephemeralStateSet(ptr("typing:"+room), len32("typing:"+room),
+	ptr(userID), len32(userID), nil, 0, 30_000) // 30s TTL backstop
+
+// Client sends typing.stop → handler:
+ephemeralStateClear(ptr("typing:"+room), len32("typing:"+room), ptr(userID), len32(userID))
+
+// No typing.stop needed on app kill / network drop: the WS disconnect publishes
+// {"_orama":"ephemeral.clear",...,"reason":"disconnect"} to every subscriber
+// immediately. On (re)connect, call ephemeral_state_list("typing:"+room) once
+// to seed local state, then track the event stream.
+```
+
 ### Logging
 
 | Function | Description |

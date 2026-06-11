@@ -26,9 +26,13 @@ type AuthService interface {
 	// Returns: accessToken, refreshToken, expirationUnix, error.
 	IssueTokens(ctx context.Context, wallet, namespace string) (string, string, int64, error)
 
-	// RefreshToken validates a refresh token and issues a new access token.
-	// Returns: newAccessToken, subject (wallet), expirationUnix, error.
-	RefreshToken(ctx context.Context, refreshToken, namespace string) (string, string, int64, error)
+	// RefreshToken atomically rotates a refresh token: validates the supplied
+	// token, revokes it, mints a fresh refresh token alongside a new access
+	// token, and returns both. RFC 9700 §4.12 / feature #68.
+	// Returns: newAccessToken, newRefreshToken, subject (wallet), expirationUnix, error.
+	// The error sentinel ErrRefreshTokenReplay indicates the CAS lock was lost
+	// (concurrent use or replay attempt).
+	RefreshToken(ctx context.Context, refreshToken, namespace string) (string, string, string, int64, error)
 
 	// RevokeToken invalidates a refresh token or all tokens for a subject.
 	// If token is provided, revokes that specific token.

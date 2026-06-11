@@ -51,11 +51,27 @@ type Config struct {
 	// Loaded from ~/.orama/secrets/api-key-hmac-secret.
 	APIKeyHMACSecret string
 
-	// WebRTC configuration (set when namespace has WebRTC enabled)
-	WebRTCEnabled bool   // Whether WebRTC endpoints are active on this gateway
-	SFUPort       int    // Local SFU signaling port to proxy WebSocket connections to
+	// SecretsEncryptionKey is the AES-256 key (32 bytes, hex-encoded → 64
+	// hex chars) used to encrypt serverless function secrets at rest in the
+	// function_secrets table. It MUST be identical on every namespace-gateway
+	// node in a cluster and stable across restarts — otherwise secrets
+	// encrypted by one process cannot be decrypted by another (bugboard #837).
+	// Loaded from ~/.orama/secrets/secrets-encryption-key.
+	SecretsEncryptionKey string
+
+	// WebRTC configuration (set when namespace has WebRTC enabled).
+	//
+	// WebRTCEnabled is RETAINED for back-compat with operator YAML and
+	// the spawn-handler request shape, but no longer gates route
+	// registration (bugboard #411). Routes auto-register whenever
+	// SFUPort > 0 — the actual operational prerequisite. Validate still
+	// uses WebRTCEnabled to enforce "if you opted in, you MUST set the
+	// dependent fields", which catches obvious YAML typos at config
+	// load.
+	WebRTCEnabled bool   // legacy opt-in; routes auto-register when SFUPort>0 regardless. Kept for back-compat.
+	SFUPort       int    // Local SFU signaling port to proxy WebSocket connections to. >0 = WebRTC routes registered.
 	TURNDomain    string // TURN server domain for credential generation
-	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation
+	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation (empty → /v1/webrtc/turn/credentials returns 503)
 
 	// StealthCDNDomain, when set, makes the WebRTC credentials handler
 	// advertise turns:<StealthCDNDomain>:443 (served by the SNI router).

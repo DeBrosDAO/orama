@@ -16,12 +16,29 @@ import (
 
 // checkWSOrigin validates WebSocket origins against the request's Host header.
 // Non-browser clients (no Origin) are allowed. Browser clients must match the host.
+//
+// Bug #240/#249 root cause: when this handler runs on a NAMESPACE gateway,
+// the request has been proxied through `handleNamespaceGatewayRequest`
+// which REWRITES `r.Host` to the backend target's IP:port (e.g.
+// "10.0.0.6:10004") before forwarding. The original public host (e.g.
+// "ns-anchat-test.orama-devnet.network") is preserved in the
+// `X-Forwarded-Host` header. If we only compare the Origin against
+// `r.Host`, browser/RN-iOS clients (which always send Origin) are
+// rejected with 403 because their Origin's `ns-anchat-test.orama-devnet.network`
+// will never match the proxied `10.0.0.6` target. Curl tests that don't
+// send Origin slip through, masking the bug.
+//
+// Prefer X-Forwarded-Host (the original public host) when present,
+// falling back to r.Host for direct (non-proxied) connections.
 func checkWSOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
 	}
-	host := r.Host
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
 	if host == "" {
 		return false
 	}
@@ -155,6 +172,26 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		}
 
 		resp, err := h.invoker.Invoke(ctx, req)
+		// Bugboard #24 diagnostic — when the 30s WS-handler timeout
+		// actually fires, log a structured warning so AnChat's next
+		// "signaling.relay timed out" report includes request_id +
+		// function + namespace + duration. Pre-fix this surfaced as
+		// opaque "RPC timeout after 30s" with no way to correlate to a
+		// specific invocation in engine logs.
+		if err != nil && ctx.Err() == context.DeadlineExceeded {
+			fields := []zap.Field{
+				zap.String("namespace", namespace),
+				zap.String("function", name),
+				zap.String("ws_client_id", clientID),
+				zap.Int64("duration_ms", resp.DurationMS),
+				zap.Int("timeout_ms", 30000),
+				zap.String("caller_wallet", callerWallet),
+			}
+			if resp.RequestID != "" {
+				fields = append(fields, zap.String("request_id", resp.RequestID))
+			}
+			h.logger.Warn("WS function-invoke hit 30s ceiling (bug-24)", fields...)
+		}
 		cancel()
 
 		// Send response back

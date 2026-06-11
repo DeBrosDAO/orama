@@ -59,6 +59,21 @@ type BatchResult struct {
 // 100 is plenty for any realistic transactional unit of work.
 const MaxBatchOps = 100
 
+// MaxBatchQueryRowsPerOp caps the row count returned per query in a
+// BatchQuery result. Without this, a malicious or buggy WASM function
+// could OOM the gateway by submitting `SELECT * FROM <large_table>` and
+// having every row materialized into a Go map. 10000 rows fits comfortably
+// in memory even when multiplied by MaxBatchOps; functions that legitimately
+// need more should paginate.
+const MaxBatchQueryRowsPerOp = 10000
+
+// MaxBatchQueryTotalBytes caps the aggregate JSON-encoded size of all
+// BatchQuery results across all ops. Defense in depth against the same
+// OOM vector as MaxBatchQueryRowsPerOp — a single op could have 5000
+// rows × 20KB each = 100MB and still be under the per-op count cap.
+// 32 MiB matches the WASM module memory ceiling order-of-magnitude.
+const MaxBatchQueryTotalBytes = 32 * 1024 * 1024
+
 // BatchWithSeq executes the user's ops atomically AND, in the same atomic
 // batch, increments the per-namespace publish sequence counter so the caller
 // can attach the assigned seq to a follow-up wake-up message.
@@ -197,6 +212,179 @@ func coerceInt64(v interface{}) (int64, error) {
 		return i, nil
 	default:
 		return 0, fmt.Errorf("unsupported type %T", v)
+	}
+}
+
+// BatchQuery runs N SELECT statements in a single HTTP request to RQLite's
+// /db/query endpoint via the native gorqlite Connection, returning one
+// OpResult per input op in the original order.
+//
+// Why this exists: c.Query (sql.DB path) sends ONE statement per HTTP call,
+// paying a full leader round-trip each time. For functions that gather state
+// from many tables before doing work (e.g. anchat's message-create gathers
+// auth + participants + devices = 7-10 reads), the per-call RTT dominates —
+// 10 sequential reads on devnet's cross-region cluster take ~3.5s vs ~330ms
+// for the batched form. See bugboard #270 for the workload measurement.
+//
+// Semantics:
+//   - All ops MUST be Kind=BatchOpQuery. Exec ops error out at validation.
+//   - All N statements are sent in one POST to /db/query with level=weak,
+//     so they all run on the leader and see the same committed snapshot.
+//   - Per-op errors are reported in OpResult.Error (one entry per input,
+//     same order). The whole call only returns a Go error on transport
+//     failures (network, leader unreachable, JSON malformed) or validation.
+//   - Rows arrive as []map[string]interface{} just like c.Query — columns
+//     are populated via the rqlite "associative" response shape.
+func (c *client) BatchQuery(ctx context.Context, ops []BatchOp) ([]OpResult, error) {
+	return c.BatchQueryConsistency(ctx, ops, ReadConsistencyWeak)
+}
+
+// BatchQueryConsistency is BatchQuery with an explicit read-consistency level.
+//
+// ReadConsistencyWeak (what BatchQuery passes) routes the batch to the leader
+// so every row reflects the latest committed write — at the cost of a leader
+// round-trip. ReadConsistencyNone routes to the serving node's LOCAL SQLite
+// (~1ms, no leader hop) and is ONLY safe for reads that don't need
+// read-your-own-writes freshness — see ReadConsistency and bug #235.
+//
+// none-level reads run on connNone; if that connection isn't configured the
+// batch transparently uses the weak connection (correct, just slower).
+func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc ReadConsistency) ([]OpResult, error) {
+	if len(ops) == 0 {
+		return []OpResult{}, nil
+	}
+	if len(ops) > MaxBatchOps {
+		return nil, fmt.Errorf("rqlite.BatchQuery: too many ops (%d > max %d)", len(ops), MaxBatchOps)
+	}
+	conn := c.queryConn(rc)
+	if conn == nil {
+		return nil, fmt.Errorf("rqlite.BatchQuery: native gorqlite connection not configured (use NewClientWithDSN or NewClientWithConn)")
+	}
+
+	// Validate up-front: callers must use BatchOpQuery for every entry.
+	// Mixing in an Exec would be a footgun (it'd silently be skipped or
+	// trigger an unrelated error from the query endpoint), so reject loud.
+	stmts := make([]gorqlite.ParameterizedStatement, len(ops))
+	for i, op := range ops {
+		if op.Kind != BatchOpQuery {
+			return nil, fmt.Errorf("rqlite.BatchQuery: op %d has kind %q (only %q allowed; use Batch for mixed exec/query)",
+				i, op.Kind, BatchOpQuery)
+		}
+		stmts[i] = gorqlite.ParameterizedStatement{
+			Query:     op.SQL,
+			Arguments: op.Args,
+		}
+	}
+
+	qrs, err := conn.QueryParameterizedContext(ctx, stmts)
+	if err != nil {
+		// gorqlite returns a slice of QueryResult even on partial failure;
+		// extract per-op errors if available, else surface the joined err.
+		if len(qrs) == 0 {
+			return nil, fmt.Errorf("rqlite.BatchQuery: %w", err)
+		}
+		// Fall through to map qrs → OpResults; per-op errors are in qr.Err.
+	}
+
+	// Track aggregate result size across all ops as a defense-in-depth
+	// OOM guard. If a single op stays under MaxBatchQueryRowsPerOp but
+	// the SUM across ops still grows pathologically large, this cap
+	// trips and the remaining ops surface an error rather than blowing
+	// the gateway's heap.
+	var totalBytes int
+	out := make([]OpResult, len(ops))
+	for i, qr := range qrs {
+		if totalBytes >= MaxBatchQueryTotalBytes {
+			out[i] = OpResult{
+				Kind:  BatchOpQuery,
+				Error: fmt.Sprintf("rqlite.BatchQuery: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
+					MaxBatchQueryTotalBytes),
+			}
+			continue
+		}
+		opRes := queryResultToOpResult(qr)
+		totalBytes += estimateOpResultBytes(opRes)
+		out[i] = opRes
+	}
+	// If fewer results returned than ops requested (shouldn't happen per
+	// gorqlite contract), pad with errors so caller indexing matches input.
+	for i := len(qrs); i < len(ops); i++ {
+		out[i] = OpResult{
+			Kind:  BatchOpQuery,
+			Error: "rqlite.BatchQuery: no result returned for op " + fmt.Sprint(i),
+		}
+	}
+	return out, nil
+}
+
+// estimateOpResultBytes is a cheap approximation of the JSON-encoded
+// size of an OpResult, used only for the aggregate-bytes cap in
+// BatchQuery. Doesn't have to be exact — overestimating is safer than
+// underestimating, since the cap is a DoS guard, not a billing meter.
+func estimateOpResultBytes(r OpResult) int {
+	// Per-row overhead: ~32 bytes for JSON braces + commas + key wrappers.
+	// Per-cell: key length (assume 16) + value bytes.
+	const perRowOverhead = 32
+	const perCellOverhead = 16
+	total := len(r.Error) + perRowOverhead
+	for _, row := range r.Rows {
+		total += perRowOverhead
+		for k, v := range row {
+			total += len(k) + perCellOverhead
+			switch x := v.(type) {
+			case string:
+				total += len(x)
+			case []byte:
+				total += len(x)
+			default:
+				// numerics, bools, nil — bounded constants, count as 16.
+				total += 16
+			}
+		}
+	}
+	return total
+}
+
+// queryResultToOpResult converts a single gorqlite.QueryResult into our
+// OpResult wire shape, including row materialization via the associative
+// API. Per-op errors are surfaced via OpResult.Error.
+//
+// Enforces MaxBatchQueryRowsPerOp as a DoS guard — a single op returning
+// more rows is truncated and Error is set so the WASM caller can decide
+// whether to paginate or treat it as fatal. Without this guard a malicious
+// `SELECT * FROM <large_table>` could OOM the gateway.
+func queryResultToOpResult(qr gorqlite.QueryResult) OpResult {
+	if qr.Err != nil {
+		return OpResult{
+			Kind:  BatchOpQuery,
+			Error: qr.Err.Error(),
+		}
+	}
+	// Materialize all rows as map[string]interface{} via the associative
+	// iterator — matches how c.Query consumers expect rows to look.
+	var rows []map[string]interface{}
+	for qr.Next() {
+		if len(rows) >= MaxBatchQueryRowsPerOp {
+			return OpResult{
+				Kind:  BatchOpQuery,
+				Rows:  rows,
+				Error: fmt.Sprintf("rqlite.BatchQuery: row cap exceeded (%d) — paginate via LIMIT/OFFSET",
+					MaxBatchQueryRowsPerOp),
+			}
+		}
+		row, mapErr := qr.Map()
+		if mapErr != nil {
+			return OpResult{
+				Kind:  BatchOpQuery,
+				Rows:  rows,
+				Error: "rqlite.BatchQuery: row map: " + mapErr.Error(),
+			}
+		}
+		rows = append(rows, row)
+	}
+	return OpResult{
+		Kind: BatchOpQuery,
+		Rows: rows,
 	}
 }
 

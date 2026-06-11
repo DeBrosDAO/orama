@@ -6,10 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
+
+// dbQueryBatchTimeout caps the rqlite round-trip for a single
+// `oh.DBQueryBatch` host call. Tighter than the function's invocation
+// timeout (typically 15-30s) so a stalled leader doesn't burn the entire
+// budget on one batched read; the WASM function still has headroom to
+// do downstream work after the read returns. 10s is generous for the
+// 167ms-RTT cross-region devnet cluster (one round-trip ~340ms) while
+// catching genuine leader stalls quickly.
+const dbQueryBatchTimeout = 10 * time.Second
 
 // DBQuery executes a SELECT query and returns JSON-encoded results.
 func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interface{}) ([]byte, error) {
@@ -176,6 +186,126 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 	return out, nil
 }
 
+// dbQueryBatchRequest is the WASM-side shape for db_query_batch input.
+// Each op MUST be Kind=BatchOpQuery; mixing exec is rejected at the
+// rqlite layer.
+type dbQueryBatchRequest struct {
+	Ops []rqlite.BatchOp `json:"ops"`
+	// Consistency is the optional rqlite read level for this batch.
+	// "" / "weak" (default): leader-routed, always fresh. "none": fast LOCAL
+	// read (~1ms, no leader hop) — ONLY safe for reads that don't need
+	// read-your-own-writes freshness (see rqlite.ReadConsistency / bug #235).
+	// feat-6: lets read-heavy functions skip the cross-region weak-read hop.
+	Consistency string `json:"consistency,omitempty"`
+}
+
+// batchQueryConsistencyClient is the optional capability a Client exposes when
+// it can serve reads at an explicit consistency level. The production
+// *rqlite.client implements it; bare test mocks don't. Kept OFF the
+// rqlite.Client interface so the none-read path doesn't churn every mock.
+type batchQueryConsistencyClient interface {
+	BatchQueryConsistency(ctx context.Context, ops []rqlite.BatchOp, rc rqlite.ReadConsistency) ([]rqlite.OpResult, error)
+}
+
+// resolveBatchQuery runs the batched read at the requested consistency.
+// Empty or "weak" → the default leader-routed read. "none" → a fast local read
+// via the consistency-capable client (degrading to weak only when the client
+// can't serve an explicit level — weak is always correct). Unknown values are
+// rejected here at the boundary rather than silently downgraded.
+func (h *HostFunctions) resolveBatchQuery(ctx context.Context, ops []rqlite.BatchOp, consistency string) ([]rqlite.OpResult, error) {
+	switch consistency {
+	case "", string(rqlite.ReadConsistencyWeak):
+		return h.db.BatchQuery(ctx, ops)
+	case string(rqlite.ReadConsistencyNone):
+		if ext, ok := h.db.(batchQueryConsistencyClient); ok {
+			return ext.BatchQueryConsistency(ctx, ops, rqlite.ReadConsistencyNone)
+		}
+		return h.db.BatchQuery(ctx, ops)
+	default:
+		return nil, fmt.Errorf("invalid consistency %q (allowed: \"none\", \"weak\")", consistency)
+	}
+}
+
+// dbQueryBatchResult is the JSON wire shape returned to WASM callers.
+// `Results` is one entry per input op, in the same order. Per-op errors
+// are surfaced in `error`; transport/validation errors come back as a
+// Go error from the host fn.
+type dbQueryBatchResult struct {
+	Results []rqlite.OpResult `json:"results"`
+}
+
+// DBQueryBatch runs N SELECTs in one round-trip via RQLite's /db/query
+// bulk endpoint. Designed for read-heavy functions that gather state
+// from multiple tables before doing work (e.g. anchat's message-create
+// reads auth + participants + devices = 7-10 SELECTs).
+//
+// Wire shapes:
+//
+//	in:  {"ops": [{"sql":"...","args":[...]}, ...]}
+//	out: {"results": [{"kind":"query","rows":[...],"error":""}, ...]}
+//
+// Per-query errors are reported in the per-op `error` field; the host
+// fn only returns a Go error on setup/validation/transport failures.
+// Kind is auto-set to "query" on input — exec ops are rejected, since
+// mixing kinds in a query batch is meaningless and would silently
+// drop the writes (see bugboard #270).
+//
+// Empirical baseline on devnet's cross-region cluster (167ms RTT to
+// leader): 10 sequential DBQuery host calls = ~3.5s; one DBQueryBatch
+// with 10 statements = ~340ms. 10× speedup.
+func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	if h.db == nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: serverless.ErrDatabaseUnavailable}
+	}
+	var req dbQueryBatchRequest
+	if err := json.Unmarshal(opsJSON, &req); err != nil {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("invalid json: %w", err),
+		}
+	}
+	if len(req.Ops) == 0 {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("ops required"),
+		}
+	}
+	if len(req.Ops) > rqlite.MaxBatchOps {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("too many ops: max %d", rqlite.MaxBatchOps),
+		}
+	}
+	// Force kind=query for every op. Callers can omit the field; this
+	// makes the wire format more ergonomic AND prevents accidental exec
+	// ops from being silently dropped by the rqlite-side validator.
+	for i := range req.Ops {
+		req.Ops[i].Kind = rqlite.BatchOpQuery
+	}
+
+	// Explicit batch-level deadline. The caller's ctx already carries the
+	// function's invocation timeout (typically 15-30s), but we want a
+	// tighter cap on the rqlite round-trip itself so a stalled leader
+	// doesn't burn the entire invocation budget on one batched query.
+	// Leaves headroom for downstream WASM work after the read returns.
+	batchCtx, cancel := context.WithTimeout(ctx, dbQueryBatchTimeout)
+	defer cancel()
+
+	results, err := h.resolveBatchQuery(batchCtx, req.Ops, req.Consistency)
+	if err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: err}
+	}
+
+	out, mErr := json.Marshal(dbQueryBatchResult{Results: results})
+	if mErr != nil {
+		return nil, &serverless.HostFunctionError{
+			Function: "db_query_batch",
+			Cause:    fmt.Errorf("marshal result: %w", mErr),
+		}
+	}
+	return out, nil
+}
+
 // execAndPublishResult is the JSON wire shape returned to WASM callers.
 type execAndPublishResult struct {
 	Results      []rqlite.OpResult `json:"results"`
@@ -220,12 +350,11 @@ func (h *HostFunctions) ExecAndPublish(
 	}
 
 	// Resolve namespace from invocation context — server-trusted.
-	h.invCtxLock.RLock()
+	// ctx-attached invCtx wins over singleton; see invocation_context.go.
 	ns := ""
-	if h.invCtx != nil {
-		ns = h.invCtx.Namespace
+	if cur := h.currentInvocationContext(ctx); cur != nil {
+		ns = cur.Namespace
 	}
-	h.invCtxLock.RUnlock()
 	if ns == "" {
 		return nil, &serverless.HostFunctionError{
 			Function: "exec_and_publish",
@@ -244,6 +373,17 @@ func (h *HostFunctions) ExecAndPublish(
 		return nil, &serverless.HostFunctionError{
 			Function: "exec_and_publish",
 			Cause:    fmt.Errorf("too many ops: max %d", rqlite.MaxBatchOps),
+		}
+	}
+
+	// exec_and_publish reaches the same shared gossipsub publish path as
+	// pubsub_publish, so it must charge the same per-invocation publish budget
+	// (it publishes exactly one wake-up message on commit). Checked before the
+	// write so an over-budget call has no side effects.
+	if n := serverless.AddPublishCount(ctx, 1); n > maxPublishesPerInvocation {
+		return nil, &serverless.HostFunctionError{
+			Function: "exec_and_publish",
+			Cause:    fmt.Errorf("publish budget exceeded (max %d per invocation)", maxPublishesPerInvocation),
 		}
 	}
 

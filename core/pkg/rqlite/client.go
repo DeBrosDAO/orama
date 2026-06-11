@@ -27,14 +27,29 @@ func NewClient(db *sql.DB) Client {
 // or "https://..."). Both connections share configuration but are independent
 // HTTP clients.
 //
-// Returns an error if the gorqlite native dial fails. The *sql.DB is not
+// It also opens a SECOND native connection pinned to level=none, used by the
+// opt-in local-read path (BatchQueryConsistency). gorqlite's consistency level
+// is per-connection, not per-query, so a dedicated connection is the only way
+// to offer none-level reads without disturbing the default weak reads.
+//
+// Returns an error if either gorqlite native dial fails. The *sql.DB is not
 // validated here — callers should already have done that.
 func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 	conn, err := gorqlite.Open(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("rqlite.NewClientWithDSN: native dial failed: %w", err)
 	}
-	return &client{db: db, conn: conn}, nil
+	connNone, err := gorqlite.Open(dsn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("rqlite.NewClientWithDSN: native dial (none-level) failed: %w", err)
+	}
+	if err := connNone.SetConsistencyLevel(gorqlite.ConsistencyLevelNone); err != nil {
+		conn.Close()
+		connNone.Close()
+		return nil, fmt.Errorf("rqlite.NewClientWithDSN: pin none consistency: %w", err)
+	}
+	return &client{db: db, conn: conn, connNone: connNone}, nil
 }
 
 // NewClientWithConn wires the ORM client when the caller already has a
@@ -55,6 +70,49 @@ func NewClientFromAdapter(adapter *RQLiteAdapter) Client {
 type client struct {
 	db   *sql.DB
 	conn *gorqlite.Connection
+	// connNone is a second native connection pinned to level=none. Used only
+	// by BatchQueryConsistency(ReadConsistencyNone) for fast LOCAL reads that
+	// skip the leader hop. nil for clients built without a native connection
+	// (NewClient) or via NewClientWithConn — in which case none-reads degrade
+	// to the weak conn (always correct, just slower).
+	connNone *gorqlite.Connection
+}
+
+// ReadConsistency selects the rqlite read-consistency level for a read path.
+// rqlite consistency applies to READS only; writes always traverse Raft.
+//
+//   - ReadConsistencyWeak (default): the serving node forwards the read to the
+//     leader, so it always observes the latest committed write. On a
+//     cross-region cluster this costs a full leader round-trip per read
+//     (feat-6: ~273ms on the Singapore↔leader hop).
+//   - ReadConsistencyNone: the serving node answers from its LOCAL SQLite
+//     without contacting the leader (~1ms). It may return a slightly stale
+//     snapshot when this node is a follower lagging in Raft replay, so it is
+//     ONLY safe for reads that do not need to observe a write made earlier in
+//     the same invocation (bug #235). Read-your-own-writes flows must stay on
+//     weak, or fold the read into a DBTransaction post-commit query.
+type ReadConsistency string
+
+const (
+	ReadConsistencyWeak ReadConsistency = "weak"
+	ReadConsistencyNone ReadConsistency = "none"
+)
+
+// useNoneConn reports whether a read at consistency rc should use the
+// dedicated none-level connection. Pure decision split out for unit testing
+// without a live rqlite dial.
+func useNoneConn(rc ReadConsistency, hasNoneConn bool) bool {
+	return rc == ReadConsistencyNone && hasNoneConn
+}
+
+// queryConn picks the native connection matching the requested read
+// consistency. Returns the weak (leader-routed) connection when none-level is
+// not requested or not available; weak is always correct, only slower.
+func (c *client) queryConn(rc ReadConsistency) *gorqlite.Connection {
+	if useNoneConn(rc, c.connNone != nil) {
+		return c.connNone
+	}
+	return c.conn
 }
 
 // Query runs an arbitrary SELECT and scans rows into dest.

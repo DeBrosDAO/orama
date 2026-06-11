@@ -353,6 +353,78 @@ func (drm *DNSRecordManager) DeleteTURNRecords(ctx context.Context, namespaceNam
 	return nil
 }
 
+// stealthDNSNamespace is the dns_records ownership tag for a namespace's
+// stealth TURNS records, distinct from "namespace-turn:" so deleting one set
+// never touches the other.
+func stealthDNSNamespace(namespaceName string) string {
+	return "namespace-turn-stealth:" + namespaceName
+}
+
+// CreateStealthTURNRecords creates DNS A records for the stealth TURNS host
+// (feat-124): <stealthHost> -> TURN node IPs. The hostname is the neutral
+// cdn-<hash>.<base-domain> label from turn.StealthHostForNamespace — it lives
+// directly under the base domain (NOT under ns-<namespace>) so the SNI string
+// never identifies the app.
+func (drm *DNSRecordManager) CreateStealthTURNRecords(ctx context.Context, namespaceName, stealthHost string, turnIPs []string) error {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	if stealthHost == "" {
+		return &ClusterError{Message: "no stealth host provided for DNS records"}
+	}
+	if len(turnIPs) == 0 {
+		return &ClusterError{Message: "no TURN IPs provided for stealth DNS records"}
+	}
+
+	fqdn := stealthHost + "."
+
+	drm.logger.Info("Creating stealth TURNS DNS records",
+		zap.String("namespace", namespaceName),
+		zap.String("fqdn", fqdn),
+		zap.Strings("turn_ips", turnIPs),
+	)
+
+	deleteQuery := `DELETE FROM dns_records WHERE namespace = ?`
+	_, _ = drm.db.Exec(internalCtx, deleteQuery, stealthDNSNamespace(namespaceName))
+
+	now := time.Now()
+	for _, ip := range turnIPs {
+		insertQuery := `
+			INSERT INTO dns_records (
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`
+		_, err := drm.db.Exec(internalCtx, insertQuery,
+			fqdn, "A", ip, 60,
+			stealthDNSNamespace(namespaceName),
+			"cluster-manager",
+			now, now,
+		)
+		if err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("failed to create stealth TURNS DNS record %s -> %s", fqdn, ip),
+				Cause:   err,
+			}
+		}
+	}
+
+	return nil
+}
+
+// DeleteStealthTURNRecords deletes a namespace's stealth TURNS DNS records.
+func (drm *DNSRecordManager) DeleteStealthTURNRecords(ctx context.Context, namespaceName string) error {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	deleteQuery := `DELETE FROM dns_records WHERE namespace = ?`
+	_, err := drm.db.Exec(internalCtx, deleteQuery, stealthDNSNamespace(namespaceName))
+	if err != nil {
+		return &ClusterError{
+			Message: "failed to delete stealth TURNS DNS records",
+			Cause:   err,
+		}
+	}
+	return nil
+}
+
 // EnableNamespaceRecord marks a specific IP's record as active (for recovery)
 func (drm *DNSRecordManager) EnableNamespaceRecord(ctx context.Context, namespaceName, ip string) error {
 	internalCtx := client.WithInternalAuth(ctx)

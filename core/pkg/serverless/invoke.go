@@ -59,6 +59,12 @@ type InvokeRequest struct {
 	// engine can populate InvocationContext.CallerJWTSubject — fixes the
 	// bug-#215 case where API-key precedence buries the JWT identity.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+	// TriggerDepth is the recursion-depth bucket at which this invocation
+	// runs. 0 means top-level (HTTP/WS/cron source); each trigger-driven
+	// invocation increments it. The dispatcher's host-fn wildcard path
+	// (bugboard #93) uses this to bound local recursion that otherwise
+	// would not round-trip through libp2p network latency.
+	TriggerDepth int `json:"trigger_depth,omitempty"`
 }
 
 // InvokeResponse contains the result of a function invocation.
@@ -69,6 +75,13 @@ type InvokeResponse struct {
 	Error      string           `json:"error,omitempty"`
 	DurationMS int64            `json:"duration_ms"`
 	Retries    int              `json:"retries,omitempty"`
+
+	// RawHTTP carries a verbatim HTTP response set by a RawHTTPResponse
+	// function via set_http_response (bugboard #835). nil for normal
+	// functions and for raw functions that never called set_http_response —
+	// the HTTP handler falls back to the standard JSON/Ack path in that case.
+	// Not serialized; consumed directly by the HTTP invoke handler.
+	RawHTTP *RawHTTPResult `json:"-"`
 }
 
 // Invoke executes a function with automatic retry logic.
@@ -97,15 +110,24 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		}, err
 	}
 
-	// Check authorization
-	authorized, err := i.CanInvoke(ctx, req.Namespace, req.FunctionName, req.CallerWallet)
-	if err != nil || !authorized {
-		return &InvokeResponse{
-			RequestID:  requestID,
-			Status:     InvocationStatusError,
-			Error:      "unauthorized",
-			DurationMS: time.Since(startTime).Milliseconds(),
-		}, ErrUnauthorized
+	// Check authorization — ONLY for user-driven trigger types. System
+	// triggers (cron, pubsub, database, timer, job) fire from rows the
+	// gateway itself persisted on behalf of an already-authenticated
+	// operator; there is no per-invocation caller identity to check, and
+	// requiring one is a 100% blocking no-op safety check (see bugboard
+	// #264). The auth boundary for system triggers is at REGISTRATION
+	// time (HTTP `POST /v1/functions/{name}/triggers`, or deploy-time
+	// auto-register from function.yaml), not at firing time.
+	if !isSystemTrigger(req.TriggerType) {
+		authorized, err := i.CanInvoke(ctx, req.Namespace, req.FunctionName, req.CallerWallet)
+		if err != nil || !authorized {
+			return &InvokeResponse{
+				RequestID:  requestID,
+				Status:     InvocationStatusError,
+				Error:      "unauthorized",
+				DurationMS: time.Since(startTime).Milliseconds(),
+			}, ErrUnauthorized
+		}
 	}
 
 	// Get environment variables
@@ -128,6 +150,7 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		EnvVars:          envVars,
 		CallerClaims:     req.CallerClaims,
 		CallerJWTSubject: req.CallerJWTSubject,
+		TriggerDepth:     req.TriggerDepth,
 	}
 
 	// Execute with retry logic
@@ -153,6 +176,8 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	}
 
 	response.Status = InvocationStatusSuccess
+	// Surface any verbatim HTTP response the function set (bugboard #835).
+	response.RawHTTP = invCtx.RawHTTP
 	return response, nil
 }
 
@@ -451,6 +476,29 @@ func (i *Invoker) BatchInvoke(ctx context.Context, req *BatchInvokeRequest) (*Ba
 // until there's a concrete tenant requirement. Today, "private" means
 // "authenticated in-namespace caller required" and that's enforced
 // here + at authMiddleware.
+// isSystemTrigger reports whether a trigger type fires from gateway-internal
+// state (a cron row, a pubsub dispatcher, a DB-change watcher, an in-process
+// scheduler) rather than from an external caller request.
+//
+// The distinction matters for authorization:
+//
+//   - User-driven triggers (HTTP, WebSocket) carry a real caller identity
+//     populated by auth middleware. CanInvoke gates them on that identity.
+//   - System triggers carry no caller identity by design — they were
+//     registered by an already-authenticated operator, stored in the
+//     namespace's own rqlite, and are now firing from the gateway process
+//     itself. Gating them on CallerWallet returns false unconditionally and
+//     silently blocks every fire (bugboard #264 — discovered via a cron
+//     trigger that fired every minute with "unauthorized" for 19+ hours).
+func isSystemTrigger(t TriggerType) bool {
+	switch t {
+	case TriggerTypeCron, TriggerTypePubSub, TriggerTypeDatabase,
+		TriggerTypeTimer, TriggerTypeJob:
+		return true
+	}
+	return false
+}
+
 func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string, callerWallet string) (bool, error) {
 	fn, err := i.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {

@@ -13,6 +13,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// JWTVerifier is the subset of *auth.Service the serverless handlers
+// need for mid-session token refresh on persistent WS (bugboard #321).
+// Kept as an interface so tests can pass a fake without standing up
+// the full auth service.
+type JWTVerifier interface {
+	ParseAndVerifyJWT(token string) (*auth.JWTClaims, error)
+}
+
 // ServerlessHandlers contains handlers for serverless function endpoints.
 // It's a separate struct to keep the Gateway struct clean.
 type ServerlessHandlers struct {
@@ -26,6 +34,7 @@ type ServerlessHandlers struct {
 	persistentMgr  *persistent.Manager // optional; when nil persistent WS rejects 503
 	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
 	secretsManager serverless.SecretsManager
+	jwtVerifier    JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
 	logger         *zap.Logger
 }
 
@@ -61,6 +70,19 @@ func NewServerlessHandlers(
 		secretsManager: secretsManager,
 		logger:         logger,
 	}
+}
+
+// SetJWTVerifier wires the JWT verifier used for mid-session auth
+// refresh on persistent WS (bugboard #321 control frame). Optional —
+// when not set, the persistent WS handler rejects auth.refresh frames
+// with a "not supported on this gateway" ack and the client falls back
+// to the legacy close+reconnect path.
+//
+// Done as a setter rather than a constructor arg to avoid breaking
+// existing call sites that don't yet have an auth service handy. Set
+// once at gateway init, after construction.
+func (h *ServerlessHandlers) SetJWTVerifier(v JWTVerifier) {
+	h.jwtVerifier = v
 }
 
 // HealthStatus returns the health status of the serverless engine.

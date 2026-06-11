@@ -38,6 +38,9 @@ type FunctionDefinition struct {
 	WSIdleTimeoutSec     int
 	WSMaxFrameBytes      int
 	WSMaxInflightPerConn int
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835).
+	RawHTTPResponse bool
 }
 
 // Function represents a deployed serverless function.
@@ -64,6 +67,9 @@ type Function struct {
 	WSIdleTimeoutSec     int
 	WSMaxFrameBytes      int
 	WSMaxInflightPerConn int
+
+	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835).
+	RawHTTPResponse bool
 }
 
 // LogEntry represents a log message emitted from inside a WASM function
@@ -105,6 +111,12 @@ type FunctionRegistry interface {
 	Get(ctx context.Context, namespace, name string, version int) (*Function, error)
 	List(ctx context.Context, namespace string) ([]*Function, error)
 	Delete(ctx context.Context, namespace, name string, version int) error
+
+	// SetEnabled flips a function's status between active and inactive
+	// across all versions without redeploying. Plan 11.5 — pause a
+	// misbehaving function during incident response.
+	SetEnabled(ctx context.Context, namespace, name string, enabled bool) error
+
 	GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error)
 
 	// GetLogs returns ONLY WASM-emitted log entries (rows in function_logs).
@@ -174,6 +186,7 @@ type functionRow struct {
 	WSIdleTimeoutSec     int
 	WSMaxFrameBytes      int
 	WSMaxInflightPerConn int
+	RawHTTPResponse      bool
 }
 
 type envVarRow struct {

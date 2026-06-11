@@ -56,6 +56,26 @@ type Client interface {
 	// the assigned sequence number. Used by exec_and_publish to attach a seq
 	// to wake-up messages so subscribers can detect replication-lag gaps.
 	BatchWithSeq(ctx context.Context, namespace string, userOps []BatchOp) (*BatchResult, int64, error)
+
+	// BatchQuery runs N SELECT statements in ONE HTTP request to RQLite's
+	// /db/query endpoint, returning one OpResult per input op in the same
+	// order. All queries execute on the leader (level=weak — same as our
+	// default reads) in a single network round-trip — N queries cost ~one
+	// query's worth of latency instead of N times.
+	//
+	// Use this for read-heavy functions that need to gather state from
+	// multiple tables before doing work. Empirically on devnet (167ms RTT to
+	// leader): 10 sequential c.Query calls = 3562ms; 1 BatchQuery with 10
+	// statements = 338ms. 10× speedup.
+	//
+	// Per-query errors are surfaced in OpResult.Error and do NOT fail the
+	// whole batch — each query's result is independent. A transport-level
+	// failure (network, leader unreachable) returns a non-nil Go error and
+	// the OpResults may be empty.
+	//
+	// Requires the client to have been constructed with a *gorqlite.Connection
+	// (NewClientWithDSN or NewClientWithConn). Returns an error otherwise.
+	BatchQuery(ctx context.Context, ops []BatchOp) ([]OpResult, error)
 }
 
 // Tx mirrors Client but executes within a transaction.

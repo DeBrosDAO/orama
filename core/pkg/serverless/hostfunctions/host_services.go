@@ -1,8 +1,11 @@
 package hostfunctions
 
 import (
+	"context"
+	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/push"
@@ -42,19 +45,61 @@ func NewHostFunctions(
 		httpTimeout = 30 * time.Second
 	}
 
-	return &HostFunctions{
-		db:             db,
-		cacheClient:    cacheClient,
-		storage:        storage,
-		ipfsAPIURL:     cfg.IPFSAPIURL,
-		pubsub:         pubsubAdapter,
-		wsManager:      wsManager,
-		secrets:        secrets,
-		pushDispatcher: pushDispatcher,
-		pushManager:    pushManager,
-		wsBridge:       wsBridge,
-		httpClient:     tlsutil.NewHTTPClient(httpTimeout),
-		logger:         logger,
-		logs:           make([]serverless.LogEntry, 0),
+	// Build the Anyone-routed HTTP client only when Anyone routing is
+	// enabled on this gateway (feat-11). When disabled, leave it nil so
+	// AnyoneFetch returns a typed error instead of silently using the
+	// direct path. anyoneproxy.NewHTTPClient() returns a fresh client
+	// with a SOCKS transport when enabled — safe to set Timeout on it
+	// (when disabled it returns the shared http.DefaultClient, which we
+	// must NOT mutate; the Enabled() guard ensures we never reach that).
+	var anyoneHTTPClient *http.Client
+	if anyoneproxy.Enabled() {
+		anyoneHTTPClient = anyoneproxy.NewHTTPClient()
+		anyoneHTTPClient.Timeout = httpTimeout
 	}
+
+	hf := &HostFunctions{
+		db:               db,
+		cacheClient:      cacheClient,
+		storage:          storage,
+		ipfsAPIURL:       cfg.IPFSAPIURL,
+		pubsub:           pubsubAdapter,
+		wsManager:        wsManager,
+		secrets:          secrets,
+		pushDispatcher:   pushDispatcher,
+		pushManager:      pushManager,
+		wsBridge:         wsBridge,
+		anyoneHTTPClient: anyoneHTTPClient,
+		turnDomain:       cfg.TURNDomain,
+		turnSecret:       cfg.TURNSecret,
+		stealthCDNDomain: cfg.StealthCDNDomain,
+		httpClient:       tlsutil.NewHTTPClient(httpTimeout),
+		logger:           logger,
+		logs:             make([]serverless.LogEntry, 0),
+		asyncInvokeSem:   make(chan struct{}, asyncInvokeMaxInFlight),
+	}
+
+	// Ephemeral-state store (bugboard #710). Publishes synthetic set/clear
+	// events through the same pubsub adapter the pubsub_publish host fn uses,
+	// and registers a WS disconnect hook so a client's owned state auto-clears
+	// the instant its WebSocket drops — zero cron lag. Only wired when a
+	// concrete WSManager is present (the disconnect hook + sweeper need it);
+	// otherwise ephemeral_state_set returns an error.
+	if wsm, ok := wsManager.(*serverless.WSManager); ok && wsm != nil {
+		var publish func(ctx context.Context, namespace, topic string, data []byte) error
+		if pubsubAdapter != nil {
+			publish = func(ctx context.Context, _ string, topic string, data []byte) error {
+				// The adapter namespaces internally (same as PubSubPublish), so
+				// the namespace arg is informational only here.
+				return pubsubAdapter.Publish(ctx, topic, data)
+			}
+		}
+		hf.ephemeralStore = serverless.NewEphemeralStore(publish)
+		wsm.AddDisconnectHook(func(clientID string) {
+			hf.ephemeralStore.ClearClient(context.Background(), clientID)
+		})
+		hf.ephemeralStore.StartSweeper()
+	}
+
+	return hf
 }

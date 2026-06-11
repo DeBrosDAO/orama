@@ -74,6 +74,10 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		SFUPort    int    `yaml:"sfu_port"`
 		TURNDomain string `yaml:"turn_domain"`
 		TURNSecret string `yaml:"turn_secret"`
+		// TURNStealthDomain is the neutral stealth TURNS:443 host (feat-124).
+		// Maps to cfg.StealthCDNDomain so turn.credentials advertises the
+		// stealth rung of the URI ladder.
+		TURNStealthDomain string `yaml:"turn_stealth_domain"`
 	}
 
 	type yamlCfg struct {
@@ -92,6 +96,12 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		IPFSTimeout           string        `yaml:"ipfs_timeout"`
 		IPFSReplicationFactor int           `yaml:"ipfs_replication_factor"`
 		WebRTC                yamlWebRTCCfg `yaml:"webrtc"`
+		// SecretsEncryptionKey: see GatewayYAMLConfig docstring. Optional;
+		// when set, the standalone gateway populates
+		// cfg.SecretsEncryptionKey so serverless function secrets can be
+		// encrypted/decrypted (bugboard #837 follow-up). Empty leaves
+		// secrets management disabled (fail-loud).
+		SecretsEncryptionKey string `yaml:"secrets_encryption_key"`
 		// ClusterSecretPath: see GatewayYAMLConfig docstring. Optional;
 		// when set, the standalone gateway reads the file at this path
 		// and populates cfg.ClusterSecret so JWT signing keys can be
@@ -229,6 +239,16 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		}
 	}
 
+	// Serverless secrets encryption key — bugboard #837 follow-up. The
+	// host-managed gateway (pkg/node/gateway.go) reads this from
+	// secrets/secrets-encryption-key; the standalone binary used by namespace
+	// gateways via systemd receives it through this YAML field. Without it,
+	// `function secrets list` returned 501 ("Secrets management not
+	// available") on namespace gateways even though the host had the key.
+	if v := strings.TrimSpace(y.SecretsEncryptionKey); v != "" {
+		cfg.SecretsEncryptionKey = v
+	}
+
 	// WebRTC configuration
 	cfg.WebRTCEnabled = y.WebRTC.Enabled
 	if y.WebRTC.SFUPort > 0 {
@@ -239,6 +259,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if v := strings.TrimSpace(y.WebRTC.TURNSecret); v != "" {
 		cfg.TURNSecret = v
+	}
+	if v := strings.TrimSpace(y.WebRTC.TURNStealthDomain); v != "" {
+		cfg.StealthCDNDomain = v
 	}
 
 	// Validate configuration

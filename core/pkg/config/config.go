@@ -15,6 +15,21 @@ type Config struct {
 	Security    SecurityConfig    `yaml:"security"`
 	Logging     LoggingConfig     `yaml:"logging"`
 	HTTPGateway HTTPGatewayConfig `yaml:"http_gateway"`
+
+	// SNIRouter is the stealth TURN-over-443 SNI router toggle (feat-124).
+	// Phase 4 config generation always emits this block into node.yaml, so
+	// the field MUST exist here: node.yaml is decoded with KnownFields(true)
+	// and an unknown top-level key fails the whole parse and crash-loops
+	// orama-node at boot (same failure mode as the v0.122.42
+	// secrets_encryption_key incident).
+	SNIRouter SNIRouterConfig `yaml:"sni_router"`
+}
+
+// SNIRouterConfig is the top-level stealth SNI router block in node.yaml
+// (feat-124). Default-off; when enabled the node runs orama-sni-router on
+// :443 and Caddy moves to :8443.
+type SNIRouterConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // ValidationError represents a single validation error with context.

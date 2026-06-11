@@ -477,6 +477,22 @@ func (o *Orchestrator) saveSecretsFromJoinResponse(resp *joinhandlers.JoinRespon
 		}
 	}
 
+	// Write serverless secrets encryption key (bugboard #837) — identical on
+	// every node so namespace function secrets decrypt cluster-wide.
+	if resp.SecretsEncryptionKey != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "secrets-encryption-key"), []byte(resp.SecretsEncryptionKey), 0600); err != nil {
+			return fmt.Errorf("failed to write secrets-encryption-key: %w", err)
+		}
+	}
+
+	// Write TURN shared secret (feat-124 #913) — identical on every node so
+	// WebRTC TURN credentials validate cluster-wide and survive config regen.
+	if resp.TURNSecret != "" {
+		if err := os.WriteFile(filepath.Join(secretsDir, "turn-secret"), []byte(resp.TURNSecret), 0600); err != nil {
+			return fmt.Errorf("failed to write turn-secret: %w", err)
+		}
+	}
+
 	// Write IPFS Cluster trusted peer IDs
 	if len(resp.IPFSClusterPeerIDs) > 0 {
 		content := strings.Join(resp.IPFSClusterPeerIDs, "\n") + "\n"

@@ -64,6 +64,10 @@ func (m *mockHostServices) DBQueryV2(ctx context.Context, query string, args []i
 	return []byte(`{"rows":[]}`), nil
 }
 
+func (m *mockHostServices) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
+	return []byte(`{"results":[]}`), nil
+}
+
 func (m *mockHostServices) CacheGet(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }
@@ -106,6 +110,14 @@ func (m *mockHostServices) PushSend(ctx context.Context, userID string, msgJSON 
 	return nil
 }
 
+func (m *mockHostServices) PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
+func (m *mockHostServices) TurnCredentials(ctx context.Context) ([]byte, error) {
+	return []byte(`{"configured":false}`), nil
+}
+
 func (m *mockHostServices) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
 	return []byte(`{"committed":true,"results":[]}`), nil
 }
@@ -122,6 +134,22 @@ func (m *mockHostServices) WSPubSubUnbridge(ctx context.Context, clientID, topic
 	return nil
 }
 
+func (m *mockHostServices) SetHTTPResponse(ctx context.Context, status int, headers map[string]string, body []byte) error {
+	return SetRawHTTPResponse(ctx, status, headers, body)
+}
+
+func (m *mockHostServices) EphemeralStateSet(ctx context.Context, topic, key string, payload []byte, ttlMs int64) error {
+	return nil
+}
+
+func (m *mockHostServices) EphemeralStateClear(ctx context.Context, topic, key string) error {
+	return nil
+}
+
+func (m *mockHostServices) EphemeralStateList(ctx context.Context, topic string) ([]byte, error) {
+	return []byte(`{"entries":[]}`), nil
+}
+
 func (m *mockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }
@@ -134,7 +162,15 @@ func (m *mockHostServices) FunctionInvoke(ctx context.Context, name string, payl
 	return nil, nil
 }
 
+func (m *mockHostServices) FunctionInvokeAsync(ctx context.Context, name string, payload []byte) error {
+	return nil
+}
+
 func (m *mockHostServices) HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *mockHostServices) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 

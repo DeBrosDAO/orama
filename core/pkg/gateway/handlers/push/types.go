@@ -22,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/push"
+	"github.com/DeBrosOfficial/network/pkg/push/credentials"
 )
 
 // Handlers serves the /v1/push/* HTTP endpoints. Construct via NewHandlers;
@@ -36,11 +37,12 @@ import (
 // configStore + manager may be nil on gateways with push fully disabled —
 // the corresponding endpoints return 503.
 type Handlers struct {
-	dispatcher  *push.PushDispatcher
-	manager     *push.Manager
-	store       push.PushDeviceStore
-	configStore push.ConfigStore
-	logger      *logging.ColoredLogger
+	dispatcher         *push.PushDispatcher
+	manager            *push.Manager
+	store              push.PushDeviceStore
+	configStore        push.ConfigStore
+	credentialsManager *credentials.Manager // optional — feature #72 (set via SetCredentialsManager)
+	logger             *logging.ColoredLogger
 }
 
 // NewHandlers constructs a Handlers with the legacy single-namespace
@@ -139,11 +141,29 @@ func resolveNamespace(r *http.Request) string {
 	return ""
 }
 
-// resolveCallerUserID extracts the JWT subject (typically the wallet) of
-// the caller, or empty if the request was authenticated by API key only.
+// accountIDClaim is the custom JWT claim an app may set to carry the stable
+// account identity (e.g. anchat's users.user_id) that a device should be
+// keyed on, independent of which wallet credential authenticated the
+// session. Injected at mint time by the namespace's claims-provider hook.
+// See bugboard #548 (name agreed in comment #906/#920).
+const accountIDClaim = "account_id"
+
+// resolveCallerUserID extracts the identity a push device should be keyed on.
+//
+// In a multi-credential app (anchat), the JWT subject is the *wallet* — a
+// credential, not the identity. A single user (rootId) with N linked wallets
+// would otherwise register N device rows and receive N duplicate pushes
+// (bugboard #548). When the app includes a stable `account_id` custom claim, we
+// key on that; otherwise we fall back to the subject (wallet) so single-
+// credential apps and older tokens keep working unchanged.
+//
+// Returns empty if the request was authenticated by API key only (no JWT).
 func resolveCallerUserID(r *http.Request) string {
 	if v := r.Context().Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			if rootID, ok := claims.Custom[accountIDClaim]; ok && rootID != "" {
+				return rootID
+			}
 			return claims.Sub
 		}
 	}
