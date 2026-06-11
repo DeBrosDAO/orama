@@ -234,3 +234,24 @@ http_gateway:
 		t.Errorf("SecretsEncryptionKey = %q, want %q", cfg.HTTPGateway.SecretsEncryptionKey, want)
 	}
 }
+
+// TestDecodeStrict_sniRouterBlock guards against a recurrence of the
+// v0.122.42-class boot crash for the feat-124 stealth SNI router: Phase 4
+// always emits a top-level `sni_router:` block into node.yaml, so the root
+// Config struct must carry a matching field or KnownFields(true) rejects
+// the whole file and orama-node crash-loops.
+func TestDecodeStrict_sniRouterBlock(t *testing.T) {
+	yamlInput := `
+node:
+  id: "test-node"
+sni_router:
+  enabled: true
+`
+	var cfg Config
+	if err := DecodeStrict(strings.NewReader(yamlInput), &cfg); err != nil {
+		t.Fatalf("node.yaml with sni_router block must parse (feat-124): %v", err)
+	}
+	if !cfg.SNIRouter.Enabled {
+		t.Errorf("SNIRouter.Enabled = false, want true")
+	}
+}
