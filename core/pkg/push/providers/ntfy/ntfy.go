@@ -1,18 +1,28 @@
 // Package ntfy implements a push.PushProvider backed by an ntfy server.
 //
 // ntfy delivers notifications via plain HTTP POST to <baseURL>/<topic>.
-// We map PushMessage fields to ntfy headers:
-//   - Title    -> "Title"
-//   - Priority -> "Priority"
-//   - Channel  -> "Tags"
-//   - Data     -> base64-encoded JSON in "X-Data"
+// We map PushMessage fields to the ntfy publish surface:
+//   - Title    -> "Title"  header
+//   - Priority -> "Priority" header
+//   - Channel  -> "Tags" header
+//   - Body     -> the POST body (ntfy's "message", relayed verbatim)
+//   - Data     -> the POST body as JSON, ONLY when Body is empty
 //
-// See https://docs.ntfy.sh/publish/#publish-as-json for details.
+// IMPORTANT (bugboard #126): ntfy does NOT relay arbitrary `X-*` request
+// headers into the subscriber stream — only its recognized publish headers
+// (Title, Priority, Tags, Click, Actions, Attach, …) and the message body
+// reach the client. So structured Data and a numeric Badge cannot be carried
+// as custom headers; the only field a subscriber reliably receives besides
+// title/priority/tags is the message BODY. We therefore deliver Data through
+// the body (UnifiedPush convention: the body IS the payload). A caller that
+// sets an explicit Body owns it — to ship structured data alongside a
+// human-readable body, encode both into the Body envelope.
+//
+// See https://docs.ntfy.sh/publish/ for the recognized header set.
 package ntfy
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,7 +89,20 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, strings.NewReader(msg.Body))
+	// Determine the POST body — the only structured payload ntfy relays to
+	// subscribers (bugboard #126). A caller-supplied Body wins; otherwise, if
+	// there's structured Data, serialize it as the body so a data-only push
+	// still reaches the client (UnifiedPush convention: body == payload).
+	body := msg.Body
+	if body == "" && len(msg.Data) > 0 {
+		b, err := json.Marshal(msg.Data)
+		if err != nil {
+			return fmt.Errorf("ntfy: marshal data: %w", err)
+		}
+		body = string(b)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, strings.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("ntfy: build request: %w", err)
 	}
@@ -96,16 +119,10 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		// ntfy uses "Tags" for both visual emoji and operator-defined tags.
 		req.Header.Set("Tags", msg.Channel)
 	}
-	if msg.Badge > 0 {
-		req.Header.Set("X-Badge", fmt.Sprintf("%d", msg.Badge))
-	}
-	if len(msg.Data) > 0 {
-		b, err := json.Marshal(msg.Data)
-		if err != nil {
-			return fmt.Errorf("ntfy: marshal data: %w", err)
-		}
-		req.Header.Set("X-Data", base64.StdEncoding.EncodeToString(b))
-	}
+	// NOTE: Badge and arbitrary Data are intentionally NOT sent as custom
+	// headers — ntfy does not relay `X-*` headers to subscribers (#126), so
+	// doing so silently drops them. Data rides the body (above); a badge
+	// count, if needed, must be encoded into the body by the caller.
 	if p.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+p.authToken)
 	}

@@ -155,7 +155,7 @@ func TestValidator_RedactNeverEchoesP8Key(t *testing.T) {
 
 func TestBuildAPSPayload_basicAlert(t *testing.T) {
 	msg := push.PushMessage{Title: "hi", Body: "from orama"}
-	raw, err := buildAPSPayload(msg)
+	raw, err := buildAPSPayload(msg, KindAlert)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -174,23 +174,58 @@ func TestBuildAPSPayload_basicAlert(t *testing.T) {
 	}
 }
 
-func TestBuildAPSPayload_dataAlongsideAPS(t *testing.T) {
+// Bugboard #38: for an ALERT push, custom data must be nested under a
+// top-level "body" object — expo-notifications' iOS serializer reads
+// content.data from userInfo["body"] only, ignoring top-level sibling keys.
+func TestBuildAPSPayload_alertNestsDataUnderBody(t *testing.T) {
 	msg := push.PushMessage{
 		Title: "x",
 		Body:  "y",
 		Data:  map[string]interface{}{"thread": "abc", "deeplink": "anchat://room/42"},
 	}
-	raw, _ := buildAPSPayload(msg)
+	raw, _ := buildAPSPayload(msg, KindAlert)
 	var out map[string]interface{}
-	_ = json.Unmarshal(raw, &out)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("payload not valid JSON: %v", err)
+	}
 	if _, hasAPS := out["aps"]; !hasAPS {
 		t.Error("payload missing aps")
 	}
-	if out["thread"] != "abc" {
-		t.Errorf("data.thread missing; got %v", out)
+	// Must NOT be at the top level (expo would ignore it there).
+	if _, leaked := out["thread"]; leaked {
+		t.Errorf("data leaked to top level; expo-notifications would drop it: %v", out)
 	}
-	if out["deeplink"] != "anchat://room/42" {
-		t.Errorf("data.deeplink missing; got %v", out)
+	body, ok := out["body"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("alert data not nested under top-level \"body\" object; got %v", out)
+	}
+	if body["thread"] != "abc" || body["deeplink"] != "anchat://room/42" {
+		t.Errorf("body envelope missing data; got %v", body)
+	}
+	// The human-readable alert body stays under aps.alert.body, distinct from
+	// the data envelope key.
+	aps := out["aps"].(map[string]interface{})
+	if alert, ok := aps["alert"].(map[string]interface{}); !ok || alert["body"] != "y" {
+		t.Errorf("aps.alert.body should be the human-readable body; got %v", aps["alert"])
+	}
+}
+
+// VoIP pushes are handled by native PushKit (not expo-notifications), so
+// custom data stays at the top level of the dictionary payload.
+func TestBuildAPSPayload_voipKeepsDataTopLevel(t *testing.T) {
+	msg := push.PushMessage{
+		Data: map[string]interface{}{"callId": "c-1", "callerName": "Alice"},
+	}
+	raw, _ := buildAPSPayload(msg, KindVoIP)
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("payload not valid JSON: %v", err)
+	}
+	if out["callId"] != "c-1" || out["callerName"] != "Alice" {
+		t.Errorf("voip data must stay top-level for PushKit; got %v", out)
+	}
+	if _, nested := out["body"]; nested {
+		t.Errorf("voip data must NOT be nested under body; got %v", out)
 	}
 }
 
@@ -199,7 +234,7 @@ func TestBuildAPSPayload_dataCannotClobberAPS(t *testing.T) {
 		Title: "x",
 		Data:  map[string]interface{}{"aps": "evil"},
 	}
-	raw, _ := buildAPSPayload(msg)
+	raw, _ := buildAPSPayload(msg, KindAlert)
 	var out map[string]interface{}
 	_ = json.Unmarshal(raw, &out)
 	apsField, ok := out["aps"]
@@ -215,7 +250,7 @@ func TestBuildAPSPayload_badgeAndSound(t *testing.T) {
 	msg := push.PushMessage{
 		Title: "x", Badge: 3, Sound: "ding.caf",
 	}
-	raw, _ := buildAPSPayload(msg)
+	raw, _ := buildAPSPayload(msg, KindAlert)
 	if !strings.Contains(string(raw), `"badge":3`) {
 		t.Errorf("badge not in payload: %s", raw)
 	}
@@ -226,7 +261,7 @@ func TestBuildAPSPayload_badgeAndSound(t *testing.T) {
 
 func TestBuildAPSPayload_channelMapsToThreadID(t *testing.T) {
 	msg := push.PushMessage{Title: "x", Channel: "messages"}
-	raw, _ := buildAPSPayload(msg)
+	raw, _ := buildAPSPayload(msg, KindAlert)
 	if !strings.Contains(string(raw), `"thread-id":"messages"`) {
 		t.Errorf("channel not mapped to thread-id: %s", raw)
 	}

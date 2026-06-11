@@ -2,7 +2,6 @@ package ntfy
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,11 +16,11 @@ import (
 
 func TestSend_happy_path(t *testing.T) {
 	var (
-		gotPath    string
-		gotBody    string
-		gotTitle   string
+		gotPath     string
+		gotBody     string
+		gotTitle    string
 		gotPriority string
-		gotAuth    string
+		gotAuth     string
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -61,9 +60,14 @@ func TestSend_happy_path(t *testing.T) {
 	}
 }
 
-func TestSend_includes_data_header_when_data_set(t *testing.T) {
-	var gotData string
+// Bugboard #126: ntfy does not relay X-* headers to subscribers, so Data must
+// ride the body. With no explicit Body, a data-only push serializes Data as
+// the JSON body — and must NOT set the dead X-Data header.
+func TestSend_dataOnly_ridesBody_noXDataHeader(t *testing.T) {
+	var gotBody, gotData string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
 		gotData = r.Header.Get("X-Data")
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -72,39 +76,49 @@ func TestSend_includes_data_header_when_data_set(t *testing.T) {
 	p := New(Config{BaseURL: srv.URL}, nil)
 	err := p.Send(context.Background(), push.PushMessage{
 		DeviceToken: "topic",
-		Body:        "x",
 		Data:        map[string]interface{}{"call_id": "abc-123"},
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(gotData)
-	if err != nil {
-		t.Fatalf("X-Data not valid base64: %v", err)
+	if gotData != "" {
+		t.Errorf("X-Data header must not be set (ntfy drops it); got %q", gotData)
 	}
 	var got map[string]interface{}
-	if err := json.Unmarshal(decoded, &got); err != nil {
-		t.Fatalf("X-Data not valid JSON: %v", err)
+	if err := json.Unmarshal([]byte(gotBody), &got); err != nil {
+		t.Fatalf("data-only body not valid JSON: %v (body=%q)", err, gotBody)
 	}
 	if got["call_id"] != "abc-123" {
-		t.Errorf("data round-trip failed: got %v", got)
+		t.Errorf("data did not ride the body: got %v", got)
 	}
 }
 
-func TestSend_no_data_no_data_header(t *testing.T) {
-	var gotData string
+// An explicit Body wins — Data does NOT clobber a caller-supplied body (the
+// caller owns the envelope; this is anchat's call-push pattern).
+func TestSend_explicitBody_winsOverData(t *testing.T) {
+	var gotBody, gotData string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
 		gotData = r.Header.Get("X-Data")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	p := New(Config{BaseURL: srv.URL}, nil)
-	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
-		t.Fatal(err)
+	err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "topic",
+		Body:        `{"type":"call.invite","callId":"c1"}`,
+		Data:        map[string]interface{}{"ignored": "yes"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotBody != `{"type":"call.invite","callId":"c1"}` {
+		t.Errorf("explicit body not preserved; got %q", gotBody)
 	}
 	if gotData != "" {
-		t.Errorf("expected no X-Data header, got %q", gotData)
+		t.Errorf("X-Data header must not be set; got %q", gotData)
 	}
 }
 

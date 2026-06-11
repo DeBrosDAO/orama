@@ -149,7 +149,7 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	if p.kind != KindVoIP && !hasVisibleContent(msg) {
 		return push.ErrEmptyContent
 	}
-	payload, err := buildAPSPayload(msg)
+	payload, err := buildAPSPayload(msg, p.kind)
 	if err != nil {
 		return fmt.Errorf("apns: build payload: %w", err)
 	}
@@ -281,12 +281,25 @@ func tokenPrefix(token string) string {
 	return token[:8] + "..."
 }
 
-// buildAPSPayload assembles the APNs JSON payload from a generic
-// PushMessage. The `aps` dictionary is the Apple-required wrapper;
-// custom fields (`data`) go alongside at the top level.
+// buildAPSPayload assembles the APNs JSON payload from a generic PushMessage.
+// The `aps` dictionary is the Apple-required wrapper; custom `Data` placement
+// depends on the kind:
+//
+//   - KindAlert: custom data is nested under a top-level "body" object.
+//     expo-notifications' iOS serializer sets content.data ONLY from
+//     userInfo["body"] for remote notifications (NotificationRecords.swift:
+//     `if isRemote { return userInfo["body"] }`) — top-level sibling keys of
+//     `aps` are IGNORED, so spreading them there yields content.data=null on
+//     iOS. This was bugboard #38 (Data never reached the JS client despite
+//     correct wire serialization). Note: "body" here is the data envelope
+//     expo expects; it is distinct from the human-readable alert body, which
+//     lives at aps.alert.body.
+//   - KindVoIP: custom data stays at the top level. PushKit/CallKit pushes are
+//     handled by the app's native pushRegistry (not expo-notifications), which
+//     reads payload.dictionaryPayload directly.
 //
 // Reference: https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/generating_a_remote_notification
-func buildAPSPayload(msg push.PushMessage) ([]byte, error) {
+func buildAPSPayload(msg push.PushMessage, kind Kind) ([]byte, error) {
 	alert := map[string]string{}
 	if msg.Title != "" {
 		alert["title"] = msg.Title
@@ -338,13 +351,28 @@ func buildAPSPayload(msg push.PushMessage) ([]byte, error) {
 		}
 	}
 	root := map[string]interface{}{"aps": aps}
+
+	// Collect tenant custom data, excluding reserved keys: `aps` (must not be
+	// clobbered) and `content_available` (already mapped into aps above).
+	data := map[string]interface{}{}
 	for k, v := range msg.Data {
-		// Don't allow tenant data to clobber `aps`, and skip the
-		// content_available marker since we mapped it to aps above.
 		if k == "aps" || k == "content_available" {
 			continue
 		}
-		root[k] = v
+		data[k] = v
+	}
+
+	if len(data) > 0 {
+		if kind == KindVoIP {
+			// Native PushKit reads the dictionary payload directly — top-level.
+			for k, v := range data {
+				root[k] = v
+			}
+		} else {
+			// expo-notifications surfaces content.data from userInfo["body"]
+			// only (bugboard #38) — nest the data envelope there.
+			root["body"] = data
+		}
 	}
 	return json.Marshal(root)
 }

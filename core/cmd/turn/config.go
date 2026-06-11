@@ -39,19 +39,6 @@ func parseTURNConfig(logger *logging.ColoredLogger) *turn.Config {
 		}
 	}
 
-	type yamlCfg struct {
-		ListenAddr      string `yaml:"listen_addr"`
-		TURNSListenAddr string `yaml:"turns_listen_addr"`
-		PublicIP        string `yaml:"public_ip"`
-		Realm           string `yaml:"realm"`
-		AuthSecret      string `yaml:"auth_secret"`
-		RelayPortStart  int    `yaml:"relay_port_start"`
-		RelayPortEnd    int    `yaml:"relay_port_end"`
-		Namespace       string `yaml:"namespace"`
-		TLSCertPath     string `yaml:"tls_cert_path"`
-		TLSKeyPath      string `yaml:"tls_key_path"`
-	}
-
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		logger.ComponentError(logging.ComponentTURN, "Config file not found",
@@ -60,24 +47,11 @@ func parseTURNConfig(logger *logging.ColoredLogger) *turn.Config {
 		os.Exit(1)
 	}
 
-	var y yamlCfg
-	if err := config.DecodeStrict(strings.NewReader(string(data)), &y); err != nil {
+	cfg, err := decodeTURNConfig(data)
+	if err != nil {
 		logger.ComponentError(logging.ComponentTURN, "Failed to parse TURN config", zap.Error(err))
 		fmt.Fprintf(os.Stderr, "Configuration parse error: %v\n", err)
 		os.Exit(1)
-	}
-
-	cfg := &turn.Config{
-		ListenAddr:      y.ListenAddr,
-		TURNSListenAddr: y.TURNSListenAddr,
-		PublicIP:        y.PublicIP,
-		Realm:           y.Realm,
-		AuthSecret:      y.AuthSecret,
-		RelayPortStart:  y.RelayPortStart,
-		RelayPortEnd:    y.RelayPortEnd,
-		Namespace:       y.Namespace,
-		TLSCertPath:     y.TLSCertPath,
-		TLSKeyPath:      y.TLSKeyPath,
 	}
 
 	if errs := cfg.Validate(); len(errs) > 0 {
@@ -97,4 +71,51 @@ func parseTURNConfig(logger *logging.ColoredLogger) *turn.Config {
 	)
 
 	return cfg
+}
+
+// decodeTURNConfig strictly decodes the TURN YAML the namespace spawner writes
+// (yaml.Marshal of turn.Config) into a turn.Config. The yamlCfg struct MUST
+// carry every yaml-tagged field turn.Config marshals — DecodeStrict rejects
+// unknown keys, so a missing field crashes the TURN binary at startup.
+// Extracted (no os.Exit) so the spawner-output ↔ parser contract is unit-
+// testable (see config_test.go).
+func decodeTURNConfig(data []byte) (*turn.Config, error) {
+	type yamlCfg struct {
+		ListenAddr      string `yaml:"listen_addr"`
+		TURNSListenAddr string `yaml:"turns_listen_addr"`
+		PublicIP        string `yaml:"public_ip"`
+		Realm           string `yaml:"realm"`
+		AuthSecret      string `yaml:"auth_secret"`
+		RelayPortStart  int    `yaml:"relay_port_start"`
+		RelayPortEnd    int    `yaml:"relay_port_end"`
+		Namespace       string `yaml:"namespace"`
+		TLSCertPath     string `yaml:"tls_cert_path"`
+		TLSKeyPath      string `yaml:"tls_key_path"`
+		// feat-124 stealth TURNS-over-:443: second cert served by SNI.
+		StealthDomain      string `yaml:"stealth_domain"`
+		TLSStealthCertPath string `yaml:"tls_stealth_cert_path"`
+		TLSStealthKeyPath  string `yaml:"tls_stealth_key_path"`
+	}
+
+	var y yamlCfg
+	if err := config.DecodeStrict(strings.NewReader(string(data)), &y); err != nil {
+		return nil, err
+	}
+
+	return &turn.Config{
+		ListenAddr:      y.ListenAddr,
+		TURNSListenAddr: y.TURNSListenAddr,
+		PublicIP:        y.PublicIP,
+		Realm:           y.Realm,
+		AuthSecret:      y.AuthSecret,
+		RelayPortStart:  y.RelayPortStart,
+		RelayPortEnd:    y.RelayPortEnd,
+		Namespace:       y.Namespace,
+		TLSCertPath:     y.TLSCertPath,
+		TLSKeyPath:      y.TLSKeyPath,
+
+		StealthDomain:      y.StealthDomain,
+		TLSStealthCertPath: y.TLSStealthCertPath,
+		TLSStealthKeyPath:  y.TLSStealthKeyPath,
+	}, nil
 }
