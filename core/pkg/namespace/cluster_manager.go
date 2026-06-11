@@ -678,23 +678,24 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 	}
 
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":                    "spawn-gateway",
-		"namespace":                 cfg.Namespace,
-		"node_id":                   cfg.NodeID,
-		"gateway_http_port":         cfg.HTTPPort,
-		"gateway_base_domain":       cfg.BaseDomain,
-		"gateway_rqlite_dsn":        cfg.RQLiteDSN,
-		"gateway_global_rqlite_dsn": cfg.GlobalRQLiteDSN,
-		"gateway_olric_servers":     cfg.OlricServers,
-		"gateway_olric_timeout":     olricTimeout,
-		"ipfs_cluster_api_url":      cfg.IPFSClusterAPIURL,
-		"ipfs_api_url":              cfg.IPFSAPIURL,
-		"ipfs_timeout":              ipfsTimeout,
-		"ipfs_replication_factor":   cfg.IPFSReplicationFactor,
-		"gateway_webrtc_enabled":    cfg.WebRTCEnabled,
-		"gateway_sfu_port":          cfg.SFUPort,
-		"gateway_turn_domain":       cfg.TURNDomain,
-		"gateway_turn_secret":       cfg.TURNSecret,
+		"action":                      "spawn-gateway",
+		"namespace":                   cfg.Namespace,
+		"node_id":                     cfg.NodeID,
+		"gateway_http_port":           cfg.HTTPPort,
+		"gateway_base_domain":         cfg.BaseDomain,
+		"gateway_rqlite_dsn":          cfg.RQLiteDSN,
+		"gateway_global_rqlite_dsn":   cfg.GlobalRQLiteDSN,
+		"gateway_olric_servers":       cfg.OlricServers,
+		"gateway_olric_timeout":       olricTimeout,
+		"ipfs_cluster_api_url":        cfg.IPFSClusterAPIURL,
+		"ipfs_api_url":                cfg.IPFSAPIURL,
+		"ipfs_timeout":                ipfsTimeout,
+		"ipfs_replication_factor":     cfg.IPFSReplicationFactor,
+		"gateway_webrtc_enabled":      cfg.WebRTCEnabled,
+		"gateway_sfu_port":            cfg.SFUPort,
+		"gateway_turn_domain":         cfg.TURNDomain,
+		"gateway_turn_secret":         cfg.TURNSecret,
+		"gateway_turn_stealth_domain": cfg.TURNStealthDomain,
 		// Bugboard #837 follow-up: carry the host secrets encryption key to
 		// the remote node so its spawned namespace gateway can manage secrets.
 		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
@@ -1614,6 +1615,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 					gwCfg.SFUPort = sfuBlock.SFUSignalingPort
 					gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", namespaceName, cm.baseDomain)
 					gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+					gwCfg.TURNStealthDomain = cm.stealthDomainFor(namespaceName, webrtcCfg)
 				}
 			}
 
@@ -1679,8 +1681,9 @@ type ClusterLocalState struct {
 	// WebRTC fields (zero values when WebRTC not enabled — backward compatible)
 	HasSFU             bool   `json:"has_sfu,omitempty"`
 	HasTURN            bool   `json:"has_turn,omitempty"`
-	TURNSharedSecret   string `json:"turn_shared_secret,omitempty"` // Needed for gateway to generate TURN credentials on cold start
-	TURNDomain         string `json:"turn_domain,omitempty"`        // TURN server domain for gateway config
+	TURNSharedSecret   string `json:"turn_shared_secret,omitempty"`  // Needed for gateway to generate TURN credentials on cold start
+	TURNDomain         string `json:"turn_domain,omitempty"`         // TURN server domain for gateway config
+	TURNStealthDomain  string `json:"turn_stealth_domain,omitempty"` // Stealth TURNS:443 host (feat-124); empty when stealth disabled
 	TURNCredentialTTL  int    `json:"turn_credential_ttl,omitempty"`
 	SFUSignalingPort   int    `json:"sfu_signaling_port,omitempty"`
 	SFUMediaPortStart  int    `json:"sfu_media_port_start,omitempty"`
@@ -1836,10 +1839,11 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 // restoreWebRTC is the resolved WebRTC gateway config for a restored
 // namespace gateway.
 type restoreWebRTC struct {
-	enabled    bool
-	sfuPort    int
-	turnDomain string
-	turnSecret string
+	enabled       bool
+	sfuPort       int
+	turnDomain    string
+	turnSecret    string
+	stealthDomain string // feat-124: empty when webrtc stealth is disabled
 }
 
 // chooseRestoreWebRTC resolves a restored gateway's WebRTC config. TWO
@@ -1864,11 +1868,12 @@ type restoreWebRTC struct {
 // Extracted as a pure function so the precedence is unit-testable without
 // standing up the full restore path (systemd spawner + DB + port store).
 func chooseRestoreWebRTC(
-	stateHasSFU bool, stateSFUPort int, stateTURNDomain, stateTURNSecret string,
-	dbFetch func() (turnSecret, turnDomain string, sfuPort int),
+	stateHasSFU bool, stateSFUPort int, stateTURNDomain, stateTURNSecret, stateStealthDomain string,
+	dbFetch func() (turnSecret, turnDomain, stealthDomain string, sfuPort int),
 ) restoreWebRTC {
 	turnSecret := stateTURNSecret
 	turnDomain := stateTURNDomain
+	stealthDomain := stateStealthDomain
 	sfuPort := 0
 	if stateHasSFU && stateSFUPort > 0 {
 		sfuPort = stateSFUPort
@@ -1878,11 +1883,16 @@ func chooseRestoreWebRTC(
 	// the marker that the namespace has WebRTC enabled at all. The state
 	// file is not updated by EnableWebRTC, so a namespace enabled after
 	// the state file was written reaches here with an empty secret.
+	// (Stealth toggles DO rewrite cluster state on every node, so the
+	// state-first read stays fresh for stealthDomain too.)
 	if turnSecret == "" {
-		if dbSecret, dbDomain, dbSFU := dbFetch(); dbSecret != "" {
+		if dbSecret, dbDomain, dbStealth, dbSFU := dbFetch(); dbSecret != "" {
 			turnSecret = dbSecret
 			if turnDomain == "" {
 				turnDomain = dbDomain
+			}
+			if stealthDomain == "" {
+				stealthDomain = dbStealth
 			}
 			if sfuPort == 0 {
 				sfuPort = dbSFU
@@ -1891,10 +1901,11 @@ func chooseRestoreWebRTC(
 	}
 
 	return restoreWebRTC{
-		enabled:    turnSecret != "" || sfuPort > 0,
-		sfuPort:    sfuPort,
-		turnDomain: turnDomain,
-		turnSecret: turnSecret,
+		enabled:       turnSecret != "" || sfuPort > 0,
+		sfuPort:       sfuPort,
+		turnDomain:    turnDomain,
+		turnSecret:    turnSecret,
+		stealthDomain: stealthDomain,
 	}
 }
 
@@ -2050,11 +2061,11 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		// fields here. The lazy dbFetch only hits the DB when the state
 		// file is incomplete.
 		wr := chooseRestoreWebRTC(
-			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret,
-			func() (turnSecret, turnDomain string, sfuPort int) {
+			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret, state.TURNStealthDomain,
+			func() (turnSecret, turnDomain, stealthDomain string, sfuPort int) {
 				webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 				if err != nil || webrtcCfg == nil {
-					return "", "", 0
+					return "", "", "", 0
 				}
 				// TURN is namespace-wide; SFU port is per-node and may be
 				// absent on a gateway-only (non-SFU) node — that's fine,
@@ -2065,6 +2076,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				}
 				return webrtcCfg.TURNSharedSecret,
 					fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
+					cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
 					sfu
 			},
 		)
@@ -2076,6 +2088,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			gwCfg.SFUPort = wr.sfuPort
 			gwCfg.TURNDomain = wr.turnDomain
 			gwCfg.TURNSecret = wr.turnSecret
+			gwCfg.TURNStealthDomain = wr.stealthDomain
 		}
 
 		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
@@ -2126,6 +2139,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 					RelayPortStart:  state.TURNRelayPortStart,
 					RelayPortEnd:    state.TURNRelayPortEnd,
 					TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
+					StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
 				}
 				if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
 					cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))

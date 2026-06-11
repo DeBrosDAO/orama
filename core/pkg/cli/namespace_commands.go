@@ -79,6 +79,8 @@ func showNamespaceHelp() {
 	fmt.Printf("  repair <namespace>            - Repair an under-provisioned namespace cluster\n")
 	fmt.Printf("  enable webrtc --namespace NS  - Enable WebRTC (SFU + TURN) for a namespace\n")
 	fmt.Printf("  disable webrtc --namespace NS - Disable WebRTC for a namespace\n")
+	fmt.Printf("  enable webrtc-stealth --namespace NS  - Enable stealth TURNS over :443 (feat-124)\n")
+	fmt.Printf("  disable webrtc-stealth --namespace NS - Disable stealth TURNS\n")
 	fmt.Printf("  webrtc-status --namespace NS  - Show WebRTC service status\n")
 	fmt.Printf("  help                          - Show this help message\n\n")
 	fmt.Printf("Flags:\n")
@@ -226,8 +228,12 @@ func handleNamespaceDelete(force bool) {
 
 func handleNamespaceEnable(args []string) {
 	feature := args[0]
+	if feature == "webrtc-stealth" {
+		handleNamespaceStealthToggle(args[1:], true)
+		return
+	}
 	if feature != "webrtc" {
-		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc\n", feature)
+		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc, webrtc-stealth\n", feature)
 		os.Exit(1)
 	}
 
@@ -283,10 +289,82 @@ func handleNamespaceEnable(args []string) {
 	fmt.Printf("  TURN instances: 2 nodes (relay on public IPs)\n")
 }
 
+// handleNamespaceStealthToggle drives /v1/namespace/webrtc/stealth/{enable|disable}
+// (feat-124 — censorship-resistant TURNS over :443).
+func handleNamespaceStealthToggle(args []string, enable bool) {
+	verb := "disable"
+	if enable {
+		verb = "enable"
+	}
+
+	var ns string
+	fs := flag.NewFlagSet("namespace "+verb+" webrtc-stealth", flag.ExitOnError)
+	fs.StringVar(&ns, "namespace", "", "Namespace name")
+	_ = fs.Parse(args)
+
+	if ns == "" {
+		fmt.Fprintf(os.Stderr, "Usage: orama namespace %s webrtc-stealth --namespace <name>\n", verb)
+		os.Exit(1)
+	}
+
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+
+	if enable {
+		fmt.Printf("Enabling WebRTC stealth (TURNS over :443) for namespace '%s'...\n", ns)
+		fmt.Printf("This provisions a Let's Encrypt cert for the neutral stealth host and may take up to ~2 minutes.\n")
+	} else {
+		fmt.Printf("Disabling WebRTC stealth for namespace '%s'...\n", ns)
+	}
+
+	url := fmt.Sprintf("%s/v1/namespace/webrtc/stealth/%s", gatewayURL, verb)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != http.StatusOK {
+		errMsg := "unknown error"
+		if e, ok := result["error"].(string); ok {
+			errMsg = e
+		}
+		fmt.Fprintf(os.Stderr, "Failed to %s WebRTC stealth: %s\n", verb, errMsg)
+		os.Exit(1)
+	}
+
+	if enable {
+		fmt.Printf("WebRTC stealth enabled for namespace '%s'.\n", ns)
+		fmt.Printf("  turn.credentials now advertises the full URI ladder including turns:<stealth-host>:443.\n")
+		fmt.Printf("  Make sure the SNI router is enabled on the TURN nodes (node.yaml sni_router.enabled).\n")
+	} else {
+		fmt.Printf("WebRTC stealth disabled for namespace '%s'.\n", ns)
+	}
+}
+
 func handleNamespaceDisable(args []string) {
 	feature := args[0]
+	if feature == "webrtc-stealth" {
+		handleNamespaceStealthToggle(args[1:], false)
+		return
+	}
 	if feature != "webrtc" {
-		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc\n", feature)
+		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc, webrtc-stealth\n", feature)
 		os.Exit(1)
 	}
 

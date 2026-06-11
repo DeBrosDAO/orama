@@ -5,9 +5,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// dnsNamePattern matches a conservative lowercase DNS hostname. It exists to
+// keep an operator/spawn-supplied domain from breaking out of the Caddyfile
+// block it is interpolated into (a value containing '{', '}', or a newline
+// could otherwise inject arbitrary Caddy directives) and to refuse cert
+// provisioning for non-hostname junk. Security: defense-in-depth at the
+// Caddyfile sink; the caller also pins the stealth domain to its deterministic
+// derivation (systemd_spawner.go SpawnTURN).
+var dnsNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 
 const (
 	caddyfilePath = "/etc/caddy/Caddyfile"
@@ -25,6 +35,12 @@ const (
 // If Caddy is not available or cert provisioning times out, returns an error
 // so the caller can fall back to a self-signed cert.
 func provisionTURNCertViaCaddy(domain, acmeEndpoint string, timeout time.Duration) (certPath, keyPath string, err error) {
+	// Refuse anything that isn't a clean DNS name before it reaches the
+	// Caddyfile write — blocks Caddyfile-injection via crafted domains.
+	if !dnsNamePattern.MatchString(domain) {
+		return "", "", fmt.Errorf("refusing to provision TURNS cert for non-DNS-name domain %q", domain)
+	}
+
 	// Check if cert already exists from a previous provisioning
 	certPath, keyPath = caddyCertPaths(domain)
 	if _, err := os.Stat(certPath); err == nil {

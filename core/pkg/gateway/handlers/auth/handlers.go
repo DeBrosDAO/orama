@@ -64,6 +64,12 @@ type WebRTCManager interface {
 	DisableWebRTC(ctx context.Context, namespaceName string) error
 	// GetWebRTCStatus returns the WebRTC config for a namespace, or nil if not enabled.
 	GetWebRTCStatus(ctx context.Context, namespaceName string) (interface{}, error)
+	// EnableWebRTCStealth / DisableWebRTCStealth toggle the censorship-
+	// resistant TURNS:443 path (feat-124): stealth cert on the TURN servers,
+	// stealth DNS records, and the turns:<stealth-host>:443 rung in the
+	// turn.credentials URI ladder. Requires WebRTC to already be enabled.
+	EnableWebRTCStealth(ctx context.Context, namespaceName string) error
+	DisableWebRTCStealth(ctx context.Context, namespaceName string) error
 }
 
 // Handlers holds dependencies for authentication HTTP handlers

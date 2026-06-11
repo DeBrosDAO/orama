@@ -95,6 +95,11 @@ type InstanceConfig struct {
 	SFUPort       int    // SFU signaling port on this node
 	TURNDomain    string // TURN server domain (e.g., "turn.ns-alice.orama-devnet.network")
 	TURNSecret    string // TURN shared secret for credential generation
+	// TURNStealthDomain is the neutral stealth TURNS host (feat-124,
+	// cdn-<hash>.<base-domain>). Non-empty only when webrtc stealth is
+	// enabled for the namespace; turn.credentials then advertises
+	// `turns:<TURNStealthDomain>:443` as the final URI-ladder rung.
+	TURNStealthDomain string
 	// SecretsEncryptionKey is the host-wide AES-256 serverless secrets
 	// encryption key (hex-encoded). Bugboard #837 follow-up: the host gateway
 	// receives this via gateway.Config but spawned namespace gateways never
@@ -109,10 +114,11 @@ type InstanceConfig struct {
 // GatewayYAMLWebRTC represents the webrtc section of the gateway YAML config.
 // Must match yamlWebRTCCfg in cmd/gateway/config.go.
 type GatewayYAMLWebRTC struct {
-	Enabled    bool   `yaml:"enabled"`
-	SFUPort    int    `yaml:"sfu_port,omitempty"`
-	TURNDomain string `yaml:"turn_domain,omitempty"`
-	TURNSecret string `yaml:"turn_secret,omitempty"`
+	Enabled           bool   `yaml:"enabled"`
+	SFUPort           int    `yaml:"sfu_port,omitempty"`
+	TURNDomain        string `yaml:"turn_domain,omitempty"`
+	TURNSecret        string `yaml:"turn_secret,omitempty"`
+	TURNStealthDomain string `yaml:"turn_stealth_domain,omitempty"`
 }
 
 // GatewayYAMLConfig represents the gateway YAML configuration structure
@@ -334,10 +340,11 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		IPFSAPIURL:            cfg.IPFSAPIURL,
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 		WebRTC: GatewayYAMLWebRTC{
-			Enabled:    cfg.WebRTCEnabled,
-			SFUPort:    cfg.SFUPort,
-			TURNDomain: cfg.TURNDomain,
-			TURNSecret: cfg.TURNSecret,
+			Enabled:           cfg.WebRTCEnabled,
+			SFUPort:           cfg.SFUPort,
+			TURNDomain:        cfg.TURNDomain,
+			TURNSecret:        cfg.TURNSecret,
+			TURNStealthDomain: cfg.TURNStealthDomain,
 		},
 		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
 	}

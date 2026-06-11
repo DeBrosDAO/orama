@@ -67,6 +67,12 @@ func (g *Gateway) Routes() http.Handler {
 	// Namespace WebRTC enable/disable/status (public, JWT/API key auth via middleware)
 	mux.HandleFunc("/v1/namespace/webrtc/enable", g.namespaceWebRTCEnablePublicHandler)
 	mux.HandleFunc("/v1/namespace/webrtc/disable", g.namespaceWebRTCDisablePublicHandler)
+	mux.HandleFunc("/v1/namespace/webrtc/stealth/enable", func(w http.ResponseWriter, r *http.Request) {
+		g.namespaceWebRTCStealthPublicHandler(w, r, true)
+	})
+	mux.HandleFunc("/v1/namespace/webrtc/stealth/disable", func(w http.ResponseWriter, r *http.Request) {
+		g.namespaceWebRTCStealthPublicHandler(w, r, false)
+	})
 	mux.HandleFunc("/v1/namespace/webrtc/status", g.namespaceWebRTCStatusPublicHandler)
 
 	// auth endpoints

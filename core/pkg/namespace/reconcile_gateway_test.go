@@ -55,7 +55,7 @@ func TestGatewayWebRTCInSync_matchingBlock_returnsTrue(t *testing.T) {
 
 func TestGatewayWebRTCInSync_eachFieldDriftDetected(t *testing.T) {
 	// Any single drifted field must trigger a restart. Pins that the
-	// comparison covers all four webrtc fields (a future refactor that
+	// comparison covers all five webrtc fields (a future refactor that
 	// drops one would silently let that field drift forever).
 	base := gateway.GatewayYAMLWebRTC{
 		Enabled: true, SFUPort: 30000,
@@ -69,6 +69,7 @@ func TestGatewayWebRTCInSync_eachFieldDriftDetected(t *testing.T) {
 		{"sfu port changed", func(w *gateway.GatewayYAMLWebRTC) { w.SFUPort = 30001 }},
 		{"turn domain changed", func(w *gateway.GatewayYAMLWebRTC) { w.TURNDomain = "turn.other" }},
 		{"turn secret rotated", func(w *gateway.GatewayYAMLWebRTC) { w.TURNSecret = "rotated" }},
+		{"stealth domain changed", func(w *gateway.GatewayYAMLWebRTC) { w.TURNStealthDomain = "cdn-deadbeef0000.orama-devnet.network" }},
 	}
 	for _, tc := range mutations {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,5 +189,27 @@ func TestReconcileGateway_missingConfigReturnsErrorNotRestart(t *testing.T) {
 	err := s.ReconcileGateway(context.Background(), "anchat-test", "node-1", desiredEnabled())
 	if err == nil {
 		t.Error("missing config must return an error (don't blind-restart a healthy gateway)")
+	}
+}
+
+func TestGatewayWebRTCInSync_stealthEnableDetectedAsDrift(t *testing.T) {
+	// feat-124: enabling stealth must drift an otherwise-matching gateway so
+	// the reconciler rewrites its yaml with turn_stealth_domain and restarts
+	// it — that's how turn.credentials starts advertising turns:<host>:443.
+	onDisk := gateway.GatewayYAMLWebRTC{
+		Enabled: true, SFUPort: 30000,
+		TURNDomain: "turn.ns-anchat-test.orama-devnet.network", TURNSecret: "the-secret",
+	}
+	desired := desiredEnabled()
+	desired.TURNStealthDomain = "cdn-abc123def456.orama-devnet.network"
+	if gatewayWebRTCInSync(onDisk, desired) {
+		t.Error("stealth enable not detected as drift — gateway would never advertise the stealth URI")
+	}
+
+	// And once the yaml carries it, the same desired config is in-sync (no
+	// restart loop).
+	onDisk.TURNStealthDomain = desired.TURNStealthDomain
+	if !gatewayWebRTCInSync(onDisk, desired) {
+		t.Error("matching stealth domain reported as drift — restart loop")
 	}
 }

@@ -36,6 +36,27 @@ type Config struct {
 
 	// Namespace this TURN instance belongs to
 	Namespace string `yaml:"namespace"`
+
+	// StealthDomain is the neutral, CDN-bland SNI hostname this server also
+	// answers TURNS for (e.g. "cdn-a1b2c3d4e5f6.orama-devnet.network").
+	//
+	// The stealth endpoint is an SNI-router passthrough, NOT a separate TURN
+	// server: a router on :443 reads only the TLS ClientHello SNI and forwards
+	// the raw bytes for this hostname to this same TURNS listener. TLS is still
+	// terminated here, by this TURN server, which therefore presents two certs
+	// (the primary TURN domain and StealthDomain) selected by ClientHello SNI.
+	// When empty, the stealth endpoint is disabled and behavior is unchanged.
+	StealthDomain string `yaml:"stealth_domain,omitempty"`
+
+	// TLSStealthCertPath is the path to the TLS certificate PEM file presented
+	// for StealthDomain. The SNI router only forwards bytes; this TURN server
+	// terminates the TLS handshake, so it needs the stealth domain's cert here.
+	TLSStealthCertPath string `yaml:"tls_stealth_cert_path,omitempty"`
+
+	// TLSStealthKeyPath is the path to the TLS private key PEM file for the
+	// StealthDomain certificate (TURN terminates TLS for the router-forwarded
+	// stealth connections).
+	TLSStealthKeyPath string `yaml:"tls_stealth_key_path,omitempty"`
 }
 
 // Validate checks the TURN configuration for errors

@@ -1114,6 +1114,48 @@ func (g *Gateway) namespaceWebRTCDisablePublicHandler(w http.ResponseWriter, r *
 	})
 }
 
+// namespaceWebRTCStealthPublicHandler handles POST /v1/namespace/webrtc/stealth/{enable|disable}
+// (feat-124). Public: authenticated by JWT/API key via auth middleware;
+// namespace from context. `enable` is true for the enable route.
+func (g *Gateway) namespaceWebRTCStealthPublicHandler(w http.ResponseWriter, r *http.Request, enable bool) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if namespaceName == "" {
+		writeError(w, http.StatusForbidden, "namespace not resolved")
+		return
+	}
+
+	if g.webrtcManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
+		return
+	}
+
+	var err error
+	action := "disabled"
+	if enable {
+		action = "enabled"
+		err = g.webrtcManager.EnableWebRTCStealth(r.Context(), namespaceName)
+	} else {
+		err = g.webrtcManager.DisableWebRTCStealth(r.Context(), namespaceName)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"namespace": namespaceName,
+		"message":   "WebRTC stealth " + action + " successfully",
+	})
+}
+
 // namespaceWebRTCStatusPublicHandler handles GET /v1/namespace/webrtc/status
 // Public: authenticated by JWT/API key via auth middleware. Namespace from context.
 func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *http.Request) {

@@ -103,6 +103,36 @@ func TestRenderNodeConfig_webRTC(t *testing.T) {
 	}
 }
 
+func TestRenderNodeConfig_sniRouter(t *testing.T) {
+	// Enabled: top-level sni_router block renders enabled: true.
+	enabled, err := RenderNodeConfig(NodeConfigData{
+		NodeID:           "node1",
+		SNIRouterEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("RenderNodeConfig failed: %v", err)
+	}
+	if !strings.Contains(enabled, "sni_router:") {
+		t.Errorf("rendered node config missing sni_router block\n---\n%s", enabled)
+	}
+	if !strings.Contains(enabled, "enabled: true") {
+		t.Errorf("sni_router should render enabled: true\n---\n%s", enabled)
+	}
+
+	// Default: the block is always present, defaulting to false (so the flag is
+	// discoverable to operators and round-trips through regen).
+	disabled, err := RenderNodeConfig(NodeConfigData{NodeID: "node1"})
+	if err != nil {
+		t.Fatalf("RenderNodeConfig failed: %v", err)
+	}
+	if !strings.Contains(disabled, "sni_router:") {
+		t.Errorf("sni_router block should always be present\n---\n%s", disabled)
+	}
+	if !strings.Contains(disabled, "enabled: false") {
+		t.Errorf("default sni_router should render enabled: false\n---\n%s", disabled)
+	}
+}
+
 func TestRenderGatewayConfig(t *testing.T) {
 	bootstrapMultiaddr := "/ip4/127.0.0.1/tcp/4001/p2p/Qm1234567890"
 	data := GatewayConfigData{

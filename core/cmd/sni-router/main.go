@@ -32,6 +32,18 @@
 //	    backend:
 //	      name: gateway
 //	      addr: "127.0.0.1:8443"
+//	turn_discovery:
+//	  namespaces_dir: /opt/orama/.orama/data/namespaces
+//	  base_domain: orama-devnet.network
+//	  rescan_interval: 30s
+//
+// When the turn_discovery.namespaces_dir is set, the router additionally scans
+// <namespaces_dir>/*/configs/turn-*.yaml every rescan_interval and derives two
+// routes per namespace with a TURNS listener — the bland stealth host and a
+// "turn.ns-<namespace>.<base_domain>" alias — both forwarding to that
+// namespace's local TURNS port. Discovered routes are merged with the static
+// routes above (static wins on conflict); a transient scan error keeps the
+// previously-installed routes.
 package main
 
 import (
@@ -69,14 +81,29 @@ type yamlRoute struct {
 	Backend yamlBackend `yaml:"backend"`
 }
 
+// yamlTURNDiscovery mirrors sniproxy.TURNDiscoveryConfig for YAML decoding.
+// When present and namespaces_dir is set, the router auto-discovers per-
+// namespace stealth-TURN routes by scanning <namespaces_dir>/*/configs/turn-*.yaml.
+type yamlTURNDiscovery struct {
+	NamespacesDir  string        `yaml:"namespaces_dir"`
+	BaseDomain     string        `yaml:"base_domain"`
+	RescanInterval time.Duration `yaml:"rescan_interval"`
+}
+
 // yamlConfig is the on-disk configuration shape.
 type yamlConfig struct {
-	Listen             string        `yaml:"listen"`
-	ClientHelloTimeout time.Duration `yaml:"client_hello_timeout"`
-	BackendDialTimeout time.Duration `yaml:"backend_dial_timeout"`
-	MaxConcurrentConns int           `yaml:"max_concurrent_conns"`
-	Fallback           yamlBackend   `yaml:"fallback"`
-	Routes             []yamlRoute   `yaml:"routes"`
+	Listen             string            `yaml:"listen"`
+	ClientHelloTimeout time.Duration     `yaml:"client_hello_timeout"`
+	BackendDialTimeout time.Duration     `yaml:"backend_dial_timeout"`
+	MaxConcurrentConns int               `yaml:"max_concurrent_conns"`
+	Fallback           yamlBackend       `yaml:"fallback"`
+	Routes             []yamlRoute       `yaml:"routes"`
+	TURNDiscovery      yamlTURNDiscovery `yaml:"turn_discovery"`
+}
+
+// discoveryEnabled reports whether TURN route auto-discovery is configured.
+func (y *yamlConfig) discoveryEnabled() bool {
+	return y.TURNDiscovery.NamespacesDir != ""
 }
 
 func main() {
@@ -94,25 +121,49 @@ func main() {
 
 	router := sniproxy.NewRouter(toBackend(cfg.Fallback))
 
-	// Hot-reload the route table from the config file so a namespace's
-	// cdn/turn SNI routes can be added or removed without restarting the
-	// router (Router.Replace swaps atomically under in-flight connections).
-	reloader := sniproxy.NewFileRouteReloader(configPath,
-		func() ([]sniproxy.Route, sniproxy.Backend, error) {
-			y, err := loadConfig(configPath)
-			if err != nil {
-				return nil, sniproxy.Backend{}, err
-			}
-			return toRoutes(y.Routes), toBackend(y.Fallback), nil
-		}, router, logger.Logger)
-	if err := reloader.Apply(); err != nil {
-		logger.ComponentError(logging.ComponentSNI, "Failed to install initial routes",
-			zap.Error(err))
-		os.Exit(1)
+	// The static routes (and fallback) always come from the config file; this
+	// closure is re-evaluated on every reload/rescan so a hand-edit to the
+	// config is picked up without a restart.
+	staticSource := func() ([]sniproxy.Route, sniproxy.Backend, error) {
+		y, err := loadConfig(configPath)
+		if err != nil {
+			return nil, sniproxy.Backend{}, err
+		}
+		return toRoutes(y.Routes), toBackend(y.Fallback), nil
 	}
+
 	routeStop := make(chan struct{})
 	defer close(routeStop)
-	go reloader.Watch(sniproxy.DefaultRouteReloadInterval, routeStop)
+
+	if cfg.discoveryEnabled() {
+		// Auto-discover per-namespace stealth-TURN routes by scanning the
+		// namespaces directory, merged with the static config routes (static
+		// wins on conflict), re-installed atomically every rescan_interval. A
+		// transient scan error keeps the previously-installed routes.
+		discoverer := sniproxy.NewTURNRouteDiscoverer(
+			sniproxy.TURNDiscoveryConfig{
+				NamespacesDir:  cfg.TURNDiscovery.NamespacesDir,
+				BaseDomain:     cfg.TURNDiscovery.BaseDomain,
+				RescanInterval: cfg.TURNDiscovery.RescanInterval,
+			}, staticSource, router, logger.Logger)
+		if err := discoverer.Apply(); err != nil {
+			logger.ComponentError(logging.ComponentSNI, "Failed to install initial routes",
+				zap.Error(err))
+			os.Exit(1)
+		}
+		go discoverer.Run(routeStop)
+	} else {
+		// No discovery configured: hot-reload the static route table from the
+		// config file so cdn/turn SNI routes can be added or removed without
+		// restarting (Router.Replace swaps atomically under in-flight conns).
+		reloader := sniproxy.NewFileRouteReloader(configPath, staticSource, router, logger.Logger)
+		if err := reloader.Apply(); err != nil {
+			logger.ComponentError(logging.ComponentSNI, "Failed to install initial routes",
+				zap.Error(err))
+			os.Exit(1)
+		}
+		go reloader.Watch(sniproxy.DefaultRouteReloadInterval, routeStop)
+	}
 
 	srv := sniproxy.NewServer(router, sniproxy.Config{
 		ClientHelloTimeout: cfg.ClientHelloTimeout,
@@ -234,6 +285,16 @@ func validateConfig(y *yamlConfig) []string {
 		if r.Backend.Addr == "" {
 			errs = append(errs, fmt.Sprintf("routes[%d].backend.addr: required", i))
 		}
+	}
+	// turn_discovery is optional, but when partially set (namespaces_dir XOR
+	// base_domain) it is almost certainly a misconfiguration, so validate the
+	// pair together via the library's own Validate.
+	if y.discoveryEnabled() || y.TURNDiscovery.BaseDomain != "" {
+		dc := sniproxy.TURNDiscoveryConfig{
+			NamespacesDir: y.TURNDiscovery.NamespacesDir,
+			BaseDomain:    y.TURNDiscovery.BaseDomain,
+		}
+		errs = append(errs, dc.Validate()...)
 	}
 	return errs
 }

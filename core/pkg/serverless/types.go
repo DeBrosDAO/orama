@@ -595,6 +595,14 @@ type HostServices interface {
 	// non-owned key is a no-op. Errors only on no-WS-client / empty topic-key.
 	EphemeralStateClear(ctx context.Context, topic, key string) error
 
+	// EphemeralStateList returns the live entries on a topic in the current
+	// invocation's namespace as a JSON envelope:
+	//   {"entries":[{"key":..,"client_id":..,"payload":<base64>,"expires_in_ms":..}, …]}
+	// The reconnect catch-up read (bugboard #710 acceptance): unlike
+	// Set/Clear it does NOT require a WS client in context — any function
+	// invocation may read. Errors on empty topic or no invocation context.
+	EphemeralStateList(ctx context.Context, topic string) ([]byte, error)
+
 	// WebSocket operations (only valid in WS context)
 	WSSend(ctx context.Context, clientID string, data []byte) error
 	WSBroadcast(ctx context.Context, topic string, data []byte) error

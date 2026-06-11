@@ -230,7 +230,52 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		return "", fmt.Errorf("failed to populate webrtc config: %w", err)
 	}
 
+	// Stealth TURN SNI router (feat-124). Like the webrtc block, sni_router is
+	// an operator opt-in that only exists in the previous node.yaml, so carry
+	// it forward across regeneration. Without this, a Phase4 regen would reset
+	// sni_router.enabled to false, stop the :443 router and break stealth TURN
+	// for every region that relies on it (the same regen-wipe class of outage
+	// as bugboard #259/#846).
+	cg.populateSNIRouterConfig(&data)
+
 	return templates.RenderNodeConfig(data)
+}
+
+// populateSNIRouterConfig carries forward the operator-set sni_router.enabled
+// flag from the existing node.yaml so a config regeneration never silently
+// disables the stealth TURN-over-443 router. Absence of the file or block
+// leaves the flag at its default (false).
+func (cg *ConfigGenerator) populateSNIRouterConfig(data *templates.NodeConfigData) {
+	data.SNIRouterEnabled = cg.readExistingSNIRouterEnabled()
+}
+
+// SNIRouterEnabled reports whether the node's on-disk node.yaml has opted in to
+// the stealth TURN-over-443 SNI router. The orchestrator reads this AFTER
+// Phase4 has written node.yaml to decide whether to move Caddy to :8443 and
+// start the router unit. Returns false when the config or block is absent.
+func (cg *ConfigGenerator) SNIRouterEnabled() bool {
+	return cg.readExistingSNIRouterEnabled()
+}
+
+// readExistingSNIRouterEnabled parses just the top-level sni_router.enabled
+// flag out of the existing node.yaml. Returns false when the file is missing,
+// malformed, or has no sni_router block (fresh install / not opted in).
+func (cg *ConfigGenerator) readExistingSNIRouterEnabled() bool {
+	configPath := filepath.Join(cg.oramaDir, "configs", "node.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return false // No existing config (fresh install) — default off.
+	}
+
+	var parsed struct {
+		SNIRouter struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"sni_router"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return false // Malformed/old config — don't fail regen; default off.
+	}
+	return parsed.SNIRouter.Enabled
 }
 
 // existingWebRTC is the minimal shape parsed out of an existing node.yaml to

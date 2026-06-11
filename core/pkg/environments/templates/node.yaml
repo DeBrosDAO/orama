@@ -15,6 +15,14 @@ node:
   operator_wallet: "{{.OperatorWallet}}"
 {{- end}}
 
+# Stealth TURN-over-443 SNI router (feat-124). When enabled, the node runs
+# orama-sni-router on :443 and Caddy is moved to :8443; default-OFF so existing
+# nodes are byte-identical until an operator opts in. This block is preserved
+# across config regeneration (GenerateNodeConfig carries forward an existing
+# sni_router.enabled: true).
+sni_router:
+  enabled: {{if .SNIRouterEnabled}}true{{else}}false{{end}}
+
 database:
   data_dir: "{{.DataDir}}/rqlite"
   replication_factor: 3

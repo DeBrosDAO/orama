@@ -741,10 +741,34 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 			ps.logf("  ✓ ntfy config generated (base_url: %s)", ntfyBaseURL)
 		}
 
+		// Stealth TURN-over-443 (feat-124): when the node opted in
+		// (sni_router.enabled in the node.yaml just written above), Caddy
+		// must vacate :443 so the orama-sni-router can own it. Move Caddy's
+		// HTTPS listener to :8443 BEFORE ConfigureCaddy renders the Caddyfile.
+		// When not opted in, the Caddyfile is byte-identical to before.
+		if ps.configGenerator.SNIRouterEnabled() {
+			ps.binaryInstaller.EnableCaddySNIRouterMode()
+			ps.logf("  ✓ SNI router enabled — Caddy HTTPS will bind :8443")
+		}
+
 		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint, baseDomain); err != nil {
 			ps.logf("  ⚠️  Caddy config warning: %v", err)
 		} else {
 			ps.logf("  ✓ Caddy config generated")
+		}
+
+		// Stealth TURN-over-443 (feat-124): when opted in, write the
+		// orama-sni-router config (listen :443, fallback Caddy :8443,
+		// turn_discovery scanning this node's namespaces dir for the cluster's
+		// base domain). The unit lifecycle is driven in Phase5 after Caddy has
+		// moved to :8443. The router uses the base domain as the zone for
+		// stealth/turn.ns-* hostnames.
+		if ps.configGenerator.SNIRouterEnabled() {
+			if err := ps.binaryInstaller.ConfigureSNIRouter(dnsZone); err != nil {
+				ps.logf("  ⚠️  SNI router config warning: %v", err)
+			} else {
+				ps.logf("  ✓ SNI router config generated (zone: %s)", dnsZone)
+			}
 		}
 	}
 
@@ -871,6 +895,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 
+	// SNI router unit (feat-124). Write the unit whenever the binary is present
+	// so the daemon-reload below picks it up; the enable/start vs stop/disable
+	// decision (based on sni_router.enabled) happens after Caddy has moved to
+	// :8443, in the start section.
+	if ps.binaryInstaller.WriteSNIRouterUnit() == nil {
+		ps.logf("  ✓ SNI router service unit created: %s", ps.binaryInstaller.SNIRouterServiceName())
+	}
+
 	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %w", err)
@@ -977,6 +1009,31 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
 		} else {
 			ps.logf("    - caddy.service started")
+		}
+	}
+
+	// Stealth TURN-over-443 (feat-124) cutover. Caddy has just been
+	// reconfigured to :8443 and restarted above, so :443 is now free for the
+	// SNI router. When opted in, enable+start the router; when not, stop+disable
+	// it so a node that flipped the flag off cleanly returns :443 to Caddy.
+	sniSvc := ps.binaryInstaller.SNIRouterServiceName()
+	if ps.configGenerator.SNIRouterEnabled() {
+		if err := ps.serviceController.EnableService(sniSvc); err != nil {
+			ps.logf("  ⚠️  Failed to enable %s: %v", sniSvc, err)
+		}
+		if err := ps.serviceController.RestartService(sniSvc); err != nil {
+			ps.logf("  ⚠️  Failed to start %s: %v", sniSvc, err)
+		} else {
+			ps.logf("    - %s started (owns :443)", sniSvc)
+		}
+	} else {
+		// Not opted in: ensure the router is not holding :443. Errors are
+		// non-fatal — the unit may simply not be loaded on this node.
+		if err := ps.serviceController.StopService(sniSvc); err != nil {
+			ps.logf("  ℹ️  %s not running (expected when disabled): %v", sniSvc, err)
+		}
+		if err := ps.serviceController.DisableService(sniSvc); err != nil {
+			ps.logf("  ℹ️  %s not enabled (expected when disabled): %v", sniSvc, err)
 		}
 	}
 

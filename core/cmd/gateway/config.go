@@ -74,6 +74,10 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		SFUPort    int    `yaml:"sfu_port"`
 		TURNDomain string `yaml:"turn_domain"`
 		TURNSecret string `yaml:"turn_secret"`
+		// TURNStealthDomain is the neutral stealth TURNS:443 host (feat-124).
+		// Maps to cfg.StealthCDNDomain so turn.credentials advertises the
+		// stealth rung of the URI ladder.
+		TURNStealthDomain string `yaml:"turn_stealth_domain"`
 	}
 
 	type yamlCfg struct {
@@ -255,6 +259,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	}
 	if v := strings.TrimSpace(y.WebRTC.TURNSecret); v != "" {
 		cfg.TURNSecret = v
+	}
+	if v := strings.TrimSpace(y.WebRTC.TURNStealthDomain); v != "" {
+		cfg.StealthCDNDomain = v
 	}
 
 	// Validate configuration

@@ -204,10 +204,10 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	}
 
 	// 14. Update cluster-state.json on all nodes with WebRTC info
-	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, sfuBlocks, turnBlocks, turnDomain, turnSecret)
+	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, sfuBlocks, turnBlocks, turnDomain, "", turnSecret)
 
 	// 15. Restart namespace gateways with WebRTC config so they register WebRTC routes
-	cm.restartGatewaysWithWebRTC(ctx, cluster, clusterNodes, nodePortBlocks, sfuBlocks, turnDomain, turnSecret)
+	cm.restartGatewaysWithWebRTC(ctx, cluster, clusterNodes, nodePortBlocks, sfuBlocks, turnDomain, "", turnSecret)
 
 	cm.logEvent(ctx, cluster.ID, EventWebRTCEnabled, "",
 		fmt.Sprintf("WebRTC enabled: SFU on %d nodes, TURN on %d nodes", len(clusterNodes), len(turnNodes)), nil)
@@ -273,9 +273,15 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 		cm.logger.Warn("Failed to deallocate WebRTC ports", zap.Error(err))
 	}
 
-	// 7. Delete TURN DNS records
+	// 7. Delete TURN DNS records (both the regular and the feat-124 stealth
+	// records — a full WebRTC teardown must not orphan stealth A records when
+	// the namespace had stealth enabled). Delete-by-tag is a no-op when the
+	// stealth records are absent, so this is safe unconditionally.
 	if err := cm.dnsManager.DeleteTURNRecords(ctx, namespaceName); err != nil {
 		cm.logger.Warn("Failed to delete TURN DNS records", zap.Error(err))
+	}
+	if err := cm.dnsManager.DeleteStealthTURNRecords(ctx, namespaceName); err != nil {
+		cm.logger.Warn("Failed to delete stealth TURN DNS records", zap.Error(err))
 	}
 
 	// 8. Clean up DB tables
@@ -283,7 +289,7 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 	cm.db.Exec(internalCtx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 
 	// 9. Update cluster-state.json to remove WebRTC info
-	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, nil, nil, "", "")
+	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, nil, nil, "", "", "")
 
 	// 10. Restart namespace gateways without WebRTC config so they unregister WebRTC routes
 	portBlocks, err := cm.portAllocator.GetAllPortBlocks(ctx, cluster.ID)
@@ -292,7 +298,7 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 		for i := range portBlocks {
 			nodePortBlocks[portBlocks[i].NodeID] = &portBlocks[i]
 		}
-		cm.restartGatewaysWithWebRTC(ctx, cluster, clusterNodes, nodePortBlocks, nil, "", "")
+		cm.restartGatewaysWithWebRTC(ctx, cluster, clusterNodes, nodePortBlocks, nil, "", "", "")
 	} else {
 		cm.logger.Warn("Failed to get port blocks for gateway restart after WebRTC disable", zap.Error(err))
 	}
@@ -487,17 +493,18 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 // spawnTURNRemote sends a spawn-turn request to a remote node
 func (cm *ClusterManager) spawnTURNRemote(ctx context.Context, nodeIP string, cfg TURNInstanceConfig) error {
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":           "spawn-turn",
-		"namespace":        cfg.Namespace,
-		"node_id":          cfg.NodeID,
-		"turn_listen_addr": cfg.ListenAddr,
-		"turn_turns_addr":  cfg.TURNSListenAddr,
-		"turn_public_ip":   cfg.PublicIP,
-		"turn_realm":       cfg.Realm,
-		"turn_auth_secret": cfg.AuthSecret,
-		"turn_relay_start": cfg.RelayPortStart,
-		"turn_relay_end":   cfg.RelayPortEnd,
-		"turn_domain":      cfg.TURNDomain,
+		"action":              "spawn-turn",
+		"namespace":           cfg.Namespace,
+		"node_id":             cfg.NodeID,
+		"turn_listen_addr":    cfg.ListenAddr,
+		"turn_turns_addr":     cfg.TURNSListenAddr,
+		"turn_public_ip":      cfg.PublicIP,
+		"turn_realm":          cfg.Realm,
+		"turn_auth_secret":    cfg.AuthSecret,
+		"turn_relay_start":    cfg.RelayPortStart,
+		"turn_relay_end":      cfg.RelayPortEnd,
+		"turn_domain":         cfg.TURNDomain,
+		"turn_stealth_domain": cfg.StealthDomain,
 	})
 	return err
 }
@@ -558,7 +565,7 @@ func (cm *ClusterManager) updateClusterStateWithWebRTC(
 	nodes []clusterNodeInfo,
 	sfuBlocks map[string]*WebRTCPortBlock,
 	turnBlocks map[string]*WebRTCPortBlock,
-	turnDomain, turnSecret string,
+	turnDomain, turnStealthDomain, turnSecret string,
 ) {
 	// Get existing port blocks for base state
 	portBlocks, err := cm.portAllocator.GetAllPortBlocks(ctx, cluster.ID)
@@ -635,6 +642,7 @@ func (cm *ClusterManager) updateClusterStateWithWebRTC(
 		}
 		// Persist TURN domain and secret so gateways can be restored on cold start
 		state.TURNDomain = turnDomain
+		state.TURNStealthDomain = turnStealthDomain
 		state.TURNSharedSecret = turnSecret
 
 		if node.NodeID == cm.localNodeID {
@@ -671,7 +679,7 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 	nodes []clusterNodeInfo,
 	portBlocks map[string]*PortBlock,
 	sfuBlocks map[string]*WebRTCPortBlock,
-	turnDomain, turnSecret string,
+	turnDomain, turnStealthDomain, turnSecret string,
 ) {
 	// Build Olric server addresses from port blocks + node IPs
 	var olricServers []string
@@ -715,6 +723,7 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 			WebRTCEnabled:         webrtcEnabled,
 			SFUPort:               sfuPort,
 			TURNDomain:            turnDomain,
+			TURNStealthDomain:     turnStealthDomain,
 			TURNSecret:            turnSecret,
 			// Bugboard #837 follow-up: preserve the secrets key on WebRTC
 			// restarts so enabling WebRTC doesn't drop secrets management.
@@ -750,23 +759,24 @@ func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP strin
 	}
 
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":                    "restart-gateway",
-		"namespace":                 cfg.Namespace,
-		"node_id":                   cfg.NodeID,
-		"gateway_http_port":         cfg.HTTPPort,
-		"gateway_base_domain":       cfg.BaseDomain,
-		"gateway_rqlite_dsn":        cfg.RQLiteDSN,
-		"gateway_global_rqlite_dsn": cfg.GlobalRQLiteDSN,
-		"gateway_olric_servers":     cfg.OlricServers,
-		"gateway_olric_timeout":     olricTimeout,
-		"ipfs_cluster_api_url":      cfg.IPFSClusterAPIURL,
-		"ipfs_api_url":              cfg.IPFSAPIURL,
-		"ipfs_timeout":              ipfsTimeout,
-		"ipfs_replication_factor":   cfg.IPFSReplicationFactor,
-		"gateway_webrtc_enabled":    cfg.WebRTCEnabled,
-		"gateway_sfu_port":          cfg.SFUPort,
-		"gateway_turn_domain":       cfg.TURNDomain,
-		"gateway_turn_secret":       cfg.TURNSecret,
+		"action":                      "restart-gateway",
+		"namespace":                   cfg.Namespace,
+		"node_id":                     cfg.NodeID,
+		"gateway_http_port":           cfg.HTTPPort,
+		"gateway_base_domain":         cfg.BaseDomain,
+		"gateway_rqlite_dsn":          cfg.RQLiteDSN,
+		"gateway_global_rqlite_dsn":   cfg.GlobalRQLiteDSN,
+		"gateway_olric_servers":       cfg.OlricServers,
+		"gateway_olric_timeout":       olricTimeout,
+		"ipfs_cluster_api_url":        cfg.IPFSClusterAPIURL,
+		"ipfs_api_url":                cfg.IPFSAPIURL,
+		"ipfs_timeout":                ipfsTimeout,
+		"ipfs_replication_factor":     cfg.IPFSReplicationFactor,
+		"gateway_webrtc_enabled":      cfg.WebRTCEnabled,
+		"gateway_sfu_port":            cfg.SFUPort,
+		"gateway_turn_domain":         cfg.TURNDomain,
+		"gateway_turn_stealth_domain": cfg.TURNStealthDomain,
+		"gateway_turn_secret":         cfg.TURNSecret,
 		// Bugboard #837 follow-up: preserve the secrets key on WebRTC restarts.
 		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
 	})

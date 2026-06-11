@@ -27,7 +27,19 @@ type CaddyInstaller struct {
 	// Enabled per-node via EnableNtfyProxy. Feature #72.
 	withNtfy     bool
 	ntfyHostname string // e.g. "push.dbrs.space" — fully-qualified public host
+
+	// behindSNIRouter, when set, moves Caddy's HTTPS listener off :443 to
+	// CaddyHTTPSPortBehindSNI so the orama-sni-router can own :443 and forward
+	// TLS by SNI (feat-124, stealth TURN). Enabled per-node via
+	// EnableSNIRouterMode. Plain HTTP (:80) is unaffected. When false the
+	// generated Caddyfile is byte-identical to the pre-feature output.
+	behindSNIRouter bool
 }
+
+// CaddyHTTPSPortBehindSNI is the port Caddy binds for HTTPS when the node runs
+// behind the SNI router (which owns :443). 8443 matches the sni-router config's
+// caddy fallback backend (127.0.0.1:8443) and the plan doc.
+const CaddyHTTPSPortBehindSNI = 8443
 
 // NewCaddyInstaller creates a new Caddy installer
 func NewCaddyInstaller(arch string, logWriter io.Writer, oramaHome string) *CaddyInstaller {
@@ -50,6 +62,16 @@ func NewCaddyInstaller(arch string, logWriter io.Writer, oramaHome string) *Cadd
 func (ci *CaddyInstaller) EnableNtfyProxy(hostname string) {
 	ci.withNtfy = true
 	ci.ntfyHostname = hostname
+}
+
+// EnableSNIRouterMode tells the Caddy installer to bind HTTPS on
+// CaddyHTTPSPortBehindSNI (8443) instead of :443, freeing :443 for the
+// orama-sni-router (feat-124). Plain HTTP on :80 is left untouched. Must be
+// called BEFORE Configure so the generated Caddyfile picks up the global
+// `https_port` option. A no-op when never called: the default Caddyfile keeps
+// HTTPS on :443.
+func (ci *CaddyInstaller) EnableSNIRouterMode() {
+	ci.behindSNIRouter = true
 }
 
 // IsInstalled checks if Caddy with orama DNS module is already installed
@@ -417,7 +439,17 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	//     workload is REST + WebSocket (neither benefits much from
 	//     h2 stream multiplexing — REST is keep-alive over h1, and
 	//     WS is single-connection by design).
-	sb.WriteString(fmt.Sprintf("{\n    email %s\n    servers {\n        protocols h1\n    }\n}\n", email))
+	// When this node runs behind the SNI router (feat-124), move Caddy's HTTPS
+	// listener off :443 to CaddyHTTPSPortBehindSNI via the `https_port` global
+	// option. The sni-router owns :443 and forwards TLS by SNI to either a
+	// namespace's TURNS listener or here (127.0.0.1:8443). Plain HTTP (:80) is
+	// unchanged. When behindSNIRouter is false, no `https_port` line is emitted
+	// and the Caddyfile is byte-identical to the pre-feature output.
+	httpsPortOption := ""
+	if ci.behindSNIRouter {
+		httpsPortOption = fmt.Sprintf("    https_port %d\n", CaddyHTTPSPortBehindSNI)
+	}
+	sb.WriteString(fmt.Sprintf("{\n    email %s\n%s    servers {\n        protocols h1\n    }\n}\n", email, httpsPortOption))
 
 	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
 	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))

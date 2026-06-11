@@ -1,6 +1,7 @@
 package installers
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -95,5 +96,52 @@ func TestGenerateCaddyfile_BaseDomainSameAsDomainOmitsDuplicates(t *testing.T) {
 	// guard at `if baseDomain != "" && baseDomain != domain` regressed).
 	if got := strings.Count(cf, "*.dbrs.space {"); got != 2 {
 		t.Errorf("expected exactly 2 `*.dbrs.space {` occurrences (1 TLS + 1 HTTP), got %d in:\n%s", got, cf)
+	}
+}
+
+// TestGenerateCaddyfile_SNIRouterDisabledByteIdentical is the safety guard for
+// feat-124: when EnableSNIRouterMode has NOT been called, the generated
+// Caddyfile must be byte-identical to the pre-feature output (HTTPS stays on
+// :443, no `https_port` global option). This is the default for every existing
+// node — any drift here is a silent production change.
+func TestGenerateCaddyfile_SNIRouterDisabledByteIdentical(t *testing.T) {
+	ci := newTestCaddyInstaller()
+	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
+		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+
+	if strings.Contains(cf, "https_port") {
+		t.Errorf("default Caddyfile must NOT contain `https_port` (SNI router off); got:\n%s", cf)
+	}
+	if strings.Contains(cf, "8443") {
+		t.Errorf("default Caddyfile must NOT reference :8443 (SNI router off); got:\n%s", cf)
+	}
+	// The global options block must be exactly the pre-feature shape.
+	if !strings.Contains(cf, "{\n    email admin@dbrs.space\n    servers {\n        protocols h1\n    }\n}\n") {
+		t.Errorf("default global options block drifted from pre-feature output; got:\n%s", cf)
+	}
+}
+
+// TestGenerateCaddyfile_SNIRouterEnabledMovesHTTPSTo8443 verifies that after
+// EnableSNIRouterMode, Caddy's HTTPS listener is moved to :8443 via the
+// `https_port` global option, while plain HTTP (:80) is unchanged so ACME
+// HTTP-01 and the HTTP catch-all still work.
+func TestGenerateCaddyfile_SNIRouterEnabledMovesHTTPSTo8443(t *testing.T) {
+	ci := newTestCaddyInstaller()
+	ci.EnableSNIRouterMode()
+	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
+		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+
+	want := fmt.Sprintf("https_port %d", CaddyHTTPSPortBehindSNI)
+	if !strings.Contains(cf, want) {
+		t.Errorf("SNI-router Caddyfile must contain %q; got:\n%s", want, cf)
+	}
+	// The global option belongs inside the top-level options block, before the
+	// servers stanza.
+	if !strings.Contains(cf, "{\n    email admin@dbrs.space\n    https_port 8443\n    servers {\n        protocols h1\n    }\n}\n") {
+		t.Errorf("https_port not placed correctly in global options block; got:\n%s", cf)
+	}
+	// Plain HTTP :80 catch-all must be unchanged.
+	if !strings.Contains(cf, ":80 {") {
+		t.Errorf("HTTP :80 block must remain when SNI router enabled; got:\n%s", cf)
 	}
 }

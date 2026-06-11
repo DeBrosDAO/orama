@@ -15,6 +15,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// stealthConfigFieldCount is the number of stealth TLS config fields that must
+// be set together (StealthDomain, TLSStealthCertPath, TLSStealthKeyPath). Any
+// other count is a partial config and fails server startup.
+const stealthConfigFieldCount = 3
+
 // Server wraps a Pion TURN server with namespace-scoped HMAC-SHA1 authentication.
 type Server struct {
 	config      *Config
@@ -24,8 +29,9 @@ type Server struct {
 	tcpListener net.Listener   // Plain TCP listener on primary port (3478)
 	tlsListener net.Listener   // TLS TCP listener for TURNS (port 5349)
 
-	certReloader *certReloader // hot-reloads the TURNS cert; nil when TURNS disabled
-	certStop     chan struct{} // closed to stop the cert-reload watcher goroutine
+	certReloader        *certReloader // hot-reloads the primary TURNS cert; nil when TURNS disabled
+	stealthCertReloader *certReloader // hot-reloads the stealth-SNI cert; nil when stealth disabled
+	certStop            chan struct{} // closed to stop the cert-reload watcher goroutine(s)
 }
 
 // NewServer creates and starts a TURN server.
@@ -94,8 +100,18 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 			s.closeListeners()
 			return nil, fmt.Errorf("failed to load TLS cert/key: %w", err)
 		}
+		s.certReloader = reloader
+
+		// Stealth SNI: when configured, terminate TLS for a second (neutral)
+		// hostname using its own hot-reloading cert. The SNI router forwards the
+		// raw stealth-domain bytes to this listener; selection is by ServerName.
+		if err := s.loadStealthCertReloader(cfg); err != nil {
+			s.closeListeners()
+			return nil, err
+		}
+
 		tlsConfig := &tls.Config{
-			GetCertificate: reloader.GetCertificate,
+			GetCertificate: newGetCertificate(cfg.StealthDomain, reloader, s.stealthCertReloader),
 			MinVersion:     tls.VersionTLS12,
 		}
 		tlsListener, err := tls.Listen("tcp", cfg.TURNSListenAddr, tlsConfig)
@@ -104,9 +120,11 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 			return nil, fmt.Errorf("failed to listen on %s: %w", cfg.TURNSListenAddr, err)
 		}
 		s.tlsListener = tlsListener
-		s.certReloader = reloader
 		s.certStop = make(chan struct{})
 		go reloader.watch(turnCertReloadInterval, s.certStop)
+		if s.stealthCertReloader != nil {
+			go s.stealthCertReloader.watch(turnCertReloadInterval, s.certStop)
+		}
 
 		listenerConfigs = append(listenerConfigs, pionTurn.ListenerConfig{
 			Listener: tlsListener,
@@ -148,6 +166,62 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 	)
 
 	return s, nil
+}
+
+// loadStealthCertReloader sets up the second cert reloader used for the stealth
+// SNI hostname, storing it on s.stealthCertReloader. The three stealth fields
+// (StealthDomain, TLSStealthCertPath, TLSStealthKeyPath) are all-or-nothing: a
+// partial config is an operator mistake and fails startup rather than silently
+// running without the stealth endpoint. When none are set, stealth is disabled
+// and the primary TLS path is byte-for-byte unchanged.
+func (s *Server) loadStealthCertReloader(cfg *Config) error {
+	set := 0
+	if cfg.StealthDomain != "" {
+		set++
+	}
+	if cfg.TLSStealthCertPath != "" {
+		set++
+	}
+	if cfg.TLSStealthKeyPath != "" {
+		set++
+	}
+	if set == 0 {
+		return nil // stealth disabled
+	}
+	if set != stealthConfigFieldCount {
+		var missing []string
+		if cfg.StealthDomain == "" {
+			missing = append(missing, "stealth_domain")
+		}
+		if cfg.TLSStealthCertPath == "" {
+			missing = append(missing, "tls_stealth_cert_path")
+		}
+		if cfg.TLSStealthKeyPath == "" {
+			missing = append(missing, "tls_stealth_key_path")
+		}
+		return fmt.Errorf("turn: partial stealth config — set all of [stealth_domain, tls_stealth_cert_path, tls_stealth_key_path] or none; missing: %s", strings.Join(missing, ", "))
+	}
+
+	reloader, err := newCertReloader(cfg.TLSStealthCertPath, cfg.TLSStealthKeyPath, s.logger)
+	if err != nil {
+		return fmt.Errorf("failed to load stealth TLS cert/key (cert=%s, key=%s): %w", cfg.TLSStealthCertPath, cfg.TLSStealthKeyPath, err)
+	}
+	s.stealthCertReloader = reloader
+	return nil
+}
+
+// newGetCertificate builds the tls.Config.GetCertificate callback. When the
+// ClientHello ServerName equals stealthDomain (case-insensitively), it serves
+// the stealth cert; every other case — including empty SNI and the primary TURN
+// domain — serves the primary cert, preserving the pre-stealth behavior. When
+// stealth is disabled (stealthReloader nil) it is exactly primary.GetCertificate.
+func newGetCertificate(stealthDomain string, primary, stealth *certReloader) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if stealth != nil && hello != nil && strings.EqualFold(hello.ServerName, stealthDomain) {
+			return stealth.GetCertificate(hello)
+		}
+		return primary.GetCertificate(hello)
+	}
 }
 
 // authHandler validates HMAC-SHA1 credentials.
@@ -239,6 +313,8 @@ func (s *Server) closeListeners() {
 		s.tlsListener.Close()
 		s.tlsListener = nil
 	}
+	s.certReloader = nil
+	s.stealthCertReloader = nil
 }
 
 // GenerateCredentials creates time-limited HMAC-SHA1 TURN credentials.

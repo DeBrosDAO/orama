@@ -537,6 +537,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 				gwCfg.SFUPort = sfuBlock.SFUSignalingPort
 				gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
 				gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+				gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
 			}
 		}
 
@@ -1080,6 +1081,7 @@ func (cm *ClusterManager) addNodeToCluster(
 			gwCfg.SFUPort = sfuBlock.SFUSignalingPort
 			gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
 			gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+			gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
 		}
 	}
 

@@ -53,6 +53,8 @@ type SpawnRequest struct {
 	GatewaySFUPort       int    `json:"gateway_sfu_port,omitempty"`
 	GatewayTURNDomain    string `json:"gateway_turn_domain,omitempty"`
 	GatewayTURNSecret    string `json:"gateway_turn_secret,omitempty"`
+	// Stealth TURNS:443 host (feat-124); empty when stealth is disabled.
+	GatewayTURNStealthDomain string `json:"gateway_turn_stealth_domain,omitempty"`
 	// Host serverless secrets encryption key forwarded to the spawned
 	// namespace gateway (bugboard #837 follow-up). Same value on every node.
 	GatewaySecretsEncryptionKey string `json:"gateway_secrets_encryption_key,omitempty"`
@@ -67,14 +69,15 @@ type SpawnRequest struct {
 	RQLiteDSN     string                 `json:"rqlite_dsn,omitempty"`
 
 	// TURN config (when action = "spawn-turn")
-	TURNListenAddr string `json:"turn_listen_addr,omitempty"`
-	TURNTURNSAddr  string `json:"turn_turns_addr,omitempty"`
-	TURNPublicIP   string `json:"turn_public_ip,omitempty"`
-	TURNRealm      string `json:"turn_realm,omitempty"`
-	TURNAuthSecret string `json:"turn_auth_secret,omitempty"`
-	TURNRelayStart int    `json:"turn_relay_start,omitempty"`
-	TURNRelayEnd   int    `json:"turn_relay_end,omitempty"`
-	TURNDomain     string `json:"turn_domain,omitempty"`
+	TURNListenAddr    string `json:"turn_listen_addr,omitempty"`
+	TURNTURNSAddr     string `json:"turn_turns_addr,omitempty"`
+	TURNPublicIP      string `json:"turn_public_ip,omitempty"`
+	TURNRealm         string `json:"turn_realm,omitempty"`
+	TURNAuthSecret    string `json:"turn_auth_secret,omitempty"`
+	TURNRelayStart    int    `json:"turn_relay_start,omitempty"`
+	TURNRelayEnd      int    `json:"turn_relay_end,omitempty"`
+	TURNDomain        string `json:"turn_domain,omitempty"`
+	TURNStealthDomain string `json:"turn_stealth_domain,omitempty"`
 
 	// Cluster state (when action = "save-cluster-state")
 	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
@@ -237,6 +240,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			WebRTCEnabled:         req.GatewayWebRTCEnabled,
 			SFUPort:               req.GatewaySFUPort,
 			TURNDomain:            req.GatewayTURNDomain,
+			TURNStealthDomain:     req.GatewayTURNStealthDomain,
 			TURNSecret:            req.GatewayTURNSecret,
 			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
 		}
@@ -291,6 +295,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			WebRTCEnabled:         req.GatewayWebRTCEnabled,
 			SFUPort:               req.GatewaySFUPort,
 			TURNDomain:            req.GatewayTURNDomain,
+			TURNStealthDomain:     req.GatewayTURNStealthDomain,
 			TURNSecret:            req.GatewayTURNSecret,
 			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
 		}
@@ -360,6 +365,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			RelayPortStart:  req.TURNRelayStart,
 			RelayPortEnd:    req.TURNRelayEnd,
 			TURNDomain:      req.TURNDomain,
+			StealthDomain:   req.TURNStealthDomain,
 		}
 		if err := h.systemdSpawner.SpawnTURN(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn TURN instance", zap.Error(err))

@@ -828,6 +828,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hWSBroadcast).Export("ws_broadcast").
 			NewFunctionBuilder().WithFunc(e.hEphemeralStateSet).Export("ephemeral_state_set").
 			NewFunctionBuilder().WithFunc(e.hEphemeralStateClear).Export("ephemeral_state_clear").
+			NewFunctionBuilder().WithFunc(e.hEphemeralStateList).Export("ephemeral_state_list").
 			NewFunctionBuilder().WithFunc(e.hFunctionInvoke).Export("function_invoke").
 			NewFunctionBuilder().WithFunc(e.hFunctionInvokeAsync).Export("function_invoke_async").
 			NewFunctionBuilder().WithFunc(e.hLogInfo).Export("log_info").
@@ -1461,6 +1462,33 @@ func (e *Engine) hEphemeralStateClear(ctx context.Context, mod api.Module,
 		return 0
 	}
 	return 1
+}
+
+// hEphemeralStateList is the WASM-callable wrapper for EphemeralStateList —
+// the bugboard #710 reconnect catch-up read.
+//
+// ABI: ephemeral_state_list(topicPtr, topicLen uint32) -> uint64 packed
+// (ptr<<32 | len) pointing to a JSON envelope in guest memory:
+//
+//	{"entries":[{"key":..,"client_id":..,"payload":<base64>,"expires_in_ms":..}, …]}
+//
+// Returns 0 on failure (empty topic, no invocation context, ephemeral state
+// unavailable, or a guest-memory error). Unlike set/clear, no WS client is
+// required — the read is namespace-scoped via the invocation context.
+func (e *Engine) hEphemeralStateList(ctx context.Context, mod api.Module,
+	topicPtr, topicLen uint32) uint64 {
+	topic, ok := e.executor.ReadFromGuest(mod, topicPtr, topicLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.EphemeralStateList(ctx, string(topic))
+	if err != nil {
+		e.logger.Warn("host function ephemeral_state_list failed",
+			zap.String("topic", string(topic)),
+			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
 }
 
 // hPushSend is the WASM-callable wrapper for PushSend.

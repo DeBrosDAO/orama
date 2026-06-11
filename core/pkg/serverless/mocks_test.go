@@ -259,6 +259,10 @@ func (m *MockHostServices) EphemeralStateClear(ctx context.Context, topic, key s
 	return nil
 }
 
+func (m *MockHostServices) EphemeralStateList(ctx context.Context, topic string) ([]byte, error) {
+	return []byte(`{"entries":[]}`), nil
+}
+
 func (m *MockHostServices) WSSend(ctx context.Context, clientID string, data []byte) error {
 	return nil
 }

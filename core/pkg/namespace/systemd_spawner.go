@@ -234,10 +234,11 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		// namespace gateways even though the host gateway had the key.
 		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
 		WebRTC: gateway.GatewayYAMLWebRTC{
-			Enabled:    cfg.WebRTCEnabled,
-			SFUPort:    cfg.SFUPort,
-			TURNDomain: cfg.TURNDomain,
-			TURNSecret: cfg.TURNSecret,
+			Enabled:           cfg.WebRTCEnabled,
+			SFUPort:           cfg.SFUPort,
+			TURNDomain:        cfg.TURNDomain,
+			TURNSecret:        cfg.TURNSecret,
+			TURNStealthDomain: cfg.TURNStealthDomain,
 		},
 	}
 
@@ -343,7 +344,8 @@ func gatewayWebRTCInSync(onDisk gateway.GatewayYAMLWebRTC, cfg gateway.InstanceC
 	return onDisk.Enabled == cfg.WebRTCEnabled &&
 		onDisk.SFUPort == cfg.SFUPort &&
 		onDisk.TURNSecret == cfg.TURNSecret &&
-		onDisk.TURNDomain == cfg.TURNDomain
+		onDisk.TURNDomain == cfg.TURNDomain &&
+		onDisk.TURNStealthDomain == cfg.TURNStealthDomain
 }
 
 // gatewayConfigInSync reports whether the full reconcile-relevant config on
@@ -516,6 +518,68 @@ type TURNInstanceConfig struct {
 	RelayPortStart  int    // Start of relay port range
 	RelayPortEnd    int    // End of relay port range
 	TURNDomain      string // TURN domain for Let's Encrypt cert (e.g., "turn.ns-myapp.orama-devnet.network")
+	// StealthDomain is the neutral stealth TURNS host (feat-124). When set,
+	// the TURN server carries a second Let's Encrypt cert for this name and
+	// serves it to TLS clients whose SNI matches — the path the SNI router
+	// forwards from :443. Stealth NEVER falls back to a self-signed cert: a
+	// cert clients reject is indistinguishable from being blocked.
+	StealthDomain string
+}
+
+// acmeInternalEndpoint is the gateway's internal ACME endpoint that the
+// Caddyfile TURN-cert blocks point the orama DNS provider at.
+const acmeInternalEndpoint = "http://localhost:6001/v1/internal/acme"
+
+// turnCertProvisionTimeout bounds how long a TURN spawn waits for Caddy to
+// provision a Let's Encrypt cert before falling back (primary domain) or
+// failing (stealth domain).
+const turnCertProvisionTimeout = 2 * time.Minute
+
+// resolveTURNSCert resolves the TURNS cert/key pair for a domain.
+//
+// Let's Encrypt via Caddy is tried FIRST whenever a domain is set — the call
+// is idempotent and instant when the cert is already in Caddy's storage. This
+// ordering also self-heals nodes stuck on the self-signed fallback from an
+// earlier failed provisioning (live devnet finding, feat-124): the old code
+// never retried Caddy once a self-signed pair existed on disk, so strict TLS
+// clients kept failing turns: validation forever.
+//
+// allowSelfSigned controls the fallback: the primary TURN domain may fall
+// back to (or reuse) a self-signed pair at <configDir>/turn-{cert,key}.pem so
+// baseline TURN stays up, while the stealth domain must hard-fail instead.
+func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, publicIP, configDir string, allowSelfSigned bool) (string, string, error) {
+	if domain != "" {
+		caddyCert, caddyKey, err := provisionTURNCertViaCaddy(domain, acmeInternalEndpoint, turnCertProvisionTimeout)
+		if err == nil {
+			s.logger.Info("Using Let's Encrypt cert from Caddy for TURNS",
+				zap.String("namespace", namespace),
+				zap.String("domain", domain),
+				zap.String("cert_path", caddyCert))
+			return caddyCert, caddyKey, nil
+		}
+		if !allowSelfSigned {
+			return "", "", fmt.Errorf("failed to provision Let's Encrypt cert for stealth TURNS domain %s (no self-signed fallback — clients must be able to validate it): %w", domain, err)
+		}
+		s.logger.Warn("Let's Encrypt cert provisioning failed, falling back to self-signed",
+			zap.String("namespace", namespace),
+			zap.String("domain", domain),
+			zap.Error(err))
+	}
+	if !allowSelfSigned {
+		return "", "", fmt.Errorf("no domain configured for TURNS cert in namespace %s", namespace)
+	}
+
+	certPath := filepath.Join(configDir, "turn-cert.pem")
+	keyPath := filepath.Join(configDir, "turn-key.pem")
+	if _, err := os.Stat(certPath); os.IsNotExist(err) {
+		if err := turn.GenerateSelfSignedCert(certPath, keyPath, publicIP); err != nil {
+			return "", "", fmt.Errorf("failed to generate TURNS self-signed cert for namespace %s: %w", namespace, err)
+		}
+		s.logger.Info("Generated TURNS self-signed certificate",
+			zap.String("namespace", namespace),
+			zap.String("cert_path", certPath))
+	}
+	return certPath, keyPath, nil
 }
 
 // SpawnTURN starts a TURN instance using systemd
@@ -534,42 +598,47 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
 
-	// Provision TLS cert for TURNS — try Let's Encrypt via Caddy first, fall back to self-signed
-	certPath := filepath.Join(configDir, "turn-cert.pem")
-	keyPath := filepath.Join(configDir, "turn-key.pem")
+	// Provision TLS cert for TURNS — Let's Encrypt via Caddy first (idempotent,
+	// also upgrades nodes stuck on the self-signed fallback), self-signed as
+	// the primary-domain fallback only.
+	var certPath, keyPath string
 	if cfg.TURNSListenAddr != "" {
-		if _, err := os.Stat(certPath); os.IsNotExist(err) {
-			// Try Let's Encrypt via Caddy first
-			if cfg.TURNDomain != "" {
-				acmeEndpoint := "http://localhost:6001/v1/internal/acme"
-				caddyCert, caddyKey, provErr := provisionTURNCertViaCaddy(cfg.TURNDomain, acmeEndpoint, 2*time.Minute)
-				if provErr == nil {
-					certPath = caddyCert
-					keyPath = caddyKey
-					s.logger.Info("Using Let's Encrypt cert from Caddy for TURNS",
-						zap.String("namespace", namespace),
-						zap.String("domain", cfg.TURNDomain),
-						zap.String("cert_path", certPath))
-				} else {
-					s.logger.Warn("Let's Encrypt cert provisioning failed, falling back to self-signed",
-						zap.String("namespace", namespace),
-						zap.String("domain", cfg.TURNDomain),
-						zap.Error(provErr))
-				}
+		var certErr error
+		certPath, keyPath, certErr = s.resolveTURNSCert(namespace, cfg.TURNDomain, cfg.PublicIP, configDir, true)
+		if certErr != nil {
+			s.logger.Warn("Failed to resolve TURNS cert, TURNS will be disabled",
+				zap.String("namespace", namespace),
+				zap.Error(certErr))
+			cfg.TURNSListenAddr = "" // Disable TURNS if no cert is available
+		}
+	}
+
+	// Stealth TURNS cert (feat-124): requires a working TURNS listener and a
+	// CA-valid cert — hard error, never a silent downgrade, because the
+	// operator explicitly enabled stealth and a half-working stealth endpoint
+	// is invisible until a censored-region user fails to connect.
+	var stealthCertPath, stealthKeyPath string
+	if cfg.StealthDomain != "" {
+		// Security: the stealth domain arrives over the spawn protocol (mesh
+		// peers gated only by the static internal-auth header). Before it
+		// reaches the Caddyfile/ACME sink, pin it to the deterministic
+		// derivation so a forged value can't drive cert issuance for an
+		// attacker-chosen name. cfg.Realm is the base domain on every TURN
+		// spawn site. (provisionTURNCertViaCaddy adds a DNS-name allowlist as
+		// defense-in-depth.)
+		if cfg.Realm != "" {
+			want := turn.StealthHostForNamespace(cfg.Namespace, cfg.Realm)
+			if cfg.StealthDomain != want {
+				return fmt.Errorf("stealth domain %q does not match the derived host %q for namespace %s — refusing to provision", cfg.StealthDomain, want, cfg.Namespace)
 			}
-			// Fallback: generate self-signed cert if no cert is available yet
-			if _, statErr := os.Stat(certPath); os.IsNotExist(statErr) {
-				if err := turn.GenerateSelfSignedCert(certPath, keyPath, cfg.PublicIP); err != nil {
-					s.logger.Warn("Failed to generate TURNS self-signed cert, TURNS will be disabled",
-						zap.String("namespace", namespace),
-						zap.Error(err))
-					cfg.TURNSListenAddr = "" // Disable TURNS if cert generation fails
-				} else {
-					s.logger.Info("Generated TURNS self-signed certificate",
-						zap.String("namespace", namespace),
-						zap.String("cert_path", certPath))
-				}
-			}
+		}
+		if cfg.TURNSListenAddr == "" {
+			return fmt.Errorf("stealth TURNS for namespace %s requires an active TURNS listener (no TLS cert/listener available)", namespace)
+		}
+		var stealthErr error
+		stealthCertPath, stealthKeyPath, stealthErr = s.resolveTURNSCert(namespace, cfg.StealthDomain, cfg.PublicIP, configDir, false)
+		if stealthErr != nil {
+			return fmt.Errorf("failed to provision stealth TURNS cert for namespace %s: %w", namespace, stealthErr)
 		}
 	}
 
@@ -587,6 +656,11 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 	if cfg.TURNSListenAddr != "" {
 		turnConfig.TLSCertPath = certPath
 		turnConfig.TLSKeyPath = keyPath
+	}
+	if stealthCertPath != "" {
+		turnConfig.StealthDomain = cfg.StealthDomain
+		turnConfig.TLSStealthCertPath = stealthCertPath
+		turnConfig.TLSStealthKeyPath = stealthKeyPath
 	}
 
 	configBytes, err := yaml.Marshal(turnConfig)

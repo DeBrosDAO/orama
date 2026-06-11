@@ -220,6 +220,34 @@ func (h *HostFunctions) EphemeralStateClear(ctx context.Context, topic, key stri
 	return nil
 }
 
+// ephemeralListEnvelope is the JSON shape returned by EphemeralStateList —
+// an object (not a bare array) so fields can be added without breaking
+// existing WASM callers.
+type ephemeralListEnvelope struct {
+	Entries []serverless.EphemeralListEntry `json:"entries"`
+}
+
+// EphemeralStateList returns the live ephemeral entries on a topic in the
+// invocation's namespace (bugboard #710 reconnect catch-up). Read-only: no
+// WS client required, so HTTP-invoked functions can serve snapshots too.
+func (h *HostFunctions) EphemeralStateList(ctx context.Context, topic string) ([]byte, error) {
+	if h.ephemeralStore == nil {
+		return nil, &serverless.HostFunctionError{Function: "ephemeral_state_list", Cause: fmt.Errorf("ephemeral state not available on this gateway")}
+	}
+	if topic == "" {
+		return nil, &serverless.HostFunctionError{Function: "ephemeral_state_list", Cause: fmt.Errorf("topic is required")}
+	}
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
+		return nil, &serverless.HostFunctionError{Function: "ephemeral_state_list", Cause: fmt.Errorf("no invocation context")}
+	}
+	out, err := json.Marshal(ephemeralListEnvelope{Entries: h.ephemeralStore.List(cur.Namespace, topic)})
+	if err != nil {
+		return nil, &serverless.HostFunctionError{Function: "ephemeral_state_list", Cause: fmt.Errorf("marshal entries: %w", err)}
+	}
+	return out, nil
+}
+
 // WSSend sends data to a specific WebSocket client.
 func (h *HostFunctions) WSSend(ctx context.Context, clientID string, data []byte) error {
 	if h.wsManager == nil {

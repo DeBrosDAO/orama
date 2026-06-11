@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -47,26 +48,29 @@ const (
 	ephemeralSweepInterval = 10 * time.Second
 )
 
-// EphemeralEventKind discriminates the synthetic events published on a topic.
-type EphemeralEventKind string
-
+// Synthetic-event discriminator values carried in the `_orama` field. The
+// `_orama` control-frame namespace is the contract agreed with app teams on
+// bugboard #710 (#458/#505/#849/#901) — the same dispatch pattern clients
+// already use for the auth.refresh control frame from #321.
 const (
-	EphemeralEventSet   EphemeralEventKind = "set"
-	EphemeralEventClear EphemeralEventKind = "clear"
+	EphemeralEventSet   = "ephemeral.set"
+	EphemeralEventClear = "ephemeral.clear"
 )
 
 // EphemeralEvent is the wire shape published on the topic when ephemeral state
-// is set, cleared, or auto-cleared on disconnect/expiry. Subscribers key off
-// Kind + Key to update their local view. Payload is only populated for "set".
+// is set, cleared, or auto-cleared on disconnect/expiry. Subscribers dispatch
+// on the `_orama` discriminator + Key to update their local view. Payload is
+// only populated for "ephemeral.set".
 type EphemeralEvent struct {
-	Type     string             `json:"__ephemeral"` // always "state"
-	Kind     EphemeralEventKind `json:"kind"`        // set | clear
-	Key      string             `json:"key"`         // app-chosen key
-	ClientID string             `json:"client_id"`   // owning WS client
+	Type     string `json:"_orama"`    // "ephemeral.set" | "ephemeral.clear"
+	Topic    string `json:"topic"`     // the topic the state lives on (self-describing for sub-routers)
+	Key      string `json:"key"`       // app-chosen key
+	ClientID string `json:"client_id"` // owning WS client
 	// Payload is the opaque app-chosen blob (may be JSON, protobuf, or
-	// arbitrary bytes), present only for "set". encoding/json base64-encodes
-	// a []byte on the wire, so subscribers base64-decode "payload" to recover
-	// the original bytes — mirroring how pubsub_publish_batch carries data.
+	// arbitrary bytes), present only for "ephemeral.set". encoding/json
+	// base64-encodes a []byte on the wire, so subscribers base64-decode
+	// "payload" to recover the original bytes — mirroring how
+	// pubsub_publish_batch carries data.
 	Payload []byte `json:"payload,omitempty"`
 	Reason  string `json:"reason,omitempty"` // clear only: explicit|disconnect|expired
 }
@@ -192,8 +196,8 @@ func (s *EphemeralStore) Set(ctx context.Context, namespace, clientID, topic, ke
 	s.mu.Unlock()
 
 	evt := EphemeralEvent{
-		Type:     "state",
-		Kind:     EphemeralEventSet,
+		Type:     EphemeralEventSet,
+		Topic:    topic,
 		Key:      key,
 		ClientID: clientID,
 		Payload:  payloadCopy,
@@ -225,12 +229,58 @@ func (s *EphemeralStore) Clear(ctx context.Context, namespace, clientID, topic, 
 	s.mu.Unlock()
 
 	return s.publishEvent(ctx, namespace, topic, EphemeralEvent{
-		Type:     "state",
-		Kind:     EphemeralEventClear,
+		Type:     EphemeralEventClear,
+		Topic:    topic,
 		Key:      key,
 		ClientID: clientID,
 		Reason:   "explicit",
 	})
+}
+
+// EphemeralListEntry is one live entry returned by List — the reconnect
+// catch-up shape for the ephemeral_state_list host fn. ExpiresInMs is relative
+// (remaining TTL) so callers don't need a synchronized clock.
+type EphemeralListEntry struct {
+	Key         string `json:"key"`
+	ClientID    string `json:"client_id"`
+	Payload     []byte `json:"payload,omitempty"`
+	ExpiresInMs int64  `json:"expires_in_ms"`
+}
+
+// List returns the live (non-expired) entries on a (namespace, topic), sorted
+// by key for deterministic output. The reconnect catch-up path (bugboard #710
+// acceptance): a client that just (re)subscribed reads the current state once,
+// then tracks the ephemeral.set/ephemeral.clear event stream. Read-only — no
+// ownership requirement, no WS client needed.
+func (s *EphemeralStore) List(namespace, topic string) []EphemeralListEntry {
+	now := s.now()
+
+	s.mu.Lock()
+	entries := make([]EphemeralListEntry, 0)
+	for sk, entry := range s.values {
+		if sk.namespace != namespace || sk.topic != topic {
+			continue
+		}
+		if !now.Before(entry.expiresAt) {
+			// now >= expiresAt: hide it. Intentionally one tick stricter than
+			// sweepExpired (which removes only when now.After(expiresAt)) — a
+			// reconnect catch-up must never surface state that is at/past its
+			// deadline, even if the backstop sweeper hasn't run yet.
+			continue
+		}
+		payloadCopy := make([]byte, len(entry.payload))
+		copy(payloadCopy, entry.payload)
+		entries = append(entries, EphemeralListEntry{
+			Key:         entry.key,
+			ClientID:    entry.clientID,
+			Payload:     payloadCopy,
+			ExpiresInMs: entry.expiresAt.Sub(now).Milliseconds(),
+		})
+	}
+	s.mu.Unlock()
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
+	return entries
 }
 
 // ClearClient removes every entry owned by clientID and publishes a clear
@@ -261,8 +311,8 @@ func (s *EphemeralStore) clearClientWithReason(ctx context.Context, clientID, re
 
 	for _, entry := range toClear {
 		_ = s.publishEvent(ctx, entry.namespace, entry.topic, EphemeralEvent{
-			Type:     "state",
-			Kind:     EphemeralEventClear,
+			Type:     EphemeralEventClear,
+			Topic:    entry.topic,
 			Key:      entry.key,
 			ClientID: clientID,
 			Reason:   reason,
@@ -292,7 +342,7 @@ func (s *EphemeralStore) publishEvent(ctx context.Context, namespace, topic stri
 		return fmt.Errorf("ephemeral state: marshal event: %w", err)
 	}
 	if err := s.publish(ctx, namespace, topic, data); err != nil {
-		return fmt.Errorf("ephemeral state: publish %s event: %w", evt.Kind, err)
+		return fmt.Errorf("ephemeral state: publish %s event: %w", evt.Type, err)
 	}
 	return nil
 }
@@ -335,8 +385,8 @@ func (s *EphemeralStore) sweepExpired(ctx context.Context) {
 
 	for _, entry := range expired {
 		_ = s.publishEvent(ctx, entry.namespace, entry.topic, EphemeralEvent{
-			Type:     "state",
-			Kind:     EphemeralEventClear,
+			Type:     EphemeralEventClear,
+			Topic:    entry.topic,
 			Key:      entry.key,
 			ClientID: entry.clientID,
 			Reason:   "expired",
