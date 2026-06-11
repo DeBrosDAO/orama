@@ -25,9 +25,29 @@ const (
 	// Caddy stores ACME certs under this directory relative to its data dir.
 	caddyACMECertDir = "certificates/acme-v02.api.letsencrypt.org-directory"
 
+	// caddyServiceStorageDir is where the Caddy systemd service (User=orama,
+	// HOME=/var/lib/caddy) actually persists its ACME certificates on a node.
+	// The orama-node service runs ProtectSystem=strict and cannot write
+	// /etc/caddy, so the runtime "append-to-Caddyfile" provisioning path
+	// (provisionTURNCertViaCaddy) fails with EROFS — TURNS cert material is
+	// instead reused from this directory (see caddyWildcardCertPaths).
+	caddyServiceStorageDir = "/var/lib/caddy/caddy"
+
 	turnCertBeginMarker = "# BEGIN TURN CERT: "
 	turnCertEndMarker   = "# END TURN CERT: "
 )
+
+// caddyWildcardCertPaths returns the cert/key file paths for the
+// `*.<baseDomain>` wildcard certificate in the Caddy service's storage. Caddy
+// names the wildcard directory `wildcard_.<baseDomain>`. The gateway already
+// provisions this wildcard for HTTPS, so a single-label subdomain of the base
+// domain (e.g. the stealth TURNS host `cdn-<hash>.<baseDomain>`) is covered by
+// it without any per-domain provisioning.
+func caddyWildcardCertPaths(baseDomain string) (certPath, keyPath string) {
+	name := "wildcard_." + baseDomain
+	dir := filepath.Join(caddyServiceStorageDir, caddyACMECertDir, name)
+	return filepath.Join(dir, name+".crt"), filepath.Join(dir, name+".key")
+}
 
 // provisionTURNCertViaCaddy appends the TURN domain to the local Caddyfile,
 // reloads Caddy to trigger DNS-01 ACME certificate provisioning, and waits

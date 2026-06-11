@@ -106,3 +106,70 @@ func TestProvisionTURNCertViaCaddy_rejectsNonDNSName(t *testing.T) {
 		}
 	}
 }
+
+// feat-124 stealth cert reuse: the stealth TURNS host reuses Caddy's existing
+// *.<base> wildcard cert instead of writing the Caddyfile (the orama-node
+// service can't, ProtectSystem=strict). These pin the validation logic.
+
+func TestIsSingleLabelSubdomain(t *testing.T) {
+	cases := []struct {
+		host, base string
+		want       bool
+	}{
+		{"cdn-a1b2c3d4e5f6.orama-devnet.network", "orama-devnet.network", true},
+		{"turn.ns-anchat-test.orama-devnet.network", "orama-devnet.network", false}, // multi-label
+		{"orama-devnet.network", "orama-devnet.network", false},                      // empty label
+		{"cdn-x.other.network", "orama-devnet.network", false},                       // wrong base
+		{"cdn-x.example.com", "example.com", true},
+	}
+	for _, c := range cases {
+		if got := isSingleLabelSubdomain(c.host, c.base); got != c.want {
+			t.Errorf("isSingleLabelSubdomain(%q, %q) = %v; want %v", c.host, c.base, got, c.want)
+		}
+	}
+}
+
+func TestCaddyWildcardCertPaths_shape(t *testing.T) {
+	crt, key := caddyWildcardCertPaths("orama-devnet.network")
+	wantCrt := "/var/lib/caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/wildcard_.orama-devnet.network/wildcard_.orama-devnet.network.crt"
+	if crt != wantCrt {
+		t.Errorf("cert path = %q; want %q", crt, wantCrt)
+	}
+	if !strings.HasSuffix(key, "wildcard_.orama-devnet.network.key") {
+		t.Errorf("key path = %q; want a wildcard .key", key)
+	}
+}
+
+func TestResolveStealthCert_rejectsMultiLabelHost(t *testing.T) {
+	s := testSpawner(t)
+	// A host that needs *.ns-x.<base> (multi-label) is NOT covered by the
+	// *.<base> wildcard — must error rather than present a mismatched cert.
+	_, _, err := s.resolveStealthCert("turn.ns-x.orama-devnet.network", "orama-devnet.network")
+	if err == nil {
+		t.Fatal("multi-label host must be rejected (wildcard wouldn't cover it)")
+	}
+	if !strings.Contains(err.Error(), "single-label") {
+		t.Errorf("error should explain the single-label requirement; got: %v", err)
+	}
+}
+
+func TestResolveStealthCert_missingWildcardErrors(t *testing.T) {
+	s := testSpawner(t)
+	// Valid single-label host but the wildcard cert almost certainly does not
+	// exist at the absolute Caddy storage path during tests → hard error
+	// naming the path, never a self-signed fallback.
+	_, _, err := s.resolveStealthCert("cdn-deadbeef0000.test-nonexistent-base.invalid", "test-nonexistent-base.invalid")
+	if err == nil {
+		t.Fatal("missing wildcard cert must hard-fail")
+	}
+	if !strings.Contains(err.Error(), "wildcard") {
+		t.Errorf("error should reference the missing wildcard cert; got: %v", err)
+	}
+}
+
+func TestResolveStealthCert_emptyBaseErrors(t *testing.T) {
+	s := testSpawner(t)
+	if _, _, err := s.resolveStealthCert("cdn-x.example.com", ""); err == nil {
+		t.Fatal("empty base domain must error")
+	}
+}

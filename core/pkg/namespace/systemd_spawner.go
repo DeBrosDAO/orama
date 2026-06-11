@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	production "github.com/DeBrosOfficial/network/pkg/environments/production"
@@ -582,6 +583,53 @@ func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, publicIP, configDir
 	return certPath, keyPath, nil
 }
 
+// resolveStealthCert resolves the TLS cert/key for the stealth TURNS host by
+// reusing Caddy's existing `*.<baseDomain>` wildcard certificate (feat-124).
+//
+// The stealth host is a single-label subdomain of the base domain
+// (cdn-<hash>.<baseDomain>), so the wildcard the gateway already provisions
+// for HTTPS covers it. This deliberately avoids the runtime
+// append-to-Caddyfile provisioning path: the orama-node service runs
+// ProtectSystem=strict as the orama user and cannot write /etc/caddy, so that
+// path fails with EROFS (and would silently fall back to a self-signed cert
+// that clients reject — indistinguishable from being blocked). Caddy renews
+// the wildcard; the TURN cert reloader hot-reloads it from storage.
+//
+// Hard error (never self-signed) when the wildcard is missing or the host is
+// not a single-label subdomain — a stealth endpoint with an unvalidatable
+// cert is worse than no stealth endpoint.
+func (s *SystemdSpawner) resolveStealthCert(stealthDomain, baseDomain string) (string, string, error) {
+	if baseDomain == "" {
+		return "", "", fmt.Errorf("stealth cert: base domain required")
+	}
+	if !isSingleLabelSubdomain(stealthDomain, baseDomain) {
+		return "", "", fmt.Errorf("stealth cert: %q is not a single-label subdomain of %q (the *.%s wildcard cert would not cover it)", stealthDomain, baseDomain, baseDomain)
+	}
+	certPath, keyPath := caddyWildcardCertPaths(baseDomain)
+	if _, err := os.Stat(certPath); err != nil {
+		return "", "", fmt.Errorf("stealth cert: Caddy wildcard cert for *.%s not found at %s (is the gateway HTTPS wildcard provisioned on this node?): %w", baseDomain, certPath, err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		return "", "", fmt.Errorf("stealth cert: Caddy wildcard key for *.%s not found at %s: %w", baseDomain, keyPath, err)
+	}
+	s.logger.Info("Using Caddy wildcard cert for stealth TURNS",
+		zap.String("stealth_domain", stealthDomain),
+		zap.String("cert_path", certPath))
+	return certPath, keyPath, nil
+}
+
+// isSingleLabelSubdomain reports whether host is exactly one DNS label below
+// base (e.g. "cdn-x.example.com" under "example.com"), which is the set a
+// `*.base` wildcard certificate covers.
+func isSingleLabelSubdomain(host, base string) bool {
+	suffix := "." + base
+	if !strings.HasSuffix(host, suffix) {
+		return false
+	}
+	label := strings.TrimSuffix(host, suffix)
+	return label != "" && !strings.Contains(label, ".")
+}
+
 // SpawnTURN starts a TURN instance using systemd
 func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string, cfg TURNInstanceConfig) error {
 	s.logger.Info("Spawning TURN via systemd",
@@ -620,25 +668,24 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 	var stealthCertPath, stealthKeyPath string
 	if cfg.StealthDomain != "" {
 		// Security: the stealth domain arrives over the spawn protocol (mesh
-		// peers gated only by the static internal-auth header). Before it
-		// reaches the Caddyfile/ACME sink, pin it to the deterministic
-		// derivation so a forged value can't drive cert issuance for an
-		// attacker-chosen name. cfg.Realm is the base domain on every TURN
-		// spawn site. (provisionTURNCertViaCaddy adds a DNS-name allowlist as
-		// defense-in-depth.)
-		if cfg.Realm != "" {
-			want := turn.StealthHostForNamespace(cfg.Namespace, cfg.Realm)
-			if cfg.StealthDomain != want {
-				return fmt.Errorf("stealth domain %q does not match the derived host %q for namespace %s — refusing to provision", cfg.StealthDomain, want, cfg.Namespace)
-			}
+		// peers gated only by the static internal-auth header). Pin it to the
+		// deterministic derivation so a forged value can't select cert
+		// material for an attacker-chosen name. cfg.Realm is the base domain
+		// on every TURN spawn site.
+		if cfg.Realm == "" {
+			return fmt.Errorf("stealth TURNS for namespace %s requires a base domain (realm) to locate the wildcard cert", namespace)
+		}
+		want := turn.StealthHostForNamespace(cfg.Namespace, cfg.Realm)
+		if cfg.StealthDomain != want {
+			return fmt.Errorf("stealth domain %q does not match the derived host %q for namespace %s — refusing to provision", cfg.StealthDomain, want, cfg.Namespace)
 		}
 		if cfg.TURNSListenAddr == "" {
 			return fmt.Errorf("stealth TURNS for namespace %s requires an active TURNS listener (no TLS cert/listener available)", namespace)
 		}
 		var stealthErr error
-		stealthCertPath, stealthKeyPath, stealthErr = s.resolveTURNSCert(namespace, cfg.StealthDomain, cfg.PublicIP, configDir, false)
+		stealthCertPath, stealthKeyPath, stealthErr = s.resolveStealthCert(cfg.StealthDomain, cfg.Realm)
 		if stealthErr != nil {
-			return fmt.Errorf("failed to provision stealth TURNS cert for namespace %s: %w", namespace, stealthErr)
+			return fmt.Errorf("failed to resolve stealth TURNS cert for namespace %s: %w", namespace, stealthErr)
 		}
 	}
 
