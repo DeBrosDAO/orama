@@ -20,6 +20,15 @@ import (
 // provider's 5s because APNs is HTTP/2 + connection-reused.
 const defaultSendTimeout = 10 * time.Second
 
+// voipPushExpiry caps the apns-expiration on VoIP (call-invite) pushes to the
+// ring window. A call signal that can't be delivered within this window is
+// worse than undelivered: without an expiration APNs store-and-forwards it and
+// lands it MINUTES later, firing a phantom "missed call" ring on the device and
+// burning PushKit goodwill (bugboard #132). With it, APNs delivers promptly or
+// DISCARDS — never a stale invite. Alert pushes keep the default
+// store-and-forward behavior.
+const voipPushExpiry = 30 * time.Second
+
 // Provider is the APNs push.PushProvider implementation, scoped to one
 // (Team ID, Key ID, p8 key, Bundle ID, Environment, Kind) tuple.
 // Construct one per (namespace, kind) via the gateway dependency
@@ -167,6 +176,15 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		n.Priority = apns2.PriorityHigh
 	} else {
 		n.Priority = apns2.PriorityLow
+	}
+
+	// Cap VoIP expiration to the ring window so APNs never store-and-forwards a
+	// stale call-invite into a phantom missed-call ring (bugboard #132). Without
+	// this, apns2 omits apns-expiration and APNs stores+retries for its default
+	// (minutes to days). Alert pushes intentionally keep the default so a
+	// message notification still lands after the device reconnects.
+	if p.kind == KindVoIP {
+		n.Expiration = time.Now().Add(voipPushExpiry)
 	}
 
 	// PushWithContext propagates cancellation through to the HTTP/2

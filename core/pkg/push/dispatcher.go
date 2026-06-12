@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"go.uber.org/zap"
@@ -185,6 +186,12 @@ func (d *PushDispatcher) SendToUserDetailed(
 			out.Ok = false
 		} else {
 			r.Success = true
+			// Record the success status explicitly. A provider Send returns nil
+			// only on a 2xx delivery, so surface 200 instead of leaving
+			// HTTPStatus at its zero value — otherwise a successful push logs
+			// "http=0", which reads like an opaque failure and masks real
+			// false-success classes (bugboard #132).
+			r.HTTPStatus = http.StatusOK
 			out.DevicesSucceeded++
 		}
 		out.Results = append(out.Results, r)

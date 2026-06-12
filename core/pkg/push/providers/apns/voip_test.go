@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/sideshow/apns2"
@@ -183,5 +184,45 @@ func TestAlert_Send_EmptyContentStillRejected(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("alert path should still reject empty-content (bugboard #348); got nil")
+	}
+}
+
+// Bugboard #132: VoIP call-invites MUST carry a short apns-expiration so APNs
+// never store-and-forwards a stale invite into a phantom missed-call ring
+// minutes later. Without it apns2 omits the header → store-and-forward.
+func TestVoIP_Send_ExpirationCappedToRingWindow(t *testing.T) {
+	fake := &fakePushClient{resp: &apns2.Response{StatusCode: http.StatusOK, ApnsID: "voip-exp"}}
+	p := newTestProviderKind(t, "com.example.app", KindVoIP, fake)
+	before := time.Now()
+	if err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "VOIP-TOKEN",
+		Data:        map[string]interface{}{"call_id": "x"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	exp := fake.lastSent.Expiration
+	if exp.IsZero() {
+		t.Fatal("VoIP push has NO apns-expiration — APNs store-and-forwards → late phantom ring (#132)")
+	}
+	if !exp.After(before) {
+		t.Errorf("expiration %v not in the future (before=%v)", exp, before)
+	}
+	if exp.After(before.Add(voipPushExpiry + 2*time.Second)) {
+		t.Errorf("expiration %v exceeds the ring-window cap (%s) — would allow a late ring", exp, voipPushExpiry)
+	}
+}
+
+// Alert (message) pushes intentionally keep store-and-forward (no expiration) so
+// a notification still lands after reconnect — only the VoIP path is capped.
+func TestAlert_Send_NoExpiration_keepsStoreAndForward(t *testing.T) {
+	fake := &fakePushClient{resp: &apns2.Response{StatusCode: http.StatusOK, ApnsID: "alert-1"}}
+	p := newTestProviderKind(t, "com.example.app", KindAlert, fake)
+	if err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "ALERT-TOKEN", Title: "hi", Body: "msg",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if !fake.lastSent.Expiration.IsZero() {
+		t.Errorf("alert push set expiration %v; want none (store-and-forward)", fake.lastSent.Expiration)
 	}
 }
