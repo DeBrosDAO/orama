@@ -493,7 +493,7 @@ func (i *Invoker) BatchInvoke(ctx context.Context, req *BatchInvokeRequest) (*Ba
 func isSystemTrigger(t TriggerType) bool {
 	switch t {
 	case TriggerTypeCron, TriggerTypePubSub, TriggerTypeDatabase,
-		TriggerTypeTimer, TriggerTypeJob:
+		TriggerTypeTimer, TriggerTypeJob, TriggerTypeInternal:
 		return true
 	}
 	return false

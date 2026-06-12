@@ -648,6 +648,14 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		authService.SetRqliteClient(deps.ORMClient)
 	}
 
+	// Wire the namespace claims-provider hook (bugboard #548): at JWT mint time
+	// the auth service invokes the namespace's reserved `auth-claims-provider`
+	// function (if deployed) and merges its additive claims (e.g. account_id)
+	// into the token. Fail-open — a missing/slow provider never breaks auth.
+	if deps.ServerlessInvoker != nil {
+		authService.SetClaimsResolver(newJWTClaimsProvider(deps.ServerlessInvoker, logger.Logger))
+	}
+
 	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
 	// cfg.ClusterSecret is set, the key is derived deterministically from
 	// it via HKDF, so every gateway in the cluster shares the same Ed25519

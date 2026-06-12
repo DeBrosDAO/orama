@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -57,7 +58,7 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute)
+	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -103,11 +104,20 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 	// the SDK persists it (bug #239 fix) and uses it on the next refresh.
 	token, newRefreshToken, subject, expUnix, err := h.authService.RefreshToken(r.Context(), req.RefreshToken, req.Namespace)
 	if err != nil {
-		// The service emits a WARN log on replay (ErrRefreshTokenReplay)
-		// so the operator can investigate. We surface a generic 401 here
-		// regardless — leaking "your token was already used" to the
-		// caller would help an attacker confirm a stolen token has been
-		// rotated.
+		// Bugboard #125: a TRANSIENT rotation failure (rqlite leader briefly
+		// unavailable during a rolling restart) must surface as a retryable
+		// 503 — NOT a 401 — so the client retries within the call-ring window
+		// instead of tearing the session down to a full SIWE re-auth, which is
+		// impossible on a locked device answering a VoIP-woken call.
+		if errors.Is(err, authsvc.ErrRefreshTransient) || errors.Is(err, authsvc.ErrRotationNotConfigured) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "refresh temporarily unavailable, retry")
+			return
+		}
+		// Genuine bad/expired/replayed token. The service emits a WARN log on
+		// replay (ErrRefreshTokenReplay) so the operator can investigate. We
+		// surface a generic 401 regardless — leaking "your token was already
+		// used" would help an attacker confirm a stolen token was rotated.
 		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}

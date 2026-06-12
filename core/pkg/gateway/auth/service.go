@@ -35,7 +35,8 @@ type Service struct {
 	edKeyID          string
 	preferEdDSA      bool
 	defaultNS        string
-	apiKeyHMACSecret string // HMAC secret for hashing API keys before storage
+	apiKeyHMACSecret string         // HMAC secret for hashing API keys before storage
+	claimsResolver   ClaimsResolver // namespace claims-provider hook (bugboard #548); nil = none
 }
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
@@ -82,6 +83,28 @@ func (s *Service) SetAPIKeyHMACSecret(secret string) {
 // (currently: RefreshToken returns ErrRotationNotConfigured).
 func (s *Service) SetRqliteClient(db rqlite.Client) {
 	s.db = db
+}
+
+// ClaimsResolver resolves additive, namespace-defined JWT custom claims for an
+// authenticated wallet at token-mint time (bugboard #548/#920). The concrete
+// implementation invokes the namespace's reserved `auth-claims-provider`
+// serverless function; it MUST be fail-open (return nil, never error) so a
+// missing/slow/broken provider never breaks authentication. Injected via
+// SetClaimsResolver; nil = no custom claims (every namespace's default).
+type ClaimsResolver interface {
+	ResolveClaims(ctx context.Context, wallet, namespace string) map[string]string
+}
+
+// SetClaimsResolver wires the namespace claims-provider hook used at mint time.
+func (s *Service) SetClaimsResolver(r ClaimsResolver) { s.claimsResolver = r }
+
+// resolveCustomClaims returns the namespace's additive claims for this wallet,
+// or nil. Fail-open by contract — the resolver never errors.
+func (s *Service) resolveCustomClaims(ctx context.Context, wallet, namespace string) map[string]string {
+	if s.claimsResolver == nil {
+		return nil
+	}
+	return s.claimsResolver.ResolveClaims(ctx, wallet, namespace)
 }
 
 // ErrRotationNotConfigured is returned by RefreshToken when the service
@@ -224,8 +247,13 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 		return "", "", 0, fmt.Errorf("signing key unavailable")
 	}
 
+	// Resolve namespace-defined additive claims (bugboard #548) ONCE at mint
+	// time. Stored with the refresh token below and replayed across rotations
+	// so the 15-min refresh path never re-invokes the provider.
+	custom := s.resolveCustomClaims(ctx, wallet, namespace)
+
 	// Issue access token (15m)
-	token, expUnix, err := s.GenerateJWT(namespace, wallet, 15*time.Minute)
+	token, expUnix, err := s.GenerateJWT(namespace, wallet, 15*time.Minute, custom)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to generate JWT: %w", err)
 	}
@@ -246,8 +274,8 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	db := s.orm.Database()
 	hashedRefresh := sha256Hex(refresh)
 	if _, err := db.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+30 days'))",
-		nsID, wallet, hashedRefresh, "gateway",
+		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
+		nsID, wallet, hashedRefresh, "gateway", marshalClaims(custom),
 	); err != nil {
 		return "", "", 0, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -264,6 +292,27 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 //
 // This is the tripwire promised by RFC 9700 §4.12 (refresh-token rotation).
 var ErrRefreshTokenReplay = fmt.Errorf("refresh token already rotated or invalid")
+
+// ErrRefreshTransient is returned when refresh-token rotation fails for a
+// RETRYABLE reason — an rqlite-layer error rather than a genuine bad/expired
+// token. Bugboard #125: during a rolling gateway restart the rqlite leader is
+// briefly unavailable (re-election window), so the lookup/rotation errors;
+// collapsing that into "invalid token" forces a 401 → full SIWE re-auth, which
+// is impossible on a locked device answering a VoIP-woken call. Callers MUST
+// surface this as a retryable 503, NOT a 401, so the client retries within the
+// ring window instead of tearing down the session.
+var ErrRefreshTransient = fmt.Errorf("refresh token rotation temporarily unavailable")
+
+const (
+	// refreshSelectRetries bounds how many times the refresh lookup is retried
+	// when the rqlite read errors (transient leader unavailability). The read
+	// is idempotent and happens BEFORE any write, so retrying is safe.
+	refreshSelectRetries = 3
+	// refreshSelectRetryDelay is the backoff between lookup retries. Three
+	// tries × 250ms rides out a brief leader re-election without adding
+	// meaningful latency to the common (healthy-leader) path.
+	refreshSelectRetryDelay = 250 * time.Millisecond
+)
 
 // RefreshToken validates the supplied refresh token, atomically rotates it
 // (revokes the old, mints a new), and returns a fresh access token alongside
@@ -309,22 +358,61 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
-		return "", "", "", 0, err
+		// Bugboard #125: namespace resolution runs an rqlite query BEFORE the
+		// token lookup, so a leader re-election during a rolling restart fails
+		// here too. Treat it as retryable (→ 503), not a bad token (→ 401) —
+		// the refresh-path namespace comes from an already-authenticated
+		// session, so a resolution failure is a transient DB error, never the
+		// client's fault.
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"refresh namespace resolution failed (transient, surfacing retryable)",
+			zap.String("namespace", namespace),
+			zap.Error(err))
+		return "", "", "", 0, ErrRefreshTransient
 	}
 
 	hashedRefresh := sha256Hex(refreshToken)
 
 	// Step 1: read the subject. Tells us who the token belongs to AND
 	// validates that it's currently usable (not revoked, not expired).
-	selectQ := `SELECT subject FROM refresh_tokens
+	//
+	// Bugboard #125: distinguish a TRANSIENT rqlite error (leader briefly
+	// unavailable during a rolling restart) from a GENUINE token miss. The
+	// read is idempotent and pre-write, so we retry it a few times; only after
+	// exhausting retries do we surface ErrRefreshTransient (→ 503, client
+	// retries). An actual empty result (Count == 0) is a real bad/expired
+	// token → "invalid or expired" (→ 401). Collapsing the two used to 401 a
+	// valid session during every restart, defeating the VoIP-wake refresh.
+	selectQ := `SELECT subject, custom_claims FROM refresh_tokens
 	            WHERE namespace_id = ? AND token = ?
 	              AND revoked_at IS NULL
 	              AND (expires_at IS NULL OR expires_at > datetime('now'))
 	            LIMIT 1`
-	res, err := ormDB.Query(internalCtx, selectQ, nsID, hashedRefresh)
-	if err != nil || res == nil || res.Count == 0 {
+	var res *client.QueryResult
+	var selErr error
+	for attempt := 0; attempt < refreshSelectRetries; attempt++ {
+		res, selErr = ormDB.Query(internalCtx, selectQ, nsID, hashedRefresh)
+		if selErr == nil && res != nil {
+			break
+		}
+		if attempt < refreshSelectRetries-1 {
+			time.Sleep(refreshSelectRetryDelay)
+		}
+	}
+	if selErr != nil || res == nil {
+		// rqlite error persisted across retries — leader likely mid-election.
+		// Retryable, NOT an invalid token.
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"refresh token lookup failed (transient rqlite error, surfacing retryable)",
+			zap.String("namespace", namespace),
+			zap.Error(selErr))
+		return "", "", "", 0, ErrRefreshTransient
+	}
+	if res.Count == 0 {
+		// Genuinely not found / revoked / expired — a real bad token.
 		return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
 	}
+	var customClaimsJSON string
 	if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
 		if val, ok := res.Rows[0][0].(string); ok {
 			subject = val
@@ -332,7 +420,15 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			b, _ := json.Marshal(res.Rows[0][0])
 			_ = json.Unmarshal(b, &subject)
 		}
+		// custom_claims (bugboard #548) — resolved once at login, replayed on
+		// every rotation so the refresh path never re-invokes the provider.
+		if len(res.Rows[0]) > 1 {
+			if cc, ok := res.Rows[0][1].(string); ok {
+				customClaimsJSON = cc
+			}
+		}
 	}
+	custom := unmarshalClaims(customClaimsJSON)
 
 	// Step 2: atomic CAS — revoke the old row. RowsAffected is the lock.
 	// Two concurrent calls with the same refresh token: exactly one wins
@@ -343,7 +439,13 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		 WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL`,
 		nsID, hashedRefresh)
 	if err != nil {
-		return "", "", "", 0, fmt.Errorf("revoke old refresh token: %w", err)
+		// rqlite write error (leader unavailable) — retryable, not a bad
+		// token. No row was revoked, so a client retry is safe (bugboard #125).
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"refresh token revoke failed (transient rqlite error, surfacing retryable)",
+			zap.String("namespace", namespace),
+			zap.Error(err))
+		return "", "", "", 0, ErrRefreshTransient
 	}
 	affected, _ := updRes.RowsAffected()
 	if affected == 0 {
@@ -359,8 +461,9 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		return "", "", "", 0, ErrRefreshTokenReplay
 	}
 
-	// Step 3: mint the new access JWT.
-	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, 15*time.Minute)
+	// Step 3: mint the new access JWT, carrying forward the stored custom
+	// claims so a rotated token keeps the same account_id etc. (bugboard #548).
+	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, 15*time.Minute, custom)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -376,10 +479,23 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	}
 	newRefreshToken = base64.RawURLEncoding.EncodeToString(rbuf)
 	hashedNew := sha256Hex(newRefreshToken)
+	// Re-marshal from the parsed map (not the raw stored string) so the new
+	// row and the freshly-minted access token are provably consistent and
+	// self-healing — a malformed stored blob converges to "" on both sides
+	// rather than being propagated forward verbatim. custom_claims is written
+	// ONLY here and in IssueTokens, both from a sanitized map (bugboard #548).
 	if _, err := ormDB.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+30 days'))",
-		nsID, subject, hashedNew, "gateway"); err != nil {
-		return "", "", "", 0, fmt.Errorf("store rotated refresh token: %w", err)
+		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
+		nsID, subject, hashedNew, "gateway", marshalClaims(custom)); err != nil {
+		// The old token is already revoked (step 2). A retryable error here
+		// leaves the client to re-attempt — which will re-auth since the old
+		// token is gone — but that's strictly better than masking a transient
+		// failure as a permanent 401 (bugboard #125). Surface retryable.
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"refresh token store failed after revoke (transient rqlite error)",
+			zap.String("namespace", namespace),
+			zap.Error(err))
+		return "", "", "", 0, ErrRefreshTransient
 	}
 
 	return accessToken, newRefreshToken, subject, expUnix, nil

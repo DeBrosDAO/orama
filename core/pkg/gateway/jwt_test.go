@@ -23,7 +23,7 @@ func TestJWTGenerateAndParse(t *testing.T) {
 		t.Fatalf("failed to create service: %v", err)
 	}
 
-	tok, exp, err := svc.GenerateJWT("ns1", "subj", time.Minute)
+	tok, exp, err := svc.GenerateJWT("ns1", "subj", time.Minute, nil)
 	if err != nil || exp <= 0 {
 		t.Fatalf("gen err=%v exp=%d", err, exp)
 	}
@@ -50,7 +50,7 @@ func TestJWTExpired(t *testing.T) {
 	}
 
 	// Use sufficiently negative TTL to bypass allowed clock skew
-	tok, _, err := svc.GenerateJWT("ns1", "subj", -2*time.Minute)
+	tok, _, err := svc.GenerateJWT("ns1", "subj", -2*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("gen err=%v", err)
 	}

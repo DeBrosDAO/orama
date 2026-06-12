@@ -112,7 +112,7 @@ func TestJWTFlow(t *testing.T) {
 	sub := "0x1234567890abcdef1234567890abcdef12345678"
 	ttl := 15 * time.Minute
 
-	token, exp, err := s.GenerateJWT(ns, sub, ttl)
+	token, exp, err := s.GenerateJWT(ns, sub, ttl, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT failed: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestEdDSAJWTFlow(t *testing.T) {
 	ttl := 15 * time.Minute
 
 	// With EdDSA preferred, GenerateJWT should produce an EdDSA token
-	token, exp, err := s.GenerateJWT(ns, sub, ttl)
+	token, exp, err := s.GenerateJWT(ns, sub, ttl, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT (EdDSA) failed: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRS256BackwardCompat(t *testing.T) {
 
 	// Generate an RS256 token directly (simulating a legacy token)
 	s.preferEdDSA = false
-	token, _, err := s.GenerateJWT("test-ns", "user1", 15*time.Minute)
+	token, _, err := s.GenerateJWT("test-ns", "user1", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT (RS256) failed: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestEdDSACrossServiceVerify(t *testing.T) {
 
 	const wantSub = "BNbN2RNQTsYrrywZCLnhV9j3hd38jwcRqfxBecZX7hDE"
 	const wantNS = "anchat-test"
-	token, _, err := signer.GenerateJWT(wantNS, wantSub, 15*time.Minute)
+	token, _, err := signer.GenerateJWT(wantNS, wantSub, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("signer.GenerateJWT: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestEdDSACrossServiceVerify_differentKeysFail(t *testing.T) {
 	_, verKey, _ := ed25519.GenerateKey(rand.Reader)
 	verifier.SetEdDSAKey(verKey)
 
-	token, _, err := signer.GenerateJWT("ns", "sub", 15*time.Minute)
+	token, _, err := signer.GenerateJWT("ns", "sub", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}

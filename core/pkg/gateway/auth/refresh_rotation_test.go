@@ -31,8 +31,15 @@ type rotationMockORMDB struct {
 	client.DatabaseClient
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
+	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
 	inserted       int               // count of INSERTs (new refresh-token rows)
 	subjects       map[string]string // subject -> last hashed token inserted
+	// selectErrRemaining: number of upcoming "SELECT subject" calls that
+	// should return selectErr (simulates a transient rqlite leader outage).
+	// Decremented per matching call; 0 = serve normally (bugboard #125).
+	selectErr           error
+	selectErrRemaining  int
+	selectAttemptsTaken int
 }
 
 func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
@@ -45,14 +52,23 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 	if containsCI(sql, "SELECT id FROM namespaces") {
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{int64(1)}}}, nil
 	}
-	// SELECT subject for the refresh-token lookup.
-	if containsCI(sql, "SELECT subject FROM refresh_tokens") {
+	// SELECT subject (+ custom_claims, bugboard #548) for the lookup.
+	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") {
+		m.selectAttemptsTaken++
+		if m.selectErrRemaining > 0 {
+			m.selectErrRemaining--
+			return nil, m.selectErr
+		}
 		if len(args) < 2 {
 			return &client.QueryResult{Count: 0}, nil
 		}
 		hashedTok, _ := args[1].(string)
 		if subj, ok := m.subjectByToken[hashedTok]; ok && subj != "" {
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj}}}, nil
+			claims := ""
+			if m.claimsByToken != nil {
+				claims = m.claimsByToken[hashedTok]
+			}
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
@@ -71,6 +87,14 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 				m.subjectByToken = map[string]string{}
 			}
 			m.subjectByToken[hashedTok] = subj
+			// custom_claims is the LAST arg (bugboard #548) — capture it so
+			// rotation-propagation tests can assert it carries forward.
+			if m.claimsByToken == nil {
+				m.claimsByToken = map[string]string{}
+			}
+			if cc, ok := args[len(args)-1].(string); ok {
+				m.claimsByToken[hashedTok] = cc
+			}
 		}
 		return &client.QueryResult{Count: 1}, nil
 	}
@@ -367,5 +391,122 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
 	if err == nil {
 		t.Fatal("expected error reusing rotated token, got nil")
+	}
+}
+
+// Bugboard #125: a TRANSIENT rqlite error on the lookup (leader briefly
+// unavailable during a rolling restart) must surface as ErrRefreshTransient
+// (→ 503, retryable) — NOT "invalid or expired" (→ 401, full SIWE re-auth,
+// impossible on a locked device answering a VoIP-woken call).
+func TestRefreshToken_transientSelectError_returnsTransient(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "valid-but-leader-down"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	// Every lookup attempt across the whole retry window errors.
+	ormDB.selectErr = errors.New("rqlite: leadership lost")
+	ormDB.selectErrRemaining = 99
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient (a valid token must not 401 during a leader outage)", err)
+	}
+}
+
+// The lookup is retried, so a brief blip recovers transparently within one
+// refresh call (no client-visible failure at all).
+func TestRefreshToken_selectRecoversAfterRetry(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "valid-blips-then-ok"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	ormDB.selectErr = errors.New("rqlite: leadership lost")
+	ormDB.selectErrRemaining = refreshSelectRetries - 1 // fail all but the last attempt
+
+	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken should recover after transient blips: %v", err)
+	}
+	if access == "" || newRefresh == "" || subj != "0xWALLET" {
+		t.Errorf("recovered refresh incomplete: access=%q newRefresh=%q subj=%q", access, newRefresh, subj)
+	}
+}
+
+// A transient error on the CAS write (revoke) is also retryable, not a 401.
+func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
+	s, ormDB, rq := newRotationTestService(t)
+	const refresh = "valid-cas-write-down"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	rq.execErrNext = []error{errors.New("rqlite: write failed, no leader")}
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient on a transient CAS write error", err)
+	}
+}
+
+// A genuinely unknown token must remain a hard invalid (401), NOT be masked as
+// transient — the distinction is the whole point of the #125 fix.
+func TestRefreshToken_unknownToken_isNotTransient(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	if err == nil {
+		t.Fatal("expected error for unknown token")
+	}
+	if errors.Is(err, ErrRefreshTransient) {
+		t.Errorf("unknown token must be a genuine invalid (401), not transient (503): %v", err)
+	}
+}
+
+// mockClaimsResolver is a fixed claims-provider stand-in for the mint tests.
+type mockClaimsResolver struct{ claims map[string]string }
+
+func (m mockClaimsResolver) ResolveClaims(_ context.Context, _, _ string) map[string]string {
+	return m.claims
+}
+
+// Bugboard #548: claims resolved at IssueTokens (login) must be stored with the
+// refresh token AND replayed into the rotated access token — so account_id
+// survives the 15-min refresh without re-invoking the provider.
+func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	s.SetClaimsResolver(mockClaimsResolver{claims: map[string]string{"account_id": "u-999"}})
+
+	// Login mint — IssueTokens resolves + stores the claims with the refresh row.
+	_, refresh, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(refresh)]; got != `{"account_id":"u-999"}` {
+		t.Fatalf("claims not stored with refresh token; got %q", got)
+	}
+
+	// Refresh — the rotated access token must carry account_id, and the NEW
+	// refresh row must propagate the stored claims.
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ValidateJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "u-999" {
+		t.Errorf("rotated access token lost account_id; custom=%v", claims.Custom)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(newRefresh)]; got != `{"account_id":"u-999"}` {
+		t.Errorf("rotation did not propagate claims to the new row; got %q", got)
+	}
+
+	// Second rotation hop (N+1 → N+2): the claim must survive repeated
+	// rotations, not just the first — the propagation is the whole point.
+	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("second RefreshToken: %v", err)
+	}
+	claims2, err := s.ParseAndVerifyJWT(access2)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT (2nd): %v", err)
+	}
+	if claims2.Custom["account_id"] != "u-999" {
+		t.Errorf("account_id lost across the second rotation; custom=%v", claims2.Custom)
 	}
 }

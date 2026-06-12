@@ -182,15 +182,22 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	return &claims, nil
 }
 
-func (s *Service) GenerateJWT(ns, subject string, ttl time.Duration) (string, int64, error) {
+// GenerateJWT mints a signed access token. `custom` carries additive
+// app-defined claims (e.g. the namespace's account_id from the claims-provider
+// hook, bugboard #548) under the top-level "custom" object — read back via
+// JWTClaims.Custom / oh.GetCallerClaim. Pass nil for none. Reserved claims
+// (sub/iss/aud/iat/nbf/exp/namespace) are always gateway-controlled and cannot
+// be overridden by `custom` (the caller is responsible for not putting
+// reserved keys here; the claims-provider path sanitizes them out upstream).
+func (s *Service) GenerateJWT(ns, subject string, ttl time.Duration, custom map[string]string) (string, int64, error) {
 	// Prefer EdDSA when available
 	if s.preferEdDSA && s.edSigningKey != nil {
-		return s.generateEdDSAJWT(ns, subject, ttl)
+		return s.generateEdDSAJWT(ns, subject, ttl, custom)
 	}
-	return s.generateRSAJWT(ns, subject, ttl)
+	return s.generateRSAJWT(ns, subject, ttl, custom)
 }
 
-func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration) (string, int64, error) {
+func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration, custom map[string]string) (string, int64, error) {
 	if s.edSigningKey == nil {
 		return "", 0, errors.New("EdDSA signing key unavailable")
 	}
@@ -211,6 +218,9 @@ func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration) (strin
 		"exp":       exp.Unix(),
 		"namespace": ns,
 	}
+	if len(custom) > 0 {
+		payload["custom"] = custom
+	}
 	pb, _ := json.Marshal(payload)
 	hb64 := base64.RawURLEncoding.EncodeToString(hb)
 	pb64 := base64.RawURLEncoding.EncodeToString(pb)
@@ -220,7 +230,7 @@ func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration) (strin
 	return signingInput + "." + sb64, exp.Unix(), nil
 }
 
-func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration) (string, int64, error) {
+func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration, custom map[string]string) (string, int64, error) {
 	if s.signingKey == nil {
 		return "", 0, errors.New("signing key unavailable")
 	}
@@ -240,6 +250,9 @@ func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration) (string,
 		"nbf":       now.Unix(),
 		"exp":       exp.Unix(),
 		"namespace": ns,
+	}
+	if len(custom) > 0 {
+		payload["custom"] = custom
 	}
 	pb, _ := json.Marshal(payload)
 	hb64 := base64.RawURLEncoding.EncodeToString(hb)

@@ -393,6 +393,32 @@ func TestRefreshHandler_NilAuthService(t *testing.T) {
 	}
 }
 
+// Bugboard #125: a non-bad-token failure (here ErrRotationNotConfigured from a
+// service with no rqlite client) must surface as a RETRYABLE 503 with a
+// Retry-After header — NOT a 401 that would force a locked device into an
+// impossible SIWE re-auth mid-call-ring.
+func TestRefreshHandler_TransientError_returns503Retryable(t *testing.T) {
+	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	if err != nil {
+		t.Fatalf("failed to create auth service: %v", err)
+	}
+	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
+
+	body, _ := json.Marshal(RefreshRequest{RefreshToken: "some-valid-looking-token"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.RefreshHandler(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("transient refresh failure must be 503, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("503 refresh response should carry a Retry-After header")
+	}
+}
+
 // --- APIKeyToJWTHandler tests ---------------------------------------------
 
 func TestAPIKeyToJWTHandler_MissingKey(t *testing.T) {

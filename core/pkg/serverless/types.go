@@ -30,6 +30,11 @@ const (
 	TriggerTypePubSub    TriggerType = "pubsub"
 	TriggerTypeTimer     TriggerType = "timer"
 	TriggerTypeJob       TriggerType = "job"
+	// TriggerTypeInternal marks a gateway-initiated invocation with no end-user
+	// caller (e.g. the auth claims-provider hook at JWT mint time, bugboard
+	// #548). Treated as a system trigger so the per-caller authorization check
+	// is skipped — the gateway is the trusted invoker.
+	TriggerTypeInternal TriggerType = "internal"
 )
 
 // JobStatus represents the current state of a background job.
@@ -234,8 +239,8 @@ type FunctionDefinition struct {
 	// When WSPersistent is true, the function exports ws_open/ws_frame/ws_close
 	// instead of using the default per-frame stateless model.
 	WSPersistent         bool `json:"ws_persistent,omitempty"`
-	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`     // 0 = no idle timeout
-	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`      // 0 = use default 256 KB
+	WSIdleTimeoutSec     int  `json:"ws_idle_timeout_sec,omitempty"`      // 0 = no idle timeout
+	WSMaxFrameBytes      int  `json:"ws_max_frame_bytes,omitempty"`       // 0 = use default 256 KB
 	WSMaxInflightPerConn int  `json:"ws_max_inflight_per_conn,omitempty"` // 0 = use default 64
 
 	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835): the
@@ -284,11 +289,11 @@ type Function struct {
 
 // InvocationContext provides context for a function invocation.
 type InvocationContext struct {
-	RequestID    string            `json:"request_id"`
-	FunctionID   string            `json:"function_id"`
-	FunctionName string            `json:"function_name"`
-	Namespace    string            `json:"namespace"`
-	CallerWallet string            `json:"caller_wallet,omitempty"`
+	RequestID    string `json:"request_id"`
+	FunctionID   string `json:"function_id"`
+	FunctionName string `json:"function_name"`
+	Namespace    string `json:"namespace"`
+	CallerWallet string `json:"caller_wallet,omitempty"`
 	// CallerIP is the source IP of the request, populated by HTTP/WS handlers.
 	// Used by the multi-tier rate limiter as a fallback bucket for anonymous
 	// (no-wallet) callers.
