@@ -312,6 +312,13 @@ const (
 	// tries × 250ms rides out a brief leader re-election without adding
 	// meaningful latency to the common (healthy-leader) path.
 	refreshSelectRetryDelay = 250 * time.Millisecond
+	// refreshReuseGrace is how long after a refresh token is rotated (revoked)
+	// the gateway will still accept it ONE more time, to recover a client whose
+	// rotation response was lost in transit — otherwise the retry dead-ends in a
+	// 401 → SIWE, impossible on a VoIP-woken locked screen (bugboard #125, RFC
+	// 9700 §4.13.2). Kept short, and single-use via grace_used_at, so a stolen
+	// token cannot be replayed at leisure.
+	refreshReuseGrace = 60 * time.Second
 )
 
 // RefreshToken validates the supplied refresh token, atomically rotates it
@@ -408,57 +415,91 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			zap.Error(selErr))
 		return "", "", "", 0, ErrRefreshTransient
 	}
+	// graceRecovery is set when the presented token was NOT in the active set
+	// but qualifies for the bugboard #125 single-use reuse grace (a just-
+	// rotated token whose rotation response was lost). In that case the old row
+	// is already revoked, so we SKIP the revoke CAS (step 2) — the grace CAS
+	// inside tryRefreshReuseGrace is our single-use lock — and go straight to
+	// minting a fresh session.
+	graceRecovery := false
+	var custom map[string]string
 	if res.Count == 0 {
-		// Genuinely not found / revoked / expired — a real bad token.
-		return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
-	}
-	var customClaimsJSON string
-	if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-		if val, ok := res.Rows[0][0].(string); ok {
-			subject = val
-		} else {
-			b, _ := json.Marshal(res.Rows[0][0])
-			_ = json.Unmarshal(b, &subject)
+		gSubject, gCustom, gOK, gErr := s.tryRefreshReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
+		if gErr != nil {
+			// Transient rqlite error during the grace lookup/claim — retryable,
+			// not a verdict on the token (bugboard #125).
+			s.logger.ComponentWarn(logging.ComponentGeneral,
+				"refresh reuse-grace lookup failed (transient rqlite error, surfacing retryable)",
+				zap.String("namespace", namespace), zap.Error(gErr))
+			return "", "", "", 0, ErrRefreshTransient
 		}
-		// custom_claims (bugboard #548) — resolved once at login, replayed on
-		// every rotation so the refresh path never re-invokes the provider.
-		if len(res.Rows[0]) > 1 {
-			if cc, ok := res.Rows[0][1].(string); ok {
-				customClaimsJSON = cc
+		if !gOK {
+			// Genuinely not found / revoked outside grace / grace already
+			// consumed / expired — a real bad token.
+			return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
+		}
+		subject = gSubject
+		custom = gCustom
+		graceRecovery = true
+		s.logger.ComponentInfo(logging.ComponentGeneral,
+			"refresh token reuse-grace recovery (lost-response retry, single-use)",
+			zap.String("namespace", namespace), zap.String("subject", subject))
+	} else {
+		var customClaimsJSON string
+		if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+			if val, ok := res.Rows[0][0].(string); ok {
+				subject = val
+			} else {
+				b, _ := json.Marshal(res.Rows[0][0])
+				_ = json.Unmarshal(b, &subject)
+			}
+			// custom_claims (bugboard #548) — resolved once at login, replayed on
+			// every rotation so the refresh path never re-invokes the provider.
+			if len(res.Rows[0]) > 1 {
+				if cc, ok := res.Rows[0][1].(string); ok {
+					customClaimsJSON = cc
+				}
 			}
 		}
+		custom = unmarshalClaims(customClaimsJSON)
 	}
-	custom := unmarshalClaims(customClaimsJSON)
 
 	// Step 2: atomic CAS — revoke the old row. RowsAffected is the lock.
 	// Two concurrent calls with the same refresh token: exactly one wins
 	// the UPDATE (RowsAffected == 1); the other sees RowsAffected == 0
 	// and bails with the replay tripwire.
-	updRes, err := s.db.Exec(internalCtx,
-		`UPDATE refresh_tokens SET revoked_at = datetime('now')
-		 WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL`,
-		nsID, hashedRefresh)
-	if err != nil {
-		// rqlite write error (leader unavailable) — retryable, not a bad
-		// token. No row was revoked, so a client retry is safe (bugboard #125).
-		s.logger.ComponentWarn(logging.ComponentGeneral,
-			"refresh token revoke failed (transient rqlite error, surfacing retryable)",
-			zap.String("namespace", namespace),
-			zap.Error(err))
-		return "", "", "", 0, ErrRefreshTransient
-	}
-	affected, _ := updRes.RowsAffected()
-	if affected == 0 {
-		// Race lost OR replay attempt: token was unrevoked at step 1 but
-		// already revoked by step 2, meaning a concurrent call rotated it
-		// in between. Could be benign (same client retrying due to a
-		// transient network error) or malicious (stolen token + race).
-		// Either way: fail closed, log it, let the operator investigate.
-		s.logger.ComponentWarn(logging.ComponentGeneral,
-			"refresh token rotation: concurrent use detected (possible replay)",
-			zap.String("namespace", namespace),
-			zap.String("subject", subject))
-		return "", "", "", 0, ErrRefreshTokenReplay
+	//
+	// Skipped on a grace recovery (bugboard #125): the token is ALREADY
+	// revoked, so this CAS would always see RowsAffected == 0 and mis-fire the
+	// replay tripwire. The single-use grace CAS (grace_used_at) inside
+	// tryRefreshReuseGrace already served as the lock for this path.
+	if !graceRecovery {
+		updRes, err := s.db.Exec(internalCtx,
+			`UPDATE refresh_tokens SET revoked_at = datetime('now')
+			 WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL`,
+			nsID, hashedRefresh)
+		if err != nil {
+			// rqlite write error (leader unavailable) — retryable, not a bad
+			// token. No row was revoked, so a client retry is safe (bugboard #125).
+			s.logger.ComponentWarn(logging.ComponentGeneral,
+				"refresh token revoke failed (transient rqlite error, surfacing retryable)",
+				zap.String("namespace", namespace),
+				zap.Error(err))
+			return "", "", "", 0, ErrRefreshTransient
+		}
+		affected, _ := updRes.RowsAffected()
+		if affected == 0 {
+			// Race lost OR replay attempt: token was unrevoked at step 1 but
+			// already revoked by step 2, meaning a concurrent call rotated it
+			// in between. Could be benign (same client retrying due to a
+			// transient network error) or malicious (stolen token + race).
+			// Either way: fail closed, log it, let the operator investigate.
+			s.logger.ComponentWarn(logging.ComponentGeneral,
+				"refresh token rotation: concurrent use detected (possible replay)",
+				zap.String("namespace", namespace),
+				zap.String("subject", subject))
+			return "", "", "", 0, ErrRefreshTokenReplay
+		}
 	}
 
 	// Step 3: mint the new access JWT, carrying forward the stored custom
@@ -501,6 +542,74 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	return accessToken, newRefreshToken, subject, expUnix, nil
 }
 
+// tryRefreshReuseGrace implements the bounded, single-use reuse grace for a
+// rotated refresh token (bugboard #125, RFC 9700 §4.13.2). A token revoked
+// within refreshReuseGrace whose grace_used_at is still NULL is accepted ONCE
+// more — recovering a client that lost its rotation response in transit (a
+// reconnect storm during a gateway roll) before it dead-ends in a 401 → SIWE.
+//
+// Returns (subject, custom, true, nil) on a successful single-use grace claim;
+// (—, —, false, nil) when there is no eligible row, the token was revoked
+// outside the grace window, it has expired, or the grace was already consumed
+// (caller → 401). A non-nil error is a transient rqlite failure (caller → 503).
+//
+// Security: the grace is both short-windowed AND single-use (a CAS on
+// grace_used_at), so a stolen token cannot be replayed repeatedly; and it never
+// touches the concurrent-rotation replay tripwire, which fires on the active
+// path only.
+func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (subject string, custom map[string]string, ok bool, err error) {
+	graceArg := fmt.Sprintf("-%d seconds", int(refreshReuseGrace.Seconds()))
+	sel := `SELECT subject, custom_claims FROM refresh_tokens
+	        WHERE namespace_id = ? AND token = ?
+	          AND revoked_at IS NOT NULL
+	          AND revoked_at > datetime('now', ?)
+	          AND grace_used_at IS NULL
+	          AND (expires_at IS NULL OR expires_at > datetime('now'))
+	        LIMIT 1`
+	res, qerr := ormDB.Query(ctx, sel, nsID, hashedRefresh, graceArg)
+	if qerr != nil {
+		return "", nil, false, qerr // transient rqlite error → caller 503
+	}
+	if res == nil || res.Count == 0 {
+		return "", nil, false, nil // no eligible grace row → caller 401
+	}
+
+	var customClaimsJSON string
+	if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+		if v, vok := res.Rows[0][0].(string); vok {
+			subject = v
+		} else {
+			b, _ := json.Marshal(res.Rows[0][0])
+			_ = json.Unmarshal(b, &subject)
+		}
+		if len(res.Rows[0]) > 1 {
+			if cc, cok := res.Rows[0][1].(string); cok {
+				customClaimsJSON = cc
+			}
+		}
+	}
+	if subject == "" {
+		return "", nil, false, nil // defensive: never grace-mint an anonymous session
+	}
+
+	// Single-use CAS: claim the grace. Exactly one caller wins; a concurrent
+	// replay of the same just-revoked token sees RowsAffected == 0 → no grace.
+	// The same time-window predicate is repeated so the claim can't succeed on a
+	// row that aged out of the window between the SELECT and here.
+	updRes, uerr := s.db.Exec(ctx,
+		`UPDATE refresh_tokens SET grace_used_at = datetime('now')
+		 WHERE namespace_id = ? AND token = ? AND grace_used_at IS NULL
+		   AND revoked_at IS NOT NULL AND revoked_at > datetime('now', ?)`,
+		nsID, hashedRefresh, graceArg)
+	if uerr != nil {
+		return "", nil, false, uerr // transient
+	}
+	if affected, _ := updRes.RowsAffected(); affected == 0 {
+		return "", nil, false, nil // grace already consumed (concurrent) → caller 401
+	}
+	return subject, unmarshalClaims(customClaimsJSON), true, nil
+}
+
 // RevokeToken revokes a specific refresh token or all tokens for a subject
 func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all bool, subject string) error {
 	internalCtx := client.WithInternalAuth(ctx)
@@ -511,14 +620,20 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 		return err
 	}
 
+	// Explicit revocation (logout / revoke-all) ALSO burns the reuse-grace slot
+	// (grace_used_at) so a deliberately-revoked token can NEVER be recovered by
+	// the bugboard #125 reuse grace. Rotation does not go through RevokeToken,
+	// so the legitimate lost-response grace path is unaffected; this only closes
+	// the logout-bypass where a just-logged-out token would otherwise be
+	// grace-eligible for the 60s window.
 	if token != "" {
 		hashedToken := sha256Hex(token)
-		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, hashedToken)
+		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, hashedToken)
 		return err
 	}
 
 	if all && subject != "" {
-		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE namespace_id = ? AND subject = ? AND revoked_at IS NULL", nsID, subject)
+		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND subject = ? AND revoked_at IS NULL", nsID, subject)
 		return err
 	}
 

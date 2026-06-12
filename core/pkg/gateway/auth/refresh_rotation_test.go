@@ -32,6 +32,10 @@ type rotationMockORMDB struct {
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
 	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
+	// graceableTokens: hashedToken -> subject for tokens that are revoked but
+	// still inside the reuse-grace window (bugboard #125). The grace SELECT
+	// (detected by the grace_used_at predicate) reads from here.
+	graceableTokens map[string]string
 	inserted       int               // count of INSERTs (new refresh-token rows)
 	subjects       map[string]string // subject -> last hashed token inserted
 	// selectErrRemaining: number of upcoming "SELECT subject" calls that
@@ -52,6 +56,23 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 	if containsCI(sql, "SELECT id FROM namespaces") {
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{int64(1)}}}, nil
 	}
+	// Grace-path SELECT (bugboard #125): SELECT subject for a recently-revoked,
+	// grace-available token. Distinguished from the active-path SELECT by the
+	// grace_used_at predicate. Must be checked BEFORE the generic handler.
+	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") && containsCI(sql, "grace_used_at") {
+		if len(args) < 2 {
+			return &client.QueryResult{Count: 0}, nil
+		}
+		hashedTok, _ := args[1].(string)
+		if subj, ok := m.graceableTokens[hashedTok]; ok && subj != "" {
+			claims := ""
+			if m.claimsByToken != nil {
+				claims = m.claimsByToken[hashedTok]
+			}
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
+		}
+		return &client.QueryResult{Count: 0}, nil
+	}
 	// SELECT subject (+ custom_claims, bugboard #548) for the lookup.
 	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") {
 		m.selectAttemptsTaken++
@@ -71,6 +92,21 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
+	}
+	// RevokeToken UPDATE that ALSO burns the grace slot (bugboard #125
+	// logout-bypass fix). Reflect it by clearing the token's grace eligibility
+	// so a follow-on grace SELECT misses it. (The rotation grace CAS goes
+	// through the rqlite Exec mock, not here, so there's no collision.)
+	if containsCI(sql, "UPDATE refresh_tokens") && containsCI(sql, "grace_used_at") && len(args) >= 2 {
+		if key, ok := args[1].(string); ok && m.graceableTokens != nil {
+			delete(m.graceableTokens, key) // single-token: key is the hashed token
+			for tok, subj := range m.graceableTokens {
+				if subj == key { // revoke-all: key is the subject
+					delete(m.graceableTokens, tok)
+				}
+			}
+		}
+		return &client.QueryResult{Count: 1}, nil
 	}
 	// INSERT new refresh_tokens row.
 	if containsCI(sql, "INSERT INTO refresh_tokens") {
@@ -113,6 +149,12 @@ type rotationMockRqlite struct {
 	rowsAffectedNext  []int64 // programmable per-call values; pop from front. Defaults to "revoke if unrevoked".
 	execErrNext       []error // programmable per-call errors
 	parallelExecGuard sync.Mutex
+	// graceCASNext: programmable RowsAffected for the grace CAS (UPDATE ... SET
+	// grace_used_at). 1 = won the single-use grace; 0 = already consumed
+	// (bugboard #125). Defaults to "win once per token".
+	graceCASNext  []int64
+	graceConsumed map[string]bool
+	graceCASCalls int
 }
 
 func (m *rotationMockRqlite) Exec(_ context.Context, sql string, args ...interface{}) (sql.Result, error) {
@@ -131,6 +173,29 @@ func (m *rotationMockRqlite) Exec(_ context.Context, sql string, args ...interfa
 		if e != nil {
 			return nil, e
 		}
+	}
+
+	// Grace CAS (bugboard #125): UPDATE ... SET grace_used_at, single-use.
+	if containsCI(sql, "SET grace_used_at") && len(args) >= 2 {
+		m.graceCASCalls++
+		hashedTok, _ := args[1].(string)
+		if m.graceConsumed == nil {
+			m.graceConsumed = map[string]bool{}
+		}
+		var affected int64
+		if len(m.graceCASNext) > 0 {
+			affected = m.graceCASNext[0]
+			m.graceCASNext = m.graceCASNext[1:]
+			if affected == 1 {
+				m.graceConsumed[hashedTok] = true
+			}
+		} else if !m.graceConsumed[hashedTok] {
+			m.graceConsumed[hashedTok] = true
+			affected = 1
+		} else {
+			affected = 0
+		}
+		return &rotationFakeResult{affected: affected}, nil
 	}
 
 	// Default UPDATE behavior: matches if token is currently unrevoked.
@@ -508,5 +573,118 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 	}
 	if claims2.Custom["account_id"] != "u-999" {
 		t.Errorf("account_id lost across the second rotation; custom=%v", claims2.Custom)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #125 — bounded, single-use refresh-token reuse grace (RFC 9700
+// §4.13.2). A rotation response lost in transit must NOT dead-end in a 401.
+// ----------------------------------------------------------------------------
+
+// A just-rotated token (revoked, within grace, grace not consumed) is accepted
+// ONCE more and mints a fresh session — recovering a client whose rotation
+// response was lost. The revoke CAS is skipped (the token is already revoked),
+// so this must NOT surface the replay tripwire.
+func TestRefreshToken_reuseGrace_recoversLostResponse(t *testing.T) {
+	s, ormDB, rq := newRotationTestService(t)
+
+	const lostTok = "rotated-but-response-lost"
+	// NOT in the active set (already revoked) ...
+	// ... but eligible for grace (revoked recently, grace unused).
+	ormDB.graceableTokens = map[string]string{sha256Hex(lostTok): "0xWALLET"}
+
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
+	if err != nil {
+		t.Fatalf("grace recovery should succeed, got error: %v", err)
+	}
+	if access == "" || newRefresh == "" {
+		t.Error("grace recovery must mint a fresh access + refresh token")
+	}
+	if newRefresh == lostTok {
+		t.Error("grace recovery must rotate to a NEW refresh token")
+	}
+	if subj != "0xWALLET" {
+		t.Errorf("subject = %q, want 0xWALLET", subj)
+	}
+	if exp <= 0 {
+		t.Errorf("expiration not set: %d", exp)
+	}
+	// The single-use grace CAS must have been claimed exactly once.
+	if rq.graceCASCalls != 1 {
+		t.Errorf("grace CAS calls = %d, want 1", rq.graceCASCalls)
+	}
+	// And a fresh refresh-token row was inserted.
+	if ormDB.inserted != 1 {
+		t.Errorf("expected 1 INSERT for the recovered session, got %d", ormDB.inserted)
+	}
+}
+
+// The grace is SINGLE-USE: once the grace_used_at CAS is lost (already
+// consumed, e.g. a replay after the legitimate client already recovered), the
+// token must 401 — a stolen token cannot be replayed at leisure.
+func TestRefreshToken_reuseGrace_singleUse_secondAttemptIs401(t *testing.T) {
+	s, ormDB, rq := newRotationTestService(t)
+
+	const tok = "already-grace-consumed"
+	ormDB.graceableTokens = map[string]string{sha256Hex(tok): "0xWALLET"}
+	// Force the grace CAS to report "already consumed".
+	rq.graceCASNext = []int64{0}
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err == nil {
+		t.Fatal("a consumed grace must NOT recover — expected an invalid-token error")
+	}
+	if !containsCI(err.Error(), "invalid or expired") {
+		t.Errorf("want invalid/expired 401, got %v", err)
+	}
+	if ormDB.inserted != 0 {
+		t.Errorf("no new session should be minted when grace is consumed; inserts=%d", ormDB.inserted)
+	}
+}
+
+// A genuinely bad token (not active AND not grace-eligible) still 401s — the
+// grace path must not turn unknown tokens into sessions.
+func TestRefreshToken_noGrace_genuineBadToken_stays401(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	// graceableTokens left empty: nothing is grace-eligible.
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test")
+	if err == nil {
+		t.Fatal("a never-seen token must be rejected")
+	}
+	if !containsCI(err.Error(), "invalid or expired") {
+		t.Errorf("want invalid/expired 401, got %v", err)
+	}
+	if ormDB.inserted != 0 {
+		t.Errorf("no session should be minted for a bad token; inserts=%d", ormDB.inserted)
+	}
+}
+
+// Security regression (bugboard #125 logout-bypass): a token explicitly revoked
+// via RevokeToken (logout) must NOT be recoverable through the reuse grace, even
+// within the 60s window. RevokeToken burns grace_used_at so the grace predicate
+// (grace_used_at IS NULL) excludes it.
+func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+
+	const tok = "logged-out-token"
+	// Within the revoke window it WOULD be grace-eligible...
+	ormDB.graceableTokens = map[string]string{sha256Hex(tok): "0xWALLET"}
+
+	// ...until the user logs out.
+	if err := s.RevokeToken(context.Background(), "anchat-test", tok, false, ""); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+
+	// A refresh with the just-logged-out token must be rejected, not resurrected.
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err == nil {
+		t.Fatal("LOGOUT-BYPASS: a logged-out token was resurrected via reuse grace")
+	}
+	if !containsCI(err.Error(), "invalid or expired") {
+		t.Errorf("want 401 invalid/expired, got %v", err)
+	}
+	if ormDB.inserted != 0 {
+		t.Errorf("no session should be minted for a logged-out token; inserts=%d", ormDB.inserted)
 	}
 }
