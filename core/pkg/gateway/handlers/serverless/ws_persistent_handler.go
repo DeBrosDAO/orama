@@ -22,6 +22,51 @@ import (
 // application traffic that goes straight to WASM. Bugboard #321.
 var oramaControlFramePrefix = []byte(`"__orama"`)
 
+const (
+	// wsJWTExpiryGrace is the slack past a JWT's `exp` before the gateway
+	// stops serving application frames on a persistent WS. It covers clock
+	// skew between the gateway and the issuing path plus the client's
+	// refresh round-trip (the #321 auth.refresh control frame). Bugboard
+	// #868: without this, a socket authenticated ONCE at upgrade keeps full
+	// RPC access — including turn.credentials minting — for the socket's
+	// entire lifetime even after the token expires.
+	//
+	// Note: on the auth.refresh path ParseAndVerifyJWT independently allows
+	// its own ±60s exp skew, so worst-case service-past-exp is this grace
+	// plus that skew (~180s), not 120s flat. Both bounds are deliberate and
+	// the socket is force-closed once they elapse.
+	wsJWTExpiryGrace = 120 * time.Second
+
+	// wsCloseJWTExpired is the application-specific WS close code sent when a
+	// persistent socket is torn down for serving past its JWT expiry. It sits
+	// in the private-use range (4000-4999) and is distinct from protocol
+	// codes so clients can special-case it as "reconnect with a fresh token".
+	// Bugboard #868.
+	wsCloseJWTExpired = 4401
+)
+
+// wsAuthState carries the live JWT expiry for a persistent WS across the read
+// loop and the auth.refresh control handler. Both run in the SAME goroutine —
+// control frames are handled inline in the read loop before any frame reaches
+// WASM — so the field needs no synchronization. Bugboard #868.
+type wsAuthState struct {
+	// expUnix is the `exp` (unix seconds) of the JWT currently authorizing
+	// this socket. 0 means "no expiry to enforce" (e.g. API-key auth or a
+	// token without exp) — such sockets are exempt from mid-session expiry.
+	expUnix int64
+}
+
+// wsJWTExpired reports whether a persistent WS authorized by a JWT expiring at
+// expUnix (unix seconds) has passed its enforcement deadline at time now,
+// allowing grace for clock skew + refresh round-trip. expUnix <= 0 means there
+// is no expiry to enforce and is never considered expired. Bugboard #868.
+func wsJWTExpired(expUnix int64, now time.Time, grace time.Duration) bool {
+	if expUnix <= 0 {
+		return false
+	}
+	return now.After(time.Unix(expUnix, 0).Add(grace))
+}
+
 // oramaControlFrame is the wire shape for gateway-handled control
 // frames on a persistent WS. The single Type field discriminates;
 // payload fields specific to each Type ride alongside.
@@ -96,6 +141,12 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 
 	invCtx := h.buildPersistentInvocationContext(r, fn, clientID)
 	callerWallet := invCtx.CallerWallet
+
+	// Capture the authorizing JWT's expiry so the read loop can enforce it
+	// for the socket's lifetime (bugboard #868). A successful auth.refresh
+	// control frame updates this in place; 0 (non-JWT auth) disables the
+	// check.
+	authState := &wsAuthState{expUnix: h.getJWTExpiryFromRequest(r)}
 
 	// Instantiate the persistent module. This compiles once (cached) and
 	// creates one wazero instance bound to this connection.
@@ -196,7 +247,7 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 		// avoids json.Unmarshal for every application frame. Only
 		// frames carrying the `"__orama"` key get parsed.
 		if bytes.Contains(frame, oramaControlFramePrefix) {
-			handled, ackErr := h.handleOramaControlFrame(frame, fn, inst, namespace, clientID, conn)
+			handled, ackErr := h.handleOramaControlFrame(frame, fn, inst, authState, namespace, clientID, conn)
 			if ackErr != nil {
 				h.logger.Warn("persistent WS: control-frame ack write failed",
 					zap.String("client_id", clientID),
@@ -211,6 +262,26 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 			// match — e.g. a JSON string literal containing
 			// `"__orama"`); fall through and submit as a normal
 			// application frame.
+		}
+
+		// Bugboard #868: a persistent WS authenticates ONCE at upgrade.
+		// Before handing an application frame to WASM, reject it once the
+		// authorizing JWT is past exp+grace — otherwise an expired token
+		// keeps serving RPCs (incl. turn.credentials minting) indefinitely.
+		// The client keeps the socket alive by sending an
+		// {"__orama":"auth.refresh"} control frame (handled above, which
+		// bypasses this check) before the token expires. The check runs
+		// only on application frames so an expired client can still recover
+		// via auth.refresh rather than being locked out.
+		if wsJWTExpired(authState.expUnix, time.Now(), wsJWTExpiryGrace) {
+			h.logger.Info("persistent WS: closing — JWT expired without refresh",
+				zap.String("client_id", clientID),
+				zap.String("namespace", namespace),
+				zap.Int64("jwt_exp", authState.expUnix))
+			_ = conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(wsCloseJWTExpired, "jwt expired; reconnect with a fresh token"),
+				time.Now().Add(time.Second))
+			break
 		}
 
 		if err := inst.Submit(frame); err != nil {
@@ -276,6 +347,7 @@ func (h *ServerlessHandlers) handleOramaControlFrame(
 	frame []byte,
 	fn *serverless.Function,
 	inst *persistent.Instance,
+	authState *wsAuthState,
 	namespace, clientID string,
 	conn *websocket.Conn,
 ) (handled bool, ackErr error) {
@@ -291,7 +363,7 @@ func (h *ServerlessHandlers) handleOramaControlFrame(
 
 	switch ctrl.Type {
 	case "auth.refresh":
-		return true, h.handleAuthRefresh(ctrl, fn, inst, namespace, clientID, conn)
+		return true, h.handleAuthRefresh(ctrl, fn, inst, authState, namespace, clientID, conn)
 	default:
 		// Unknown control type — ack with an error so the client knows
 		// the frame was seen but ignored. Treat as handled (don't
@@ -312,6 +384,7 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 	ctrl oramaControlFrame,
 	fn *serverless.Function,
 	inst *persistent.Instance,
+	authState *wsAuthState,
 	namespace, clientID string,
 	conn *websocket.Conn,
 ) error {
@@ -406,6 +479,12 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 			Error: "internal: failed to apply refresh",
 		})
 	}
+
+	// Extend the socket's expiry enforcement to the new token's exp so the
+	// read loop keeps serving RPCs past the old deadline (bugboard #868).
+	// authState and the read loop share this goroutine, so the write is
+	// race-free.
+	authState.expUnix = claims.Exp
 
 	h.logger.Info("persistent WS: auth.refresh applied",
 		zap.String("client_id", clientID),

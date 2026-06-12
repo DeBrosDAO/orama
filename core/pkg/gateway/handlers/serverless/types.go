@@ -157,6 +157,24 @@ func (h *ServerlessHandlers) getJWTSubjectFromRequest(r *http.Request) string {
 	return strings.TrimSpace(claims.Sub)
 }
 
+// getJWTExpiryFromRequest returns the Bearer JWT's `exp` claim (unix seconds)
+// if the request was JWT-authenticated, or 0 otherwise (e.g. API-key auth, or
+// a token without an exp). Persistent WS connections capture this at upgrade
+// to enforce mid-session expiry — a long-lived socket must stop serving RPCs
+// once its authorizing token expires, unless refreshed via the #321
+// auth.refresh control frame. Bugboard #868.
+func (h *ServerlessHandlers) getJWTExpiryFromRequest(r *http.Request) int64 {
+	v := r.Context().Value(ctxkeys.JWT)
+	if v == nil {
+		return 0
+	}
+	claims, ok := v.(*auth.JWTClaims)
+	if !ok || claims == nil {
+		return 0
+	}
+	return claims.Exp
+}
+
 // getWalletFromRequest extracts wallet address from JWT.
 func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
 	// Import strings package functions inline to avoid circular dependencies
