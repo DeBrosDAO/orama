@@ -11,11 +11,16 @@ import "testing"
 // port is per-node (0 on a gateway-only node). Pins both the drift
 // fallback and the non-SFU-gateway case.
 
-// dbFetch signature: () -> (turnSecret, turnDomain, stealthDomain string, sfuPort int).
-func dbNone() (string, string, string, int) { return "", "", "", 0 }
+// dbFetch signature: () -> (turnSecret, turnDomain, stealthDomain string, sfuPort int, resolved bool).
+// resolved=true means the lookup completed (with or without a config);
+// resolved=false means it ERRORED (e.g. decrypt failure) → unresolved.
+func dbNone() (string, string, string, int, bool) { return "", "", "", 0, true }
 
-func dbFull(secret, domain string, sfuPort int) func() (string, string, string, int) {
-	return func() (string, string, string, int) { return secret, domain, "", sfuPort }
+// dbError models a DB/decrypt failure: the lookup did not complete.
+func dbError() (string, string, string, int, bool) { return "", "", "", 0, false }
+
+func dbFull(secret, domain string, sfuPort int) func() (string, string, string, int, bool) {
+	return func() (string, string, string, int, bool) { return secret, domain, "", sfuPort, true }
 }
 
 func TestChooseRestoreWebRTC_stateFileCompleteWins(t *testing.T) {
@@ -24,7 +29,7 @@ func TestChooseRestoreWebRTC_stateFileCompleteWins(t *testing.T) {
 	// restart path).
 	dbCalled := false
 	got := chooseRestoreWebRTC(true, 7800, "turn.ns-x.dbrs.space", "state-secret", "",
-		func() (string, string, string, int) { dbCalled = true; return dbNone() })
+		func() (string, string, string, int, bool) { dbCalled = true; return dbNone() })
 
 	if dbCalled {
 		t.Error("DB fetch was called even though the state file had the TURN secret (should short-circuit)")
@@ -85,7 +90,7 @@ func TestChooseRestoreWebRTC_stateHasTURNButNoSFU(t *testing.T) {
 	// NOT consult the DB (TURN secret present = complete enough).
 	dbCalled := false
 	got := chooseRestoreWebRTC(false, 0, "turn.ns-x.dbrs.space", "state-secret", "",
-		func() (string, string, string, int) { dbCalled = true; return dbNone() })
+		func() (string, string, string, int, bool) { dbCalled = true; return dbNone() })
 
 	if dbCalled {
 		t.Error("DB fetch called even though state file had the TURN secret")
@@ -110,7 +115,7 @@ func TestChooseRestoreWebRTC_dbNoSecretStaysDisabled(t *testing.T) {
 	// enablement marker; without it we treat it as not-configured-for-
 	// TURN, but an SFU port alone still enables SFU routes.
 	got := chooseRestoreWebRTC(false, 0, "", "", "",
-		func() (string, string, string, int) { return "", "turn.db", "", 9000 })
+		func() (string, string, string, int, bool) { return "", "turn.db", "", 9000, true })
 	// dbFetch only runs when state secret is empty; here it returns no
 	// secret, so the `if dbSecret != ""` guard means NOTHING is taken
 	// from the DB → disabled. (An SFU-only-no-TURN namespace is not a
@@ -126,7 +131,7 @@ func TestChooseRestoreWebRTC_stealthFromStateFile(t *testing.T) {
 	// Stealth toggles rewrite cluster state, so a fresh state file carries
 	// the stealth domain and must win without a DB call.
 	got := chooseRestoreWebRTC(true, 7800, "turn.ns-x.dbrs.space", "state-secret", "cdn-abc123def456.dbrs.space",
-		func() (string, string, string, int) {
+		func() (string, string, string, int, bool) {
 			t.Error("DB fetch called even though state file was complete")
 			return dbNone()
 		})
@@ -139,11 +144,62 @@ func TestChooseRestoreWebRTC_stealthFromDBOnStaleState(t *testing.T) {
 	// Stale state (no TURN secret) + DB has stealth enabled → stealth domain
 	// re-materializes from the DB alongside the rest of the WebRTC block.
 	got := chooseRestoreWebRTC(false, 0, "", "", "",
-		func() (string, string, string, int) {
-			return "db-secret", "turn.ns-x.dbrs.space", "cdn-abc123def456.dbrs.space", 7801
+		func() (string, string, string, int, bool) {
+			return "db-secret", "turn.ns-x.dbrs.space", "cdn-abc123def456.dbrs.space", 7801, true
 		})
 	if !got.enabled || got.stealthDomain != "cdn-abc123def456.dbrs.space" {
 		t.Errorf("want stealth domain from DB on stale state; got %+v", got)
+	}
+}
+
+// --- bugboard #130: distinguish "unresolved (DB/decrypt error)" from "disabled" ---
+
+func TestChooseRestoreWebRTC_dbErrorMarksUnresolvedNotDisabled(t *testing.T) {
+	// The bug-130 case: state file has no secret (freshly-joined node) and
+	// the DB lookup ERRORS (e.g. the stored TURN secret can't be decrypted
+	// after a cluster-secret rotation). This MUST surface as unresolved —
+	// NOT as a clean "disabled" — so the caller preserves the running config
+	// instead of writing a TURN-disabled gateway (which made turn.credentials
+	// return namespace_not_configured).
+	got := chooseRestoreWebRTC(false, 0, "", "", "", dbError)
+
+	if !got.unresolved {
+		t.Fatal("BUG #130 REGRESSION: a DB/decrypt error must mark the result unresolved")
+	}
+	if got.enabled {
+		t.Errorf("unresolved result must never be enabled (would write a config off an errored lookup); got %+v", got)
+	}
+	if got.turnSecret != "" {
+		t.Errorf("unresolved result must carry no secret; got %q", got.turnSecret)
+	}
+}
+
+func TestChooseRestoreWebRTC_resolvedEmptyIsDisabledNotUnresolved(t *testing.T) {
+	// The contrast case: the DB lookup COMPLETES and reports no WebRTC
+	// (genuinely disabled namespace). This must be disabled, NOT unresolved —
+	// the caller is free to write the empty/disabled config here.
+	got := chooseRestoreWebRTC(false, 0, "", "", "", dbNone)
+
+	if got.unresolved {
+		t.Error("a clean resolved-but-empty lookup must NOT be marked unresolved")
+	}
+	if got.enabled {
+		t.Errorf("genuinely-disabled namespace must be disabled; got %+v", got)
+	}
+}
+
+func TestChooseRestoreWebRTC_stateSecretWinsOverDBError(t *testing.T) {
+	// A node that already holds the TURN secret in its state file must NOT be
+	// affected by a DB error — it short-circuits before dbFetch and stays
+	// enabled/resolved. Guards against the #130 fix accidentally disabling
+	// healthy nodes when the DB is flaky.
+	got := chooseRestoreWebRTC(true, 7800, "turn.ns-x.dbrs.space", "state-secret", "",
+		func() (string, string, string, int, bool) {
+			t.Error("DB fetch must not be called when the state file has the secret")
+			return dbError()
+		})
+	if got.unresolved || !got.enabled || got.turnSecret != "state-secret" {
+		t.Errorf("state-file secret must win and stay enabled/resolved; got %+v", got)
 	}
 }
 

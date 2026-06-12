@@ -1844,6 +1844,13 @@ type restoreWebRTC struct {
 	turnDomain    string
 	turnSecret    string
 	stealthDomain string // feat-124: empty when webrtc stealth is disabled
+	// unresolved is true when the state file had no TURN secret AND the DB
+	// fallback ERRORED (vs. resolved-but-not-enabled). The caller must NOT
+	// write a WebRTC-disabled gateway config off an unresolved lookup — that
+	// silently kills turn.credentials on a node that should serve TURN
+	// (bugboard #130: a decrypt failure after cluster-secret rotation was
+	// swallowed into "disabled"). enabled is always false when unresolved.
+	unresolved bool
 }
 
 // chooseRestoreWebRTC resolves a restored gateway's WebRTC config. TWO
@@ -1869,7 +1876,7 @@ type restoreWebRTC struct {
 // standing up the full restore path (systemd spawner + DB + port store).
 func chooseRestoreWebRTC(
 	stateHasSFU bool, stateSFUPort int, stateTURNDomain, stateTURNSecret, stateStealthDomain string,
-	dbFetch func() (turnSecret, turnDomain, stealthDomain string, sfuPort int),
+	dbFetch func() (turnSecret, turnDomain, stealthDomain string, sfuPort int, resolved bool),
 ) restoreWebRTC {
 	turnSecret := stateTURNSecret
 	turnDomain := stateTURNDomain
@@ -1885,8 +1892,18 @@ func chooseRestoreWebRTC(
 	// the state file was written reaches here with an empty secret.
 	// (Stealth toggles DO rewrite cluster state on every node, so the
 	// state-first read stays fresh for stealthDomain too.)
+	unresolved := false
 	if turnSecret == "" {
-		if dbSecret, dbDomain, dbStealth, dbSFU := dbFetch(); dbSecret != "" {
+		dbSecret, dbDomain, dbStealth, dbSFU, resolved := dbFetch()
+		switch {
+		case !resolved:
+			// The DB/decrypt lookup ERRORED — we do not know whether WebRTC
+			// is enabled. This is DISTINCT from resolved-but-empty (genuinely
+			// disabled). Signal unresolved so the caller preserves the
+			// running config instead of writing a TURN-disabled one
+			// (bugboard #130).
+			unresolved = true
+		case dbSecret != "":
 			turnSecret = dbSecret
 			if turnDomain == "" {
 				turnDomain = dbDomain
@@ -1901,7 +1918,8 @@ func chooseRestoreWebRTC(
 	}
 
 	return restoreWebRTC{
-		enabled:       turnSecret != "" || sfuPort > 0,
+		enabled:       !unresolved && (turnSecret != "" || sfuPort > 0),
+		unresolved:    unresolved,
 		sfuPort:       sfuPort,
 		turnDomain:    turnDomain,
 		turnSecret:    turnSecret,
@@ -2062,10 +2080,25 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		// file is incomplete.
 		wr := chooseRestoreWebRTC(
 			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret, state.TURNStealthDomain,
-			func() (turnSecret, turnDomain, stealthDomain string, sfuPort int) {
+			func() (turnSecret, turnDomain, stealthDomain string, sfuPort int, resolved bool) {
 				webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-				if err != nil || webrtcCfg == nil {
-					return "", "", "", 0
+				if err != nil {
+					// Do NOT swallow this into "disabled". A decrypt failure
+					// (stale cluster-secret-derived key after rotation) or a
+					// transient read error would otherwise silently disable
+					// TURN on this node — turn.credentials then returns
+					// namespace_not_configured (bugboard #130). Surface it
+					// loudly and signal unresolved so the caller preserves the
+					// running config.
+					cm.logger.Error("WebRTC TURN secret unresolvable on this node — refusing to silently disable TURN; preserving existing gateway config. Likely a cluster-secret rotation; regenerate with `orama namespace disable webrtc` then `orama namespace enable webrtc`.",
+						zap.String("namespace", state.NamespaceName),
+						zap.String("node_id", cm.localNodeID),
+						zap.Error(err))
+					return "", "", "", 0, false
+				}
+				if webrtcCfg == nil {
+					// Resolved cleanly: the namespace genuinely has no WebRTC.
+					return "", "", "", 0, true
 				}
 				// TURN is namespace-wide; SFU port is per-node and may be
 				// absent on a gateway-only (non-SFU) node — that's fine,
@@ -2077,7 +2110,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				return webrtcCfg.TURNSharedSecret,
 					fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
 					cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-					sfu
+					sfu, true
 			},
 		)
 		if wr.enabled {
@@ -2094,20 +2127,48 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
-			// Gateway is already up. Reconcile config drift (bugboard #25 —
-			// the WARM case): if the running gateway's on-disk config has a
-			// WebRTC block that differs from the desired (e.g. it lost the
-			// block on a prior restart where it stayed healthy and the
-			// cold-spawn path below never ran), rewrite the config + restart.
-			// ReconcileGateway is a no-op when the on-disk block already
-			// matches, so this does NOT cause a restart loop on every boot.
-			if rerr := cm.systemdSpawner.ReconcileGateway(ctx, state.NamespaceName, cm.localNodeID, gwCfg); rerr != nil {
-				cm.logger.Warn("Gateway WebRTC reconcile failed (leaving running config as-is)",
-					zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+			switch {
+			case wr.unresolved:
+				// Bugboard #130 guard: the WebRTC secret could not be resolved
+				// (DB/decrypt error, logged above). The gateway is already up
+				// and may be serving TURN from a valid on-disk secret — do NOT
+				// reconcile it to the empty/disabled block we'd otherwise
+				// build, which would kill turn.credentials on this node. Leave
+				// the running config untouched; the operator regenerates the
+				// secret.
+				//
+				// Note: this also defers ReconcileGateway's #837
+				// secrets-encryption-key reconcile for this one converge pass.
+				// That is acceptable — the operator action that fixes the
+				// unresolved TURN secret (regenerate + restart) re-runs the
+				// full reconcile, and pre-fix this path would have corrupted
+				// the WebRTC block anyway.
+				cm.logger.Error("Gateway up but WebRTC secret unresolved — skipping reconcile to avoid disabling TURN on the running config (bugboard #130)",
+					zap.String("namespace", state.NamespaceName))
+			default:
+				// Gateway is already up. Reconcile config drift (bugboard #25 —
+				// the WARM case): if the running gateway's on-disk config has a
+				// WebRTC block that differs from the desired (e.g. it lost the
+				// block on a prior restart where it stayed healthy and the
+				// cold-spawn path below never ran), rewrite the config +
+				// restart. ReconcileGateway is a no-op when the on-disk block
+				// already matches, so this does NOT cause a restart loop.
+				if rerr := cm.systemdSpawner.ReconcileGateway(ctx, state.NamespaceName, cm.localNodeID, gwCfg); rerr != nil {
+					cm.logger.Warn("Gateway WebRTC reconcile failed (leaving running config as-is)",
+						zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+				}
 			}
 		} else {
-			// Gateway is down → cold spawn with the resolved config.
-			if wr.enabled && !state.HasSFU {
+			// Gateway is down → cold spawn. We must bring a gateway up
+			// regardless (the namespace needs one); but if the WebRTC secret
+			// was unresolved we can't write a working TURN block, so warn
+			// loudly that TURN is degraded on this node until the secret is
+			// regenerated (bugboard #130).
+			switch {
+			case wr.unresolved:
+				cm.logger.Error("Cold-spawning gateway with TURN UNAVAILABLE — WebRTC secret unresolved on this node; turn.credentials will return namespace_not_configured until it is regenerated (`orama namespace disable webrtc` then `orama namespace enable webrtc`)",
+					zap.String("namespace", state.NamespaceName))
+			case wr.enabled && !state.HasSFU:
 				cm.logger.Info("Re-materialized WebRTC gateway config from DB (state file was stale)",
 					zap.String("namespace", state.NamespaceName),
 					zap.Int("sfu_port", wr.sfuPort))
