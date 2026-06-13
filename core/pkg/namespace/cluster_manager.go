@@ -1785,8 +1785,15 @@ func (cm *ClusterManager) saveLocalState(state *ClusterLocalState) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 	path := filepath.Join(dir, "cluster-state.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// 0600: this file now carries the namespace TURN shared secret for
+	// cold-start resilience (bugboard #130), so it must not be world/group
+	// readable. WriteFile's mode only applies on create — chmod explicitly so a
+	// file written 0644 by an older release is tightened on the next rewrite.
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("failed to set state file permissions: %w", err)
 	}
 	cm.logger.Info("Saved cluster local state", zap.String("namespace", state.NamespaceName), zap.String("path", path))
 	return nil
@@ -1838,6 +1845,41 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 
 // restoreWebRTC is the resolved WebRTC gateway config for a restored
 // namespace gateway.
+const (
+	// webrtcResolveRetries / webrtcResolveRetryDelay bound how long the converge
+	// waits for a slow/just-restarted node's namespace rqlite to become readable
+	// before giving up on the WebRTC secret. A distant node (high WG RTT) can
+	// take a few seconds to sync; without this it reads empty once and comes up
+	// with TURN disabled (bugboard #130). 5 × 2s = 10s ceiling on the cold path.
+	webrtcResolveRetries    = 5
+	webrtcResolveRetryDelay = 2 * time.Second
+)
+
+// applyResolvedWebRTCToState copies a freshly-resolved WebRTC config into the
+// local cluster state so a future cold start can read the TURN secret from disk
+// instead of the (possibly-slow) namespace rqlite (bugboard #130). Returns true
+// iff the state changed, so the caller only rewrites the on-disk file when
+// there's something to persist. Pure — unit-testable without a live cluster.
+func applyResolvedWebRTCToState(state *ClusterLocalState, wr restoreWebRTC) bool {
+	hasTURN := wr.turnSecret != ""
+	hasSFU := wr.sfuPort > 0
+	if state.TURNSharedSecret == wr.turnSecret &&
+		state.TURNDomain == wr.turnDomain &&
+		state.TURNStealthDomain == wr.stealthDomain &&
+		state.SFUSignalingPort == wr.sfuPort &&
+		state.HasTURN == hasTURN &&
+		state.HasSFU == hasSFU {
+		return false
+	}
+	state.HasTURN = hasTURN
+	state.HasSFU = hasSFU
+	state.TURNSharedSecret = wr.turnSecret
+	state.TURNDomain = wr.turnDomain
+	state.TURNStealthDomain = wr.stealthDomain
+	state.SFUSignalingPort = wr.sfuPort
+	return true
+}
+
 type restoreWebRTC struct {
 	enabled       bool
 	sfuPort       int
@@ -2081,18 +2123,35 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		wr := chooseRestoreWebRTC(
 			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret, state.TURNStealthDomain,
 			func() (turnSecret, turnDomain, stealthDomain string, sfuPort int, resolved bool) {
-				webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+				// Retry the read on a transient error. A distant/slow node's
+				// namespace rqlite may not be synced/readable yet at cold-start
+				// converge time — without the retry the read fails once and the
+				// gateway is written with TURN disabled (bugboard #130). The
+				// secret IS in the DB; we just need the read to land once the
+				// follower catches up (typically a few seconds). A genuine
+				// decrypt failure (stale key) also errors here and will exhaust
+				// the retries → unresolved → the caller preserves the running
+				// config rather than blanking it.
+				var webrtcCfg *WebRTCConfig
+				var err error
+				for attempt := 0; attempt < webrtcResolveRetries; attempt++ {
+					webrtcCfg, err = cm.GetWebRTCConfig(ctx, state.NamespaceName)
+					if err == nil {
+						break // success — webrtcCfg may be nil (genuinely disabled)
+					}
+					if attempt < webrtcResolveRetries-1 {
+						time.Sleep(webrtcResolveRetryDelay)
+					}
+				}
 				if err != nil {
-					// Do NOT swallow this into "disabled". A decrypt failure
-					// (stale cluster-secret-derived key after rotation) or a
-					// transient read error would otherwise silently disable
-					// TURN on this node — turn.credentials then returns
-					// namespace_not_configured (bugboard #130). Surface it
-					// loudly and signal unresolved so the caller preserves the
-					// running config.
-					cm.logger.Error("WebRTC TURN secret unresolvable on this node — refusing to silently disable TURN; preserving existing gateway config. Likely a cluster-secret rotation; regenerate with `orama namespace disable webrtc` then `orama namespace enable webrtc`.",
+					// Persistent error after retries (slow read that never
+					// landed, or a decrypt failure). Do NOT swallow into
+					// "disabled" — surface loudly and signal unresolved so the
+					// caller preserves the running config (bugboard #130).
+					cm.logger.Error("WebRTC TURN secret unresolvable on this node after retries — refusing to silently disable TURN; preserving existing gateway config. If this is a cluster-secret rotation, regenerate with `orama namespace disable webrtc` then `orama namespace enable webrtc`.",
 						zap.String("namespace", state.NamespaceName),
 						zap.String("node_id", cm.localNodeID),
+						zap.Int("attempts", webrtcResolveRetries),
 						zap.Error(err))
 					return "", "", "", 0, false
 				}
@@ -2122,6 +2181,23 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			gwCfg.TURNDomain = wr.turnDomain
 			gwCfg.TURNSecret = wr.turnSecret
 			gwCfg.TURNStealthDomain = wr.stealthDomain
+
+			// Cache the resolved secret into THIS node's local state so the
+			// NEXT cold start reads it from disk (state-first in
+			// chooseRestoreWebRTC short-circuits before the DB) instead of
+			// depending on a live, possibly-slow namespace-rqlite read — which
+			// is exactly what left a distant/slow node's gateway with TURN
+			// disabled on restart (bugboard #130). Each node self-heals its own
+			// cache on a successful resolve; nothing is sent cross-node.
+			if applyResolvedWebRTCToState(state, wr) {
+				if err := cm.saveLocalState(state); err != nil {
+					cm.logger.Warn("Failed to cache resolved WebRTC config to local state (cold start may fall back to the DB read next boot)",
+						zap.String("namespace", state.NamespaceName), zap.Error(err))
+				} else {
+					cm.logger.Info("Cached resolved WebRTC config to local state for cold-start resilience (bugboard #130)",
+						zap.String("namespace", state.NamespaceName))
+				}
+			}
 		}
 
 		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))

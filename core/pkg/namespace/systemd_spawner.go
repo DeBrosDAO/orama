@@ -801,8 +801,15 @@ func (s *SystemdSpawner) SaveClusterState(namespace string, data []byte) error {
 		return fmt.Errorf("failed to create namespace dir: %w", err)
 	}
 	path := filepath.Join(dir, "cluster-state.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// 0600 + chmod: cluster-state.json carries the namespace TURN shared secret
+	// for cold-start resilience (bugboard #130), so it must not be world/group
+	// readable on the receiving node either. WriteFile's mode only applies on
+	// create, so chmod explicitly to tighten a file an older release wrote 0644.
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write cluster state: %w", err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("failed to set cluster state permissions: %w", err)
 	}
 	s.logger.Info("Saved cluster state from coordinator",
 		zap.String("namespace", namespace),

@@ -211,3 +211,56 @@ func TestChooseRestoreWebRTC_noStealthStaysEmpty(t *testing.T) {
 		t.Errorf("stealthDomain = %q; want empty when stealth is disabled", got.stealthDomain)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// Bugboard #130 — cache the resolved WebRTC secret into local state so a slow
+// node's cold start reads it from disk instead of the (slow) namespace rqlite.
+// ----------------------------------------------------------------------------
+
+func TestApplyResolvedWebRTCToState_populatesAndReportsChange(t *testing.T) {
+	st := &ClusterLocalState{} // fresh node: no cached secret (the #130 gap)
+	wr := restoreWebRTC{enabled: true, turnSecret: "sek-123", turnDomain: "turn.ns-x.dbrs.space", stealthDomain: "cdn-abc.dbrs.space", sfuPort: 30000}
+
+	if !applyResolvedWebRTCToState(st, wr) {
+		t.Fatal("expected change=true when caching a secret into empty state")
+	}
+	if st.TURNSharedSecret != "sek-123" {
+		t.Errorf("TURNSharedSecret = %q; want sek-123 (must be cached for cold start)", st.TURNSharedSecret)
+	}
+	if !st.HasTURN || !st.HasSFU || st.SFUSignalingPort != 30000 ||
+		st.TURNDomain != "turn.ns-x.dbrs.space" || st.TURNStealthDomain != "cdn-abc.dbrs.space" {
+		t.Errorf("state not fully populated: %+v", st)
+	}
+
+	// The whole point: a SECOND boot now reads the secret from state and must
+	// NOT consult the DB (chooseRestoreWebRTC short-circuits).
+	dbCalled := false
+	got := chooseRestoreWebRTC(st.HasSFU, st.SFUSignalingPort, st.TURNDomain, st.TURNSharedSecret, st.TURNStealthDomain,
+		func() (string, string, string, int, bool) { dbCalled = true; return dbError() })
+	if dbCalled {
+		t.Error("BUG #130: cold start still hit the DB even though the secret was cached in local state")
+	}
+	if !got.enabled || got.unresolved || got.turnSecret != "sek-123" {
+		t.Errorf("cached cold start should resolve enabled from state; got %+v", got)
+	}
+}
+
+func TestApplyResolvedWebRTCToState_noChangeWhenAlreadyCached(t *testing.T) {
+	st := &ClusterLocalState{HasTURN: true, HasSFU: true, TURNSharedSecret: "sek-123", TURNDomain: "d", TURNStealthDomain: "s", SFUSignalingPort: 30000}
+	wr := restoreWebRTC{enabled: true, turnSecret: "sek-123", turnDomain: "d", stealthDomain: "s", sfuPort: 30000}
+	if applyResolvedWebRTCToState(st, wr) {
+		t.Error("expected change=false (no rewrite) when state already matches the resolved config")
+	}
+}
+
+func TestApplyResolvedWebRTCToState_turnOnlyNode_noSFU(t *testing.T) {
+	// A gateway-only node (serves TURN credentials, runs no local SFU): secret
+	// set, sfuPort 0. Must still cache the secret + report HasTURN, HasSFU=false.
+	st := &ClusterLocalState{}
+	if !applyResolvedWebRTCToState(st, restoreWebRTC{enabled: true, turnSecret: "sek", turnDomain: "d", sfuPort: 0}) {
+		t.Fatal("want change=true")
+	}
+	if !st.HasTURN || st.HasSFU || st.TURNSharedSecret != "sek" {
+		t.Errorf("turn-only node: want HasTURN=true HasSFU=false secret cached; got %+v", st)
+	}
+}
