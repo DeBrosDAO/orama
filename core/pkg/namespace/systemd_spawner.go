@@ -801,15 +801,23 @@ func (s *SystemdSpawner) SaveClusterState(namespace string, data []byte) error {
 		return fmt.Errorf("failed to create namespace dir: %w", err)
 	}
 	path := filepath.Join(dir, "cluster-state.json")
-	// 0600 + chmod: cluster-state.json carries the namespace TURN shared secret
-	// for cold-start resilience (bugboard #130), so it must not be world/group
-	// readable on the receiving node either. WriteFile's mode only applies on
-	// create, so chmod explicitly to tighten a file an older release wrote 0644.
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write cluster state: %w", err)
+	// Atomic write to a temp file + rename: cluster-state.json carries the
+	// namespace TURN shared secret (bugboard #130), so it must not be
+	// world/group readable on the receiving node either, and a reader must
+	// never see a half-written secret. 0600 + chmod on the temp file keeps the
+	// secret private; the rename then makes the live file 0600 too, tightening
+	// a file an older release wrote 0644.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("failed to write temp cluster state: %w", err)
 	}
-	if err := os.Chmod(path, 0600); err != nil {
+	if err := os.Chmod(tmp, 0600); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("failed to set cluster state permissions: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to rename cluster state into place: %w", err)
 	}
 	s.logger.Info("Saved cluster state from coordinator",
 		zap.String("namespace", namespace),

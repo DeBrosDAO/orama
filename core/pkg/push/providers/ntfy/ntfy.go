@@ -23,12 +23,14 @@ package ntfy
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/push"
@@ -45,14 +47,34 @@ type Config struct {
 	AuthToken string
 	// Timeout bounds each Send call. 0 selects 5 seconds.
 	Timeout time.Duration
+
+	// FanoutResolver, when set, returns the set of ntfy publish base URLs to
+	// deliver EACH publish to — one per active push node. The cluster runs an
+	// independent ntfy per node with NO shared message store, while subscribers
+	// are scattered across nodes by round-robin DNS; a publish that lands on one
+	// node only reaches subscribers on that node, losing ~(N-1)/N (bugboard
+	// #858). Fanning a publish to EVERY node guarantees it reaches whichever
+	// instance the subscriber's connection landed on. When nil, or it returns no
+	// hosts (or errors), Send falls back to the single BaseURL — so push never
+	// breaks if node discovery is unavailable.
+	FanoutResolver func(ctx context.Context) ([]string, error)
+	// FanoutHostHeader, when set, overrides the HTTP Host header and TLS SNI on
+	// fan-out requests. Needed because FanoutResolver returns per-node addresses
+	// (IPs) but each node's reverse proxy (Caddy) routes by — and serves its TLS
+	// cert for — the public push hostname. Empty: no override (tests /
+	// homogeneous hosts).
+	FanoutHostHeader string
 }
 
 // Provider is the ntfy push.PushProvider implementation.
 type Provider struct {
-	baseURL    string
-	authToken  string
-	httpClient *http.Client
-	logger     *zap.Logger
+	baseURL          string
+	authToken        string
+	httpClient       *http.Client
+	fanoutClient     *http.Client
+	fanoutResolver   func(ctx context.Context) ([]string, error)
+	fanoutHostHeader string
+	logger           *zap.Logger
 }
 
 // New creates a Provider with the given config.
@@ -64,18 +86,37 @@ func New(cfg Config, logger *zap.Logger) *Provider {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	return &Provider{
-		baseURL:    strings.TrimRight(cfg.BaseURL, "/"),
-		authToken:  cfg.AuthToken,
-		httpClient: &http.Client{Timeout: timeout},
-		logger:     logger.Named("ntfy"),
+	p := &Provider{
+		baseURL:          strings.TrimRight(cfg.BaseURL, "/"),
+		authToken:        cfg.AuthToken,
+		httpClient:       &http.Client{Timeout: timeout},
+		fanoutResolver:   cfg.FanoutResolver,
+		fanoutHostHeader: cfg.FanoutHostHeader,
+		logger:           logger.Named("ntfy"),
 	}
+	if cfg.FanoutResolver != nil {
+		// Fan-out requests dial per-node addresses but must present the public
+		// push hostname for SNI so each node's Caddy serves the right cert and
+		// routes to its local ntfy. A dedicated client carries that fixed SNI.
+		tr := &http.Transport{}
+		if cfg.FanoutHostHeader != "" {
+			tr.TLSClientConfig = &tls.Config{ServerName: cfg.FanoutHostHeader}
+		}
+		p.fanoutClient = &http.Client{Timeout: timeout, Transport: tr}
+	}
+	return p
 }
 
 // Name implements push.PushProvider.
 func (p *Provider) Name() string { return "ntfy" }
 
 // Send delivers a push notification to the device's ntfy topic.
+//
+// When a FanoutResolver is configured, the publish is delivered to EVERY active
+// push node (the ntfy instances don't share state, so the subscriber's instance
+// — whichever the round-robin LB picked — must be among the targets), and Send
+// succeeds as long as at least one instance accepted it (bugboard #858).
+// Otherwise it publishes to the single configured BaseURL.
 func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	if msg.DeviceToken == "" {
 		return push.ErrEmptyToken
@@ -84,7 +125,7 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		return fmt.Errorf("ntfy: base URL not configured")
 	}
 
-	endpointURL, err := p.resolveEndpoint(msg.DeviceToken)
+	topic, err := p.resolveTopic(msg.DeviceToken)
 	if err != nil {
 		return err
 	}
@@ -102,9 +143,72 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		body = string(b)
 	}
 
+	// Resolve the set of base URLs to publish to. Default: the single base URL.
+	// With a fan-out resolver, publish to every active push node so the
+	// subscriber's instance is always covered. Resolver failure is non-fatal —
+	// fall back to the base URL so push keeps working.
+	bases := []string{p.baseURL}
+	httpClient := p.httpClient
+	hostHeader := ""
+	if p.fanoutResolver != nil {
+		if hosts, rerr := p.fanoutResolver(ctx); rerr != nil {
+			p.logger.Warn("ntfy fan-out node resolution failed; publishing to base URL only", zap.Error(rerr))
+		} else if len(hosts) > 0 {
+			bases = hosts
+			httpClient = p.fanoutClient
+			hostHeader = p.fanoutHostHeader
+		}
+	}
+
+	if len(bases) == 1 {
+		return p.postOne(ctx, httpClient, bases[0], topic, body, msg, hostHeader)
+	}
+
+	// Fan out concurrently. Success = at least one instance accepted the
+	// publish (the message is in the cluster). A node that's down is logged but
+	// does not fail the Send, since the message still reaches every reachable
+	// instance — including, in the common case, the subscriber's.
+	var wg sync.WaitGroup
+	errs := make([]error, len(bases))
+	for i, base := range bases {
+		wg.Add(1)
+		go func(i int, base string) {
+			defer wg.Done()
+			errs[i] = p.postOne(ctx, httpClient, base, topic, body, msg, hostHeader)
+		}(i, base)
+	}
+	wg.Wait()
+
+	okCount := 0
+	var firstErr error
+	for _, e := range errs {
+		if e == nil {
+			okCount++
+		} else if firstErr == nil {
+			firstErr = e
+		}
+	}
+	if okCount == 0 {
+		return fmt.Errorf("ntfy: fan-out to all %d push nodes failed: %w", len(bases), firstErr)
+	}
+	if okCount < len(bases) {
+		p.logger.Warn("ntfy fan-out partial failure (message still delivered to the reachable instances)",
+			zap.Int("delivered", okCount), zap.Int("total", len(bases)), zap.Error(firstErr))
+	}
+	return nil
+}
+
+// postOne publishes a single (already-resolved) topic+body to one ntfy base URL.
+// hostHeader, when non-empty, overrides the HTTP Host header so a request dialed
+// at a node IP is still routed by the node's proxy as the public push hostname.
+func (p *Provider) postOne(ctx context.Context, httpClient *http.Client, base, topic, body string, msg push.PushMessage, hostHeader string) error {
+	endpointURL := strings.TrimRight(base, "/") + "/" + topic
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, strings.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("ntfy: build request: %w", err)
+	}
+	if hostHeader != "" {
+		req.Host = hostHeader
 	}
 
 	if msg.Title != "" {
@@ -127,15 +231,15 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		req.Header.Set("Authorization", "Bearer "+p.authToken)
 	}
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ntfy: post: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("ntfy: http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("ntfy: http %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
 	// Drain body to allow connection reuse.
@@ -143,20 +247,21 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	return nil
 }
 
-// resolveEndpoint maps a device token to the ntfy publish URL.
+// resolveTopic maps a device token to the escaped ntfy topic path (without the
+// base URL), so the same topic can be published to one or many push nodes.
 //
 // The token is one of two shapes:
 //
 //   - A plain ntfy topic (possibly hierarchical, e.g. "ns/myapp/user-1") —
-//     published to "<baseURL>/<topic>", with each path segment escaped so a
-//     crafted token can't break out of the topic path.
+//     each path segment is escaped so a crafted token can't break out of the
+//     topic path.
 //   - A full UnifiedPush endpoint URL handed to the client by the ntfy
 //     distributor (e.g. "https://push.example.com/up<random>"). UnifiedPush
-//     requires the application server to POST to that endpoint verbatim, so we
-//     use it as-is — but ONLY after verifying its scheme+host match the
-//     configured base URL. That check turns a device-supplied token into an
-//     SSRF only against our own push host, never an arbitrary one.
-func (p *Provider) resolveEndpoint(token string) (string, error) {
+//     requires the application server to POST to that endpoint, so we accept it
+//     — but ONLY after verifying its scheme+host match the configured base URL,
+//     then take only its path as the topic. That turns a device-supplied token
+//     into a publish only against our own push host, never an arbitrary one.
+func (p *Provider) resolveTopic(token string) (string, error) {
 	topic := token
 	if isAbsoluteHTTPURL(token) {
 		u, err := url.Parse(token)
@@ -173,10 +278,7 @@ func (p *Provider) resolveEndpoint(token string) (string, error) {
 			return "", fmt.Errorf("ntfy: endpoint host %q does not match configured push host %q", u.Host, base.Host)
 		}
 		// Confine the URL form to the SAME publish surface as a bare topic:
-		// take only the path as the topic and re-build through the per-segment
-		// escaping below, dropping any query/fragment. So a UnifiedPush
-		// endpoint token can publish a topic but can't gain arbitrary path or
-		// query control on the push host beyond what a plain topic already has.
+		// take only the path as the topic, dropping any query/fragment.
 		topic = strings.TrimPrefix(u.Path, "/")
 		if topic == "" {
 			return "", fmt.Errorf("ntfy: endpoint url %q has no topic path", token)
@@ -188,7 +290,7 @@ func (p *Provider) resolveEndpoint(token string) (string, error) {
 	for i, seg := range parts {
 		parts[i] = url.PathEscape(seg)
 	}
-	return p.baseURL + "/" + strings.Join(parts, "/"), nil
+	return strings.Join(parts, "/"), nil
 }
 
 // isAbsoluteHTTPURL reports whether s looks like an absolute http(s) URL (the
