@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -72,6 +73,13 @@ func (s *DBSecretsManager) Set(ctx context.Context, namespace, name, value strin
 		return fmt.Errorf("failed to encrypt secret: %w", err)
 	}
 
+	// Store the ciphertext as an EXPLICIT base64 string (bugboard #837): the
+	// rqlite client serializes a raw []byte parameter as base64 and reads it
+	// back as that base64 TEXT — not the original bytes — so a raw-blob write
+	// round-tripped into base64 that decrypt() could never open. Encoding here
+	// (and decoding in Get) makes the round-trip deterministic and symmetric.
+	encoded := base64.StdEncoding.EncodeToString(encrypted)
+
 	// Upsert the secret
 	query := `
 		INSERT INTO function_secrets (id, namespace, name, encrypted_value, created_at, updated_at)
@@ -83,7 +91,7 @@ func (s *DBSecretsManager) Set(ctx context.Context, namespace, name, value strin
 
 	id := fmt.Sprintf("%s:%s", namespace, name)
 	now := time.Now()
-	if _, err := s.db.Exec(ctx, query, id, namespace, name, encrypted, now, now); err != nil {
+	if _, err := s.db.Exec(ctx, query, id, namespace, name, encoded, now, now); err != nil {
 		return fmt.Errorf("failed to save secret: %w", err)
 	}
 
@@ -105,7 +113,15 @@ func (s *DBSecretsManager) Get(ctx context.Context, namespace, name string) (str
 		return "", serverless.ErrSecretNotFound
 	}
 
-	decrypted, err := s.decrypt(rows[0].EncryptedValue)
+	// Decode the base64 wrapper written by Set. Fall back to the raw bytes for
+	// any value that isn't valid base64 (defensive — should not occur once all
+	// writes go through the encode path above). bugboard #837.
+	ciphertext, decErr := base64.StdEncoding.DecodeString(string(rows[0].EncryptedValue))
+	if decErr != nil {
+		ciphertext = rows[0].EncryptedValue
+	}
+
+	decrypted, err := s.decrypt(ciphertext)
 	if err != nil {
 		return "", fmt.Errorf("failed to decrypt secret: %w", err)
 	}

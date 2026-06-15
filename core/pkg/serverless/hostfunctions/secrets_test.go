@@ -3,6 +3,7 @@ package hostfunctions
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -35,7 +36,20 @@ func (f *fakeSecretsDB) Exec(ctx context.Context, query string, args ...any) (sq
 	if strings.Contains(query, "INSERT INTO function_secrets") {
 		namespace, _ := args[1].(string)
 		name, _ := args[2].(string)
-		enc, _ := args[3].([]byte)
+		// Emulate how real rqlite persists the param into the encrypted_value
+		// column (bugboard #837): a string is stored as text as-is, while a raw
+		// []byte param is base64-encoded and stored as text — and READ BACK as
+		// that base64 text, never the original bytes. The fix passes an explicit
+		// base64 string from Set and decodes it in Get, so the round-trip is
+		// symmetric. (A regression to a raw []byte Set + no-decode Get would
+		// fail this test: decrypt would receive base64 ASCII, not ciphertext.)
+		var enc []byte
+		switch v := args[3].(type) {
+		case string:
+			enc = []byte(v)
+		case []byte:
+			enc = []byte(base64.StdEncoding.EncodeToString(v))
+		}
 		cp := make([]byte, len(enc))
 		copy(cp, enc)
 		f.store[storeKey(namespace, name)] = cp
