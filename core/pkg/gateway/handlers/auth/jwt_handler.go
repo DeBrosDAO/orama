@@ -32,28 +32,33 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate and get namespace
+	// Validate and get namespace. API keys are stored HMAC-hashed (see
+	// Service.HashAPIKey), so resolve the hashed key first and fall back to the
+	// raw key for any legacy unhashed rows during a rolling upgrade — mirroring
+	// the gateway middleware's lookupAPIKeyNamespace. Without the hashed lookup
+	// this endpoint always returned "invalid API key" for real keys, so api-key
+	// holders could never exchange for a JWT.
 	db := h.netClient.Database()
 	ctx := r.Context()
 	internalCtx := h.internalAuthFn(ctx)
-	q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
-	res, err := db.Query(internalCtx, q, key)
-	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 {
-		writeError(w, http.StatusUnauthorized, "invalid API key")
-		return
-	}
+	const q = "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
 
-	// Extract namespace from first row
-	row, ok := res.Rows[0].([]interface{})
-	if !ok || len(row) == 0 {
-		writeError(w, http.StatusUnauthorized, "invalid API key")
-		return
+	ns := ""
+	for _, candidate := range apiKeyLookupCandidates(key, h.authService.HashAPIKey(key)) {
+		res, err := db.Query(internalCtx, q, candidate)
+		if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 {
+			continue
+		}
+		row, ok := res.Rows[0].([]interface{})
+		if !ok || len(row) == 0 {
+			continue
+		}
+		if s, ok := row[0].(string); ok && s != "" {
+			ns = s
+			break
+		}
 	}
-
-	var ns string
-	if s, ok := row[0].(string); ok {
-		ns = s
-	} else {
+	if ns == "" {
 		writeError(w, http.StatusUnauthorized, "invalid API key")
 		return
 	}
@@ -177,6 +182,17 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// apiKeyLookupCandidates returns the api_keys.key values to try, hashed first
+// (new keys are stored HMAC-hashed) then the raw key as a rolling-upgrade
+// fallback for legacy unhashed rows. The raw fallback is skipped when hashing
+// is a no-op (hashedKey == rawKey) so we never issue a duplicate query.
+func apiKeyLookupCandidates(rawKey, hashedKey string) []string {
+	if hashedKey == rawKey {
+		return []string{rawKey}
+	}
+	return []string{hashedKey, rawKey}
 }
 
 // extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
