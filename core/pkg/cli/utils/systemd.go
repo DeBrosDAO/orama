@@ -105,6 +105,14 @@ func ResolveServiceName(alias string) ([]string, error) {
 	return nil, fmt.Errorf("service %q not found. Use: node, ipfs, cluster, gateway, olric, or full service name", alias)
 }
 
+// ServiceUnitExists reports whether a systemd unit file is installed for the
+// given service name (e.g. "caddy"). Used to guard restart/start logic so it
+// only touches services actually present on this node.
+func ServiceUnitExists(service string) bool {
+	_, err := os.Stat(filepath.Join("/etc/systemd/system", service+".service"))
+	return err == nil
+}
+
 // IsServiceActive checks if a systemd service is currently active (running)
 func IsServiceActive(service string) (bool, error) {
 	cmd := exec.Command("systemctl", "is-active", "--quiet", service)
