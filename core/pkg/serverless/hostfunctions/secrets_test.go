@@ -66,15 +66,15 @@ func (f *fakeSecretsDB) Query(ctx context.Context, dest any, query string, args 
 	namespace, _ := args[0].(string)
 	name, _ := args[1].(string)
 	rows, ok := dest.(*[]struct {
-		EncryptedValue []byte `db:"encrypted_value"`
+		EncryptedValue string `db:"encrypted_value"`
 	})
 	if !ok {
 		return errors.New("unexpected dest type")
 	}
 	if enc, found := f.store[storeKey(namespace, name)]; found {
 		*rows = append(*rows, struct {
-			EncryptedValue []byte `db:"encrypted_value"`
-		}{EncryptedValue: enc})
+			EncryptedValue string `db:"encrypted_value"`
+		}{EncryptedValue: string(enc)})
 	}
 	return nil
 }

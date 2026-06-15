@@ -2,15 +2,13 @@ package hostfunctions
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -68,17 +66,17 @@ func NewDBSecretsManager(db rqlite.Client, encryptionKeyHex string, allowEphemer
 
 // Set stores an encrypted secret.
 func (s *DBSecretsManager) Set(ctx context.Context, namespace, name, value string) error {
-	encrypted, err := s.encrypt([]byte(value))
+	// Encrypt to a "enc:"-prefixed base64 STRING and store/read it as a string —
+	// the proven pattern used by the push-credentials store. bugboard #837: the
+	// previous code stored the raw AES-GCM bytes as a []byte param and read them
+	// back into []byte, but the rqlite client applies base64 binary semantics to
+	// []byte on both legs and the round-trip never reproduced the ciphertext, so
+	// decrypt() always failed and get_secret returned empty. A text string round-
+	// trips cleanly.
+	encrypted, err := secrets.Encrypt(value, s.encryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt secret: %w", err)
 	}
-
-	// Store the ciphertext as an EXPLICIT base64 string (bugboard #837): the
-	// rqlite client serializes a raw []byte parameter as base64 and reads it
-	// back as that base64 TEXT — not the original bytes — so a raw-blob write
-	// round-tripped into base64 that decrypt() could never open. Encoding here
-	// (and decoding in Get) makes the round-trip deterministic and symmetric.
-	encoded := base64.StdEncoding.EncodeToString(encrypted)
 
 	// Upsert the secret
 	query := `
@@ -91,7 +89,7 @@ func (s *DBSecretsManager) Set(ctx context.Context, namespace, name, value strin
 
 	id := fmt.Sprintf("%s:%s", namespace, name)
 	now := time.Now()
-	if _, err := s.db.Exec(ctx, query, id, namespace, name, encoded, now, now); err != nil {
+	if _, err := s.db.Exec(ctx, query, id, namespace, name, encrypted, now, now); err != nil {
 		return fmt.Errorf("failed to save secret: %w", err)
 	}
 
@@ -102,8 +100,10 @@ func (s *DBSecretsManager) Set(ctx context.Context, namespace, name, value strin
 func (s *DBSecretsManager) Get(ctx context.Context, namespace, name string) (string, error) {
 	query := `SELECT encrypted_value FROM function_secrets WHERE namespace = ? AND name = ?`
 
+	// Scan into a STRING (not []byte) so the rqlite client returns the stored
+	// text verbatim instead of applying base64 binary semantics (bugboard #837).
 	var rows []struct {
-		EncryptedValue []byte `db:"encrypted_value"`
+		EncryptedValue string `db:"encrypted_value"`
 	}
 	if err := s.db.Query(ctx, &rows, query, namespace, name); err != nil {
 		return "", fmt.Errorf("failed to query secret: %w", err)
@@ -113,20 +113,12 @@ func (s *DBSecretsManager) Get(ctx context.Context, namespace, name string) (str
 		return "", serverless.ErrSecretNotFound
 	}
 
-	// Decode the base64 wrapper written by Set. Fall back to the raw bytes for
-	// any value that isn't valid base64 (defensive — should not occur once all
-	// writes go through the encode path above). bugboard #837.
-	ciphertext, decErr := base64.StdEncoding.DecodeString(string(rows[0].EncryptedValue))
-	if decErr != nil {
-		ciphertext = rows[0].EncryptedValue
-	}
-
-	decrypted, err := s.decrypt(ciphertext)
+	decrypted, err := secrets.Decrypt(rows[0].EncryptedValue, s.encryptionKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to decrypt secret: %w", err)
 	}
 
-	return string(decrypted), nil
+	return decrypted, nil
 }
 
 // List returns all secret names for a namespace.
@@ -163,45 +155,4 @@ func (s *DBSecretsManager) Delete(ctx context.Context, namespace, name string) e
 	}
 
 	return nil
-}
-
-// encrypt encrypts data using AES-256-GCM.
-func (s *DBSecretsManager) encrypt(plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(s.encryptionKey)
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
-}
-
-// decrypt decrypts data using AES-256-GCM.
-func (s *DBSecretsManager) decrypt(ciphertext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(s.encryptionKey)
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	return gcm.Open(nil, nonce, ciphertext, nil)
 }
