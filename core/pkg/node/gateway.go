@@ -85,6 +85,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		ClusterSecret:        clusterSecret,
 		APIKeyHMACSecret:     apiKeyHMACSecret,
 		SecretsEncryptionKey: secretsEncryptionKey,
+		NtfyBaseURL:          n.config.HTTPGateway.NtfyBaseURL,
 		WebRTCEnabled:        n.config.HTTPGateway.WebRTC.Enabled,
 		SFUPort:              n.config.HTTPGateway.WebRTC.SFUPort,
 		TURNDomain:           n.config.HTTPGateway.WebRTC.TURNDomain,

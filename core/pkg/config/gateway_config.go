@@ -30,6 +30,16 @@ type HTTPGatewayConfig struct {
 	// and the node→gateway mapping were missed).
 	SecretsEncryptionKey string `yaml:"secrets_encryption_key"`
 
+	// NtfyBaseURL is the shared self-hosted ntfy base URL (e.g.
+	// "https://push.orama-devnet.network"). When set, the push ntfy provider
+	// fans each publish out to every active push node so a subscriber pinned
+	// to any instance by round-robin DNS receives it (bugboard #858). Rendered
+	// under http_gateway by Phase 4 config generation as "https://push."+dnsZone
+	// — matching the ntfy server + Caddy reverse-proxy host. Empty → no fan-out
+	// (single-host delivery, the ~87% loss the fix exists to remove). MUST exist
+	// here or the node→gateway mapping cannot populate gateway.Config.NtfyBaseURL.
+	NtfyBaseURL string `yaml:"ntfy_base_url"`
+
 	// WebRTC configuration (optional, enabled per-namespace)
 	WebRTC WebRTCConfig `yaml:"webrtc"`
 }

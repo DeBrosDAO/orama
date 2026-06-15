@@ -220,6 +220,18 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		data.SecretsEncryptionKey = strings.TrimSpace(string(keyBytes))
 	}
 
+	// Shared self-hosted ntfy base URL (bugboard #858). Derive it the SAME way
+	// the orchestrator derives the ntfy server + Caddy reverse-proxy host
+	// (push.<dnsZone>, dnsZone = baseDomain or the node domain), so the gateway's
+	// NtfyBaseURL matches and the push provider fans each publish out to every
+	// active push node instead of single-host delivery. Without this the fan-out
+	// code is inert and ~87% of publishes never reach a pinned subscriber.
+	if dnsZone := baseDomain; dnsZone != "" {
+		data.NtfyBaseURL = "https://push." + dnsZone
+	} else if domain != "" {
+		data.NtfyBaseURL = "https://push." + domain
+	}
+
 	// WebRTC/TURN config (feat-124 #913). The TURN secret lives in the secrets
 	// dir so it survives Phase4 config regeneration; turn_domain/sfu_port/enabled
 	// are operator-set values that only exist in the previous node.yaml, so we
