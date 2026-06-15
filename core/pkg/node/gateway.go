@@ -161,6 +161,13 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			zap.String("base_domain", clusterCfg.BaseDomain),
 			zap.String("base_data_dir", baseDataDir))
 
+		// Keep namespace raft leadership on co-located voters (bugboard #708):
+		// a geography-blind raft election can place leadership on a distant
+		// node, funneling every write across a ~256ms link into 5-10s RPCs.
+		// This reconciler hands leadership off an isolated leader to the nearest
+		// voter — never changing membership (all nodes stay voters).
+		clusterManager.StartLeaderLocalityReconciler(ctx)
+
 		// Restore previously-running namespace cluster processes in background.
 		// First try local state files (no DB dependency), then fall back to DB query with retries.
 		go func() {

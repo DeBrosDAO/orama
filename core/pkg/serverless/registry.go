@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -14,6 +16,27 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// registryCacheTTL bounds how long function metadata + env vars are cached
+// in-process before re-reading rqlite. Bugboard #708: every function_invoke
+// previously did 3 uncached `weak` reads (Get, a redundant Get inside
+// CanInvoke, and GetEnvVars), each forwarded to the raft leader — ~820ms of
+// pure pre-flight tax per op when the leader is a distant node. With a short
+// TTL + explicit invalidation on deploy/enable/disable/delete, a burst of RPCs
+// (e.g. a call setup) reads metadata once instead of N times. The TTL is a
+// backstop; correctness comes from the explicit invalidation, so cross-node
+// propagation of a deploy/disable is bounded to this TTL.
+const registryCacheTTL = 5 * time.Second
+
+type fnCacheEntry struct {
+	fn *Function
+	at time.Time
+}
+
+type envCacheEntry struct {
+	env map[string]string
+	at  time.Time
+}
 
 // Ensure Registry implements FunctionRegistry and InvocationLogger interfaces.
 var _ FunctionRegistry = (*Registry)(nil)
@@ -27,6 +50,12 @@ type Registry struct {
 	ipfsAPIURL string
 	logger     *zap.Logger
 	tableName  string
+
+	// Metadata cache (bugboard #708) — see registryCacheTTL.
+	cacheTTL time.Duration
+	cacheMu  sync.RWMutex
+	fnCache  map[string]fnCacheEntry  // key: namespace\x00name\x00version
+	envCache map[string]envCacheEntry // key: functionID
 }
 
 // RegistryConfig holds configuration for the Registry.
@@ -42,7 +71,76 @@ func NewRegistry(db rqlite.Client, ipfsClient ipfs.IPFSClient, cfg RegistryConfi
 		ipfsAPIURL: cfg.IPFSAPIURL,
 		logger:     logger,
 		tableName:  "functions",
+		cacheTTL:   registryCacheTTL,
+		fnCache:    make(map[string]fnCacheEntry),
+		envCache:   make(map[string]envCacheEntry),
 	}
+}
+
+// --- metadata cache (bugboard #708) ---
+//
+// The cached *Function and env map are SHARED with all callers and MUST be
+// treated as read-only — no consumer in pkg/serverless mutates them today, and
+// none may, or it would corrupt the cache for concurrent readers.
+
+func fnCacheKey(namespace, name string, version int) string {
+	return namespace + "\x00" + name + "\x00" + strconv.Itoa(version)
+}
+
+func (r *Registry) cachedFn(key string) (*Function, bool) {
+	r.cacheMu.RLock()
+	e, ok := r.fnCache[key]
+	r.cacheMu.RUnlock()
+	if !ok || time.Since(e.at) > r.cacheTTL {
+		return nil, false
+	}
+	return e.fn, true
+}
+
+func (r *Registry) storeFn(key string, fn *Function) {
+	r.cacheMu.Lock()
+	r.fnCache[key] = fnCacheEntry{fn: fn, at: time.Now()}
+	r.cacheMu.Unlock()
+}
+
+func (r *Registry) cachedEnv(functionID string) (map[string]string, bool) {
+	r.cacheMu.RLock()
+	e, ok := r.envCache[functionID]
+	r.cacheMu.RUnlock()
+	if !ok || time.Since(e.at) > r.cacheTTL {
+		return nil, false
+	}
+	return e.env, true
+}
+
+func (r *Registry) storeEnv(functionID string, env map[string]string) {
+	r.cacheMu.Lock()
+	r.envCache[functionID] = envCacheEntry{env: env, at: time.Now()}
+	r.cacheMu.Unlock()
+}
+
+// invalidateFn drops every cached version of (namespace, name). Called on
+// deploy/enable/disable/delete so a metadata change is never masked by the
+// cache beyond the write itself.
+func (r *Registry) invalidateFn(namespace, name string) {
+	prefix := strings.TrimSpace(namespace) + "\x00" + strings.TrimSpace(name) + "\x00"
+	r.cacheMu.Lock()
+	for k := range r.fnCache {
+		if strings.HasPrefix(k, prefix) {
+			delete(r.fnCache, k)
+		}
+	}
+	r.cacheMu.Unlock()
+}
+
+// invalidateEnv drops the cached env vars for a function ID. A redeploy REUSES
+// the existing function ID (Register: id = oldFn.ID) and rewrites env vars
+// under it, so without this an env-var change would be masked by the cache for
+// up to the TTL.
+func (r *Registry) invalidateEnv(functionID string) {
+	r.cacheMu.Lock()
+	delete(r.envCache, functionID)
+	r.cacheMu.Unlock()
 }
 
 // Register deploys a new function or updates an existing one.
@@ -128,6 +226,9 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
+	r.invalidateFn(fn.Namespace, fn.Name)
+	r.invalidateEnv(id)
+
 	r.logger.Info("Function registered",
 		zap.String("id", id),
 		zap.String("name", fn.Name),
@@ -145,6 +246,12 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 func (r *Registry) Get(ctx context.Context, namespace, name string, version int) (*Function, error) {
 	namespace = strings.TrimSpace(namespace)
 	name = strings.TrimSpace(name)
+
+	// Cache hit (bugboard #708): skip the leader-routed weak read entirely.
+	cacheKey := fnCacheKey(namespace, name, version)
+	if fn, ok := r.cachedFn(cacheKey); ok {
+		return fn, nil
+	}
 
 	var query string
 	var args []interface{}
@@ -184,13 +291,17 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 	}
 
 	if len(functions) == 0 {
+		// Do NOT cache misses — a just-deployed function must be visible
+		// immediately on the next call, not after the TTL.
 		if version == 0 {
 			return nil, ErrFunctionNotFound
 		}
 		return nil, ErrVersionNotFound
 	}
 
-	return r.rowToFunction(&functions[0]), nil
+	fn := r.rowToFunction(&functions[0])
+	r.storeFn(cacheKey, fn)
+	return fn, nil
 }
 
 // List returns all functions for a namespace.
@@ -252,6 +363,7 @@ func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabl
 	if rowsAffected == 0 {
 		return ErrFunctionNotFound
 	}
+	r.invalidateFn(namespace, name)
 	r.logger.Info("Function enabled-state updated",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
@@ -290,6 +402,8 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 		return ErrVersionNotFound
 	}
 
+	r.invalidateFn(namespace, name)
+
 	r.logger.Info("Function deleted",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
@@ -321,6 +435,10 @@ func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, er
 
 // GetEnvVars retrieves environment variables for a function.
 func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[string]string, error) {
+	if env, ok := r.cachedEnv(functionID); ok {
+		return env, nil
+	}
+
 	query := `SELECT key, value FROM function_env_vars WHERE function_id = ?`
 
 	var rows []envVarRow
@@ -333,6 +451,7 @@ func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[strin
 		envVars[row.Key] = row.Value
 	}
 
+	r.storeEnv(functionID, envVars)
 	return envVars, nil
 }
 

@@ -86,6 +86,11 @@ type ClusterManager struct {
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
 	provisioning   map[string]bool // namespace -> in progress
+
+	// Leadership-locality reconciler cooldown (bugboard #708): per-namespace
+	// timestamp of the last leadership transfer, to bound churn. Lazy-init.
+	leaderLocalityMu       sync.Mutex
+	leaderLocalityCooldown map[string]time.Time
 }
 
 // NewClusterManager creates a new cluster manager
