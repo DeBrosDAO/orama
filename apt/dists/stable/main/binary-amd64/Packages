@@ -1,13 +1,13 @@
 Package: orama
-Version: 0.122.47
+Version: 0.122.60-nightly
 Architecture: amd64
 Maintainer: DeBros Team <team@orama.network>
 Depends: libc6
-Filename: pool/main/o/orama/orama_0.122.47_amd64.deb
-Size: 62744360
-MD5sum: e869bf3bffa9fccc43361ae3ec0a8578
-SHA1: 7e6dd2174c913e75ab4e3d0f73d99311814bff1a
-SHA256: 42d89babf3f52b76cca1f7959c4599ec4fd54f0134ff55604424fed63b60f2ff
+Filename: pool/main/o/orama/orama_0.122.60-nightly_amd64.deb
+Size: 62815628
+MD5sum: 04b2781220dc2c5bc4dae0496d70aa67
+SHA1: 9e0005e5c26c3853c6be4433229d30f3b0077bd2
+SHA256: 4bfad6269551491d8d67cf08dca63b0fc99c6322d6f79144798ceb36abe2422d
 Section: net
 Priority: optional
 Description: Orama Network - Distributed P2P Database System
