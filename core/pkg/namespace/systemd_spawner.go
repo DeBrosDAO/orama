@@ -638,6 +638,17 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 		zap.String("listen_addr", cfg.ListenAddr),
 		zap.String("public_ip", cfg.PublicIP))
 
+	// Guard (bugboard #846): the TURN server hard-fails on an empty public_ip
+	// ("turn.public_ip: must not be empty") and systemd then crash-loops it
+	// forever. A crash-looped TURN means (a) zero ICE relay candidates for any
+	// client round-robined to this node, and (b) SpawnTURN never reaches the
+	// AddWebRTCRules call below, so the relay UDP ports stay firewalled. The
+	// caller MUST resolve the node's public IP before spawning — fail loudly
+	// here instead of writing a config that is guaranteed to crash-loop.
+	if cfg.PublicIP == "" {
+		return fmt.Errorf("refusing to spawn TURN for namespace %s on node %s: public_ip is empty (would crash-loop the TURN server); the caller must resolve the node's public IP first", namespace, nodeID)
+	}
+
 	// Create config directory
 	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -756,6 +767,18 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 		zap.String("node_id", nodeID))
 
 	return nil
+}
+
+// EnsureTURNFirewall idempotently re-applies the TURN relay firewall rules
+// (3478/udp+tcp, 5349/tcp, relay UDP range). SpawnTURN already does this on a
+// fresh spawn, but a node-level `ufw --force reset` (reprovision) wipes the
+// rules while the TURN process keeps running — leaving the relay ports closed
+// so calls reach ICE "checking" but media never forwards (bugboard #846). The
+// boot-time restore path calls this even when TURN is already running so the
+// wipe is self-healed on the next boot. ufw allow is additive + idempotent.
+func (s *SystemdSpawner) EnsureTURNFirewall(relayStart, relayEnd int) error {
+	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
+	return fw.AddWebRTCRules(relayStart, relayEnd)
 }
 
 // StopTURN stops a TURN instance

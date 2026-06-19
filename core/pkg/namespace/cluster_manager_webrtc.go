@@ -395,6 +395,26 @@ func (cm *ClusterManager) getClusterNodesWithIPs(ctx context.Context, clusterID 
 	return nodes, nil
 }
 
+// getLocalNodePublicIP resolves this node's public IP from its dns_nodes record.
+// The boot-time TURN restore path historically passed an empty PublicIP relying
+// on a "spawner resolves it" promise that never existed, producing a TURN
+// config that crash-loops on `public_ip must not be empty` (bugboard #846).
+// Returns an actionable error if no public IP is recorded so the caller can
+// skip the spawn instead of crash-looping.
+func (cm *ClusterManager) getLocalNodePublicIP(ctx context.Context) (string, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+	var rows []struct {
+		IP string `db:"ip_address"`
+	}
+	if err := cm.db.Query(internalCtx, &rows, `SELECT ip_address FROM dns_nodes WHERE id = ?`, cm.localNodeID); err != nil {
+		return "", fmt.Errorf("failed to query public IP for local node %s: %w", cm.localNodeID, err)
+	}
+	if len(rows) == 0 || rows[0].IP == "" {
+		return "", fmt.Errorf("no public IP recorded for local node %s in dns_nodes", cm.localNodeID)
+	}
+	return rows[0].IP, nil
+}
+
 // selectTURNNodes selects the best N nodes for TURN, preferring nodes without existing TURN allocations.
 func (cm *ClusterManager) selectTURNNodes(ctx context.Context, nodes []clusterNodeInfo, count int) []clusterNodeInfo {
 	if count >= len(nodes) {
