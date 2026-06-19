@@ -264,13 +264,14 @@ func (h *Handlers) SendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := push.PushMessage{
-		Title:    body.Title,
-		Body:     body.Body,
-		Channel:  body.Channel,
-		Priority: pickPriority(body.Priority),
-		Badge:    body.Badge,
-		Sound:    body.Sound,
-		Data:     body.Data,
+		Title:     body.Title,
+		Body:      body.Body,
+		Channel:   body.Channel,
+		Priority:  pickPriority(body.Priority),
+		Badge:     body.Badge,
+		Sound:     body.Sound,
+		Data:      body.Data,
+		MessageID: body.MessageID,
 	}
 	// Prefer the per-namespace Manager when present so per-namespace
 	// config (set via PUT /v1/push/config) takes effect. Fall back to the

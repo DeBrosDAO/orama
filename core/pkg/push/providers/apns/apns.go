@@ -29,6 +29,10 @@ const defaultSendTimeout = 10 * time.Second
 // store-and-forward behavior.
 const voipPushExpiry = 30 * time.Second
 
+// apnsCollapseIDMaxBytes is the APNs limit on the apns-collapse-id header
+// (bugboard #833). Ids longer than this are truncated rather than rejected.
+const apnsCollapseIDMaxBytes = 64
+
 // Provider is the APNs push.PushProvider implementation, scoped to one
 // (Team ID, Key ID, p8 key, Bundle ID, Environment, Kind) tuple.
 // Construct one per (namespace, kind) via the gateway dependency
@@ -167,6 +171,17 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		Topic:       p.topicForKind(),
 		Payload:     payload,
 		PushType:    p.pushTypeForKind(),
+	}
+	// Collapse identifier (bugboard #833): when set, APNs replaces any prior
+	// undelivered notification carrying the same apns-collapse-id instead of
+	// stacking a second one. The header is capped at 64 bytes — truncate
+	// rather than let APNs reject the whole push with PayloadTooLarge.
+	if msg.MessageID != "" {
+		cid := msg.MessageID
+		if len(cid) > apnsCollapseIDMaxBytes {
+			cid = cid[:apnsCollapseIDMaxBytes]
+		}
+		n.CollapseID = cid
 	}
 	// Priority mapping: APNs uses 10 (immediate) / 5 (power-saving).
 	// VoIP MUST use immediate (10) — Apple rejects "5" for voip pushes

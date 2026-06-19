@@ -58,6 +58,14 @@ type PushMessage struct {
 	Priority        PushPriority
 	TargetProvider  string // dispatcher-side positive filter; "" = fanout. See type doc.
 	ExcludeProvider string // dispatcher-side negative filter; "" = no exclusion. See type doc.
+
+	// MessageID is an optional collapse identifier (bugboard #833). When set,
+	// providers map it to their native dedup/replace key so a superseded or
+	// duplicate push collapses on-device instead of stacking: APNs sets
+	// apns-collapse-id, Expo sets collapseId (→ FCM collapse_key / APNs
+	// apns-collapse-id under the hood). Empty = no collapsing (each push is
+	// distinct). APNs caps the id at 64 bytes; longer ids are truncated.
+	MessageID string
 }
 
 // PushProvider is implemented by each backend (ntfy, expo, apns).
