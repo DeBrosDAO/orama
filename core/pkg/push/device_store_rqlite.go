@@ -107,6 +107,40 @@ func (s *RqliteDeviceStore) Upsert(ctx context.Context, dev PushDevice) error {
 	if err != nil {
 		return fmt.Errorf("upsert push device: %w", err)
 	}
+
+	// Token-exclusive registration (feat-135): a physical device (identified by
+	// device_id) maps to exactly ONE active user. Evict any OTHER user's row for
+	// the same (namespace, device_id). Rationale: when a user signs in on a device
+	// a different account previously used, the previous account's row otherwise
+	// stays live pointing at the SAME physical APNs/VoIP token — so the gateway
+	// fans that account's pushes out to this device even after the user switched
+	// away (the cross-account banner on multi-account-on-one-device setups). The
+	// latest sign-in owns the physical device's push token. Eviction is
+	// NAMESPACE-SCOPED (it can never touch another tenant's rows); token
+	// encryption is non-deterministic (AES-GCM) so we match on the plaintext
+	// device_id; the alert and ":voip" rows are evicted independently as each is
+	// re-registered. Auto-cleans pre-existing orphans on the next sign-in.
+	// Best-effort: a failed eviction must NOT fail the registration — the next
+	// registration retries it.
+	//
+	// NOTE: this changes the default for every namespace on this gateway. It is a
+	// sane, privacy-correct default (the latest sign-in claims the device's push
+	// token), but a future tenant wanting "all signed-in accounts notified"
+	// (Telegram-style) would need this gated behind a per-namespace flag. Tracked
+	// on bugboard feat-135.
+	evict := `DELETE FROM push_devices WHERE namespace = ? AND device_id = ? AND user_id != ?`
+	if res, evErr := s.db.Exec(ctx, evict, dev.Namespace, dev.DeviceID, dev.UserID); evErr != nil {
+		s.logger.Warn("token-exclusive eviction failed",
+			zap.String("namespace", dev.Namespace),
+			zap.String("device_id", dev.DeviceID),
+			zap.Error(evErr))
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		s.logger.Info("evicted stale device rows for re-registered device",
+			zap.String("namespace", dev.Namespace),
+			zap.String("device_id", dev.DeviceID),
+			zap.String("owner", dev.UserID),
+			zap.Int64("evicted", n))
+	}
 	return nil
 }
 
