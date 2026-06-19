@@ -410,8 +410,20 @@ behind-proxy: true
 
 # Cache + persistence. The SQLite database stores subscribed clients'
 # pending messages so a disconnected client can replay on reconnect.
+# NOTE (bugboard #858): the cache is PER-NODE and message IDs are assigned
+# per-instance, so a client recovering missed messages across the round-robin
+# fan-out must use since=<unix-timestamp>/<duration>, NOT since=<message-id>
+# (IDs differ between nodes). Each node's cache holds every fanned-out message.
 cache-file: "%s/cache.db"
 cache-duration: "12h"
+
+# Keepalive (bugboard #858): ntfy's 45s default is too long for aggressive
+# carrier/mobile NATs, which silently drop idle long-lived /json streams — the
+# client still thinks the stream is "open" but the server-side socket is gone,
+# so real-time publishes are never delivered (the exact open-but-silent
+# signature). A 25s interval keeps the NAT mapping warm and lets the client
+# detect a dead connection (missing keepalive) ~2x faster so it can reconnect.
+keepalive-interval: "25s"
 
 # Attachments off — Orama push payloads are tiny JSON. Disabling stops
 # tenants from accidentally storing files here.
