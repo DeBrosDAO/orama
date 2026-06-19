@@ -2313,16 +2313,11 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 4. Restore TURN (if enabled)
 	if state.HasTURN && state.TURNRelayPortStart > 0 {
-		// Always re-ensure the relay firewall rules, even when TURN is already
-		// running. A node-level `ufw --force reset` (reprovision) wipes them
-		// while TURN keeps running, leaving the relay UDP ports closed so calls
-		// reach ICE "checking" but media never forwards (bugboard #846). The
-		// rule add is idempotent, so this is a cheap self-heal on every boot.
-		if fwErr := cm.systemdSpawner.EnsureTURNFirewall(state.TURNRelayPortStart, state.TURNRelayPortEnd); fwErr != nil {
-			cm.logger.Warn("Failed to ensure TURN relay firewall rules on restore",
-				zap.String("namespace", state.NamespaceName), zap.Error(fwErr))
-		}
-
+		// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by
+		// the root-level Phase 6b firewall setup, which is TURN-aware. orama-node
+		// runs as a NON-root user and cannot modify ufw, so the firewall reconcile
+		// deliberately does NOT live here — it would just spawn a doomed `ufw`
+		// call. The restore below only re-spawns the TURN process itself.
 		turnRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
 		if !turnRunning {
 			// TURN config needs the shared secret from DB — we can't persist it to disk state.

@@ -769,18 +769,6 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 	return nil
 }
 
-// EnsureTURNFirewall idempotently re-applies the TURN relay firewall rules
-// (3478/udp+tcp, 5349/tcp, relay UDP range). SpawnTURN already does this on a
-// fresh spawn, but a node-level `ufw --force reset` (reprovision) wipes the
-// rules while the TURN process keeps running — leaving the relay ports closed
-// so calls reach ICE "checking" but media never forwards (bugboard #846). The
-// boot-time restore path calls this even when TURN is already running so the
-// wipe is self-healed on the next boot. ufw allow is additive + idempotent.
-func (s *SystemdSpawner) EnsureTURNFirewall(relayStart, relayEnd int) error {
-	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
-	return fw.AddWebRTCRules(relayStart, relayEnd)
-}
-
 // StopTURN stops a TURN instance
 func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string) error {
 	s.logger.Info("Stopping TURN via systemd",
