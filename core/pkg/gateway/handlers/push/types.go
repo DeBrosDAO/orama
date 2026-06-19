@@ -124,6 +124,10 @@ type SendRequest struct {
 	Badge    int                    `json:"badge,omitempty"`
 	Sound    string                 `json:"sound,omitempty"`
 	Data     map[string]interface{} `json:"data,omitempty"`
+	// MessageID is an optional collapse identifier (bugboard #833): providers
+	// map it to apns-collapse-id / Expo collapseId so a superseded push
+	// replaces the prior one on-device instead of stacking.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // SendResponse is the body of POST /v1/push/send.

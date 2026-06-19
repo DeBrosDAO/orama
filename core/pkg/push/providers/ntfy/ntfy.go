@@ -23,7 +23,9 @@ package ntfy
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +38,16 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"go.uber.org/zap"
 )
+
+// topicFingerprint returns a short, non-reversible identifier for an ntfy topic
+// suitable for logs. The full topic is a per-user push channel: in ntfy's model
+// knowing the topic name is enough to subscribe to (read) it, so we never write
+// it to logs. The fingerprint still lets an operator correlate repeated failures
+// for the same topic without exposing the subscribable identifier (bugboard #858).
+func topicFingerprint(topic string) string {
+	sum := sha256.Sum256([]byte(topic))
+	return hex.EncodeToString(sum[:])[:12]
+}
 
 // Config holds per-provider settings.
 type Config struct {
@@ -181,19 +193,31 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 
 	okCount := 0
 	var firstErr error
-	for _, e := range errs {
+	var failedNodes []string
+	for i, e := range errs {
 		if e == nil {
 			okCount++
-		} else if firstErr == nil {
-			firstErr = e
+		} else {
+			failedNodes = append(failedNodes, bases[i])
+			if firstErr == nil {
+				firstErr = e
+			}
 		}
 	}
 	if okCount == 0 {
 		return fmt.Errorf("ntfy: fan-out to all %d push nodes failed: %w", len(bases), firstErr)
 	}
 	if okCount < len(bases) {
-		p.logger.Warn("ntfy fan-out partial failure (message still delivered to the reachable instances)",
-			zap.Int("delivered", okCount), zap.Int("total", len(bases)), zap.Error(firstErr))
+		// bugboard #858: name the failed nodes + topic. The publish succeeds
+		// overall (some node accepted), but a subscriber whose round-robin
+		// stream is pinned to one of these failed nodes will silently miss this
+		// message — exactly the open-subscriber-receives-nothing signature. This
+		// makes such a loss diagnosable from the gateway log instead of invisible.
+		p.logger.Warn("ntfy fan-out partial failure — a subscriber pinned to a failed node misses this message",
+			zap.String("topic_fp", topicFingerprint(topic)),
+			zap.Int("delivered", okCount), zap.Int("total", len(bases)),
+			zap.Strings("failed_nodes", failedNodes),
+			zap.Error(firstErr))
 	}
 	return nil
 }

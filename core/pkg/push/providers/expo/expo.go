@@ -71,6 +71,7 @@ type expoMessage struct {
 	Priority       string                 `json:"priority,omitempty"`
 	MutableContent bool                   `json:"mutableContent,omitempty"`
 	ChannelID      string                 `json:"channelId,omitempty"`
+	CollapseID     string                 `json:"collapseId,omitempty"`
 }
 
 // expoTicket is the per-message response.
@@ -104,6 +105,7 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		Priority:       priority,
 		MutableContent: true, // for iOS Notification Service Extension
 		ChannelID:      msg.Channel,
+		CollapseID:     msg.MessageID, // bugboard #833: Expo maps collapseId → FCM collapse_key / APNs apns-collapse-id
 	}
 	if wire.Sound == "" {
 		wire.Sound = "default"

@@ -35,6 +35,18 @@ func TestFirewallProvisioner_GenerateRules_StandardNode(t *testing.T) {
 	}
 }
 
+// TestFirewallProvisioner_GenerateRules_NoTURN_NoRelayPorts confirms a non-TURN
+// node never opens the relay ports (the TURN-enabled path is covered by
+// TestFirewallProvisioner_GenerateRules_WithTURN). Bugboard #846.
+func TestFirewallProvisioner_GenerateRules_NoTURN_NoRelayPorts(t *testing.T) {
+	rules := NewFirewallProvisioner(FirewallConfig{}).GenerateRules()
+	for _, rule := range rules {
+		if strings.Contains(rule, "3478") || strings.Contains(rule, "5349") || strings.Contains(rule, "49152") {
+			t.Errorf("non-TURN node should not open relay ports: %s", rule)
+		}
+	}
+}
+
 func TestFirewallProvisioner_GenerateRules_Nameserver(t *testing.T) {
 	fp := NewFirewallProvisioner(FirewallConfig{
 		IsNameserver: true,

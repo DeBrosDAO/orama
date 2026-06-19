@@ -2313,29 +2313,44 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 4. Restore TURN (if enabled)
 	if state.HasTURN && state.TURNRelayPortStart > 0 {
+		// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by
+		// the root-level Phase 6b firewall setup, which is TURN-aware. orama-node
+		// runs as a NON-root user and cannot modify ufw, so the firewall reconcile
+		// deliberately does NOT live here — it would just spawn a doomed `ufw`
+		// call. The restore below only re-spawns the TURN process itself.
 		turnRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
 		if !turnRunning {
 			// TURN config needs the shared secret from DB — we can't persist it to disk state.
 			// If DB is available, fetch it; otherwise skip TURN restore (it will come back when DB is ready).
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {
-				turnCfg := TURNInstanceConfig{
-					Namespace:       state.NamespaceName,
-					NodeID:          cm.localNodeID,
-					ListenAddr:      fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
-					TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
-					PublicIP:        "", // Will be resolved by spawner or from node info
-					Realm:           cm.baseDomain,
-					AuthSecret:      webrtcCfg.TURNSharedSecret,
-					RelayPortStart:  state.TURNRelayPortStart,
-					RelayPortEnd:    state.TURNRelayPortEnd,
-					TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
-					StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-				}
-				if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
-					cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+				// Resolve this node's public IP. Passing an empty PublicIP here
+				// (the old behavior) produced a TURN config that crash-loops on
+				// "public_ip must not be empty" — killing TURN on the node and
+				// preventing AddWebRTCRules from ever running (bugboard #846).
+				publicIP, ipErr := cm.getLocalNodePublicIP(ctx)
+				if ipErr != nil {
+					cm.logger.Error("Skipping TURN restore: cannot resolve local node public IP (an empty public_ip crash-loops the TURN server)",
+						zap.String("namespace", state.NamespaceName), zap.Error(ipErr))
 				} else {
-					cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName))
+					turnCfg := TURNInstanceConfig{
+						Namespace:       state.NamespaceName,
+						NodeID:          cm.localNodeID,
+						ListenAddr:      fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
+						TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
+						PublicIP:        publicIP,
+						Realm:           cm.baseDomain,
+						AuthSecret:      webrtcCfg.TURNSharedSecret,
+						RelayPortStart:  state.TURNRelayPortStart,
+						RelayPortEnd:    state.TURNRelayPortEnd,
+						TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
+						StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
+					}
+					if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
+						cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+					} else {
+						cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName), zap.String("public_ip", publicIP))
+					}
 				}
 			} else {
 				cm.logger.Warn("Skipping TURN restore: WebRTC config not available from DB",
