@@ -112,7 +112,7 @@ func pushDirect(archivePath string, nodes []inspector.Node) error {
 			return fmt.Errorf("upload to %s failed: %w", node.Host, err)
 		}
 
-		if err := extractOnNode(node, remotePath); err != nil {
+		if err := extractOnNode(node, remotePath, false); err != nil {
 			return fmt.Errorf("extract on %s failed: %w", node.Host, err)
 		}
 
@@ -134,7 +134,10 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 		return fmt.Errorf("upload to hub %s failed: %w", hub.Host, err)
 	}
 
-	if err := extractOnNode(hub, remotePath); err != nil {
+	// Keep the archive on the hub — the fanout below scp's it to every other
+	// node. (Removing it here was the bug that broke fanout: the subsequent scp
+	// from the hub found no local file.)
+	if err := extractOnNode(hub, remotePath, true); err != nil {
 		return fmt.Errorf("extract on hub %s failed: %w", hub.Host, err)
 	}
 	fmt.Printf("  ✓ hub %s done\n\n", hub.Host)
@@ -182,6 +185,9 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 
 	wg.Wait()
 
+	// Fanout done — remove the hub's retained archive (best-effort).
+	_ = remotessh.RunSSHStreaming(hub, remotessh.SudoPrefix(hub)+"rm -f "+remotePath)
+
 	// Check for errors
 	var failed []string
 	for i, err := range errors {
@@ -199,11 +205,16 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 	return nil
 }
 
-// extractOnNode extracts the archive on a remote node.
-func extractOnNode(node inspector.Node, remotePath string) error {
+// extractOnNode extracts the archive on a remote node. When keepArchive is true
+// the uploaded tarball is left in place — the hub needs it to fan out to the
+// other nodes; otherwise it is removed after extraction to reclaim /tmp.
+func extractOnNode(node inspector.Node, remotePath string, keepArchive bool) error {
 	sudo := remotessh.SudoPrefix(node)
-	cmd := fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama && %srm -f %s",
-		sudo, sudo, remotePath, sudo, remotePath)
+	cmd := fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama",
+		sudo, sudo, remotePath)
+	if !keepArchive {
+		cmd += fmt.Sprintf(" && %srm -f %s", sudo, remotePath)
+	}
 	return remotessh.RunSSHStreaming(node, cmd)
 }
 
