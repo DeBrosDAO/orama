@@ -33,6 +33,15 @@ type FunctionConfig struct {
 	WSMaxFrameBytes      int  `yaml:"ws_max_frame_bytes"`
 	WSMaxInflightPerConn int  `yaml:"ws_max_inflight_per_conn"`
 
+	// Reactor enables reactor-mode for a STATELESS function (bugboard #898):
+	// the function exports `handle(ptr,len)->packed` and is built
+	// `-buildmode=c-shared` (WASI reactor: `_initialize`, no `_start`). The
+	// gateway pre-warms instances so the ~550ms TinyGo cold-start runs ahead of
+	// the request instead of on it. The function's init() must be
+	// identity-independent (warming has no caller in scope); do per-caller work
+	// in handle(). Unset = command mode (back-compat).
+	Reactor bool `yaml:"reactor"`
+
 	// RawHTTPResponse enables raw-HTTP-response mode (bugboard #835) — the
 	// function may call set_http_response to emit a verbatim HTTP response
 	// (status/headers/body) instead of the JSON/Ack-wrapped output.

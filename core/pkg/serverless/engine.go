@@ -93,7 +93,21 @@ type Engine struct {
 
 	// Rate limiter
 	rateLimiter RateLimiter
+
+	// reactorPool pre-warms one-shot instances for reactor-mode functions so
+	// their ~550ms TinyGo _initialize cold-start runs ahead of the request
+	// instead of on it (bugboard #898). Dormant unless a function is built
+	// reactor-mode (exports handle + _initialize, no _start); command-mode
+	// functions never touch it. Each warmed instance serves exactly one call
+	// and is then closed (isolation identical to fresh-instance-per-call).
+	reactorPool *reactorPool
 }
+
+// Reactor pre-warm pool sizing (bugboard #898).
+const (
+	reactorWarmTarget = 2  // ready instances kept per reactor module
+	reactorMaxModules = 64 // distinct reactor module pools (LRU-evicted)
+)
 
 // InvocationLogger logs function invocations (optional).
 type InvocationLogger interface {
@@ -213,6 +227,10 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 		executor:     execution.NewExecutor(runtime, logger, cfg.MaxConcurrentExecutions),
 		lifecycle:    execution.NewModuleLifecycle(runtime, logger),
 	}
+
+	// Reactor pre-warm pool (bugboard #898). The warmer reuses the engine's
+	// compile cache + runtime; warmed instances are one-shot and isolated.
+	engine.reactorPool = newReactorPool(engine.instantiateReactorInstance, reactorWarmTarget, reactorMaxModules, logger)
 
 	// Apply options
 	for _, opt := range opts {
@@ -365,7 +383,16 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// _start cold-start) took, letting the slow-invoke diagnostic split the
 	// execute phase into cold-start vs handler work (bugboard #27).
 	execCtx, instTiming := execution.WithInstantiateTiming(execCtx)
-	output, err := e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
+	// Reactor-mode functions (bugboard #898) are served from the pre-warm pool
+	// via handle() — they cannot run through ExecuteModule (no _start) and their
+	// cold-start is paid ahead of the request. Per-invocation identity rides
+	// execCtx. Command-mode functions are unchanged.
+	var output []byte
+	if moduleIsReactor(module) {
+		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input)
+	} else {
+		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
+	}
 	executeDoneAt = time.Now()
 	if err != nil {
 		status := InvocationStatusError
@@ -482,6 +509,11 @@ func (e *Engine) Precompile(ctx context.Context, wasmCID string, wasmBytes []byt
 // Invalidate removes a compiled module from the cache.
 func (e *Engine) Invalidate(wasmCID string) {
 	e.moduleCache.Delete(context.Background(), wasmCID)
+	// Drop any pre-warmed reactor instances for the old module so a redeploy
+	// never serves stale code (bugboard #898).
+	if e.reactorPool != nil {
+		e.reactorPool.Invalidate(wasmCID)
+	}
 }
 
 // Close shuts down the engine and releases resources.
@@ -491,6 +523,11 @@ func (e *Engine) Close(ctx context.Context) error {
 	// acceptable; blocking the process on telemetry is not.
 	if e.logQueue != nil {
 		e.logQueue.Close()
+	}
+
+	// Drain the reactor pre-warm pool (bugboard #898) before closing modules.
+	if e.reactorPool != nil {
+		e.reactorPool.Close()
 	}
 
 	// Close all cached modules
@@ -681,6 +718,81 @@ func (e *Engine) InstantiatePersistent(ctx context.Context, fn *Function, invCtx
 	}
 
 	return instance, nil
+}
+
+// instantiateReactorInstance warms a one-shot reactor instance for the
+// reactor-mode function identified by wasmCID: it instantiates the compiled
+// module and runs the TinyGo _initialize cold-start so the returned instance
+// can serve a single `handle` call immediately. The reactor pool calls this in
+// the background (bugboard #898); name must be unique within the runtime.
+//
+// REACTOR CONTRACT: _initialize must be identity-independent. Warming happens
+// before any request, so there is no caller identity in scope — a reactor
+// function does all per-caller work in handle() (which DOES receive the
+// invocation context via ctx), never in package init().
+func (e *Engine) instantiateReactorInstance(ctx context.Context, wasmCID, name string) (api.Module, error) {
+	compiled, err := e.getOrCompileModule(ctx, wasmCID)
+	if err != nil {
+		return nil, fmt.Errorf("reactor warm: compile: %w", err)
+	}
+	moduleConfig := wazero.NewModuleConfig().
+		WithName(name).
+		WithStartFunctions(). // suppress auto-start; we run _initialize explicitly
+		WithStdin(emptyReader{}).
+		WithStdout(discardWriter{}).
+		WithStderr(discardWriter{}).
+		WithArgs(name).
+		WithSysWalltime().  // real clocks (bugboard #27)
+		WithSysNanotime().
+		WithRandSource(cryptorand.Reader) // real CSPRNG (bugboard #120)
+
+	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
+	if err != nil {
+		return nil, fmt.Errorf("reactor warm: instantiate: %w", err)
+	}
+	if hook := instance.ExportedFunction("_initialize"); hook != nil {
+		initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if _, callErr := hook.Call(initCtx); callErr != nil {
+			_ = instance.Close(ctx)
+			return nil, fmt.Errorf("reactor warm: _initialize: %w", callErr)
+		}
+	}
+	return instance, nil
+}
+
+// moduleIsReactor reports whether a compiled module was built reactor-mode
+// (TinyGo -buildmode=c-shared): it exports the `handle` entrypoint plus the WASI
+// reactor `_initialize` hook and has NO command-mode `_start`. Such a module
+// cannot run via ExecuteModule (which expects _start + stdout output) — it must
+// be driven by calling handle(). Command-mode functions export `_start` and
+// return false, so they keep using ExecuteModule unchanged.
+func moduleIsReactor(compiled wazero.CompiledModule) bool {
+	exports := compiled.ExportedFunctions()
+	_, hasHandle := exports["handle"]
+	_, hasInit := exports["_initialize"]
+	_, hasStart := exports["_start"]
+	return hasHandle && hasInit && !hasStart
+}
+
+// invokeReactor runs a reactor-mode function (bugboard #898): it serves the call
+// from a pre-warmed pool instance when one is ready (skipping the ~550ms
+// cold-start), otherwise instantiates one synchronously (cold fallback). Either
+// way the instance serves THIS one call and is then closed — never reused, so
+// isolation is identical to fresh-instance-per-call. Per-invocation identity
+// rides ctx (WithInvocationContext), so a generic warmed instance resolves the
+// correct caller in its host calls.
+func (e *Engine) invokeReactor(ctx context.Context, wasmCID, fnName string, input []byte) ([]byte, error) {
+	instance, warm := e.reactorPool.Acquire(wasmCID)
+	if !warm {
+		var err error
+		instance, err = e.reactorPool.InstantiateSync(ctx, wasmCID)
+		if err != nil {
+			return nil, fmt.Errorf("reactor cold instantiate %s: %w", fnName, err)
+		}
+	}
+	defer instance.Close(context.Background())
+	return e.executor.CallHandleFunction(ctx, instance, input)
 }
 
 // emptyReader satisfies io.Reader for persistent WASM stdin.
