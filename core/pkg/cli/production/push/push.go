@@ -155,6 +155,26 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 		return nil
 	}
 
+	// Stage each target's SSH key on the hub so the hub authenticates to the
+	// target with a SINGLE key (-i + IdentitiesOnly), instead of agent-forwarding
+	// ALL node keys — which the target's sshd rejects with "too many
+	// authentication failures" once the offered-key count exceeds MaxAuthTries
+	// (default 6). Keys are chmod 600 and removed (defer) when the fanout ends.
+	const fanoutKeyDir = "/tmp/.orama-fanout-keys"
+	if err := remotessh.RunSSHStreaming(hub, "rm -rf "+fanoutKeyDir+" && mkdir -p "+fanoutKeyDir+" && chmod 700 "+fanoutKeyDir); err != nil {
+		return fmt.Errorf("prepare fanout key dir on hub: %w", err)
+	}
+	defer func() { _ = remotessh.RunSSHStreaming(hub, "rm -rf "+fanoutKeyDir) }()
+	for _, t := range remaining {
+		dst := fanoutKeyDir + "/" + t.Host
+		if err := remotessh.UploadFile(hub, t.SSHKey, dst); err != nil {
+			return fmt.Errorf("stage key for %s on hub: %w", t.Host, err)
+		}
+		if err := remotessh.RunSSHStreaming(hub, "chmod 600 "+dst); err != nil {
+			return fmt.Errorf("chmod staged key for %s: %w", t.Host, err)
+		}
+	}
+
 	fmt.Printf("[fanout] Distributing from %s to %d nodes...\n", hub.Host, len(remaining))
 
 	var wg sync.WaitGroup
@@ -165,16 +185,17 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 		go func(idx int, target inspector.Node) {
 			defer wg.Done()
 
-			// SCP from hub to target (agent forwarding serves the key)
-			scpCmd := fmt.Sprintf("scp -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 %s %s@%s:%s",
-				remotePath, target.User, target.Host, remotePath)
+			// SCP from hub to target using the target's staged key only.
+			keyPath := fanoutKeyDir + "/" + target.Host
+			scpCmd := fmt.Sprintf("scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i %s -o ConnectTimeout=10 %s %s@%s:%s",
+				keyPath, remotePath, target.User, target.Host, remotePath)
 
-			if err := remotessh.RunSSHStreaming(hub, scpCmd, remotessh.WithAgentForward()); err != nil {
+			if err := remotessh.RunSSHStreaming(hub, scpCmd); err != nil {
 				errors[idx] = fmt.Errorf("fanout to %s failed: %w", target.Host, err)
 				return
 			}
 
-			if err := extractOnNodeVia(hub, target, remotePath); err != nil {
+			if err := extractOnNodeVia(hub, target, remotePath, keyPath); err != nil {
 				errors[idx] = fmt.Errorf("extract on %s failed: %w", target.Host, err)
 				return
 			}
@@ -218,18 +239,18 @@ func extractOnNode(node inspector.Node, remotePath string, keepArchive bool) err
 	return remotessh.RunSSHStreaming(node, cmd)
 }
 
-// extractOnNodeVia extracts the archive on a target node by SSHing through the hub.
-// Uses agent forwarding so the hub can authenticate to the target.
-func extractOnNodeVia(hub, target inspector.Node, remotePath string) error {
+// extractOnNodeVia extracts the archive on a target node by SSHing through the
+// hub, authenticating with the target's staged key (keyPath) only — avoiding the
+// forwarded-agent "too many authentication failures".
+func extractOnNodeVia(hub, target inspector.Node, remotePath, keyPath string) error {
 	sudo := remotessh.SudoPrefix(target)
 	extractCmd := fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama && %srm -f %s",
 		sudo, sudo, remotePath, sudo, remotePath)
 
-	// SSH from hub to target to extract (agent forwarding serves the key)
-	sshCmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 %s@%s '%s'",
-		target.User, target.Host, extractCmd)
+	sshCmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i %s -o ConnectTimeout=10 %s@%s '%s'",
+		keyPath, target.User, target.Host, extractCmd)
 
-	return remotessh.RunSSHStreaming(hub, sshCmd, remotessh.WithAgentForward())
+	return remotessh.RunSSHStreaming(hub, sshCmd)
 }
 
 // findNewestArchive finds the newest binary archive in /tmp/.
