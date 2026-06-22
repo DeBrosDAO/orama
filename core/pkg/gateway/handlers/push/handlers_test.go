@@ -25,15 +25,17 @@ type fakeStore struct {
 	listErr  error
 }
 
-func (s *fakeStore) Upsert(ctx context.Context, dev push.PushDevice) error {
+func (s *fakeStore) Upsert(ctx context.Context, dev push.PushDevice) (string, error) {
 	if s.upsertFn != nil {
-		return s.upsertFn(dev)
+		if err := s.upsertFn(dev); err != nil {
+			return "", err
+		}
 	}
 	if dev.ID == "" {
 		dev.ID = "row-" + dev.DeviceID
 	}
 	s.devices = append(s.devices, dev)
-	return nil
+	return dev.ID, nil
 }
 func (s *fakeStore) Delete(ctx context.Context, ns, id string) error {
 	if s.deleteFn != nil {
@@ -102,6 +104,40 @@ func TestRegister_happy_path(t *testing.T) {
 	d := store.devices[0]
 	if d.Namespace != "myapp" || d.UserID != "user-1" || d.Token != "ns/myapp/user-1" {
 		t.Errorf("unexpected device: %+v", d)
+	}
+}
+
+// TestRegister_returnsRowIDAndDeviceID covers bugboard #981 ask 2: the register
+// response must serialize the persisted row id + device_id so a client can
+// DELETE directly without a GET-then-match.
+func TestRegister_returnsRowIDAndDeviceID(t *testing.T) {
+	store := &fakeStore{} // fake returns "row-"+device_id as the persisted id
+	h := newHandlers(store, nil)
+
+	body, _ := json.Marshal(RegisterDeviceRequest{
+		DeviceID: "iphone-abc",
+		Provider: "ntfy",
+		Token:    "ns/myapp/user-1",
+	})
+	req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/devices", bytes.NewReader(body)), "myapp", "user-1")
+	rr := httptest.NewRecorder()
+	h.RegisterDeviceHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	var resp RegisterDeviceResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (body: %s)", err, rr.Body.String())
+	}
+	if resp.Status != "ok" {
+		t.Errorf("status = %q, want ok", resp.Status)
+	}
+	if resp.ID != "row-iphone-abc" {
+		t.Errorf("id = %q, want row-iphone-abc (the persisted row id)", resp.ID)
+	}
+	if resp.DeviceID != "iphone-abc" {
+		t.Errorf("device_id = %q, want iphone-abc", resp.DeviceID)
 	}
 }
 

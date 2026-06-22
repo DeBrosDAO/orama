@@ -97,7 +97,8 @@ func (h *Handlers) RegisterDeviceHandler(w http.ResponseWriter, r *http.Request)
 		AppVer:    body.AppVersion,
 		LastSeen:  now,
 	}
-	if err := h.store.Upsert(boundCtx(r), dev); err != nil {
+	id, err := h.store.Upsert(boundCtx(r), dev)
+	if err != nil {
 		h.logger.ComponentWarn("push", "device upsert failed",
 			zap.String("namespace", ns),
 			zap.String("user_id", userID),
@@ -106,7 +107,9 @@ func (h *Handlers) RegisterDeviceHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, RegisterDeviceResponse{Status: "ok"})
+	// Return the persisted row id + device_id (bugboard #981 ask 2) so the
+	// client can DELETE the registration directly without a GET-then-match.
+	writeJSON(w, http.StatusOK, RegisterDeviceResponse{Status: "ok", ID: id, DeviceID: dev.DeviceID})
 }
 
 // ListDevicesHandler handles GET /v1/push/devices.

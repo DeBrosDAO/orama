@@ -942,6 +942,19 @@ func buildPushDispatcher(
 		return nil, nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
 	}
 
+	// Backfill token_fp for rows registered before the bugboard #981 migration
+	// so token-exclusive eviction also covers pre-existing orphans. Best-effort
+	// + idempotent; runs in the background so it never delays gateway startup.
+	go func() {
+		bctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if n, berr := store.BackfillTokenFP(bctx); berr != nil {
+			logger.Logger.Warn("push: token_fp backfill failed", zap.Error(berr))
+		} else if n > 0 {
+			logger.Logger.Info("push: token_fp backfill complete", zap.Int("updated", n))
+		}
+	}()
+
 	cfgStore, err := push.NewRqliteConfigStore(db, cfg.ClusterSecret, logger.Logger)
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("init push config store: %w", err)

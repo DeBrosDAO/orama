@@ -97,9 +97,11 @@ type PushDevice struct {
 
 // PushDeviceStore persists per-user device registrations.
 type PushDeviceStore interface {
-	// Upsert registers or updates a device. The Token is encrypted by the
-	// implementation before being written to durable storage.
-	Upsert(ctx context.Context, dev PushDevice) error
+	// Upsert registers or updates a device and returns the persisted row id.
+	// The Token is encrypted by the implementation before being written to
+	// durable storage. Implementations enforce token-exclusivity (bugboard
+	// #981): a physical token maps to a single active owner per namespace.
+	Upsert(ctx context.Context, dev PushDevice) (string, error)
 
 	// Delete removes a single device by ID, scoped to the namespace.
 	Delete(ctx context.Context, namespace, id string) error

@@ -258,7 +258,9 @@ func TestManager_concurrent_dispatcherFor_no_race(t *testing.T) {
 // fakeDeviceStore is a stub PushDeviceStore for manager tests.
 type fakeDeviceStore struct{}
 
-func (s *fakeDeviceStore) Upsert(_ context.Context, _ PushDevice) error { return nil }
+func (s *fakeDeviceStore) Upsert(_ context.Context, dev PushDevice) (string, error) {
+	return dev.ID, nil
+}
 func (s *fakeDeviceStore) Delete(_ context.Context, _, _ string) error  { return nil }
 func (s *fakeDeviceStore) ListForUser(_ context.Context, _, _ string) ([]PushDevice, error) {
 	return nil, nil

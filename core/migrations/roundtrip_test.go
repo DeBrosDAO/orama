@@ -184,6 +184,36 @@ func TestSchemaRoundtrip_PlatformExemplars(t *testing.T) {
 			exec: true,
 		},
 
+		// push_devices token-exclusive upsert — token_fp added by migration 033
+		// (bugboard #981). Mirrors RqliteDeviceStore.Upsert.
+		{
+			name: "push_devices UPSERT with token_fp",
+			sql: `INSERT INTO push_devices (
+				id, namespace, user_id, device_id, provider,
+				token_encrypted, token_fp, platform, app_version,
+				created_at, updated_at, last_seen
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(namespace, user_id, device_id) DO UPDATE SET
+				token_encrypted = excluded.token_encrypted,
+				token_fp = excluded.token_fp,
+				updated_at = excluded.updated_at`,
+			args: []any{
+				"dev-2", "ns", "u1", "device-B", "apns",
+				"enc:...", "abc123fp", "ios", "1.0",
+				0, 0, 0,
+			},
+			exec: true,
+		},
+
+		// push_devices token-exclusive eviction — rowid-ordered DELETE by token_fp
+		// (bugboard #981). Mirrors RqliteDeviceStore.evictOtherOwnersOfToken.
+		{
+			name: "push_devices token eviction DELETE",
+			sql:  `DELETE FROM push_devices WHERE namespace = ? AND token_fp = ? AND rowid < ?`,
+			args: []any{"ns", "abc123fp", 1},
+			exec: true,
+		},
+
 		// namespace_publish_seq — sequence counter from plan 08.
 		{
 			name: "namespace_publish_seq UPSERT",

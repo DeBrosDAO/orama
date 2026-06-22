@@ -30,12 +30,12 @@ type fakeStore struct {
 	err     error
 }
 
-func (s *fakeStore) Upsert(ctx context.Context, dev PushDevice) error {
+func (s *fakeStore) Upsert(ctx context.Context, dev PushDevice) (string, error) {
 	if s.err != nil {
-		return s.err
+		return "", s.err
 	}
 	s.devices = append(s.devices, dev)
-	return nil
+	return dev.ID, nil
 }
 func (s *fakeStore) Delete(ctx context.Context, ns, id string) error { return nil }
 func (s *fakeStore) ListForUser(ctx context.Context, ns, userID string) ([]PushDevice, error) {
