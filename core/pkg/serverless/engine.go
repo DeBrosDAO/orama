@@ -389,7 +389,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// execCtx. Command-mode functions are unchanged.
 	var output []byte
 	if moduleIsReactor(module) {
-		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input)
+		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input, instTiming)
 	} else {
 		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
 	}
@@ -751,7 +751,12 @@ func (e *Engine) instantiateReactorInstance(ctx context.Context, wasmCID, name s
 		return nil, fmt.Errorf("reactor warm: instantiate: %w", err)
 	}
 	if hook := instance.ExportedFunction("_initialize"); hook != nil {
-		initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Pin warm-time host calls to a neutral, identity-free invocation context
+		// so a guest init() can never observe a concurrent invocation's singleton
+		// identity (bugboard #898 hardening). Per-caller work belongs in handle(),
+		// which receives the real caller via ctx.
+		warmCtx := WithInvocationContext(ctx, &InvocationContext{})
+		initCtx, cancel := context.WithTimeout(warmCtx, 5*time.Second)
 		defer cancel()
 		if _, callErr := hook.Call(initCtx); callErr != nil {
 			_ = instance.Close(ctx)
@@ -782,11 +787,18 @@ func moduleIsReactor(compiled wazero.CompiledModule) bool {
 // isolation is identical to fresh-instance-per-call. Per-invocation identity
 // rides ctx (WithInvocationContext), so a generic warmed instance resolves the
 // correct caller in its host calls.
-func (e *Engine) invokeReactor(ctx context.Context, wasmCID, fnName string, input []byte) ([]byte, error) {
+func (e *Engine) invokeReactor(ctx context.Context, wasmCID, fnName string, input []byte, instTiming *execution.InstantiateTiming) ([]byte, error) {
 	instance, warm := e.reactorPool.Acquire(wasmCID)
 	if !warm {
+		// Pool miss: pay the cold-start synchronously and attribute it to the
+		// instantiate phase so the bugboard #27 slow-invoke diagnostic stays
+		// accurate (a warm hit pays ~0 instantiate on the request path).
+		coldStart := time.Now()
 		var err error
 		instance, err = e.reactorPool.InstantiateSync(ctx, wasmCID)
+		if instTiming != nil {
+			instTiming.InstantiateNs = time.Since(coldStart).Nanoseconds()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("reactor cold instantiate %s: %w", fnName, err)
 		}

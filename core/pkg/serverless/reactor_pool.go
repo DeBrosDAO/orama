@@ -145,8 +145,22 @@ func (p *reactorPool) warmOne(wasmCID string, mp *modulePool, name string) {
 	defer cancel()
 	inst, err := p.warm(ctx, wasmCID, name)
 
+	// Decide the instance's fate under the lock. The send must only happen if
+	// this pool is STILL the live pool for wasmCID — otherwise it was torn down
+	// (Invalidate / LRU-evict / Close / replaced) while we were warming, and
+	// sending into its now-detached channel would leak the instance (nothing
+	// would ever drain + Close it). In that case we close it here instead.
+	stored := false
 	p.mu.Lock()
 	mp.inflight--
+	if err == nil && p.pools[wasmCID] == mp {
+		select {
+		case mp.ready <- inst:
+			stored = true
+		default:
+			// Pool already at target — fall through and close the surplus below.
+		}
+	}
 	p.mu.Unlock()
 
 	if err != nil {
@@ -155,11 +169,9 @@ func (p *reactorPool) warmOne(wasmCID string, mp *modulePool, name string) {
 			zap.Error(err))
 		return
 	}
-	select {
-	case mp.ready <- inst:
-	default:
-		// Pool filled concurrently — discard this surplus warmed instance so it
-		// never lingers unused (and never gets reused).
+	if !stored {
+		// Surplus, or the pool was torn down mid-warm — discard so the instance
+		// is never reused and never leaks.
 		_ = inst.Close(context.Background())
 	}
 }

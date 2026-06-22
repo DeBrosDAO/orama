@@ -173,6 +173,31 @@ func TestReactorPool_LRUEviction_closesEvicted(t *testing.T) {
 	waitFor(t, func() bool { return spy.closedCount() >= 1 }, "evicted instance closed")
 }
 
+// TestReactorPool_warmRacingInvalidate_noLeak is the regression for the
+// code-review MEDIUM finding: a warm that completes AFTER its pool is torn down
+// must close its instance, not leak it into a detached channel.
+func TestReactorPool_warmRacingInvalidate_noLeak(t *testing.T) {
+	release := make(chan struct{})
+	var built atomic.Bool
+	var leaked *mockModule
+	blockingWarm := func(_ context.Context, _ string, name string) (api.Module, error) {
+		<-release // block mid-warm until the test invalidates the pool
+		m := &mockModule{name: name, closed: &atomic.Bool{}}
+		leaked = m
+		built.Store(true)
+		return m, nil
+	}
+	p := newReactorPool(blockingWarm, 1, 8, zap.NewNop())
+
+	p.Acquire("cid")         // kicks off a warm that now blocks on <-release
+	p.Invalidate("cid")      // tear the pool down while the warm is in flight
+	close(release)           // let the warm complete
+
+	waitFor(t, func() bool { return built.Load() }, "the in-flight warm completes")
+	waitFor(t, func() bool { return leaked != nil && leaked.closed.Load() },
+		"the post-teardown warmed instance is Closed, not leaked")
+}
+
 func TestReactorPool_Close_drainsAll(t *testing.T) {
 	spy := &warmerSpy{}
 	p := newReactorPool(spy.warm, 2, 8, zap.NewNop())
