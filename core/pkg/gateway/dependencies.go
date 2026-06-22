@@ -945,13 +945,31 @@ func buildPushDispatcher(
 	// Backfill token_fp for rows registered before the bugboard #981 migration
 	// so token-exclusive eviction also covers pre-existing orphans. Best-effort
 	// + idempotent; runs in the background so it never delays gateway startup.
+	//
+	// It can lose a startup race with migration 033 (the column doesn't exist
+	// yet → "no such column"); retry until the migration applies. This was a real
+	// bug observed live: the backfill failed permanently on the first attempt.
 	go func() {
-		bctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		if n, berr := store.BackfillTokenFP(bctx); berr != nil {
+		for {
+			n, berr := store.BackfillTokenFP(bctx)
+			if berr == nil {
+				if n > 0 {
+					logger.Logger.Info("push: token_fp backfill complete", zap.Int("updated", n))
+				}
+				return
+			}
+			if strings.Contains(berr.Error(), "no such column") {
+				select {
+				case <-time.After(15 * time.Second):
+					continue // migration 033 not applied yet; retry
+				case <-bctx.Done():
+					return
+				}
+			}
 			logger.Logger.Warn("push: token_fp backfill failed", zap.Error(berr))
-		} else if n > 0 {
-			logger.Logger.Info("push: token_fp backfill complete", zap.Int("updated", n))
+			return
 		}
 	}()
 

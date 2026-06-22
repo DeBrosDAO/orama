@@ -70,11 +70,9 @@ type deviceRow struct {
 	LastSeen       int64
 }
 
-// selfRow is the scan target for resolving a row's identity + insertion order
-// (SQLite rowid) after an upsert.
-type selfRow struct {
-	Rowid int64
-	ID    string
+// idRow is the scan target for resolving a row's id after an upsert.
+type idRow struct {
+	ID string
 }
 
 // tokenFingerprint returns a deterministic keyed fingerprint of the plaintext
@@ -145,16 +143,15 @@ func (s *RqliteDeviceStore) Upsert(ctx context.Context, dev PushDevice) (string,
 		return "", fmt.Errorf("upsert push device: %w", err)
 	}
 
-	// Resolve the persisted row: on INSERT the id is `id` above, but on a
-	// CONFLICT the pre-existing row's id is preserved, so re-read by the unique
-	// key to return the real id (bugboard #981 ask 2). We also read the SQLite
-	// rowid (monotonic by insertion order) to drive token-exclusive eviction.
-	self, err := s.resolveSelf(ctx, dev.Namespace, dev.UserID, dev.DeviceID)
+	// Resolve the persisted id: on INSERT it is `id` above, but on a CONFLICT the
+	// pre-existing row's id is preserved, so re-read by the unique key to return
+	// the real id (bugboard #981 ask 2) and to use as the eviction keeper.
+	persistedID, err := s.resolveDeviceID(ctx, dev.Namespace, dev.UserID, dev.DeviceID)
 	if err != nil {
 		// The write succeeded; fall back to the candidate id so registration
 		// still returns a usable value instead of failing. Skip eviction since
-		// we can't determine the keeper's insertion order safely.
-		s.logger.Warn("resolve persisted device row failed; returning candidate id, skipping eviction",
+		// we can't safely identify the keeper.
+		s.logger.Warn("resolve persisted device id failed; returning candidate id, skipping eviction",
 			zap.String("namespace", dev.Namespace),
 			zap.Error(err))
 		return id, nil
@@ -162,53 +159,52 @@ func (s *RqliteDeviceStore) Upsert(ctx context.Context, dev PushDevice) (string,
 
 	// Token-exclusive eviction (bugboard #981). Best-effort: a failure here must
 	// not fail the registration that already succeeded.
-	if err := s.evictOtherOwnersOfToken(ctx, dev.Namespace, tokenFP, self.Rowid); err != nil {
+	if err := s.evictOtherOwnersOfToken(ctx, dev.Namespace, tokenFP, persistedID); err != nil {
 		s.logger.Warn("token-exclusive eviction failed (registration still succeeded)",
 			zap.String("namespace", dev.Namespace),
 			zap.Error(err))
 	}
 
-	return self.ID, nil
+	return persistedID, nil
 }
 
-// resolveSelf returns the stored row id + rowid for the unique (namespace,
-// user_id, device_id) key.
-func (s *RqliteDeviceStore) resolveSelf(ctx context.Context, namespace, userID, deviceID string) (selfRow, error) {
-	var rows []selfRow
+// resolveDeviceID returns the stored row id for the unique (namespace, user_id,
+// device_id) key.
+func (s *RqliteDeviceStore) resolveDeviceID(ctx context.Context, namespace, userID, deviceID string) (string, error) {
+	var rows []idRow
 	err := s.db.Query(ctx, &rows,
-		`SELECT rowid, id FROM push_devices WHERE namespace = ? AND user_id = ? AND device_id = ?`,
+		`SELECT id FROM push_devices WHERE namespace = ? AND user_id = ? AND device_id = ?`,
 		namespace, userID, deviceID)
 	if err != nil {
-		return selfRow{}, fmt.Errorf("query device row: %w", err)
+		return "", fmt.Errorf("query device id: %w", err)
 	}
 	if len(rows) == 0 {
-		return selfRow{}, fmt.Errorf("device not found after upsert")
+		return "", fmt.Errorf("device not found after upsert")
 	}
-	return rows[0], nil
+	return rows[0].ID, nil
 }
 
 // evictOtherOwnersOfToken deletes every OTHER row carrying the same physical
-// token within the namespace that was inserted BEFORE the just-registered row
-// (keepRowid), leaving the most-recently-registered owner as the single one.
+// token within the namespace, leaving the just-registered row (keepID) as the
+// single active owner — exactly the ticket's "one physical token → one active
+// owner, last-writer-wins". The just-registered row ALWAYS wins, regardless of
+// when its row was first inserted (the earlier rowid-ordered version failed here:
+// a re-registering account keeps its old, low rowid and so never evicted
+// newer-inserted stale rows — confirmed live on anchat-test).
 //
-// Ordering is by SQLite rowid (monotonic insertion order), NOT updated_at:
-// updated_at is unix seconds, so a fast account switch (logout A → login B
-// within the same second) would otherwise tie and fail to evict A — exactly the
-// cross-account case this fixes. rowid also makes concurrent same-token
-// registrations by two users race-safe: rqlite serializes the inserts, so each
-// gets a distinct rowid; "rowid < keepRowid" means the newest insertion is
-// never eligible for eviction, so exactly one survivor remains regardless of
-// interleaving (a naive "id != self" delete run by both could delete BOTH,
-// leaving the device with no registration). A device legitimately re-claiming
-// its own token after being evicted re-inserts with a fresh (higher) rowid and
-// wins, which is correct — the currently-active account owns the device token.
-func (s *RqliteDeviceStore) evictOtherOwnersOfToken(ctx context.Context, namespace, tokenFP string, keepRowid int64) error {
+// Race note: registrations for one physical token are serial — a device has one
+// active account and one in-flight request at a time, and a client retry
+// CONFLICTs onto the same row (same keeper), so two concurrent same-token
+// registers cannot occur. In the impossible event they did and deleted each
+// other, the device simply re-registers on its next cycle (self-healing).
+// Strictly namespace-scoped — never touches another tenant.
+func (s *RqliteDeviceStore) evictOtherOwnersOfToken(ctx context.Context, namespace, tokenFP, keepID string) error {
 	if tokenFP == "" {
 		return nil
 	}
 	res, err := s.db.Exec(ctx,
-		`DELETE FROM push_devices WHERE namespace = ? AND token_fp = ? AND rowid < ?`,
-		namespace, tokenFP, keepRowid)
+		`DELETE FROM push_devices WHERE namespace = ? AND token_fp = ? AND id != ?`,
+		namespace, tokenFP, keepID)
 	if err != nil {
 		return fmt.Errorf("evict other owners of token: %w", err)
 	}

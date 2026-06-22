@@ -205,12 +205,12 @@ func TestSchemaRoundtrip_PlatformExemplars(t *testing.T) {
 			exec: true,
 		},
 
-		// push_devices token-exclusive eviction — rowid-ordered DELETE by token_fp
+		// push_devices token-exclusive eviction — DELETE other owners by token_fp
 		// (bugboard #981). Mirrors RqliteDeviceStore.evictOtherOwnersOfToken.
 		{
 			name: "push_devices token eviction DELETE",
-			sql:  `DELETE FROM push_devices WHERE namespace = ? AND token_fp = ? AND rowid < ?`,
-			args: []any{"ns", "abc123fp", 1},
+			sql:  `DELETE FROM push_devices WHERE namespace = ? AND token_fp = ? AND id != ?`,
+			args: []any{"ns", "abc123fp", "keeper-id"},
 			exec: true,
 		},
 

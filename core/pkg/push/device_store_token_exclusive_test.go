@@ -152,6 +152,48 @@ func TestUpsert_tokenExclusive_switchBackReclaims(t *testing.T) {
 // TestUpsert_tokenExclusive_namespaceScoped ensures the eviction never crosses
 // tenants: the same physical device used with two namespaces (two apps) keeps an
 // independent registration per namespace.
+// TestUpsert_tokenExclusive_collapsesPreexistingDuplicates is the regression for
+// the live bug: rows accumulated on the OLD gateway (no eviction), then one of
+// the EXISTING accounts re-registers (a CONFLICT/UPDATE that keeps its original
+// row). The earlier rowid-ordered eviction evicted only rows with a LOWER rowid,
+// so a re-register by the first-inserted account evicted nothing and the
+// duplicates persisted (observed live: 11 accounts on one device token, 0
+// evictions). The correct id!=keeper eviction collapses them all.
+func TestUpsert_tokenExclusive_collapsesPreexistingDuplicates(t *testing.T) {
+	s, db := newDeviceTestStore(t)
+	const token = "device-physical-token"
+	fp := s.tokenFingerprint(token)
+	enc, err := secrets.Encrypt(token, s.encKey)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	// Seed 3 pre-existing duplicate rows (same physical token, different accounts)
+	// directly, bypassing Upsert's eviction — as the old no-eviction gateway did.
+	for i, u := range []string{"acctA", "acctB", "acctC"} {
+		if _, err := db.Exec(
+			`INSERT INTO push_devices (id, namespace, user_id, device_id, provider, token_encrypted, token_fp, created_at, updated_at)
+			 VALUES (?,?,?,?,?,?,?,?,?)`,
+			"id-"+u, "ns", u, "dev-"+u, "apns", enc, fp, int64(i+1), int64(i+1),
+		); err != nil {
+			t.Fatalf("seed %s: %v", u, err)
+		}
+	}
+
+	// acctA (the FIRST-inserted, lowest rowid) re-registers its token. With the
+	// old rowid logic this evicted nothing; the fix must collapse to exactly 1.
+	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "acctA", DeviceID: "dev-acctA", Provider: "apns", Token: token})
+
+	if got := countRows(t, db, "namespace=? AND token_fp=?", "ns", fp); got != 1 {
+		t.Fatalf("expected exactly 1 row after the re-register collapsed duplicates, got %d (rowid-bug regression)", got)
+	}
+	if got := len(mustList(t, s, "ns", "acctA")); got != 1 {
+		t.Fatalf("acctA (the re-registrant) should own the token, got %d", got)
+	}
+	if got := len(mustList(t, s, "ns", "acctB")) + len(mustList(t, s, "ns", "acctC")); got != 0 {
+		t.Fatalf("acctB + acctC should be evicted, got %d total", got)
+	}
+}
+
 func TestUpsert_tokenExclusive_namespaceScoped(t *testing.T) {
 	s, _ := newDeviceTestStore(t)
 	const token = "shared-physical-token"
