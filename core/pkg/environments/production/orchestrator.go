@@ -815,6 +815,19 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ IPFS service created: orama-ipfs.service")
 
+	// IPFS GC one-shot + timer. The daemon runs without in-process GC, so GC
+	// cadence is owned here: a scheduled `ipfs repo gc` that reclaims disk from
+	// unpinned blocks, off the request path and staggered across nodes.
+	gcUnit := ps.serviceGenerator.GenerateIPFSGCService(ipfsBinary)
+	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-gc.service", gcUnit); err != nil {
+		return fmt.Errorf("failed to write IPFS GC service: %w", err)
+	}
+	gcTimer := ps.serviceGenerator.GenerateIPFSGCTimer()
+	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-gc.timer", gcTimer); err != nil {
+		return fmt.Errorf("failed to write IPFS GC timer: %w", err)
+	}
+	ps.logf("  ✓ IPFS GC service + timer created: orama-ipfs-gc.{service,timer}")
+
 	// IPFS Cluster service
 	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
 	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-cluster.service", clusterUnit); err != nil {
@@ -912,7 +925,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
 	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service"}
+	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service", "orama-ipfs-gc.timer"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -983,6 +996,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("  ⚠️  Failed to start orama-ipfs-cluster.service: %v", err)
 	} else {
 		ps.logf("    - orama-ipfs-cluster.service started")
+	}
+
+	// Start the IPFS GC timer (the daemon has no in-process GC; this drives reclaim).
+	// The one-shot service it triggers is ordered After/Requires orama-ipfs.service.
+	if err := ps.serviceController.RestartService("orama-ipfs-gc.timer"); err != nil {
+		ps.logf("  ⚠️  Failed to start orama-ipfs-gc.timer: %v", err)
+	} else {
+		ps.logf("    - orama-ipfs-gc.timer started")
 	}
 
 	// Start node service (gateway is embedded in node, no separate service needed)

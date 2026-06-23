@@ -80,6 +80,63 @@ WantedBy=multi-user.target
 `, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, logFile, ipfsBinary, oramaServiceHardening)
 }
 
+// IPFS garbage-collection schedule. The daemon runs WITHOUT --enable-gc by
+// design (see GenerateIPFSService), so GC cadence is owned here: a one-shot
+// `ipfs repo gc` driven by a timer, off the request path and staggered across
+// nodes so the cluster never GCs in lockstep.
+const (
+	// ipfsGCOnBootSec delays the first GC after boot so the daemon + cluster stabilize.
+	ipfsGCOnBootSec = "20min"
+	// ipfsGCInterval is how often the scheduled GC runs after the first.
+	ipfsGCInterval = "6h"
+	// ipfsGCRandomizedDelaySec staggers GC across nodes (avoids a correlated cluster-wide stall).
+	ipfsGCRandomizedDelaySec = "30min"
+)
+
+// GenerateIPFSGCService generates the one-shot unit that runs `ipfs repo gc`,
+// triggered by orama-ipfs-gc.timer. GC reclaims disk from blocks that have been
+// unpinned (e.g. by a tenant's retention/prune job). Without it, unpinned blocks
+// accumulate forever because the daemon runs without in-process GC.
+func (ssg *SystemdServiceGenerator) GenerateIPFSGCService(ipfsBinary string) string {
+	ipfsRepoPath := filepath.Join(ssg.oramaDir, "data", "ipfs", "repo")
+	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs-gc.log")
+
+	// No [Install] section: the unit is triggered by the timer, never enabled directly.
+	return fmt.Sprintf(`[Unit]
+Description=IPFS repo garbage collection (one-shot)
+After=orama-ipfs.service
+Requires=orama-ipfs.service
+
+[Service]
+Type=oneshot
+%[5]s
+ReadWritePaths=%[3]s
+Environment=HOME=%[1]s
+Environment=IPFS_PATH=%[2]s
+ExecStart=%[4]s repo gc
+TimeoutStartSec=1800
+StandardOutput=append:%[6]s
+StandardError=append:%[6]s
+SyslogIdentifier=orama-ipfs-gc
+`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, ipfsBinary, oramaServiceHardening, logFile)
+}
+
+// GenerateIPFSGCTimer generates the timer that triggers orama-ipfs-gc.service.
+func (ssg *SystemdServiceGenerator) GenerateIPFSGCTimer() string {
+	return fmt.Sprintf(`[Unit]
+Description=Schedule periodic IPFS repo garbage collection
+
+[Timer]
+OnBootSec=%[1]s
+OnUnitActiveSec=%[2]s
+RandomizedDelaySec=%[3]s
+Unit=orama-ipfs-gc.service
+
+[Install]
+WantedBy=timers.target
+`, ipfsGCOnBootSec, ipfsGCInterval, ipfsGCRandomizedDelaySec)
+}
+
 // GenerateIPFSClusterService generates the IPFS Cluster systemd unit
 func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary string) string {
 	clusterPath := filepath.Join(ssg.oramaDir, "data", "ipfs-cluster")

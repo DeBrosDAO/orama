@@ -140,3 +140,70 @@ func TestGenerateRQLiteServiceArgs(t *testing.T) {
 		t.Error("missing -join-attempts 30")
 	}
 }
+
+// TestGenerateIPFSGCService verifies the one-shot GC unit: it must run
+// `ipfs repo gc`, be ordered after (and require) the IPFS daemon, point at the
+// repo via IPFS_PATH, and — being timer-triggered — must NOT install itself.
+func TestGenerateIPFSGCService(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+
+	unit := ssg.GenerateIPFSGCService("/usr/local/bin/ipfs")
+
+	for _, want := range []string{
+		"Type=oneshot",
+		"ExecStart=/usr/local/bin/ipfs repo gc",
+		"After=orama-ipfs.service",
+		"Requires=orama-ipfs.service",
+		"Environment=IPFS_PATH=/opt/orama/.orama/data/ipfs/repo",
+		"SyslogIdentifier=orama-ipfs-gc",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("GC service missing %q, got:\n%s", want, unit)
+		}
+	}
+
+	// Must carry the unprivileged hardening block (same as the daemon) — a GC
+	// run never needs root, so NoNewPrivileges must hold.
+	for _, want := range []string{"User=orama", "NoNewPrivileges=yes", "ProtectSystem=strict"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("GC service missing hardening directive %q, got:\n%s", want, unit)
+		}
+	}
+
+	// A one-shot triggered by a timer must not enable itself on boot.
+	if strings.Contains(unit, "[Install]") {
+		t.Errorf("GC one-shot service must have no [Install] section, got:\n%s", unit)
+	}
+	// The daemon, not this unit, should never carry --enable-gc; this unit is the
+	// GC mechanism, so it must not accidentally launch a daemon.
+	if strings.Contains(unit, "daemon") {
+		t.Errorf("GC service must not start a daemon, got:\n%s", unit)
+	}
+}
+
+// TestGenerateIPFSGCTimer verifies the timer wiring: it triggers the GC one-shot,
+// staggers across nodes, and installs into timers.target.
+func TestGenerateIPFSGCTimer(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+
+	unit := ssg.GenerateIPFSGCTimer()
+
+	for _, want := range []string{
+		"[Timer]",
+		"OnBootSec=" + ipfsGCOnBootSec,
+		"OnUnitActiveSec=" + ipfsGCInterval,
+		"RandomizedDelaySec=" + ipfsGCRandomizedDelaySec,
+		"Unit=orama-ipfs-gc.service",
+		"WantedBy=timers.target",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("GC timer missing %q, got:\n%s", want, unit)
+		}
+	}
+}
