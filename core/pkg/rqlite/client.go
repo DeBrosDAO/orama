@@ -7,9 +7,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"time"
 
 	"github.com/rqlite/gorqlite"
 )
+
+// freshReadHTTPTimeout caps a single native none+freshness read (PART B,
+// queryNoneFresh). Matches the 5s status-query timeout used elsewhere; a
+// freshness-bound local read should complete in single-digit ms.
+const freshReadHTTPTimeout = 5 * time.Second
 
 // NewClient wires the ORM client to a *sql.DB (from your RQLiteAdapter).
 //
@@ -49,7 +58,56 @@ func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 		connNone.Close()
 		return nil, fmt.Errorf("rqlite.NewClientWithDSN: pin none consistency: %w", err)
 	}
-	return &client{db: db, conn: conn, connNone: connNone}, nil
+	c := &client{db: db, conn: conn, connNone: connNone}
+	// Parse the DSN once to wire (a) the local-follower freshness gate (#1022)
+	// and (b) the native none+freshness read path (#1021). A DSN that doesn't
+	// parse leaves both disabled (gate nil, freshHTTP nil) rather than failing
+	// construction — none-reads then behave exactly as before this change.
+	if parts, ok := parseDSNParts(dsn); ok {
+		c.localStatusPort = parts.port
+		c.staleGate = newFollowerFreshnessGate(parts.port, LocalFollowerFresh, 0)
+		c.freshScheme = parts.scheme
+		c.freshHost = parts.host
+		c.freshUser = parts.user
+		c.freshPass = parts.pass
+		c.freshHTTP = &http.Client{Timeout: freshReadHTTPTimeout}
+	}
+	return c, nil
+}
+
+// dsnParts holds the components of a parsed rqlite DSN needed by the freshness
+// gate and the native none+freshness read path.
+type dsnParts struct {
+	scheme string
+	host   string // host:port (the serving node we POST reads to)
+	port   int    // numeric port for the local /status query
+	user   string
+	pass   string
+}
+
+// parseDSNParts parses a standard rqlite DSN ("http://user:pass@host:port")
+// into its components. Returns ok=false (and the caller leaves the gate/HTTP
+// path disabled) when the DSN can't be parsed or lacks a numeric port — never
+// an error, so construction stays backward compatible.
+func parseDSNParts(dsn string) (dsnParts, bool) {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return dsnParts{}, false
+	}
+	portStr := u.Port()
+	if portStr == "" {
+		return dsnParts{}, false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return dsnParts{}, false
+	}
+	parts := dsnParts{scheme: u.Scheme, host: u.Host, port: port}
+	if u.User != nil {
+		parts.user = u.User.Username()
+		parts.pass, _ = u.User.Password()
+	}
+	return parts, true
 }
 
 // NewClientWithConn wires the ORM client when the caller already has a
@@ -76,6 +134,25 @@ type client struct {
 	// (NewClient) or via NewClientWithConn — in which case none-reads degrade
 	// to the weak conn (always correct, just slower).
 	connNone *gorqlite.Connection
+
+	// localStatusPort is the rqlite HTTP port of the LOCAL serving node, parsed
+	// from the DSN. Used by the freshness gate to query /status. Zero when the
+	// DSN had no usable port (gate disabled).
+	localStatusPort int
+	// staleGate gates none-reads on local-follower freshness (#1022). nil
+	// disables gating (NewClient / NewClientWithConn, or an unparseable DSN) —
+	// none-reads then behave exactly as before this change.
+	staleGate *followerFreshnessGate
+
+	// fresh* fields support the native none+freshness read path (#1021,
+	// freshness_read.go). They are populated from the DSN in NewClientWithDSN;
+	// freshHTTP nil means the path is unavailable and BatchQueryFresh with a
+	// positive freshness errors out. freshPass is NEVER logged.
+	freshScheme string
+	freshHost   string
+	freshUser   string
+	freshPass   string
+	freshHTTP   *http.Client
 }
 
 // ReadConsistency selects the rqlite read-consistency level for a read path.

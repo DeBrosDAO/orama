@@ -52,6 +52,11 @@ const (
 	ErrCodeFunctionExecution RPCErrorCode = "FUNCTION_EXECUTION_FAILED"
 	ErrCodeFunctionDeploy    RPCErrorCode = "FUNCTION_DEPLOY_FAILED"
 	ErrCodeSchemaMismatch    RPCErrorCode = "SCHEMA_MISMATCH"
+	// ErrCodeFunctionUnavailable is a TRANSIENT infra failure loading a
+	// function's code (e.g. its WASM blob isn't yet retrievable from IPFS on
+	// this node). Distinct from FUNCTION_EXECUTION_FAILED (a real, non-retryable
+	// error inside the function); this one is safe to retry the exact request.
+	ErrCodeFunctionUnavailable RPCErrorCode = "FUNCTION_UNAVAILABLE"
 )
 
 // RPCErrorEnvelope is the canonical wire shape. Use WriteRPCError to emit;
@@ -167,6 +172,8 @@ func defaultMessageFor(code RPCErrorCode) string {
 		return "request timed out"
 	case ErrCodeFunctionExecution:
 		return "function execution failed"
+	case ErrCodeFunctionUnavailable:
+		return "function temporarily unavailable, retry"
 	case ErrCodeFunctionDeploy:
 		return "function deployment failed"
 	case ErrCodeSchemaMismatch:
@@ -180,7 +187,7 @@ func defaultMessageFor(code RPCErrorCode) string {
 // Callers can override via WithRetryable() / WithRetryAfter().
 func defaultRetryableFor(code RPCErrorCode) bool {
 	switch code {
-	case ErrCodeRateLimited, ErrCodeServiceUnavailable, ErrCodeTimeout:
+	case ErrCodeRateLimited, ErrCodeServiceUnavailable, ErrCodeTimeout, ErrCodeFunctionUnavailable:
 		return true
 	default:
 		return false

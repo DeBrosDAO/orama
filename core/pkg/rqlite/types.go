@@ -13,6 +13,12 @@ type RQLiteStatus struct {
 			State             string `json:"state"`
 			LeaderID          string `json:"leader_id"`
 			LeaderAddr        string `json:"leader_addr"`
+			// LastContact is the time since this follower last heard from the
+			// leader, formatted by rqlite as a Go duration string ("2.5ms",
+			// "1.2s") or the literal "never" before first contact. Empty/absent
+			// on the leader's own /status. Used by the local-follower freshness
+			// gate (freshness.go) to decide whether a none-read is safe.
+			LastContact       string `json:"last_contact"`
 			Term              uint64 `json:"term"`
 			NumPeers          int    `json:"num_peers"`
 			Voter             bool   `json:"voter"`

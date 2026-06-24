@@ -18,10 +18,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/rqlite/gorqlite"
 )
+
+// staleDegradeWarnInterval rate-limits the "none-read degraded to weak" warning
+// so a hot read loop hitting a stale follower logs at most once per interval
+// instead of once per batch.
+const staleDegradeWarnInterval = time.Second
+
+// lastStaleDegradeWarnNanos holds the unix-nano timestamp of the last emitted
+// stale-degrade warning, guarded by atomics for the rate limit.
+var lastStaleDegradeWarnNanos int64
+
+// warnStaleDegrade logs (at most once per staleDegradeWarnInterval) that a
+// none-read was auto-degraded to the leader-routed weak connection because the
+// local follower is stale. reason is actionable and carries the status port.
+func warnStaleDegrade(reason string, port int) {
+	now := time.Now().UnixNano()
+	prev := atomic.LoadInt64(&lastStaleDegradeWarnNanos)
+	if now-prev < int64(staleDegradeWarnInterval) {
+		return
+	}
+	if !atomic.CompareAndSwapInt64(&lastStaleDegradeWarnNanos, prev, now) {
+		return
+	}
+	log.Printf("rqlite: none-read auto-degraded to weak (leader-routed) — local follower stale on status port %d: %s", port, reason)
+}
 
 // BatchOpKind enumerates the supported op kinds.
 type BatchOpKind string
@@ -261,6 +287,12 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 		return nil, fmt.Errorf("rqlite.BatchQuery: native gorqlite connection not configured (use NewClientWithDSN or NewClientWithConn)")
 	}
 
+	// #1022: gate none-reads on local-follower freshness. When the dedicated
+	// none connection would be used and the local follower is stale, auto-degrade
+	// to the weak (leader-routed) conn — transparent to the caller, always
+	// correct. No-op when the gate is nil or the follower is fresh.
+	conn = c.gateNoneConn(rc, conn)
+
 	// Validate up-front: callers must use BatchOpQuery for every entry.
 	// Mixing in an Exec would be a footgun (it'd silently be skipped or
 	// trigger an unrelated error from the query endpoint), so reject loud.
@@ -313,6 +345,90 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 			Kind:  BatchOpQuery,
 			Error: "rqlite.BatchQuery: no result returned for op " + fmt.Sprint(i),
 		}
+	}
+	return out, nil
+}
+
+// gateNoneConn applies the #1022 freshness gate to a none-read's chosen
+// connection. It only acts when the dedicated none connection is in play
+// (rc==none && connNone set) AND a gate is configured; otherwise it returns the
+// connection unchanged. When the local follower is stale it returns the weak
+// (leader-routed) conn instead and emits a rate-limited warning. Split out so
+// the auto-degrade decision is unit-testable without a live rqlite dial.
+func (c *client) gateNoneConn(rc ReadConsistency, chosen *gorqlite.Connection) *gorqlite.Connection {
+	if rc != ReadConsistencyNone || c.connNone == nil || c.staleGate == nil {
+		return chosen
+	}
+	if fresh, reason := c.staleGate.Fresh(); !fresh {
+		warnStaleDegrade(reason, c.localStatusPort)
+		return c.conn
+	}
+	return chosen
+}
+
+// BatchQueryFresh runs N SELECTs at level=none with an explicit freshness
+// bound (feature #1021). Unlike BatchQueryConsistency(None), which serves the
+// local snapshot at whatever staleness it has, this asks rqlite to REJECT the
+// read when the local node is staler than `freshness` — returning a typed
+// error (errors.Is(err, ErrFreshnessViolation)) so the caller can fall back to
+// a leader-routed read instead of silently reading stale rows.
+//
+// Validation matches BatchQueryConsistency: count cap and all-query. When
+// freshness <= 0 the call delegates to BatchQueryConsistency(None) (the
+// unchanged fast path with no freshness assertion). A freshness violation is
+// the TOP-LEVEL error, never a per-op success — callers must not mistake a
+// rejection for an empty result set. The same MaxBatchQueryRowsPerOp /
+// MaxBatchQueryTotalBytes caps apply.
+func (c *client) BatchQueryFresh(ctx context.Context, ops []BatchOp, freshness time.Duration, strict bool) ([]OpResult, error) {
+	if len(ops) == 0 {
+		return []OpResult{}, nil
+	}
+	if len(ops) > MaxBatchOps {
+		return nil, fmt.Errorf("rqlite.BatchQueryFresh: too many ops (%d > max %d)", len(ops), MaxBatchOps)
+	}
+	stmts := make([]gorqlite.ParameterizedStatement, len(ops))
+	for i, op := range ops {
+		if op.Kind != BatchOpQuery {
+			return nil, fmt.Errorf("rqlite.BatchQueryFresh: op %d has kind %q (only %q allowed; use Batch for mixed exec/query)",
+				i, op.Kind, BatchOpQuery)
+		}
+		stmts[i] = gorqlite.ParameterizedStatement{Query: op.SQL, Arguments: op.Args}
+	}
+
+	// freshness <= 0: no freshness assertion requested — take the existing
+	// none path unchanged (also keeps the #1022 freshness gate in effect).
+	if freshness <= 0 {
+		return c.BatchQueryConsistency(ctx, ops, ReadConsistencyNone)
+	}
+
+	results, err := c.queryNoneFresh(ctx, stmts, freshness, strict)
+	if err != nil {
+		// Surface a freshness violation (and any transport error) as the
+		// top-level error so callers can errors.Is it — never as a per-op row.
+		return nil, err
+	}
+
+	var totalBytes int
+	out := make([]OpResult, 0, len(ops))
+	for i := 0; i < len(ops); i++ {
+		if i >= len(results) {
+			out = append(out, OpResult{
+				Kind:  BatchOpQuery,
+				Error: "rqlite.BatchQueryFresh: no result returned for op " + fmt.Sprint(i),
+			})
+			continue
+		}
+		if totalBytes >= MaxBatchQueryTotalBytes {
+			out = append(out, OpResult{
+				Kind: BatchOpQuery,
+				Error: fmt.Sprintf("rqlite.BatchQueryFresh: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
+					MaxBatchQueryTotalBytes),
+			})
+			continue
+		}
+		opRes := rqliteResultToOpResult(results[i])
+		totalBytes += estimateOpResultBytes(opRes)
+		out = append(out, opRes)
 	}
 	return out, nil
 }

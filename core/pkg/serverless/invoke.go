@@ -281,6 +281,15 @@ func (i *Invoker) executeWithRetry(ctx context.Context, fn *Function, input []by
 
 // isRetryable determines if an error should trigger a retry.
 func (i *Invoker) isRetryable(err error) bool {
+	// A WASM-fetch timeout is already retried inside GetWASMBytes (independent
+	// 4s×3 budget) and is surfaced to the client as retryable
+	// (FUNCTION_UNAVAILABLE). Re-running the whole invocation here would just
+	// re-fetch and amplify IPFS load, so don't retry it at the invoker layer —
+	// the client retries the request instead. (bugboard #137)
+	if errors.Is(err, ErrWASMFetchTimeout) {
+		return false
+	}
+
 	// Don't retry validation errors or not-found errors
 	if IsNotFound(err) {
 		return false

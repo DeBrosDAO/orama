@@ -413,13 +413,59 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 	return nil
 }
 
-// GetWASMBytes retrieves the compiled WASM bytecode for a function.
+// WASM-fetch tuning. The IPFS `cat` must NOT consume the function's whole
+// execution budget on a single stalled request (bugboard #137: a 15s function
+// spent all 15s on one cold fetch). Each attempt gets its own short deadline and
+// we retry a few times so bitswap can resolve a not-yet-local block from a pin
+// holder (the warm path is ~450ms, so 3×4s is ample headroom).
+const (
+	wasmFetchTimeout     = 4 * time.Second
+	wasmFetchMaxAttempts = 3
+	wasmFetchRetryBase   = 250 * time.Millisecond
+)
+
+// GetWASMBytes retrieves the compiled WASM bytecode for a function. On a cold
+// block it retries with a bounded per-attempt deadline and returns the typed
+// ErrWASMFetchTimeout (retryable infra failure) so callers don't misreport a
+// transient IPFS stall as a permanent function error.
 func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error) {
 	if wasmCID == "" {
 		return nil, &ValidationError{Field: "wasmCID", Message: "cannot be empty"}
 	}
 
-	reader, err := r.ipfs.Get(ctx, wasmCID, r.ipfsAPIURL)
+	var lastErr error
+	for attempt := 1; attempt <= wasmFetchMaxAttempts; attempt++ {
+		data, err := r.fetchWASMOnce(ctx, wasmCID)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+
+		// Respect caller cancellation / overall deadline — don't keep retrying
+		// into an already-dead context.
+		if ctx.Err() != nil {
+			break
+		}
+		if attempt < wasmFetchMaxAttempts {
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%w: cid=%s: %v", ErrWASMFetchTimeout, wasmCID, ctx.Err())
+			case <-time.After(time.Duration(attempt) * wasmFetchRetryBase):
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("%w: cid=%s after %d attempts: %v", ErrWASMFetchTimeout, wasmCID, wasmFetchMaxAttempts, lastErr)
+}
+
+// fetchWASMOnce does a single IPFS fetch bounded by an independent deadline that
+// is capped at the smaller of wasmFetchTimeout and whatever the caller ctx has
+// left.
+func (r *Registry) fetchWASMOnce(ctx context.Context, wasmCID string) ([]byte, error) {
+	fetchCtx, cancel := context.WithTimeout(ctx, wasmFetchTimeout)
+	defer cancel()
+
+	reader, err := r.ipfs.Get(fetchCtx, wasmCID, r.ipfsAPIURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get WASM from IPFS: %w", err)
 	}
@@ -723,10 +769,18 @@ func (r *Registry) GetInvocations(ctx context.Context, namespace, name string, l
 // Private helpers
 // -----------------------------------------------------------------------------
 
-// defaultWASMReplicationFactor is the IPFS Cluster replication factor for WASM binaries.
-const defaultWASMReplicationFactor = 3
+// wasmReplicationEverywhere pins WASM binaries on EVERY IPFS-Cluster peer
+// (IPFS-Cluster treats a replication factor of -1 as "pin everywhere"). WASM
+// blobs are tiny metadata-class content that any namespace gateway node may need
+// to load on invoke; pinning everywhere (vs RF=3) means every node already holds
+// the block locally, eliminating the cold cross-node bitswap fetch that made
+// rarely-invoked functions intermittently time out (bugboard #137).
+const wasmReplicationEverywhere = -1
 
-// uploadWASM uploads WASM bytecode to IPFS and pins it for cluster-wide replication.
+// uploadWASM uploads WASM bytecode to IPFS and pins it on every cluster peer.
+// A function whose code is not durably retrievable is not deployed, so a pin
+// failure is fatal here — we must not leave a "deployed but unfetchable" row
+// that intermittently 15s-times-out on whichever node happens to be cold.
 func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string) (string, error) {
 	reader := bytes.NewReader(wasmBytes)
 	resp, err := r.ipfs.Add(ctx, reader, name+".wasm")
@@ -734,13 +788,8 @@ func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string
 		return "", fmt.Errorf("failed to upload WASM to IPFS: %w", err)
 	}
 
-	// Pin the CID across cluster peers so the binary survives node failures.
-	if _, err := r.ipfs.Pin(ctx, resp.Cid, name+".wasm", defaultWASMReplicationFactor); err != nil {
-		r.logger.Warn("Failed to pin WASM binary — content may not be replicated",
-			zap.String("cid", resp.Cid),
-			zap.String("function", name),
-			zap.Error(err),
-		)
+	if _, err := r.ipfs.Pin(ctx, resp.Cid, name+".wasm", wasmReplicationEverywhere); err != nil {
+		return "", fmt.Errorf("failed to pin WASM cid=%s on cluster: %w", resp.Cid, err)
 	}
 
 	return resp.Cid, nil

@@ -202,7 +202,19 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		}
 
 		if err != nil {
-			response["error"] = resp.Error
+			// Carry the same machine-readable code + retryable bit as the HTTP
+			// path so the rpc-router can distinguish a transient cold-WASM
+			// FUNCTION_UNAVAILABLE (retry the exact request) from a real
+			// FUNCTION_EXECUTION_FAILED (do not retry). Previously the WS frame
+			// gave clients no retry signal at all (bugboard #137).
+			_, code, retryable := classifyInvokeError(err)
+			msg := resp.Error
+			if msg == "" {
+				msg = err.Error()
+			}
+			response["error"] = msg
+			response["code"] = string(code)
+			response["retryable"] = retryable
 		} else if len(resp.Output) > 0 {
 			// Try to parse output as JSON
 			var output interface{}

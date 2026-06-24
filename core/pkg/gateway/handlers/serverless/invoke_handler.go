@@ -14,6 +14,26 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
+// classifyInvokeError maps a function-invoke error to the canonical
+// (HTTP status, RPC code, retryable) triple. Shared by the HTTP and WS invoke
+// paths so both transports report identical, machine-readable error semantics.
+// A cold-WASM fetch timeout is a transient infra failure (retryable); a genuine
+// error raised inside the function is FUNCTION_EXECUTION_FAILED (not retryable).
+func classifyInvokeError(err error) (int, httputil.RPCErrorCode, bool) {
+	switch {
+	case errors.Is(err, serverless.ErrWASMFetchTimeout):
+		return http.StatusServiceUnavailable, httputil.ErrCodeFunctionUnavailable, true
+	case serverless.IsNotFound(err):
+		return http.StatusNotFound, httputil.ErrCodeNotFound, false
+	case serverless.IsResourceExhausted(err):
+		return http.StatusTooManyRequests, httputil.ErrCodeRateLimited, true
+	case serverless.IsUnauthorized(err):
+		return http.StatusUnauthorized, httputil.ErrCodeUnauthorized, false
+	default:
+		return http.StatusInternalServerError, httputil.ErrCodeFunctionExecution, false
+	}
+}
+
 // extractRemoteIP returns a best-effort source IP for the request.
 // Trusts X-Real-IP / X-Forwarded-For only when the immediate peer is loopback
 // or a private address (i.e. behind our own reverse proxy / SNI router).
@@ -112,20 +132,10 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		// Map domain-typed errors to (status, RPC code).
-		statusCode := http.StatusInternalServerError
-		errCode := httputil.ErrCodeFunctionExecution
-		switch {
-		case serverless.IsNotFound(err):
-			statusCode = http.StatusNotFound
-			errCode = httputil.ErrCodeNotFound
-		case serverless.IsResourceExhausted(err):
-			statusCode = http.StatusTooManyRequests
-			errCode = httputil.ErrCodeRateLimited
-		case serverless.IsUnauthorized(err):
-			statusCode = http.StatusUnauthorized
-			errCode = httputil.ErrCodeUnauthorized
-		}
+		// Map domain-typed errors to (status, RPC code). WriteRPCError seeds the
+		// retryable bit from defaultRetryableFor(code), so a cold-WASM
+		// FUNCTION_UNAVAILABLE comes back retryable automatically.
+		statusCode, errCode, _ := classifyInvokeError(err)
 
 		// Pick the most informative message: function-side resp.Error
 		// (if set) is more actionable than the wrapping err.Error().
