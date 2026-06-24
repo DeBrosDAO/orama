@@ -479,6 +479,54 @@ func (r *Registry) fetchWASMOnce(ctx context.Context, wasmCID string) ([]byte, e
 	return data, nil
 }
 
+// RepinAllWASM re-pins every ACTIVE function's WASM on the cluster
+// (replication=-1) so functions deployed before the pin-everywhere fix become
+// durably pinned + GC-safe. Best-effort + idempotent; returns the count pinned.
+//
+// Incident 2026-06-24: scheduled IPFS GC reclaimed unpinned function WASM,
+// deleting the bytecode of functions that were only ever pinned RF=3 (or whose
+// pin silently failed). Run on gateway startup, this backfill guarantees all
+// existing function WASM is pinned everywhere so GC can never delete it. New
+// deploys are already covered by uploadWASM's pin-everywhere + hard-fail.
+func (r *Registry) RepinAllWASM(ctx context.Context) (int, error) {
+	var rows []wasmCIDRow
+	query := `SELECT DISTINCT wasm_cid FROM functions WHERE status = 'active' AND wasm_cid IS NOT NULL AND wasm_cid != ''`
+	if err := r.db.Query(ctx, &rows, query); err != nil {
+		return 0, fmt.Errorf("failed to list function WASM CIDs: %w", err)
+	}
+
+	cids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		cids = append(cids, row.WASMCID)
+	}
+	return r.repinWASMCIDs(ctx, cids), nil
+}
+
+// wasmCIDRow is the scan target for RepinAllWASM's DISTINCT wasm_cid query.
+type wasmCIDRow struct {
+	WASMCID string `db:"wasm_cid"`
+}
+
+// repinWASMCIDs pins each CID on every cluster peer (replication=-1),
+// best-effort: a CID whose block is gone (GC-deleted) can't be pinned, so it is
+// logged and skipped while the surviving ones are still protected. Returns the
+// count successfully pinned. Split out so the pin loop is unit-testable.
+func (r *Registry) repinWASMCIDs(ctx context.Context, cids []string) int {
+	pinned := 0
+	for _, cid := range cids {
+		if ctx.Err() != nil {
+			return pinned
+		}
+		if _, err := r.ipfs.Pin(ctx, cid, cid+".wasm", wasmReplicationEverywhere); err != nil {
+			r.logger.Warn("repin function WASM failed (block may be gone — needs re-deploy)",
+				zap.String("cid", cid), zap.Error(err))
+			continue
+		}
+		pinned++
+	}
+	return pinned
+}
+
 // GetEnvVars retrieves environment variables for a function.
 func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[string]string, error) {
 	if env, ok := r.cachedEnv(functionID); ok {

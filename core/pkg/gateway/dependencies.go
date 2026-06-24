@@ -440,6 +440,26 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	registry := serverless.NewRegistry(deps.ORMClient, deps.IPFSClient, registryCfg, logger.Logger)
 	deps.ServerlessRegistry = registry
 
+	// Backfill: re-pin every active function's WASM cluster-wide so functions
+	// deployed before the pin-everywhere fix are durable + GC-safe. Incident
+	// 2026-06-24: scheduled IPFS GC deleted unpinned function WASM. New deploys
+	// are covered by uploadWASM's pin-everywhere + hard-fail; this protects
+	// existing ones. Best-effort + idempotent (the cluster dedups pins), delayed
+	// so it never races gateway startup. The rolling-restart cadence naturally
+	// staggers it across nodes; the first node to run it pins everything
+	// cluster-wide and the rest are no-ops.
+	go func() {
+		time.Sleep(2 * time.Minute) // let the namespace + IPFS cluster settle
+		bctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		n, berr := registry.RepinAllWASM(bctx)
+		if berr != nil {
+			logger.Logger.Warn("serverless: WASM re-pin backfill failed", zap.Error(berr))
+			return
+		}
+		logger.Logger.Info("serverless: WASM re-pin backfill complete", zap.Int("pinned", n))
+	}()
+
 	// Create WebSocket manager for function streaming
 	deps.ServerlessWSMgr = serverless.NewWSManager(logger.Logger)
 

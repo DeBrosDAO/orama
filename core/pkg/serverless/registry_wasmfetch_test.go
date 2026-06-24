@@ -20,6 +20,8 @@ type wasmFakeIPFS struct {
 	pinErr        error
 	pinReplFactor int
 	pinCalls      int
+	failCID       string   // simulate a pin failure for this specific CID (gone block)
+	pinnedCIDs    []string // CIDs successfully pinned
 
 	getErrN  int // return an error for the first N Get calls
 	getCalls int
@@ -32,7 +34,20 @@ func (f *wasmFakeIPFS) Pin(ctx context.Context, cid, name string, replicationFac
 	if f.pinErr != nil {
 		return nil, f.pinErr
 	}
+	if f.failCID != "" && cid == f.failCID {
+		return nil, fmt.Errorf("simulated pin failure for gone block %s", cid)
+	}
+	f.pinnedCIDs = append(f.pinnedCIDs, cid)
 	return &ipfs.PinResponse{Cid: cid, Name: name}, nil
+}
+
+func wasmFakeContains(s []string, want string) bool {
+	for _, v := range s {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *wasmFakeIPFS) Get(ctx context.Context, cid, apiURL string) (io.ReadCloser, error) {
@@ -118,6 +133,42 @@ func TestGetWASMBytes_exhaustedReturnsTypedTimeout(t *testing.T) {
 	}
 	if ip.getCalls != wasmFetchMaxAttempts {
 		t.Errorf("Get attempted %d times, want %d", ip.getCalls, wasmFetchMaxAttempts)
+	}
+}
+
+// TestRepinWASMCIDs_pinsAllEverywhereBestEffort asserts the GC-safety backfill
+// pins every CID at replication=-1 and is best-effort: a gone (un-pinnable)
+// block doesn't stop the surviving ones from being protected (incident
+// 2026-06-24).
+func TestRepinWASMCIDs_pinsAllEverywhereBestEffort(t *testing.T) {
+	ip := &wasmFakeIPFS{MockIPFSClient: NewMockIPFSClient(), failCID: "QmGone"}
+	registry := newWASMTestRegistry(t, ip)
+
+	n := registry.repinWASMCIDs(context.Background(), []string{"QmA", "QmGone", "QmB"})
+
+	if n != 2 {
+		t.Errorf("pinned = %d, want 2 (QmGone fails, best-effort continues)", n)
+	}
+	if ip.pinReplFactor != wasmReplicationEverywhere {
+		t.Errorf("replication factor = %d, want %d (pin-everywhere)", ip.pinReplFactor, wasmReplicationEverywhere)
+	}
+	if !wasmFakeContains(ip.pinnedCIDs, "QmA") || !wasmFakeContains(ip.pinnedCIDs, "QmB") {
+		t.Errorf("expected QmA + QmB pinned, got %v", ip.pinnedCIDs)
+	}
+	if wasmFakeContains(ip.pinnedCIDs, "QmGone") {
+		t.Errorf("QmGone should have failed to pin, got %v", ip.pinnedCIDs)
+	}
+}
+
+// TestRepinWASMCIDs_empty is the trivial no-functions case.
+func TestRepinWASMCIDs_empty(t *testing.T) {
+	ip := &wasmFakeIPFS{MockIPFSClient: NewMockIPFSClient()}
+	registry := newWASMTestRegistry(t, ip)
+	if n := registry.repinWASMCIDs(context.Background(), nil); n != 0 {
+		t.Errorf("pinned = %d, want 0", n)
+	}
+	if ip.pinCalls != 0 {
+		t.Errorf("pin called %d times for empty input, want 0", ip.pinCalls)
 	}
 }
 
