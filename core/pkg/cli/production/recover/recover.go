@@ -2,8 +2,12 @@ package recover
 
 import (
 	"bufio"
+	"context"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -19,9 +23,18 @@ type Flags struct {
 	Force  bool   // Skip confirmation
 }
 
+// rqlite on-disk layout (rqlite v8, as deployed by the production installer).
+// The committed data lives in db.sqlite* and rsnapshots/, which are SEPARATE
+// from the Raft log/stable store (raft.db). This separation is what lets us
+// reset the Raft configuration on the leader while preserving all data.
 const (
-	raftDir   = "/opt/orama/.orama/data/rqlite/raft"
-	backupDir = "/tmp/rqlite-raft-backup"
+	rqliteRoot     = "/opt/orama/.orama/data/rqlite"
+	raftDBFile     = rqliteRoot + "/raft.db"           // Raft log + stable store (BoltDB)
+	raftSubdir     = rqliteRoot + "/raft"              // recovery peers.json lives here
+	peersFile      = rqliteRoot + "/raft/peers.json"   // rqlite reads this iff raft.db is absent
+	discoveryPeers = rqliteRoot + "/discovery-peers.json"
+	rqliteOwner    = "orama:orama"
+	rqlitePort     = 5001
 )
 
 // Handle is the entry point for the recover-raft command.
@@ -91,21 +104,30 @@ func execute(flags *Flags) error {
 		}
 	}
 
+	// Pre-flight: resolve the leader's own Raft address (e.g. "10.0.0.1:7001")
+	// from the LIVE cluster while it is still up. This becomes the sole member
+	// of the recovery peers.json. Must run before we stop anything.
+	leaderRaftAddr, err := resolveLeaderRaftAddr(leader)
+	if err != nil {
+		return fmt.Errorf("resolve leader raft address (is %s currently the raft leader?): %w", leader.Host, err)
+	}
+
 	// Print plan
-	fmt.Printf("Recover Raft: %s (%d nodes)\n", flags.Env, len(nodes))
-	fmt.Printf("  Leader candidate: %s (%s) — raft/ data preserved\n", leader.Host, leader.Role)
+	fmt.Printf("Recover Raft: %s (reforming cluster around %d survivor nodes)\n", flags.Env, len(nodes))
+	fmt.Printf("  Leader candidate: %s (%s) — raft addr %s — DATA PRESERVED, config reset to single-node\n", leader.Host, leader.Role, leaderRaftAddr)
 	for _, n := range followers {
-		fmt.Printf("  - %s (%s) — raft/ will be deleted\n", n.Host, n.Role)
+		fmt.Printf("  - %s (%s) — WIPED and re-joined fresh from leader\n", n.Host, n.Role)
 	}
 	fmt.Println()
 
 	// Confirm unless --force
 	if !flags.Force {
 		fmt.Printf("⚠️  THIS WILL:\n")
-		fmt.Printf("  1. Stop orama-node on ALL %d nodes\n", len(nodes))
-		fmt.Printf("  2. DELETE raft/ data on %d nodes (backup to %s)\n", len(followers), backupDir)
-		fmt.Printf("  3. Keep raft/ data ONLY on %s (leader candidate)\n", leader.Host)
-		fmt.Printf("  4. Restart all nodes to reform the cluster\n")
+		fmt.Printf("  1. Stop orama-node on ALL %d survivor nodes (brief main-cluster outage)\n", len(nodes))
+		fmt.Printf("  2. On %s: delete raft.db and write a single-node recovery peers.json\n", leader.Host)
+		fmt.Printf("     (db.sqlite + rsnapshots preserved — no data loss)\n")
+		fmt.Printf("  3. On %d follower(s): WIPE all rqlite state (raft + db.sqlite) so they re-sync fresh\n", len(followers))
+		fmt.Printf("  4. Restart leader (single-node), then followers re-join as voters\n")
 		fmt.Printf("\nType 'yes' to confirm: ")
 		reader := bufio.NewReader(os.Stdin)
 		input, _ := reader.ReadString('\n')
@@ -121,26 +143,99 @@ func execute(flags *Flags) error {
 		return fmt.Errorf("phase 1 (stop all): %w", err)
 	}
 
-	// Phase 2: Backup and delete raft/ on non-leader nodes
-	if err := phase2ClearFollowers(followers); err != nil {
-		return fmt.Errorf("phase 2 (clear followers): %w", err)
+	// Phase 2: Reset the leader's Raft config to a single-node cluster while
+	// preserving its data. rqlite honours peers.json only when raft.db is
+	// absent, so we remove raft.db and write the recovery file.
+	if err := phase2ResetLeader(leader, leaderRaftAddr); err != nil {
+		return fmt.Errorf("phase 2 (reset leader): %w", err)
 	}
-	fmt.Printf("  Leader node %s raft/ data preserved.\n\n", leader.Host)
 
-	// Phase 3: Start leader node and wait for Leader state
+	// Phase 3: Start the leader and confirm it recovered as Leader WITH its
+	// data intact — BEFORE touching any follower. If recovery failed, the
+	// followers still hold their copies and we abort without destroying them.
 	if err := phase3StartLeader(leader); err != nil {
 		return fmt.Errorf("phase 3 (start leader): %w", err)
 	}
 
-	// Phase 4: Start remaining nodes in batches
-	if err := phase4StartFollowers(followers); err != nil {
-		return fmt.Errorf("phase 4 (start followers): %w", err)
+	// Phase 4: Only now that the leader is proven healthy do we wipe the
+	// followers so they re-join fresh from the leader.
+	if err := phase4WipeFollowers(followers); err != nil {
+		return fmt.Errorf("phase 4 (wipe followers): %w", err)
 	}
 
-	// Phase 5: Verify cluster health
-	phase5Verify(nodes, leader)
+	// Phase 5: Start remaining nodes serially (each pulls a full snapshot).
+	if err := phase5StartFollowers(followers); err != nil {
+		return fmt.Errorf("phase 5 (start followers): %w", err)
+	}
+
+	// Phase 6: Verify cluster health
+	phase6Verify(nodes, leader)
 
 	return nil
+}
+
+// resolveLeaderRaftAddr queries the given node's live /nodes endpoint and
+// returns the raft address of whichever member reports leader==true. This is
+// the node's own WireGuard raft address (e.g. "10.0.0.1:7001").
+func resolveLeaderRaftAddr(leader inspector.Node) (string, error) {
+	// Cross-check: the node the operator named must ITSELF currently be the raft
+	// leader. Otherwise its /nodes view could name a different (partitioned)
+	// node, and we'd reset THIS node's raft.db while writing a peers.json whose
+	// sole member is someone else — producing a node that isn't in its own
+	// cluster config.
+	if state := raftState(leader); state != "Leader" {
+		return "", fmt.Errorf("node %s reports raft state %q, not Leader — pass --leader as the current leader (highest commit index)", leader.Host, state)
+	}
+
+	cmd := fmt.Sprintf("curl -sS --max-time 10 http://localhost:%d/nodes", rqlitePort)
+	res := inspector.RunSSH(context.Background(), leader, cmd)
+	if !res.OK() {
+		return "", fmt.Errorf("query /nodes on %s: %v (stderr: %s)", leader.Host, res.Err, res.Stderr)
+	}
+	return parseLeaderRaftID([]byte(res.Stdout))
+}
+
+// parseLeaderRaftID extracts the raft address of the leader from an rqlite
+// /nodes JSON response (a map of nodeID -> node info with a "leader" flag).
+func parseLeaderRaftID(nodesJSON []byte) (string, error) {
+	var nodes map[string]struct {
+		Leader bool `json:"leader"`
+	}
+	if err := json.Unmarshal(nodesJSON, &nodes); err != nil {
+		return "", fmt.Errorf("parse /nodes response: %w", err)
+	}
+	for id, n := range nodes {
+		if !n.Leader {
+			continue
+		}
+		// The raft address is always a WireGuard host:port (e.g. 10.0.0.1:7001).
+		// Reject anything malformed so a corrupt/poisoned /nodes response fails
+		// fast HERE — before Phase 1 stops the cluster — rather than producing a
+		// broken recovery peers.json that a node would then act on.
+		host, port, err := net.SplitHostPort(id)
+		if err != nil || host == "" || port == "" {
+			return "", fmt.Errorf("leader reported malformed raft address %q in /nodes response: %v", id, err)
+		}
+		if net.ParseIP(host) == nil {
+			return "", fmt.Errorf("leader raft address %q has a non-IP host (expected WireGuard 10.0.0.x)", id)
+		}
+		return id, nil
+	}
+	return "", fmt.Errorf("no node reported leader==true in /nodes response")
+}
+
+// buildSingleNodePeersJSON renders the rqlite recovery peers.json content for a
+// single-voter cluster consisting only of the given raft address. The format
+// matches what the discovery service writes (id/address/non_voter).
+func buildSingleNodePeersJSON(raftAddr string) (string, error) {
+	peers := []map[string]interface{}{
+		{"id": raftAddr, "address": raftAddr, "non_voter": false},
+	}
+	data, err := json.MarshalIndent(peers, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal peers.json: %w", err)
+	}
+	return string(data), nil
 }
 
 func phase1StopAll(nodes []inspector.Node) error {
@@ -177,23 +272,53 @@ func phase1StopAll(nodes []inspector.Node) error {
 	return nil
 }
 
-func phase2ClearFollowers(followers []inspector.Node) error {
-	fmt.Printf("== Phase 2: Clearing raft state on %d non-leader nodes ==\n", len(followers))
+func phase2ResetLeader(leader inspector.Node, leaderRaftAddr string) error {
+	fmt.Printf("== Phase 2: Resetting leader %s to single-node config (data preserved) ==\n", leader.Host)
+
+	peersJSON, err := buildSingleNodePeersJSON(leaderRaftAddr)
+	if err != nil {
+		return err
+	}
+	// base64 the JSON to sidestep all shell-quoting hazards over SSH.
+	encoded := base64.StdEncoding.EncodeToString([]byte(peersJSON))
+
+	sudo := remotessh.SudoPrefix(leader)
+	script := fmt.Sprintf(`%sbash -c '
+set -e
+if systemctl is-active --quiet orama-node; then
+  echo "ERROR: orama-node still active on leader — aborting"; exit 1
+fi
+rm -f %s
+mkdir -p %s
+echo %s | base64 -d > %s
+chown -R %s %s
+echo "LEADER_RESET_DONE peers=$(cat %s | tr -d "\n")"
+'`, sudo, raftDBFile, raftSubdir, encoded, peersFile, rqliteOwner, raftSubdir, peersFile)
+
+	if err := remotessh.RunSSHStreaming(leader, script); err != nil {
+		return fmt.Errorf("reset leader %s: %w", leader.Host, err)
+	}
+	fmt.Println()
+	return nil
+}
+
+func phase4WipeFollowers(followers []inspector.Node) error {
+	fmt.Printf("== Phase 4: Wiping rqlite state on %d follower(s) ==\n", len(followers))
 
 	for _, node := range followers {
 		sudo := remotessh.SudoPrefix(node)
-		fmt.Printf("  Clearing %s ... ", node.Host)
+		fmt.Printf("  Wiping %s ... ", node.Host)
 
 		script := fmt.Sprintf(`%sbash -c '
+rm -f %s
 rm -rf %s
-if [ -d %s ]; then
-    cp -r %s %s 2>/dev/null || true
-    rm -rf %s
-    echo "CLEARED (backup at %s)"
-else
-    echo "NO_RAFT_DIR (nothing to clear)"
-fi
-'`, sudo, backupDir, raftDir, raftDir, backupDir, raftDir, backupDir)
+rm -f %s/db.sqlite %s/db.sqlite-shm %s/db.sqlite-wal
+rm -rf %s/rsnapshots
+rm -f %s
+echo FOLLOWER_WIPE_DONE
+'`, sudo, raftDBFile, raftSubdir,
+			rqliteRoot, rqliteRoot, rqliteRoot,
+			rqliteRoot, discoveryPeers)
 
 		if err := remotessh.RunSSHStreaming(node, script); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
@@ -201,7 +326,7 @@ fi
 		}
 		fmt.Println()
 	}
-
+	fmt.Println()
 	return nil
 }
 
@@ -214,43 +339,77 @@ func phase3StartLeader(leader inspector.Node) error {
 		return fmt.Errorf("failed to start leader node %s: %w", leader.Host, err)
 	}
 
-	fmt.Printf("  Waiting for leader to become Leader...\n")
-	maxWait := 120
+	fmt.Printf("  Waiting for leader to reach Leader state (up to 120s)...\n")
+	deadline := 120
 	elapsed := 0
+	reachedLeader := false
+	for elapsed < deadline {
+		time.Sleep(10 * time.Second)
+		elapsed += 10
 
-	for elapsed < maxWait {
-		// Check raft state via RQLite status endpoint
-		checkCmd := `curl -s --max-time 3 http://localhost:5001/status 2>/dev/null | python3 -c "
-import sys,json
-try:
-  d=json.load(sys.stdin)
-  print(d.get('store',{}).get('raft',{}).get('state',''))
-except:
-  print('')
-" 2>/dev/null || echo ""`
-
-		// We can't easily capture output from RunSSHStreaming, so we use a simple approach
-		// Check via a combined command that prints a marker
-		stateCheckCmd := fmt.Sprintf(`state=$(%s); echo "RAFT_STATE=$state"`, checkCmd)
-		// Since RunSSHStreaming prints to stdout, we'll poll and let user see the state
-		fmt.Printf("  ... polling (%ds / %ds)\n", elapsed, maxWait)
-
-		// Try to check state - the output goes to stdout via streaming
-		_ = remotessh.RunSSHStreaming(leader, stateCheckCmd)
-
-		time.Sleep(5 * time.Second)
-		elapsed += 5
+		state := raftState(leader)
+		fmt.Printf("  ... %ds: raft state = %q\n", elapsed, state)
+		if state == "Leader" {
+			reachedLeader = true
+			break
+		}
+	}
+	if !reachedLeader {
+		return fmt.Errorf("leader %s did not reach Leader state within %ds (check /opt/orama/.orama/logs/rqlite-node.log)", leader.Host, deadline)
 	}
 
-	fmt.Printf("  Leader start complete. Check output above for state.\n\n")
+	// Data-integrity gate: prove the recovered leader can serve reads and that
+	// its schema survived, BEFORE we wipe the followers (their copies are the
+	// only fallback if recovery silently lost data).
+	tables, err := leaderTableCount(leader)
+	if err != nil {
+		return fmt.Errorf("leader %s reached Leader but failed the data-integrity check — NOT wiping followers so data is recoverable: %w", leader.Host, err)
+	}
+	if tables <= 0 {
+		return fmt.Errorf("leader %s recovered with an EMPTY schema (%d tables) — aborting before wiping followers to avoid data loss", leader.Host, tables)
+	}
+	fmt.Printf("  ✅ Leader is up and healthy (%d tables in schema — data preserved).\n\n", tables)
 	return nil
 }
 
-func phase4StartFollowers(followers []inspector.Node) error {
-	fmt.Printf("== Phase 4: Starting %d remaining nodes ==\n", len(followers))
+// leaderTableCount runs a strong-consistency read against the recovered leader
+// to confirm the SQLite data survived the raft config reset.
+func leaderTableCount(leader inspector.Node) (int, error) {
+	cmd := fmt.Sprintf(`curl -sS --max-time 10 -G 'http://localhost:%d/db/query?level=strong' --data-urlencode 'q=SELECT count(*) FROM sqlite_master WHERE type='"'"'table'"'"''`, rqlitePort)
+	res := inspector.RunSSH(context.Background(), leader, cmd)
+	if !res.OK() {
+		return 0, fmt.Errorf("query failed: %v (stderr: %s)", res.Err, res.Stderr)
+	}
+	// rqlite response: {"results":[{"columns":[...],"values":[[N]]}]}
+	var q struct {
+		Results []struct {
+			Values [][]interface{} `json:"values"`
+			Error  string          `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &q); err != nil {
+		return 0, fmt.Errorf("parse query response %q: %w", res.Stdout, err)
+	}
+	if len(q.Results) == 0 {
+		return 0, fmt.Errorf("empty results in query response: %s", res.Stdout)
+	}
+	if q.Results[0].Error != "" {
+		return 0, fmt.Errorf("rqlite query error: %s", q.Results[0].Error)
+	}
+	if len(q.Results[0].Values) == 0 || len(q.Results[0].Values[0]) == 0 {
+		return 0, fmt.Errorf("no count value in query response: %s", res.Stdout)
+	}
+	// JSON numbers decode as float64.
+	if f, ok := q.Results[0].Values[0][0].(float64); ok {
+		return int(f), nil
+	}
+	return 0, fmt.Errorf("unexpected count type in response: %s", res.Stdout)
+}
 
-	batchSize := 3
-	for i, node := range followers {
+func phase5StartFollowers(followers []inspector.Node) error {
+	fmt.Printf("== Phase 5: Starting %d follower(s) (fresh re-join) ==\n", len(followers))
+
+	for _, node := range followers {
 		sudo := remotessh.SudoPrefix(node)
 		fmt.Printf("  Starting %s ... ", node.Host)
 
@@ -261,21 +420,18 @@ func phase4StartFollowers(followers []inspector.Node) error {
 		}
 		fmt.Println()
 
-		// Batch delay for cluster stability
-		if (i+1)%batchSize == 0 && i+1 < len(followers) {
-			fmt.Printf("  (waiting 15s between batches for cluster stability)\n")
-			time.Sleep(15 * time.Second)
-		}
+		// Serial start with a settle delay: each follower pulls a full 3GB
+		// snapshot from the leader, so give it room before the next one.
+		fmt.Printf("  (waiting 20s for %s to sync before next follower)\n", node.Host)
+		time.Sleep(20 * time.Second)
 	}
 
 	fmt.Println()
 	return nil
 }
 
-func phase5Verify(nodes []inspector.Node, leader inspector.Node) {
-	fmt.Printf("== Phase 5: Waiting for cluster to stabilize ==\n")
-
-	// Wait in 30s increments
+func phase6Verify(nodes []inspector.Node, leader inspector.Node) {
+	fmt.Printf("== Phase 6: Waiting for cluster to stabilize ==\n")
 	for _, s := range []int{30, 60, 90, 120} {
 		time.Sleep(30 * time.Second)
 		fmt.Printf("  ... %ds\n", s)
@@ -287,26 +443,33 @@ func phase5Verify(nodes []inspector.Node, leader inspector.Node) {
 		if node.Host == leader.Host {
 			marker = " ← LEADER"
 		}
-
-		checkCmd := `curl -s --max-time 5 http://localhost:5001/status 2>/dev/null | python3 -c "
-import sys,json
-try:
-  d=json.load(sys.stdin)
-  r=d.get('store',{}).get('raft',{})
-  n=d.get('store',{}).get('num_nodes','?')
-  print(f'state={r.get(\"state\",\"?\")} commit={r.get(\"commit_index\",\"?\")} leader={r.get(\"leader\",{}).get(\"node_id\",\"?\")} nodes={n}')
-except:
-  print('NO_RESPONSE')
-" 2>/dev/null || echo "SSH_FAILED"`
-
-		fmt.Printf("  %s%s: ", node.Host, marker)
-		_ = remotessh.RunSSHStreaming(node, checkCmd)
-		fmt.Println()
+		fmt.Printf("  %s%s: raft state = %q\n", node.Host, marker, raftState(node))
 	}
 
 	fmt.Printf("\n== Recovery complete ==\n\n")
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  1. Run 'orama monitor report --env <env>' to verify full cluster health\n")
-	fmt.Printf("  2. If some nodes show Candidate state, give them more time (up to 5 min)\n")
-	fmt.Printf("  3. If nodes fail to join, check /opt/orama/.orama/logs/rqlite-node.log on the node\n")
+	fmt.Printf("  2. If a follower shows a non-Leader/Follower state, give it up to 5 min to finish syncing\n")
+	fmt.Printf("  3. Check /opt/orama/.orama/logs/rqlite-node.log on any node that fails to join\n")
+}
+
+// raftState returns the node's current raft state ("Leader"/"Follower"/...) via
+// its local /status endpoint, or "" if unreachable.
+func raftState(node inspector.Node) string {
+	cmd := fmt.Sprintf(`curl -sS --max-time 5 http://localhost:%d/status`, rqlitePort)
+	res := inspector.RunSSH(context.Background(), node, cmd)
+	if !res.OK() {
+		return ""
+	}
+	var status struct {
+		Store struct {
+			Raft struct {
+				State string `json:"state"`
+			} `json:"raft"`
+		} `json:"store"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &status); err != nil {
+		return ""
+	}
+	return status.Store.Raft.State
 }

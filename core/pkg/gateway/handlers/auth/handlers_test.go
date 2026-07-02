@@ -3,9 +3,12 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -18,12 +21,18 @@ import (
 // ---------------------------------------------------------------------------
 
 // mockDatabaseClient implements DatabaseClient with configurable query results.
+// queryFn, when set, takes precedence and lets a test inspect the bound args
+// (e.g. to return a row only for the HMAC-hashed key, not the raw key).
 type mockDatabaseClient struct {
 	queryResult *QueryResult
 	queryErr    error
+	queryFn     func(query string, args ...interface{}) (*QueryResult, error)
 }
 
-func (m *mockDatabaseClient) Query(_ context.Context, _ string, _ ...interface{}) (*QueryResult, error) {
+func (m *mockDatabaseClient) Query(_ context.Context, query string, args ...interface{}) (*QueryResult, error) {
+	if m.queryFn != nil {
+		return m.queryFn(query, args...)
+	}
 	return m.queryResult, m.queryErr
 }
 
@@ -393,6 +402,32 @@ func TestRefreshHandler_NilAuthService(t *testing.T) {
 	}
 }
 
+// Bugboard #125: a non-bad-token failure (here ErrRotationNotConfigured from a
+// service with no rqlite client) must surface as a RETRYABLE 503 with a
+// Retry-After header — NOT a 401 that would force a locked device into an
+// impossible SIWE re-auth mid-call-ring.
+func TestRefreshHandler_TransientError_returns503Retryable(t *testing.T) {
+	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	if err != nil {
+		t.Fatalf("failed to create auth service: %v", err)
+	}
+	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
+
+	body, _ := json.Marshal(RefreshRequest{RefreshToken: "some-valid-looking-token"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.RefreshHandler(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("transient refresh failure must be 503, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("503 refresh response should carry a Retry-After header")
+	}
+}
+
 // --- APIKeyToJWTHandler tests ---------------------------------------------
 
 func TestAPIKeyToJWTHandler_MissingKey(t *testing.T) {
@@ -445,6 +480,132 @@ func TestAPIKeyToJWTHandler_NilAuthService(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+	}
+}
+
+// jwtCapableService builds a Service that can both hash API keys (HMAC secret
+// set, so HashAPIKey produces a value distinct from the raw key) and mint JWTs
+// (EdDSA signing key set).
+func jwtCapableService(t *testing.T, hmacSecret string) *authsvc.Service {
+	t.Helper()
+	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	if hmacSecret != "" {
+		svc.SetAPIKeyHMACSecret(hmacSecret)
+	}
+	_, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519 keygen failed: %v", err)
+	}
+	svc.SetEdDSAKey(edPriv)
+	return svc
+}
+
+func nsLookupRow(ns string) *QueryResult {
+	return &QueryResult{Count: 1, Rows: []interface{}{[]interface{}{ns}}}
+}
+
+// TestAPIKeyToJWTHandler_HashedKeyLookup proves the fix: keys are stored
+// HMAC-hashed, so the handler must resolve the namespace by the HASHED key.
+// The mock returns a row ONLY for the hashed key — the pre-fix raw-key-only
+// lookup would have returned 401 here.
+func TestAPIKeyToJWTHandler_HashedKeyLookup(t *testing.T) {
+	const rawKey = "ak_live_abc123"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+	if hashed == rawKey {
+		t.Fatal("precondition: HashAPIKey must differ from the raw key")
+	}
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", rawKey)
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	m := decodeBody(t, rec)
+	if m["namespace"] != "vrf708" {
+		t.Errorf("expected namespace vrf708, got %v", m["namespace"])
+	}
+	tok, _ := m["access_token"].(string)
+	if strings.Count(tok, ".") != 2 {
+		t.Errorf("expected a JWT (2 dots) in access_token, got %q", tok)
+	}
+}
+
+// TestAPIKeyToJWTHandler_RawKeyFallback covers the rolling-upgrade fallback:
+// a legacy row stored under the RAW (unhashed) key still resolves.
+func TestAPIKeyToJWTHandler_RawKeyFallback(t *testing.T) {
+	const rawKey = "ak_legacy_unhashed"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == rawKey && k != hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", rawKey)
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 via raw-key fallback, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAPIKeyToJWTHandler_UnknownKey verifies an unknown key still 401s after
+// both candidate lookups miss.
+func TestAPIKeyToJWTHandler_UnknownKey(t *testing.T) {
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	db := &mockDatabaseClient{queryFn: func(_ string, _ ...interface{}) (*QueryResult, error) {
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", "ak_does_not_exist")
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unknown key, got %d", rec.Code)
+	}
+}
+
+func TestApiKeyLookupCandidates(t *testing.T) {
+	// Distinct hash → hashed first, raw fallback.
+	got := apiKeyLookupCandidates("raw", "hashed")
+	if len(got) != 2 || got[0] != "hashed" || got[1] != "raw" {
+		t.Errorf("distinct: expected [hashed raw], got %v", got)
+	}
+	// No HMAC secret (hashed == raw) → single candidate, no duplicate query.
+	got = apiKeyLookupCandidates("raw", "raw")
+	if len(got) != 1 || got[0] != "raw" {
+		t.Errorf("equal: expected [raw], got %v", got)
 	}
 }
 

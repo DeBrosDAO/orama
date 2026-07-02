@@ -815,6 +815,19 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ IPFS service created: orama-ipfs.service")
 
+	// IPFS GC one-shot + timer. The daemon runs without in-process GC, so GC
+	// cadence is owned here: a scheduled `ipfs repo gc` that reclaims disk from
+	// unpinned blocks, off the request path and staggered across nodes.
+	gcUnit := ps.serviceGenerator.GenerateIPFSGCService(ipfsBinary)
+	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-gc.service", gcUnit); err != nil {
+		return fmt.Errorf("failed to write IPFS GC service: %w", err)
+	}
+	gcTimer := ps.serviceGenerator.GenerateIPFSGCTimer()
+	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-gc.timer", gcTimer); err != nil {
+		return fmt.Errorf("failed to write IPFS GC timer: %w", err)
+	}
+	ps.logf("  ✓ IPFS GC service + timer created: orama-ipfs-gc.{service,timer}")
+
 	// IPFS Cluster service
 	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
 	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-cluster.service", clusterUnit); err != nil {
@@ -912,7 +925,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Enable services (unified names - no bootstrap/node distinction)
 	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
 	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service"}
+	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service", "orama-ipfs-gc.timer"}
 
 	// Add Anyone service if configured (relay or client)
 	if ps.IsAnyoneRelay() {
@@ -983,6 +996,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("  ⚠️  Failed to start orama-ipfs-cluster.service: %v", err)
 	} else {
 		ps.logf("    - orama-ipfs-cluster.service started")
+	}
+
+	// Start the IPFS GC timer (the daemon has no in-process GC; this drives reclaim).
+	// The one-shot service it triggers is ordered After/Requires orama-ipfs.service.
+	if err := ps.serviceController.RestartService("orama-ipfs-gc.timer"); err != nil {
+		ps.logf("  ⚠️  Failed to start orama-ipfs-gc.timer: %v", err)
+	} else {
+		ps.logf("    - orama-ipfs-gc.timer started")
 	}
 
 	// Start node service (gateway is embedded in node, no separate service needed)
@@ -1160,12 +1181,28 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 		anyoneORPort = ps.anyoneRelayConfig.ORPort
 	}
 
-	fp := NewFirewallProvisioner(FirewallConfig{
+	fwCfg := FirewallConfig{
 		SSHPort:       22,
 		IsNameserver:  ps.isNameserver,
 		AnyoneORPort:  anyoneORPort,
 		WireGuardPort: 51820,
-	})
+	}
+	// TURN relay ports (bugboard #846): this `ufw --force reset` also runs on
+	// every upgrade, so if this node hosts a TURN instance we MUST re-open the
+	// relay ports here — otherwise the reset closes them and the relay silently
+	// stops forwarding (calls reach ICE "checking" but never connect). This is
+	// the only firewall step that runs as root; orama-node itself runs as a
+	// non-root user and cannot re-add ufw rules, so the reconcile has to live
+	// here. The relay range is the full default (49152-65535), a superset of
+	// every namespace's per-tenant sub-range.
+	if ps.hostRunsTURN() {
+		ps.logf("  TURN instance detected — opening relay ports")
+		fwCfg.TURNEnabled = true
+		fwCfg.TURNRelayStart = defaultTURNRelayPortStart
+		fwCfg.TURNRelayEnd = defaultTURNRelayPortEnd
+	}
+
+	fp := NewFirewallProvisioner(fwCfg)
 
 	if err := fp.Setup(); err != nil {
 		return fmt.Errorf("firewall setup failed: %w", err)
@@ -1173,6 +1210,28 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 
 	ps.logf("  ✓ UFW firewall configured and enabled")
 	return nil
+}
+
+// hostRunsTURN reports whether this node hosts at least one namespace TURN
+// instance, so Phase 6b keeps the relay ports open across the firewall reset
+// (bugboard #846).
+//
+// It detects via the persisted per-namespace env file
+// (<oramaDir>/data/namespaces/<ns>/turn.env), NOT systemctl: the upgrade STOPS
+// every namespace TURN unit before Phase 6b runs, and a stopped systemd
+// template instance can be garbage-collected out of `systemctl list-units`,
+// producing a false negative on the exact upgrade path this fix targets. The
+// env file survives stop + `ufw --force reset` (it's removed only on
+// deprovision), which is the same signal serviceExists() keys on to decide
+// whether to (re)start TURN — so this stays consistent with the start/stop
+// gating. A false negative would close the relay and break all calls, so the
+// detector must be reference-free.
+func (ps *ProductionSetup) hostRunsTURN() bool {
+	matches, err := filepath.Glob(filepath.Join(ps.oramaDir, "data", "namespaces", "*", "turn.env"))
+	if err != nil {
+		return false
+	}
+	return len(matches) > 0
 }
 
 // EnableWireGuardWithPeers writes WG config with assigned IP and peers, then enables it.

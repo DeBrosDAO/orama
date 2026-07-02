@@ -92,8 +92,15 @@ type RegisterDeviceRequest struct {
 }
 
 // RegisterDeviceResponse is the body of POST /v1/push/devices.
+//
+// ID is the server-generated row id (the DELETE key); DeviceID echoes the
+// app-supplied device_id. Both are returned (bugboard #981) so a client can
+// unregister directly via DELETE /v1/push/devices/{id} without first doing a
+// GET /v1/push/devices and matching by device_id.
 type RegisterDeviceResponse struct {
-	Status string `json:"status"`
+	Status   string `json:"status"`
+	ID       string `json:"id,omitempty"`
+	DeviceID string `json:"device_id,omitempty"`
 }
 
 // PushDeviceView is the safe (token-omitting) representation returned
@@ -124,6 +131,10 @@ type SendRequest struct {
 	Badge    int                    `json:"badge,omitempty"`
 	Sound    string                 `json:"sound,omitempty"`
 	Data     map[string]interface{} `json:"data,omitempty"`
+	// MessageID is an optional collapse identifier (bugboard #833): providers
+	// map it to apns-collapse-id / Expo collapseId so a superseded push
+	// replaces the prior one on-device instead of stacking.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // SendResponse is the body of POST /v1/push/send.

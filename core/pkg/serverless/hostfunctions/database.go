@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -197,6 +198,25 @@ type dbQueryBatchRequest struct {
 	// read-your-own-writes freshness (see rqlite.ReadConsistency / bug #235).
 	// feat-6: lets read-heavy functions skip the cross-region weak-read hop.
 	Consistency string `json:"consistency,omitempty"`
+	// Freshness (#1021) is an optional Go duration string ("2s", "500ms"). When
+	// set with consistency="none", the local read is REJECTED by rqlite if this
+	// node is staler than the bound, instead of silently returning stale rows.
+	// Empty (default) preserves prior behavior. Setting it with any consistency
+	// other than "none" is a boundary error.
+	Freshness string `json:"freshness,omitempty"`
+	// FreshnessStrict (#1021) maps to rqlite's freshness_strict: also reject the
+	// read if this node has no leader (not just when stale). Ignored unless
+	// Freshness is set.
+	FreshnessStrict bool `json:"freshness_strict,omitempty"`
+}
+
+// freshClient is the optional capability a Client exposes when it can serve a
+// none-read with an explicit freshness bound (#1021). The production
+// *rqlite.client implements it; bare test mocks don't. Kept OFF the
+// rqlite.Client interface alongside batchQueryConsistencyClient so the
+// freshness path doesn't churn every mock.
+type freshClient interface {
+	BatchQueryFresh(ctx context.Context, ops []rqlite.BatchOp, freshness time.Duration, strict bool) ([]rqlite.OpResult, error)
 }
 
 // batchQueryConsistencyClient is the optional capability a Client exposes when
@@ -207,16 +227,33 @@ type batchQueryConsistencyClient interface {
 	BatchQueryConsistency(ctx context.Context, ops []rqlite.BatchOp, rc rqlite.ReadConsistency) ([]rqlite.OpResult, error)
 }
 
-// resolveBatchQuery runs the batched read at the requested consistency.
-// Empty or "weak" → the default leader-routed read. "none" → a fast local read
-// via the consistency-capable client (degrading to weak only when the client
-// can't serve an explicit level — weak is always correct). Unknown values are
-// rejected here at the boundary rather than silently downgraded.
-func (h *HostFunctions) resolveBatchQuery(ctx context.Context, ops []rqlite.BatchOp, consistency string) ([]rqlite.OpResult, error) {
+// resolveBatchQuery runs the batched read at the requested consistency and
+// optional freshness bound. Empty or "weak" → the default leader-routed read.
+// "none" → a fast local read via the consistency-capable client (degrading to
+// weak only when the client can't serve an explicit level — weak is always
+// correct). When freshness is set (#1021) the none-read is routed to
+// BatchQueryFresh so rqlite rejects it if this node is staler than the bound.
+// All invalid combinations are rejected here at the boundary rather than
+// silently downgraded.
+func (h *HostFunctions) resolveBatchQuery(ctx context.Context, ops []rqlite.BatchOp, consistency, freshness string, strict bool) ([]rqlite.OpResult, error) {
+	// Parse + validate freshness at the boundary before any DB work.
+	freshDur, err := parseFreshness(consistency, freshness)
+	if err != nil {
+		return nil, err
+	}
 	switch consistency {
 	case "", string(rqlite.ReadConsistencyWeak):
 		return h.db.BatchQuery(ctx, ops)
 	case string(rqlite.ReadConsistencyNone):
+		if freshDur > 0 {
+			if ext, ok := h.db.(freshClient); ok {
+				return ext.BatchQueryFresh(ctx, ops, freshDur, strict)
+			}
+			// A freshness bound was requested but the client can't enforce it.
+			// Degrading to a non-freshness read would silently drop the
+			// staleness guarantee the caller asked for — reject instead.
+			return nil, fmt.Errorf("freshness requested but client cannot enforce it (no freshness capability)")
+		}
 		if ext, ok := h.db.(batchQueryConsistencyClient); ok {
 			return ext.BatchQueryConsistency(ctx, ops, rqlite.ReadConsistencyNone)
 		}
@@ -226,12 +263,55 @@ func (h *HostFunctions) resolveBatchQuery(ctx context.Context, ops []rqlite.Batc
 	}
 }
 
+const (
+	// minFreshness is the smallest freshness bound accepted. Sub-millisecond
+	// bounds are meaningless for a cross-node read, and time.Duration.String()
+	// renders them with a non-ASCII "µs" unit that must never reach the request
+	// target — reject them at the boundary.
+	minFreshness = time.Millisecond
+	// maxFreshness caps the bound; anything larger is effectively "no bound", so
+	// the caller should omit freshness instead of passing a huge value.
+	maxFreshness = 24 * time.Hour
+)
+
+// parseFreshness validates and parses the optional freshness bound at the host
+// boundary. Empty freshness → 0 (no bound, unchanged behavior). A non-empty
+// freshness is only valid with consistency="none" and must fall within
+// [minFreshness, maxFreshness]. Returns an actionable error otherwise.
+func parseFreshness(consistency, freshness string) (time.Duration, error) {
+	if freshness == "" {
+		return 0, nil
+	}
+	if consistency != string(rqlite.ReadConsistencyNone) {
+		return 0, fmt.Errorf("freshness requires consistency=\"none\"")
+	}
+	d, err := time.ParseDuration(freshness)
+	if err != nil {
+		return 0, fmt.Errorf("invalid freshness %q: %w", freshness, err)
+	}
+	if d < minFreshness {
+		return 0, fmt.Errorf("invalid freshness %q: minimum is %s", freshness, minFreshness)
+	}
+	if d > maxFreshness {
+		return 0, fmt.Errorf("invalid freshness %q: maximum is %s", freshness, maxFreshness)
+	}
+	return d, nil
+}
+
 // dbQueryBatchResult is the JSON wire shape returned to WASM callers.
 // `Results` is one entry per input op, in the same order. Per-op errors
 // are surfaced in `error`; transport/validation errors come back as a
 // Go error from the host fn.
+//
+// StaleRejected (#1021) is true ONLY when a freshness-bound none-read was
+// rejected because this node was staler than the bound. It is a structured,
+// WASM-visible signal — distinct from an opaque host error — so the caller can
+// fall back to a leader-routed read. When true, Results is empty and
+// StaleDetail carries rqlite's reason (credential-free).
 type dbQueryBatchResult struct {
-	Results []rqlite.OpResult `json:"results"`
+	Results       []rqlite.OpResult `json:"results"`
+	StaleRejected bool              `json:"stale_rejected,omitempty"`
+	StaleDetail   string            `json:"stale_detail,omitempty"`
 }
 
 // DBQueryBatch runs N SELECTs in one round-trip via RQLite's /db/query
@@ -291,8 +371,25 @@ func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byt
 	batchCtx, cancel := context.WithTimeout(ctx, dbQueryBatchTimeout)
 	defer cancel()
 
-	results, err := h.resolveBatchQuery(batchCtx, req.Ops, req.Consistency)
+	results, err := h.resolveBatchQuery(batchCtx, req.Ops, req.Consistency, req.Freshness, req.FreshnessStrict)
 	if err != nil {
+		// A freshness rejection is a recoverable, WASM-visible signal — return a
+		// structured envelope (stale_rejected=true) so the caller can fall back
+		// to a leader-routed read, instead of an opaque host error.
+		if errors.Is(err, rqlite.ErrFreshnessViolation) {
+			out, mErr := json.Marshal(dbQueryBatchResult{
+				Results:       []rqlite.OpResult{},
+				StaleRejected: true,
+				StaleDetail:   err.Error(),
+			})
+			if mErr != nil {
+				return nil, &serverless.HostFunctionError{
+					Function: "db_query_batch",
+					Cause:    fmt.Errorf("marshal stale-rejected result: %w", mErr),
+				}
+			}
+			return out, nil
+		}
 		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: err}
 	}
 

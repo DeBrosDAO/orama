@@ -102,6 +102,14 @@ http_gateway:
   # (bugboard #837). Sourced from ~/.orama/secrets/secrets-encryption-key.
   secrets_encryption_key: "{{.SecretsEncryptionKey}}"
 {{- end}}
+{{- if .NtfyBaseURL}}
+  # Shared self-hosted ntfy base URL (bugboard #858). Same push.<dnsZone> host
+  # the ntfy server + Caddy reverse-proxy use, so the gateway's push provider
+  # fans each publish out to every active push node (each node runs an
+  # independent ntfy with no shared store; without fan-out a subscriber pinned
+  # to a different instance than the publish lands on misses it ~87% of the time).
+  ntfy_base_url: "{{.NtfyBaseURL}}"
+{{- end}}
 {{- if .TURNSecret}}
   # WebRTC/TURN config (feat-124 #913). turn_secret is sourced from
   # ~/.orama/secrets/turn-secret so it survives config regeneration;

@@ -56,6 +56,12 @@ type NodeConfigData struct {
 	// stays disabled until the key is configured).
 	SecretsEncryptionKey string
 
+	// NtfyBaseURL is the shared self-hosted ntfy base URL (e.g.
+	// "https://push.<dnsZone>"), rendered under http_gateway as ntfy_base_url.
+	// When set, the gateway's push provider fans each ntfy publish out to every
+	// active push node (bugboard #858). Empty → omitted (single-host delivery).
+	NtfyBaseURL string
+
 	// WebRTC/TURN configuration, rendered under http_gateway.webrtc when
 	// WebRTCEnabled is true (feat-124 #913). TURNSecret is sourced from
 	// ~/.orama/secrets/turn-secret so it survives Phase4 config regeneration;

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -439,6 +440,26 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	registry := serverless.NewRegistry(deps.ORMClient, deps.IPFSClient, registryCfg, logger.Logger)
 	deps.ServerlessRegistry = registry
 
+	// Backfill: re-pin every active function's WASM cluster-wide so functions
+	// deployed before the pin-everywhere fix are durable + GC-safe. Incident
+	// 2026-06-24: scheduled IPFS GC deleted unpinned function WASM. New deploys
+	// are covered by uploadWASM's pin-everywhere + hard-fail; this protects
+	// existing ones. Best-effort + idempotent (the cluster dedups pins), delayed
+	// so it never races gateway startup. The rolling-restart cadence naturally
+	// staggers it across nodes; the first node to run it pins everything
+	// cluster-wide and the rest are no-ops.
+	go func() {
+		time.Sleep(2 * time.Minute) // let the namespace + IPFS cluster settle
+		bctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		n, berr := registry.RepinAllWASM(bctx)
+		if berr != nil {
+			logger.Logger.Warn("serverless: WASM re-pin backfill failed", zap.Error(berr))
+			return
+		}
+		logger.Logger.Info("serverless: WASM re-pin backfill complete", zap.Int("pinned", n))
+	}()
+
 	// Create WebSocket manager for function streaming
 	deps.ServerlessWSMgr = serverless.NewWSManager(logger.Logger)
 
@@ -478,15 +499,21 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 
 	// Create secrets manager for serverless functions (AES-256-GCM encrypted).
 	//
-	// The encryption key comes from the gateway Config (loaded from
-	// ~/.orama/secrets/secrets-encryption-key), NOT from engineCfg — engineCfg
-	// never has the key set, so passing it always produced a per-process
-	// ephemeral key and made get_secret return undecryptable values
-	// (bugboard #837). allowEphemeral=false: a missing/invalid key fails
+	// The encryption key is DERIVED from the cluster secret via HKDF
+	// (resolveSecretsEncryptionKeyHex), so every gateway in the cluster computes
+	// the identical key and a secret written on one node decrypts on every other
+	// node and survives rolling upgrades. This replaces the old per-node
+	// crypto/rand key file, whose divergence across an upgraded cluster kept
+	// get_secret broken (bugboard #837). The file key (cfg.SecretsEncryptionKey)
+	// remains only as a fallback when no cluster secret is available (legacy /
+	// single-node test rigs). allowEphemeral=false: a missing/invalid key fails
 	// loudly here and disables get_secret rather than silently corrupting
 	// secrets.
 	var secretsMgr serverless.SecretsManager
-	if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, cfg.SecretsEncryptionKey, false, logger.Logger); secretsErr != nil {
+	if secretsKeyHex, keyErr := resolveSecretsEncryptionKeyHex(cfg.ClusterSecret, cfg.SecretsEncryptionKey); keyErr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral, "Failed to derive secrets encryption key; get_secret will be unavailable",
+			zap.Error(keyErr))
+	} else if smImpl, secretsErr := hostfunctions.NewDBSecretsManager(deps.ORMClient, secretsKeyHex, false, logger.Logger); secretsErr != nil {
 		logger.ComponentWarn(logging.ComponentGeneral, "Failed to initialize secrets manager; get_secret will be unavailable",
 			zap.Error(secretsErr))
 	} else {
@@ -504,7 +531,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	//
 	// PushDispatcher (legacy) is set only when YAML defaults exist —
 	// kept for back-compat with code that hasn't migrated to Manager.
-	pushDispatcher, pushStore, pushManager, pushCfgStore, pushCredManager, err := buildPushDispatcher(cfg, deps.ORMClient, logger)
+	pushDispatcher, pushStore, pushManager, pushCfgStore, pushCredManager, err := buildPushDispatcher(cfg, deps.ORMClient, deps.Client, logger)
 	if err != nil {
 		// Non-fatal: log and continue. Functions calling push_send will get nil
 		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
@@ -646,6 +673,14 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// returns ErrRotationNotConfigured rather than rotating non-atomically.
 	if deps.ORMClient != nil {
 		authService.SetRqliteClient(deps.ORMClient)
+	}
+
+	// Wire the namespace claims-provider hook (bugboard #548): at JWT mint time
+	// the auth service invokes the namespace's reserved `auth-claims-provider`
+	// function (if deployed) and merges its additive claims (e.g. account_id)
+	// into the token. Fail-open — a missing/slow provider never breaks auth.
+	if deps.ServerlessInvoker != nil {
+		authService.SetClaimsResolver(newJWTClaimsProvider(deps.ServerlessInvoker, logger.Logger))
 	}
 
 	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
@@ -913,6 +948,7 @@ func appendRQLiteQueryParams(dsn string) string {
 func buildPushDispatcher(
 	cfg *Config,
 	db rqlite.Client,
+	globalDB client.NetworkClient,
 	logger *logging.ColoredLogger,
 ) (*push.PushDispatcher, push.PushDeviceStore, *push.Manager, push.ConfigStore, *pushcreds.Manager, error) {
 	if cfg.ClusterSecret == "" {
@@ -925,6 +961,37 @@ func buildPushDispatcher(
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
 	}
+
+	// Backfill token_fp for rows registered before the bugboard #981 migration
+	// so token-exclusive eviction also covers pre-existing orphans. Best-effort
+	// + idempotent; runs in the background so it never delays gateway startup.
+	//
+	// It can lose a startup race with migration 033 (the column doesn't exist
+	// yet → "no such column"); retry until the migration applies. This was a real
+	// bug observed live: the backfill failed permanently on the first attempt.
+	go func() {
+		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		for {
+			n, berr := store.BackfillTokenFP(bctx)
+			if berr == nil {
+				if n > 0 {
+					logger.Logger.Info("push: token_fp backfill complete", zap.Int("updated", n))
+				}
+				return
+			}
+			if strings.Contains(berr.Error(), "no such column") {
+				select {
+				case <-time.After(15 * time.Second):
+					continue // migration 033 not applied yet; retry
+				case <-bctx.Done():
+					return
+				}
+			}
+			logger.Logger.Warn("push: token_fp backfill failed", zap.Error(berr))
+			return
+		}
+	}()
 
 	cfgStore, err := push.NewRqliteConfigStore(db, cfg.ClusterSecret, logger.Logger)
 	if err != nil {
@@ -948,6 +1015,25 @@ func buildPushDispatcher(
 	// call here — no other code needs to know.
 	pushcreds.Register(pushapns.NewValidator())
 	pushcreds.Register(pushntfy.NewValidator())
+
+	// ntfy cluster fan-out (bugboard #858): the default push infra runs an
+	// independent ntfy per node with no shared store, so a publish must reach
+	// EVERY active node for the subscriber's instance (picked by round-robin
+	// DNS) to receive it. Build a resolver over the global dns_nodes table; the
+	// factory attaches it only to providers using the shared default base URL
+	// (a namespace pointing ntfy at its own server is never fanned across our
+	// cluster). nil globalDB or an unparseable base URL → no fan-out (provider
+	// falls back to the single base URL).
+	var ntfyFanout *ntfyFanoutResolver
+	var ntfyFanoutHost string
+	if globalDB != nil {
+		if base := strings.TrimSpace(cfg.NtfyBaseURL); base != "" {
+			if u, perr := url.Parse(base); perr == nil && u.Hostname() != "" {
+				ntfyFanoutHost = u.Hostname()
+				ntfyFanout = newNtfyFanoutResolver(globalDB, u.Scheme, u.Port(), defaultNtfyFanoutTTL)
+			}
+		}
+	}
 
 	// ProviderFactory turns a resolved Config into the right set of
 	// provider instances. Lives here in dependencies.go because this is
@@ -989,6 +1075,13 @@ func buildPushDispatcher(
 			}
 		}
 		if ntfyCfg.BaseURL != "" {
+			// Fan out across all push nodes ONLY for the shared default infra.
+			// A namespace that overrode BaseURL with its own ntfy server keeps
+			// single-host delivery (its server, not our cluster).
+			if ntfyFanout != nil && ntfyCfg.BaseURL == cfg.NtfyBaseURL {
+				ntfyCfg.FanoutResolver = ntfyFanout.Hosts
+				ntfyCfg.FanoutHostHeader = ntfyFanoutHost
+			}
 			ps = append(ps, pushntfy.New(ntfyCfg, logger.Logger))
 		}
 		if c.ExpoAccessToken != "" {

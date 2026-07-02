@@ -844,20 +844,53 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		nsID := nres.Rows[0][0]
 
 		q := "SELECT 1 FROM namespace_ownership WHERE namespace_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1"
-		res, err := db.Query(internalCtx, q, nsID, ownerType, ownerID)
 
-		// If primary owner check fails and we have a JWT wallet with API key fallback, try the API key
-		if (err != nil || res == nil || res.Count == 0) && ownerType == "wallet" && apiKeyFallback != "" {
-			res, err = db.Query(internalCtx, q, nsID, "api_key", apiKeyFallback)
+		// ownsBy reports whether (ot, oid) owns this namespace. API keys are
+		// stored HMAC-hashed in namespace_ownership (see service.HashAPIKey),
+		// while the presented value here is the RAW key — so for api_key owners
+		// we check the hashed form first and the raw form second (rolling-
+		// upgrade legacy), mirroring lookupAPIKeyNamespace. Without this, an
+		// api_key-authenticated owner never matched and got a 403 on a
+		// namespace they actually own (blocked function deploy / push config).
+		ownsBy := func(ot, oid string) bool {
+			hashed := ""
+			if ot == "api_key" {
+				hashed = g.authService.HashAPIKey(oid)
+			}
+			for _, c := range apiKeyOwnerCandidates(ot, oid, hashed) {
+				res, qerr := db.Query(internalCtx, q, nsID, ot, c)
+				if qerr == nil && res != nil && res.Count > 0 {
+					return true
+				}
+			}
+			return false
 		}
 
-		if err != nil || res == nil || res.Count == 0 {
+		owns := ownsBy(ownerType, ownerID)
+		// A JWT wallet can also fall back to its API key (also stored hashed).
+		if !owns && ownerType == "wallet" && apiKeyFallback != "" {
+			owns = ownsBy("api_key", apiKeyFallback)
+		}
+
+		if !owns {
 			writeError(w, http.StatusForbidden, "forbidden: not an owner of namespace")
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// apiKeyOwnerCandidates returns the owner_id values to test for a namespace
+// ownership check. API keys are stored HMAC-hashed in namespace_ownership, so
+// for an api_key owner the hashed form is checked first and the raw key second
+// (rolling-upgrade legacy, mirroring lookupAPIKeyNamespace). For every other
+// owner type the value is used as-is.
+func apiKeyOwnerCandidates(ownerType, ownerID, hashed string) []string {
+	if ownerType == "api_key" && hashed != "" && hashed != ownerID {
+		return []string{hashed, ownerID}
+	}
+	return []string{ownerID}
 }
 
 // requiresNamespaceOwnership returns true if the path should be guarded by

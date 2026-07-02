@@ -167,6 +167,41 @@ export class HttpClient {
     return this.baseURL;
   }
 
+  /**
+   * Normalize any thrown error into a typed SDKError so callers can branch on
+   * `.code`/`.httpStatus` instead of string-matching a bare platform
+   * `TypeError: Network request failed` (bugboard #129).
+   *
+   * - SDKError (an HTTP error response) passes through unchanged.
+   * - An AbortError (our own per-request timeout firing) → code "TIMEOUT".
+   * - Anything else (fetch rejects with a TypeError on DNS failure, connection
+   *   refused, offline, or TLS error) → code "NETWORK_ERROR".
+   *
+   * In every network case httpStatus is 0 (no HTTP response was received), which
+   * is how the app distinguishes "couldn't reach the gateway" from a real 4xx/5xx.
+   */
+  private normalizeError(error: unknown, timeoutMs: number): SDKError {
+    if (error instanceof SDKError) {
+      return error;
+    }
+    const name = (error as { name?: string })?.name;
+    const message = error instanceof Error ? error.message : String(error);
+    if (name === "AbortError") {
+      return new SDKError(
+        `request timed out after ${timeoutMs}ms`,
+        0,
+        "TIMEOUT",
+        { cause: name }
+      );
+    }
+    return new SDKError(
+      message || "network request failed",
+      0,
+      "NETWORK_ERROR",
+      { cause: name }
+    );
+  }
+
   async request<T = any>(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
@@ -298,18 +333,14 @@ export class HttpClient {
         }
       }
 
-      // Call the network error callback if configured
-      // This allows the app to trigger gateway failover
+      // Normalize native errors (TypeError, AbortError) into a typed SDKError
+      // so the app gets a stable `.code`/`.httpStatus` instead of a bare
+      // platform "Network request failed" (bugboard #129).
+      const sdkError = this.normalizeError(error, requestTimeout);
+
+      // Call the network error callback if configured. This allows the app to
+      // trigger gateway failover.
       if (this.onNetworkError) {
-        // Convert native errors (TypeError, AbortError) to SDKError for the callback
-        const sdkError =
-          error instanceof SDKError
-            ? error
-            : new SDKError(
-                error instanceof Error ? error.message : String(error),
-                0, // httpStatus 0 indicates network-level failure
-                "NETWORK_ERROR"
-              );
         this.onNetworkError(sdkError, {
           method,
           path,
@@ -318,7 +349,7 @@ export class HttpClient {
         });
       }
 
-      throw error;
+      throw sdkError;
     } finally {
       clearTimeout(timeoutId);
     }

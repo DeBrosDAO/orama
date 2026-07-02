@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -304,5 +305,138 @@ func TestName(t *testing.T) {
 	p := New(Config{BaseURL: "http://x"}, nil)
 	if p.Name() != "ntfy" {
 		t.Errorf("expected Name=ntfy, got %s", p.Name())
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #858 — cluster fan-out. Each push node runs an independent ntfy with
+// no shared store, so a publish must reach EVERY node for the subscriber's
+// instance (round-robin DNS picks one) to receive it.
+// ----------------------------------------------------------------------------
+
+// fanoutRecorder is a test ntfy node that records the topics it received.
+type fanoutRecorder struct {
+	mu     sync.Mutex
+	topics []string
+}
+
+func newFanoutNode(t *testing.T) (*httptest.Server, *fanoutRecorder) {
+	t.Helper()
+	rec := &fanoutRecorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.mu.Lock()
+		rec.topics = append(rec.topics, strings.TrimPrefix(r.URL.Path, "/"))
+		rec.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	return srv, rec
+}
+
+func (r *fanoutRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.topics)
+}
+
+func TestSend_fanout_publishesToAllNodes(t *testing.T) {
+	s1, r1 := newFanoutNode(t)
+	defer s1.Close()
+	s2, r2 := newFanoutNode(t)
+	defer s2.Close()
+	s3, r3 := newFanoutNode(t)
+	defer s3.Close()
+
+	p := New(Config{
+		BaseURL: s1.URL, // base URL still required; fan-out targets come from the resolver
+		FanoutResolver: func(context.Context) ([]string, error) {
+			return []string{s1.URL, s2.URL, s3.URL}, nil
+		},
+	}, nil)
+
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "user-1", Body: "hi"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	for i, r := range []*fanoutRecorder{r1, r2, r3} {
+		if r.count() != 1 {
+			t.Errorf("node %d received %d publishes; want exactly 1 (the publish must reach every node)", i+1, r.count())
+		}
+		if r.count() == 1 && r.topics[0] != "user-1" {
+			t.Errorf("node %d got topic %q; want user-1", i+1, r.topics[0])
+		}
+	}
+}
+
+func TestSend_fanout_oneNodeDown_stillSucceeds(t *testing.T) {
+	up, rUp := newFanoutNode(t)
+	defer up.Close()
+	down, _ := newFanoutNode(t)
+	down.Close() // unreachable
+
+	p := New(Config{
+		BaseURL: up.URL,
+		FanoutResolver: func(context.Context) ([]string, error) {
+			return []string{up.URL, down.URL}, nil
+		},
+	}, nil)
+
+	// At least one node accepted it → Send succeeds; the message still reached
+	// the reachable instances.
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
+		t.Fatalf("Send should succeed when at least one node is up; got %v", err)
+	}
+	if rUp.count() != 1 {
+		t.Errorf("the up node should have received the publish; got %d", rUp.count())
+	}
+}
+
+func TestSend_fanout_allNodesDown_returnsError(t *testing.T) {
+	d1, _ := newFanoutNode(t)
+	d1.Close()
+	d2, _ := newFanoutNode(t)
+	d2.Close()
+
+	p := New(Config{
+		BaseURL: "http://127.0.0.1:1", // unused for posting; just non-empty
+		FanoutResolver: func(context.Context) ([]string, error) {
+			return []string{d1.URL, d2.URL}, nil
+		},
+	}, nil)
+
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err == nil {
+		t.Fatal("Send should fail when every node is unreachable")
+	}
+}
+
+func TestSend_fanout_resolverEmpty_fallsBackToBaseURL(t *testing.T) {
+	base, rBase := newFanoutNode(t)
+	defer base.Close()
+
+	p := New(Config{
+		BaseURL:        base.URL,
+		FanoutResolver: func(context.Context) ([]string, error) { return nil, nil }, // no active nodes
+	}, nil)
+
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if rBase.count() != 1 {
+		t.Errorf("empty resolver must fall back to the base URL; base got %d publishes", rBase.count())
+	}
+}
+
+func TestSend_fanout_resolverError_fallsBackToBaseURL(t *testing.T) {
+	base, rBase := newFanoutNode(t)
+	defer base.Close()
+
+	p := New(Config{
+		BaseURL:        base.URL,
+		FanoutResolver: func(context.Context) ([]string, error) { return nil, context.DeadlineExceeded },
+	}, nil)
+
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
+		t.Fatalf("resolver error must not fail the push (fall back to base URL); got %v", err)
+	}
+	if rBase.count() != 1 {
+		t.Errorf("resolver error must fall back to the base URL; base got %d publishes", rBase.count())
 	}
 }

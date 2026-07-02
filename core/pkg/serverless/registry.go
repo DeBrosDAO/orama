@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -14,6 +16,27 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// registryCacheTTL bounds how long function metadata + env vars are cached
+// in-process before re-reading rqlite. Bugboard #708: every function_invoke
+// previously did 3 uncached `weak` reads (Get, a redundant Get inside
+// CanInvoke, and GetEnvVars), each forwarded to the raft leader — ~820ms of
+// pure pre-flight tax per op when the leader is a distant node. With a short
+// TTL + explicit invalidation on deploy/enable/disable/delete, a burst of RPCs
+// (e.g. a call setup) reads metadata once instead of N times. The TTL is a
+// backstop; correctness comes from the explicit invalidation, so cross-node
+// propagation of a deploy/disable is bounded to this TTL.
+const registryCacheTTL = 5 * time.Second
+
+type fnCacheEntry struct {
+	fn *Function
+	at time.Time
+}
+
+type envCacheEntry struct {
+	env map[string]string
+	at  time.Time
+}
 
 // Ensure Registry implements FunctionRegistry and InvocationLogger interfaces.
 var _ FunctionRegistry = (*Registry)(nil)
@@ -27,6 +50,12 @@ type Registry struct {
 	ipfsAPIURL string
 	logger     *zap.Logger
 	tableName  string
+
+	// Metadata cache (bugboard #708) — see registryCacheTTL.
+	cacheTTL time.Duration
+	cacheMu  sync.RWMutex
+	fnCache  map[string]fnCacheEntry  // key: namespace\x00name\x00version
+	envCache map[string]envCacheEntry // key: functionID
 }
 
 // RegistryConfig holds configuration for the Registry.
@@ -42,7 +71,76 @@ func NewRegistry(db rqlite.Client, ipfsClient ipfs.IPFSClient, cfg RegistryConfi
 		ipfsAPIURL: cfg.IPFSAPIURL,
 		logger:     logger,
 		tableName:  "functions",
+		cacheTTL:   registryCacheTTL,
+		fnCache:    make(map[string]fnCacheEntry),
+		envCache:   make(map[string]envCacheEntry),
 	}
+}
+
+// --- metadata cache (bugboard #708) ---
+//
+// The cached *Function and env map are SHARED with all callers and MUST be
+// treated as read-only — no consumer in pkg/serverless mutates them today, and
+// none may, or it would corrupt the cache for concurrent readers.
+
+func fnCacheKey(namespace, name string, version int) string {
+	return namespace + "\x00" + name + "\x00" + strconv.Itoa(version)
+}
+
+func (r *Registry) cachedFn(key string) (*Function, bool) {
+	r.cacheMu.RLock()
+	e, ok := r.fnCache[key]
+	r.cacheMu.RUnlock()
+	if !ok || time.Since(e.at) > r.cacheTTL {
+		return nil, false
+	}
+	return e.fn, true
+}
+
+func (r *Registry) storeFn(key string, fn *Function) {
+	r.cacheMu.Lock()
+	r.fnCache[key] = fnCacheEntry{fn: fn, at: time.Now()}
+	r.cacheMu.Unlock()
+}
+
+func (r *Registry) cachedEnv(functionID string) (map[string]string, bool) {
+	r.cacheMu.RLock()
+	e, ok := r.envCache[functionID]
+	r.cacheMu.RUnlock()
+	if !ok || time.Since(e.at) > r.cacheTTL {
+		return nil, false
+	}
+	return e.env, true
+}
+
+func (r *Registry) storeEnv(functionID string, env map[string]string) {
+	r.cacheMu.Lock()
+	r.envCache[functionID] = envCacheEntry{env: env, at: time.Now()}
+	r.cacheMu.Unlock()
+}
+
+// invalidateFn drops every cached version of (namespace, name). Called on
+// deploy/enable/disable/delete so a metadata change is never masked by the
+// cache beyond the write itself.
+func (r *Registry) invalidateFn(namespace, name string) {
+	prefix := strings.TrimSpace(namespace) + "\x00" + strings.TrimSpace(name) + "\x00"
+	r.cacheMu.Lock()
+	for k := range r.fnCache {
+		if strings.HasPrefix(k, prefix) {
+			delete(r.fnCache, k)
+		}
+	}
+	r.cacheMu.Unlock()
+}
+
+// invalidateEnv drops the cached env vars for a function ID. A redeploy REUSES
+// the existing function ID (Register: id = oldFn.ID) and rewrites env vars
+// under it, so without this an env-var change would be masked by the cache for
+// up to the TTL.
+func (r *Registry) invalidateEnv(functionID string) {
+	r.cacheMu.Lock()
+	delete(r.envCache, functionID)
+	r.cacheMu.Unlock()
 }
 
 // Register deploys a new function or updates an existing one.
@@ -128,6 +226,9 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
+	r.invalidateFn(fn.Namespace, fn.Name)
+	r.invalidateEnv(id)
+
 	r.logger.Info("Function registered",
 		zap.String("id", id),
 		zap.String("name", fn.Name),
@@ -145,6 +246,12 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 func (r *Registry) Get(ctx context.Context, namespace, name string, version int) (*Function, error) {
 	namespace = strings.TrimSpace(namespace)
 	name = strings.TrimSpace(name)
+
+	// Cache hit (bugboard #708): skip the leader-routed weak read entirely.
+	cacheKey := fnCacheKey(namespace, name, version)
+	if fn, ok := r.cachedFn(cacheKey); ok {
+		return fn, nil
+	}
 
 	var query string
 	var args []interface{}
@@ -184,13 +291,17 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 	}
 
 	if len(functions) == 0 {
+		// Do NOT cache misses — a just-deployed function must be visible
+		// immediately on the next call, not after the TTL.
 		if version == 0 {
 			return nil, ErrFunctionNotFound
 		}
 		return nil, ErrVersionNotFound
 	}
 
-	return r.rowToFunction(&functions[0]), nil
+	fn := r.rowToFunction(&functions[0])
+	r.storeFn(cacheKey, fn)
+	return fn, nil
 }
 
 // List returns all functions for a namespace.
@@ -252,6 +363,7 @@ func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabl
 	if rowsAffected == 0 {
 		return ErrFunctionNotFound
 	}
+	r.invalidateFn(namespace, name)
 	r.logger.Info("Function enabled-state updated",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
@@ -290,6 +402,8 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 		return ErrVersionNotFound
 	}
 
+	r.invalidateFn(namespace, name)
+
 	r.logger.Info("Function deleted",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
@@ -299,13 +413,59 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 	return nil
 }
 
-// GetWASMBytes retrieves the compiled WASM bytecode for a function.
+// WASM-fetch tuning. The IPFS `cat` must NOT consume the function's whole
+// execution budget on a single stalled request (bugboard #137: a 15s function
+// spent all 15s on one cold fetch). Each attempt gets its own short deadline and
+// we retry a few times so bitswap can resolve a not-yet-local block from a pin
+// holder (the warm path is ~450ms, so 3×4s is ample headroom).
+const (
+	wasmFetchTimeout     = 4 * time.Second
+	wasmFetchMaxAttempts = 3
+	wasmFetchRetryBase   = 250 * time.Millisecond
+)
+
+// GetWASMBytes retrieves the compiled WASM bytecode for a function. On a cold
+// block it retries with a bounded per-attempt deadline and returns the typed
+// ErrWASMFetchTimeout (retryable infra failure) so callers don't misreport a
+// transient IPFS stall as a permanent function error.
 func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, error) {
 	if wasmCID == "" {
 		return nil, &ValidationError{Field: "wasmCID", Message: "cannot be empty"}
 	}
 
-	reader, err := r.ipfs.Get(ctx, wasmCID, r.ipfsAPIURL)
+	var lastErr error
+	for attempt := 1; attempt <= wasmFetchMaxAttempts; attempt++ {
+		data, err := r.fetchWASMOnce(ctx, wasmCID)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+
+		// Respect caller cancellation / overall deadline — don't keep retrying
+		// into an already-dead context.
+		if ctx.Err() != nil {
+			break
+		}
+		if attempt < wasmFetchMaxAttempts {
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%w: cid=%s: %v", ErrWASMFetchTimeout, wasmCID, ctx.Err())
+			case <-time.After(time.Duration(attempt) * wasmFetchRetryBase):
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("%w: cid=%s after %d attempts: %v", ErrWASMFetchTimeout, wasmCID, wasmFetchMaxAttempts, lastErr)
+}
+
+// fetchWASMOnce does a single IPFS fetch bounded by an independent deadline that
+// is capped at the smaller of wasmFetchTimeout and whatever the caller ctx has
+// left.
+func (r *Registry) fetchWASMOnce(ctx context.Context, wasmCID string) ([]byte, error) {
+	fetchCtx, cancel := context.WithTimeout(ctx, wasmFetchTimeout)
+	defer cancel()
+
+	reader, err := r.ipfs.Get(fetchCtx, wasmCID, r.ipfsAPIURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get WASM from IPFS: %w", err)
 	}
@@ -319,8 +479,60 @@ func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, er
 	return data, nil
 }
 
+// RepinAllWASM re-pins every ACTIVE function's WASM on the cluster
+// (replication=-1) so functions deployed before the pin-everywhere fix become
+// durably pinned + GC-safe. Best-effort + idempotent; returns the count pinned.
+//
+// Incident 2026-06-24: scheduled IPFS GC reclaimed unpinned function WASM,
+// deleting the bytecode of functions that were only ever pinned RF=3 (or whose
+// pin silently failed). Run on gateway startup, this backfill guarantees all
+// existing function WASM is pinned everywhere so GC can never delete it. New
+// deploys are already covered by uploadWASM's pin-everywhere + hard-fail.
+func (r *Registry) RepinAllWASM(ctx context.Context) (int, error) {
+	var rows []wasmCIDRow
+	query := `SELECT DISTINCT wasm_cid FROM functions WHERE status = 'active' AND wasm_cid IS NOT NULL AND wasm_cid != ''`
+	if err := r.db.Query(ctx, &rows, query); err != nil {
+		return 0, fmt.Errorf("failed to list function WASM CIDs: %w", err)
+	}
+
+	cids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		cids = append(cids, row.WASMCID)
+	}
+	return r.repinWASMCIDs(ctx, cids), nil
+}
+
+// wasmCIDRow is the scan target for RepinAllWASM's DISTINCT wasm_cid query.
+type wasmCIDRow struct {
+	WASMCID string `db:"wasm_cid"`
+}
+
+// repinWASMCIDs pins each CID on every cluster peer (replication=-1),
+// best-effort: a CID whose block is gone (GC-deleted) can't be pinned, so it is
+// logged and skipped while the surviving ones are still protected. Returns the
+// count successfully pinned. Split out so the pin loop is unit-testable.
+func (r *Registry) repinWASMCIDs(ctx context.Context, cids []string) int {
+	pinned := 0
+	for _, cid := range cids {
+		if ctx.Err() != nil {
+			return pinned
+		}
+		if _, err := r.ipfs.Pin(ctx, cid, cid+".wasm", wasmReplicationEverywhere); err != nil {
+			r.logger.Warn("repin function WASM failed (block may be gone — needs re-deploy)",
+				zap.String("cid", cid), zap.Error(err))
+			continue
+		}
+		pinned++
+	}
+	return pinned
+}
+
 // GetEnvVars retrieves environment variables for a function.
 func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[string]string, error) {
+	if env, ok := r.cachedEnv(functionID); ok {
+		return env, nil
+	}
+
 	query := `SELECT key, value FROM function_env_vars WHERE function_id = ?`
 
 	var rows []envVarRow
@@ -333,6 +545,7 @@ func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[strin
 		envVars[row.Key] = row.Value
 	}
 
+	r.storeEnv(functionID, envVars)
 	return envVars, nil
 }
 
@@ -604,10 +817,18 @@ func (r *Registry) GetInvocations(ctx context.Context, namespace, name string, l
 // Private helpers
 // -----------------------------------------------------------------------------
 
-// defaultWASMReplicationFactor is the IPFS Cluster replication factor for WASM binaries.
-const defaultWASMReplicationFactor = 3
+// wasmReplicationEverywhere pins WASM binaries on EVERY IPFS-Cluster peer
+// (IPFS-Cluster treats a replication factor of -1 as "pin everywhere"). WASM
+// blobs are tiny metadata-class content that any namespace gateway node may need
+// to load on invoke; pinning everywhere (vs RF=3) means every node already holds
+// the block locally, eliminating the cold cross-node bitswap fetch that made
+// rarely-invoked functions intermittently time out (bugboard #137).
+const wasmReplicationEverywhere = -1
 
-// uploadWASM uploads WASM bytecode to IPFS and pins it for cluster-wide replication.
+// uploadWASM uploads WASM bytecode to IPFS and pins it on every cluster peer.
+// A function whose code is not durably retrievable is not deployed, so a pin
+// failure is fatal here — we must not leave a "deployed but unfetchable" row
+// that intermittently 15s-times-out on whichever node happens to be cold.
 func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string) (string, error) {
 	reader := bytes.NewReader(wasmBytes)
 	resp, err := r.ipfs.Add(ctx, reader, name+".wasm")
@@ -615,13 +836,8 @@ func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string
 		return "", fmt.Errorf("failed to upload WASM to IPFS: %w", err)
 	}
 
-	// Pin the CID across cluster peers so the binary survives node failures.
-	if _, err := r.ipfs.Pin(ctx, resp.Cid, name+".wasm", defaultWASMReplicationFactor); err != nil {
-		r.logger.Warn("Failed to pin WASM binary — content may not be replicated",
-			zap.String("cid", resp.Cid),
-			zap.String("function", name),
-			zap.Error(err),
-		)
+	if _, err := r.ipfs.Pin(ctx, resp.Cid, name+".wasm", wasmReplicationEverywhere); err != nil {
+		return "", fmt.Errorf("failed to pin WASM cid=%s on cluster: %w", resp.Cid, err)
 	}
 
 	return resp.Cid, nil

@@ -78,6 +78,12 @@ var (
 	// ErrStorageUnavailable is returned when IPFS storage is unavailable.
 	ErrStorageUnavailable = errors.New("storage unavailable")
 
+	// ErrWASMFetchTimeout marks a transient failure fetching a function's WASM
+	// bytecode from IPFS (the block is cold/not-yet-replicated on this node).
+	// It is an infra failure, not a function error, so callers must treat it as
+	// retryable and surface a retryable error envelope to clients.
+	ErrWASMFetchTimeout = errors.New("wasm fetch from IPFS timed out")
+
 	// ErrDatabaseUnavailable is returned when the database is unavailable.
 	ErrDatabaseUnavailable = errors.New("database unavailable")
 

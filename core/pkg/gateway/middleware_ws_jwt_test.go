@@ -51,7 +51,7 @@ func newAuthServiceForTest(t *testing.T) *auth.Service {
 
 func TestAuthMiddleware_WSJWTQuery_validToken(t *testing.T) {
 	svc := newAuthServiceForTest(t)
-	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET_SUBJECT", 15*time.Minute)
+	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET_SUBJECT", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestAuthMiddleware_WSJWTQuery_ignoredOnNonWSRequest(t *testing.T) {
 	// privacy issues of JWTs leaking via referrer headers, browser history,
 	// and access logs.
 	svc := newAuthServiceForTest(t)
-	token, _, err := svc.GenerateJWT("ns", "sub", 15*time.Minute)
+	token, _, err := svc.GenerateJWT("ns", "sub", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}
@@ -156,8 +156,8 @@ func TestAuthMiddleware_WSJWTQuery_headerWinsOverQuery(t *testing.T) {
 	// Header path runs FIRST and wins. Verifies the query fallback is a
 	// fallback, not an override.
 	svc := newAuthServiceForTest(t)
-	headerJWT, _, _ := svc.GenerateJWT("ns-header", "sub-header", 15*time.Minute)
-	queryJWT, _, _ := svc.GenerateJWT("ns-query", "sub-query", 15*time.Minute)
+	headerJWT, _, _ := svc.GenerateJWT("ns-header", "sub-header", 15*time.Minute, nil)
+	queryJWT, _, _ := svc.GenerateJWT("ns-query", "sub-query", 15*time.Minute, nil)
 
 	g := &Gateway{authService: svc}
 
@@ -242,7 +242,7 @@ func TestAuthMiddleware_WSJWTQuery_malformedJWTFallsThrough(t *testing.T) {
 
 func TestValidateAuthForNamespaceProxy_WSJWTQuery(t *testing.T) {
 	svc := newAuthServiceForTest(t)
-	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET", 15*time.Minute)
+	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestValidateAuthForNamespaceProxy_WSJWTQuery(t *testing.T) {
 
 func TestValidateAuthForNamespaceProxy_WSJWTQuery_ignoredOnNonWS(t *testing.T) {
 	svc := newAuthServiceForTest(t)
-	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET", 15*time.Minute)
+	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestValidateAuthForNamespaceProxy_WSJWTQuery_ignoredOnNonWS(t *testing.T) {
 // doesn't leak into proxy hops or downstream logs.
 func TestAuthMiddleware_WSJWTQuery_strippedAfterVerify(t *testing.T) {
 	svc := newAuthServiceForTest(t)
-	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET", 15*time.Minute)
+	token, _, err := svc.GenerateJWT("anchat-test", "0xWALLET", 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("GenerateJWT: %v", err)
 	}

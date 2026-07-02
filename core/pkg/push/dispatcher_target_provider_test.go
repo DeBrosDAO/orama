@@ -37,7 +37,9 @@ type targetFilterDeviceStore struct {
 	devices []PushDevice
 }
 
-func (f *targetFilterDeviceStore) Upsert(ctx context.Context, dev PushDevice) error { return nil }
+func (f *targetFilterDeviceStore) Upsert(ctx context.Context, dev PushDevice) (string, error) {
+	return dev.ID, nil
+}
 func (f *targetFilterDeviceStore) Delete(ctx context.Context, ns, id string) error  { return nil }
 func (f *targetFilterDeviceStore) ListForUser(ctx context.Context, ns, userID string) ([]PushDevice, error) {
 	return f.devices, nil

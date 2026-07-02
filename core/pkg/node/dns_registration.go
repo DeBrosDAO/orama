@@ -197,6 +197,14 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		n.ensureSOAAndNSRecords(ctx, baseDomain)
 	}
 
+	// Pin push.<baseDomain> to a single healthy nameserver (bugboard #858) so the
+	// shared ntfy tier — which keeps no cross-node state — converges every
+	// publisher AND subscriber onto one instance. Nameserver-only: they run Caddy
+	// and already serve push.<baseDomain> on :443.
+	if baseDomain != "" && n.isNameserverNode(ctx) {
+		n.ensurePushDesignatedRecord(ctx, baseDomain)
+	}
+
 	// Claim an NS slot for the base domain (ns1/ns2/ns3) — only if this node
 	// was installed with --nameserver (i.e. runs Caddy + CoreDNS).
 	if baseDomain != "" && n.isNameserverPreference() {
@@ -249,6 +257,70 @@ func (n *Node) ensureSOAAndNSRecords(ctx context.Context, baseDomain string) {
 			n.logger.ComponentWarn(logging.ComponentNode, "Failed to create NS record", zap.Error(err))
 		}
 	}
+}
+
+// ensurePushDesignatedRecord pins push.<baseDomain> to a single healthy
+// nameserver node (bugboard #858), with failover. Thin wrapper over
+// pinPushDesignated that logs failures.
+func (n *Node) ensurePushDesignatedRecord(ctx context.Context, baseDomain string) {
+	if _, err := pinPushDesignated(ctx, n.rqliteAdapter.GetSQLDB(), baseDomain); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to pin push DNS record (bugboard #858)", zap.Error(err))
+	}
+}
+
+// pinPushDesignated makes push.<baseDomain> resolve to exactly ONE healthy
+// nameserver node — the lowest-IP active one (deterministic ordering, so every
+// nameserver computes the same value with no leader election; it fails over when
+// that node stops heartbeating).
+//
+// Why: the shared ntfy push tier keeps no cross-node shared state, so a publish
+// and a long-lived subscriber that round-robin DNS sends to different instances
+// never meet (bugboard #858 — measured 0/5 cross-node delivery). Concentrating
+// push.<baseDomain> on one instance makes every publisher AND subscriber
+// converge there. The specific A-record overrides the round-robin wildcard
+// (exact match wins in DNS); the gateway fan-out still reaches that node, so
+// there are no duplicates. Returns the designated IP, or "" if no healthy
+// nameserver is resolvable (in which case the wildcard round-robin is left
+// untouched — push still works via the gateway fan-out). Split out for testing.
+func pinPushDesignated(ctx context.Context, db *sql.DB, baseDomain string) (string, error) {
+	var designated string
+	err := db.QueryRowContext(ctx, `
+		SELECT ns.ip_address
+		FROM dns_nameservers ns
+		JOIN dns_nodes dn ON dn.ip_address = ns.ip_address
+		WHERE ns.domain = ?
+		  AND dn.status = 'active'
+		  AND dn.last_seen > datetime('now', '-90 seconds')
+		ORDER BY ns.ip_address ASC
+		LIMIT 1`, baseDomain).Scan(&designated)
+	if err == sql.ErrNoRows {
+		return "", nil // no healthy nameserver; leave the wildcard round-robin
+	}
+	if err != nil {
+		return "", fmt.Errorf("select designated push node: %w", err)
+	}
+	if designated == "" {
+		return "", nil
+	}
+
+	fqdn := "push." + baseDomain + "."
+	if _, err := rqlite.SafeExecContext(db, ctx,
+		`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
+		 VALUES (?, 'A', ?, 60, 'system', 'system', TRUE, datetime('now'), datetime('now'))
+		 ON CONFLICT(fqdn, record_type, value) DO UPDATE SET is_active = TRUE, updated_at = datetime('now')`,
+		fqdn, designated,
+	); err != nil {
+		return "", fmt.Errorf("pin push record: %w", err)
+	}
+	// Exactly one instance serves push: prune any stale push.<baseDomain> A-records
+	// pointing elsewhere (this is also the failover step).
+	if _, err := rqlite.SafeExecContext(db, ctx,
+		`DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value != ?`,
+		fqdn, designated,
+	); err != nil {
+		return designated, fmt.Errorf("prune stale push records: %w", err)
+	}
+	return designated, nil
 }
 
 // claimNameserverSlot attempts to claim an available NS hostname (ns1/ns2/ns3) for this node.

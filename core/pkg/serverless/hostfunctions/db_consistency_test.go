@@ -50,7 +50,7 @@ func TestResolveBatchQuery_noneRoutesToConsistencyPath(t *testing.T) {
 	fake := &consistencyAwareClient{}
 	h := newHFWithDB(fake)
 
-	if _, err := h.resolveBatchQuery(context.Background(), []rqlite.BatchOp{{Kind: rqlite.BatchOpQuery, SQL: "SELECT 1"}}, "none"); err != nil {
+	if _, err := h.resolveBatchQuery(context.Background(), []rqlite.BatchOp{{Kind: rqlite.BatchOpQuery, SQL: "SELECT 1"}}, "none", "", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.consistencyCalls != 1 || fake.batchQueryCalls != 0 {
@@ -65,7 +65,7 @@ func TestResolveBatchQuery_defaultAndWeakUseLeaderRoutedRead(t *testing.T) {
 	for _, consistency := range []string{"", "weak"} {
 		fake := &consistencyAwareClient{}
 		h := newHFWithDB(fake)
-		if _, err := h.resolveBatchQuery(context.Background(), nil, consistency); err != nil {
+		if _, err := h.resolveBatchQuery(context.Background(), nil, consistency, "", false); err != nil {
 			t.Fatalf("consistency=%q unexpected error: %v", consistency, err)
 		}
 		if fake.batchQueryCalls != 1 || fake.consistencyCalls != 0 {
@@ -79,7 +79,7 @@ func TestResolveBatchQuery_noneDegradesWhenClientLacksCapability(t *testing.T) {
 	fake := &weakOnlyClient{}
 	h := newHFWithDB(fake)
 
-	if _, err := h.resolveBatchQuery(context.Background(), nil, "none"); err != nil {
+	if _, err := h.resolveBatchQuery(context.Background(), nil, "none", "", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.batchQueryCalls != 1 {
@@ -91,7 +91,7 @@ func TestResolveBatchQuery_invalidConsistencyRejected(t *testing.T) {
 	fake := &consistencyAwareClient{}
 	h := newHFWithDB(fake)
 
-	_, err := h.resolveBatchQuery(context.Background(), nil, "bogus")
+	_, err := h.resolveBatchQuery(context.Background(), nil, "bogus", "", false)
 	if err == nil {
 		t.Fatal("invalid consistency must return an error, not silently downgrade")
 	}

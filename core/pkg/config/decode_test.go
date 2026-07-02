@@ -235,6 +235,29 @@ http_gateway:
 	}
 }
 
+// TestDecodeStrict_ntfyBaseURL guards the same v0.122.42-class boot crash for
+// the bugboard #858 ntfy fan-out: Phase 4 now emits `ntfy_base_url` under
+// http_gateway, so HTTPGatewayConfig MUST carry a matching field or
+// KnownFields(true) rejects the whole node.yaml and orama-node crash-loops.
+// If someone deletes the parse field, the render tests still pass but
+// production crash-loops — this guard catches that.
+func TestDecodeStrict_ntfyBaseURL(t *testing.T) {
+	yamlInput := `
+node:
+  id: "test-node"
+http_gateway:
+  enabled: true
+  ntfy_base_url: "https://push.dbrs.space"
+`
+	var cfg Config
+	if err := DecodeStrict(strings.NewReader(yamlInput), &cfg); err != nil {
+		t.Fatalf("node.yaml with ntfy_base_url must parse (bugboard #858): %v", err)
+	}
+	if cfg.HTTPGateway.NtfyBaseURL != "https://push.dbrs.space" {
+		t.Errorf("NtfyBaseURL = %q, want https://push.dbrs.space", cfg.HTTPGateway.NtfyBaseURL)
+	}
+}
+
 // TestDecodeStrict_sniRouterBlock guards against a recurrence of the
 // v0.122.42-class boot crash for the feat-124 stealth SNI router: Phase 4
 // always emits a top-level `sni_router:` block into node.yaml, so the root

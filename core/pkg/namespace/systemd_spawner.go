@@ -638,6 +638,17 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 		zap.String("listen_addr", cfg.ListenAddr),
 		zap.String("public_ip", cfg.PublicIP))
 
+	// Guard (bugboard #846): the TURN server hard-fails on an empty public_ip
+	// ("turn.public_ip: must not be empty") and systemd then crash-loops it
+	// forever. A crash-looped TURN means (a) zero ICE relay candidates for any
+	// client round-robined to this node, and (b) SpawnTURN never reaches the
+	// AddWebRTCRules call below, so the relay UDP ports stay firewalled. The
+	// caller MUST resolve the node's public IP before spawning — fail loudly
+	// here instead of writing a config that is guaranteed to crash-loop.
+	if cfg.PublicIP == "" {
+		return fmt.Errorf("refusing to spawn TURN for namespace %s on node %s: public_ip is empty (would crash-loop the TURN server); the caller must resolve the node's public IP first", namespace, nodeID)
+	}
+
 	// Create config directory
 	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -801,8 +812,23 @@ func (s *SystemdSpawner) SaveClusterState(namespace string, data []byte) error {
 		return fmt.Errorf("failed to create namespace dir: %w", err)
 	}
 	path := filepath.Join(dir, "cluster-state.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write cluster state: %w", err)
+	// Atomic write to a temp file + rename: cluster-state.json carries the
+	// namespace TURN shared secret (bugboard #130), so it must not be
+	// world/group readable on the receiving node either, and a reader must
+	// never see a half-written secret. 0600 + chmod on the temp file keeps the
+	// secret private; the rename then makes the live file 0600 too, tightening
+	// a file an older release wrote 0644.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("failed to write temp cluster state: %w", err)
+	}
+	if err := os.Chmod(tmp, 0600); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to set cluster state permissions: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to rename cluster state into place: %w", err)
 	}
 	s.logger.Info("Saved cluster state from coordinator",
 		zap.String("namespace", namespace),

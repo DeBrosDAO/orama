@@ -31,8 +31,19 @@ type rotationMockORMDB struct {
 	client.DatabaseClient
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
+	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
+	// graceableTokens: hashedToken -> subject for tokens that are revoked but
+	// still inside the reuse-grace window (bugboard #125). The grace SELECT
+	// (detected by the grace_used_at predicate) reads from here.
+	graceableTokens map[string]string
 	inserted       int               // count of INSERTs (new refresh-token rows)
 	subjects       map[string]string // subject -> last hashed token inserted
+	// selectErrRemaining: number of upcoming "SELECT subject" calls that
+	// should return selectErr (simulates a transient rqlite leader outage).
+	// Decremented per matching call; 0 = serve normally (bugboard #125).
+	selectErr           error
+	selectErrRemaining  int
+	selectAttemptsTaken int
 }
 
 func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
@@ -45,16 +56,57 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 	if containsCI(sql, "SELECT id FROM namespaces") {
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{int64(1)}}}, nil
 	}
-	// SELECT subject for the refresh-token lookup.
-	if containsCI(sql, "SELECT subject FROM refresh_tokens") {
+	// Grace-path SELECT (bugboard #125): SELECT subject for a recently-revoked,
+	// grace-available token. Distinguished from the active-path SELECT by the
+	// grace_used_at predicate. Must be checked BEFORE the generic handler.
+	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") && containsCI(sql, "grace_used_at") {
+		if len(args) < 2 {
+			return &client.QueryResult{Count: 0}, nil
+		}
+		hashedTok, _ := args[1].(string)
+		if subj, ok := m.graceableTokens[hashedTok]; ok && subj != "" {
+			claims := ""
+			if m.claimsByToken != nil {
+				claims = m.claimsByToken[hashedTok]
+			}
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
+		}
+		return &client.QueryResult{Count: 0}, nil
+	}
+	// SELECT subject (+ custom_claims, bugboard #548) for the lookup.
+	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") {
+		m.selectAttemptsTaken++
+		if m.selectErrRemaining > 0 {
+			m.selectErrRemaining--
+			return nil, m.selectErr
+		}
 		if len(args) < 2 {
 			return &client.QueryResult{Count: 0}, nil
 		}
 		hashedTok, _ := args[1].(string)
 		if subj, ok := m.subjectByToken[hashedTok]; ok && subj != "" {
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj}}}, nil
+			claims := ""
+			if m.claimsByToken != nil {
+				claims = m.claimsByToken[hashedTok]
+			}
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
+	}
+	// RevokeToken UPDATE that ALSO burns the grace slot (bugboard #125
+	// logout-bypass fix). Reflect it by clearing the token's grace eligibility
+	// so a follow-on grace SELECT misses it. (The rotation grace CAS goes
+	// through the rqlite Exec mock, not here, so there's no collision.)
+	if containsCI(sql, "UPDATE refresh_tokens") && containsCI(sql, "grace_used_at") && len(args) >= 2 {
+		if key, ok := args[1].(string); ok && m.graceableTokens != nil {
+			delete(m.graceableTokens, key) // single-token: key is the hashed token
+			for tok, subj := range m.graceableTokens {
+				if subj == key { // revoke-all: key is the subject
+					delete(m.graceableTokens, tok)
+				}
+			}
+		}
+		return &client.QueryResult{Count: 1}, nil
 	}
 	// INSERT new refresh_tokens row.
 	if containsCI(sql, "INSERT INTO refresh_tokens") {
@@ -71,6 +123,14 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 				m.subjectByToken = map[string]string{}
 			}
 			m.subjectByToken[hashedTok] = subj
+			// custom_claims is the LAST arg (bugboard #548) — capture it so
+			// rotation-propagation tests can assert it carries forward.
+			if m.claimsByToken == nil {
+				m.claimsByToken = map[string]string{}
+			}
+			if cc, ok := args[len(args)-1].(string); ok {
+				m.claimsByToken[hashedTok] = cc
+			}
 		}
 		return &client.QueryResult{Count: 1}, nil
 	}
@@ -89,6 +149,12 @@ type rotationMockRqlite struct {
 	rowsAffectedNext  []int64 // programmable per-call values; pop from front. Defaults to "revoke if unrevoked".
 	execErrNext       []error // programmable per-call errors
 	parallelExecGuard sync.Mutex
+	// graceCASNext: programmable RowsAffected for the grace CAS (UPDATE ... SET
+	// grace_used_at). 1 = won the single-use grace; 0 = already consumed
+	// (bugboard #125). Defaults to "win once per token".
+	graceCASNext  []int64
+	graceConsumed map[string]bool
+	graceCASCalls int
 }
 
 func (m *rotationMockRqlite) Exec(_ context.Context, sql string, args ...interface{}) (sql.Result, error) {
@@ -107,6 +173,29 @@ func (m *rotationMockRqlite) Exec(_ context.Context, sql string, args ...interfa
 		if e != nil {
 			return nil, e
 		}
+	}
+
+	// Grace CAS (bugboard #125): UPDATE ... SET grace_used_at, single-use.
+	if containsCI(sql, "SET grace_used_at") && len(args) >= 2 {
+		m.graceCASCalls++
+		hashedTok, _ := args[1].(string)
+		if m.graceConsumed == nil {
+			m.graceConsumed = map[string]bool{}
+		}
+		var affected int64
+		if len(m.graceCASNext) > 0 {
+			affected = m.graceCASNext[0]
+			m.graceCASNext = m.graceCASNext[1:]
+			if affected == 1 {
+				m.graceConsumed[hashedTok] = true
+			}
+		} else if !m.graceConsumed[hashedTok] {
+			m.graceConsumed[hashedTok] = true
+			affected = 1
+		} else {
+			affected = 0
+		}
+		return &rotationFakeResult{affected: affected}, nil
 	}
 
 	// Default UPDATE behavior: matches if token is currently unrevoked.
@@ -367,5 +456,235 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
 	if err == nil {
 		t.Fatal("expected error reusing rotated token, got nil")
+	}
+}
+
+// Bugboard #125: a TRANSIENT rqlite error on the lookup (leader briefly
+// unavailable during a rolling restart) must surface as ErrRefreshTransient
+// (→ 503, retryable) — NOT "invalid or expired" (→ 401, full SIWE re-auth,
+// impossible on a locked device answering a VoIP-woken call).
+func TestRefreshToken_transientSelectError_returnsTransient(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "valid-but-leader-down"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	// Every lookup attempt across the whole retry window errors.
+	ormDB.selectErr = errors.New("rqlite: leadership lost")
+	ormDB.selectErrRemaining = 99
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient (a valid token must not 401 during a leader outage)", err)
+	}
+}
+
+// The lookup is retried, so a brief blip recovers transparently within one
+// refresh call (no client-visible failure at all).
+func TestRefreshToken_selectRecoversAfterRetry(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "valid-blips-then-ok"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	ormDB.selectErr = errors.New("rqlite: leadership lost")
+	ormDB.selectErrRemaining = refreshSelectRetries - 1 // fail all but the last attempt
+
+	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken should recover after transient blips: %v", err)
+	}
+	if access == "" || newRefresh == "" || subj != "0xWALLET" {
+		t.Errorf("recovered refresh incomplete: access=%q newRefresh=%q subj=%q", access, newRefresh, subj)
+	}
+}
+
+// A transient error on the CAS write (revoke) is also retryable, not a 401.
+func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
+	s, ormDB, rq := newRotationTestService(t)
+	const refresh = "valid-cas-write-down"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	rq.execErrNext = []error{errors.New("rqlite: write failed, no leader")}
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient on a transient CAS write error", err)
+	}
+}
+
+// A genuinely unknown token must remain a hard invalid (401), NOT be masked as
+// transient — the distinction is the whole point of the #125 fix.
+func TestRefreshToken_unknownToken_isNotTransient(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	if err == nil {
+		t.Fatal("expected error for unknown token")
+	}
+	if errors.Is(err, ErrRefreshTransient) {
+		t.Errorf("unknown token must be a genuine invalid (401), not transient (503): %v", err)
+	}
+}
+
+// mockClaimsResolver is a fixed claims-provider stand-in for the mint tests.
+type mockClaimsResolver struct{ claims map[string]string }
+
+func (m mockClaimsResolver) ResolveClaims(_ context.Context, _, _ string) map[string]string {
+	return m.claims
+}
+
+// Bugboard #548: claims resolved at IssueTokens (login) must be stored with the
+// refresh token AND replayed into the rotated access token — so account_id
+// survives the 15-min refresh without re-invoking the provider.
+func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	s.SetClaimsResolver(mockClaimsResolver{claims: map[string]string{"account_id": "u-999"}})
+
+	// Login mint — IssueTokens resolves + stores the claims with the refresh row.
+	_, refresh, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(refresh)]; got != `{"account_id":"u-999"}` {
+		t.Fatalf("claims not stored with refresh token; got %q", got)
+	}
+
+	// Refresh — the rotated access token must carry account_id, and the NEW
+	// refresh row must propagate the stored claims.
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ValidateJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "u-999" {
+		t.Errorf("rotated access token lost account_id; custom=%v", claims.Custom)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(newRefresh)]; got != `{"account_id":"u-999"}` {
+		t.Errorf("rotation did not propagate claims to the new row; got %q", got)
+	}
+
+	// Second rotation hop (N+1 → N+2): the claim must survive repeated
+	// rotations, not just the first — the propagation is the whole point.
+	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("second RefreshToken: %v", err)
+	}
+	claims2, err := s.ParseAndVerifyJWT(access2)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT (2nd): %v", err)
+	}
+	if claims2.Custom["account_id"] != "u-999" {
+		t.Errorf("account_id lost across the second rotation; custom=%v", claims2.Custom)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #125 — bounded, single-use refresh-token reuse grace (RFC 9700
+// §4.13.2). A rotation response lost in transit must NOT dead-end in a 401.
+// ----------------------------------------------------------------------------
+
+// A just-rotated token (revoked, within grace, grace not consumed) is accepted
+// ONCE more and mints a fresh session — recovering a client whose rotation
+// response was lost. The revoke CAS is skipped (the token is already revoked),
+// so this must NOT surface the replay tripwire.
+func TestRefreshToken_reuseGrace_recoversLostResponse(t *testing.T) {
+	s, ormDB, rq := newRotationTestService(t)
+
+	const lostTok = "rotated-but-response-lost"
+	// NOT in the active set (already revoked) ...
+	// ... but eligible for grace (revoked recently, grace unused).
+	ormDB.graceableTokens = map[string]string{sha256Hex(lostTok): "0xWALLET"}
+
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
+	if err != nil {
+		t.Fatalf("grace recovery should succeed, got error: %v", err)
+	}
+	if access == "" || newRefresh == "" {
+		t.Error("grace recovery must mint a fresh access + refresh token")
+	}
+	if newRefresh == lostTok {
+		t.Error("grace recovery must rotate to a NEW refresh token")
+	}
+	if subj != "0xWALLET" {
+		t.Errorf("subject = %q, want 0xWALLET", subj)
+	}
+	if exp <= 0 {
+		t.Errorf("expiration not set: %d", exp)
+	}
+	// The single-use grace CAS must have been claimed exactly once.
+	if rq.graceCASCalls != 1 {
+		t.Errorf("grace CAS calls = %d, want 1", rq.graceCASCalls)
+	}
+	// And a fresh refresh-token row was inserted.
+	if ormDB.inserted != 1 {
+		t.Errorf("expected 1 INSERT for the recovered session, got %d", ormDB.inserted)
+	}
+}
+
+// The grace is SINGLE-USE: once the grace_used_at CAS is lost (already
+// consumed, e.g. a replay after the legitimate client already recovered), the
+// token must 401 — a stolen token cannot be replayed at leisure.
+func TestRefreshToken_reuseGrace_singleUse_secondAttemptIs401(t *testing.T) {
+	s, ormDB, rq := newRotationTestService(t)
+
+	const tok = "already-grace-consumed"
+	ormDB.graceableTokens = map[string]string{sha256Hex(tok): "0xWALLET"}
+	// Force the grace CAS to report "already consumed".
+	rq.graceCASNext = []int64{0}
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err == nil {
+		t.Fatal("a consumed grace must NOT recover — expected an invalid-token error")
+	}
+	if !containsCI(err.Error(), "invalid or expired") {
+		t.Errorf("want invalid/expired 401, got %v", err)
+	}
+	if ormDB.inserted != 0 {
+		t.Errorf("no new session should be minted when grace is consumed; inserts=%d", ormDB.inserted)
+	}
+}
+
+// A genuinely bad token (not active AND not grace-eligible) still 401s — the
+// grace path must not turn unknown tokens into sessions.
+func TestRefreshToken_noGrace_genuineBadToken_stays401(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	// graceableTokens left empty: nothing is grace-eligible.
+
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test")
+	if err == nil {
+		t.Fatal("a never-seen token must be rejected")
+	}
+	if !containsCI(err.Error(), "invalid or expired") {
+		t.Errorf("want invalid/expired 401, got %v", err)
+	}
+	if ormDB.inserted != 0 {
+		t.Errorf("no session should be minted for a bad token; inserts=%d", ormDB.inserted)
+	}
+}
+
+// Security regression (bugboard #125 logout-bypass): a token explicitly revoked
+// via RevokeToken (logout) must NOT be recoverable through the reuse grace, even
+// within the 60s window. RevokeToken burns grace_used_at so the grace predicate
+// (grace_used_at IS NULL) excludes it.
+func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+
+	const tok = "logged-out-token"
+	// Within the revoke window it WOULD be grace-eligible...
+	ormDB.graceableTokens = map[string]string{sha256Hex(tok): "0xWALLET"}
+
+	// ...until the user logs out.
+	if err := s.RevokeToken(context.Background(), "anchat-test", tok, false, ""); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+
+	// A refresh with the just-logged-out token must be rejected, not resurrected.
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err == nil {
+		t.Fatal("LOGOUT-BYPASS: a logged-out token was resurrected via reuse grace")
+	}
+	if !containsCI(err.Error(), "invalid or expired") {
+		t.Errorf("want 401 invalid/expired, got %v", err)
+	}
+	if ormDB.inserted != 0 {
+		t.Errorf("no session should be minted for a logged-out token; inserts=%d", ormDB.inserted)
 	}
 }

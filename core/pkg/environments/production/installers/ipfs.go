@@ -7,9 +7,39 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 )
+
+// ipfsStorageMaxDiskFraction is the share of the node's TOTAL disk used as the
+// Datastore.StorageMax budget. This is an ADVISORY watermark, not a hard cap:
+// kubo only auto-GCs against StorageMax when the daemon runs with --enable-gc,
+// which it does not here — reclaim is driven by orama-ipfs-gc.timer, which
+// collects every unpinned block regardless of StorageMax. So StorageMax mainly
+// (a) sizes the monitoring denominator (repo_use_pct in `orama monitor`) and
+// (b) bounds growth if watermark GC is ever enabled. kubo's built-in default is
+// "10GB" regardless of disk size. Nodes have heterogeneous disks (observed
+// 96GB–290GB on devnet), so the budget is computed per node rather than fixed.
+// 50% is conservative — it assumes IPFS is the dominant consumer while leaving
+// the rest for the OS, RQLite, Olric, and logs on a shared single-disk layout.
+const ipfsStorageMaxDiskFraction = 0.5
+
+// ipfsStorageMaxFloorGB is the lower bound for the computed StorageMax, matching
+// kubo's own default so we never configure a budget smaller than out-of-the-box.
+const ipfsStorageMaxFloorGB = 10
+
+// ipfsStorageMaxForDisk computes the Datastore.StorageMax string (e.g. "145GB")
+// for a filesystem of totalBytes, as a fraction of total disk floored at the
+// kubo default. Pure helper so the sizing policy is unit-testable without a
+// real filesystem. GB are decimal (1e9), matching how kubo parses "NNGB".
+func ipfsStorageMaxForDisk(totalBytes uint64) string {
+	gb := uint64(float64(totalBytes) * ipfsStorageMaxDiskFraction / 1e9)
+	if gb < ipfsStorageMaxFloorGB {
+		gb = ipfsStorageMaxFloorGB
+	}
+	return fmt.Sprintf("%dGB", gb)
+}
 
 // IPFSInstaller handles IPFS (Kubo) installation
 type IPFSInstaller struct {
@@ -172,6 +202,13 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 		return fmt.Errorf("failed to configure IPFS addresses: %w", err)
 	}
 
+	// Set a disk-aware Datastore.StorageMax so GC has a real budget to reclaim
+	// against (kubo's default is an unenforced 10GB). Reclaim itself is driven by
+	// the orama-ipfs-gc.timer; the daemon runs without in-process GC.
+	if err := ii.configureDatastore(ipfsRepoPath); err != nil {
+		return fmt.Errorf("failed to configure IPFS datastore: %w", err)
+	}
+
 	// Always disable AutoConf for private swarm when swarm.key is present
 	// This is critical - IPFS will fail to start if AutoConf is enabled on a private network
 	// We do this even for existing repos to fix repos initialized before this fix was applied
@@ -299,6 +336,59 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 		return fmt.Errorf("failed to write IPFS config: %w", err)
 	}
 
+	return nil
+}
+
+// setDatastoreStorageMax returns the IPFS config JSON with Datastore.StorageMax
+// set to storageMax, preserving every other field (including other Datastore
+// keys such as GCPeriod / StorageGCWatermark). Pure helper for testability.
+func setDatastoreStorageMax(configData []byte, storageMax string) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configData, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse IPFS config: %w", err)
+	}
+
+	datastore, ok := config["Datastore"].(map[string]interface{})
+	if !ok {
+		datastore = make(map[string]interface{})
+	}
+	datastore["StorageMax"] = storageMax
+	config["Datastore"] = datastore
+
+	out, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal IPFS config: %w", err)
+	}
+	return out, nil
+}
+
+// configureDatastore sets Datastore.StorageMax to a disk-aware budget so IPFS GC
+// has a real target to reclaim against (kubo's default is an unenforced 10GB
+// regardless of disk size). Idempotent: runs on every install/upgrade via
+// InitializeRepo. Preserves all other config fields.
+func (ii *IPFSInstaller) configureDatastore(ipfsRepoPath string) error {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(ipfsRepoPath, &stat); err != nil {
+		return fmt.Errorf("failed to stat filesystem for IPFS repo %s: %w", ipfsRepoPath, err)
+	}
+	totalBytes := stat.Blocks * uint64(stat.Bsize)
+	storageMax := ipfsStorageMaxForDisk(totalBytes)
+
+	configPath := filepath.Join(ipfsRepoPath, "config")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read IPFS config: %w", err)
+	}
+	updated, err := setDatastoreStorageMax(data, storageMax)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(configPath, updated, 0600); err != nil {
+		return fmt.Errorf("failed to write IPFS config: %w", err)
+	}
+
+	fmt.Fprintf(ii.logWriter, "    IPFS Datastore.StorageMax set to %s (%.0f%% of %dGB disk)...\n",
+		storageMax, ipfsStorageMaxDiskFraction*100, totalBytes/1_000_000_000)
 	return nil
 }
 

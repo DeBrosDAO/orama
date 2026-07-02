@@ -86,6 +86,11 @@ type ClusterManager struct {
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
 	provisioning   map[string]bool // namespace -> in progress
+
+	// Leadership-locality reconciler cooldown (bugboard #708): per-namespace
+	// timestamp of the last leadership transfer, to bound churn. Lazy-init.
+	leaderLocalityMu       sync.Mutex
+	leaderLocalityCooldown map[string]time.Time
 }
 
 // NewClusterManager creates a new cluster manager
@@ -1785,8 +1790,24 @@ func (cm *ClusterManager) saveLocalState(state *ClusterLocalState) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 	path := filepath.Join(dir, "cluster-state.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write state file: %w", err)
+	// Atomic write: this file now carries the namespace TURN shared secret
+	// (bugboard #130) and is rewritten from multiple converge paths. Write a
+	// temp file then rename over the target so a reader (or a concurrent
+	// writer) never observes a half-written secret — rename is atomic on the
+	// same filesystem. 0600 + chmod on the temp file keeps the secret out of
+	// world/group read; the rename then makes the live file 0600 too, which
+	// also tightens a file an older release left at 0644.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("failed to write temp state file: %w", err)
+	}
+	if err := os.Chmod(tmp, 0600); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to set temp state file permissions: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to rename state file into place: %w", err)
 	}
 	cm.logger.Info("Saved cluster local state", zap.String("namespace", state.NamespaceName), zap.String("path", path))
 	return nil
@@ -1838,12 +1859,78 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 
 // restoreWebRTC is the resolved WebRTC gateway config for a restored
 // namespace gateway.
+const (
+	// webrtcResolveRetries / webrtcResolveRetryDelay bound how long the converge
+	// waits for a slow/just-restarted node's namespace rqlite to become readable
+	// before giving up on the WebRTC secret. A distant node (high WG RTT) can
+	// take a few seconds to sync; without this it reads empty once and comes up
+	// with TURN disabled (bugboard #130). 5 × 2s = 10s ceiling on the cold path.
+	webrtcResolveRetries    = 5
+	webrtcResolveRetryDelay = 2 * time.Second
+)
+
+// resolveWebRTCConfigWithRetry calls fetch up to `retries` times, sleeping
+// `delay` between attempts, and returns the first result whose error is nil. A
+// distant/just-restarted node's namespace rqlite can take a few seconds to
+// become readable; without the retry the read fails once and the gateway comes
+// up with TURN disabled (bugboard #130). A genuine decrypt failure (stale
+// cluster-secret) also errors and exhausts the retries, returning the final
+// error so the caller can mark the result unresolved. `sleep` is injected so
+// unit tests exercise the loop without real delay.
+func resolveWebRTCConfigWithRetry(retries int, delay time.Duration, sleep func(time.Duration), fetch func() (*WebRTCConfig, error)) (*WebRTCConfig, error) {
+	var cfg *WebRTCConfig
+	var err error
+	for attempt := 0; attempt < retries; attempt++ {
+		cfg, err = fetch()
+		if err == nil {
+			return cfg, nil
+		}
+		if attempt < retries-1 {
+			sleep(delay)
+		}
+	}
+	return cfg, err
+}
+
+// applyResolvedWebRTCToState copies a freshly-resolved WebRTC config into the
+// local cluster state so a future cold start can read the TURN secret from disk
+// instead of the (possibly-slow) namespace rqlite (bugboard #130). Returns true
+// iff the state changed, so the caller only rewrites the on-disk file when
+// there's something to persist. Pure — unit-testable without a live cluster.
+func applyResolvedWebRTCToState(state *ClusterLocalState, wr restoreWebRTC) bool {
+	hasTURN := wr.turnSecret != ""
+	hasSFU := wr.sfuPort > 0
+	if state.TURNSharedSecret == wr.turnSecret &&
+		state.TURNDomain == wr.turnDomain &&
+		state.TURNStealthDomain == wr.stealthDomain &&
+		state.SFUSignalingPort == wr.sfuPort &&
+		state.HasTURN == hasTURN &&
+		state.HasSFU == hasSFU {
+		return false
+	}
+	state.HasTURN = hasTURN
+	state.HasSFU = hasSFU
+	state.TURNSharedSecret = wr.turnSecret
+	state.TURNDomain = wr.turnDomain
+	state.TURNStealthDomain = wr.stealthDomain
+	state.SFUSignalingPort = wr.sfuPort
+	return true
+}
+
 type restoreWebRTC struct {
 	enabled       bool
 	sfuPort       int
 	turnDomain    string
 	turnSecret    string
 	stealthDomain string // feat-124: empty when webrtc stealth is disabled
+	// unresolved is true when the DB lookup ERRORED (vs. resolved-but-not-
+	// enabled) AND the local cache had no secret to fall back to. The caller
+	// must NOT write a WebRTC-disabled gateway config off an unresolved
+	// lookup — that silently kills turn.credentials on a node that should
+	// serve TURN (bugboard #130: a decrypt failure after cluster-secret
+	// rotation was swallowed into "disabled"). enabled is always false when
+	// unresolved.
+	unresolved bool
 }
 
 // chooseRestoreWebRTC resolves a restored gateway's WebRTC config. TWO
@@ -1856,9 +1943,18 @@ type restoreWebRTC struct {
 //   - SFU (sfuPort) is PER-NODE — non-zero only when this node runs a
 //     local SFU (for /v1/webrtc/signal + /rooms proxying).
 //
-// Precedence: prefer the local state file; fall back to the DB (source of
-// truth) when the state file lacks the TURN secret (the namespace-wide
-// "webrtc is enabled" marker). dbFetch is lazy — only hit when needed.
+// Precedence: DB-FIRST. The namespace_webrtc_config row is the source of
+// truth for the CURRENT TURN secret, so we always consult it. The local
+// cluster-state.json cache (dbFetch's counterpart) is a FALLBACK ONLY —
+// used when the DB read fails (a slow/just-restarted node whose namespace
+// rqlite has not synced yet). This is the bugboard #130 FOLLOW-UP fix: the
+// earlier state-FIRST read short-circuited the DB whenever the cache held a
+// secret and so NEVER re-validated a present-but-stale cached secret. If a
+// secret was rotated (disable→enable) while a node was offline, that node
+// kept serving the OLD secret indefinitely. DB-first means a stale cache
+// can survive at most until the DB becomes readable on the next converge —
+// never indefinitely — while still letting a genuinely DB-down node come up
+// on TURN via the cache (the #130 resilience the cache was added for).
 //
 // `enabled` is true when EITHER a TURN secret OR an SFU port is present,
 // so the caller knows to write a webrtc block. A non-SFU gateway gets
@@ -1869,43 +1965,47 @@ type restoreWebRTC struct {
 // standing up the full restore path (systemd spawner + DB + port store).
 func chooseRestoreWebRTC(
 	stateHasSFU bool, stateSFUPort int, stateTURNDomain, stateTURNSecret, stateStealthDomain string,
-	dbFetch func() (turnSecret, turnDomain, stealthDomain string, sfuPort int),
+	dbFetch func() (turnSecret, turnDomain, stealthDomain string, sfuPort int, resolved bool),
 ) restoreWebRTC {
-	turnSecret := stateTURNSecret
-	turnDomain := stateTURNDomain
-	stealthDomain := stateStealthDomain
+	// DB-first: consult the source of truth before trusting the local cache.
+	dbSecret, dbDomain, dbStealth, dbSFU, resolved := dbFetch()
+	if resolved {
+		// The DB read landed and is authoritative. dbSecret == "" means the
+		// namespace genuinely has no WebRTC enabled — honor that (disable),
+		// do NOT fall back to a possibly-stale cached secret. A present
+		// secret is the CURRENT one and wins over any cached value.
+		if dbSecret == "" {
+			return restoreWebRTC{}
+		}
+		return restoreWebRTC{
+			enabled:       true,
+			sfuPort:       dbSFU,
+			turnDomain:    dbDomain,
+			turnSecret:    dbSecret,
+			stealthDomain: dbStealth,
+		}
+	}
+
+	// The DB/decrypt lookup ERRORED (slow node whose namespace rqlite is not
+	// readable yet, or a decrypt failure after a cluster-secret rotation).
+	// Fall back to the locally-cached secret so TURN still comes up — possibly
+	// stale, but functional, and self-correcting on the next converge once the
+	// DB is readable (NOT indefinite). If the cache is empty too, signal
+	// unresolved so the caller preserves the running gateway config instead of
+	// blanking TURN (bugboard #130).
 	sfuPort := 0
 	if stateHasSFU && stateSFUPort > 0 {
 		sfuPort = stateSFUPort
 	}
-
-	// Fall back to the DB when the state file has no TURN secret — that's
-	// the marker that the namespace has WebRTC enabled at all. The state
-	// file is not updated by EnableWebRTC, so a namespace enabled after
-	// the state file was written reaches here with an empty secret.
-	// (Stealth toggles DO rewrite cluster state on every node, so the
-	// state-first read stays fresh for stealthDomain too.)
-	if turnSecret == "" {
-		if dbSecret, dbDomain, dbStealth, dbSFU := dbFetch(); dbSecret != "" {
-			turnSecret = dbSecret
-			if turnDomain == "" {
-				turnDomain = dbDomain
-			}
-			if stealthDomain == "" {
-				stealthDomain = dbStealth
-			}
-			if sfuPort == 0 {
-				sfuPort = dbSFU
-			}
-		}
+	if stateTURNSecret == "" && sfuPort == 0 {
+		return restoreWebRTC{unresolved: true}
 	}
-
 	return restoreWebRTC{
-		enabled:       turnSecret != "" || sfuPort > 0,
+		enabled:       stateTURNSecret != "" || sfuPort > 0,
 		sfuPort:       sfuPort,
-		turnDomain:    turnDomain,
-		turnSecret:    turnSecret,
-		stealthDomain: stealthDomain,
+		turnDomain:    stateTURNDomain,
+		turnSecret:    stateTURNSecret,
+		stealthDomain: stateStealthDomain,
 	}
 }
 
@@ -2054,18 +2154,44 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
 		}
 
-		// Resolve WebRTC config. Prefer the local state file; fall back to
-		// the DB (source of truth) to self-heal stale state. Bugboard #25 —
-		// the state file is NOT updated by EnableWebRTC, so a namespace
-		// enabled AFTER its state file was written carries no SFU/TURN
-		// fields here. The lazy dbFetch only hits the DB when the state
-		// file is incomplete.
+		// Resolve WebRTC config. DB-FIRST (source of truth for the CURRENT
+		// secret); the local state cache is consulted only when the DB read
+		// fails (bugboard #130 follow-up — see chooseRestoreWebRTC). Bugboard
+		// #25 — the state file is NOT updated by EnableWebRTC, so a namespace
+		// enabled AFTER its state file was written carries no SFU/TURN fields
+		// here; reading the DB re-materializes them.
 		wr := chooseRestoreWebRTC(
 			state.HasSFU, state.SFUSignalingPort, state.TURNDomain, state.TURNSharedSecret, state.TURNStealthDomain,
-			func() (turnSecret, turnDomain, stealthDomain string, sfuPort int) {
-				webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-				if err != nil || webrtcCfg == nil {
-					return "", "", "", 0
+			func() (turnSecret, turnDomain, stealthDomain string, sfuPort int, resolved bool) {
+				// Retry the read on a transient error. A distant/slow node's
+				// namespace rqlite may not be synced/readable yet at cold-start
+				// converge time — without the retry the read fails once and the
+				// gateway is written with TURN disabled (bugboard #130). The
+				// secret IS in the DB; we just need the read to land once the
+				// follower catches up (typically a few seconds). A genuine
+				// decrypt failure (stale key) also errors here and will exhaust
+				// the retries → unresolved → the caller preserves the running
+				// config rather than blanking it.
+				webrtcCfg, err := resolveWebRTCConfigWithRetry(
+					webrtcResolveRetries, webrtcResolveRetryDelay, time.Sleep,
+					func() (*WebRTCConfig, error) {
+						return cm.GetWebRTCConfig(ctx, state.NamespaceName)
+					})
+				if err != nil {
+					// Persistent error after retries (slow read that never
+					// landed, or a decrypt failure). Do NOT swallow into
+					// "disabled" — surface loudly and signal unresolved so the
+					// caller preserves the running config (bugboard #130).
+					cm.logger.Error("WebRTC TURN secret unresolvable on this node after retries — refusing to silently disable TURN; preserving existing gateway config. If this is a cluster-secret rotation, regenerate with `orama namespace disable webrtc` then `orama namespace enable webrtc`.",
+						zap.String("namespace", state.NamespaceName),
+						zap.String("node_id", cm.localNodeID),
+						zap.Int("attempts", webrtcResolveRetries),
+						zap.Error(err))
+					return "", "", "", 0, false
+				}
+				if webrtcCfg == nil {
+					// Resolved cleanly: the namespace genuinely has no WebRTC.
+					return "", "", "", 0, true
 				}
 				// TURN is namespace-wide; SFU port is per-node and may be
 				// absent on a gateway-only (non-SFU) node — that's fine,
@@ -2077,7 +2203,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				return webrtcCfg.TURNSharedSecret,
 					fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
 					cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-					sfu
+					sfu, true
 			},
 		)
 		if wr.enabled {
@@ -2089,25 +2215,90 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			gwCfg.TURNDomain = wr.turnDomain
 			gwCfg.TURNSecret = wr.turnSecret
 			gwCfg.TURNStealthDomain = wr.stealthDomain
+
+			// Cache the resolved secret into THIS node's local state so that if
+			// the NEXT cold start can't read the namespace rqlite (a distant/
+			// slow node whose follower hasn't synced), chooseRestoreWebRTC can
+			// fall back to this on-disk secret instead of coming up with TURN
+			// disabled (bugboard #130). The cache is a FALLBACK — DB-first
+			// resolution still prefers the live DB secret whenever it's
+			// readable, so this cached value can never pin the node to a stale
+			// secret. Each node self-heals its own cache on a successful
+			// resolve; nothing is sent cross-node.
+			if applyResolvedWebRTCToState(state, wr) {
+				if err := cm.saveLocalState(state); err != nil {
+					cm.logger.Warn("Failed to cache resolved WebRTC config to local state (cold start may fall back to the DB read next boot)",
+						zap.String("namespace", state.NamespaceName), zap.Error(err))
+				} else {
+					cm.logger.Info("Cached resolved WebRTC config to local state for cold-start resilience (bugboard #130)",
+						zap.String("namespace", state.NamespaceName))
+				}
+			}
+		} else if !wr.unresolved {
+			// The DB read RESOLVED that this namespace has NO WebRTC (disabled).
+			// Clear any stale cached secret from local state so a future cold
+			// start that hits a transient DB error can't fall back to it and
+			// resurrect TURN for a disabled namespace — the hole being: a node
+			// that was offline during DisableWebRTC never received the cleared
+			// state push and would otherwise keep serving the old secret. Only
+			// do this on a RESOLVED-disabled read, NEVER on an unresolved
+			// (DB-error) one — there the cache IS the fallback and must survive.
+			if applyResolvedWebRTCToState(state, restoreWebRTC{}) {
+				if err := cm.saveLocalState(state); err != nil {
+					cm.logger.Warn("Failed to clear stale cached WebRTC secret from local state after DB reported the namespace disabled",
+						zap.String("namespace", state.NamespaceName), zap.Error(err))
+				} else {
+					cm.logger.Info("Cleared stale cached WebRTC secret from local state (namespace disabled in DB)",
+						zap.String("namespace", state.NamespaceName))
+				}
+			}
 		}
 
 		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
-			// Gateway is already up. Reconcile config drift (bugboard #25 —
-			// the WARM case): if the running gateway's on-disk config has a
-			// WebRTC block that differs from the desired (e.g. it lost the
-			// block on a prior restart where it stayed healthy and the
-			// cold-spawn path below never ran), rewrite the config + restart.
-			// ReconcileGateway is a no-op when the on-disk block already
-			// matches, so this does NOT cause a restart loop on every boot.
-			if rerr := cm.systemdSpawner.ReconcileGateway(ctx, state.NamespaceName, cm.localNodeID, gwCfg); rerr != nil {
-				cm.logger.Warn("Gateway WebRTC reconcile failed (leaving running config as-is)",
-					zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+			switch {
+			case wr.unresolved:
+				// Bugboard #130 guard: the WebRTC secret could not be resolved
+				// (DB/decrypt error, logged above). The gateway is already up
+				// and may be serving TURN from a valid on-disk secret — do NOT
+				// reconcile it to the empty/disabled block we'd otherwise
+				// build, which would kill turn.credentials on this node. Leave
+				// the running config untouched; the operator regenerates the
+				// secret.
+				//
+				// Note: this also defers ReconcileGateway's #837
+				// secrets-encryption-key reconcile for this one converge pass.
+				// That is acceptable — the operator action that fixes the
+				// unresolved TURN secret (regenerate + restart) re-runs the
+				// full reconcile, and pre-fix this path would have corrupted
+				// the WebRTC block anyway.
+				cm.logger.Error("Gateway up but WebRTC secret unresolved — skipping reconcile to avoid disabling TURN on the running config (bugboard #130)",
+					zap.String("namespace", state.NamespaceName))
+			default:
+				// Gateway is already up. Reconcile config drift (bugboard #25 —
+				// the WARM case): if the running gateway's on-disk config has a
+				// WebRTC block that differs from the desired (e.g. it lost the
+				// block on a prior restart where it stayed healthy and the
+				// cold-spawn path below never ran), rewrite the config +
+				// restart. ReconcileGateway is a no-op when the on-disk block
+				// already matches, so this does NOT cause a restart loop.
+				if rerr := cm.systemdSpawner.ReconcileGateway(ctx, state.NamespaceName, cm.localNodeID, gwCfg); rerr != nil {
+					cm.logger.Warn("Gateway WebRTC reconcile failed (leaving running config as-is)",
+						zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+				}
 			}
 		} else {
-			// Gateway is down → cold spawn with the resolved config.
-			if wr.enabled && !state.HasSFU {
+			// Gateway is down → cold spawn. We must bring a gateway up
+			// regardless (the namespace needs one); but if the WebRTC secret
+			// was unresolved we can't write a working TURN block, so warn
+			// loudly that TURN is degraded on this node until the secret is
+			// regenerated (bugboard #130).
+			switch {
+			case wr.unresolved:
+				cm.logger.Error("Cold-spawning gateway with TURN UNAVAILABLE — WebRTC secret unresolved on this node; turn.credentials will return namespace_not_configured until it is regenerated (`orama namespace disable webrtc` then `orama namespace enable webrtc`)",
+					zap.String("namespace", state.NamespaceName))
+			case wr.enabled && !state.HasSFU:
 				cm.logger.Info("Re-materialized WebRTC gateway config from DB (state file was stale)",
 					zap.String("namespace", state.NamespaceName),
 					zap.Int("sfu_port", wr.sfuPort))
@@ -2122,29 +2313,44 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 4. Restore TURN (if enabled)
 	if state.HasTURN && state.TURNRelayPortStart > 0 {
+		// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by
+		// the root-level Phase 6b firewall setup, which is TURN-aware. orama-node
+		// runs as a NON-root user and cannot modify ufw, so the firewall reconcile
+		// deliberately does NOT live here — it would just spawn a doomed `ufw`
+		// call. The restore below only re-spawns the TURN process itself.
 		turnRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
 		if !turnRunning {
 			// TURN config needs the shared secret from DB — we can't persist it to disk state.
 			// If DB is available, fetch it; otherwise skip TURN restore (it will come back when DB is ready).
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {
-				turnCfg := TURNInstanceConfig{
-					Namespace:       state.NamespaceName,
-					NodeID:          cm.localNodeID,
-					ListenAddr:      fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
-					TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
-					PublicIP:        "", // Will be resolved by spawner or from node info
-					Realm:           cm.baseDomain,
-					AuthSecret:      webrtcCfg.TURNSharedSecret,
-					RelayPortStart:  state.TURNRelayPortStart,
-					RelayPortEnd:    state.TURNRelayPortEnd,
-					TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
-					StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-				}
-				if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
-					cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+				// Resolve this node's public IP. Passing an empty PublicIP here
+				// (the old behavior) produced a TURN config that crash-loops on
+				// "public_ip must not be empty" — killing TURN on the node and
+				// preventing AddWebRTCRules from ever running (bugboard #846).
+				publicIP, ipErr := cm.getLocalNodePublicIP(ctx)
+				if ipErr != nil {
+					cm.logger.Error("Skipping TURN restore: cannot resolve local node public IP (an empty public_ip crash-loops the TURN server)",
+						zap.String("namespace", state.NamespaceName), zap.Error(ipErr))
 				} else {
-					cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName))
+					turnCfg := TURNInstanceConfig{
+						Namespace:       state.NamespaceName,
+						NodeID:          cm.localNodeID,
+						ListenAddr:      fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
+						TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
+						PublicIP:        publicIP,
+						Realm:           cm.baseDomain,
+						AuthSecret:      webrtcCfg.TURNSharedSecret,
+						RelayPortStart:  state.TURNRelayPortStart,
+						RelayPortEnd:    state.TURNRelayPortEnd,
+						TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
+						StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
+					}
+					if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
+						cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+					} else {
+						cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName), zap.String("public_ip", publicIP))
+					}
 				}
 			} else {
 				cm.logger.Warn("Skipping TURN restore: WebRTC config not available from DB",

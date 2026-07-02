@@ -388,6 +388,49 @@ func TestSend_HighPrioritySetsAPNsHigh(t *testing.T) {
 	}
 }
 
+// TestSend_setsCollapseIDFromMessageID is the bugboard #833 guard: a non-empty
+// MessageID must flow to the apns-collapse-id header so a superseded push
+// replaces the prior one on-device.
+func TestSend_setsCollapseIDFromMessageID(t *testing.T) {
+	fake := &fakePushClient{resp: &apns2.Response{StatusCode: http.StatusOK}}
+	p := newTestProvider(t, "com.example.app", fake)
+	_ = p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "t",
+		Title:       "x",
+		MessageID:   "chat-msg-42",
+	})
+	if fake.lastSent.CollapseID != "chat-msg-42" {
+		t.Errorf("CollapseID = %q; want %q", fake.lastSent.CollapseID, "chat-msg-42")
+	}
+}
+
+// TestSend_emptyMessageID_noCollapseID: no MessageID → no collapse (each push
+// stays distinct, preserving the pre-#833 behavior).
+func TestSend_emptyMessageID_noCollapseID(t *testing.T) {
+	fake := &fakePushClient{resp: &apns2.Response{StatusCode: http.StatusOK}}
+	p := newTestProvider(t, "com.example.app", fake)
+	_ = p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Title: "x"})
+	if fake.lastSent.CollapseID != "" {
+		t.Errorf("CollapseID = %q; want empty", fake.lastSent.CollapseID)
+	}
+}
+
+// TestSend_collapseIDTruncatedTo64Bytes: APNs rejects an apns-collapse-id over
+// 64 bytes — we truncate rather than let the whole push fail.
+func TestSend_collapseIDTruncatedTo64Bytes(t *testing.T) {
+	fake := &fakePushClient{resp: &apns2.Response{StatusCode: http.StatusOK}}
+	p := newTestProvider(t, "com.example.app", fake)
+	long := strings.Repeat("a", 100)
+	_ = p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "t",
+		Title:       "x",
+		MessageID:   long,
+	})
+	if len(fake.lastSent.CollapseID) != 64 {
+		t.Errorf("CollapseID len = %d; want 64 (truncated)", len(fake.lastSent.CollapseID))
+	}
+}
+
 // ---- ParseCredentials tests -----------------------------------------
 
 func TestParseCredentials_RoundTrip(t *testing.T) {

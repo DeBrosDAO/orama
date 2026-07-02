@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// defaultTURNRelayPortStart / defaultTURNRelayPortEnd are the full TURN relay
+// UDP port range — a superset of every namespace's per-tenant sub-range. Phase
+// 6b opens this whole range on any node that hosts a TURN instance (bugboard
+// #846) so the firewall reset never closes the relay.
+const (
+	defaultTURNRelayPortStart = 49152
+	defaultTURNRelayPortEnd   = 65535
+)
+
 // FirewallConfig holds the configuration for UFW firewall rules
 type FirewallConfig struct {
 	SSHPort       int  // default 22

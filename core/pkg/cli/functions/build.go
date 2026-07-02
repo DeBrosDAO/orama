@@ -18,9 +18,9 @@ import (
 // `_initialize`, no `_start`) — see the comment on cfg loading in
 // buildFunction for the full rationale. Stateless (default) functions
 // stay on command mode for back-compat.
-func tinygoBuildArgs(outputPath string, wsPersistent bool) []string {
+func tinygoBuildArgs(outputPath string, cShared bool) []string {
 	args := []string{"build", "-o", outputPath, "-target", "wasi"}
-	if wsPersistent {
+	if cShared {
 		args = append(args, "-buildmode=c-shared")
 	}
 	args = append(args, ".")
@@ -93,12 +93,16 @@ func buildFunction(dir string) (string, error) {
 
 	fmt.Printf("Building %s...\n", absDir)
 
-	// Build args. Default = command mode. Persistent WS functions get
-	// reactor mode via `-buildmode=c-shared` so TinyGo emits
-	// `_initialize` and the runtime guard activates.
-	tinygoArgs := tinygoBuildArgs(outputPath, cfg.WSPersistent)
+	// Build args. Default = command mode. Persistent WS functions AND
+	// reactor-mode stateless functions (bugboard #898) get `-buildmode=c-shared`
+	// so TinyGo emits `_initialize` (WASI reactor) and the runtime drives the
+	// exported entrypoints (ws_open/ws_frame/ws_close, or handle) explicitly.
+	cShared := cfg.WSPersistent || cfg.Reactor
+	tinygoArgs := tinygoBuildArgs(outputPath, cShared)
 	if cfg.WSPersistent {
 		fmt.Printf("  (ws_persistent=true → using -buildmode=c-shared for WASI-reactor semantics)\n")
+	} else if cfg.Reactor {
+		fmt.Printf("  (reactor=true → using -buildmode=c-shared; export handle(ptr,len)->packed)\n")
 	}
 
 	buildCmd := exec.Command(tinygoPath, tinygoArgs...)

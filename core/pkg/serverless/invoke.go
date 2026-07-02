@@ -118,16 +118,16 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	// #264). The auth boundary for system triggers is at REGISTRATION
 	// time (HTTP `POST /v1/functions/{name}/triggers`, or deploy-time
 	// auto-register from function.yaml), not at firing time.
-	if !isSystemTrigger(req.TriggerType) {
-		authorized, err := i.CanInvoke(ctx, req.Namespace, req.FunctionName, req.CallerWallet)
-		if err != nil || !authorized {
-			return &InvokeResponse{
-				RequestID:  requestID,
-				Status:     InvocationStatusError,
-				Error:      "unauthorized",
-				DurationMS: time.Since(startTime).Milliseconds(),
-			}, ErrUnauthorized
-		}
+	if !isSystemTrigger(req.TriggerType) && !canInvokeFn(fn, req.CallerWallet) {
+		// Authorization uses the function we already fetched above —
+		// CanInvoke would re-`registry.Get` it, a redundant leader-routed
+		// read on every op (bugboard #708).
+		return &InvokeResponse{
+			RequestID:  requestID,
+			Status:     InvocationStatusError,
+			Error:      "unauthorized",
+			DurationMS: time.Since(startTime).Milliseconds(),
+		}, ErrUnauthorized
 	}
 
 	// Get environment variables
@@ -281,6 +281,15 @@ func (i *Invoker) executeWithRetry(ctx context.Context, fn *Function, input []by
 
 // isRetryable determines if an error should trigger a retry.
 func (i *Invoker) isRetryable(err error) bool {
+	// A WASM-fetch timeout is already retried inside GetWASMBytes (independent
+	// 4s×3 budget) and is surfaced to the client as retryable
+	// (FUNCTION_UNAVAILABLE). Re-running the whole invocation here would just
+	// re-fetch and amplify IPFS load, so don't retry it at the invoker layer —
+	// the client retries the request instead. (bugboard #137)
+	if errors.Is(err, ErrWASMFetchTimeout) {
+		return false
+	}
+
 	// Don't retry validation errors or not-found errors
 	if IsNotFound(err) {
 		return false
@@ -493,7 +502,7 @@ func (i *Invoker) BatchInvoke(ctx context.Context, req *BatchInvokeRequest) (*Ba
 func isSystemTrigger(t TriggerType) bool {
 	switch t {
 	case TriggerTypeCron, TriggerTypePubSub, TriggerTypeDatabase,
-		TriggerTypeTimer, TriggerTypeJob:
+		TriggerTypeTimer, TriggerTypeJob, TriggerTypeInternal:
 		return true
 	}
 	return false
@@ -504,20 +513,19 @@ func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string,
 	if err != nil {
 		return false, err
 	}
+	return canInvokeFn(fn, callerWallet), nil
+}
 
-	// Public functions can be invoked by anyone (auth middleware allows
-	// the request through without credentials).
+// canInvokeFn is the pure authorization decision for an already-fetched
+// function, so the hot Invoke path doesn't re-read the registry (bugboard
+// #708). Public functions are open; a private function only requires that the
+// caller has SOME identity — the auth middleware already verified namespace
+// membership before the function ran.
+func canInvokeFn(fn *Function, callerWallet string) bool {
 	if fn.IsPublic {
-		return true, nil
+		return true
 	}
-
-	// Private function: require an authenticated caller. The auth
-	// middleware has already verified the caller belongs to this
-	// namespace (either via JWT `namespace` claim or via API-key
-	// namespace lookup) before this function ever runs, so the only
-	// thing we need to confirm here is that the caller has SOME
-	// identity at all (i.e. the request wasn't anonymous).
-	return strings.TrimSpace(callerWallet) != "", nil
+	return strings.TrimSpace(callerWallet) != ""
 }
 
 // GetFunctionInfo returns basic info about a function for invocation.

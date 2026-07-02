@@ -58,6 +58,14 @@ type PushMessage struct {
 	Priority        PushPriority
 	TargetProvider  string // dispatcher-side positive filter; "" = fanout. See type doc.
 	ExcludeProvider string // dispatcher-side negative filter; "" = no exclusion. See type doc.
+
+	// MessageID is an optional collapse identifier (bugboard #833). When set,
+	// providers map it to their native dedup/replace key so a superseded or
+	// duplicate push collapses on-device instead of stacking: APNs sets
+	// apns-collapse-id, Expo sets collapseId (→ FCM collapse_key / APNs
+	// apns-collapse-id under the hood). Empty = no collapsing (each push is
+	// distinct). APNs caps the id at 64 bytes; longer ids are truncated.
+	MessageID string
 }
 
 // PushProvider is implemented by each backend (ntfy, expo, apns).
@@ -89,9 +97,11 @@ type PushDevice struct {
 
 // PushDeviceStore persists per-user device registrations.
 type PushDeviceStore interface {
-	// Upsert registers or updates a device. The Token is encrypted by the
-	// implementation before being written to durable storage.
-	Upsert(ctx context.Context, dev PushDevice) error
+	// Upsert registers or updates a device and returns the persisted row id.
+	// The Token is encrypted by the implementation before being written to
+	// durable storage. Implementations enforce token-exclusivity (bugboard
+	// #981): a physical token maps to a single active owner per namespace.
+	Upsert(ctx context.Context, dev PushDevice) (string, error)
 
 	// Delete removes a single device by ID, scoped to the namespace.
 	Delete(ctx context.Context, namespace, id string) error

@@ -43,9 +43,10 @@ type AuthService interface {
 	// Verifies signature, expiration, and issuer.
 	ParseAndVerifyJWT(token string) (*JWTClaims, error)
 
-	// GenerateJWT creates a new signed JWT with the specified claims and TTL.
+	// GenerateJWT creates a new signed JWT with the specified subject, TTL, and
+	// optional additive custom claims (nil = none; bugboard #548).
 	// Returns: token, expirationUnix, error.
-	GenerateJWT(namespace, subject string, ttl time.Duration) (string, int64, error)
+	GenerateJWT(namespace, subject string, ttl time.Duration, custom map[string]string) (string, int64, error)
 
 	// RegisterApp registers a new client application with the gateway.
 	// Returns an application ID that can be used for OAuth flows.

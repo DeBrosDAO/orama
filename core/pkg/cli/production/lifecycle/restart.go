@@ -43,6 +43,16 @@ func HandleRestartWithFlags(force bool) {
 		return
 	}
 
+	// The TLS/DNS frontend (caddy, coredns) is NOT part of GetProductionServices,
+	// but caddy/coredns declare `Requires=orama-node.service`, so stopping
+	// orama-node below cascade-stops them via systemd. `Requires` propagates a
+	// STOP but never a START, and StartServicesOrdered only starts the orama
+	// services — so without this a bare `orama node restart` leaves caddy dead
+	// and the node's :443 HTTPS frontend offline until the next reboot. Capture
+	// which frontend units are running now and bring exactly those back at the
+	// end, after the gateway is healthy (caddy's own ExecStartPre gates on it).
+	frontendToRestore := activeFrontendServices()
+
 	// Stop namespace services first (same as stop command)
 	fmt.Printf("\n  Stopping namespace services...\n")
 	stopAllNamespaceServices()
@@ -100,5 +110,45 @@ func HandleRestartWithFlags(force bool) {
 	fmt.Printf("\n  Starting services...\n")
 	utils.StartServicesOrdered(services, "start")
 
+	// Bring the TLS/DNS frontend back up (see capture above). Done last so the
+	// embedded gateway is already started; caddy's ExecStartPre then clears its
+	// localhost:6001/health wait quickly instead of timing out.
+	for _, svc := range frontendToRestore {
+		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
+			fmt.Printf("  Warning: Failed to start %s: %v\n", svc, err)
+		} else {
+			fmt.Printf("  Started %s\n", svc)
+		}
+	}
+
 	fmt.Printf("\n All services restarted\n")
+}
+
+// frontendServices are the TLS/DNS units that sit in front of the node and are
+// torn down (but not brought back) by an orama-node restart — see HandleRestartWithFlags.
+var frontendServices = []string{"coredns", "caddy"}
+
+// activeFrontendServices returns the frontend units that are installed AND
+// currently active, so a restart can restore exactly the set that was running.
+func activeFrontendServices() []string {
+	return selectFrontendToRestore(frontendServices, func(svc string) bool {
+		if !utils.ServiceUnitExists(svc) {
+			return false
+		}
+		running, _ := utils.IsServiceActive(svc)
+		return running
+	})
+}
+
+// selectFrontendToRestore filters candidates to those shouldRestore reports
+// true for, preserving order. Split from the systemd probing so the restore
+// policy is unit-testable without a live host.
+func selectFrontendToRestore(candidates []string, shouldRestore func(string) bool) []string {
+	var out []string
+	for _, svc := range candidates {
+		if shouldRestore(svc) {
+			out = append(out, svc)
+		}
+	}
+	return out
 }
