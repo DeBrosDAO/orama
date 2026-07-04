@@ -8,6 +8,7 @@ import (
 	"time"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 )
 
 // APIKeyToJWTHandler issues a short-lived JWT from a valid API key.
@@ -32,49 +33,76 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate and get namespace. API keys are stored HMAC-hashed (see
-	// Service.HashAPIKey), so resolve the hashed key first and fall back to the
-	// raw key for any legacy unhashed rows during a rolling upgrade — mirroring
-	// the gateway middleware's lookupAPIKeyNamespace. Without the hashed lookup
-	// this endpoint always returned "invalid API key" for real keys, so api-key
-	// holders could never exchange for a JWT.
-	db := h.netClient.Database()
 	ctx := r.Context()
-	internalCtx := h.internalAuthFn(ctx)
-	// Also fetch the key's scopes and reject revoked keys: the minted JWT must
-	// carry the SAME scope set as the key, otherwise a narrow runtime key could
-	// exchange for a JWT and escalate to admin (bugboard #148).
-	const q = "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
 
+	// Resolve the caller's namespace and effective scopes.
+	//
+	// The auth middleware has ALREADY validated this API key against the MAIN
+	// cluster RQLite — either directly (on the main gateway) or, when this
+	// handler runs on a NAMESPACE gateway, via the trusted X-Internal-Auth-*
+	// headers the main gateway sets after validating and before proxying. It
+	// stores the resolved namespace + scope set on the request context.
+	//
+	// We MUST trust that context here rather than re-query the key. Namespace
+	// gateways have an ISOLATED RQLite whose api_keys table is EMPTY (API keys
+	// live in the main cluster RQLite only). This endpoint was the one handler
+	// that bypassed the internal-auth context and self-queried the local DB, so
+	// `POST /v1/auth/token` returned "invalid API key" for EVERY real key on a
+	// namespace gateway — even though the same key authenticated fine on every
+	// other path (bugboard #147/#148 two-gateway regression).
 	ns := ""
-	rawScopes := ""
-	for _, candidate := range apiKeyLookupCandidates(key, h.authService.HashAPIKey(key)) {
-		res, err := db.Query(internalCtx, q, candidate)
-		if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 {
-			continue
-		}
-		row, ok := res.Rows[0].([]interface{})
-		if !ok || len(row) == 0 {
-			continue
-		}
-		if s, ok := row[0].(string); ok && s != "" {
-			ns = s
-			if len(row) > 1 {
-				if sc, ok := row[1].(string); ok {
-					rawScopes = sc
-				}
-			}
-			break
-		}
+	if v, ok := ctx.Value(ctxkeys.NamespaceOverride).(string); ok {
+		ns = strings.TrimSpace(v)
 	}
+	scopesCanonical := ""
+	if s, ok := ctx.Value(ctxkeys.Scopes).(authsvc.ScopeSet); ok {
+		scopesCanonical = s.Canonical()
+	}
+
+	// Fallback: no pre-validated identity on the context (e.g. the handler was
+	// reached on the main gateway without the middleware resolving a namespace,
+	// or in a direct unit-test invocation). Resolve against the DB. API keys are
+	// stored HMAC-hashed (Service.HashAPIKey), so try the hashed key first and
+	// fall back to the raw key for legacy unhashed rows during a rolling upgrade.
+	// Revoked keys (revoked_at IS NOT NULL) resolve to invalid. The minted JWT
+	// carries the SAME scope set as the key so a narrow runtime key cannot
+	// exchange for a JWT and escalate to admin (bugboard #148).
+	if ns == "" {
+		db := h.netClient.Database()
+		internalCtx := h.internalAuthFn(ctx)
+		const q = "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
+		rawScopes := ""
+		for _, candidate := range apiKeyLookupCandidates(key, h.authService.HashAPIKey(key)) {
+			res, err := db.Query(internalCtx, q, candidate)
+			if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 {
+				continue
+			}
+			row, ok := res.Rows[0].([]interface{})
+			if !ok || len(row) == 0 {
+				continue
+			}
+			if s, ok := row[0].(string); ok && s != "" {
+				ns = s
+				if len(row) > 1 {
+					if sc, ok := row[1].(string); ok {
+						rawScopes = sc
+					}
+				}
+				break
+			}
+		}
+		// Embed the key's effective scopes (grandfather NULL→admin).
+		scopesCanonical = authsvc.ScopesFromStored(rawScopes).Canonical()
+	}
+
 	if ns == "" {
 		writeError(w, http.StatusUnauthorized, "invalid API key")
 		return
 	}
 
-	// Embed the key's effective scopes (grandfather NULL→admin) so the gateway
-	// scope gate enforces them on the exchanged JWT exactly as on the raw key.
-	custom := map[string]string{"scopes": authsvc.ScopesFromStored(rawScopes).Canonical()}
+	// Embed the key's effective scopes so the gateway scope gate enforces them on
+	// the exchanged JWT exactly as on the raw key (bugboard #148).
+	custom := map[string]string{"scopes": scopesCanonical}
 	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute, custom)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

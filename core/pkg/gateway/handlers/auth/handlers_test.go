@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -593,6 +594,52 @@ func TestAPIKeyToJWTHandler_UnknownKey(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for unknown key, got %d", rec.Code)
+	}
+}
+
+// TestAPIKeyToJWTHandler_TrustsInternalAuthContext is the regression for the
+// two-gateway bug (bugboard #147/#148): on a NAMESPACE gateway the api_keys
+// table is EMPTY (keys live in the main cluster RQLite only). The main gateway
+// validates the key first and forwards the resolved namespace + scopes via the
+// trusted X-Internal-Auth-* headers, which the namespace gateway's auth
+// middleware places on the request context. The exchange handler must mint the
+// JWT from that context, NOT re-query the local DB — the pre-fix self-query
+// returned "invalid API key" for EVERY real key on a namespace gateway.
+//
+// We prove it by wiring a DB whose query FAILS the test if it is ever called.
+func TestAPIKeyToJWTHandler_TrustsInternalAuthContext(t *testing.T) {
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	db := &mockDatabaseClient{queryFn: func(_ string, _ ...interface{}) (*QueryResult, error) {
+		t.Error("handler must NOT query the DB when the namespace is pre-validated on the request context")
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", "ak_runtime:anchat-test")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "anchat-test")
+	ctx = context.WithValue(ctx, ctxkeys.Scopes, authsvc.ParseScopes("invoke,proxy,push,storage,webrtc"))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from pre-validated context, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	m := decodeBody(t, rec)
+	if m["namespace"] != "anchat-test" {
+		t.Errorf("expected namespace anchat-test, got %v", m["namespace"])
+	}
+	// The minted JWT must carry the key's EXACT scopes so the scope gate enforces
+	// them on the exchanged token exactly as on the raw key (no escalation).
+	tok, _ := m["access_token"].(string)
+	claims, err := svc.ParseAndVerifyJWT(tok)
+	if err != nil {
+		t.Fatalf("minted token failed verification: %v", err)
+	}
+	if got := claims.Custom["scopes"]; got != "invoke,proxy,push,storage,webrtc" {
+		t.Errorf("expected canonical scopes on the JWT, got %q", got)
 	}
 }
 

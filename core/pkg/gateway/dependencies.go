@@ -221,14 +221,46 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Apply embedded migrations to ensure schema is up-to-date.
 	// This is critical for namespace gateways whose RQLite instances
 	// don't get migrations from the main cluster RQLiteManager.
+	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer migCancel()
+
+	// A NAMESPACE gateway's RQLite is ALSO the tenant app's own database (they
+	// read/write it via /v1/rqlite and /v1/db/sqlite). Apply core's schema under
+	// an ISOLATED tracker (orama_schema_migrations) and free the generic table
+	// names the tenant needs to own — "schema_migrations" and the dead pubsub
+	// "subscriptions" — so core and app schema never collide (bugboard #150).
+	// Detection mirrors the global-auth-client check: a namespace gateway is the
+	// one configured with a separate GlobalRQLiteDSN pointing at the main cluster.
+	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
+		if err := rqlite.ApplyEmbeddedMigrationsNamespace(migCtx, db, migrations.FS, logger.Logger); err != nil {
+			return fmt.Errorf("apply namespace embedded migrations failed: %w "+
+				"(hint: this namespace gateway can't safely run without its required schema; "+
+				"check the namespace RQLite health and re-run startup)", err)
+		}
+		logger.ComponentInfo(logging.ComponentGeneral, "Namespace-isolated migrations applied to gateway RQLite")
+
+		// Schema-version contract against the ISOLATED tracker (a namespace
+		// RQLite records core's applied versions in orama_schema_migrations,
+		// leaving schema_migrations for the tenant).
+		applied, err := rqlite.AppliedVersionFromTracker(migCtx, db, rqlite.NamespaceMigrationsTracker())
+		if err != nil {
+			return fmt.Errorf("namespace schema contract read failed: %w", err)
+		}
+		if required := migrations.RequiredVersion(); applied < required {
+			return fmt.Errorf("namespace schema contract violation: applied=%d, required=%d", applied, required)
+		}
+		logger.ComponentInfo(logging.ComponentGeneral, "Namespace schema contract satisfied",
+			zap.Int("required_version", migrations.RequiredVersion()))
+		return nil
+	}
+
+	// Main cluster: full core schema, tracked in the standard schema_migrations.
 	//
 	// Failures here are FATAL: a gateway that can't bring its schema up
 	// to the version its binary expects will silently corrupt deploys
 	// later (e.g. INSERTing into missing columns and surfacing as a
 	// cryptic SQL error to end users). Better to refuse to start with
 	// a clear actionable error.
-	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer migCancel()
 	if err := rqlite.ApplyEmbeddedMigrations(migCtx, db, migrations.FS, logger.Logger); err != nil {
 		return fmt.Errorf("apply embedded migrations failed: %w "+
 			"(hint: this gateway can't safely run without its required schema; "+

@@ -109,22 +109,22 @@ export class HttpClient {
   private getAuthHeaders(path: string): Record<string, string> {
     const headers: Record<string, string> = {};
 
-    // For database, pubsub, proxy, and cache operations, ONLY use API key to avoid JWT user context
-    // interfering with namespace-level authorization
+    // Database, pubsub, and cache operations use ONLY the API key, to avoid a JWT
+    // user context interfering with namespace-level authorization.
+    //
+    // NOTE: /v1/proxy/* is deliberately NOT in this list (bugboard #149). The
+    // gateway enforces a per-user wallet (SIWE) JWT on proxy — layer-1, #148 —
+    // so an API key alone is rejected 401 "requires a logged-in user". Proxy must
+    // send BOTH the API key and the wallet JWT, so it falls through to the default
+    // branch below — exactly like /v1/storage/*, which is the working reference.
     const isDbOperation = path.includes("/v1/rqlite/");
     const isPubSubOperation = path.includes("/v1/pubsub/");
-    const isProxyOperation = path.includes("/v1/proxy/");
     const isCacheOperation = path.includes("/v1/cache/");
 
     // For auth operations, prefer API key over JWT to ensure proper authentication
     const isAuthOperation = path.includes("/v1/auth/");
 
-    if (
-      isDbOperation ||
-      isPubSubOperation ||
-      isProxyOperation ||
-      isCacheOperation
-    ) {
+    if (isDbOperation || isPubSubOperation || isCacheOperation) {
       // For database/pubsub/proxy/cache operations: use only API key (preferred for namespace operations)
       if (this.apiKey) {
         headers["X-API-Key"] = this.apiKey;
