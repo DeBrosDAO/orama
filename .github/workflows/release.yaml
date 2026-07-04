@@ -46,7 +46,12 @@ jobs:
           version: '~> v2'
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use a PAT (not the default GITHUB_TOKEN) so the GitHub Release this
+          # creates FIRES the `release: published` event — GITHUB_TOKEN-created
+          # releases are suppressed by GitHub's anti-recursion rule, which
+          # otherwise means publish-sdk.yml + release-apt.yml never auto-run.
+          # Falls back to GITHUB_TOKEN if the PAT secret is absent.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Upload artifacts
