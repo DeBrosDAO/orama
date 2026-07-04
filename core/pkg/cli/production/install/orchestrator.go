@@ -64,7 +64,14 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 			BandwidthPct:  flags.AnyoneBandwidth,
 			AccountingMax: flags.AnyoneAccounting,
 		})
-	} else if flags.AnyoneClient {
+	} else {
+		// Default every non-relay node to Anyone client mode. The gateway on
+		// every node serves /v1/proxy/anon, which requires a local anon SOCKS5
+		// proxy on :9050. Relay nodes already expose :9050 via their own anonrc;
+		// previously a node installed with neither --anyone-relay nor
+		// --anyone-client had no SOCKS proxy, so /v1/proxy/anon returned
+		// "Anyone proxy not available at localhost:9050". The explicit
+		// --anyone-client flag remains accepted (it just matches the default).
 		setup.SetAnyoneClient(true)
 	}
 

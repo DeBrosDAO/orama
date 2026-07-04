@@ -17,11 +17,15 @@ export class PathBasedAuthStrategy implements IAuthStrategy {
    * Mapping of path patterns to auth types
    */
   private readonly authRules: Array<{ pattern: string; type: AuthType }> = [
-    // Database, PubSub, Proxy, Cache: prefer API key
+    // Database, PubSub, Cache: prefer API key.
     { pattern: "/v1/rqlite/", type: "api-key-only" },
     { pattern: "/v1/pubsub/", type: "api-key-only" },
-    { pattern: "/v1/proxy/", type: "api-key-only" },
     { pattern: "/v1/cache/", type: "api-key-only" },
+    // Proxy (anon): the gateway enforces a per-user JWT on /v1/proxy/* (layer-1,
+    // bugboard #148) — an API key alone is rejected with 401. Send BOTH so the
+    // logged-in wallet JWT rides along; the gateway is JWT-first and uses it.
+    // (storage/push/webrtc aren't listed here and already fall to default "both".)
+    { pattern: "/v1/proxy/", type: "both" },
     // Auth operations: prefer API key
     { pattern: "/v1/auth/", type: "api-key-preferred" },
   ];

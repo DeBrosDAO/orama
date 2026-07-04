@@ -110,22 +110,71 @@ func (fp *FilesystemProvisioner) EnsureOramaUser() error {
 	}
 
 	// Always ensure the sudoers rule is up-to-date (handles upgrades too).
-	// Resolve systemctl path to avoid hardcoding /bin vs /usr/bin.
+	// Resolve binary paths to avoid hardcoding /bin vs /usr/bin vs /usr/sbin.
 	systemctlPath, err := exec.LookPath("systemctl")
 	if err != nil {
 		systemctlPath = "/bin/systemctl" // fallback
 	}
-
-	// Grant orama user permission to manage namespace and deployment services.
-	sudoersRule := fmt.Sprintf(
-		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s daemon-reload\n",
-		systemctlPath,
-	)
-	sudoersPath := "/etc/sudoers.d/orama-namespaces"
-	if err := os.WriteFile(sudoersPath, []byte(sudoersRule), 0440); err != nil {
-		return fmt.Errorf("failed to write sudoers rule: %w", err)
+	ufwPath, err := exec.LookPath("ufw")
+	if err != nil {
+		ufwPath = "/usr/sbin/ufw" // fallback
 	}
 
+	if err := writeSudoersFile("/etc/sudoers.d/orama-namespaces", oramaSudoersRule(systemctlPath, ufwPath)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// oramaSudoersRule returns the /etc/sudoers.d/orama-namespaces content granting
+// the unprivileged orama user NOPASSWD access to exactly the systemctl and ufw
+// commands it needs at runtime: namespace/deployment service management, and
+// opening per-namespace TURN relay firewall ports when WebRTC is enabled
+// (FirewallProvisioner.AddWebRTCRules runs `ufw`, which needs root — without
+// these ufw entries TURN ports stayed firewalled after `webrtc enable`).
+func oramaSudoersRule(systemctlPath, ufwPath string) string {
+	return fmt.Sprintf(
+		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s daemon-reload, %[2]s allow *, %[2]s delete allow *, %[2]s reload, %[2]s status, %[2]s status verbose\n",
+		systemctlPath, ufwPath,
+	)
+}
+
+// writeSudoersFile validates the rule with `visudo -c` before atomically
+// installing it (mode 0440). A syntactically broken drop-in is never written,
+// so a future edit to oramaSudoersRule can't silently corrupt sudo. The temp
+// file is created in the target dir (same filesystem, atomic rename) with a
+// leading dot so sudo's includedir ignores it even if cleanup is skipped.
+func writeSudoersFile(path, content string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".orama-sudoers-*")
+	if err != nil {
+		return fmt.Errorf("create temp sudoers file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp sudoers file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp sudoers file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0440); err != nil {
+		return fmt.Errorf("chmod temp sudoers file: %w", err)
+	}
+
+	// Validate syntax before installing. visudo ships with sudo; only skip the
+	// check if it is genuinely absent (e.g. a minimal build environment).
+	if visudo, lookErr := exec.LookPath("visudo"); lookErr == nil {
+		if out, err := exec.Command(visudo, "-c", "-f", tmpPath).CombinedOutput(); err != nil {
+			return fmt.Errorf("sudoers rule failed visudo validation: %w\n%s", err, string(out))
+		}
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("install sudoers file %s: %w", path, err)
+	}
 	return nil
 }
 

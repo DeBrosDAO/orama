@@ -213,9 +213,9 @@ func (h *Handlers) putCredentials(
 	w http.ResponseWriter, r *http.Request,
 	ns, provider string, v credentials.Validator,
 ) {
-	caller := resolveCallerUserID(r)
+	caller := resolveAdminCaller(r)
 	if caller == "" {
-		writeError(w, http.StatusUnauthorized, "user authentication required (JWT)")
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
@@ -296,9 +296,9 @@ func (h *Handlers) deleteCredentials(
 	w http.ResponseWriter, r *http.Request,
 	ns, provider string,
 ) {
-	caller := resolveCallerUserID(r)
+	caller := resolveAdminCaller(r)
 	if caller == "" {
-		writeError(w, http.StatusUnauthorized, "user authentication required (JWT)")
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if err := h.credentialsManager.Store().Delete(boundCtx(r), ns, provider); err != nil {

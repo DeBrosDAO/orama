@@ -1,6 +1,8 @@
 package namespacecmd
 
 import (
+	"fmt"
+
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/spf13/cobra"
 )
@@ -88,11 +90,93 @@ var webrtcStatusCmd = &cobra.Command{
 	},
 }
 
+var keysCmd = &cobra.Command{
+	Use:   "keys",
+	Short: "Manage scoped API keys (bugboard #148)",
+	Long:  "Create, list, and revoke scoped API keys. Profiles: invoke-only | app-runtime | admin.",
+}
+
+var keysCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Mint a new scoped API key",
+	Run: func(cmd *cobra.Command, args []string) {
+		scope, _ := cmd.Flags().GetString("scope")
+		label, _ := cmd.Flags().GetString("label")
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"keys", "create", "--scope", scope}
+		if label != "" {
+			cliArgs = append(cliArgs, "--label", label)
+		}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
+var keysListCmd = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List scoped API keys",
+	Run: func(cmd *cobra.Command, args []string) {
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"keys", "list"}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
+var keysRevokeCmd = &cobra.Command{
+	Use:   "revoke",
+	Short: "Revoke a single API key by id",
+	Run: func(cmd *cobra.Command, args []string) {
+		id, _ := cmd.Flags().GetInt("id")
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"keys", "revoke", "--id", fmt.Sprintf("%d", id)}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
+var keysRevokeLegacyCmd = &cobra.Command{
+	Use:   "revoke-legacy",
+	Short: "Revoke ALL legacy (unscoped) keys — the cutover step",
+	Run: func(cmd *cobra.Command, args []string) {
+		force, _ := cmd.Flags().GetBool("force")
+		ns, _ := cmd.Flags().GetString("namespace")
+		cliArgs := []string{"keys", "revoke-legacy"}
+		if force {
+			cliArgs = append(cliArgs, "--force")
+		}
+		if ns != "" {
+			cliArgs = append(cliArgs, "--namespace", ns)
+		}
+		cli.HandleNamespaceCommand(cliArgs)
+	},
+}
+
 func init() {
 	deleteCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 	enableCmd.Flags().String("namespace", "", "Namespace name")
 	disableCmd.Flags().String("namespace", "", "Namespace name")
 	webrtcStatusCmd.Flags().String("namespace", "", "Namespace name")
+
+	keysCreateCmd.Flags().String("scope", "", "Profile (invoke-only|app-runtime|admin) or grant list")
+	keysCreateCmd.Flags().String("label", "", "Human label for the key")
+	keysCreateCmd.Flags().String("namespace", "", "Namespace name")
+	keysListCmd.Flags().String("namespace", "", "Namespace name")
+	keysRevokeCmd.Flags().Int("id", 0, "Key id to revoke")
+	keysRevokeCmd.Flags().String("namespace", "", "Namespace name")
+	keysRevokeLegacyCmd.Flags().Bool("force", false, "Skip confirmation prompt")
+	keysRevokeLegacyCmd.Flags().String("namespace", "", "Namespace name")
+	keysCmd.AddCommand(keysCreateCmd)
+	keysCmd.AddCommand(keysListCmd)
+	keysCmd.AddCommand(keysRevokeCmd)
+	keysCmd.AddCommand(keysRevokeLegacyCmd)
 
 	Cmd.AddCommand(listCmd)
 	Cmd.AddCommand(deleteCmd)
@@ -100,4 +184,5 @@ func init() {
 	Cmd.AddCommand(enableCmd)
 	Cmd.AddCommand(disableCmd)
 	Cmd.AddCommand(webrtcStatusCmd)
+	Cmd.AddCommand(keysCmd)
 }

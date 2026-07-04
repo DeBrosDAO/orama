@@ -181,6 +181,23 @@ func resolveCallerUserID(r *http.Request) string {
 	return ""
 }
 
+// resolveAdminCaller resolves the identity for a namespace-owner push admin
+// operation (config / credentials writes — bugboard #147). It prefers a real
+// user (JWT) identity, but falls back to the API-key identity recorded as
+// "apikey:<namespace>" — NEVER the raw key — so the namespace owner can
+// self-serve push config with the admin API key (these routes are admin-scoped,
+// so only an admin key or the owner wallet reaches them). Device registration
+// deliberately does NOT use this: a device must bind to a real user.
+func resolveAdminCaller(r *http.Request) string {
+	if id := resolveCallerUserID(r); id != "" {
+		return id
+	}
+	if ns := resolveNamespace(r); ns != "" {
+		return "apikey:" + ns
+	}
+	return ""
+}
+
 func writeError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

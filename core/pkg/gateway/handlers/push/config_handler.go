@@ -122,9 +122,9 @@ func (h *Handlers) PutConfigHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
-	caller := resolveCallerUserID(r)
+	caller := resolveAdminCaller(r)
 	if caller == "" {
-		writeError(w, http.StatusUnauthorized, "user authentication required")
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
@@ -209,9 +209,9 @@ func (h *Handlers) DeleteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
-	caller := resolveCallerUserID(r)
+	caller := resolveAdminCaller(r)
 	if caller == "" {
-		writeError(w, http.StatusUnauthorized, "user authentication required")
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 

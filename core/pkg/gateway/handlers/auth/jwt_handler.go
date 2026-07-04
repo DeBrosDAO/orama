@@ -41,9 +41,13 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 	db := h.netClient.Database()
 	ctx := r.Context()
 	internalCtx := h.internalAuthFn(ctx)
-	const q = "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
+	// Also fetch the key's scopes and reject revoked keys: the minted JWT must
+	// carry the SAME scope set as the key, otherwise a narrow runtime key could
+	// exchange for a JWT and escalate to admin (bugboard #148).
+	const q = "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
 
 	ns := ""
+	rawScopes := ""
 	for _, candidate := range apiKeyLookupCandidates(key, h.authService.HashAPIKey(key)) {
 		res, err := db.Query(internalCtx, q, candidate)
 		if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 {
@@ -55,6 +59,11 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if s, ok := row[0].(string); ok && s != "" {
 			ns = s
+			if len(row) > 1 {
+				if sc, ok := row[1].(string); ok {
+					rawScopes = sc
+				}
+			}
 			break
 		}
 	}
@@ -63,7 +72,10 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute, nil)
+	// Embed the key's effective scopes (grandfather NULL→admin) so the gateway
+	// scope gate enforces them on the exchanged JWT exactly as on the raw key.
+	custom := map[string]string{"scopes": authsvc.ScopesFromStored(rawScopes).Canonical()}
+	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute, custom)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

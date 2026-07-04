@@ -83,6 +83,12 @@ const (
 	// as a base64(JSON) blob. Optional; absent means the original token had
 	// no custom claims. Same trust gate as HeaderInternalAuthJWTSub.
 	HeaderInternalAuthJWTCustom = "X-Internal-Auth-JWT-Custom"
+	// HeaderInternalAuthScopes carries the effective API-key grant set (canonical
+	// comma-separated, grandfather-applied) across the namespace-gateway proxy
+	// hop for API-key callers (bugboard #148). Without it, the namespace gateway
+	// — which trusts pre-validation and does not re-look-up the key — computes an
+	// empty scope set and 403s every admin op. Same trust gate as the JWT headers.
+	HeaderInternalAuthScopes = "X-Internal-Auth-Scopes"
 )
 
 // setInternalAuthJWTHeaders writes the validated JWT subject and custom claims
@@ -126,6 +132,7 @@ func stripInboundInternalAuthHeaders(h http.Header) {
 	h.Del(HeaderInternalAuthNamespace)
 	h.Del(HeaderInternalAuthJWTSub)
 	h.Del(HeaderInternalAuthJWTCustom)
+	h.Del(HeaderInternalAuthScopes)
 }
 
 // maxQueryJWTLength caps the size of a JWT accepted via `?jwt=` query
@@ -193,7 +200,7 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTCla
 //   - (namespace, nil, "") if auth is valid via API key.
 //   - ("", nil, errorMessage) if auth is invalid.
 //   - ("", nil, "") if no auth credentials provided (for public paths).
-func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, claims *auth.JWTClaims, errMsg string) {
+func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, claims *auth.JWTClaims, scopes string, errMsg string) {
 	// 1) Try JWT Bearer first
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 		lower := strings.ToLower(authHeader)
@@ -202,7 +209,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 			if strings.Count(tok, ".") == 2 {
 				if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 					if ns := strings.TrimSpace(c.Namespace); ns != "" {
-						return ns, c, ""
+						// JWT drives scopes on the namespace side via the rebuilt
+						// sub/custom claims; no separate scopes header needed.
+						return ns, c, "", ""
 					}
 				}
 				// JWT verification failed - fall through to API key check
@@ -222,7 +231,7 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 			if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 				if ns := strings.TrimSpace(c.Namespace); ns != "" {
 					stripJWTQueryParam(r)
-					return ns, c, ""
+					return ns, c, "", ""
 				}
 			}
 		}
@@ -231,14 +240,17 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 	// 2) Try API key
 	key := extractAPIKey(r)
 	if key == "" {
-		return "", nil, "" // No credentials provided
+		return "", nil, "", "" // No credentials provided
 	}
 
-	ns, err := g.lookupAPIKeyNamespace(r.Context(), key, g.client)
+	// Resolve namespace AND the key's effective (grandfather-applied) scopes so
+	// they can be forwarded to the namespace gateway, which does not re-look-up
+	// the key (bugboard #148).
+	ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.client)
 	if err != nil {
-		return "", nil, "invalid API key"
+		return "", nil, "", "invalid API key"
 	}
-	return ns, nil, ""
+	return ns, nil, auth.ScopesFromStored(rawScopes).Canonical(), ""
 }
 
 // lookupAPIKeyNamespace resolves an API key to its namespace using cache and DB.
@@ -248,26 +260,40 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 // Dual lookup strategy for rolling upgrade: tries HMAC-hashed key first (new keys),
 // then falls back to raw key lookup (existing unhashed keys during transition).
 func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, dbClient client.NetworkClient) (string, error) {
+	ns, _, err := g.lookupAPIKeyEntry(ctx, key, dbClient)
+	return ns, err
+}
+
+// lookupAPIKeyEntry resolves an API key to its (namespace, scopes) using cache
+// and DB. scopes is the raw api_keys.scopes value ("" = legacy/grandfather).
+// Revoked keys (revoked_at IS NOT NULL) are treated as invalid (bugboard #148).
+func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, dbClient client.NetworkClient) (string, string, error) {
 	// Cache uses raw key as cache key (in-memory only, never persisted)
 	if g.mwCache != nil {
-		if cachedNS, ok := g.mwCache.GetAPIKeyNamespace(key); ok {
-			return cachedNS, nil
+		if cachedNS, cachedScopes, ok := g.mwCache.GetAPIKeyEntry(key); ok {
+			return cachedNS, cachedScopes, nil
 		}
 	}
 
 	db := dbClient.Database()
 	internalCtx := client.WithInternalAuth(ctx)
-	q := "SELECT namespaces.name FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? LIMIT 1"
+	// Filter out revoked keys so a revoked key resolves to "invalid" (bounded by
+	// the 60s cache TTL). scopes is nullable — a NULL means a legacy key.
+	q := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
 
 	// Try HMAC-hashed lookup first (new keys stored as hashes)
 	hashedKey := g.authService.HashAPIKey(key)
 	res, err := db.Query(internalCtx, q, hashedKey)
 	if err == nil && res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
 		if ns := getString(res.Rows[0][0]); ns != "" {
-			if g.mwCache != nil {
-				g.mwCache.SetAPIKeyNamespace(key, ns)
+			scopes := ""
+			if len(res.Rows[0]) > 1 {
+				scopes = getString(res.Rows[0][1])
 			}
-			return ns, nil
+			if g.mwCache != nil {
+				g.mwCache.SetAPIKeyEntry(key, ns, scopes)
+			}
+			return ns, scopes, nil
 		}
 	}
 
@@ -276,15 +302,19 @@ func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, dbClien
 		res, err = db.Query(internalCtx, q, key)
 		if err == nil && res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
 			if ns := getString(res.Rows[0][0]); ns != "" {
-				if g.mwCache != nil {
-					g.mwCache.SetAPIKeyNamespace(key, ns)
+				scopes := ""
+				if len(res.Rows[0]) > 1 {
+					scopes = getString(res.Rows[0][1])
 				}
-				return ns, nil
+				if g.mwCache != nil {
+					g.mwCache.SetAPIKeyEntry(key, ns, scopes)
+				}
+				return ns, scopes, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("invalid API key")
+	return "", "", fmt.Errorf("invalid API key")
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request
@@ -365,7 +395,9 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> authorization -> namespace rate limit -> handler
+	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	// The scope gate (bugboard #148) runs after ownership so it only ever
+	// tightens an already-authorized request; it never authorizes on its own.
 	return g.loggingMiddleware(
 		g.securityHeadersMiddleware(
 			g.rateLimitMiddleware(
@@ -373,7 +405,8 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 					g.domainRoutingMiddleware(
 						g.authMiddleware(
 							g.authorizationMiddleware(
-								g.namespaceRateLimitMiddleware(next))))))))
+								g.scopeMiddleware(
+									g.namespaceRateLimitMiddleware(next)))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -469,6 +502,12 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 					if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
 						reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
 					}
+					// #148: hydrate the API-key caller's effective scopes from the
+					// trusted internal-auth header so scopeMiddleware can enforce
+					// them (the namespace gateway does not re-look-up the key).
+					if raw := strings.TrimSpace(r.Header.Get(HeaderInternalAuthScopes)); raw != "" {
+						reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ParseScopes(raw))
+					}
 					next.ServeHTTP(w, r.WithContext(reqCtx))
 					return
 				}
@@ -556,7 +595,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		if g.authClient != nil {
 			dbClient = g.authClient
 		}
-		ns, err := g.lookupAPIKeyNamespace(r.Context(), key, dbClient)
+		ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, dbClient)
 		if err != nil {
 			if isPublic {
 				next.ServeHTTP(w, r)
@@ -567,9 +606,12 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Attach auth metadata to context for downstream use
+		// Attach auth metadata to context for downstream use. The scope set
+		// (bugboard #148) is applied by scopeMiddleware; a NULL/empty scopes
+		// column grandfathers to admin (ScopesFromStored).
 		reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
 		reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, ns)
+		reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ScopesFromStored(rawScopes))
 		next.ServeHTTP(w, r.WithContext(reqCtx))
 	})
 }
@@ -877,6 +919,13 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// A verified SIWE wallet owner may act as admin via a wallet JWT — record
+		// it so the scope gate grants admin to the owner without granting it to
+		// every authenticated user (bugboard #148).
+		if ownerType == "wallet" {
+			r = markOwnerConfirmed(r)
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -917,7 +966,18 @@ func requiresNamespaceOwnership(p string) bool {
 	if strings.HasPrefix(p, "/v1/push/") {
 		return true
 	}
+	// push-credentials is admin-scoped; also require ownership so it is
+	// double-gated like /v1/push/ (defense-in-depth, review follow-up).
+	if p == "/v1/namespace/push-credentials" || strings.HasPrefix(p, "/v1/namespace/push-credentials/") {
+		return true
+	}
 	if strings.HasPrefix(p, "/v1/serverless/") {
+		return true
+	}
+	// Scoped API-key management is namespace-scoped: the ownership check also
+	// lets a verified owner wallet (OwnerConfirmed) manage keys, not just an
+	// admin API key (bugboard #148).
+	if p == "/v1/namespace/keys" || strings.HasPrefix(p, "/v1/namespace/keys/") {
 		return true
 	}
 	return false
@@ -1093,6 +1153,17 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 			subdomain := strings.TrimSuffix(host, suffix)
 			if strings.HasPrefix(subdomain, "ns-") {
 				namespaceName := strings.TrimPrefix(subdomain, "ns-")
+				// Scoped API-key management (bugboard #148) operates on the MAIN
+				// cluster RQLite, where API keys are validated. Namespace gateways
+				// have isolated RQLites without the authoritative api_keys table,
+				// so proxying these writes would land keys in the wrong DB (they'd
+				// never authenticate). Serve them on the main gateway instead,
+				// pinning the namespace from the subdomain.
+				if isKeyMgmtPath(r.URL.Path) {
+					r = r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, namespaceName))
+					next.ServeHTTP(w, r)
+					return
+				}
 				g.handleNamespaceGatewayRequest(w, r, namespaceName)
 				return
 			}
@@ -1147,7 +1218,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
 	// Validate auth against main cluster RQLite BEFORE proxying
 	// This ensures API keys work even though they're not in the namespace's RQLite
-	validatedNamespace, validatedClaims, authErr := g.validateAuthForNamespaceProxy(r)
+	validatedNamespace, validatedClaims, validatedScopes, authErr := g.validateAuthForNamespaceProxy(r)
 	isWS := isWebSocketUpgrade(r)
 	isPublic := isPublicPath(r.URL.Path)
 
@@ -1414,6 +1485,10 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			// namespace gateway's auth middleware can hydrate ctxKeyJWT and
 			// host functions see a non-empty caller_jwt_subject.
 			setInternalAuthJWTHeaders(r.Header, validatedClaims)
+			// #148: forward the API-key caller's effective scopes.
+			if validatedScopes != "" {
+				r.Header.Set(HeaderInternalAuthScopes, validatedScopes)
+			}
 		}
 		r.URL.Scheme = "http"
 		r.URL.Host = targetHost
@@ -1467,6 +1542,10 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		// namespace gateway's auth middleware can hydrate ctxKeyJWT and
 		// host functions see a non-empty caller_jwt_subject.
 		setInternalAuthJWTHeaders(proxyReq.Header, validatedClaims)
+		// #148: forward the API-key caller's effective scopes.
+		if validatedScopes != "" {
+			proxyReq.Header.Set(HeaderInternalAuthScopes, validatedScopes)
+		}
 	}
 
 	// Pick the proxy timeout based on the path's expected work bound.

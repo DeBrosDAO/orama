@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -61,6 +63,8 @@ func HandleNamespaceCommand(args []string) {
 			os.Exit(1)
 		}
 		handleNamespaceWebRTCStatus(ns)
+	case "keys":
+		handleNamespaceKeys(args[1:])
 	case "help":
 		showNamespaceHelp()
 	default:
@@ -68,6 +72,183 @@ func HandleNamespaceCommand(args []string) {
 		showNamespaceHelp()
 		os.Exit(1)
 	}
+}
+
+// handleNamespaceKeys drives scoped API-key management (bugboard #148):
+//   orama namespace keys create --scope <profile|grants> [--label ...]
+//   orama namespace keys list
+//   orama namespace keys revoke --id <n>
+//   orama namespace keys revoke-legacy
+func handleNamespaceKeys(args []string) {
+	if len(args) == 0 {
+		showNamespaceKeysHelp()
+		return
+	}
+	switch args[0] {
+	case "create":
+		handleNamespaceKeysCreate(args[1:])
+	case "list", "ls":
+		handleNamespaceKeysList(args[1:])
+	case "revoke":
+		handleNamespaceKeysRevoke(args[1:])
+	case "revoke-legacy":
+		handleNamespaceKeysRevokeLegacy(args[1:])
+	default:
+		showNamespaceKeysHelp()
+		os.Exit(1)
+	}
+}
+
+func showNamespaceKeysHelp() {
+	fmt.Printf("Scoped API-key management (bugboard #148)\n\n")
+	fmt.Printf("Usage: orama namespace keys <subcommand>\n\n")
+	fmt.Printf("Subcommands:\n")
+	fmt.Printf("  create --scope <profile|grants> [--label L] [--namespace NS]\n")
+	fmt.Printf("      Mint a new key. Profiles: invoke-only | app-runtime | admin.\n")
+	fmt.Printf("      Or an explicit grant list, e.g. --scope \"invoke,storage,push\".\n")
+	fmt.Printf("  list [--namespace NS]                 List keys (id, scopes, status).\n")
+	fmt.Printf("  revoke --id N [--namespace NS]        Revoke a single key by id.\n")
+	fmt.Printf("  revoke-legacy [--force] [--namespace NS]\n")
+	fmt.Printf("      Revoke ALL legacy (unscoped) keys — the cutover step.\n\n")
+	fmt.Printf("Note: key management requires an admin-scoped key (or the owner wallet).\n")
+}
+
+// keysDo performs an authenticated JSON request to the gateway and returns the
+// decoded body + status. Exits on transport failure.
+func keysDo(method, url, apiKey string, body io.Reader) (map[string]interface{}, int) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	var result map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return result, resp.StatusCode
+}
+
+func keysErr(result map[string]interface{}) string {
+	if e, ok := result["error"].(string); ok && e != "" {
+		return e
+	}
+	return "unknown error"
+}
+
+func handleNamespaceKeysCreate(args []string) {
+	var ns, scope, label string
+	fs := flag.NewFlagSet("namespace keys create", flag.ExitOnError)
+	fs.StringVar(&ns, "namespace", "", "Namespace name")
+	fs.StringVar(&scope, "scope", "", "Profile (invoke-only|app-runtime|admin) or grant list")
+	fs.StringVar(&label, "label", "", "Human label for the key")
+	_ = fs.Parse(args)
+	if strings.TrimSpace(scope) == "" {
+		fmt.Fprintf(os.Stderr, "Usage: orama namespace keys create --scope <profile|grants> [--label L] [--namespace NS]\n")
+		os.Exit(1)
+	}
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+	payload, _ := json.Marshal(map[string]string{"scope": scope, "label": label})
+	result, status := keysDo(http.MethodPost, gatewayURL+"/v1/namespace/keys", apiKey, bytes.NewReader(payload))
+	if status != http.StatusCreated && status != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Failed to create key: %s\n", keysErr(result))
+		os.Exit(1)
+	}
+	fmt.Printf("API key created.\n")
+	fmt.Printf("  id:        %v\n", result["id"])
+	fmt.Printf("  scopes:    %v\n", result["scopes"])
+	fmt.Printf("  namespace: %v\n", result["namespace"])
+	if l, _ := result["label"].(string); l != "" {
+		fmt.Printf("  label:     %s\n", l)
+	}
+	fmt.Printf("\n  API KEY (shown once — store it now):\n  %v\n", result["api_key"])
+}
+
+func handleNamespaceKeysList(args []string) {
+	var ns string
+	fs := flag.NewFlagSet("namespace keys list", flag.ExitOnError)
+	fs.StringVar(&ns, "namespace", "", "Namespace name")
+	_ = fs.Parse(args)
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+	result, status := keysDo(http.MethodGet, gatewayURL+"/v1/namespace/keys", apiKey, nil)
+	if status != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Failed to list keys: %s\n", keysErr(result))
+		os.Exit(1)
+	}
+	keys, _ := result["keys"].([]interface{})
+	if len(keys) == 0 {
+		fmt.Println("No API keys found.")
+		return
+	}
+	fmt.Printf("API keys for namespace '%v' (%d):\n\n", result["namespace"], len(keys))
+	for _, k := range keys {
+		km, _ := k.(map[string]interface{})
+		scopes, _ := km["scopes"].(string)
+		if scopes == "" {
+			scopes = "(legacy: admin)"
+		}
+		state := "active"
+		if rv, _ := km["revoked_at"].(string); rv != "" {
+			state = "REVOKED"
+		}
+		label, _ := km["name"].(string)
+		fmt.Printf("  #%-4v  %-8s  %-40s  %s\n", km["id"], state, scopes, label)
+	}
+}
+
+func handleNamespaceKeysRevoke(args []string) {
+	var ns string
+	var id int
+	fs := flag.NewFlagSet("namespace keys revoke", flag.ExitOnError)
+	fs.StringVar(&ns, "namespace", "", "Namespace name")
+	fs.IntVar(&id, "id", 0, "Key id to revoke")
+	_ = fs.Parse(args)
+	if id <= 0 {
+		fmt.Fprintf(os.Stderr, "Usage: orama namespace keys revoke --id <n> [--namespace NS]\n")
+		os.Exit(1)
+	}
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+	result, status := keysDo(http.MethodDelete, fmt.Sprintf("%s/v1/namespace/keys/%d", gatewayURL, id), apiKey, nil)
+	if status != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Failed to revoke key: %s\n", keysErr(result))
+		os.Exit(1)
+	}
+	fmt.Printf("Key %d revoked.\n", id)
+}
+
+func handleNamespaceKeysRevokeLegacy(args []string) {
+	var ns string
+	var force bool
+	fs := flag.NewFlagSet("namespace keys revoke-legacy", flag.ExitOnError)
+	fs.StringVar(&ns, "namespace", "", "Namespace name")
+	fs.BoolVar(&force, "force", false, "Skip confirmation prompt")
+	_ = fs.Parse(args)
+	gatewayURL, apiKey := loadAuthForNamespace(ns)
+	if !force {
+		fmt.Printf("This will revoke ALL legacy (unscoped) API keys for this namespace.\n")
+		fmt.Printf("Any consumer still using an old omnipotent key will stop working.\n")
+		fmt.Printf("Type 'revoke' to confirm: ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		if strings.TrimSpace(scanner.Text()) != "revoke" {
+			fmt.Println("Aborted.")
+			os.Exit(1)
+		}
+	}
+	result, status := keysDo(http.MethodPost, gatewayURL+"/v1/namespace/keys/revoke-legacy", apiKey, nil)
+	if status != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Failed to revoke legacy keys: %s\n", keysErr(result))
+		os.Exit(1)
+	}
+	fmt.Printf("Revoked %v legacy key(s).\n", result["revoked"])
 }
 
 func showNamespaceHelp() {

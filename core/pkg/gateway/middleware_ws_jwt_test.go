@@ -253,7 +253,7 @@ func TestValidateAuthForNamespaceProxy_WSJWTQuery(t *testing.T) {
 	r.Header.Set("Connection", "upgrade")
 	r.Header.Set("Upgrade", "websocket")
 
-	ns, claims, errMsg := g.validateAuthForNamespaceProxy(r)
+	ns, claims, _, errMsg := g.validateAuthForNamespaceProxy(r)
 	if errMsg != "" {
 		t.Fatalf("unexpected errMsg: %q", errMsg)
 	}
@@ -280,7 +280,7 @@ func TestValidateAuthForNamespaceProxy_WSJWTQuery_ignoredOnNonWS(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/v1/invoke/rpc-router?jwt="+token, nil)
 	// No Upgrade headers — this is a regular HTTP request.
 
-	ns, claims, errMsg := g.validateAuthForNamespaceProxy(r)
+	ns, claims, _, errMsg := g.validateAuthForNamespaceProxy(r)
 	if ns != "" || claims != nil {
 		t.Errorf("non-WS request was authenticated via ?jwt= — expected (\"\", nil), got (%q, %#v)", ns, claims)
 	}
