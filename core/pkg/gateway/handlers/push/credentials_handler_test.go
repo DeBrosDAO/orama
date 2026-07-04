@@ -281,20 +281,25 @@ func TestCredentials_DeleteIdempotent(t *testing.T) {
 	}
 }
 
-func TestCredentials_MissingAuthRejected(t *testing.T) {
+// TestCredentials_APIKeyCallerAccepted verifies bugboard #147: a namespace-owner
+// PUT authenticated by the (admin) API key — namespace resolved, no user JWT —
+// is now ACCEPTED and attributed to "apikey:<ns>" (never the raw key). These
+// routes are admin-scoped at the gateway, so only an admin key or the owner
+// wallet reaches this handler.
+func TestCredentials_APIKeyCallerAccepted(t *testing.T) {
 	credentials.ResetRegistryForTest()
 	defer credentials.ResetRegistryForTest()
 	credentials.Register(fakeValidator{name: "apns"})
 
 	h, _ := buildHandlersWithCreds(t)
 
-	// PUT without JWT subject — 401.
+	// PUT with namespace (api-key auth) and no user JWT — accepted (#147).
 	r := authedRequest(http.MethodPut, "/v1/namespace/push-credentials/apns",
 		[]byte(`{}`), "ns-a", "" /* no JWT */)
 	w := httptest.NewRecorder()
 	h.CredentialsByProviderHandler(w, r)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("PUT no-JWT: status %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("PUT api-key caller: status %d, want 200", w.Code)
 	}
 }
 

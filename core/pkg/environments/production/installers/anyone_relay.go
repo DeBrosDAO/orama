@@ -339,7 +339,9 @@ func (ari *AnyoneRelayInstaller) ConfigureClient() error {
 # Client-only mode — no relay traffic, no ORPort
 
 AgreeToTerms 1
-SocksPort 9050
+# Bind the SOCKS proxy to loopback only — it is consumed by the local gateway
+# (/v1/proxy/anon → localhost:9050) and must never be reachable off-host.
+SocksPort 127.0.0.1:9050
 
 Log notice file /var/log/anon/notices.log
 DataDirectory /var/lib/anon

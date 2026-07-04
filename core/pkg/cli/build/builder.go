@@ -215,19 +215,36 @@ func (b *Builder) buildVaultGuardian() error {
 		return fmt.Errorf("unsupported architecture for vault: %s", b.flags.Arch)
 	}
 
-	if b.flags.Verbose {
-		fmt.Printf("  zig build -Dtarget=%s -Doptimize=ReleaseSafe\n", zigTarget)
+	// Emit directly into zig-out/bin so the copy step below is unchanged.
+	outDir := filepath.Join(vaultDir, "zig-out", "bin")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create vault output dir: %w", err)
 	}
 
-	cmd := exec.Command("zig", "build",
-		fmt.Sprintf("-Dtarget=%s", zigTarget),
-		"-Doptimize=ReleaseSafe")
+	if b.flags.Verbose {
+		fmt.Printf("  zig build-exe src/main.zig -target %s -O ReleaseSafe\n", zigTarget)
+	}
+
+	// Use `zig build-exe` rather than `zig build` (the build-system runner).
+	// `zig build` first compiles a HOST build-runner binary and links it against
+	// the host libc; on newer macOS SDKs (Darwin 25+/macOS 26) Zig 0.15.2 fails
+	// to link that runner (undefined libSystem symbols) even though the
+	// linux-musl cross-compile itself works fine. The vault build.zig is a
+	// single executable built from src/main.zig, so build-exe is equivalent and
+	// sidesteps the broken host runner. On platforms where `zig build` works,
+	// this produces an identical binary.
+	cmd := exec.Command("zig", "build-exe",
+		"src/main.zig",
+		"-target", zigTarget,
+		"-O", "ReleaseSafe",
+		"--name", "vault-guardian",
+		"-femit-bin=zig-out/bin/vault-guardian")
 	cmd.Dir = vaultDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("zig build failed: %w", err)
+		return fmt.Errorf("zig build-exe failed: %w", err)
 	}
 
 	// Copy output binary to build bin dir

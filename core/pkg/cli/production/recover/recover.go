@@ -18,9 +18,10 @@ import (
 
 // Flags holds recover-raft command flags.
 type Flags struct {
-	Env    string // Target environment
-	Leader string // Leader node IP (highest commit index)
-	Force  bool   // Skip confirmation
+	Env            string // Target environment
+	Leader         string // Leader node IP (highest commit index)
+	LeaderRaftAddr string // Explicit leader raft address (host:port); bypasses live resolution
+	Force          bool   // Skip confirmation
 }
 
 // rqlite on-disk layout (rqlite v8, as deployed by the production installer).
@@ -61,6 +62,7 @@ func parseFlags(args []string) (*Flags, error) {
 	flags := &Flags{}
 	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	fs.StringVar(&flags.Leader, "leader", "", "Leader node IP (node with highest commit index) [required]")
+	fs.StringVar(&flags.LeaderRaftAddr, "leader-raft-addr", "", "Explicit leader raft address host:port (e.g. 10.0.0.1:7001). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check.")
 	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
 
 	if err := fs.Parse(args); err != nil {
@@ -104,12 +106,25 @@ func execute(flags *Flags) error {
 		}
 	}
 
-	// Pre-flight: resolve the leader's own Raft address (e.g. "10.0.0.1:7001")
-	// from the LIVE cluster while it is still up. This becomes the sole member
-	// of the recovery peers.json. Must run before we stop anything.
-	leaderRaftAddr, err := resolveLeaderRaftAddr(leader)
-	if err != nil {
-		return fmt.Errorf("resolve leader raft address (is %s currently the raft leader?): %w", leader.Host, err)
+	// Resolve the leader's own Raft address (e.g. "10.0.0.1:7001"). This becomes
+	// the sole member of the recovery peers.json.
+	//   - If --leader-raft-addr is given, trust it (validated). This is the
+	//     correct path when quorum is ALREADY lost (the usual recovery case),
+	//     since the leader can't report itself as Leader without quorum.
+	//   - Otherwise auto-resolve from the still-live cluster, which requires the
+	//     named node to currently be the raft Leader.
+	var leaderRaftAddr string
+	if flags.LeaderRaftAddr != "" {
+		if err := validateRaftAddr(flags.LeaderRaftAddr); err != nil {
+			return fmt.Errorf("invalid --leader-raft-addr: %w", err)
+		}
+		leaderRaftAddr = flags.LeaderRaftAddr
+		fmt.Printf("Using explicit leader raft address: %s\n", leaderRaftAddr)
+	} else {
+		leaderRaftAddr, err = resolveLeaderRaftAddr(leader)
+		if err != nil {
+			return fmt.Errorf("resolve leader raft address (is %s currently the raft leader? if quorum is already lost, pass --leader-raft-addr): %w", leader.Host, err)
+		}
 	}
 
 	// Print plan
@@ -204,24 +219,42 @@ func parseLeaderRaftID(nodesJSON []byte) (string, error) {
 	if err := json.Unmarshal(nodesJSON, &nodes); err != nil {
 		return "", fmt.Errorf("parse /nodes response: %w", err)
 	}
+	var leaders []string
 	for id, n := range nodes {
-		if !n.Leader {
-			continue
+		if n.Leader {
+			leaders = append(leaders, id)
 		}
-		// The raft address is always a WireGuard host:port (e.g. 10.0.0.1:7001).
-		// Reject anything malformed so a corrupt/poisoned /nodes response fails
-		// fast HERE — before Phase 1 stops the cluster — rather than producing a
-		// broken recovery peers.json that a node would then act on.
-		host, port, err := net.SplitHostPort(id)
-		if err != nil || host == "" || port == "" {
-			return "", fmt.Errorf("leader reported malformed raft address %q in /nodes response: %v", id, err)
-		}
-		if net.ParseIP(host) == nil {
-			return "", fmt.Errorf("leader raft address %q has a non-IP host (expected WireGuard 10.0.0.x)", id)
-		}
-		return id, nil
 	}
-	return "", fmt.Errorf("no node reported leader==true in /nodes response")
+	if len(leaders) == 0 {
+		return "", fmt.Errorf("no node reported leader==true in /nodes response")
+	}
+	// Map iteration is random; if /nodes somehow reports two leaders (the very
+	// split-brain this command recovers from), refuse rather than pick one.
+	if len(leaders) > 1 {
+		return "", fmt.Errorf("multiple nodes report leader==true (%v) — split-brain; resolve manually before recovery", leaders)
+	}
+	id := leaders[0]
+	// Reject anything malformed so a corrupt/poisoned /nodes response fails fast
+	// HERE — before Phase 1 stops the cluster — rather than producing a broken
+	// recovery peers.json that a node would then act on.
+	if err := validateRaftAddr(id); err != nil {
+		return "", fmt.Errorf("leader reported %v in /nodes response", err)
+	}
+	return id, nil
+}
+
+// validateRaftAddr checks that s is a well-formed raft address: a WireGuard
+// host:port with an IP host (e.g. "10.0.0.1:7001"). Rejects shell-injection or
+// corrupt values before they can reach a recovery peers.json.
+func validateRaftAddr(s string) error {
+	host, port, err := net.SplitHostPort(s)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("malformed raft address %q: %v", s, err)
+	}
+	if net.ParseIP(host) == nil {
+		return fmt.Errorf("raft address %q has a non-IP host (expected WireGuard 10.0.0.x)", s)
+	}
+	return nil
 }
 
 // buildSingleNodePeersJSON renders the rqlite recovery peers.json content for a
@@ -265,11 +298,51 @@ func phase1StopAll(nodes []inspector.Node) error {
 		}
 	}
 
-	fmt.Printf("\nWaiting 5s for processes to fully stop...\n")
-	time.Sleep(5 * time.Second)
+	// Enforce quiescence: a lingering rqlited still holds raft.db open and would
+	// race the phase-2 `rm -f raft.db` on the leader (data corruption). Poll
+	// until every node reports no orama-node/rqlited process, and ABORT if any
+	// node can't be quiesced — never proceed to destructive phases otherwise.
+	fmt.Printf("\nVerifying all nodes are fully stopped...\n")
+	if err := waitAllStopped(nodes, 60*time.Second); err != nil {
+		return err
+	}
+	fmt.Println("  All nodes quiesced.")
 	fmt.Println()
 
 	return nil
+}
+
+// waitAllStopped polls each node until neither orama-node nor rqlited is running,
+// or the timeout elapses. Returns an error naming the nodes that would not stop.
+func waitAllStopped(nodes []inspector.Node, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	remaining := make([]inspector.Node, len(nodes))
+	copy(remaining, nodes)
+
+	for {
+		var stillRunning []inspector.Node
+		for _, node := range remaining {
+			cmd := `bash -c 'if pgrep -x rqlited >/dev/null 2>&1 || pgrep -x orama-node >/dev/null 2>&1; then echo RUNNING; else echo STOPPED; fi'`
+			res := inspector.RunSSH(context.Background(), node, cmd)
+			// If we cannot even determine state (SSH failure), treat as still
+			// running so we do not proceed to destructive steps on a guess.
+			if !res.OK() || strings.TrimSpace(res.Stdout) != "STOPPED" {
+				stillRunning = append(stillRunning, node)
+			}
+		}
+		if len(stillRunning) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			hosts := make([]string, len(stillRunning))
+			for i, n := range stillRunning {
+				hosts[i] = n.Host
+			}
+			return fmt.Errorf("nodes still running orama-node/rqlited after %s: %v — aborting before destructive phases", timeout, hosts)
+		}
+		remaining = stillRunning
+		time.Sleep(3 * time.Second)
+	}
 }
 
 func phase2ResetLeader(leader inspector.Node, leaderRaftAddr string) error {
@@ -305,11 +378,20 @@ echo "LEADER_RESET_DONE peers=$(cat %s | tr -d "\n")"
 func phase4WipeFollowers(followers []inspector.Node) error {
 	fmt.Printf("== Phase 4: Wiping rqlite state on %d follower(s) ==\n", len(followers))
 
+	var failed []string
 	for _, node := range followers {
 		sudo := remotessh.SudoPrefix(node)
 		fmt.Printf("  Wiping %s ... ", node.Host)
 
+		// set -e + active-service guard: never rm live rqlite files, and never
+		// leave a follower half-wiped. A failed wipe is FATAL — starting that
+		// node later with a stale raft.db would reintroduce the pre-shrink
+		// config and cause split-brain.
 		script := fmt.Sprintf(`%sbash -c '
+set -e
+if systemctl is-active --quiet orama-node; then
+  echo "ERROR: orama-node still active — refusing to wipe"; exit 1
+fi
 rm -f %s
 rm -rf %s
 rm -f %s/db.sqlite %s/db.sqlite-shm %s/db.sqlite-wal
@@ -322,11 +404,16 @@ echo FOLLOWER_WIPE_DONE
 
 		if err := remotessh.RunSSHStreaming(node, script); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
+			failed = append(failed, node.Host)
 			continue
 		}
 		fmt.Println()
 	}
 	fmt.Println()
+
+	if len(failed) > 0 {
+		return fmt.Errorf("%d follower(s) failed to wipe: %v — do NOT start them (stale raft.db would cause split-brain); investigate and re-run", len(failed), failed)
+	}
 	return nil
 }
 
@@ -409,6 +496,7 @@ func leaderTableCount(leader inspector.Node) (int, error) {
 func phase5StartFollowers(followers []inspector.Node) error {
 	fmt.Printf("== Phase 5: Starting %d follower(s) (fresh re-join) ==\n", len(followers))
 
+	var failed []string
 	for _, node := range followers {
 		sudo := remotessh.SudoPrefix(node)
 		fmt.Printf("  Starting %s ... ", node.Host)
@@ -416,25 +504,73 @@ func phase5StartFollowers(followers []inspector.Node) error {
 		cmd := fmt.Sprintf("%ssystemctl start orama-node && echo STARTED", sudo)
 		if err := remotessh.RunSSHStreaming(node, cmd); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
+			failed = append(failed, node.Host)
 			continue
 		}
 		fmt.Println()
 
-		// Serial start with a settle delay: each follower pulls a full 3GB
-		// snapshot from the leader, so give it room before the next one.
-		fmt.Printf("  (waiting 20s for %s to sync before next follower)\n", node.Host)
-		time.Sleep(20 * time.Second)
+		// Serial start: each follower pulls a full snapshot from the leader.
+		// Poll its raft state (health check, not a fixed sleep) before moving on
+		// so we don't hammer the leader with concurrent snapshot installs.
+		fmt.Printf("  Waiting for %s to join as Follower (up to 180s)...\n", node.Host)
+		if joined := waitForState(node, "Follower", 180*time.Second); !joined {
+			fmt.Printf("  ⚠️  %s did not report Follower within timeout (may still be syncing a large snapshot)\n", node.Host)
+			failed = append(failed, node.Host)
+		} else {
+			fmt.Printf("  ✅ %s joined.\n", node.Host)
+		}
 	}
 
 	fmt.Println()
+	if len(failed) > 0 {
+		return fmt.Errorf("%d follower(s) did not start/join cleanly: %v — check /opt/orama/.orama/logs/rqlite-node.log on each", len(failed), failed)
+	}
 	return nil
 }
 
+// waitForState polls a node's raft state until it matches want, or timeout.
+func waitForState(node inspector.Node, want string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if raftState(node) == want {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
 func phase6Verify(nodes []inspector.Node, leader inspector.Node) {
-	fmt.Printf("== Phase 6: Waiting for cluster to stabilize ==\n")
-	for _, s := range []int{30, 60, 90, 120} {
-		time.Sleep(30 * time.Second)
-		fmt.Printf("  ... %ds\n", s)
+	fmt.Printf("== Phase 6: Verifying cluster health (up to 180s) ==\n")
+
+	deadline := time.Now().Add(180 * time.Second)
+	var states map[string]string
+	healthy := false
+	for {
+		states = make(map[string]string, len(nodes))
+		allSettled := true
+		leaderSeen := false
+		for _, node := range nodes {
+			st := raftState(node)
+			states[node.Host] = st
+			switch st {
+			case "Leader":
+				leaderSeen = true
+			case "Follower":
+			default:
+				allSettled = false
+			}
+		}
+		if allSettled && leaderSeen {
+			healthy = true
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Second)
 	}
 
 	fmt.Printf("\n== Cluster status ==\n")
@@ -443,14 +579,18 @@ func phase6Verify(nodes []inspector.Node, leader inspector.Node) {
 		if node.Host == leader.Host {
 			marker = " ← LEADER"
 		}
-		fmt.Printf("  %s%s: raft state = %q\n", node.Host, marker, raftState(node))
+		fmt.Printf("  %s%s: raft state = %q\n", node.Host, marker, states[node.Host])
 	}
 
-	fmt.Printf("\n== Recovery complete ==\n\n")
+	if healthy {
+		fmt.Printf("\n✅ Recovery complete — leader elected and all nodes settled.\n\n")
+	} else {
+		fmt.Printf("\n⚠️  Recovery finished but not all nodes settled (see states above).\n")
+		fmt.Printf("   A follower syncing a large snapshot can take longer; re-check shortly.\n\n")
+	}
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  1. Run 'orama monitor report --env <env>' to verify full cluster health\n")
-	fmt.Printf("  2. If a follower shows a non-Leader/Follower state, give it up to 5 min to finish syncing\n")
-	fmt.Printf("  3. Check /opt/orama/.orama/logs/rqlite-node.log on any node that fails to join\n")
+	fmt.Printf("  2. If a follower still shows an unsettled state, check /opt/orama/.orama/logs/rqlite-node.log\n")
 }
 
 // raftState returns the node's current raft state ("Leader"/"Follower"/...) via

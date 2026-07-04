@@ -51,6 +51,11 @@ const (
 var reservedClaimKeys = map[string]struct{}{
 	"sub": {}, "iss": {}, "aud": {}, "iat": {},
 	"nbf": {}, "exp": {}, "namespace": {}, "custom": {},
+	// "scopes" is the gateway-authoritative API-key grant set (bugboard #148).
+	// A namespace claims provider must NEVER be able to inject it — otherwise a
+	// tenant could mint admin for every end-user's JWT. Only the API-key→JWT
+	// exchange path sets it, and callerScopes only trusts it on an ak_ subject.
+	"scopes": {},
 }
 
 // jwtClaimsProvider implements auth.ClaimsResolver by invoking the namespace's

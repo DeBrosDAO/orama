@@ -26,6 +26,7 @@ type middlewareCache struct {
 
 type cachedValue struct {
 	value     string
+	scopes    string // api_keys.scopes (bugboard #148); "" means grandfather=admin
 	expiresAt time.Time
 }
 
@@ -69,11 +70,31 @@ func (mc *middlewareCache) GetAPIKeyNamespace(apiKey string) (string, bool) {
 
 // SetAPIKeyNamespace caches an API key → namespace mapping.
 func (mc *middlewareCache) SetAPIKeyNamespace(apiKey, namespace string) {
+	mc.SetAPIKeyEntry(apiKey, namespace, "")
+}
+
+// GetAPIKeyEntry returns the cached namespace AND scopes for an API key
+// (bugboard #148). scopes is the raw api_keys.scopes value ("" = grandfather).
+func (mc *middlewareCache) GetAPIKeyEntry(apiKey string) (namespace, scopes string, ok bool) {
+	mc.apiKeyNSMu.RLock()
+	defer mc.apiKeyNSMu.RUnlock()
+
+	entry, present := mc.apiKeyNS[apiKey]
+	if !present || time.Now().After(entry.expiresAt) {
+		return "", "", false
+	}
+	return entry.value, entry.scopes, true
+}
+
+// SetAPIKeyEntry caches an API key → (namespace, scopes) mapping. The TTL
+// (60s) bounds how long a revoked key can still resolve after revocation.
+func (mc *middlewareCache) SetAPIKeyEntry(apiKey, namespace, scopes string) {
 	mc.apiKeyNSMu.Lock()
 	defer mc.apiKeyNSMu.Unlock()
 
 	mc.apiKeyNS[apiKey] = &cachedValue{
 		value:     namespace,
+		scopes:    scopes,
 		expiresAt: time.Now().Add(mc.ttl),
 	}
 }

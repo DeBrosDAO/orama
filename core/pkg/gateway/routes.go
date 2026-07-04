@@ -118,6 +118,11 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/namespace/list", g.namespaceListHandler)
 	}
 
+	// Scoped API-key management (bugboard #148) — admin-scoped + namespace-scoped.
+	// GET list / POST create; DELETE /{id} revoke one; POST /revoke-legacy sweep.
+	mux.HandleFunc("/v1/namespace/keys", g.namespaceKeysHandler)
+	mux.HandleFunc("/v1/namespace/keys/", g.namespaceKeysByIDHandler)
+
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
 	mux.HandleFunc("/v1/network/peers", g.networkPeersHandler)
