@@ -59,6 +59,23 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Server-side storage quota (bugboard #141). The CID is already owned, so
+	// re-pinning adds no NEW logical bytes (additional=0) — but reject if the
+	// namespace is already over its configured budget. Unlimited when unset;
+	// fail-open on a transient quota-lookup error.
+	if exceeded, budget, projected, qErr := h.storageQuotaExceeded(ctx, namespace, 0); qErr != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "storage quota check failed; allowing pin (fail-open)",
+			zap.Error(qErr), zap.String("namespace", namespace))
+	} else if exceeded {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "pin rejected: storage quota exceeded",
+			zap.String("namespace", namespace),
+			zap.Int64("budget_bytes", budget),
+			zap.Int64("projected_bytes", projected))
+		httputil.WriteRPCError(w, http.StatusRequestEntityTooLarge, httputil.ErrCodeStorageQuotaExceeded,
+			fmt.Sprintf("namespace storage quota exceeded: %d bytes (× RF) exceeds budget %d bytes", projected, budget))
+		return
+	}
+
 	// Get replication factor from config (default: 3)
 	replicationFactor := h.config.IPFSReplicationFactor
 	if replicationFactor == 0 {

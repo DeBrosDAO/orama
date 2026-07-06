@@ -42,6 +42,11 @@ const (
 	ErrCodeConflict         RPCErrorCode = "CONFLICT"
 	ErrCodeRateLimited      RPCErrorCode = "RATE_LIMITED"
 	ErrCodePayloadTooLarge  RPCErrorCode = "PAYLOAD_TOO_LARGE"
+	// ErrCodeStorageQuotaExceeded — the namespace's configured storage budget
+	// (max_storage_bytes) would be exceeded by this pin/upload, RF-aware
+	// (bugboard #141). Non-retryable: the caller must free space or raise the
+	// budget. Only enforced for namespaces that have a positive budget row.
+	ErrCodeStorageQuotaExceeded RPCErrorCode = "STORAGE_QUOTA_EXCEEDED"
 
 	// 5xx — server error
 	ErrCodeInternal           RPCErrorCode = "INTERNAL"

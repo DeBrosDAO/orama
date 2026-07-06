@@ -38,7 +38,9 @@ export interface IHttpTransport {
   uploadFile<T = any>(
     path: string,
     formData: FormData,
-    options?: { timeout?: number }
+    // signal: optional caller AbortSignal to cancel the in-flight upload
+    // (bugboard #144). Kept in sync with the concrete HttpClient.uploadFile.
+    options?: { timeout?: number; signal?: AbortSignal }
   ): Promise<T>;
 
   /**

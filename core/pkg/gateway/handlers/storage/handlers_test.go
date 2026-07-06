@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,7 +13,35 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
+
+// quotaMockDB is a partial rqlite.Client (bugboard #141 tests): it embeds the
+// interface so it satisfies every method, but only Query/Exec are implemented —
+// Query returns crafted budget/usage rows keyed on the SQL, Exec is a no-op.
+type quotaMockDB struct {
+	rqlite.Client
+	budget []map[string]interface{}
+	usage  []map[string]interface{}
+}
+
+func (m *quotaMockDB) Query(_ context.Context, dest any, query string, _ ...any) error {
+	out, ok := dest.(*[]map[string]interface{})
+	if !ok {
+		return nil
+	}
+	switch {
+	case strings.Contains(query, "max_storage_bytes"):
+		*out = m.budget
+	case strings.Contains(query, "SUM(size_bytes)"):
+		*out = m.usage
+	}
+	return nil
+}
+
+func (m *quotaMockDB) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -747,3 +776,63 @@ func TestIsAlreadyUnpinned(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestStorageQuotaExceeded(t *testing.T) {
+	mk := func(budget, usage int64, hasBudgetRow bool) *Handlers {
+		db := &quotaMockDB{usage: []map[string]interface{}{{"used": usage}}}
+		if hasBudgetRow {
+			db.budget = []map[string]interface{}{{"max_storage_bytes": budget}}
+		}
+		return New(&mockIPFSClient{}, newTestLogger(), Config{IPFSReplicationFactor: 3}, db)
+	}
+	ctx := context.Background()
+
+	// No budget row → unlimited (opt-in enforcement).
+	if ex, _, _, _ := mk(0, 74_000_000, false).storageQuotaExceeded(ctx, "ns", 1_000_000); ex {
+		t.Error("no budget row must be unlimited")
+	}
+	// Within budget: (74MB + 1MB) × 3 = 225MB < 300MB.
+	if ex, _, _, _ := mk(300_000_000, 74_000_000, true).storageQuotaExceeded(ctx, "ns", 1_000_000); ex {
+		t.Error("within budget must not be exceeded")
+	}
+	// Over budget: (74MB + 1MB) × 3 = 225MB > 100MB.
+	if ex, budget, projected, _ := mk(100_000_000, 74_000_000, true).storageQuotaExceeded(ctx, "ns", 1_000_000); !ex {
+		t.Errorf("over budget must be exceeded (budget=%d projected=%d)", budget, projected)
+	}
+	// Zero / non-positive budget → unlimited.
+	if ex, _, _, _ := mk(0, 74_000_000, true).storageQuotaExceeded(ctx, "ns", 1_000_000); ex {
+		t.Error("zero budget must be unlimited")
+	}
+	// nil db (test mode) → never enforced.
+	if ex, _, _, _ := newTestHandlers(&mockIPFSClient{}).storageQuotaExceeded(ctx, "ns", 1<<40); ex {
+		t.Error("nil db must skip enforcement")
+	}
+}
+
+func TestUploadHandler_QuotaExceeded(t *testing.T) {
+	// Budget 10 bytes; a 5-byte upload → (0+5)×RF3 = 15 > 10 → rejected before Add.
+	db := &quotaMockDB{
+		budget: []map[string]interface{}{{"max_storage_bytes": int64(10)}},
+		usage:  []map[string]interface{}{{"used": int64(0)}},
+	}
+	h := New(&mockIPFSClient{addResp: &ipfs.AddResponse{Cid: "QmShouldNotBeAdded", Size: 5}},
+		newTestLogger(), Config{IPFSReplicationFactor: 3}, db)
+
+	// "aGVsbG8=" is base64("hello") = 5 bytes.
+	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload",
+		strings.NewReader(`{"data":"aGVsbG8=","name":"x.txt"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withNamespace(req, "ns")
+	rec := httptest.NewRecorder()
+
+	h.UploadHandler(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	body := decodeBody(t, rec)
+	errObj, _ := body["error"].(map[string]interface{})
+	if errObj == nil || errObj["code"] != "STORAGE_QUOTA_EXCEEDED" {
+		t.Errorf("expected STORAGE_QUOTA_EXCEEDED envelope, got %v", body)
+	}
+}

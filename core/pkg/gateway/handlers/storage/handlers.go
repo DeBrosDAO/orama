@@ -76,6 +76,79 @@ func (h *Handlers) recordCIDOwnership(ctx context.Context, cid, namespace, name,
 	return err
 }
 
+// quotaRowToInt64 coerces an rqlite scalar (float64 / int64 / int) to int64.
+func quotaRowToInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	}
+	return 0
+}
+
+// getNamespaceStorageBudget returns the namespace's configured storage budget
+// in raw (RF-inclusive) bytes from namespace_quotas, or 0 when there is no row
+// or a non-positive value — meaning storage is unlimited and quota enforcement
+// is skipped. Enforcement is OPT-IN (bugboard #141): a namespace is only capped
+// once an operator sets a positive max_storage_bytes.
+func (h *Handlers) getNamespaceStorageBudget(ctx context.Context, namespace string) (int64, error) {
+	var rows []map[string]interface{}
+	if err := h.db.Query(ctx, &rows,
+		`SELECT max_storage_bytes FROM namespace_quotas WHERE namespace = ?`, namespace); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return quotaRowToInt64(rows[0]["max_storage_bytes"]), nil
+}
+
+// getNamespaceStorageUsage returns the namespace's current LOGICAL stored bytes
+// (sum of size_bytes across all owned CIDs). Multiply by the replication factor
+// for the raw cluster cost.
+func (h *Handlers) getNamespaceStorageUsage(ctx context.Context, namespace string) (int64, error) {
+	var rows []map[string]interface{}
+	if err := h.db.Query(ctx, &rows,
+		`SELECT COALESCE(SUM(size_bytes), 0) AS used FROM ipfs_content_ownership WHERE namespace = ?`, namespace); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return quotaRowToInt64(rows[0]["used"]), nil
+}
+
+// storageQuotaExceeded reports whether adding additionalBytes of LOGICAL content
+// would push the namespace's RF-inclusive storage over its configured budget
+// (bugboard #141). Returns exceeded=false when the namespace has no budget
+// (unlimited) or when h.db is nil (test mode). budget/projected are returned for
+// the error message. A DB error is surfaced so the caller can decide fail-open.
+func (h *Handlers) storageQuotaExceeded(ctx context.Context, namespace string, additionalBytes int64) (exceeded bool, budget, projected int64, err error) {
+	if h.db == nil {
+		return false, 0, 0, nil
+	}
+	budget, err = h.getNamespaceStorageBudget(ctx, namespace)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if budget <= 0 {
+		return false, 0, 0, nil // not configured → unlimited
+	}
+	usage, err := h.getNamespaceStorageUsage(ctx, namespace)
+	if err != nil {
+		return false, budget, 0, err
+	}
+	rf := int64(h.config.IPFSReplicationFactor)
+	if rf < 1 {
+		rf = 3
+	}
+	projected = (usage + additionalBytes) * rf
+	return projected > budget, budget, projected, nil
+}
+
 // checkCIDOwnership verifies that a namespace owns (has uploaded) a specific CID.
 // Returns true if the namespace owns the CID, false otherwise.
 func (h *Handlers) checkCIDOwnership(ctx context.Context, cid, namespace string) (bool, error) {

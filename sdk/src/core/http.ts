@@ -385,8 +385,12 @@ export class HttpClient {
         error instanceof SDKError &&
         [408, 429, 500, 502, 503, 504].includes(error.httpStatus);
 
+      // Never retry once the request's signal has been aborted (caller cancel
+      // or timeout) — bugboard #144. A retry would ignore a user's Cancel.
+      const aborted = (options as RequestInit).signal?.aborted === true;
+
       // Retry on same gateway for retryable HTTP errors
-      if (isRetryableError && attempt < this.maxRetries) {
+      if (isRetryableError && attempt < this.maxRetries && !aborted) {
         if (typeof console !== "undefined") {
           console.warn(
             `[HttpClient] Retrying request (attempt ${attempt + 1}/${this.maxRetries})`
@@ -442,6 +446,14 @@ export class HttpClient {
     formData: FormData,
     options?: {
       timeout?: number;
+      /**
+       * Optional caller AbortSignal (bugboard #144). When it fires, the
+       * in-flight upload is terminated at the socket and the promise rejects
+       * with an SDKError whose code is "ABORTED" — distinct from an internal
+       * timeout ("TIMEOUT") — and it is never retried. Lets a UI Cancel button
+       * actually stop the bytes going out.
+       */
+      signal?: AbortSignal;
     }
   ): Promise<T> {
     const startTime = performance.now(); // Track upload start time
@@ -451,9 +463,26 @@ export class HttpClient {
       // Don't set Content-Type - browser will set it with boundary
     };
 
+    // Fail fast if the caller already aborted before we even start.
+    if (options?.signal?.aborted) {
+      throw new SDKError("upload aborted by caller", 0, "ABORTED", {
+        cause: "caller-abort",
+      });
+    }
+
     const controller = new AbortController();
     const requestTimeout = options?.timeout ?? this.timeout * 5; // 5x timeout for uploads
     const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+
+    // Forward a caller abort to the in-flight request (socket-level) and record
+    // that the cancel was caller-initiated so it is distinguishable from the
+    // internal timeout (which may retry; a caller abort must NOT).
+    let abortedByCaller = false;
+    const onCallerAbort = () => {
+      abortedByCaller = true;
+      controller.abort();
+    };
+    options?.signal?.addEventListener("abort", onCallerAbort, { once: true });
 
     const fetchOptions: RequestInit = {
       method: "POST",
@@ -480,6 +509,23 @@ export class HttpClient {
       return result;
     } catch (error) {
       const duration = performance.now() - startTime;
+
+      // A deliberate caller cancel is a distinct, non-retryable outcome — never
+      // a timeout, and not surfaced through the network-error callback (it's not
+      // a network failure, it's a user action).
+      if (abortedByCaller) {
+        if (typeof console !== "undefined") {
+          console.log(
+            `[HttpClient] POST ${path} (upload) aborted by caller after ${duration.toFixed(
+              2
+            )}ms`
+          );
+        }
+        throw new SDKError("upload aborted by caller", 0, "ABORTED", {
+          cause: "caller-abort",
+        });
+      }
+
       if (typeof console !== "undefined") {
         console.error(
           `[HttpClient] POST ${path} (upload) failed after ${duration.toFixed(
@@ -489,17 +535,11 @@ export class HttpClient {
         );
       }
 
-      // Call the network error callback if configured
+      // Normalize an internal-timeout AbortError to a TIMEOUT SDKError; a real
+      // HTTP SDKError passes through unchanged.
+      const normalized = this.normalizeError(error, requestTimeout);
       if (this.onNetworkError) {
-        const sdkError =
-          error instanceof SDKError
-            ? error
-            : new SDKError(
-                error instanceof Error ? error.message : String(error),
-                0,
-                "NETWORK_ERROR"
-              );
-        this.onNetworkError(sdkError, {
+        this.onNetworkError(normalized, {
           method: "POST",
           path,
           isRetry: false,
@@ -507,9 +547,10 @@ export class HttpClient {
         });
       }
 
-      throw error;
+      throw normalized;
     } finally {
       clearTimeout(timeoutId);
+      options?.signal?.removeEventListener("abort", onCallerAbort);
     }
   }
 

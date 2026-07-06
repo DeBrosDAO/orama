@@ -50,6 +50,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	var reader io.Reader
 	var name string
+	var inputSize int64
 	var shouldPin bool = true // Default to true
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
@@ -68,6 +69,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		reader = file
 		name = header.Filename
+		inputSize = header.Size
 
 		// Parse pin flag from form (default: true)
 		if pinValue := r.FormValue("pin"); pinValue != "" {
@@ -96,11 +98,40 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		reader = bytes.NewReader(data)
 		name = req.Name
+		inputSize = int64(len(data))
 		// For JSON requests, pin defaults to true (can be extended if needed)
 	}
 
-	// Add to IPFS
 	ctx := r.Context()
+
+	// Server-side per-namespace storage quota (bugboard #141). Reject BEFORE we
+	// add/pin so the namespace's RF-inclusive budget is a real ceiling, not a
+	// client-trusted gate. A namespace with no configured budget is unlimited
+	// (no-op). Fail-open on a transient quota-lookup error — availability over a
+	// hard cap for a DB hiccup.
+	//
+	// inputSize is the server-observed byte count (multipart part size / decoded
+	// JSON length), NOT a client-asserted field — a client can't understate it
+	// without sending fewer bytes. The recorded ledger uses addResp.Size (the
+	// IPFS DAG-wrapped size, marginally larger due to UnixFS framing), so the
+	// enforced cap is approximate at the framing-overhead level — acceptable for
+	// a coarse byte quota. (Pre-GA hardening: authoritative record-then-check
+	// with rollback + per-namespace serialization to close the concurrent-burst
+	// TOCTOU; deferred while enforcement is opt-in and unused.)
+	if exceeded, budget, projected, qErr := h.storageQuotaExceeded(ctx, namespace, inputSize); qErr != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "storage quota check failed; allowing upload (fail-open)",
+			zap.Error(qErr), zap.String("namespace", namespace))
+	} else if exceeded {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "upload rejected: storage quota exceeded",
+			zap.String("namespace", namespace),
+			zap.Int64("budget_bytes", budget),
+			zap.Int64("projected_bytes", projected))
+		httputil.WriteRPCError(w, http.StatusRequestEntityTooLarge, httputil.ErrCodeStorageQuotaExceeded,
+			fmt.Sprintf("namespace storage quota exceeded: projected %d bytes ((logical+new) × RF) exceeds budget %d bytes", projected, budget))
+		return
+	}
+
+	// Add to IPFS
 	addResp, err := h.ipfsClient.Add(ctx, reader, name)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to add content to IPFS", zap.Error(err))
