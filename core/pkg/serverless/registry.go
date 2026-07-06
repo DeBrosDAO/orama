@@ -424,6 +424,24 @@ const (
 	wasmFetchRetryBase   = 250 * time.Millisecond
 )
 
+// Pin-verification tuning. IPFS-Cluster's POST /pins returns 200/202 IMMEDIATELY
+// and pins ASYNC per-peer, so a deploy that only fires-and-forgets the pin can
+// report success while the block is still "pinning" (or never converges) on the
+// peers — exactly the bugboard #137 failure (a node cold-fetches a block no peer
+// actually holds and times out on invoke). After pinning we poll PinStatus until
+// every peer reports "pinned" (or we time out and hard-fail the deploy).
+// These are vars (not consts) only so tests can shorten them to keep the
+// pin-verification timeout path fast; production never mutates them.
+var (
+	wasmPinVerifyTimeout  = 30 * time.Second
+	wasmPinVerifyInterval = 2 * time.Second
+	// wasmRecoveryWait bounds the re-pin-and-wait recovery on a cold read miss:
+	// re-issuing the pin makes the local cluster peer re-fetch the block from a
+	// peer that has it, then we poll (capped by this) for local availability
+	// before one final fetch attempt.
+	wasmRecoveryWait = 10 * time.Second
+)
+
 // GetWASMBytes retrieves the compiled WASM bytecode for a function. On a cold
 // block it retries with a bounded per-attempt deadline and returns the typed
 // ErrWASMFetchTimeout (retryable infra failure) so callers don't misreport a
@@ -455,7 +473,61 @@ func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, er
 		}
 	}
 
+	// Every local attempt timed out: the block isn't on this node's daemon. The
+	// local cluster peer may simply never have fetched it — re-pinning triggers
+	// it to pull the block from a peer that has it, after which one more fetch
+	// can succeed (bugboard #137). If the block is gone everywhere, this can't
+	// recover it and we still fail (correct). Skip recovery if the caller's
+	// context is already dead — a cancelled request must not trigger a re-pin it
+	// cannot await.
+	if ctx.Err() == nil {
+		if data, err := r.recoverWASMByRepin(ctx, wasmCID); err == nil {
+			return data, nil
+		}
+	}
+
 	return nil, fmt.Errorf("%w: cid=%s after %d attempts: %v", ErrWASMFetchTimeout, wasmCID, wasmFetchMaxAttempts, lastErr)
+}
+
+// recoverWASMByRepin performs one bounded recovery for a cold read miss: re-pin
+// the CID everywhere (so the local cluster peer re-fetches it from a peer that
+// holds it), poll PinStatus until it is locally available (capped by
+// wasmRecoveryWait), then attempt a single final fetch. Returns the bytes on
+// success or an error the caller treats as "recovery failed".
+func (r *Registry) recoverWASMByRepin(ctx context.Context, wasmCID string) ([]byte, error) {
+	if _, err := r.ipfs.Pin(ctx, wasmCID, wasmCID+".wasm", wasmReplicationEverywhere); err != nil {
+		return nil, fmt.Errorf("re-pin recovery for cid=%s failed: %w", wasmCID, err)
+	}
+
+	r.waitForLocalWASMBlock(ctx, wasmCID)
+
+	data, err := r.fetchWASMOnce(ctx, wasmCID)
+	if err != nil {
+		return nil, fmt.Errorf("post-repin fetch for cid=%s failed: %w", wasmCID, err)
+	}
+	return data, nil
+}
+
+// waitForLocalWASMBlock polls PinStatus (capped by wasmRecoveryWait) until at
+// least one peer reports the block pinned, giving the local cluster peer time to
+// re-fetch it after a recovery re-pin. It returns when the block appears, the
+// wait budget is spent, or ctx is cancelled — the caller still attempts a final
+// fetch regardless, since the block may be local before the status converges.
+func (r *Registry) waitForLocalWASMBlock(ctx context.Context, wasmCID string) {
+	waitCtx, cancel := context.WithTimeout(ctx, wasmRecoveryWait)
+	defer cancel()
+	ticker := time.NewTicker(wasmFetchRetryBase)
+	defer ticker.Stop()
+	for {
+		if status, err := r.ipfs.PinStatus(waitCtx, wasmCID); err == nil && status.PinnedPeers > 0 {
+			return
+		}
+		select {
+		case <-waitCtx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // fetchWASMOnce does a single IPFS fetch bounded by an independent deadline that
@@ -519,6 +591,13 @@ func (r *Registry) repinWASMCIDs(ctx context.Context, cids []string) int {
 		}
 		if _, err := r.ipfs.Pin(ctx, cid, cid+".wasm", wasmReplicationEverywhere); err != nil {
 			r.logger.Warn("repin function WASM failed (block may be gone — needs re-deploy)",
+				zap.String("cid", cid), zap.Error(err))
+			continue
+		}
+		// Only count a CID as pinned once the async per-peer pin actually
+		// converges — an unverified pin is what the #137 bug relied on.
+		if err := r.verifyPinnedEverywhere(ctx, cid); err != nil {
+			r.logger.Warn("repin function WASM not confirmed on all peers (block may be gone / not converged)",
 				zap.String("cid", cid), zap.Error(err))
 			continue
 		}
@@ -840,7 +919,58 @@ func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string
 		return "", fmt.Errorf("failed to pin WASM cid=%s on cluster: %w", resp.Cid, err)
 	}
 
+	// The pin is async per-peer, so confirm it actually converged to "pinned"
+	// on every peer before declaring the function deployed. A "deployed but not
+	// actually pinned" function is the bugboard #137 bug — hard-fail instead.
+	if err := r.verifyPinnedEverywhere(ctx, resp.Cid); err != nil {
+		return "", err
+	}
+
 	return resp.Cid, nil
+}
+
+// verifyPinnedEverywhere polls PinStatus until the CID reports "pinned" on every
+// cluster peer or wasmPinVerifyTimeout elapses. On timeout it returns a wrapped
+// error naming the cid, the last observed status, and the pinned/total peer
+// counts so the caller can surface an actionable failure.
+//
+// Caveat: "every peer" is every peer IPFS-Cluster currently reports in the CID's
+// peer_map. A peer that is down/unreachable at verify time may be omitted from
+// the peer_map entirely (rather than reported as cluster_error), so the
+// pinned==total check can pass while an absent peer holds nothing. The guarantee
+// is therefore "pinned on every peer the cluster currently reports," not "every
+// peer that will ever exist" — a down peer during a rolling upgrade is exactly
+// when this gap matters. The startup RepinAllWASM backfill re-covers such peers
+// once they rejoin.
+func (r *Registry) verifyPinnedEverywhere(ctx context.Context, cid string) error {
+	deadline := time.Now().Add(wasmPinVerifyTimeout)
+	ticker := time.NewTicker(wasmPinVerifyInterval)
+	defer ticker.Stop()
+
+	var lastStatus string
+	var lastPinned, lastTotal int
+	for {
+		status, err := r.ipfs.PinStatus(ctx, cid)
+		if err == nil {
+			lastStatus, lastPinned, lastTotal = status.Status, status.PinnedPeers, status.TotalPeers
+			if status.Status == ipfs.PinStatusPinned {
+				return nil
+			}
+		} else {
+			lastStatus = "query-failed: " + err.Error()
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("WASM pin not confirmed on all cluster peers: cid=%s last_status=%q pinned=%d/%d after %s",
+				cid, lastStatus, lastPinned, lastTotal, wasmPinVerifyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("WASM pin verification cancelled: cid=%s last_status=%q pinned=%d/%d: %w",
+				cid, lastStatus, lastPinned, lastTotal, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // getByNameInternal retrieves a function by name regardless of status.

@@ -32,6 +32,10 @@ type rotationMockORMDB struct {
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
 	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
+	// claimsBySubject: subject -> last-known-good custom_claims JSON. Serves the
+	// lastKnownCustomClaims lookup (bugboard #143): the anti-fragmentation reuse
+	// reads the most recent stored account_id for a wallet at login.
+	claimsBySubject map[string]string
 	// graceableTokens: hashedToken -> subject for tokens that are revoked but
 	// still inside the reuse-grace window (bugboard #125). The grace SELECT
 	// (detected by the grace_used_at predicate) reads from here.
@@ -55,6 +59,19 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 	}
 	if containsCI(sql, "SELECT id FROM namespaces") {
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{int64(1)}}}, nil
+	}
+	// lastKnownCustomClaims lookup (bugboard #143): SELECT custom_claims by
+	// subject. Distinguished from the token-keyed selects by selecting
+	// custom_claims (not subject) and keying on subject (args[1]).
+	if containsCI(sql, "SELECT custom_claims") && containsCI(sql, "FROM refresh_tokens") {
+		if len(args) < 2 {
+			return &client.QueryResult{Count: 0}, nil
+		}
+		subj, _ := args[1].(string)
+		if cc, ok := m.claimsBySubject[subj]; ok && cc != "" {
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{cc}}}, nil
+		}
+		return &client.QueryResult{Count: 0}, nil
 	}
 	// Grace-path SELECT (bugboard #125): SELECT subject for a recently-revoked,
 	// grace-available token. Distinguished from the active-path SELECT by the
@@ -526,6 +543,106 @@ type mockClaimsResolver struct{ claims map[string]string }
 
 func (m mockClaimsResolver) ResolveClaims(_ context.Context, _, _ string) map[string]string {
 	return m.claims
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #143 — durable anti-fragmentation: last-known-good custom-claims
+// reuse at login. When a namespace's claims provider fails open (transient
+// cold-WASM stall) yielding no account_id, that login's push devices would
+// register under the wallet Sub instead of the stable account_id and never
+// receive fan-out. IssueTokens must reuse the last account_id the wallet ever
+// resolved so the device stays on the stable identity.
+// ----------------------------------------------------------------------------
+
+// lastKnownCustomClaims returns the most recent stored claims for a subject.
+func TestLastKnownCustomClaims_returnsStoredClaims(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"uuid-X"}`}
+
+	nsID, err := s.ResolveNamespaceID(context.Background(), "anchat-test")
+	if err != nil {
+		t.Fatalf("ResolveNamespaceID: %v", err)
+	}
+	got := s.lastKnownCustomClaims(context.Background(), nsID, "0xWALLET")
+	if got["account_id"] != "uuid-X" {
+		t.Fatalf("expected last-known account_id, got %v", got)
+	}
+}
+
+// No stored history → nil (fail-soft, mints without custom claims).
+func TestLastKnownCustomClaims_emptyReturnsNil(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	nsID, _ := s.ResolveNamespaceID(context.Background(), "anchat-test")
+	if got := s.lastKnownCustomClaims(context.Background(), nsID, "0xNOHISTORY"); got != nil {
+		t.Fatalf("expected nil for no history, got %v", got)
+	}
+}
+
+// The core #143 fix: the provider returns EMPTY at login (transient failure),
+// but the wallet has a stored account_id — the minted access token must still
+// carry it, and the new refresh row must persist it.
+func TestIssueTokens_reusesLastKnownClaims_whenResolverEmpty(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	// Namespace HAS a provider, but it fails open (returns nil this login).
+	s.SetClaimsResolver(mockClaimsResolver{claims: nil})
+	// The wallet resolved account_id on a PRIOR login (stored in refresh_tokens).
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"uuid-X"}`}
+
+	access, refresh, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "uuid-X" {
+		t.Errorf("access token lost account_id after reuse; custom=%v", claims.Custom)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(refresh)]; got != `{"account_id":"uuid-X"}` {
+		t.Errorf("reused claims not persisted to new refresh row; got %q", got)
+	}
+}
+
+// Guard: with NO provider configured (claimsResolver == nil), the reuse path is
+// skipped entirely — single-credential apps are unaffected even if an unrelated
+// stored blob exists for the subject.
+func TestIssueTokens_noResolver_doesNotReuse(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	// No SetClaimsResolver call → claimsResolver is nil.
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"uuid-X"}`}
+
+	access, _, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if _, present := claims.Custom["account_id"]; present {
+		t.Errorf("no-provider app must not reuse stored claims; custom=%v", claims.Custom)
+	}
+}
+
+// Guard: when the resolver DOES return claims, reuse must not run (the fresh
+// resolution wins). Store a DIFFERENT stale value and assert the fresh one is used.
+func TestIssueTokens_resolverNonEmpty_skipsReuse(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	s.SetClaimsResolver(mockClaimsResolver{claims: map[string]string{"account_id": "fresh"}})
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"stale"}`}
+
+	access, _, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "fresh" {
+		t.Errorf("fresh resolution must win over stored; custom=%v", claims.Custom)
+	}
 }
 
 // Bugboard #548: claims resolved at IssueTokens (login) must be stored with the

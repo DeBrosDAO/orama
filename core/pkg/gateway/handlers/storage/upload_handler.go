@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -131,6 +132,15 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, response)
 }
 
+// pinVerify tuning for the async upload path. IPFS-Cluster's pin is async
+// per-peer, so a Pin call returning success doesn't mean the block is durable
+// yet. We best-effort poll PinStatus a few times to surface a stuck pin in the
+// logs — but we never fail the upload (its response already went out).
+const (
+	pinVerifyAttempts = 3
+	pinVerifyInterval = 2 * time.Second
+)
+
 // pinAsync pins a CID asynchronously in the background with retry logic.
 // It retries once if the first attempt fails, then gives up.
 func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace string) {
@@ -142,6 +152,7 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded", zap.String("cid", cid))
 		// Update pin status in database
 		h.updatePinStatus(ctx, cid, namespace, true)
+		h.verifyPinDurable(ctx, cid)
 		return
 	}
 
@@ -160,7 +171,26 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
 		// Update pin status in database
 		h.updatePinStatus(ctx, cid, namespace, true)
+		h.verifyPinDurable(ctx, cid)
 	}
+}
+
+// verifyPinDurable best-effort polls PinStatus a few times after a successful
+// pin to confirm the async cluster pin actually reached "pinned". It only logs
+// a Warn on non-convergence — it never blocks or fails the upload (the response
+// has already been returned to the client).
+func (h *Handlers) verifyPinDurable(ctx context.Context, cid string) {
+	for attempt := 1; attempt <= pinVerifyAttempts; attempt++ {
+		status, err := h.ipfsClient.PinStatus(ctx, cid)
+		if err == nil && status != nil && status.Status == ipfs.PinStatusPinned {
+			return
+		}
+		if attempt < pinVerifyAttempts {
+			time.Sleep(pinVerifyInterval)
+		}
+	}
+	h.logger.ComponentWarn(logging.ComponentGeneral, "pin not confirmed durable after verify polls (may still be converging)",
+		zap.String("cid", cid))
 }
 
 // base64Decode decodes a base64 string to bytes.

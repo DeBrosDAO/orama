@@ -63,8 +63,19 @@ type PinStatus struct {
 	ReplicationMax    int      `json:"replication_max"`
 	ReplicationFactor int      `json:"replication_factor"`
 	Peers             []string `json:"peers"`
+	PinnedPeers       int      `json:"pinned_peers"`
+	TotalPeers        int      `json:"total_peers"`
 	Error             string   `json:"error,omitempty"`
 }
+
+// Aggregated PinStatus.Status values. IPFS-Cluster reports a per-peer status;
+// these are the honest cluster-wide rollups PinStatus computes from the peer_map.
+const (
+	PinStatusPinned  = "pinned"  // every peer holds the block
+	PinStatusPinning = "pinning" // at least one peer is still fetching
+	PinStatusError   = "error"   // at least one peer failed to pin
+	PinStatusUnknown = "unknown" // no peers reported (cluster can't confirm)
+)
 
 // AddResponse represents the response from adding content to IPFS
 type AddResponse struct {
@@ -477,35 +488,37 @@ func (c *Client) PinStatus(ctx context.Context, cid string) (*PinStatus, error) 
 	// Use name from GlobalPinInfo
 	name := gpi.Name
 
-	// Extract status from peer map (use first peer's status, or aggregate)
-	status := "unknown"
+	// Aggregate the per-peer statuses HONESTLY. IPFS-Cluster's POST /pins
+	// returns before the async per-peer pinning finishes, so a CID can be
+	// "pinning"/"remote"/errored on some peers while our caller needs to know
+	// whether it is DURABLE everywhere before serving invokes (bugboard #137).
+	// We must never optimistically report "pinned" when we can't confirm it.
 	peers := make([]string, 0, len(gpi.PeerMap))
+	pinnedPeers := 0
 	var errorMsg string
+	var firstNonPinned string
+	anyError := false
+	anyPinning := false
 	for peerID, pinInfo := range gpi.PeerMap {
 		peers = append(peers, peerID)
-		if pinInfo.Status != nil {
-			// Convert status to string
-			if s, ok := pinInfo.Status.(string); ok {
-				if status == "unknown" || s != "" {
-					status = s
-				}
-			} else if status == "unknown" {
-				// If status is not a string, try to convert it
-				status = fmt.Sprintf("%v", pinInfo.Status)
-			}
+		s := normalizePeerStatus(pinInfo.Status)
+		switch {
+		case s == PinStatusPinned:
+			pinnedPeers++
+		case isErrorStatus(s):
+			anyError = true
+		case isPinningStatus(s):
+			anyPinning = true
+		}
+		if s != PinStatusPinned && firstNonPinned == "" {
+			firstNonPinned = s
 		}
 		if pinInfo.Error != "" {
 			errorMsg = pinInfo.Error
 		}
 	}
 
-	// Normalize status string (common IPFS Cluster statuses)
-	if status == "" || status == "unknown" {
-		status = "pinned" // Default to pinned if we have peers
-		if len(peers) == 0 {
-			status = "unknown"
-		}
-	}
+	status := aggregatePinStatus(len(peers), pinnedPeers, anyError, anyPinning, firstNonPinned)
 
 	result := &PinStatus{
 		Cid:               gpi.Cid,
@@ -515,6 +528,8 @@ func (c *Client) PinStatus(ctx context.Context, cid string) (*PinStatus, error) 
 		ReplicationMax:    0, // Not available in GlobalPinInfo
 		ReplicationFactor: len(peers),
 		Peers:             peers,
+		PinnedPeers:       pinnedPeers,
+		TotalPeers:        len(peers),
 		Error:             errorMsg,
 	}
 
@@ -524,6 +539,54 @@ func (c *Client) PinStatus(ctx context.Context, cid string) (*PinStatus, error) 
 	}
 
 	return result, nil
+}
+
+// normalizePeerStatus renders a per-peer TrackerStatus (which the cluster API
+// encodes as either a string or a number) to a lowercase string.
+func normalizePeerStatus(raw interface{}) string {
+	if raw == nil {
+		return ""
+	}
+	if s, ok := raw.(string); ok {
+		return strings.ToLower(strings.TrimSpace(s))
+	}
+	return strings.ToLower(fmt.Sprintf("%v", raw))
+}
+
+// isErrorStatus reports whether a per-peer status represents a pin failure.
+func isErrorStatus(s string) bool {
+	switch s {
+	case "pin_error", "cluster_error":
+		return true
+	}
+	return strings.Contains(s, "error")
+}
+
+// isPinningStatus reports whether a per-peer status is an in-progress pin.
+func isPinningStatus(s string) bool {
+	switch s {
+	case "pinning", "pin_queued", "queued":
+		return true
+	}
+	return false
+}
+
+// aggregatePinStatus rolls the per-peer tallies into a single honest cluster
+// status. "pinned" requires EVERY peer pinned; errors win over in-progress; an
+// empty peer_map is "unknown" (the cluster couldn't confirm anything).
+func aggregatePinStatus(totalPeers, pinnedPeers int, anyError, anyPinning bool, firstNonPinned string) string {
+	switch {
+	case totalPeers == 0:
+		return PinStatusUnknown
+	case pinnedPeers == totalPeers:
+		return PinStatusPinned
+	case anyError:
+		return PinStatusError
+	case anyPinning:
+		return PinStatusPinning
+	default:
+		return firstNonPinned
+	}
 }
 
 // Unpin removes a pin from a CID

@@ -44,6 +44,18 @@ const (
 	// claimsProviderWarnInterval rate-limits the fail-open WARN so a broken
 	// provider doesn't flood the log on every login.
 	claimsProviderWarnInterval = 30 * time.Second
+	// claimsProviderMaxAttempts bounds how many times ResolveClaims re-invokes
+	// the provider on a TRANSIENT infra failure (cold WASM fetch, transient
+	// invoke error). The provider is a serverless function subject to cold-WASM
+	// stalls (bugboard #143): a single attempt fails open under a cold start,
+	// dropping account_id and fragmenting the user's devices. Each attempt is
+	// independently bounded by claimsProviderTimeout, so the total budget stays
+	// bounded; fail-open still holds after the last attempt.
+	claimsProviderMaxAttempts = 3
+	// claimsProviderRetryBackoff is the short pause between transient-failure
+	// retries — enough to let an in-flight cold WASM fetch land, without adding
+	// meaningful latency to the login path.
+	claimsProviderRetryBackoff = 150 * time.Millisecond
 )
 
 // reservedClaimKeys can never be injected by a namespace claims provider; the
@@ -58,10 +70,17 @@ var reservedClaimKeys = map[string]struct{}{
 	"scopes": {},
 }
 
+// claimsInvoker is the narrow invoke seam the claims provider depends on —
+// satisfied by *serverless.Invoker in production and by a fake in tests so the
+// retry behaviour (bugboard #143) can be exercised without a live WASM engine.
+type claimsInvoker interface {
+	Invoke(ctx context.Context, req *serverless.InvokeRequest) (*serverless.InvokeResponse, error)
+}
+
 // jwtClaimsProvider implements auth.ClaimsResolver by invoking the namespace's
 // reserved auth-claims-provider function.
 type jwtClaimsProvider struct {
-	invoker *serverless.Invoker
+	invoker claimsInvoker
 	logger  *zap.Logger
 
 	mu          sync.Mutex
@@ -74,7 +93,14 @@ func newJWTClaimsProvider(invoker *serverless.Invoker, logger *zap.Logger) *jwtC
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &jwtClaimsProvider{invoker: invoker, logger: logger.Named("claims-provider")}
+	p := &jwtClaimsProvider{logger: logger.Named("claims-provider")}
+	// Guard against a typed-nil interface: a nil *serverless.Invoker stored in
+	// the claimsInvoker interface would be != nil, defeating the disable check
+	// in ResolveClaims. Only assign when the concrete pointer is non-nil.
+	if invoker != nil {
+		p.invoker = invoker
+	}
+	return p
 }
 
 // ResolveClaims invokes the namespace's auth-claims-provider and returns the
@@ -89,10 +115,50 @@ func (p *jwtClaimsProvider) ResolveClaims(ctx context.Context, wallet, namespace
 		return nil
 	}
 
+	var lastErr error
+	for attempt := 0; attempt < claimsProviderMaxAttempts; attempt++ {
+		if ctx.Err() != nil { // parent cancelled/expired — stop early, fail open
+			break
+		}
+		resp, err := p.invokeOnce(ctx, namespace, input)
+		if err == nil && resp != nil && resp.Status == serverless.InvocationStatusSuccess {
+			return sanitizeProviderClaims(resp.Output)
+		}
+		if errors.Is(err, registry.ErrFunctionNotFound) {
+			// No provider deployed — the normal no-claims case. Stay silent, no retry.
+			return nil
+		}
+		if !p.retryable(err) {
+			// A clean non-success result is the app's own logic, and a non-
+			// transient invoke error is not going to recover on retry — fail
+			// open once. A non-success result is not an err; note it below.
+			if err != nil {
+				p.warnRateLimited("claims provider invoke failed (minting without custom claims)",
+					namespace, err)
+			} else {
+				p.warnRateLimited("claims provider returned non-success (minting without custom claims)",
+					namespace, nil)
+			}
+			return nil
+		}
+		lastErr = err
+		if attempt < claimsProviderMaxAttempts-1 {
+			time.Sleep(claimsProviderRetryBackoff)
+		}
+	}
+
+	// Exhausted retries on a transient failure (or parent ctx done) — fail open.
+	p.warnRateLimited("claims provider transient failure exhausted retries (minting without custom claims)",
+		namespace, lastErr)
+	return nil
+}
+
+// invokeOnce performs a single provider invocation bounded by
+// claimsProviderTimeout derived from the parent ctx.
+func (p *jwtClaimsProvider) invokeOnce(ctx context.Context, namespace string, input []byte) (*serverless.InvokeResponse, error) {
 	callCtx, cancel := context.WithTimeout(ctx, claimsProviderTimeout)
 	defer cancel()
-
-	resp, err := p.invoker.Invoke(callCtx, &serverless.InvokeRequest{
+	return p.invoker.Invoke(callCtx, &serverless.InvokeRequest{
 		Namespace:    namespace,
 		FunctionName: claimsProviderFnName,
 		Input:        input,
@@ -100,23 +166,15 @@ func (p *jwtClaimsProvider) ResolveClaims(ctx context.Context, wallet, namespace
 		// per-caller authorization check.
 		TriggerType: serverless.TriggerTypeInternal,
 	})
-	if err != nil || resp == nil {
-		// The namespace simply hasn't deployed the function (registry miss) is
-		// the normal no-claims case for most namespaces — stay silent. Any
-		// other failure is a real problem worth a rate-limited WARN.
-		if !errors.Is(err, registry.ErrFunctionNotFound) {
-			p.warnRateLimited("claims provider invoke failed (minting without custom claims)",
-				namespace, err)
-		}
-		return nil
-	}
-	if resp.Status != serverless.InvocationStatusSuccess {
-		p.warnRateLimited("claims provider returned non-success (minting without custom claims)",
-			namespace, nil)
-		return nil
-	}
+}
 
-	return sanitizeProviderClaims(resp.Output)
+// retryable reports whether an invoke error is a TRANSIENT infra failure worth
+// re-attempting. Cold WASM fetch (ErrWASMFetchTimeout) is the concrete signal
+// (bugboard #143): the block is not-yet-replicated on this node and lands on a
+// subsequent attempt. Everything else — a clean non-success result (nil err),
+// ErrFunctionNotFound, or a genuine invoke error — is not retried.
+func (p *jwtClaimsProvider) retryable(err error) bool {
+	return errors.Is(err, serverless.ErrWASMFetchTimeout)
 }
 
 // sanitizeProviderClaims parses the provider's RAW stdout as a bare JSON object

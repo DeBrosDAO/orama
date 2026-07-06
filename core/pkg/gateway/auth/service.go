@@ -107,6 +107,55 @@ func (s *Service) resolveCustomClaims(ctx context.Context, wallet, namespace str
 	return s.claimsResolver.ResolveClaims(ctx, wallet, namespace)
 }
 
+// lastKnownCustomClaims returns the most recently stored non-empty custom_claims
+// for (nsID, subject) from refresh_tokens, or nil. It is the durable anti-
+// fragmentation fallback (bugboard #143): once a wallet has EVER resolved
+// account_id, a later TRANSIENT provider failure at login must not silently drop
+// it — a device that registers under the wallet Sub instead of the stable
+// account_id never receives fan-out push. Fail-soft: any error/empty → nil, so a
+// missing history simply mints without custom claims (the pre-existing behaviour).
+func (s *Service) lastKnownCustomClaims(ctx context.Context, nsID interface{}, subject string) map[string]string {
+	internalCtx := client.WithInternalAuth(ctx)
+	db := s.orm.Database()
+	res, err := db.Query(internalCtx,
+		`SELECT custom_claims FROM refresh_tokens
+		 WHERE namespace_id = ? AND subject = ?
+		   AND custom_claims IS NOT NULL AND custom_claims != ''
+		 ORDER BY expires_at DESC LIMIT 1`,
+		nsID, subject)
+	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return nil
+	}
+	cc, ok := res.Rows[0][0].(string)
+	if !ok {
+		return nil
+	}
+	return unmarshalClaims(cc)
+}
+
+// reuseLastKnownClaims implements the durable anti-fragmentation fallback
+// (bugboard #143). When this namespace HAS a claims provider (claimsResolver !=
+// nil) but it just failed open (transient cold-WASM stall) yielding no
+// account_id, the wallet's login-time devices would register under the wallet
+// Sub instead of the stable account_id and never receive fan-out push. In that
+// case reuse the last account_id this wallet ever resolved. Only runs when the
+// resolver is configured AND returned empty — single-credential apps (no
+// provider) are unaffected, and the refresh path is untouched (it already
+// replays stored claims forward). Returns the claims to mint with.
+func (s *Service) reuseLastKnownClaims(ctx context.Context, nsID interface{}, wallet, namespace string, custom map[string]string) map[string]string {
+	if s.claimsResolver == nil || len(custom) > 0 {
+		return custom
+	}
+	lkg := s.lastKnownCustomClaims(ctx, nsID, wallet)
+	if len(lkg) == 0 {
+		return custom
+	}
+	s.logger.ComponentInfo(logging.ComponentGeneral,
+		"claims provider returned empty at login; reusing last-known-good custom claims (anti-fragmentation)",
+		zap.String("namespace", namespace), zap.String("subject", wallet))
+	return lkg
+}
+
 // ErrRotationNotConfigured is returned by RefreshToken when the service
 // wasn't given an rqlite client — refusing to rotate without atomicity
 // guarantees is safer than rotating non-atomically.
@@ -252,6 +301,13 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	// so the 15-min refresh path never re-invokes the provider.
 	custom := s.resolveCustomClaims(ctx, wallet, namespace)
 
+	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to resolve namespace ID: %w", err)
+	}
+
+	custom = s.reuseLastKnownClaims(ctx, nsID, wallet, namespace, custom)
+
 	// Issue access token (15m)
 	token, expUnix, err := s.GenerateJWT(namespace, wallet, 15*time.Minute, custom)
 	if err != nil {
@@ -264,11 +320,6 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 		return "", "", 0, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
 	refresh := base64.RawURLEncoding.EncodeToString(rbuf)
-
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to resolve namespace ID: %w", err)
-	}
 
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.orm.Database()

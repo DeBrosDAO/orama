@@ -294,6 +294,140 @@ func TestClient_PinStatus(t *testing.T) {
 	})
 }
 
+// TestClient_PinStatus_aggregation asserts PinStatus reports the cluster-wide
+// status HONESTLY from the peer_map (bugboard #137): "pinned" ONLY when every
+// peer is pinned, errors win over in-progress, and an empty peer_map is
+// "unknown" — never the old optimistic "pinned" default.
+func TestClient_PinStatus_aggregation(t *testing.T) {
+	logger := zap.NewNop()
+
+	tests := []struct {
+		name       string
+		peerMap    map[string]interface{}
+		wantStatus string
+		wantPinned int
+		wantTotal  int
+	}{
+		{
+			name: "all_pinned",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinned"},
+				"peer3": map[string]interface{}{"status": "pinned"},
+			},
+			wantStatus: "pinned",
+			wantPinned: 3,
+			wantTotal:  3,
+		},
+		{
+			name: "one_pinning_rest_pinned",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinning"},
+				"peer3": map[string]interface{}{"status": "pinned"},
+			},
+			wantStatus: "pinning",
+			wantPinned: 2,
+			wantTotal:  3,
+		},
+		{
+			name: "pin_error_wins",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinning"},
+				"peer3": map[string]interface{}{"status": "pin_error", "error": "boom"},
+			},
+			wantStatus: "error",
+			wantPinned: 1,
+			wantTotal:  3,
+		},
+		{
+			name:       "empty_peer_map_unknown",
+			peerMap:    map[string]interface{}{},
+			wantStatus: "unknown",
+			wantPinned: 0,
+			wantTotal:  0,
+		},
+		{
+			name: "no_optimistic_pinned_default",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "remote"},
+				"peer2": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "remote",
+			wantPinned: 0,
+			wantTotal:  2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]interface{}{
+					"cid":      "QmAgg",
+					"name":     "agg-file",
+					"peer_map": tc.peerMap,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			}))
+			defer server.Close()
+
+			client, err := NewClient(Config{ClusterAPIURL: server.URL}, logger)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			status, err := client.PinStatus(context.Background(), "QmAgg")
+			if err != nil {
+				t.Fatalf("PinStatus: %v", err)
+			}
+			if status.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", status.Status, tc.wantStatus)
+			}
+			if status.PinnedPeers != tc.wantPinned {
+				t.Errorf("PinnedPeers = %d, want %d", status.PinnedPeers, tc.wantPinned)
+			}
+			if status.TotalPeers != tc.wantTotal {
+				t.Errorf("TotalPeers = %d, want %d", status.TotalPeers, tc.wantTotal)
+			}
+		})
+	}
+}
+
+// TestClient_PinStatus_numericStatus asserts the per-peer status is normalized
+// correctly when the cluster API encodes TrackerStatus as a number rather than
+// a string.
+func TestClient_PinStatus_numericStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"cid": "QmNum",
+			"peer_map": map[string]interface{}{
+				// Numeric status that is NOT "pinned" must not be treated as pinned.
+				"peer1": map[string]interface{}{"status": 5},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{ClusterAPIURL: server.URL}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	status, err := client.PinStatus(context.Background(), "QmNum")
+	if err != nil {
+		t.Fatalf("PinStatus: %v", err)
+	}
+	if status.Status == "pinned" {
+		t.Errorf("numeric non-pinned status must not aggregate to 'pinned', got %q", status.Status)
+	}
+	if status.PinnedPeers != 0 {
+		t.Errorf("PinnedPeers = %d, want 0", status.PinnedPeers)
+	}
+}
+
 func TestClient_Unpin(t *testing.T) {
 	logger := zap.NewNop()
 

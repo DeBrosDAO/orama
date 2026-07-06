@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
@@ -26,6 +27,15 @@ type wasmFakeIPFS struct {
 	getErrN  int // return an error for the first N Get calls
 	getCalls int
 	getData  []byte
+
+	// PinStatus control (bugboard #137 pin verification).
+	pinStatus      string // aggregated status to report; "" => "pinned"
+	pinnedPeers    int    // PinnedPeers reported (defaults derived from pinStatus)
+	totalPeers     int    // TotalPeers reported; 0 => 1
+	pinStatusCalls int
+	// pinnedAfterN: once PinStatus has been polled at least this many times,
+	// report "pinned" (simulates async convergence). 0 disables (use pinStatus).
+	pinnedAfterN int
 }
 
 func (f *wasmFakeIPFS) Pin(ctx context.Context, cid, name string, replicationFactor int) (*ipfs.PinResponse, error) {
@@ -39,6 +49,35 @@ func (f *wasmFakeIPFS) Pin(ctx context.Context, cid, name string, replicationFac
 	}
 	f.pinnedCIDs = append(f.pinnedCIDs, cid)
 	return &ipfs.PinResponse{Cid: cid, Name: name}, nil
+}
+
+func (f *wasmFakeIPFS) PinStatus(ctx context.Context, cid string) (*ipfs.PinStatus, error) {
+	f.pinStatusCalls++
+
+	status := f.pinStatus
+	if status == "" {
+		status = ipfs.PinStatusPinned
+	}
+	if f.pinnedAfterN > 0 && f.pinStatusCalls >= f.pinnedAfterN {
+		status = ipfs.PinStatusPinned
+	}
+
+	total := f.totalPeers
+	if total == 0 {
+		total = 1
+	}
+	pinned := f.pinnedPeers
+	if status == ipfs.PinStatusPinned {
+		pinned = total
+	}
+
+	return &ipfs.PinStatus{
+		Cid:         cid,
+		Status:      status,
+		PinnedPeers: pinned,
+		TotalPeers:  total,
+		Peers:       make([]string, total),
+	}, nil
 }
 
 func wasmFakeContains(s []string, want string) bool {
@@ -131,8 +170,10 @@ func TestGetWASMBytes_exhaustedReturnsTypedTimeout(t *testing.T) {
 	if !errors.Is(err, ErrWASMFetchTimeout) {
 		t.Errorf("error = %v, want it to wrap ErrWASMFetchTimeout", err)
 	}
-	if ip.getCalls != wasmFetchMaxAttempts {
-		t.Errorf("Get attempted %d times, want %d", ip.getCalls, wasmFetchMaxAttempts)
+	// wasmFetchMaxAttempts local fetches + 1 post-repin recovery fetch, all of
+	// which fail here (block gone everywhere), so the typed timeout still wins.
+	if ip.getCalls != wasmFetchMaxAttempts+1 {
+		t.Errorf("Get attempted %d times, want %d (local attempts + 1 recovery fetch)", ip.getCalls, wasmFetchMaxAttempts+1)
 	}
 }
 
@@ -177,5 +218,85 @@ func TestGetWASMBytes_emptyCID(t *testing.T) {
 	registry := newWASMTestRegistry(t, &wasmFakeIPFS{MockIPFSClient: NewMockIPFSClient()})
 	if _, err := registry.GetWASMBytes(context.Background(), ""); err == nil {
 		t.Fatal("expected error for empty wasmCID")
+	}
+}
+
+// withFastPinVerify shortens the pin-verification timings for a test and
+// restores them afterwards, so the timeout path doesn't take 30s.
+func withFastPinVerify(t *testing.T) {
+	t.Helper()
+	timeout, interval := wasmPinVerifyTimeout, wasmPinVerifyInterval
+	wasmPinVerifyTimeout = 100 * time.Millisecond
+	wasmPinVerifyInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		wasmPinVerifyTimeout = timeout
+		wasmPinVerifyInterval = interval
+	})
+}
+
+// TestUploadWASM_hardFailsWhenPinNeverConfirms asserts a deploy HARD-FAILS when
+// the cluster pin is accepted but never converges to "pinned" on every peer —
+// the exact "deployed but unfetchable" state that caused bugboard #137.
+func TestUploadWASM_hardFailsWhenPinNeverConfirms(t *testing.T) {
+	withFastPinVerify(t)
+	ip := &wasmFakeIPFS{MockIPFSClient: NewMockIPFSClient(), pinStatus: ipfs.PinStatusPinning}
+	registry := newWASMTestRegistry(t, ip)
+
+	_, err := registry.Register(context.Background(),
+		&FunctionDefinition{Name: "fn-stuck", Namespace: "ns", IsPublic: true},
+		[]byte("wasm-bytes"))
+	if err == nil {
+		t.Fatal("expected Register to fail when pin never confirms 'pinned', got nil")
+	}
+	if ip.pinStatusCalls == 0 {
+		t.Error("expected PinStatus to be polled during verification")
+	}
+}
+
+// TestUploadWASM_succeedsWhenPinnedEverywhere asserts a deploy succeeds once the
+// cluster reports the WASM pinned on every peer.
+func TestUploadWASM_succeedsWhenPinnedEverywhere(t *testing.T) {
+	ip := &wasmFakeIPFS{MockIPFSClient: NewMockIPFSClient(), pinStatus: ipfs.PinStatusPinned}
+	registry := newWASMTestRegistry(t, ip)
+
+	if _, err := registry.Register(context.Background(),
+		&FunctionDefinition{Name: "fn-ok", Namespace: "ns", IsPublic: true},
+		[]byte("wasm-bytes")); err != nil {
+		t.Fatalf("Register with pinned WASM should succeed: %v", err)
+	}
+	if ip.pinStatusCalls == 0 {
+		t.Error("expected PinStatus to be polled to confirm the pin")
+	}
+}
+
+// TestGetWASMBytes_recoversViaRepin asserts a cold read miss (all local fetches
+// time out) triggers ONE re-pin recovery and then serves the block on the final
+// post-repin fetch (bugboard #137 peer-recoverable read).
+func TestGetWASMBytes_recoversViaRepin(t *testing.T) {
+	want := []byte("recovered-wasm")
+	// getErrN == wasmFetchMaxAttempts: all local attempts fail, then the single
+	// post-repin recovery fetch (call #4) succeeds.
+	ip := &wasmFakeIPFS{
+		MockIPFSClient: NewMockIPFSClient(),
+		getErrN:        wasmFetchMaxAttempts,
+		getData:        want,
+		pinStatus:      ipfs.PinStatusPinned,
+		pinnedPeers:    1,
+		totalPeers:     1,
+	}
+	registry := newWASMTestRegistry(t, ip)
+
+	got, err := registry.GetWASMBytes(context.Background(), "QmColdRecover")
+	if err != nil {
+		t.Fatalf("GetWASMBytes should recover via re-pin: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if ip.pinCalls == 0 {
+		t.Error("expected a recovery re-pin to be issued on cold miss")
+	}
+	if ip.getCalls != wasmFetchMaxAttempts+1 {
+		t.Errorf("Get called %d times, want %d (local attempts + 1 recovery fetch)", ip.getCalls, wasmFetchMaxAttempts+1)
 	}
 }
