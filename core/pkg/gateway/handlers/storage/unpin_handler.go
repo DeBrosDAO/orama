@@ -55,6 +55,18 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.ipfsClient.Unpin(ctx, path); err != nil {
+		// Idempotent reclaim (bugboard #140/#151): a CID that is already absent
+		// from the cluster pinset (never pinned, or already GC'd) is the desired
+		// end state, so treat "not pinned / not found" as success rather than a
+		// 500. A retention cron re-unpinning already-gone CIDs must not error.
+		if isAlreadyUnpinned(err) {
+			if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
+				h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
+					zap.Error(uerr), zap.String("cid", path))
+			}
+			httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "already_unpinned": true})
+			return
+		}
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to unpin CID",
 			zap.Error(err), zap.String("cid", path))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unpin: %v", err))
@@ -68,4 +80,23 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path})
+}
+
+// isAlreadyUnpinned reports whether an Unpin error actually means the CID is
+// already absent from the cluster pinset — the reclaim goal is already met, so
+// it is an idempotent success rather than a failure. IPFS-Cluster reports this
+// as a 404 and/or a body containing "not part of the pinset" (bugboard #140).
+func isAlreadyUnpinned(err error) bool {
+	if err == nil {
+		return true
+	}
+	// Match ONLY the definitive IPFS-Cluster "already absent from the pinset"
+	// phrases. A bare 404 / "not found" is ambiguous — it could be an unrelated
+	// routing / namespace / restart failure — and must NOT be swallowed: doing
+	// so would flip a still-pinned CID to unpinned and orphan the blob
+	// (bugboard #140/#151). IPFS-Cluster reports this exact case as
+	// "<cid> not part of the pinset".
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not part of the pinset") ||
+		strings.Contains(msg, "not pinned")
 }

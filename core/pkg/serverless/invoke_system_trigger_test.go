@@ -174,6 +174,72 @@ func TestInvoke_systemTriggerStillAllowsPublic(t *testing.T) {
 	}
 }
 
+// TestInvoke_internalFunctionGate is the bugboard #152 integration guard on
+// the full Invoke gate: an `internal: true` function may be invoked by an
+// admin caller or a system trigger, but a normal (non-admin) app-runtime key
+// invoking it by name over HTTP is rejected `unauthorized` — even though it
+// carries a valid identity that would satisfy a plain private function.
+func TestInvoke_internalFunctionGate(t *testing.T) {
+	internalFn := &Function{
+		ID:         "fn-id",
+		Namespace:  "anchat-test",
+		Name:       "migrate",
+		IsPublic:   false,
+		IsInternal: true,
+	}
+	inv := &Invoker{
+		registry: &invokeMockRegistry{fn: internalFn},
+		logger:   zap.NewNop(),
+		// engine nil — cancelled-ctx short-circuit prevents reaching it.
+	}
+
+	cases := []struct {
+		name          string
+		trigger       TriggerType
+		callerWallet  string
+		callerIsAdmin bool
+		wantAuth      bool // true → must hit ErrUnauthorized
+	}{
+		// Non-admin app-runtime key with a real identity: the exact hole
+		// #152 closes. A private function would allow this; an internal one
+		// must not.
+		{"http non-admin identified caller denied", TriggerTypeHTTP, "0xAppRuntime", false, true},
+		// Admin caller: allowed to reach execution (no auth error).
+		{"http admin caller allowed", TriggerTypeHTTP, "0xAdmin", true, false},
+		// System trigger (cron): bypasses canInvokeFn entirely, so an
+		// internal function still fires — this is how internal functions are
+		// meant to be driven.
+		{"cron system trigger bypasses gate", TriggerTypeCron, "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // pre-cancelled so executeWithRetry short-circuits post-auth
+
+			req := &InvokeRequest{
+				Namespace:     "anchat-test",
+				FunctionName:  "migrate",
+				Input:         []byte(`{}`),
+				TriggerType:   tc.trigger,
+				CallerWallet:  tc.callerWallet,
+				CallerIsAdmin: tc.callerIsAdmin,
+			}
+			resp, err := inv.Invoke(ctx, req)
+
+			if tc.wantAuth {
+				if !errors.Is(err, ErrUnauthorized) {
+					t.Errorf("err=%v, want ErrUnauthorized", err)
+				}
+				if resp == nil || resp.Error != "unauthorized" {
+					t.Errorf("expected response.Error=\"unauthorized\", got %+v", resp)
+				}
+			} else if errors.Is(err, ErrUnauthorized) {
+				t.Errorf("internal function wrongly blocked at auth: %+v", resp)
+			}
+		})
+	}
+}
+
 // TestInvoke_userTriggerWithCallerStillWorks verifies the fix doesn't
 // regress the happy path for user-driven triggers: an HTTP request with a
 // real CallerWallet on a private function still succeeds at the auth gate.

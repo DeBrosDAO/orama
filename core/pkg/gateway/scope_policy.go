@@ -193,6 +193,32 @@ func hasWalletJWT(r *http.Request) bool {
 	return false
 }
 
+// hasAnyJWT reports whether the request carries ANY verified JWT — a genuine
+// wallet JWT OR an API-key-exchanged one (ak_ subject). Used ONLY by the
+// storage-unpin exception below (bugboard #151): a serverless cron/job has no
+// logged-in user, so it proves key-possession by exchanging its storage-scoped
+// runtime key for a JWT. A bare API key (no JWT) yields false here, so the
+// "an extracted key is inert without a JWT" property of layer-1 still holds.
+func hasAnyJWT(r *http.Request) bool {
+	if v := r.Context().Value(ctxKeyJWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			return strings.TrimSpace(claims.Sub) != ""
+		}
+	}
+	return false
+}
+
+// isStorageUnpinPath reports whether (method, path) is the storage RECLAIM
+// endpoint — DELETE /v1/storage/unpin/:cid. This is the ONLY storage op whose
+// layer-1 user-JWT requirement is relaxed (bugboard #151): unpin is
+// namespace-ownership-checked in its handler and can only DROP the namespace's
+// own pins — it never reads or uploads. So a storage-scoped exchanged JWT is
+// sufficient for the userless server-side reclaim (cron / avatar-GC /
+// free-up-space). upload / get / pin keep the strict wallet-JWT requirement.
+func isStorageUnpinPath(method, path string) bool {
+	return method == http.MethodDelete && strings.HasPrefix(path, "/v1/storage/unpin/")
+}
+
 // scopeMiddleware enforces the API-key scope model. It runs after the
 // authorization (ownership) middleware, so ownership has already been verified;
 // this layer additionally (a) rejects a credential whose grant set does not
@@ -222,6 +248,17 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if requiresUserJWT(required) && !scopes.IsAdmin() && !hasWalletJWT(r) {
+			// Exception (bugboard #151): server-side storage RECLAIM. A
+			// serverless cron/job (prune-attachments, avatar-GC, free-up-space)
+			// has no logged-in user and authenticates by exchanging its
+			// storage-scoped runtime key for a JWT. Unpin is namespace-isolated
+			// (handler verifies CID ownership) and reclaim-only, so a scoped
+			// exchanged JWT suffices — but a bare API key (no JWT) still fails,
+			// and the scope check above already proved the caller holds storage.
+			if isStorageUnpinPath(r.Method, r.URL.Path) && hasAnyJWT(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			g.logger.ComponentWarn("gateway", "request rejected: user JWT required",
 				zap.String("path", r.URL.Path),
 				zap.String("required_scope", required),

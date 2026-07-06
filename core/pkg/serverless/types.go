@@ -221,12 +221,15 @@ type WebSocketConn interface {
 
 // FunctionDefinition contains the configuration for deploying a function.
 type FunctionDefinition struct {
-	Name              string            `json:"name"`
-	Namespace         string            `json:"namespace"`
-	Version           int               `json:"version,omitempty"`
-	MemoryLimitMB     int               `json:"memory_limit_mb,omitempty"`
-	TimeoutSeconds    int               `json:"timeout_seconds,omitempty"`
-	IsPublic          bool              `json:"is_public,omitempty"`
+	Name           string `json:"name"`
+	Namespace      string `json:"namespace"`
+	Version        int    `json:"version,omitempty"`
+	MemoryLimitMB  int    `json:"memory_limit_mb,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	IsPublic       bool   `json:"is_public,omitempty"`
+	// IsInternal marks a function invokable ONLY by a system trigger or an
+	// admin caller (bugboard #152). Default false → invokable as before.
+	IsInternal        bool              `json:"is_internal,omitempty"`
 	RetryCount        int               `json:"retry_count,omitempty"`
 	RetryDelaySeconds int               `json:"retry_delay_seconds,omitempty"`
 	DLQTopic          string            `json:"dlq_topic,omitempty"`
@@ -258,15 +261,19 @@ type DBTriggerConfig struct {
 
 // Function represents a deployed serverless function.
 type Function struct {
-	ID                string         `json:"id"`
-	Name              string         `json:"name"`
-	Namespace         string         `json:"namespace"`
-	Version           int            `json:"version"`
-	WASMCID           string         `json:"wasm_cid"`
-	SourceCID         string         `json:"source_cid,omitempty"`
-	MemoryLimitMB     int            `json:"memory_limit_mb"`
-	TimeoutSeconds    int            `json:"timeout_seconds"`
-	IsPublic          bool           `json:"is_public"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Namespace      string `json:"namespace"`
+	Version        int    `json:"version"`
+	WASMCID        string `json:"wasm_cid"`
+	SourceCID      string `json:"source_cid,omitempty"`
+	MemoryLimitMB  int    `json:"memory_limit_mb"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	IsPublic       bool   `json:"is_public"`
+	// IsInternal marks a function invokable ONLY by a system trigger or an
+	// admin caller (bugboard #152). Enforced in canInvokeFn; default false
+	// so every existing function stays invokable exactly as before.
+	IsInternal        bool           `json:"is_internal"`
 	RetryCount        int            `json:"retry_count"`
 	RetryDelaySeconds int            `json:"retry_delay_seconds"`
 	DLQTopic          string         `json:"dlq_topic,omitempty"`
@@ -297,10 +304,14 @@ type InvocationContext struct {
 	// CallerIP is the source IP of the request, populated by HTTP/WS handlers.
 	// Used by the multi-tier rate limiter as a fallback bucket for anonymous
 	// (no-wallet) callers.
-	CallerIP    string            `json:"caller_ip,omitempty"`
-	TriggerType TriggerType       `json:"trigger_type"`
-	WSClientID  string            `json:"ws_client_id,omitempty"`
-	EnvVars     map[string]string `json:"env_vars,omitempty"`
+	CallerIP string `json:"caller_ip,omitempty"`
+	// CallerIsAdmin marks the caller as holding the admin (control-plane)
+	// grant (bugboard #152). Propagated into child WASM→WASM invocations so
+	// an internal→internal call works while external→internal stays blocked.
+	CallerIsAdmin bool              `json:"caller_is_admin,omitempty"`
+	TriggerType   TriggerType       `json:"trigger_type"`
+	WSClientID    string            `json:"ws_client_id,omitempty"`
+	EnvVars       map[string]string `json:"env_vars,omitempty"`
 	// CallerClaims holds custom JWT claims set on the caller's token (beyond
 	// the standard sub/namespace fields). Read via host fn `get_caller_claim`.
 	// Populated by auth handlers from JWTClaims.Custom; empty for non-JWT auth.

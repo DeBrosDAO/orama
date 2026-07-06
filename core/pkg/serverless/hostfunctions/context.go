@@ -108,11 +108,15 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 	}
 
 	req := &serverless.InvokeRequest{
-		Namespace:        cur.Namespace,
-		FunctionName:     name,
-		Input:            payload,
-		TriggerType:      serverless.TriggerTypeWebSocket,
-		CallerWallet:     cur.CallerWallet,
+		Namespace:    cur.Namespace,
+		FunctionName: name,
+		Input:        payload,
+		TriggerType:  serverless.TriggerTypeWebSocket,
+		CallerWallet: cur.CallerWallet,
+		// Inherit the parent's admin bit so an internal→internal call works
+		// while external→internal stays blocked (bugboard #152). When the
+		// parent context never carried admin (external caller), this is false.
+		CallerIsAdmin:    cur.CallerIsAdmin,
 		CallerIP:         cur.CallerIP,
 		WSClientID:       cur.WSClientID,
 		CallerClaims:     cur.CallerClaims,
@@ -204,11 +208,14 @@ func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, pa
 		defer cancel()
 
 		req := &serverless.InvokeRequest{
-			Namespace:        snapshot.Namespace,
-			FunctionName:     name,
-			Input:            payloadCopy,
-			TriggerType:      serverless.TriggerTypeWebSocket,
-			CallerWallet:     snapshot.CallerWallet,
+			Namespace:    snapshot.Namespace,
+			FunctionName: name,
+			Input:        payloadCopy,
+			TriggerType:  serverless.TriggerTypeWebSocket,
+			CallerWallet: snapshot.CallerWallet,
+			// Inherit the parent's admin bit (bugboard #152): internal→internal
+			// async calls work; external→internal stay blocked.
+			CallerIsAdmin:    snapshot.CallerIsAdmin,
 			CallerIP:         snapshot.CallerIP,
 			WSClientID:       snapshot.WSClientID,
 			CallerClaims:     snapshot.CallerClaims,

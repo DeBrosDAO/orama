@@ -49,6 +49,11 @@ type InvokeRequest struct {
 	Input        []byte      `json:"input"`
 	TriggerType  TriggerType `json:"trigger_type"`
 	CallerWallet string      `json:"caller_wallet,omitempty"`
+	// CallerIsAdmin is true when the caller holds the admin (control-plane)
+	// scope. Only an admin (or a system trigger) may invoke a function marked
+	// is_internal (bugboard #152). Set by the HTTP/WS handlers from the
+	// request's resolved scope set.
+	CallerIsAdmin bool `json:"caller_is_admin,omitempty"`
 	// CallerIP is the source IP of the request, used by the multi-tier
 	// rate limiter as a fallback bucket for anonymous (no-wallet) callers.
 	CallerIP   string `json:"caller_ip,omitempty"`
@@ -118,7 +123,7 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	// #264). The auth boundary for system triggers is at REGISTRATION
 	// time (HTTP `POST /v1/functions/{name}/triggers`, or deploy-time
 	// auto-register from function.yaml), not at firing time.
-	if !isSystemTrigger(req.TriggerType) && !canInvokeFn(fn, req.CallerWallet) {
+	if !isSystemTrigger(req.TriggerType) && !canInvokeFn(fn, req.CallerWallet, req.CallerIsAdmin) {
 		// Authorization uses the function we already fetched above —
 		// CanInvoke would re-`registry.Get` it, a redundant leader-routed
 		// read on every op (bugboard #708).
@@ -145,6 +150,7 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		Namespace:        fn.Namespace,
 		CallerWallet:     req.CallerWallet,
 		CallerIP:         req.CallerIP,
+		CallerIsAdmin:    req.CallerIsAdmin,
 		TriggerType:      req.TriggerType,
 		WSClientID:       req.WSClientID,
 		EnvVars:          envVars,
@@ -467,6 +473,9 @@ func (i *Invoker) BatchInvoke(ctx context.Context, req *BatchInvokeRequest) (*Ba
 //     namespace OR an API key resolved to the target namespace. So the
 //     non-empty `callerWallet` here is sufficient evidence of a verified
 //     in-namespace caller.
+//   - Internal functions (`internal: true`, bugboard #152): invokable ONLY
+//     by a system trigger or an admin caller (callerIsAdmin). A normal
+//     app-runtime key is rejected even though it has a valid identity.
 //
 // History (bug #215 follow-up): the previous logic was a stub —
 //
@@ -508,12 +517,12 @@ func isSystemTrigger(t TriggerType) bool {
 	return false
 }
 
-func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string, callerWallet string) (bool, error) {
+func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string, callerWallet string, callerIsAdmin bool) (bool, error) {
 	fn, err := i.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {
 		return false, err
 	}
-	return canInvokeFn(fn, callerWallet), nil
+	return canInvokeFn(fn, callerWallet, callerIsAdmin), nil
 }
 
 // canInvokeFn is the pure authorization decision for an already-fetched
@@ -521,7 +530,17 @@ func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string,
 // #708). Public functions are open; a private function only requires that the
 // caller has SOME identity — the auth middleware already verified namespace
 // membership before the function ran.
-func canInvokeFn(fn *Function, callerWallet string) bool {
+//
+// An internal function (bugboard #152) may be invoked ONLY by a system
+// trigger or an admin caller. System triggers bypass this function entirely
+// (isSystemTrigger short-circuits the gate in Invoke), so reaching here with
+// an internal function means an external caller — require admin. This closes
+// the hole where a scoped app-runtime key could invoke internal/admin/cron
+// functions (e.g. `migrate`) by name.
+func canInvokeFn(fn *Function, callerWallet string, callerIsAdmin bool) bool {
+	if fn.IsInternal && !callerIsAdmin {
+		return false
+	}
 	if fn.IsPublic {
 		return true
 	}

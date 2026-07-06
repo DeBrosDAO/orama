@@ -202,16 +202,16 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	query := `
 		INSERT OR REPLACE INTO functions (
 			id, name, namespace, version, wasm_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
 			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 			raw_http_response
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
-		memoryLimit, timeout, fn.IsPublic,
+		memoryLimit, timeout, fn.IsPublic, fn.IsInternal,
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
 		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
@@ -260,7 +260,7 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 		// Get latest version
 		query = `
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
-				memory_limit_mb, timeout_seconds, is_public,
+				memory_limit_mb, timeout_seconds, is_public, is_internal,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
@@ -274,7 +274,7 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 	} else {
 		query = `
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
-				memory_limit_mb, timeout_seconds, is_public,
+				memory_limit_mb, timeout_seconds, is_public, is_internal,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
@@ -309,7 +309,7 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 	// Get latest version of each function in the namespace
 	query := `
 		SELECT f.id, f.name, f.namespace, f.version, f.wasm_cid, f.source_cid,
-			f.memory_limit_mb, f.timeout_seconds, f.is_public,
+			f.memory_limit_mb, f.timeout_seconds, f.is_public, f.is_internal,
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
 			f.status, f.created_at, f.updated_at, f.created_by,
 			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn,
@@ -632,7 +632,7 @@ func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[strin
 func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 	query := `
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
 			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
@@ -656,7 +656,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 func (r *Registry) ListVersions(ctx context.Context, namespace, name string) ([]*Function, error) {
 	query := `
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
 			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
@@ -980,7 +980,7 @@ func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string
 
 	query := `
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
 			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
@@ -1037,6 +1037,7 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		MemoryLimitMB:     row.MemoryLimitMB,
 		TimeoutSeconds:    row.TimeoutSeconds,
 		IsPublic:          row.IsPublic,
+		IsInternal:        row.IsInternal,
 		RetryCount:        row.RetryCount,
 		RetryDelaySeconds: row.RetryDelaySeconds,
 		DLQTopic:          row.DLQTopic.String,
@@ -1075,6 +1076,7 @@ type functionRow struct {
 	MemoryLimitMB     int            `db:"memory_limit_mb"`
 	TimeoutSeconds    int            `db:"timeout_seconds"`
 	IsPublic          bool           `db:"is_public"`
+	IsInternal        bool           `db:"is_internal"`
 	RetryCount        int            `db:"retry_count"`
 	RetryDelaySeconds int            `db:"retry_delay_seconds"`
 	DLQTopic          sql.NullString `db:"dlq_topic"`

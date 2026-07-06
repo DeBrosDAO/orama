@@ -151,3 +151,66 @@ func TestCallerScopes(t *testing.T) {
 		t.Error("confirmed owner wallet should be admin")
 	}
 }
+
+// reqDelJWT builds a DELETE request with optional JWT claims in context.
+func reqDelJWT(path string, claims *auth.JWTClaims) *http.Request {
+	r := httptest.NewRequest(http.MethodDelete, path, nil)
+	if claims != nil {
+		r = r.WithContext(context.WithValue(r.Context(), ctxKeyJWT, claims))
+	}
+	return r
+}
+
+func TestHasAnyJWT(t *testing.T) {
+	if !hasAnyJWT(reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})) {
+		t.Error("wallet JWT should count as a JWT")
+	}
+	// Unlike hasWalletJWT, an exchanged api-key JWT DOES count here (#151).
+	if !hasAnyJWT(reqWithJWT(&auth.JWTClaims{Sub: "ak_abc:ns"})) {
+		t.Error("exchanged api-key JWT should count for hasAnyJWT")
+	}
+	if hasAnyJWT(reqWithJWT(&auth.JWTClaims{Sub: ""})) {
+		t.Error("empty-subject JWT must not count")
+	}
+	// Bare api key (no JWT in context) must NOT count — keeps layer-1's
+	// "an extracted key is inert without a JWT" property.
+	if hasAnyJWT(httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/Qm1", nil)) {
+		t.Error("no JWT (bare api key) must not count")
+	}
+}
+
+func TestIsStorageUnpinPath(t *testing.T) {
+	if !isStorageUnpinPath(http.MethodDelete, "/v1/storage/unpin/Qm123") {
+		t.Error("DELETE /v1/storage/unpin/:cid should match")
+	}
+	if isStorageUnpinPath(http.MethodPost, "/v1/storage/unpin/Qm123") {
+		t.Error("only DELETE should match the unpin exception")
+	}
+	// Every OTHER storage op keeps the strict wallet-JWT requirement.
+	for _, p := range []string{"/v1/storage/upload", "/v1/storage/get/Qm1", "/v1/storage/pin", "/v1/storage/status/Qm1"} {
+		if isStorageUnpinPath(http.MethodDelete, p) {
+			t.Errorf("%q must NOT be treated as the unpin exception", p)
+		}
+	}
+}
+
+// TestUnpinException_decision locks in the exact layer-1 relaxation used by
+// scopeMiddleware for bugboard #151: unpin + any scoped JWT is allowed; a bare
+// api key (no JWT) is not; and the exception never leaks to other storage ops.
+func TestUnpinException_decision(t *testing.T) {
+	// unpin + exchanged storage-scoped JWT → allowed.
+	exchanged := reqDelJWT("/v1/storage/unpin/Qm1", &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke,storage,push,webrtc,proxy"}})
+	if !(isStorageUnpinPath(exchanged.Method, exchanged.URL.Path) && hasAnyJWT(exchanged)) {
+		t.Error("unpin with an exchanged storage-scoped JWT must be allowed (#151)")
+	}
+	// unpin + BARE api key (no JWT) → NOT allowed.
+	bare := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/Qm1", nil)
+	if isStorageUnpinPath(bare.Method, bare.URL.Path) && hasAnyJWT(bare) {
+		t.Error("unpin with a bare api key (no JWT) must NOT be allowed")
+	}
+	// The exception must never apply to upload (a DELETE-shaped probe still
+	// fails because the path isn't the unpin path).
+	if isStorageUnpinPath(http.MethodDelete, "/v1/storage/upload") {
+		t.Error("upload must keep the strict wallet-JWT requirement, not the unpin exception")
+	}
+}

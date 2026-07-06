@@ -1,0 +1,22 @@
+-- =============================================================================
+-- 035_functions_internal.sql
+--
+-- Gateway-enforced `internal` function flag (bugboard #152).
+--
+-- A scoped app-runtime API key could invoke ANY function by name via
+-- POST /v1/invoke/<ns>/<fn>, including internal/admin/cron functions (e.g. a
+-- `migrate` function whose reset drops all tables). `public: false` is NOT an
+-- invoke gate — a private function only requires SOME caller identity, which
+-- every app-runtime key trivially has.
+--
+-- This column marks a function as internal: it may then be invoked ONLY by a
+-- system trigger (cron/pubsub/db/timer/job/internal — already bypassing the
+-- caller check) OR by an admin caller. A normal (non-admin) app-runtime key
+-- invoking an internal function by name is rejected `unauthorized`.
+--
+-- Default FALSE → backward compatible: every existing function stays invokable
+-- exactly as before. Enforcement only engages when a function opts in via
+-- `internal: true` in its function.yaml.
+-- =============================================================================
+
+ALTER TABLE functions ADD COLUMN is_internal BOOLEAN NOT NULL DEFAULT FALSE;

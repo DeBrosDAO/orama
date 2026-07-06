@@ -103,16 +103,101 @@ func TestRegistryCache_keyDistinctNoCollision(t *testing.T) {
 }
 
 func TestCanInvokeFn(t *testing.T) {
-	if !canInvokeFn(&Function{IsPublic: true}, "") {
+	if !canInvokeFn(&Function{IsPublic: true}, "", false) {
 		t.Error("public function must be invokable by an anonymous caller")
 	}
-	if canInvokeFn(&Function{IsPublic: false}, "") {
+	if canInvokeFn(&Function{IsPublic: false}, "", false) {
 		t.Error("private function must reject an empty (anonymous) caller")
 	}
-	if canInvokeFn(&Function{IsPublic: false}, "   ") {
+	if canInvokeFn(&Function{IsPublic: false}, "   ", false) {
 		t.Error("private function must reject a whitespace-only caller")
 	}
-	if !canInvokeFn(&Function{IsPublic: false}, "wallet-abc") {
+	if !canInvokeFn(&Function{IsPublic: false}, "wallet-abc", false) {
 		t.Error("private function must accept an identified caller")
+	}
+}
+
+// TestRowToFunction_isInternal guards the read path enforcement depends on
+// (bugboard #152): if rowToFunction drops is_internal, fn.IsInternal reads
+// false for every function and the gate silently never engages. Asserts the
+// scan struct field maps through to the Function struct in both directions.
+func TestRowToFunction_isInternal(t *testing.T) {
+	r := &Registry{}
+	if got := r.rowToFunction(&functionRow{IsInternal: true}); !got.IsInternal {
+		t.Error("rowToFunction must carry IsInternal=true through to the Function")
+	}
+	if got := r.rowToFunction(&functionRow{IsInternal: false}); got.IsInternal {
+		t.Error("rowToFunction must carry IsInternal=false through to the Function")
+	}
+}
+
+// TestCanInvokeFn_internal exercises the bugboard #152 gate: an internal
+// function is invokable ONLY by an admin caller (system triggers bypass
+// canInvokeFn entirely via isSystemTrigger, so reaching here means an
+// external caller — admin required). Non-internal behavior is unchanged.
+func TestCanInvokeFn_internal(t *testing.T) {
+	tests := []struct {
+		name          string
+		fn            *Function
+		callerWallet  string
+		callerIsAdmin bool
+		want          bool
+	}{
+		{
+			name:          "internal private, admin caller allowed",
+			fn:            &Function{IsInternal: true, IsPublic: false},
+			callerWallet:  "wallet-abc",
+			callerIsAdmin: true,
+			want:          true,
+		},
+		{
+			name:          "internal private, non-admin identified caller denied",
+			fn:            &Function{IsInternal: true, IsPublic: false},
+			callerWallet:  "wallet-abc",
+			callerIsAdmin: false,
+			want:          false,
+		},
+		{
+			name:          "internal public, non-admin caller still denied",
+			fn:            &Function{IsInternal: true, IsPublic: true},
+			callerWallet:  "wallet-abc",
+			callerIsAdmin: false,
+			want:          false,
+		},
+		{
+			name:          "internal public, admin caller allowed",
+			fn:            &Function{IsInternal: true, IsPublic: true},
+			callerWallet:  "",
+			callerIsAdmin: true,
+			want:          true,
+		},
+		{
+			name:          "non-internal public, anyone allowed (unchanged)",
+			fn:            &Function{IsInternal: false, IsPublic: true},
+			callerWallet:  "",
+			callerIsAdmin: false,
+			want:          true,
+		},
+		{
+			name:          "non-internal private, identified caller allowed (unchanged)",
+			fn:            &Function{IsInternal: false, IsPublic: false},
+			callerWallet:  "wallet-abc",
+			callerIsAdmin: false,
+			want:          true,
+		},
+		{
+			name:          "non-internal private, anonymous caller denied (unchanged)",
+			fn:            &Function{IsInternal: false, IsPublic: false},
+			callerWallet:  "",
+			callerIsAdmin: false,
+			want:          false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := canInvokeFn(tt.fn, tt.callerWallet, tt.callerIsAdmin); got != tt.want {
+				t.Errorf("canInvokeFn = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

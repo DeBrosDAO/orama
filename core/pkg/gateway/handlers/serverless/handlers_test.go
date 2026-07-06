@@ -189,14 +189,19 @@ func TestGetNamespaceFromRequest_Priority(t *testing.T) {
 // Tests: getWalletFromRequest
 // ---------------------------------------------------------------------------
 
-func TestGetWalletFromRequest_XWalletHeader(t *testing.T) {
+// TestGetWalletFromRequest_XWalletHeaderIgnored locks in the bugboard #152 fix:
+// a client-supplied X-Wallet header is NOT trusted as identity. A request that
+// carries ONLY the header (no verified JWT, no API key) must resolve to an
+// empty caller — otherwise an unauthenticated caller on the public invoke paths
+// could impersonate any wallet and defeat in-function admin gates.
+func TestGetWalletFromRequest_XWalletHeaderIgnored(t *testing.T) {
 	h := newTestHandlers(nil)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Wallet", "0xABCD1234")
+	req.Header.Set("X-Wallet", "0xATTACKERSPOOF")
 
 	got := h.getWalletFromRequest(req)
-	if got != "0xABCD1234" {
-		t.Errorf("expected '0xABCD1234', got %q", got)
+	if got != "" {
+		t.Errorf("X-Wallet header must be ignored (spoofing fix); got %q", got)
 	}
 }
 
@@ -821,5 +826,75 @@ func TestRegisterRoutes(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405 for DELETE /v1/functions, got %d", rec.Code)
+	}
+}
+
+// TestHandleWebSocket_internalPersistentRequiresAdmin locks in the bugboard #152
+// HIGH fix: the persistent-WS path bypasses canInvokeFn, so an internal function
+// exposed as ws_persistent must be gated at upgrade — a non-admin caller is
+// rejected before any WebSocket upgrade; an admin caller passes the gate.
+func TestHandleWebSocket_internalPersistentRequiresAdmin(t *testing.T) {
+	reg := newMockRegistry()
+	reg.functions["test-ns/migrate"] = &serverless.Function{
+		Name:         "migrate",
+		Namespace:    "test-ns",
+		WSPersistent: true,
+		IsInternal:   true,
+	}
+	h := newTestHandlers(reg)
+
+	// Non-admin → 403 before upgrade.
+	req := httptest.NewRequest(http.MethodGet, "/?namespace=test-ns", nil)
+	rec := httptest.NewRecorder()
+	h.HandleWebSocket(rec, req, "migrate", 0)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin persistent-WS invoke of internal fn: expected 403, got %d", rec.Code)
+	}
+
+	// Admin → passes the internal gate (the subsequent upgrade fails on the
+	// non-hijackable recorder, but crucially it is NOT a 403 from the gate).
+	adminReq := httptest.NewRequest(http.MethodGet, "/?namespace=test-ns", nil)
+	adminReq = adminReq.WithContext(context.WithValue(adminReq.Context(), ctxkeys.Scopes, auth.ScopeSet{auth.ScopeAdmin: {}}))
+	adminRec := httptest.NewRecorder()
+	h.HandleWebSocket(adminRec, adminReq, "migrate", 0)
+	if adminRec.Code == http.StatusForbidden {
+		t.Fatalf("admin persistent-WS invoke of internal fn must pass the gate, got 403")
+	}
+}
+
+// TestGetCallerIsAdminFromRequest covers the bugboard #152 admin resolution used
+// to gate internal-function invokes — including the MEDIUM fix that an admin key
+// used via /v1/auth/token (an ak_-subject exchanged JWT) resolves to admin,
+// while a wallet JWT can NEVER self-assert admin via an injected scopes claim.
+func TestGetCallerIsAdminFromRequest(t *testing.T) {
+	h := newTestHandlers(nil)
+	withCtx := func(k, v any) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)
+		return r.WithContext(context.WithValue(r.Context(), k, v))
+	}
+
+	// Admin raw-key scopes → admin.
+	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeAdmin: {}})) {
+		t.Error("admin scope set should resolve to admin")
+	}
+	// Non-admin app-runtime scopes → NOT admin.
+	if h.getCallerIsAdminFromRequest(withCtx(ctxkeys.Scopes, auth.DataPlaneScopes())) {
+		t.Error("data-plane scopes must not resolve to admin")
+	}
+	// Admin key exchanged for a JWT (ak_ subject + custom scopes=admin) → admin.
+	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})) {
+		t.Error("admin exchanged JWT (ak_ subject) should resolve to admin")
+	}
+	// Wallet JWT with an INJECTED scopes=admin claim → NOT admin (no self-assert).
+	if h.getCallerIsAdminFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "0xWALLET", Custom: map[string]string{"scopes": "admin"}})) {
+		t.Error("wallet JWT must not self-assert admin via an injected scopes claim")
+	}
+	// Confirmed namespace owner → admin.
+	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.OwnerConfirmed, true)) {
+		t.Error("confirmed owner should resolve to admin")
+	}
+	// Bare request (no identity) → NOT admin.
+	if h.getCallerIsAdminFromRequest(httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)) {
+		t.Error("no identity must not resolve to admin")
 	}
 }

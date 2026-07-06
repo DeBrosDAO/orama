@@ -53,6 +53,9 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		if v := r.FormValue("is_public"); v != "" {
 			def.IsPublic, _ = strconv.ParseBool(v)
 		}
+		if v := r.FormValue("is_internal"); v != "" {
+			def.IsInternal, _ = strconv.ParseBool(v)
+		}
 		if v := r.FormValue("memory_limit_mb"); v != "" {
 			def.MemoryLimitMB, _ = strconv.Atoi(v)
 		}

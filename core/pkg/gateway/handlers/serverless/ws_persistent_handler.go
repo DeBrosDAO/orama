@@ -325,6 +325,7 @@ func (h *ServerlessHandlers) buildPersistentInvocationContext(
 		FunctionName:     fn.Name,
 		Namespace:        fn.Namespace,
 		CallerWallet:     h.getWalletFromRequest(r),
+		CallerIsAdmin:    h.getCallerIsAdminFromRequest(r),
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
@@ -434,8 +435,17 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 	// case (token renewal); cross-subject is legal but rare enough
 	// that operators benefit from seeing it in the audit trail.
 	prevSubject := ""
+	prevIsAdmin := false
+	prevIP := ""
 	if cur := inst.CurrentInvocationContext(); cur != nil {
 		prevSubject = cur.CallerJWTSubject
+		// Preserve the connection-scoped authorization + client IP established
+		// at upgrade — a token refresh keeps the socket alive, it does not
+		// re-open it. Dropping CallerIsAdmin here would silently strip admin
+		// from an admin's internal→internal child invokes after a refresh
+		// (bugboard #152); CallerIP was likewise being lost.
+		prevIsAdmin = cur.CallerIsAdmin
+		prevIP = cur.CallerIP
 	}
 	if prevSubject != "" && prevSubject != claims.Sub {
 		h.logger.Info("persistent WS: auth.refresh swapping subject identity on socket",
@@ -462,6 +472,8 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 		CallerWallet:     claims.Sub,
 		CallerClaims:     customClaims,
 		CallerJWTSubject: claims.Sub,
+		CallerIP:         prevIP,
+		CallerIsAdmin:    prevIsAdmin,
 		WSClientID:       clientID,
 		TriggerType:      serverless.TriggerTypeWebSocket,
 	}

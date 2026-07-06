@@ -41,7 +41,7 @@ func TestCanInvoke_publicAllowsAnyone(t *testing.T) {
 		IsPublic:  true,
 	})
 	for _, wallet := range []string{"", "8oxu7UzzaSXc...", "anchat-test"} {
-		ok, err := inv.CanInvoke(context.Background(), "anchat-test", "username-check", wallet)
+		ok, err := inv.CanInvoke(context.Background(), "anchat-test", "username-check", wallet, false)
 		if err != nil {
 			t.Fatalf("wallet=%q: %v", wallet, err)
 		}
@@ -59,12 +59,12 @@ func TestCanInvoke_privateRejectsAnonymous(t *testing.T) {
 		Name:      "user-create",
 		IsPublic:  false,
 	})
-	ok, _ := inv.CanInvoke(context.Background(), "anchat-test", "user-create", "")
+	ok, _ := inv.CanInvoke(context.Background(), "anchat-test", "user-create", "", false)
 	if ok {
 		t.Error("anonymous caller should be denied for private function")
 	}
 	// Whitespace-only is still anonymous.
-	ok, _ = inv.CanInvoke(context.Background(), "anchat-test", "user-create", "   ")
+	ok, _ = inv.CanInvoke(context.Background(), "anchat-test", "user-create", "   ", false)
 	if ok {
 		t.Error("whitespace-only callerWallet should be denied")
 	}
@@ -89,7 +89,7 @@ func TestCanInvoke_privateAllowsJWTAuthenticatedNewWallet(t *testing.T) {
 		CreatedBy: "0xdeployer-wallet-not-this-caller",
 	})
 	const newUserWallet = "8oxu7UzzaSXcxZ9B3YuEqr3Qpmx7tgT9HzaA4NUGiand"
-	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", newUserWallet)
+	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", newUserWallet, false)
 	if err != nil {
 		t.Fatalf("CanInvoke: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCanInvoke_privateAllowsAPIKeyCaller(t *testing.T) {
 		IsPublic:  false,
 		CreatedBy: "0xdeployer-wallet",
 	})
-	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", "anchat-test")
+	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", "anchat-test", false)
 	if err != nil {
 		t.Fatalf("CanInvoke: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestCanInvoke_privateAllowsDeployer(t *testing.T) {
 		IsPublic:  false,
 		CreatedBy: deployer,
 	})
-	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", deployer)
+	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", deployer, false)
 	if err != nil {
 		t.Fatalf("CanInvoke: %v", err)
 	}

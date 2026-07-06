@@ -18,12 +18,16 @@ import (
 
 // FunctionConfig represents the function.yaml configuration.
 type FunctionConfig struct {
-	Name    string            `yaml:"name"`
-	Public  bool              `yaml:"public"`
-	Memory  int               `yaml:"memory"`
-	Timeout int               `yaml:"timeout"`
-	Retry   RetryConfig       `yaml:"retry"`
-	Env     map[string]string `yaml:"env"`
+	Name   string `yaml:"name"`
+	Public bool   `yaml:"public"`
+	// Internal marks a function invokable ONLY by a system trigger or an admin
+	// caller (bugboard #152). A normal app-runtime key invoking it by name is
+	// rejected. Default false → invokable as before.
+	Internal bool              `yaml:"internal"`
+	Memory   int               `yaml:"memory"`
+	Timeout  int               `yaml:"timeout"`
+	Retry    RetryConfig       `yaml:"retry"`
+	Env      map[string]string `yaml:"env"`
 
 	// Persistent WebSocket settings — when WSPersistent is true, the function
 	// must export ws_open / ws_frame / ws_close instead of running per-frame
@@ -215,6 +219,7 @@ func uploadWASMFunction(wasmPath string, cfg *FunctionConfig) (map[string]interf
 	// Add form fields
 	writer.WriteField("name", cfg.Name)
 	writer.WriteField("is_public", strconv.FormatBool(cfg.Public))
+	writer.WriteField("is_internal", strconv.FormatBool(cfg.Internal))
 	writer.WriteField("memory_limit_mb", strconv.Itoa(cfg.Memory))
 	writer.WriteField("timeout_seconds", strconv.Itoa(cfg.Timeout))
 	writer.WriteField("retry_count", strconv.Itoa(cfg.Retry.Count))

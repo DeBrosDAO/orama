@@ -175,7 +175,53 @@ func (h *ServerlessHandlers) getJWTExpiryFromRequest(r *http.Request) int64 {
 	return claims.Exp
 }
 
-// getWalletFromRequest extracts wallet address from JWT.
+// getCallerIsAdminFromRequest reports whether the request's resolved scope
+// set holds the admin (control-plane) grant — the signal that gates invoking
+// an `internal: true` function (bugboard #152). It reads the same two sources
+// the gateway's scope policy trusts:
+//
+//   - ctxkeys.Scopes: the auth.ScopeSet stashed by the auth middleware for an
+//     API-key (or API-key-exchanged JWT) request. Admin keys carry ScopeAdmin.
+//   - ctxkeys.OwnerConfirmed: set when a SIWE wallet JWT was verified to own
+//     the target namespace. A confirmed owner is admin for their namespace
+//     (mirrors Gateway.callerScopes, which returns {admin} in that case).
+//
+// A normal app-runtime key (data-plane scopes, no owner confirmation) is NOT
+// admin, so it cannot invoke an internal function by name.
+func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
+	ctx := r.Context()
+	if v := ctx.Value(ctxkeys.Scopes); v != nil {
+		if s, ok := v.(auth.ScopeSet); ok && s.IsAdmin() {
+			return true
+		}
+	}
+	// An API-key-exchanged JWT (from /v1/auth/token) carries the key's scopes in
+	// a custom claim — the JWT-bearer auth path sets ctxkeys.JWT but NOT
+	// ctxkeys.Scopes — so an admin key used via exchange would otherwise be
+	// wrongly denied. Mirror Gateway.callerScopes: trust custom["scopes"] ONLY
+	// for an ak_ subject; a SIWE wallet JWT must never self-assert admin here.
+	if v := ctx.Value(ctxkeys.JWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
+			if strings.HasPrefix(sub, "ak_") && claims.Custom != nil {
+				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).IsAdmin() {
+					return true
+				}
+			}
+		}
+	}
+	if confirmed, _ := ctx.Value(ctxkeys.OwnerConfirmed).(bool); confirmed {
+		return true
+	}
+	return false
+}
+
+// getWalletFromRequest resolves the caller identity for an invoke from
+// VERIFIED sources only: the JWT subject (a wallet), else the API-key-derived
+// namespace. It deliberately does NOT trust any client-supplied identity header
+// (bugboard #152): the invoke paths are public, so an unauthenticated caller
+// could otherwise set a header and impersonate any wallet — including the
+// namespace owner — defeating in-function admin gates.
 func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
 	// Import strings package functions inline to avoid circular dependencies
 	trimSpace := func(s string) string {
@@ -218,12 +264,10 @@ func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
 		return string(result)
 	}
 
-	// 1. Try X-Wallet header (legacy/direct bypass)
-	if wallet := r.Header.Get("X-Wallet"); wallet != "" {
-		return wallet
-	}
-
-	// 2. Try JWT claims from context
+	// Identity comes only from a VERIFIED JWT subject, else the API-key-derived
+	// namespace. A client-supplied X-Wallet header is NOT trusted (bugboard
+	// #152) — it let an unauthenticated caller impersonate any wallet on the
+	// public invoke paths.
 	if v := r.Context().Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			subj := trimSpace(claims.Sub)

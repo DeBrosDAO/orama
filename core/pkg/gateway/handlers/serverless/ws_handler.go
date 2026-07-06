@@ -75,6 +75,16 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	// Look up the function once to decide which execution model to use.
 	fn, lookupErr := h.registry.Get(r.Context(), namespace, name, version)
 	if lookupErr == nil && fn != nil && fn.WSPersistent {
+		// The persistent path builds its InvocationContext directly and never
+		// routes through canInvokeFn, so enforce the internal-function gate HERE
+		// (bugboard #152). An internal function is admin/system-trigger only; a
+		// persistent-WS client upgrade is neither, so reject a non-admin caller
+		// before upgrading — the stateless path below is gated per-frame via
+		// Invoke → canInvokeFn.
+		if fn.IsInternal && !h.getCallerIsAdminFromRequest(r) {
+			http.Error(w, "forbidden: internal function requires an admin caller", http.StatusForbidden)
+			return
+		}
 		h.handlePersistentWebSocket(w, r, fn, namespace)
 		return
 	}
@@ -138,6 +148,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	)
 
 	callerWallet := h.getWalletFromRequest(r)
+	callerIsAdmin := h.getCallerIsAdminFromRequest(r)
 	callerIP := extractRemoteIP(r)
 	// Capture custom claims at upgrade time and reuse for every frame —
 	// the JWT context is request-scoped and won't survive past upgrade.
@@ -165,6 +176,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 			Input:            message,
 			TriggerType:      serverless.TriggerTypeWebSocket,
 			CallerWallet:     callerWallet,
+			CallerIsAdmin:    callerIsAdmin,
 			CallerIP:         callerIP,
 			CallerClaims:     callerClaims,
 			CallerJWTSubject: callerJWTSubject,

@@ -713,3 +713,37 @@ func TestUpdatePinStatus_NilDB(t *testing.T) {
 		t.Errorf("expected nil error with nil db, got %v", err)
 	}
 }
+
+func TestIsAlreadyUnpinned(t *testing.T) {
+	// Nil error = the CID was unpinned = success.
+	if !isAlreadyUnpinned(nil) {
+		t.Error("nil error should be treated as already-unpinned success")
+	}
+	// IPFS-Cluster "already gone" shapes → idempotent success (bugboard #140).
+	for _, msg := range []string{
+		"unpin failed with status 404: cid not part of the pinset",
+		"CID is NOT PINNED on this cluster",
+		"the pin is not part of the pinset for peer abc",
+	} {
+		if !isAlreadyUnpinned(errString(msg)) {
+			t.Errorf("expected idempotent success for %q", msg)
+		}
+	}
+	// Real failures AND ambiguous 404 / "not found" shapes that are NOT the
+	// definitive pinset phrase must NOT be swallowed (would orphan a blob).
+	for _, msg := range []string{
+		"pin request failed: connection refused",
+		"unpin failed with status 500: internal error",
+		"namespace not found",
+		"route not found",
+		"unpin failed with status 404: gateway not found",
+	} {
+		if isAlreadyUnpinned(errString(msg)) {
+			t.Errorf("ambiguous/real failure %q must not be treated as success", msg)
+		}
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
