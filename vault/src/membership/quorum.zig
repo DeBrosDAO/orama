@@ -8,12 +8,18 @@
 const std = @import("std");
 const node_list = @import("node_list.zig");
 
-/// Calculate write quorum: ceil(2/3 * N).
+/// Calculate write quorum: W = min(N, max(K+1, ceil(2N/3))).
+/// The invariant W > K guarantees a successful write persists more shares than
+/// a read requires, so it is always recoverable and survives losing at least
+/// one guardian. The old formula (ceil(2N/3)) gave W=2 < K=3 at N=3, allowing
+/// silently-unrecoverable "successful" writes.
 pub fn writeQuorum(alive_count: usize) usize {
     if (alive_count == 0) return 0;
-    if (alive_count <= 2) return alive_count; // require all for tiny clusters
-    // ceil(2*N/3) = (2*N + 2) / 3 using integer arithmetic
-    return (2 * alive_count + 2) / 3;
+    const k = readQuorum(alive_count);
+    var w = (2 * alive_count + 2) / 3; // ceil(2N/3)
+    if (w < k + 1) w = k + 1;
+    if (w > alive_count) w = alive_count;
+    return w;
 }
 
 /// Check if we have enough ACKs for a successful write.
@@ -21,12 +27,11 @@ pub fn hasWriteQuorum(ack_count: usize, alive_count: usize) bool {
     return ack_count >= writeQuorum(alive_count);
 }
 
-/// Calculate read quorum: how many shares needed to reconstruct.
-/// This is the Shamir threshold K = max(3, floor(N/3)).
+/// Calculate read threshold K = max(2, floor(N/3)).
+/// Minimum shares needed to reconstruct; any K-1 reveal zero information.
 pub fn readQuorum(alive_count: usize) usize {
-    if (alive_count == 0) return 3;
     const t = alive_count / 3;
-    return if (t < 3) 3 else t;
+    return if (t < 2) 2 else t;
 }
 
 /// Result of a multi-guardian push operation.
@@ -65,7 +70,7 @@ test "writeQuorum: various cluster sizes" {
     try std.testing.expectEqual(@as(usize, 0), writeQuorum(0));
     try std.testing.expectEqual(@as(usize, 1), writeQuorum(1));
     try std.testing.expectEqual(@as(usize, 2), writeQuorum(2));
-    try std.testing.expectEqual(@as(usize, 2), writeQuorum(3)); // ceil(6/3) = 2
+    try std.testing.expectEqual(@as(usize, 3), writeQuorum(3)); // max(K+1=3, ceil(6/3)=2) = 3
     try std.testing.expectEqual(@as(usize, 3), writeQuorum(4)); // ceil(8/3) = 3
     try std.testing.expectEqual(@as(usize, 4), writeQuorum(5)); // ceil(10/3) = 4
     try std.testing.expectEqual(@as(usize, 10), writeQuorum(14)); // ceil(28/3) = 10
@@ -77,15 +82,15 @@ test "hasWriteQuorum: basic checks" {
     try std.testing.expect(hasWriteQuorum(5, 5));
     try std.testing.expect(!hasWriteQuorum(3, 5));
 
-    // 3-node cluster: quorum = 2
-    try std.testing.expect(hasWriteQuorum(2, 3));
-    try std.testing.expect(!hasWriteQuorum(1, 3));
+    // 3-node cluster: quorum = 3 (all must ack; W > K guarantees recoverability)
+    try std.testing.expect(hasWriteQuorum(3, 3));
+    try std.testing.expect(!hasWriteQuorum(2, 3));
 }
 
 test "readQuorum: adaptive threshold" {
-    try std.testing.expectEqual(@as(usize, 3), readQuorum(0));
-    try std.testing.expectEqual(@as(usize, 3), readQuorum(3));
-    try std.testing.expectEqual(@as(usize, 3), readQuorum(5)); // 5/3=1, min=3
+    try std.testing.expectEqual(@as(usize, 2), readQuorum(0));
+    try std.testing.expectEqual(@as(usize, 2), readQuorum(3)); // 3/3=1, min=2
+    try std.testing.expectEqual(@as(usize, 2), readQuorum(5)); // 5/3=1, min=2
     try std.testing.expectEqual(@as(usize, 3), readQuorum(9)); // 9/3=3
     try std.testing.expectEqual(@as(usize, 4), readQuorum(14)); // 14/3=4
     try std.testing.expectEqual(@as(usize, 33), readQuorum(100)); // 100/3=33

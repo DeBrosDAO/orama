@@ -118,26 +118,41 @@ func Combine(shares []Share) ([]byte, error) {
 	return result, nil
 }
 
-// AdaptiveThreshold returns max(3, floor(n/3)).
-// This is the read quorum: minimum shares needed to reconstruct.
+// AdaptiveThreshold returns the read threshold K = max(2, floor(n/3)).
+// K is the minimum number of shares required to reconstruct the secret; any
+// K-1 shares reveal zero information. The floor is 2 (not 3) because Split
+// itself requires only K>=2, and pairing K=2 with WriteQuorum's W>K invariant
+// gives small clusters (e.g. N=3) read fault tolerance while keeping a
+// successful write recoverable.
 func AdaptiveThreshold(n int) int {
 	t := n / 3
-	if t < 3 {
-		return 3
+	if t < 2 {
+		return 2
 	}
 	return t
 }
 
-// WriteQuorum returns ceil(2n/3).
-// This is the write quorum: minimum ACKs needed for a successful push.
+// WriteQuorum returns the write quorum W = min(n, max(K+1, ceil(2n/3))).
+//
+// The invariant W > K is the durability guarantee: any push reported successful
+// has persisted strictly more shares than a read requires, so a "successful"
+// write is always recoverable and survives the loss of at least one guardian.
+// The previous formula (ceil(2n/3), with K floored at 3) produced W=2 < K=3 at
+// n=3, so a push could report success while storing too few shares to ever read
+// back — silent, permanent data loss.
 func WriteQuorum(n int) int {
-	if n == 0 {
+	if n <= 0 {
 		return 0
 	}
-	if n <= 2 {
-		return n
+	k := AdaptiveThreshold(n)
+	w := (2*n + 2) / 3 // ceil(2n/3)
+	if w < k+1 {
+		w = k + 1
 	}
-	return (2*n + 2) / 3
+	if w > n {
+		w = n
+	}
+	return w
 }
 
 // evaluatePolynomial evaluates p(x) = coeffs[0] + coeffs[1]*x + ... using Horner's method.

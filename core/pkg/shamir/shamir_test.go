@@ -478,7 +478,7 @@ func TestCombine_Errors(t *testing.T) {
 
 func TestAdaptiveThreshold(t *testing.T) {
 	tests := [][2]int{
-		{1, 3}, {2, 3}, {3, 3}, {5, 3}, {8, 3}, {9, 3},
+		{1, 2}, {2, 2}, {3, 2}, {5, 2}, {8, 2}, {9, 3},
 		{10, 3}, {12, 4}, {15, 5}, {30, 10}, {100, 33},
 	}
 	for _, tt := range tests {
@@ -490,7 +490,7 @@ func TestAdaptiveThreshold(t *testing.T) {
 
 func TestWriteQuorum(t *testing.T) {
 	tests := [][2]int{
-		{0, 0}, {1, 1}, {2, 2}, {3, 2}, {4, 3}, {5, 4},
+		{0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 3}, {5, 4},
 		{6, 4}, {10, 7}, {14, 10}, {100, 67},
 	}
 	for _, tt := range tests {

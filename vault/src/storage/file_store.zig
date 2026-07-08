@@ -137,6 +137,58 @@ pub fn deleteShare(
     std.fs.cwd().deleteTree(share_dir) catch {};
 }
 
+/// V1 share metadata: the reconstruction parameters the share was split with.
+/// Persisting these means a pull uses the ORIGINAL threshold, not one recomputed
+/// from the live cluster size — otherwise growing/shrinking the fleet silently
+/// bricks every existing backup.
+pub const V1Meta = struct {
+    version: u64,
+    threshold: u8,
+};
+
+/// Write V1 metadata atomically. Written LAST (after share.bin + checksum.bin)
+/// so meta.json acts as the commit marker: the share is only considered present
+/// once meta exists, giving crash-consistency across the multi-file write.
+pub fn writeMeta(
+    data_dir: []const u8,
+    identity_hash_hex: []const u8,
+    meta: V1Meta,
+    allocator: std.mem.Allocator,
+) !void {
+    if (identity_hash_hex.len == 0) return StoreError.IdentityHashRequired;
+
+    const share_dir = try std.fmt.allocPrint(allocator, "{s}/shares/{s}", .{ data_dir, identity_hash_hex });
+    defer allocator.free(share_dir);
+    std.fs.cwd().makePath(share_dir) catch return StoreError.IoError;
+
+    const json = try std.fmt.allocPrint(allocator, "{{\"version\":{d},\"threshold\":{d}}}", .{ meta.version, meta.threshold });
+    defer allocator.free(json);
+
+    const path = try std.fmt.allocPrint(allocator, "{s}/meta.json", .{share_dir});
+    defer allocator.free(path);
+    const tmp = try std.fmt.allocPrint(allocator, "{s}/meta.json.tmp", .{share_dir});
+    defer allocator.free(tmp);
+
+    try atomicWrite(path, tmp, json);
+}
+
+/// Read V1 metadata. Returns StoreError.IoError if absent or malformed.
+pub fn readMeta(
+    data_dir: []const u8,
+    identity_hash_hex: []const u8,
+    allocator: std.mem.Allocator,
+) !V1Meta {
+    const path = try std.fmt.allocPrint(allocator, "{s}/shares/{s}/meta.json", .{ data_dir, identity_hash_hex });
+    defer allocator.free(path);
+
+    const data = std.fs.cwd().readFileAlloc(allocator, path, 256) catch return StoreError.IoError;
+    defer allocator.free(data);
+
+    const parsed = std.json.parseFromSlice(V1Meta, allocator, data, .{ .ignore_unknown_fields = true }) catch return StoreError.IoError;
+    defer parsed.deinit();
+    return parsed.value;
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 fn atomicWrite(final_path: []const u8, tmp_path: []const u8, data: []const u8) !void {

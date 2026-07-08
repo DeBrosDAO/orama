@@ -17,15 +17,24 @@ pub const Guardian = struct {
     cfg: config.Config,
     nodes: node_list.NodeList,
     allocator: std.mem.Allocator,
-    /// Random server secret for HMAC-based auth (generated at startup)
+    /// Random server secret for HMAC-based auth (generated at startup).
+    /// Ephemeral by design: regenerated each boot and used only to sign
+    /// session/challenge tokens, which clients re-acquire on demand.
     server_secret: [32]u8,
+    /// Persistent at-rest integrity key, loaded/created in data_dir. Keys the
+    /// HMAC over stored share files, so it MUST survive restarts — otherwise
+    /// every stored share fails its integrity check after a reboot.
+    integrity_key: [32]u8,
     /// Share count cache (refreshed periodically)
     share_count: u32,
 
     pub fn init(allocator: std.mem.Allocator, cfg: config.Config) !Guardian {
-        // Generate server secret
+        // Generate ephemeral server secret (auth tokens only).
         var secret: [32]u8 = undefined;
         std.crypto.random.bytes(&secret);
+
+        // Load (or create) the persistent at-rest integrity key.
+        const integrity_key = loadOrCreateIntegrityKey(cfg.data_dir, allocator);
 
         // Try to load node list from RQLite, fall back to self-only
         var nodes = node_list.fetchFromRqlite(allocator, cfg.rqlite_url, cfg.client_port) catch blk: {
@@ -48,14 +57,16 @@ pub const Guardian = struct {
             .nodes = nodes,
             .allocator = allocator,
             .server_secret = secret,
+            .integrity_key = integrity_key,
             .share_count = share_count,
         };
     }
 
     pub fn deinit(self: *Guardian) void {
         self.nodes.deinit();
-        // Zero out server secret
+        // Zero out secrets
         @memset(&self.server_secret, 0);
+        @memset(&self.integrity_key, 0);
     }
 
     /// Get current write quorum requirement.
@@ -73,6 +84,67 @@ pub const Guardian = struct {
         self.share_count = heartbeat.countShares(self.cfg.data_dir);
     }
 };
+
+/// Load the persistent at-rest integrity key from <data_dir>/integrity.key,
+/// creating it with fresh randomness on first run.
+///
+/// This key authenticates share files on disk, so it MUST persist across
+/// restarts. The previous implementation keyed at-rest integrity with the
+/// ephemeral server_secret, which meant every stored share became unreadable
+/// after any restart (deploy, crash, reboot). If the key cannot be persisted we
+/// fall back to an in-memory random key and warn loudly (degraded: shares
+/// written this boot won't survive a restart).
+fn loadOrCreateIntegrityKey(data_dir: []const u8, allocator: std.mem.Allocator) [32]u8 {
+    var key: [32]u8 = undefined;
+
+    const path = std.fmt.allocPrint(allocator, "{s}/integrity.key", .{data_dir}) catch {
+        std.crypto.random.bytes(&key);
+        log.err("integrity key path alloc failed; using ephemeral key (shares will not survive restart)", .{});
+        return key;
+    };
+    defer allocator.free(path);
+
+    // Load an existing, well-formed key if present.
+    if (std.fs.cwd().readFileAlloc(allocator, path, 32)) |existing| {
+        defer allocator.free(existing);
+        if (existing.len == 32) {
+            @memcpy(&key, existing[0..32]);
+            return key;
+        }
+        log.warn("integrity.key has unexpected size {d}; regenerating", .{existing.len});
+    } else |_| {}
+
+    // Create a fresh key and persist it atomically with 0600 perms.
+    std.crypto.random.bytes(&key);
+    std.fs.cwd().makePath(data_dir) catch {};
+
+    const tmp_path = std.fmt.allocPrint(allocator, "{s}/integrity.key.tmp", .{data_dir}) catch {
+        log.err("integrity key persist failed (tmp path); using ephemeral key", .{});
+        return key;
+    };
+    defer allocator.free(tmp_path);
+
+    persist: {
+        const file = std.fs.cwd().createFile(tmp_path, .{ .mode = 0o600 }) catch {
+            log.err("could not create integrity key file; using ephemeral key (shares will not survive restart)", .{});
+            break :persist;
+        };
+        {
+            defer file.close();
+            file.writeAll(&key) catch {
+                log.err("could not write integrity key; using ephemeral key", .{});
+                break :persist;
+            };
+        }
+        std.fs.cwd().rename(tmp_path, path) catch {
+            std.fs.cwd().deleteFile(tmp_path) catch {};
+            log.err("could not finalize integrity key; using ephemeral key", .{});
+            break :persist;
+        };
+        log.info("initialized persistent vault integrity key", .{});
+    }
+    return key;
+}
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 

@@ -254,16 +254,20 @@ The SDK handles this automatically. Sessions are cached per-guardian and refresh
 
 The adaptive threshold is calculated automatically based on how many guardians you configure. You do not set it manually. The system determines:
 
-- **Write quorum** — The majority of guardians that must acknowledge a write.
-- **Read threshold** — The minimum number of shares needed to reconstruct the secret.
+- **Read threshold (K)** — `max(2, floor(N/3))`. The minimum number of shares needed to reconstruct the secret; any K−1 shares reveal nothing.
+- **Write quorum (W)** — `min(N, max(K+1, ceil(2N/3)))`. The number of guardians that must acknowledge a write for it to succeed.
 
-| Guardians | Read Threshold | Write Quorum |
-|-----------|---------------|--------------|
-| 3 | 2 | 2 |
-| 5 | 3 | 3 |
-| 7 | 4 | 4 |
+The invariant **W > K** is deliberate: a write is only reported successful once it has persisted strictly more shares than a read requires, so a successful write is always recoverable and survives losing at least one guardian.
 
-More guardians means higher fault tolerance. With three guardians, losing one still allows full reconstruction. With five, you can tolerate two failures.
+| Guardians (N) | Read Threshold (K) | Write Quorum (W) |
+|---------------|--------------------|------------------|
+| 3 | 2 | 3 |
+| 5 | 2 | 4 |
+| 7 | 2 | 5 |
+| 9 | 3 | 6 |
+| 12 | 4 | 8 |
+
+More guardians means higher fault tolerance. With three guardians, losing one still allows full reconstruction. Because W > K, a write reported successful is never left below the read threshold.
 
 ---
 

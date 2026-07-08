@@ -83,7 +83,7 @@ pub fn handlePut(
 
     // Derive integrity key
     const integrity_key: []const u8 = if (ctx.guardian) |guardian|
-        &guardian.server_secret
+        &guardian.integrity_key
     else
         "vault-default-integrity-key!!!!!";
 
@@ -125,7 +125,7 @@ pub fn handleGet(
 
     // Derive integrity key
     const integrity_key: []const u8 = if (ctx.guardian) |guardian|
-        &guardian.server_secret
+        &guardian.integrity_key
     else
         "vault-default-integrity-key!!!!!";
 
