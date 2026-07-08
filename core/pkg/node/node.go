@@ -109,16 +109,16 @@ func (n *Node) Start(ctx context.Context) error {
 
 	// Register this node in dns_nodes table for deployment routing
 	if err := n.registerDNSNode(ctx); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to register DNS node", zap.Error(err))
-		// Don't fail startup if DNS registration fails, it will retry on heartbeat
-	} else {
-		// Start DNS heartbeat to keep node status fresh
-		n.startDNSHeartbeat(ctx)
-
-		// Ensure base DNS records exist for this node (self-healing)
-		if err := n.ensureBaseDNSRecords(ctx); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure base DNS records", zap.Error(err))
-		}
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to register DNS node (will retry on heartbeat)", zap.Error(err))
+	}
+	// Always start the heartbeat, even if the initial registration failed — the
+	// heartbeat re-asserts this node's 'active' status and re-registers if needed.
+	// Previously it only started on registration success, so a node that came up
+	// during a leaderless RQLite window (common during rolling restarts) stayed
+	// 'inactive' forever and silently dropped out of vault guardian discovery.
+	n.startDNSHeartbeat(ctx)
+	if err := n.ensureBaseDNSRecords(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure base DNS records", zap.Error(err))
 	}
 
 	// Get listen addresses for logging

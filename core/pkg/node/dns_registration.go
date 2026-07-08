@@ -119,11 +119,21 @@ func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
 		return fmt.Errorf("node peer ID not available")
 	}
 
-	query := `UPDATE dns_nodes SET last_seen = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+	// Re-assert 'active' as well as refreshing last_seen: a live, heartbeating
+	// node must count as active. This self-heals a node that was reaped to
+	// 'inactive' during a restart window without a fresh registration.
+	query := `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now') WHERE id = ?`
 	db := n.rqliteAdapter.GetSQLDB()
-	_, err := rqlite.SafeExecContext(db, ctx, query, nodeID)
+	res, err := rqlite.SafeExecContext(db, ctx, query, nodeID)
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)
+	}
+
+	// If the row is missing entirely (initial registration never landed), register now.
+	if res != nil {
+		if affected, aerr := res.RowsAffected(); aerr == nil && affected == 0 {
+			return n.registerDNSNode(ctx)
+		}
 	}
 
 	return nil
