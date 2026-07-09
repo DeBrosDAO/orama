@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -67,6 +68,18 @@ func (h *Handlers) HandlePull(w http.ResponseWriter, r *http.Request) {
 
 	if !isValidIdentity(req.Identity) {
 		writeError(w, http.StatusBadRequest, "identity must be 64 hex characters")
+		return
+	}
+
+	// Per-IP limit is checked BEFORE the ownership proof: a seed guesser mints a
+	// valid signature for every guess, so counting only post-auth requests would
+	// miss the attack. Bounding per source IP here caps guess throughput cheaply.
+	// The generic "rate limited" message does not reveal whether the identity
+	// exists. (The per-identity limit stays after verification so a third party
+	// cannot exhaust a victim's budget with forged, unsigned requests.)
+	if !h.ipRateLimiter.AllowPull(clientIP(r)) {
+		w.Header().Set("Retry-After", strconv.Itoa(ipRetryAfterSeconds))
+		writeError(w, http.StatusTooManyRequests, "rate limited")
 		return
 	}
 

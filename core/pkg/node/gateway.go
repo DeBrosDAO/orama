@@ -174,7 +174,7 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		go func() {
 			time.Sleep(5 * time.Second)
 
-			// Try disk-based restore first (instant, no DB needed)
+			// Try disk-based restore first (instant, no DB needed).
 			restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
 			if err != nil {
 				n.logger.ComponentWarn(logging.ComponentNode, "Disk-based namespace restore failed", zap.Error(err))
@@ -182,22 +182,28 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			if restored > 0 {
 				n.logger.ComponentInfo(logging.ComponentNode, "Restored namespace clusters from local state",
 					zap.Int("count", restored))
-				return
 			}
 
-			// No state files found — fall back to DB query with retries
-			n.logger.ComponentInfo(logging.ComponentNode, "No local state files, falling back to DB restore")
+			// ALWAYS reconcile against the DB too — do NOT early-return on a
+			// non-zero disk-restore count. A cluster provisioned through the async
+			// path never wrote a cluster-state.json, so disk restore silently drops
+			// it; previously the DB fallback only ran when ZERO state files existed,
+			// so a node hosting one state-file namespace + one async namespace
+			// restored only the former, forever. RestoreLocalClusters is idempotent
+			// (the RQLite/Olric/Gateway spawn paths skip services already running),
+			// so re-running it over the disk-restored namespaces is a safe no-op and
+			// picks up any namespace that lacks a state file.
 			time.Sleep(5 * time.Second)
 			for attempt := 1; attempt <= 12; attempt++ {
 				if err := clusterManager.RestoreLocalClusters(ctx); err == nil {
 					return
 				} else {
-					n.logger.ComponentWarn(logging.ComponentNode, "Namespace cluster restore failed, retrying",
+					n.logger.ComponentWarn(logging.ComponentNode, "Namespace cluster DB restore failed, retrying",
 						zap.Int("attempt", attempt), zap.Error(err))
 				}
 				time.Sleep(10 * time.Second)
 			}
-			n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters after all retries")
+			n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters from DB after all retries")
 		}()
 	}
 

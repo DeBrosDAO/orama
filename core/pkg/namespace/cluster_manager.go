@@ -1334,6 +1334,14 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
 	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
 
+	// Save cluster-state.json on all nodes (local + remote) for disk-based restore
+	// on restart. The synchronous ProvisionCluster path does this; the async path
+	// previously did not, so any namespace created through the normal (async) flow
+	// had no state file and was silently dropped on the next node reboot (disk
+	// restore found nothing and the DB fallback was skipped when other namespaces
+	// had state files). Mirror the sync path so async-provisioned clusters survive.
+	cm.saveClusterStateToAllNodes(ctx, cluster, nodes, portBlocks)
+
 	cm.logger.Info("Cluster provisioning completed",
 		zap.String("cluster_id", cluster.ID),
 		zap.String("namespace", namespaceName),

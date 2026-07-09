@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -65,6 +66,15 @@ func (h *Handlers) HandlePush(w http.ResponseWriter, r *http.Request) {
 
 	if !isValidIdentity(req.Identity) {
 		writeError(w, http.StatusBadRequest, "identity must be 64 hex characters")
+		return
+	}
+
+	// Per-IP limit is checked BEFORE the ownership proof (see HandlePull for the
+	// rationale). The generic "rate limited" message does not reveal whether the
+	// identity exists.
+	if !h.ipRateLimiter.AllowPush(clientIP(r)) {
+		w.Header().Set("Retry-After", strconv.Itoa(ipRetryAfterSeconds))
+		writeError(w, http.StatusTooManyRequests, "rate limited")
 		return
 	}
 

@@ -35,10 +35,11 @@ const (
 
 // Handlers provides HTTP handlers for vault proxy operations.
 type Handlers struct {
-	logger      *logging.ColoredLogger
-	dbClient    client.NetworkClient
-	rateLimiter *IdentityRateLimiter
-	httpClient  *http.Client
+	logger        *logging.ColoredLogger
+	dbClient      client.NetworkClient
+	rateLimiter   *IdentityRateLimiter
+	ipRateLimiter *IPRateLimiter
+	httpClient    *http.Client
 }
 
 // NewHandlers creates vault proxy handlers.
@@ -50,6 +51,9 @@ func NewHandlers(logger *logging.ColoredLogger, dbClient client.NetworkClient) *
 			30,  // 30 pushes per hour per identity
 			120, // 120 pulls per hour per identity
 		),
+		// Per-IP limiter: bounds online password/seed guessing that iterates
+		// many identities from one source (see ratelimit.go for the rationale).
+		ipRateLimiter: NewIPRateLimiter(),
 		httpClient: &http.Client{
 			Timeout: guardianTimeout,
 			Transport: &http.Transport{
@@ -60,6 +64,7 @@ func NewHandlers(logger *logging.ColoredLogger, dbClient client.NetworkClient) *
 		},
 	}
 	h.rateLimiter.StartCleanup(10*time.Minute, 1*time.Hour)
+	h.ipRateLimiter.StartCleanup(ipCleanupInterval, ipBucketMaxAge)
 	return h
 }
 

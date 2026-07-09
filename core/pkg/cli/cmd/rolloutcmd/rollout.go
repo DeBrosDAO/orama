@@ -137,13 +137,19 @@ func findLeaderIndex(nodes []inspector.Node) int {
 func upgradeNode(node inspector.Node, current, total int, sshOpts []remotessh.SSHOption) error {
 	fmt.Printf("  [%d/%d] Upgrading %s...\n", current, total, node.Host)
 
+	// /usr/local/bin/orama is owned by the service account and `orama node upgrade`
+	// requires root, so a non-root SSH user (e.g. `ubuntu`) must sudo. The
+	// production/upgrade/remote.go path already does this; rolloutcmd previously did
+	// not, so the rolling upgrade failed on every non-root node.
+	sudo := remotessh.SudoPrefix(node)
+
 	// Pre-replace orama CLI binary to avoid ETXTBSY
-	preReplace := "rm -f /usr/local/bin/orama && cp /opt/orama/bin/orama /usr/local/bin/orama"
+	preReplace := fmt.Sprintf("%srm -f /usr/local/bin/orama && %scp /opt/orama/bin/orama /usr/local/bin/orama", sudo, sudo)
 	if err := remotessh.RunSSHStreaming(node, preReplace, sshOpts...); err != nil {
 		return fmt.Errorf("pre-replace orama binary on %s: %w", node.Host, err)
 	}
 
-	if err := remotessh.RunSSHStreaming(node, "orama node upgrade --restart", sshOpts...); err != nil {
+	if err := remotessh.RunSSHStreaming(node, sudo+"orama node upgrade --restart", sshOpts...); err != nil {
 		return fmt.Errorf("upgrade %s: %w", node.Host, err)
 	}
 
@@ -173,9 +179,19 @@ func pushArchive(nodes []inspector.Node, archivePath string) error {
 		return fmt.Errorf("upload to %s: %w", hub.Host, err)
 	}
 
+	// Build the extract command for a node, applying sudo for non-root users.
+	// /opt/orama is owned by the `orama` service account, so a non-root SSH user
+	// (e.g. `ubuntu`) must sudo to overwrite it. Previously this path had no sudo
+	// (unlike production/push's extractOnNode), so the rollout failed on every
+	// non-root node with "tar: Cannot open: File exists / Operation not permitted".
+	extractFor := func(node inspector.Node) string {
+		s := remotessh.SudoPrefix(node)
+		return fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama && %srm -f %s",
+			s, s, remotePath, s, remotePath)
+	}
+
 	// Extract on hub
-	extractCmd := fmt.Sprintf("mkdir -p /opt/orama && tar xzf %s -C /opt/orama && rm -f %s", remotePath, remotePath)
-	if err := remotessh.RunSSHStreaming(hub, extractCmd); err != nil {
+	if err := remotessh.RunSSHStreaming(hub, extractFor(hub)); err != nil {
 		return fmt.Errorf("extract on %s: %w", hub.Host, err)
 	}
 
@@ -185,7 +201,7 @@ func pushArchive(nodes []inspector.Node, archivePath string) error {
 		if err := remotessh.UploadFile(n, archivePath, remotePath); err != nil {
 			return fmt.Errorf("upload to %s: %w", n.Host, err)
 		}
-		if err := remotessh.RunSSHStreaming(n, extractCmd); err != nil {
+		if err := remotessh.RunSSHStreaming(n, extractFor(n)); err != nil {
 			return fmt.Errorf("extract on %s: %w", n.Host, err)
 		}
 	}
