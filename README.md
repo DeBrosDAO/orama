@@ -32,14 +32,14 @@ make vault-build
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](core/docs/ARCHITECTURE.md) | System architecture and design patterns |
-| [Deployment Guide](core/docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
-| [Dev & Deploy](core/docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
-| [Security](core/docs/SECURITY.md) | Security hardening and threat model |
-| [Monitoring](core/docs/MONITORING.md) | Cluster health monitoring |
-| [Client SDK](core/docs/CLIENT_SDK.md) | Go SDK documentation |
-| [Serverless](core/docs/SERVERLESS.md) | WASM serverless functions |
-| [Common Problems](core/docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
+| [Architecture](docs/ARCHITECTURE.md) | System architecture and design patterns |
+| [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
+| [Dev & Deploy](docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
+| [Security](docs/SECURITY.md) | Security hardening and threat model |
+| [Monitoring](docs/MONITORING.md) | Cluster health monitoring |
+| [Client SDK](docs/CLIENT_SDK.md) | Go SDK documentation |
+| [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
+| [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
 
 ## Contributing
 

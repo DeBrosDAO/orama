@@ -80,16 +80,16 @@ In the target design, guardians discover each other via RQLite (the cluster's me
 
 Authenticated endpoints require a session token obtained via challenge-response (HMAC-based tokens, 1-hour expiry). V1 push and pull additionally require an Ed25519 ownership proof (identity = SHA-256 of the public key, plus a signature over the request); only health, status, and guardians are unauthenticated.
 
-See [docs/API.md](docs/API.md) for the full API reference.
+See [docs/vault/API.md](../docs/vault/API.md) for the full API reference.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — System design, data flow, and component overview
-- [Security Model](docs/SECURITY_MODEL.md) — Threat model, crypto rationale, and hardening measures
-- [API Reference](docs/API.md) — Complete endpoint documentation
-- [Deployment](docs/DEPLOYMENT.md) — Deploying vault guardians to production
-- [Operator Guide](docs/OPERATOR_GUIDE.md) — Running and maintaining guardian nodes
-- [Post-Quantum Integration](docs/PQ_INTEGRATION.md) — ML-KEM and ML-DSA roadmap
+- [Architecture](../docs/vault/ARCHITECTURE.md) — System design, data flow, and component overview
+- [Security Model](../docs/vault/SECURITY_MODEL.md) — Threat model, crypto rationale, and hardening measures
+- [API Reference](../docs/vault/API.md) — Complete endpoint documentation
+- [Deployment](../docs/vault/DEPLOYMENT.md) — Deploying vault guardians to production
+- [Operator Guide](../docs/vault/OPERATOR_GUIDE.md) — Running and maintaining guardian nodes
+- [Post-Quantum Integration](../docs/vault/PQ_INTEGRATION.md) — ML-KEM and ML-DSA roadmap
 
 ## Building
 

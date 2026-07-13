@@ -265,6 +265,6 @@ When running multiple nameservers:
 
 ## Related Documentation
 
-- [CoreDNS RQLite Plugin](../pkg/coredns/README.md) - Technical details
+- [CoreDNS RQLite Plugin](../core/pkg/coredns/README.md) - Technical details
 - [Deployment Guide](./DEPLOYMENT_GUIDE.md) - Full deployment instructions
 - [Architecture](./ARCHITECTURE.md) - System architecture overview

@@ -3,7 +3,6 @@
 # Runs supply-chain + vulnerability checks per the DeBros baseline rules.
 # Triggers on main pushes/PRs and weekly to catch newly-published CVEs.
 #
-# See: https://github.com/DeBrosDAO/rules/blob/main/DEBROS.md
 
 name: security
 
@@ -35,14 +34,14 @@ jobs:
       - name: Verify lockfile committed
         run: |
           if [ ! -f pnpm-lock.yaml ]; then
-            echo "::error::sdk/pnpm-lock.yaml must be committed (DEBROS.md §1.2)"
+            echo "::error::sdk/pnpm-lock.yaml must be committed"
             exit 1
           fi
 
       - name: Verify .npmrc blocks install scripts
         run: |
           if ! grep -q '^ignore-scripts=true' .npmrc 2>/dev/null; then
-            echo "::error::sdk/.npmrc must contain 'ignore-scripts=true' (DEBROS.md §1.3)"
+            echo "::error::sdk/.npmrc must contain 'ignore-scripts=true'"
             exit 1
           fi
 
@@ -76,7 +75,7 @@ jobs:
       - name: Verify go.sum committed
         run: |
           if [ ! -f go.sum ]; then
-            echo "::error::core/go.sum must be committed (DEBROS.md §1.2)"
+            echo "::error::core/go.sum must be committed"
             exit 1
           fi
 

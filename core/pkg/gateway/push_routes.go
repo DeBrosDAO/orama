@@ -20,7 +20,7 @@ import (
 // reused by every push entrypoint so operators see consistent guidance.
 const pushNotConfiguredMessage = "push notifications are not configured on this namespace gateway. " +
 	"Set `ntfy_base_url` or `expo_access_token` in the gateway config and restart, " +
-	"then call this endpoint again. See core/docs/SERVERLESS.md for details."
+	"then call this endpoint again. See docs/PUSH_NOTIFICATIONS.md for details."
 
 // pushDevicesHandler dispatches GET (list) / POST (register) on
 // /v1/push/devices. Returns 503 when push isn't configured.

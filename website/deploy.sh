@@ -16,7 +16,11 @@ cd "$SCRIPT_DIR"
 pnpm build
 
 echo "Deploying to $REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH..."
+# Force password-only auth. Without this, an ssh-agent holding several keys
+# offers them all first and trips the server's MaxAuthTries ("Too many
+# authentication failures") before sshpass ever sends the password.
 sshpass -p "$REMOTE_PASS" rsync -avz --delete \
+  -e "ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
   dist/ \
   "$REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH/"
 
