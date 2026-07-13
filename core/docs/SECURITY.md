@@ -119,7 +119,7 @@ These measures apply only to OramaOS nodes (mainnet, devnet, testnet).
 
 - **LUKS2** with AES-XTS-Plain64 on the data partition
 - **Shamir's Secret Sharing** over GF(256) — LUKS key split across peer vault-guardians
-- **Adaptive threshold** — K = max(3, N/3) where N is the number of peers
+- **Adaptive threshold** — K = max(2, floor(N/3)) where N is the number of peers; writes require W = min(N, max(K+1, ceil(2N/3))) shares so a successful write is always recoverable
 - **Key zeroing** — LUKS key wiped from memory immediately after use
 - **Malicious share detection** — fetch K+1 shares when possible, verify consistency
 

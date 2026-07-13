@@ -107,38 +107,60 @@ The `iceTransportPolicy: "relay"` setting is mandatory. The SFU rejects non-rela
 
 ### 3. Connect Signaling WebSocket
 
-The signaling channel is a WebSocket connection to the SFU. Pass the room ID and authentication as query parameters.
+The signaling channel is a WebSocket connection proxied by the gateway to the SFU. Pass authentication as a query parameter. All messages in both directions use an envelope of the form `{ type, data }`, and the first message you send must be a `join` with both `roomId` and `userId` in `data` — the SFU rejects the connection if either is missing. Rooms are created implicitly on first join.
 
 ```typescript
 const ws = new WebSocket(
-  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&api_key=${apiKey}`
+  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}`
 );
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    type: "join",
+    data: { roomId, userId },
+  }));
+};
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
 
   switch (msg.type) {
+    case "welcome":
+      // msg.data: { peerId, roomId, participants }
+      handleWelcome(msg.data);
+      break;
     case "offer":
-      handleOffer(msg);
+      handleOffer(msg.data);
       break;
     case "answer":
-      handleAnswer(msg);
+      handleAnswer(msg.data);
       break;
     case "ice-candidate":
-      handleICE(msg);
+      handleICE(msg.data);
       break;
-    case "peer-joined":
-      handleJoin(msg);
+    case "participant-joined":
+      // msg.data: { participant: { peerId, userId } }
+      handleJoin(msg.data);
       break;
-    case "peer-left":
-      handleLeave(msg);
+    case "participant-left":
+      // msg.data: { peerId }
+      handleLeave(msg.data);
+      break;
+    case "track-added":
+    case "track-removed":
+      // msg.data: { peerId, userId, trackId, kind, ... }
+      handleTrackChange(msg.type, msg.data);
       break;
     case "turn-credentials":
     case "refresh-credentials":
-      updateTURN(msg);
+      updateTURN(msg.data);
       break;
     case "server-draining":
       reconnect();
+      break;
+    case "error":
+      // msg.data: { code, message }
+      console.error(msg.data);
       break;
   }
 };
@@ -162,22 +184,29 @@ for (const track of stream.getTracks()) {
 const offer = await pc.createOffer();
 await pc.setLocalDescription(offer);
 
-ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+ws.send(JSON.stringify({ type: "offer", data: { sdp: offer.sdp } }));
 
 // Handle answer from SFU
-function handleAnswer(msg: { sdp: string }) {
-  pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+function handleAnswer(data: { sdp: string }) {
+  pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
 }
 
 // Exchange ICE candidates
 pc.onicecandidate = ({ candidate }) => {
   if (candidate) {
-    ws.send(JSON.stringify({ type: "ice-candidate", candidate }));
+    ws.send(JSON.stringify({
+      type: "ice-candidate",
+      data: {
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid,
+        sdpMLineIndex: candidate.sdpMLineIndex,
+      },
+    }));
   }
 };
 
-function handleICE(msg: { candidate: RTCIceCandidateInit }) {
-  pc.addIceCandidate(msg.candidate);
+function handleICE(data: RTCIceCandidateInit) {
+  pc.addIceCandidate(data);
 }
 ```
 
@@ -200,10 +229,10 @@ pc.ontrack = (event) => {
 The SFU sends refreshed TURN credentials at 80% of TTL (8 minutes for the default 10-minute TTL). Update the ICE configuration without renegotiating.
 
 ```typescript
-function updateTURN(msg: TURNCredentials) {
+function updateTURN(data: TURNCredentials) {
   const config = pc.getConfiguration();
   config.iceServers = [
-    { urls: msg.uris, username: msg.username, credential: msg.password },
+    { urls: data.uris, username: data.username, credential: data.password },
   ];
   pc.setConfiguration(config);
 }
@@ -218,39 +247,25 @@ function reconnect() {
   ws.close();
   // Re-establish signaling connection — the gateway routes to an available SFU
   const newWs = new WebSocket(
-    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&api_key=${apiKey}`
+    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}`
   );
-  // Re-attach handlers...
+  // Re-attach handlers and send a new join message on open...
 }
 ```
 
 ## Room Management
 
-Rooms are managed via REST. Creating and closing rooms requires namespace ownership.
+There is no REST API for creating or closing rooms. Rooms are created implicitly when the first peer joins via the signaling WebSocket and are cleaned up when the last peer leaves. The `/v1/webrtc/rooms` endpoint is read-only (GET) and proxies to the SFU's health endpoint for room information.
 
 ```typescript
 const headers = {
   "X-API-Key": apiKey,
-  "Content-Type": "application/json",
 };
 
-// Create a room
-await fetch("https://ns-myapp.orama-devnet.network/v1/webrtc/rooms", {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ room_id: "my-room" }),
-});
-
-// List rooms
+// Get room information (proxied to the SFU health endpoint)
 const rooms = await fetch("https://ns-myapp.orama-devnet.network/v1/webrtc/rooms", {
   headers,
 }).then((r) => r.json());
-
-// Close a room
-await fetch(
-  "https://ns-myapp.orama-devnet.network/v1/webrtc/rooms?room_id=my-room",
-  { method: "DELETE", headers }
-);
 ```
 
 ## REST Endpoints
@@ -259,36 +274,38 @@ await fetch(
 |--------|------|------|-------------|
 | POST | `/v1/webrtc/turn/credentials` | API key / JWT | Get TURN relay credentials |
 | GET (WebSocket) | `/v1/webrtc/signal` | API key / JWT | Signaling channel |
-| GET | `/v1/webrtc/rooms` | API key / JWT | List rooms |
-| POST | `/v1/webrtc/rooms` | API key / JWT (owner) | Create room |
-| DELETE | `/v1/webrtc/rooms` | API key / JWT (owner) | Close room |
+| GET | `/v1/webrtc/rooms` | API key / JWT | Room information (SFU health) |
 
 ## Signaling Messages
 
-Messages exchanged over the WebSocket signaling channel.
+Messages exchanged over the WebSocket signaling channel. Every message is an envelope `{ type, data }` with the payload under `data`.
 
 ### Client to SFU
 
-| Type | Description |
-|------|-------------|
-| `join` | Join a room |
-| `offer` | SDP offer |
-| `answer` | SDP answer |
-| `ice-candidate` | ICE candidate |
-| `leave` | Leave a room |
+| Type | Data payload | Description |
+|------|--------------|-------------|
+| `join` | `{ roomId, userId }` | Join a room (must be the first message; both fields required) |
+| `offer` | `{ sdp }` | SDP offer |
+| `answer` | `{ sdp }` | SDP answer |
+| `ice-candidate` | `{ candidate, sdpMid, sdpMLineIndex }` | ICE candidate |
+| `leave` | — | Leave a room |
 
 ### SFU to Client
 
-| Type | Description |
-|------|-------------|
-| `offer` | SDP offer (for subscribing to new tracks) |
-| `answer` | SDP answer |
-| `ice-candidate` | ICE candidate |
-| `peer-joined` | New peer entered the room |
-| `peer-left` | Peer left the room |
-| `turn-credentials` | Initial TURN credentials on connect |
-| `refresh-credentials` | Refreshed TURN credentials (sent at 80% TTL) |
-| `server-draining` | SFU shutting down, reconnect to another node |
+| Type | Data payload | Description |
+|------|--------------|-------------|
+| `welcome` | `{ peerId, roomId, participants }` | Join confirmed, with current participants |
+| `offer` | `{ sdp }` | SDP offer (for subscribing to new tracks) |
+| `answer` | `{ sdp }` | SDP answer |
+| `ice-candidate` | `{ candidate, sdpMid, sdpMLineIndex }` | ICE candidate |
+| `participant-joined` | `{ participant: { peerId, userId } }` | New participant entered the room |
+| `participant-left` | `{ peerId }` | Participant left the room |
+| `track-added` | `{ peerId, userId, trackId, streamId, kind }` | A new track is available |
+| `track-removed` | `{ peerId, userId, trackId, kind }` | A track was removed |
+| `turn-credentials` | `{ username, password, ttl, uris }` | Initial TURN credentials on connect |
+| `refresh-credentials` | `{ username, password, ttl, uris }` | Refreshed TURN credentials (sent at 80% TTL) |
+| `server-draining` | `{ reason, timeoutMs }` | SFU shutting down, reconnect to another node |
+| `error` | `{ code, message }` | Signaling error |
 
 ## TURN Credential Protocol
 
@@ -323,7 +340,7 @@ SFU ports are internal only — bound to WireGuard interfaces, not exposed throu
 A minimal working example connecting two peers in a room.
 
 ```typescript
-async function joinRoom(roomId: string, apiKey: string) {
+async function joinRoom(roomId: string, userId: string, apiKey: string) {
   // 1. Get TURN credentials
   const creds = await fetch(
     "https://ns-myapp.orama-devnet.network/v1/webrtc/turn/credentials",
@@ -358,20 +375,28 @@ async function joinRoom(roomId: string, apiKey: string) {
 
   // 5. Connect signaling
   const ws = new WebSocket(
-    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&api_key=${apiKey}`
+    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}`
   );
 
   ws.onopen = async () => {
-    ws.send(JSON.stringify({ type: "join", room_id: roomId }));
+    // First message must be a join with both roomId and userId in data
+    ws.send(JSON.stringify({ type: "join", data: { roomId, userId } }));
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+    ws.send(JSON.stringify({ type: "offer", data: { sdp: offer.sdp } }));
   };
 
   pc.onicecandidate = ({ candidate }) => {
     if (candidate) {
-      ws.send(JSON.stringify({ type: "ice-candidate", candidate }));
+      ws.send(JSON.stringify({
+        type: "ice-candidate",
+        data: {
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex,
+        },
+      }));
     }
   };
 
@@ -380,22 +405,22 @@ async function joinRoom(roomId: string, apiKey: string) {
 
     switch (msg.type) {
       case "answer":
-        pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        pc.setRemoteDescription({ type: "answer", sdp: msg.data.sdp });
         break;
       case "ice-candidate":
-        pc.addIceCandidate(msg.candidate);
+        pc.addIceCandidate(msg.data);
         break;
       case "offer":
-        pc.setRemoteDescription({ type: "offer", sdp: msg.sdp }).then(async () => {
+        pc.setRemoteDescription({ type: "offer", sdp: msg.data.sdp }).then(async () => {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+          ws.send(JSON.stringify({ type: "answer", data: { sdp: answer.sdp } }));
         });
         break;
       case "refresh-credentials":
         const config = pc.getConfiguration();
         config.iceServers = [
-          { urls: msg.uris, username: msg.username, credential: msg.password },
+          { urls: msg.data.uris, username: msg.data.username, credential: msg.data.password },
         ];
         pc.setConfiguration(config);
         break;
@@ -442,4 +467,4 @@ pc.ondatachannel = (event) => {
 - **Namespace isolation** — Separate TURN secrets, port ranges, and room spaces per namespace.
 - **SFU on WireGuard only** — SFU binds to `10.0.0.x`, never `0.0.0.0`. Only reachable through TURN relay.
 - **Permissions-Policy** — `camera=(self), microphone=(self)` restricts media device access to same-origin.
-- **Room ownership** — Creating and closing rooms requires namespace-level authentication.
+- **Room lifecycle** — Rooms have no owner and no REST create/close API; they are created implicitly on first join and cleaned up when the last peer leaves. Joining still requires namespace-level authentication (API key or JWT) on the signaling connection.

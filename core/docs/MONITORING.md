@@ -54,7 +54,7 @@ Without a subcommand, launches the interactive TUI.
 | `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
 | `--json` | `false` | Machine-readable JSON output (for one-shot subcommands) |
 | `--node` | | Filter to a specific node host/IP |
-| `--config` | `scripts/remote-nodes.conf` | Path to node configuration file |
+| `--config` | `scripts/nodes.conf` | Path to node configuration file |
 
 ### Subcommands
 
@@ -135,24 +135,23 @@ The TUI auto-refreshes every 30 seconds. A spinner shows during data collection.
     "collected_at": "2026-02-16T12:00:00Z",
     "duration_seconds": 3.2,
     "node_count": 3,
-    "healthy_count": 3
+    "healthy_count": 3,
+    "failed_count": 0
   },
   "summary": {
     "rqlite_leader": "10.0.0.1",
-    "rqlite_voters": "3/3",
-    "rqlite_raft_term": 42,
-    "wg_mesh_status": "all connected",
-    "service_health": "all nominal",
+    "rqlite_quorum": "ok",
+    "wg_mesh_status": "ok",
+    "service_health": "ok",
     "critical_alerts": 0,
-    "warning_alerts": 1,
-    "info_alerts": 0
+    "warning_alerts": 1
   },
   "alerts": [...],
   "nodes": [
     {
       "host": "51.195.109.238",
-      "status": "healthy",
-      "collection_ms": 526,
+      "role": "nameserver",
+      "status": "ok",
       "report": { ... }
     }
   ]
@@ -179,6 +178,7 @@ sudo orama node report --json
 | **rqlite** | Raft state, leader, term, applied/commit index, peers, strong read test, readyz, debug vars |
 | **olric** | Service state, memberlist, member count, restarts, memory, log analysis |
 | **ipfs** | Daemon/cluster state, swarm/cluster peers, repo size, versions, swarm key |
+| **vault** | Service state, guardian health (healthy/total, read threshold, write quorum), restarts |
 | **gateway** | HTTP health check, subsystem status |
 | **wireguard** | Interface state, WG IP, peers, handshake ages, MTU, config permissions |
 | **dns** | CoreDNS/Caddy state, port bindings, resolution tests, TLS cert expiry |
@@ -186,10 +186,12 @@ sudo orama node report --json
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
 | **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
+| **deployments** | Deployment counts: total, running, failed, static |
+| **serverless** | Function count, engine status |
 
 ### Performance
 
-All 12 collectors run in parallel with goroutines. Typical collection time is **< 1 second** per node. HTTP timeouts are 3 seconds, command timeouts are 4 seconds.
+All 15 collectors run in parallel with goroutines. Typical collection time is **< 1 second** per node. HTTP timeouts are 3 seconds, command timeouts are 4 seconds.
 
 ### Output Schema
 
@@ -197,21 +199,25 @@ All 12 collectors run in parallel with goroutines. Typical collection time is **
 {
   "timestamp": "2026-02-16T12:00:00Z",
   "hostname": "ns1",
-  "version": "0.107.0",
+  "public_ip": "51.195.109.238",
+  "wireguard_ip": "10.0.0.1",
+  "version": "",
   "collect_ms": 526,
-  "errors": [],
   "system": { "cpu_count": 4, "load_avg_1": 0.1, "mem_total_mb": 7937, ... },
   "services": { "services": [...], "failed_units": [] },
   "rqlite": { "responsive": true, "raft_state": "Leader", "term": 42, ... },
   "olric": { "service_active": true, "memberlist_up": true, ... },
   "ipfs": { "daemon_active": true, "swarm_peers": 2, ... },
+  "vault": { "service_active": true, "responsive": true, "status": "healthy", ... },
   "gateway": { "responsive": true, "http_status": 200, ... },
   "wireguard": { "interface_up": true, "wg_ip": "10.0.0.1", "peers": [...], ... },
   "dns": { "coredns_active": true, "caddy_active": true, "base_tls_days_left": 88, ... },
   "anyone": { "relay_active": true, "bootstrapped": true, ... },
   "network": { "internet_reachable": true, "ufw_active": true, ... },
   "processes": { "zombie_count": 0, "orphan_count": 0, "panic_count": 0, ... },
-  "namespaces": []
+  "namespaces": [],
+  "deployments": { "total_count": 0, "running_count": 0, "failed_count": 0, "static_count": 0 },
+  "serverless": { "function_count": 0, "engine_status": "ok" }
 }
 ```
 
@@ -224,7 +230,7 @@ Alerts are derived from cross-node analysis of all collected reports. Each alert
 | Severity | Examples |
 |----------|----------|
 | **critical** | SSH collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive |
-| **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Anyone not bootstrapped, clock skew > 5s, binary version mismatch, internet unreachable, high TCP retransmission |
+| **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Anyone not bootstrapped, clock skew > 5s, internet unreachable, high TCP retransmission |
 | **info** | Zombie processes, orphan orama processes, swap usage > 30% |
 
 ### Cross-Node Checks
@@ -237,9 +243,7 @@ These checks compare data across all nodes:
 - **Applied Index Lag**: Followers within 100 entries of the leader
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
 - **Clock Skew**: Node clocks within 5 seconds of each other
-- **Binary Version**: All nodes running the same version
-- **WebRTC SFU Coverage**: SFU running on expected nodes (3/3) per namespace
-- **WebRTC TURN Redundancy**: TURN running on expected nodes (2/3) per namespace
+- **Binary Version**: All nodes running the same version. Currently inert: `orama node report` always emits an empty `version`, so every node reads as "unknown" and this alert never fires.
 
 ### Per-Node Checks
 
@@ -251,7 +255,6 @@ These checks compare data across all nodes:
 - **Anyone**: Bootstrap progress
 - **Processes**: Zombies, orphans, panics in logs
 - **Namespaces**: Gateway and RQLite per namespace
-- **WebRTC**: SFU and TURN service health (when provisioned)
 - **Network**: UFW, internet reachability, TCP retransmission
 
 ## Monitor vs Inspector
@@ -271,8 +274,8 @@ Use `monitor` for day-to-day health checks and the interactive TUI. Use `inspect
 
 ## Configuration
 
-Uses the same `scripts/remote-nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.
+Uses the same `scripts/nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.
 
 ## Prerequisites
 
-Nodes must have the `orama` CLI installed (via `orama node install` or `upload-source.sh`). The monitor runs `sudo orama node report --json` over SSH, so the binary must be at `/usr/local/bin/orama` on each node.
+Nodes must have the `orama` CLI installed (via `orama node install`, or updated via `orama node push` / `orama node rollout`). The monitor runs `sudo orama node report --json` over SSH, so the binary must be at `/usr/local/bin/orama` on each node.

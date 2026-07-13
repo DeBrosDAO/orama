@@ -11,7 +11,7 @@ Each Orama node is assigned a private IP address on the `10.0.0.0/24` subnet. Al
 - **WireGuard** (UDP port 51820) -- the encrypted tunnel itself
 - **DNS** (port 53, TCP/UDP) -- only on nameserver nodes
 
-Internal service ports (RQLite on 4001/4002/5001, Olric on 3320/3322, IPFS on 4001/5001/9094/9095, gateway on 8443, etc.) are never exposed to the public internet.
+Internal service ports (RQLite on 5001/7001, Olric on 3320/3322, IPFS on 4501/8080/4101, IPFS Cluster on 9094/9096, gateway API on 6001, Caddy HTTPS behind the SNI router on 8443, etc.) are never exposed to the public internet.
 
 ## Network Topology
 
@@ -52,7 +52,7 @@ The gateway provides these internal endpoints for WireGuard peer management (aut
 |----------|-------------|
 | `POST /v1/internal/wg/peer` | Register a new WireGuard peer |
 | `GET /v1/internal/wg/peers` | List all registered peers |
-| `POST /v1/internal/wg/peer/remove` | Remove a peer |
+| `DELETE /v1/internal/wg/peer/remove?node_id=<id>` | Remove a peer |
 
 These endpoints are for internal cluster coordination only. Operators do not call them directly.
 

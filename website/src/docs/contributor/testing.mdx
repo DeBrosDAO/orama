@@ -6,7 +6,11 @@ Testing is a critical part of contributing to Orama. All logic changes require t
 
 ### Go (Network)
 
+The Go module lives in `core/` — run these from `core/` (or `make test` from the repo root, which delegates there):
+
 ```bash
+cd core
+
 # Run all tests
 make test
 
@@ -168,9 +172,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 ## End-to-End Tests
 
-E2E tests verify that components work together against a real cluster. They are organized by scope:
+E2E tests verify that components work together against a real cluster. They are organized by scope. The `test-e2e-*` targets are defined in `core/Makefile`, so run them from `core/`:
 
 ```bash
+cd core
+
 # Run all E2E tests (auto-discovers config)
 make test-e2e
 
@@ -190,18 +196,17 @@ make test-e2e-production     # DNS, HTTPS, cross-node routing
 make test-e2e-prod           # All E2E including production-only
 ```
 
-E2E tests are slower and require a running cluster (sandbox or real environment). They are run in CI but can be skipped locally if you are only working on unit-tested logic.
+E2E tests are slower and require a running cluster (sandbox or real environment). They are not part of CI — run them manually before merging changes that touch deployment, clustering, or cross-node behavior.
 
 ## CI/CD Pipeline
 
-Every pull request triggers the CI pipeline, which runs:
+Every pull request triggers the CI pipeline (`.github/workflows/ci.yml`), which runs:
 
-1. **Lint** — `go vet` and `go fmt` for Go, ESLint for TypeScript
-2. **Unit tests** — Full test suite via `make test`
-3. **Build** — Verify all binaries compile successfully
-4. **E2E tests** — Run against a test environment
+1. **Go tests** — `go vet ./...` and `go test -race ./...`, both run in `core/`
+2. **SDK build** — `pnpm typecheck`, `pnpm build`, and `pnpm vitest run tests/unit` in `sdk/`
+3. **Version sanity** — checks that the root `VERSION` file matches `sdk/package.json`
 
-All checks must pass before a PR can be merged. If CI fails, fix the issue locally and push the fix — do not ask to skip checks.
+There is no `go fmt` check, no ESLint step, no all-binaries build job, and no E2E job in CI — E2E tests are run manually against a sandbox or real environment. All checks must pass before a PR can be merged. If CI fails, fix the issue locally and push the fix — do not ask to skip checks.
 
 ## Sandbox Testing
 
@@ -214,8 +219,8 @@ orama sandbox create --name my-test
 # Deploy your changes to the sandbox
 orama sandbox rollout --name my-test
 
-# Run E2E tests against the sandbox
-make test-e2e
+# Run E2E tests against the sandbox (from core/)
+cd core && make test-e2e
 
 # Tear down when done
 orama sandbox destroy --name my-test

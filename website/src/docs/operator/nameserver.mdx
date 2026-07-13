@@ -305,27 +305,18 @@ sudo ufw allow 53/tcp
 sudo ufw allow 53/udp
 ```
 
-Keep internal service ports restricted to the WireGuard overlay network:
+Keep internal service ports restricted to the WireGuard overlay network. The installer's UFW setup already does this with a blanket rule:
 
 ```bash
-# CoreDNS health endpoint (internal only)
-sudo ufw allow from 10.0.0.0/8 to any port 8080
-
-# CoreDNS Prometheus metrics (internal only)
-sudo ufw allow from 10.0.0.0/8 to any port 9153
+# Allow all traffic from the WireGuard mesh subnet
+sudo ufw allow from 10.0.0.0/24
 ```
 
 Do not expose RQLite, Olric, or any other internal service ports to the public internet. All inter-node traffic flows over the WireGuard mesh.
 
 ### Rate Limiting
 
-DNS servers are common targets for amplification attacks, where an attacker sends small queries with a spoofed source IP to generate large responses directed at the victim. Consider adding rate limiting in the CoreDNS Corefile:
-
-```
-ratelimit 100
-```
-
-This limits each source IP to 100 queries per second. The exact threshold depends on your expected traffic volume. CoreDNS rate limiting is configured per-zone in the Corefile.
+DNS servers are common targets for amplification attacks, where an attacker sends small queries with a spoofed source IP to generate large responses directed at the victim. The custom CoreDNS build used by Orama does not include the external `ratelimit` plugin -- do not add a `ratelimit` directive to the Corefile, as CoreDNS will fail to start with an "Unknown directive" error. If you need per-source query rate limiting, apply it at the firewall level (e.g., iptables/nftables rate rules on port 53) instead.
 
 ## How It All Fits Together
 

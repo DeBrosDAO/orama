@@ -19,7 +19,7 @@ In production, the Orama gateway reverse-proxies these endpoints over TLS (port 
 
 ### GET /v1/vault/health
 
-Liveness check. Returns immediately with a static response. No authentication required. Used by load balancers and monitoring.
+Liveness and readiness check. No authentication required. Used by load balancers and monitoring.
 
 **Request:**
 ```
@@ -30,11 +30,22 @@ GET /v1/vault/health HTTP/1.1
 ```json
 {
   "status": "ok",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "shares": 12,
+  "peers": 2,
+  "data_dir_ok": true
 }
 ```
 
-This endpoint never returns an error. If the process is running and the TCP listener is accepting connections, it returns 200.
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `ok`, `degraded`, or `unhealthy` |
+| `version` | string | Guardian version |
+| `shares` | number | Number of shares stored on this node |
+| `peers` | number | Number of alive peers (excluding self) |
+| `data_dir_ok` | boolean | Whether the data directory is accessible |
+
+The status is computed: `unhealthy` if the data directory is not accessible, `degraded` if there are zero alive peers, otherwise `ok`. Because RQLite peer discovery is not yet implemented (the node list is empty), a node currently always reports `degraded` -- this is expected and does not indicate a failed deploy. The response is always HTTP 200 as long as the process is running.
 
 ---
 
@@ -62,7 +73,7 @@ GET /v1/vault/status HTTP/1.1
 
 ### GET /v1/vault/guardians
 
-List known guardian nodes. In the current MVP, returns only the local node. Phase 3 will query RQLite for the full cluster list.
+List alive guardian nodes from the guardian's node list. Because RQLite peer discovery is not yet implemented (it returns an empty node list), the current response is an empty guardians array.
 
 **Request:**
 ```
@@ -72,14 +83,9 @@ GET /v1/vault/guardians HTTP/1.1
 **Response (200 OK):**
 ```json
 {
-  "guardians": [
-    {
-      "address": "0.0.0.0",
-      "port": 7500
-    }
-  ],
+  "guardians": [],
   "threshold": 3,
-  "total": 1
+  "total": 0
 }
 ```
 
@@ -97,24 +103,33 @@ GET /v1/vault/guardians HTTP/1.1
 
 Store an encrypted share for a user. The client has already performed the Shamir split locally and sends one share to each guardian.
 
+Requires a valid session token in the `X-Session-Token` header (see the auth endpoints below) **and** an Ed25519 ownership proof: `identity` must equal SHA-256 of `pubkey`, and `signature` must be a valid Ed25519 signature over the ASCII message `vault-push-v1:<identity_hex>:<version>`.
+
 **Request:**
 ```
 POST /v1/vault/push HTTP/1.1
 Content-Type: application/json
+X-Session-Token: <session token>
 Content-Length: <length>
 
 {
   "identity": "<64 hex chars>",
   "share": "<base64-encoded share data>",
-  "version": <uint64>
+  "version": <uint64>,
+  "threshold": <uint8>,
+  "pubkey": "<64 hex chars>",
+  "signature": "<128 hex chars>"
 }
 ```
 
 | Field | Type | Required | Constraints |
 |-------|------|----------|-------------|
-| `identity` | string | yes | Exactly 64 lowercase hex characters (SHA-256 of user identity) |
+| `identity` | string | yes | Exactly 64 lowercase hex characters (SHA-256 of the Ed25519 public key) |
 | `share` | string | yes | Base64-encoded encrypted share data. Decoded size must be > 0 and <= 512 KiB |
 | `version` | number | yes | Unsigned 64-bit integer. Must be strictly greater than the currently stored version (monotonic counter) |
+| `threshold` | number | no | Shamir threshold K the share was split with. Stored in metadata for reconstruction (defaults to 0) |
+| `pubkey` | string | yes | Hex-encoded Ed25519 public key (32 bytes). Must hash to `identity` |
+| `signature` | string | yes | Hex-encoded Ed25519 signature (64 bytes) over `vault-push-v1:<identity_hex>:<version>` |
 
 **Success Response (200 OK):**
 ```json
@@ -129,24 +144,27 @@ Content-Length: <length>
 |--------|------|-----------|
 | 400 | `{"error":"empty body"}` | Request body is empty |
 | 400 | `{"error":"request body too large"}` | Body exceeds 1 MiB |
-| 400 | `{"error":"missing identity field"}` | `identity` field not found in JSON |
-| 400 | `{"error":"missing share field"}` | `share` field not found in JSON |
+| 400 | `{"error":"invalid JSON"}` | Body is not valid JSON or required fields are missing/mistyped |
 | 400 | `{"error":"identity must be exactly 64 hex characters"}` | Identity is not 64 chars |
 | 400 | `{"error":"identity must be hex"}` | Identity contains non-hex characters |
 | 400 | `{"error":"invalid base64 in share"}` | Share data is not valid base64 |
 | 400 | `{"error":"share data too large"}` | Decoded share exceeds 512 KiB |
 | 400 | `{"error":"share data is empty"}` | Decoded share is 0 bytes |
-| 400 | `{"error":"missing or invalid version field"}` | `version` field missing or not a valid unsigned integer |
-| 400 | `{"error":"version must be greater than current stored version"}` | Anti-rollback: version <= stored version |
+| 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
+| 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
+| 401 | `{"error":"invalid ownership signature"}` | Missing/invalid `pubkey`/`signature`, or identity does not match the pubkey |
 | 405 | `{"error":"method not allowed"}` | Non-POST method used |
+| 409 | `{"error":"version must be greater than current stored version"}` | Anti-rollback: version <= stored version |
 | 500 | `{"error":"internal server error"}` | Disk write failure or allocation error |
+
+The anti-rollback rejection deliberately uses **409 Conflict** (not 400) so clients can distinguish a stale version from a malformed request, re-read the current version, and retry with a higher one.
 
 **Storage Behavior:**
 
-1. Share data is written atomically: first to `share.bin.tmp`, then renamed to `share.bin`.
-2. Version counter is written atomically: first to `version.tmp`, then renamed to `version`.
-3. Anti-rollback: if a version file exists for this identity, the new version must be strictly greater. Equal versions are also rejected.
-4. Directory path: `<data_dir>/shares/<identity>/share.bin`
+1. Share data is written atomically: first to `share.bin.tmp`, then renamed to `share.bin`. An HMAC-SHA256 checksum (keyed by the guardian's persistent integrity key) is written to `checksum.bin`.
+2. Metadata (`version` + `threshold`) is written LAST to `meta.json` as the commit marker -- the share only counts as present once `meta.json` lands, so a crash mid-write leaves an incomplete (ignored) share rather than a corrupt one.
+3. Anti-rollback: if `meta.json` exists for this identity, the new version must be strictly greater. Equal versions are also rejected.
+4. Directory path: `<data_dir>/shares/<identity>/` containing `share.bin`, `checksum.bin`, `meta.json`
 
 **Size Limits:**
 
@@ -163,27 +181,40 @@ Content-Length: <length>
 
 Retrieve an encrypted share for a user. The client contacts multiple guardians to collect K shares for reconstruction.
 
+Requires a valid session token in the `X-Session-Token` header **and** an Ed25519 ownership proof: `identity` must equal SHA-256 of `pubkey`, `timestamp` must be within 120 seconds of the guardian's clock, and `signature` must be a valid Ed25519 signature over the ASCII message `vault-pull-v1:<identity_hex>:<timestamp>`.
+
 **Request:**
 ```
 POST /v1/vault/pull HTTP/1.1
 Content-Type: application/json
+X-Session-Token: <session token>
 Content-Length: <length>
 
 {
-  "identity": "<64 hex chars>"
+  "identity": "<64 hex chars>",
+  "pubkey": "<64 hex chars>",
+  "signature": "<128 hex chars>",
+  "timestamp": <unix seconds>
 }
 ```
 
 | Field | Type | Required | Constraints |
 |-------|------|----------|-------------|
 | `identity` | string | yes | Exactly 64 lowercase hex characters |
+| `pubkey` | string | yes | Hex-encoded Ed25519 public key (32 bytes). Must hash to `identity` |
+| `signature` | string | yes | Hex-encoded Ed25519 signature (64 bytes) over `vault-pull-v1:<identity_hex>:<timestamp>` |
+| `timestamp` | number | yes | Unix seconds. Must be within +/-120 seconds of the guardian's clock |
 
 **Success Response (200 OK):**
 ```json
 {
-  "share": "<base64-encoded share data>"
+  "share": "<base64-encoded share data>",
+  "version": <uint64>,
+  "threshold": <uint8>
 }
 ```
+
+`version` and `threshold` come from the stored `meta.json`, so the client can select a version-consistent read set and reconstruct with the original threshold.
 
 **Error Responses:**
 
@@ -191,9 +222,12 @@ Content-Length: <length>
 |--------|------|-----------|
 | 400 | `{"error":"empty body"}` | Request body is empty |
 | 400 | `{"error":"request body too large"}` | Body exceeds 4 KiB |
-| 400 | `{"error":"missing identity field"}` | `identity` not found |
+| 400 | `{"error":"invalid JSON"}` | Body is not valid JSON or `identity` is missing |
 | 400 | `{"error":"identity must be exactly 64 hex characters"}` | Wrong length |
 | 400 | `{"error":"identity must be hex"}` | Non-hex characters |
+| 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
+| 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
+| 401 | `{"error":"invalid ownership signature"}` | Missing/invalid proof, stale timestamp, or identity does not match the pubkey |
 | 404 | `{"error":"share not found"}` | No share stored for this identity |
 | 405 | `{"error":"method not allowed"}` | Non-POST method used |
 | 500 | `{"error":"internal server error"}` | Disk read failure |
@@ -224,14 +258,13 @@ Content-Type: application/json
 **Response (200 OK):**
 ```json
 {
-  "nonce": "<base64 32 bytes>",
+  "nonce": "<64 hex chars>",
   "created_ns": <i128>,
-  "tag": "<base64 32 bytes>",
-  "expires_in_seconds": 60
+  "tag": "<64 hex chars>"
 }
 ```
 
-The client must return this exact challenge (nonce + created_ns + tag) along with their identity within 60 seconds.
+`nonce` and `tag` are 32 bytes each, encoded as lowercase hex. The client must return this exact challenge (nonce + created_ns + tag) along with their identity within 60 seconds.
 
 ---
 
@@ -246,21 +279,28 @@ Content-Type: application/json
 
 {
   "identity": "<64 hex chars>",
-  "nonce": "<base64 32 bytes>",
+  "nonce": "<64 hex chars>",
   "created_ns": <i128>,
-  "tag": "<base64 32 bytes>"
+  "tag": "<64 hex chars>"
 }
 ```
 
 **Response (200 OK):**
 ```json
 {
-  "session_token": "<base64-encoded token>",
-  "expires_in_seconds": 3600
+  "identity": "<64 hex chars>",
+  "expiry_ns": <i128>,
+  "tag": "<64 hex chars>"
 }
 ```
 
-The session token is valid for 1 hour. It should be included in subsequent requests as a Bearer token in the Authorization header.
+There is no ready-made token field: the client assembles the session token itself by joining the three response fields with colons:
+
+```
+<identity>:<expiry_ns>:<tag>
+```
+
+The token is valid for 1 hour and must be sent in the `X-Session-Token` header on subsequent push/pull requests. (The `Authorization` header is parsed but not used by any handler.)
 
 ---
 
@@ -284,13 +324,18 @@ Client                              Guardian
   |----------------------------------->|
   |                                    | Verify HMAC tag
   |                                    | Check nonce not expired (60s)
-  |  {"session_token":".."}            | Issue HMAC-based session token (1h)
+  |  {"identity":"..","expiry_ns":..,  | Issue HMAC-based session token (1h)
+  |   "tag":".."}                      |
   |<-----------------------------------|
   |                                    |
+  |  [assemble token: <identity>:<expiry_ns>:<tag>]
+  |                                    |
   |  POST /v1/vault/push               |
-  |  Authorization: Bearer <token>     |
+  |  X-Session-Token: <token>          |
+  |  {.., "pubkey":"..", "signature":".."}
   |----------------------------------->|
   |                                    | Verify session token
+  |                                    | Verify Ed25519 ownership signature
   |                                    | Process request
 ```
 
@@ -299,7 +344,7 @@ Key properties:
 - Session tokens expire in 1 hour.
 - All HMAC verifications use constant-time comparison to prevent timing attacks.
 - Server secret is generated randomly at startup (not persisted -- sessions invalidate on restart).
-- Phase 3 adds Ed25519 signature verification for true public-key authentication.
+- Push and pull additionally require an Ed25519 ownership proof: the identity must be SHA-256 of the presented public key, and the request must carry a valid signature over a domain-separated message (`vault-push-v1:...` / `vault-pull-v1:...`). This is what stops anyone who merely knows a 64-hex identity from reading or overwriting it.
 
 ---
 
@@ -326,12 +371,13 @@ Content-Type: application/json
 **Response (200 OK):**
 ```json
 {
-  "nonce": "<base64 32 bytes>",
+  "nonce": "<64 hex chars>",
   "created_ns": <i128>,
-  "tag": "<base64 32 bytes>",
-  "expires_in_seconds": 60
+  "tag": "<64 hex chars>"
 }
 ```
+
+`nonce` and `tag` are 32 bytes each, encoded as lowercase hex. The challenge expires after 60 seconds.
 
 ---
 
@@ -346,21 +392,22 @@ Content-Type: application/json
 
 {
   "identity": "<64 hex chars>",
-  "nonce": "<base64 32 bytes>",
+  "nonce": "<64 hex chars>",
   "created_ns": <i128>,
-  "tag": "<base64 32 bytes>"
+  "tag": "<64 hex chars>"
 }
 ```
 
 **Response (200 OK):**
 ```json
 {
-  "session_token": "<base64-encoded token>",
-  "expires_in_seconds": 3600
+  "identity": "<64 hex chars>",
+  "expiry_ns": <i128>,
+  "tag": "<64 hex chars>"
 }
 ```
 
-The session token is valid for 1 hour. Include it in all subsequent V2 requests as the `X-Session-Token` header.
+The client assembles the session token as `<identity>:<expiry_ns>:<tag>`. The token is valid for 1 hour. Include it in all subsequent V2 requests as the `X-Session-Token` header.
 
 ---
 
@@ -400,16 +447,16 @@ X-Session-Token: <session_token>
 | Status | Body | Condition |
 |--------|------|-----------|
 | 400 | `{"error":"empty body"}` | Request body is empty |
-| 400 | `{"error":"invalid secret name"}` | Name contains disallowed characters or exceeds 128 chars |
-| 400 | `{"error":"missing share field"}` | `share` not found in JSON |
+| 400 | `{"error":"secret name too long"}` | Name exceeds 128 characters |
+| 400 | `{"error":"secret name invalid: only alphanumeric, underscore, hyphen allowed"}` | Name contains disallowed characters |
+| 400 | `{"error":"invalid JSON: expected {\"share\":\"<base64>\",\"version\":<u64>}"}` | Body is not valid JSON or `share`/`version` missing |
 | 400 | `{"error":"invalid base64 in share"}` | Share is not valid base64 |
 | 400 | `{"error":"share data too large"}` | Decoded share exceeds 512 KiB |
 | 400 | `{"error":"share data is empty"}` | Decoded share is 0 bytes |
-| 400 | `{"error":"missing or invalid version field"}` | `version` missing or invalid |
 | 400 | `{"error":"version must be greater than current stored version"}` | Anti-rollback: version <= stored version |
-| 401 | `{"error":"missing session token"}` | `X-Session-Token` header not provided |
+| 400 | `{"error":"secret limit exceeded"}` | Identity has reached the 1000 secret limit |
+| 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
-| 409 | `{"error":"too many secrets"}` | Identity has reached the 1000 secret limit |
 | 500 | `{"error":"internal server error"}` | Disk write failure |
 
 **Storage Layout:**
@@ -465,7 +512,7 @@ X-Session-Token: <session_token>
 
 | Status | Body | Condition |
 |--------|------|-----------|
-| 401 | `{"error":"missing session token"}` | `X-Session-Token` header not provided |
+| 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
 | 404 | `{"error":"secret not found"}` | No secret with this name for this identity |
 | 500 | `{"error":"internal server error"}` | Disk read failure |
@@ -494,7 +541,7 @@ X-Session-Token: <session_token>
 
 | Status | Body | Condition |
 |--------|------|-----------|
-| 401 | `{"error":"missing session token"}` | `X-Session-Token` header not provided |
+| 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
 | 404 | `{"error":"secret not found"}` | No secret with this name for this identity |
 | 500 | `{"error":"internal server error"}` | Disk delete failure |
@@ -518,12 +565,16 @@ X-Session-Token: <session_token>
     {
       "name": "my-api-key",
       "version": 1,
-      "size": 256
+      "size": 256,
+      "created_ns": 1700000000000000000,
+      "updated_ns": 1700000000000000000
     },
     {
       "name": "db-password",
       "version": 3,
-      "size": 48
+      "size": 48,
+      "created_ns": 1700000000000000000,
+      "updated_ns": 1700000000000000000
     }
   ]
 }
@@ -535,12 +586,14 @@ X-Session-Token: <session_token>
 | `secrets[].name` | string | Secret name |
 | `secrets[].version` | number | Current version |
 | `secrets[].size` | number | Size of stored data in bytes |
+| `secrets[].created_ns` | number | Creation timestamp in nanoseconds |
+| `secrets[].updated_ns` | number | Last update timestamp in nanoseconds |
 
 **Error Responses:**
 
 | Status | Body | Condition |
 |--------|------|-----------|
-| 401 | `{"error":"missing session token"}` | `X-Session-Token` header not provided |
+| 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
 | 500 | `{"error":"internal server error"}` | Disk read failure |
 
@@ -568,8 +621,11 @@ Client                              Guardian
   |----------------------------------->|
   |                                    | Verify HMAC tag
   |                                    | Check nonce not expired (60s)
-  |  {"session_token":".."}            | Issue HMAC-based session token (1h)
+  |  {"identity":"..","expiry_ns":..,  | Issue HMAC-based session token (1h)
+  |   "tag":".."}                      |
   |<-----------------------------------|
+  |                                    |
+  |  [assemble token: <identity>:<expiry_ns>:<tag>]
   |                                    |
   |  PUT /v2/vault/secrets/my-key      |
   |  X-Session-Token: <token>          |
@@ -582,9 +638,8 @@ Client                              Guardian
 ```
 
 Key differences from V1:
-- Session token is sent via `X-Session-Token` header (not Authorization Bearer).
 - Identity is extracted from the session token, not from the request body.
-- All V2 secrets endpoints require authentication (mandatory, not optional).
+- No Ed25519 ownership proof fields -- authorization comes entirely from the session token.
 
 ---
 
@@ -607,21 +662,19 @@ Standard HTTP status codes:
 | 401 | Authentication required or token invalid |
 | 404 | Resource not found (share/secret not found, unknown endpoint) |
 | 405 | Method not allowed |
-| 409 | Conflict (e.g., too many secrets) |
+| 409 | Conflict (stale version on push -- anti-rollback) |
+| 429 | Too many requests (rate limited) |
 | 500 | Internal server error |
 
 All responses include `Connection: close` and `Content-Type: application/json` headers.
 
 ---
 
-## Rate Limiting (not yet implemented)
+## Rate Limiting
 
-> **Status:** Rate limiting is planned for Phase 3. Currently there are no request rate limits.
+The HTTP listener enforces per-IP rate limiting: **120 requests per 60-second window** per client IP. Requests over the limit are rejected with `429 {"error":"rate limit exceeded"}` until the window resets.
 
-Planned behavior:
-- Per-identity rate limiting on push/pull endpoints.
-- Health and status endpoints exempt from rate limiting.
-- Rate limit headers in responses (`X-RateLimit-Limit`, `X-RateLimit-Remaining`).
+The limit applies to all endpoints, including health and status. No rate limit headers (`X-RateLimit-*`) are returned, and there is no per-identity limiting yet.
 
 ---
 
@@ -640,7 +693,9 @@ The HTTP listener uses a 64 KiB read buffer. Requests larger than this may be tr
 
 ## Peer Protocol (Port 7501)
 
-The guardian-to-guardian protocol is a binary TCP protocol, **not** HTTP. It runs on port 7501 and is restricted to the WireGuard overlay network (10.0.0.x).
+The guardian-to-guardian protocol is a binary TCP protocol, **not** HTTP. It is designed for port 7501, restricted to the WireGuard overlay network (10.0.0.x).
+
+> **Status:** The wire protocol (encode/decode) is implemented and tested, and the daemon sends heartbeats to known peers every 5 seconds -- but the peer *listener* is not yet wired into the daemon, so nothing accepts connections on port 7501 in v0.1.0.
 
 ### Wire Format
 

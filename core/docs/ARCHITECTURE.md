@@ -89,22 +89,29 @@ Provides a clean Go SDK for interacting with the Orama Network.
 ```go
 // Main client interface
 type NetworkClient interface {
-    Storage() StorageClient
-    Cache() CacheClient
     Database() DatabaseClient
     PubSub() PubSubClient
-    Serverless() ServerlessClient
-    Auth() AuthClient
+    Network() NetworkInfo
+    Storage() StorageClient
+
+    Connect() error
+    Disconnect() error
+    Health() (*HealthStatus, error)
+    Config() *ClientConfig
+    Host() host.Host
 }
 ```
 
+Cache and serverless operations are not exposed through the SDK; use the gateway HTTP API (`/v1/cache/*`, `/v1/functions/*`) directly.
+
 **Key Files:**
 - `client.go` - Main client orchestration
+- `interface.go` - `NetworkClient` and sub-client interfaces
 - `config.go` - Client configuration
 - `storage_client.go` - IPFS storage client
-- `cache_client.go` - Olric cache client
 - `database_client.go` - RQLite database client
 - `pubsub_bridge.go` - Pub/sub messaging client
+- `network_client.go` - Network/peer information client
 - `transport.go` - HTTP transport layer
 - `errors.go` - Client-specific errors
 
@@ -113,29 +120,34 @@ type NetworkClient interface {
 import "github.com/DeBrosOfficial/network/pkg/client"
 
 // Create client
-cfg := client.DefaultClientConfig()
+cfg := client.DefaultClientConfig("my-app")
 cfg.GatewayURL = "https://api.orama.network"
 cfg.APIKey = "your-api-key"
 
-c := client.NewNetworkClient(cfg)
+c, err := client.NewClient(cfg)
+if err != nil {
+    log.Fatal(err)
+}
+if err := c.Connect(); err != nil {
+    log.Fatal(err)
+}
+defer c.Disconnect()
 
-// Use storage
-resp, err := c.Storage().Upload(ctx, data, "file.txt")
-
-// Use cache
-err = c.Cache().Set(ctx, "key", value, 0)
+// Use storage (reader-based upload; result carries the CID)
+resp, err := c.Storage().Upload(ctx, bytes.NewReader(data), "file.txt")
+fmt.Println(resp.Cid)
 
 // Query database
-rows, err := c.Database().Query(ctx, "SELECT * FROM users")
+result, err := c.Database().Query(ctx, "SELECT * FROM users")
 
 // Publish message
 err = c.PubSub().Publish(ctx, "chat", []byte("hello"))
 
-// Deploy function
-fn, err := c.Serverless().Deploy(ctx, def, wasmBytes)
-
-// Invoke function
-result, err := c.Serverless().Invoke(ctx, "function-name", input)
+// Subscribe to a topic
+err = c.PubSub().Subscribe(ctx, "chat", func(topic string, data []byte) error {
+    fmt.Printf("%s: %s\n", topic, data)
+    return nil
+})
 ```
 
 ### 3. Database Layer (`pkg/rqlite/`)
@@ -159,25 +171,28 @@ ORM-like interface over RQLite distributed SQL database.
 
 **Example:**
 ```go
-// Query builder
-users, err := client.CreateQueryBuilder("users").
-    Select("id", "name", "email").
-    Where("age > ?", 18).
-    OrderBy("name ASC").
-    Limit(10).
-    GetMany(ctx, &users)
-
-// Repository pattern
 type User struct {
     ID    int    `db:"id"`
     Name  string `db:"name"`
     Email string `db:"email"`
 }
 
-repo := client.Repository("users")
+// Query builder (scans into dest, returns only error)
+var users []User
+err := client.CreateQueryBuilder("users").
+    Select("id", "name", "email").
+    Where("age > ?", 18).
+    OrderBy("name ASC").
+    Limit(10).
+    GetMany(ctx, &users)
+
+// Save an entity (insert or update by primary key)
 user := &User{Name: "Alice", Email: "alice@example.com"}
-err := repo.Save(ctx, user)
+err = client.Save(ctx, user)
 ```
+
+Note: `Client.Repository(table)` returns an untyped `any` — assert it to the
+generic `Repository[T]` interface before use.
 
 ### 4. Serverless Engine (`pkg/serverless/`)
 
@@ -222,7 +237,7 @@ Domain-specific configuration with validation.
 ```
 pkg/config/
 ├── config.go              - Main config aggregator
-├── loader.go              - YAML loading
+├── yaml.go                - YAML loading
 ├── node_config.go         - Node settings
 ├── database_config.go     - Database settings
 ├── gateway_config.go      - Gateway settings
@@ -230,7 +245,9 @@ pkg/config/
     ├── validators.go
     ├── node.go
     ├── database.go
-    └── gateway.go
+    ├── discovery.go
+    ├── logging.go
+    └── security.go
 ```
 
 ### 6. Anyone Integration (`pkg/anyoneproxy/`)
@@ -435,9 +452,9 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 ### Metrics
 
-- Prometheus-compatible metrics endpoint
-- Request counts, latencies, error rates
-- Service-specific metrics (cache hit ratio, DB query times)
+There is no Prometheus-compatible metrics endpoint yet. Observability today comes
+from the health/status endpoints above, structured logs, and the `orama monitor`
+and `orama inspect` CLI commands.
 
 ### Logging
 
@@ -477,14 +494,14 @@ make test-e2e  # Run E2E tests
 ```bash
 # First node (genesis — creates cluster)
 # Nameserver nodes use the base domain as --domain
-sudo orama install --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
+sudo orama node install --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 
 # On the genesis node, generate an invite for a new node
-orama invite
-# Outputs: sudo orama install --join https://example.com --token <TOKEN> --vps-ip <NEW_IP>
+orama node invite
+# Outputs the join command with the token for the new node
 
 # Additional nameserver nodes (join via invite token over HTTPS)
-sudo orama install --join https://example.com --token <TOKEN> \
+sudo orama node install --join https://example.com --token <TOKEN> \
     --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 ```
 

@@ -93,3 +93,6 @@ local/
 
 # Implementation plans (not committed)
 core/plans/
+
+# Claude Code local settings (machine-specific allowlists — never commit)
+.claude/settings.local.json

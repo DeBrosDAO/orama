@@ -34,15 +34,15 @@ The Orama Network is a mesh of VPS nodes connected via WireGuard tunnels. Each n
 ## Install the SDK
 
 ```bash
-npm install @debros/network-ts-sdk
+npm install @debros/orama
 # or
-pnpm add @debros/network-ts-sdk
+pnpm add @debros/orama
 ```
 
 ## Initialize the Client
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://your-node.orama-devnet.network",
@@ -153,11 +153,11 @@ Default environments:
 
 | Environment | Gateway URL |
 |-------------|-------------|
-| `production` | `https://dbrs.space` |
+| `sandbox` | `https://dbrs.space` |
 | `devnet` | `https://orama-devnet.network` |
 | `testnet` | `https://orama-testnet.network` |
 
-The default active environment is `devnet`. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
+The default active environment is `sandbox`. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
 
 ## Quick Example: Deploy a Static Site
 

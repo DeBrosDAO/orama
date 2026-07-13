@@ -37,19 +37,20 @@ orama inspect [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | `scripts/remote-nodes.conf` | Path to node configuration file |
+| `--config` | `scripts/nodes.conf` | Path to node configuration file |
 | `--env` | *(required)* | Environment to inspect (`devnet`, `testnet`) |
 | `--subsystem` | `all` | Comma-separated subsystems to inspect |
 | `--format` | `table` | Output format: `table` or `json` |
 | `--timeout` | `30s` | SSH command timeout per node |
 | `--verbose` | `false` | Print collection progress |
+| `--output` | *(none)* | Save results to a directory as markdown (e.g., `./results`) |
 | `--ai` | `false` | Enable AI analysis of failures |
 | `--model` | `moonshotai/kimi-k2.5` | OpenRouter model for AI analysis |
 | `--api-key` | `$OPENROUTER_API_KEY` | OpenRouter API key |
 
 ### Subsystem Names
 
-`rqlite`, `olric`, `ipfs`, `dns`, `wireguard` (alias: `wg`), `system`, `network`, `namespace`
+`rqlite`, `olric`, `ipfs`, `dns`, `wireguard` (alias: `wg`), `system`, `network`, `namespace`, `anyone`, `webrtc`
 
 Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 
@@ -65,6 +66,8 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **system** | Core services (orama-node, rqlite, olric, ipfs, ipfs-cluster, wg-quick), nameserver services (coredns, caddy), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (orama), panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, TCP retransmission rate, WireGuard mesh ping (all peers) |
 | **namespace** | Per-namespace: RQLite up + raft state + readyz, Olric memberlist, Gateway HTTP health. Cross-namespace: all-healthy check, RQLite quorum per namespace |
+| **anyone** | Anyone relay/client services: relay active, SOCKS5 port 9050 + control port 9051 listening, client bootstrap %, ORPort 9001 listening. Skipped on nameservers and nodes without the services |
+| **webrtc** | Per-namespace SFU/TURN services active, cross-node SFU coverage (3 nodes) and TURN redundancy (2 nodes). Only applies to namespaces with WebRTC provisioned |
 
 ## Severity Levels
 
@@ -162,7 +165,7 @@ The AI receives the full check results plus cluster metadata and returns a struc
 
 ## Configuration
 
-The inspector reads node definitions from a pipe-delimited config file (default: `scripts/remote-nodes.conf`).
+The inspector reads node definitions from a pipe-delimited config file (default: `scripts/nodes.conf`).
 
 ### Format
 

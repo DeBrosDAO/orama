@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.21+
+- Go 1.24.6+ (see `go.mod`)
 - Node.js 18+ (for anyone-client in dev mode)
 - macOS or Linux
 
@@ -13,10 +13,13 @@
 make build
 
 # Outputs:
-#   bin/orama-node   — the node binary
-#   bin/orama        — the CLI
-#   bin/gateway      — standalone gateway (optional)
-#   bin/identity     — identity tool
+#   bin/orama-node        — the node binary
+#   bin/orama             — the CLI
+#   bin/gateway           — standalone gateway (optional)
+#   bin/identity          — identity tool
+#   bin/sfu               — WebRTC SFU
+#   bin/turn              — TURN server
+#   bin/orama-sni-router  — SNI router
 ```
 
 ## Running Tests
@@ -326,7 +329,10 @@ sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
 
 # 2. On genesis node, generate an invite
 orama node invite --expiry 24h
-# Output: sudo orama node install --join https://example.com --token <TOKEN> --vps-ip <IP>
+# Prints: sudo orama install --join https://example.com --token <TOKEN> \
+#           [--ca-fingerprint <FP>] --vps-ip <NEW_NODE_IP> --nameserver
+# Note: the printed command says `orama install`; the registered command is
+# `orama node install`. Drop --nameserver when joining as a regular node.
 
 # 3a. Join as nameserver (requires --domain set to base domain)
 sudo orama node install --join http://1.2.3.4 --token abc123... \
@@ -386,7 +392,7 @@ curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway"
 
 See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.
 
-**Note:** `orama node clean` does not work on OramaOS nodes (no SSH). Use `orama node leave` for graceful departure, or reflash the image for a factory reset.
+**Note:** `orama node clean` does not work on OramaOS nodes (no SSH). For graceful departure use the Gateway API (`POST /v1/node/leave`), or reflash the image for a factory reset. There is no `orama node leave` CLI command.
 
 ## Pre-Install Checklist (Ubuntu Only)
 
@@ -519,15 +525,19 @@ dispatcher is invalidated on PUT/DELETE). No restart needed.
 
 ### Operator flow (cluster-wide defaults — optional)
 
-Operators can still seed defaults in the gateway YAML. Per-namespace config
-OVERRIDES the defaults; namespaces with no row inherit them.
+Operators can seed a cluster-wide ntfy default in node.yaml. Per-namespace
+config OVERRIDES the default; namespaces with no row inherit it.
 
 ```yaml
-# Cluster-wide push defaults (optional; tenants override per-namespace)
-push:
-  ntfy_base_url: "https://ntfy.sh"           # default for namespaces with no override
-  expo_access_token: "..."                    # default Expo token
+# node.yaml — the only push-related YAML key, nested under http_gateway.
+# node.yaml is strictly decoded: unknown keys (e.g. a top-level push:
+# block) make config parsing fail and orama-node refuse to start.
+http_gateway:
+  ntfy_base_url: "https://ntfy.sh"   # default for namespaces with no override
 ```
+
+There is no YAML key for a default Expo access token — Expo tokens can
+only be set per-namespace via `PUT /v1/push/config`.
 
 ### Encryption
 

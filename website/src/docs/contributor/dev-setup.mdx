@@ -32,7 +32,7 @@ pnpm --version
 
 ## Cloning the Repository
 
-The Orama codebase lives in a single repository that includes the network services, CLI, Go SDK, and TypeScript SDK:
+The Orama codebase is a monorepo that includes the network services, CLI, Go SDK, TypeScript SDK, Vault guardian, and website:
 
 ```bash
 git clone https://github.com/DeBrosOfficial/network.git
@@ -43,22 +43,27 @@ cd network
 
 ### Network (Go)
 
+The Go module lives in `core/`, not the repository root — either `cd core` first or run everything through the root `Makefile`, which delegates to it.
+
 ```bash
 # Install dependencies
+cd core
 go mod download
 
-# Build all binaries (CLI, gateway, node, SFU, TURN, identity)
+# Build all binaries (CLI, gateway, node, SFU, TURN, identity, SNI router)
 make build
 
 # Run tests
 make test
 
 # The main CLI binary is built from cmd/cli/
-# After make build, binaries are in ./bin/
+# After make build, binaries are in core/bin/
 ./bin/orama version
 ```
 
-`make build` produces these binaries in `./bin/`:
+From the repository root, `make build` and `make test` delegate to `core/` for you, so `go mod download` and `go build`/`go test` invocations still need to run inside `core/`.
+
+`make build` produces these binaries in `core/bin/`:
 
 | Binary | Entry Point | Purpose |
 |--------|-------------|---------|
@@ -68,6 +73,7 @@ make test
 | `sfu` | `cmd/sfu/` | WebRTC Selective Forwarding Unit |
 | `turn` | `cmd/turn/` | TURN relay server for WebRTC |
 | `identity` | `cmd/identity/` | P2P identity key generator |
+| `orama-sni-router` | `cmd/sni-router/` | SNI-based TLS router |
 
 ### SDK (TypeScript)
 
@@ -85,7 +91,7 @@ pnpm test
 For testing against a live network, connect to the devnet environment:
 
 ```bash
-# Set active environment to devnet (this is the default)
+# Set active environment to devnet (the default is sandbox)
 ./bin/orama env use devnet
 
 # Verify current environment
@@ -95,13 +101,15 @@ For testing against a live network, connect to the devnet environment:
 ./bin/orama auth login
 ```
 
+Run these from `core/` (or point at `core/bin/orama`) — see [Building from Source](#building-from-source).
+
 Available environments:
 
 | Name | Gateway URL | Description |
 |------|-------------|-------------|
-| `devnet` | `https://orama-devnet.network` | Development (default) |
-| `testnet` | `https://orama-testnet.network` | Staging |
-| `production` | `https://dbrs.space` | Production |
+| `sandbox` | `https://dbrs.space` | Sandbox cluster (default) |
+| `devnet` | `https://orama-devnet.network` | Development network |
+| `testnet` | `https://orama-testnet.network` | Test network (staging) |
 
 ## IDE Setup
 
@@ -115,35 +123,41 @@ Install the following extensions:
 
 ### GoLand / IntelliJ
 
-Import the `network` directory as a Go module project. The Go module configuration is in `go.mod` at the repository root.
+Import the `core/` directory as a Go module project. The Go module configuration is in `core/go.mod`, not at the repository root.
 
 ## Project Structure
 
 ```
 network/
-  cmd/           # Binary entry points
-    cli/         # CLI (orama command)
-    gateway/     # API gateway
-    node/        # P2P node
-    sfu/         # WebRTC SFU
-    turn/        # TURN relay
-    identity/    # Key generator
-    inspector/   # SSH health inspector
-  pkg/           # All Go packages
-    gateway/     # Gateway core + handlers
-    cli/         # CLI command implementations
-    auth/        # Authentication (wallet, JWT)
-    rqlite/      # RQLite ORM layer
-    serverless/  # WASM runtime + host functions
-    config/      # Configuration management
-    anyoneproxy/ # Anyone Protocol integration
-  sdk/           # TypeScript SDK + Go function SDK
-  e2e/           # End-to-end tests
-  systemd/       # Service templates
-  scripts/       # Build and deployment scripts
-  docs/          # Internal documentation
-  Makefile       # Build targets
-  go.mod         # Go module definition
+  core/          # Go network services + CLI (the Go module root)
+    cmd/         # Binary entry points
+      cli/       # CLI (orama command)
+      gateway/   # API gateway
+      node/      # P2P node
+      sfu/       # WebRTC SFU
+      turn/      # TURN relay
+      identity/  # Key generator
+      inspector/ # SSH health inspector
+      sni-router/ # SNI-based TLS router
+    pkg/         # All Go packages
+      gateway/   # Gateway core + handlers
+      cli/       # CLI command implementations
+      auth/      # Authentication (wallet, JWT)
+      rqlite/    # RQLite ORM layer
+      serverless/ # WASM runtime + host functions
+      config/    # Configuration management
+      anyoneproxy/ # Anyone Protocol integration
+    sdk/         # Go function SDK
+    e2e/         # End-to-end tests
+    systemd/     # Service templates
+    scripts/     # Build and deployment scripts
+    docs/        # Internal documentation
+    go.mod       # Go module definition
+  sdk/           # TypeScript SDK
+  vault/         # Vault guardian (Zig)
+  os/            # OramaOS
+  website/       # This documentation site
+  Makefile       # Root build targets (delegates to core/, sdk/, vault/, os/)
 ```
 
 ## Sandbox Clusters

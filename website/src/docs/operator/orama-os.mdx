@@ -26,10 +26,9 @@ OramaOS is built with Buildroot — a minimal Linux containing only systemd, cry
 ### Partition Layout
 
 ```
-/dev/sda1 — ESP (EFI, systemd-boot)
-/dev/sda2 — rootfs-A (SquashFS + dm-verity, read-only)
-/dev/sda3 — rootfs-B (standby partition for updates)
-/dev/sda4 — data (LUKS2 encrypted, ext4)
+/dev/sda1 — rootfs-A (SquashFS + dm-verity, read-only)
+/dev/sda2 — rootfs-B (standby partition for updates)
+/dev/sda3 — data (LUKS2 encrypted, ext4)
 ```
 
 The root filesystem is read-only and integrity-verified. All mutable state lives on the LUKS-encrypted data partition.
@@ -92,16 +91,9 @@ If not enough peers are available, the agent retries with exponential backoff an
 
 ### Genesis Node
 
-The first node has no peers for Shamir distribution. Instead:
+The first node has no peers for Shamir distribution, so it can't reconstruct its LUKS key from peer shares on reboot. On reboot it opens a temporary unlock server on its WireGuard IP (port 9998) that accepts `POST /v1/agent/unlock` with `{"key":"<base64-luks-key>"}`.
 
-- The LUKS key is encrypted with a rootwallet-derived key and stored on the rootfs
-- On reboot, the operator unlocks manually:
-
-```bash
-orama node unlock --genesis --node-ip <wg-ip>
-```
-
-Once 5+ peers join, the genesis node distributes Shamir shares, deletes the local key, and transitions to normal Shamir-based unlock. The unlock command is no longer needed after this.
+**Not yet available:** automatically encrypting the LUKS key with a rootwallet-derived key, storing it on the rootfs, and fetching it via `orama node unlock --genesis --node-ip <wg-ip>` is not implemented — the agent has no endpoint to serve a stored genesis key, so that command fails unless you pass `--key-file` pointing at a key you've retained yourself. There is also no automatic transition once 5+ peers join; share distribution only runs once, during the node's own enrollment boot. Until this is built, operators must record the genesis node's raw LUKS key out of band during initial enrollment and supply it manually to unlock the node after a reboot.
 
 ## Node Management
 
@@ -141,8 +133,8 @@ This stops services, redistributes Shamir shares, and removes the WireGuard peer
 
 OramaOS uses an A/B partition scheme for safe, automatic updates:
 
-1. Agent checks for new versions periodically
-2. Downloads the signed image (P2P over WireGuard)
+1. Agent checks for new versions periodically against a central update server (`https://updates.orama.network`)
+2. Downloads the signed image over HTTPS
 3. Verifies the rootwallet EVM signature
 4. Writes to the standby partition
 5. Reboots with boot counting enabled (`tries_left=3`)
@@ -158,7 +150,7 @@ Each service runs in its own isolated environment:
 - **Mount namespace** — only the service's data directory is writable; everything else is read-only
 - **UTS namespace** — isolated hostname
 - **Dedicated UID/GID** — each service runs as a different non-root user
-- **Seccomp filtering** — per-service syscall allowlist
+- **Seccomp filtering** — per-service syscall allowlist, currently running in **audit-only mode**: disallowed syscalls are logged, not blocked. Enforcement (killing the process on a disallowed syscall) is not yet enabled.
 
 | Service | Extra Syscalls Allowed |
 |---------|----------------------|
@@ -184,7 +176,7 @@ Check that port 9999 is open in your VPS provider's external firewall (Hetzner f
 
 ### LUKS unlock fails after reboot
 
-Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(3, N/3)). Ensure cluster nodes are running. For genesis nodes before 5+ peers exist, use `orama node unlock --genesis`.
+Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(3, N/3)). Ensure cluster nodes are running. For the genesis node, which has no peers to reconstruct shares from, unlock it manually (see [Genesis Node](#genesis-node)).
 
 ### Update rolled back
 

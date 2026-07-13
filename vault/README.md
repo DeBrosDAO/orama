@@ -17,7 +17,7 @@ The security is **information-theoretic**: K-1 shares reveal exactly zero inform
 - **No central authority** — No master key, no trusted coordinator, no single point of failure
 - **Tamper-evident** — Every share is protected by HMAC-SHA256 integrity checksums
 - **Anti-rollback** — Monotonic version counters prevent downgrade attacks
-- **Proactive re-sharing** — Periodic share refresh (Herzberg protocol) invalidates old shares, providing forward secrecy
+- **Proactive re-sharing (not yet active)** — Share refresh (Herzberg protocol) that invalidates old shares is implemented and tested, but not yet triggered at runtime
 - **Post-quantum ready** — Interfaces for ML-KEM-768 and ML-DSA-65 are defined, with hybrid X25519 + ML-KEM key exchange
 
 ## Use Cases
@@ -42,10 +42,10 @@ Pre-built Orama One hardware nodes run a vault guardian out of the box, contribu
 
 ## Tech Stack
 
-- **Language:** Zig 0.14+
+- **Language:** Zig 0.15.2+
 - **Crypto:** AES-256-GCM, HMAC-SHA256, HKDF-SHA256, GF(2^8) field arithmetic
 - **Storage:** File-per-user with atomic writes (no database dependency)
-- **Transport:** HTTP (port 7500, client-facing) + binary TCP protocol (port 7501, peer-to-peer over WireGuard)
+- **Transport:** HTTP (port 7500, client-facing) + binary TCP protocol (port 7501, peer-to-peer over WireGuard; not yet active — see Architecture)
 - **Security:** Secure memory (mlock, volatile zero), constant-time comparisons, systemd hardening
 
 ## Architecture
@@ -60,7 +60,9 @@ Client ──▶ Gateway (443/TLS) ──▶ vault-guardian (7500/HTTP)
                                   Peer guardians
 ```
 
-Guardians discover each other via RQLite (the cluster's membership source of truth) and maintain health through a heartbeat protocol with alive/suspect/dead state transitions.
+In the target design, guardians discover each other via RQLite (the cluster's membership source of truth) and maintain health through a heartbeat protocol with alive/suspect/dead state transitions.
+
+> **Status (v0.1.0):** The multi-guardian plumbing is not yet wired in. RQLite discovery is a stub that returns an empty node list, the peer listener on port 7501 is never started, and re-sharing is never triggered — each guardian currently runs single-node, serving push/pull over HTTP on port 7500.
 
 ## API Overview
 
@@ -69,14 +71,14 @@ Guardians discover each other via RQLite (the cluster's membership source of tru
 | `/v1/vault/health` | GET | Liveness check |
 | `/v1/vault/status` | GET | Guardian status and config |
 | `/v1/vault/guardians` | GET | List known guardian nodes |
-| `/v1/vault/push` | POST | Store a share (single share per identity) |
-| `/v1/vault/pull` | POST | Retrieve a share |
+| `/v1/vault/push` | POST | Store a share (single share per identity) (authenticated) |
+| `/v1/vault/pull` | POST | Retrieve a share (authenticated) |
 | `/v2/vault/secrets/{name}` | PUT | Store a named secret (authenticated) |
 | `/v2/vault/secrets/{name}` | GET | Retrieve a named secret (authenticated) |
 | `/v2/vault/secrets/{name}` | DELETE | Delete a named secret (authenticated) |
 | `/v2/vault/secrets` | GET | List all secrets for an identity (authenticated) |
 
-V2 endpoints require session authentication via challenge-response (HMAC-based tokens, 1-hour expiry).
+Authenticated endpoints require a session token obtained via challenge-response (HMAC-based tokens, 1-hour expiry). V1 push and pull additionally require an Ed25519 ownership proof (identity = SHA-256 of the public key, plus a signature over the request); only health, status, and guardians are unauthenticated.
 
 See [docs/API.md](docs/API.md) for the full API reference.
 
@@ -96,7 +98,7 @@ zig build              # Build the vault-guardian binary
 zig build test         # Run all unit tests
 ```
 
-Requires Zig 0.14.0 or later.
+Requires Zig 0.15.2 or later (`minimum_zig_version` in `build.zig.zon`).
 
 ## License
 

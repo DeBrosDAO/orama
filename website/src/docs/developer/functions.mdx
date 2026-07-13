@@ -4,13 +4,13 @@ Orama Functions lets you run serverless code on the decentralized network using 
 
 ## Overview
 
-Functions are written in Go, compiled to WASM using [TinyGo](https://tinygo.org/), and executed in an isolated wazero sandbox on Orama nodes. Each function receives JSON input via **stdin** and returns JSON output via **stdout**. Functions can access Orama platform services -- database, cache, storage, HTTP, secrets, PubSub, WebSocket, and logging -- through **host functions** injected by the runtime.
+Functions are written in Go, compiled to WASM using [TinyGo](https://tinygo.org/), and executed in an isolated wazero sandbox on Orama nodes. Each function receives JSON input via **stdin** and returns JSON output via **stdout**. Functions can access Orama platform services -- database, cache, HTTP, secrets, PubSub, WebSocket, and logging -- through **host functions** injected by the runtime.
 
 Key characteristics:
 
 - **Go + TinyGo** -- Write standard Go, compile to a portable WASM binary
 - **Sandboxed execution** -- Each invocation runs in an isolated wazero instance with memory and timeout limits
-- **Platform integration** -- Host functions provide direct access to RQLite, Olric, IPFS, PubSub, WebSocket, secrets, and outbound HTTP
+- **Platform integration** -- Host functions provide direct access to RQLite, Olric, PubSub, WebSocket, secrets, and outbound HTTP
 - **Event-driven** -- Functions can be invoked via HTTP, WebSocket, or triggered automatically by PubSub messages
 
 ## Writing Functions
@@ -160,7 +160,7 @@ curl -X POST https://gateway.example.com/v1/functions \
 The TypeScript SDK invokes functions via the `/v1/invoke/{namespace}/{name}` endpoint:
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://gateway.example.com",
@@ -250,18 +250,12 @@ Read and write to the distributed Olric cache. Cache operations use a fixed dmap
 |----------|-------------|
 | `cache_get(key)` | Get cached value by key. Returns empty on miss. |
 | `cache_set(key, value, ttlSeconds)` | Store value with TTL in seconds. |
-| `cache_delete(key)` | Delete a cached value. |
 | `cache_incr(key)` | Atomically increment by 1 (initializes to 0 if missing). |
 | `cache_incr_by(key, delta)` | Atomically increment by delta. |
 
 ### Storage (IPFS)
 
-Upload and retrieve data from IPFS.
-
-| Function | Description |
-|----------|-------------|
-| `storage_put(data)` | Upload data to IPFS. Returns the CID. |
-| `storage_get(cid)` | Retrieve data from IPFS by CID. |
+**Not yet available.** IPFS storage host functions (`storage_put`, `storage_get`) and `cache_delete` are not currently exported by the runtime -- a function that imports them will fail to instantiate. Use the [Storage API](/docs/developer/storage) from outside your function instead.
 
 ### HTTP
 

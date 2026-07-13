@@ -16,22 +16,23 @@ OramaOS is a locked-down operating system designed specifically for Orama node o
 ## Architecture
 
 ```
-Partition Layout:
-  /dev/sda1 — ESP (EFI System Partition, systemd-boot)
-  /dev/sda2 — rootfs-A (SquashFS, read-only, dm-verity)
-  /dev/sda3 — rootfs-B (standby, for A/B updates)
-  /dev/sda4 — data (LUKS2 encrypted, ext4)
+Partition Layout (devices as used by the agent):
+  /dev/sda1 — rootfs-A (SquashFS, read-only, dm-verity)
+  /dev/sda2 — rootfs-B (standby, for A/B updates)
+  /dev/sda3 — data (LUKS2 encrypted, ext4)
 
 Boot Flow:
   systemd-boot → dm-verity rootfs → orama-agent → WireGuard → services
 ```
+
+Note: the GPT image as built by genimage (`os/buildroot/board/orama/genimage.cfg`) places the ESP (systemd-boot + kernel) as the first partition, followed by rootfs-A, rootfs-B, and data — which does not match the device paths the agent operates on (`PartitionA=/dev/sda1`, `PartitionB=/dev/sda2`, `DataDevice=/dev/sda3`). This inconsistency is unresolved in the current code.
 
 The **orama-agent** is the only root process. It manages:
 - Boot sequence and LUKS key reconstruction
 - WireGuard tunnel setup
 - Service lifecycle (start, stop, restart in sandboxed namespaces)
 - Command reception from the Gateway over WireGuard
-- OS updates (download, verify signature, A/B swap, reboot)
+- OS updates (download, verify signature, A/B swap, boot counting)
 
 ## Enrollment Flow
 
@@ -53,9 +54,8 @@ wget https://releases.orama.network/oramaos-v1.0.0-amd64.qcow2
 
 On first boot, the agent:
 1. Generates a random 8-character registration code
-2. Starts a temporary HTTP server on port 9999
-3. Opens an outbound WebSocket to the Gateway
-4. Waits for enrollment to complete
+2. Starts a temporary HTTP server on port 9999 that serves the code (one-shot)
+3. Waits for the Gateway to push cluster config via HTTP `POST` to `/v1/agent/enroll/complete` on port 9999
 
 The registration code is displayed on the VPS console (if available) and served at `http://<vps-ip>:9999/`.
 
@@ -89,22 +89,22 @@ orama monitor report --env <env>
 
 ## Genesis Node
 
-The first OramaOS node in a cluster is the **genesis node**. It has a special boot path because there are no peers yet for Shamir key distribution:
+The first OramaOS node in a cluster is the **genesis node**. It needs a special path because there are no peers yet for Shamir key distribution. **Most of this path is not yet implemented.**
 
-1. Genesis generates a LUKS key and encrypts the data partition
-2. The LUKS key is encrypted with a rootwallet-derived key and stored on the unencrypted rootfs
-3. On reboot (before enough peers exist), the operator must manually unlock:
+What works today: when Shamir reconstruction fails after a reboot (genesis node, or peers offline), the agent falls back to **genesis unlock mode** — it starts an HTTP server on the WireGuard interface (port 9998) and waits for the operator to supply the raw LUKS key:
 
 ```bash
-orama node unlock --genesis --node-ip <wg-ip>
+curl -X POST "http://<wg-ip>:9998/v1/agent/unlock" \
+  -H "Content-Type: application/json" \
+  -d '{"key":"<base64-encoded 32-byte LUKS key>"}'
 ```
 
-This command:
-1. Fetches the encrypted genesis key from the node
-2. Decrypts it using the rootwallet (`rw decrypt`)
-3. Sends the decrypted LUKS key to the agent over WireGuard
+Not yet implemented (do not rely on any of this):
 
-Once 5+ peers have joined, the genesis node distributes Shamir shares to peers, deletes the local encrypted key, and transitions to normal Shamir-based unlock. After this transition, `orama node unlock` is no longer needed.
+- **Genesis enrollment.** Enrollment always tries to distribute Shamir shares and fails with "no peers available for key distribution" when the cluster has zero peers — there is no genesis fallback in the enrollment flow, so a genesis OramaOS node cannot currently complete enrollment.
+- **Key escrow.** The agent never creates or stores a rootwallet-encrypted copy of the LUKS key, and serves no `GET /v1/agent/genesis-key` endpoint.
+- **`orama node unlock --genesis --node-ip <wg-ip>`.** The CLI command exists, but its first step fetches the encrypted genesis key from `GET /v1/agent/genesis-key`, which the agent does not serve — so it always fails unless `--key-file` supplies a rootwallet-encrypted key, which nothing currently produces.
+- **The 5-peer transition.** No agent code distributes Shamir shares once 5+ peers join, deletes a local escrowed key, or transitions to normal Shamir-based unlock.
 
 ## Normal Reboot (Shamir Unlock)
 
@@ -118,7 +118,7 @@ When an enrolled OramaOS node reboots:
 6. Starts all services
 7. Zeros key from memory
 
-If not enough peers are available, the agent enters a degraded "waiting for peers" state and retries with exponential backoff (1s, 2s, 4s, 8s, 16s, max 5 retries per cycle).
+If not enough peers are available, the agent retries the share fetch with exponential backoff (1s, 2s, 4s, 8s, 16s, max 5 retries). If reconstruction still fails, it falls back to genesis unlock mode and waits for a manual operator unlock on port 9998 (see [Genesis Node](#genesis-node)).
 
 ## Node Management
 
@@ -148,16 +148,16 @@ The Gateway proxies these requests to the agent over WireGuard (port 9998). The 
 
 OramaOS uses an A/B partition scheme for atomic, rollback-safe updates:
 
-1. Agent periodically checks for new versions
-2. Downloads the signed image (P2P over WireGuard between nodes)
-3. Verifies the rootwallet EVM signature against the embedded public key
+1. Agent checks for new versions hourly (`https://updates.orama.network/v1/latest`)
+2. Downloads the signed image over HTTPS from the update server
+3. Verifies the SHA-256 checksum and the rootwallet EVM signature against the embedded public key
 4. Writes to the standby partition (if running from A, writes to B)
 5. Sets systemd-boot to boot from B with `tries_left=3`
-6. Reboots
+6. On the next reboot (the agent does not reboot automatically), the node boots into B
 7. If B boots successfully (agent starts, WG connects, services healthy): marks B as "good"
 8. If B fails 3 times: systemd-boot automatically falls back to A
 
-No operator intervention is needed for updates. Failed updates are automatically rolled back.
+Updates are staged automatically; activating one requires a reboot. Failed updates are automatically rolled back.
 
 ## Service Sandboxing
 
@@ -195,7 +195,7 @@ Services and their sandbox profiles:
 
 OramaOS nodes cannot be cleaned with the standard `orama node clean` command (no SSH access). Instead:
 
-- **Graceful departure:** `orama node leave` via the Gateway API — stops services, redistributes Shamir shares, removes WG peer
+- **Graceful departure:** `POST /v1/node/leave` on the Gateway API (see [Node Management](#node-management); there is no `orama node leave` CLI subcommand) — stops services, redistributes Shamir shares, removes WG peer
 - **Factory reset:** Reflash the OramaOS image on the VPS via the hosting provider's dashboard
 - **Data is unrecoverable:** Since the LUKS key is distributed across peers, reflashing destroys all data permanently
 
@@ -213,10 +213,7 @@ After reboot, the node can't reconstruct its LUKS key.
 
 **Check:** How many peer nodes are online? The node needs at least K peers (threshold) to be reachable over WireGuard.
 
-**Fix:** Ensure enough cluster nodes are online. If this is the genesis node and fewer than 5 peers exist, use:
-```bash
-orama node unlock --genesis --node-ip <wg-ip>
-```
+**Fix:** Ensure enough cluster nodes are online. If reconstruction keeps failing, the agent falls back to genesis unlock mode and waits for a manual `POST /v1/agent/unlock` on port 9998 — see [Genesis Node](#genesis-node). (The `orama node unlock --genesis` CLI flow is not functional yet; it depends on an unimplemented key-escrow endpoint.)
 
 ### Update failed, node rolled back
 The node applied an update but reverted to the previous version.

@@ -1,13 +1,13 @@
 # SDK Reference
 
-The Orama TypeScript SDK (`@debros/network-ts-sdk`) provides a unified interface for interacting with all Orama Network services. This reference covers client initialization, all service modules, and their methods.
+The Orama TypeScript SDK (`@debros/orama`) provides a unified interface for interacting with all Orama Network services. This reference covers client initialization, all service modules, and their methods.
 
 ## Installation
 
 ```bash
-npm install @debros/network-ts-sdk
+npm install @debros/orama
 # or
-pnpm add @debros/network-ts-sdk
+pnpm add @debros/orama
 ```
 
 ## Client Initialization
@@ -15,7 +15,7 @@ pnpm add @debros/network-ts-sdk
 All interactions with Orama start by calling `createClient()`:
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://orama-devnet.network",
@@ -693,7 +693,7 @@ import {
   withRetry,
   adaptiveThreshold,
   writeQuorum,
-} from "@debros/network-ts-sdk";
+} from "@debros/orama";
 ```
 
 ---
@@ -703,7 +703,7 @@ import {
 The SDK throws `SDKError` for all failure scenarios:
 
 ```typescript
-import { createClient, SDKError } from "@debros/network-ts-sdk";
+import { createClient, SDKError } from "@debros/orama";
 
 try {
   await client.db.query("SELECT * FROM nonexistent");

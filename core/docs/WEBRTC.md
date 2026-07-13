@@ -218,7 +218,7 @@ TURNS (port 5349) uses TLS. Certificate provisioning:
 1. **Let's Encrypt (primary)**: On TURN spawn, the TURN domain is added to the local Caddy instance's Caddyfile. Caddy provisions a Let's Encrypt cert via DNS-01 ACME challenge (using the orama DNS provider). TURN reads the cert from Caddy's storage.
 2. **Self-signed (fallback)**: If Caddy cert provisioning fails (timeout, Caddy not running), a self-signed cert is generated with the node's public IP as SAN.
 
-Caddy auto-renews Let's Encrypt certs at ~60 days. TURN picks up renewed certs on restart.
+Caddy auto-renews Let's Encrypt certs at ~60 days. TURN serves the cert through a hot-reloading `GetCertificate` callback that polls the cert file every 60 seconds, so renewed certs are picked up in-process without a restart (a restart would drop every active relay).
 
 ## Monitoring
 

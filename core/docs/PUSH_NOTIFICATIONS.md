@@ -181,7 +181,7 @@ GET /v1/namespace/push-credentials
 {
   "namespace":  "myapp-prod",
   "configured": ["apns", "ntfy"],
-  "supported":  ["apns", "ntfy", "fcm"]
+  "supported":  ["apns", "ntfy"]
 }
 ```
 
@@ -260,17 +260,34 @@ function or an external system:
 
 ### From a serverless function
 
-```javascript
-import { push } from "@orama/sdk";
+Functions are Go compiled with TinyGo (see `SERVERLESS.md`). Push is
+exposed as the `push_send` / `push_send_v2` host functions
+(pointer/length ABI, same as the other host calls):
 
-await push.send({
-  user_id: "<wallet or user ID>",
-  title:   "New message",
-  body:    "Hello from %1",
-  channel: "messages",
-  priority: "high",
-});
+```go
+//go:wasmimport env push_send
+func pushSend(userIDPtr *byte, userIDLen uint32, msgPtr *byte, msgLen uint32) uint32
+
+msg, _ := json.Marshal(map[string]any{
+    "title":    "New message",
+    "body":     "Hello from %1",
+    "channel":  "messages",
+    "priority": "high",
+})
+// pass the user ID and msg bytes via the ptr/len ABI
 ```
+
+The `msg` JSON matches `pkg/serverless/hostfunctions.PushSendArgs`:
+`title`, `body`, `channel`, `priority` (`"high"`/`"normal"`), `badge`,
+`sound`, `data`, `target_provider`, `exclude_provider`, `message_id`.
+The user ID is passed separately (the namespace comes from the
+server-trusted invocation context — a function can only push to users
+in its own namespace).
+
+`push_send` returns 1/0. `push_send_v2` instead returns a packed
+`ptr<<32|len` JSON envelope with per-device results (HTTP status,
+reason, unregistered flag) — parse it; a non-zero return does NOT mean
+every device succeeded.
 
 The hostfunc fans out to every registered device for the user, using
 each device's recorded `provider`.
@@ -311,31 +328,24 @@ removed provider are skipped with a warning log).
 
 These bits are for whoever runs the Orama gateway cluster, NOT tenants.
 
-### Enabling self-hosted ntfy
+### Self-hosted ntfy (installed on every node)
 
-The gateway installer takes a `--with-ntfy` flag (install + upgrade
-commands). When set on a node, that node:
+ntfy is installed unconditionally on every node by `orama node install`
+and `orama node upgrade` — there is no flag to enable or disable it,
+and nothing is persisted to `preferences.yaml`. Each node:
 
 - Installs the ntfy binary at `/usr/local/bin/ntfy`.
 - Runs ntfy as a `ntfy` system user with restricted privileges.
 - Listens on `127.0.0.1:8090` (Caddy fronts it for public TLS).
-- Persists message cache at `/var/lib/ntfy/cache.db`.
+- Persists message cache at `/var/lib/ntfy/` (owned by the ntfy user).
 - Generates a Caddy reverse-proxy block for `push.<dnsZone>` →
   localhost:8090, with Let's Encrypt cert via the orama ACME DNS-01
   flow.
 
-For **devnet**, enable on `ns1` (already runs Caddy):
-
-```
-orama node install --with-ntfy --nameserver  # (other flags omitted)
-```
-
-For **production**, you can either colocate with ns1 or run a
-dedicated node. The installer is identical either way.
-
-The preference persists in `/opt/orama/.orama/preferences.yaml` so
-subsequent `orama node upgrade` runs keep it on without re-passing
-the flag.
+ntfy only binds to localhost, so nodes that don't host a public
+`push.*` DNS entry simply run an idle ntfy with no inbound traffic —
+uniform install means no per-node toggling and no surprises when the
+DNS topology changes.
 
 ### How the gateway handles credentials
 

@@ -1,6 +1,6 @@
 # Sandbox: Ephemeral Hetzner Cloud Clusters
 
-Spin up temporary 5-node Orama clusters on Hetzner Cloud for development and testing. Total cost: ~€0.04/hour.
+Spin up temporary 5-node Orama clusters on Hetzner Cloud for development and testing. Cost depends on the server type you pick during setup — a few euro cents per hour for a small shared-vCPU cluster.
 
 ## Quick Start
 
@@ -67,11 +67,12 @@ orama sandbox setup
 This will:
 1. Prompt for your Hetzner API token and validate it
 2. Ask for your sandbox domain
-3. Create or reuse 2 Hetzner Floating IPs (~$0.005/hr each)
-4. Create a firewall with sandbox rules
-5. Create a rootwallet SSH entry (`sandbox/root`) if it doesn't exist
-6. Upload the wallet-derived public key to Hetzner
-7. Display DNS configuration instructions
+3. Let you pick a datacenter location (default: `nbg1`)
+4. Let you pick a server type from what's available at that location, with prices (default: the cheapest option)
+5. Create or reuse 2 Hetzner Floating IPs (~€0.005/hr each)
+6. Create a firewall with sandbox rules
+7. Create a rootwallet SSH entry (`sandbox/root`) if it doesn't exist and upload the wallet-derived public key to Hetzner
+8. Display DNS configuration instructions and optionally verify glue records
 
 Config is saved to `~/.orama/sandbox.yaml`.
 
@@ -86,7 +87,7 @@ Creates a new 5-node cluster. If `--name` is omitted, a random name is generated
 - Nodes 3-5: Regular nodes (all services except CoreDNS)
 
 **Phases:**
-1. Provision 5 CX22 servers on Hetzner (parallel, ~90s)
+1. Provision 5 servers on Hetzner using the configured server type (parallel, ~90s)
 2. Assign floating IPs to nameserver nodes (~10s)
 3. Upload binary archive to all nodes (parallel, ~60s)
 4. Install genesis node + generate invite tokens (~120s)
@@ -143,7 +144,7 @@ Hetzner Floating IPs are persistent IPv4 addresses that can be reassigned betwee
 
 ### SSH Authentication
 
-Sandbox uses a rootwallet-derived SSH key (`sandbox/root` vault entry), the same mechanism as production. The wallet must be unlocked (`rw unlock`) before running sandbox commands that use SSH. The public key is uploaded to Hetzner during setup and injected into every server at creation time.
+Sandbox uses a rootwallet-derived SSH key (`sandbox/root` vault entry), the same mechanism as production. The rootwallet agent must be running and unlocked (`rw agent start && rw agent unlock`) before running sandbox commands that use SSH; first-time use also requires the RootWallet desktop app to be open to approve access. The public key is uploaded to Hetzner during setup and injected into every server at creation time.
 
 ### Server Naming
 
@@ -155,13 +156,12 @@ Sandbox state is stored at `~/.orama/sandboxes/<name>.yaml`. This tracks server 
 
 ## Cost
 
-| Resource | Cost | Qty | Total |
-|----------|------|-----|-------|
-| CX22 (2 vCPU, 4GB) | €0.006/hr | 5 | €0.03/hr |
-| Floating IPv4 | €0.005/hr | 2 | €0.01/hr |
-| **Total** | | | **~€0.04/hr** |
+| Resource | Cost | Qty |
+|----------|------|-----|
+| Servers (type chosen during setup) | depends on type | 5 |
+| Floating IPv4 | €0.005/hr | 2 |
 
-Servers are billed per hour. Floating IPs are billed as long as they exist (even unassigned). Destroy the sandbox when not in use to save on server costs.
+Servers are billed per hour at the rate for the chosen type (shown during `orama sandbox setup`). Floating IPs are billed as long as they exist (even unassigned). Destroy the sandbox when not in use to save on server costs.
 
 ## Troubleshooting
 
@@ -185,7 +185,7 @@ orama sandbox destroy --name <name>
 Check:
 - Hetzner API token is valid and has read/write permissions
 - You haven't hit Hetzner's server limit (default: 10 per project)
-- The selected location has CX22 capacity
+- The selected location has capacity for the configured server type
 
 ### Genesis install fails
 

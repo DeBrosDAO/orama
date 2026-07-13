@@ -66,7 +66,7 @@ cd my-react-app
 npm run build
 
 # 2. Deploy the build directory
-orama deploy static ./dist --name my-react-app --domain repoanalyzer.ai
+orama deploy static ./dist --name my-react-app
 
 # Output:
 # 📦 Creating tarball from ./dist...
@@ -138,18 +138,15 @@ This setting makes Next.js create a standalone build in `.next/standalone/` that
 ```bash
 # 1. Ensure next.config.js has output: 'standalone'
 
-# 2. Build your Next.js app
+# 2. Deploy the project source directory with SSR enabled
+#    (the CLI installs dependencies, runs the build, and uploads for you)
 cd my-nextjs-app
-npm run build
-
-# 3. Create tarball (must include .next and public directories)
-tar -czvf nextjs.tar.gz .next public package.json next.config.js
-
-# 4. Deploy with SSR enabled
-orama deploy nextjs ./nextjs.tar.gz --name my-nextjs --ssr
+orama deploy nextjs . --name my-nextjs --ssr
 
 # Output:
-# 📦 Creating tarball from .
+# 📦 Installing dependencies...
+# 🔨 Building Next.js application...
+# 📦 Creating tarball from standalone output...
 # ☁️  Uploading to Orama Network...
 #
 # ✅ Deployment successful!
@@ -168,12 +165,13 @@ orama deploy nextjs ./nextjs.tar.gz --name my-nextjs --ssr
 
 ### What Happens Behind the Scenes
 
-1. **Tarball Upload**: Your `.next` build directory, `package.json`, and `public` are uploaded
-2. **Home Node Assignment**: A node is chosen to host your app based on capacity
-3. **Port Allocation**: A unique port (10100-19999) is assigned
-4. **Systemd Service**: A systemd service is created to run `node server.js`
-5. **Health Checks**: Gateway monitors your app every 30 seconds
-6. **Reverse Proxy**: Gateway proxies requests from your domain to the local port
+1. **Build**: The CLI runs `npm install` (if `node_modules` is missing) and `npm run build` in your project directory
+2. **Tarball Upload**: The `.next/standalone/` output (with `.next/static` and `public` copied in) is tarballed and uploaded
+3. **Home Node Assignment**: A node is chosen to host your app based on capacity
+4. **Port Allocation**: A unique port (10100-19999) is assigned
+5. **Systemd Service**: A systemd service is created to run `node server.js`
+6. **Health Checks**: Gateway monitors your app every 30 seconds
+7. **Reverse Proxy**: Gateway proxies requests from your domain to the local port
 
 ### Static Next.js Export (No SSR)
 
@@ -194,30 +192,27 @@ orama deploy static ./out --name my-nextjs-static
 
 ## Deploying Go Backends
 
-Deploy compiled Go binaries for high-performance APIs.
+Deploy Go backends for high-performance APIs.
 
 ### Prerequisites
 
 > ⚠️ **IMPORTANT**: Your Go application MUST:
-> 1. Be compiled for Linux: `GOOS=linux GOARCH=amd64`
+> 1. Have a `go.mod` in the project root (the CLI cross-compiles for you)
 > 2. Listen on the port from `PORT` environment variable
 > 3. Implement a `/health` endpoint that returns HTTP 200 when ready
+> 4. Build with `CGO_ENABLED=0` (the CLI compiles with cgo disabled — use pure-Go dependencies)
 
 ### Go REST API Example
 
 ```bash
-# 1. Build your Go binary for Linux (if on Mac/Windows)
+# Deploy the project source directory — the CLI cross-compiles
+# for linux/amd64 (CGO_ENABLED=0) and uploads for you
 cd my-go-api
-GOOS=linux GOARCH=amd64 go build -o app main.go  # Name it 'app' for auto-detection
-
-# 2. Create tarball
-tar -czvf api.tar.gz app
-
-# 3. Deploy the binary
-orama deploy go ./api.tar.gz --name my-api
+orama deploy go . --name my-api
 
 # Output:
-# 📦 Creating tarball from ./api...
+# 🔨 Building Go binary (linux/amd64)...
+# 📦 Creating tarball...
 # ☁️  Uploading to Orama Network...
 #
 # ✅ Deployment successful!
@@ -272,8 +267,8 @@ func main() {
 
 - **Environment Variables**: The `PORT` environment variable is automatically set to your allocated port
 - **Health Endpoint**: **REQUIRED** - Must implement `/health` that returns HTTP 200 when ready
-- **Binary Requirements**: Must be Linux amd64 (`GOOS=linux GOARCH=amd64`)
-- **Binary Naming**: Name your binary `app` for automatic detection, or any ELF executable will work
+- **Automatic Cross-Compilation**: The CLI runs `go build -o app .` with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0` — no manual build needed
+- **No cgo**: Because builds use `CGO_ENABLED=0`, dependencies requiring cgo (e.g. `mattn/go-sqlite3`) will not work — use pure-Go alternatives (e.g. `modernc.org/sqlite`)
 - **Systemd Managed**: Runs as a systemd service with auto-restart on failure
 - **Port Range**: Allocated ports are in the range 10100-19999
 
@@ -296,18 +291,15 @@ Deploy Node.js/Express/TypeScript backends.
 ### Express API Example
 
 ```bash
-# 1. Build your Node.js app (if using TypeScript)
+# Deploy the project source directory — the CLI installs dependencies,
+# runs the build script (if any), and uploads for you
 cd my-node-api
-npm run build
-
-# 2. Create tarball (include package.json, your code, and optionally node_modules)
-tar -czvf api.tar.gz dist package.json package-lock.json
-
-# 3. Deploy
-orama deploy nodejs ./api.tar.gz --name my-node-api
+orama deploy nodejs . --name my-node-api
 
 # Output:
-# 📦 Creating tarball from ./dist...
+# 📦 Installing dependencies...
+# 🔨 Building...
+# 📦 Creating tarball...
 # ☁️  Uploading to Orama Network...
 #
 # ✅ Deployment successful!
@@ -347,7 +339,7 @@ app.listen(port, () => {
 
 - **Environment Variables**: The `PORT` environment variable is automatically set to your allocated port
 - **Health Endpoint**: **REQUIRED** - Must implement `/health` that returns HTTP 200 when ready
-- **Dependencies**: If `node_modules` is not included, `npm install --production` runs automatically
+- **Dependencies**: The CLI runs `npm install --production` locally if `node_modules` is missing; `node_modules` and hidden files are excluded from the uploaded tarball, and dependencies are installed on the server
 - **Start Command Detection**:
   1. If `package.json` has `scripts.start` → runs `npm start`
   2. Else if `package.json` has `main` field → runs `node {main}`
@@ -367,10 +359,14 @@ Each namespace gets its own isolated SQLite databases.
 orama db create my-database
 
 # Output:
-# ✅ Database created: my-database
+# ✅ Database created successfully!
+#
+# Name:      my-database
 # Home Node: node-abc123
-# File Path: /opt/orama/.orama/data/sqlite/your-namespace/my-database.db
+# Created:   2024-01-22T10:30:00Z
 ```
+
+The database file is stored on the home node at `/opt/orama/.orama/data/sqlite/{your-namespace}/my-database.db`.
 
 ### Executing Queries
 
@@ -399,9 +395,9 @@ orama db query my-database "SELECT * FROM users"
 orama db list
 
 # Output:
-# NAME              SIZE        HOME NODE       CREATED
-# my-database       12.3 KB     node-abc123     2024-01-22 10:30
-# prod-database     1.2 MB      node-abc123     2024-01-20 09:15
+# NAME              SIZE        BACKUP CID      CREATED
+# my-database       12.3 KB     QmYxxx...       2024-01-22 10:30
+# prod-database     1.2 MB      -               2024-01-20 09:15
 #
 # Total: 2
 ```
@@ -421,16 +417,16 @@ orama db backup my-database
 orama db backups my-database
 
 # Output:
-# VERSION    CID               SIZE        DATE
-# 1          QmYxxx...         12.3 KB     2024-01-22 10:45
-# 2          QmZxxx...         15.1 KB     2024-01-22 14:20
+# CID               SIZE        BACKED UP
+# QmYxxx...         12.3 KB     2024-01-22 10:45
+# QmZxxx...         15.1 KB     2024-01-22 14:20
 ```
 
 ### Database Features
 
 - ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
 - ✅ **Namespace Isolation**: Complete separation between namespaces
-- ✅ **Automatic Backups**: Scheduled backups to IPFS every 6 hours
+- ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
 - ✅ **ACID Transactions**: Full SQLite transactional support
 - ✅ **Concurrent Reads**: Multiple readers can query simultaneously
 
@@ -503,9 +499,16 @@ DNS uses round-robin, so requests may hit any node in the cluster. If a deployme
 
 This is **transparent to users** - your app works regardless of which node handles the initial request.
 
-### Custom Domains (Future Feature)
+### Custom Domains
 
-Support for custom domains (e.g., `www.myapp.com`) with TXT record verification.
+The gateway supports attaching custom domains (e.g., `www.myapp.com`) to a deployment via HTTP API (no CLI subcommand yet):
+
+- `POST /v1/deployments/domains/add` — registers the domain and returns a verification token
+- `POST /v1/deployments/domains/verify` — checks for a TXT record at `_orama-verify.{domain}` matching the token
+- `GET /v1/deployments/domains/list` — lists domains for a deployment
+- `POST /v1/deployments/domains/remove` — detaches a domain
+
+After verification, point your domain's A record to your deployment's node IP.
 
 ---
 
@@ -536,7 +539,7 @@ Deploy a complete full-stack application with React frontend, Go backend, and SQ
 ┌─────────────────────────────────────────────┐
 │   SQLite Database                           │
 │   Name: myapp-db                            │
-│   File: ~/.orama/data/sqlite/ns/myapp-db.db│
+│   File: .../data/sqlite/ns/myapp-db.db      │
 └─────────────────────────────────────────────┘
 ```
 
@@ -572,7 +575,7 @@ import (
     "net/http"
     "os"
 
-    _ "github.com/mattn/go-sqlite3"
+    _ "modernc.org/sqlite" // pure-Go driver (deployments build with CGO_ENABLED=0)
 )
 
 type User struct {
@@ -585,14 +588,13 @@ type User struct {
 var db *sql.DB
 
 func main() {
-    // DATABASE_NAME env var is automatically set by Orama
-    dbPath := os.Getenv("DATABASE_PATH")
-    if dbPath == "" {
-        dbPath = "/opt/orama/.orama/data/sqlite/" + os.Getenv("NAMESPACE") + "/myapp-db.db"
-    }
+    // Orama only injects the PORT env var — the database path is up to you.
+    // Databases created with `orama db create` live on the home node at:
+    //   /opt/orama/.orama/data/sqlite/{your-namespace}/{db-name}.db
+    dbPath := "/opt/orama/.orama/data/sqlite/your-namespace/myapp-db.db"
 
     var err error
-    db, err = sql.Open("sqlite3", dbPath)
+    db, err = sql.Open("sqlite", dbPath)
     if err != nil {
         log.Fatal(err)
     }
@@ -684,11 +686,9 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 **Deploy Backend**:
 
 ```bash
-# Build for Linux
-GOOS=linux GOARCH=amd64 go build -o api main.go
-
-# Deploy
-orama deploy go ./api --name myapp-api
+# Deploy the source directory — the CLI cross-compiles
+# for linux/amd64 (CGO_ENABLED=0) and uploads for you
+orama deploy go . --name myapp-api
 ```
 
 ### Step 3: Deploy React Frontend
@@ -937,8 +937,8 @@ orama app get my-app
 orama app logs my-app
 
 # Common issues:
-# - Binary not compiled for Linux (GOOS=linux GOARCH=amd64)
-# - Missing dependencies (node_modules not included)
+# - App not listening on the PORT environment variable
+# - Missing dependencies (not declared in package.json / go.mod)
 # - Port already in use (shouldn't happen, but check logs)
 # - Health check failing (ensure /health endpoint exists)
 ```
@@ -977,8 +977,8 @@ orama db list
 # Check table exists
 orama db query my-db "SELECT name FROM sqlite_master WHERE type='table'"
 
-# Check syntax
-orama db query my-db ".schema users"
+# Check table schema (sqlite3 dot-commands like .schema are NOT supported — plain SQL only)
+orama db query my-db "SELECT sql FROM sqlite_master WHERE name='users'"
 ```
 
 ### Authentication Issues
@@ -1030,7 +1030,7 @@ orama auth status
 ## Next Steps
 
 - **Explore the API**: See `/docs/GATEWAY_API.md` for HTTP API details
-- **Advanced Features**: Custom domains, load balancing, autoscaling (coming soon)
+- **Advanced Features**: Custom domains (via gateway API, see [How Domains Work](#how-domains-work)); load balancing and autoscaling coming soon
 - **Production Deployment**: Install nodes with `orama node install` for production clusters
 - **Client SDK**: Use the Go/JS SDK for programmatic deployments
 

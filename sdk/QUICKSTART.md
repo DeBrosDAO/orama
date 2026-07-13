@@ -1,17 +1,17 @@
-# Quick Start Guide for @debros/network-ts-sdk
+# Quick Start Guide for @debros/orama
 
 ## 5-Minute Setup
 
 ### 1. Install
 
 ```bash
-npm install @debros/network-ts-sdk
+npm install @debros/orama
 ```
 
 ### 2. Create a Client
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "http://localhost:6001",
@@ -47,26 +47,19 @@ const status = await client.network.status();
 ## Running Tests Locally
 
 ### Prerequisites
-1. Bootstrap node must be running (provides database on port 5001)
-2. Gateway must be running (provides REST API on port 6001)
+1. A running Orama gateway to test against (REST API on port 6001; RQLite on port 5001 behind it)
+2. An API key for that gateway
+
+The SDK lives in the `sdk/` directory of the Orama monorepo (the Go node/gateway code is under `core/`). Point the E2E tests at any running gateway:
 
 ```bash
-# Terminal 1: Start bootstrap node
-cd ../network
-make run-node
-
-# Terminal 2: Start gateway (after bootstrap is ready)
-cd ../network
-make run-gateway
-
-# Terminal 3: Run E2E tests
-cd ../network-ts-sdk
+cd sdk
 export GATEWAY_BASE_URL=http://localhost:6001
 export GATEWAY_API_KEY=ak_your_api_key:default
 pnpm run test:e2e
 ```
 
-**Note**: The gateway configuration now correctly uses port 5001 for RQLite (not 4001 which is P2P).
+Without `GATEWAY_API_KEY` set, the tests skip gracefully instead of failing.
 
 ## Building for Production
 
@@ -124,7 +117,7 @@ await client.db.transaction([
 
 ### Error Handling
 ```typescript
-import { SDKError } from "@debros/network-ts-sdk";
+import { SDKError } from "@debros/orama";
 
 try {
   await client.db.query("SELECT * FROM invalid_table");
@@ -141,7 +134,9 @@ Full type safety - use autocomplete in your IDE:
 ```typescript
 const status: NetworkStatus = await client.network.status();
 const users: User[] = await repo.find({ active: 1 });
-const msg: Message = await subscription.onMessage((m) => m);
+const sub = await client.pubsub.subscribe("news", {
+  onMessage: (msg: PubSubMessage) => console.log(msg.data),
+});
 ```
 
 ## Next Steps

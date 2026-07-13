@@ -25,8 +25,8 @@ The system provides information-theoretic security: compromising fewer than K gu
 Every Orama node runs a `vault-guardian` process alongside the gateway, RQLite, and Olric. The guardian:
 
 - Listens on **port 7500** for client HTTP requests (V1 push/pull shares, V2 CRUD secrets).
-- Listens on **port 7501** for guardian-to-guardian binary protocol (heartbeat, verify, repair), restricted to the WireGuard overlay network.
-- Discovers peers via RQLite (the cluster's membership source of truth).
+- Reserves **port 7501** for the guardian-to-guardian binary protocol (heartbeat, verify, repair), restricted to the WireGuard overlay network. The protocol is implemented, but the peer listener is not yet started by the daemon -- nothing accepts connections on 7501 in v0.1.0.
+- Will discover peers via RQLite (the cluster's membership source of truth). The RQLite fetch is currently a stub that returns an empty node list, so each guardian effectively runs single-node today.
 
 ## Data Flow
 
@@ -44,9 +44,9 @@ Client                     Guardian-1        Guardian-2        Guardian-N
 
 1. Client generates encrypted key material (DEK-wrapped secret, KEK1/KEK2 wrapped DEKs).
 2. Client runs Shamir split locally: secret -> N shares with threshold K.
-3. Client pushes each share to a different guardian via `POST /v1/vault/push`.
+3. Client pushes each share to a different guardian via `POST /v1/vault/push` (session token + Ed25519 ownership proof required).
 4. Each guardian stores the share atomically to disk (temp file + rename).
-5. Each guardian writes a monotonic version counter for anti-rollback protection.
+5. Each guardian writes the monotonic version (plus threshold) to `meta.json` last, as the commit marker, for anti-rollback protection.
 
 ### V1 Pull (Recovery)
 
@@ -74,7 +74,7 @@ Client                     Guardian-1        Guardian-2        Guardian-N
   |-- auth/challenge -------->|                 |                 |
   |<-- {nonce,tag} -----------|                 |                 |
   |-- auth/session ---------->|                 |                 |
-  |<-- {session_token} -------|                 |                 |
+  |<-- {identity,expiry_ns,tag} (client assembles token)          |
   |                            |                 |                 |
   |  [Shamir split: secret -> N shares]                           |
   |                            |                 |                 |
@@ -181,12 +181,13 @@ Each user's share is stored as a plain file. In V1 the layout is `<data_dir>/sha
 <data_dir>/shares/<identity_hash_hex>/
     share.bin          -- Raw encrypted share data
     share.bin.tmp      -- Temp file during atomic write
-    version            -- Monotonic version counter (anti-rollback)
     checksum.bin       -- HMAC-SHA256 integrity checksum
-    meta.json          -- Share metadata (Phase 2)
+    meta.json          -- {"version":<n>,"threshold":<k>} (anti-rollback + reconstruction params)
     wrapped_dek1.bin   -- KEK1-wrapped DEK (Phase 2)
     wrapped_dek2.bin   -- KEK2-wrapped DEK (Phase 2)
 ```
+
+`meta.json` is written last, as the commit marker: the share only counts as present once it lands, giving crash-consistency across the multi-file write. The guardian also keeps a persistent at-rest integrity key at `<data_dir>/integrity.key` (created on first run, 0600 permissions) that keys the HMAC over stored share files so they survive restarts.
 
 **V2 (Generic Secrets):**
 
@@ -228,17 +229,17 @@ All-node replication was chosen because:
 
 ### Startup
 
-1. Parse CLI arguments and load config from `vault.yaml` (or defaults).
-2. Ensure data directory exists (`<data_dir>/shares/`, `<data_dir>/vaults/`).
-3. Generate a random 32-byte server secret (for HMAC-based auth).
-4. Attempt to fetch node list from RQLite; fall back to single-node mode.
-5. Mark self as alive in the node list.
+1. Parse CLI arguments and load config from the config file (key=value format; defaults if the file does not exist).
+2. Ensure the data directory exists.
+3. Generate a random 32-byte server secret (for HMAC-based auth) and load or create the persistent at-rest integrity key (`<data_dir>/integrity.key`).
+4. Fetch node list from RQLite -- currently a stub that returns an empty list, so the guardian runs with no known peers.
+5. Mark self as alive in the node list (only when the list is non-empty).
 6. Count existing shares on disk.
-7. Start HTTP server on port 7500 (blocks in accept loop).
+7. Start the heartbeat-send thread, then the HTTP server on port 7500 (blocks in accept loop).
 
 ### Heartbeat
 
-The peer protocol runs on port 7501 (WireGuard-only). Every 5 seconds, each guardian sends a heartbeat to all known peers. The heartbeat includes:
+The peer protocol targets port 7501 (WireGuard-only). Every 5 seconds, a background thread sends a heartbeat to all known peers. Note that the peer *listener* is not yet wired into the daemon, so heartbeats are currently sent but never received -- and with RQLite discovery stubbed there are no known peers to send to anyway. The heartbeat includes:
 
 - Sender IP (4 bytes, WireGuard address)
 - Sender port (2 bytes)
@@ -257,7 +258,7 @@ dead     --- heartbeat received ---> alive
 
 ### Verify
 
-Periodic verification ensures share integrity across guardians. A guardian:
+Periodic verification ensures share integrity across guardians (part of the not-yet-wired peer protocol). A guardian:
 
 1. Selects a share and computes its SHA-256 hash (commitment root).
 2. Sends a `verify_request` to a peer with the identity hash.
@@ -266,7 +267,9 @@ Periodic verification ensures share integrity across guardians. A guardian:
 
 ### Repair (Proactive Re-sharing)
 
-When the cluster topology changes (node join/leave) or every 24 hours, the repair protocol refreshes all shares using the Herzberg-Jarecki-Krawczyk-Yung protocol:
+> **Status:** The repair/reshare modules are implemented and unit-tested but not yet wired into the running daemon -- no runtime code triggers re-sharing today.
+
+When the cluster topology changes (node join/leave) or every 24 hours, the repair protocol is designed to refresh all shares using the Herzberg-Jarecki-Krawczyk-Yung protocol:
 
 1. Leader broadcasts `repair_offer` to all guardians.
 2. Each guardian generates a random polynomial q_i(x) of degree K-1 with q_i(0)=0.
@@ -285,7 +288,7 @@ Safety requirement: at least 3 alive guardians to initiate repair.
 
 ### Shutdown
 
-On shutdown, the server secret is securely zeroed (`@memset(&self.server_secret, 0)`). Share data on disk persists across restarts.
+On shutdown, the in-memory server secret and integrity key are both zeroed (`@memset`). Share data on disk -- and the persistent `integrity.key` file -- survive restarts.
 
 ## Recovery Paths
 
@@ -332,19 +335,20 @@ This path depends on the key wrapping scheme (DEK encrypted by KEK1 from mnemoni
 | Peer verify protocol | Complete | Commitment comparison |
 | Repair round state machine | Complete | Timeout, delta tracking |
 | Node list / discovery | Complete | Static + RQLite (RQLite fetch is stub) |
-| Quorum logic | Complete | Write quorum W=ceil(2N/3), read quorum K |
+| Quorum logic | Complete | Write quorum W=min(N, max(K+1, ceil(2N/3))), read quorum K |
 | Challenge-response auth | Complete | HMAC-based, 60s expiry, wired to router |
 | Session tokens | Complete | HMAC-based, 1h expiry, wired to router |
 | Auth enforcement on V2 | Complete | Mandatory session auth on all V2 secrets endpoints |
-| Config file parsing | Stub | Returns defaults, YAML parsing Phase 2 |
+| Auth enforcement on V1 push/pull | Complete | Mandatory session token + Ed25519 ownership proof |
+| Config file parsing | Complete | key=value format (not YAML); defaults when file absent |
+| Rate limiting | Complete | Per-IP, 120 requests per 60s window in the listener |
+| Heartbeat send loop | Complete | Background thread in main(); no peers to send to until discovery lands |
 | RQLite node discovery | Stub | Returns empty list, HTTP fetch Phase 2 |
-| Post-quantum KEM (ML-KEM-768) | Stub | Interface only, random bytes |
-| Post-quantum signatures (ML-DSA-65) | Stub | Interface only, verify always succeeds |
+| Post-quantum KEM (ML-KEM-768) | Stub | HMAC-derived shared secrets, not real ML-KEM |
+| Post-quantum signatures (ML-DSA-65) | Stub | HMAC-based sign/verify, fail-closed but not post-quantum |
 | Hybrid key exchange (X25519 + ML-KEM) | Partial | X25519 works, ML-KEM is stub |
 | Multi-threaded HTTP server | Not started | Phase 3 |
 | TLS termination | Not started | Phase 3, currently plain TCP |
-| Auth enforcement on V1 push/pull | Not started | Auth module exists but not wired to V1 handlers |
-| Peer heartbeat loop | Not started | State machine exists, loop not wired |
+| Peer listener (port 7501) | Not started | Protocol implemented, listener not started by the daemon |
 | Peer repair orchestration | Not started | State machine exists, coordination not wired |
-| Rate limiting | Not started | Phase 3 |
 | Admin API | Not started | Phase 3 |

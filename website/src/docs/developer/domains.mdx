@@ -24,7 +24,7 @@ The three environments each have their own base domain:
 |-------------|-------------|
 | **Devnet** | `orama-devnet.network` |
 | **Testnet** | `orama-testnet.network` |
-| **Production** | `dbrs.space` |
+| **Sandbox** | `dbrs.space` |
 
 The domain is live as soon as the deployment completes. No additional configuration is required.
 
@@ -153,10 +153,11 @@ You can map your own domain (like `api.example.com`) to an Orama deployment usin
 
 ### Flow
 
-1. Add a CNAME record on your domain pointing to your app's Orama domain
-2. Call the add endpoint with your domain and deployment name
-3. Verify ownership via DNS (the API will check for the CNAME)
-4. A certificate is automatically provisioned for the custom domain
+1. Call the add endpoint with your domain and deployment name -- the response includes a verification token
+2. Add a TXT record at `_orama-verify.<your-domain>` with the verification token as its value
+3. Call the verify endpoint with your domain (the API will check the TXT record)
+4. Point your domain's A record to your deployment's node IP
+5. A certificate is automatically provisioned for the custom domain
 
 ---
 

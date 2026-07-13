@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Zig 0.14.0+** (specified in `build.zig.zon` as `minimum_zig_version`). Zig 0.15+ recommended for the latest std library improvements.
+- **Zig 0.15.2+** (specified in `build.zig.zon` as `minimum_zig_version`). Older versions, including 0.15.0/0.15.1, are refused by the build.
 - **Linux x86_64** target for production nodes.
 - **macOS (arm64 or x86_64)** for local development and testing.
 
@@ -91,7 +91,18 @@ CLI arguments override config file values.
 
 The guardian reads a config file from `--config` (default: `/opt/orama/.orama/data/vault/vault.yaml`).
 
-> **Note:** YAML parsing is not yet implemented (Phase 2). The config loader currently returns defaults regardless of file contents. All configuration must be done via CLI arguments for now.
+> **Note:** Despite the `.yaml` default filename, the config format is simple `key=value` lines, not YAML. Lines starting with `#` are comments; unknown keys are ignored. If the file does not exist, defaults are used. CLI arguments override config file values.
+
+Example config file:
+
+```
+# vault-guardian config
+listen_address = 0.0.0.0
+client_port = 7500
+peer_port = 7501
+data_dir = /opt/orama/.orama/data/vault
+rqlite_url = http://127.0.0.1:4001
+```
 
 ### Config Fields
 
@@ -111,11 +122,12 @@ The guardian creates the data directory on startup if it does not exist. The dir
 
 ```
 /opt/orama/.orama/data/vault/
+    integrity.key           -- Persistent at-rest integrity key (created on first run, 0600)
     shares/
         <identity_hash_hex>/
             share.bin       -- Encrypted share data
-            version         -- Monotonic version counter
             checksum.bin    -- HMAC-SHA256 integrity checksum
+            meta.json       -- {"version":<n>,"threshold":<k>} (anti-rollback)
 ```
 
 ### Permissions
@@ -218,7 +230,9 @@ sudo ufw allow from 10.0.0.0/24 to any port 7501 proto tcp comment "vault-guardi
 | Port | Protocol | Interface | Purpose |
 |------|----------|-----------|---------|
 | 7500 | TCP | WireGuard (10.0.0.x) | Client-facing HTTP API |
-| 7501 | TCP | WireGuard (10.0.0.x) only | Guardian-to-guardian binary protocol |
+| 7501 | TCP | WireGuard (10.0.0.x) only | Guardian-to-guardian binary protocol (reserved -- no listener yet) |
+
+> **Note:** In v0.1.0 the daemon does not start the peer listener, so nothing accepts connections on port 7501 yet. The firewall rule is forward-looking for when the peer protocol is wired in.
 
 **Port 7501 must NEVER be exposed on the public interface.** The peer protocol has no authentication beyond WireGuard -- it trusts that only authorized nodes can reach it.
 
@@ -270,11 +284,13 @@ sudo systemctl status orama-vault
 curl http://127.0.0.1:7500/v1/vault/health
 
 # Expected response:
-# {"status":"ok","version":"0.1.0"}
+# {"status":"degraded","version":"0.1.0","shares":0,"peers":0,"data_dir_ok":true}
 
 # Check status endpoint
 curl http://127.0.0.1:7500/v1/vault/status
 ```
+
+`"status":"degraded"` with `"peers":0` is the expected healthy state today: peer discovery via RQLite is not yet implemented, so every node runs with zero alive peers. A failed deploy shows up as `"status":"unhealthy"` (data directory inaccessible), `"data_dir_ok":false`, or no response at all.
 
 ---
 
@@ -287,7 +303,7 @@ curl http://127.0.0.1:7500/v1/vault/status
 ./zig-out/bin/vault-guardian --data-dir /tmp/vault-dev --port 7500 --bind 127.0.0.1
 ```
 
-The guardian runs in single-node mode when it cannot reach RQLite. This is normal for local development.
+The guardian always runs in single-node mode today: RQLite node discovery is not yet implemented (the fetch returns an empty node list), so no peers are ever known. This is normal for local development and, for now, for deployed nodes too.
 
 ### Staging / Testnet
 
@@ -300,6 +316,6 @@ vault-guardian --config /opt/orama/.orama/data/vault/vault.yaml
 ### Production / Mainnet
 
 - Ensure WireGuard is up and peers are connected before starting the guardian.
-- Ensure RQLite is running and healthy (the guardian queries it for node discovery).
+- RQLite-based node discovery is not yet implemented -- the guardian currently runs single-node regardless of RQLite state. The `rqlite_url` config value is reserved for when discovery lands.
 - Verify firewall rules restrict port 7501 to WireGuard interfaces only.
 - Monitor via the health endpoint and systemd journal.

@@ -46,26 +46,50 @@ ns3.dbrs.space.  IN  A  141.227.156.51
 
 ### Step 1: Install Orama on Each VPS
 
-Install Orama with the `--nameserver` flag on each VPS that will serve as a nameserver:
+Install Orama with `orama node install` and the `--nameserver` flag on each VPS that will serve as a nameserver. The first node creates the cluster; every subsequent node must join it with `--join` and `--token`, otherwise each install bootstraps its own separate cluster.
 
 ```bash
-# On VPS 1 (ns1)
-sudo orama install \
+# On VPS 1 (ns1) — first node, creates the cluster
+sudo orama node install \
   --nameserver \
   --domain dbrs.space \
+  --base-domain dbrs.space \
   --vps-ip 141.227.165.168
 
-# On VPS 2 (ns2)
-sudo orama install \
+# On ns1, generate an invite token for each joining node
+orama node invite --expiry 1h
+
+# On VPS 2 (ns2) — joins the existing cluster
+sudo orama node install \
+  --join http://141.227.165.168 \
+  --token <invite-token> \
   --nameserver \
   --domain dbrs.space \
+  --base-domain dbrs.space \
   --vps-ip 141.227.165.154
 
-# On VPS 3 (ns3)
-sudo orama install \
+# On VPS 3 (ns3) — joins the existing cluster (generate a fresh token)
+sudo orama node install \
+  --join http://141.227.165.168 \
+  --token <invite-token> \
   --nameserver \
   --domain dbrs.space \
+  --base-domain dbrs.space \
   --vps-ip 141.227.156.51
+```
+
+`--base-domain` sets the base domain used for DNS routing and record seeding; if omitted, the installer prompts for it interactively.
+
+Alternatively, `orama node setup` provisions a fresh VPS end-to-end (SSH key, binary upload, install) in one command:
+
+```bash
+# Genesis nameserver
+orama node setup --ip 141.227.165.168 --password '<vps-pass>' --env devnet \
+  --base-domain dbrs.space --role nameserver --genesis
+
+# Join as nameserver
+orama node setup --ip 141.227.165.154 --password '<vps-pass>' --env devnet \
+  --base-domain dbrs.space --role nameserver
 ```
 
 ### Step 2: Configure Your Registrar
@@ -222,11 +246,9 @@ Only expose necessary ports:
 # Allow DNS from anywhere
 sudo ufw allow 53/tcp
 sudo ufw allow 53/udp
-
-# Restrict admin ports to internal network
-sudo ufw allow from 10.0.0.0/8 to any port 8080  # Health
-sudo ufw allow from 10.0.0.0/8 to any port 9153  # Metrics
 ```
+
+The generated Corefile does not enable CoreDNS's `health` or `prometheus` plugins, so there are no CoreDNS health/metrics ports to expose. The forward block for non-authoritative queries is bound to 127.0.0.1, so the node cannot be used as an open recursive resolver.
 
 ### Rate Limiting
 
@@ -238,8 +260,8 @@ This can be configured in the CoreDNS Corefile.
 When running multiple nameservers:
 
 1. **All nodes share the same RQLite cluster** - DNS records are automatically synchronized
-2. **Install in order** - First node bootstraps, others join
-3. **Same domain configuration** - All nodes must use the same `--domain` value
+2. **Install in order** - First node bootstraps, others join with `--join` and `--token`
+3. **Same domain configuration** - All nodes must use the same `--domain` and `--base-domain` values
 
 ## Related Documentation
 

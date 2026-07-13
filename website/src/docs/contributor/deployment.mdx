@@ -34,7 +34,7 @@ orama build --verbose
 | `--verbose` | `false` | Verbose output |
 
 The build pipeline:
-1. Cross-compiles all Go binaries for `linux/<arch>` (CLI, gateway, node, SFU, TURN, identity)
+1. Cross-compiles all Go binaries for `linux/<arch>` (CLI, gateway, node, SFU, TURN, identity, SNI router)
 2. Bundles third-party dependencies (RQLite, Olric, IPFS, CoreDNS, Caddy)
 3. Includes systemd service templates
 4. Packages everything into a tar.gz archive with a `manifest.json` (checksums)
@@ -183,20 +183,23 @@ Do not proceed to the next node until:
 Changes flow through environments in this order:
 
 ```
-devnet → testnet → production
+devnet → testnet → sandbox
 ```
 
 - **devnet** — First deployment target, used for active development and testing
-- **testnet** — Staging environment, mirrors production configuration
-- **production** — Production (`dbrs.space`), requires extra verification and approval
+- **testnet** — Staging environment, mirrors sandbox configuration
+- **sandbox** — Production-facing cluster (`dbrs.space`), requires extra verification and approval. This is the CLI's default active environment.
+
+There is no separate `production` environment name in the CLI — `dbrs.space` is configured as `sandbox` (defaults: `sandbox`, `devnet`, `testnet`).
 
 ## CI/CD Pipeline
 
-The CI pipeline runs on every push and PR:
+The CI pipeline (`.github/workflows/ci.yml`) runs on every push and PR:
 
 | Stage | What It Does |
 |-------|-------------|
-| Lint | Code style and static analysis (`go vet`, `go fmt`) |
-| Test | Unit tests via `make test` |
-| Build | Compile all 6 binaries for target platforms |
-| E2E | Run against a test environment |
+| Go tests | `go vet ./...` and `go test -race ./...`, run in `core/` |
+| SDK build | `pnpm typecheck`, `pnpm build`, `pnpm vitest run tests/unit` in `sdk/` |
+| Version sanity | Checks the root `VERSION` file matches `sdk/package.json` |
+
+There is no `go fmt` check, no all-binaries build stage, and no E2E stage in CI — E2E tests are run manually against a sandbox or real environment.

@@ -38,7 +38,7 @@ The Orama gateway exposes V1 vault endpoints that perform Shamir splitting/combi
 | Path | API Version | Who splits/combines | Auth |
 |------|-------------|-------------------|------|
 | SDK → Guardians | V2 | Client (SDK) | HMAC session tokens |
-| Client → Gateway | V1 | Gateway | Namespace API key |
+| Client → Gateway | V1 | Gateway | Per-request Ed25519 ownership signature |
 
 ---
 
@@ -47,7 +47,7 @@ The Orama gateway exposes V1 vault endpoints that perform Shamir splitting/combi
 Install the SDK and create a client with vault configuration:
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://gateway.example.com",
@@ -141,31 +141,51 @@ Like writes, deletion requires a quorum acknowledgment to be considered successf
 
 For clients that cannot connect directly to guardians, the gateway exposes V1 vault endpoints. The gateway performs Shamir splitting/combining server-side.
 
+These endpoints are **not** protected by the namespace API key — the `/v1/vault/` path is public in the gateway's routing. Instead, each push and pull request must prove ownership of the identity with a fresh Ed25519 signature, verified independently by the gateway and by every guardian it forwards to. There is no SDK helper for the gateway proxy path; the caller is responsible for holding the Ed25519 identity keypair and signing the canonical message itself.
+
 ### Store via Gateway
 
+The request body requires `identity` (64 hex chars, `= SHA-256(pubkey)`), the base64-encoded `envelope`, a monotonically increasing `version`, the hex-encoded `pubkey`, and a hex-encoded Ed25519 `signature` over the ASCII message `vault-push-v1:<identity>:<version>`.
+
 ```typescript
+const message = `vault-push-v1:${identityHex}:${version}`;
+const signature = sign(message, privateKey); // your Ed25519 signer, hex-encoded
+
 const res = await fetch("https://ns-myapp.orama-devnet.network/v1/vault/push", {
   method: "POST",
-  headers: {
-    "X-API-Key": apiKey,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ envelope: encryptedData }),
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    identity: identityHex,
+    envelope: base64EncryptedData,
+    version,
+    pubkey: pubkeyHex,
+    signature,
+  }),
 });
 
-const { ack_count, total, quorum, threshold } = await res.json();
+const { status, ack_count, total, quorum, threshold } = await res.json();
 ```
+
+A `409` response (`status: "version_conflict"`) means a quorum of guardians already has this version or newer — re-read and bump `version` before retrying.
 
 ### Retrieve via Gateway
 
+The request body requires `identity`, `pubkey`, a `timestamp` (unix seconds, must be within 120 seconds of the gateway's clock), and a hex-encoded Ed25519 `signature` over the ASCII message `vault-pull-v1:<identity>:<timestamp>`.
+
 ```typescript
+const timestamp = Math.floor(Date.now() / 1000);
+const message = `vault-pull-v1:${identityHex}:${timestamp}`;
+const signature = sign(message, privateKey);
+
 const res = await fetch("https://ns-myapp.orama-devnet.network/v1/vault/pull", {
   method: "POST",
-  headers: {
-    "X-API-Key": apiKey,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ identity: identityHex }),
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    identity: identityHex,
+    pubkey: pubkeyHex,
+    signature,
+    timestamp,
+  }),
 });
 
 const { envelope, collected, threshold } = await res.json();
@@ -174,11 +194,10 @@ const { envelope, collected, threshold } = await res.json();
 ### Health Check
 
 ```bash
-curl https://ns-myapp.orama-devnet.network/v1/vault/health \
-  -H "X-API-Key: $API_KEY"
+curl https://ns-myapp.orama-devnet.network/v1/vault/health
 ```
 
-Returns aggregate guardian health: `healthy`, `degraded`, or `unavailable`.
+No authentication required. Returns aggregate guardian health: `healthy`, `degraded`, or `unavailable`.
 
 ### Rate Limits
 
@@ -210,12 +229,14 @@ Session tokens are passed via the `X-Session-Token` header. Sessions expire afte
 
 ### Gateway V1 Endpoints (Proxy)
 
+These paths are public in the gateway's routing — the namespace API key is not checked. Push and pull are instead authenticated per-request with an Ed25519 ownership signature (see [Gateway Proxy API](#gateway-proxy-api)).
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/v1/vault/push` | API key | Store secret (gateway splits into shares) |
-| POST | `/v1/vault/pull` | API key | Retrieve secret (gateway combines shares) |
-| GET | `/v1/vault/health` | API key | Aggregate guardian health |
-| GET | `/v1/vault/status` | API key | Guardian count, healthy count, threshold |
+| POST | `/v1/vault/push` | Ed25519 ownership signature | Store secret (gateway splits into shares) |
+| POST | `/v1/vault/pull` | Ed25519 ownership signature | Retrieve secret (gateway combines shares) |
+| GET | `/v1/vault/health` | None | Aggregate guardian health |
+| GET | `/v1/vault/status` | None | Guardian count, healthy count, threshold |
 
 ### Guardian Health Endpoints
 
@@ -305,7 +326,7 @@ import {
 
   // Validation
   isValidEncryptedData,
-} from "@debros/network-ts-sdk";
+} from "@debros/orama";
 ```
 
 | Function | Description |

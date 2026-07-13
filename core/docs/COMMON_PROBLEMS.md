@@ -117,7 +117,7 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 ## 4. Namespace gateway processes not restarting after upgrade
 
-**Symptom:** After `orama upgrade --restart` or `orama node restart`, namespace gateway/olric/rqlite services don't start.
+**Symptom:** After `orama node upgrade --restart` or `orama node restart`, namespace gateway/olric/rqlite services don't start.
 
 **Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
 
@@ -176,7 +176,7 @@ ssh -n user@host 'command'
 
 **Symptom:** OramaOS node can't reconstruct its LUKS key after reboot.
 
-**Cause:** Not enough peer vault-guardians are online to meet the Shamir threshold (K = max(3, N/3)).
+**Cause:** Not enough peer vault-guardians are online to meet the Shamir threshold (K = max(2, floor(N/3))).
 
 **Fix:** Ensure enough cluster nodes are online and reachable over WireGuard. The agent retries with exponential backoff. For genesis nodes before 5+ peers exist, use:
 

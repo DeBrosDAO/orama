@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Orama Network Client SDK provides a clean, type-safe Go interface for interacting with the Orama Network. It abstracts away the complexity of HTTP requests, authentication, and error handling.
+The Orama Network Client SDK provides a clean, type-safe Go interface for interacting with the Orama Network. It abstracts away the complexity of peer connections, authentication, and error handling.
 
 ## Installation
 
@@ -19,29 +19,38 @@ import (
     "context"
     "fmt"
     "log"
+    "strings"
 
     "github.com/DeBrosOfficial/network/pkg/client"
 )
 
 func main() {
     // Create client configuration
-    cfg := client.DefaultClientConfig()
+    cfg := client.DefaultClientConfig("my-app")
     cfg.GatewayURL = "https://api.orama.network"
     cfg.APIKey = "your-api-key-here"
 
     // Create client
-    c := client.NewNetworkClient(cfg)
+    c, err := client.NewClient(cfg)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Connect to the network
+    if err := c.Connect(); err != nil {
+        log.Fatal(err)
+    }
+    defer c.Disconnect()
 
     // Use the client
     ctx := context.Background()
 
     // Upload to storage
-    data := []byte("Hello, Orama!")
-    resp, err := c.Storage().Upload(ctx, data, "hello.txt")
+    resp, err := c.Storage().Upload(ctx, strings.NewReader("Hello, Orama!"), "hello.txt")
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Printf("Uploaded: CID=%s\n", resp.CID)
+    fmt.Printf("Uploaded: CID=%s\n", resp.Cid)
 }
 ```
 
@@ -51,49 +60,53 @@ func main() {
 
 ```go
 type ClientConfig struct {
-    // Gateway URL (e.g., "https://api.orama.network")
-    GatewayURL string
-
-    // Authentication (choose one)
-    APIKey    string  // API key authentication
-    JWTToken  string  // JWT token authentication
-
-    // Client options
-    Timeout   time.Duration  // Request timeout (default: 30s)
-    UserAgent string         // Custom user agent
-
-    // Network client namespace
-    Namespace string  // Default namespace for operations
+    AppName           string        // Application name (required)
+    DatabaseName      string        // Database name (default: "<AppName>_db")
+    BootstrapPeers    []string      // LibP2P bootstrap peer multiaddresses
+    DatabaseEndpoints []string      // RQLite database endpoints
+    GatewayURL        string        // Gateway URL for HTTP API access
+    ConnectTimeout    time.Duration // Connection timeout (default: 30s)
+    RetryAttempts     int           // Retry attempts (default: 3)
+    RetryDelay        time.Duration // Delay between retries (default: 5s)
+    QuietMode         bool          // Suppress debug/info logs
+    APIKey            string        // API key for gateway auth
+    JWT               string        // Optional JWT bearer token
+    IdentityPath      string        // Path to persistent LibP2P identity key file
 }
 ```
 
 ### Creating a Client
 
 ```go
-// Default configuration
-cfg := client.DefaultClientConfig()
+// Default configuration (app name is required)
+cfg := client.DefaultClientConfig("my-app")
 cfg.GatewayURL = "https://api.orama.network"
 cfg.APIKey = "your-api-key"
 
-c := client.NewNetworkClient(cfg)
+c, err := client.NewClient(cfg)
+if err != nil {
+    log.Fatal(err)
+}
 ```
+
+`DefaultClientConfig` fills in default bootstrap peers and database endpoints; `NewClient` returns an error if the config is nil or the app name is empty.
 
 ## Authentication
 
 ### API Key Authentication
 
 ```go
-cfg := client.DefaultClientConfig()
+cfg := client.DefaultClientConfig("my-app")
 cfg.APIKey = "your-api-key-here"
-c := client.NewNetworkClient(cfg)
+c, err := client.NewClient(cfg)
 ```
 
 ### JWT Token Authentication
 
 ```go
-cfg := client.DefaultClientConfig()
-cfg.JWTToken = "your-jwt-token-here"
-c := client.NewNetworkClient(cfg)
+cfg := client.DefaultClientConfig("my-app")
+cfg.JWT = "your-jwt-token-here"
+c, err := client.NewClient(cfg)
 ```
 
 ### Obtaining Credentials
@@ -103,7 +116,7 @@ c := client.NewNetworkClient(cfg)
 // Use the gateway API directly: POST /v1/auth/challenge + /v1/auth/verify
 
 // 2. Issue API key after authentication
-// POST /v1/auth/apikey with JWT token
+// POST /v1/auth/api-key with JWT token
 ```
 
 ## Storage Client
@@ -112,31 +125,29 @@ Upload, download, pin, and unpin files to IPFS.
 
 ### Upload File
 
+Upload takes an `io.Reader`:
+
 ```go
-data := []byte("Hello, World!")
-resp, err := c.Storage().Upload(ctx, data, "hello.txt")
+resp, err := c.Storage().Upload(ctx, strings.NewReader("Hello, World!"), "hello.txt")
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("CID: %s\n", resp.CID)
-```
-
-### Upload with Options
-
-```go
-opts := &client.StorageUploadOptions{
-    Pin:               true,           // Pin after upload
-    Encrypt:           true,           // Encrypt before upload
-    ReplicationFactor: 3,              // Number of replicas
-}
-resp, err := c.Storage().UploadWithOptions(ctx, data, "file.txt", opts)
+fmt.Printf("CID: %s, Size: %d\n", resp.Cid, resp.Size)
 ```
 
 ### Get File
 
+Get returns an `io.ReadCloser`:
+
 ```go
 cid := "QmXxx..."
-data, err := c.Storage().Get(ctx, cid)
+rc, err := c.Storage().Get(ctx, cid)
+if err != nil {
+    log.Fatal(err)
+}
+defer rc.Close()
+
+data, err := io.ReadAll(rc)
 if err != nil {
     log.Fatal(err)
 }
@@ -145,13 +156,15 @@ fmt.Printf("Downloaded %d bytes\n", len(data))
 
 ### Pin File
 
+Pin takes the CID and a name:
+
 ```go
 cid := "QmXxx..."
-resp, err := c.Storage().Pin(ctx, cid)
+resp, err := c.Storage().Pin(ctx, cid, "hello.txt")
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Pinned: %s\n", resp.CID)
+fmt.Printf("Pinned: %s\n", resp.Cid)
 ```
 
 ### Unpin File
@@ -173,104 +186,48 @@ status, err := c.Storage().Status(ctx, cid)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Status: %s, Replicas: %d\n", status.Status, status.Replicas)
+fmt.Printf("Status: %s, Replication factor: %d, Peers: %v\n",
+    status.Status, status.ReplicationFactor, status.Peers)
 ```
+
+`StorageStatus` includes `Cid`, `Name`, `Status` (`"pinned"`, `"pinning"`, `"queued"`, `"unpinned"`, `"error"`), `ReplicationMin`, `ReplicationMax`, `ReplicationFactor`, `Peers`, and `Error`.
 
 ## Cache Client
 
-Distributed key-value cache using Olric.
-
-### Set Value
-
-```go
-key := "user:123"
-value := map[string]interface{}{
-    "name": "Alice",
-    "email": "alice@example.com",
-}
-ttl := 5 * time.Minute
-
-err := c.Cache().Set(ctx, key, value, ttl)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Get Value
-
-```go
-key := "user:123"
-var user map[string]interface{}
-err := c.Cache().Get(ctx, key, &user)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("User: %+v\n", user)
-```
-
-### Delete Value
-
-```go
-key := "user:123"
-err := c.Cache().Delete(ctx, key)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Multi-Get
-
-```go
-keys := []string{"user:1", "user:2", "user:3"}
-results, err := c.Cache().MGet(ctx, keys)
-if err != nil {
-    log.Fatal(err)
-}
-for key, value := range results {
-    fmt.Printf("%s: %v\n", key, value)
-}
-```
+**Not yet available.** The SDK does not currently expose the Olric distributed cache — there is no `Cache()` accessor on the client. Caching is used internally by the gateway.
 
 ## Database Client
 
 Query RQLite distributed SQL database.
 
-### Execute Query (Write)
+### Write Query
+
+Writes (INSERT, UPDATE, DELETE, CREATE, DROP, ...) go through `Query` as well — the client detects write statements and executes them accordingly:
 
 ```go
 sql := "INSERT INTO users (name, email) VALUES (?, ?)"
-args := []interface{}{"Alice", "alice@example.com"}
 
-result, err := c.Database().Execute(ctx, sql, args...)
+_, err := c.Database().Query(ctx, sql, "Alice", "alice@example.com")
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Inserted %d rows\n", result.RowsAffected)
 ```
 
-### Query (Read)
+### Read Query
+
+`Query` returns a `*QueryResult` with `Columns`, `Rows`, and `Count`:
 
 ```go
 sql := "SELECT id, name, email FROM users WHERE id = ?"
-args := []interface{}{123}
 
-rows, err := c.Database().Query(ctx, sql, args...)
+result, err := c.Database().Query(ctx, sql, 123)
 if err != nil {
     log.Fatal(err)
 }
 
-type User struct {
-    ID    int    `json:"id"`
-    Name  string `json:"name"`
-    Email string `json:"email"`
-}
-
-var users []User
-for _, row := range rows {
-    var user User
-    // Parse row into user struct
-    // (manual parsing required, or use ORM layer)
-    users = append(users, user)
+for _, row := range result.Rows {
+    // row is []interface{}, ordered to match result.Columns
+    fmt.Println(row)
 }
 ```
 
@@ -284,33 +241,25 @@ schema := `CREATE TABLE IF NOT EXISTS users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`
 
-_, err := c.Database().Execute(ctx, schema)
+err := c.Database().CreateTable(ctx, schema)
 if err != nil {
     log.Fatal(err)
 }
 ```
 
+There is also `DropTable(ctx, tableName)` and `GetSchema(ctx)` for schema introspection.
+
 ### Transaction
 
+Transactions take a slice of SQL statements that are executed atomically:
+
 ```go
-tx, err := c.Database().Begin(ctx)
-if err != nil {
-    log.Fatal(err)
+queries := []string{
+    "INSERT INTO users (name) VALUES ('Alice')",
+    "INSERT INTO users (name) VALUES ('Bob')",
 }
 
-_, err = tx.Execute(ctx, "INSERT INTO users (name) VALUES (?)", "Alice")
-if err != nil {
-    tx.Rollback(ctx)
-    log.Fatal(err)
-}
-
-_, err = tx.Execute(ctx, "INSERT INTO users (name) VALUES (?)", "Bob")
-if err != nil {
-    tx.Rollback(ctx)
-    log.Fatal(err)
-}
-
-err = tx.Commit(ctx)
+err := c.Database().Transaction(ctx, queries)
 if err != nil {
     log.Fatal(err)
 }
@@ -334,20 +283,34 @@ if err != nil {
 
 ### Subscribe to Topic
 
+The handler is a `func(topic string, data []byte) error`:
+
 ```go
 topic := "chat"
-handler := func(ctx context.Context, msg []byte) error {
-    fmt.Printf("Received: %s\n", string(msg))
+handler := func(topic string, data []byte) error {
+    fmt.Printf("Received on %s: %s\n", topic, string(data))
     return nil
 }
 
-unsubscribe, err := c.PubSub().Subscribe(ctx, topic, handler)
+err := c.PubSub().Subscribe(ctx, topic, handler)
 if err != nil {
     log.Fatal(err)
 }
 
 // Later: unsubscribe
-defer unsubscribe()
+defer c.PubSub().Unsubscribe(ctx, topic)
+```
+
+### Batch Publish
+
+`PublishBatch` publishes multiple messages in parallel (one per topic), and `PublishSame` sends the same payload to every topic:
+
+```go
+msgs := []client.TopicMessage{
+    {Topic: "chat", Data: []byte("hello")},
+    {Topic: "alerts", Data: []byte("warning")},
+}
+err := c.PubSub().PublishBatch(ctx, msgs, client.PublishBatchOptions{})
 ```
 
 ### List Topics
@@ -362,83 +325,7 @@ fmt.Printf("Topics: %v\n", topics)
 
 ## Serverless Client
 
-Deploy and invoke WebAssembly functions.
-
-### Deploy Function
-
-```go
-// Read WASM file
-wasmBytes, err := os.ReadFile("function.wasm")
-if err != nil {
-    log.Fatal(err)
-}
-
-// Function definition
-def := &client.FunctionDefinition{
-    Name:        "hello-world",
-    Namespace:   "default",
-    Description: "Hello world function",
-    MemoryLimit: 64, // MB
-    Timeout:     30, // seconds
-}
-
-// Deploy
-fn, err := c.Serverless().Deploy(ctx, def, wasmBytes)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("Deployed: %s (CID: %s)\n", fn.Name, fn.WASMCID)
-```
-
-### Invoke Function
-
-```go
-functionName := "hello-world"
-input := map[string]interface{}{
-    "name": "Alice",
-}
-
-output, err := c.Serverless().Invoke(ctx, functionName, input)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("Result: %s\n", output)
-```
-
-### List Functions
-
-```go
-functions, err := c.Serverless().List(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-for _, fn := range functions {
-    fmt.Printf("- %s: %s\n", fn.Name, fn.Description)
-}
-```
-
-### Delete Function
-
-```go
-functionName := "hello-world"
-err := c.Serverless().Delete(ctx, functionName)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Get Function Logs
-
-```go
-functionName := "hello-world"
-logs, err := c.Serverless().GetLogs(ctx, functionName, 100)
-if err != nil {
-    log.Fatal(err)
-}
-for _, log := range logs {
-    fmt.Printf("[%s] %s: %s\n", log.Timestamp, log.Level, log.Message)
-}
-```
+**Not yet available in the SDK.** The Go client does not expose a `Serverless()` accessor. Serverless functions are written in Go, compiled with TinyGo, and deployed/managed via the `orama function` CLI — see `SERVERLESS.md` for the full workflow.
 
 ## Error Handling
 
@@ -447,7 +334,7 @@ All client methods return typed errors that can be checked:
 ```go
 import "github.com/DeBrosOfficial/network/pkg/errors"
 
-resp, err := c.Storage().Upload(ctx, data, "file.txt")
+resp, err := c.Storage().Upload(ctx, reader, "file.txt")
 if err != nil {
     if errors.IsNotFound(err) {
         fmt.Println("Resource not found")
@@ -469,7 +356,7 @@ if err != nil {
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
 
-resp, err := c.Storage().Upload(ctx, data, "file.txt")
+resp, err := c.Storage().Upload(ctx, reader, "file.txt")
 ```
 
 ### Retry Logic
@@ -479,7 +366,7 @@ import "github.com/DeBrosOfficial/network/pkg/errors"
 
 maxRetries := 3
 for i := 0; i < maxRetries; i++ {
-    resp, err := c.Storage().Upload(ctx, data, "file.txt")
+    resp, err := c.Storage().Upload(ctx, reader, "file.txt")
     if err == nil {
         break
     }
@@ -490,55 +377,42 @@ for i := 0; i < maxRetries; i++ {
 }
 ```
 
-### Multiple Namespaces
+### Namespaces
+
+The client's namespace is derived from its credentials (API key or JWT) — there is no per-request namespace override. To operate in multiple namespaces, create separate clients with different credentials:
 
 ```go
-// Default namespace
-c1 := client.NewNetworkClient(cfg)
-c1.Storage().Upload(ctx, data, "file.txt") // Uses default namespace
+cfg1 := client.DefaultClientConfig("app-one")
+cfg1.APIKey = "api-key-for-namespace-one"
+c1, err := client.NewClient(cfg1)
 
-// Override namespace per request
-opts := &client.StorageUploadOptions{
-    Namespace: "custom-namespace",
-}
-c1.Storage().UploadWithOptions(ctx, data, "file.txt", opts)
+cfg2 := client.DefaultClientConfig("app-two")
+cfg2.APIKey = "api-key-for-namespace-two"
+c2, err := client.NewClient(cfg2)
 ```
 
 ## Testing
 
-### Mock Client
+The SDK does not ship mock implementations. `NetworkClient`, `StorageClient`, `DatabaseClient`, and `PubSubClient` are interfaces, so you can write your own mocks (or generate them) for unit tests:
 
 ```go
-// Create a mock client for testing
-mockClient := &MockNetworkClient{
-    StorageClient: &MockStorageClient{
-        UploadFunc: func(ctx context.Context, data []byte, filename string) (*UploadResponse, error) {
-            return &UploadResponse{CID: "QmMock"}, nil
-        },
-    },
+type mockStorage struct {
+    client.StorageClient
 }
 
-// Use in tests
-resp, err := mockClient.Storage().Upload(ctx, data, "test.txt")
-assert.NoError(t, err)
-assert.Equal(t, "QmMock", resp.CID)
+func (m *mockStorage) Upload(ctx context.Context, r io.Reader, name string) (*client.StorageUploadResult, error) {
+    return &client.StorageUploadResult{Cid: "QmMock", Name: name}, nil
+}
 ```
 
 ## Examples
 
-See the `examples/` directory for complete examples:
-
-- `examples/storage/` - Storage upload/download examples
-- `examples/cache/` - Cache operations
-- `examples/database/` - Database queries
-- `examples/pubsub/` - Pub/sub messaging
-- `examples/serverless/` - Serverless functions
+Serverless function examples (hello, echo, counter) live in `docs/examples/functions/`. There are currently no standalone SDK example programs in the repository.
 
 ## API Reference
 
 Complete API documentation is available at:
 - GoDoc: https://pkg.go.dev/github.com/DeBrosOfficial/network/pkg/client
-- OpenAPI: `openapi/gateway.yaml`
 
 ## Support
 

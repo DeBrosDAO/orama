@@ -10,10 +10,10 @@ The CLI is a Go binary built from source:
 git clone https://github.com/DeBrosOfficial/network.git
 cd network
 make build
-./bin/orama version
+./core/bin/orama version
 ```
 
-You can also add `./bin` to your `PATH` or copy the binary to `/usr/local/bin`.
+The build runs in the `core/` module and outputs binaries to `core/bin/`. You can also add `./core/bin` to your `PATH` or copy the binary to `/usr/local/bin`.
 
 ## Global Flags
 
@@ -92,9 +92,9 @@ Default environments:
 
 | Name | Gateway URL | Description |
 |------|-------------|-------------|
-| `devnet` | `https://orama-devnet.network` | Development (default) |
+| `sandbox` | `https://dbrs.space` | Sandbox cluster (default) |
+| `devnet` | `https://orama-devnet.network` | Development |
 | `testnet` | `https://orama-testnet.network` | Staging |
-| `production` | `https://dbrs.space` | Production |
 
 ### Examples
 

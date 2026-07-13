@@ -6,19 +6,19 @@
 |--------|----------|------------|--------|
 | **Single node compromise** | Medium | Shamir SSS: a single share reveals zero information about the secret. Attacker gets one share out of N; needs K to reconstruct. | Implemented |
 | **K-1 node collusion** | High | Information-theoretic security: K-1 shares provide exactly zero bits of information about the secret. This is not computational -- it is mathematically proven. | Implemented |
-| **All N nodes collude** | Critical | Not defended. If all N guardians collude, they can reconstruct the secret. Mitigated by: (1) nodes operated by different parties, (2) geographic distribution, (3) proactive re-sharing invalidates old shares. | By design |
+| **All N nodes collude** | Critical | Not defended. If all N guardians collude, they can reconstruct the secret. Mitigated by: (1) nodes operated by different parties, (2) geographic distribution, (3) proactive re-sharing (not yet active at runtime) invalidates old shares. | By design |
 | **Quantum adversary** | Future | Post-quantum KEM (ML-KEM-768) and signatures (ML-DSA-65) interfaces are defined. Hybrid key exchange (X25519 + ML-KEM-768) is implemented. | Stub (Phase 2) |
 | **Replay attack on push** | Medium | Monotonic version counter. Each push must have a version strictly greater than the stored version. Replaying an old push is rejected. | Implemented |
-| **Rollback attack** | Medium | Anti-rollback via monotonic version file per identity. Attacker cannot downgrade a share to an older version. | Implemented |
+| **Rollback attack** | Medium | Anti-rollback via monotonic version counter stored in each identity's `meta.json`. Attacker cannot downgrade a share to an older version; violations are rejected with 409 Conflict. | Implemented |
 | **Disk corruption** | Medium | HMAC-SHA256 checksum per share file. On read, the checksum is verified before returning data. Corruption is detected and surfaced as an error. | Implemented |
 | **Disk tampering** | Medium | Same HMAC integrity check. An attacker who modifies share.bin on disk cannot forge a valid checksum without the integrity key. | Implemented |
 | **Network eavesdropping** | High | All inter-node traffic uses WireGuard (encrypted tunnel). Client-to-guardian will use TLS in Phase 3. | Partial (WireGuard: yes, TLS: Phase 3) |
 | **Timing side-channels** | Low | All HMAC verifications and auth token checks use constant-time comparison (`diff |= x ^ y` accumulator). | Implemented |
 | **Memory disclosure** | Low | Secure memory: `secureZero` (volatile zero-fill that cannot be optimized away), `mlock` (prevents swap to disk), `SecureBuffer` RAII wrapper. Server secret zeroed on Guardian deinit. | Implemented |
 | **Resource exhaustion** | Medium | Request body size limits (1 MiB push, 4 KiB pull), share size limit (512 KiB), peer protocol max payload (1 MiB). Systemd MemoryMax=512M. | Implemented |
-| **Man-in-the-middle (peer)** | High | WireGuard provides authenticated encryption between peers. Only nodes with valid WireGuard keys can communicate on port 7501. | Implemented (via WireGuard) |
+| **Man-in-the-middle (peer)** | High | WireGuard provides authenticated encryption between peers on the overlay. Note: in v0.1.0 the peer listener is never started, so nothing accepts connections on port 7501 -- there is no active peer protocol to attack. | Peer protocol not active (v0.1.0) |
 | **Man-in-the-middle (client)** | High | TLS termination planned for Phase 3. Currently plain TCP on port 7500. In production, the Orama gateway provides TLS. | Gateway-level |
-| **Unauthorized push/pull** | Medium | Challenge-response auth module exists with HMAC-based tokens. Not yet wired to HTTP handlers. | Phase 2 |
+| **Unauthorized push/pull** | Medium | Two layers, both enforced by the push/pull handlers: (1) a session token (HMAC challenge-response via `/v1/vault/auth/challenge` + `/v1/vault/auth/session`, sent as `X-Session-Token`), and (2) an Ed25519 ownership proof — identity = SHA-256(pubkey), with a signature over the push message (binding the version) or pull message (binding a timestamp, max 120s skew). Requests without both get 401. | Implemented |
 | **Share epoch mixing** | High | After proactive re-sharing, old and new shares are algebraically independent. Mixing shares from different epochs does NOT reconstruct the secret. Tested and verified. | Implemented |
 
 ---
@@ -153,12 +153,12 @@ This detects:
 
 ## Anti-Rollback Protection
 
-Each identity has a monotonic version counter stored in a separate file (`version`). On push:
+Each identity has a monotonic version counter stored (with the Shamir threshold) in `<data_dir>/shares/<identity>/meta.json`. On push:
 
-1. Read current version from `<data_dir>/shares/<identity>/version`.
-2. If the file exists and the new version is <= the stored version, reject with 400.
+1. Read the current version from `meta.json`.
+2. If metadata exists and the new version is <= the stored version, reject with 409 Conflict (distinguishable from a 400 malformed request, so clients can re-read and bump).
 3. If the new version is strictly greater, proceed with the write.
-4. Write the new version atomically (temp + rename).
+4. Write `meta.json` atomically (temp + rename), last -- it doubles as the commit marker for the multi-file write.
 
 This prevents an attacker from replacing a current share with an older version, which could be part of an attack to force reconstruction with a known set of shares.
 
@@ -264,17 +264,19 @@ Similarly, the `split` operation zeros the coefficient buffer (which contains th
 
 ### Current State: Stubs
 
-The post-quantum modules exist with correct interfaces but provide **zero security**:
+The post-quantum modules exist with correct interfaces but provide **zero post-quantum security** (no real lattice operations):
 
-- **ML-KEM-768** (`src/crypto/pq_kem.zig`): `keygen()` returns random bytes. `encaps()` returns random shared secret. `decaps()` returns random shared secret. They do NOT perform real lattice operations.
+- **ML-KEM-768** (`src/crypto/pq_kem.zig`): `keygen()` returns random bytes. `encaps()` generates a random ciphertext and derives the shared secret as HMAC-SHA256(public_key, ciphertext); `decaps()` derives HMAC-SHA256(secret_key, ciphertext). Because the stub keys are independent random bytes, encaps and decaps do NOT produce matching secrets -- the stub preserves the interface only.
 
-- **ML-DSA-65** (`src/crypto/pq_sig.zig`): `keygen()` returns random bytes. `sign()` returns SHA-256 hash as placeholder. `verify()` **ALWAYS SUCCEEDS** -- provides zero signature verification.
+- **ML-DSA-65** (`src/crypto/pq_sig.zig`): `keygen()` returns random bytes. `sign()` places SHA-256(message) in the signature as a placeholder. `verify()` is **fail-closed**: it recomputes SHA-256(message), compares in constant time, and returns `SigError.VerifyFailed` on mismatch. This rejects tampered messages/signatures but is NOT real post-quantum verification.
 
 Both modules log a one-time warning when first used:
 ```
-pq_kem: STUB implementation in use -- provides ZERO post-quantum security
-pq_sig: STUB implementation in use -- provides ZERO post-quantum security, verify() ALWAYS succeeds
+pq_kem: STUB implementation — uses HMAC-based KEM, NOT real post-quantum security. Install liboqs for ML-KEM-768.
+pq_sig: STUB implementation — uses HMAC-based signatures, NOT real post-quantum security. Install liboqs for ML-DSA-65.
 ```
+
+See [PQ_INTEGRATION.md](PQ_INTEGRATION.md) for details.
 
 ### Planned Implementation (Phase 2)
 
@@ -309,7 +311,11 @@ The X25519 portion is fully functional using Zig's `std.crypto.dh.X25519`. Only 
 
 ## WireGuard Transport Security
 
-All guardian-to-guardian communication (port 7501) is restricted to the WireGuard overlay network (10.0.0.x addresses). WireGuard provides:
+Guardian-to-guardian communication (port 7501) is designed to be restricted to the WireGuard overlay network (10.0.0.x addresses).
+
+> **Status (v0.1.0):** The peer protocol is not active -- `main()` never starts the peer listener, so nothing accepts connections on port 7501 (the module is exercised only by tests). The heartbeat sender runs, but with the empty stubbed node list it has no peers to contact. The properties below apply once the peer protocol is wired in.
+
+WireGuard provides:
 
 1. **Authenticated encryption:** ChaCha20-Poly1305 with per-peer keys derived from Noise IK handshake.
 2. **Perfect forward secrecy:** New ephemeral keys every 2 minutes or 2^64 messages.
@@ -337,10 +343,10 @@ The Herzberg-Jarecki-Krawczyk-Yung re-sharing protocol ensures:
 
 4. **No secret reconstruction.** At no point during re-sharing does any single party learn the secret. Each guardian only processes deltas and updates its own share.
 
-Re-sharing is triggered:
-- On node topology changes (join/leave detected by discovery module).
-- Periodically every 24 hours.
-- When alive count drops below the safety threshold (K+1).
+> **Status (v0.1.0):** The re-sharing math is implemented and tested (`src/sss/reshare.zig`), but no runtime code invokes it -- the repair/re-share modules are referenced only from tests. The planned triggers (Phase 2) are:
+> - On node topology changes (join/leave detected by discovery module).
+> - Periodically every 24 hours.
+> - When alive count drops below the safety threshold (K+1).
 
 ---
 

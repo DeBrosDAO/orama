@@ -306,14 +306,13 @@ Removes the deployment, frees the domain, and cleans up resources on the node.
 
 ## Environment Variables
 
-Server-side deployments (Next.js, Go, Node.js) receive the following environment variables automatically:
+Server-side deployments (Next.js, Go, Node.js) receive the following environment variable automatically:
 
 | Variable | Description |
 |----------|-------------|
 | `PORT` | Port the app must listen on. Assigned by the node. |
-| `NODE_ENV` | Set to `production` for Node.js and Next.js deployments. |
-| `ORAMA_APP_NAME` | The deployment name. |
-| `ORAMA_NAMESPACE` | Your namespace. |
+
+`NODE_ENV=production` is set while dependencies are installed at deploy time (`npm install`), but it is not injected into the running app's environment -- set it yourself if your app relies on it at runtime.
 
 ---
 

@@ -44,6 +44,7 @@ Provision a VPS with the following minimum specifications:
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 22 | TCP | SSH access |
+| 80 | TCP | ACME challenges / HTTP-to-HTTPS redirect |
 | 443 | TCP | HTTPS (external traffic via Caddy) |
 | 51820 | UDP | WireGuard mesh tunnel |
 | 9001 | TCP | Anyone relay ORPort (only if running a relay) |
@@ -70,7 +71,7 @@ chmod +x orama
 mv orama /usr/local/bin/
 
 # Verify installation
-orama --version
+orama version
 ```
 
 ## Node Installation
@@ -230,11 +231,12 @@ orama node report --json
 Stream logs from a specific service using shorthand aliases:
 
 ```bash
-orama node logs node       # Node service logs
-orama node logs gateway    # Gateway logs
+orama node logs node       # Node service logs (includes RQLite)
+orama node logs gateway    # Gateway logs (embedded in the node service)
 orama node logs ipfs       # IPFS daemon logs
-orama node logs cluster    # RQLite cluster logs
+orama node logs cluster    # IPFS Cluster logs
 orama node logs olric      # Olric cache logs
+orama node logs rqlite     # RQLite logs (included in node service logs)
 ```
 
 ### Invite Tokens
@@ -253,7 +255,7 @@ Share the generated token along with your node's HTTPS URL. The joining operator
 
 ### Upgrades
 
-Upgrade the Orama binary on a node. The upgrade command downloads the latest binary and can optionally restart services.
+Upgrade the Orama binaries on a node. The upgrade command installs from a pre-built binary archive already staged on the node (delivered via `orama push` or `orama rollout`), falling back to compiling from source at `/opt/orama/src` if no archive is present. It does not download anything itself, and it can optionally restart services.
 
 ```bash
 # Upgrade binary only (no restart)
@@ -303,13 +305,13 @@ orama node push --env mainnet --direct
 
 ### Uninstall
 
-Remove all Orama services, data, and configuration from a node:
+Remove all Orama services from a node:
 
 ```bash
 orama node uninstall
 ```
 
-This stops all services, removes systemd units, deletes data directories, and tears down the WireGuard interface. The node is deregistered from the cluster.
+This stops and disables all services (including namespace services) and removes their systemd unit files. Configuration and data are preserved in `/opt/orama/.orama` — to remove them as well, run `rm -rf /opt/orama/.orama` afterwards. Uninstall does not tear down the WireGuard interface or deregister the node from the cluster.
 
 ## Recovery
 

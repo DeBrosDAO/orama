@@ -13,10 +13,18 @@ curl -s http://127.0.0.1:7500/v1/vault/health | jq .
 Expected response:
 ```json
 {
-  "status": "ok",
-  "version": "0.1.0"
+  "status": "degraded",
+  "version": "0.1.0",
+  "shares": 0,
+  "peers": 0,
+  "data_dir_ok": true
 }
 ```
+
+Status meanings:
+- `"unhealthy"` -- the data directory is not accessible. Investigate immediately.
+- `"degraded"` -- data directory OK, but zero alive peers. **This is the expected status in v0.1.0**: RQLite node discovery is a stub that returns an empty node list, so the peer count is always zero.
+- `"ok"` -- data directory OK and at least one alive peer (requires the Phase 2 discovery integration).
 
 If this endpoint does not respond, the guardian process is not running or the port is blocked. Check systemd status first.
 
@@ -47,7 +55,13 @@ Lists known guardian nodes in the cluster:
 curl -s http://127.0.0.1:7500/v1/vault/guardians | jq .
 ```
 
-> **Note (v0.1.0):** This currently returns only the local node. Full cluster listing requires RQLite integration (Phase 2).
+The handler lists all alive nodes from the guardian's node list. In v0.1.0 the RQLite discovery stub returns an empty node list, so the response is:
+
+```json
+{"guardians":[],"threshold":3,"total":0}
+```
+
+Full cluster listing requires RQLite integration (Phase 2).
 
 ### Systemd Journal
 
@@ -71,11 +85,11 @@ Log messages include:
 - `vault-guardian v0.1.0 starting` -- startup confirmation
 - `config: <path>` -- config file path
 - `listening on <addr>:<port> (client)` -- client listener bound
-- `listening on <addr>:<port> (peer)` -- peer listener bound
+- `listening on <addr>:<port> (peer)` -- configured peer port. **Note (v0.1.0):** this line is logged, but no peer listener is actually started -- nothing binds port 7501 at runtime.
 - `data directory: <path>` -- data directory path
 - `guardian ready -- starting HTTP server` -- initialization complete
 - `stored share for identity <hex> (<n> bytes, version <v>)` -- successful push
-- `served share for identity <hex> (<n> bytes)` -- successful pull
+- `served share for identity <hex> (<n> bytes, v<v>)` -- successful pull
 - `rejected rollback for <hex>: version <v> <= current <v>` -- anti-rollback rejection
 - `accept error: <err>` -- TCP accept failure (non-fatal, retried)
 - `connection error: <err>` -- individual connection handling error
@@ -130,7 +144,7 @@ The systemd service uses `ProtectSystem=strict` with `ReadWritePaths=/opt/orama/
 
 ### RQLite Connectivity
 
-**Symptom:** Log shows `failed to fetch node list from RQLite, running in single-node mode`
+**Symptom:** Health endpoint reports `"status":"degraded"` with `"peers":0`; guardians endpoint returns an empty list.
 
 **Diagnosis:**
 ```bash
@@ -142,11 +156,9 @@ curl -s http://127.0.0.1:4001/status | jq .store.raft.state
 ```
 
 **Resolution:**
-- This warning is non-fatal. The guardian continues in single-node mode.
-- Ensure RQLite is started before the vault guardian (normal dependency ordering).
-- Verify the `rqlite_url` in config matches the actual RQLite address.
-
-> **Note (v0.1.0):** RQLite node discovery is a stub. The guardian always falls back to single-node mode. This warning is expected in the current version.
+- In v0.1.0 this is not fixable by configuration: RQLite node discovery is a stub that "succeeds" with an empty node list, so the guardian always runs with zero known peers regardless of RQLite health. (Because the stub does not return an error, the `failed to fetch node list from RQLite, running in single-node mode` fallback log never appears.)
+- The guardian is fully functional for local push/pull in this mode.
+- Real RQLite discovery is Phase 2; the `rqlite_url` config value is currently unused by the fetch.
 
 ### Share Write Failures
 
@@ -171,16 +183,16 @@ ls -la /opt/orama/.orama/data/vault/shares/
 
 ### Anti-Rollback Rejections
 
-**Symptom:** Push returns 400 with `"version must be greater than current stored version"`
+**Symptom:** Push returns 409 Conflict with `"version must be greater than current stored version"`
 
-This is normal behavior -- the client tried to push an older version of a share. Common causes:
+This is normal behavior -- the client tried to push an older version of a share. (409 rather than 400 lets clients distinguish a stale version from a malformed request.) Common causes:
 - Client retry after a network timeout (the first push actually succeeded).
 - Client software bug sending stale version numbers.
 
 **Diagnosis:**
 ```bash
-# Check current stored version for an identity
-cat /opt/orama/.orama/data/vault/shares/<identity_hex>/version
+# Check current stored version (and threshold) for an identity
+cat /opt/orama/.orama/data/vault/shares/<identity_hex>/meta.json
 ```
 
 **Resolution:** The client must send a version number strictly greater than the stored value. This is not a guardian bug.
@@ -218,8 +230,8 @@ ls /opt/orama/.orama/data/vault/shares/
 Check a specific identity's share:
 
 ```bash
-# View version
-cat /opt/orama/.orama/data/vault/shares/<identity_hex>/version
+# View version and threshold metadata
+cat /opt/orama/.orama/data/vault/shares/<identity_hex>/meta.json
 
 # View share size
 ls -la /opt/orama/.orama/data/vault/shares/<identity_hex>/share.bin
@@ -249,27 +261,28 @@ test -s /opt/orama/.orama/data/vault/shares/<identity>/checksum.bin && echo "OK"
 
 ### Test Push/Pull
 
+Push and pull are authenticated: both handlers require an `X-Session-Token` header (obtained via the challenge/session endpoints) **and** an Ed25519 ownership proof (`pubkey` + `signature` fields in the body, where `identity = SHA-256(pubkey)`). A plain curl without these returns 401 Unauthorized -- which makes it a useful smoke test that auth is enforced:
+
 ```bash
-# Push a test share
-curl -X POST http://127.0.0.1:7500/v1/vault/push \
+# Verify auth is enforced (expected: 401 with "session token required")
+curl -s -X POST http://127.0.0.1:7500/v1/vault/push \
   -H "Content-Type: application/json" \
   -d '{
     "identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "share": "dGVzdCBzaGFyZSBkYXRh",
     "version": 1
   }'
-
-# Expected: {"status":"stored"}
-
-# Pull it back
-curl -X POST http://127.0.0.1:7500/v1/vault/pull \
-  -H "Content-Type: application/json" \
-  -d '{
-    "identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  }'
-
-# Expected: {"share":"dGVzdCBzaGFyZSBkYXRh"}
 ```
+
+A full push/pull test requires a signing client (curl alone cannot produce Ed25519 signatures). The flow is:
+
+1. Generate an Ed25519 keypair; the identity is `SHA-256(pubkey)` as 64 lowercase hex chars.
+2. `POST /v1/vault/auth/challenge` with `{"identity":"<hex>"}` -- returns `{"nonce":..., "created_ns":..., "tag":...}`.
+3. `POST /v1/vault/auth/session` echoing those fields plus the identity -- returns `{"identity":..., "expiry_ns":..., "tag":...}`. The session token is `<identity_hex>:<expiry_ns>:<tag_hex>`.
+4. Push: `POST /v1/vault/push` with header `X-Session-Token: <token>` and body fields `identity`, `share` (base64), `version`, `pubkey` (64 hex), `signature` (128 hex) -- the signature is Ed25519 over the ASCII message `vault-push-v1:<identity_hex>:<version>`. Expected: `{"status":"stored"}`.
+5. Pull: `POST /v1/vault/pull` with the same header and body fields `identity`, `pubkey`, `signature`, `timestamp` (Unix seconds, within 120s of the guardian's clock) -- the signature is over `vault-pull-v1:<identity_hex>:<timestamp>`. Expected: `{"share":"<base64>","version":<n>,"threshold":<k>}`.
+
+In practice, use the Orama gateway's vault client (or the SDK) for end-to-end testing rather than hand-rolling signatures.
 
 ### Delete a Share (Emergency)
 
@@ -336,8 +349,9 @@ Each user's share directory contains:
 | File | Typical Size | Description |
 |------|-------------|-------------|
 | `share.bin` | ~1 KB | Encrypted share data (same size as original secret) |
-| `version` | ~1-20 bytes | Version counter as ASCII digits |
+| `meta.json` | ~40 bytes | Version counter and threshold, e.g. `{"version":1,"threshold":3}` |
 | `checksum.bin` | 32 bytes | HMAC-SHA256 checksum |
+| `wrapped_dek1.bin` / `wrapped_dek2.bin` | ~60 bytes each | KEK-wrapped DEKs (when present) |
 | Directory entry | ~4 KB | Filesystem overhead (depends on filesystem) |
 
 **Total per user per node: ~5 KB** (including filesystem overhead).
@@ -378,6 +392,8 @@ This is unlikely to be a bottleneck but is worth monitoring on small partitions.
 
 ## Cluster Scaling
 
+> **Note (v0.1.0):** This section describes the multi-guardian design. At runtime today, RQLite discovery returns an empty node list, the peer listener is never started, and the repair/re-sharing protocol is not wired in -- each guardian effectively operates single-node. The mechanics below take effect with the Phase 2 integration.
+
 ### Adding Nodes
 
 When a new node joins the Orama network:
@@ -414,17 +430,19 @@ K = max(3, floor(alive_count / 3))
 
 ### Write Quorum
 
-Write quorum requires supermajority acknowledgment:
+Write quorum requires supermajority acknowledgment, with a floor that guarantees a successful write persists more shares than a read requires (W > K):
 
 ```
-W = ceil(2/3 * alive_count)
+W = min(N, max(K + 1, ceil(2/3 * N)))
 ```
+
+(The plain `ceil(2N/3)` formula was unsafe: at N=3 it gave W=2 < K, allowing "successful" writes that were silently unrecoverable.)
 
 | Alive | Write Quorum (W) |
 |-------|-------------------|
 | 1 | 1 |
 | 2 | 2 |
-| 3 | 2 |
+| 3 | 3 |
 | 4 | 3 |
 | 5 | 4 |
 | 14 | 10 |
@@ -443,12 +461,12 @@ A push succeeds only if W guardians acknowledge storage. This ensures consistenc
 - [ ] Binary built with `-Doptimize=ReleaseSafe` for the correct target.
 - [ ] Data directory exists with correct ownership and permissions.
 - [ ] systemd service file installed and enabled.
-- [ ] Firewall rules allow port 7500 (client) and 7501 (peer, WireGuard only).
+- [ ] Firewall rules allow port 7500 (client) and 7501 (peer, WireGuard only). Note: in v0.1.0 nothing listens on 7501 (the peer listener is not started); the rule is forward-compatibility for Phase 2.
 - [ ] WireGuard is up and peers are connected.
 
 ### Post-Deploy
 
-- [ ] Health endpoint responds: `curl http://127.0.0.1:7500/v1/vault/health`
+- [ ] Health endpoint responds: `curl http://127.0.0.1:7500/v1/vault/health` (expect `"status":"degraded"` in v0.1.0 -- see Health Endpoint above)
 - [ ] Status endpoint shows correct config: `curl http://127.0.0.1:7500/v1/vault/status`
 - [ ] No error-level log messages: `sudo journalctl -u orama-vault -p err -n 10`
 - [ ] Test push/pull cycle works (see "Test Push/Pull" section above).

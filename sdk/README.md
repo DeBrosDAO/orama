@@ -1,6 +1,6 @@
-# @debros/network-ts-sdk - TypeScript SDK for DeBros Network
+# @debros/orama - TypeScript SDK for Orama Network
 
-A modern, isomorphic TypeScript SDK for the DeBros Network gateway. Works seamlessly in both Node.js and browser environments with support for database operations, pub/sub messaging, and network management.
+A modern, isomorphic TypeScript SDK for the Orama Network gateway. Works seamlessly in both Node.js and browser environments with support for database operations, pub/sub messaging, and network management.
 
 ## Features
 
@@ -14,7 +14,7 @@ A modern, isomorphic TypeScript SDK for the DeBros Network gateway. Works seamle
 ## Installation
 
 ```bash
-npm install @debros/network-ts-sdk
+npm install @debros/orama
 ```
 
 ## Quick Start
@@ -22,7 +22,7 @@ npm install @debros/network-ts-sdk
 ### Initialize the Client
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "http://localhost:6001",
@@ -165,7 +165,7 @@ subscription.close();
 **Message Interface:**
 
 ```typescript
-interface Message {
+interface PubSubMessage {
   data: string; // Decoded message payload (string)
   topic: string; // Topic name
   timestamp: number; // Server timestamp in milliseconds
@@ -174,19 +174,7 @@ interface Message {
 
 #### Debug Raw Envelopes
 
-For debugging, you can inspect raw message envelopes before decoding:
-
-```typescript
-const subscription = await client.pubsub.subscribe("notifications", {
-  onMessage: (msg) => {
-    console.log("Decoded message:", msg.data);
-  },
-  onRaw: (envelope) => {
-    console.log("Raw envelope:", envelope);
-    // { data: "base64...", timestamp: 1234567890, topic: "notifications" }
-  },
-});
-```
+**Not yet available.** An `onRaw` callback for inspecting raw message envelopes before decoding is not implemented. `SubscribeOptions` currently supports `onMessage`, `onError`, `onClose`, and `presence`.
 
 #### Multi-Subscriber Support
 
@@ -309,7 +297,8 @@ const healthy = await client.network.health();
 
 ```typescript
 const status = await client.network.status();
-console.log(status.healthy, status.peers);
+console.log(status.node_id, status.connected, status.peer_count);
+// NetworkStatus: { node_id, connected, peer_count, database_size, uptime }
 ```
 
 #### List Peers
@@ -379,7 +368,7 @@ interface ClientConfig {
 By default, credentials are stored in memory. For browser apps, use localStorage:
 
 ```typescript
-import { createClient, LocalStorageAdapter } from "@debros/network-ts-sdk";
+import { createClient, LocalStorageAdapter } from "@debros/orama";
 
 const client = createClient({
   baseURL: "http://localhost:6001",
@@ -539,7 +528,8 @@ const client = createClient({
       { address: "10.0.0.2", port: 8443 },
       { address: "10.0.0.3", port: 8443 },
     ],
-    identityHex: "your-identity-hex",
+    hmacKey: yourHmacKey, // Uint8Array — HMAC key for guardian authentication
+    identityHex: "your-identity-hex", // 64-char hex identity hash
   },
 });
 
@@ -565,18 +555,31 @@ await client.vault.delete("api-key");
 For wallet-based auth (challenge-response flow):
 
 ```typescript
-// 1. Request a challenge
-const challenge = await client.auth.challenge();
+// 1. Request a challenge nonce for your wallet
+const challenge = await client.auth.challenge({ wallet: "0xYourWallet" });
 
-// 2. Sign the challenge with your wallet (external)
-const signature = await wallet.signMessage(challenge.message);
+// 2. Sign the nonce with your wallet (external)
+const signature = await wallet.signMessage(challenge.nonce);
 
-// 3. Verify signature and get JWT
-const session = await client.auth.verify(challenge.id, signature);
-console.log(session.token);
+// 3. Verify signature and get JWT (persisted on the client automatically)
+const session = await client.auth.verify({
+  wallet: "0xYourWallet",
+  nonce: challenge.nonce,
+  signature,
+  chain_type: "ETH", // or "SOL"
+});
+console.log(session.access_token);
+console.log(session.api_key); // API key for long-lived access, if issued
 
-// 4. Get an API key for long-lived access
-const apiKey = await client.auth.getApiKey();
+// Alternatively, request an API key directly. Nonces are single-use,
+// so sign a fresh challenge:
+const fresh = await client.auth.challenge({ wallet: "0xYourWallet" });
+const apiKey = await client.auth.getApiKey({
+  wallet: "0xYourWallet",
+  nonce: fresh.nonce,
+  signature: await wallet.signMessage(fresh.nonce),
+});
+console.log(apiKey.api_key);
 ```
 
 ## Error Handling
@@ -584,7 +587,7 @@ const apiKey = await client.auth.getApiKey();
 The SDK throws `SDKError` for all errors:
 
 ```typescript
-import { SDKError } from "@debros/network-ts-sdk";
+import { SDKError } from "@debros/orama";
 
 try {
   await client.db.query("SELECT * FROM nonexistent");
@@ -604,7 +607,7 @@ The SDK works in browsers with minimal setup:
 
 ```typescript
 // Browser example
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://gateway.example.com",
@@ -653,7 +656,7 @@ Output goes to `dist/` with ESM and type declarations.
 ```bash
 npm run dev      # Watch mode
 npm run typecheck # Type checking
-npm run lint     # Linting (if configured)
+npm run lint     # Linting
 ```
 
 ## License

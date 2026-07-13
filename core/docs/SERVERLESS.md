@@ -44,8 +44,10 @@ memory: 64              # Memory limit in MB (1-256, default: 64)
 timeout: 30             # Execution timeout in seconds (1-300, default: 30)
                         # Bump to 60-300 for batch DB ops, schema migrations,
                         # or anything that does many sequential host calls.
-                        # Functions that exceed timeout return the canonical
-                        # TIMEOUT envelope: {ok:false, error:{code:"TIMEOUT",...}}.
+                        # Exceeding this timeout on a direct invoke returns
+                        # HTTP 429 {ok:false, error:{code:"RATE_LIMITED",...}}
+                        # (retryable). The code "TIMEOUT" (HTTP 504) appears
+                        # only when the namespace-proxy budget is exceeded.
 retry:
   count: 0              # Retry attempts on failure (default: 0)
   delay: 5              # Seconds between retries (default: 5)
@@ -100,6 +102,21 @@ orama function build
 # Or manually
 tinygo build -o function.wasm -target wasi function.go
 ```
+
+> ⚠️ **`orama function deploy` reuses an existing `function.wasm`.** It only
+> auto-builds when `function.wasm` is **absent**. If you edit `function.go` but a
+> stale `function.wasm` from a previous build is still on disk, `deploy` uploads the
+> **old** binary and your changes silently never ship — which looks exactly like "the
+> gateway isn't picking up my update". After editing source, run `orama function
+> build` (which overwrites the wasm) or `rm function.wasm` before `orama function
+> deploy`. Redeploys otherwise take effect immediately (new version → new WASM CID →
+> the runtime loads it on the next invoke).
+
+> ℹ️ **Deploys are per-gateway.** `orama function deploy` targets the gateway of your
+> **active CLI environment** (`orama env`). To deploy into a namespace, point the CLI
+> at that namespace's gateway (`orama env add <name> https://ns-<ns>.<domain>` then
+> `orama env use <name>`), or set `ORAMA_GATEWAY_URL`. Verify against the same
+> namespace host — the bare/main gateway has a different function registry + DB view.
 
 ## Host Functions API
 
@@ -180,6 +197,20 @@ The legacy `db_execute` is kept indefinitely so existing functions don't break. 
 | Function | Description |
 |----------|-------------|
 | `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. |
+
+### Storage (IPFS)
+
+There is **no `storage_put` / `storage_get` host function exposed to WASM** — a
+function cannot pin to or read IPFS directly. Storage is done over the gateway HTTP
+API (`POST /v1/storage/upload`, `GET /v1/storage/get/:cid`).
+
+> ⚠️ Those storage endpoints require a **logged-in user (JWT)** — an API key alone is
+> rejected (`the 'storage' operation requires a logged-in user; an API key alone is
+> not sufficient`). So a function cannot upload via `http_fetch` with an API-key
+> secret either. The pattern that works: the **client** uploads with its user JWT and
+> passes the resulting CID to a function (which records/uses it). If your function
+> truly needs to originate IPFS content, it needs a user-JWT credential, not a
+> namespace API key.
 
 ### PubSub
 
@@ -494,7 +525,7 @@ func main() {
     // 4. log_info("Push sent to " + invite.CalleeID)
     //
     // Note: Host functions use the WASM ABI (pointer/length).
-    // A Go SDK for ergonomic access is planned.
+    // The sdk/fn package wraps them for ergonomic access.
 
     response := map[string]interface{}{
         "status":  "sent",
