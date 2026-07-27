@@ -26,7 +26,7 @@ func TestResolveTURNSCert_primaryFallsBackToSelfSigned(t *testing.T) {
 	s := testSpawner(t)
 	dir := t.TempDir()
 
-	certPath, keyPath, err := s.resolveTURNSCert("ns-test", "turn.ns-test.example.com", "203.0.113.7", dir, true)
+	certPath, keyPath, err := s.resolveTURNSCert("ns-test", "turn.ns-test.example.com", "", "203.0.113.7", dir, true)
 	if err != nil {
 		t.Fatalf("expected self-signed fallback, got error: %v", err)
 	}
@@ -38,11 +38,59 @@ func TestResolveTURNSCert_primaryFallsBackToSelfSigned(t *testing.T) {
 	}
 }
 
+// TURNS cert fix: when the *.<base> wildcard cert exists, resolveTURNSCert must
+// return it (browser-valid) BEFORE any Caddy provisioning or self-signed
+// fallback — this is the core of the fix.
+func TestResolveTURNSCert_prefersWildcard(t *testing.T) {
+	storage := t.TempDir()
+	s := &SystemdSpawner{logger: zap.NewNop(), caddyStorageDirOverride: storage}
+
+	base := "orama-devnet.network"
+	wcCert, wcKey := s.wildcardCertPaths(base)
+	if err := os.MkdirAll(filepath.Dir(wcCert), 0o755); err != nil {
+		t.Fatalf("mkdir wildcard dir: %v", err)
+	}
+	if err := os.WriteFile(wcCert, []byte("dummy-cert"), 0o600); err != nil {
+		t.Fatalf("write wildcard cert: %v", err)
+	}
+	if err := os.WriteFile(wcKey, []byte("dummy-key"), 0o600); err != nil {
+		t.Fatalf("write wildcard key: %v", err)
+	}
+
+	dir := t.TempDir()
+	gotCert, gotKey, err := s.resolveTURNSCert("ns-test", "turn.ns-test."+base, base, "203.0.113.7", dir, true)
+	if err != nil {
+		t.Fatalf("resolveTURNSCert: %v", err)
+	}
+	if gotCert != wcCert || gotKey != wcKey {
+		t.Errorf("expected wildcard pair %s/%s, got %s/%s", wcCert, wcKey, gotCert, gotKey)
+	}
+	// Must NOT have fallen through to writing a self-signed pair.
+	if _, statErr := os.Stat(filepath.Join(dir, "turn-cert.pem")); !os.IsNotExist(statErr) {
+		t.Error("wildcard was available — must not generate a self-signed cert")
+	}
+}
+
+// With a baseDomain set but the wildcard absent, resolveTURNSCert must fall
+// through to the existing behavior (self-signed for the primary domain), never
+// error out — locks the branch ordering wildcard -> provision -> self-signed.
+func TestResolveTURNSCert_missingWildcardFallsThrough(t *testing.T) {
+	s := &SystemdSpawner{logger: zap.NewNop(), caddyStorageDirOverride: t.TempDir()}
+	dir := t.TempDir()
+	certPath, _, err := s.resolveTURNSCert("ns-test", "turn.ns-test.example.com", "example.com", "203.0.113.7", dir, true)
+	if err != nil {
+		t.Fatalf("expected self-signed fallback, got: %v", err)
+	}
+	if certPath != filepath.Join(dir, "turn-cert.pem") {
+		t.Errorf("expected self-signed fallback path, got %s", certPath)
+	}
+}
+
 func TestResolveTURNSCert_existingSelfSignedReused(t *testing.T) {
 	s := testSpawner(t)
 	dir := t.TempDir()
 
-	first, _, err := s.resolveTURNSCert("ns-test", "", "203.0.113.7", dir, true)
+	first, _, err := s.resolveTURNSCert("ns-test", "", "", "203.0.113.7", dir, true)
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
@@ -51,7 +99,7 @@ func TestResolveTURNSCert_existingSelfSignedReused(t *testing.T) {
 		t.Fatalf("stat first cert: %v", err)
 	}
 
-	second, _, err := s.resolveTURNSCert("ns-test", "", "203.0.113.7", dir, true)
+	second, _, err := s.resolveTURNSCert("ns-test", "", "", "203.0.113.7", dir, true)
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -68,7 +116,7 @@ func TestResolveTURNSCert_stealthNeverFallsBackToSelfSigned(t *testing.T) {
 	s := testSpawner(t)
 	dir := t.TempDir()
 
-	_, _, err := s.resolveTURNSCert("ns-test", "cdn-abc123def456.example.com", "203.0.113.7", dir, false)
+	_, _, err := s.resolveTURNSCert("ns-test", "cdn-abc123def456.example.com", "", "203.0.113.7", dir, false)
 	if err == nil {
 		t.Fatal("stealth cert resolution must hard-fail without Let's Encrypt — a self-signed stealth cert is indistinguishable from being blocked")
 	}
@@ -82,7 +130,7 @@ func TestResolveTURNSCert_stealthNeverFallsBackToSelfSigned(t *testing.T) {
 
 func TestResolveTURNSCert_noDomainNoFallbackErrors(t *testing.T) {
 	s := testSpawner(t)
-	_, _, err := s.resolveTURNSCert("ns-test", "", "203.0.113.7", t.TempDir(), false)
+	_, _, err := s.resolveTURNSCert("ns-test", "", "", "203.0.113.7", t.TempDir(), false)
 	if err == nil {
 		t.Fatal("empty domain with self-signed disallowed must error")
 	}

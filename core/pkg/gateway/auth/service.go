@@ -117,9 +117,15 @@ func (s *Service) resolveCustomClaims(ctx context.Context, wallet, namespace str
 func (s *Service) lastKnownCustomClaims(ctx context.Context, nsID interface{}, subject string) map[string]string {
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.orm.Database()
+	// bugboard #154: exclude revoked rows. Without this a logged-out / rotated
+	// row (or a stale row for a deleted-then-recreated identity) whose
+	// expires_at is still in the future could resurrect stale claims (e.g. a
+	// prior account_id). Only a live, non-revoked row is a trustworthy
+	// last-known-good source.
 	res, err := db.Query(internalCtx,
 		`SELECT custom_claims FROM refresh_tokens
 		 WHERE namespace_id = ? AND subject = ?
+		   AND revoked_at IS NULL
 		   AND custom_claims IS NOT NULL AND custom_claims != ''
 		 ORDER BY expires_at DESC LIMIT 1`,
 		nsID, subject)
@@ -513,6 +519,27 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			}
 		}
 		custom = unmarshalClaims(customClaimsJSON)
+	}
+
+	// bugboard #154: an empty-claims session must be able to self-heal on
+	// refresh. A JWT minted BEFORE the app's account row exists (e.g. AnChat
+	// signup: token minted at SIWE-verify, account_id resolves 5-25s later)
+	// stored empty custom_claims; the pre-existing behaviour replayed that
+	// emptiness for the whole ~30-day refresh chain, so account_id-gated
+	// features (push routing) stayed broken until a manual re-login. When the
+	// stored claims are EMPTY and this namespace has a provider, RE-RESOLVE
+	// here so the session converges within one refresh cycle (~15 min).
+	// Scoped to empty-claims sessions only: a healthy (non-empty) session never
+	// touches the provider, so the hot path pays nothing. resolveCustomClaims
+	// is fail-open (never errors) and we only overwrite on a non-empty result,
+	// so a still-unavailable provider leaves custom empty and refresh proceeds
+	// unchanged. Self-terminating: once healed, subsequent refreshes see
+	// non-empty claims and skip this entirely. subject is the wallet (stored as
+	// the refresh-row subject at mint), exactly what the resolver expects.
+	if len(custom) == 0 && s.claimsResolver != nil {
+		if reResolved := s.resolveCustomClaims(internalCtx, subject, namespace); len(reResolved) > 0 {
+			custom = reResolved
+		}
 	}
 
 	// Step 2: atomic CAS — revoke the old row. RowsAffected is the lock.

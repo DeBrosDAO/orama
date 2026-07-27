@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/DeBrosOfficial/network/pkg/turn"
@@ -30,6 +31,23 @@ type SystemdSpawner struct {
 	// to per-node random keys and JWTs won't verify cross-node.
 	clusterSecretPath string
 	logger            *zap.Logger
+
+	// caddyStorageDirOverride overrides the Caddy cert-storage dir used to
+	// locate the `*.<base>` wildcard cert. Empty means the production default
+	// (caddyServiceStorageDir). Only set in tests so the wildcard-preference
+	// branch of resolveTURNSCert can be exercised without touching /var/lib.
+	caddyStorageDirOverride string
+}
+
+// wildcardCertPaths returns the cert/key paths for the `*.<baseDomain>` wildcard
+// in Caddy's storage, honoring caddyStorageDirOverride when set (tests).
+func (s *SystemdSpawner) wildcardCertPaths(baseDomain string) (certPath, keyPath string) {
+	if s.caddyStorageDirOverride != "" {
+		name := "wildcard_." + baseDomain
+		dir := filepath.Join(s.caddyStorageDirOverride, caddyACMECertDir, name)
+		return filepath.Join(dir, name+".crt"), filepath.Join(dir, name+".key")
+	}
+	return caddyWildcardCertPaths(baseDomain)
 }
 
 // NewSystemdSpawner creates a new systemd-based spawner.
@@ -418,6 +436,117 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
+// TURNConfigExists reports whether this node has a TURN config for the
+// namespace on disk — i.e. it is provisioned to run TURN. Deterministic (unlike
+// checking the systemd unit state, which is racy during a restart), so callers
+// can reliably decide whether to advertise this node in TURN DNS (bugboard #158).
+func (s *SystemdSpawner) TURNConfigExists(namespace, nodeID string) bool {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("turn-%s.yaml", nodeID))
+	_, err := os.Stat(configPath)
+	return err == nil
+}
+
+// turnSecretDrift reports whether the on-disk TURN auth_secret differs from the
+// desired (current DB) secret — i.e. a rewrite+restart is needed. Pure function
+// so the reconcile decision is unit-testable.
+func turnSecretDrift(onDiskSecret, dbSecret string) bool {
+	return onDiskSecret != dbSecret
+}
+
+// reconcileTURNConfigFields applies desired state to a parsed TURN config in
+// place and returns the names of the fields that actually changed (empty slice
+// = no change, so the caller skips the rewrite+restart). Pure — the reconcile
+// decision is unit-testable without systemd or disk.
+//
+// wildcardCert/wildcardKey are the `*.<base>` wildcard paths, or "" when the
+// wildcard isn't available; the cert is switched only when both are non-empty,
+// TURNS is enabled, and the config isn't already pointing at it.
+func reconcileTURNConfigFields(cfg *turn.Config, dbSecret, wildcardCert, wildcardKey string) []string {
+	var reconciled []string
+
+	// (1) auth_secret drift. Never write an unresolved/encrypted secret (that
+	// would make TURN validate with ciphertext and break every call) — parity
+	// with the gateway's #130 skip.
+	if dbSecret != "" && !secrets.IsEncrypted(dbSecret) && turnSecretDrift(cfg.AuthSecret, dbSecret) {
+		cfg.AuthSecret = dbSecret
+		reconciled = append(reconciled, "auth_secret")
+	}
+
+	// (2) TURNS cert drift. Switch the self-signed fallback to the wildcard so
+	// the cert validates in browsers (self-signed is rejected).
+	if cfg.TURNSListenAddr != "" && wildcardCert != "" && wildcardKey != "" && cfg.TLSCertPath != wildcardCert {
+		cfg.TLSCertPath = wildcardCert
+		cfg.TLSKeyPath = wildcardKey
+		reconciled = append(reconciled, "tls_cert")
+	}
+
+	return reconciled
+}
+
+// ReconcileTURN keeps a running TURN server's on-disk config in sync with the
+// current namespace state, restarting TURN only when something actually changed:
+//   - auth_secret drift vs the DB secret (bugboard #158)
+//   - the TURNS TLS cert still on the browser-rejected self-signed pair while
+//     the `*.<base>` wildcard cert is now available on disk (TURNS cert fix)
+//
+// Both matter for the SAME reason: the TURN config is otherwise only (re)written
+// on a COLD spawn (unit DOWN). A rolling deploy RESTARTS the unit, so it re-reads
+// the stale file — a new binary's resolveTURNSCert / secret logic never runs. So
+// on a warm restart the gateway would mint creds TURN rejects (Allocate 400 →
+// zero candidates), and TURNS would keep presenting the self-signed cert browsers
+// reject. This warm reconcile closes both gaps.
+//
+// SELF-CONTAINED: reads everything else (ports, public IP, stealth domain, base
+// domain) from the on-disk turn config and patches ONLY the drifted fields — so
+// it works even for namespaces whose cluster-state.json doesn't persist TURN
+// fields. Idempotent: a no-op when there is no TURN config on this node or
+// nothing drifted, so it never restart-loops or drops calls on an in-sync node.
+func (s *SystemdSpawner) ReconcileTURN(ctx context.Context, namespace, nodeID, dbSecret string) error {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("turn-%s.yaml", nodeID))
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		// No TURN config on this node → this node doesn't run TURN for the
+		// namespace. Nothing to reconcile.
+		return nil
+	}
+	var cfg turn.Config
+	if err := yaml.Unmarshal(existing, &cfg); err != nil {
+		return fmt.Errorf("parse TURN config for reconcile: %w", err)
+	}
+
+	// Resolve the wildcard cert paths ONLY if TURNS is enabled and the wildcard
+	// actually exists on disk — otherwise pass "" so the cert stays untouched (a
+	// node without the wildcard keeps its self-signed baseline rather than losing
+	// TURNS). The reconcile decision itself is a pure function (testable).
+	var wcCert, wcKey string
+	if cfg.TURNSListenAddr != "" && cfg.Realm != "" {
+		c, k := s.wildcardCertPaths(cfg.Realm)
+		if _, e1 := os.Stat(c); e1 == nil {
+			if _, e2 := os.Stat(k); e2 == nil {
+				wcCert, wcKey = c, k
+			}
+		}
+	}
+
+	reconciled := reconcileTURNConfigFields(&cfg, dbSecret, wcCert, wcKey)
+	if len(reconciled) == 0 {
+		return nil // already in sync — no restart
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return fmt.Errorf("marshal TURN config for reconcile: %w", err)
+	}
+	if err := writeConfigAtomic(configPath, out, 0644); err != nil {
+		return fmt.Errorf("write TURN config for reconcile: %w", err)
+	}
+
+	s.logger.Info("TURN config drifted from desired state — rewrote config and restarting TURN",
+		zap.String("namespace", namespace), zap.String("node_id", nodeID),
+		zap.Strings("reconciled", reconciled))
+	return s.systemdMgr.RestartService(namespace, systemd.ServiceTypeTURN)
+}
+
 // SFUInstanceConfig holds configuration for spawning an SFU instance
 type SFUInstanceConfig struct {
 	Namespace      string
@@ -463,7 +592,7 @@ func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string,
 		return fmt.Errorf("failed to marshal SFU config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+	if err := writeConfigAtomic(configPath, configBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write SFU config: %w", err)
 	}
 
@@ -538,17 +667,43 @@ const turnCertProvisionTimeout = 2 * time.Minute
 
 // resolveTURNSCert resolves the TURNS cert/key pair for a domain.
 //
-// Let's Encrypt via Caddy is tried FIRST whenever a domain is set — the call
-// is idempotent and instant when the cert is already in Caddy's storage. This
-// ordering also self-heals nodes stuck on the self-signed fallback from an
-// earlier failed provisioning (live devnet finding, feat-124): the old code
-// never retried Caddy once a self-signed pair existed on disk, so strict TLS
-// clients kept failing turns: validation forever.
+// The Caddy `*.<baseDomain>` wildcard cert is preferred whenever baseDomain is
+// set and the wildcard is on disk: the client-facing TURNS host is now a
+// single-label subdomain (turn.TLSHostForNamespace), which the wildcard covers,
+// so no per-namespace ACME provisioning is needed and the browser gets a
+// CA-valid cert. This is the fix for TURNS being stuck on a self-signed cert —
+// the legacy two-label host could never get a real cert (provisionTURNCertViaCaddy
+// can't write /etc/caddy under ProtectSystem=strict, and the wildcard doesn't
+// cover a two-label host).
+//
+// When no wildcard is available, per-domain Let's Encrypt via Caddy is tried
+// next (idempotent, self-heals a node stuck on self-signed once Caddy can
+// provision), then the self-signed fallback.
 //
 // allowSelfSigned controls the fallback: the primary TURN domain may fall
 // back to (or reuse) a self-signed pair at <configDir>/turn-{cert,key}.pem so
 // baseline TURN stays up, while the stealth domain must hard-fail instead.
-func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, publicIP, configDir string, allowSelfSigned bool) (string, string, error) {
+func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, baseDomain, publicIP, configDir string, allowSelfSigned bool) (string, string, error) {
+	// Prefer the Caddy `*.<baseDomain>` wildcard cert. The client-facing TURNS
+	// host is now a single-label subdomain (turn.TLSHostForNamespace), which the
+	// wildcard covers — so the TURN server can present a CA-valid cert with no
+	// per-namespace ACME provisioning, the same cert reuse that makes stealth
+	// work. This is the fix for TURNS being stuck on a browser-rejected
+	// self-signed cert: the legacy two-label host could never get a real cert
+	// because provisionTURNCertViaCaddy can't write /etc/caddy under
+	// ProtectSystem=strict, and the wildcard doesn't cover a two-label host.
+	if baseDomain != "" {
+		wcCert, wcKey := s.wildcardCertPaths(baseDomain)
+		_, certErr := os.Stat(wcCert)
+		_, keyErr := os.Stat(wcKey)
+		if certErr == nil && keyErr == nil {
+			s.logger.Info("Using Caddy wildcard cert for TURNS",
+				zap.String("namespace", namespace),
+				zap.String("base_domain", baseDomain),
+				zap.String("cert_path", wcCert))
+			return wcCert, wcKey, nil
+		}
+	}
 	if domain != "" {
 		caddyCert, caddyKey, err := provisionTURNCertViaCaddy(domain, acmeInternalEndpoint, turnCertProvisionTimeout)
 		if err == nil {
@@ -663,7 +818,7 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 	var certPath, keyPath string
 	if cfg.TURNSListenAddr != "" {
 		var certErr error
-		certPath, keyPath, certErr = s.resolveTURNSCert(namespace, cfg.TURNDomain, cfg.PublicIP, configDir, true)
+		certPath, keyPath, certErr = s.resolveTURNSCert(namespace, cfg.TURNDomain, cfg.Realm, cfg.PublicIP, configDir, true)
 		if certErr != nil {
 			s.logger.Warn("Failed to resolve TURNS cert, TURNS will be disabled",
 				zap.String("namespace", namespace),
@@ -726,7 +881,7 @@ func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string
 		return fmt.Errorf("failed to marshal TURN config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+	if err := writeConfigAtomic(configPath, configBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write TURN config: %w", err)
 	}
 
@@ -878,4 +1033,43 @@ func (s *SystemdSpawner) waitForService(namespace string, serviceType systemd.Se
 	}
 
 	return fmt.Errorf("service did not become active within %v", timeout)
+}
+
+// writeConfigAtomic writes a service config via temp-file + rename.
+//
+// Two writers can now target the same config concurrently — the boot restore and
+// the 60s WebRTC reconciler (bugboard #161) — and a plain os.WriteFile truncates
+// in place, so an interleaved write can leave truncated or malformed YAML on
+// disk. The unit then fails to parse and crash-loops, which the reconciler
+// retries forever. rename(2) is atomic within a filesystem, so a reader sees
+// either the old file or the new one, never a half-written one.
+func writeConfigAtomic(configPath string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(configPath)
+	tmp, err := os.CreateTemp(dir, filepath.Base(configPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	// fsync before rename so a crash cannot leave the new name pointing at
+	// unflushed (zero-length) content.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpName, configPath); err != nil {
+		return fmt.Errorf("rename temp config into place: %w", err)
+	}
+	return nil
 }

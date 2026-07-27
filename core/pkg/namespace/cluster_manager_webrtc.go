@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -810,5 +814,615 @@ func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP strin
 			zap.String("node_ip", nodeIP),
 			zap.String("namespace", cfg.Namespace),
 			zap.Bool("webrtc_enabled", cfg.WebRTCEnabled))
+	}
+}
+
+// --- WebRTC role reconciliation (bugboard #161) ---
+//
+// Node replacement migrates the CORE roles (gateway, olric, rqlite) to the
+// replacement node but leaves `webrtc_port_allocations` pointing at the node that
+// left. The namespace then holds its TURN/SFU roles on a machine set that no
+// longer matches its cluster membership. Observed on devnet anchat-test: one of
+// two TURN roles sat on a node removed weeks earlier (so only ONE live relay, no
+// redundancy), the replacement node held no WebRTC role at all (so its SFU config
+// had no ports to source and crash-looped ~300k times), and a node that had left
+// the cluster still held an SFU role.
+
+// webrtcAllocRef identifies one WebRTC role assignment.
+type webrtcAllocRef struct {
+	NodeID      string
+	ServiceType string // "turn" | "sfu"
+}
+
+// webrtcReallocationPlan is the decision produced by planWebRTCReallocation.
+type webrtcReallocationPlan struct {
+	Deallocate   []webrtcAllocRef // roles held by nodes that are no longer live members
+	AllocateSFU  []string         // live members that must gain an SFU role
+	AllocateTURN []string         // live members that must gain a TURN role
+}
+
+func (p webrtcReallocationPlan) empty() bool {
+	return len(p.Deallocate) == 0 && len(p.AllocateSFU) == 0 && len(p.AllocateTURN) == 0
+}
+
+// planWebRTCReallocation decides how to bring WebRTC role assignments back in
+// line with live cluster membership. Pure so the decision is unit-testable
+// without a cluster: given the current allocations, the live member IDs, and the
+// desired TURN fan-out, it returns what to drop and what to add.
+//
+// Rules:
+//   - Any role held by a node that is not a live member is dropped.
+//   - Every live member should hold an SFU role (SFU runs on all nodes).
+//   - TURN runs on min(desiredTURN, len(live)) members — never more, so a
+//     shrunken cluster does not over-provision relays.
+//
+// Candidate selection is sorted so every node computes the identical plan; that
+// is what lets the coordinator election below be a pure local decision.
+func planWebRTCReallocation(current []webrtcAllocRef, memberNodeIDs, liveNodeIDs []string, desiredTURN int) webrtcReallocationPlan {
+	// TWO distinct sets, deliberately:
+	//   members — rows in namespace_cluster_nodes. Losing membership is a real
+	//             topology change and is the ONLY thing that revokes a role.
+	//   live    — members whose dns_nodes.status is 'active'. Used solely to pick
+	//             ALLOCATION targets.
+	// Keying revocation on liveness would let a 120s heartbeat gap (a rolling
+	// restart, a brief rqlite stall) strip a healthy node's roles — the exact
+	// thrash this reconciler exists to prevent.
+	member := make(map[string]bool, len(memberNodeIDs))
+	for _, id := range memberNodeIDs {
+		member[id] = true
+	}
+	live := make(map[string]bool, len(liveNodeIDs))
+	for _, id := range liveNodeIDs {
+		live[id] = true
+	}
+
+	var plan webrtcReallocationPlan
+	hasSFU := map[string]bool{}
+	hasTURN := map[string]bool{}
+	for _, a := range current {
+		if !member[a.NodeID] {
+			plan.Deallocate = append(plan.Deallocate, a)
+			continue
+		}
+		switch a.ServiceType {
+		case "sfu":
+			hasSFU[a.NodeID] = true
+		case "turn":
+			hasTURN[a.NodeID] = true
+		}
+	}
+	sort.Slice(plan.Deallocate, func(i, j int) bool {
+		if plan.Deallocate[i].NodeID != plan.Deallocate[j].NodeID {
+			return plan.Deallocate[i].NodeID < plan.Deallocate[j].NodeID
+		}
+		return plan.Deallocate[i].ServiceType < plan.Deallocate[j].ServiceType
+	})
+
+	sorted := append([]string(nil), liveNodeIDs...)
+	sort.Strings(sorted)
+
+	// SFU on every live member. The member[] check matters: members and live are
+	// read as two separate queries, so a row added between them can appear in
+	// live but not member — without this filter the plan would deallocate that
+	// node's roles and re-allocate to it in the same pass.
+	for _, id := range sorted {
+		if member[id] && !hasSFU[id] {
+			plan.AllocateSFU = append(plan.AllocateSFU, id)
+		}
+	}
+
+	// TURN up to the desired fan-out. Both the cap and the current count are
+	// measured over MEMBERS, not live nodes: a member that is briefly down still
+	// holds its role, so counting only live holders would allocate a replacement
+	// and leave the namespace over-provisioned (3 relays) once it returns. A node
+	// that is genuinely gone loses membership, which frees its role above.
+	want := desiredTURN
+	if want > len(memberNodeIDs) {
+		want = len(memberNodeIDs)
+	}
+	have := 0
+	for id := range hasTURN {
+		if member[id] {
+			have++
+		}
+	}
+	for _, id := range sorted {
+		if have >= want {
+			break
+		}
+		if member[id] && !hasTURN[id] {
+			plan.AllocateTURN = append(plan.AllocateTURN, id)
+			have++
+		}
+	}
+
+	// Trim surplus TURN. Two nodes in overlapping majorities can both self-elect
+	// and each add a relay, pushing past the desired fan-out; nothing else would
+	// ever remove the excess, and every extra relay locks 3478/5349 against other
+	// namespaces on that host. Drop the highest-sorted holders so the choice is
+	// identical on every node.
+	if have > want {
+		holders := make([]string, 0, len(hasTURN))
+		for id := range hasTURN {
+			if member[id] {
+				holders = append(holders, id)
+			}
+		}
+		sort.Strings(holders)
+		for i := len(holders) - 1; i >= 0 && have > want; i-- {
+			plan.Deallocate = append(plan.Deallocate, webrtcAllocRef{NodeID: holders[i], ServiceType: "turn"})
+			have--
+		}
+	}
+	return plan
+}
+
+// webrtcReconcileQuorumOK reports whether a node may reshape role assignments
+// from the membership view it currently sees.
+//
+// A strict majority is required so a partitioned or heartbeat-starved minority
+// can never conclude it is the last survivor and pull every role onto itself.
+// Pure, so the arithmetic that stands between a partition and a role stampede is
+// actually testable.
+func webrtcReconcileQuorumOK(live, members int) bool {
+	if live == 0 {
+		return false
+	}
+	return live*2 > members
+}
+
+// webrtcReconcileCoordinator picks the single node that may apply a reallocation
+// plan: the lowest-sorted live member.
+//
+// Allocation is cluster-wide state, so letting every node reconcile concurrently
+// could double-allocate a role. This is a deterministic election — every node
+// computes the same answer from the same membership list with no coordination,
+// no lock, and no leader lookup — so exactly one applies the plan and the rest
+// no-op. Mirrors the bootstrap election used for the namespace rqlite leader.
+func webrtcReconcileCoordinator(liveNodeIDs []string) string {
+	if len(liveNodeIDs) == 0 {
+		return ""
+	}
+	sorted := append([]string(nil), liveNodeIDs...)
+	sort.Strings(sorted)
+	return sorted[0]
+}
+
+// getActiveClusterNodeIDs returns the node IDs of cluster members that are
+// currently ACTIVE in dns_nodes.
+//
+// Deliberately distinct from getClusterNodesWithIPs, which has no status filter
+// and therefore happily returns departed nodes — the write-time root of #161,
+// where a removed node kept being treated as a WebRTC-capable member.
+func (cm *ClusterManager) getActiveClusterNodeIDs(ctx context.Context, clusterID string) ([]string, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+	type row struct {
+		NodeID string `db:"node_id"`
+	}
+	var rows []row
+	query := `
+		SELECT ncn.node_id
+		FROM namespace_cluster_nodes ncn
+		JOIN dns_nodes dn ON ncn.node_id = dn.id
+		WHERE ncn.namespace_cluster_id = ? AND dn.status = 'active'
+		GROUP BY ncn.node_id
+	`
+	if err := cm.db.Query(internalCtx, &rows, query, clusterID); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.NodeID)
+	}
+	return ids, nil
+}
+
+// getClusterMemberNodeIDs returns every node recorded as a member of the cluster,
+// regardless of heartbeat status. Membership loss — not a missed heartbeat — is
+// what revokes a WebRTC role (bugboard #161).
+func (cm *ClusterManager) getClusterMemberNodeIDs(ctx context.Context, clusterID string) ([]string, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+	type row struct {
+		NodeID string `db:"node_id"`
+	}
+	var rows []row
+	query := `SELECT node_id FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? GROUP BY node_id`
+	if err := cm.db.Query(internalCtx, &rows, query, clusterID); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.NodeID)
+	}
+	return ids, nil
+}
+
+// ReconcileWebRTCAllocations brings a namespace's WebRTC role assignments back in
+// line with its live cluster membership (bugboard #161).
+//
+// Applied by ONE node per sweep — the lowest-sorted live member — because
+// allocations are cluster-wide state and concurrent reconcilers could
+// double-allocate a role. Every node computes the same coordinator locally, so
+// this needs no lock and no leader lookup.
+//
+// Only the DB assignment is changed here. Each node converges its own local
+// TURN/SFU services to its own allocations on the restore path, so a node that
+// gains a role spawns it and a node that loses one stops advertising it. Doing it
+// this way avoids the blunt alternative (disable+enable WebRTC), which
+// regenerates the namespace TURN secret and would invalidate every client
+// credential in flight and drop active calls.
+//
+// Idempotent: a healthy cluster produces an empty plan and writes nothing.
+func (cm *ClusterManager) ReconcileWebRTCAllocations(ctx context.Context, clusterID, namespaceName string, desiredTURN int) error {
+	memberIDs, err := cm.getClusterMemberNodeIDs(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("get cluster members for webrtc reconcile: %w", err)
+	}
+	liveIDs, err := cm.getActiveClusterNodeIDs(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("get active cluster nodes for webrtc reconcile: %w", err)
+	}
+	// Quorum floor: never reshape roles from a minority view. A partition or a
+	// cluster-wide heartbeat stall must not let one node conclude it is the only
+	// survivor and pull every role onto itself.
+	if !webrtcReconcileQuorumOK(len(liveIDs), len(memberIDs)) {
+		return nil
+	}
+	if webrtcReconcileCoordinator(liveIDs) != cm.localNodeID {
+		return nil // another node coordinates this sweep
+	}
+
+	blocks, err := cm.webrtcPortAllocator.GetAllPorts(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("get webrtc allocations for reconcile: %w", err)
+	}
+	current := make([]webrtcAllocRef, 0, len(blocks))
+	for _, b := range blocks {
+		current = append(current, webrtcAllocRef{NodeID: b.NodeID, ServiceType: b.ServiceType})
+	}
+
+	if desiredTURN <= 0 {
+		desiredTURN = DefaultTURNNodeCount
+	}
+	plan := planWebRTCReallocation(current, memberIDs, liveIDs, desiredTURN)
+	if plan.empty() {
+		return nil
+	}
+
+	cm.logger.Info("WebRTC role assignments drifted from cluster membership — reallocating (bugboard #161)",
+		zap.String("namespace", namespaceName),
+		zap.Int("deallocate", len(plan.Deallocate)),
+		zap.Strings("allocate_sfu", plan.AllocateSFU),
+		zap.Strings("allocate_turn", plan.AllocateTURN))
+
+	var errs []error
+	for _, d := range plan.Deallocate {
+		if derr := cm.webrtcPortAllocator.DeallocateByNode(ctx, clusterID, d.NodeID, d.ServiceType); derr != nil {
+			errs = append(errs, fmt.Errorf("deallocate %s on %s: %w", d.ServiceType, d.NodeID, derr))
+		}
+	}
+	for _, id := range plan.AllocateSFU {
+		if _, aerr := cm.webrtcPortAllocator.AllocateSFUPorts(ctx, id, clusterID); aerr != nil {
+			errs = append(errs, fmt.Errorf("allocate sfu on %s: %w", id, aerr))
+		}
+	}
+	// TURN binds the fixed 3478/5349, so a node already serving TURN for ANOTHER
+	// namespace cannot take a second one — it would crash-loop on
+	// "address already in use". EnableWebRTC avoids this via selectTURNNodes;
+	// honour the same exclusivity here rather than allocating blind.
+	for _, id := range plan.AllocateTURN {
+		// TURN binds the fixed 3478/5349, so a node already serving TURN for
+		// ANOTHER namespace cannot take a second one — the ports are exclusive per
+		// HOST, so the check joins colocated node IDs. If the check itself cannot
+		// be verified, BLOCK the allocation — waving it through on a DB error is
+		// how you get a crash-looping "address already in use" relay.
+		busy, herr := cm.webrtcPortAllocator.HostHasTURN(ctx, id)
+		if herr != nil {
+			errs = append(errs, fmt.Errorf("verify turn exclusivity on %s: %w", id, herr))
+			continue
+		}
+		if busy {
+			cm.logger.Warn("Skipping TURN allocation: node already serves TURN for another namespace (ports 3478/5349 are exclusive)",
+				zap.String("namespace", namespaceName), zap.String("node_id", id))
+			continue
+		}
+		if _, aerr := cm.webrtcPortAllocator.AllocateTURNPorts(ctx, id, clusterID); aerr != nil {
+			errs = append(errs, fmt.Errorf("allocate turn on %s: %w", id, aerr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// webrtcReconcileInterval is how often each node re-checks WebRTC role
+// assignments. Long enough that a rolling restart settles between sweeps, short
+// enough that a node replacement converges in about a minute.
+const webrtcReconcileInterval = 60 * time.Second
+
+// StartWebRTCReconciler runs the periodic WebRTC role reconcile until ctx is
+// cancelled. Safe to call once at node boot.
+//
+// Scope: this sweep reconciles the DB assignments, STARTS a role this node has
+// gained, STOPS one it no longer holds, and keeps the TURN DNS record current —
+// so it converges in both directions without waiting for a restart.
+//
+// The stop side still demands positive evidence (see
+// stopUnallocatedWebRTCServices) and the start side is backed off on failure: a
+// reconciler that moves services between machines must never act on a guess in
+// either direction.
+func (cm *ClusterManager) StartWebRTCReconciler(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(webrtcReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cm.reconcileWebRTCForLocalNamespaces(ctx)
+			}
+		}
+	}()
+}
+
+// reconcileWebRTCForLocalNamespaces reconciles every namespace this node holds
+// local state for: first the cluster-wide assignments (coordinator-gated), then
+// this node's own services against its own allocations.
+func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context) {
+	if cm.localNodeID == "" {
+		return // cannot reason about "this node's" roles without an identity
+	}
+	pattern := filepath.Join(cm.baseDataDir, "*", "cluster-state.json")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+	for _, path := range matches {
+		if ctx.Err() != nil {
+			return
+		}
+		state, lerr := loadLocalState(path)
+		if lerr != nil || state == nil || state.ClusterID == "" {
+			continue
+		}
+		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+		if werr != nil || webrtcCfg == nil {
+			continue // WebRTC not enabled for this namespace
+		}
+		// cluster-state.json is never validated against the DB. If a namespace was
+		// deprovisioned and re-provisioned while this node's state file survived
+		// (the delete fan-out is best-effort), state.ClusterID is stale — and a
+		// lookup against a stale ID returns "no rows" CLEANLY, which the stop
+		// sweep would read as positive evidence and use to stop a service the
+		// node legitimately holds under the new cluster. Resolve identity from
+		// the DB and skip on any mismatch.
+		cluster, cerr := cm.GetClusterByNamespace(ctx, state.NamespaceName)
+		if cerr != nil || cluster == nil || cluster.ID != state.ClusterID {
+			continue
+		}
+		if aerr := cm.ReconcileWebRTCAllocations(ctx, state.ClusterID, state.NamespaceName, webrtcCfg.TURNNodeCount); aerr != nil {
+			cm.logger.Warn("Periodic WebRTC allocation reconcile failed",
+				zap.String("namespace", state.NamespaceName), zap.Error(aerr))
+		}
+		// Start what we hold, then stop what we don't — in that order, so a role
+		// that MOVED to this node is serving before the DNS ensure below can
+		// advertise it.
+		cm.spawnAllocatedWebRTCServices(ctx, state, webrtcCfg)
+		cm.stopUnallocatedWebRTCServices(ctx, state.ClusterID, state.NamespaceName)
+
+		// Re-advertise this node's TURN record once it actually runs TURN.
+		// The boot-time ensure is gated on TURNConfigExists but runs BEFORE the
+		// spawn that writes that config, so a node that has just GAINED the TURN
+		// role never advertises itself there. Repeating it here closes that
+		// ordering gap and gives the record a periodic catch-up instead of a
+		// single boot-time attempt. Additive and per-node — never touches a
+		// peer's record.
+		// Gate on the ALLOCATION, not on TURNConfigExists: StopService leaves the
+		// config file behind, so a config-file gate would re-advertise this node
+		// on the very tick it stopped serving — a black hole in the round-robin.
+		// Holding the allocation is necessary but NOT sufficient — a spawn can
+		// fail or still be starting, and DNS must never advertise a relay that is
+		// not up (that is the #161 symptom, clients round-robin onto a dead
+		// endpoint, recreated from the advertising side). Require the unit to be
+		// actually serving, which is why this runs AFTER the spawn above.
+		turnBlk, turnBlkErr := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID)
+		turnUp := false
+		if cm.systemdSpawner != nil && cm.systemdSpawner.systemdMgr != nil {
+			turnUp, _ = cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
+		}
+		if turnBlkErr == nil && turnBlk != nil && turnUp {
+			if pip, perr := cm.getLocalNodePublicIP(ctx); perr == nil && pip != "" {
+				if derr := cm.dnsManager.EnsureTURNRecordForNode(ctx, state.NamespaceName, pip,
+					cm.stealthDomainFor(state.NamespaceName, webrtcCfg)); derr != nil {
+					cm.logger.Warn("Periodic TURN DNS ensure failed",
+						zap.String("namespace", state.NamespaceName), zap.Error(derr))
+				}
+			}
+		}
+	}
+}
+
+// stopUnallocatedWebRTCServices stops this node's TURN/SFU only when the
+// allocator gives POSITIVE evidence that the allocation is gone.
+//
+// The distinction is load-bearing. An earlier version treated "query failed" and
+// "no allocation" identically, so a transient main-rqlite failure — a leader
+// election, a WireGuard blip — would stop TURN and SFU on every node at once.
+// Because gaining a role only takes effect on the next restore (see
+// StartWebRTCReconciler), nothing would restart them: a ten-second hiccup became
+// a fleet-wide WebRTC outage. Stopping a live relay must never be easier than
+// starting one, so an unreadable allocator means DO NOTHING.
+func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clusterID, namespaceName string) {
+	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil {
+		return
+	}
+	// A node that cannot identify itself holds NO positive evidence about itself.
+	// GetTURNPorts(clusterID, "") is a perfectly clean read that returns no rows,
+	// which the predicate below would otherwise read as "role revoked" and stop
+	// every WebRTC service — permanently, since the restore path keys on the same
+	// empty ID. Every other empty-ID path in this package fails closed; so must
+	// this one.
+	if cm.localNodeID == "" || clusterID == "" {
+		cm.logger.Warn("Skipping WebRTC stop sweep: local node identity or cluster ID unknown — cannot distinguish \"no allocation\" from \"cannot ask\"",
+			zap.String("namespace", namespaceName))
+		return
+	}
+	// definitelyUnallocated reports true ONLY for a clean read that returned no
+	// block. A read error yields false — leave the service alone.
+	definitelyUnallocated := func(b *WebRTCPortBlock, err error) bool {
+		return err == nil && b == nil
+	}
+	for _, svc := range []struct {
+		typ  systemd.ServiceType
+		gone func() bool
+	}{
+		{systemd.ServiceTypeTURN, func() bool {
+			return definitelyUnallocated(cm.webrtcPortAllocator.GetTURNPorts(ctx, clusterID, cm.localNodeID))
+		}},
+		{systemd.ServiceTypeSFU, func() bool {
+			return definitelyUnallocated(cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID))
+		}},
+	} {
+		running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, svc.typ)
+		if !running || !svc.gone() {
+			continue
+		}
+		cm.logger.Info("Stopping WebRTC service: this node no longer holds the allocation (bugboard #161)",
+			zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
+		if serr := cm.systemdSpawner.systemdMgr.StopService(namespaceName, svc.typ); serr != nil {
+			cm.logger.Warn("Failed to stop unallocated WebRTC service — its ports stay bound while the allocator considers them free",
+				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(serr))
+			continue
+		}
+		// Verify it actually stopped. The allocator has already freed these ports,
+		// so a process that is still bound can collide with the next allocation
+		// (an overlapping relay range, or 3478 taken from under another
+		// namespace). A failed stop must be loud, not assumed.
+		if stillUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, svc.typ); stillUp {
+			cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
+				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
+		}
+	}
+}
+
+// webrtcSpawnBackoff is how long a namespace is skipped after a failed spawn.
+//
+// IsServiceActive reports a crash-looping unit as NOT running, so without a
+// backoff the reconciler rewrites its config and issues `systemctl start` every
+// single tick, forever — which also resets systemd's own StartLimitBurst so the
+// unit never settles. Worse, each attempt blocks up to 30s in waitForService and
+// namespaces are reconciled SERIALLY, so one wedged unit starves the stop sweep
+// and DNS ensure for every namespace after it on this node. Back off instead.
+const webrtcSpawnBackoff = 10 * time.Minute
+
+// spawnBackoffActive reports whether a namespace is still inside its post-failure
+// cooldown, and is the only reader/writer of the cooldown map besides
+// recordSpawnFailure — both take the mutex.
+func (cm *ClusterManager) spawnBackoffActive(namespace string) bool {
+	cm.webrtcSpawnMu.Lock()
+	defer cm.webrtcSpawnMu.Unlock()
+	until, ok := cm.webrtcSpawnCooldown[namespace]
+	return ok && time.Now().Before(until)
+}
+
+func (cm *ClusterManager) recordSpawnFailure(namespace string) {
+	cm.webrtcSpawnMu.Lock()
+	defer cm.webrtcSpawnMu.Unlock()
+	if cm.webrtcSpawnCooldown == nil {
+		cm.webrtcSpawnCooldown = make(map[string]time.Time)
+	}
+	cm.webrtcSpawnCooldown[namespace] = time.Now().Add(webrtcSpawnBackoff)
+}
+
+// spawnAllocatedWebRTCServices starts TURN/SFU that this node HOLDS an allocation
+// for but is not currently running.
+//
+// This is the counterpart to stopUnallocatedWebRTCServices, and it is what makes
+// the reconciler symmetric. Without it the sweep could only ever REDUCE the
+// number of running relays: a coordinator could move TURN from node B to node C,
+// B would stop on its next tick, and C would not start until it happened to
+// reboot — so the namespace silently dropped a relay. A reconciler that stops
+// faster than it starts is a liability, not a repair.
+//
+// Only ever touches THIS node's own services, driven by THIS node's own
+// allocation, so it is safe to run unguarded on every node.
+func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, state *ClusterLocalState, webrtcCfg *WebRTCConfig) {
+	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil || cm.localNodeID == "" {
+		return
+	}
+	if cm.spawnBackoffActive(state.NamespaceName) {
+		return
+	}
+	// These come from cluster-state.json, which this package elsewhere treats as
+	// untrustworthy for exactly these fields. An empty LocalIP would bind the SFU
+	// signaling socket to ALL interfaces including the public one, not just the
+	// WireGuard address; a zero RQLite port yields http://localhost:0.
+	if state.LocalIP == "" || state.LocalPorts.RQLiteHTTPPort <= 0 {
+		return
+	}
+	turnDomain := fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain)
+
+	// TURN — spawn only from a COMPLETE allocation. turnPortBlockSpawnable
+	// refuses a zero port, which would otherwise bind a random one and relay
+	// nothing while looking healthy.
+	if blk, err := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID); err == nil && turnPortBlockSpawnable(blk) {
+		if running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN); !running {
+			publicIP, ipErr := cm.getLocalNodePublicIP(ctx)
+			if ipErr != nil || publicIP == "" {
+				cm.logger.Warn("Cannot start newly-allocated TURN: public IP unresolved (an empty public_ip crash-loops the server)",
+					zap.String("namespace", state.NamespaceName), zap.Error(ipErr))
+			} else if busy, herr := cm.webrtcPortAllocator.HostHasTURNForOtherCluster(ctx, cm.localNodeID, state.ClusterID); herr != nil || busy {
+				// 3478/5349 are host-exclusive. The previous holder only stops on
+				// ITS next tick, so spawning here during that window would
+				// crash-loop on "address already in use" — and be retried forever.
+				cm.logger.Warn("Deferring TURN start: this host still serves TURN for another namespace",
+					zap.String("namespace", state.NamespaceName), zap.Error(herr))
+			} else if serr := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, TURNInstanceConfig{
+				Namespace:       state.NamespaceName,
+				NodeID:          cm.localNodeID,
+				ListenAddr:      fmt.Sprintf("0.0.0.0:%d", blk.TURNListenPort),
+				TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", blk.TURNTLSPort),
+				PublicIP:        publicIP,
+				Realm:           cm.baseDomain,
+				AuthSecret:      webrtcCfg.TURNSharedSecret,
+				RelayPortStart:  blk.TURNRelayPortStart,
+				RelayPortEnd:    blk.TURNRelayPortEnd,
+				TURNDomain:      turnDomain,
+				StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
+			}); serr != nil {
+				cm.recordSpawnFailure(state.NamespaceName)
+				cm.logger.Warn("Failed to start newly-allocated TURN (backing off)",
+					zap.String("namespace", state.NamespaceName), zap.Error(serr))
+			} else {
+				cm.logger.Info("Started TURN for a newly-allocated role (bugboard #161)",
+					zap.String("namespace", state.NamespaceName))
+			}
+		}
+	}
+
+	// SFU — same shape; sfuPortBlockSpawnable refuses a zero media range.
+	if blk, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID); err == nil && sfuPortBlockSpawnable(blk) {
+		if running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU); !running {
+			if serr := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
+				Namespace:      state.NamespaceName,
+				NodeID:         cm.localNodeID,
+				ListenAddr:     fmt.Sprintf("%s:%d", state.LocalIP, blk.SFUSignalingPort),
+				MediaPortStart: blk.SFUMediaPortStart,
+				MediaPortEnd:   blk.SFUMediaPortEnd,
+				TURNServers: []sfu.TURNServerConfig{
+					{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
+					{Host: turnDomain, Port: TURNSPort, Secure: true},
+				},
+				TURNSecret:  webrtcCfg.TURNSharedSecret,
+				TURNCredTTL: webrtcCfg.TURNCredentialTTL,
+				RQLiteDSN:   fmt.Sprintf("http://localhost:%d", state.LocalPorts.RQLiteHTTPPort),
+			}); serr != nil {
+				cm.recordSpawnFailure(state.NamespaceName)
+				cm.logger.Warn("Failed to start newly-allocated SFU (backing off)",
+					zap.String("namespace", state.NamespaceName), zap.Error(serr))
+			} else {
+				cm.logger.Info("Started SFU for a newly-allocated role (bugboard #161)",
+					zap.String("namespace", state.NamespaceName))
+			}
+		}
 	}
 }

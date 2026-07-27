@@ -7,6 +7,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 	"go.uber.org/zap"
 )
 
@@ -247,15 +248,37 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 		zap.String("new_ip", newIP),
 	)
 
-	// Update both the main record and wildcard record
+	// Update both the main record and wildcard record.
+	//
+	// Upsert semantics: the old row may legitimately be gone by the time failover
+	// re-points DNS — the #158 sweep purges records for non-active nodes, and
+	// HandleDeadNode marks the node offline minutes before it reaches this call.
+	// A plain UPDATE would then match zero rows and return nil, reporting success
+	// while the replacement node silently never entered the round-robin. Fall back
+	// to an additive insert so the new IP is advertised either way.
 	for _, f := range []string{fqdn, wildcardFqdn} {
 		updateQuery := `UPDATE dns_records SET value = ?, is_active = 1, updated_at = ? WHERE fqdn = ? AND value = ?`
-		_, err := drm.db.Exec(internalCtx, updateQuery, newIP, time.Now(), f, oldIP)
+		res, err := drm.db.Exec(internalCtx, updateQuery, newIP, time.Now(), f, oldIP)
 		if err != nil {
 			drm.logger.Warn("Failed to update DNS record",
 				zap.String("fqdn", f),
 				zap.Error(err),
 			)
+			continue
+		}
+		if res != nil {
+			if affected, aerr := res.RowsAffected(); aerr == nil && affected == 0 {
+				now := time.Now()
+				tag := "namespace:" + namespaceName
+				if _, ierr := drm.db.Exec(internalCtx, ensureNamespaceHostRecordSQL,
+					f, newIP, tag, now, now, f, newIP, tag); ierr != nil {
+					drm.logger.Warn("Failed to insert replacement DNS record after a no-op update",
+						zap.String("fqdn", f), zap.String("new_ip", newIP), zap.Error(ierr))
+					continue
+				}
+				drm.logger.Info("Old DNS record was already gone — inserted the replacement additively",
+					zap.String("fqdn", f), zap.String("new_ip", newIP))
+			}
 		}
 	}
 
@@ -291,45 +314,176 @@ func (drm *DNSRecordManager) CreateTURNRecords(ctx context.Context, namespaceNam
 		return &ClusterError{Message: "no TURN IPs provided for DNS records"}
 	}
 
+	// Two round-robin hostnames point at the same TURN nodes:
+	//   - turn.ns-<ns>.<base>  : legacy host, used for plain UDP/TCP TURN (:3478)
+	//   - turn-<ns>.<base>     : single-label TLS host, used for turns:(:5349);
+	//                            covered by the *.<base> wildcard cert so it
+	//                            validates in browsers (the legacy two-label host
+	//                            can't get a CA-valid cert).
 	fqdn := fmt.Sprintf("turn.ns-%s.%s.", namespaceName, drm.baseDomain)
+	tlsFQDN := turn.TLSHostForNamespace(namespaceName, drm.baseDomain) + "."
 
 	drm.logger.Info("Creating TURN DNS records",
 		zap.String("namespace", namespaceName),
 		zap.String("fqdn", fqdn),
+		zap.String("tls_fqdn", tlsFQDN),
 		zap.Strings("turn_ips", turnIPs),
 	)
 
-	// Delete existing TURN records for this namespace
-	deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ?`
-	_, _ = drm.db.Exec(internalCtx, deleteQuery, fqdn, "namespace-turn:"+namespaceName)
-
-	// Create A records for each TURN node IP
+	tag := "namespace-turn:" + namespaceName
 	now := time.Now()
-	for _, ip := range turnIPs {
-		insertQuery := `
-			INSERT INTO dns_records (
-				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`
-		_, err := drm.db.Exec(internalCtx, insertQuery,
-			fqdn, "A", ip, 60,
-			"namespace-turn:"+namespaceName,
-			"cluster-manager",
-			now, now,
-		)
-		if err != nil {
-			return &ClusterError{
-				Message: fmt.Sprintf("failed to create TURN DNS record %s -> %s", fqdn, ip),
-				Cause:   err,
+	for _, host := range []string{fqdn, tlsFQDN} {
+		// Delete existing records for this host+namespace, then recreate.
+		deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ?`
+		_, _ = drm.db.Exec(internalCtx, deleteQuery, host, tag)
+
+		for _, ip := range turnIPs {
+			insertQuery := `
+				INSERT INTO dns_records (
+					fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`
+			_, err := drm.db.Exec(internalCtx, insertQuery,
+				host, "A", ip, 60, tag, "cluster-manager", now, now,
+			)
+			if err != nil {
+				return &ClusterError{
+					Message: fmt.Sprintf("failed to create TURN DNS record %s -> %s", host, ip),
+					Cause:   err,
+				}
 			}
 		}
 	}
 
 	drm.logger.Info("TURN DNS records created",
 		zap.String("namespace", namespaceName),
-		zap.Int("record_count", len(turnIPs)),
+		zap.Int("record_count", len(turnIPs)*2),
 	)
 
+	return nil
+}
+
+// ensureTURNRecordSQL additively inserts one node's TURN A record only if an
+// identical (fqdn, value, namespace-tag) row is absent (bugboard #158).
+const ensureTURNRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
+	SELECT ?, 'A', ?, 60, ?, 'turn-dns-reconcile', ?, ?
+	WHERE NOT EXISTS (
+	    SELECT 1 FROM dns_records
+	    WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = ?
+	)`
+
+// EnsureTURNRecordForNode additively upserts THIS node's TURN (and stealth) A
+// records so a live TURN node always advertises itself (bugboard #158).
+//
+// CreateTURNRecords is a one-shot DELETE+INSERT run only at WebRTC-enable time,
+// and the #158 sweep only DELETES records for inactive nodes — so a TURN node
+// whose record was purged while it was briefly down (e.g. mid-deploy) never got
+// re-added, leaving the turn domain empty (NXDOMAIN → clients resolve no TURN
+// server → zero relay candidates). This is the re-add counterpart: each TURN
+// node ensures its own A record exists on every boot.
+//
+// Per-node and additive: it inserts ONLY this node's value and only if absent,
+// so it never touches other TURN nodes' records — safe to run unguarded on
+// every node (no leader gating), like the sweep.
+func (drm *DNSRecordManager) EnsureTURNRecordForNode(ctx context.Context, namespaceName, nodeIP, stealthHost string) error {
+	if nodeIP == "" {
+		return nil
+	}
+	internalCtx := client.WithInternalAuth(ctx)
+	now := time.Now()
+
+	ensure := func(fqdn, tag string) error {
+		// Read before write. The INSERT is already idempotent, but in rqlite an
+		// Exec that inserts ZERO rows is still a replicated, fsync'd Raft entry —
+		// and this runs on a 60s reconcile tick from every TURN node, for every
+		// namespace, three statements each. In the steady state that is a
+		// permanent stream of no-op log entries that only grows the Raft log and
+		// snapshots. A leader-routed SELECT is far cheaper than a Raft round, so
+		// only write when the row is genuinely missing.
+		var existing []struct {
+			N int `db:"n"`
+		}
+		if err := drm.db.Query(internalCtx, &existing,
+			`SELECT COUNT(*) AS n FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = ?`,
+			fqdn, nodeIP, tag); err == nil && len(existing) > 0 && existing[0].N > 0 {
+			return nil
+		}
+		// Absent, or the check failed — fall through to the guarded INSERT, which
+		// is still a no-op if the row turns out to exist.
+		_, err := drm.db.Exec(internalCtx, ensureTURNRecordSQL, fqdn, nodeIP, tag, now, now, fqdn, nodeIP, tag)
+		return err
+	}
+
+	turnFQDN := fmt.Sprintf("turn.ns-%s.%s.", namespaceName, drm.baseDomain)
+	if err := ensure(turnFQDN, "namespace-turn:"+namespaceName); err != nil {
+		return &ClusterError{Message: fmt.Sprintf("ensure TURN A record %s -> %s", turnFQDN, nodeIP), Cause: err}
+	}
+	// Single-label TLS host (turn-<ns>.<base>) for the `turns:…:5349` URI. It is
+	// covered by the `*.<base>` wildcard cert, so TURNS validates in browsers —
+	// unlike the two-label turnFQDN above, which is only used for plain UDP/TCP
+	// TURN now. Same namespace tag/round-robin semantics as turnFQDN.
+	tlsFQDN := turn.TLSHostForNamespace(namespaceName, drm.baseDomain) + "."
+	if err := ensure(tlsFQDN, "namespace-turn:"+namespaceName); err != nil {
+		return &ClusterError{Message: fmt.Sprintf("ensure TURNS A record %s -> %s", tlsFQDN, nodeIP), Cause: err}
+	}
+	if stealthHost != "" {
+		if err := ensure(stealthHost+".", stealthDNSNamespace(namespaceName)); err != nil {
+			return &ClusterError{Message: fmt.Sprintf("ensure stealth TURN A record %s -> %s", stealthHost, nodeIP), Cause: err}
+		}
+	}
+	return nil
+}
+
+// ensureNamespaceHostRecordSQL additively inserts one node's namespace-host A
+// record only if an identical (fqdn, value, namespace-tag) row is absent. Kept
+// separate from ensureTURNRecordSQL so each carries its own created_by
+// provenance (and so the production-verified TURN query stays untouched).
+//
+// is_active is intentionally NOT set here: the column defaults to TRUE for a new
+// row, and an existing row that recovery deliberately soft-disabled
+// (DisableNamespaceRecord, used by the suspect-node path) must stay disabled —
+// re-enabling it would fight the health monitor.
+const ensureNamespaceHostRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
+	SELECT ?, 'A', ?, 60, ?, 'namespace-dns-reconcile', ?, ?
+	WHERE NOT EXISTS (
+	    SELECT 1 FROM dns_records
+	    WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = ?
+	)`
+
+// EnsureNamespaceHostRecordForNode additively upserts THIS node's A records for
+// the namespace gateway host (`ns-<ns>` and its `*.ns-<ns>` deployment wildcard).
+//
+// This is the missing counterpart to EnsureTURNRecordForNode. CreateNamespaceRecords
+// runs ONCE at provision time and AddNamespaceRecord only on node replacement, so
+// nothing re-asserted these rows on boot. That asymmetry made deleting them unsafe:
+// a node marked non-active transiently (120s without a heartbeat, a rolling deploy,
+// or markNodeOffline) would lose its gateway A record permanently, eroding the
+// round-robin one node at a time with no recovery path. With this ensure in place
+// the purge becomes recoverable — a flap self-heals on the next heartbeat.
+//
+// Per-node and additive: inserts ONLY this node's value, only when absent, so it
+// never touches another node's row for the same round-robin fqdn — safe to run
+// unguarded on every node (no leader gating), exactly like the TURN ensure.
+func (drm *DNSRecordManager) EnsureNamespaceHostRecordForNode(ctx context.Context, namespaceName, nodeIP string) error {
+	if nodeIP == "" {
+		return nil
+	}
+	internalCtx := client.WithInternalAuth(ctx)
+	now := time.Now()
+	tag := "namespace:" + namespaceName
+
+	for _, fqdn := range []string{
+		fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain),
+		fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain),
+	} {
+		if _, err := drm.db.Exec(internalCtx, ensureNamespaceHostRecordSQL,
+			fqdn, nodeIP, tag, now, now, fqdn, nodeIP, tag); err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("ensure namespace host A record %s -> %s", fqdn, nodeIP),
+				Cause:   err,
+			}
+		}
+	}
 	return nil
 }
 

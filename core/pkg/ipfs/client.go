@@ -26,6 +26,7 @@ type IPFSClient interface {
 	PinStatus(ctx context.Context, cid string) (*PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
+	EvictLocal(ctx context.Context, cid string) (int, error)
 	Health(ctx context.Context) error
 	GetPeerCount(ctx context.Context) (int, error)
 	Close(ctx context.Context) error
@@ -33,10 +34,10 @@ type IPFSClient interface {
 
 // Client wraps an IPFS Cluster HTTP API client for storage operations
 type Client struct {
-	apiURL      string
-	ipfsAPIURL  string
-	httpClient  *http.Client
-	logger      *zap.Logger
+	apiURL     string
+	ipfsAPIURL string
+	httpClient *http.Client
+	logger     *zap.Logger
 }
 
 // Config holds configuration for the IPFS client
@@ -639,6 +640,123 @@ func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.Rea
 	}
 
 	return resp.Body, nil
+}
+
+// EvictLocal immediately reclaims the blocks of a CID from THIS node's local
+// kubo blockstore, so an unpinned CID becomes unfetchable without waiting for
+// the scheduled `ipfs repo gc` sweep (bugboard #153 — the ~6h privacy window).
+//
+// It walks the CID's DAG via `refs -r` and `block rm`s each block (plus the
+// root) WITHOUT --force. block rm without force is pin-safe: kubo refuses to
+// remove a block still part of any pinned DAG, so a block shared with another
+// still-pinned CID is left intact — defence in depth alongside the caller's
+// cross-namespace zero-pin gate. Uses c.ipfsAPIURL (the kubo daemon API), NOT
+// the cluster API.
+//
+// Best-effort and idempotent: a block already absent is a no-op success; a
+// block still locally pinned (cluster unpin not yet propagated to this node) is
+// surfaced in the joined error so the caller can retry. Returns blocks removed.
+func (c *Client) EvictLocal(ctx context.Context, cid string) (int, error) {
+	blocks, err := c.dagBlocks(ctx, cid)
+	if err != nil {
+		return 0, fmt.Errorf("enumerate blocks for %s: %w", cid, err)
+	}
+	// refs -r returns descendants only; the root block must be removed too.
+	blocks = append(blocks, cid)
+
+	removed := 0
+	var errs []error
+	for _, block := range blocks {
+		if err := c.blockRm(ctx, block); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		removed++
+	}
+	return removed, errors.Join(errs...)
+}
+
+// dagBlocks returns the unique recursive refs (DAG descendants) of a CID from
+// the local kubo daemon.
+func (c *Client) dagBlocks(ctx context.Context, cid string) ([]string, error) {
+	q := url.Values{}
+	q.Set("arg", cid)
+	q.Set("recursive", "true")
+	q.Set("unique", "true")
+	req, err := http.NewRequestWithContext(ctx, "POST", c.ipfsAPIURL+"/api/v0/refs?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("refs failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	var refs []string
+	dec := json.NewDecoder(resp.Body)
+	for dec.More() {
+		var line struct {
+			Ref string `json:"Ref"`
+			Err string `json:"Err"`
+		}
+		if err := dec.Decode(&line); err != nil {
+			return nil, fmt.Errorf("decode refs stream: %w", err)
+		}
+		if line.Err != "" {
+			return nil, fmt.Errorf("refs traversal error: %s", line.Err)
+		}
+		if line.Ref != "" {
+			refs = append(refs, line.Ref)
+		}
+	}
+	return refs, nil
+}
+
+// blockRm removes a single block from the local kubo blockstore WITHOUT force.
+// An absent block is an idempotent success; a still-pinned block is surfaced as
+// an error (retryable once cluster unpin has propagated to this node).
+func (c *Client) blockRm(ctx context.Context, block string) error {
+	q := url.Values{}
+	q.Set("arg", block)
+	// force stays false — pin-safety relies on kubo refusing pinned blocks.
+	req, err := http.NewRequestWithContext(ctx, "POST", c.ipfsAPIURL+"/api/v0/block/rm?"+q.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("block rm %s failed with status %d: %s", block, resp.StatusCode, string(body))
+	}
+	// block/rm streams one JSON object per arg: {"Hash":"...","Error":"..."}.
+	dec := json.NewDecoder(resp.Body)
+	for dec.More() {
+		var line struct {
+			Hash  string `json:"Hash"`
+			Error string `json:"Error"`
+		}
+		if err := dec.Decode(&line); err != nil {
+			return fmt.Errorf("decode block rm stream: %w", err)
+		}
+		if line.Error == "" {
+			continue
+		}
+		low := strings.ToLower(line.Error)
+		// Already gone → reclaim goal already met (idempotent success).
+		if strings.Contains(low, "not found") || strings.Contains(low, "not exist") || strings.Contains(low, "no such") {
+			continue
+		}
+		return fmt.Errorf("block rm %s: %s", block, line.Error)
+	}
+	return nil
 }
 
 // Close closes the IPFS client connection

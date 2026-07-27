@@ -177,6 +177,11 @@ func TestIsPublicPath(t *testing.T) {
 		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", true},
 		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", true},
 		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", true},
+		// Internal storage eviction (bugboard #153) — exempt from API-key
+		// middleware; handler enforces internal-auth header + WireGuard peer.
+		// Without this the cross-node evict fan-out 401s and immediate reclaim
+		// silently never runs.
+		{"internal storage evict", "/v1/internal/storage/evict", true},
 		// Guard: the PUBLIC webrtc mgmt path must STILL require auth (only
 		// the /internal/ variant is exempt).
 		{"public webrtc enable still requires auth", "/v1/namespace/webrtc/enable", false},

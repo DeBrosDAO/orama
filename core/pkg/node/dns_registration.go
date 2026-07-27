@@ -99,8 +99,21 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 				if err := n.ensureBaseDNSRecords(ctx); err != nil {
 					n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure DNS records on heartbeat", zap.Error(err))
 				}
+				// Re-advertise this node in the namespace gateway round-robin.
+				// MUST run after the heartbeat above (which re-asserts 'active')
+				// and before the purge below, so a just-recovered node is no
+				// longer purge-eligible by the time it re-adds itself.
+				n.ensureNamespaceHostRecords(ctx)
+				// Retract this node's own TURN records for namespaces it is no
+				// longer a TURN node for. The inactive-node purge cannot catch
+				// these: the node is alive, it just does not serve that namespace.
+				n.retractForeignTURNRecords(ctx)
 				// Remove DNS records for nodes that stopped heartbeating
 				n.cleanupStaleNodeRecords(ctx)
+				// Purge per-namespace records (gateway host, TURN, stealth) that
+				// still point at inactive nodes (bugboard #158) — neither an RPC/
+				// WebSocket client nor a relay-only call must resolve a removed node.
+				n.purgeInactiveNodeRecords(ctx)
 			}
 		}
 	}()
@@ -484,6 +497,336 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 				zap.String("ip", ip),
 				zap.Int("affected_namespaces", nsCount),
 			)
+		}
+	}
+}
+
+// inactiveNodeIPsSQL selects the public IPs of nodes that are no longer active.
+// The NOT IN guard excludes any IP still held by an ACTIVE node, so if a departed
+// node's public IP is later reused by a live node, that live node's records are
+// preserved (bugboard #158 review).
+// purgeStaleAfter is how long a node must have been silent before its DNS records
+// are eligible for deletion. It is deliberately much longer than the 120s
+// active→inactive threshold used by cleanupStaleNodeRecords: that flag flips on a
+// transient blip (a rolling restart, a leaderless rqlite window), and deleting
+// records is not something a blip should trigger. Only a node that has been quiet
+// this long is treated as genuinely gone.
+const purgeStaleAfter = 15 * time.Minute
+
+// staleCutoff renders the "silent since" instant that the purge queries bind.
+//
+// Extracted so tests exercise the real computation against a real SQLite clock:
+// every part of it is load-bearing and silently fails open if wrong. The format
+// must match what the heartbeat writes into last_seen (datetime('now') /
+// CURRENT_TIMESTAMP → 'YYYY-MM-DD HH:MM:SS', fixed width, so lexicographic
+// comparison equals chronological). .UTC() is required because those writers store
+// UTC — on a UTC+N host a local-time cutoff would sit N hours in the future, making
+// `last_seen < cutoff` true for every node and defeating the gate entirely.
+func staleCutoff() string {
+	return time.Now().UTC().Add(-purgeStaleAfter).Format("2006-01-02 15:04:05")
+}
+
+// inactiveNodeIPsSQL selects the public IPs of nodes that are genuinely gone:
+// non-active AND silent since the caller-supplied cutoff (one `?`).
+//
+// The cutoff is computed in Go and bound as a parameter rather than written as
+// datetime('now', …). rqlite replicates the statement and each node applies it
+// locally, so a non-deterministic expression in a DELETE *predicate* could match
+// different rows on different nodes and diverge the cluster. A bound constant
+// travels identically to every replica.
+//
+// The IS NOT NULL / != '' filter is explicit rather than incidental: a single NULL
+// ip_address would make the outer `value NOT IN (…)` evaluate to NULL for every
+// row (SQL three-valued logic), silently turning the whole purge into a no-op.
+const inactiveNodeIPsSQL = `SELECT ip_address FROM dns_nodes WHERE status != 'active'
+	           AND ip_address IS NOT NULL AND ip_address != ''
+	           AND last_seen < ?
+	           AND ip_address NOT IN (SELECT ip_address FROM dns_nodes
+	               WHERE status = 'active' AND ip_address IS NOT NULL AND ip_address != '')`
+
+// purgeInactiveTURNRecordsSQL removes namespace TURN/stealth A records whose
+// value is the IP of a non-active node (bugboard #158).
+//
+// Deliberately NOT guarded against emptying the fqdn, unlike the namespace-host
+// purge below. The rationale is recoverability, not resolution behavior:
+// EnsureTURNRecordForNode re-adds each live TURN node's own record on every boot,
+// so an over-purged turn host repopulates itself, and a relay that resolves
+// nowhere is no worse for the client than one that resolves to a dead node —
+// either way the ICE agent falls through to the next server. This is the exact
+// query already verified in production; the namespace host gets the extra guard
+// because its blast radius (all RPC + the signaling WebSocket) is far larger.
+const purgeInactiveTURNRecordsSQL = `DELETE FROM dns_records
+	 WHERE record_type = 'A'
+	   AND (namespace LIKE 'namespace-turn:%' OR namespace LIKE 'namespace-turn-stealth:%')
+	   AND value IN (
+	       ` + inactiveNodeIPsSQL + `
+	   )`
+
+// purgeInactiveNamespaceHostRecordsSQL removes namespace GATEWAY-host A records
+// (`ns-<ns>` and its `*.ns-<ns>` wildcard, tag `namespace:<ns>`) whose value is
+// the IP of a non-active node.
+//
+// This host is the origin for the persistent signaling WebSocket and every RPC,
+// and the resolver round-robins across its A records — so one dead IP among three
+// meant roughly a third of connections landing on a node that refuses :443
+// (devnet: 109.123.239.61 on ns-anchat-test). The original #158 purge covered only
+// the `namespace-turn*` tags, leaving this host stale.
+//
+// SAFETY — the EXISTS guard: a dead-IP row is deleted only when the SAME fqdn
+// still has at least one RESOLVABLE A record that is NOT a dead IP. Without it, a
+// cluster-wide heartbeat failure that flipped every node to non-active would
+// delete every A record for the namespace host.
+//
+// Note what emptying it would actually cause — it is NOT a clean NXDOMAIN. The
+// resolver rewrites a 3-label miss to the base wildcard (getWildcardName in
+// pkg/coredns/rqlite/plugin.go), and `*.<base>` DOES exist (ensureBaseDNSRecords),
+// so `ns-<ns>.<base>` would silently fall through to the nameserver nodes — which
+// may not host this namespace at all. Clients would connect, pass TLS on the
+// wildcard cert, and hit the wrong backend: a silent misroute is harder to
+// diagnose than an outright failure, which makes this guard more important, not
+// less.
+//
+// "Resolvable" means is_active = TRUE, matching the resolver's own predicate
+// (pkg/coredns/rqlite/backend.go). A soft-disabled row must NOT count as a
+// survivor: recovery's suspect-node path (DisableNamespaceRecord) sets
+// is_active = FALSE on exactly these fqdns, so counting dark rows would let the
+// purge delete the last row that actually answers queries. For the same reason a
+// dark row is never itself deleted — removing it changes nothing observable, and
+// keeping it preserves recovery's ability to re-enable it.
+//
+// Survivors are matched by fqdn, not by tag: any surviving resolvable A record
+// for the name means the name still resolves.
+//
+// Recoverability: paired with EnsureNamespaceHostRecordForNode, which re-adds
+// each live gateway node's own record on every boot. That counterpart is what
+// makes deleting these rows safe at all — a node flapped non-active transiently
+// re-advertises itself instead of being erased permanently.
+const purgeInactiveNamespaceHostRecordsSQL = `DELETE FROM dns_records
+	 WHERE record_type = 'A'
+	   AND namespace LIKE 'namespace:%'
+	   AND is_active = TRUE
+	   AND value IN (
+	       ` + inactiveNodeIPsSQL + `
+	   )
+	   AND EXISTS (
+	       SELECT 1 FROM dns_records AS survivor
+	        WHERE survivor.fqdn = dns_records.fqdn
+	          AND survivor.record_type = 'A'
+	          AND survivor.is_active = TRUE
+	          AND survivor.value NOT IN (
+	              ` + inactiveNodeIPsSQL + `
+	          )
+	   )`
+
+// ensureNamespaceHostRecordsSQL re-advertises THIS node in the gateway
+// round-robin for every namespace it currently serves as a running gateway.
+//
+// One statement covers all such namespaces: it derives the fqdn from
+// namespace_clusters.namespace_name and inserts only when an identical
+// (fqdn, A, value, tag) row is absent. `?` order:
+//
+//	1 prefix, 2 baseDomain, 3 nodeIP, 4 now, 5 now,      -- projection
+//	6 nodeID,                                            -- which namespaces
+//	7 prefix, 8 baseDomain, 9 nodeIP                     -- NOT EXISTS guard
+//
+// is_active is left to its TRUE default and never forced: a row recovery
+// deliberately disabled (DisableNamespaceRecord) blocks the insert via NOT EXISTS
+// and stays dark, so this can never resurrect traffic to a drained node.
+//
+// ON CONFLICT DO NOTHING is a required backstop, not decoration. The NOT EXISTS
+// guard matches on four columns INCLUDING the namespace tag, but the table's
+// constraint is UNIQUE(fqdn, record_type, value) with no tag — so a row carrying
+// the same (fqdn, A, ip) under a different tag slips past the guard and hits the
+// constraint. Since this is ONE statement covering EVERY namespace this node
+// gateways, that would abort the whole insert and silently stop re-advertisement
+// for all of them, every 30s — exactly the failure this function exists to fix.
+// Same clause as the sibling self-heal in ensureBaseDNSRecords.
+const ensureNamespaceHostRecordsSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
+	SELECT ?||'ns-'||nc.namespace_name||'.'||?||'.', 'A', ?, 60,
+	       'namespace:'||nc.namespace_name, 'namespace-dns-reconcile', ?, ?
+	  FROM namespace_cluster_nodes ncn
+	  JOIN namespace_clusters nc ON ncn.namespace_cluster_id = nc.id
+	 WHERE ncn.node_id = ? AND ncn.role = 'gateway' AND ncn.status = 'running'
+	   AND NOT EXISTS (
+	       SELECT 1 FROM dns_records r
+	        WHERE r.fqdn = ?||'ns-'||nc.namespace_name||'.'||?||'.'
+	          AND r.record_type = 'A' AND r.value = ?
+	          AND r.namespace = 'namespace:'||nc.namespace_name
+	   )
+	ON CONFLICT(fqdn, record_type, value) DO NOTHING`
+
+// ensureNamespaceHostRecords re-advertises this node in the `ns-<ns>` (and
+// `*.ns-<ns>`) round-robin for every namespace it gateways.
+//
+// Runs on the 30s DNS sweep, immediately AFTER updateDNSHeartbeat has re-asserted
+// status='active' and refreshed last_seen — the ordering matters, because it means
+// a node that just recovered is no longer purge-eligible by the time it
+// re-advertises. Making this periodic rather than boot-only is what keeps the
+// purge safe: purge and re-add now run at the same cadence, so a node whose record
+// was removed while it was genuinely gone rejoins the round-robin ~30s after it
+// comes back, instead of staying absent until its next process restart (which is
+// how a healthy node silently sat out of rotation on devnet).
+//
+// Additive and per-node: inserts only THIS node's own value, only when absent.
+func (n *Node) ensureNamespaceHostRecords(ctx context.Context) {
+	if n.rqliteAdapter == nil {
+		return
+	}
+	nodeID := n.GetPeerID()
+	if nodeID == "" {
+		return
+	}
+	// Deliberately NO fallback to Node.Domain. Provisioning derives the namespace
+	// host solely from HTTPGateway.BaseDomain (CreateNamespaceRecords), so falling
+	// back to this node's own per-node domain would fabricate `ns-<ns>.<node
+	// domain>.` records — a different name on every node, resolving nothing and
+	// round-robining nothing. Better to advertise nothing than to invent a name.
+	baseDomain := n.config.HTTPGateway.BaseDomain
+	if baseDomain == "" {
+		return
+	}
+	ip, err := n.getNodeIPAddress()
+	if err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"Cannot re-advertise namespace host DNS records: this node's public IP is unavailable",
+			zap.Error(err))
+		return
+	}
+
+	db := n.rqliteAdapter.GetSQLDB()
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	// The apex host and the deployment wildcard are always advertised together.
+	for _, prefix := range []string{"", "*."} {
+		res, err := rqlite.SafeExecContext(db, ctx, ensureNamespaceHostRecordsSQL,
+			prefix, baseDomain, ip, now, now, nodeID, prefix, baseDomain, ip)
+		if err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode,
+				"Failed to ensure namespace host DNS records",
+				zap.String("prefix", prefix), zap.Error(err))
+			continue
+		}
+		if res != nil {
+			if affected, _ := res.RowsAffected(); affected > 0 {
+				n.logger.ComponentInfo(logging.ComponentNode,
+					"Re-advertised this node in the namespace gateway round-robin",
+					zap.String("prefix", prefix), zap.String("ip", ip),
+					zap.Int64("records_added", affected))
+			}
+		}
+	}
+}
+
+// retractForeignTURNRecordsSQL removes THIS node's own TURN/stealth A records for
+// any namespace it does not actually serve as a TURN node.
+//
+// `webrtc_port_allocations` (service_type='turn') is the authoritative record of
+// which nodes run TURN for a namespace. The DNS A records, by contrast, are written
+// once at webrtc-enable time (CreateTURNRecords) and never reconciled against it —
+// so when a node is removed from a namespace's cluster, its TURN records linger and
+// clients keep round-robining onto a host that no longer answers. That is NOT
+// something the inactive-node purge can catch: the node is alive and heartbeating,
+// it simply is not a TURN node for that namespace (observed on devnet: 57.129.7.232
+// advertised on turn-anchat-test with no TURN allocation, so ~50% of relay
+// connections hit a dead endpoint).
+//
+// Per-node and self-limited: `value = ?` is this node's own IP, so a node can only
+// ever retract ITSELF. It can never delete a peer's record, which makes it safe to
+// run unguarded on every node — the same model as the ensure. `?` order:
+// 1 nodeIP, 2 nodeID.
+const retractForeignTURNRecordsSQL = `DELETE FROM dns_records
+	 WHERE record_type = 'A'
+	   AND value = ?
+	   AND (namespace LIKE 'namespace-turn:%' OR namespace LIKE 'namespace-turn-stealth:%')
+	   AND NOT EXISTS (
+	       SELECT 1 FROM webrtc_port_allocations wpa
+	         JOIN namespace_clusters nc ON wpa.namespace_cluster_id = nc.id
+	        WHERE wpa.service_type = 'turn'
+	          AND wpa.node_id = ?
+	          AND dns_records.namespace IN ('namespace-turn:'||nc.namespace_name,
+	                                        'namespace-turn-stealth:'||nc.namespace_name)
+	   )`
+
+// retractForeignTURNRecords drops this node's TURN/stealth A records for any
+// namespace it holds no TURN allocation for. See retractForeignTURNRecordsSQL.
+func (n *Node) retractForeignTURNRecords(ctx context.Context) {
+	if n.rqliteAdapter == nil {
+		return
+	}
+	nodeID := n.GetPeerID()
+	if nodeID == "" {
+		return
+	}
+	ip, err := n.getNodeIPAddress()
+	if err != nil {
+		return // already logged by the ensure on the same sweep
+	}
+	res, err := rqlite.SafeExecContext(n.rqliteAdapter.GetSQLDB(), ctx,
+		retractForeignTURNRecordsSQL, ip, nodeID)
+	if err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"Failed to retract stale TURN DNS records for this node", zap.Error(err))
+		return
+	}
+	if res != nil {
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			n.logger.ComponentInfo(logging.ComponentNode,
+				"Retracted own TURN DNS records for namespaces this node no longer serves as a TURN node",
+				zap.String("ip", ip), zap.Int64("records_removed", affected))
+		}
+	}
+}
+
+// purgeInactiveNodeRecords deletes per-namespace A records (namespace gateway
+// host, TURN, stealth-TURN) whose value is the IP of a node that is no longer
+// active (bugboard #158).
+//
+// These records are written once at provision / WebRTC-enable time
+// (dns_manager.go: CreateNamespaceRecords / CreateTURNRecords /
+// CreateStealthTURNRecords) and are never reconciled on topology change, unlike
+// the system round-robin records that cleanupStaleNodeRecords handles. So when a
+// node is removed/replaced its A records linger, and the resolver keeps handing
+// clients a dead IP:
+//   - `turn.ns-<ns>` → zero relay candidates, the call hangs on "connecting"
+//   - `ns-<ns>` → the signaling WebSocket and every RPC hit a node that refuses
+//     :443, so roughly 1-in-N connections fail and get retried
+//
+// cleanupStaleNodeRecords only fires at the active→inactive transition and only
+// touches `namespace='system'` rows, so an already-inactive node's per-namespace
+// records are never cleaned. This purge closes that gap for ALL currently-inactive
+// nodes, while the EXISTS guard in the SQL guarantees it can never empty an fqdn.
+// Idempotent DELETE-by-value — safe to run from every node on every sweep (same
+// model as cleanupStaleNodeRecords, no leader gating needed).
+func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
+	if n.rqliteAdapter == nil {
+		return
+	}
+	db := n.rqliteAdapter.GetSQLDB()
+
+	cutoff := staleCutoff()
+
+	// Two independent statements. The TURN purge is unguarded (for a relay-only
+	// client NXDOMAIN fails instantly whereas a dead A record burns a timeout);
+	// the namespace-host purge never empties an fqdn. `args` repeats the cutoff
+	// once per occurrence of inactiveNodeIPsSQL in each statement.
+	for _, p := range []struct {
+		what string
+		sql  string
+		args []interface{}
+	}{
+		{"TURN/stealth", purgeInactiveTURNRecordsSQL, []interface{}{cutoff}},
+		{"namespace host", purgeInactiveNamespaceHostRecordsSQL, []interface{}{cutoff, cutoff}},
+	} {
+		res, err := rqlite.SafeExecContext(db, ctx, p.sql, p.args...)
+		if err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "Failed to purge inactive-node DNS records",
+				zap.String("record_set", p.what), zap.Error(err))
+			continue
+		}
+		if res != nil {
+			if affected, _ := res.RowsAffected(); affected > 0 {
+				n.logger.ComponentInfo(logging.ComponentNode, "Purged DNS records pointing at inactive nodes",
+					zap.String("record_set", p.what), zap.Int64("records_removed", affected))
+			}
 		}
 	}
 }

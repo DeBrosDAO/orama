@@ -42,6 +42,45 @@ ns2.dbrs.space.  IN  A  141.227.165.154
 ns3.dbrs.space.  IN  A  141.227.156.51
 ```
 
+### Record Lifecycle and Self-Healing
+
+Per-namespace A records are round-robin sets: `ns-<namespace>.<base>` (the gateway
+host — origin of the signaling WebSocket and all RPC), its `*.ns-<namespace>.<base>`
+deployment wildcard, `turn.ns-<namespace>.<base>` (plain UDP/TCP TURN),
+`turn-<namespace>.<base>` (TURNS), and the stealth TURNS host. Each carries one A
+record per node serving that role.
+
+These are created at provision / WebRTC-enable time, so two reconcilers keep them
+true as the topology changes. Both run from **every** node — they are per-node and
+idempotent, so no leader election is needed:
+
+| Reconciler | When | What it does |
+|---|---|---|
+| Ensure (re-advertise) | Every 30s sweep, per hosted namespace | Additively inserts **this node's own** A record if absent, for every namespace where it is a `running` `gateway`. Never touches another node's record, and never re-enables a record that recovery deliberately disabled. Runs immediately after the heartbeat re-asserts `active`, so a just-recovered node is no longer purge-eligible when it re-advertises. |
+| Purge | Every 30s DNS sweep | Deletes A records whose value is a node that is non-active **and** silent longer than the staleness window (15 min). |
+
+Two safety properties matter:
+
+- **The staleness window** is far longer than the 120s active→inactive threshold.
+  That flag flips on a transient blip (rolling restart, brief rqlite unavailability),
+  and a blip must never delete records.
+- **The gateway-host purge never empties a name.** A record is removed only when the
+  same FQDN still has another *resolvable* (`is_active = TRUE`) record. Without that
+  guard, a cluster-wide heartbeat failure could delete every record for a namespace
+  host — and the result would not be a clean failure: the resolver rewrites a
+  3-label miss to the base wildcard, and `*.<base>` exists, so `ns-<namespace>.<base>`
+  would silently fall through to the nameserver nodes, which may not host that
+  namespace. Clients would connect, pass TLS on the wildcard cert, and reach the
+  wrong backend. A silent misroute is harder to diagnose than an outright failure.
+  The TURN purge is deliberately *not* guarded this way, on recoverability grounds:
+  each live TURN node re-advertises itself on boot, so an over-purged TURN host
+  repopulates, and for a relay-only client a host that resolves nowhere is no worse
+  than one resolving to a dead node — ICE falls through to the next server either way.
+
+If a namespace host is down to a single record pointing at a departed node, the
+guard keeps it — deletion would take the namespace fully offline. That state is
+resolved by adding a replacement node, which re-advertises itself on the next sweep.
+
 ## Installation
 
 ### Step 1: Install Orama on Each VPS

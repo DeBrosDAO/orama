@@ -220,6 +220,9 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/storage/status/", g.storageHandlers.StatusHandler)
 		mux.HandleFunc("/v1/storage/get/", g.storageHandlers.DownloadHandler)
 		mux.HandleFunc("/v1/storage/unpin/", g.storageHandlers.UnpinHandler)
+		// Internal (WireGuard-only): per-node immediate block eviction for
+		// privacy-grade unpin fan-out (bugboard #153).
+		mux.HandleFunc("/v1/internal/storage/evict", g.storageHandlers.EvictHandler)
 	}
 
 	// serverless functions (if enabled)

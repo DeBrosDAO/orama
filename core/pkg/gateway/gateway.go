@@ -46,6 +46,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 )
@@ -221,15 +222,20 @@ func (a *authClientAdapter) Database() authhandlers.DatabaseClient {
 	return &authDatabaseAdapter{db: a.client.Database()}
 }
 
-// authDatabaseAdapter adapts client.DatabaseClient to authhandlers.DatabaseClient
+// authDatabaseAdapter adapts an apiKeyQuerier (client.DatabaseClient or the
+// namespace-bound sqlAPIKeyQuerier — see apikey_querier.go) to
+// authhandlers.DatabaseClient.
 type authDatabaseAdapter struct {
-	db client.DatabaseClient
+	db apiKeyQuerier
 }
 
 func (a *authDatabaseAdapter) Query(ctx context.Context, sql string, args ...interface{}) (*authhandlers.QueryResult, error) {
+	if a == nil || a.db == nil {
+		return nil, fmt.Errorf("authDatabaseAdapter: no database configured, cannot run query %q", sql)
+	}
 	result, err := a.db.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authDatabaseAdapter: query failed: %w", err)
 	}
 	// Convert client.QueryResult to authhandlers.QueryResult
 	// The auth handlers expect []interface{} but client returns [][]interface{}
@@ -439,6 +445,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.TURNSecret,
 			gw.proxyWebSocket,
 		)
+		// TURNS (:5349) must advertise the single-label host so the *.<base>
+		// wildcard cert validates it in browsers; UDP/TCP keep the legacy host.
+		if tlsHost := turn.TLSHostFromLegacyTURNHost(cfg.TURNDomain); tlsHost != "" {
+			gw.webrtcHandlers.SetTURNSTLSDomain(tlsHost)
+		}
 		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
 			zap.Int("sfu_port", cfg.SFUPort),
 			zap.Bool("turn_secret_set", cfg.TURNSecret != ""),
@@ -473,6 +484,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		solanaVerifier := auth.NewDefaultSolanaNFTVerifier()
 		gw.authHandlers.SetSolanaVerifier(solanaVerifier)
 		logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured")
+
+		// Wire the namespace-bound API-key querier (gw.apiKeyDB(), backed by
+		// gw.sqlDB) into the JWT-exchange handler's self-query fallback.
+		// Without this, APIKeyToJWTHandler's fallback used authClientAdapter
+		// above — which wraps deps.Client, accidentally core-bound — and every
+		// namespace API key 401'd on POST /v1/auth/token.
+		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)

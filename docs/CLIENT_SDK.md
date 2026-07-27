@@ -178,6 +178,16 @@ if err != nil {
 fmt.Println("Unpinned successfully")
 ```
 
+By default a successful unpin removes the pin immediately, but the underlying
+blocks are physically reclaimed only by the periodic GC sweep (~6h). For a
+**privacy-grade delete** ("delete for everyone" / "free up space"), call
+`DELETE /v1/storage/unpin/:cid?immediate=true`: when the CID's **last** pin is
+removed (no other namespace still references it), the blocks are evicted
+cluster-wide right away so the content is no longer fetchable. The response then
+includes an `evicted` field (`"true"`, `"partial"`, `"shared"`, or `"skipped"`).
+Use it only for genuine privacy deletes — it fans out per-node work and should
+not be set on routine unpins (e.g. avatar rotation) (bugboard #153).
+
 ### Check Pin Status
 
 ```go

@@ -4,18 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/turn"
 )
 
-// turnCredentialTTL mirrors the HTTP handler at
-// pkg/gateway/handlers/webrtc/credentials.go — the credentials are
-// time-bound HMAC tokens and 10min is the operational sweet spot
-// (long enough for a call to set up, short enough to limit replay
-// exposure if a token leaks).
-const turnCredentialTTL = 10 * time.Minute
+// turnCredentialTTL is the lifetime of credentials issued by the WASM host-fn
+// path. Sourced from the shared pkg/turn default so it and the HTTP handler at
+// pkg/gateway/handlers/webrtc/credentials.go stay in lockstep — a 10min value
+// here expired mid-call under relay-only media (bugboard #155).
+const turnCredentialTTL = turn.DefaultCredentialTTL
 
 // turnCredentialsEnvelope is the JSON shape returned by TurnCredentials.
 // Mirrors what the HTTP credentials endpoint returns at the wire so

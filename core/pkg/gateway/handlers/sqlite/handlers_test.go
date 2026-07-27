@@ -169,6 +169,10 @@ func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
 	return nil
 }
 
+func (m *mockIPFSClient) EvictLocal(ctx context.Context, cid string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockIPFSClient) Health(ctx context.Context) error {
 	if m.HealthFunc != nil {
 		return m.HealthFunc(ctx)

@@ -59,7 +59,7 @@ orama namespace disable webrtc --namespace myapp
 3. Allocates WebRTC port blocks on each node (SFU signaling + media range, TURN relay range)
 4. Spawns TURN on 2 nodes (selected by capacity)
 5. Spawns SFU on all 3 nodes
-6. Creates DNS A records: `turn.ns-{name}.{baseDomain}` pointing to TURN node public IPs
+6. Creates DNS A records pointing to TURN node public IPs: `turn.ns-{name}.{baseDomain}` (plain UDP/TCP TURN) and `turn-{name}.{baseDomain}` (single-label TLS host for TURNS, covered by the `*.{baseDomain}` wildcard cert)
 7. Updates cluster state on all nodes (for cold-boot restoration)
 
 ### What happens on disable:
@@ -99,11 +99,17 @@ const { uris, username, password, ttl } = await response.json();
 // uris: [
 //   "turn:turn.ns-myapp.orama-devnet.network:3478?transport=udp",
 //   "turn:turn.ns-myapp.orama-devnet.network:3478?transport=tcp",
-//   "turns:turn.ns-myapp.orama-devnet.network:5349"
+//   "turns:turn-myapp.orama-devnet.network:5349"
 // ]
+// NOTE: plain UDP/TCP TURN uses the two-label host turn.ns-<ns>.<base>; TURNS
+// (TLS) uses the SINGLE-label host turn-<ns>.<base>. Only a single-label host
+// is covered by the *.<base> wildcard cert, so only it validates in browsers —
+// the two-label host can present a self-signed cert only, which browsers reject.
+// Both round-robin to the same TURN nodes.
 // username: "{expiry_unix}:{namespace}"
 // password: HMAC-SHA1 derived (base64)
-// ttl: 600 (seconds)
+// ttl: 86400 (seconds — 24h; the one-shot REST/host-fn credential is not
+//            refreshed mid-call, so it must outlast any call, bugboard #155)
 ```
 
 ### 2. Create PeerConnection
@@ -207,18 +213,63 @@ WebRTC uses a **separate port allocation system** from the core namespace ports:
 - Credentials use HMAC-SHA1 with a per-namespace shared secret
 - Username format: `{expiry_unix}:{namespace}`
 - Password: `base64(HMAC-SHA1(shared_secret, username))`
-- Default TTL: 600 seconds (10 minutes)
-- SFU proactively sends `refresh-credentials` at 80% of TTL (8 minutes)
+- One-shot REST / `turn_credentials` host-fn TTL: 24h (`turn.DefaultCredentialTTL`).
+  These paths mint once at call setup and are never refreshed, so the credential
+  must outlast the whole call — a short TTL tore down relay-only media at expiry
+  (bugboard #155).
+- SFU signaling path TTL: per-namespace `turn_credential_ttl` (default 600s). The
+  SFU proactively sends `refresh-credentials` over the signaling WebSocket at 80%
+  of TTL, so a short TTL is safe there.
 - Clients should update ICE servers on receiving refresh
 
 ## TURNS TLS Certificate
 
-TURNS (port 5349) uses TLS. Certificate provisioning:
+TURNS (port 5349) uses TLS and the client connects to the single-label host
+`turn-{name}.{baseDomain}`. Certificate provisioning, in order:
 
-1. **Let's Encrypt (primary)**: On TURN spawn, the TURN domain is added to the local Caddy instance's Caddyfile. Caddy provisions a Let's Encrypt cert via DNS-01 ACME challenge (using the orama DNS provider). TURN reads the cert from Caddy's storage.
-2. **Self-signed (fallback)**: If Caddy cert provisioning fails (timeout, Caddy not running), a self-signed cert is generated with the node's public IP as SAN.
+1. **Wildcard reuse (primary)**: TURN presents Caddy's existing `*.{baseDomain}`
+   wildcard cert (already provisioned for HTTPS). The single-label TLS host is
+   covered by it, so no per-namespace ACME provisioning is needed and browsers
+   validate the cert. The `orama-node` service reads the wildcard from Caddy's
+   storage; the cert reloader hot-reloads renewals.
+2. **Per-domain Let's Encrypt (fallback)**: If the wildcard is unavailable, TURN
+   tries to provision a per-domain cert by appending to the Caddyfile. This path
+   fails on nodes where `orama-node` runs `ProtectSystem=strict` (can't write
+   `/etc/caddy`), so it is best-effort only.
+3. **Self-signed (last resort)**: If neither works, a self-signed cert is
+   generated with the node's public IP as SAN. Browsers reject it — TURNS is
+   effectively unavailable until a valid cert is in place. The two-label host
+   `turn.ns-{name}.{baseDomain}` can only reach this state (the wildcard doesn't
+   cover it), which is why TURNS moved to the single-label host.
 
 Caddy auto-renews Let's Encrypt certs at ~60 days. TURN serves the cert through a hot-reloading `GetCertificate` callback that polls the cert file every 60 seconds, so renewed certs are picked up in-process without a restart (a restart would drop every active relay).
+
+## Role Reconciliation
+
+TURN and SFU roles are recorded in `webrtc_port_allocations` — that table, not any
+local file, is the authority for which node runs what. Every node runs a 60s
+reconciler that keeps reality matching it:
+
+| Step | What it does |
+|---|---|
+| Reallocate | One node per sweep (the lowest-sorted live member, elected deterministically with no lock) drops roles held by nodes that have left the cluster and assigns them to current members. Requires a strict majority to act, so a partitioned minority can never reshape roles. |
+| Start | Starts TURN/SFU this node holds an allocation for but is not running. Backs off for 10 minutes after a failed start, so a crash-looping unit is not restarted every tick. |
+| Stop | Stops TURN/SFU this node no longer holds — but only on a **clean** allocator read that returns nothing. An unreadable database means do nothing, never stop. |
+| Advertise | Re-adds this node's TURN DNS records, but only when it both holds the allocation **and** is actually serving. |
+
+Two properties are deliberate:
+
+- **Revocation follows cluster membership, not heartbeats.** A node that misses a
+  heartbeat keeps its roles; only leaving the cluster releases them. A 120-second
+  heartbeat gap must never move a relay.
+- **Stopping requires positive evidence.** Starting a service is backed off and
+  can fail; stopping is immediate. A reconciler whose stop path is more capable
+  than its start path can only ever reduce capacity, so the stop path is the
+  conservative one.
+
+Without this, replacing a node left its TURN/SFU roles behind: the namespace kept
+two TURN allocations where one belonged to a machine that no longer existed, and
+the replacement node held no role at all (bugboard #161).
 
 ## Monitoring
 
@@ -252,7 +303,7 @@ systemctl status orama-namespace-turn@myapp
 ## Security Model
 
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side. Clients cannot bypass TURN.
-- **HMAC credentials**: Per-namespace TURN shared secret. Credentials expire after 10 minutes.
+- **HMAC credentials**: Per-namespace TURN shared secret. REST/host-fn credentials expire after 24h (long enough to outlast any call, since they are not refreshed mid-call); SFU-signaled credentials use the shorter per-namespace TTL and are refreshed over the signaling channel.
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
 - **Authentication required**: All WebRTC endpoints require API key or JWT (`X-API-Key` header, `Authorization: ApiKey`, or `Authorization: Bearer`).
 - **Room management**: Creating/closing rooms requires namespace ownership.

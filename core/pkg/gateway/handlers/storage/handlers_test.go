@@ -49,15 +49,21 @@ func (m *quotaMockDB) Exec(_ context.Context, _ string, _ ...any) (sql.Result, e
 
 // mockIPFSClient implements the IPFSClient interface for testing.
 type mockIPFSClient struct {
-	addResp   *ipfs.AddResponse
-	addErr    error
-	pinResp   *ipfs.PinResponse
-	pinErr    error
-	pinStatus *ipfs.PinStatus
+	addResp    *ipfs.AddResponse
+	addErr     error
+	pinResp    *ipfs.PinResponse
+	pinErr     error
+	pinStatus  *ipfs.PinStatus
 	pinStatErr error
-	getReader io.ReadCloser
-	getErr    error
-	unpinErr  error
+	getReader  io.ReadCloser
+	getErr     error
+	unpinErr   error
+	unpinCalls int
+	// evict tracking (bugboard #153)
+	evictRemoved int
+	evictErr     error
+	evictCalls   int
+	evictedCIDs  []string
 }
 
 func (m *mockIPFSClient) Add(_ context.Context, _ io.Reader, _ string) (*ipfs.AddResponse, error) {
@@ -77,7 +83,14 @@ func (m *mockIPFSClient) Get(_ context.Context, _ string, _ string) (io.ReadClos
 }
 
 func (m *mockIPFSClient) Unpin(_ context.Context, _ string) error {
+	m.unpinCalls++
 	return m.unpinErr
+}
+
+func (m *mockIPFSClient) EvictLocal(_ context.Context, cid string) (int, error) {
+	m.evictCalls++
+	m.evictedCIDs = append(m.evictedCIDs, cid)
+	return m.evictRemoved, m.evictErr
 }
 
 // ---------------------------------------------------------------------------
