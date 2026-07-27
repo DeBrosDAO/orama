@@ -222,8 +222,8 @@ func (a *authClientAdapter) Database() authhandlers.DatabaseClient {
 	return &authDatabaseAdapter{db: a.client.Database()}
 }
 
-// authDatabaseAdapter adapts an apiKeyQuerier (client.DatabaseClient or the
-// namespace-bound sqlAPIKeyQuerier — see apikey_querier.go) to
+// authDatabaseAdapter adapts an apiKeyQuerier (the global-registry
+// client.DatabaseClient returned by apiKeyDB() — see apikey_querier.go) to
 // authhandlers.DatabaseClient.
 type authDatabaseAdapter struct {
 	db apiKeyQuerier
@@ -485,11 +485,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.authHandlers.SetSolanaVerifier(solanaVerifier)
 		logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured")
 
-		// Wire the namespace-bound API-key querier (gw.apiKeyDB(), backed by
-		// gw.sqlDB) into the JWT-exchange handler's self-query fallback.
-		// Without this, APIKeyToJWTHandler's fallback used authClientAdapter
-		// above — which wraps deps.Client, accidentally core-bound — and every
-		// namespace API key 401'd on POST /v1/auth/token.
+		// Wire the global-registry API-key querier (gw.apiKeyDB(), preferring
+		// gw.authClient when GlobalRQLiteDSN is configured, else gw.client —
+		// see apikey_querier.go) into the JWT-exchange handler's self-query
+		// fallback, so it resolves against the SAME global registry the auth
+		// middleware uses. API keys are only ever created in the global/core
+		// registry, never in a namespace's own RQLite, so every gateway must
+		// validate against it.
 		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
 	}
 

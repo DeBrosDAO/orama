@@ -107,6 +107,14 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// and populates cfg.ClusterSecret so JWT signing keys can be
 		// derived deterministically (bug #215 fix).
 		ClusterSecretPath string `yaml:"cluster_secret_path"`
+		// APIKeyHMACSecret: see GatewayYAMLConfig docstring. Optional;
+		// when set, the standalone gateway populates cfg.APIKeyHMACSecret
+		// so API keys are hashed the same way as the main gateway
+		// (bugboard #160 fix). Without it, a namespace gateway cannot
+		// authenticate any key from the core registry (which stores
+		// HMAC-SHA256 hashes) and would persist any key it issues itself
+		// in plaintext.
+		APIKeyHMACSecret string `yaml:"api_key_hmac_secret"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -247,6 +255,17 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	// available") on namespace gateways even though the host had the key.
 	if v := strings.TrimSpace(y.SecretsEncryptionKey); v != "" {
 		cfg.SecretsEncryptionKey = v
+	}
+
+	// API key HMAC secret — bugboard #160 fix. The host-managed gateway
+	// (pkg/node/gateway.go) reads this from secrets/api-key-hmac-secret; the
+	// standalone binary used by namespace gateways via systemd receives it
+	// through this YAML field. Without it, HashAPIKey returns keys
+	// unhashed, so a namespace gateway can't authenticate core-registry
+	// keys (stored as HMAC-SHA256 hashes) and stores any key it issues
+	// itself in plaintext.
+	if v := strings.TrimSpace(y.APIKeyHMACSecret); v != "" {
+		cfg.APIKeyHMACSecret = v
 	}
 
 	// WebRTC configuration

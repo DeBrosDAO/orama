@@ -254,8 +254,8 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 }
 
 // lookupAPIKeyNamespace resolves an API key to its namespace using cache and DB.
-// q is the querier to use — always this gateway's own namespace-bound RQLite
-// (see apiKeyDB in apikey_querier.go), never the accidentally core-bound g.client.
+// q is the querier to use — always the global/core API-key registry (see
+// apiKeyDB in apikey_querier.go), never a namespace's own RQLite.
 // Returns the namespace name or an error if the key is invalid.
 //
 // Dual lookup strategy for rolling upgrade: tries HMAC-hashed key first (new keys),
@@ -269,9 +269,10 @@ func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, q apiKe
 // and DB. scopes is the raw api_keys.scopes value ("" = legacy/grandfather).
 // Revoked keys (revoked_at IS NOT NULL) are treated as invalid (bugboard #148).
 //
-// q must be this gateway's own namespace-bound querier (apiKeyDB()) — API
-// keys are created by `orama namespace keys create` into the namespace RQLite,
-// so that is the only store that can ever resolve them.
+// q must be the global/core API-key registry querier (apiKeyDB()) — API keys
+// are created by `orama namespace keys create` into the global/core RQLite,
+// so that is the only store that can ever resolve them. A namespace's own
+// RQLite is never authoritative for API keys.
 func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQuerier) (string, string, error) {
 	// Cache uses raw key as cache key (in-memory only, never persisted)
 	if g.mwCache != nil {
