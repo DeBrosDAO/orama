@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 )
 
 func testHandlers() *WebRTCHandlers {
@@ -56,13 +60,103 @@ func TestCredentialsHandler_Success(t *testing.T) {
 	if result["ttl"] == nil {
 		t.Error("expected ttl field")
 	}
+	// bugboard #155: TTL must be the long-lived shared default (24h), not the
+	// old 10-minute value that expired mid-call under relay-only media.
+	wantTTL := float64(int(turn.DefaultCredentialTTL.Seconds()))
 	ttl, ok := result["ttl"].(float64)
-	if !ok || ttl != 600 {
-		t.Errorf("ttl = %v, want 600", result["ttl"])
+	if !ok || ttl != wantTTL {
+		t.Errorf("ttl = %v, want %v", result["ttl"], wantTTL)
 	}
 	uris, ok := result["uris"].([]interface{})
 	if !ok || len(uris) != 3 {
 		t.Errorf("uris count = %v, want 3", result["uris"])
+	}
+}
+
+// TURNS cert fix: turns:…:5349 must advertise the single-label TLS host (covered
+// by the *.<base> wildcard cert) while plain turn:…:3478 keeps the legacy host.
+func TestCredentialsHandler_TURNSUsesTLSHost(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
+	h := NewWebRTCHandlers(logger, "", 8443, "turn.ns-test.dbrs.space", "test-secret-key-32bytes-long!!!!", nil)
+	h.SetTURNSTLSDomain(turn.TLSHostFromLegacyTURNHost("turn.ns-test.dbrs.space")) // "turn-test.dbrs.space"
+
+	req := requestWithNamespace("POST", "/v1/webrtc/turn/credentials", "test-ns")
+	w := httptest.NewRecorder()
+	h.CredentialsHandler(w, req)
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	uris, _ := result["uris"].([]interface{})
+	var udp, turns string
+	for _, u := range uris {
+		s, _ := u.(string)
+		switch {
+		case strings.HasPrefix(s, "turn:") && strings.Contains(s, "udp"):
+			udp = s
+		case strings.HasPrefix(s, "turns:"):
+			turns = s
+		}
+	}
+	if udp != "turn:turn.ns-test.dbrs.space:3478?transport=udp" {
+		t.Errorf("UDP URI should keep the legacy host; got %q", udp)
+	}
+	if turns != "turns:turn-test.dbrs.space:5349" {
+		t.Errorf("TURNS URI must use the single-label TLS host; got %q", turns)
+	}
+}
+
+// When no TLS host is set, turns:5349 falls back to the legacy host (pre-fix
+// behavior) — so a partial rollout never emits an empty/malformed TURNS URI.
+func TestCredentialsHandler_TURNSFallsBackWhenTLSHostUnset(t *testing.T) {
+	h := testHandlers() // no SetTURNSTLSDomain call
+	req := requestWithNamespace("POST", "/v1/webrtc/turn/credentials", "test-ns")
+	w := httptest.NewRecorder()
+	h.CredentialsHandler(w, req)
+
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	uris, _ := result["uris"].([]interface{})
+	found := false
+	for _, u := range uris {
+		if s, _ := u.(string); s == "turns:turn.ns-test.dbrs.space:5349" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("TURNS URI should fall back to the legacy host when TLS host unset; uris=%v", uris)
+	}
+}
+
+// TestCredentialsHandler_ExpiryEncodesLongTTL asserts the issued coturn-style
+// username encodes an expiry ~24h out (bugboard #155 verify signal: the leading
+// unix timestamp must be now+DefaultCredentialTTL, not now+10min).
+func TestCredentialsHandler_ExpiryEncodesLongTTL(t *testing.T) {
+	h := testHandlers()
+	req := requestWithNamespace("POST", "/v1/webrtc/turn/credentials", "test-ns")
+	w := httptest.NewRecorder()
+
+	before := time.Now()
+	h.CredentialsHandler(w, req)
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	username, _ := result["username"].(string)
+	parts := strings.SplitN(username, ":", 2)
+	if len(parts) != 2 {
+		t.Fatalf("username %q is not <expiry>:<namespace>", username)
+	}
+	expiry, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		t.Fatalf("expiry %q not an int: %v", parts[0], err)
+	}
+	wantMin := before.Add(turn.DefaultCredentialTTL).Unix() - 5
+	wantMax := time.Now().Add(turn.DefaultCredentialTTL).Unix() + 5
+	if expiry < wantMin || expiry > wantMax {
+		t.Errorf("expiry = %d, want ~now+%s (in [%d,%d])", expiry, turn.DefaultCredentialTTL, wantMin, wantMax)
 	}
 }
 

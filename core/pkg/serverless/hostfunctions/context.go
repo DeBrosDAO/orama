@@ -79,6 +79,37 @@ func (h *HostFunctions) SetTriggerDispatcher(d *triggers.PubSubDispatcher) {
 	h.triggerDispatcher = d
 }
 
+// nestedTriggerType decides the trigger type for a function_invoke made from
+// inside another function, given the PARENT invocation's trigger type.
+//
+// Bugboard #159: this used to be hardcoded to TriggerTypeWebSocket, which made
+// every nested call re-enter the authorization gate as an ordinary external
+// caller. For a system-triggered parent (cron, pubsub, db-watcher, timer, job)
+// there is no caller identity by design — CallerWallet is "" and CallerIsAdmin
+// is false — so canInvokeFn("", false) rejected the nested call and any
+// `public: false` callee was unreachable from a cron. AnChat's cron-driven
+// payment reconciler reported SUCCESS on ~25 consecutive runs while settling
+// zero payments, because the settlement function it invoked was non-public.
+//
+// A system-originated parent therefore propagates as TriggerTypeInternal, which
+// isSystemTrigger already recognises: the gateway is the trusted invoker and the
+// auth boundary for a system trigger is at REGISTRATION time, not at fire time.
+// The call stays inside the parent's own namespace (the caller sets Namespace
+// from the parent context). NOTE: TriggerDepth does NOT bound function_invoke
+// chains — it is only incremented on the pubsub dispatch path — so a
+// function_invoke cycle is bounded by the parent's context deadline and the
+// executor's concurrency limit, not by maxTriggerDepth.
+//
+// An externally-triggered parent (HTTP/WebSocket) is unchanged: it keeps the
+// WebSocket type and is still gated, so external→internal stays blocked
+// (bugboard #152).
+func nestedTriggerType(parent serverless.TriggerType) serverless.TriggerType {
+	if serverless.IsSystemTrigger(parent) {
+		return serverless.TriggerTypeInternal
+	}
+	return serverless.TriggerTypeWebSocket
+}
+
 // FunctionInvoke synchronously runs another function in the same namespace
 // and returns its output bytes. Caller wallet, JWT claims, and WS client
 // ID are inherited from the current invocation so the inner function sees
@@ -111,7 +142,7 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		Namespace:    cur.Namespace,
 		FunctionName: name,
 		Input:        payload,
-		TriggerType:  serverless.TriggerTypeWebSocket,
+		TriggerType:  nestedTriggerType(cur.TriggerType),
 		CallerWallet: cur.CallerWallet,
 		// Inherit the parent's admin bit so an internal→internal call works
 		// while external→internal stays blocked (bugboard #152). When the
@@ -211,7 +242,7 @@ func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, pa
 			Namespace:    snapshot.Namespace,
 			FunctionName: name,
 			Input:        payloadCopy,
-			TriggerType:  serverless.TriggerTypeWebSocket,
+			TriggerType:  nestedTriggerType(snapshot.TriggerType),
 			CallerWallet: snapshot.CallerWallet,
 			// Inherit the parent's admin bit (bugboard #152): internal→internal
 			// async calls work; external→internal stay blocked.
@@ -223,10 +254,23 @@ func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, pa
 			TriggerDepth:     snapshot.TriggerDepth,
 		}
 		if _, err := inv.Invoke(bgCtx, req); err != nil && logger != nil {
-			logger.Warn("function_invoke_async target failed",
-				zap.String("name", name),
-				zap.String("namespace", snapshot.Namespace),
-				zap.Error(err))
+			// An async invoke gives the guest NO signal at all — it is
+			// fire-and-forget — so the host log is the only evidence it
+			// failed. Separate a permanent authorization refusal (which will
+			// never succeed on retry and means a misconfiguration) from a
+			// transient failure, so it cannot rot unnoticed the way the
+			// cron-reconciler no-op did (bugboard #159).
+			if serverless.IsUnauthorized(err) {
+				logger.Error("function_invoke_async unauthorized",
+					zap.String("name", name),
+					zap.String("namespace", snapshot.Namespace),
+					zap.Error(err))
+			} else {
+				logger.Warn("function_invoke_async target failed",
+					zap.String("name", name),
+					zap.String("namespace", snapshot.Namespace),
+					zap.Error(err))
+			}
 		}
 	}()
 	return nil

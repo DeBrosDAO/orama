@@ -20,6 +20,7 @@ type IPFSClient interface {
 	PinStatus(ctx context.Context, cid string) (*ipfs.PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
+	EvictLocal(ctx context.Context, cid string) (int, error)
 }
 
 // Config holds configuration values needed by storage handlers.

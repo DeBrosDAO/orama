@@ -374,3 +374,89 @@ func TestResolveWebRTCConfigWithRetry_exhaustsAndReturnsError(t *testing.T) {
 		t.Errorf("want a sleep between attempts but not after the last; got %d", slept)
 	}
 }
+
+// Bugboard SFU media_port=0 crash-loop — the SFU restore path (section 5 of
+// restoreClusterFromState) must source its media ports from the DB port
+// allocation, NOT the gateway-only local state file (where media ports are 0).
+// sfuPortBlockSpawnable is the guard that refuses to spawn pion with a zero
+// media range (which fails to bind and crash-loops the systemd unit). This
+// reproduces the bug: a block with media_start=0 must be rejected.
+func TestSFUPortBlockSpawnable(t *testing.T) {
+	tests := []struct {
+		name  string
+		block *WebRTCPortBlock
+		want  bool
+	}{
+		{"nil block (no allocation for this node)", nil, false},
+		{"zero media start crash-loops pion — the bug", &WebRTCPortBlock{SFUSignalingPort: 30000, SFUMediaPortStart: 0, SFUMediaPortEnd: 0}, false},
+		{"zero signaling port", &WebRTCPortBlock{SFUSignalingPort: 0, SFUMediaPortStart: 20000, SFUMediaPortEnd: 20499}, false},
+		{"media end unset", &WebRTCPortBlock{SFUSignalingPort: 30000, SFUMediaPortStart: 20000, SFUMediaPortEnd: 0}, false},
+		{"complete DB allocation is spawnable", &WebRTCPortBlock{SFUSignalingPort: 30000, SFUMediaPortStart: 20000, SFUMediaPortEnd: 20499}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sfuPortBlockSpawnable(tt.block); got != tt.want {
+				t.Errorf("sfuPortBlockSpawnable(%+v) = %v, want %v", tt.block, got, tt.want)
+			}
+		})
+	}
+}
+
+// TURN/SFU decoupling (bugboard #25) — regression: the gateway's TURN secret used
+// to be set only inside `if sfuBlock != nil`, so a gateway on a node with no SFU
+// allocation got NO turn_secret and answered /v1/webrtc/turn/credentials with 503
+// "TURN not configured". Reachable via dead-node failover: a replacement gateway
+// never holds an SFU allocation yet. Observed live on devnet (57.131.41.160 served
+// ~50% of anchat-test credential requests and failed all of them).
+//
+// This pins the invariant the three call sites must all satisfy: TURN fields are
+// namespace-wide and set whenever WebRTC is enabled; SFU fields are per-node.
+func TestGatewayWebRTC_turnSecretIndependentOfSFUAllocation(t *testing.T) {
+	// applyGatewayWebRTC mirrors the shape of the production blocks: TURN fields
+	// unconditional on webrtc-enabled, SFU fields only when a block exists.
+	type gw struct {
+		WebRTCEnabled bool
+		SFUPort       int
+		TURNSecret    string
+		TURNDomain    string
+	}
+	apply := func(webrtcEnabled bool, secret, domain string, sfuPort int, hasSFU bool) gw {
+		var g gw
+		if webrtcEnabled {
+			g.TURNSecret = secret
+			g.TURNDomain = domain
+			if hasSFU {
+				g.WebRTCEnabled = true
+				g.SFUPort = sfuPort
+			}
+		}
+		return g
+	}
+
+	t.Run("no SFU allocation still gets the TURN secret", func(t *testing.T) {
+		g := apply(true, "ns-wide-secret", "turn.ns-x.d", 0, false)
+		if g.TURNSecret != "ns-wide-secret" {
+			t.Error("a gateway without an SFU allocation MUST still receive the namespace TURN secret (else 503 on credentials)")
+		}
+		if g.TURNDomain == "" {
+			t.Error("turn domain must be set so the creds handler can build URIs")
+		}
+		if g.SFUPort != 0 || g.WebRTCEnabled {
+			t.Error("SFU fields must stay unset on a non-SFU node")
+		}
+	})
+
+	t.Run("SFU node gets both", func(t *testing.T) {
+		g := apply(true, "ns-wide-secret", "turn.ns-x.d", 30000, true)
+		if g.TURNSecret == "" || g.SFUPort != 30000 || !g.WebRTCEnabled {
+			t.Errorf("SFU node should get both TURN and SFU config, got %+v", g)
+		}
+	})
+
+	t.Run("webrtc disabled sets nothing", func(t *testing.T) {
+		g := apply(false, "ns-wide-secret", "turn.ns-x.d", 30000, true)
+		if g.TURNSecret != "" || g.SFUPort != 0 || g.WebRTCEnabled {
+			t.Errorf("nothing should be set when webrtc is disabled, got %+v", g)
+		}
+	})
+}

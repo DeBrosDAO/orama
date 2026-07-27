@@ -14,8 +14,14 @@ type WebRTCHandlers struct {
 	logger     *logging.ColoredLogger
 	sfuHost    string // SFU host IP (WireGuard IP) to proxy connections to
 	sfuPort    int    // Local SFU signaling port to proxy WebSocket connections to
-	turnDomain string // TURN server domain for building URIs
+	turnDomain string // TURN server domain for plain UDP/TCP URIs (turn:…:3478)
 	turnSecret string // HMAC-SHA1 shared secret for TURN credential generation
+
+	// turnsTLSDomain is the single-label host (turn-<ns>.<base>) used for the
+	// turns:…:5349 TLS URI. It is covered by the *.<base> wildcard cert, so
+	// TURNS validates in browsers — unlike turnDomain (two labels), which can't
+	// get a CA-valid cert. Empty → fall back to turnDomain (pre-fix behavior).
+	turnsTLSDomain string
 
 	// stealthCDNDomain, when non-empty, causes CredentialsHandler to also
 	// advertise turns://<stealthCDNDomain>:443 — the stealth TURN URI served
@@ -30,6 +36,13 @@ type WebRTCHandlers struct {
 // Pass empty string to disable. Safe to call before serving begins.
 func (h *WebRTCHandlers) SetStealthCDNDomain(domain string) {
 	h.stealthCDNDomain = domain
+}
+
+// SetTURNSTLSDomain sets the single-label host used for the turns:…:5349 TLS
+// URI. Pass empty to fall back to the plain turnDomain. Safe to call before
+// serving begins.
+func (h *WebRTCHandlers) SetTURNSTLSDomain(domain string) {
+	h.turnsTLSDomain = domain
 }
 
 // NewWebRTCHandlers creates a new WebRTCHandlers instance.

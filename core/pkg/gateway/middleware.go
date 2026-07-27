@@ -246,7 +246,7 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 	// Resolve namespace AND the key's effective (grandfather-applied) scopes so
 	// they can be forwarded to the namespace gateway, which does not re-look-up
 	// the key (bugboard #148).
-	ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.client)
+	ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 	if err != nil {
 		return "", nil, "", "invalid API key"
 	}
@@ -254,20 +254,25 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 }
 
 // lookupAPIKeyNamespace resolves an API key to its namespace using cache and DB.
-// dbClient controls which database is queried (global vs namespace-specific).
+// q is the querier to use — always this gateway's own namespace-bound RQLite
+// (see apiKeyDB in apikey_querier.go), never the accidentally core-bound g.client.
 // Returns the namespace name or an error if the key is invalid.
 //
 // Dual lookup strategy for rolling upgrade: tries HMAC-hashed key first (new keys),
 // then falls back to raw key lookup (existing unhashed keys during transition).
-func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, dbClient client.NetworkClient) (string, error) {
-	ns, _, err := g.lookupAPIKeyEntry(ctx, key, dbClient)
+func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, q apiKeyQuerier) (string, error) {
+	ns, _, err := g.lookupAPIKeyEntry(ctx, key, q)
 	return ns, err
 }
 
 // lookupAPIKeyEntry resolves an API key to its (namespace, scopes) using cache
 // and DB. scopes is the raw api_keys.scopes value ("" = legacy/grandfather).
 // Revoked keys (revoked_at IS NOT NULL) are treated as invalid (bugboard #148).
-func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, dbClient client.NetworkClient) (string, string, error) {
+//
+// q must be this gateway's own namespace-bound querier (apiKeyDB()) — API
+// keys are created by `orama namespace keys create` into the namespace RQLite,
+// so that is the only store that can ever resolve them.
+func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQuerier) (string, string, error) {
 	// Cache uses raw key as cache key (in-memory only, never persisted)
 	if g.mwCache != nil {
 		if cachedNS, cachedScopes, ok := g.mwCache.GetAPIKeyEntry(key); ok {
@@ -275,16 +280,22 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, dbClient cl
 		}
 	}
 
-	db := dbClient.Database()
+	if q == nil {
+		return "", "", fmt.Errorf("lookupAPIKeyEntry: no database querier configured for this gateway")
+	}
+
 	internalCtx := client.WithInternalAuth(ctx)
 	// Filter out revoked keys so a revoked key resolves to "invalid" (bounded by
 	// the 60s cache TTL). scopes is nullable — a NULL means a legacy key.
-	q := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
+	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
 
 	// Try HMAC-hashed lookup first (new keys stored as hashes)
 	hashedKey := g.authService.HashAPIKey(key)
-	res, err := db.Query(internalCtx, q, hashedKey)
-	if err == nil && res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+	res, err := q.Query(internalCtx, sqlQuery, hashedKey)
+	if err != nil {
+		return "", "", fmt.Errorf("lookupAPIKeyEntry: hashed-key query failed: %w", err)
+	}
+	if res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
 		if ns := getString(res.Rows[0][0]); ns != "" {
 			scopes := ""
 			if len(res.Rows[0]) > 1 {
@@ -299,8 +310,11 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, dbClient cl
 
 	// Fallback: try raw key lookup (existing unhashed keys during rolling upgrade)
 	if hashedKey != key {
-		res, err = db.Query(internalCtx, q, key)
-		if err == nil && res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+		res, err = q.Query(internalCtx, sqlQuery, key)
+		if err != nil {
+			return "", "", fmt.Errorf("lookupAPIKeyEntry: raw-key query failed: %w", err)
+		}
+		if res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
 			if ns := getString(res.Rows[0][0]); ns != "" {
 				scopes := ""
 				if len(res.Rows[0]) > 1 {
@@ -590,12 +604,21 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Look up API key → namespace (uses cache + DB)
-		dbClient := g.client
-		if g.authClient != nil {
-			dbClient = g.authClient
-		}
-		ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, dbClient)
+		// Look up API key → namespace against THIS gateway's own database.
+		//
+		// A namespace gateway owns its namespace's key registry: `orama namespace
+		// keys create` writes scoped keys into the namespace rqlite, so that is
+		// where they must be verified. Validating against the GLOBAL database
+		// instead (the old g.authClient path) meant a key could be valid,
+		// unrevoked and correctly scoped yet still 401 — because auth never
+		// looked in the database it lived in. Whether a key worked depended on
+		// which gateway happened to mint it, which is why devnet and testnet
+		// behaved differently with the identical command.
+		//
+		// Each gateway now verifies against the registry it owns. A namespace
+		// gateway therefore cannot authenticate a key belonging to a different
+		// namespace, which is the correct tenant boundary anyway.
+		ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 		if err != nil {
 			if isPublic {
 				next.ServeHTTP(w, r)
@@ -711,6 +734,16 @@ func isPublicPath(p string) bool {
 	// working path (the public endpoint hits a gateway without the WebRTC
 	// manager wired). Bugboard: internal webrtc mgmt endpoints unreachable.
 	if strings.HasPrefix(p, "/v1/internal/namespace/webrtc/") {
+		return true
+	}
+
+	// Internal storage eviction endpoint (bugboard #153). Auth is handled INSIDE
+	// the handler by the X-Orama-Internal-Auth header + WireGuard-peer source
+	// check (same as spawn/repair/webrtc above). Without this exemption the
+	// API-key middleware 401s the cross-node evict fan-out before the handler's
+	// internal-auth check runs, so immediate eviction would silently never
+	// execute (the unpin would report "partial" while the blob survived).
+	if p == "/v1/internal/storage/evict" {
 		return true
 	}
 
@@ -1359,7 +1392,12 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 				zap.String("namespace", namespaceName),
 				zap.Error(err),
 				zap.Bool("result_nil", result == nil),
-				zap.Int("row_count", func() int { if result != nil { return len(result.Rows) }; return -1 }()),
+				zap.Int("row_count", func() int {
+					if result != nil {
+						return len(result.Rows)
+					}
+					return -1
+				}()),
 			)
 			http.Error(w, "Namespace gateway not found", http.StatusNotFound)
 			return

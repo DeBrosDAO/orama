@@ -317,6 +317,17 @@ func (s *Server) closeListeners() {
 	s.stealthCertReloader = nil
 }
 
+// DefaultCredentialTTL is the lifetime of a minted TURN credential when no
+// per-namespace override is configured. It MUST comfortably outlast any
+// realistic call: the one-shot REST/host-fn credential paths mint once at call
+// setup and never refresh the credential, so once it expires coturn/pion 401s
+// the periodic TURN allocation Refresh and a relay-only call's media path dies
+// (bugboard #155 — the "every call drops at 10 minutes" bug was a 10-minute
+// TTL). 24h is the conventional coturn ephemeral-credential horizon and leaves
+// a wide margin over the longest plausible call while still bounding replay
+// exposure of a leaked credential.
+const DefaultCredentialTTL = 24 * time.Hour
+
 // GenerateCredentials creates time-limited HMAC-SHA1 TURN credentials.
 // Returns username and password suitable for WebRTC ICE server configuration.
 func GenerateCredentials(secret, namespace string, ttl time.Duration) (username, password string) {

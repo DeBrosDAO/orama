@@ -530,14 +530,21 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
 		}
 
-		// Add WebRTC config if enabled for this namespace
+		// Add WebRTC config if enabled for this namespace.
+		//
+		// TURN and SFU are DECOUPLED (bugboard #25): the TURN secret is
+		// namespace-wide, so this replacement gateway must be able to mint
+		// credentials even though it holds no SFU allocation yet. Setting them
+		// together used to leave a failover replacement with NO turn_secret, so it
+		// answered /v1/webrtc/turn/credentials with 503 while serving its share of
+		// the ns-<ns> round-robin (observed on devnet, 57.131.41.160).
 		if webrtcCfg, err := cm.GetWebRTCConfig(ctx, cluster.NamespaceName); err == nil && webrtcCfg != nil {
-			if sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, cluster.ID, replacement.NodeID); err == nil && sfuBlock != nil {
+			gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+			gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+			gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
+			if sfuBlock, serr := cm.webrtcPortAllocator.GetSFUPorts(ctx, cluster.ID, replacement.NodeID); serr == nil && sfuBlock != nil {
 				gwCfg.WebRTCEnabled = true
 				gwCfg.SFUPort = sfuBlock.SFUSignalingPort
-				gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
-				gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
-				gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
 			}
 		}
 
@@ -1074,14 +1081,17 @@ func (cm *ClusterManager) addNodeToCluster(
 		SecretsEncryptionKey:  cm.secretsEncryptionKey,
 	}
 
-	// Add WebRTC config if enabled for this namespace
+	// Add WebRTC config if enabled for this namespace. TURN/SFU decoupled — see
+	// the identical block in HandleDeadNode above (bugboard #25): the
+	// namespace-wide TURN secret must be set even with no SFU allocation, or this
+	// replacement gateway serves 503 on /v1/webrtc/turn/credentials.
 	if webrtcCfg, err := cm.GetWebRTCConfig(ctx, cluster.NamespaceName); err == nil && webrtcCfg != nil {
-		if sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, cluster.ID, replacement.NodeID); err == nil && sfuBlock != nil {
+		gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+		gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+		gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
+		if sfuBlock, serr := cm.webrtcPortAllocator.GetSFUPorts(ctx, cluster.ID, replacement.NodeID); serr == nil && sfuBlock != nil {
 			gwCfg.WebRTCEnabled = true
 			gwCfg.SFUPort = sfuBlock.SFUSignalingPort
-			gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
-			gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
-			gwCfg.TURNStealthDomain = cm.stealthDomainFor(cluster.NamespaceName, webrtcCfg)
 		}
 	}
 

@@ -30,10 +30,18 @@ const (
 	TriggerTypePubSub    TriggerType = "pubsub"
 	TriggerTypeTimer     TriggerType = "timer"
 	TriggerTypeJob       TriggerType = "job"
-	// TriggerTypeInternal marks a gateway-initiated invocation with no end-user
-	// caller (e.g. the auth claims-provider hook at JWT mint time, bugboard
-	// #548). Treated as a system trigger so the per-caller authorization check
-	// is skipped — the gateway is the trusted invoker.
+	// TriggerTypeInternal marks an invocation with no end-user caller. Treated
+	// as a system trigger so the per-caller authorization check is skipped.
+	//
+	// Two producers:
+	//  1. Gateway-initiated hooks — e.g. the auth claims-provider at JWT mint
+	//     time (bugboard #548). The gateway is the trusted invoker.
+	//  2. A nested function_invoke whose PARENT was system-triggered (bugboard
+	//     #159), so a cron/pubsub handler can compose functions in its own
+	//     namespace. See hostfunctions.nestedTriggerType.
+	//
+	// Because both map to the same value, `invocations.trigger_type` cannot
+	// distinguish them after the fact.
 	TriggerTypeInternal TriggerType = "internal"
 )
 

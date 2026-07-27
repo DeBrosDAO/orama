@@ -517,6 +517,14 @@ func isSystemTrigger(t TriggerType) bool {
 	return false
 }
 
+// IsSystemTrigger is the exported form of isSystemTrigger, for callers outside
+// this package that must know whether an invocation is system-originated.
+//
+// pkg/serverless/hostfunctions uses it so a nested function_invoke made by a
+// system-triggered parent stays system-originated instead of being re-checked as
+// an anonymous external call (bugboard #159).
+func IsSystemTrigger(t TriggerType) bool { return isSystemTrigger(t) }
+
 func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string, callerWallet string, callerIsAdmin bool) (bool, error) {
 	fn, err := i.registry.Get(ctx, namespace, functionName, 0)
 	if err != nil {

@@ -597,6 +597,48 @@ func TestAPIKeyToJWTHandler_UnknownKey(t *testing.T) {
 	}
 }
 
+// TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient proves the namespace-DB
+// fix (bugboard: POST /v1/auth/token 401 on namespace gateways): when
+// SetAPIKeyDB has been wired (as gateway.go does via apiKeyDB()), the
+// fallback lookup must use it instead of netClient — netClient is the
+// core-bound adapter and, pre-fix, was the only thing this handler queried.
+// The netClient mock fails the test if queried at all.
+func TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient(t *testing.T) {
+	const rawKey = "ak_live_nsdb"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	coreDB := &mockDatabaseClient{queryFn: func(_ string, _ ...interface{}) (*QueryResult, error) {
+		t.Error("handler must query apiKeyDB, not the core-bound netClient, once SetAPIKeyDB is wired")
+		return &QueryResult{Count: 0}, nil
+	}}
+	nsDB := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: coreDB}, "default", noopInternalAuth)
+	h.SetAPIKeyDB(nsDB)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", rawKey)
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	m := decodeBody(t, rec)
+	if m["namespace"] != "vrf708" {
+		t.Errorf("expected namespace vrf708, got %v", m["namespace"])
+	}
+}
+
 // TestAPIKeyToJWTHandler_TrustsInternalAuthContext is the regression for the
 // two-gateway bug (bugboard #147/#148): on a NAMESPACE gateway the api_keys
 // table is EMPTY (keys live in the main cluster RQLite only). The main gateway

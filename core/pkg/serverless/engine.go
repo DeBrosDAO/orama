@@ -1444,9 +1444,23 @@ func (e *Engine) hFunctionInvoke(ctx context.Context, mod api.Module,
 	}
 	out, err := e.hostServices.FunctionInvoke(ctx, string(name), payload)
 	if err != nil {
-		e.logger.Warn("function_invoke failed",
-			zap.String("name", string(name)),
-			zap.Error(err))
+		// The guest ABI can only signal "no result" (0), so an authorization
+		// refusal is indistinguishable from a transient failure to the guest
+		// (bugboard #159 ask 2 — still open, it needs an ABI/SDK change).
+		// Until then, at least make the two loudly distinguishable HOST-side:
+		// an unauthorized nested invoke is a permanent misconfiguration that
+		// will silently no-op forever, not something a retry fixes. AnChat's
+		// cron reconciler reported SUCCESS while settling nothing for weeks
+		// because this was one undifferentiated Warn.
+		if IsUnauthorized(err) {
+			e.logger.Error("function_invoke unauthorized",
+				zap.String("name", string(name)),
+				zap.Error(err))
+		} else {
+			e.logger.Warn("function_invoke failed",
+				zap.String("name", string(name)),
+				zap.Error(err))
+		}
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)

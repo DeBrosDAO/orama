@@ -40,8 +40,8 @@ type rotationMockORMDB struct {
 	// still inside the reuse-grace window (bugboard #125). The grace SELECT
 	// (detected by the grace_used_at predicate) reads from here.
 	graceableTokens map[string]string
-	inserted       int               // count of INSERTs (new refresh-token rows)
-	subjects       map[string]string // subject -> last hashed token inserted
+	inserted        int               // count of INSERTs (new refresh-token rows)
+	subjects        map[string]string // subject -> last hashed token inserted
 	// selectErrRemaining: number of upcoming "SELECT subject" calls that
 	// should return selectErr (simulates a transient rqlite leader outage).
 	// Decremented per matching call; 0 = serve normally (bugboard #125).
@@ -690,6 +690,121 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 	}
 	if claims2.Custom["account_id"] != "u-999" {
 		t.Errorf("account_id lost across the second rotation; custom=%v", claims2.Custom)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #154 — an empty-claims session (claims resolved empty at login
+// mint, e.g. a JWT minted before the account row existed) must SELF-HEAL on
+// refresh by re-resolving the provider, instead of replaying emptiness for the
+// whole ~30-day refresh chain. Scoped to empty-claims sessions only — a healthy
+// session must never re-invoke the provider on the hot path.
+// ----------------------------------------------------------------------------
+
+// countingClaimsResolver records how many times it is invoked so tests can
+// prove the empty-only scoping (healthy sessions must not call it).
+type countingClaimsResolver struct {
+	mu     sync.Mutex
+	calls  int
+	claims map[string]string
+}
+
+func (c *countingClaimsResolver) ResolveClaims(_ context.Context, _, _ string) map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return c.claims
+}
+
+// The core #154 fix: an empty-claims session re-resolves on refresh; once the
+// provider can answer (account row has committed), the rotated access token
+// carries account_id and the new refresh row persists it.
+func TestRefreshToken_reResolvesEmptyClaims_onRefresh(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "empty-claims-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET" // stored claims empty
+	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "uuid-healed"}}
+	s.SetClaimsResolver(resolver)
+
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Errorf("provider calls = %d, want 1 (empty-claims session must re-resolve)", resolver.calls)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "uuid-healed" {
+		t.Errorf("rotated access token did not pick up re-resolved account_id; custom=%v", claims.Custom)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(newRefresh)]; got != `{"account_id":"uuid-healed"}` {
+		t.Errorf("re-resolved claims not persisted to new refresh row; got %q", got)
+	}
+}
+
+// A HEALTHY session (non-empty stored claims) must NOT invoke the provider on
+// refresh — the empty-only guard keeps the hot path free of provider cost.
+func TestRefreshToken_healthySession_doesNotReResolve(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "healthy-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	ormDB.claimsByToken = map[string]string{sha256Hex(refresh): `{"account_id":"u-1"}`}
+	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "SHOULD-NOT-APPEAR"}}
+	s.SetClaimsResolver(resolver)
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	if resolver.calls != 0 {
+		t.Errorf("provider calls = %d, want 0 (healthy session must not re-resolve)", resolver.calls)
+	}
+	claims, _ := s.ParseAndVerifyJWT(access)
+	if claims.Custom["account_id"] != "u-1" {
+		t.Errorf("healthy session lost/changed account_id; custom=%v", claims.Custom)
+	}
+}
+
+// Re-resolve is fail-open: if the provider is STILL empty at refresh time, the
+// rotation must succeed (no error), just without claims.
+func TestRefreshToken_emptyClaims_providerStillEmpty_succeeds(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "still-empty-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	resolver := &countingClaimsResolver{claims: nil}
+	s.SetClaimsResolver(resolver)
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken must succeed even when re-resolve yields empty: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Errorf("provider calls = %d, want 1", resolver.calls)
+	}
+	claims, _ := s.ParseAndVerifyJWT(access)
+	if _, present := claims.Custom["account_id"]; present {
+		t.Errorf("no claims expected when provider empty; custom=%v", claims.Custom)
+	}
+}
+
+// A namespace with NO provider (claimsResolver nil) must not attempt re-resolve
+// and must rotate normally.
+func TestRefreshToken_emptyClaims_noResolver_untouched(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "no-resolver-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	// No SetClaimsResolver → claimsResolver nil; the guard skips re-resolution.
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	claims, _ := s.ParseAndVerifyJWT(access)
+	if len(claims.Custom) != 0 {
+		t.Errorf("expected no custom claims; custom=%v", claims.Custom)
 	}
 }
 

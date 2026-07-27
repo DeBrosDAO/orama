@@ -63,6 +63,14 @@ type Config struct {
 func (c *Config) Validate() []error {
 	var errs []error
 
+	// NOTE (bugboard #161): a zero port ("0.0.0.0:0") is deliberately NOT rejected
+	// here. It binds an OS-assigned ephemeral port, which is a legitimate and
+	// widely-used idiom for tests that need a free port. The danger is a
+	// PRODUCTION spawn built from an incomplete port allocation, where a zero
+	// port yields a server that looks healthy and relays nothing — that is
+	// guarded at the spawn site by turnPortBlockSpawnable (pkg/namespace), which
+	// refuses to write such a config in the first place. Validating it here would
+	// break the test idiom without protecting anything the spawn guard misses.
 	if c.ListenAddr == "" {
 		errs = append(errs, fmt.Errorf("turn.listen_addr: must not be empty"))
 	}

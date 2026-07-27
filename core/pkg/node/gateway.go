@@ -169,6 +169,14 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 		// voter — never changing membership (all nodes stay voters).
 		clusterManager.StartLeaderLocalityReconciler(ctx)
 
+		// Keeps WebRTC role assignments (TURN/SFU) aligned with cluster
+		// membership after a node replacement (bugboard #161), retracts a role
+		// this node no longer holds, and keeps its TURN DNS record current.
+		// Spawning a NEWLY-gained role still happens on the next restore, not
+		// here — see StartWebRTCReconciler for why the stop side is deliberately
+		// more conservative than the start side.
+		clusterManager.StartWebRTCReconciler(ctx)
+
 		// Restore previously-running namespace cluster processes in background.
 		// First try local state files (no DB dependency), then fall back to DB query with retries.
 		go func() {

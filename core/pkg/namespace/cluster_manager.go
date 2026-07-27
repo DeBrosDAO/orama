@@ -59,6 +59,11 @@ type ClusterManager struct {
 	db                  rqlite.Client
 	portAllocator       *NamespacePortAllocator
 	webrtcPortAllocator *WebRTCPortAllocator
+
+	// webrtcSpawnCooldown throttles WebRTC spawn retries per namespace so a
+	// crash-looping unit cannot be restarted every tick (bugboard #161).
+	webrtcSpawnMu       sync.Mutex
+	webrtcSpawnCooldown map[string]time.Time
 	nodeSelector        *ClusterNodeSelector
 	systemdSpawner      *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
 	dnsManager          *DNSRecordManager
@@ -1621,14 +1626,30 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				SecretsEncryptionKey:  cm.secretsEncryptionKey,
 			}
 
-			// Add WebRTC config if enabled for this namespace
+			// Add WebRTC config if enabled for this namespace.
+			//
+			// TURN and SFU are DECOUPLED (bugboard #25): the TURN shared secret is
+			// namespace-wide, so ANY gateway for the namespace can mint TURN
+			// credentials — the TURN servers are remote and a credential is just an
+			// HMAC of that secret. The SFU port, by contrast, is per-node and only
+			// exists on nodes holding an SFU allocation.
+			//
+			// These used to be set together inside `if sfuBlock != nil`, so a gateway
+			// on a node with no SFU allocation got NO turn_secret at all and answered
+			// /v1/webrtc/turn/credentials with 503 "TURN not configured". That is
+			// reachable in normal operation: dead-node failover can make a node a
+			// gateway for a namespace it holds no WebRTC allocation in (observed on
+			// devnet — 57.131.41.160 served ~50% of anchat-test credential requests
+			// and failed every one of them).
 			if webrtcCfg, err := cm.GetWebRTCConfig(ctx, namespaceName); err == nil && webrtcCfg != nil {
-				if sfuBlock, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID); err == nil && sfuBlock != nil {
+				gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", namespaceName, cm.baseDomain)
+				gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
+				gwCfg.TURNStealthDomain = cm.stealthDomainFor(namespaceName, webrtcCfg)
+				// WebRTCEnabled is the legacy SFU-presence flag; the route gate no
+				// longer keys on it (#25/#411). Only an SFU node reports a port.
+				if sfuBlock, serr := cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID); serr == nil && sfuBlock != nil {
 					gwCfg.WebRTCEnabled = true
 					gwCfg.SFUPort = sfuBlock.SFUSignalingPort
-					gwCfg.TURNDomain = fmt.Sprintf("turn.ns-%s.%s", namespaceName, cm.baseDomain)
-					gwCfg.TURNSecret = webrtcCfg.TURNSharedSecret
-					gwCfg.TURNStealthDomain = cm.stealthDomainFor(namespaceName, webrtcCfg)
 				}
 			}
 
@@ -2017,6 +2038,27 @@ func chooseRestoreWebRTC(
 	}
 }
 
+// sfuPortBlockSpawnable reports whether a DB SFU port allocation is complete
+// enough to spawn a pion SFU. A nil block (no allocation for this node) or a
+// zero signaling/media-start port would produce a crash-looping unit that fails
+// to bind, so the restore path must skip the spawn rather than write a broken
+// config. Pure function so the guard is unit-testable without a live cluster.
+func sfuPortBlockSpawnable(block *WebRTCPortBlock) bool {
+	return block != nil && block.SFUSignalingPort > 0 && block.SFUMediaPortStart > 0 && block.SFUMediaPortEnd > 0
+}
+
+// turnPortBlockSpawnable reports whether a DB TURN allocation is complete enough
+// to spawn a TURN server. The listen/TLS ports matter as much as the relay range:
+// a config with listen port 0 does NOT fail — pion binds "0.0.0.0:0" to a random
+// ephemeral port, systemd reports the unit active, and the node stays in TURN DNS
+// while relaying nothing. A silent dead relay is far worse than a refused spawn,
+// so every port is checked here rather than trusted. Pure, so it is testable.
+func turnPortBlockSpawnable(block *WebRTCPortBlock) bool {
+	return block != nil &&
+		block.TURNListenPort > 0 && block.TURNTLSPort > 0 &&
+		block.TURNRelayPortStart > 0 && block.TURNRelayPortEnd > 0
+}
+
 // restoreClusterFromState restores all processes for a cluster using local state (no DB queries).
 func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *ClusterLocalState) error {
 	cm.logger.Info("Restoring namespace cluster from local state",
@@ -2139,6 +2181,32 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 3. Restore Gateway
 	if state.HasGateway {
+		// Re-advertise THIS node in the namespace gateway round-robin (`ns-<ns>`
+		// and its `*.ns-<ns>` wildcard). Counterpart to EnsureTURNRecordForNode:
+		// CreateNamespaceRecords only runs at provision time, so without this a
+		// node whose record was purged while it was briefly non-active would never
+		// re-advertise. Additive per-node upsert — never touches another node's
+		// record, and never re-enables a record recovery deliberately disabled.
+		// The public-IP lookup hits the MAIN rqlite, which this restore path
+		// deliberately avoids depending on — so it can fail this early in boot.
+		// That failure must be logged, not swallowed: it is correlated with the
+		// very condition the purge reacts to (a node cut off from rqlite), and it
+		// is the only signal that this node did not re-enter the round-robin.
+		pip, perr := cm.getLocalNodePublicIP(ctx)
+		switch {
+		case perr != nil:
+			cm.logger.Warn("Cannot re-advertise namespace host DNS record: public IP unavailable from dns_nodes (main rqlite not reachable this early in boot) — this node stays out of the ns-<ns> round-robin until the next restore",
+				zap.String("namespace", state.NamespaceName), zap.Error(perr))
+		case pip == "":
+			cm.logger.Warn("Cannot re-advertise namespace host DNS record: this node has no public IP recorded in dns_nodes",
+				zap.String("namespace", state.NamespaceName))
+		default:
+			if derr := cm.dnsManager.EnsureNamespaceHostRecordForNode(ctx, state.NamespaceName, pip); derr != nil {
+				cm.logger.Warn("Ensure namespace host DNS record for node failed",
+					zap.String("namespace", state.NamespaceName), zap.Error(derr))
+			}
+		}
+
 		// Build the desired gateway config up front (incl. WebRTC resolved
 		// from state→DB) so it drives BOTH the cold-spawn (gateway down)
 		// and the warm-reconcile (gateway up but config drifted) paths.
@@ -2319,8 +2387,74 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		}
 	}
 
-	// 4. Restore TURN (if enabled)
-	if state.HasTURN && state.TURNRelayPortStart > 0 {
+	// bugboard #158: keep the TURN server's auth_secret in sync with the current
+	// namespace DB secret, independently of the state file. Some namespaces'
+	// cluster-state.json does not persist TURN fields (only has_gateway), so the
+	// state-gated TURN restore below never fires for them — yet the gateway still
+	// re-syncs its turn_secret to the DB secret on every boot (ReconcileGateway).
+	// If TURN keeps a stale secret the gateway mints credentials TURN rejects and
+	// every call fails auth (Allocate 400 → zero relay candidates). ReconcileTURN
+	// also switches the TURNS cert from the self-signed fallback to the wildcard
+	// once it's available (browsers reject self-signed). Reads the on-disk turn
+	// config and patches only drifted fields; a no-op when there is no TURN on
+	// this node or it is already in sync.
+	if turnWebRTCCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName); werr == nil && turnWebRTCCfg != nil {
+		// Before reconciling THIS node's services, bring the cluster-wide role
+		// assignments back in line with live membership (bugboard #161): node
+		// replacement migrates gateway/olric/rqlite but leaves TURN/SFU
+		// allocations on the departed node, so a namespace silently ends up with
+		// one live relay instead of two and the replacement node holds no role at
+		// all. Self-elects a single coordinator, and is a no-op once healthy.
+		if aerr := cm.ReconcileWebRTCAllocations(ctx, state.ClusterID, state.NamespaceName, turnWebRTCCfg.TURNNodeCount); aerr != nil {
+			cm.logger.Warn("WebRTC allocation reconcile failed (leaving assignments as-is)",
+				zap.String("namespace", state.NamespaceName), zap.Error(aerr))
+		}
+
+		if rerr := cm.systemdSpawner.ReconcileTURN(ctx, state.NamespaceName, cm.localNodeID, turnWebRTCCfg.TURNSharedSecret); rerr != nil {
+			cm.logger.Warn("TURN reconcile failed (leaving running config as-is)",
+				zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+		}
+		// If this node runs TURN, make sure its TURN/stealth A record exists.
+		// The #158 sweep only DELETES records for inactive nodes; a node whose
+		// record was purged while briefly down (e.g. mid-deploy) would otherwise
+		// never re-advertise, leaving the turn domain empty. Additive per-node
+		// upsert (never touches other nodes' records).
+		// Gate on the ALLOCATION and on the unit actually serving — NOT on the
+		// config file. StopService leaves the config behind, so a file-existence
+		// gate re-advertises a node that lost the TURN role on its next boot,
+		// pointing clients at a relay that will never start (the #161 symptom).
+		bootTurnBlk, bootTurnErr := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID)
+		bootTurnUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
+		if bootTurnErr == nil && bootTurnBlk != nil && bootTurnUp {
+			pip, perr := cm.getLocalNodePublicIP(ctx)
+			switch {
+			case perr != nil:
+				cm.logger.Warn("Cannot re-advertise TURN DNS record: public IP unavailable from dns_nodes (main rqlite not reachable this early in boot) — this TURN node stays unadvertised until the next restore",
+					zap.String("namespace", state.NamespaceName), zap.Error(perr))
+			case pip == "":
+				cm.logger.Warn("Cannot re-advertise TURN DNS record: this node has no public IP recorded in dns_nodes",
+					zap.String("namespace", state.NamespaceName))
+			default:
+				if derr := cm.dnsManager.EnsureTURNRecordForNode(ctx, state.NamespaceName, pip, cm.stealthDomainFor(state.NamespaceName, turnWebRTCCfg)); derr != nil {
+					cm.logger.Warn("Ensure TURN DNS record for node failed",
+						zap.String("namespace", state.NamespaceName), zap.Error(derr))
+				}
+			}
+		}
+	}
+
+	// 4. Restore TURN — gated on this node's DB ALLOCATION, not the state file.
+	// Same reasoning as the SFU gate below (bugboard #161): after a node
+	// replacement the TURN role moves, and cluster-state.json cannot know. The
+	// relay port range is read from the allocation too, so a node that gains the
+	// role spawns with real ports instead of the state file's zeros.
+	turnAlloc, turnAllocErr := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID)
+	turnAllocated := turnAllocErr == nil && turnPortBlockSpawnable(turnAlloc)
+	if turnAllocated {
+		state.TURNRelayPortStart = turnAlloc.TURNRelayPortStart
+		state.TURNRelayPortEnd = turnAlloc.TURNRelayPortEnd
+	}
+	if turnAllocated {
 		// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by
 		// the root-level Phase 6b firewall setup, which is TURN-aware. orama-node
 		// runs as a NON-root user and cannot modify ufw, so the firewall reconcile
@@ -2344,8 +2478,8 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 					turnCfg := TURNInstanceConfig{
 						Namespace:       state.NamespaceName,
 						NodeID:          cm.localNodeID,
-						ListenAddr:      fmt.Sprintf("0.0.0.0:%d", state.TURNListenPort),
-						TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", state.TURNTLSPort),
+						ListenAddr:      fmt.Sprintf("0.0.0.0:%d", turnAlloc.TURNListenPort),
+						TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", turnAlloc.TURNTLSPort),
 						PublicIP:        publicIP,
 						Realm:           cm.baseDomain,
 						AuthSecret:      webrtcCfg.TURNSharedSecret,
@@ -2367,31 +2501,63 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		}
 	}
 
-	// 5. Restore SFU (if enabled)
-	if state.HasSFU && state.SFUSignalingPort > 0 {
+	// 5. Restore SFU — gated on this node's DB ALLOCATION, not the state file.
+	//
+	// state.HasSFU comes from cluster-state.json, which restoreClusterOnNode
+	// rewrites as gateway-only, so it is routinely absent even on a node that
+	// genuinely holds an SFU role. Worse, after a node replacement the roles move
+	// (bugboard #161) and the state file cannot know: the replacement node has no
+	// has_sfu flag, so it would never spawn the role it was just assigned, while
+	// the departed node's file still claims one. webrtc_port_allocations is the
+	// authority for who runs what.
+	sfuAllocated := false
+	if blk, aerr := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID); aerr == nil {
+		sfuAllocated = sfuPortBlockSpawnable(blk)
+	}
+	if sfuAllocated {
 		sfuRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU)
 		if !sfuRunning {
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {
-				turnDomain := fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain)
-				sfuCfg := SFUInstanceConfig{
-					Namespace:      state.NamespaceName,
-					NodeID:         cm.localNodeID,
-					ListenAddr:     fmt.Sprintf("%s:%d", localIP, state.SFUSignalingPort),
-					MediaPortStart: state.SFUMediaPortStart,
-					MediaPortEnd:   state.SFUMediaPortEnd,
-					TURNServers: []sfu.TURNServerConfig{
-						{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
-						{Host: turnDomain, Port: TURNSPort, Secure: true},
-					},
-					TURNSecret:  webrtcCfg.TURNSharedSecret,
-					TURNCredTTL: webrtcCfg.TURNCredentialTTL,
-					RQLiteDSN:   fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
-				}
-				if err := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
-					cm.logger.Error("Failed to restore SFU from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
+				// Source SFU ports from the DB port allocator, NOT the local
+				// state file. restoreClusterOnNode persists a gateway-only
+				// ClusterLocalState (no SFU media ports), so state.SFUMediaPort*
+				// are 0 here — spawning pion with a 0 media range makes it fail
+				// to bind and the systemd unit crash-loops. The DB is
+				// authoritative and matches how EnableWebRTC first spawned the
+				// SFU (same root class as the TURN #158 config-from-stale-state
+				// bug: config must come from the DB, not the incomplete state).
+				sfuBlock, serr := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID)
+				if !sfuPortBlockSpawnable(sfuBlock) {
+					cm.logger.Error("Skipping SFU restore: SFU port allocation missing or invalid in DB — refusing to spawn with a zero media range",
+						zap.String("namespace", state.NamespaceName),
+						zap.String("node_id", cm.localNodeID),
+						zap.Error(serr))
 				} else {
-					cm.logger.Info("Restored SFU instance from state", zap.String("namespace", state.NamespaceName))
+					turnDomain := fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain)
+					sfuCfg := SFUInstanceConfig{
+						Namespace:      state.NamespaceName,
+						NodeID:         cm.localNodeID,
+						ListenAddr:     fmt.Sprintf("%s:%d", localIP, sfuBlock.SFUSignalingPort),
+						MediaPortStart: sfuBlock.SFUMediaPortStart,
+						MediaPortEnd:   sfuBlock.SFUMediaPortEnd,
+						TURNServers: []sfu.TURNServerConfig{
+							{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
+							{Host: turnDomain, Port: TURNSPort, Secure: true},
+						},
+						TURNSecret:  webrtcCfg.TURNSharedSecret,
+						TURNCredTTL: webrtcCfg.TURNCredentialTTL,
+						RQLiteDSN:   fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+					}
+					if err := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
+						cm.logger.Error("Failed to restore SFU", zap.String("namespace", state.NamespaceName), zap.Error(err))
+					} else {
+						cm.logger.Info("Restored SFU instance from DB port allocation",
+							zap.String("namespace", state.NamespaceName),
+							zap.Int("signaling_port", sfuBlock.SFUSignalingPort),
+							zap.Int("media_start", sfuBlock.SFUMediaPortStart),
+							zap.Int("media_end", sfuBlock.SFUMediaPortEnd))
+					}
 				}
 			} else {
 				cm.logger.Warn("Skipping SFU restore: WebRTC config not available from DB",
