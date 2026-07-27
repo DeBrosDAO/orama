@@ -214,6 +214,22 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 	return nil
 }
 
+// apiKeyHMACSecretFileName is the on-disk file name of the API-key HMAC
+// secret under <oramaDir>/secrets/. Matches the path the main gateway
+// reads in pkg/node/gateway.go, so namespace gateways hash API keys
+// identically to it (bugboard #160 fix).
+const apiKeyHMACSecretFileName = "api-key-hmac-secret"
+
+// oramaDir returns the host's orama data directory (typically ~/.orama),
+// derived from namespaceBase without hardcoding a production path. Every
+// caller constructs namespaceBase as "<oramaDir>/data/namespaces" (see
+// ClusterManagerConfig.BaseDataDir and pkg/node/gateway.go's baseDataDir),
+// so two levels up recovers oramaDir — the same directory whose
+// secrets/ subfolder the main gateway reads.
+func (s *SystemdSpawner) oramaDir() string {
+	return filepath.Join(s.namespaceBase, "..", "..")
+}
+
 // SpawnGateway starts a Gateway instance using systemd
 func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID string, cfg gateway.InstanceConfig) error {
 	s.logger.Info("Spawning Gateway via systemd",
@@ -227,6 +243,24 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 	}
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("gateway-%s.yaml", nodeID))
+
+	// Bugboard #160 fix: read the same API-key HMAC secret the main
+	// gateway uses (pkg/node/gateway.go) so this namespace gateway hashes
+	// keys identically. Without it, auth.Service.HashAPIKey returns keys
+	// unchanged: the gateway can't authenticate any core-registry key
+	// (stored as a 64-char HMAC-SHA256 hash) and would persist any key it
+	// issues itself in plaintext. A namespace gateway with no secret can
+	// never authenticate anything, so booting one without it is never the
+	// right outcome — fail loud instead of silently degrading.
+	apiKeyHMACSecretPath := filepath.Join(s.oramaDir(), "secrets", apiKeyHMACSecretFileName)
+	secretBytes, err := os.ReadFile(apiKeyHMACSecretPath)
+	if err != nil {
+		return fmt.Errorf("read API-key HMAC secret at %s (required for namespace gateway auth): %w", apiKeyHMACSecretPath, err)
+	}
+	apiKeyHMACSecret := strings.TrimSpace(string(secretBytes))
+	if apiKeyHMACSecret == "" {
+		return fmt.Errorf("API-key HMAC secret file %s is empty; namespace gateway cannot authenticate without it", apiKeyHMACSecretPath)
+	}
 
 	// Build Gateway YAML config using the shared type from gateway package
 	gatewayConfig := gateway.GatewayYAMLConfig{
@@ -252,6 +286,10 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		// secrets. Without this, `function secrets list` returned 501 on
 		// namespace gateways even though the host gateway had the key.
 		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
+		// Bugboard #160 fix: forward the API-key HMAC secret read above so
+		// this namespace gateway hashes/verifies API keys identically to
+		// the main gateway.
+		APIKeyHMACSecret: apiKeyHMACSecret,
 		WebRTC: gateway.GatewayYAMLWebRTC{
 			Enabled:           cfg.WebRTCEnabled,
 			SFUPort:           cfg.SFUPort,

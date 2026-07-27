@@ -37,23 +37,23 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the caller's namespace and effective scopes.
 	//
-	// The auth middleware has ALREADY validated this API key against THIS
-	// gateway's own namespace-bound RQLite — either directly (auth
-	// middleware's lookupAPIKeyEntry) or, when this handler runs on a
-	// NAMESPACE gateway reached via the main gateway's proxy hop, via the
-	// trusted X-Internal-Auth-* headers the main gateway sets after
-	// validating and before proxying. It stores the resolved namespace +
-	// scope set on the request context.
+	// The auth middleware has ALREADY validated this API key against the
+	// global/core API-key registry — either directly (auth middleware's
+	// lookupAPIKeyEntry) or, when this handler runs on a NAMESPACE gateway
+	// reached via the main gateway's proxy hop, via the trusted
+	// X-Internal-Auth-* headers the main gateway sets after validating and
+	// before proxying. It stores the resolved namespace + scope set on the
+	// request context.
 	//
 	// We prefer that context here to avoid a redundant re-query. When it's
 	// absent (e.g. this handler reached directly, without the domain-routing
 	// proxy hop), the fallback below re-resolves the key — against
-	// h.apiKeyDB, the SAME namespace-bound querier the auth middleware uses
-	// (wired by the gateway package via SetAPIKeyDB), NOT the core-bound
-	// netClient. Every gateway (main or namespace) owns its own api_keys
-	// table; querying the wrong one is what caused every namespace API key
-	// to 401 on `POST /v1/auth/token` (bugboard #147/#148 two-gateway
-	// regression).
+	// h.apiKeyDB, the SAME global-registry querier the auth middleware uses
+	// (wired by the gateway package via SetAPIKeyDB). API keys are stored
+	// ONLY in the global/core registry, HMAC-hashed; a namespace's own
+	// RQLite api_keys table is never authoritative, and querying it is what
+	// caused main-gateway and namespace-gateway validation to disagree
+	// (bugboard #147/#148 regression).
 	ns := ""
 	if v, ok := ctx.Value(ctxkeys.NamespaceOverride).(string); ok {
 		ns = strings.TrimSpace(v)
@@ -66,9 +66,11 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 	// Fallback: no pre-validated identity on the context (e.g. the handler was
 	// reached on the main gateway without the middleware resolving a namespace,
 	// or in a direct unit-test invocation). Resolve against the DB. Prefer
-	// h.apiKeyDB (this gateway's own namespace-bound querier); fall back to
+	// h.apiKeyDB (the global/core registry querier); fall back to
 	// netClient.Database() only when apiKeyDB was never wired (e.g. direct
-	// unit-test construction of Handlers). API keys are stored HMAC-hashed
+	// unit-test construction of Handlers) — netClient is also core-bound, so
+	// this fallback still resolves against the global registry, never a
+	// namespace's own RQLite. API keys are stored HMAC-hashed
 	// (Service.HashAPIKey), so try the hashed key first and fall back to the
 	// raw key for legacy unhashed rows during a rolling upgrade. Revoked keys
 	// (revoked_at IS NOT NULL) resolve to invalid. The minted JWT carries the

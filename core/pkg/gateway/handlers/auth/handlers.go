@@ -82,12 +82,13 @@ type Handlers struct {
 	clusterProvisioner ClusterProvisioner        // Optional: for namespace cluster provisioning
 	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 
-	// apiKeyDB is the gateway's own namespace-bound API-key querier, wired via
-	// SetAPIKeyDB. When set, APIKeyToJWTHandler's self-query fallback uses it
-	// instead of netClient.Database() — netClient is core-bound on namespace
-	// gateways (see gateway.authClientAdapter), which caused every namespace
-	// API key to 401 on POST /v1/auth/token. nil in most unit tests, which
-	// then exercise the netClient fallback path directly.
+	// apiKeyDB is the global/core API-key registry querier, wired via
+	// SetAPIKeyDB (see gateway.Gateway.apiKeyDB). When set,
+	// APIKeyToJWTHandler's self-query fallback uses it instead of
+	// netClient.Database(); both ultimately resolve against the same
+	// global registry, so either succeeding keeps main-gateway and
+	// namespace-gateway validation in agreement. nil in most unit tests,
+	// which then exercise the netClient fallback path directly.
 	apiKeyDB DatabaseClient
 }
 
@@ -118,8 +119,8 @@ func (h *Handlers) SetSolanaVerifier(verifier *authsvc.SolanaNFTVerifier) {
 	h.solanaVerifier = verifier
 }
 
-// SetAPIKeyDB wires the gateway's own namespace-bound API-key querier into
-// this handler set. See the apiKeyDB field doc for why this exists.
+// SetAPIKeyDB wires the global/core API-key registry querier into this
+// handler set. See the apiKeyDB field doc for why this exists.
 func (h *Handlers) SetAPIKeyDB(db DatabaseClient) {
 	h.apiKeyDB = db
 }

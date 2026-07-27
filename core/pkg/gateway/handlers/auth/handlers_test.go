@@ -597,12 +597,11 @@ func TestAPIKeyToJWTHandler_UnknownKey(t *testing.T) {
 	}
 }
 
-// TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient proves the namespace-DB
-// fix (bugboard: POST /v1/auth/token 401 on namespace gateways): when
-// SetAPIKeyDB has been wired (as gateway.go does via apiKeyDB()), the
-// fallback lookup must use it instead of netClient — netClient is the
-// core-bound adapter and, pre-fix, was the only thing this handler queried.
-// The netClient mock fails the test if queried at all.
+// TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient proves that once
+// SetAPIKeyDB has been wired (as gateway.go does via apiKeyDB(), which
+// resolves to the global/core API-key registry), the fallback lookup uses it
+// instead of netClient, avoiding a redundant query against the core-bound
+// adapter. The netClient mock fails the test if queried at all.
 func TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient(t *testing.T) {
 	const rawKey = "ak_live_nsdb"
 	svc := jwtCapableService(t, "hmac-secret-xyz")

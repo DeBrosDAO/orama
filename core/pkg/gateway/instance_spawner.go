@@ -155,6 +155,15 @@ type GatewayYAMLConfig struct {
 	// binary read the secret on startup and derive the canonical Ed25519
 	// key shared with every other gateway in the cluster.
 	ClusterSecretPath string `yaml:"cluster_secret_path,omitempty"`
+	// APIKeyHMACSecret carries the host's API-key HMAC secret into the
+	// spawned namespace gateway so it hashes/verifies API keys the same
+	// way the main gateway does (bugboard #160 fix). Without it,
+	// auth.Service.HashAPIKey returns keys unchanged, so a namespace
+	// gateway can neither authenticate a core-registry key (stored as a
+	// 64-char HMAC-SHA256 hash) nor persist a key it issues itself except
+	// in plaintext. Because this is key material, generateConfig writes
+	// the file 0600.
+	APIKeyHMACSecret string `yaml:"api_key_hmac_secret,omitempty"`
 }
 
 // NewInstanceSpawner creates a new Gateway instance spawner
