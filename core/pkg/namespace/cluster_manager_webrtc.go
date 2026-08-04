@@ -851,22 +851,44 @@ func (p webrtcReallocationPlan) empty() bool {
 // desired TURN fan-out, it returns what to drop and what to add.
 //
 // Rules:
-//   - Any role held by a node that is not a live member is dropped.
+//   - Any role held by a node that is not a VIABLE member is dropped.
 //   - Every live member should hold an SFU role (SFU runs on all nodes).
-//   - TURN runs on min(desiredTURN, len(live)) members — never more, so a
+//   - TURN runs on min(desiredTURN, len(viable)) members — never more, so a
 //     shrunken cluster does not over-provision relays.
 //
 // Candidate selection is sorted so every node computes the identical plan; that
 // is what lets the coordinator election below be a pure local decision.
 func planWebRTCReallocation(current []webrtcAllocRef, memberNodeIDs, liveNodeIDs []string, desiredTURN int) webrtcReallocationPlan {
-	// TWO distinct sets, deliberately:
-	//   members — rows in namespace_cluster_nodes. Losing membership is a real
-	//             topology change and is the ONLY thing that revokes a role.
-	//   live    — members whose dns_nodes.status is 'active'. Used solely to pick
-	//             ALLOCATION targets.
-	// Keying revocation on liveness would let a 120s heartbeat gap (a rolling
-	// restart, a brief rqlite stall) strip a healthy node's roles — the exact
-	// thrash this reconciler exists to prevent.
+	// TWO distinct sets, deliberately — but NOT the raw namespace_cluster_nodes
+	// row set the parameter name suggests. Production passes:
+	//   members (memberNodeIDs) — the VIABLE set from getWebRTCMemberStatus:
+	//             members that are currently active OR were seen within
+	//             webrtcMemberGracePeriod. Losing viability is what revokes a
+	//             role here. The raw namespace_cluster_nodes row survives
+	//             much longer than this — see pruneStaleClusterNodes
+	//             (cluster_recovery.go, bugboard #173) for the row's own,
+	//             longer-horizon removal.
+	//   live    — the subset of the SAME read whose dns_nodes.status is
+	//             'active'. Used solely to pick ALLOCATION targets.
+	// Keying revocation on raw liveness (dns_nodes.status alone, no grace
+	// window) would let a 120s heartbeat gap (a rolling restart, a brief
+	// rqlite stall) strip a healthy node's roles — the exact thrash this
+	// reconciler exists to prevent.
+	//
+	// Both sets are evaluated against `datetime('now', ...)` at READ time
+	// (getWebRTCMemberStatus / cluster_manager_webrtc.go), not a stored,
+	// stable snapshot — so two coordinators computing a plan on either side of
+	// a member's exact grace-boundary instant CAN see different viable sets
+	// and therefore different plans. This is bounded, not oscillating: a
+	// member's viability only ages out ONCE (last_seen never moves backward,
+	// so once it crosses the boundary it stays excluded on every later read)
+	// or jumps straight back to fully viable on its next heartbeat (no
+	// partial/hovering state) — so at most one sweep around the transition
+	// can disagree with the next, and the following sweep converges. The
+	// trim-surplus-TURN path below produces the identical, deterministic plan
+	// from whatever set the coordinator for that sweep actually saw, so
+	// convergence holds even though the two sets are not literally identical
+	// across every possible pair of sweeps.
 	member := make(map[string]bool, len(memberNodeIDs))
 	for _, id := range memberNodeIDs {
 		member[id] = true
@@ -901,10 +923,15 @@ func planWebRTCReallocation(current []webrtcAllocRef, memberNodeIDs, liveNodeIDs
 	sorted := append([]string(nil), liveNodeIDs...)
 	sort.Strings(sorted)
 
-	// SFU on every live member. The member[] check matters: members and live are
-	// read as two separate queries, so a row added between them can appear in
-	// live but not member — without this filter the plan would deallocate that
-	// node's roles and re-allocate to it in the same pass.
+	// SFU on every live member. The member[] check is defense-in-depth rather
+	// than load-bearing today: production derives memberNodeIDs and
+	// liveNodeIDs from a single read (getWebRTCMemberStatus, bugboard #170),
+	// so live is now structurally a subset of member and this is always true
+	// for production callers. It is kept because planWebRTCReallocation is a
+	// pure function exercised directly in tests with hand-built inputs, and a
+	// caller that ever passes an inconsistent pair (live containing an id
+	// absent from member) must not have that id both dropped above and
+	// silently re-added here in the same pass.
 	for _, id := range sorted {
 		if member[id] && !hasSFU[id] {
 			plan.AllocateSFU = append(plan.AllocateSFU, id)
@@ -988,54 +1015,137 @@ func webrtcReconcileCoordinator(liveNodeIDs []string) string {
 	return sorted[0]
 }
 
-// getActiveClusterNodeIDs returns the node IDs of cluster members that are
-// currently ACTIVE in dns_nodes.
+// webrtcMemberGracePeriod bounds how long a cluster member may be non-live
+// before its WebRTC roles are treated as abandoned and released to a live
+// node.
 //
-// Deliberately distinct from getClusterNodesWithIPs, which has no status filter
-// and therefore happily returns departed nodes — the write-time root of #161,
-// where a removed node kept being treated as a WebRTC-capable member.
-func (cm *ClusterManager) getActiveClusterNodeIDs(ctx context.Context, clusterID string) ([]string, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-	type row struct {
-		NodeID string `db:"node_id"`
-	}
-	var rows []row
-	query := `
-		SELECT ncn.node_id
-		FROM namespace_cluster_nodes ncn
-		JOIN dns_nodes dn ON ncn.node_id = dn.id
-		WHERE ncn.namespace_cluster_id = ? AND dn.status = 'active'
-		GROUP BY ncn.node_id
-	`
-	if err := cm.db.Query(internalCtx, &rows, query, clusterID); err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(rows))
-	for _, r := range rows {
-		ids = append(ids, r.NodeID)
-	}
-	return ids, nil
+// Node replacement (ReplaceClusterNode) and cluster repair (RepairCluster)
+// are both supposed to keep namespace_cluster_nodes in sync with reality, but
+// the bugboard #161 postmortem found a departed node's row left behind
+// indefinitely on live devnet: RepairCluster only ever ADDS members without
+// removing stale ones, and the dead-node health monitor had not fired for
+// every node that actually died (bugboard #173 traced this to a race between
+// the DNS heartbeat loop and the ring-based health monitor — see
+// pruneStaleClusterNodes in cluster_recovery.go). A membership row like that
+// inflates both the quorum denominator and the "already has a role" count
+// forever, so live members could never reclaim TURN/SFU capacity — the
+// reconciler was permanently deadlocked by data it had no way to age out.
+// pruneStaleClusterNodes now removes that row outright on a much longer
+// horizon (clusterNodePurgeStaleAfter, 15m); this grace period is the
+// SHORTER-lived signal used to decide role HOLDING in the meantime, well
+// before the row itself is eligible for removal.
+//
+// Set well above a single node's restart/rolling-upgrade window (many
+// multiples of webrtcReconcileInterval) so a routine restart never triggers a
+// role migration — only a member still gone after several sweeps is treated
+// as abandoned.
+const webrtcMemberGracePeriod = 10 * time.Minute
+
+// webrtcViableMemberSQL selects cluster members whose WebRTC roles should
+// still count as held: members that are currently active, or that have been
+// seen within webrtcMemberGracePeriod. Also selects dn.status so a single
+// execution can serve both the viable set (every returned row) AND the live
+// subset (rows with status = 'active') — see getWebRTCMemberStatus. Exported
+// as a query constant (matching the ensureTURNRecordSQL /
+// ensureNamespaceHostRecordSQL pattern in dns_manager.go) so the exact
+// production query is what gets exercised in tests. Args: clusterID, "-N
+// seconds" (webrtcMemberGracePeriod as a SQLite datetime modifier).
+const webrtcViableMemberSQL = `
+	SELECT ncn.node_id, dn.status
+	FROM namespace_cluster_nodes ncn
+	JOIN dns_nodes dn ON ncn.node_id = dn.id
+	WHERE ncn.namespace_cluster_id = ?
+	  AND (dn.status = 'active' OR dn.last_seen > datetime('now', ?))
+	GROUP BY ncn.node_id
+`
+
+// webrtcMemberStatusRow is one row of webrtcViableMemberSQL.
+type webrtcMemberStatusRow struct {
+	NodeID string `db:"node_id"`
+	Status string `db:"status"`
 }
 
-// getClusterMemberNodeIDs returns every node recorded as a member of the cluster,
-// regardless of heartbeat status. Membership loss — not a missed heartbeat — is
-// what revokes a WebRTC role (bugboard #161).
-func (cm *ClusterManager) getClusterMemberNodeIDs(ctx context.Context, clusterID string) ([]string, error) {
+// getWebRTCMemberStatus returns the viable and live member sets for a
+// cluster from a SINGLE query (bugboard #170), so live is structurally a
+// subset of viable: both are derived from the exact same DB read, rather than
+// two separate reads that a node's status could flip between (a node
+// transitioning active -> inactive right between them used to be able to
+// land in "live" without being in "viable", which the quorum check assumes
+// can never happen).
+//
+// A member down longer than webrtcMemberGracePeriod is excluded from viable
+// (and therefore from live too) even though its namespace_cluster_nodes row
+// still exists — that row cannot be trusted to have been cleaned up
+// (bugboard #161; pruneStaleClusterNodes now does eventually clean it up, on
+// a longer horizon — see cluster_recovery.go, bugboard #173).
+func (cm *ClusterManager) getWebRTCMemberStatus(ctx context.Context, clusterID string) (viable, live []string, err error) {
 	internalCtx := client.WithInternalAuth(ctx)
-	type row struct {
-		NodeID string `db:"node_id"`
+	var rows []webrtcMemberStatusRow
+	graceModifier := fmt.Sprintf("-%d seconds", int(webrtcMemberGracePeriod.Seconds()))
+	if err := cm.db.Query(internalCtx, &rows, webrtcViableMemberSQL, clusterID, graceModifier); err != nil {
+		return nil, nil, err
 	}
-	var rows []row
-	query := `SELECT node_id FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? GROUP BY node_id`
-	if err := cm.db.Query(internalCtx, &rows, query, clusterID); err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(rows))
+	viable = make([]string, 0, len(rows))
+	live = make([]string, 0, len(rows))
 	for _, r := range rows {
-		ids = append(ids, r.NodeID)
+		viable = append(viable, r.NodeID)
+		if r.Status == "active" {
+			live = append(live, r.NodeID)
+		}
 	}
-	return ids, nil
+	return viable, live, nil
 }
+
+// webrtcRawMemberCountSQL counts every namespace_cluster_nodes row for a
+// cluster, independent of dns_nodes entirely. This is the denominator
+// webrtcReconcileMajorityHeld (bugboard #171) checks the viable set against,
+// so a majority of RECORDED membership can never silently age out of the
+// viable set within a single sweep and still be treated as authoritative.
+const webrtcRawMemberCountSQL = `SELECT COUNT(DISTINCT node_id) AS count FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`
+
+// getRawClusterMemberCount returns the total number of distinct nodes
+// recorded as members of a cluster, regardless of dns_nodes status.
+func (cm *ClusterManager) getRawClusterMemberCount(ctx context.Context, clusterID string) (int, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+	var rows []struct {
+		Count int `db:"count"`
+	}
+	if err := cm.db.Query(internalCtx, &rows, webrtcRawMemberCountSQL, clusterID); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return rows[0].Count, nil
+}
+
+// webrtcReconcileMajorityHeld reports whether the viable set still represents
+// a majority of every recorded member (bugboard #171).
+//
+// webrtcReconcileQuorumOK alone stops being a useful safeguard once live and
+// viable are both derived from the same liveness signal (bugboard #170's
+// fix): past webrtcMemberGracePeriod, viable can never exceed live by much,
+// so live*2 > viable can only fail when viable itself is inflated beyond
+// live — which is exactly the situation a lone surviving node after a
+// cluster-wide outage does NOT produce (viable shrinks to match it). A LONE
+// node always "passes" 1*2 > 1. This second, independent check bounds how
+// much of the RAW recorded membership may have aged out of the viable set at
+// once: if fewer than half of it is still viable, that is a mass outage (or
+// its tail), not a routine departure, and the survivor(s) must not act as if
+// they were the whole cluster.
+func webrtcReconcileMajorityHeld(viable, rawMembers int) bool {
+	return viable >= (rawMembers+1)/2
+}
+
+// webrtcReconcileStartupGrace bounds how soon after this node's own process
+// start it will act as WebRTC reconcile coordinator (bugboard #171). Mirrors
+// the reasoning behind health.DefaultStartupGracePeriod
+// (pkg/node/health/monitor.go, 5m — cannot import directly, pkg/node imports
+// pkg/namespace, see cluster_manager.go's startedAt field doc): a node that
+// has JUST come back up has not yet had time to observe its peers report back
+// in, so its very first read of cluster membership can look exactly like "I
+// am the only survivor" during totally routine startup, not an outage.
+const webrtcReconcileStartupGrace = 5 * time.Minute
 
 // ReconcileWebRTCAllocations brings a namespace's WebRTC role assignments back in
 // line with its live cluster membership (bugboard #161).
@@ -1054,22 +1164,69 @@ func (cm *ClusterManager) getClusterMemberNodeIDs(ctx context.Context, clusterID
 //
 // Idempotent: a healthy cluster produces an empty plan and writes nothing.
 func (cm *ClusterManager) ReconcileWebRTCAllocations(ctx context.Context, clusterID, namespaceName string, desiredTURN int) error {
-	memberIDs, err := cm.getClusterMemberNodeIDs(ctx, clusterID)
-	if err != nil {
-		return fmt.Errorf("get cluster members for webrtc reconcile: %w", err)
+	// bugboard #171: a node that has not been running long enough to have
+	// observed its peers cannot be trusted to reconcile or coordinate — see
+	// webrtcReconcileStartupGrace. time.Since of a zero-valued startedAt (a
+	// ClusterManager built directly, as tests do, rather than via
+	// NewClusterManager) is enormous, so this is a no-op unless a test
+	// deliberately sets startedAt to simulate a fresh boot.
+	if since := time.Since(cm.startedAt); since < webrtcReconcileStartupGrace {
+		cm.logger.Debug("WebRTC reconcile skipped: this node is inside its startup grace period",
+			zap.String("namespace", namespaceName),
+			zap.Duration("since_start", since))
+		return nil
 	}
-	liveIDs, err := cm.getActiveClusterNodeIDs(ctx, clusterID)
+
+	viableIDs, liveIDs, err := cm.getWebRTCMemberStatus(ctx, clusterID)
 	if err != nil {
-		return fmt.Errorf("get active cluster nodes for webrtc reconcile: %w", err)
+		return fmt.Errorf("get cluster member status for webrtc reconcile: %w", err)
 	}
+	if len(viableIDs) == 0 {
+		cm.logger.Warn("WebRTC reconcile skipped: no viable cluster members recorded — refusing to treat this as grounds for mass deallocation",
+			zap.String("namespace", namespaceName))
+		return nil
+	}
+
 	// Quorum floor: never reshape roles from a minority view. A partition or a
 	// cluster-wide heartbeat stall must not let one node conclude it is the only
 	// survivor and pull every role onto itself.
-	if !webrtcReconcileQuorumOK(len(liveIDs), len(memberIDs)) {
+	//
+	// The denominator is VIABLE members (live, or seen within the grace
+	// period), not every historical namespace_cluster_nodes row — a stale row
+	// for a node that is never coming back must not be able to make this
+	// quorum permanently unreachable (bugboard #161: exactly that happened,
+	// silently, forever, until this log line existed).
+	if !webrtcReconcileQuorumOK(len(liveIDs), len(viableIDs)) {
+		cm.logger.Warn("WebRTC reconcile skipped: no quorum — live node count is not a strict majority of viable cluster members",
+			zap.String("namespace", namespaceName),
+			zap.Int("live", len(liveIDs)),
+			zap.Int("viable_members", len(viableIDs)))
 		return nil
 	}
-	if webrtcReconcileCoordinator(liveIDs) != cm.localNodeID {
-		return nil // another node coordinates this sweep
+
+	// bugboard #171 regression guard — see webrtcReconcileMajorityHeld doc.
+	rawMemberCount, err := cm.getRawClusterMemberCount(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("get raw cluster member count for webrtc reconcile: %w", err)
+	}
+	if !webrtcReconcileMajorityHeld(len(viableIDs), rawMemberCount) {
+		cm.logger.Warn("WebRTC reconcile skipped: majority of recorded cluster membership is not viable — refusing to reallocate off what looks like a mass outage",
+			zap.String("namespace", namespaceName),
+			zap.Int("viable_members", len(viableIDs)),
+			zap.Int("raw_members", rawMemberCount))
+		return nil
+	}
+
+	if coordinator := webrtcReconcileCoordinator(liveIDs); coordinator != cm.localNodeID {
+		cm.logger.Debug("WebRTC reconcile skipped: this node is not the elected coordinator for this sweep",
+			zap.String("namespace", namespaceName),
+			zap.String("coordinator", coordinator),
+			zap.String("local_node", cm.localNodeID))
+		return nil
+	}
+
+	if desiredTURN <= 0 {
+		desiredTURN = DefaultTURNNodeCount
 	}
 
 	blocks, err := cm.webrtcPortAllocator.GetAllPorts(ctx, clusterID)
@@ -1081,10 +1238,24 @@ func (cm *ClusterManager) ReconcileWebRTCAllocations(ctx context.Context, cluste
 		current = append(current, webrtcAllocRef{NodeID: b.NodeID, ServiceType: b.ServiceType})
 	}
 
-	if desiredTURN <= 0 {
-		desiredTURN = DefaultTURNNodeCount
+	plan := planWebRTCReallocation(current, viableIDs, liveIDs, desiredTURN)
+
+	// Mirrors planWebRTCReallocation's own cap (want = min(desiredTURN,
+	// len(memberNodeIDs)), memberNodeIDs here being viableIDs) rather than
+	// liveIDs — the old condition checked liveIDs, which the planner never
+	// actually caps on, so it could warn ("cannot reach desired count") in
+	// cases the planner had already fully satisfied, and stay silent in cases
+	// it hadn't. Logged at Info, not Warn: a namespace with fewer than
+	// desiredTURN viable members is an expected steady state (e.g. a 2-node
+	// cluster), not an actionable problem, and this fires on every sweep for
+	// as long as it's true.
+	if len(viableIDs) < desiredTURN {
+		cm.logger.Info("WebRTC TURN fan-out is capped by viable membership, below the desired count",
+			zap.String("namespace", namespaceName),
+			zap.Int("desired_turn", desiredTURN),
+			zap.Int("viable_members", len(viableIDs)))
 	}
-	plan := planWebRTCReallocation(current, memberIDs, liveIDs, desiredTURN)
+
 	if plan.empty() {
 		return nil
 	}
@@ -1184,10 +1355,6 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		if lerr != nil || state == nil || state.ClusterID == "" {
 			continue
 		}
-		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-		if werr != nil || webrtcCfg == nil {
-			continue // WebRTC not enabled for this namespace
-		}
 		// cluster-state.json is never validated against the DB. If a namespace was
 		// deprovisioned and re-provisioned while this node's state file survived
 		// (the delete fan-out is best-effort), state.ClusterID is stale — and a
@@ -1199,7 +1366,26 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		if cerr != nil || cluster == nil || cluster.ID != state.ClusterID {
 			continue
 		}
-		if aerr := cm.ReconcileWebRTCAllocations(ctx, state.ClusterID, state.NamespaceName, webrtcCfg.TURNNodeCount); aerr != nil {
+
+		// Prune permanently-gone cluster-node rows before anything else reads
+		// membership (bugboard #173). Unconditional — not WebRTC-specific, and
+		// the ring-based dead-node health monitor cannot be relied on to ever
+		// catch this itself (see pruneStaleClusterNodes doc comment for why).
+		// Idempotent DELETE, so running it from every WebRTC-enabled node's
+		// periodic sweep needs no coordinator election.
+		if removed, perr := cm.pruneStaleClusterNodes(ctx, cluster.ID); perr != nil {
+			cm.logger.Warn("Periodic stale cluster-node prune failed",
+				zap.String("namespace", state.NamespaceName), zap.Error(perr))
+		} else if len(removed) > 0 {
+			cm.logger.Warn("Periodic sweep pruned permanently-gone cluster node assignments (bugboard #173)",
+				zap.String("namespace", state.NamespaceName), zap.Strings("removed_nodes", removed))
+		}
+
+		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+		if werr != nil || webrtcCfg == nil {
+			continue // WebRTC not enabled for this namespace
+		}
+		if aerr := cm.ReconcileWebRTCAllocations(ctx, cluster.ID, state.NamespaceName, webrtcCfg.TURNNodeCount); aerr != nil {
 			cm.logger.Warn("Periodic WebRTC allocation reconcile failed",
 				zap.String("namespace", state.NamespaceName), zap.Error(aerr))
 		}

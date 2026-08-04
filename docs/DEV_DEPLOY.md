@@ -153,6 +153,12 @@ This will:
 4. Start remaining nodes in batches
 5. Verify cluster health
 
+### Replacing a nameserver VPS (keep cluster alive)
+
+See **[NODE_REPLACEMENT.md](NODE_REPLACEMENT.md)** — join new node first, sync, DNS,
+namespace safety, then Raft-remove and clean. Written from the 2026-08-03 devnet
+cutover; use the same process for testnet.
+
 ### Cleaning Nodes for Reinstallation
 
 ```bash

@@ -206,6 +206,20 @@ orama node unlock --genesis --node-ip <wg-ip>
 
 ---
 
+## 11. Function WASM timeouts / deploy 504 after node replace (bugboard #167)
+
+**Symptom:**
+
+- `failed to fetch WASM: wasm fetch from IPFS timed out` (~15s) on invoke after a nameserver replace or rolling restart
+- Other functions still succeed in milliseconds (different CIDs already local)
+- `orama function deploy` returns **504** / `TIMEOUT` / “proxy budget (30s)” while gateway health still shows `ipfs: ok`
+
+**Cause:** Function **metadata** is in namespace RQLite; function **bytes** are IPFS blobs. A **new or wiped node** starts with an empty Kubo repo. Until every active `wasm_cid` is **locally pinned** (bitswap from peers), cold `cat`/`add` can hang under hard deadlines. Health checks only prove the daemon is up.
+
+**Fix:** Follow **IPFS function-WASM backfill** in [NODE_REPLACEMENT.md](NODE_REPLACEMENT.md): export active CIDs from the namespace RQLite, `pin/add` on **every** nameserver, verify `cat` + ~1.2 MB `add` on the new node. Do not treat platform Raft 3/3 alone as cutover complete.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
