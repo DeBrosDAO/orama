@@ -667,6 +667,84 @@ func (cm *ClusterManager) removeClusterNodeAssignment(ctx context.Context, clust
 	}
 }
 
+// clusterNodePurgeStaleAfter mirrors purgeStaleAfter in
+// pkg/node/dns_registration.go:514 (15m) — the DNS layer already treats a
+// node silent this long as genuinely gone and purges its records, so cluster
+// membership should not keep carrying it any longer than DNS does. It cannot
+// be imported directly: pkg/node imports pkg/namespace (pkg/node/gateway.go),
+// so the reverse import would be a cycle. Keep the two values in sync by hand
+// if either changes.
+//
+// Deliberately longer than webrtcMemberGracePeriod (10m): deleting the
+// namespace_cluster_nodes ROW is a more consequential, harder-to-undo action
+// than merely excluding a node from one WebRTC reconcile pass, so it gets
+// extra margin on top of that grace before acting. A node down for less than
+// this is still within a routine rolling-restart window, not gone.
+const clusterNodePurgeStaleAfter = 15 * time.Minute
+
+// staleClusterNodeSQL selects cluster members that are permanently gone:
+// recorded in namespace_cluster_nodes for this cluster, but their dns_nodes
+// row is non-active and has been silent since before the caller-supplied
+// cutoff. Mirrors the shape of webrtcViableMemberSQL (cluster_manager_webrtc.go)
+// but selects the STALE complement on the longer clusterNodePurgeStaleAfter
+// horizon rather than the WebRTC-specific grace period. Args: clusterID, cutoff
+// ("YYYY-MM-DD HH:MM:SS", UTC — see staleCutoff-style callers).
+const staleClusterNodeSQL = `
+	SELECT DISTINCT ncn.node_id
+	FROM namespace_cluster_nodes ncn
+	JOIN dns_nodes dn ON ncn.node_id = dn.id
+	WHERE ncn.namespace_cluster_id = ?
+	  AND dn.status != 'active'
+	  AND dn.last_seen < ?
+`
+
+// pruneStaleClusterNodes removes namespace_cluster_nodes rows for members
+// that are permanently gone (bugboard #173).
+//
+// Root cause: RepairCluster only ever ADDS members, never removes stale ones,
+// and removeClusterNodeAssignment was otherwise only reachable through
+// ReplaceClusterNode — which only runs when HandleDeadNode fires. On devnet
+// that path never fired for two nodes that really were gone: the DNS
+// heartbeat loop (startDNSHeartbeat, 30s tick) flips a silent node's
+// dns_nodes.status to 'inactive' after just 120s
+// (cleanupStaleNodeRecords, pkg/node/dns_registration.go), and the ring-based
+// health monitor's getRingNeighbors (pkg/node/health/monitor.go) only
+// considers status='active' nodes as probe targets. Once a node flips
+// inactive it drops out of every node's neighbor set, pruneStaleState wipes
+// its accumulated miss count, and it can never again reach the monitor's own
+// 12-miss dead threshold — so onNodeDead, and therefore HandleDeadNode and
+// this row's cleanup, permanently never fires for a node that dies this way.
+// That leaves the namespace_cluster_nodes row an orphan forever, inflating
+// both the WebRTC quorum denominator (bugboard #170/#171) and RepairCluster's
+// "already have enough nodes" count. This sweep closes that gap
+// independently of whether the ring monitor ever confirms death, using
+// dns_nodes staleness directly rather than relying on that confirmation.
+//
+// Not exclusive to one coordinator: the DELETE is idempotent, so more than
+// one node running this concurrently just performs the same no-op delete
+// twice — no lock or election is needed the way role reallocation needs one.
+func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID string) ([]string, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+	type row struct {
+		NodeID string `db:"node_id"`
+	}
+	var rows []row
+	cutoff := time.Now().UTC().Add(-clusterNodePurgeStaleAfter).Format("2006-01-02 15:04:05")
+	if err := cm.db.Query(internalCtx, &rows, staleClusterNodeSQL, clusterID, cutoff); err != nil {
+		return nil, fmt.Errorf("query stale cluster nodes: %w", err)
+	}
+
+	removed := make([]string, 0, len(rows))
+	for _, r := range rows {
+		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
+		removed = append(removed, r.NodeID)
+		cm.logger.Warn("Removed permanently-gone cluster node assignment (bugboard #173)",
+			zap.String("cluster_id", clusterID),
+			zap.String("node_id", r.NodeID))
+	}
+	return removed, nil
+}
+
 // getNodeIPs returns both the internal (WireGuard) and public IP for a node.
 func (cm *ClusterManager) getNodeIPs(ctx context.Context, nodeID string) (*nodeIPInfo, error) {
 	var results []nodeIPInfo
@@ -841,7 +919,21 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 		cm.provisioningMu.Unlock()
 	}()
 
-	// 3. Get current cluster nodes
+	// 3. Prune permanently-gone members before counting what's missing
+	// (bugboard #173). Without this, a member that died without
+	// HandleDeadNode ever confirming it (see pruneStaleClusterNodes for why
+	// that confirmation can permanently never arrive) keeps its
+	// namespace_cluster_nodes row and its status forever — RepairCluster
+	// would count it as active below and never trigger a replacement.
+	if removed, perr := cm.pruneStaleClusterNodes(ctx, cluster.ID); perr != nil {
+		cm.logger.Warn("Failed to prune stale cluster nodes during repair — proceeding with unpruned membership",
+			zap.String("namespace", namespaceName), zap.Error(perr))
+	} else if len(removed) > 0 {
+		cm.logger.Warn("Repair pruned permanently-gone cluster node assignments (bugboard #173)",
+			zap.String("namespace", namespaceName), zap.Strings("removed_nodes", removed))
+	}
+
+	// 4. Get current cluster nodes
 	clusterNodes, err := cm.getClusterNodes(ctx, cluster.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get cluster nodes: %w", err)
@@ -880,7 +972,7 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 	cm.logEvent(ctx, cluster.ID, EventRecoveryStarted, "",
 		fmt.Sprintf("Cluster repair started: %d of %d nodes active, adding %d", activeCount, expectedCount, missingCount), nil)
 
-	// 4. Build the current node exclude list (all physical node IDs in the cluster)
+	// 5. Build the current node exclude list (all physical node IDs in the cluster)
 	excludeIDs := make([]string, 0)
 	nodeIDSet := make(map[string]bool)
 	for _, cn := range clusterNodes {
@@ -890,7 +982,7 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 		}
 	}
 
-	// 5. Get surviving nodes' port info for joining
+	// 6. Get surviving nodes' port info for joining
 	var surviving []survivingNodePorts
 	portsQuery := `
 		SELECT pa.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip, dn.ip_address,
@@ -908,7 +1000,7 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 		return fmt.Errorf("no surviving nodes found with port allocations")
 	}
 
-	// 6. Add missing nodes one at a time
+	// 7. Add missing nodes one at a time
 	addedCount := 0
 	for i := 0; i < missingCount; i++ {
 		replacement, portBlock, err := cm.addNodeToCluster(ctx, cluster, excludeIDs, surviving)
@@ -944,10 +1036,10 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 		return fmt.Errorf("failed to add any replacement nodes")
 	}
 
-	// 7. Update cluster-state.json on all nodes
+	// 8. Update cluster-state.json on all nodes
 	cm.updateClusterStateAfterRecovery(ctx, cluster)
 
-	// 8. Mark cluster ready
+	// 9. Mark cluster ready
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
 
 	cm.logEvent(ctx, cluster.ID, EventRecoveryComplete, "",

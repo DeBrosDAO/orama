@@ -96,6 +96,16 @@ type ClusterManager struct {
 	// timestamp of the last leadership transfer, to bound churn. Lazy-init.
 	leaderLocalityMu       sync.Mutex
 	leaderLocalityCooldown map[string]time.Time
+
+	// startedAt is when this ClusterManager was constructed (process start,
+	// for all practical purposes). Bugboard #171: gates how soon this node
+	// will act as WebRTC reconcile coordinator — see
+	// webrtcReconcileStartupGrace. Left zero-valued when a ClusterManager is
+	// constructed directly (as unit tests do) rather than via
+	// NewClusterManager; time.Since of the zero value is enormous, so that
+	// case is always treated as "well past the grace period" rather than
+	// accidentally gating tests that don't care about startup timing.
+	startedAt time.Time
 }
 
 // NewClusterManager creates a new cluster manager
@@ -147,6 +157,7 @@ func NewClusterManager(
 		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
+		startedAt:             time.Now(),
 	}
 }
 
@@ -195,6 +206,7 @@ func NewClusterManagerWithComponents(
 		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
+		startedAt:             time.Now(),
 	}
 }
 

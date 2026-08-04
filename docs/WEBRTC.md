@@ -252,24 +252,78 @@ reconciler that keeps reality matching it:
 
 | Step | What it does |
 |---|---|
-| Reallocate | One node per sweep (the lowest-sorted live member, elected deterministically with no lock) drops roles held by nodes that have left the cluster and assigns them to current members. Requires a strict majority to act, so a partitioned minority can never reshape roles. |
+| Prune | Before anything else reads membership, removes `namespace_cluster_nodes` rows for members that are permanently gone (dns_nodes non-active and silent for 15+ minutes). Not WebRTC-specific and runs unconditionally for every locally-resident cluster, not just WebRTC-enabled ones. |
+| Reallocate | One node per sweep (the lowest-sorted live member, elected deterministically with no lock) drops roles held by nodes that are no longer viable members and assigns them to current ones. Requires a strict majority of viable members to act, so a partitioned minority can never reshape roles. |
 | Start | Starts TURN/SFU this node holds an allocation for but is not running. Backs off for 10 minutes after a failed start, so a crash-looping unit is not restarted every tick. |
 | Stop | Stops TURN/SFU this node no longer holds — but only on a **clean** allocator read that returns nothing. An unreadable database means do nothing, never stop. |
 | Advertise | Re-adds this node's TURN DNS records, but only when it both holds the allocation **and** is actually serving. |
 
-Two properties are deliberate:
+Several properties are deliberate:
 
-- **Revocation follows cluster membership, not heartbeats.** A node that misses a
-  heartbeat keeps its roles; only leaving the cluster releases them. A 120-second
-  heartbeat gap must never move a relay.
+- **Revocation follows viable membership, not a raw heartbeat.** A node that
+  misses a single heartbeat keeps its roles; a 120-second heartbeat gap must
+  never move a relay. "Viable" means recorded in `namespace_cluster_nodes` AND
+  (currently active OR last seen within the last 10 minutes) — a node down
+  longer than that is excluded from role-holding even if its
+  `namespace_cluster_nodes` row is still there. Both the viable set and its
+  live subset are read from a **single** query (`webrtcViableMemberSQL`) so
+  live is structurally guaranteed to be a subset of viable — an earlier
+  version read them as two separate queries, so a node's status flipping
+  between the two reads could land it in "live" without being in "viable",
+  which the quorum math assumed could never happen (bugboard #170).
+- **A stale row is eventually removed outright, not just excluded from a
+  sweep.** Node replacement and cluster repair are both supposed to remove a
+  departed node's `namespace_cluster_nodes` row, but a #161/#173 postmortem
+  found rows left behind indefinitely on live devnet: cluster repair only
+  ever *added* members, and the row's only other removal path
+  (`removeClusterNodeAssignment`, reachable through `ReplaceClusterNode`)
+  only fires when the ring-based dead-node health monitor confirms a node
+  dead by quorum — which a genuinely-dead node can permanently evade. The
+  DNS heartbeat loop (`startDNSHeartbeat`, 30s tick) flips a silent node's
+  `dns_nodes.status` to `inactive` after just 120s
+  (`cleanupStaleNodeRecords`), and the ring monitor's neighbor discovery
+  only considers `status = 'active'` nodes as probe targets — so a node that
+  flips inactive drops out of every observer's neighbor set before the
+  monitor's own 12-miss (~120s) dead threshold is reached, its accumulated
+  miss count is discarded on the next prune, and it can never again reach
+  quorum-confirmed death. On devnet this produced an unbreakable 50/50 split
+  (2 of 4 recorded members permanently dead) that the old raw-membership
+  quorum check could never pass. The reconciler's Prune step above now
+  removes such a row directly from `dns_nodes` staleness (15-minute
+  horizon, deliberately looser than the 10-minute role-viability grace so
+  removing the row gets extra margin over merely excluding a role), and
+  `RepairCluster` does the same before counting how many nodes are missing —
+  independent of whether the ring monitor ever confirms death.
+- **A lone survivor after a mass outage does not self-elect.** Once live and
+  viable are both derived from the same signal, a single node always
+  satisfies the plain majority check (`live*2 > viable`, since a lone viable
+  node trivially outnumbers itself). A second, independent check requires the
+  viable set to still represent a majority of every *raw* recorded member
+  (`viable >= (raw+1)/2`) — so a cluster that goes quiet for the reconciler's
+  10-minute grace window and then has one node report back in first does not
+  treat that node as the entire cluster and strip the others' roles the
+  moment they're a minute late (bugboard #171). A newly-restarted node is
+  also held out of coordination for a 5-minute startup grace, so its very
+  first read — before peers have had a chance to report back in — can't look
+  like a mass outage either.
 - **Stopping requires positive evidence.** Starting a service is backed off and
   can fail; stopping is immediate. A reconciler whose stop path is more capable
   than its start path can only ever reduce capacity, so the stop path is the
   conservative one.
+- **A skipped sweep is always logged.** "No viable members", "no quorum",
+  "majority of recorded membership is not viable", "startup grace", and "not
+  the elected coordinator" each log their reason (namespace, and whatever
+  counts drove the decision) — the original #161 fix had two silent
+  early-returns here, which is exactly why the deadlock above went unnoticed
+  for weeks.
 
 Without this, replacing a node left its TURN/SFU roles behind: the namespace kept
 two TURN allocations where one belonged to a machine that no longer existed, and
-the replacement node held no role at all (bugboard #161).
+the replacement node held no role at all (bugboard #161). If viable members can
+never reach the desired TURN/SFU count (fewer viable nodes than the namespace's
+configured `turn_node_count`), the reconciler allocates to every viable member it
+has instead of doing nothing, and logs the shortfall at Info (an expected steady
+state for small clusters, not a per-sweep warning).
 
 ## Monitoring
 
