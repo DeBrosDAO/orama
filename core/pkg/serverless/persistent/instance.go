@@ -38,27 +38,50 @@ const (
 // to this function.
 type SendFunc func(data []byte) error
 
+// guestFunc is the callable surface of an exported WASM function.
+// api.Function satisfies it.
+type guestFunc interface {
+	Call(ctx context.Context, params ...uint64) ([]uint64, error)
+}
+
+// guestMemory is the part of a module's linear memory the instance writes to.
+// api.Memory satisfies it.
+type guestMemory interface {
+	Write(offset uint32, v []byte) bool
+}
+
+// guestModule is the instance's ownership handle on the wazero module.
+// api.Module satisfies it.
+type guestModule interface {
+	Close(ctx context.Context) error
+}
+
 // Instance owns one WASM module bound to one WebSocket connection.
 //
 // Lifecycle:
 //
-//	1. NewInstance — wraps an already-instantiated module
-//	2. Open(input) — calls ws_open; non-zero return = reject
-//	3. Run(ctx) — drains the inbound channel, calling ws_frame per message;
-//	              blocks until ctx cancelled or instance closed
-//	4. Submit(frame) — enqueues a frame for Run to pick up; returns error if full
-//	5. Close(reason) — calls ws_close; closes the wazero instance; idempotent
+//  1. NewInstance — wraps an already-instantiated module
+//  2. Open(input) — calls ws_open; non-zero return = reject
+//  3. Run(ctx) — drains the inbound channel, calling ws_frame per message;
+//     blocks until ctx cancelled or instance closed
+//  4. Submit(frame) — enqueues a frame for Run to pick up; returns error if full
+//  5. Close(reason) — calls ws_close; closes the wazero instance; idempotent
 type Instance struct {
 	clientID     string
 	functionName string
 	namespace    string
 
-	module   api.Module   // wazero instance, owned by this struct
-	openFn   api.Function // exported ws_open
-	frameFn  api.Function // exported ws_frame
-	closeFn  api.Function // exported ws_close
-	allocFn  api.Function // orama_alloc / malloc — for input bytes
-	memory   api.Memory
+	// The wazero handles are held through the narrowest interfaces this type
+	// actually uses. api.Module and api.Memory are sealed (wazeroOnly), so
+	// depending on them directly makes the instance lifecycle untestable
+	// without a full runtime — and the lifecycle is exactly where the
+	// process-killing concurrency bug lived.
+	module  guestModule // wazero instance, owned by this struct
+	openFn  guestFunc   // exported ws_open
+	frameFn guestFunc   // exported ws_frame
+	closeFn guestFunc   // exported ws_close
+	allocFn guestFunc   // orama_alloc / malloc — for input bytes
+	memory  guestMemory
 
 	// Per-instance invocation context. Bound at NewInstance time and
 	// attached to every WASM-host call's ctx via
@@ -80,9 +103,40 @@ type Instance struct {
 	// Per-frame timeout. Bounded by the function's TimeoutSeconds.
 	frameTimeout time.Duration
 
+	// callMu serializes EVERY entry into the wazero module — ws_open, ws_frame,
+	// ws_close and the final module.Close.
+	//
+	// wazero instances are not goroutine-safe: the wazevo engine keeps a single
+	// manually-managed guest stack per instance and executes guest code on the
+	// calling goroutine. Two goroutines inside one instance corrupt that
+	// bookkeeping, and the failure is not a returned error — it is a Go runtime
+	// fatal (`split stack overflow`, `unknown caller pc`, `bad recovery`) that
+	// no recover() can catch, so it kills the whole gateway process and every
+	// other WebSocket on the node.
+	//
+	// The frame loop and Close ran concurrently: teardown cancelled Run's
+	// context and then called ws_close immediately, without waiting for an
+	// in-flight frame to unwind. Frame execution is bounded by frameTimeout
+	// (seconds), so the window was wide open — and it is widest exactly when
+	// frames are slow, which is also when clients give up and disconnect.
+	callMu sync.Mutex
+
+	// runDone is closed when Run returns, so Close can wait for the frame loop
+	// to finish before tearing the module down. runStarted reports whether Run
+	// was ever launched — Close must not wait on a loop that will never run
+	// (e.g. an instance rejected by ws_open).
+	runDone    chan struct{}
+	runOnce    sync.Once
+	runStarted atomic.Bool
+
 	// Closed exactly once.
 	closeOnce sync.Once
 	closed    atomic.Bool
+}
+
+// signalRunDone marks the frame loop as finished. Idempotent.
+func (i *Instance) signalRunDone() {
+	i.runOnce.Do(func() { close(i.runDone) })
 }
 
 // Config holds knobs for a persistent instance. Zero values use sensible
@@ -167,6 +221,7 @@ func NewInstance(module api.Module, cfg Config, logger *zap.Logger) (*Instance, 
 		inbound:      make(chan []byte, maxInflight),
 		logger:       logger,
 		frameTimeout: frameTimeout,
+		runDone:      make(chan struct{}),
 	}, nil
 }
 
@@ -278,6 +333,11 @@ func (i *Instance) Submit(frame []byte) error {
 //
 // Frames are processed serially — wazero instances are not goroutine-safe.
 func (i *Instance) Run(ctx context.Context) {
+	i.runStarted.Store(true)
+	// Signalled on every exit path so Close never waits on a loop that has
+	// already stopped.
+	defer i.signalRunDone()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -318,11 +378,36 @@ func (i *Instance) handleFrame(ctx context.Context, frame []byte) error {
 func (i *Instance) Close(ctx context.Context, reason CloseReason) {
 	i.closeOnce.Do(func() {
 		i.closed.Store(true)
-		// Drain channel to unblock any blocked Submit on the way out.
-		go func() {
-			for range i.inbound {
-			}
-		}()
+		// The inbound channel is deliberately NOT closed, and there is no
+		// drain goroutine.
+		//
+		// Closing it raced Submit: the closed-flag check and the send are not
+		// atomic, so a frame arriving during teardown could send on an
+		// already-closed channel — an unrecoverable panic in the WebSocket
+		// read loop. The drain goroutine that motivated the close was itself
+		// unnecessary, because Submit is non-blocking (select with default),
+		// so no sender is ever parked on this channel.
+		//
+		// Leaving it open is safe: once Run has returned nothing reads it, any
+		// buffered frames are dropped, and the channel is reclaimed with the
+		// instance.
+
+		// Wait for the frame loop to unwind before entering the module again.
+		//
+		// The caller cancels Run's context just before calling us, but
+		// cancellation is asynchronous: a frame already executing inside wazero
+		// keeps running until the guest yields. Entering the module for
+		// ws_close while that frame is still in flight is a concurrent entry
+		// into a non-goroutine-safe instance, which crashes the PROCESS rather
+		// than failing the request (see callMu).
+		//
+		// callMu alone would make that safe, but waiting also preserves the
+		// ABI's ordering guarantee — ws_close is the last callback a function
+		// sees, after the final ws_frame. The wait is bounded so a wedged guest
+		// delays teardown instead of leaking the goroutine; callMu still holds
+		// the safety property if the wait times out.
+		i.waitForRunLoop()
+
 		// Best-effort ws_close — don't propagate errors; we're shutting down.
 		closeCtx, cancel := context.WithTimeout(i.withInvCtx(ctx), i.frameTimeout)
 		defer cancel()
@@ -332,13 +417,41 @@ func (i *Instance) Close(ctx context.Context, reason CloseReason) {
 				zap.Error(err),
 			)
 		}
-		close(i.inbound)
-		if err := i.module.Close(context.Background()); err != nil {
+		// module.Close tears down the same instance the frame loop executes in,
+		// so it takes callMu too.
+		i.callMu.Lock()
+		err := i.module.Close(context.Background())
+		i.callMu.Unlock()
+		if err != nil {
 			i.logger.Debug("persistent module.Close error",
 				zap.String("client_id", i.clientID),
 				zap.Error(err))
 		}
 	})
+}
+
+// runLoopDrainTimeout bounds how long Close waits for the frame loop to unwind
+// before proceeding anyway. Sized above the per-frame timeout so a normal
+// in-flight frame always gets to finish; past that the guest is wedged and
+// teardown must not be held hostage (callMu still guarantees safety).
+const runLoopDrainGrace = 2 * time.Second
+
+// waitForRunLoop blocks until Run has returned, or until the frame timeout plus
+// a small grace elapses. Returns immediately when Run was never started.
+func (i *Instance) waitForRunLoop() {
+	if !i.runStarted.Load() {
+		return
+	}
+	timer := time.NewTimer(i.frameTimeout + runLoopDrainGrace)
+	defer timer.Stop()
+	select {
+	case <-i.runDone:
+	case <-timer.C:
+		i.logger.Warn("persistent frame loop did not stop before teardown deadline; closing anyway",
+			zap.String("client_id", i.clientID),
+			zap.String("function", i.functionName),
+		)
+	}
 }
 
 // callExport allocates space in the guest, copies `payload` into it, calls
@@ -349,7 +462,13 @@ func (i *Instance) Close(ctx context.Context, reason CloseReason) {
 // at the per-instance level, and we rely on the module being closed at
 // session end. For long-running instances with very high frame rates,
 // memory growth is bounded by the function's memory_limit_mb.
-func (i *Instance) callExport(ctx context.Context, fn api.Function, payload []byte) (uint32, error) {
+func (i *Instance) callExport(ctx context.Context, fn guestFunc, payload []byte) (uint32, error) {
+	// Single entry point into the module — see callMu. Every export call and
+	// the module teardown funnel through this lock, so a wazero instance is
+	// only ever executing on one goroutine at a time.
+	i.callMu.Lock()
+	defer i.callMu.Unlock()
+
 	var ptr uint64
 	if len(payload) > 0 {
 		results, err := i.allocFn.Call(ctx, uint64(len(payload)))

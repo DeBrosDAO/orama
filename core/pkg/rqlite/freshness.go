@@ -55,7 +55,7 @@ func LocalFollowerFresh(port int) (fresh bool, reason string, err error) {
 	if strings.EqualFold(raft.State, "Leader") {
 		return true, "leader", nil
 	}
-	lastContact := parseLastContact(raft.LastContact)
+	lastContact := parseLastContact(raft.LastContact.String())
 	if lastContact > StalenessMaxLastContact {
 		return false, fmt.Sprintf("follower last_contact=%q exceeds max %s (port %d) — degrading none-read to leader-routed weak", raft.LastContact, StalenessMaxLastContact, port), nil
 	}

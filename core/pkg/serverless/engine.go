@@ -3,6 +3,7 @@ package serverless
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/tetratelabs/wazero/sys"
 	"go.uber.org/zap"
 
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless/cache"
 	"github.com/DeBrosOfficial/network/pkg/serverless/execution"
 )
@@ -742,7 +744,7 @@ func (e *Engine) instantiateReactorInstance(ctx context.Context, wasmCID, name s
 		WithStdout(discardWriter{}).
 		WithStderr(discardWriter{}).
 		WithArgs(name).
-		WithSysWalltime().  // real clocks (bugboard #27)
+		WithSysWalltime(). // real clocks (bugboard #27)
 		WithSysNanotime().
 		WithRandSource(cryptorand.Reader) // real CSPRNG (bugboard #120)
 
@@ -1314,10 +1316,35 @@ func (e *Engine) hDBTransaction(ctx context.Context, mod api.Module, opsPtr, ops
 	}
 	out, err := e.hostServices.DBTransaction(ctx, opsJSON)
 	if err != nil {
+		// Return a structured rejection instead of 0 (bugboard #175).
+		//
+		// Returning 0 gave the guest an empty buffer with no reason, which
+		// surfaced to callers as "host returned empty envelope". A real
+		// namespace outage was diagnosed that way: a group write exceeding
+		// MaxBatchOps failed deterministically, and neither the function nor
+		// its operators could see why — the reason existed only in the
+		// gateway's own journal, which tenants cannot read.
 		e.logger.Warn("host function db_transaction failed", zap.Error(err))
-		return 0
+		return e.writeBatchRejection(ctx, mod, err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// writeBatchRejection serializes a batch-level failure into the guest as a
+// BatchResult carrying Error, so a WASM caller reading the normal envelope sees
+// committed=false plus the reason. Falls back to 0 only if the envelope itself
+// cannot be written, which is the pre-existing "no information" signal.
+func (e *Engine) writeBatchRejection(ctx context.Context, mod api.Module, cause error) uint64 {
+	payload, mErr := json.Marshal(rqlite.BatchResult{
+		Results:   []rqlite.OpResult{},
+		Committed: false,
+		Error:     cause.Error(),
+	})
+	if mErr != nil {
+		e.logger.Error("failed to marshal db_transaction rejection envelope", zap.Error(mErr))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, payload)
 }
 
 // hDBQueryBatch is the WASM-callable wrapper for DBQueryBatch.

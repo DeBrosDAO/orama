@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -16,9 +17,118 @@ import (
 	"go.uber.org/zap"
 )
 
-// syncWireGuardPeers reads all peers from RQLite and reconciles the local
-// WireGuard interface so it matches the cluster state. This is called on
-// startup after RQLite is ready and periodically thereafter.
+const (
+	// defaultWireGuardPort is the listen port assumed for a peer row that
+	// records wg_port = 0 (older rows predate the column being populated).
+	defaultWireGuardPort = 51820
+
+	// wgKeyLogPrefixLen is how much of a WireGuard public key is kept in log
+	// lines — enough to correlate against `wg show`, short enough to read.
+	wgKeyLogPrefixLen = 8
+
+	// wgSyncInterval is how often the local interface is reconciled against
+	// cluster membership.
+	wgSyncInterval = 60 * time.Second
+)
+
+// wgPeerQuery selects the mesh membership the local interface is reconciled
+// against. Ordered by wg_ip so log output and tests are deterministic.
+const wgPeerQuery = "SELECT node_id, wg_ip, public_key, public_ip, wg_port FROM wireguard_peers ORDER BY wg_ip"
+
+// desiredWGPeers is the outcome of loading the mesh membership.
+//
+// Authoritative distinguishes "this is the cluster's committed membership"
+// from "this is the best guess I could scrape locally". Only an authoritative
+// set may drive REMOVALS — see reconcileWireGuardPeers.
+type desiredWGPeers struct {
+	peers         map[string]production.WireGuardPeer
+	authoritative bool
+	source        string
+}
+
+// loadDesiredWireGuardPeers reads the mesh membership, preferring the
+// leader-routed view and falling back to this node's local replica.
+//
+// Why the fallback exists (the bootstrap deadlock): raft runs OVER the
+// WireGuard mesh. A node whose interface has no peers cannot reach any other
+// node, so its rqlite can never elect a leader, so a leader-routed read of
+// `wireguard_peers` can never succeed — and the peer list is precisely what it
+// needs to repair the mesh. Left there, a single restart is an unrecoverable
+// outage: the rows sit readable on local disk while the node retries a query
+// that cannot succeed until those very rows are applied.
+//
+// The local replica may be stale, so a fallback result is returned with
+// authoritative=false and is only ever used to ADD peers. Adding a peer that
+// has since left is self-correcting (it simply never handshakes, and the next
+// authoritative sync removes it); failing to add one is not.
+func (n *Node) loadDesiredWireGuardPeers(ctx context.Context, localPubKey string) (desiredWGPeers, error) {
+	leaderDB := n.rqliteAdapter.GetSQLDB()
+	peers, err := scanWGPeers(ctx, leaderDB, localPubKey)
+	if err == nil {
+		return desiredWGPeers{peers: peers, authoritative: true, source: "leader"}, nil
+	}
+	leaderErr := err
+
+	localDB, localErr := n.rqliteAdapter.LocalDB()
+	if localErr != nil {
+		return desiredWGPeers{}, fmt.Errorf("failed to query wireguard_peers (leader: %v; local handle: %w)", leaderErr, localErr)
+	}
+	peers, localErr = scanWGPeers(ctx, localDB, localPubKey)
+	if localErr != nil {
+		return desiredWGPeers{}, fmt.Errorf("failed to query wireguard_peers (leader: %v; local: %w)", leaderErr, localErr)
+	}
+
+	n.logger.ComponentWarn(logging.ComponentNode,
+		"WireGuard peer list unavailable from the raft leader — falling back to the local replica so the mesh can be repaired without a quorum (additive only, no peers will be removed)",
+		zap.Int("local_peers", len(peers)),
+		zap.Error(leaderErr))
+	return desiredWGPeers{peers: peers, authoritative: false, source: "local-replica"}, nil
+}
+
+// scanWGPeers runs the membership query against db and returns the peer set
+// keyed by public key, excluding this node.
+//
+// A row that fails to scan is a hard error rather than a skip: silently
+// dropping rows shrinks the desired set, and a short desired set used to mean
+// "remove the peers that are missing from it" — i.e. a malformed row could cut
+// the node out of the mesh. Callers get all-or-nothing.
+func scanWGPeers(ctx context.Context, db *sql.DB, localPubKey string) (map[string]production.WireGuardPeer, error) {
+	rows, err := rqlite.SafeQueryContext(db, ctx, wgPeerQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	peers := make(map[string]production.WireGuardPeer)
+	for rows.Next() {
+		var nodeID, wgIP, pubKey, pubIP string
+		var wgPort int
+		if err := rows.Scan(&nodeID, &wgIP, &pubKey, &pubIP, &wgPort); err != nil {
+			return nil, fmt.Errorf("scan wireguard_peers row: %w", err)
+		}
+		if pubKey == "" || wgIP == "" {
+			return nil, fmt.Errorf("wireguard_peers row for node %q has an empty public_key or wg_ip", nodeID)
+		}
+		if pubKey == localPubKey {
+			continue // skip self
+		}
+		if wgPort == 0 {
+			wgPort = defaultWireGuardPort
+		}
+		peers[pubKey] = production.WireGuardPeer{
+			PublicKey: pubKey,
+			Endpoint:  fmt.Sprintf("%s:%d", pubIP, wgPort),
+			AllowedIP: wgIP + "/32",
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate wireguard_peers: %w", err)
+	}
+	return peers, nil
+}
+
+// syncWireGuardPeers reads the mesh membership and reconciles the local
+// WireGuard interface against it. Called at startup and every syncInterval.
 func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 	if n.rqliteAdapter == nil {
 		return fmt.Errorf("rqlite adapter not initialized")
@@ -41,71 +151,98 @@ func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 	currentPeers := parseWGShowPeers(string(out))
 	localPubKey := parseWGShowLocalKey(string(out))
 
-	// Query all peers from RQLite
-	db := n.rqliteAdapter.GetSQLDB()
-	rows, err := db.QueryContext(ctx,
-		"SELECT node_id, wg_ip, public_key, public_ip, wg_port FROM wireguard_peers ORDER BY wg_ip")
+	desired, err := n.loadDesiredWireGuardPeers(ctx, localPubKey)
 	if err != nil {
-		return fmt.Errorf("failed to query wireguard_peers: %w", err)
+		return err
 	}
-	defer rows.Close()
 
-	// Build desired peer set (excluding self)
-	desiredPeers := make(map[string]production.WireGuardPeer)
-	for rows.Next() {
-		var nodeID, wgIP, pubKey, pubIP string
-		var wgPort int
-		if err := rows.Scan(&nodeID, &wgIP, &pubKey, &pubIP, &wgPort); err != nil {
+	n.reconcileWireGuardPeers(currentPeers, desired)
+	return nil
+}
+
+// wgPeerProvisioner is the subset of production.WireGuardProvisioner the
+// reconciler needs. Declared here so reconcileWireGuardPeers can be exercised
+// without shelling out to `wg` — the add/remove decisions are the part worth
+// testing, and getting them wrong severs the cluster.
+type wgPeerProvisioner interface {
+	AddPeer(peer production.WireGuardPeer) error
+	RemovePeer(publicKey string) error
+}
+
+// reconcileWireGuardPeers applies desired onto the live interface.
+//
+// Removal is deliberately conservative. It runs ONLY when the desired set is
+// authoritative AND non-empty, because "I read zero peers" and "the cluster has
+// zero peers" are indistinguishable at this layer and the first is far more
+// likely — a node that has just lost quorum, a replica mid-restore, or a
+// migration in flight all produce an empty read. Treating that as "remove every
+// peer" severs the mesh, and severing the mesh is what makes the loss
+// unrecoverable. Adding peers is always safe, so adds are unconditional.
+func (n *Node) reconcileWireGuardPeers(currentPeers map[string]struct{}, desired desiredWGPeers) {
+	n.reconcileWireGuardPeersWith(&production.WireGuardProvisioner{}, currentPeers, desired)
+}
+
+// reconcileWireGuardPeersWith is reconcileWireGuardPeers against an injected
+// provisioner.
+func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers map[string]struct{}, desired desiredWGPeers) {
+	added := 0
+	for pubKey, peer := range desired.peers {
+		if _, exists := currentPeers[pubKey]; exists {
 			continue
 		}
-		if pubKey == localPubKey {
-			continue // skip self
+		if err := wp.AddPeer(peer); err != nil {
+			n.logger.ComponentWarn(logging.ComponentNode, "failed to add WG peer",
+				zap.String("public_key", shortWGKey(pubKey)),
+				zap.Error(err))
+			continue
 		}
-		if wgPort == 0 {
-			wgPort = 51820
-		}
-		desiredPeers[pubKey] = production.WireGuardPeer{
-			PublicKey: pubKey,
-			Endpoint:  fmt.Sprintf("%s:%d", pubIP, wgPort),
-			AllowedIP: wgIP + "/32",
-		}
+		added++
+		n.logger.ComponentInfo(logging.ComponentNode, "added WG peer",
+			zap.String("allowed_ip", peer.AllowedIP),
+			zap.String("source", desired.source))
 	}
 
-	wp := &production.WireGuardProvisioner{}
-
-	// Add missing peers
-	for pubKey, peer := range desiredPeers {
-		if _, exists := currentPeers[pubKey]; !exists {
-			if err := wp.AddPeer(peer); err != nil {
-				n.logger.ComponentWarn(logging.ComponentNode, "failed to add WG peer",
-					zap.String("public_key", pubKey[:8]+"..."),
-					zap.Error(err))
-			} else {
-				n.logger.ComponentInfo(logging.ComponentNode, "added WG peer",
-					zap.String("allowed_ip", peer.AllowedIP))
+	removed := 0
+	canRemove := desired.authoritative && len(desired.peers) > 0
+	if canRemove {
+		for pubKey := range currentPeers {
+			if _, exists := desired.peers[pubKey]; exists {
+				continue
 			}
-		}
-	}
-
-	// Remove peers not in the desired set
-	for pubKey := range currentPeers {
-		if _, exists := desiredPeers[pubKey]; !exists {
 			if err := wp.RemovePeer(pubKey); err != nil {
 				n.logger.ComponentWarn(logging.ComponentNode, "failed to remove stale WG peer",
-					zap.String("public_key", pubKey[:8]+"..."),
+					zap.String("public_key", shortWGKey(pubKey)),
 					zap.Error(err))
-			} else {
-				n.logger.ComponentInfo(logging.ComponentNode, "removed stale WG peer",
-					zap.String("public_key", pubKey[:8]+"..."))
+				continue
 			}
+			removed++
+			n.logger.ComponentInfo(logging.ComponentNode, "removed stale WG peer",
+				zap.String("public_key", shortWGKey(pubKey)))
 		}
+	} else if len(currentPeers) > 0 {
+		n.logger.ComponentInfo(logging.ComponentNode,
+			"skipping WG peer removal — membership is not authoritative or came back empty; keeping the live mesh intact",
+			zap.Bool("authoritative", desired.authoritative),
+			zap.Int("desired_peers", len(desired.peers)),
+			zap.String("source", desired.source))
 	}
 
 	n.logger.ComponentInfo(logging.ComponentNode, "WireGuard peer sync completed",
-		zap.Int("desired_peers", len(desiredPeers)),
-		zap.Int("current_peers", len(currentPeers)))
+		zap.Int("desired_peers", len(desired.peers)),
+		zap.Int("current_peers", len(currentPeers)),
+		zap.Int("added", added),
+		zap.Int("removed", removed),
+		zap.Bool("authoritative", desired.authoritative),
+		zap.String("source", desired.source))
+}
 
-	return nil
+// shortWGKey truncates a WireGuard public key for logging. Full keys are not
+// secret (they are public keys) but they are noise at 44 chars.
+func shortWGKey(pubKey string) string {
+	if len(pubKey) <= wgKeyLogPrefixLen {
+		return pubKey
+	}
+	return pubKey[:wgKeyLogPrefixLen] + "..."
 }
 
 // ensureWireGuardSelfRegistered ensures this node's WireGuard info is in the
@@ -175,13 +312,13 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 
 	_, err = rqlite.SafeExecContext(db, ctx,
 		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id) VALUES (?, ?, ?, ?, ?, ?)",
-		nodeID, wgIP, localPubKey, publicIP, 51820, ipfsPeerID)
+		nodeID, wgIP, localPubKey, publicIP, defaultWireGuardPort, ipfsPeerID)
 	if err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to self-register WG peer", zap.Error(err))
 	} else {
 		n.logger.ComponentInfo(logging.ComponentNode, "WireGuard self-registered",
 			zap.String("wg_ip", wgIP),
-			zap.String("public_key", localPubKey[:8]+"..."),
+			zap.String("public_key", shortWGKey(localPubKey)),
 			zap.String("ipfs_peer_id", ipfsPeerID))
 	}
 }
@@ -214,9 +351,9 @@ func (n *Node) startWireGuardSyncLoop(ctx context.Context) {
 		n.logger.ComponentWarn(logging.ComponentNode, "initial WireGuard peer sync failed", zap.Error(err))
 	}
 
-	// Periodic sync every 60 seconds
+	// Periodic sync every wgSyncInterval
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		ticker := time.NewTicker(wgSyncInterval)
 		defer ticker.Stop()
 		for {
 			select {

@@ -183,6 +183,84 @@ if res.Error != "" {
 
 The legacy `db_execute` is kept indefinitely so existing functions don't break. New code should use `db_execute_v2` for any path where distinguishing "no rows" from "SQL error" matters — most paths.
 
+#### Database Transactions
+
+`db_transaction(opsJSON)` runs a set of statements as one atomic batch.
+
+**Input** — `{"ops": [{"kind": "exec"|"query", "sql": "...", "args": [...]}, ...]}`
+
+**Output** — a `BatchResult`:
+
+```json
+{
+  "results": [{"kind": "exec", "rows_affected": 1, "last_insert_id": 42}],
+  "committed": true,
+  "failed_index": 0,
+  "error": ""
+}
+```
+
+Always check `committed`. A non-empty return does **not** imply the writes landed.
+
+- `committed: true` — every `exec` op is durable.
+- `committed: false` with `failed_index` set — one statement failed and the whole
+  batch rolled back; that op's `results` entry carries its SQL error.
+- `error` non-empty — the batch was rejected as a whole, before or instead of
+  execution. This is where limit violations and transport failures appear.
+
+**Semantics**
+
+- All `exec` ops go to RQLite in one transactional request. Any failure rolls back
+  the entire batch.
+- `query` ops are sequenced **after** the exec batch commits, on the same node, and
+  see the committed writes. A failing query does **not** roll back the writes — its
+  own `results` entry gets `error` and `committed` stays `true`.
+- Result order always matches input order.
+
+**Limits** — exceeding any of these fails the whole batch with `error` set:
+
+| Limit | Value | Applies to |
+|---|---|---|
+| Statements per batch | **100** | `db_transaction`, `db_query_batch`, `exec_and_publish` |
+| Rows returned per query op | 10,000 | `db_query_batch` |
+| Total result bytes per batch | 32 MiB | `db_query_batch` |
+| Batch round-trip deadline | 10s | `db_query_batch` |
+
+> ⚠️ The 100-statement cap is the one that bites in practice. A write whose size
+> scales with fan-out — one row per group participant, per device — crosses it as
+> the group grows, and it fails **deterministically at 101**, not under load. Split
+> such work into chunks of ≤100 and drive them as separate transactions, or restructure
+> so a single statement covers many rows.
+
+```go
+resultBytes := callDBTransaction(ops)
+
+var res struct {
+    Committed   bool   `json:"committed"`
+    FailedIndex int    `json:"failed_index"`
+    Error       string `json:"error"`
+}
+json.Unmarshal(resultBytes, &res)
+
+if res.Error != "" {
+    return fmt.Errorf("batch rejected: %s", res.Error)   // e.g. "too many ops: max 100"
+}
+if !res.Committed {
+    return fmt.Errorf("batch rolled back at op %d", res.FailedIndex)
+}
+```
+
+**Read consistency** — `db_query_batch` (not `db_transaction`) accepts an optional
+`consistency` field on the request body:
+
+- omitted / `"weak"` (default) — leader-routed, always sees the latest committed
+  write. Costs one round trip to the raft leader.
+- `"none"` — served from the local node's SQLite. Much faster, but may be stale;
+  only safe for reads that do not need read-your-own-writes.
+
+`db_query_v2` does **not** accept `consistency`; wrap a single read as a one-op
+`db_query_batch` if you need it.
+
 ### Cache (Olric Distributed Cache)
 
 | Function | Description |
