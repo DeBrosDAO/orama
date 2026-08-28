@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -31,7 +32,16 @@ type NamespaceHealth struct {
 type namespaceHealthState struct {
 	mu    sync.RWMutex
 	cache map[string]*NamespaceHealth // namespace_name → health
+	// healthyStreak counts consecutive healthy local probes per namespace. Used
+	// to damp the DNS reclaim so a flapping service cannot flap DNS.
+	healthyStreak map[string]int
 }
+
+// healthyProbesBeforeDNSReclaim is how many consecutive healthy 30s probes a
+// namespace must pass before this node re-advertises itself in DNS. Three
+// probes (~90s) is long enough that a service restarting mid-probe does not
+// trigger a reclaim, short enough to recover well inside a human response time.
+const healthyProbesBeforeDNSReclaim = 3
 
 // startNamespaceHealthLoop runs two periodic tasks:
 //  1. Every 30s: probe local namespace services and cache health state
@@ -142,6 +152,129 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 	g.nsHealth.mu.Lock()
 	g.nsHealth.cache = health
 	g.nsHealth.mu.Unlock()
+
+	g.reclaimStaleNamespaceDNS(ctx, health)
+}
+
+// reclaimStaleNamespaceDNS re-advertises this node in the `ns-<ns>` round-robin
+// when its own record was soft-disabled and nothing has refreshed that decision
+// since.
+//
+// DisableNamespaceRecord writes durable state, but the only re-enable path
+// (HandleSuspectRecovery) fires on an IN-MEMORY suspect→healthy transition in
+// the node health monitor. A restart clears that map, so the transition never
+// happens and the row stays disabled permanently — a healthy gateway silently
+// removed from DNS with no path back. Reclaiming here is the level-triggered
+// counterpart to that edge.
+//
+// Deliberately conservative:
+//   - only namespaces this node currently serves, and only when the local
+//     probe says every one of their services is healthy;
+//   - only after healthyProbesBeforeDNSReclaim consecutive healthy probes, so a
+//     flapping service does not flap DNS;
+//   - only this node's own row, and only when the disable is already stale, so
+//     a live peer verdict is never overridden (see ReclaimStaleNamespaceHostRecord).
+func (g *Gateway) reclaimStaleNamespaceDNS(ctx context.Context, health map[string]*NamespaceHealth) {
+	if g.sqlDB == nil || g.nodePeerID == "" || g.nsHealth == nil {
+		return
+	}
+
+	g.nsHealth.mu.Lock()
+	if g.nsHealth.healthyStreak == nil {
+		g.nsHealth.healthyStreak = make(map[string]int)
+	}
+	ready := make([]string, 0, len(health))
+	for name, h := range health {
+		if h == nil || h.Status != "healthy" {
+			delete(g.nsHealth.healthyStreak, name)
+			continue
+		}
+		g.nsHealth.healthyStreak[name]++
+		if g.nsHealth.healthyStreak[name] >= healthyProbesBeforeDNSReclaim {
+			ready = append(ready, name)
+		}
+	}
+	// Drop streaks for namespaces this node no longer serves.
+	for name := range g.nsHealth.healthyStreak {
+		if _, still := health[name]; !still {
+			delete(g.nsHealth.healthyStreak, name)
+		}
+	}
+	g.nsHealth.mu.Unlock()
+
+	if len(ready) == 0 {
+		return
+	}
+
+	publicIP, err := g.localNodePublicIP(ctx)
+	if err != nil || publicIP == "" {
+		// Not fatal and not worth a warning every 30s — the next probe retries,
+		// which is the whole point of being level-triggered.
+		g.logger.ComponentDebug(logging.ComponentGeneral,
+			"Skipping namespace DNS reclaim: local public IP unavailable",
+			zap.Error(err))
+		return
+	}
+
+	baseDomain := g.cfg.BaseDomain
+	if baseDomain == "" {
+		return // without the zone we cannot name the record; nothing safe to do
+	}
+
+	now := time.Now()
+	cutoff := now.Add(-staleDisableReclaimAfter)
+	for _, name := range ready {
+		for _, fqdn := range []string{
+			fmt.Sprintf("ns-%s.%s.", name, baseDomain),
+			fmt.Sprintf("*.ns-%s.%s.", name, baseDomain),
+		} {
+			res, rerr := g.sqlDB.ExecContext(ctx, reclaimStaleNamespaceHostRecordSQL, now, fqdn, publicIP, cutoff)
+			if rerr != nil {
+				g.logger.ComponentWarn(logging.ComponentGeneral,
+					"Failed to reclaim stale namespace DNS record",
+					zap.String("namespace", name), zap.String("fqdn", fqdn), zap.Error(rerr))
+				continue
+			}
+			if n, aerr := res.RowsAffected(); aerr == nil && n > 0 {
+				g.logger.ComponentInfo(logging.ComponentGeneral,
+					"Re-enabled this node's namespace DNS record after a stale disable",
+					zap.String("namespace", name),
+					zap.String("fqdn", fqdn),
+					zap.String("ip", publicIP))
+			}
+		}
+	}
+}
+
+// staleDisableReclaimAfter is how long a soft-disabled namespace-host record
+// must have sat untouched before a locally-healthy node may re-enable its own
+// row. It comfortably exceeds the health monitor's suspect cadence (3 missed
+// probes at 10s) so a LIVE verdict is never overridden: a monitor that still
+// considers this node suspect keeps refreshing updated_at, holding the row
+// outside this window indefinitely.
+const staleDisableReclaimAfter = 10 * time.Minute
+
+// reclaimStaleNamespaceHostRecordSQL re-activates exactly one node's own
+// namespace-host A record, and only when the disable has gone stale.
+//
+// The is_active=0 and updated_at guards are what make this safe to run
+// unattended on every node: a no-op on an already-active row, and a no-op on a
+// row some live health monitor is actively holding down.
+const reclaimStaleNamespaceHostRecordSQL = `UPDATE dns_records
+	SET is_active = 1, updated_at = ?
+	WHERE fqdn = ? AND record_type = 'A' AND value = ?
+	  AND is_active = 0
+	  AND updated_at < ?`
+
+// localNodePublicIP resolves this node's public IP from dns_nodes — the value
+// that appears in the A records.
+func (g *Gateway) localNodePublicIP(ctx context.Context) (string, error) {
+	var ip string
+	row := g.sqlDB.QueryRowContext(ctx, `SELECT ip_address FROM dns_nodes WHERE id = ?`, g.nodePeerID)
+	if err := row.Scan(&ip); err != nil {
+		return "", err
+	}
+	return ip, nil
 }
 
 // reconcileNamespaces checks all namespaces for under-provisioning and triggers repair.
