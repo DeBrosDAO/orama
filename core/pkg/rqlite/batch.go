@@ -79,6 +79,14 @@ type BatchResult struct {
 	Results     []OpResult `json:"results"`
 	Committed   bool       `json:"committed"`
 	FailedIndex int        `json:"failed_index,omitempty"` // valid only when !Committed
+	// Error carries a batch-level rejection reason — a validation failure
+	// (op count over MaxBatchOps, malformed JSON, unknown op kind) or a
+	// transport failure — as opposed to a per-op SQL error, which lives in the
+	// corresponding Results entry.
+	//
+	// Empty on success. Present whenever Committed is false for a reason that
+	// is not attributable to a single op.
+	Error string `json:"error,omitempty"`
 }
 
 // MaxBatchOps caps the number of ops in a single batch to prevent abuse.
@@ -328,7 +336,7 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 	for i, qr := range qrs {
 		if totalBytes >= MaxBatchQueryTotalBytes {
 			out[i] = OpResult{
-				Kind:  BatchOpQuery,
+				Kind: BatchOpQuery,
 				Error: fmt.Sprintf("rqlite.BatchQuery: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
 					MaxBatchQueryTotalBytes),
 			}
@@ -482,8 +490,8 @@ func queryResultToOpResult(qr gorqlite.QueryResult) OpResult {
 	for qr.Next() {
 		if len(rows) >= MaxBatchQueryRowsPerOp {
 			return OpResult{
-				Kind:  BatchOpQuery,
-				Rows:  rows,
+				Kind: BatchOpQuery,
+				Rows: rows,
 				Error: fmt.Sprintf("rqlite.BatchQuery: row cap exceeded (%d) — paginate via LIMIT/OFFSET",
 					MaxBatchQueryRowsPerOp),
 			}

@@ -42,6 +42,13 @@ const (
 	olricInitMaxAttempts    = 5
 	olricInitInitialBackoff = 500 * time.Millisecond
 	olricInitMaxBackoff     = 5 * time.Second
+
+	// rqliteReadyTimeout bounds how long gateway startup waits for the local
+	// RQLite to become leader-reachable before giving up. Generous enough to
+	// cover a cold node whose raft is still replaying (a large namespace log
+	// can take tens of seconds), short enough that a genuinely broken cluster
+	// surfaces a clear error instead of hanging forever.
+	rqliteReadyTimeout = 90 * time.Second
 )
 
 // Dependencies holds all service clients and components required by the Gateway.
@@ -217,6 +224,22 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 		zap.String("base_path", "/v1/db"),
 		zap.Duration("timeout", deps.ORMHTTP.Timeout),
 	)
+
+	// Wait for the local RQLite to actually be able to serve a leader-routed
+	// read before touching the schema.
+	//
+	// sql.Open above is lazy and rqlite accepts connections well before it has
+	// elected a leader, so without this the migrations below fire into a
+	// database that cannot answer them. systemd's After=/Requires= on the
+	// rqlite unit does not help: for Type=simple it orders process start, not
+	// readiness. Gating on the real signal turns "gateway dies at boot because
+	// the database was 3 seconds behind it" into "gateway waits 3 seconds".
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), rqliteReadyTimeout)
+	defer readyCancel()
+	if err := rqlite.WaitForLeader(readyCtx, db, rqliteReadyTimeout); err != nil {
+		return fmt.Errorf("rqlite not ready for schema work: %w", err)
+	}
+	logger.ComponentInfo(logging.ComponentGeneral, "RQLite ready (leader reachable), applying schema")
 
 	// Apply embedded migrations to ensure schema is up-to-date.
 	// This is critical for namespace gateways whose RQLite instances
