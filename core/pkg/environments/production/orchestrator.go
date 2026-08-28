@@ -916,6 +916,14 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("  ✓ SNI router service unit created: %s", ps.binaryInstaller.SNIRouterServiceName())
 	}
 
+	// Log rotation for the append:-redirected service logs. Without it these
+	// files grow without bound until the disk fills.
+	if err := InstallLogrotateConfig(ps.oramaDir); err != nil {
+		ps.logf("  ⚠️  Failed to install logrotate config: %v", err)
+	} else {
+		ps.logf("  ✓ Log rotation configured (%s)", logrotateConfigPath)
+	}
+
 	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %w", err)
@@ -1283,7 +1291,6 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
 		ps.logf("  Config: /etc/anon/anonrc")
 		ps.logf("  Register at: https://dashboard.anyone.io")
-		ps.logf("  IMPORTANT: You need 100 $ANYONE tokens in your wallet to receive rewards")
 	} else if ps.IsAnyoneClient() {
 		ps.logf("\nStart All Services:")
 		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-client orama-node")
