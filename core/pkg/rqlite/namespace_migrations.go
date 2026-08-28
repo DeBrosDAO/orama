@@ -86,7 +86,7 @@ func ApplyEmbeddedMigrationsNamespace(ctx context.Context, db *sql.DB, fsys fs.F
 		if err := applySQLNamespace(ctx, db, string(sqlBytes)); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
 		}
-		if _, err := db.ExecContext(ctx, insert, mf.Version); err != nil {
+		if _, err := SafeExecContext(db, ctx, insert, mf.Version); err != nil {
 			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 	}
@@ -151,7 +151,7 @@ func applySQLNamespace(ctx context.Context, db *sql.DB, script string) error {
 		if stmtTargetsStrippedTable(stmt) {
 			continue // core self-recording or dead-table DDL — never in a namespace DB
 		}
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
+		if _, err := SafeExecContext(db, ctx, stmt); err != nil {
 			if isAlreadyAppliedError(err) {
 				continue
 			}
@@ -177,7 +177,7 @@ func isolateNamespaceSchema(ctx context.Context, db *sql.DB, logger *zap.Logger)
 			return err
 		}
 		if isCoreTrackerShape(cols) {
-			if _, err := db.ExecContext(ctx, `DROP TABLE schema_migrations`); err != nil {
+			if _, err := SafeExecContext(db, ctx, `DROP TABLE schema_migrations`); err != nil {
 				return fmt.Errorf("drop core schema_migrations: %w", err)
 			}
 			logger.Info("namespace isolation: dropped core-owned schema_migrations (freed for tenant)")
@@ -201,7 +201,7 @@ func isolateNamespaceSchema(ctx context.Context, db *sql.DB, logger *zap.Logger)
 				return err
 			}
 			if n == 0 {
-				if _, err := db.ExecContext(ctx, `DROP TABLE subscriptions`); err != nil {
+				if _, err := SafeExecContext(db, ctx, `DROP TABLE subscriptions`); err != nil {
 					return fmt.Errorf("drop core subscriptions: %w", err)
 				}
 				logger.Info("namespace isolation: dropped dead core subscriptions table (freed for tenant)")
@@ -269,7 +269,7 @@ func seedTrackerFromLegacy(ctx context.Context, db *sql.DB, tracker string, logg
 		return nil // tenant-owned (any shape but core's exact {version,applied_at}); never read from it
 	}
 	q := fmt.Sprintf(`INSERT OR IGNORE INTO %s(version) SELECT version FROM schema_migrations`, tracker)
-	if _, err := db.ExecContext(ctx, q); err != nil {
+	if _, err := SafeExecContext(db, ctx, q); err != nil {
 		return fmt.Errorf("seed from legacy schema_migrations: %w", err)
 	}
 	logger.Info("namespace isolation: seeded isolated tracker from core-owned schema_migrations")
@@ -282,7 +282,7 @@ func ensureTrackerTable(ctx context.Context, db *sql.DB, tracker string) error {
 	if !safeIdent.MatchString(tracker) {
 		return fmt.Errorf("invalid tracker identifier %q", tracker)
 	}
-	_, err := db.ExecContext(ctx, fmt.Sprintf(`
+	_, err := SafeExecContext(db, ctx, fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
 	version     INTEGER PRIMARY KEY,
 	applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -296,7 +296,7 @@ func loadAppliedVersionsFrom(ctx context.Context, db *sql.DB, tracker string) (m
 	if !safeIdent.MatchString(tracker) {
 		return nil, fmt.Errorf("invalid tracker identifier %q", tracker)
 	}
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT version FROM %s`, tracker))
+	rows, err := SafeQueryContext(db, ctx, fmt.Sprintf(`SELECT version FROM %s`, tracker))
 	if err != nil {
 		if isNoSuchTable(err) {
 			if err := ensureTrackerTable(ctx, db, tracker); err != nil {
@@ -354,7 +354,7 @@ func tableColumns(ctx context.Context, db *sql.DB, name string) ([]string, error
 	if !safeIdent.MatchString(name) {
 		return nil, fmt.Errorf("invalid table identifier %q", name)
 	}
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT name FROM pragma_table_info('%s')`, name))
+	rows, err := SafeQueryContext(db, ctx, fmt.Sprintf(`SELECT name FROM pragma_table_info('%s')`, name))
 	if err != nil {
 		return nil, fmt.Errorf("read columns of %q: %w", name, err)
 	}
