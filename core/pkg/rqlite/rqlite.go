@@ -26,6 +26,21 @@ type RQLiteManager struct {
 	connection       *gorqlite.Connection
 	discoveryService *ClusterDiscoveryService
 	waitDone         chan struct{} // closed when cmd.Wait() completes (reaps zombie)
+
+	// onProcessStarted, when set, runs after the local rqlited process is
+	// listening but BEFORE Start blocks waiting for a raft leader. See the call
+	// site in Start for why that window is the only place transport-layer
+	// prerequisites for raft can be repaired.
+	//
+	// It must be fast and best-effort: it runs on the startup path, and any
+	// error it hits is its own to log. Set via SetOnProcessStarted.
+	onProcessStarted func(context.Context)
+}
+
+// SetOnProcessStarted registers a callback invoked once the local rqlited is
+// listening and before Start waits for a leader. Call before Start.
+func (r *RQLiteManager) SetOnProcessStarted(fn func(context.Context)) {
+	r.onProcessStarted = fn
 }
 
 // NewRQLiteManager creates a new RQLite manager
@@ -63,6 +78,21 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 
 	if err := r.launchProcess(ctx, rqliteDataDir); err != nil {
 		return err
+	}
+
+	// The local rqlited is now listening but has not necessarily joined a
+	// quorum. This is the ONLY window in which a node can repair transport-layer
+	// prerequisites for raft, so give the caller a chance to act before we block
+	// on a leader.
+	//
+	// It matters because raft runs over the WireGuard mesh while mesh membership
+	// is stored in raft. A node whose interface has lost its peers cannot reach
+	// any voter, so waitForReadyAndConnect below can never succeed, and the
+	// repair step that would fix it is ordered after this call — unreachable.
+	// One restart in that state is an unrecoverable outage. Hooking here inverts
+	// the dependency: repair transport, then wait for consensus.
+	if r.onProcessStarted != nil {
+		r.onProcessStarted(ctx)
 	}
 
 	if err := r.waitForReadyAndConnect(ctx); err != nil {
