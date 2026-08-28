@@ -54,6 +54,17 @@ func (n *Node) startRQLite(ctx context.Context) error {
 		n.logger.Info("Cluster discovery service started (waiting for RQLite)")
 	}
 
+	// Repair the WireGuard mesh in the window after rqlited is listening but
+	// before it blocks waiting for a leader.
+	//
+	// Raft talks to its peers over the mesh, so a node that has lost its peers
+	// can never reach a quorum — and the steady-state peer sync runs later in
+	// Node.Start, which this call never returns to. That ordering is what turned
+	// a routine restart into a multi-day outage. Repairing here, off the local
+	// replica, lets a partitioned node rebuild its own transport and then
+	// converge normally.
+	n.rqliteManager.SetOnProcessStarted(n.bootstrapWireGuardMesh)
+
 	// Start RQLite FIRST before updating metadata
 	if err := n.rqliteManager.Start(ctx); err != nil {
 		return err
@@ -75,4 +86,3 @@ func (n *Node) startRQLite(ctx context.Context) error {
 
 	return nil
 }
-

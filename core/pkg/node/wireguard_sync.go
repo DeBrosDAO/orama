@@ -29,6 +29,11 @@ const (
 	// wgSyncInterval is how often the local interface is reconciled against
 	// cluster membership.
 	wgSyncInterval = 60 * time.Second
+
+	// wgBootstrapTimeout bounds the startup-path mesh repair. It runs before
+	// rqlite has a leader, so it must not be able to stall boot; the periodic
+	// sync retries anything missed.
+	wgBootstrapTimeout = 10 * time.Second
 )
 
 // wgPeerQuery selects the mesh membership the local interface is reconciled
@@ -395,4 +400,95 @@ func parseWGShowLocalKey(output string) string {
 		}
 	}
 	return ""
+}
+
+// bootstrapWireGuardMesh repairs the local WireGuard interface during node
+// startup, before rqlite blocks waiting for a raft leader.
+//
+// This is the recovery path for a node whose mesh membership was lost. Raft
+// runs over the mesh, so such a node reaches no voter and its rqlite never
+// elects a leader; meanwhile the steady-state sync loop
+// (startWireGuardSyncLoop) runs later in Node.Start, which is never reached
+// because the leader wait fails first. The result is a node that cannot recover
+// without hands, while the peer rows sit readable on its own disk.
+//
+// Running here breaks that cycle. It reads the local replica directly rather
+// than going through the adapter, because the adapter is only constructed after
+// rqlite is up — the very thing being waited on. Failures are logged and
+// swallowed: this is best-effort repair on the startup path, and the periodic
+// sync will retry once the node is running.
+func (n *Node) bootstrapWireGuardMesh(ctx context.Context) {
+	if _, err := exec.LookPath("wg"); err != nil {
+		return // no WireGuard on this node
+	}
+	out, err := exec.CommandContext(ctx, "wg", "show", "wg0").CombinedOutput()
+	if err != nil {
+		return // wg0 not active
+	}
+	currentPeers := parseWGShowPeers(string(out))
+	localPubKey := parseWGShowLocalKey(string(out))
+
+	db, err := n.openLocalRQLiteForBootstrap()
+	if err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"WireGuard bootstrap: cannot open local rqlite read handle — mesh repair skipped, node will rely on the periodic sync once rqlite is up",
+			zap.Error(err))
+		return
+	}
+	defer db.Close()
+
+	bootCtx, cancel := context.WithTimeout(ctx, wgBootstrapTimeout)
+	defer cancel()
+
+	peers, err := scanWGPeers(bootCtx, db, localPubKey)
+	if err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"WireGuard bootstrap: local peer read failed — mesh repair skipped",
+			zap.Error(err))
+		return
+	}
+
+	missing := 0
+	for k := range peers {
+		if _, ok := currentPeers[k]; !ok {
+			missing++
+		}
+	}
+	if missing == 0 {
+		return // mesh already matches what we know; stay quiet on the happy path
+	}
+
+	n.logger.ComponentInfo(logging.ComponentNode,
+		"WireGuard bootstrap: repairing mesh before waiting for a raft leader",
+		zap.Int("known_peers", len(peers)),
+		zap.Int("live_peers", len(currentPeers)),
+		zap.Int("missing", missing))
+
+	// Additive only — a bootstrap read is never authoritative enough to remove.
+	n.reconcileWireGuardPeers(currentPeers, desiredWGPeers{
+		peers:         peers,
+		authoritative: false,
+		source:        "bootstrap-local-replica",
+	})
+}
+
+// openLocalRQLiteForBootstrap opens a short-lived level=none handle to this
+// node's own rqlite. Used only by bootstrapWireGuardMesh, which runs before the
+// shared adapter exists. The caller owns and must Close the handle.
+func (n *Node) openLocalRQLiteForBootstrap() (*sql.DB, error) {
+	if n.config == nil {
+		return nil, fmt.Errorf("node config unavailable")
+	}
+	port := n.config.Database.RQLitePort
+	if port == 0 {
+		return nil, fmt.Errorf("rqlite port not configured")
+	}
+	dsn := fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true&level=none", port)
+	db, err := sql.Open("rqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open local rqlite handle on port %d: %w", port, err)
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	return db, nil
 }
