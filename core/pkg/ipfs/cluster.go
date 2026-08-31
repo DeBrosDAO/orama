@@ -120,13 +120,39 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 	cfg.Cluster.ListenMultiaddress = []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", clusterListenPort)}
 	cfg.Consensus.CRDT.ClusterName = "orama-cluster"
 
-	// Use trusted peers from file if available, otherwise fall back to "*" (open trust)
-	trustedPeers := cm.loadTrustedPeersWithSelf()
-	if len(trustedPeers) > 0 {
-		cfg.Consensus.CRDT.TrustedPeers = trustedPeers
-	} else {
-		cfg.Consensus.CRDT.TrustedPeers = []string{"*"}
-	}
+	// Every authenticated cluster peer is a trusted CRDT writer.
+	//
+	// This used to be an allowlist built from the secrets/ipfs-cluster-trusted-peers
+	// file, and it could never be correct. A joining node receives the CURRENT
+	// contents of that file from the node it joins through and appends itself,
+	// so it trusts {bootstrap set} ∪ {self} — but nothing ever adds the joiner's
+	// ID to the peers that were already running. On a three-node cluster the
+	// bootstrap node ends up trusting only itself.
+	//
+	// In CRDT consensus an untrusted peer's writes are silently dropped by
+	// everyone who does not trust it. So a pin or unpin served by any node other
+	// than the original bootstrap node applied to that node's local state and
+	// was discarded everywhere else — no error, HTTP 200, divergent pinsets.
+	// Because tenant traffic is spread across nodes by round-robin DNS, most
+	// storage writes and deletes never replicated. Observed on devnet: an unpin
+	// served by node 2 left the CID pinned on nodes 1 and 3 indefinitely, which
+	// is what made privacy-grade immediate reclaim (bugboard #153) impossible to
+	// deliver — the blocks it tries to evict were still pinned elsewhere.
+	//
+	// Membership is already gated: a peer cannot join the libp2p cluster at all
+	// without the shared cluster secret, cluster traffic travels the WireGuard
+	// mesh, and node enrolment requires an invite token. The per-peer allowlist
+	// added no barrier on top of those — it only introduced an asymmetry that
+	// fails open on reads and silently drops writes. Trusting every peer that
+	// cleared those gates is the model IPFS-Cluster's "*" is for, and it is what
+	// this code already fell back to whenever the file was absent.
+	cfg.Consensus.CRDT.TrustedPeers = []string{"*"}
+
+	// The trusted-peers FILE is still maintained (the join handshake exchanges
+	// peer IDs through it) — it is simply no longer used to restrict who may
+	// write cluster state. Keep recording our own ID so a joining node still
+	// receives a complete peer list.
+	cm.recordOwnClusterPeerID()
 
 	cfg.API.RestAPI.HTTPListenMultiaddress = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", restAPIPort)
 	cfg.API.IPFSProxy.ListenMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", proxyPort)
@@ -268,32 +294,20 @@ func (cm *ClusterConfigManager) addTrustedPeer(peerID string) error {
 
 // loadTrustedPeersWithSelf loads trusted peers from file and ensures this node's
 // own peer ID is included. Returns nil if no trusted peers file exists.
-func (cm *ClusterConfigManager) loadTrustedPeersWithSelf() []string {
-	peers := cm.loadTrustedPeers()
-
-	// Try to read own peer ID and add it
+// recordOwnClusterPeerID persists this node's IPFS Cluster peer ID into the
+// shared trusted-peers file, which the join handshake serves to new nodes so
+// they learn the cluster's peer set. It no longer influences who may write
+// cluster state — see EnsureConfig for why that allowlist was removed.
+func (cm *ClusterConfigManager) recordOwnClusterPeerID() {
 	ownID, err := cm.readClusterPeerID()
 	if err != nil {
 		cm.logger.Debug("Could not read own IPFS Cluster peer ID", zap.Error(err))
-		return peers
+		return
 	}
-
-	if ownID != "" {
-		if err := cm.addTrustedPeer(ownID); err != nil {
-			cm.logger.Warn("Failed to persist own peer ID to trusted peers file", zap.Error(err))
-		}
-		// Check if already in the list
-		found := false
-		for _, p := range peers {
-			if p == ownID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			peers = append(peers, ownID)
-		}
+	if ownID == "" {
+		return
 	}
-
-	return peers
+	if err := cm.addTrustedPeer(ownID); err != nil {
+		cm.logger.Warn("Failed to persist own peer ID to the cluster peers file", zap.Error(err))
+	}
 }

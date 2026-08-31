@@ -203,6 +203,11 @@ func (g *Gateway) Routes() http.Handler {
 
 	// anon proxy (authenticated users only)
 	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)
+	// Authenticated tunnelling proxy (bugboard #168): an opaque TCP stream over
+	// a WebSocket, so TLS stays end-to-end between the user's device and the
+	// destination and the gateway relays ciphertext. Same auth posture as
+	// /v1/proxy/anon — `proxy` grant plus a genuine wallet JWT.
+	mux.HandleFunc("/v1/proxy/tunnel", g.anonTunnelHandler)
 
 	// cache endpoints (Olric) - always register, check handler dynamically
 	// This allows cache routes to work after background Olric reconnection

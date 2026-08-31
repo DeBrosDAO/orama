@@ -38,15 +38,31 @@ type Handlers struct {
 	logger     *logging.ColoredLogger
 	config     Config
 	db         rqlite.Client // For tracking IPFS content ownership
+	// globalDB reads the MAIN cluster's RQLite. Content-ownership rows live in
+	// `db` (this gateway's own database), but cluster TOPOLOGY — dns_nodes —
+	// exists only in the main cluster, so the immediate-eviction fan-out must
+	// read it from here (bugboard #153). On the main gateway it is the same
+	// handle as db.
+	globalDB rqlite.Client
+	// evictPort overrides the per-node internal gateway port the eviction
+	// fan-out dials. Zero selects internalGatewayPort, which is what production
+	// always uses; tests set it to point the fan-out at a local stub node.
+	evictPort int
 }
 
 // New creates a new storage handlers instance with the provided dependencies.
-func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db rqlite.Client) *Handlers {
+// db is this gateway's own RQLite (content ownership); globalDB is the MAIN
+// cluster's RQLite, the only place cluster topology (dns_nodes) exists.
+func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db rqlite.Client, globalDB rqlite.Client) *Handlers {
+	if globalDB == nil {
+		globalDB = db
+	}
 	return &Handlers{
 		ipfsClient: ipfsClient,
 		logger:     logger,
 		config:     config,
 		db:         db,
+		globalDB:   globalDB,
 	}
 }
 

@@ -196,7 +196,8 @@ The legacy `db_execute` is kept indefinitely so existing functions don't break. 
   "results": [{"kind": "exec", "rows_affected": 1, "last_insert_id": 42}],
   "committed": true,
   "failed_index": 0,
-  "error": ""
+  "error": "",
+  "code": ""
 }
 ```
 
@@ -205,8 +206,26 @@ Always check `committed`. A non-empty return does **not** imply the writes lande
 - `committed: true` — every `exec` op is durable.
 - `committed: false` with `failed_index` set — one statement failed and the whole
   batch rolled back; that op's `results` entry carries its SQL error.
-- `error` non-empty — the batch was rejected as a whole, before or instead of
-  execution. This is where limit violations and transport failures appear.
+- `error` non-empty — the batch failed as a whole, for a reason belonging to no
+  single statement: a limit violation, an expired deadline, a lost leader, a
+  transport fault. `code` classifies it.
+
+**`code` values** — always set together with `error`, never on success:
+
+| Code | Meaning | Retry? |
+|---|---|---|
+| `TOO_MANY_STATEMENTS` | Over the per-batch statement cap | No — split the batch |
+| `PAYLOAD_TOO_LARGE` | Result rows/bytes over the caps | No — paginate |
+| `DEADLINE_EXCEEDED` | The call ran past its deadline | Yes |
+| `UNAVAILABLE` | Database unreachable, or leader lost mid-call | Yes |
+| `INVALID_ARGUMENT` | Malformed request (bad JSON, unknown op kind) | No — fix the caller |
+| `INTERNAL` | Unclassified — read `error` | Depends |
+
+The same `error` + `code` pair is returned by `db_query_batch` and
+`exec_and_publish` when they fail at the host level. None of the three ever
+returns an empty buffer: an empty result used to be indistinguishable from a
+deadline, an oversized payload or a node that died mid-commit, which made a real
+namespace outage diagnosable only by guessing (bugboard #175).
 
 **Semantics**
 
@@ -239,11 +258,17 @@ var res struct {
     Committed   bool   `json:"committed"`
     FailedIndex int    `json:"failed_index"`
     Error       string `json:"error"`
+    Code        string `json:"code"`
 }
 json.Unmarshal(resultBytes, &res)
 
 if res.Error != "" {
-    return fmt.Errorf("batch rejected: %s", res.Error)   // e.g. "too many ops: max 100"
+    switch res.Code {
+    case "DEADLINE_EXCEEDED", "UNAVAILABLE":
+        return retryLater(res.Error)                     // transient
+    default:
+        return fmt.Errorf("batch rejected [%s]: %s", res.Code, res.Error)
+    }
 }
 if !res.Committed {
     return fmt.Errorf("batch rolled back at op %d", res.FailedIndex)

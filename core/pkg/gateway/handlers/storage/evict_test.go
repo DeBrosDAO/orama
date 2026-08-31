@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -26,6 +29,14 @@ type mockStorageDB struct {
 	remainingQueried bool
 	otherQueried     bool
 	nodesQueried     bool
+
+	// namespaceScoped marks this mock as a NAMESPACE gateway's own database.
+	// dns_nodes exists there but is never written, so it answers topology reads
+	// with zero rows — exactly what production did before bugboard #153. Any
+	// code path that reads topology from this handle is therefore silently
+	// broken, and topologyReadHere records that it happened.
+	namespaceScoped  bool
+	topologyReadHere bool
 }
 
 func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...any) error {
@@ -50,6 +61,11 @@ func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...an
 		*out = []map[string]interface{}{{"count": float64(m.pinCount)}}
 	case strings.Contains(query, "dns_nodes"):
 		m.nodesQueried = true
+		if m.namespaceScoped {
+			m.topologyReadHere = true
+			*out = nil
+			return nil
+		}
 		rows := make([]map[string]interface{}, 0, len(m.nodeIPs))
 		for _, ip := range m.nodeIPs {
 			rows = append(rows, map[string]interface{}{"ip": ip})
@@ -66,8 +82,22 @@ func (m *mockStorageDB) Exec(_ context.Context, _ string, _ ...any) (sql.Result,
 	return nil, nil // updatePinStatus UPDATE — no-op in tests
 }
 
+// newHandlersWithDB builds handlers the way a NAMESPACE gateway is wired: `db`
+// is the namespace's own RQLite and a separate handle carries the main
+// cluster's topology. The namespace handle is marked namespaceScoped so it
+// answers dns_nodes with nothing, reproducing production; the node list moves
+// to the global handle.
 func newHandlersWithDB(client IPFSClient, db rqlite.Client) *Handlers {
-	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001"}, db)
+	global := &mockStorageDB{}
+	if m, ok := db.(*mockStorageDB); ok {
+		m.namespaceScoped = true
+		global.nodeIPs = m.nodeIPs
+	}
+	return newHandlersWithDBs(client, db, global)
+}
+
+func newHandlersWithDBs(client IPFSClient, db, globalDB rqlite.Client) *Handlers {
+	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001"}, db, globalDB)
 }
 
 // --- remainingPinsForCID ------------------------------------------------------
@@ -123,15 +153,118 @@ func TestMaybeImmediateEvict_sharedCIDNotEvicted(t *testing.T) {
 }
 
 func TestMaybeImmediateEvict_zeroPins_noNodes_partial(t *testing.T) {
-	// Zero remaining pins but no active nodes to fan out to → best-effort partial.
-	db := &mockStorageDB{pinCount: 0, nodeIPs: nil}
-	h := newHandlersWithDB(&mockIPFSClient{}, db)
+	// A genuinely empty cluster topology cannot reclaim anything → partial.
+	// This is the honest failure signal; the bug it used to hide is covered by
+	// TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB below.
+	db := &mockStorageDB{pinCount: 0}
+	global := &mockStorageDB{nodeIPs: nil}
+	db.namespaceScoped = true
+	h := newHandlersWithDBs(&mockIPFSClient{}, db, global)
 	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "partial" {
 		t.Errorf("evicted = %q, want partial", got)
 	}
-	if !db.remainingQueried || !db.nodesQueried {
-		t.Error("zero-pin path must check references AND attempt fan-out")
+	if !db.remainingQueried {
+		t.Error("zero-pin path must check references")
 	}
+	if !global.nodesQueried {
+		t.Error("zero-pin path must attempt fan-out against the global topology")
+	}
+}
+
+// Bugboard #153 root cause. dns_nodes is written ONLY to the main cluster; a
+// namespace gateway's own RQLite has the table and never a row. Reading
+// topology from the namespace handle therefore returned an empty target set on
+// every call, so the fan-out reached nobody, `evicted` was permanently
+// "partial", and no block was ever reclaimed — while every unit test passed,
+// because the mock answered both roles from one handle.
+//
+// Mutation check: point activeNodeInternalIPs back at h.db and this fails.
+func TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB(t *testing.T) {
+	nsDB := &mockStorageDB{namespaceScoped: true, nodeIPs: []string{"10.0.0.99"}}
+	global := &mockStorageDB{nodeIPs: []string{"10.0.0.1", "10.0.0.2", "10.0.0.17"}}
+	h := newHandlersWithDBs(&mockIPFSClient{}, nsDB, global)
+
+	ips, err := h.activeNodeInternalIPs(context.Background())
+	if err != nil {
+		t.Fatalf("activeNodeInternalIPs: %v", err)
+	}
+	if len(ips) != 3 {
+		t.Fatalf("got %d node IPs %v, want the 3 from the GLOBAL database", len(ips), ips)
+	}
+	if nsDB.topologyReadHere {
+		t.Error("topology was read from the namespace database, which is empty in production")
+	}
+	if !global.nodesQueried {
+		t.Error("topology must be read from the global database")
+	}
+}
+
+func TestActiveNodeInternalIPs_noGlobalHandleIsAnError(t *testing.T) {
+	// A missing global handle must surface, not read as "cluster has no nodes".
+	h := &Handlers{logger: newTestLogger()}
+	if _, err := h.activeNodeInternalIPs(context.Background()); err == nil {
+		t.Fatal("want an error when no global database handle is configured")
+	}
+}
+
+func TestMaybeImmediateEvict_evictsUsingGlobalTopology(t *testing.T) {
+	// End-to-end of the fixed path: zero remaining pins, topology resolved from
+	// the global handle, every node confirms → "true".
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","cid":"QmGone","removed":3}`))
+	}))
+	defer srv.Close()
+
+	h := newHandlersWithDBs(&mockIPFSClient{},
+		&mockStorageDB{namespaceScoped: true, pinCount: 0},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.evictPort = portOf(t, srv.URL)
+
+	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "true" {
+		t.Errorf("evicted = %q, want true", got)
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Errorf("fan-out hit the node %d times, want 1", hits)
+	}
+}
+
+// A node that answers 200 while reporting an INCOMPLETE local reclaim must not
+// be counted as success: "true" is a promise to the tenant that the bytes are
+// gone. Before bugboard #153 the fan-out looked only at the status code, so a
+// node that removed some blocks and kept others still produced "true".
+func TestMaybeImmediateEvict_nodePartialBodyIsNotTrue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"partial","cid":"QmGone","removed":1}`))
+	}))
+	defer srv.Close()
+
+	h := newHandlersWithDBs(&mockIPFSClient{},
+		&mockStorageDB{namespaceScoped: true, pinCount: 0},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.evictPort = portOf(t, srv.URL)
+
+	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "partial" {
+		t.Errorf("evicted = %q, want partial (a node kept blocks)", got)
+	}
+}
+
+// portOf extracts the TCP port a httptest server bound, so the fan-out (which
+// dials a fixed internal port in production) can be aimed at it.
+func portOf(t *testing.T, rawURL string) int {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse %q: %v", rawURL, err)
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("port of %q: %v", rawURL, err)
+	}
+	return p
 }
 
 // --- EvictHandler (per-node internal endpoint) --------------------------------

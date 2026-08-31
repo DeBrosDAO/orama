@@ -263,7 +263,8 @@ Integration with the Anyone Protocol for anonymous routing.
 
 **Key Files:**
 - `pkg/anyoneproxy/socks.go` - SOCKS5 proxy client interface
-- `pkg/gateway/anon_proxy_handler.go` - Anonymous proxy API endpoint
+- `pkg/gateway/anon_proxy_handler.go` - Anonymous request proxy endpoint
+- `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy (bugboard #168)
 - `pkg/environments/production/installers/anyone_relay.go` - Relay installation
 
 **Features:**
@@ -272,8 +273,18 @@ Integration with the Anyone Protocol for anonymous routing.
 - Migration support for existing relay operators
 - Exit relay mode with legal warnings
 
-**API Endpoint:**
-- `POST /v1/proxy/anon` - Route HTTP requests through Anyone network
+**API Endpoints:**
+- `POST /v1/proxy/anon` - Route a single HTTP request through the Anyone network.
+  The gateway performs the request, so it necessarily sees the URL, headers and
+  body in cleartext.
+- `GET /v1/proxy/tunnel` (WebSocket) - Carry an opaque TCP stream to
+  `?host=&port=` through the Anyone network. TLS is negotiated end-to-end
+  between the client and the destination *through* the tunnel, so the gateway
+  relays ciphertext and sees only the destination host and port. See
+  "Anonymity Tunnel" in `docs/CLIENT_SDK.md`.
+
+Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
+app-runtime API key alone is refused.
 
 **Relay Requirements:**
 - Linux OS (Debian/Ubuntu)

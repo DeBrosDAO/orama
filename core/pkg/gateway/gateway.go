@@ -68,6 +68,13 @@ type Gateway struct {
 	// Global RQLite client for API key validation (namespace gateways only)
 	authClient client.NetworkClient
 
+	// Authenticated anonymity tunnel (bugboard #168). tunnelLimiter bounds
+	// concurrent tunnels per user and per node; tunnelIsolationSecret keys the
+	// HMAC that turns a caller identity into an opaque per-user SOCKS circuit
+	// selector, so the anonymity client never receives a wallet address.
+	tunnelLimiter         *tunnelLimiter
+	tunnelIsolationSecret string
+
 	// Olric cache client
 	olricClient *olric.Client
 	olricMu     sync.RWMutex
@@ -307,6 +314,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		client:             deps.Client,
 		nodePeerID:         cfg.NodePeerID,
 		startedAt:          time.Now(),
+		tunnelLimiter:      newTunnelLimiter(),
 		sqlDB:              deps.SQLDB,
 		ormClient:          deps.ORMClient,
 		ormHTTP:            deps.ORMHTTP,
@@ -344,6 +352,14 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentWarn(logging.ComponentGeneral, "Could not detect WireGuard IP, local gateway preference disabled",
 			zap.Error(err))
 	}
+
+	// Per-user circuit isolation secret for the anonymity tunnel (bugboard #168).
+	// Derived from credentials this node already holds and never leaves the
+	// process: it only keys an HMAC whose output is handed to the local SOCKS
+	// port as a circuit selector. A per-process random value would work equally
+	// well for isolation but would re-shuffle every user onto a new circuit on
+	// each gateway restart, so a stable node-local input is preferred.
+	gw.tunnelIsolationSecret = tunnelSecretFrom(cfg)
 
 	// Create separate auth client for global RQLite if GlobalRQLiteDSN is provided
 	// This allows namespace gateways to validate API keys against the global database
@@ -466,7 +482,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.storageHandlers = storage.New(deps.IPFSClient, logger, storage.Config{
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
-		}, deps.ORMClient)
+		}, deps.ORMClient, deps.GlobalORMClient)
 	}
 
 	if deps.AuthService != nil {
