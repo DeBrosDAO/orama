@@ -87,6 +87,20 @@ type BatchResult struct {
 	// Empty on success. Present whenever Committed is false for a reason that
 	// is not attributable to a single op.
 	Error string `json:"error,omitempty"`
+	// Code is the stable machine-readable classification of Error — one of the
+	// BatchCode* constants (bugboard #175). Callers branch on this and log
+	// Error; the two are always set together.
+	Code string `json:"code,omitempty"`
+}
+
+// setBatchError records a batch-level failure on the result, classifying it.
+// Kept in one place so Error and Code can never drift apart.
+func (r *BatchResult) setBatchError(err error) {
+	if err == nil || r == nil {
+		return
+	}
+	r.Error = err.Error()
+	r.Code = ClassifyBatchError(err)
 }
 
 // MaxBatchOps caps the number of ops in a single batch to prevent abuse.
@@ -588,8 +602,15 @@ func (c *client) Batch(ctx context.Context, ops []BatchOp) (*BatchResult, error)
 						execs[i].idx, wr.Err)
 				}
 			}
-			// No per-statement error reported, return the joined error.
-			return result, fmt.Errorf("rqlite.Batch: %w", err)
+			// No per-statement error: the batch never reached a statement — a
+			// transport fault, a lost leader, an expired deadline. This result
+			// is returned to the guest as-is, so the reason MUST be recorded on
+			// it (bugboard #175). Without this the guest saw committed=false,
+			// failed_index=0 and an empty error, which reads as "op 0 failed"
+			// and is indistinguishable from every other whole-batch failure.
+			wrapped := fmt.Errorf("rqlite.Batch: %w", err)
+			result.setBatchError(wrapped)
+			return result, wrapped
 		}
 		// All execs succeeded; map results back into their original positions.
 		for i, wr := range wrs {

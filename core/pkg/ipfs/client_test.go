@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -621,5 +622,267 @@ func TestClient_Close(t *testing.T) {
 	err = client.Close(context.Background())
 	if err != nil {
 		t.Errorf("Close should not error, got: %v", err)
+	}
+}
+
+// --- EvictLocal (bugboard #153) -----------------------------------------------
+
+// newEvictTestClient points a Client's kubo API at a stub daemon.
+func newEvictTestClient(t *testing.T, handler http.HandlerFunc) (*Client, func()) {
+	t.Helper()
+	// Every eviction first waits for this node's kubo to drop its own pin.
+	// Unless a test overrides it, answer "not pinned" so the wait completes
+	// immediately and the test exercises the removal path it cares about.
+	inner := handler
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/pin/ls") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"Message":"path 'x' is not pinned","Code":0,"Type":"error"}`))
+			return
+		}
+		inner(w, r)
+	}))
+	c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 5 * time.Second}, zap.NewNop())
+	if err != nil {
+		srv.Close()
+		t.Fatalf("NewClient: %v", err)
+	}
+	return c, srv.Close
+}
+
+// The DAG walk must be local-only. Without offline=true kubo treats a missing
+// block as a cache miss and goes to the network, so enumerating a DAG this node
+// does not hold blocks until the caller's deadline — which failed the whole
+// cluster-wide eviction fan-out instead of reporting "nothing here".
+func TestEvictLocal_refsAreOfflineOnly(t *testing.T) {
+	var sawOffline string
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			sawOffline = r.URL.Query().Get("offline")
+			_, _ = w.Write([]byte(`{"Ref":"QmChild","Err":""}` + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Hash":"x","Error":""}` + "\n"))
+	})
+	defer done()
+
+	if _, err := c.EvictLocal(context.Background(), "QmRoot"); err != nil {
+		t.Fatalf("EvictLocal: %v", err)
+	}
+	if sawOffline != "true" {
+		t.Errorf("refs offline param = %q, want \"true\"", sawOffline)
+	}
+}
+
+// A node that does not hold the DAG has nothing to reclaim. That is the normal
+// case for most nodes whenever the replication factor is below the cluster
+// size, so it must not be reported as a failure — doing so would make a
+// cluster-wide eviction permanently incomplete on any cluster larger than RF.
+func TestEvictLocal_nodeWithoutTheDAGIsNotAFailure(t *testing.T) {
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			_, _ = w.Write([]byte(`{"Ref":"","Err":"block was not found locally (offline): ipld: could not find QmRoot"}` + "\n"))
+			return
+		}
+		t.Error("block/rm must not be called when the DAG is absent")
+	})
+	defer done()
+
+	removed, err := c.EvictLocal(context.Background(), "QmRoot")
+	if err != nil {
+		t.Fatalf("absent DAG must not be an error, got %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+}
+
+// A real traversal failure must still surface — the not-found tolerance above
+// must not swallow every refs error.
+func TestEvictLocal_realRefsFailureStillErrors(t *testing.T) {
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("datastore is corrupt"))
+			return
+		}
+	})
+	defer done()
+
+	if _, err := c.EvictLocal(context.Background(), "QmRoot"); err == nil {
+		t.Fatal("want an error for a genuine refs failure")
+	}
+}
+
+// Every block of the DAG plus the root must be removed, and an already-absent
+// block counts as success (idempotent reclaim).
+func TestEvictLocal_removesEveryBlockIncludingRoot(t *testing.T) {
+	var removed []string
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			_, _ = w.Write([]byte(`{"Ref":"QmA","Err":""}` + "\n" + `{"Ref":"QmB","Err":""}` + "\n"))
+			return
+		}
+		arg := r.URL.Query().Get("arg")
+		removed = append(removed, arg)
+		if arg == "QmB" {
+			_, _ = w.Write([]byte(`{"Hash":"QmB","Error":"blockstore: block not found"}` + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Hash":"` + arg + `","Error":""}` + "\n"))
+	})
+	defer done()
+
+	n, err := c.EvictLocal(context.Background(), "QmRoot")
+	if err != nil {
+		t.Fatalf("EvictLocal: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("removed = %d, want 3 (QmA, QmB already-absent, QmRoot)", n)
+	}
+	want := []string{"QmA", "QmB", "QmRoot"}
+	if len(removed) != len(want) {
+		t.Fatalf("block/rm called for %v, want %v", removed, want)
+	}
+	for i := range want {
+		if removed[i] != want[i] {
+			t.Errorf("block/rm[%d] = %q, want %q", i, removed[i], want[i])
+		}
+	}
+}
+
+// A block that is still part of another pinned DAG must be surfaced, not
+// silently counted as reclaimed — that is the pin-safety guarantee.
+func TestEvictLocal_stillPinnedBlockSurfaces(t *testing.T) {
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			_, _ = w.Write([]byte(`{"Ref":"QmA","Err":""}` + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Hash":"QmA","Error":"pinned: pinned via QmOther"}` + "\n"))
+	})
+	defer done()
+
+	if _, err := c.EvictLocal(context.Background(), "QmRoot"); err == nil {
+		t.Fatal("a still-pinned block must be reported, not swallowed")
+	}
+}
+
+// Bugboard #153 propagation race.
+//
+// IPFS-Cluster's unpin returns once the removal is committed to its consensus
+// log; each peer's kubo then unpins asynchronously. The eviction fan-out fires
+// immediately after that return, so on every node except the one that served
+// the request the pin was typically still in place — and `block rm` without
+// --force correctly refuses a pinned block. Observed live on devnet: two of
+// three nodes reported an incomplete reclaim and kept the blocks.
+func TestEvictLocal_waitsForTheLocalPinToClear(t *testing.T) {
+	var pinChecks int32
+	var blockRms int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/pin/ls"):
+			// Still pinned for the first two polls, then the cluster unpin
+			// lands and kubo reports it gone.
+			if atomic.AddInt32(&pinChecks, 1) <= 2 {
+				_, _ = w.Write([]byte(`{"Keys":{"QmRoot":{"Type":"recursive"}}}`))
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"Message":"path 'QmRoot' is not pinned","Code":0,"Type":"error"}`))
+		case strings.Contains(r.URL.Path, "/refs"):
+			_, _ = w.Write([]byte(`{"Ref":"QmChild","Err":""}` + "\n"))
+		default:
+			atomic.AddInt32(&blockRms, 1)
+			_, _ = w.Write([]byte(`{"Hash":"x","Error":""}` + "\n"))
+		}
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 10 * time.Second}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	removed, err := c.EvictLocal(context.Background(), "QmRoot")
+	if err != nil {
+		t.Fatalf("EvictLocal: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("removed = %d, want 2 (child + root)", removed)
+	}
+	if got := atomic.LoadInt32(&pinChecks); got < 3 {
+		t.Errorf("pin was polled %d times; the wait must re-check until the pin clears", got)
+	}
+	if atomic.LoadInt32(&blockRms) == 0 {
+		t.Error("no block was removed after the pin cleared")
+	}
+}
+
+// A node whose kubo never drops the pin must be reported, not silently counted
+// as reclaimed — that is the difference between "the bytes are gone" and "the
+// bytes are still here and we told the user otherwise".
+func TestEvictLocal_stillPinnedAfterTheBoundIsReported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/pin/ls") {
+			_, _ = w.Write([]byte(`{"Keys":{"QmRoot":{"Type":"recursive"}}}`))
+			return
+		}
+		t.Error("block removal must not be attempted while the CID is still pinned")
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 10 * time.Second}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	// Bound the test by its own context rather than waiting the full
+	// propagation timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	removed, err := c.EvictLocal(ctx, "QmRoot")
+	if err == nil {
+		t.Fatal("a CID still pinned locally must be reported as an incomplete reclaim")
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+}
+
+// kubo answers an unpinned CID with a 500 and "is not pinned". Treating that as
+// a transport failure would make every eviction fail.
+func TestIsPinnedLocally_readsKuboResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"pinned recursively", 200, `{"Keys":{"QmRoot":{"Type":"recursive"}}}`, true},
+		{"pinned indirectly", 200, `{"Keys":{"QmRoot":{"Type":"indirect"}}}`, true},
+		{"not pinned", 500, `{"Message":"path 'QmRoot' is not pinned","Code":0,"Type":"error"}`, false},
+		{"empty pinset", 200, `{"Keys":{}}`, false},
+		{"a different cid", 200, `{"Keys":{"QmOther":{"Type":"recursive"}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 5 * time.Second}, zap.NewNop())
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			got, err := c.isPinnedLocally(context.Background(), "QmRoot")
+			if err != nil {
+				t.Fatalf("isPinnedLocally: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("isPinnedLocally = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

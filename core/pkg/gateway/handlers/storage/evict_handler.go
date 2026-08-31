@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -29,6 +30,16 @@ const (
 
 	// evictFanoutTimeout bounds a single node's evict call during fan-out.
 	evictFanoutTimeout = 30 * time.Second
+
+	// evictStatusOK is the per-node body status meaning every block of the DAG
+	// was removed from that node (or was already absent). Anything else means
+	// blocks survive there and the cluster-wide claim must not be "true".
+	evictStatusOK = "ok"
+
+	// maxEvictResponseBytes caps how much of a node's evict response is read.
+	// The body is a two-field JSON object; anything larger is a malfunctioning
+	// peer, not something to buffer.
+	maxEvictResponseBytes = 64 << 10
 )
 
 // remainingPinsForCID returns how many namespaces still hold a live pin on this
@@ -94,16 +105,23 @@ func countFromRow(v interface{}) int {
 // cluster nodes — the fan-out target set for immediate eviction. A node that
 // does not hold the block simply no-ops its local block rm, so targeting all
 // active nodes is safe (and the cluster's RF replicas are a subset).
+//
+// Reads the MAIN cluster's RQLite via globalDB, NOT this gateway's own database
+// (bugboard #153). dns_nodes is written only by the node process against the
+// main cluster; a namespace gateway's isolated RQLite has the table and zero
+// rows forever. Reading it there returned an empty target set on every call, so
+// the fan-out ran against nobody, `evicted` was permanently "partial", and no
+// block was ever reclaimed — the exact ~6h window this feature removes.
 func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) {
-	if h.db == nil {
-		return nil, nil
+	if h.globalDB == nil {
+		return nil, fmt.Errorf("no global database handle (cluster topology unavailable)")
 	}
 	// Only nodes with a real WireGuard internal IP: the fan-out is an
 	// internal-auth call that must travel the WG mesh (the receiver rejects any
 	// non-10.0.0.x source), so never fall back to a public ip_address.
 	var result []map[string]interface{}
 	query := `SELECT internal_ip as ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''`
-	if err := h.db.Query(ctx, &result, query); err != nil {
+	if err := h.globalDB.Query(ctx, &result, query); err != nil {
 		return nil, err
 	}
 	ips := make([]string, 0, len(result))
@@ -115,6 +133,14 @@ func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) 
 	return ips, nil
 }
 
+// evictNodePort is the internal gateway port the fan-out dials on each peer.
+func (h *Handlers) evictNodePort() int {
+	if h.evictPort > 0 {
+		return h.evictPort
+	}
+	return internalGatewayPort
+}
+
 // evictBlobEverywhere fans out an immediate local eviction of a CID to every
 // active cluster node (bugboard #153). Best-effort: per-node failures are
 // logged but do not fail the caller — the pin is already removed cluster-wide,
@@ -123,11 +149,18 @@ func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) 
 func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 	ips, err := h.activeNodeInternalIPs(ctx)
 	if err != nil {
-		h.logger.ComponentWarn(logging.ComponentGeneral, "immediate evict: failed to list nodes (skipping fan-out)",
+		h.logger.ComponentError(logging.ComponentGeneral, "immediate evict: failed to list cluster nodes; no blocks reclaimed",
 			zap.String("cid", cid), zap.Error(err))
 		return false
 	}
 	if len(ips) == 0 {
+		// Not a normal state: a running cluster always has at least this node
+		// registered active in the main RQLite. An empty set means the topology
+		// read reached the wrong database or the node registry is broken, and
+		// it silently degrades every privacy delete back to the ~6h GC sweep —
+		// so it is an ERROR, not a quiet false.
+		h.logger.ComponentError(logging.ComponentGeneral, "immediate evict: no active cluster nodes found in dns_nodes; no blocks reclaimed",
+			zap.String("cid", cid))
 		return false
 	}
 
@@ -153,7 +186,7 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
-			url := fmt.Sprintf("http://%s:%d/v1/internal/storage/evict", ip, internalGatewayPort)
+			url := fmt.Sprintf("http://%s:%d/v1/internal/storage/evict", ip, h.evictNodePort())
 			reqCtx, cancel := context.WithTimeout(ctx, evictFanoutTimeout)
 			defer cancel()
 			req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(payload))
@@ -175,6 +208,27 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 			if resp.StatusCode != http.StatusOK {
 				h.logger.ComponentWarn(logging.ComponentGeneral, "immediate evict: node returned non-200 (best-effort)",
 					zap.String("cid", cid), zap.String("node_ip", ip), zap.Int("status", resp.StatusCode))
+				markFailed()
+				return
+			}
+			// The per-node endpoint answers 200 for BOTH a complete eviction and
+			// an incomplete one (it reports incompleteness in the body, because a
+			// partial local removal is not an HTTP error). Judging the fan-out on
+			// the status code alone therefore reported `evicted: "true"` — a
+			// promise that the bytes are gone — while blocks were still on disk.
+			// The body is the only signal that distinguishes them.
+			var nodeResp struct {
+				Status string `json:"status"`
+			}
+			if err := json.NewDecoder(io.LimitReader(resp.Body, maxEvictResponseBytes)).Decode(&nodeResp); err != nil {
+				h.logger.ComponentWarn(logging.ComponentGeneral, "immediate evict: unreadable node response (best-effort)",
+					zap.String("cid", cid), zap.String("node_ip", ip), zap.Error(err))
+				markFailed()
+				return
+			}
+			if nodeResp.Status != evictStatusOK {
+				h.logger.ComponentWarn(logging.ComponentGeneral, "immediate evict: node did not fully reclaim (best-effort)",
+					zap.String("cid", cid), zap.String("node_ip", ip), zap.String("node_status", nodeResp.Status))
 				markFailed()
 			}
 		}(ip)

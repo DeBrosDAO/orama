@@ -174,6 +174,15 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 		// Unrecoverable setup failure (no native conn). Surface as Go error.
 		return nil, &serverless.HostFunctionError{Function: "db_transaction", Cause: err}
 	}
+	// A rollback attributable to a statement is described by that op's Results
+	// entry, and the caller reads `committed`. But a failure that reached no
+	// statement leaves every entry zero-valued, so committed=false would be the
+	// ONLY signal — indistinguishable from "op 0 failed" (bugboard #175).
+	// Guarantee the envelope always carries a reason when nothing else does.
+	if err != nil && res.Error == "" && !opResultsCarryError(res.Results) {
+		res.Error = err.Error()
+		res.Code = rqlite.ClassifyBatchError(err)
+	}
 	out, mErr := json.Marshal(res)
 	if mErr != nil {
 		return nil, &serverless.HostFunctionError{
@@ -182,9 +191,19 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 		}
 	}
 	// Rollback errors are encoded in the JSON; do NOT propagate as Go error.
-	// Only true setup/transport errors after the result was built warrant returning err.
-	_ = err // intentionally swallowed — committed=false carries the signal
+	// The caller inspects committed / failed_index / error instead.
 	return out, nil
+}
+
+// opResultsCarryError reports whether any op already explains the failure, so
+// the batch-level reason is only added when nothing else describes it.
+func opResultsCarryError(results []rqlite.OpResult) bool {
+	for _, r := range results {
+		if r.Error != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // dbQueryBatchRequest is the WASM-side shape for db_query_batch input.
@@ -312,6 +331,10 @@ type dbQueryBatchResult struct {
 	Results       []rqlite.OpResult `json:"results"`
 	StaleRejected bool              `json:"stale_rejected,omitempty"`
 	StaleDetail   string            `json:"stale_detail,omitempty"`
+	// Error / Code carry a batch-level failure (bugboard #175). Populated by
+	// the ABI wrapper's rejection envelope; empty on the success path.
+	Error string `json:"error,omitempty"`
+	Code  string `json:"code,omitempty"`
 }
 
 // DBQueryBatch runs N SELECTs in one round-trip via RQLite's /db/query
@@ -411,6 +434,12 @@ type execAndPublishResult struct {
 	Seq          int64             `json:"seq,omitempty"`
 	Published    bool              `json:"published,omitempty"`
 	PublishError string            `json:"publish_error,omitempty"`
+	// Error / Code carry a batch-level failure that belongs to no single op —
+	// a transport fault, a lost leader, an expired deadline (bugboard #175).
+	// Without them a batch that never reached a statement returned
+	// committed=false with nothing else set, which reads as "op 0 failed".
+	Error string `json:"error,omitempty"`
+	Code  string `json:"code,omitempty"`
 }
 
 // ExecAndPublish runs ops atomically (with a seq increment in the same batch)
@@ -485,18 +514,27 @@ func (h *HostFunctions) ExecAndPublish(
 	}
 
 	batchRes, seq, batchErr := h.db.BatchWithSeq(ctx, ns, req.Ops)
-	out := execAndPublishResult{}
+	out := execAndPublishResult{Results: []rqlite.OpResult{}}
 	if batchRes != nil {
 		out.Results = batchRes.Results
 		out.Committed = batchRes.Committed
 		out.FailedIndex = batchRes.FailedIndex
+		out.Error = batchRes.Error
+		out.Code = batchRes.Code
 	}
 
 	// On rollback or pre-publish error, return without publishing.
 	if batchErr != nil || !out.Committed {
-		// On a true rollback batchErr may be non-nil; that's already encoded
-		// in the result. Don't surface as Go error — caller reads `committed`.
-		_ = batchErr
+		// A rollback attributable to a statement is already described by that
+		// op's Results entry, so the Go error adds nothing there. But a failure
+		// that reached no statement at all — transport, lost leader, deadline —
+		// leaves every Results entry zero-valued, and reporting only
+		// committed=false told the caller nothing about why (bugboard #175).
+		// Record the reason whenever nothing else carries it.
+		if batchErr != nil && out.Error == "" {
+			out.Error = batchErr.Error()
+			out.Code = rqlite.ClassifyBatchError(batchErr)
+		}
 		buf, mErr := json.Marshal(out)
 		if mErr != nil {
 			return nil, &serverless.HostFunctionError{Function: "exec_and_publish", Cause: mErr}

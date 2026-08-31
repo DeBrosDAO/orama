@@ -123,7 +123,7 @@ func newTestGatewayWithIPFS(t *testing.T, ipfsClient ipfs.IPFSClient) *Gateway {
 		gw.storageHandlers = storage.New(ipfsClient, logger, storage.Config{
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
-		}, nil) // nil db client for tests
+		}, nil, nil) // nil db clients for tests
 	}
 
 	return gw
@@ -139,7 +139,7 @@ func TestStorageUploadHandler_MissingIPFSClient(t *testing.T) {
 	handlers := storage.New(nil, logger, storage.Config{
 		IPFSReplicationFactor: 3,
 		IPFSAPIURL:            "http://localhost:5001",
-	}, nil)
+	}, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", nil)
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns")

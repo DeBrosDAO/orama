@@ -106,7 +106,7 @@ func newTestHandlers(client IPFSClient) *Handlers {
 	return New(client, newTestLogger(), Config{
 		IPFSReplicationFactor: 3,
 		IPFSAPIURL:            "http://localhost:5001",
-	}, nil) // db=nil -> ownership checks bypassed
+	}, nil, nil) // db=nil -> ownership checks bypassed
 }
 
 // withNamespace returns a request with the namespace context key set.
@@ -796,7 +796,7 @@ func TestStorageQuotaExceeded(t *testing.T) {
 		if hasBudgetRow {
 			db.budget = []map[string]interface{}{{"max_storage_bytes": budget}}
 		}
-		return New(&mockIPFSClient{}, newTestLogger(), Config{IPFSReplicationFactor: 3}, db)
+		return New(&mockIPFSClient{}, newTestLogger(), Config{IPFSReplicationFactor: 3}, db, db)
 	}
 	ctx := context.Background()
 
@@ -829,7 +829,7 @@ func TestUploadHandler_QuotaExceeded(t *testing.T) {
 		usage:  []map[string]interface{}{{"used": int64(0)}},
 	}
 	h := New(&mockIPFSClient{addResp: &ipfs.AddResponse{Cid: "QmShouldNotBeAdded", Size: 5}},
-		newTestLogger(), Config{IPFSReplicationFactor: 3}, db)
+		newTestLogger(), Config{IPFSReplicationFactor: 3}, db, db)
 
 	// "aGVsbG8=" is base64("hello") = 5 bytes.
 	req := httptest.NewRequest(http.MethodPost, "/v1/storage/upload",

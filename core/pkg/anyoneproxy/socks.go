@@ -2,6 +2,7 @@ package anyoneproxy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -142,4 +143,46 @@ func Running() bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// DialThrough opens a TCP connection to addr ("host:port") through the Anyone
+// SOCKS5 proxy, for the authenticated tunnelling proxy (bugboard #168).
+//
+// isolationKey selects the circuit. Tor-family SOCKS ports isolate streams by
+// SOCKS credentials by default (IsolateSOCKSAuth), so passing a distinct value
+// per end user gives each user their own circuit and therefore their own exit.
+// Without it every tunnel on a node would share one circuit: one user's traffic
+// would be linkable to another's at the exit, and one slow circuit would
+// degrade everybody. The value is an opaque identifier — never a wallet address
+// or anything else that identifies the user to the exit, which sees only that
+// two streams differ.
+//
+// The hostname is passed to the proxy UNRESOLVED so the exit performs DNS.
+// Resolving locally would leak the destination to this node's resolver and, for
+// a name pointing at a private address, would aim the dial at our own network.
+func DialThrough(ctx context.Context, addr, isolationKey string) (net.Conn, error) {
+	if !Enabled() {
+		return nil, fmt.Errorf("anyone proxy is disabled on this node")
+	}
+	var auth *goproxy.Auth
+	if isolationKey != "" {
+		// Password is irrelevant to an unauthenticated Tor SOCKS port; the pair
+		// exists only as the isolation token.
+		auth = &goproxy.Auth{User: isolationKey, Password: isolationKey}
+	}
+	base := &net.Dialer{}
+	if deadline, ok := ctx.Deadline(); ok {
+		base.Timeout = time.Until(deadline)
+		if base.Timeout <= 0 {
+			return nil, context.DeadlineExceeded
+		}
+	}
+	dialer, err := goproxy.SOCKS5("tcp", socksAddr(), auth, base)
+	if err != nil {
+		return nil, fmt.Errorf("build SOCKS5 dialer for %s: %w", socksAddr(), err)
+	}
+	if cd, ok := dialer.(goproxy.ContextDialer); ok {
+		return cd.DialContext(ctx, "tcp", addr)
+	}
+	return dialer.Dial("tcp", addr)
 }

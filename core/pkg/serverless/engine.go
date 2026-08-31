@@ -1305,7 +1305,9 @@ func (e *Engine) hDBQueryV2(ctx context.Context, mod api.Module, queryPtr, query
 // hDBTransaction is the WASM-callable wrapper for DBTransaction.
 // Input: pointer/length of opsJSON ({"ops":[{kind,sql,args},...]}).
 // Returns a packed uint64 (ptr<<32 | len) pointing to JSON BatchResult in
-// guest memory, or 0 on setup error.
+// guest memory. A host-level failure carries `error` and `code` on that same
+// envelope (bugboard #175); 0 is reserved for the case where the envelope
+// itself could not be written into guest memory.
 //
 // Note the result JSON's `committed` field tells the caller whether the
 // writes landed — a return of non-zero does NOT imply commit.
@@ -1325,23 +1327,42 @@ func (e *Engine) hDBTransaction(ctx context.Context, mod api.Module, opsPtr, ops
 		// its operators could see why — the reason existed only in the
 		// gateway's own journal, which tenants cannot read.
 		e.logger.Warn("host function db_transaction failed", zap.Error(err))
-		return e.writeBatchRejection(ctx, mod, err)
+		return e.writeBatchRejection(ctx, mod, "db_transaction", err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
 }
 
-// writeBatchRejection serializes a batch-level failure into the guest as a
-// BatchResult carrying Error, so a WASM caller reading the normal envelope sees
-// committed=false plus the reason. Falls back to 0 only if the envelope itself
-// cannot be written, which is the pre-existing "no information" signal.
-func (e *Engine) writeBatchRejection(ctx context.Context, mod api.Module, cause error) uint64 {
-	payload, mErr := json.Marshal(rqlite.BatchResult{
+// batchRejectionPayload builds the JSON envelope a batched database host
+// function returns when it fails at the host level (bugboard #175).
+//
+// One shape serves all three (db_transaction, db_query_batch,
+// exec_and_publish): rqlite.BatchResult decodes cleanly into each of their
+// success structs, since encoding/json ignores fields a caller does not
+// declare. `committed` is false and `results` is an empty array rather than
+// null, so a guest that iterates results without a nil check still works.
+func batchRejectionPayload(cause error) ([]byte, error) {
+	return json.Marshal(rqlite.BatchResult{
 		Results:   []rqlite.OpResult{},
 		Committed: false,
 		Error:     cause.Error(),
+		Code:      rqlite.ClassifyBatchError(cause),
 	})
+}
+
+// writeBatchRejection writes that envelope into guest memory, so a WASM caller
+// reading the normal result sees committed=false plus a classified reason
+// instead of an empty buffer.
+//
+// Returning nothing was the whole of bugboard #175: "host returned empty
+// envelope" cannot be told apart from a deadline, an oversized payload, a
+// rejected Raft entry or a node that died mid-commit, and the reason existed
+// only in the gateway journal, which tenants cannot read. Falls back to 0 only
+// when the envelope itself cannot be written, which is genuinely no signal.
+func (e *Engine) writeBatchRejection(ctx context.Context, mod api.Module, hostFn string, cause error) uint64 {
+	payload, mErr := batchRejectionPayload(cause)
 	if mErr != nil {
-		e.logger.Error("failed to marshal db_transaction rejection envelope", zap.Error(mErr))
+		e.logger.Error("failed to marshal host function rejection envelope",
+			zap.String("host_fn", hostFn), zap.Error(mErr))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, payload)
@@ -1350,11 +1371,12 @@ func (e *Engine) writeBatchRejection(ctx context.Context, mod api.Module, cause 
 // hDBQueryBatch is the WASM-callable wrapper for DBQueryBatch.
 // Input: pointer/length of opsJSON ({"ops":[{"sql":"...","args":[...]}, ...]}).
 // Returns a packed uint64 (ptr<<32 | len) pointing to JSON result in guest
-// memory, or 0 on setup/transport error.
+// memory. A host-level failure returns an envelope carrying `error` and `code`
+// (bugboard #175), never an empty buffer; 0 is reserved for the case where the
+// envelope itself could not be written into guest memory.
 //
 // Per-query errors are surfaced inside the JSON result (one entry per op
-// has its own `error` field). A return of 0 means the whole call failed
-// before per-op results could be built.
+// has its own `error` field).
 func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsLen uint32) uint64 {
 	opsJSON, ok := e.executor.ReadFromGuest(mod, opsPtr, opsLen)
 	if !ok {
@@ -1362,8 +1384,9 @@ func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsL
 	}
 	out, err := e.hostServices.DBQueryBatch(ctx, opsJSON)
 	if err != nil {
+		// Structured rejection rather than an empty buffer (bugboard #175).
 		e.logger.Warn("host function db_query_batch failed", zap.Error(err))
-		return 0
+		return e.writeBatchRejection(ctx, mod, "db_query_batch", err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
 }
@@ -1376,8 +1399,10 @@ func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsL
 //	dataPtr/dataLen   — wake-up payload bytes; "{{seq}}" will be substituted
 //
 // Returns a packed uint64 (ptr<<32 | len) pointing to the JSON result in
-// guest memory, or 0 on setup error. The result JSON has fields
-// committed/seq/published/publish_error that the caller inspects.
+// guest memory. The result JSON has fields committed/seq/published/
+// publish_error that the caller inspects; a host-level failure carries `error`
+// and `code` instead (bugboard #175). 0 is reserved for the case where the
+// envelope itself could not be written into guest memory.
 func (e *Engine) hExecAndPublish(ctx context.Context, mod api.Module,
 	opsPtr, opsLen, topicPtr, topicLen, dataPtr, dataLen uint32) uint64 {
 
@@ -1395,10 +1420,11 @@ func (e *Engine) hExecAndPublish(ctx context.Context, mod api.Module,
 	}
 	out, err := e.hostServices.ExecAndPublish(ctx, opsJSON, string(topic), data)
 	if err != nil {
+		// Structured rejection rather than an empty buffer (bugboard #175).
 		e.logger.Warn("host function exec_and_publish failed",
 			zap.String("topic", string(topic)),
 			zap.Error(err))
-		return 0
+		return e.writeBatchRejection(ctx, mod, "exec_and_publish", err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
 }

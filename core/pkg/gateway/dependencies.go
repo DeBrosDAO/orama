@@ -62,6 +62,15 @@ type Dependencies struct {
 	ORMClient rqlite.Client
 	ORMHTTP   *rqlite.HTTPGateway
 
+	// GlobalORMClient reads the MAIN cluster's RQLite. On a namespace gateway
+	// ORMClient points at that namespace's own isolated RQLite, which does not
+	// carry cluster-wide tables such as dns_nodes — those live only in the main
+	// cluster (see pkg/node/dns_registration.go). Any handler that needs
+	// cluster topology must use this handle, not ORMClient (bugboard #153).
+	// On the main gateway (no separate GlobalRQLiteDSN) it IS ORMClient.
+	GlobalORMClient rqlite.Client
+	globalSQLDB     *sql.DB
+
 	// Olric distributed cache client
 	OlricClient *olric.Client
 
@@ -225,6 +234,18 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 		zap.Duration("timeout", deps.ORMHTTP.Timeout),
 	)
 
+	// Open a SECOND handle on the MAIN cluster when this is a namespace gateway
+	// (bugboard #153). Cluster-wide tables — dns_nodes above all — are written
+	// only to the main RQLite by pkg/node/dns_registration.go; a namespace
+	// RQLite has the table (core migrations run there) but never a single row.
+	// Reading topology off ORMClient therefore returns an empty set that looks
+	// exactly like "no nodes", which is how immediate storage eviction silently
+	// fanned out to nobody on every call. Resolve the handle ONCE, explicitly,
+	// so no caller has to know which RQLite it is talking to.
+	if err := initializeGlobalRQLite(logger, cfg, deps); err != nil {
+		return err
+	}
+
 	// Wait for the local RQLite to actually be able to serve a leader-routed
 	// read before touching the schema.
 	//
@@ -303,6 +324,53 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	logger.ComponentInfo(logging.ComponentGeneral, "Schema contract satisfied",
 		zap.Int("required_version", migrations.RequiredVersion()))
 
+	return nil
+}
+
+// initializeGlobalRQLite resolves Dependencies.GlobalORMClient — the handle on
+// the MAIN cluster's RQLite (bugboard #153).
+//
+// A namespace gateway runs against its own isolated RQLite (cfg.RQLiteDSN) and
+// is additionally told where the main cluster lives (cfg.GlobalRQLiteDSN, used
+// today for API-key validation). Cluster-wide tables live ONLY in the main
+// RQLite: dns_nodes is written by pkg/node/dns_registration.go through the
+// node's own adapter. The namespace RQLite has the table — core migrations run
+// there under an isolated tracker — but it is permanently empty, and an empty
+// result is indistinguishable from "this cluster has no active nodes".
+//
+// On the MAIN gateway the two DSNs are the same (or the global one is unset),
+// so the global handle IS ORMClient and no second connection is opened.
+//
+// A namespace gateway that cannot reach the main RQLite is a hard failure, not
+// a degraded mode: the caller would otherwise read an empty topology and act on
+// it. Auth already depends on the same database, so there is no configuration
+// in which proceeding without it is correct.
+func initializeGlobalRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependencies) error {
+	globalDSN := strings.TrimSpace(cfg.GlobalRQLiteDSN)
+	if globalDSN == "" || globalDSN == strings.TrimSpace(cfg.RQLiteDSN) {
+		deps.GlobalORMClient = deps.ORMClient
+		deps.globalSQLDB = deps.SQLDB
+		return nil
+	}
+
+	dsn := appendRQLiteQueryParams(injectRQLiteAuth(globalDSN, cfg.RQLiteUsername, cfg.RQLitePassword))
+	db, err := sql.Open("rqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("open global rqlite (%s): %w", globalDSN, err)
+	}
+	// Cluster-topology reads are small and infrequent; a wide pool here would
+	// only add idle connections against the main cluster from every namespace
+	// gateway on the node.
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(2 * time.Minute)
+
+	deps.globalSQLDB = db
+	deps.GlobalORMClient = rqlite.NewClient(db)
+
+	logger.ComponentInfo(logging.ComponentGeneral, "Global RQLite handle ready (cluster-topology reads)",
+		zap.String("global_dsn", globalDSN))
 	return nil
 }
 

@@ -183,10 +183,22 @@ blocks are physically reclaimed only by the periodic GC sweep (~6h). For a
 **privacy-grade delete** ("delete for everyone" / "free up space"), call
 `DELETE /v1/storage/unpin/:cid?immediate=true`: when the CID's **last** pin is
 removed (no other namespace still references it), the blocks are evicted
-cluster-wide right away so the content is no longer fetchable. The response then
-includes an `evicted` field (`"true"`, `"partial"`, `"shared"`, or `"skipped"`).
-Use it only for genuine privacy deletes — it fans out per-node work and should
-not be set on routine unpins (e.g. avatar rotation) (bugboard #153).
+cluster-wide right away so the content is no longer fetchable. Use it only for
+genuine privacy deletes — it fans out per-node work and should not be set on
+routine unpins (e.g. avatar rotation) (bugboard #153).
+
+The response carries an `evicted` field:
+
+| Value | Meaning |
+|---|---|
+| `"true"` | Every active node confirmed a complete local reclaim. The bytes are gone cluster-wide. |
+| `"partial"` | At least one node did not confirm — unreachable, errored, or reported an incomplete reclaim. The pin is still removed everywhere, but the blocks survive on that node until the next GC sweep (≤6h). |
+| `"shared"` | Another namespace still pins this CID, so nothing was evicted. Correct and expected for deduplicated content. |
+| `"skipped"` | Immediate reclaim was not requested, or the reference check could not run. |
+
+Only `"true"` is a delete-for-everyone guarantee. Do not surface "permanently
+deleted" to a user on a `"partial"`; log it, because it means some node still
+holds the content.
 
 ### Check Pin Status
 
@@ -332,6 +344,81 @@ if err != nil {
 }
 fmt.Printf("Topics: %v\n", topics)
 ```
+
+## Anonymity Proxy
+
+Two endpoints route traffic through the Anyone network so the destination never
+learns the end user's IP. Both require the `proxy` grant **and** a genuine
+end-user (SIWE wallet) JWT — an app-runtime API key alone is refused, because
+these are per-user capabilities and an extracted bundle key must not carry them.
+
+Neither is exposed by the SDK yet; call them over HTTP.
+
+### Request proxy — `POST /v1/proxy/anon`
+
+The gateway performs one HTTP request on the caller's behalf and returns the
+response. Simple, but the gateway is inside the TLS boundary: it sees the URL,
+the headers and the body in cleartext. Appropriate for fetching a single
+document (a link preview, an article); **not** appropriate for general browsing,
+where it would make the gateway a complete browsing-history observer.
+
+### Anonymity tunnel — `GET /v1/proxy/tunnel` (WebSocket)
+
+Carries an **opaque TCP stream**. The client negotiates TLS end-to-end with the
+destination *through* the tunnel, so the gateway relays ciphertext.
+
+```
+wss://ns-<namespace>.<base-domain>/v1/proxy/tunnel?host=example.com&port=443&jwt=<user JWT>
+```
+
+- `host` — destination hostname or public IP. Required. Resolved at the exit
+  relay, never by the gateway.
+- `port` — `80` or `443`. Optional, defaults to `443`.
+- Authenticate with `Authorization: Bearer <jwt>`, or `?jwt=` when the client
+  cannot set headers on a WebSocket handshake (browsers, React Native).
+
+Once open, every **binary** WebSocket frame is written to the destination and
+every chunk read back is delivered as a binary frame. There is no framing of our
+own — write TLS records, read TLS records. A text frame is a protocol violation
+and closes the tunnel.
+
+**What the gateway can and cannot see.** It cannot see paths, headers, bodies or
+any content: that is all inside the TLS session it is relaying. It *can* see the
+destination host and port, because it cannot dial a connection without them.
+This is true of every tunnelling proxy. Do not tell users the tunnel hides which
+sites they visit from the platform — it hides *what they do* there, and hides
+*them* from the site.
+
+**Using it as a browser proxy.** Web views take a proxy configuration, not a
+WebSocket. Run a small loopback HTTP-CONNECT relay inside the app and point the
+web view at it: for each local `CONNECT host:port`, open one tunnel and splice.
+The relay is also where the user's JWT is attached, which is required anyway on
+the platform that cannot supply proxy credentials from its web view.
+
+**Limits** (per node):
+
+| Limit | Value |
+|---|---|
+| Destination ports | 80, 443 only |
+| Concurrent tunnels per user | 24 |
+| Concurrent tunnels per node | 512 |
+| Bytes per tunnel, each direction | 256 MiB |
+| Idle timeout | 2 minutes |
+| Maximum tunnel lifetime | 30 minutes |
+
+Exceeding a concurrency cap returns `429` with `Retry-After`. A refused
+destination returns `400`. An unreachable destination returns `502` with a
+deliberately generic message — a tunnel that reports exactly why a dial failed
+is a port scanner for whatever the exit relay can reach.
+
+**Private destinations are refused**: loopback, RFC1918, link-local,
+carrier-grade NAT, multicast and `localhost` are all rejected, so a tunnel
+cannot be aimed at the WireGuard mesh or a cloud metadata endpoint.
+
+**Circuit isolation.** Each user gets their own circuit through the anonymity
+network, selected by an HMAC of their identity under a node-local secret. Users
+on the same node are therefore not linkable to one another at the exit, and the
+anonymity client never receives a wallet address.
 
 ## Serverless Client
 

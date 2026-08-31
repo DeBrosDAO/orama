@@ -78,6 +78,20 @@ const (
 	PinStatusUnknown = "unknown" // no peers reported (cluster can't confirm)
 )
 
+const (
+	// evictPinPropagationTimeout bounds how long an immediate eviction waits
+	// for the cluster's unpin to reach this node's kubo (bugboard #153).
+	// Generous enough to cover normal cross-region consensus propagation, short
+	// enough that the caller's 30s per-node fan-out budget is not exhausted by
+	// a node that will never converge.
+	evictPinPropagationTimeout = 20 * time.Second
+
+	// evictPinPollInterval is how often the local pinset is re-checked while
+	// waiting. Short: the wait is normally sub-second and every extra tick is
+	// latency the tenant sees on a privacy delete.
+	evictPinPollInterval = 250 * time.Millisecond
+)
+
 // AddResponse represents the response from adding content to IPFS
 type AddResponse struct {
 	Name string `json:"name"`
@@ -657,8 +671,31 @@ func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.Rea
 // block still locally pinned (cluster unpin not yet propagated to this node) is
 // surfaced in the joined error so the caller can retry. Returns blocks removed.
 func (c *Client) EvictLocal(ctx context.Context, cid string) (int, error) {
+	// Wait for THIS node's kubo to drop its own pin first.
+	//
+	// IPFS-Cluster's unpin returns as soon as the removal is committed to its
+	// consensus log; each peer's kubo then unpins asynchronously. The eviction
+	// fan-out fires immediately after that return, so on every node except the
+	// one that served the request the pin is typically still in place — and
+	// block rm without --force correctly refuses to touch a pinned block. The
+	// result was a permanent "partial" on a healthy cluster, with the blocks
+	// surviving until the next GC sweep: exactly the window this is meant to
+	// close. Polling the real signal (is it still pinned here?) rather than
+	// sleeping a guessed interval is what makes the reclaim deterministic.
+	if err := c.waitForLocalUnpin(ctx, cid); err != nil {
+		return 0, err
+	}
+
 	blocks, err := c.dagBlocks(ctx, cid)
 	if err != nil {
+		// This node simply does not hold the DAG. With a replication factor
+		// below the cluster size that is the ordinary case for most nodes, not
+		// a failure: there is nothing here to reclaim, and reporting it as an
+		// error would mark the cluster-wide eviction incomplete forever on any
+		// cluster larger than RF.
+		if isNotFoundLocally(err) {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("enumerate blocks for %s: %w", cid, err)
 	}
 	// refs -r returns descendants only; the root block must be removed too.
@@ -683,6 +720,12 @@ func (c *Client) dagBlocks(ctx context.Context, cid string) ([]string, error) {
 	q.Set("arg", cid)
 	q.Set("recursive", "true")
 	q.Set("unique", "true")
+	// Local-only traversal. Without this kubo treats a missing block as a cache
+	// miss and goes to the network for it, so enumerating a DAG this node does
+	// not have blocks until the caller's deadline expires — turning "nothing to
+	// evict here" into a 30-second stall that fails the whole fan-out. Offline
+	// mode answers in milliseconds with a not-found error instead.
+	q.Set("offline", "true")
 	req, err := http.NewRequestWithContext(ctx, "POST", c.ipfsAPIURL+"/api/v0/refs?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -757,6 +800,89 @@ func (c *Client) blockRm(ctx context.Context, block string) error {
 		return fmt.Errorf("block rm %s: %s", block, line.Error)
 	}
 	return nil
+}
+
+// waitForLocalUnpin blocks until this node's kubo no longer holds a pin on cid,
+// or the bound elapses. Returns nil the moment the CID is unpinned here.
+//
+// A CID that is still pinned after the bound is reported as an error rather
+// than pushed through: block rm would refuse anyway, and claiming a reclaim
+// that did not happen is the failure mode this whole feature exists to avoid.
+func (c *Client) waitForLocalUnpin(ctx context.Context, cid string) error {
+	ctx, cancel := context.WithTimeout(ctx, evictPinPropagationTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(evictPinPollInterval)
+	defer ticker.Stop()
+
+	for {
+		pinned, err := c.isPinnedLocally(ctx, cid)
+		if err != nil {
+			return fmt.Errorf("check local pin for %s: %w", cid, err)
+		}
+		if !pinned {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("cluster unpin of %s has not reached this node's kubo within %s (still pinned locally)",
+				cid, evictPinPropagationTimeout)
+		case <-ticker.C:
+		}
+	}
+}
+
+// isPinnedLocally reports whether this node's kubo holds a pin on cid. kubo
+// answers an unpinned CID with an error object rather than an empty set, so the
+// "not pinned" response is a success for our purposes.
+func (c *Client) isPinnedLocally(ctx context.Context, cid string) (bool, error) {
+	q := url.Values{}
+	q.Set("arg", cid)
+	q.Set("type", "all")
+	req, err := http.NewRequestWithContext(ctx, "POST", c.ipfsAPIURL+"/api/v0/pin/ls?"+q.Encode(), nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	// kubo returns 500 with {"Message":"path '<cid>' is not pinned"} for an
+	// unpinned CID. That is the answer we are waiting for, not a failure.
+	if strings.Contains(strings.ToLower(string(body)), "is not pinned") {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("pin ls %s failed with status %d: %s", cid, resp.StatusCode, string(body))
+	}
+	var out struct {
+		Keys map[string]struct {
+			Type string `json:"Type"`
+		} `json:"Keys"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return false, fmt.Errorf("decode pin ls for %s: %w", cid, err)
+	}
+	_, ok := out.Keys[cid]
+	return ok, nil
+}
+
+// isNotFoundLocally reports whether a kubo error means "this node does not have
+// the block", as opposed to a real failure. In offline mode kubo answers a
+// missing block with "block was not found locally (offline)" wrapping an
+// "ipld: could not find <cid>"; both phrasings are matched so the check does not
+// hinge on one exact string.
+func isNotFoundLocally(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found locally") ||
+		strings.Contains(msg, "could not find") ||
+		strings.Contains(msg, "merkledag: not found")
 }
 
 // Close closes the IPFS client connection
