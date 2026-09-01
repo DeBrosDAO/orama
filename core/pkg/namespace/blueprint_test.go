@@ -101,6 +101,62 @@ func TestBlueprint_MemberCount(t *testing.T) {
 	}
 }
 
+func TestPortsPerNamespace_matchesBlueprintTenant(t *testing.T) {
+	if n := BlueprintTenant().PortNeedCount(); n != PortsPerNamespace {
+		t.Errorf("BlueprintTenant PortNeedCount = %d, want PortsPerNamespace %d", n, PortsPerNamespace)
+	}
+}
+
+func TestBlueprintTenantN_1_and_5(t *testing.T) {
+	one := BlueprintTenantN(1)
+	if one.SelectCount != 1 {
+		t.Errorf("N=1 SelectCount = %d, want 1", one.SelectCount)
+	}
+	if one.PortNeedCount() != PortsPerNamespace {
+		t.Errorf("N=1 PortNeedCount = %d, want %d (same services)", one.PortNeedCount(), PortsPerNamespace)
+	}
+	if err := one.Validate(); err != nil {
+		t.Fatalf("N=1 must be valid: %v", err)
+	}
+	rqliteN, olricN, gatewayN := one.serviceNodeCounts()
+	if rqliteN != 1 || olricN != 1 || gatewayN != 1 {
+		t.Errorf("N=1 service counts = %d, %d, %d, want 1,1,1", rqliteN, olricN, gatewayN)
+	}
+
+	five := BlueprintTenantN(5)
+	if five.SelectCount != 5 {
+		t.Errorf("N=5 SelectCount = %d, want 5", five.SelectCount)
+	}
+	if err := five.Validate(); err != nil {
+		t.Fatalf("N=5 must be valid: %v", err)
+	}
+
+	zero := BlueprintTenantN(0)
+	if err := zero.Validate(); err == nil {
+		t.Fatal("N=0 must be rejected")
+	}
+}
+
+func TestBlueprint_gatewayOnlyOnePort(t *testing.T) {
+	bp := Blueprint{
+		Name:        BlueprintNameTenant,
+		Membership:  MembersSelect,
+		SelectCount: 1,
+		Services: []ServiceSpec{{
+			Name:      ServiceGateway,
+			Order:     1,
+			Scope:     ScopeReusable,
+			PortNeeds: []PortNeed{{FromBlock: 0}},
+		}},
+	}
+	if n := bp.PortNeedCount(); n != 1 {
+		t.Errorf("gateway-only PortNeedCount = %d, want 1", n)
+	}
+	if err := bp.Validate(); err != nil {
+		t.Fatalf("gateway-only blueprint must be valid: %v", err)
+	}
+}
+
 func TestBlueprint_serviceNodeCounts_subsetRQLite(t *testing.T) {
 	bp := BlueprintTenant()
 	bp.SelectCount = 10

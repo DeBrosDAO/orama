@@ -308,7 +308,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Allocate ports on each node
 	portBlocks := make([]*PortBlock, len(nodes))
 	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
+		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID, bp)
 		if err != nil {
 			// Rollback previous allocations
 			for j := 0; j < i; j++ {
@@ -322,7 +322,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks)
+	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
 		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
 		return nil, err
@@ -356,7 +356,10 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 // default is all members (3/3/3). The columns are independent so a later
 // blueprint can select 10 nodes and run rqlite on only 3 of them.
 func newProvisioningCluster(namespaceID int, namespaceName, provisionedBy string) *NamespaceCluster {
-	bp := BlueprintTenant()
+	return newProvisioningClusterFrom(BlueprintTenant(), namespaceID, namespaceName, provisionedBy)
+}
+
+func newProvisioningClusterFrom(bp Blueprint, namespaceID int, namespaceName, provisionedBy string) *NamespaceCluster {
 	rqliteN, olricN, gatewayN := bp.serviceNodeCounts()
 	return &NamespaceCluster{
 		ID:               uuid.New().String(),
@@ -371,7 +374,7 @@ func newProvisioningCluster(namespaceID int, namespaceName, provisionedBy string
 	}
 }
 
-func (cm *ClusterManager) startTenantServices(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) (*provisionState, error) {
+func (cm *ClusterManager) startTenantServices(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, bp Blueprint) (*provisionState, error) {
 	state := &provisionState{}
 	req := SpawnRequest{
 		Cluster:    cluster,
@@ -379,26 +382,48 @@ func (cm *ClusterManager) startTenantServices(ctx context.Context, cluster *Name
 		PortBlocks: portBlocks,
 		State:      state,
 	}
-	if err := walkServices(ctx, BlueprintTenant(), cm.drivers, req); err != nil {
+	if err := walkServices(ctx, bp, cm.drivers, req); err != nil {
 		return state, err
 	}
 	return state, nil
 }
 
+// rqliteMemberConfigs builds per-node RQLite configs. Node 0 is the leader
+// with no -join. Followers join the leader's Raft address. A single node
+// (N=1) is leader-only.
+func rqliteMemberConfigs(namespace string, nodes []NodeCapacity, portBlocks []*PortBlock) []rqlite.InstanceConfig {
+	cfgs := make([]rqlite.InstanceConfig, len(nodes))
+	if len(nodes) == 0 {
+		return cfgs
+	}
+	leaderRaft := fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort)
+	for i, node := range nodes {
+		cfg := rqlite.InstanceConfig{
+			Namespace:      namespace,
+			NodeID:         node.NodeID,
+			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
+			RaftPort:       portBlocks[i].RQLiteRaftPort,
+			HTTPAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort),
+			RaftAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteRaftPort),
+			IsLeader:       i == 0,
+		}
+		if i > 0 {
+			cfg.JoinAddresses = []string{leaderRaft}
+		}
+		cfgs[i] = cfg
+	}
+	return cfgs
+}
+
 // startRQLiteCluster starts RQLite instances on all nodes (locally or remotely)
 func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*rqlite.Instance, error) {
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no nodes for RQLite cluster")
+	}
+	configs := rqliteMemberConfigs(cluster.NamespaceName, nodes, portBlocks)
 	instances := make([]*rqlite.Instance, len(nodes))
 
-	// Start leader first (node 0)
-	leaderCfg := rqlite.InstanceConfig{
-		Namespace:      cluster.NamespaceName,
-		NodeID:         nodes[0].NodeID,
-		HTTPPort:       portBlocks[0].RQLiteHTTPPort,
-		RaftPort:       portBlocks[0].RQLiteRaftPort,
-		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort),
-		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort),
-		IsLeader:       true,
-	}
+	leaderCfg := configs[0]
 
 	var err error
 	if nodes[0].NodeID == cm.localNodeID {
@@ -425,19 +450,9 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		cm.logger.Warn("Failed to record cluster node", zap.Error(err))
 	}
 
-	// Start followers
-	leaderRaftAddr := leaderCfg.RaftAdvAddress
+	// Start followers (none when N=1)
 	for i := 1; i < len(nodes); i++ {
-		followerCfg := rqlite.InstanceConfig{
-			Namespace:      cluster.NamespaceName,
-			NodeID:         nodes[i].NodeID,
-			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
-			RaftPort:       portBlocks[i].RQLiteRaftPort,
-			HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteHTTPPort),
-			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteRaftPort),
-			JoinAddresses:  []string{leaderRaftAddr},
-			IsLeader:       false,
-		}
+		followerCfg := configs[i]
 
 		var followerInstance *rqlite.Instance
 		if nodes[i].NodeID == cm.localNodeID {
@@ -1284,7 +1299,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	// Allocate ports on each node
 	portBlocks := make([]*PortBlock, len(nodes))
 	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
+		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID, bp)
 		if err != nil {
 			// Rollback previous allocations
 			for j := 0; j < i; j++ {
@@ -1299,7 +1314,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks)
+	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
 		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
 		cm.logger.Error("Failed to start cluster services", zap.Error(err))

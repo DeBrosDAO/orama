@@ -22,18 +22,18 @@ type ClusterNodeSelector struct {
 
 // NodeCapacity represents the capacity metrics for a single node
 type NodeCapacity struct {
-	NodeID                   string  `json:"node_id"`
-	IPAddress                string  `json:"ip_address"`
-	InternalIP               string  `json:"internal_ip"` // WireGuard IP for inter-node communication
-	DeploymentCount          int     `json:"deployment_count"`
-	AllocatedPorts           int     `json:"allocated_ports"`
-	AvailablePorts           int     `json:"available_ports"`
-	UsedMemoryMB             int     `json:"used_memory_mb"`
-	AvailableMemoryMB        int     `json:"available_memory_mb"`
-	UsedCPUPercent           int     `json:"used_cpu_percent"`
-	NamespaceInstanceCount   int     `json:"namespace_instance_count"`   // Number of namespace clusters on this node
-	AvailableNamespaceSlots  int     `json:"available_namespace_slots"`  // How many more namespace instances can fit
-	Score                    float64 `json:"score"`
+	NodeID                  string  `json:"node_id"`
+	IPAddress               string  `json:"ip_address"`
+	InternalIP              string  `json:"internal_ip"` // WireGuard IP for inter-node communication
+	DeploymentCount         int     `json:"deployment_count"`
+	AllocatedPorts          int     `json:"allocated_ports"`
+	AvailablePorts          int     `json:"available_ports"`
+	UsedMemoryMB            int     `json:"used_memory_mb"`
+	AvailableMemoryMB       int     `json:"available_memory_mb"`
+	UsedCPUPercent          int     `json:"used_cpu_percent"`
+	NamespaceInstanceCount  int     `json:"namespace_instance_count"`  // Number of namespace clusters on this node
+	AvailableNamespaceSlots int     `json:"available_namespace_slots"` // How many more namespace instances can fit
+	Score                   float64 `json:"score"`
 }
 
 // NewClusterNodeSelector creates a new node selector
@@ -226,6 +226,11 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 		return nil, err
 	}
 
+	availableNamespaceSlots, err := cns.portAllocator.GetNodeCapacity(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Calculate available capacity
 	maxDeployments := constants.MaxDeploymentsPerNode
 	maxPorts := constants.MaxPortsPerNode
@@ -242,7 +247,6 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 		availableMemoryMB = 0
 	}
 
-	availableNamespaceSlots := MaxNamespacesPerNode - namespaceInstanceCount
 	if availableNamespaceSlots < 0 {
 		availableNamespaceSlots = 0
 	}
@@ -411,4 +415,3 @@ func (cns *ClusterNodeSelector) calculateCapacityScore(
 
 	return totalScore
 }
-

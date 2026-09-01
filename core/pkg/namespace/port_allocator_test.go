@@ -306,6 +306,80 @@ func TestNewNamespacePortAllocator(t *testing.T) {
 	}
 }
 
+func TestFindFreeBlock_packsVariableSizes(t *testing.T) {
+	empty := []allocatedRange(nil)
+	start, ok := findFreeBlock(empty, NamespacePortRangeStart, NamespacePortRangeEnd, 5)
+	if !ok || start != NamespacePortRangeStart {
+		t.Fatalf("empty range size 5: start=%d ok=%v, want %d true", start, ok, NamespacePortRangeStart)
+	}
+
+	taken5 := []allocatedRange{{Start: 10000, End: 10004}}
+	start, ok = findFreeBlock(taken5, NamespacePortRangeStart, NamespacePortRangeEnd, 5)
+	if !ok || start != 10005 {
+		t.Fatalf("after 5-port block, size 5: start=%d ok=%v, want 10005 true", start, ok)
+	}
+	start, ok = findFreeBlock(taken5, NamespacePortRangeStart, NamespacePortRangeEnd, 1)
+	if !ok || start != 10005 {
+		t.Fatalf("after 5-port block, size 1: start=%d ok=%v, want 10005 true", start, ok)
+	}
+
+	// Hole of 1 between two blocks.
+	gapped := []allocatedRange{{Start: 10000, End: 10004}, {Start: 10006, End: 10010}}
+	start, ok = findFreeBlock(gapped, NamespacePortRangeStart, NamespacePortRangeEnd, 1)
+	if !ok || start != 10005 {
+		t.Fatalf("1-port into gap: start=%d ok=%v, want 10005 true", start, ok)
+	}
+
+	oneThenNeedFive := []allocatedRange{{Start: 10000, End: 10000}}
+	start, ok = findFreeBlock(oneThenNeedFive, NamespacePortRangeStart, NamespacePortRangeEnd, 5)
+	if !ok || start != 10001 {
+		t.Fatalf("1-port then 5-port: start=%d ok=%v, want 10001 true", start, ok)
+	}
+
+	if _, ok := findFreeBlock(nil, NamespacePortRangeStart, NamespacePortRangeEnd, 0); ok {
+		t.Fatal("size 0 must not allocate")
+	}
+}
+
+func TestPortBlockFromBlueprint_tenantAndGatewayOnly(t *testing.T) {
+	tenant := portBlockFromBlueprint("n1", "c1", 10000, BlueprintTenant())
+	if tenant.PortEnd != 10004 {
+		t.Errorf("tenant PortEnd = %d, want 10004", tenant.PortEnd)
+	}
+	if tenant.RQLiteHTTPPort != 10000 || tenant.RQLiteRaftPort != 10001 {
+		t.Errorf("tenant rqlite ports = %d/%d, want 10000/10001", tenant.RQLiteHTTPPort, tenant.RQLiteRaftPort)
+	}
+	if tenant.OlricHTTPPort != 10002 || tenant.OlricMemberlistPort != 10003 {
+		t.Errorf("tenant olric ports = %d/%d, want 10002/10003", tenant.OlricHTTPPort, tenant.OlricMemberlistPort)
+	}
+	if tenant.GatewayHTTPPort != 10004 {
+		t.Errorf("tenant gateway port = %d, want 10004", tenant.GatewayHTTPPort)
+	}
+
+	gwOnly := Blueprint{
+		Name:        BlueprintNameTenant,
+		Membership:  MembersSelect,
+		SelectCount: 1,
+		Services: []ServiceSpec{{
+			Name:      ServiceGateway,
+			Order:     1,
+			Scope:     ScopeReusable,
+			PortNeeds: []PortNeed{{FromBlock: 0}},
+		}},
+	}
+	block := portBlockFromBlueprint("n1", "c1", 10000, gwOnly)
+	if block.PortStart != 10000 || block.PortEnd != 10000 {
+		t.Errorf("gateway-only block = %d-%d, want 10000-10000", block.PortStart, block.PortEnd)
+	}
+	if block.GatewayHTTPPort != 10000 {
+		t.Errorf("gateway-only GatewayHTTPPort = %d, want 10000", block.GatewayHTTPPort)
+	}
+	if block.RQLiteHTTPPort != 0 || block.OlricHTTPPort != 0 {
+		t.Errorf("gateway-only must leave unused named ports at 0, got rqlite=%d olric=%d",
+			block.RQLiteHTTPPort, block.OlricHTTPPort)
+	}
+}
+
 func TestDefaultClusterSizes(t *testing.T) {
 	// Verify default cluster size constants
 	if DefaultRQLiteNodeCount != 3 {

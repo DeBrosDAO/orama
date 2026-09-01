@@ -80,11 +80,12 @@ const (
 	// NamespacePortRangeEnd is the end of the reserved port range for namespace services
 	NamespacePortRangeEnd = 10099
 
-	// PortsPerNamespace is the number of ports required per namespace instance on a node
+	// PortsPerNamespace is the tenant-default port block size (rqlite+olric+gateway).
+	// Must equal BlueprintTenant().PortNeedCount(). Other blueprints may use fewer.
 	// RQLite HTTP (0), RQLite Raft (1), Olric HTTP (2), Olric Memberlist (3), Gateway HTTP (4)
 	PortsPerNamespace = 5
 
-	// MaxNamespacesPerNode is the maximum number of namespace instances a single node can host
+	// MaxNamespacesPerNode is how many tenant-default (5-port) instances fit in 10000–10099.
 	MaxNamespacesPerNode = (NamespacePortRangeEnd - NamespacePortRangeStart + 1) / PortsPerNamespace // 20
 )
 

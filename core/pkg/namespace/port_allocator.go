@@ -3,6 +3,7 @@ package namespace
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 // NamespacePortAllocator manages the reserved port range (10000-10099) for namespace services.
-// Each namespace instance on a node gets a block of 5 consecutive ports.
+// Block size is the blueprint's PortNeedCount() (tenant default 5).
 type NamespacePortAllocator struct {
 	db     rqlite.Client
 	logger *zap.Logger
@@ -27,9 +28,8 @@ func NewNamespacePortAllocator(db rqlite.Client, logger *zap.Logger) *NamespaceP
 	}
 }
 
-// AllocatePortBlock finds and allocates the next available 5-port block on a node.
-// Returns an error if the node is at capacity (20 namespace instances).
-func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string) (*PortBlock, error) {
+// AllocatePortBlock finds and allocates a contiguous block sized to bp.PortNeedCount().
+func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string, bp Blueprint) (*PortBlock, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
 	// Check if allocation already exists for this namespace on this node
@@ -48,12 +48,13 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 	retryDelay := 100 * time.Millisecond
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		block, err := npa.tryAllocatePortBlock(internalCtx, nodeID, namespaceClusterID)
+		block, err := npa.tryAllocatePortBlock(internalCtx, nodeID, namespaceClusterID, bp)
 		if err == nil {
 			npa.logger.Info("Port block allocated successfully",
 				zap.String("node_id", nodeID),
 				zap.String("namespace_cluster_id", namespaceClusterID),
 				zap.Int("port_start", block.PortStart),
+				zap.Int("port_end", block.PortEnd),
 				zap.Int("attempt", attempt+1),
 			)
 			return block, nil
@@ -81,62 +82,127 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 	}
 }
 
-// tryAllocatePortBlock attempts to allocate a port block (single attempt)
-func (npa *NamespacePortAllocator) tryAllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string) (*PortBlock, error) {
-	// In dev environments where all nodes share the same IP, we need to track
-	// allocations by IP address to avoid port conflicts. First get this node's IP.
+type allocatedRange struct {
+	Start int
+	End   int // inclusive
+}
+
+// findFreeBlock returns the first rangeStart..rangeEnd inclusive gap of size ports.
+func findFreeBlock(allocated []allocatedRange, rangeStart, rangeEnd, size int) (int, bool) {
+	if size <= 0 {
+		return 0, false
+	}
+	sorted := append([]allocatedRange(nil), allocated...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	cursor := rangeStart
+	for _, r := range sorted {
+		if r.End < cursor {
+			continue
+		}
+		if cursor+size-1 < r.Start && cursor+size-1 <= rangeEnd {
+			return cursor, true
+		}
+		if r.End+1 > cursor {
+			cursor = r.End + 1
+		}
+	}
+	if cursor+size-1 <= rangeEnd {
+		return cursor, true
+	}
+	return 0, false
+}
+
+func portBlockFromBlueprint(nodeID, clusterID string, portStart int, bp Blueprint) *PortBlock {
+	size := bp.PortNeedCount()
+	if size < 1 {
+		size = 1
+	}
+	block := &PortBlock{
+		ID:                 uuid.New().String(),
+		NodeID:             nodeID,
+		NamespaceClusterID: clusterID,
+		PortStart:          portStart,
+		PortEnd:            portStart + size - 1,
+		AllocatedAt:        time.Now(),
+	}
+	for _, spec := range bp.Services {
+		var ports []int
+		for _, p := range spec.PortNeeds {
+			if p.Fixed != 0 {
+				continue
+			}
+			ports = append(ports, portStart+p.FromBlock)
+		}
+		switch spec.Name {
+		case ServiceRQLite:
+			if len(ports) > 0 {
+				block.RQLiteHTTPPort = ports[0]
+			}
+			if len(ports) > 1 {
+				block.RQLiteRaftPort = ports[1]
+			}
+		case ServiceOlric:
+			if len(ports) > 0 {
+				block.OlricHTTPPort = ports[0]
+			}
+			if len(ports) > 1 {
+				block.OlricMemberlistPort = ports[1]
+			}
+		case ServiceGateway:
+			if len(ports) > 0 {
+				block.GatewayHTTPPort = ports[0]
+			}
+		}
+	}
+	return block
+}
+
+func (npa *NamespacePortAllocator) allocatedRanges(ctx context.Context, nodeID string) ([]allocatedRange, error) {
+	// In dev environments where all nodes share the same IP, track allocations
+	// by IP so two node IDs cannot bind the same host port.
 	var nodeInfos []struct {
 		IPAddress string `db:"ip_address"`
 	}
 	nodeQuery := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	if err := npa.db.Query(ctx, &nodeInfos, nodeQuery, nodeID); err != nil || len(nodeInfos) == 0 {
-		// Fallback: if we can't get the IP, allocate per node_id only
 		npa.logger.Debug("Could not get node IP, falling back to node_id-only allocation",
 			zap.String("node_id", nodeID),
 		)
 	}
 
-	// Query all allocated port blocks. If nodes share the same IP, we need to
-	// check allocations by IP address to prevent port conflicts.
 	type portRow struct {
 		PortStart int `db:"port_start"`
+		PortEnd   int `db:"port_end"`
 	}
-
-	var allocatedBlocks []portRow
-	var query string
+	var rows []portRow
 	var err error
 
 	if len(nodeInfos) > 0 && nodeInfos[0].IPAddress != "" {
-		// Check if other nodes share this IP - if so, allocate globally by IP
 		var sameIPCount []struct {
 			Count int `db:"count"`
 		}
 		countQuery := `SELECT COUNT(DISTINCT id) as count FROM dns_nodes WHERE ip_address = ?`
 		if err := npa.db.Query(ctx, &sameIPCount, countQuery, nodeInfos[0].IPAddress); err == nil && len(sameIPCount) > 0 && sameIPCount[0].Count > 1 {
-			// Multiple nodes share this IP (dev environment) - allocate globally
-			query = `
-				SELECT npa.port_start
+			query := `
+				SELECT npa.port_start, npa.port_end
 				FROM namespace_port_allocations npa
 				JOIN dns_nodes dn ON npa.node_id = dn.id
 				WHERE dn.ip_address = ?
 				ORDER BY npa.port_start ASC
 			`
-			err = npa.db.Query(ctx, &allocatedBlocks, query, nodeInfos[0].IPAddress)
+			err = npa.db.Query(ctx, &rows, query, nodeInfos[0].IPAddress)
 			npa.logger.Debug("Multiple nodes share IP, allocating globally",
 				zap.String("ip_address", nodeInfos[0].IPAddress),
 				zap.Int("same_ip_nodes", sameIPCount[0].Count),
 			)
 		} else {
-			// Single node per IP (production) - allocate per node
-			query = `SELECT port_start FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
-			err = npa.db.Query(ctx, &allocatedBlocks, query, nodeID)
+			query := `SELECT port_start, port_end FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
+			err = npa.db.Query(ctx, &rows, query, nodeID)
 		}
 	} else {
-		// No IP info - allocate per node_id
-		query = `SELECT port_start FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
-		err = npa.db.Query(ctx, &allocatedBlocks, query, nodeID)
+		query := `SELECT port_start, port_end FROM namespace_port_allocations WHERE node_id = ? ORDER BY port_start ASC`
+		err = npa.db.Query(ctx, &rows, query, nodeID)
 	}
-
 	if err != nil {
 		return nil, &ClusterError{
 			Message: "failed to query allocated ports",
@@ -144,44 +210,35 @@ func (npa *NamespacePortAllocator) tryAllocatePortBlock(ctx context.Context, nod
 		}
 	}
 
-	// Build map of allocated block starts
-	allocatedStarts := make(map[int]bool)
-	for _, row := range allocatedBlocks {
-		allocatedStarts[row.PortStart] = true
-	}
-
-	// Check node capacity
-	if len(allocatedBlocks) >= MaxNamespacesPerNode {
-		return nil, ErrNodeAtCapacity
-	}
-
-	// Find first available port block
-	portStart := -1
-	for start := NamespacePortRangeStart; start <= NamespacePortRangeEnd-PortsPerNamespace+1; start += PortsPerNamespace {
-		if !allocatedStarts[start] {
-			portStart = start
-			break
+	out := make([]allocatedRange, 0, len(rows))
+	for _, row := range rows {
+		end := row.PortEnd
+		if end < row.PortStart {
+			end = row.PortStart + PortsPerNamespace - 1
 		}
+		out = append(out, allocatedRange{Start: row.PortStart, End: end})
+	}
+	return out, nil
+}
+
+// tryAllocatePortBlock attempts to allocate a port block (single attempt)
+func (npa *NamespacePortAllocator) tryAllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string, bp Blueprint) (*PortBlock, error) {
+	size := bp.PortNeedCount()
+	if size <= 0 {
+		return nil, &ClusterError{Message: "blueprint needs no ports"}
 	}
 
-	if portStart < 0 {
+	allocated, err := npa.allocatedRanges(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	portStart, ok := findFreeBlock(allocated, NamespacePortRangeStart, NamespacePortRangeEnd, size)
+	if !ok {
 		return nil, ErrNoPortsAvailable
 	}
 
-	// Create port block
-	block := &PortBlock{
-		ID:                  uuid.New().String(),
-		NodeID:              nodeID,
-		NamespaceClusterID:  namespaceClusterID,
-		PortStart:           portStart,
-		PortEnd:             portStart + PortsPerNamespace - 1,
-		RQLiteHTTPPort:      portStart + 0,
-		RQLiteRaftPort:      portStart + 1,
-		OlricHTTPPort:       portStart + 2,
-		OlricMemberlistPort: portStart + 3,
-		GatewayHTTPPort:     portStart + 4,
-		AllocatedAt:         time.Now(),
-	}
+	block := portBlockFromBlueprint(nodeID, namespaceClusterID, portStart, bp)
 
 	// Attempt to insert allocation record
 	insertQuery := `
@@ -307,36 +364,25 @@ func (npa *NamespacePortAllocator) GetAllPortBlocks(ctx context.Context, namespa
 	return blocks, nil
 }
 
-// GetNodeCapacity returns how many more namespace instances a node can host
+// GetNodeCapacity returns how many more tenant-default (PortsPerNamespace)
+// blocks still fit on the node, first-fit.
 func (npa *NamespacePortAllocator) GetNodeCapacity(ctx context.Context, nodeID string) (int, error) {
 	internalCtx := client.WithInternalAuth(ctx)
-
-	type countResult struct {
-		Count int `db:"count"`
-	}
-
-	var results []countResult
-	query := `SELECT COUNT(*) as count FROM namespace_port_allocations WHERE node_id = ?`
-	err := npa.db.Query(internalCtx, &results, query, nodeID)
+	allocated, err := npa.allocatedRanges(internalCtx, nodeID)
 	if err != nil {
-		return 0, &ClusterError{
-			Message: "failed to count allocated port blocks",
-			Cause:   err,
+		return 0, err
+	}
+	n := 0
+	alloc := append([]allocatedRange(nil), allocated...)
+	for {
+		start, ok := findFreeBlock(alloc, NamespacePortRangeStart, NamespacePortRangeEnd, PortsPerNamespace)
+		if !ok {
+			break
 		}
+		n++
+		alloc = append(alloc, allocatedRange{Start: start, End: start + PortsPerNamespace - 1})
 	}
-
-	if len(results) == 0 {
-		return MaxNamespacesPerNode, nil
-	}
-
-	allocated := results[0].Count
-	available := MaxNamespacesPerNode - allocated
-
-	if available < 0 {
-		available = 0
-	}
-
-	return available, nil
+	return n, nil
 }
 
 // GetNodeAllocationCount returns the number of namespace instances on a node

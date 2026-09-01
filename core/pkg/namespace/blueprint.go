@@ -74,10 +74,17 @@ type Blueprint struct {
 // BlueprintTenant is today's namespace cluster: 3 nodes, rqlite → olric →
 // gateway, 5-port block (2+2+1). WebRTC (sfu/turn) stays a bolt-on.
 func BlueprintTenant() Blueprint {
+	return BlueprintTenantN(DefaultRQLiteNodeCount)
+}
+
+// BlueprintTenantN is a tenant cluster of n members. n=3 is the API-key
+// default (BlueprintTenant). n=1 is a single-node cluster (rqlite leader,
+// no -join). Port needs stay 2+2+1.
+func BlueprintTenantN(n int) Blueprint {
 	return Blueprint{
 		Name:        BlueprintNameTenant,
 		Membership:  MembersSelect,
-		SelectCount: DefaultRQLiteNodeCount,
+		SelectCount: n,
 		Services: []ServiceSpec{
 			{
 				Name:  ServiceRQLite,
@@ -157,6 +164,10 @@ func (b Blueprint) Validate() error {
 	if allowed == nil {
 		return fmt.Errorf("unknown blueprint %q", b.Name)
 	}
+	if b.Membership == MembersSelect && b.SelectCount < 1 {
+		return fmt.Errorf("SelectCount %d must be >= 1", b.SelectCount)
+	}
+	seenOffset := map[int]ServiceName{}
 	for _, spec := range b.Services {
 		if !allowed[spec.Scope] {
 			return fmt.Errorf("service %s (scope %s) is not allowed on blueprint %s", spec.Name, spec.Scope, b.Name)
@@ -166,6 +177,19 @@ func (b Blueprint) Validate() error {
 		}
 		if b.Membership == MembersSelect && spec.Count > b.SelectCount {
 			return fmt.Errorf("service %s Count %d exceeds SelectCount %d", spec.Name, spec.Count, b.SelectCount)
+		}
+		needCount := b.PortNeedCount()
+		for _, p := range spec.PortNeeds {
+			if p.Fixed != 0 {
+				continue
+			}
+			if p.FromBlock < 0 || (needCount > 0 && p.FromBlock >= needCount) {
+				return fmt.Errorf("service %s port offset %d is outside block size %d", spec.Name, p.FromBlock, needCount)
+			}
+			if other, ok := seenOffset[p.FromBlock]; ok {
+				return fmt.Errorf("port offset %d used by %s and %s", p.FromBlock, other, spec.Name)
+			}
+			seenOffset[p.FromBlock] = spec.Name
 		}
 	}
 	return nil
