@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -153,19 +154,15 @@ func (h *DeleteHandler) cleanupDeployments(ctx context.Context, ns string) {
 	// 2. Unpin deployment IPFS content
 	if h.ipfsClient != nil {
 		for _, dep := range deps {
-			if dep.ContentCID != "" {
-				if err := h.ipfsClient.Unpin(ctx, dep.ContentCID); err != nil {
-					h.logger.Warn("Failed to unpin deployment content CID",
-						zap.String("deployment_id", dep.ID),
-						zap.String("cid", dep.ContentCID), zap.Error(err))
-				}
+			if err := storage.UnpinIfLastPinner(ctx, h.ormClient, h.ipfsClient, dep.ContentCID, ns); err != nil {
+				h.logger.Warn("Failed to unpin deployment content CID",
+					zap.String("deployment_id", dep.ID),
+					zap.String("cid", dep.ContentCID), zap.Error(err))
 			}
-			if dep.BuildCID != "" {
-				if err := h.ipfsClient.Unpin(ctx, dep.BuildCID); err != nil {
-					h.logger.Warn("Failed to unpin deployment build CID",
-						zap.String("deployment_id", dep.ID),
-						zap.String("cid", dep.BuildCID), zap.Error(err))
-				}
+			if err := storage.UnpinIfLastPinner(ctx, h.ormClient, h.ipfsClient, dep.BuildCID, ns); err != nil {
+				h.logger.Warn("Failed to unpin deployment build CID",
+					zap.String("deployment_id", dep.ID),
+					zap.String("cid", dep.BuildCID), zap.Error(err))
 			}
 		}
 	}
@@ -280,7 +277,7 @@ func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
 		zap.Int("cid_count", len(rows)))
 
 	for _, row := range rows {
-		if err := h.ipfsClient.Unpin(ctx, row.CID); err != nil {
+		if err := storage.UnpinIfLastPinner(ctx, h.ormClient, h.ipfsClient, row.CID, ns); err != nil {
 			h.logger.Warn("Failed to unpin CID (best-effort)",
 				zap.String("cid", row.CID),
 				zap.String("namespace", ns),

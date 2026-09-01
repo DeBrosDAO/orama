@@ -9,6 +9,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
 )
@@ -236,10 +237,8 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Unpin IPFS content
-	if deployment.ContentCID != "" {
-		if err := h.ipfsClient.Unpin(ctx, deployment.ContentCID); err != nil {
-			h.logger.Warn("Failed to unpin IPFS content", zap.Error(err), zap.String("cid", deployment.ContentCID))
-		}
+	if err := storage.UnpinIfLastPinner(ctx, h.service.db, h.ipfsClient, deployment.ContentCID, namespace); err != nil {
+		h.logger.Warn("Failed to unpin IPFS content", zap.Error(err), zap.String("cid", deployment.ContentCID))
 	}
 
 	// 4. Delete subdomain registry
