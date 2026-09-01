@@ -605,20 +605,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Look up API key → namespace against THIS gateway's own database.
-		//
-		// A namespace gateway owns its namespace's key registry: `orama namespace
-		// keys create` writes scoped keys into the namespace rqlite, so that is
-		// where they must be verified. Validating against the GLOBAL database
-		// instead (the old g.authClient path) meant a key could be valid,
-		// unrevoked and correctly scoped yet still 401 — because auth never
-		// looked in the database it lived in. Whether a key worked depended on
-		// which gateway happened to mint it, which is why devnet and testnet
-		// behaved differently with the identical command.
-		//
-		// Each gateway now verifies against the registry it owns. A namespace
-		// gateway therefore cannot authenticate a key belonging to a different
-		// namespace, which is the correct tenant boundary anyway.
+		// Look up API key → namespace against the core/index registry
+		// (g.apiKeyDB(): authClient when GlobalRQLiteDSN is set, else
+		// g.client). Keys are created only in that registry (bugboard #162).
+		// A namespace gateway's own RQLite is never authoritative for keys.
 		ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 		if err != nil {
 			if isPublic {

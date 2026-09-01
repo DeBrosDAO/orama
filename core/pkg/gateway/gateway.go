@@ -383,6 +383,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 				logger.ComponentWarn(logging.ComponentGeneral, "Failed to connect global auth client", zap.Error(err))
 			} else {
 				gw.authClient = authClient
+				if deps.AuthService != nil {
+					deps.AuthService.SetAPIKeyRegistry(authClient)
+				}
 				logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
 			}
 		}

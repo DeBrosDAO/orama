@@ -22,9 +22,11 @@ type apiKeyQuerier interface {
 
 // apiKeyDB returns the querier API-key lookups should use: the explicit
 // global-registry client (g.authClient, built from cfg.GlobalRQLiteDSN -- see
-// New in gateway.go) when available, falling back to g.client (core-bound on
-// namespace gateways, since client.DefaultClientConfig() resolves to the core
-// bootstrap peers) only when no dedicated global client was configured.
+// New in gateway.go) when available, falling back to g.client only when no
+// dedicated global client was configured (the index gateway, where
+// rqlite_dsn IS the registry). g.client on a namespace gateway is the
+// tenant RQLite after bugboard #162 (explicit rqlite_dsn wins) and must
+// not be used for keys when authClient exists.
 // g.sqlDB (this gateway's own namespace RQLite) must NEVER be used here --
 // its api_keys table is not authoritative, and querying it split key
 // validation into two disagreeing registries (bugboard #151/#152

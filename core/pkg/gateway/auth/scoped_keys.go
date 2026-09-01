@@ -28,7 +28,7 @@ type KeyInfo struct {
 // several keys with different scopes (e.g. app-runtime + admin). Returns the
 // raw key (shown once) and its row id.
 func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, label string) (string, int64, error) {
-	if s.orm == nil {
+	if s.keyORM() == nil {
 		return "", 0, fmt.Errorf("client not initialized")
 	}
 	if strings.TrimSpace(storedScopes) == "" {
@@ -39,7 +39,7 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, l
 		return "", 0, fmt.Errorf("namespace is required")
 	}
 
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
 	}
@@ -52,7 +52,7 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, l
 	hashedKey := s.HashAPIKey(rawKey)
 
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.keyORM().Database()
 
 	if _, err := db.Query(internalCtx,
 		"INSERT INTO api_keys(key, name, namespace_id, scopes) VALUES (?, ?, ?, ?)",
@@ -87,15 +87,15 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, l
 // authenticating within the 60s cache TTL. Returns an error if no matching
 // active key was found.
 func (s *Service) RevokeKey(ctx context.Context, namespace string, id int64) error {
-	if s.orm == nil {
+	if s.keyORM() == nil {
 		return fmt.Errorf("client not initialized")
 	}
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
 		return fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
 	}
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.keyORM().Database()
 
 	// Confirm the key exists, is in this namespace, and is not already revoked.
 	sel, err := db.Query(internalCtx,
@@ -124,15 +124,15 @@ func (s *Service) RevokeKey(ctx context.Context, namespace string, id int64) err
 // namespace — the omnipotent keys that predate scoping (bugboard #148 cutover).
 // Scoped keys (non-empty scopes) are left untouched. Returns the count revoked.
 func (s *Service) RevokeAllLegacy(ctx context.Context, namespace string) (int, error) {
-	if s.orm == nil {
+	if s.keyORM() == nil {
 		return 0, fmt.Errorf("client not initialized")
 	}
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
 		return 0, fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
 	}
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.keyORM().Database()
 
 	const legacyPred = "namespace_id = ? AND revoked_at IS NULL AND (scopes IS NULL OR TRIM(scopes) = '')"
 
@@ -167,15 +167,15 @@ func (s *Service) RevokeAllLegacy(ctx context.Context, namespace string) (int, e
 // ListKeys returns non-secret metadata for every key in a namespace (bugboard
 // #148). It never returns the key material.
 func (s *Service) ListKeys(ctx context.Context, namespace string) ([]KeyInfo, error) {
-	if s.orm == nil {
+	if s.keyORM() == nil {
 		return nil, fmt.Errorf("client not initialized")
 	}
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
 	}
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.keyORM().Database()
 
 	res, err := db.Query(internalCtx,
 		"SELECT id, name, scopes, created_at, last_used_at, revoked_at FROM api_keys WHERE namespace_id = ? ORDER BY id ASC", nsID)
