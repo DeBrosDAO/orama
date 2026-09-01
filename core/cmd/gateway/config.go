@@ -285,6 +285,12 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		cfg.StealthCDNDomain = v
 	}
 
+	if strings.TrimSpace(cfg.APIKeyHMACSecret) == "" {
+		fmt.Fprintf(os.Stderr, "\napi_key_hmac_secret is required (bugboard #163).\n")
+		fmt.Fprintf(os.Stderr, "Spawn writes it from ~/.orama/secrets/api-key-hmac-secret.\n")
+		os.Exit(1)
+	}
+
 	// Validate configuration
 	if errs := cfg.ValidateConfig(); len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "\nGateway configuration errors (%d):\n", len(errs))

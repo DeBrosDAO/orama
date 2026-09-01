@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"reflect"
 	"sync"
 	"time"
@@ -512,6 +513,17 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// registry, never in a namespace's own RQLite, so every gateway must
 		// validate against it.
 		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
+
+		if strings.TrimSpace(cfg.APIKeyHMACSecret) != "" {
+			n, merr := deps.AuthService.MigratePlaintextAPIKeys(context.Background())
+			if merr != nil {
+				return nil, fmt.Errorf("migrate plaintext API keys: %w", merr)
+			}
+			if n > 0 {
+				logger.ComponentInfo(logging.ComponentGeneral, "Hashed leftover plaintext API keys",
+					zap.Int("count", n))
+			}
+		}
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)
