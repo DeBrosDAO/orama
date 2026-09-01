@@ -87,11 +87,18 @@ func collectProcesses() *ProcessReport {
 
 // managedServiceUnits lists systemd units whose MainPID should be excluded from orphan detection.
 var managedServiceUnits = []string{
-	"orama-node", "orama-olric",
-	"orama-ipfs", "orama-ipfs-cluster",
-	"orama-vault",
-	"orama-anyone-relay", "orama-anyone-client",
-	"coredns", "caddy", "rqlited",
+	"orama-node",
+	"orama-namespace-olric@index",
+	"orama-namespace-ipfs@index",
+	"orama-namespace-ipfs-cluster@index",
+	"orama-namespace-vault@index",
+	"orama-namespace-anyone-client@index",
+	"orama-namespace-caddy@index",
+	"orama-namespace-wireguard@index",
+	"orama-namespace-rqlite@index",
+	"orama-namespace-gateway@index",
+	"orama-namespace-pubsub@index",
+	"coredns", "rqlited",
 }
 
 // collectManagedPIDs queries systemd for the MainPID of each known service.
@@ -111,7 +118,11 @@ func collectManagedPIDs() map[int]bool {
 	namespacesDir := "/opt/orama/.orama/data/namespaces"
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
-		nsServiceTypes := []string{"rqlite", "olric", "gateway"}
+		nsServiceTypes := []string{
+			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
+			"wireguard", "ipfs", "ipfs-cluster", "vault", "caddy",
+			"ntfy", "anyone-client", "sni-router",
+		}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {
 				continue

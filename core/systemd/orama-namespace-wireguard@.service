@@ -1,0 +1,23 @@
+[Unit]
+Description=Orama Namespace WireGuard (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network-online.target
+Wants=network-online.target
+PartOf=orama-node.service
+
+[Service]
+# Adopt in place: existing /etc/wireguard/wg0.conf. This unit must never
+# write or replace that conf (doing so drops mesh peers).
+Type=oneshot
+RemainAfterExit=yes
+# If wg0 is already up (leftover wg-quick@wg0), do not bounce it.
+ExecStart=/bin/sh -c 'wg show wg0 >/dev/null 2>&1 || wg-quick up wg0'
+ExecStop=/usr/bin/wg-quick down wg0
+TimeoutStartSec=30
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-wireguard-%i
+
+[Install]
+WantedBy=multi-user.target

@@ -48,3 +48,18 @@ func TestIndexSupervisor_doesNotSelectNodes(t *testing.T) {
 	var s IndexSupervisor
 	_ = s.CoreRQLiteDir
 }
+
+func TestIndexHostDataPaths_adoptInPlace(t *testing.T) {
+	s := NewIndexSupervisor("/opt/orama/.orama", nil)
+	if s.CoreRQLiteDir() != "/opt/orama/.orama/data/rqlite" {
+		t.Errorf("CoreRQLiteDir = %s", s.CoreRQLiteDir())
+	}
+	ipfsRepo := filepath.Join(s.dataDir, "ipfs", "repo")
+	if ipfsRepo != "/opt/orama/.orama/data/ipfs/repo" {
+		t.Errorf("ipfs repo = %s", ipfsRepo)
+	}
+	vault := filepath.Join(s.dataDir, "vault", "vault.yaml")
+	if vault != "/opt/orama/.orama/data/vault/vault.yaml" {
+		t.Errorf("vault yaml = %s", vault)
+	}
+}

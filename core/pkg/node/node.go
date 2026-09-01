@@ -79,6 +79,10 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
+	if err := n.startIndexWireGuard(ctx); err != nil {
+		return fmt.Errorf("failed to start index wireguard: %w", err)
+	}
+
 	// Start LibP2P host first (needed for cluster discovery)
 	if err := n.startLibP2P(); err != nil {
 		return fmt.Errorf("failed to start LibP2P: %w", err)
@@ -89,6 +93,10 @@ func (n *Node) Start(ctx context.Context) error {
 		if err := n.startIPFSClusterConfig(); err != nil {
 			n.logger.ComponentWarn(logging.ComponentNode, "Failed to initialize IPFS Cluster config", zap.Error(err))
 		}
+	}
+
+	if err := n.startIndexStorage(ctx); err != nil {
+		return fmt.Errorf("failed to start index storage: %w", err)
 	}
 
 	// Start RQLite with cluster discovery
@@ -102,6 +110,10 @@ func (n *Node) Start(ctx context.Context) error {
 
 	if err := n.startIndexGateway(ctx); err != nil {
 		return fmt.Errorf("failed to start index gateway: %w", err)
+	}
+
+	if err := n.startIndexEdge(ctx); err != nil {
+		return fmt.Errorf("failed to start index edge: %w", err)
 	}
 
 	// Sync WireGuard peers from RQLite (if WG is active on this node)

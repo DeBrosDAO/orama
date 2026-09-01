@@ -30,13 +30,20 @@ const (
 type ServiceName string
 
 const (
-	ServiceRQLite    ServiceName = "rqlite"
-	ServiceOlric     ServiceName = "olric"
-	ServiceGateway   ServiceName = "gateway"
-	ServiceIPFS      ServiceName = "ipfs"
-	ServiceWireGuard ServiceName = "wireguard"
-	ServiceCoreDNS   ServiceName = "coredns"
-	ServicePubsub    ServiceName = "pubsub"
+	ServiceRQLite       ServiceName = "rqlite"
+	ServiceOlric        ServiceName = "olric"
+	ServiceGateway      ServiceName = "gateway"
+	ServiceIPFS         ServiceName = "ipfs"
+	ServiceIPFSCluster  ServiceName = "ipfs-cluster"
+	ServiceIPFSGC       ServiceName = "ipfs-gc"
+	ServiceWireGuard    ServiceName = "wireguard"
+	ServiceVault        ServiceName = "vault"
+	ServiceCaddy        ServiceName = "caddy"
+	ServiceNtfy         ServiceName = "ntfy"
+	ServiceAnyoneClient ServiceName = "anyone-client"
+	ServiceSNIRouter    ServiceName = "sni-router"
+	ServiceCoreDNS      ServiceName = "coredns"
+	ServicePubsub       ServiceName = "pubsub"
 )
 
 // Named blueprints. Index and nameserver are reserved; they are not
@@ -78,18 +85,47 @@ func BlueprintTenant() Blueprint {
 	return BlueprintTenantN(DefaultRQLiteNodeCount)
 }
 
-// BlueprintIndex is the host/control plane on this machine: rqlite + olric
-// on the existing 5001/7001 and 3320/3322. Gateway stays out until
-// BlueprintIndexWithGateway (phase 4). Membership is all nodes; ClusterManager
-// must not select or allocate tenant ports.
+// BlueprintIndex is the host/control plane on this machine. Membership is
+// all nodes; ClusterManager must not select or allocate tenant ports.
+// Gateway stays out until BlueprintIndexWithGateway.
 func BlueprintIndex() Blueprint {
 	return Blueprint{
 		Name:       BlueprintNameIndex,
 		Membership: MembersAll,
 		Services: []ServiceSpec{
 			{
-				Name:  ServiceRQLite,
+				Name:  ServiceWireGuard,
 				Order: 1,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexWireGuardPort},
+				},
+			},
+			{
+				Name:  ServiceIPFS,
+				Order: 2,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexIPFSAPIPort},
+				},
+			},
+			{
+				Name:  ServiceIPFSCluster,
+				Order: 3,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexIPFSClusterAPIPort},
+				},
+			},
+			{
+				Name:      ServiceIPFSGC,
+				Order:     4,
+				Scope:     ScopeIndex,
+				PortNeeds: nil,
+			},
+			{
+				Name:  ServiceRQLite,
+				Order: 5,
 				Scope: ScopeReusable,
 				PortNeeds: []PortNeed{
 					{Fixed: IndexRQLiteHTTPPort},
@@ -98,7 +134,7 @@ func BlueprintIndex() Blueprint {
 			},
 			{
 				Name:  ServiceOlric,
-				Order: 2,
+				Order: 6,
 				Scope: ScopeReusable,
 				PortNeeds: []PortNeed{
 					{Fixed: IndexOlricHTTPPort},
@@ -107,27 +143,82 @@ func BlueprintIndex() Blueprint {
 			},
 			{
 				Name:  ServicePubsub,
-				Order: 3,
+				Order: 7,
 				Scope: ScopeIndex,
 				PortNeeds: []PortNeed{
 					{Fixed: IndexPubsubPort},
+				},
+			},
+			{
+				Name:  ServiceVault,
+				Order: 9,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexVaultPort},
+				},
+			},
+			{
+				Name:  ServiceSNIRouter,
+				Order: 10,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexCaddyHTTPSPort},
+				},
+			},
+			{
+				Name:  ServiceCaddy,
+				Order: 11,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexCaddyHTTPPort},
+					{Fixed: IndexCaddyHTTPSPort},
+				},
+			},
+			{
+				Name:  ServiceNtfy,
+				Order: 12,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexNtfyPort},
+				},
+			},
+			{
+				Name:  ServiceAnyoneClient,
+				Order: 13,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexAnyoneSOCKSPort},
 				},
 			},
 		},
 	}
 }
 
-// BlueprintIndexWithGateway is BlueprintIndex plus the core gateway on :6001.
+// BlueprintIndexWithGateway is BlueprintIndex plus the core gateway on :6001,
+// inserted after pubsub (before vault / edge TLS).
 func BlueprintIndexWithGateway() Blueprint {
 	bp := BlueprintIndex()
-	bp.Services = append(bp.Services, ServiceSpec{
+	gw := ServiceSpec{
 		Name:  ServiceGateway,
-		Order: 4,
+		Order: 8,
 		Scope: ScopeReusable,
 		PortNeeds: []PortNeed{
 			{Fixed: IndexGatewayHTTPPort},
 		},
-	})
+	}
+	out := make([]ServiceSpec, 0, len(bp.Services)+1)
+	inserted := false
+	for _, spec := range bp.Services {
+		out = append(out, spec)
+		if spec.Name == ServicePubsub {
+			out = append(out, gw)
+			inserted = true
+		}
+	}
+	if !inserted {
+		out = append(out, gw)
+	}
+	bp.Services = out
 	return bp
 }
 

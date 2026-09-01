@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule periodic IPFS repo garbage collection (%i)
+PartOf=orama-node.service
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=6h
+RandomizedDelaySec=30min
+Unit=orama-namespace-ipfs-gc@%i.service
+
+[Install]
+WantedBy=timers.target

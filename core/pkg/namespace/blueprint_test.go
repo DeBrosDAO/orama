@@ -65,7 +65,14 @@ func TestBlueprintTenant_rejectsIndexSingletons(t *testing.T) {
 	base := BlueprintTenant()
 	singletons := []ServiceSpec{
 		{Name: ServiceIPFS, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceIPFSCluster, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceIPFSGC, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceWireGuard, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceVault, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceCaddy, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceNtfy, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceAnyoneClient, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceSNIRouter, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceCoreDNS, Scope: ScopeNameserver, Order: 99},
 		{Name: ServicePubsub, Scope: ScopeIndex, Order: 99},
 	}
@@ -116,9 +123,18 @@ func TestBlueprintIndex_fixedPortsNotTenantRange(t *testing.T) {
 	if err := bp.Validate(); err != nil {
 		t.Fatalf("BlueprintIndex must be valid: %v", err)
 	}
-	want := []ServiceName{ServiceRQLite, ServiceOlric, ServicePubsub}
+	want := []ServiceName{
+		ServiceWireGuard, ServiceIPFS, ServiceIPFSCluster, ServiceIPFSGC,
+		ServiceRQLite, ServiceOlric, ServicePubsub,
+		ServiceVault, ServiceSNIRouter, ServiceCaddy, ServiceNtfy, ServiceAnyoneClient,
+	}
 	if len(bp.Services) != len(want) {
-		t.Fatalf("len(Services) = %d, want %d", len(bp.Services), len(want))
+		t.Fatalf("len(Services) = %d, want %d (%v)", len(bp.Services), len(want), serviceNames(bp))
+	}
+	for i, name := range want {
+		if bp.Services[i].Name != name {
+			t.Errorf("Services[%d] = %s, want %s", i, bp.Services[i].Name, name)
+		}
 	}
 	for _, spec := range bp.Services {
 		for _, p := range spec.PortNeeds {
@@ -132,11 +148,12 @@ func TestBlueprintIndex_fixedPortsNotTenantRange(t *testing.T) {
 	}
 
 	withGW := BlueprintIndexWithGateway()
-	if len(withGW.Services) != 4 || withGW.Services[3].Name != ServiceGateway {
-		t.Fatalf("BlueprintIndexWithGateway services = %v, want rqlite,olric,pubsub,gateway", serviceNames(withGW))
-	}
 	if err := withGW.Validate(); err != nil {
 		t.Fatalf("BlueprintIndexWithGateway must be valid: %v", err)
+	}
+	names := serviceNames(withGW)
+	if names[6] != ServicePubsub || names[7] != ServiceGateway || names[8] != ServiceVault {
+		t.Fatalf("gateway must sit after pubsub and before vault, got %v", names)
 	}
 }
 

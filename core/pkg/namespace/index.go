@@ -131,6 +131,9 @@ func (s *IndexSupervisor) EnsureOlric(ctx context.Context, nodeID, bindAddr stri
 		AdvertiseAddr:  bindAddr,
 		PeerAddresses:  peers,
 	}
+	if err := stopLeftoverUnits("orama-olric.service"); err != nil {
+		s.logger.Warn("stop leftover orama-olric", zap.Error(err))
+	}
 	if _, err := os.Stat(hostCfg); err == nil {
 		envVars := map[string]string{
 			"OLRIC_SERVER_CONFIG": hostCfg,
@@ -147,7 +150,7 @@ func (s *IndexSupervisor) EnsureOlric(ctx context.Context, nodeID, bindAddr stri
 			return err
 		}
 	}
-	return disableHostOlric()
+	return disableLeftoverUnits("orama-olric.service")
 }
 
 // EnsurePubsub starts orama-namespace-pubsub@index on 127.0.0.1:10105.
@@ -186,18 +189,61 @@ func (s *IndexSupervisor) EnsureGateway(ctx context.Context, cfg gateway.Instanc
 	return nil
 }
 
-func disableHostOlric() error {
-	for _, args := range [][]string{
-		{"stop", "orama-olric.service"},
-		{"disable", "orama-olric.service"},
-	} {
-		cmd := exec.Command("systemctl", args...)
-		if os.Getuid() != 0 {
-			cmd = exec.Command("sudo", append([]string{"systemctl"}, args...)...)
-		}
+func systemctlCmd(args ...string) *exec.Cmd {
+	if os.Getuid() == 0 {
+		return exec.Command("systemctl", args...)
+	}
+	return exec.Command("sudo", append([]string{"systemctl"}, args...)...)
+}
+
+func unitActive(unit string) bool {
+	return systemctlCmd("is-active", "--quiet", unit).Run() == nil
+}
+
+// disableLeftoverUnits removes boot enablement without stopping the process.
+// Used for WireGuard so we never bounce wg0 (that drops mesh peers).
+func disableLeftoverUnits(units ...string) error {
+	var first error
+	for _, unit := range units {
+		cmd := systemctlCmd("disable", unit)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("systemctl %s orama-olric.service: %w (%s)", args[0], err, out)
+			msg := string(out)
+			if strings.Contains(msg, "No such file") || strings.Contains(msg, "not found") || strings.Contains(msg, "does not exist") {
+				continue
+			}
+			if first == nil {
+				first = fmt.Errorf("systemctl disable %s: %w (%s)", unit, err, msg)
+			}
 		}
+	}
+	return first
+}
+
+// stopLeftoverUnits stops pre-factory host units so @index can bind the same ports.
+// Do not use this on wg-quick@wg0 — that runs wg-quick down.
+func stopLeftoverUnits(units ...string) error {
+	var first error
+	for _, unit := range units {
+		cmd := systemctlCmd("stop", unit)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			msg := string(out)
+			if strings.Contains(msg, "not loaded") || strings.Contains(msg, "not found") || strings.Contains(msg, "inactive") || strings.Contains(msg, "does not exist") {
+				continue
+			}
+			if first == nil {
+				first = fmt.Errorf("systemctl stop %s: %w (%s)", unit, err, msg)
+			}
+		}
+	}
+	return first
+}
+
+func (s *IndexSupervisor) writeEnvAndStart(nodeID string, st systemd.ServiceType, envVars map[string]string) error {
+	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameIndex, nodeID, st, envVars); err != nil {
+		return err
+	}
+	if err := s.systemdMgr.StartService(BlueprintNameIndex, st); err != nil {
+		return fmt.Errorf("start orama-namespace-%s@index: %w", st, err)
 	}
 	return nil
 }

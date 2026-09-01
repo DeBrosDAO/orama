@@ -10,15 +10,14 @@ import (
 
 var coreServices = []string{
 	"orama-node",
-	"orama-olric",
-	"orama-ipfs",
-	"orama-ipfs-cluster",
-	"orama-vault",
-	"orama-anyone-relay",
-	"orama-anyone-client",
+	"orama-namespace-olric@index",
+	"orama-namespace-ipfs@index",
+	"orama-namespace-ipfs-cluster@index",
+	"orama-namespace-vault@index",
+	"orama-namespace-anyone-client@index",
+	"orama-namespace-caddy@index",
+	"orama-namespace-wireguard@index",
 	"coredns",
-	"caddy",
-	"wg-quick@wg0",
 }
 
 func collectServices() *ServicesReport {

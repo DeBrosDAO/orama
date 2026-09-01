@@ -275,9 +275,8 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 
 	return fmt.Sprintf(`[Unit]
 Description=Orama Network Node
-After=orama-ipfs-cluster.service orama-olric.service wg-quick@wg0.service
-Wants=orama-ipfs-cluster.service orama-olric.service
-Requires=wg-quick@wg0.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

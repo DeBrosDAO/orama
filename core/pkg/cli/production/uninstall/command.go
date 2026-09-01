@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // Handle executes the uninstall command
@@ -85,11 +87,7 @@ func stopNamespaceServices() {
 
 // removeNamespaceTemplates removes namespace template unit files
 func removeNamespaceTemplates() {
-	templatePatterns := []string{
-		"orama-namespace-rqlite@.service",
-		"orama-namespace-olric@.service",
-		"orama-namespace-gateway@.service",
-	}
+	templatePatterns := systemd.TemplateUnits
 	for _, pattern := range templatePatterns {
 		unitPath := filepath.Join("/etc/systemd/system", pattern)
 		if _, err := os.Stat(unitPath); err == nil {

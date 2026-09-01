@@ -14,6 +14,7 @@ func TestCheckSystem_HealthyNode(t *testing.T) {
 			"orama-olric":        "active",
 			"orama-ipfs":         "active",
 			"orama-ipfs-cluster": "active",
+			"caddy":              "active",
 			"wg-quick@wg0":       "active",
 		},
 		FailedUnits:    nil,
@@ -42,6 +43,7 @@ func TestCheckSystem_HealthyNode(t *testing.T) {
 	expectStatus(t, results, "system.svc_orama_olric", inspector.StatusPass)
 	expectStatus(t, results, "system.svc_orama_ipfs", inspector.StatusPass)
 	expectStatus(t, results, "system.svc_orama_ipfs_cluster", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_caddy", inspector.StatusPass)
 	expectStatus(t, results, "system.svc_wg", inspector.StatusPass)
 	expectStatus(t, results, "system.no_failed_units", inspector.StatusPass)
 	expectStatus(t, results, "system.memory", inspector.StatusPass)
@@ -67,6 +69,7 @@ func TestCheckSystem_ServiceInactive(t *testing.T) {
 			"orama-olric":        "inactive",
 			"orama-ipfs":         "active",
 			"orama-ipfs-cluster": "failed",
+			"caddy":              "active",
 		},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
@@ -95,6 +98,27 @@ func TestCheckSystem_NameserverServices(t *testing.T) {
 	expectStatus(t, results, "system.svc_caddy", inspector.StatusPass)
 }
 
+func TestCheckSystem_IndexUnitsAlias(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.System = &inspector.SystemData{
+		Services: map[string]string{
+			"orama-node":                         "active",
+			"orama-namespace-olric@index":        "active",
+			"orama-namespace-ipfs@index":         "active",
+			"orama-namespace-ipfs-cluster@index": "active",
+			"orama-namespace-caddy@index":        "active",
+			"orama-namespace-wireguard@index":    "active",
+		},
+	}
+	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
+	results := CheckSystem(data)
+	expectStatus(t, results, "system.svc_orama_olric", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_ipfs", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_orama_ipfs_cluster", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_caddy", inspector.StatusPass)
+	expectStatus(t, results, "system.svc_wg", inspector.StatusPass)
+}
+
 func TestCheckSystem_NameserverServicesNotCheckedOnRegularNode(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
@@ -103,6 +127,7 @@ func TestCheckSystem_NameserverServicesNotCheckedOnRegularNode(t *testing.T) {
 			"orama-olric":        "active",
 			"orama-ipfs":         "active",
 			"orama-ipfs-cluster": "active",
+			"caddy":              "active",
 		},
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})

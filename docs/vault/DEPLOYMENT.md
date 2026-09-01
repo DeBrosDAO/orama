@@ -145,35 +145,13 @@ sudo chmod 700 /opt/orama/.orama/data/vault
 
 ## Systemd Service
 
-The project includes a systemd service file at `systemd/orama-vault.service`:
+The live unit is `orama-namespace-vault@index`, started by `orama-node`. Data stays at `/opt/orama/.orama/data/vault` (adopt in place). The template lives at `core/systemd/orama-namespace-vault@.service`.
 
 ```ini
 [Unit]
-Description=Orama Vault Guardian
-Documentation=https://github.com/orama-network/debros
-After=network.target
+Description=Orama Namespace Vault Guardian (%i)
+After=network-online.target orama-namespace-wireguard@%i.service
 PartOf=orama-node.service
-
-[Service]
-Type=simple
-ExecStart=/opt/orama/bin/vault-guardian --config /opt/orama/.orama/data/vault/vault.yaml
-Restart=on-failure
-RestartSec=5s
-
-# Security hardening
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=/opt/orama/.orama/data/vault
-NoNewPrivileges=yes
-
-# Allow mlock for secure memory
-LimitMEMLOCK=67108864
-
-# Resource limits
-MemoryMax=512M
-
-[Install]
-WantedBy=multi-user.target
 ```
 
 ### Installation
@@ -183,27 +161,17 @@ WantedBy=multi-user.target
 sudo cp zig-out/bin/vault-guardian /opt/orama/bin/vault-guardian
 sudo chmod 755 /opt/orama/bin/vault-guardian
 
-# Copy service file
-sudo cp systemd/orama-vault.service /etc/systemd/system/orama-vault.service
-
-# Reload systemd
-sudo systemctl daemon-reload
-
-# Enable and start
-sudo systemctl enable orama-vault
-sudo systemctl start orama-vault
-
 # Check status
-sudo systemctl status orama-vault
+sudo systemctl status orama-namespace-vault@index
 ```
 
 ### Service Dependencies
 
 The service is `PartOf=orama-node.service`, meaning:
 
-- When `orama-node.service` is stopped, `orama-vault` is also stopped.
-- When `orama-node.service` is restarted, `orama-vault` is also restarted.
-- `After=network.target` ensures the network stack is up before the guardian starts.
+- When `orama-node.service` is stopped, `orama-namespace-vault@index` is also stopped.
+- When `orama-node.service` is restarted, the supervisor starts vault again.
+- WireGuard is up first (`After=orama-namespace-wireguard@index`).
 
 ### Restart Behavior
 

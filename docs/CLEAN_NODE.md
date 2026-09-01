@@ -10,8 +10,11 @@ Run this as root or with sudo on the target VPS:
 
 ```bash
 # 1. Stop and disable all services
-sudo systemctl stop orama-node orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
-sudo systemctl disable orama-node orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
+sudo systemctl stop orama-node 2>/dev/null
+sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
+sudo systemctl disable orama-node 2>/dev/null
+sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
+sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
 
 # 1b. Kill leftover processes (binaries may run outside systemd)
 sudo pkill -f orama-node 2>/dev/null; sudo pkill -f ipfs-cluster-service 2>/dev/null
@@ -78,13 +81,13 @@ echo "Node cleaned. Ready for fresh install."
 | **App data** | `/opt/orama/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
 | **Source code** | `/opt/orama/src/` |
 | **Binaries** | `/opt/orama/bin/orama-node`, `/opt/orama/bin/gateway`, `/opt/orama/bin/vault-guardian` |
-| **Systemd** | `orama-*.service`, `orama-ipfs-gc.timer`, `coredns.service`, `caddy.service`, `orama-deploy-*.service` |
+| **Systemd** | `orama-node.service`, `orama-namespace-*@index`, leftover `orama-*.service`, `coredns.service`, `caddy.service`, `orama-deploy-*.service` |
 | **WireGuard** | `/etc/wireguard/wg0.conf`, `wg-quick@wg0` systemd unit |
 | **Firewall** | All UFW rules (reset to default + SSH only) |
 | **User** | `orama` system user, `/etc/sudoers.d/orama-*` (incl. `orama-namespaces`) |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
-| **Anyone** | `orama-anyone-client.service` (and leftover `orama-anyone-relay.service` if present) |
+| **Anyone** | `orama-namespace-anyone-client@index` (and leftover `orama-anyone-client.service` / `orama-anyone-relay.service` if present) |
 | **Temp files** | `/tmp/orama`, `/tmp/network-source.*`, build dirs |
 
 ## What This Does NOT Remove
@@ -141,9 +144,12 @@ for entry in "${NODES[@]}"; do
   IFS=: read -r userhost pass <<< "$entry"
   echo "Cleaning $userhost..."
   sshpass -p "$pass" ssh -o StrictHostKeyChecking=no "$userhost" 'bash -s' << 'CLEAN'
-sudo systemctl stop orama-node orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
-sudo systemctl disable orama-node orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy 2>/dev/null
-sudo rm -f /etc/systemd/system/orama-*.service /etc/systemd/system/orama-*.timer /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service
+sudo systemctl stop orama-node 2>/dev/null
+sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
+sudo systemctl disable orama-node 2>/dev/null
+sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
+sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
+sudo rm -f /etc/systemd/system/orama-*.service /etc/systemd/system/orama-*.timer /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service /etc/systemd/system/ntfy.service
 sudo systemctl daemon-reload
 sudo systemctl stop wg-quick@wg0 2>/dev/null
 sudo wg-quick down wg0 2>/dev/null

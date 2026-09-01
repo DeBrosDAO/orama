@@ -141,6 +141,32 @@ func TestGenerateRQLiteServiceArgs(t *testing.T) {
 	}
 }
 
+func TestGenerateNodeService_supervisorOnly(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+	unit := ssg.GenerateNodeService()
+	for _, want := range []string{
+		"After=network-online.target",
+		"Wants=network-online.target",
+		"ExecStart=/opt/orama/bin/orama-node",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("node unit missing %q, got:\n%s", want, unit)
+		}
+	}
+	for _, not := range []string{
+		"Requires=wg-quick@wg0",
+		"After=orama-ipfs-cluster",
+		"After=orama-olric",
+	} {
+		if strings.Contains(unit, not) {
+			t.Errorf("node unit must not depend on leftover host unit %q, got:\n%s", not, unit)
+		}
+	}
+}
+
 // TestGenerateIPFSGCService verifies the one-shot GC unit: it must run
 // `ipfs repo gc`, be ordered after (and require) the IPFS daemon, point at the
 // repo via IPFS_PATH, and — being timer-triggered — must NOT install itself.

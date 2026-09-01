@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/environments/production/installers"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // ProductionSetup orchestrates the entire production deployment
@@ -23,7 +23,7 @@ type ProductionSetup struct {
 	forceReconfigure   bool
 	skipOptionalDeps   bool
 	skipResourceChecks bool
-	isNameserver       bool // Whether this node is a nameserver (runs CoreDNS + Caddy)
+	isNameserver       bool // Whether this node is a nameserver (runs CoreDNS)
 	isAnyoneClient     bool // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	privChecker        *PrivilegeChecker
 	osDetector         *OSDetector
@@ -568,7 +568,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	ps.logf("  ✓ Node config generated: %s", configFile)
 
 	// Gateway configuration is now embedded in each node's config
-	// No separate gateway.yaml needed - each node runs its own embedded gateway
+	// Index gateway is orama-namespace-gateway@index; no separate host gateway.yaml
 
 	// Olric config:
 	// - HTTP API binds to localhost for security (accessed via gateway)
@@ -766,12 +766,12 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Olric service created")
 
-	// Node service (unified - includes embedded gateway)
+	// Node service (supervisor: starts orama-namespace-*@index)
 	nodeUnit := ps.serviceGenerator.GenerateNodeService()
 	if err := ps.serviceController.WriteServiceUnit("orama-node.service", nodeUnit); err != nil {
 		return fmt.Errorf("failed to write Node service: %w", err)
 	}
-	ps.logf("  ✓ Node service created: orama-node.service (with embedded gateway)")
+	ps.logf("  ✓ Node service created: orama-node.service (supervisor)")
 
 	// Vault Guardian service
 	vaultUnit := ps.serviceGenerator.GenerateVaultService()
@@ -842,32 +842,15 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable services (unified names - no bootstrap/node distinction)
-	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
-	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service", "orama-ipfs-gc.timer"}
-
-	// Add Anyone service if configured (client)
-	if ps.IsAnyoneClient() {
-		services = append(services, "orama-anyone-client.service")
-	}
-
-	// Add CoreDNS only for nameserver nodes
+	// Enable only orama-node. Host daemons are orama-namespace-*@index,
+	// started by the node supervisor. CoreDNS stays a nameserver unit (phase 7).
+	enable := []string{"orama-node.service"}
 	if ps.isNameserver {
 		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			services = append(services, "coredns.service")
+			enable = append(enable, "coredns.service")
 		}
 	}
-	// Add Caddy on ALL nodes (any node may host namespaces and need TLS)
-	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		services = append(services, "caddy.service")
-	}
-	// Add ntfy on every node (#72). The unit file is written by
-	// installers/ntfy.go::writeSystemdUnit during Phase 2.
-	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
-		services = append(services, "ntfy.service")
-	}
-	for _, svc := range services {
+	for _, svc := range enable {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
 		} else {
@@ -875,52 +858,26 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 
-	// Restart services in dependency order (restart instead of start ensures
-	// services pick up new configs even if already running from a previous install)
-	ps.logf("  Starting services...")
-
-	// Start infrastructure first (IPFS, Olric, Vault, Anyone) - RQLite is managed internally by each node
-	infraServices := []string{"orama-ipfs.service", "orama-olric.service", "orama-vault.service"}
-
-	// Add Anyone service if configured (client)
-	if ps.IsAnyoneClient() {
-		infraServices = append(infraServices, "orama-anyone-client.service")
-	}
-
-	for _, svc := range infraServices {
-		if err := ps.serviceController.RestartService(svc); err != nil {
-			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
+	for _, leftover := range systemd.LeftoverHostUnits {
+		if err := ps.serviceController.DisableService(leftover); err != nil {
+			ps.logf("  ℹ️  leftover %s not enabled: %v", leftover, err)
 		} else {
-			ps.logf("    - %s started", svc)
+			ps.logf("  ✓ Leftover disabled: %s", leftover)
 		}
 	}
-
-	// Wait a moment for infrastructure to stabilize
-	time.Sleep(2 * time.Second)
-
-	// Start IPFS Cluster
-	if err := ps.serviceController.RestartService("orama-ipfs-cluster.service"); err != nil {
-		ps.logf("  ⚠️  Failed to start orama-ipfs-cluster.service: %v", err)
+	if err := ps.serviceController.DisableService(systemd.LeftoverWireGuardUnit); err != nil {
+		ps.logf("  ℹ️  leftover %s not enabled: %v", systemd.LeftoverWireGuardUnit, err)
 	} else {
-		ps.logf("    - orama-ipfs-cluster.service started")
+		ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
 	}
 
-	// Start the IPFS GC timer (the daemon has no in-process GC; this drives reclaim).
-	// The one-shot service it triggers is ordered After/Requires orama-ipfs.service.
-	if err := ps.serviceController.RestartService("orama-ipfs-gc.timer"); err != nil {
-		ps.logf("  ⚠️  Failed to start orama-ipfs-gc.timer: %v", err)
-	} else {
-		ps.logf("    - orama-ipfs-gc.timer started")
-	}
-
-	// Start node service (gateway is embedded in node, no separate service needed)
+	ps.logf("  Starting orama-node (supervisor starts @index host stack)...")
 	if err := ps.serviceController.RestartService("orama-node.service"); err != nil {
 		ps.logf("  ⚠️  Failed to start orama-node.service: %v", err)
 	} else {
-		ps.logf("    - orama-node.service started (with embedded gateway)")
+		ps.logf("    - orama-node.service started")
 	}
 
-	// Start CoreDNS (nameserver nodes only)
 	if ps.isNameserver {
 		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
 			if err := ps.serviceController.RestartService("coredns.service"); err != nil {
@@ -928,51 +885,6 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 			} else {
 				ps.logf("    - coredns.service started")
 			}
-		}
-	}
-	// Start Caddy on ALL nodes (any node may host namespaces and need TLS)
-	// Caddy depends on orama-node.service (gateway on :6001), so start after node
-	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		if err := ps.serviceController.RestartService("caddy.service"); err != nil {
-			ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
-		} else {
-			ps.logf("    - caddy.service started")
-		}
-	}
-
-	// Stealth TURN-over-443 (feat-124) cutover. Caddy has just been
-	// reconfigured to :8443 and restarted above, so :443 is now free for the
-	// SNI router. When opted in, enable+start the router; when not, stop+disable
-	// it so a node that flipped the flag off cleanly returns :443 to Caddy.
-	sniSvc := ps.binaryInstaller.SNIRouterServiceName()
-	if ps.configGenerator.SNIRouterEnabled() {
-		if err := ps.serviceController.EnableService(sniSvc); err != nil {
-			ps.logf("  ⚠️  Failed to enable %s: %v", sniSvc, err)
-		}
-		if err := ps.serviceController.RestartService(sniSvc); err != nil {
-			ps.logf("  ⚠️  Failed to start %s: %v", sniSvc, err)
-		} else {
-			ps.logf("    - %s started (owns :443)", sniSvc)
-		}
-	} else {
-		// Not opted in: ensure the router is not holding :443. Errors are
-		// non-fatal — the unit may simply not be loaded on this node.
-		if err := ps.serviceController.StopService(sniSvc); err != nil {
-			ps.logf("  ℹ️  %s not running (expected when disabled): %v", sniSvc, err)
-		}
-		if err := ps.serviceController.DisableService(sniSvc); err != nil {
-			ps.logf("  ℹ️  %s not enabled (expected when disabled): %v", sniSvc, err)
-		}
-	}
-
-	// Start ntfy on every node (#72). Caddy must already be up (it
-	// terminates TLS for push.<dnsZone>), which the order above
-	// guarantees.
-	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
-		if err := ps.serviceController.RestartService("ntfy.service"); err != nil {
-			ps.logf("  ⚠️  Failed to start ntfy.service: %v", err)
-		} else {
-			ps.logf("    - ntfy.service started")
 		}
 	}
 
@@ -1163,25 +1075,17 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf(strings.Repeat("=", 70))
 	ps.logf("\nNode Peer ID: %s", peerID)
 	ps.logf("\nService Management:")
-	ps.logf("  systemctl status orama-ipfs")
+	ps.logf("  systemctl status orama-node")
+	ps.logf("  systemctl status orama-namespace-ipfs@index")
 	ps.logf("  journalctl -u orama-node -f")
 	ps.logf("  tail -f %s/logs/node.log", ps.oramaDir)
 	ps.logf("\nLog Files:")
-	ps.logf("  %s/logs/ipfs.log", ps.oramaDir)
-	ps.logf("  %s/logs/ipfs-cluster.log", ps.oramaDir)
-	ps.logf("  %s/logs/olric.log", ps.oramaDir)
+	ps.logf("  journalctl -u orama-namespace-ipfs@index")
+	ps.logf("  journalctl -u orama-namespace-gateway@index")
 	ps.logf("  %s/logs/node.log", ps.oramaDir)
-	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
-	ps.logf("  %s/logs/vault.log", ps.oramaDir)
 
-	// Anyone mode-specific logs and commands
-	if ps.IsAnyoneClient() {
-		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-client orama-node")
-	} else {
-		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-node")
-	}
+	ps.logf("\nStart supervisor (starts @index host stack):")
+	ps.logf("  systemctl start orama-node")
 
 	ps.logf("\nVerify Installation:")
 	ps.logf("  curl http://localhost:6001/health")

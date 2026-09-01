@@ -642,7 +642,10 @@ func (b *Builder) copySystemdTemplates() error {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".service") {
+		if entry.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".service") && !strings.HasSuffix(entry.Name(), ".timer") {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(systemdSrc, entry.Name()))

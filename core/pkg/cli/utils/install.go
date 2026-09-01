@@ -70,11 +70,8 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("  - %s/configs/olric/config.yaml\n", oramaDir)
 
 	fmt.Printf("\n⚙️  Systemd services that would be created:\n")
-	fmt.Printf("  - orama-ipfs.service\n")
-	fmt.Printf("  - orama-ipfs-cluster.service\n")
-	fmt.Printf("  - orama-olric.service\n")
-	fmt.Printf("  - orama-node.service (includes embedded gateway + RQLite)\n")
-	fmt.Printf("  - orama-anyone-client.service\n")
+	fmt.Printf("  - orama-node.service (enabled; supervisor starts @index host stack)\n")
+	fmt.Printf("  - orama-namespace-*@index (ipfs, cluster, rqlite, olric, gateway, caddy, …)\n")
 
 	fmt.Printf("\n🌐 Ports that would be used:\n")
 	fmt.Printf("  External (must be open in firewall):\n")

@@ -26,7 +26,9 @@ func collectAnyone() *AnyoneReport {
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		if out, err := runCmd(ctx, "systemctl", "is-active", "orama-anyone-client"); err == nil {
+		if out, err := runCmd(ctx, "systemctl", "is-active", "orama-namespace-anyone-client@index"); err == nil && strings.TrimSpace(out) == "active" {
+			r.ClientActive = true
+		} else if out, err := runCmd(ctx, "systemctl", "is-active", "orama-anyone-client"); err == nil {
 			r.ClientActive = strings.TrimSpace(out) == "active"
 		}
 	}

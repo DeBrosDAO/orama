@@ -566,17 +566,17 @@ func collectOlric(ctx context.Context, node Node) *OlricData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active orama-olric 2>/dev/null
+(systemctl is-active --quiet orama-namespace-olric@index && echo active) || (systemctl is-active --quiet orama-olric && echo active) || echo inactive
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep ':3322 ' | head -1
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
+journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
+journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
+journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
 echo "$SEP"
-systemctl show orama-olric --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show orama-namespace-olric@index --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
 ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 `
@@ -610,9 +610,9 @@ func collectIPFS(ctx context.Context, node Node) *IPFSData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active orama-ipfs 2>/dev/null
+(systemctl is-active --quiet orama-namespace-ipfs@index && echo active) || (systemctl is-active --quiet orama-ipfs && echo active) || echo inactive
 echo "$SEP"
-systemctl is-active orama-ipfs-cluster 2>/dev/null
+(systemctl is-active --quiet orama-namespace-ipfs-cluster@index && echo active) || (systemctl is-active --quiet orama-ipfs-cluster && echo active) || echo inactive
 echo "$SEP"
 curl -sf -X POST 'http://localhost:4501/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
@@ -817,7 +817,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 ip -4 addr show wg0 2>/dev/null | grep -oP 'inet \K[0-9.]+'
 echo "$SEP"
-systemctl is-active wg-quick@wg0 2>/dev/null
+(systemctl is-active --quiet orama-namespace-wireguard@index && echo active) || (systemctl is-active --quiet wg-quick@wg0 && echo active) || echo inactive
 echo "$SEP"
 cat /sys/class/net/wg0/mtu 2>/dev/null || echo 0
 echo "$SEP"
@@ -886,9 +886,13 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	}
 
 	services := []string{
-		"orama-node", "orama-ipfs", "orama-ipfs-cluster",
-		"orama-olric", "orama-anyone-relay", "orama-anyone-client",
-		"coredns", "caddy", "wg-quick@wg0",
+		"orama-node",
+		"orama-namespace-ipfs@index", "orama-ipfs",
+		"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster",
+		"orama-namespace-olric@index", "orama-olric",
+		"orama-namespace-anyone-client@index", "orama-anyone-relay", "orama-anyone-client",
+		"orama-namespace-caddy@index", "coredns", "caddy",
+		"orama-namespace-wireguard@index", "wg-quick@wg0",
 	}
 
 	cmd := `SEP="===INSPECTOR_SEP==="`
@@ -1153,7 +1157,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 systemctl is-active orama-anyone-relay 2>/dev/null || echo inactive
 echo "$SEP"
-systemctl is-active orama-anyone-client 2>/dev/null || echo inactive
+(systemctl is-active --quiet orama-namespace-anyone-client@index && echo active) || (systemctl is-active --quiet orama-anyone-client && echo active) || echo inactive
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep -q ':9001 ' && echo yes || echo no
 echo "$SEP"

@@ -193,7 +193,11 @@ func GetProductionServices() []string {
 	namespacesDir := "/opt/orama/.orama/data/namespaces"
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
-		serviceTypes := []string{"rqlite", "olric", "gateway", "sfu", "turn", "pubsub"}
+		serviceTypes := []string{
+			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
+			"wireguard", "ipfs", "ipfs-cluster", "ipfs-gc", "vault",
+			"caddy", "ntfy", "anyone-client", "sni-router",
+		}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {
 				continue

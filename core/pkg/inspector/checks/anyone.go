@@ -43,7 +43,7 @@ func checkAnyonePerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	if !a.ClientActive {
 		r = append(r, inspector.Fail("anyone.client_active", "Anyone client service active", anyoneSub, node,
-			"orama-anyone-client is not active (/v1/proxy/anon needs SOCKS on :9050)", inspector.High))
+			"orama-namespace-anyone-client@index is not active (/v1/proxy/anon needs SOCKS on :9050)", inspector.High))
 		return r
 	}
 

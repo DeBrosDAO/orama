@@ -21,6 +21,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // Orchestrator manages the install process
@@ -588,14 +589,7 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 	}
 	systemdDir := "/etc/systemd/system"
 
-	templates := []string{
-		"orama-namespace-rqlite@.service",
-		"orama-namespace-olric@.service",
-		"orama-namespace-gateway@.service",
-		"orama-namespace-sfu@.service",
-		"orama-namespace-turn@.service",
-		"orama-namespace-pubsub@.service",
-	}
+	templates := systemd.TemplateUnits
 
 	installedCount := 0
 	for _, template := range templates {

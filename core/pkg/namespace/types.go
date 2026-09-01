@@ -98,6 +98,16 @@ const (
 	// IndexPubsubPort is the localhost HTTP API for the app GossipSub mesh.
 	// Phase 8 keeps this number when internals move to 10100+.
 	IndexPubsubPort = 10105
+
+	// Host-stack edge / singleton ports. Unchanged by the 10100 renumber.
+	IndexWireGuardPort      = 51820
+	IndexIPFSAPIPort        = 4501
+	IndexIPFSClusterAPIPort = 9094
+	IndexVaultPort          = 7500
+	IndexCaddyHTTPPort      = 80
+	IndexCaddyHTTPSPort     = 443
+	IndexNtfyPort           = 8090
+	IndexAnyoneSOCKSPort    = 9050
 )
 
 // WebRTC port allocation constants
