@@ -119,6 +119,23 @@ func TestCheckSystem_IndexUnitsAlias(t *testing.T) {
 	expectStatus(t, results, "system.svc_wg", inspector.StatusPass)
 }
 
+func TestCheckSystem_NameserverCoreDNSAlias(t *testing.T) {
+	nd := makeNodeData("5.5.5.5", "nameserver-ns1")
+	nd.System = &inspector.SystemData{
+		Services: map[string]string{
+			"orama-node":                         "active",
+			"orama-olric":                        "active",
+			"orama-ipfs":                         "active",
+			"orama-ipfs-cluster":                 "active",
+			"caddy":                              "active",
+			"orama-namespace-coredns@nameserver": "active",
+		},
+	}
+	data := makeCluster(map[string]*inspector.NodeData{"5.5.5.5": nd})
+	results := CheckSystem(data)
+	expectStatus(t, results, "system.svc_coredns", inspector.StatusPass)
+}
+
 func TestCheckSystem_NameserverServicesNotCheckedOnRegularNode(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{

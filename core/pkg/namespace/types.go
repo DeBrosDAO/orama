@@ -108,6 +108,9 @@ const (
 	IndexCaddyHTTPSPort     = 443
 	IndexNtfyPort           = 8090
 	IndexAnyoneSOCKSPort    = 9050
+
+	// NameserverDNSPort is CoreDNS on the nameserver blueprint. Edge; not 10100.
+	NameserverDNSPort = 53
 )
 
 // WebRTC port allocation constants

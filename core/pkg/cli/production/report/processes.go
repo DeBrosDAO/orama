@@ -98,7 +98,8 @@ var managedServiceUnits = []string{
 	"orama-namespace-rqlite@index",
 	"orama-namespace-gateway@index",
 	"orama-namespace-pubsub@index",
-	"coredns", "rqlited",
+	"orama-namespace-coredns@nameserver",
+	"rqlited",
 }
 
 // collectManagedPIDs queries systemd for the MainPID of each known service.
@@ -121,7 +122,7 @@ func collectManagedPIDs() map[int]bool {
 		nsServiceTypes := []string{
 			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
 			"wireguard", "ipfs", "ipfs-cluster", "vault", "caddy",
-			"ntfy", "anyone-client", "sni-router",
+			"ntfy", "anyone-client", "sni-router", "coredns",
 		}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {

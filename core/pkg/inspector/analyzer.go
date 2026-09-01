@@ -20,7 +20,8 @@ const systemPrompt = `You are a distributed systems expert analyzing health chec
 - **RQLite**: Raft consensus SQLite database. Requires N/2+1 quorum for writes. Each node runs one instance.
 - **Olric**: Distributed in-memory cache using memberlist protocol. Coordinates via elected coordinator node.
 - **IPFS**: Decentralized storage with private swarm (swarm key). Runs Kubo daemon + IPFS Cluster for pinning.
-- **CoreDNS + Caddy**: DNS resolution (port 53) and TLS termination (ports 80/443). Only on nameserver nodes.
+- **CoreDNS**: DNS resolution (port 53) on nameserver nodes (orama-namespace-coredns@nameserver).
+- **Caddy**: TLS termination (ports 80/443) on every node (orama-namespace-caddy@index).
 - **WireGuard**: Mesh VPN connecting all nodes via 10.0.0.0/8 on port 51820. All inter-node traffic goes over WG.
 - **Namespaces**: Isolated tenant environments. Each namespace runs its own RQLite + Olric + Gateway on a 5-port block (base+0=RQLite HTTP, +1=Raft, +2=Olric HTTP, +3=Memberlist, +4=Gateway).
 

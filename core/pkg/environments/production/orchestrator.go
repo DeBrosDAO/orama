@@ -842,14 +842,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable only orama-node. Host daemons are orama-namespace-*@index,
-	// started by the node supervisor. CoreDNS stays a nameserver unit (phase 7).
+	// Enable only orama-node. Host daemons are orama-namespace-*@index;
+	// CoreDNS is orama-namespace-coredns@nameserver. The supervisor starts both.
 	enable := []string{"orama-node.service"}
-	if ps.isNameserver {
-		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			enable = append(enable, "coredns.service")
-		}
-	}
 	for _, svc := range enable {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -870,22 +865,17 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	} else {
 		ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
 	}
+	if err := ps.serviceController.DisableService(systemd.LeftoverNameserverUnit); err != nil {
+		ps.logf("  ℹ️  leftover %s not enabled: %v", systemd.LeftoverNameserverUnit, err)
+	} else {
+		ps.logf("  ✓ Leftover disabled: %s", systemd.LeftoverNameserverUnit)
+	}
 
-	ps.logf("  Starting orama-node (supervisor starts @index host stack)...")
+	ps.logf("  Starting orama-node (supervisor starts @index host stack and @nameserver CoreDNS)...")
 	if err := ps.serviceController.RestartService("orama-node.service"); err != nil {
 		ps.logf("  ⚠️  Failed to start orama-node.service: %v", err)
 	} else {
 		ps.logf("    - orama-node.service started")
-	}
-
-	if ps.isNameserver {
-		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			if err := ps.serviceController.RestartService("coredns.service"); err != nil {
-				ps.logf("  ⚠️  Failed to start coredns.service: %v", err)
-			} else {
-				ps.logf("    - coredns.service started")
-			}
-		}
 	}
 
 	ps.logf("  ✓ All services started")

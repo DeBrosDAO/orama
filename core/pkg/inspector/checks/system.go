@@ -96,7 +96,7 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	// 6.3 CoreDNS (nameserver nodes only). Caddy is index, checked above.
 	if nd.Node.IsNameserver() {
-		status := serviceStatus(sys.Services, "coredns")
+		status := serviceStatus(sys.Services, "orama-namespace-coredns@nameserver", "coredns")
 		if status == "active" {
 			r = append(r, inspector.Pass("system.svc_coredns", "coredns service active", systemSub, node, "active", inspector.Critical))
 		} else {

@@ -4,7 +4,10 @@ This guide explains how to configure your domain registrar to use Orama Network 
 
 ## Overview
 
-When you install Orama with the `--nameserver` flag, the node runs CoreDNS to serve DNS records for your domain. This enables:
+When you install Orama with the `--nameserver` flag, `orama-node` starts
+`orama-namespace-coredns@nameserver` after index rqlite is up. CoreDNS still
+binds `:53` and reads zone data from index RQLite `dns_records`
+(`localhost:5001`) via the existing `/etc/coredns/Corefile`. This enables:
 
 - Dynamic DNS for deployments (e.g., `myapp.node-abc123.dbrs.space`)
 - Wildcard DNS support for all subdomains

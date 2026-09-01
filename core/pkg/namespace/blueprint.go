@@ -232,6 +232,25 @@ func IsReservedNamespace(name string) bool {
 	}
 }
 
+// BlueprintNameserver is CoreDNS on :53 for a node installed with --nameserver.
+// Membership is local (this node only). SNI router and Caddy are index, not here.
+func BlueprintNameserver() Blueprint {
+	return Blueprint{
+		Name:       BlueprintNameNameserver,
+		Membership: MembersLocal,
+		Services: []ServiceSpec{
+			{
+				Name:  ServiceCoreDNS,
+				Order: 1,
+				Scope: ScopeNameserver,
+				PortNeeds: []PortNeed{
+					{Fixed: NameserverDNSPort},
+				},
+			},
+		},
+	}
+}
+
 // BlueprintTenantN is a tenant cluster of n members. n=3 is the API-key
 // default (BlueprintTenant). n=1 is a single-node cluster (rqlite leader,
 // no -join). Port needs stay 2+2+1.

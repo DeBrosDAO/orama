@@ -29,6 +29,7 @@ const (
 	ServiceTypeNtfy         ServiceType = "ntfy"
 	ServiceTypeAnyoneClient ServiceType = "anyone-client"
 	ServiceTypeSNIRouter    ServiceType = "sni-router"
+	ServiceTypeCoreDNS      ServiceType = "coredns"
 )
 
 // LeftoverHostUnits are pre-factory host daemons. The installer still writes
@@ -49,6 +50,10 @@ var LeftoverHostUnits = []string{
 // LeftoverWireGuardUnit is disabled (not stopped) so wg0 is never bounced.
 const LeftoverWireGuardUnit = "wg-quick@wg0.service"
 
+// LeftoverNameserverUnit is the pre-factory CoreDNS unit. Disabled on install;
+// NameserverSupervisor starts orama-namespace-coredns@nameserver instead.
+const LeftoverNameserverUnit = "coredns.service"
+
 // TemplateUnits are the orama-namespace-*@ templates copied to /etc/systemd/system.
 var TemplateUnits = []string{
 	"orama-namespace-rqlite@.service",
@@ -67,6 +72,7 @@ var TemplateUnits = []string{
 	"orama-namespace-ntfy@.service",
 	"orama-namespace-anyone-client@.service",
 	"orama-namespace-sni-router@.service",
+	"orama-namespace-coredns@.service",
 }
 
 // Manager manages systemd units for namespace services

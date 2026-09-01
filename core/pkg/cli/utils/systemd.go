@@ -196,7 +196,7 @@ func GetProductionServices() []string {
 		serviceTypes := []string{
 			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
 			"wireguard", "ipfs", "ipfs-cluster", "ipfs-gc", "vault",
-			"caddy", "ntfy", "anyone-client", "sni-router",
+			"caddy", "ntfy", "anyone-client", "sni-router", "coredns",
 		}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {

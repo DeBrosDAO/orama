@@ -104,6 +104,10 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	if err := n.startNameserver(ctx); err != nil {
+		return fmt.Errorf("failed to start nameserver: %w", err)
+	}
+
 	if err := n.startIndexPubsub(ctx); err != nil {
 		return fmt.Errorf("failed to start index pubsub: %w", err)
 	}

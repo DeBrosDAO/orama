@@ -1,7 +1,7 @@
 [Unit]
 Description=Orama Namespace Caddy (%i)
 Documentation=https://caddyserver.com/docs/
-After=network-online.target orama-namespace-gateway@%i.service coredns.service
+After=network-online.target orama-namespace-gateway@%i.service orama-namespace-coredns@nameserver.service
 Wants=network-online.target
 PartOf=orama-node.service
 

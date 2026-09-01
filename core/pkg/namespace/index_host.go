@@ -154,3 +154,28 @@ func (s *IndexSupervisor) EnsureSNIRouter(nodeID string, enabled bool) error {
 		"NODE_ID": nodeID,
 	})
 }
+
+// EnsureCoreDNS starts orama-namespace-coredns@nameserver against the existing
+// Corefile. Call only on nodes installed with --nameserver, after index rqlite
+// is up. Zone data stays in index RQLite dns_records (localhost:5001).
+func (s *IndexSupervisor) EnsureCoreDNS(nodeID string) error {
+	if _, err := os.Stat("/usr/local/bin/coredns"); err != nil {
+		return fmt.Errorf("nameserver: /usr/local/bin/coredns not installed: %w", err)
+	}
+	if _, err := os.Stat("/etc/coredns/Corefile"); err != nil {
+		return fmt.Errorf("nameserver: missing /etc/coredns/Corefile: %w", err)
+	}
+	leftover := []string{systemd.LeftoverNameserverUnit}
+	if err := stopLeftoverUnits(leftover...); err != nil {
+		s.logger.Warn("stop leftover coredns", zap.Error(err))
+	}
+	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameNameserver, nodeID, systemd.ServiceTypeCoreDNS, map[string]string{
+		"NODE_ID": nodeID,
+	}); err != nil {
+		return err
+	}
+	if err := s.systemdMgr.StartService(BlueprintNameNameserver, systemd.ServiceTypeCoreDNS); err != nil {
+		return fmt.Errorf("start orama-namespace-coredns@nameserver: %w", err)
+	}
+	return disableLeftoverUnits(leftover...)
+}

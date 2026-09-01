@@ -165,6 +165,59 @@ func serviceNames(bp Blueprint) []ServiceName {
 	return out
 }
 
+func TestBlueprintNameserver_corednsOnly(t *testing.T) {
+	bp := BlueprintNameserver()
+	if bp.Name != BlueprintNameNameserver {
+		t.Errorf("Name = %q, want %q", bp.Name, BlueprintNameNameserver)
+	}
+	if bp.Membership != MembersLocal {
+		t.Errorf("Membership = %s, want %s", bp.Membership, MembersLocal)
+	}
+	if err := bp.Validate(); err != nil {
+		t.Fatalf("BlueprintNameserver must be valid: %v", err)
+	}
+	if len(bp.Services) != 1 || bp.Services[0].Name != ServiceCoreDNS {
+		t.Fatalf("services = %v, want [coredns]", serviceNames(bp))
+	}
+	if bp.Services[0].Scope != ScopeNameserver {
+		t.Errorf("coredns Scope = %s, want %s", bp.Services[0].Scope, ScopeNameserver)
+	}
+	if n := bp.PortNeedCount(); n != 0 {
+		t.Errorf("PortNeedCount = %d, want 0 (fixed :53)", n)
+	}
+	if got := bp.Services[0].PortNeeds[0].Fixed; got != NameserverDNSPort {
+		t.Errorf("coredns Fixed = %d, want %d", got, NameserverDNSPort)
+	}
+	if NameserverDNSPort != 53 {
+		t.Errorf("NameserverDNSPort = %d, want 53", NameserverDNSPort)
+	}
+
+	withSNI := bp
+	withSNI.Services = append(append([]ServiceSpec(nil), bp.Services...), ServiceSpec{
+		Name: ServiceSNIRouter, Scope: ScopeIndex, Order: 2,
+	})
+	if err := withSNI.Validate(); err == nil {
+		t.Fatal("nameserver blueprint must reject sni-router")
+	}
+	withCaddy := bp
+	withCaddy.Services = append(append([]ServiceSpec(nil), bp.Services...), ServiceSpec{
+		Name: ServiceCaddy, Scope: ScopeIndex, Order: 2,
+	})
+	if err := withCaddy.Validate(); err == nil {
+		t.Fatal("nameserver blueprint must reject caddy")
+	}
+}
+
+func TestBlueprintIndex_rejectsCoreDNS(t *testing.T) {
+	bp := BlueprintIndex()
+	bp.Services = append(bp.Services, ServiceSpec{
+		Name: ServiceCoreDNS, Scope: ScopeNameserver, Order: 99,
+	})
+	if err := bp.Validate(); err == nil {
+		t.Fatal("index blueprint must reject coredns")
+	}
+}
+
 func TestIsReservedNamespace(t *testing.T) {
 	if !IsReservedNamespace(BlueprintNameIndex) || !IsReservedNamespace(BlueprintNameNameserver) {
 		t.Fatal("index and nameserver must be reserved")

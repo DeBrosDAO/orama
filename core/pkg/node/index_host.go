@@ -73,3 +73,15 @@ func (n *Node) startIndexEdge(_ context.Context) error {
 	}
 	return nil
 }
+
+// startNameserver starts orama-namespace-coredns@nameserver after index rqlite.
+func (n *Node) startNameserver(_ context.Context) error {
+	if !n.isNameserverPreference() {
+		return nil
+	}
+	sup, nodeID, err := n.indexSupervisor()
+	if err != nil {
+		return err
+	}
+	return sup.EnsureCoreDNS(nodeID)
+}

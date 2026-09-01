@@ -17,7 +17,7 @@ var coreServices = []string{
 	"orama-namespace-anyone-client@index",
 	"orama-namespace-caddy@index",
 	"orama-namespace-wireguard@index",
-	"coredns",
+	"orama-namespace-coredns@nameserver",
 }
 
 func collectServices() *ServicesReport {

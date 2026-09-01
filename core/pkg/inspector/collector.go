@@ -681,7 +681,7 @@ func collectDNS(ctx context.Context, node Node) *DNSData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active coredns 2>/dev/null
+(systemctl is-active --quiet orama-namespace-coredns@nameserver && echo active) || (systemctl is-active --quiet coredns && echo active) || echo inactive
 echo "$SEP"
 systemctl is-active caddy 2>/dev/null
 echo "$SEP"
@@ -693,9 +693,9 @@ ss -tlnp 2>/dev/null | grep ':443 ' | head -1
 echo "$SEP"
 ps -C coredns -o rss= 2>/dev/null | head -1 || echo 0
 echo "$SEP"
-systemctl show coredns --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show orama-namespace-coredns@nameserver --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
-journalctl -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
+journalctl -u orama-namespace-coredns@nameserver -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
 echo "$SEP"
 test -f /etc/coredns/Corefile && echo yes || echo no
 echo "$SEP"
@@ -891,7 +891,7 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 		"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster",
 		"orama-namespace-olric@index", "orama-olric",
 		"orama-namespace-anyone-client@index", "orama-anyone-relay", "orama-anyone-client",
-		"orama-namespace-caddy@index", "coredns", "caddy",
+		"orama-namespace-caddy@index", "orama-namespace-coredns@nameserver", "coredns", "caddy",
 		"orama-namespace-wireguard@index", "wg-quick@wg0",
 	}
 
