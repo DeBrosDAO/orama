@@ -48,6 +48,9 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(fp.oramaDir, "secrets"), 0700); err != nil {
+		return fmt.Errorf("failed to set secrets directory permissions: %w", err)
+	}
 
 	// Remove any stray cluster-secret file from root .orama directory
 	// The correct location is .orama/secrets/cluster-secret
