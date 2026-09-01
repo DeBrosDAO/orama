@@ -1,6 +1,6 @@
 module github.com/DeBrosOfficial/network
 
-go 1.24.6
+go 1.26.7
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0

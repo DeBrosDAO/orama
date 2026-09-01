@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.24.6+ (see `go.mod`)
+- Go 1.26.7+ (see `go.mod`)
 - Node.js 18+ (for anyone-client in dev mode)
 - macOS or Linux
 
