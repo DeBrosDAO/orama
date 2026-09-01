@@ -28,6 +28,7 @@ SyslogIdentifier=orama-olric-%i
 PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=2G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

@@ -19,6 +19,7 @@ StandardError=journal
 SyslogIdentifier=orama-pubsub-%i
 PrivateTmp=yes
 LimitNOFILE=65536
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

@@ -22,6 +22,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 LimitNOFILE=65536
+MemorySwapMax=0
 
 TimeoutStopSec=15s
 KillMode=mixed

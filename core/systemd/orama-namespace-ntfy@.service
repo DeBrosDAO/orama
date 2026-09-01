@@ -28,6 +28,7 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 LimitNOFILE=65536
+MemorySwapMax=0
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=orama-ntfy-%i

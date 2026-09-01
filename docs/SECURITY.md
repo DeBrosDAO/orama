@@ -149,6 +149,12 @@ Note: CLONE_NEWPID is intentionally omitted — it makes services PID 1 in their
 - All commands are logged and auditable
 - No root access, no console access, no file system access
 
+## RAM-to-disk (swap and cores)
+
+Guest `mlock`/`mlockall` is **not** used in the Go services. `mlock(2)` does not survive `execve`, so a launcher that locks then execs `rqlited`/`caddy`/`olric-server` gives those binaries zero locked pages. Go `string` values are also unzeroable. Against a hosting-provider RAM snapshot, mlock buys nothing.
+
+The control that keeps secrets off the **block device** is cgroup `MemorySwapMax=0` on secret-bearing units, plus install-time `swapoff` / `fs.suid_dumpable=0` / systemd-coredump `Storage=none`. That does **not** stop a RAM snapshot or provider VM-suspend.
+
 ## What this does not defend against today
 
 Stated so the gaps above are known positions, not implied protections:

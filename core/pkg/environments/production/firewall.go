@@ -156,6 +156,9 @@ func (fp *FirewallProvisioner) Setup() error {
 	if err := fp.persistIPv6Disable(); err != nil {
 		return fmt.Errorf("failed to persist IPv6 disable: %w", err)
 	}
+	if err := fp.persistRAMHygiene(); err != nil {
+		return fmt.Errorf("failed to persist RAM hygiene: %w", err)
+	}
 
 	return nil
 }
@@ -167,6 +170,32 @@ func (fp *FirewallProvisioner) persistIPv6Disable() error {
 	cmd.Stdin = strings.NewReader(content)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to write sysctl config: %w\n%s", err, string(output))
+	}
+	return nil
+}
+
+// persistRAMHygiene turns off swap, disables suid core dumps, and stops
+// systemd-coredump from writing crash images to disk (bugboard #233).
+func (fp *FirewallProvisioner) persistRAMHygiene() error {
+	_ = exec.Command("swapoff", "-a").Run()
+	_ = exec.Command("systemctl", "mask", "swap.target").Run()
+
+	sysctl := "# Orama: keep secret-bearing pages off the block device\nfs.suid_dumpable = 0\n"
+	cmd := exec.Command("tee", "/etc/sysctl.d/99-orama-ram-hygiene.conf")
+	cmd.Stdin = strings.NewReader(sysctl)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to write ram-hygiene sysctl: %w\n%s", err, string(output))
+	}
+	_ = exec.Command("sysctl", "--system").Run()
+
+	if err := exec.Command("mkdir", "-p", "/etc/systemd/coredump.conf.d").Run(); err != nil {
+		return fmt.Errorf("mkdir coredump.conf.d: %w", err)
+	}
+	coredump := "[Coredump]\nStorage=none\nProcessSizeMax=0\n"
+	cmd = exec.Command("tee", "/etc/systemd/coredump.conf.d/orama.conf")
+	cmd.Stdin = strings.NewReader(coredump)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to write coredump.conf: %w\n%s", err, string(output))
 	}
 	return nil
 }
