@@ -524,6 +524,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 					zap.Int("count", n))
 			}
 		}
+		if on, oerr := deps.AuthService.RevokeOrphanedAPIKeys(context.Background()); oerr != nil {
+			logger.ComponentWarn(logging.ComponentGeneral, "revoke orphaned API keys failed", zap.Error(oerr))
+		} else if on > 0 {
+			logger.ComponentInfo(logging.ComponentGeneral, "Revoked orphaned API keys",
+				zap.Int("count", on))
+		}
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)

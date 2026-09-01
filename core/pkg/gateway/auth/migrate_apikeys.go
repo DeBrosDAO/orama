@@ -62,3 +62,30 @@ func (s *Service) MigratePlaintextAPIKeys(ctx context.Context) (int, error) {
 	}
 	return n, nil
 }
+
+// RevokeOrphanedAPIKeys sets revoked_at on api_keys whose namespace_id no
+// longer exists (bugboard #164). Idempotent. Returns the number of rows
+// updated. Lookup already INNER JOINs namespaces, so these keys 401; revoking
+// them makes the 401 mean "revoked" rather than "unknown" in diagnostics.
+func (s *Service) RevokeOrphanedAPIKeys(ctx context.Context) (int, error) {
+	orm := s.keyORM()
+	if orm == nil {
+		return 0, nil
+	}
+	db := orm.Database()
+	if db == nil {
+		return 0, nil
+	}
+	internalCtx := client.WithInternalAuth(ctx)
+	res, err := db.Query(internalCtx, `
+		UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP
+		WHERE revoked_at IS NULL
+		  AND namespace_id NOT IN (SELECT id FROM namespaces)`)
+	if err != nil {
+		return 0, fmt.Errorf("revoke orphaned api keys: %w", err)
+	}
+	if res == nil {
+		return 0, nil
+	}
+	return int(res.Count), nil
+}

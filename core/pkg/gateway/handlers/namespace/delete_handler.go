@@ -102,11 +102,13 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 4. Clean up global tables that use namespace TEXT (not FK cascade)
 	h.cleanupGlobalTables(r.Context(), ns)
 
-	// 5. Delete API keys, ownership records, and namespace record
-	h.ormClient.Exec(r.Context(), "DELETE FROM wallet_api_keys WHERE namespace_id = ?", namespaceID)
-	h.ormClient.Exec(r.Context(), "DELETE FROM api_keys WHERE namespace_id = ?", namespaceID)
-	h.ormClient.Exec(r.Context(), "DELETE FROM namespace_ownership WHERE namespace_id = ?", namespaceID)
-	h.ormClient.Exec(r.Context(), "DELETE FROM namespaces WHERE id = ?", namespaceID)
+	// 5. Delete FK children explicitly (ON DELETE CASCADE is decorative:
+	// rqlited is not started with -fk, bugboard #164). Check every error.
+	if err := h.deleteNamespaceRows(r.Context(), namespaceID); err != nil {
+		h.logger.Error("Failed to delete namespace rows", zap.Error(err))
+		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
 
 	h.logger.Info("Namespace deleted successfully", zap.String("namespace", ns))
 
@@ -285,6 +287,33 @@ func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
 				zap.Error(err))
 		}
 	}
+}
+
+// namespaceFKChildren are tables that declare REFERENCES namespaces(id)
+// ON DELETE CASCADE. CASCADE does not fire (foreign_keys=0 / no -fk), so
+// deleteNamespaceRows must empty them first. Order: children, then namespaces.
+var namespaceFKChildren = []string{
+	"wallet_api_keys",
+	"api_keys",
+	"namespace_ownership",
+	"apps",
+	"nonces",
+	"subscriptions",
+	"refresh_tokens",
+	"audit_events",
+	"namespace_clusters",
+}
+
+func (h *DeleteHandler) deleteNamespaceRows(ctx context.Context, namespaceID int64) error {
+	for _, table := range namespaceFKChildren {
+		if _, err := h.ormClient.Exec(ctx, "DELETE FROM "+table+" WHERE namespace_id = ?", namespaceID); err != nil {
+			return fmt.Errorf("delete %s for namespace %d: %w", table, namespaceID, err)
+		}
+	}
+	if _, err := h.ormClient.Exec(ctx, "DELETE FROM namespaces WHERE id = ?", namespaceID); err != nil {
+		return fmt.Errorf("delete namespaces id %d: %w", namespaceID, err)
+	}
+	return nil
 }
 
 // cleanupGlobalTables deletes orphaned records from global tables that reference
