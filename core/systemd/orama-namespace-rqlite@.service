@@ -18,8 +18,9 @@ ExecStart=/bin/sh -c 'exec /usr/local/bin/rqlited \
   -raft-addr ${RAFT_ADDR} \
   -http-adv-addr ${HTTP_ADV_ADDR} \
   -raft-adv-addr ${RAFT_ADV_ADDR} \
+  ${EXTRA_ARGS} \
   ${JOIN_ARGS} \
-  /opt/orama/.orama/data/namespaces/%i/rqlite/${NODE_ID}'
+  ${DATA_DIR}'
 
 # Graceful shutdown
 TimeoutStopSec=60s

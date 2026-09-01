@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -162,13 +163,12 @@ func (r *RQLiteManager) recoverCluster(ctx context.Context, peersJSONPath string
 	}
 	time.Sleep(2 * time.Second)
 
-	rqliteDataDir, err := r.rqliteDataDirPath()
-	if err != nil {
-		return err
+	cmd := exec.Command("systemctl", "restart", "orama-namespace-rqlite@index.service")
+	if os.Getuid() != 0 {
+		cmd = exec.Command("sudo", "systemctl", "restart", "orama-namespace-rqlite@index.service")
 	}
-
-	if err := r.launchProcess(ctx, rqliteDataDir); err != nil {
-		return err
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("restart orama-namespace-rqlite@index: %w (%s)", err, out)
 	}
 
 	return r.waitForReadyAndConnect(ctx)
@@ -335,4 +335,3 @@ func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 	_ = os.Remove(filepath.Join(rqliteDataDir, "discovery-peers.json"))
 	return nil
 }
-

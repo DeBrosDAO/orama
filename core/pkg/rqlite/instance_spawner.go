@@ -32,6 +32,7 @@ type InstanceConfig struct {
 	DataDir        string   // Data directory for this instance
 	IsLeader       bool     // Whether this is the first node (creates cluster)
 	AuthFile       string   // Path to RQLite auth JSON file. Empty = no auth enforcement.
+	ExtraArgs      string   // Extra rqlited flags (raft timeouts). Empty for tenants.
 }
 
 // Instance represents a running RQLite instance

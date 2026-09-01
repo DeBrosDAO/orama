@@ -82,6 +82,10 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 	}
 
 	// Generate environment file
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = rqliteUnitDataDir(namespace, nodeID, s.namespaceBase, "")
+	}
 	envVars := map[string]string{
 		"HTTP_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort),
 		"RAFT_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.RaftPort),
@@ -89,6 +93,11 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		"RAFT_ADV_ADDR": cfg.RaftAdvAddress,
 		"JOIN_ARGS":     joinArgs,
 		"NODE_ID":       nodeID,
+		"DATA_DIR":      dataDir,
+		"EXTRA_ARGS":    cfg.ExtraArgs,
+	}
+	if cfg.AuthFile != "" {
+		envVars["EXTRA_ARGS"] = strings.TrimSpace(envVars["EXTRA_ARGS"] + " -auth " + cfg.AuthFile)
 	}
 
 	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeRQLite, envVars); err != nil {

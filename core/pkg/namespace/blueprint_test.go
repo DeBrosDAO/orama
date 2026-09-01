@@ -101,6 +101,61 @@ func TestBlueprint_MemberCount(t *testing.T) {
 	}
 }
 
+func TestBlueprintIndex_fixedPortsNotTenantRange(t *testing.T) {
+	bp := BlueprintIndex()
+	if bp.Name != BlueprintNameIndex {
+		t.Errorf("Name = %q, want %q", bp.Name, BlueprintNameIndex)
+	}
+	if bp.Membership != MembersAll {
+		t.Errorf("Membership = %s, want %s", bp.Membership, MembersAll)
+	}
+	if bp.PortNeedCount() != 0 {
+		t.Errorf("index PortNeedCount = %d, want 0 (fixed ports, not tenant block)", bp.PortNeedCount())
+	}
+	if err := bp.Validate(); err != nil {
+		t.Fatalf("BlueprintIndex must be valid: %v", err)
+	}
+	want := []ServiceName{ServiceRQLite, ServiceOlric}
+	if len(bp.Services) != len(want) {
+		t.Fatalf("len(Services) = %d, want %d", len(bp.Services), len(want))
+	}
+	for _, spec := range bp.Services {
+		for _, p := range spec.PortNeeds {
+			if p.Fixed == 0 {
+				t.Errorf("%s: expected Fixed port, got FromBlock %d", spec.Name, p.FromBlock)
+			}
+			if p.Fixed >= NamespacePortRangeStart && p.Fixed <= NamespacePortRangeEnd {
+				t.Errorf("%s Fixed %d collides with tenant range %d-%d", spec.Name, p.Fixed, NamespacePortRangeStart, NamespacePortRangeEnd)
+			}
+		}
+	}
+
+	withGW := BlueprintIndexWithGateway()
+	if len(withGW.Services) != 3 || withGW.Services[2].Name != ServiceGateway {
+		t.Fatalf("BlueprintIndexWithGateway services = %v, want rqlite,olric,gateway", serviceNames(withGW))
+	}
+	if err := withGW.Validate(); err != nil {
+		t.Fatalf("BlueprintIndexWithGateway must be valid: %v", err)
+	}
+}
+
+func serviceNames(bp Blueprint) []ServiceName {
+	out := make([]ServiceName, len(bp.Services))
+	for i, s := range bp.Services {
+		out[i] = s.Name
+	}
+	return out
+}
+
+func TestIsReservedNamespace(t *testing.T) {
+	if !IsReservedNamespace(BlueprintNameIndex) || !IsReservedNamespace(BlueprintNameNameserver) {
+		t.Fatal("index and nameserver must be reserved")
+	}
+	if IsReservedNamespace("anchat-test") || IsReservedNamespace("rootwallet") {
+		t.Fatal("tenant names must not be reserved")
+	}
+}
+
 func TestPortsPerNamespace_matchesBlueprintTenant(t *testing.T) {
 	if n := BlueprintTenant().PortNeedCount(); n != PortsPerNamespace {
 		t.Errorf("BlueprintTenant PortNeedCount = %d, want PortsPerNamespace %d", n, PortsPerNamespace)

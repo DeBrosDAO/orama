@@ -1184,6 +1184,9 @@ func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceNa
 	if namespaceName == "default" || namespaceName == "" {
 		return "", "default", false, nil
 	}
+	if IsReservedNamespace(namespaceName) {
+		return "", "reserved", false, nil
+	}
 
 	cluster, err := cm.GetClusterByNamespace(ctx, namespaceName)
 	if err != nil {

@@ -3,7 +3,12 @@ package node
 import (
 	"context"
 	"fmt"
+	"net"
+	"path/filepath"
+	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/namespace"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
@@ -65,9 +70,27 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	// converge normally.
 	n.rqliteManager.SetOnProcessStarted(n.bootstrapWireGuardMesh)
 
-	// Start RQLite FIRST before updating metadata
+	dataDir, err := config.ExpandPath(n.config.Node.DataDir)
+	if err != nil {
+		return fmt.Errorf("expand data dir: %w", err)
+	}
+	sup := namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger)
+	extra := indexRQLiteExtraArgs(n.config.Database)
+	requireExisting := namespace.HasExistingRaft(sup.CoreRQLiteDir())
+	if err := sup.EnsureRQLite(ctx, nodeID, n.config.Discovery.HttpAdvAddress, n.config.Discovery.RaftAdvAddress, n.config.Database.RQLiteJoinAddress, extra, requireExisting); err != nil {
+		return err
+	}
+
 	if err := n.rqliteManager.Start(ctx); err != nil {
 		return err
+	}
+
+	bindAddr, _, _ := net.SplitHostPort(n.config.Discovery.HttpAdvAddress)
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
+	if err := sup.EnsureOlric(ctx, nodeID, bindAddr, nil); err != nil {
+		return fmt.Errorf("index olric: %w", err)
 	}
 
 	// NOW update metadata after RQLite is running
@@ -85,4 +108,29 @@ func (n *Node) startRQLite(ctx context.Context) error {
 	n.rqliteAdapter = adapter
 
 	return nil
+}
+
+func indexRQLiteExtraArgs(db config.DatabaseConfig) string {
+	election := db.RaftElectionTimeout
+	if election == 0 {
+		election = 5 * time.Second
+	}
+	heartbeat := db.RaftHeartbeatTimeout
+	if heartbeat == 0 {
+		heartbeat = 2 * time.Second
+	}
+	apply := db.RaftApplyTimeout
+	if apply == 0 {
+		apply = 30 * time.Second
+	}
+	lease := db.RaftLeaderLeaseTimeout
+	if lease == 0 {
+		lease = 2 * time.Second
+	}
+	args := fmt.Sprintf("-raft-election-timeout %s -raft-timeout %s -raft-apply-timeout %s -raft-leader-lease-timeout %s",
+		election, heartbeat, apply, lease)
+	if db.RQLiteAuthFile != "" {
+		args += " -auth " + db.RQLiteAuthFile
+	}
+	return args
 }

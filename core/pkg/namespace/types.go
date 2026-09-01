@@ -87,6 +87,14 @@ const (
 
 	// MaxNamespacesPerNode is how many tenant-default (5-port) instances fit in 10000–10099.
 	MaxNamespacesPerNode = (NamespacePortRangeEnd - NamespacePortRangeStart + 1) / PortsPerNamespace // 20
+
+	// Index internals stay on today's host ports until the renumber phase.
+	// Do not place these in the tenant pool (10000–10099).
+	IndexRQLiteHTTPPort      = 5001
+	IndexRQLiteRaftPort      = 7001
+	IndexOlricHTTPPort       = 3320
+	IndexOlricMemberlistPort = 3322
+	IndexGatewayHTTPPort     = 6001
 )
 
 // WebRTC port allocation constants

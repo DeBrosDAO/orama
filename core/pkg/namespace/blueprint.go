@@ -77,6 +77,61 @@ func BlueprintTenant() Blueprint {
 	return BlueprintTenantN(DefaultRQLiteNodeCount)
 }
 
+// BlueprintIndex is the host/control plane on this machine: rqlite + olric
+// on the existing 5001/7001 and 3320/3322. Gateway stays out until
+// BlueprintIndexWithGateway (phase 4). Membership is all nodes; ClusterManager
+// must not select or allocate tenant ports.
+func BlueprintIndex() Blueprint {
+	return Blueprint{
+		Name:       BlueprintNameIndex,
+		Membership: MembersAll,
+		Services: []ServiceSpec{
+			{
+				Name:  ServiceRQLite,
+				Order: 1,
+				Scope: ScopeReusable,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexRQLiteHTTPPort},
+					{Fixed: IndexRQLiteRaftPort},
+				},
+			},
+			{
+				Name:  ServiceOlric,
+				Order: 2,
+				Scope: ScopeReusable,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexOlricHTTPPort},
+					{Fixed: IndexOlricMemberlistPort},
+				},
+			},
+		},
+	}
+}
+
+// BlueprintIndexWithGateway is BlueprintIndex plus the core gateway on :6001.
+func BlueprintIndexWithGateway() Blueprint {
+	bp := BlueprintIndex()
+	bp.Services = append(bp.Services, ServiceSpec{
+		Name:  ServiceGateway,
+		Order: 3,
+		Scope: ScopeReusable,
+		PortNeeds: []PortNeed{
+			{Fixed: IndexGatewayHTTPPort},
+		},
+	})
+	return bp
+}
+
+// IsReservedNamespace reports names that must never be tenant-provisioned.
+func IsReservedNamespace(name string) bool {
+	switch name {
+	case BlueprintNameIndex, BlueprintNameNameserver:
+		return true
+	default:
+		return false
+	}
+}
+
 // BlueprintTenantN is a tenant cluster of n members. n=3 is the API-key
 // default (BlueprintTenant). n=1 is a single-node cluster (rqlite leader,
 // no -join). Port needs stay 2+2+1.
