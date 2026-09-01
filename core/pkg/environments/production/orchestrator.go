@@ -572,7 +572,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	// Index gateway is orama-namespace-gateway@index; no separate host gateway.yaml
 
 	// Olric config:
-	// - HTTP API binds to localhost for security (accessed via gateway)
+	// - HTTP API binds to the WireGuard IP (unique per node; not localhost)
 	// - Memberlist binds to WG IP for cluster communication across nodes
 	// - Advertise WG IP so peers can reach this node
 	// - Seed peers from join response for initial cluster formation

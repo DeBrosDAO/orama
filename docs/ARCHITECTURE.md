@@ -75,7 +75,7 @@ Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-
 
 Drive nodes through the `orama` CLI (`orama node …`). Do not `systemctl start` leftover host units (`orama-ipfs`, `orama-olric`, `caddy.service`, `coredns.service`, `wg-quick@wg0`). Those files may still exist on disk for rollback; they are disabled. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
 
-RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`.
+RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`. Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components
 
@@ -388,7 +388,7 @@ Function Invocation:
 All inter-node communication is encrypted via a WireGuard VPN mesh:
 
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
-- **UFW Firewall:** Only public ports are exposed: 22 (SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
+- **UFW Firewall:** Only public ports are exposed: 22 (SSH; Ubuntu/sandbox only — OramaOS has no SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
 - **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
 - **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
@@ -427,12 +427,18 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 ### Middleware Stack
 
-1. **Logger** - Request/response logging
-2. **CORS** - Cross-origin resource sharing
-3. **Authentication** - JWT/API key validation
-4. **Authorization** - Namespace access control
-5. **Rate Limiting** - Per-client rate limits
-6. **Error Handling** - Consistent error responses
+Order matches `Gateway.withMiddleware` (outermost first). Rate limiting runs **before** authentication so the auth path itself is capped.
+
+1. **Logger** — request/response logging
+2. **Security headers**
+3. **Rate limiting** — per-client, before auth
+4. **CORS**
+5. **Domain routing**
+6. **Authentication** — JWT / API key
+7. **Authorization** — namespace access control
+8. **Scope gate** — tightens an already-authorized request
+9. **Namespace rate limiting**
+10. Handler (errors are returned as HTTP status, not a separate middleware)
 
 ## Scalability
 
@@ -566,10 +572,12 @@ For mainnet, devnet, and testnet environments, nodes run **OramaOS** — a custo
 **Key properties:**
 - No SSH, no shell — operators cannot access the filesystem
 - LUKS full-disk encryption with Shamir key distribution across peers
-- Read-only rootfs (SquashFS + dm-verity)
+- Read-only rootfs (SquashFS). dm-verity hashes can be built into the image; they are **not** wired into the boot path today, so rootfs integrity is not enforced at boot
 - A/B partition updates with cryptographic signature verification
-- Service sandboxing via Linux namespaces + seccomp
+- Service sandboxing via Linux namespaces + seccomp (seccomp profiles exist; enforcement is not on for the Ubuntu fleet — that is OramaOS work)
 - Single root process: the **orama-agent**
+
+These OramaOS properties do **not** apply to the production Ubuntu fleet (sandbox and current operators). Ubuntu nodes have SSH and no LUKS/dm-verity.
 
 **The orama-agent manages:**
 - Boot sequence and LUKS key reconstruction

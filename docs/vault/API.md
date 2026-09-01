@@ -9,7 +9,7 @@ http://<guardian-ip>:7500/v1/vault/...
 http://<guardian-ip>:7500/v2/vault/...
 ```
 
-In production, the Orama gateway reverse-proxies these endpoints over TLS (port 443). Direct access to port 7500 is only available within the WireGuard overlay network.
+In production, clients reach vault over TLS on port 443 **through the Orama gateway**. The gateway is not a reverse-proxy of `/v1/vault/*`: it splits secrets on push and combines shares on pull, then talks to guardians on the WireGuard overlay. Direct access to guardian port 7500 is overlay-only.
 
 > **Note:** TLS termination is not yet implemented in the guardian itself (Phase 3). Currently plain TCP.
 

@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS deployment_env_vars (
     id TEXT PRIMARY KEY,                    -- UUID
     deployment_id TEXT NOT NULL,
     key TEXT NOT NULL,
-    value TEXT NOT NULL,                    -- Encrypted in production
+    value TEXT NOT NULL,                    -- Plaintext JSON (not encrypted)
     is_secret BOOLEAN DEFAULT FALSE,        -- True for sensitive values
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

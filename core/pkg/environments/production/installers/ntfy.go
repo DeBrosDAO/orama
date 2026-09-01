@@ -389,9 +389,8 @@ WantedBy=multi-user.target
 
 // generateServerYAML produces the contents of /etc/ntfy/server.yml.
 // Hardened defaults: listens on localhost, behind-proxy mode on, cache
-// + persistence configured, attachments disabled (we don't need them
-// for transactional push), and access defaults to deny — auth is
-// per-topic via the operator-side `auth-file` (future, not in v1).
+// + persistence configured, attachments disabled. There is no auth-file
+// in v1 — ntfy 2.11.0 with no auth-file does **not** default to deny.
 func (ni *NtfyInstaller) generateServerYAML(publicBaseURL string) string {
 	return fmt.Sprintf(`# ntfy server config (Orama #72). Generated — do not edit by hand.
 # Re-running the orchestrator's Phase 4 will overwrite changes here.
