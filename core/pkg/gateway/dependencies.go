@@ -452,7 +452,6 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 	ipfsAPIURL := cfg.IPFSAPIURL
 	ipfsTimeout := cfg.IPFSTimeout
 	ipfsReplicationFactor := cfg.IPFSReplicationFactor
-	ipfsEnableEncryption := cfg.IPFSEnableEncryption
 
 	if ipfsClusterURL == "" {
 		logger.ComponentInfo(logging.ComponentGeneral, "IPFS Cluster URL not configured, discovering from node configs...")
@@ -466,16 +465,13 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 			if discovered.replicationFactor > 0 {
 				ipfsReplicationFactor = discovered.replicationFactor
 			}
-			ipfsEnableEncryption = discovered.enableEncryption
 			logger.ComponentInfo(logging.ComponentGeneral, "Discovered IPFS endpoints from node configs",
 				zap.String("cluster_url", ipfsClusterURL),
-				zap.String("api_url", ipfsAPIURL),
-				zap.Bool("encryption_enabled", ipfsEnableEncryption))
+				zap.String("api_url", ipfsAPIURL))
 		} else {
 			// Fallback to localhost defaults
 			ipfsClusterURL = "http://localhost:10108"
 			ipfsAPIURL = "http://localhost:10107"
-			ipfsEnableEncryption = true // Default to true
 			logger.ComponentInfo(logging.ComponentGeneral, "No IPFS config found in node configs, using localhost defaults")
 		}
 	}
@@ -488,13 +484,6 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 	}
 	if ipfsReplicationFactor == 0 {
 		ipfsReplicationFactor = 3
-	}
-	if !cfg.IPFSEnableEncryption && !ipfsEnableEncryption {
-		// Only disable if explicitly set to false in both places
-		ipfsEnableEncryption = false
-	} else {
-		// Default to true if not explicitly disabled
-		ipfsEnableEncryption = true
 	}
 
 	ipfsCfg := ipfs.Config{
@@ -534,13 +523,11 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 		zap.String("ipfs_api_url", ipfsAPIURL),
 		zap.Duration("timeout", ipfsCfg.Timeout),
 		zap.Int("replication_factor", ipfsReplicationFactor),
-		zap.Bool("encryption_enabled", ipfsEnableEncryption),
 	)
 
 	// Store IPFS settings back in config for use by handlers
 	cfg.IPFSAPIURL = ipfsAPIURL
 	cfg.IPFSReplicationFactor = ipfsReplicationFactor
-	cfg.IPFSEnableEncryption = ipfsEnableEncryption
 }
 
 // initializeServerless sets up the serverless function engine and related components
@@ -940,7 +927,6 @@ type ipfsDiscoveryResult struct {
 	apiURL            string
 	timeout           time.Duration
 	replicationFactor int
-	enableEncryption  bool
 }
 
 // discoverIPFSFromNodeConfigs discovers IPFS configuration from node.yaml files.
@@ -978,7 +964,6 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 				apiURL:            nodeCfg.Database.IPFS.APIURL,
 				timeout:           nodeCfg.Database.IPFS.Timeout,
 				replicationFactor: nodeCfg.Database.IPFS.ReplicationFactor,
-				enableEncryption:  nodeCfg.Database.IPFS.EnableEncryption,
 			}
 
 			if result.apiURL == "" {
@@ -990,16 +975,11 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 			if result.replicationFactor == 0 {
 				result.replicationFactor = 3
 			}
-			// Default encryption to true if not set
-			if !result.enableEncryption {
-				result.enableEncryption = true
-			}
 
 			logger.Info("Discovered IPFS config from node config",
 				zap.String("file", filename),
 				zap.String("cluster_url", result.clusterURL),
-				zap.String("api_url", result.apiURL),
-				zap.Bool("encryption_enabled", result.enableEncryption))
+				zap.String("api_url", result.apiURL))
 
 			return result
 		}
