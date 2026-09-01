@@ -8,6 +8,6 @@ const (
 	IPFSKuboVersion    = "v0.38.2"
 	IPFSClusterVersion = "v1.1.2"
 	RQLiteVersion      = "8.43.0"
-	CoreDNSVersion     = "1.12.0"
+	CoreDNSVersion     = "1.14.4"
 	CaddyVersion       = "2.10.2"
 )

@@ -17,10 +17,10 @@ CoreDNS plugins must be compiled into the binary. Follow these steps:
 ### 1. Install Prerequisites
 
 ```bash
-# Install Go 1.21 or later
-wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz
+# Install Go 1.26.7 or later (see core/go.mod)
+wget https://go.dev/dl/go1.26.7.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.21.6.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.7.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Verify Go installation
@@ -33,7 +33,7 @@ go version
 cd /tmp
 git clone https://github.com/coredns/coredns.git
 cd coredns
-git checkout v1.11.1  # Match the version in install script
+git checkout v1.14.4  # Match constants.CoreDNSVersion
 ```
 
 ### 3. Add RQLite Plugin
