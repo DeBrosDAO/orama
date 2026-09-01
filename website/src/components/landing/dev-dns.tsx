@@ -12,8 +12,8 @@ export function DevDns() {
         <AnimateIn>
           <div className="flex flex-col gap-8">
             <SectionHeader
-              title="Your domain. Zero configuration."
-              subtitle="Point your nameservers to Orama and every deployment gets a domain automatically. No Cloudflare. No DNS propagation headaches."
+              title="A domain and a certificate, without asking for one."
+              subtitle="Every node runs CoreDNS as an authoritative nameserver for the network. Deployments get a resolvable subdomain and a valid certificate as part of the deploy."
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
@@ -22,39 +22,61 @@ export function DevDns() {
                 <div className="flex items-start gap-3">
                   <Globe className="w-5 h-5 text-accent shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-display font-semibold text-fg text-sm">Orama Nameservers</p>
+                    <p className="font-display font-semibold text-fg text-sm">
+                      DNS served by the mesh
+                    </p>
                     <p className="text-sm text-muted">
-                      Point to ns1.orama.network and ns2.orama.network. Your app gets a subdomain instantly.
+                      NS records point at the Orama nodes themselves, with glue
+                      records so resolvers can reach them. Queries round-robin
+                      across every nameserver node.
                     </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <Lock className="w-5 h-5 text-accent shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-display font-semibold text-fg text-sm">Automatic TLS</p>
+                    <p className="font-display font-semibold text-fg text-sm">
+                      Certificates via DNS-01
+                    </p>
                     <p className="text-sm text-muted">
-                      Every domain gets a valid certificate. No manual cert management. No renewal headaches.
+                      ACME challenges are answered from CoreDNS, so any
+                      nameserver can complete them. No node has to be reachable
+                      at a fixed address for a certificate to issue.
                     </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <Link2 className="w-5 h-5 text-accent shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-display font-semibold text-fg text-sm">Custom Domains</p>
+                    <p className="font-display font-semibold text-fg text-sm">
+                      Bring your own domain
+                    </p>
                     <p className="text-sm text-muted">
-                      Add any domain via CLI or SDK. CNAME to your Orama app and it just works.
+                      Add the domain, prove ownership with a TXT record, point
+                      an A record at the deployment. The certificate is
+                      provisioned for you.
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* Right — terminal */}
+              {/* Right — the record set */}
               <Terminal
                 lines={[
-                  { prefix: "$", text: "orama domain add myapp.com" },
-                  { prefix: "\u2192", text: "CNAME myapp.com \u2192 my-app.orama.network" },
-                  { prefix: "\u2192", text: "TLS certificate provisioned" },
-                  { prefix: "\u2713", text: "Domain active \u2014 https://myapp.com" },
+                  { prefix: "#", text: "authoritative zone, served by the nodes" },
+                  {
+                    text: "orama-devnet.network. NS ns1.orama-devnet.network.",
+                  },
+                  {
+                    text: "orama-devnet.network. NS ns2.orama-devnet.network.",
+                  },
+                  { text: "" },
+                  { prefix: "#", text: "glue records" },
+                  { text: "ns1.orama-devnet.network.  A  <node-1-ip>" },
+                  { text: "ns2.orama-devnet.network.  A  <node-2-ip>" },
+                  { text: "" },
+                  { prefix: "#", text: "your deployment, resolvable on deploy" },
+                  { prefix: "$", text: "dig +short my-app-f3o4if.orama-devnet.network" },
                 ]}
               />
             </div>

@@ -15,10 +15,13 @@ export function SectionHeader({
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <div className="flex items-center gap-4">
-        <h2 className="font-display text-xl font-bold text-fg whitespace-nowrap tracking-tight">
+        {/* No `whitespace-nowrap`: a long title has to be allowed to wrap, or it
+            pushes past the viewport on narrow screens. `min-w-0` lets the rule
+            shrink instead of forcing overflow. */}
+        <h2 className="font-display text-xl font-bold text-fg tracking-tight text-balance">
           {title}
         </h2>
-        <div className="flex-1 border-t border-dashed border-border" />
+        <div className="flex-1 min-w-0 border-t border-dashed border-border" />
       </div>
 
       {subtitle && (
