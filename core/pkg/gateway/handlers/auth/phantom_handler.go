@@ -123,17 +123,14 @@ func (h *Handlers) PhantomSessionStatusHandler(w http.ResponseWriter, r *http.Re
 	expiresAtStr := getString(row[6])
 	namespace := getString(row[1])
 
-	// Check expiration if still pending
-	if status == "pending" {
-		if expiresAt, err := time.Parse("2006-01-02 15:04:05", expiresAtStr); err == nil {
-			if time.Now().UTC().After(expiresAt) {
-				status = "expired"
-				// Update in DB
-				_, _ = db.Query(internalCtx,
-					"UPDATE phantom_auth_sessions SET status = 'expired' WHERE id = ? AND status = 'pending'",
-					sessionID,
-				)
-			}
+	if expiresAt, err := time.Parse("2006-01-02 15:04:05", expiresAtStr); err == nil {
+		if time.Now().UTC().After(expiresAt) {
+			status = "expired"
+			apiKey = ""
+			_, _ = db.Query(internalCtx,
+				"UPDATE phantom_auth_sessions SET status = 'expired', api_key = NULL WHERE id = ?",
+				sessionID,
+			)
 		}
 	}
 
@@ -147,6 +144,11 @@ func (h *Handlers) PhantomSessionStatusHandler(w http.ResponseWriter, r *http.Re
 	}
 	if apiKey != "" {
 		resp["api_key"] = apiKey
+		// One-shot: do not leave the plaintext key in RQLite after first read.
+		_, _ = db.Query(internalCtx,
+			"UPDATE phantom_auth_sessions SET api_key = NULL WHERE id = ?",
+			sessionID,
+		)
 	}
 	if errorMsg != "" {
 		resp["error"] = errorMsg
