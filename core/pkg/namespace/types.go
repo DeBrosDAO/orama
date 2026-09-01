@@ -132,19 +132,21 @@ const (
 
 // NamespaceCluster represents a dedicated cluster for a namespace
 type NamespaceCluster struct {
-	ID               string        `json:"id" db:"id"`
-	NamespaceID      int           `json:"namespace_id" db:"namespace_id"`
-	NamespaceName    string        `json:"namespace_name" db:"namespace_name"`
-	Status           ClusterStatus `json:"status" db:"status"`
-	RQLiteNodeCount  int           `json:"rqlite_node_count" db:"rqlite_node_count"`
-	OlricNodeCount   int           `json:"olric_node_count" db:"olric_node_count"`
-	GatewayNodeCount int           `json:"gateway_node_count" db:"gateway_node_count"`
-	ProvisionedBy    string        `json:"provisioned_by" db:"provisioned_by"`
-	ProvisionedAt    time.Time     `json:"provisioned_at" db:"provisioned_at"`
-	ReadyAt          *time.Time    `json:"ready_at,omitempty" db:"ready_at"`
-	LastHealthCheck  *time.Time    `json:"last_health_check,omitempty" db:"last_health_check"`
-	ErrorMessage     string        `json:"error_message,omitempty" db:"error_message"`
-	RetryCount       int           `json:"retry_count" db:"retry_count"`
+	ID            string        `json:"id" db:"id"`
+	NamespaceID   int           `json:"namespace_id" db:"namespace_id"`
+	NamespaceName string        `json:"namespace_name" db:"namespace_name"`
+	Status        ClusterStatus `json:"status" db:"status"`
+	// Per-service replica counts among selected members. They can differ
+	// (10 members, RQLite on 3). Today's tenant writes 3/3/3.
+	RQLiteNodeCount  int        `json:"rqlite_node_count" db:"rqlite_node_count"`
+	OlricNodeCount   int        `json:"olric_node_count" db:"olric_node_count"`
+	GatewayNodeCount int        `json:"gateway_node_count" db:"gateway_node_count"`
+	ProvisionedBy    string     `json:"provisioned_by" db:"provisioned_by"`
+	ProvisionedAt    time.Time  `json:"provisioned_at" db:"provisioned_at"`
+	ReadyAt          *time.Time `json:"ready_at,omitempty" db:"ready_at"`
+	LastHealthCheck  *time.Time `json:"last_health_check,omitempty" db:"last_health_check"`
+	ErrorMessage     string     `json:"error_message,omitempty" db:"error_message"`
+	RetryCount       int        `json:"retry_count" db:"retry_count"`
 
 	// Populated by queries, not stored directly
 	Nodes []ClusterNode `json:"nodes,omitempty"`

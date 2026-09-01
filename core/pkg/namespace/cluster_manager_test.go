@@ -36,6 +36,30 @@ func TestNewClusterManager(t *testing.T) {
 	}
 }
 
+func TestNewProvisioningCluster_serviceCountsFromBlueprint(t *testing.T) {
+	bp := BlueprintTenant()
+	rqliteN, olricN, gatewayN := bp.serviceNodeCounts()
+	cluster := newProvisioningCluster(1, "test-ns", "wallet")
+	if cluster.RQLiteNodeCount != rqliteN || cluster.OlricNodeCount != olricN || cluster.GatewayNodeCount != gatewayN {
+		t.Errorf("node counts = rqlite %d olric %d gateway %d, want %d, %d, %d",
+			cluster.RQLiteNodeCount, cluster.OlricNodeCount, cluster.GatewayNodeCount,
+			rqliteN, olricN, gatewayN)
+	}
+}
+
+func TestNewClusterManager_registersTenantDrivers(t *testing.T) {
+	manager := NewClusterManager(newMockRQLiteClient(), ClusterManagerConfig{
+		BaseDomain:  "orama-devnet.network",
+		BaseDataDir: "/tmp/test-namespaces",
+	}, zap.NewNop())
+
+	for _, name := range []ServiceName{ServiceRQLite, ServiceOlric, ServiceGateway} {
+		if _, ok := manager.drivers.lookup(name); !ok {
+			t.Errorf("missing tenant driver %s", name)
+		}
+	}
+}
+
 func TestNamespaceCluster_InitialState(t *testing.T) {
 	now := time.Now()
 
@@ -370,13 +394,13 @@ func TestClusterManager_MinimumNodeRequirement(t *testing.T) {
 func TestClusterManager_QuorumCalculation(t *testing.T) {
 	// For RQLite Raft consensus, quorum = (n/2) + 1
 	tests := []struct {
-		nodes         int
+		nodes          int
 		expectedQuorum int
-		canLoseNodes  int
+		canLoseNodes   int
 	}{
-		{3, 2, 1},  // 3 nodes: quorum=2, can lose 1
-		{5, 3, 2},  // 5 nodes: quorum=3, can lose 2
-		{7, 4, 3},  // 7 nodes: quorum=4, can lose 3
+		{3, 2, 1}, // 3 nodes: quorum=2, can lose 1
+		{5, 3, 2}, // 5 nodes: quorum=3, can lose 2
+		{7, 4, 3}, // 7 nodes: quorum=4, can lose 3
 	}
 
 	for _, tt := range tests {
