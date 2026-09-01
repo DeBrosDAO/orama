@@ -54,9 +54,10 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 **API Key Hashing (Step 1.6)**
 - API keys stored as HMAC-SHA256 hashes using a server-side secret
 - HMAC secret generated at cluster genesis, stored in `~/.orama/secrets/api-key-hmac-secret`
-- On lookup: compute HMAC, query by hash — fast enough for every request (unlike bcrypt)
+- Namespace and index gateway spawn refuse to start if that file is missing or empty
+- On lookup: compute HMAC, query by hash against the **core/index** RQLite registry (never a tenant RQLite)
 - In-memory cache uses raw key as cache key (never persisted)
-- During rolling upgrade: dual lookup (HMAC first, then raw as fallback) until all nodes upgraded
+- Startup migrates leftover plaintext `ak_…` rows to HMAC in place; lookup is hashed-only after that
 
 **TURN Secret Encryption (Step 1.15)**
 - TURN shared secrets encrypted at rest in RQLite using AES-256-GCM
