@@ -254,24 +254,16 @@ pkg/config/
 
 Integration with the Anyone Protocol for anonymous routing.
 
-**Modes:**
-
-| Mode | Purpose | Port | Rewards |
-|------|---------|------|---------|
-| Client | Route traffic anonymously | 9050 (SOCKS5) | No |
-| Relay | Provide bandwidth to network | 9001 (ORPort) + 9050 | Yes ($ANYONE) |
+Every node runs Anyone as a **client** only: a local SOCKS5 proxy on `127.0.0.1:9050` used by `/v1/proxy/anon` and the anonymity tunnel. Relay/ORPort operator mode is not installed.
 
 **Key Files:**
 - `pkg/anyoneproxy/socks.go` - SOCKS5 proxy client interface
 - `pkg/gateway/anon_proxy_handler.go` - Anonymous request proxy endpoint
 - `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy (bugboard #168)
-- `pkg/environments/production/installers/anyone_relay.go` - Relay installation
+- `pkg/environments/production/installers/anyone_installer.go` - Client binary + anonrc
 
 **Features:**
 - Smart routing (bypasses proxy for local/private addresses)
-- Automatic detection of existing Anyone installations
-- Migration support for existing relay operators
-- Exit relay mode with legal warnings
 
 **API Endpoints:**
 - `POST /v1/proxy/anon` - Route a single HTTP request through the Anyone network.
@@ -285,12 +277,6 @@ Integration with the Anyone Protocol for anonymous routing.
 
 Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
 app-runtime API key alone is refused.
-
-**Relay Requirements:**
-- Linux OS (Debian/Ubuntu)
-- 100 $ANYONE tokens in wallet
-- ORPort accessible from internet
-- Registration at dashboard.anyone.io
 
 ### 7. Shared Utilities
 

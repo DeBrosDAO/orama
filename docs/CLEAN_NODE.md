@@ -84,7 +84,7 @@ echo "Node cleaned. Ready for fresh install."
 | **User** | `orama` system user, `/etc/sudoers.d/orama-*` (incl. `orama-namespaces`) |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
-| **Anyone Relay** | `orama-anyone-relay.service`, `orama-anyone-client.service` |
+| **Anyone** | `orama-anyone-client.service` (and leftover `orama-anyone-relay.service` if present) |
 | **Temp files** | `/tmp/orama`, `/tmp/network-source.*`, build dirs |
 
 ## What This Does NOT Remove

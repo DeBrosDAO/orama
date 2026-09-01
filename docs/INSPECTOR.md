@@ -66,7 +66,7 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **system** | Core services (orama-node, rqlite, olric, ipfs, ipfs-cluster, wg-quick), nameserver services (coredns, caddy), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (orama), panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, TCP retransmission rate, WireGuard mesh ping (all peers) |
 | **namespace** | Per-namespace: RQLite up + raft state + readyz, Olric memberlist, Gateway HTTP health. Cross-namespace: all-healthy check, RQLite quorum per namespace |
-| **anyone** | Anyone relay/client services: relay active, SOCKS5 port 9050 + control port 9051 listening, client bootstrap %, ORPort 9001 listening. Skipped on nameservers and nodes without the services |
+| **anyone** | Anyone client: SOCKS5 `:9050` + control `:9051`, bootstrap %. Leftover `orama-anyone-relay` is a warning. Skipped on nodes with neither unit |
 | **webrtc** | Per-namespace SFU/TURN services active, cross-node SFU coverage (3 nodes) and TURN redundancy (2 nodes). Only applies to namespaces with WebRTC provisioned |
 
 ## Severity Levels
