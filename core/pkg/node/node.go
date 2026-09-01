@@ -79,11 +79,6 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Start HTTP Gateway first (doesn't depend on other services)
-	if err := n.startHTTPGateway(ctx); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start HTTP Gateway", zap.Error(err))
-	}
-
 	// Start LibP2P host first (needed for cluster discovery)
 	if err := n.startLibP2P(); err != nil {
 		return fmt.Errorf("failed to start LibP2P: %w", err)
@@ -99,6 +94,10 @@ func (n *Node) Start(ctx context.Context) error {
 	// Start RQLite with cluster discovery
 	if err := n.startRQLite(ctx); err != nil {
 		return fmt.Errorf("failed to start RQLite: %w", err)
+	}
+
+	if err := n.startIndexGateway(ctx); err != nil {
+		return fmt.Errorf("failed to start index gateway: %w", err)
 	}
 
 	// Sync WireGuard peers from RQLite (if WG is active on this node)

@@ -182,6 +182,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	cfg.EnableHTTPS = y.EnableHTTPS
 	if v := strings.TrimSpace(y.DomainName); v != "" {
 		cfg.DomainName = v
+		cfg.BaseDomain = v
 	}
 	if v := strings.TrimSpace(y.TLSCacheDir); v != "" {
 		cfg.TLSCacheDir = v
@@ -241,6 +242,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 				zap.Error(err))
 		} else {
 			cfg.ClusterSecret = strings.TrimSpace(string(secretBytes))
+			cfg.DataDir = filepath.Dir(filepath.Dir(path))
 			logger.ComponentInfo(logging.ComponentGeneral,
 				"Loaded cluster secret for cluster-wide JWT signing key derivation",
 				zap.String("path", path))

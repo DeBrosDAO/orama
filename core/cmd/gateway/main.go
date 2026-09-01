@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
+	namespacehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/namespace"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/namespace"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -40,6 +42,13 @@ func main() {
 	defer gw.Close()
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Gateway initialization completed successfully")
+
+	if namespace.IsIndexGateway(cfg) {
+		if err := namespacehandlers.WireCoreGateway(context.Background(), gw, cfg, logger.Logger); err != nil {
+			logger.ComponentError(logging.ComponentGeneral, "failed to wire index gateway cluster manager", zap.Error(err))
+			os.Exit(1)
+		}
+	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating HTTP server and routes...")
 

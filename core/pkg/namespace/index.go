@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -14,6 +13,11 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
 )
+
+// IsIndexGateway reports whether this process is the core/index gateway.
+func IsIndexGateway(cfg *gateway.Config) bool {
+	return cfg != nil && cfg.ClientNamespace == BlueprintNameIndex
+}
 
 // ErrEmptyAdopt is returned when @index rqlite would start with no raft.db.
 // That would create a new cluster and wipe the registry.
@@ -147,19 +151,14 @@ func (s *IndexSupervisor) EnsureOlric(ctx context.Context, nodeID, bindAddr stri
 
 // EnsureGateway starts orama-namespace-gateway@index on :6001.
 // RQLiteDSN is the core DB; GlobalRQLiteDSN is left empty (this process is the core).
-func (s *IndexSupervisor) EnsureGateway(ctx context.Context, nodeID, bindAddr, baseDomain, secretsKey string) error {
-	cfg := gateway.InstanceConfig{
-		Namespace:            BlueprintNameIndex,
-		NodeID:               nodeID,
-		HTTPPort:             IndexGatewayHTTPPort,
-		BaseDomain:           baseDomain,
-		RQLiteDSN:            fmt.Sprintf("http://localhost:%d", IndexRQLiteHTTPPort),
-		GlobalRQLiteDSN:      "",
-		OlricServers:         []string{fmt.Sprintf("%s:%d", bindAddr, IndexOlricHTTPPort)},
-		OlricTimeout:         10 * time.Second,
-		SecretsEncryptionKey: secretsKey,
+func (s *IndexSupervisor) EnsureGateway(ctx context.Context, cfg gateway.InstanceConfig) error {
+	cfg.Namespace = BlueprintNameIndex
+	cfg.HTTPPort = IndexGatewayHTTPPort
+	if cfg.RQLiteDSN == "" {
+		cfg.RQLiteDSN = fmt.Sprintf("http://localhost:%d", IndexRQLiteHTTPPort)
 	}
-	if err := s.spawner.SpawnGateway(ctx, BlueprintNameIndex, nodeID, cfg); err != nil {
+	cfg.GlobalRQLiteDSN = ""
+	if err := s.spawner.SpawnGateway(ctx, BlueprintNameIndex, cfg.NodeID, cfg); err != nil {
 		return fmt.Errorf("start orama-namespace-gateway@index: %w", err)
 	}
 	return nil
