@@ -758,7 +758,7 @@ func (Provider) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the module.
 func (p *Provider) Provision(ctx caddy.Context) error {
 	if p.Endpoint == "" {
-		p.Endpoint = "http://localhost:6001/v1/internal/acme"
+		p.Endpoint = "` + fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort) + `"
 	}
 	return nil
 }

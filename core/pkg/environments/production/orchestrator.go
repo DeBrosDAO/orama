@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production/installers"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
@@ -382,7 +383,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	// Initialize IPFS repo with correct path structure
 	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4101 for swarm (to avoid conflict with LibP2P on 4001)
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), 4501, 8080, 4101, vpsIP, ipfsPeer); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, 8080, 4101, vpsIP, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -418,7 +419,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		}
 	}
 
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(clusterPath, clusterSecret, 4501, clusterPeers); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(clusterPath, clusterSecret, constants.IPFSAPIPort, clusterPeers); err != nil {
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
@@ -581,9 +582,9 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 	olricConfig, err := ps.configGenerator.GenerateOlricConfig(
 		vpsIP, // HTTP API on WG IP (unique per node, avoids memberlist name conflict)
-		3320,
+		constants.OlricHTTPPort,
 		vpsIP, // Memberlist on WG IP for clustering
-		3322,
+		constants.OlricMemberlistPort,
 		"lan", // Production environment
 		vpsIP, // Advertise WG IP
 		olricSeedPeers,
@@ -633,7 +634,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 			ns3IP = peerAddresses[2]
 		}
 
-		rqliteDSN := "http://localhost:5001"
+		rqliteDSN := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
 		if err := ps.binaryInstaller.ConfigureCoreDNS(dnsZone, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
 			ps.logf("  ⚠️  CoreDNS config warning: %v", err)
 		} else {
@@ -646,7 +647,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 			caddyDomain = baseDomain
 		}
 		email := "admin@" + caddyDomain
-		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
+		acmeEndpoint := fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort)
 
 		// Self-hosted ntfy (feature #72): always emit the Caddy
 		// push.<dnsZone> reverse-proxy block and write
@@ -921,7 +922,7 @@ func (ps *ProductionSetup) SeedDNSRecords(baseDomain, vpsIP string, peerAddresse
 		ns3IP = extractedIPs[2]
 	}
 
-	rqliteDSN := "http://localhost:5001"
+	rqliteDSN := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
 	if err := ps.binaryInstaller.SeedDNS(baseDomain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
 		return fmt.Errorf("failed to seed DNS records: %w", err)
 	}
@@ -1078,6 +1079,6 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  systemctl start orama-node")
 
 	ps.logf("\nVerify Installation:")
-	ps.logf("  curl http://localhost:6001/health")
-	ps.logf("  curl http://localhost:5001/status\n")
+	ps.logf("  curl http://localhost:%d/health", constants.GatewayAPIPort)
+	ps.logf("  curl http://localhost:%d/status\n", constants.RQLiteHTTPPort)
 }

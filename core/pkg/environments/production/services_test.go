@@ -91,8 +91,8 @@ func TestGenerateCaddyService_GatewayReadinessCheck(t *testing.T) {
 	if !strings.Contains(unit, "ExecStartPre=") {
 		t.Error("missing ExecStartPre directive for gateway readiness check")
 	}
-	if !strings.Contains(unit, "localhost:6001/health") {
-		t.Error("ExecStartPre should poll localhost:6001/health")
+	if !strings.Contains(unit, "localhost:10104/health") {
+		t.Error("ExecStartPre should poll localhost:10104/health")
 	}
 
 	// Must use Requires= (hard dependency), not Wants= (soft dependency)

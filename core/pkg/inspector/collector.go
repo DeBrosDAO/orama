@@ -324,15 +324,15 @@ func collectRQLite(ctx context.Context, node Node, verbose bool) *RQLiteData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-curl -sf http://localhost:5001/status 2>/dev/null || echo '{"error":"unreachable"}'
+curl -sf http://localhost:10100/status 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf 'http://localhost:5001/nodes?nonvoters' 2>/dev/null || echo '{"error":"unreachable"}'
+curl -sf 'http://localhost:10100/nodes?nonvoters' 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf http://localhost:5001/readyz 2>/dev/null; echo "EXIT:$?"
+curl -sf http://localhost:10100/readyz 2>/dev/null; echo "EXIT:$?"
 echo "$SEP"
-curl -sf http://localhost:5001/debug/vars 2>/dev/null || echo '{"error":"unreachable"}'
+curl -sf http://localhost:10100/debug/vars 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf -H 'Content-Type: application/json' 'http://localhost:5001/db/query?level=strong' -d '["SELECT 1"]' 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
+curl -sf -H 'Content-Type: application/json' 'http://localhost:10100/db/query?level=strong' -d '["SELECT 1"]' 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
 `
 
 	result := RunSSH(ctx, node, cmd)
@@ -568,7 +568,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 (systemctl is-active --quiet orama-namespace-olric@index && echo active) || (systemctl is-active --quiet orama-olric && echo active) || echo inactive
 echo "$SEP"
-ss -tlnp 2>/dev/null | grep ':3322 ' | head -1
+ss -tlnp 2>/dev/null | grep ':10103 ' | head -1
 echo "$SEP"
 journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
 echo "$SEP"
@@ -614,19 +614,19 @@ echo "$SEP"
 echo "$SEP"
 (systemctl is-active --quiet orama-namespace-ipfs-cluster@index && echo active) || (systemctl is-active --quiet orama-ipfs-cluster && echo active) || echo inactive
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
+curl -sf -X POST 'http://localhost:10107/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf --max-time 10 'http://localhost:9094/peers' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
+curl -sf --max-time 10 'http://localhost:10108/peers' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (curl -sf 'http://localhost:10108/id' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
+curl -sf -X POST 'http://localhost:10107/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
+curl -sf -X POST 'http://localhost:10107/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
+curl -sf 'http://localhost:10108/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
 test -f /opt/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
+curl -sf -X POST 'http://localhost:10107/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
 	res := RunSSH(ctx, node, cmd)
 	if !res.OK() && res.Stdout == "" {

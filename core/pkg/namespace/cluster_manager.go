@@ -126,11 +126,11 @@ func NewClusterManager(
 	// Set IPFS defaults
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
 	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = "http://localhost:9094"
+		ipfsClusterAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSClusterAPIPort)
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSAPIPort)
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -177,11 +177,11 @@ func NewClusterManagerWithComponents(
 	// Set IPFS defaults (same as NewClusterManager)
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
 	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = "http://localhost:9094"
+		ipfsClusterAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSClusterAPIPort)
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSAPIPort)
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -765,7 +765,7 @@ type spawnResponse struct {
 
 // sendSpawnRequest sends a spawn/stop request to a remote node's spawn endpoint
 func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error) {
-	url := fmt.Sprintf("http://%s:6001/v1/internal/namespace/spawn", nodeIP)
+	url := fmt.Sprintf("http://%s:%d/v1/internal/namespace/spawn", nodeIP, IndexGatewayHTTPPort)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal spawn request: %w", err)

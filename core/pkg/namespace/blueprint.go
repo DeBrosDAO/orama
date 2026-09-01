@@ -194,7 +194,7 @@ func BlueprintIndex() Blueprint {
 	}
 }
 
-// BlueprintIndexWithGateway is BlueprintIndex plus the core gateway on :6001,
+// BlueprintIndexWithGateway is BlueprintIndex plus the core gateway,
 // inserted after pubsub (before vault / edge TLS).
 func BlueprintIndexWithGateway() Blueprint {
 	bp := BlueprintIndex()

@@ -251,10 +251,10 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	// 6.25 Expected ports listening
 	expectedPorts := map[int]string{
-		5001: "RQLite HTTP",
-		3322: "Olric Memberlist",
-		6001: "Gateway",
-		4501: "IPFS API",
+		10100: "RQLite HTTP",
+		10103: "Olric Memberlist",
+		10104: "Gateway",
+		10107: "IPFS API",
 	}
 	for port, svcName := range expectedPorts {
 		found := false

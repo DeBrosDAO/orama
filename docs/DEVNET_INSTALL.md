@@ -70,7 +70,7 @@ After all nodes are installed, verify cluster health:
 ./bin/orama monitor report --env devnet --node <ip>
 
 # Or manually from any VPS:
-curl -s http://localhost:5001/status | jq -r '.store.raft.state, .store.raft.num_peers'
-curl -s http://localhost:6001/health
+curl -s http://localhost:10100/status | jq -r '.store.raft.state, .store.raft.num_peers'
+curl -s http://localhost:10104/health
 systemctl status orama-anyone-client
 ```

@@ -174,7 +174,7 @@ func (s *IndexSupervisor) EnsurePubsub(_ context.Context, nodeID string, bootstr
 	return nil
 }
 
-// EnsureGateway starts orama-namespace-gateway@index on :6001.
+// EnsureGateway starts orama-namespace-gateway@index on the index gateway port.
 // RQLiteDSN is the core DB; GlobalRQLiteDSN is left empty (this process is the core).
 func (s *IndexSupervisor) EnsureGateway(ctx context.Context, cfg gateway.InstanceConfig) error {
 	cfg.Namespace = BlueprintNameIndex

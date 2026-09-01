@@ -22,7 +22,8 @@ type NodeConfigData struct {
 	RQLiteJoinAddress      string   // Optional: join address for joining existing cluster
 	BootstrapPeers         []string // List of peer multiaddrs to connect to
 	ClusterAPIPort         int
-	IPFSAPIPort            int    // Default: 4501
+	IPFSAPIPort            int
+	OlricHTTPPort          int
 	HTTPAdvAddress         string // Advertised HTTP address (IP:port)
 	RaftAdvAddress         string // Advertised Raft address (IP:port or domain:port for SNI)
 	UnifiedGatewayPort     int    // Unified gateway port for all node services

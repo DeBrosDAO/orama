@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 
@@ -25,8 +26,8 @@ func (n *Node) startIndexPubsub(ctx context.Context) error {
 	return sup.EnsurePubsub(ctx, nodeID, n.config.Discovery.BootstrapPeers)
 }
 
-// startIndexGateway starts orama-namespace-gateway@index on :6001.
-// orama-node does not bind :6001; Caddy still reverse_proxies to localhost:6001.
+// startIndexGateway starts orama-namespace-gateway@index.
+// orama-node does not bind the gateway port; Caddy reverse_proxies to it.
 func (n *Node) startIndexGateway(ctx context.Context) error {
 	if !n.config.HTTPGateway.Enabled {
 		n.logger.ComponentInfo(logging.ComponentNode, "HTTP Gateway disabled in config")
@@ -51,7 +52,7 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 
 	olricServers := n.config.HTTPGateway.OlricServers
 	if len(olricServers) == 0 {
-		olricServers = []string{net.JoinHostPort(bindAddr, "3320")}
+		olricServers = []string{net.JoinHostPort(bindAddr, fmt.Sprintf("%d", namespace.IndexOlricHTTPPort))}
 	}
 
 	return sup.EnsureGateway(ctx, gateway.InstanceConfig{

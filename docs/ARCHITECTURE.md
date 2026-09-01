@@ -43,14 +43,14 @@ The system follows a clean, layered architecture with clear separation of concer
 │   RQLite     │  │    Olric     │  │     IPFS     │
 │  (Database)  │  │   (Cache)    │  │  (Storage)   │
 │              │  │              │  │              │
-│  Port 5001   │  │  Port 3320   │  │  Port 4501   │
+│  Port 10100  │  │  Port 10102  │  │  Port 10107  │
 └──────────────┘  └──────────────┘  └──────────────┘
 
         ┌─────────────────┐         ┌──────────────┐
         │  IPFS Cluster   │         │  Serverless  │
         │   (Pinning)     │         │    (WASM)    │
         │                 │         │              │
-        │  Port 9094      │         │   In-Process │
+        │  Port 10108     │         │   In-Process │
         └─────────────────┘         └──────────────┘
 
         ┌─────────────────┐
@@ -374,7 +374,7 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
-- **Internal services** (RQLite 5001/7001, IPFS 4001/4501, Olric 3320/3322, Gateway 6001) are only accessible via WireGuard or localhost
+- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
 - **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
 - **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh
 
@@ -505,7 +505,7 @@ sudo orama node install --join https://example.com --token <TOKEN> \
 **Security:** Nodes join via single-use invite tokens over HTTPS. A WireGuard VPN tunnel
 is established before any cluster services start. All inter-node traffic (RQLite, IPFS,
 Olric, LibP2P) flows over the encrypted WireGuard mesh — no cluster ports are exposed
-publicly. **Never use `http://<ip>:6001`** for joining — port 6001 is internal-only and
+publicly. **Never use `http://<ip>:10104`** for joining — the index gateway is internal-only and
 blocked by UFW. Use the domain (`https://node1.example.com`) or, if DNS is not yet
 configured, use the IP over HTTP port 80 (`http://<ip>`) which goes through Caddy.
 

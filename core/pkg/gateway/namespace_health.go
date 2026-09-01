@@ -339,7 +339,7 @@ func (g *Gateway) reconcileNamespaces(ctx context.Context) {
 func (g *Gateway) isRQLiteLeader(ctx context.Context) bool {
 	dsn := g.cfg.RQLiteDSN
 	if dsn == "" {
-		dsn = "http://localhost:5001"
+		dsn = "http://localhost:10100"
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}

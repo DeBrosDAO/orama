@@ -124,7 +124,7 @@ func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) rqliteBaseURL() string {
 	dsn := g.cfg.RQLiteDSN
 	if dsn == "" {
-		dsn = "http://localhost:5001"
+		dsn = "http://localhost:10100"
 	}
 	if idx := strings.Index(dsn, "?"); idx != -1 {
 		dsn = dsn[:idx]

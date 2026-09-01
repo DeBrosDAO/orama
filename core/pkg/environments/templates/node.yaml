@@ -88,9 +88,9 @@ http_gateway:
   rqlite_dsn: "http://localhost:{{.RQLiteHTTPPort}}"
   olric_servers:
 {{- if .WGIP}}
-    - "{{.WGIP}}:3320"
+    - "{{.WGIP}}:{{.OlricHTTPPort}}"
 {{- else}}
-    - "127.0.0.1:3320"
+    - "127.0.0.1:{{.OlricHTTPPort}}"
 {{- end}}
   olric_timeout: "10s"
   ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"

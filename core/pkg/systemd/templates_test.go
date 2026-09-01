@@ -50,9 +50,9 @@ func TestTemplateUnits_hostStackAdoptsExistingPaths(t *testing.T) {
 	checks := map[string][]string{
 		"orama-namespace-wireguard@.service":     {"wg-quick up wg0", "wg show wg0"},
 		"orama-namespace-ipfs@.service":          {"ipfs daemon", "IPFS_PATH"},
-		"orama-namespace-ipfs-cluster@.service":  {"ipfs-cluster-service daemon", "127.0.0.1:4501"},
+		"orama-namespace-ipfs-cluster@.service":  {"ipfs-cluster-service daemon", "127.0.0.1:10107"},
 		"orama-namespace-vault@.service":         {"data/vault/vault.yaml"},
-		"orama-namespace-caddy@.service":         {"/etc/caddy/Caddyfile", "localhost:6001/health", "orama-namespace-coredns@nameserver.service"},
+		"orama-namespace-caddy@.service":         {"/etc/caddy/Caddyfile", "localhost:10104/health", "orama-namespace-coredns@nameserver.service"},
 		"orama-namespace-anyone-client@.service": {"/etc/anon/anonrc"},
 		"orama-namespace-sni-router@.service":    {"Before=orama-namespace-caddy@%i.service"},
 		"orama-namespace-coredns@.service":       {"/etc/coredns/Corefile", "orama-namespace-rqlite@index.service"},

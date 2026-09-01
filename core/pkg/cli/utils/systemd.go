@@ -35,12 +35,12 @@ var ServicePorts = map[string][]PortSpec{
 		{Name: "RQLite Raft", Port: constants.RQLiteRaftPort},
 	},
 	"orama-ipfs": {
-		{Name: "IPFS API", Port: 4501},
+		{Name: "IPFS API", Port: constants.IPFSAPIPort},
 		{Name: "IPFS Gateway", Port: 8080},
 		{Name: "IPFS Swarm", Port: 4101},
 	},
 	"orama-ipfs-cluster": {
-		{Name: "IPFS Cluster API", Port: 9094},
+		{Name: "IPFS Cluster API", Port: constants.IPFSClusterAPIPort},
 	},
 }
 
@@ -48,12 +48,12 @@ var ServicePorts = map[string][]PortSpec{
 func DefaultPorts() []PortSpec {
 	return []PortSpec{
 		{Name: "IPFS Swarm", Port: 4001},
-		{Name: "IPFS API", Port: 4501},
+		{Name: "IPFS API", Port: constants.IPFSAPIPort},
 		{Name: "IPFS Gateway", Port: 8080},
 		{Name: "Gateway API", Port: constants.GatewayAPIPort},
 		{Name: "RQLite HTTP", Port: constants.RQLiteHTTPPort},
 		{Name: "RQLite Raft", Port: constants.RQLiteRaftPort},
-		{Name: "IPFS Cluster API", Port: 9094},
+		{Name: "IPFS Cluster API", Port: constants.IPFSClusterAPIPort},
 		{Name: "Olric HTTP", Port: constants.OlricHTTPPort},
 		{Name: "Olric Memberlist", Port: constants.OlricMemberlistPort},
 	}

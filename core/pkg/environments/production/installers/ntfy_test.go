@@ -124,7 +124,7 @@ func TestNtfySystemdUnit_includesHardening(t *testing.T) {
 	if ntfyBinaryPath != "/usr/local/bin/ntfy" {
 		t.Errorf("ntfyBinaryPath drift; got %q", ntfyBinaryPath)
 	}
-	if NtfyListenPort != 8090 {
+	if NtfyListenPort != 10109 {
 		t.Errorf("NtfyListenPort drift; got %d", NtfyListenPort)
 	}
 }

@@ -157,7 +157,7 @@ func (s *IndexSupervisor) EnsureSNIRouter(nodeID string, enabled bool) error {
 
 // EnsureCoreDNS starts orama-namespace-coredns@nameserver against the existing
 // Corefile. Call only on nodes installed with --nameserver, after index rqlite
-// is up. Zone data stays in index RQLite dns_records (localhost:5001).
+// is up. Zone data stays in index RQLite dns_records (localhost:<index-rqlite-http>).
 func (s *IndexSupervisor) EnsureCoreDNS(nodeID string) error {
 	if _, err := os.Stat("/usr/local/bin/coredns"); err != nil {
 		return fmt.Errorf("nameserver: /usr/local/bin/coredns not installed: %w", err)

@@ -145,9 +145,9 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		nr := namedResult{name: "vault"}
 		start := time.Now()
-		vaultAddr := "localhost:7500"
+		vaultAddr := "localhost:10106"
 		if g.localWireGuardIP != "" {
-			vaultAddr = g.localWireGuardIP + ":7500"
+			vaultAddr = g.localWireGuardIP + ":10106"
 		}
 		conn, err := net.DialTimeout("tcp", vaultAddr, 2*time.Second)
 		if err != nil {

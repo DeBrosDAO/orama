@@ -2,6 +2,8 @@ package namespace
 
 import (
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // ClusterStatus represents the current state of a namespace cluster
@@ -88,26 +90,24 @@ const (
 	// MaxNamespacesPerNode is how many tenant-default (5-port) instances fit in 10000–10099.
 	MaxNamespacesPerNode = (NamespacePortRangeEnd - NamespacePortRangeStart + 1) / PortsPerNamespace // 20
 
-	// Index internals stay on today's host ports until the renumber phase.
-	// Do not place these in the tenant pool (10000–10099).
-	IndexRQLiteHTTPPort      = 5001
-	IndexRQLiteRaftPort      = 7001
-	IndexOlricHTTPPort       = 3320
-	IndexOlricMemberlistPort = 3322
-	IndexGatewayHTTPPort     = 6001
-	// IndexPubsubPort is the localhost HTTP API for the app GossipSub mesh.
-	// Phase 8 keeps this number when internals move to 10100+.
-	IndexPubsubPort = 10105
+	// Index internals occupy 10100–10199. Do not place these in the tenant
+	// pool (10000–10099). Edge ports stay outside this block.
+	IndexRQLiteHTTPPort      = constants.RQLiteHTTPPort
+	IndexRQLiteRaftPort      = constants.RQLiteRaftPort
+	IndexOlricHTTPPort       = constants.OlricHTTPPort
+	IndexOlricMemberlistPort = constants.OlricMemberlistPort
+	IndexGatewayHTTPPort     = constants.GatewayAPIPort
+	IndexPubsubPort          = constants.PubsubAPIPort
+	IndexVaultPort           = constants.VaultHTTPPort
+	IndexIPFSAPIPort         = constants.IPFSAPIPort
+	IndexIPFSClusterAPIPort  = constants.IPFSClusterAPIPort
+	IndexNtfyPort            = constants.NtfyListenPort
 
-	// Host-stack edge / singleton ports. Unchanged by the 10100 renumber.
-	IndexWireGuardPort      = 51820
-	IndexIPFSAPIPort        = 4501
-	IndexIPFSClusterAPIPort = 9094
-	IndexVaultPort          = 7500
-	IndexCaddyHTTPPort      = 80
-	IndexCaddyHTTPSPort     = 443
-	IndexNtfyPort           = 8090
-	IndexAnyoneSOCKSPort    = 9050
+	// Host-stack edge / singleton ports. Not in 10100.
+	IndexWireGuardPort   = constants.WireGuardPort
+	IndexCaddyHTTPPort   = 80
+	IndexCaddyHTTPSPort  = 443
+	IndexAnyoneSOCKSPort = 9050
 
 	// NameserverDNSPort is CoreDNS on the nameserver blueprint. Edge; not 10100.
 	NameserverDNSPort = 53

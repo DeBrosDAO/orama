@@ -30,7 +30,7 @@ func TestCheckSystem_HealthyNode(t *testing.T) {
 		SwapUsedMB:     100,
 		UptimeRaw:      "2024-01-01 00:00:00",
 		InodePct:       10,
-		ListeningPorts: []int{5001, 3322, 6001, 4501},
+		ListeningPorts: []int{10100, 10103, 10104, 10107},
 		UFWActive:      true,
 		ProcessUser:    "orama",
 		PanicCount:     0,
@@ -55,10 +55,10 @@ func TestCheckSystem_HealthyNode(t *testing.T) {
 	expectStatus(t, results, "system.ufw", inspector.StatusPass)
 	expectStatus(t, results, "system.process_user", inspector.StatusPass)
 	expectStatus(t, results, "system.panics", inspector.StatusPass)
-	expectStatus(t, results, "system.port_5001", inspector.StatusPass)
-	expectStatus(t, results, "system.port_3322", inspector.StatusPass)
-	expectStatus(t, results, "system.port_6001", inspector.StatusPass)
-	expectStatus(t, results, "system.port_4501", inspector.StatusPass)
+	expectStatus(t, results, "system.port_10100", inspector.StatusPass)
+	expectStatus(t, results, "system.port_10103", inspector.StatusPass)
+	expectStatus(t, results, "system.port_10104", inspector.StatusPass)
+	expectStatus(t, results, "system.port_10107", inspector.StatusPass)
 }
 
 func TestCheckSystem_ServiceInactive(t *testing.T) {
@@ -317,15 +317,15 @@ func TestCheckSystem_ExpectedPorts(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{
 		Services:       map[string]string{},
-		ListeningPorts: []int{5001, 6001}, // Missing 3322, 4501
+		ListeningPorts: []int{10100, 10104}, // Missing memberlist/IPFS
 	}
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
 	results := CheckSystem(data)
 
-	expectStatus(t, results, "system.port_5001", inspector.StatusPass)
-	expectStatus(t, results, "system.port_6001", inspector.StatusPass)
-	expectStatus(t, results, "system.port_3322", inspector.StatusWarn)
-	expectStatus(t, results, "system.port_4501", inspector.StatusWarn)
+	expectStatus(t, results, "system.port_10100", inspector.StatusPass)
+	expectStatus(t, results, "system.port_10104", inspector.StatusPass)
+	expectStatus(t, results, "system.port_10103", inspector.StatusWarn)
+	expectStatus(t, results, "system.port_10107", inspector.StatusWarn)
 }
 
 func TestCheckSystem_NilData(t *testing.T) {

@@ -98,7 +98,7 @@ func ValidateDiscovery(disc DiscoveryConfig) []error {
 		errs = append(errs, ValidationError{
 			Path:    "discovery.http_adv_address",
 			Message: "required for RQLite cluster discovery",
-			Hint:    "set to your public HTTP address (e.g., 51.83.128.181:5001)",
+			Hint:    "set to your public HTTP address (e.g., 51.83.128.181:10100)",
 		})
 	} else {
 		if err := ValidateHostOrHostPort(disc.HttpAdvAddress); err != nil {
@@ -115,7 +115,7 @@ func ValidateDiscovery(disc DiscoveryConfig) []error {
 		errs = append(errs, ValidationError{
 			Path:    "discovery.raft_adv_address",
 			Message: "required for RQLite cluster discovery",
-			Hint:    "set to your public Raft address (e.g., 51.83.128.181:7001)",
+			Hint:    "set to your public Raft address (e.g., 51.83.128.181:10101)",
 		})
 	} else {
 		if err := ValidateHostOrHostPort(disc.RaftAdvAddress); err != nil {

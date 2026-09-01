@@ -705,7 +705,7 @@ type TURNInstanceConfig struct {
 
 // acmeInternalEndpoint is the gateway's internal ACME endpoint that the
 // Caddyfile TURN-cert blocks point the orama DNS provider at.
-const acmeInternalEndpoint = "http://localhost:6001/v1/internal/acme"
+var acmeInternalEndpoint = fmt.Sprintf("http://localhost:%d/v1/internal/acme", IndexGatewayHTTPPort)
 
 // turnCertProvisionTimeout bounds how long a TURN spawn waits for Caddy to
 // provision a Let's Encrypt cert before falling back (primary domain) or
