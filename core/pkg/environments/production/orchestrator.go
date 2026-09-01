@@ -13,20 +13,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/environments/production/installers"
 )
 
-// AnyoneRelayConfig holds configuration for Anyone relay mode
-type AnyoneRelayConfig struct {
-	Enabled       bool   // Whether to run as relay operator
-	Exit          bool   // Whether to run as exit relay
-	Migrate       bool   // Whether to migrate existing installation
-	Nickname      string // Relay nickname (1-19 alphanumeric)
-	Contact       string // Contact info (email or @telegram)
-	Wallet        string // Ethereum wallet for rewards
-	ORPort        int    // ORPort for relay (default 9001)
-	MyFamily      string // Comma-separated fingerprints of other relays (for multi-relay operators)
-	BandwidthPct  int    // Percentage of VPS bandwidth to allocate to relay (0 = unlimited)
-	AccountingMax int    // Monthly data cap in GB (0 = unlimited)
-}
-
 // ProductionSetup orchestrates the entire production deployment
 type ProductionSetup struct {
 	osInfo             *OSInfo
@@ -37,9 +23,8 @@ type ProductionSetup struct {
 	forceReconfigure   bool
 	skipOptionalDeps   bool
 	skipResourceChecks bool
-	isNameserver       bool               // Whether this node is a nameserver (runs CoreDNS + Caddy)
-	isAnyoneClient     bool               // Whether this node runs Anyone as client-only (SOCKS5 proxy)
-	anyoneRelayConfig  *AnyoneRelayConfig // Configuration for Anyone relay mode
+	isNameserver       bool // Whether this node is a nameserver (runs CoreDNS + Caddy)
+	isAnyoneClient     bool // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	privChecker        *PrivilegeChecker
 	osDetector         *OSDetector
 	archDetector       *ArchitectureDetector
@@ -135,16 +120,6 @@ func (ps *ProductionSetup) IsNameserver() bool {
 	return ps.isNameserver
 }
 
-// SetAnyoneRelayConfig sets the Anyone relay configuration
-func (ps *ProductionSetup) SetAnyoneRelayConfig(config *AnyoneRelayConfig) {
-	ps.anyoneRelayConfig = config
-}
-
-// IsAnyoneRelay returns whether this node is configured as an Anyone relay operator
-func (ps *ProductionSetup) IsAnyoneRelay() bool {
-	return ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.Enabled
-}
-
 // SetAnyoneClient sets whether this node runs Anyone as client-only
 func (ps *ProductionSetup) SetAnyoneClient(enabled bool) {
 	ps.isAnyoneClient = enabled
@@ -156,7 +131,7 @@ func (ps *ProductionSetup) IsAnyoneClient() bool {
 }
 
 // disableConflictingAnyoneService stops, disables, and removes a conflicting
-// Anyone service file. A node must run either relay or client, never both.
+// Anyone service file. A node must run client, never both.
 // This is best-effort: errors are logged but do not abort the operation.
 func (ps *ProductionSetup) disableConflictingAnyoneService(serviceName string) {
 	unitPath := filepath.Join("/etc/systemd/system", serviceName)
@@ -298,9 +273,8 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		}
 	}
 
-	// Anyone relay/client configuration runs after BOTH paths.
+	// Anyone client configuration runs after BOTH paths.
 	// Pre-built mode installs the anon binary via .deb/apt;
-	// source mode installs it via the relay installer's Install().
 	// Configuration (anonrc, bandwidth, migration) is always needed.
 	if err := ps.configureAnyone(); err != nil {
 		ps.logf("  ⚠️  Anyone configuration warning: %v", err)
@@ -370,66 +344,14 @@ func (ps *ProductionSetup) installFromSource() error {
 	return nil
 }
 
-// configureAnyone handles Anyone relay/client installation and configuration.
+// configureAnyone handles Anyone client installation and configuration.
 // This runs after both pre-built and source mode binary installation.
 func (ps *ProductionSetup) configureAnyone() error {
-	if ps.IsAnyoneRelay() {
-		ps.logf("  Installing Anyone relay (operator mode)...")
-		relayConfig := installers.AnyoneRelayConfig{
-			Nickname:      ps.anyoneRelayConfig.Nickname,
-			Contact:       ps.anyoneRelayConfig.Contact,
-			Wallet:        ps.anyoneRelayConfig.Wallet,
-			ORPort:        ps.anyoneRelayConfig.ORPort,
-			ExitRelay:     ps.anyoneRelayConfig.Exit,
-			Migrate:       ps.anyoneRelayConfig.Migrate,
-			MyFamily:      ps.anyoneRelayConfig.MyFamily,
-			AccountingMax: ps.anyoneRelayConfig.AccountingMax,
-		}
-
-		// Run bandwidth test and calculate limits if percentage is set
-		if ps.anyoneRelayConfig.BandwidthPct > 0 {
-			measuredKBs, err := installers.MeasureBandwidth(ps.logWriter)
-			if err != nil {
-				ps.logf("  ⚠️  Bandwidth test failed, relay will run without bandwidth limits: %v", err)
-			} else if measuredKBs > 0 {
-				rate, burst := installers.CalculateBandwidthLimits(measuredKBs, ps.anyoneRelayConfig.BandwidthPct)
-				relayConfig.BandwidthRate = rate
-				relayConfig.BandwidthBurst = burst
-				rateMbps := float64(rate) * 8 / 1024
-				ps.logf("  ✓ Relay bandwidth limited to %d%% of measured speed (%d KBytes/s = %.1f Mbps)",
-					ps.anyoneRelayConfig.BandwidthPct, rate, rateMbps)
-			}
-		}
-
-		relayInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, relayConfig)
-
-		// Check for existing installation if migration is requested
-		if relayConfig.Migrate {
-			existing, err := installers.DetectExistingAnyoneInstallation()
-			if err != nil {
-				ps.logf("  ⚠️  Failed to detect existing installation: %v", err)
-			} else if existing != nil {
-				backupDir := filepath.Join(ps.oramaDir, "backups")
-				if err := relayInstaller.MigrateExistingInstallation(existing, backupDir); err != nil {
-					ps.logf("  ⚠️  Migration warning: %v", err)
-				}
-			}
-		}
-
-		// Install the relay (apt-based, not Go — idempotent if already installed via .deb)
-		if err := relayInstaller.Install(); err != nil {
-			ps.logf("  ⚠️  Anyone relay install warning: %v", err)
-		}
-
-		// Configure the relay
-		if err := relayInstaller.Configure(); err != nil {
-			ps.logf("  ⚠️  Anyone relay config warning: %v", err)
-		}
-	} else if ps.IsAnyoneClient() {
+	if ps.IsAnyoneClient() {
 		ps.logf("  Installing Anyone client-only mode (SOCKS5 proxy)...")
-		clientInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, installers.AnyoneRelayConfig{})
+		clientInstaller := installers.NewAnyoneInstaller(ps.arch, ps.logWriter)
 
-		// Install the anon binary (same apt package as relay — idempotent)
+		// Install the anon binary
 		if err := clientInstaller.Install(); err != nil {
 			ps.logf("  ⚠️  Anyone client install warning: %v", err)
 		}
@@ -858,18 +780,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Vault service created: orama-vault.service")
 
-	// Anyone Relay service (only created when --anyone-relay flag is used)
-	// A node must run EITHER relay OR client, never both. When writing one
-	// mode's service, we remove the other to prevent conflicts (they share
-	// the same anon binary and would fight over ports).
-	if ps.IsAnyoneRelay() {
-		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
-		if err := ps.serviceController.WriteServiceUnit("orama-anyone-relay.service", anyoneUnit); err != nil {
-			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
-		}
-		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
-		ps.disableConflictingAnyoneService("orama-anyone-client.service")
-	} else if ps.IsAnyoneClient() {
+	// Anyone client (SOCKS :9050 for /v1/proxy/anon). Always disable a leftover
+	// orama-anyone-relay unit if one is still on disk from older installs.
+	if ps.IsAnyoneClient() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
 		if err := ps.serviceController.WriteServiceUnit("orama-anyone-client.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone client service: %w", err)
@@ -877,7 +790,6 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
 		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
 	} else {
-		// Neither mode configured — clean up both
 		ps.disableConflictingAnyoneService("orama-anyone-client.service")
 		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
 	}
@@ -935,10 +847,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
 	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service", "orama-ipfs-gc.timer"}
 
-	// Add Anyone service if configured (relay or client)
-	if ps.IsAnyoneRelay() {
-		services = append(services, "orama-anyone-relay.service")
-	} else if ps.IsAnyoneClient() {
+	// Add Anyone service if configured (client)
+	if ps.IsAnyoneClient() {
 		services = append(services, "orama-anyone-client.service")
 	}
 
@@ -972,19 +882,8 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Start infrastructure first (IPFS, Olric, Vault, Anyone) - RQLite is managed internally by each node
 	infraServices := []string{"orama-ipfs.service", "orama-olric.service", "orama-vault.service"}
 
-	// Add Anyone service if configured (relay or client)
-	if ps.IsAnyoneRelay() {
-		orPort := 9001
-		if ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.ORPort > 0 {
-			orPort = ps.anyoneRelayConfig.ORPort
-		}
-		if ps.portChecker.IsPortInUse(orPort) {
-			ps.logf("  ℹ️  ORPort %d is already in use (existing anon relay running)", orPort)
-			ps.logf("  ℹ️  Skipping orama-anyone-relay startup - using existing service")
-		} else {
-			infraServices = append(infraServices, "orama-anyone-relay.service")
-		}
-	} else if ps.IsAnyoneClient() {
+	// Add Anyone service if configured (client)
+	if ps.IsAnyoneClient() {
 		infraServices = append(infraServices, "orama-anyone-client.service")
 	}
 
@@ -1184,15 +1083,9 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 
 	ps.logf("Phase 6b: Setting up UFW firewall...")
 
-	anyoneORPort := 0
-	if ps.IsAnyoneRelay() && ps.anyoneRelayConfig != nil {
-		anyoneORPort = ps.anyoneRelayConfig.ORPort
-	}
-
 	fwCfg := FirewallConfig{
 		SSHPort:       22,
 		IsNameserver:  ps.isNameserver,
-		AnyoneORPort:  anyoneORPort,
 		WireGuardPort: 51820,
 	}
 	// TURN relay ports (bugboard #846): this `ufw --force reset` also runs on
@@ -1282,16 +1175,7 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  %s/logs/vault.log", ps.oramaDir)
 
 	// Anyone mode-specific logs and commands
-	if ps.IsAnyoneRelay() {
-		ps.logf("  /var/log/anon/notices.log (Anyone Relay)")
-		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-relay orama-node")
-		ps.logf("\nAnyone Relay Operator:")
-		ps.logf("  ORPort: %d", ps.anyoneRelayConfig.ORPort)
-		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
-		ps.logf("  Config: /etc/anon/anonrc")
-		ps.logf("  Register at: https://dashboard.anyone.io")
-	} else if ps.IsAnyoneClient() {
+	if ps.IsAnyoneClient() {
 		ps.logf("\nStart All Services:")
 		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-client orama-node")
 	} else {

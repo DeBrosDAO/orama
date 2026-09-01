@@ -12,8 +12,6 @@ type NodePreferences struct {
 	Branch       string `yaml:"branch"`
 	Nameserver   bool   `yaml:"nameserver"`
 	AnyoneClient bool   `yaml:"anyone_client"`
-	AnyoneRelay  bool   `yaml:"anyone_relay"`
-	AnyoneORPort int    `yaml:"anyone_orport,omitempty"` // typically 9001
 }
 
 const preferencesFile = "preferences.yaml"

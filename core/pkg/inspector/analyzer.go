@@ -619,25 +619,8 @@ func buildAnyoneContext(data *ClusterData) string {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", host))
-		b.WriteString(fmt.Sprintf("  relay=%v client=%v orport=%v socks=%v control=%v\n",
-			a.RelayActive, a.ClientActive, a.ORPortListening, a.SocksListening, a.ControlListening))
-		if a.RelayActive {
-			b.WriteString(fmt.Sprintf("  bootstrap=%d%% fingerprint=%s nickname=%s\n",
-				a.BootstrapPct, a.Fingerprint, a.Nickname))
-		}
-		if len(a.ORPortReachable) > 0 {
-			var unreachable []string
-			for h, ok := range a.ORPortReachable {
-				if !ok {
-					unreachable = append(unreachable, h)
-				}
-			}
-			if len(unreachable) > 0 {
-				b.WriteString(fmt.Sprintf("  orport_unreachable: %s\n", strings.Join(unreachable, ", ")))
-			} else {
-				b.WriteString(fmt.Sprintf("  orport: all %d peers reachable\n", len(a.ORPortReachable)))
-			}
-		}
+		b.WriteString(fmt.Sprintf("  client=%v leftover_relay=%v socks=%v control=%v bootstrap=%d%%\n",
+			a.ClientActive, a.RelayActive, a.SocksListening, a.ControlListening, a.BootstrapPct))
 	}
 	return b.String()
 }

@@ -32,15 +32,14 @@ import (
 
 // Options holds the flags for the setup command.
 type Options struct {
-	IP          string
-	Env         string
-	Role        string // "node" or "nameserver"
-	User        string // SSH user (default: "root")
-	Password    string // One-time password for initial SSH access
-	BaseDomain  string
-	Gateway     string // Gateway URL to use for invite tokens (overrides env config)
-	Genesis     bool   // If true, create a new cluster instead of joining
-	AnyoneRelay bool
+	IP         string
+	Env        string
+	Role       string // "node" or "nameserver"
+	User       string // SSH user (default: "root")
+	Password   string // One-time password for initial SSH access
+	BaseDomain string
+	Gateway    string // Gateway URL to use for invite tokens (overrides env config)
+	Genesis    bool   // If true, create a new cluster instead of joining
 }
 
 // Run executes the node setup.
@@ -216,6 +215,7 @@ func installPublicKey(ip, user, password, pubKey string) error {
 func buildInstallCommand(opts Options, node inspector.Node, agentClient *rwagent.Client) (string, error) {
 	parts := []string{"sudo /opt/orama/bin/orama node install"}
 	parts = append(parts, "--vps-ip", opts.IP)
+	parts = append(parts, "--anyone-client")
 
 	if opts.BaseDomain != "" {
 		parts = append(parts, "--base-domain", opts.BaseDomain)
@@ -226,12 +226,6 @@ func buildInstallCommand(opts Options, node inspector.Node, agentClient *rwagent
 		if opts.BaseDomain != "" {
 			parts = append(parts, "--domain", opts.BaseDomain)
 		}
-	}
-
-	if opts.AnyoneRelay {
-		parts = append(parts, "--anyone-relay")
-	} else {
-		parts = append(parts, "--anyone-client")
 	}
 
 	// Pass operator metadata so the node registers with correct values

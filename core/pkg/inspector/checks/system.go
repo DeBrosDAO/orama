@@ -50,8 +50,8 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.2 Anyone relay/client services (only check if installed, don't fail if absent)
-	for _, svc := range []string{"orama-anyone-relay", "orama-anyone-client"} {
+	// 6.2 Anyone client (only check if installed; leftover relay is handled in CheckAnyone)
+	for _, svc := range []string{"orama-anyone-client"} {
 		status, ok := sys.Services[svc]
 		if !ok || status == "inactive" {
 			continue // not installed or intentionally stopped

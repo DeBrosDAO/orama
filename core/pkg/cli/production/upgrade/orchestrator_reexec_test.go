@@ -47,7 +47,7 @@ func TestFlags_ReexecedAfterBinarySwap_defaultFalse(t *testing.T) {
 		t.Fatalf("ParseFlags empty args: %v", err)
 	}
 	if flags.ReexecedAfterBinarySwap {
-		t.Fatal("FATAL DEFAULT: ReexecedAfterBinarySwap defaults to true; this would skip "+
+		t.Fatal("FATAL DEFAULT: ReexecedAfterBinarySwap defaults to true; this would skip " +
 			"Phase 2b (binary install) on every upgrade. MUST be false by default.")
 	}
 }

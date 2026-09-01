@@ -413,44 +413,6 @@ WantedBy=multi-user.target
 `, logFile)
 }
 
-// GenerateAnyoneRelayService generates the Anyone Relay operator systemd unit
-// Uses debian-anon user created by the anon apt package
-func (ssg *SystemdServiceGenerator) GenerateAnyoneRelayService() string {
-	return `[Unit]
-Description=Anyone Relay (Orama Network)
-Documentation=https://docs.anyone.io
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=debian-anon
-Group=debian-anon
-ExecStart=/usr/bin/anon --agree-to-terms
-Restart=always
-RestartSec=10
-SyslogIdentifier=anon-relay
-
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=full
-ProtectHome=read-only
-PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=/var/lib/anon /var/log/anon /etc/anon
-LimitNOFILE=65536
-TimeoutStopSec=30
-KillMode=mixed
-MemoryMax=2G
-
-[Install]
-WantedBy=multi-user.target
-`
-}
-
 // GenerateCoreDNSService generates the CoreDNS systemd unit
 func (ssg *SystemdServiceGenerator) GenerateCoreDNSService() string {
 	return fmt.Sprintf(`[Unit]

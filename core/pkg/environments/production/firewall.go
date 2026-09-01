@@ -31,13 +31,12 @@ const (
 
 // FirewallConfig holds the configuration for UFW firewall rules
 type FirewallConfig struct {
-	SSHPort       int  // default 22
-	IsNameserver  bool // enables port 53 TCP+UDP
-	AnyoneORPort  int  // 0 = disabled, typically 9001
-	WireGuardPort int  // default 51820
-	TURNEnabled   bool // enables TURN relay ports (3478/udp+tcp, 5349/tcp, relay range)
-	TURNRelayStart int // start of TURN relay port range (default 49152)
-	TURNRelayEnd   int // end of TURN relay port range (default 65535)
+	SSHPort        int  // default 22
+	IsNameserver   bool // enables port 53 TCP+UDP
+	WireGuardPort  int  // default 51820
+	TURNEnabled    bool // enables TURN relay ports (3478/udp+tcp, 5349/tcp, relay range)
+	TURNRelayStart int  // start of TURN relay port range (default 49152)
+	TURNRelayEnd   int  // end of TURN relay port range (default 65535)
 }
 
 // FirewallProvisioner manages UFW firewall setup
@@ -105,16 +104,11 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 		rules = append(rules, "ufw allow 53/udp")
 	}
 
-	// Anyone relay ORPort
-	if fp.config.AnyoneORPort > 0 {
-		rules = append(rules, fmt.Sprintf("ufw allow %d/tcp", fp.config.AnyoneORPort))
-	}
-
 	// TURN relay (only for nodes running TURN servers)
 	if fp.config.TURNEnabled {
-		rules = append(rules, "ufw allow 3478/udp")  // TURN standard port (UDP)
-		rules = append(rules, "ufw allow 3478/tcp")  // TURN standard port (TCP fallback)
-		rules = append(rules, "ufw allow 5349/tcp")  // TURNS (TURN over TLS/TCP)
+		rules = append(rules, "ufw allow 3478/udp") // TURN standard port (UDP)
+		rules = append(rules, "ufw allow 3478/tcp") // TURN standard port (TCP fallback)
+		rules = append(rules, "ufw allow 5349/tcp") // TURNS (TURN over TLS/TCP)
 		if fp.config.TURNRelayStart > 0 && fp.config.TURNRelayEnd > 0 {
 			rules = append(rules, fmt.Sprintf("ufw allow %d:%d/udp", fp.config.TURNRelayStart, fp.config.TURNRelayEnd))
 		}

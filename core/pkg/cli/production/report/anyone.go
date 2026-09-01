@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// collectAnyone gathers Anyone Protocol relay/client health information.
+// collectAnyone gathers Anyone client health (and leftover relay unit state).
 func collectAnyone() *AnyoneReport {
 	r := &AnyoneReport{}
 
@@ -31,11 +31,11 @@ func collectAnyone() *AnyoneReport {
 		}
 	}
 
-	// 3. Mode: derive from active state
-	if r.RelayActive {
-		r.Mode = "relay"
-	} else if r.ClientActive {
+	// 3. Mode: client if the client unit is up, even when a leftover relay unit exists.
+	if r.ClientActive {
 		r.Mode = "client"
+	} else if r.RelayActive {
+		r.Mode = "relay"
 	}
 
 	// 4. ORPortListening, SocksListening, ControlListening: check ports in ss -tlnp

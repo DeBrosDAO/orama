@@ -627,18 +627,11 @@ func shouldSkipServiceAlert(svcName, state string, r *report.NodeReport, nc *nod
 		return true
 	}
 
-	// Anyone services: only alert for the mode the node is configured for
-	if r.Anyone != nil {
-		mode := r.Anyone.Mode
-		if svcName == "orama-anyone-client" && mode == "relay" {
-			return true // relay node doesn't run client
-		}
-		if svcName == "orama-anyone-relay" && mode == "client" {
-			return true // client node doesn't run relay
-		}
+	// Leftover relay unit is not required; skip inactive. Client down should alert.
+	if svcName == "orama-anyone-relay" {
+		return true
 	}
-	// If anyone section is nil (no anyone configured), skip both anyone services
-	if r.Anyone == nil && (svcName == "orama-anyone-client" || svcName == "orama-anyone-relay") {
+	if r.Anyone == nil && svcName == "orama-anyone-client" {
 		return true
 	}
 

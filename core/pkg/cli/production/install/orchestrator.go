@@ -48,32 +48,7 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	setup.SetNameserver(flags.Nameserver)
 
 	// Configure Anyone mode
-	if flags.AnyoneRelay && flags.AnyoneClient {
-		return nil, fmt.Errorf("--anyone-relay and --anyone-client are mutually exclusive")
-	}
-	if flags.AnyoneRelay {
-		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
-			Enabled:       true,
-			Exit:          flags.AnyoneExit,
-			Migrate:       flags.AnyoneMigrate,
-			Nickname:      flags.AnyoneNickname,
-			Contact:       flags.AnyoneContact,
-			Wallet:        flags.AnyoneWallet,
-			ORPort:        flags.AnyoneORPort,
-			MyFamily:      flags.AnyoneFamily,
-			BandwidthPct:  flags.AnyoneBandwidth,
-			AccountingMax: flags.AnyoneAccounting,
-		})
-	} else {
-		// Default every non-relay node to Anyone client mode. The gateway on
-		// every node serves /v1/proxy/anon, which requires a local anon SOCKS5
-		// proxy on :9050. Relay nodes already expose :9050 via their own anonrc;
-		// previously a node installed with neither --anyone-relay nor
-		// --anyone-client had no SOCKS proxy, so /v1/proxy/anon returned
-		// "Anyone proxy not available at localhost:9050". The explicit
-		// --anyone-client flag remains accepted (it just matches the default).
-		setup.SetAnyoneClient(true)
-	}
+	setup.SetAnyoneClient(true)
 
 	// Set operator metadata (from orama node setup)
 	setup.SSHUser = flags.SSHUser
@@ -101,18 +76,7 @@ func (o *Orchestrator) Execute() error {
 
 	// Dry-run mode: show what would be done and exit
 	if o.flags.DryRun {
-		var relayInfo *utils.AnyoneRelayDryRunInfo
-		if o.flags.AnyoneRelay {
-			relayInfo = &utils.AnyoneRelayDryRunInfo{
-				Enabled:  true,
-				Exit:     o.flags.AnyoneExit,
-				Nickname: o.flags.AnyoneNickname,
-				Contact:  o.flags.AnyoneContact,
-				Wallet:   o.flags.AnyoneWallet,
-				ORPort:   o.flags.AnyoneORPort,
-			}
-		}
-		utils.ShowDryRunSummaryWithRelay(o.flags.VpsIP, o.flags.Domain, "main", o.peers, o.flags.JoinAddress, o.validator.IsFirstNode(), o.oramaDir, relayInfo)
+		utils.ShowDryRunSummary(o.flags.VpsIP, o.flags.Domain, "main", o.peers, o.flags.JoinAddress, o.validator.IsFirstNode(), o.oramaDir)
 		return nil
 	}
 
@@ -123,19 +87,11 @@ func (o *Orchestrator) Execute() error {
 		}
 	}
 
-	// Save preferences for future upgrades
-	anyoneORPort := 0
-	if o.flags.AnyoneRelay && o.flags.AnyoneORPort > 0 {
-		anyoneORPort = o.flags.AnyoneORPort
-	} else if o.flags.AnyoneRelay {
-		anyoneORPort = 9001
-	}
+	// Save preferences for future upgrades. Anyone is always client-only.
 	prefs := &production.NodePreferences{
 		Branch:       "main",
 		Nameserver:   o.flags.Nameserver,
-		AnyoneClient: o.flags.AnyoneClient,
-		AnyoneRelay:  o.flags.AnyoneRelay,
-		AnyoneORPort: anyoneORPort,
+		AnyoneClient: true,
 	}
 	if err := production.SavePreferences(o.oramaDir, prefs); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)

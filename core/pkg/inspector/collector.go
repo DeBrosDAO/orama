@@ -266,9 +266,6 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 
 	wg.Wait()
 
-	// Second pass: cross-node ORPort reachability (needs all nodes collected first)
-	collectAnyoneReachability(ctx, data)
-
 	data.Duration = time.Since(start)
 	return data
 }
@@ -1225,69 +1222,6 @@ grep -qP '^\s*ORPort\s' /etc/anon/anonrc 2>/dev/null && echo relay || echo clien
 	}
 
 	return data
-}
-
-// collectAnyoneReachability runs a second pass to check ORPort reachability across nodes.
-// Called after all nodes are collected so we know which nodes run relays.
-func collectAnyoneReachability(ctx context.Context, data *ClusterData) {
-	// Find all nodes running the relay (have ORPort listening)
-	var relayHosts []string
-	for host, nd := range data.Nodes {
-		if nd.Anyone != nil && nd.Anyone.RelayActive && nd.Anyone.ORPortListening {
-			relayHosts = append(relayHosts, host)
-		}
-	}
-
-	if len(relayHosts) == 0 {
-		return
-	}
-
-	// From each node, try to TCP connect to each relay's ORPort 9001
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, nd := range data.Nodes {
-		if nd.Anyone == nil || nd.Anyone.Mode == "client" {
-			continue // skip nodes without Anyone data or in client mode
-		}
-		wg.Add(1)
-		go func(nd *NodeData) {
-			defer wg.Done()
-
-			// Build commands to test TCP connectivity to each relay
-			var tcpCmds string
-			for _, relayHost := range relayHosts {
-				if relayHost == nd.Node.Host {
-					continue // skip self
-				}
-				tcpCmds += fmt.Sprintf(
-					`echo "ORPORT:%s:$(timeout 3 bash -c 'echo >/dev/tcp/%s/9001' 2>/dev/null && echo ok || echo fail)"
-`, relayHost, relayHost)
-			}
-
-			if tcpCmds == "" {
-				return
-			}
-
-			res := RunSSH(ctx, nd.Node, tcpCmds)
-			if res.Stdout == "" {
-				return
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			for _, line := range strings.Split(res.Stdout, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "ORPORT:") {
-					p := strings.SplitN(line, ":", 3)
-					if len(p) == 3 {
-						nd.Anyone.ORPortReachable[p[1]] = p[2] == "ok"
-					}
-				}
-			}
-		}(nd)
-	}
-	wg.Wait()
 }
 
 func collectNamespaces(ctx context.Context, node Node) []NamespaceData {
