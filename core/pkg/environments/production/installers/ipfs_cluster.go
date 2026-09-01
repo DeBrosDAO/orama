@@ -1,6 +1,7 @@
 package installers
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -242,8 +243,8 @@ func (ici *IPFSClusterInstaller) verifySecret(clusterPath, expectedSecret string
 
 	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
 		if secret, ok := cluster["secret"].(string); ok {
-			if secret != expectedSecret {
-				return fmt.Errorf("secret mismatch: expected %s, got %s", expectedSecret, secret)
+			if subtle.ConstantTimeCompare([]byte(secret), []byte(expectedSecret)) != 1 {
+				return fmt.Errorf("secret mismatch in service.json")
 			}
 			return nil
 		}
