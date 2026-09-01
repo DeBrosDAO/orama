@@ -124,19 +124,12 @@ sudo chown orama:orama /var/lib/coredns
 # 3. Copy configuration
 sudo cp configs/coredns/Corefile /etc/coredns/
 
-# 4. Install systemd service
-sudo cp configs/coredns/coredns.service /etc/systemd/system/
-sudo systemctl daemon-reload
+# 4. Production: CoreDNS is orama-namespace-coredns@nameserver,
+#    started by orama-node after index rqlite. Do not enable coredns.service.
 
 # 5. Configure firewall
 sudo ufw allow 53/tcp
 sudo ufw allow 53/udp
-sudo ufw allow 8080/tcp  # Health check
-sudo ufw allow 9153/tcp  # Metrics
-
-# 6. Start service
-sudo systemctl enable coredns
-sudo systemctl start coredns
 ```
 
 ## Configuration
@@ -148,7 +141,7 @@ The Corefile at `/etc/coredns/Corefile` configures CoreDNS behavior:
 ```corefile
 orama.network {
     rqlite {
-        dsn http://localhost:5001    # RQLite HTTP endpoint
+        dsn http://localhost:10100    # index RQLite HTTP endpoint
         refresh 10s                   # Health check interval
         ttl 300                       # Cache TTL in seconds
         cache_size 10000              # Max cached entries
@@ -179,10 +172,10 @@ Ensure RQLite is running and accessible:
 
 ```bash
 # Test RQLite connectivity
-curl http://localhost:5001/status
+curl http://localhost:10100/status
 
 # Test DNS record query
-curl -G http://localhost:5001/db/query \
+curl -G http://localhost:10100/db/query \
   --data-urlencode 'q=SELECT * FROM dns_records LIMIT 5'
 ```
 
@@ -192,7 +185,7 @@ curl -G http://localhost:5001/db/query \
 
 ```bash
 # Via RQLite
-curl -XPOST 'http://localhost:5001/db/execute' \
+curl -XPOST 'http://localhost:10100/db/execute' \
   -H 'Content-Type: application/json' \
   -d '[
     ["INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -218,7 +211,7 @@ dig @<node-ip> test.orama.network
 
 ```bash
 # Add wildcard record
-curl -XPOST 'http://localhost:5001/db/execute' \
+curl -XPOST 'http://localhost:10100/db/execute' \
   -H 'Content-Type: application/json' \
   -d '[
     ["INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -282,7 +275,7 @@ If CoreDNS fails to start with "plugin not found":
 sudo systemctl status rqlite
 
 # Test RQLite HTTP API
-curl http://localhost:5001/status
+curl http://localhost:10100/status
 
 # Check firewall
 sudo ufw status | grep 5001
@@ -301,7 +294,7 @@ dig @127.0.0.1 test.orama.network
 sudo journalctl -u coredns --since "5 minutes ago"
 
 # 4. Verify DNS records exist in RQLite
-curl -G http://localhost:5001/db/query \
+curl -G http://localhost:10100/db/query \
   --data-urlencode 'q=SELECT * FROM dns_records WHERE is_active = TRUE'
 ```
 
@@ -378,7 +371,7 @@ Only expose necessary ports:
 - Port 53 (DNS): Public
 - Port 8080 (Health): Internal only
 - Port 9153 (Metrics): Internal only
-- Port 5001 (RQLite): Internal only
+- Port 10100 (index RQLite): Internal only
 
 ```bash
 # Allow DNS from anywhere

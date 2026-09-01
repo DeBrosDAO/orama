@@ -119,9 +119,9 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 **Symptom:** After `orama node upgrade --restart` or `orama node restart`, namespace gateway/olric/rqlite services don't start.
 
-**Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
+**Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services. Index host units (`@index`) are started by the supervisor on node start and do not need to be enabled.
 
-**Fix:** Re-enable the services before restarting:
+**Fix:** Re-enable the **tenant** services before restarting:
 
 ```bash
 systemctl enable orama-namespace-rqlite@<name>.service

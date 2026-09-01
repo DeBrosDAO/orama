@@ -61,6 +61,22 @@ The system follows a clean, layered architecture with clear separation of concer
         └─────────────────┘
 ```
 
+## Node process model
+
+Install enables **only** `orama-node.service`. That process is a supervisor: it does not embed the HTTP gateway or exec `rqlited`. On start it brings up host and control-plane units as `orama-namespace-<driver>@index` (and CoreDNS as `orama-namespace-coredns@nameserver` when the node was installed with `--nameserver`).
+
+| Plane | Membership | Units | Ports |
+|---|---|---|---|
+| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,anyone-client}@index`; optional `sni-router@index` | internals `10100–10109`; edge `80`/`443`/`51820`/`9050` |
+| **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
+| **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
+
+Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-provisionable.
+
+Drive nodes through the `orama` CLI (`orama node …`). Do not `systemctl start` leftover host units (`orama-ipfs`, `orama-olric`, `caddy.service`, `coredns.service`, `wg-quick@wg0`). Those files may still exist on disk for rollback; they are disabled. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
+
+RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`.
+
 ## Core Components
 
 ### 1. API Gateway (`pkg/gateway/`)
@@ -396,9 +412,9 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 
 ### Process Isolation
 
-- **Dedicated user:** All services run as `orama` user (not root)
-- **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc.
-- **Capabilities:** Caddy and CoreDNS get `CAP_NET_BIND_SERVICE` for privileged ports
+- **Dedicated user:** Most units run as `orama`. WireGuard (`wg-quick`) runs as root. Anyone client runs as `debian-anon`. ntfy runs as `ntfy`.
+- **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc. `orama-node` omits `NoNewPrivileges` so it can `sudo systemctl` the `@` units.
+- **Capabilities:** Caddy, CoreDNS, and the SNI router get `CAP_NET_BIND_SERVICE` for privileged ports.
 
 See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 

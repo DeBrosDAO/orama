@@ -9,12 +9,12 @@ How to completely remove all Orama Network state from a VPS so it can be reinsta
 Run this as root or with sudo on the target VPS:
 
 ```bash
-# 1. Stop and disable all services
+# 1. Stop supervisor (PartOf stops @index / @nameserver), then leftover host units
 sudo systemctl stop orama-node 2>/dev/null
 sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
 sudo systemctl disable orama-node 2>/dev/null
-sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
-sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
+sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
+sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
 
 # 1b. Kill leftover processes (binaries may run outside systemd)
 sudo pkill -f orama-node 2>/dev/null; sudo pkill -f ipfs-cluster-service 2>/dev/null
@@ -147,8 +147,8 @@ for entry in "${NODES[@]}"; do
 sudo systemctl stop orama-node 2>/dev/null
 sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
 sudo systemctl disable orama-node 2>/dev/null
-sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
-sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router 2>/dev/null
+sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
+sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
 sudo rm -f /etc/systemd/system/orama-*.service /etc/systemd/system/orama-*.timer /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service /etc/systemd/system/ntfy.service
 sudo systemctl daemon-reload
 sudo systemctl stop wg-quick@wg0 2>/dev/null

@@ -63,9 +63,15 @@ orama node install --vps-ip <ip> --nameserver --domain <domain> --base-domain <d
 
 The installer auto-detects the binary archive at `/opt/orama/manifest.json` and copies pre-built binaries instead of compiling from source.
 
+### What runs on a node
+
+The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.
+
+Use `orama node …` (start/stop/restart/upgrade). Do not enable leftover `orama-ipfs.service`, `orama-olric.service`, `caddy.service`, or `coredns.service`. Index RQLite data stays at `~/.orama/data/rqlite`. Internals are `10100–10109`; do not mix a voter still on 5001 with one on 10100.
+
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
-**NEVER restart all nodes simultaneously.** RQLite uses Raft consensus and requires a majority (quorum) to function.
+**NEVER restart all nodes simultaneously.** Index RQLite uses Raft consensus and requires a majority (quorum) to function. Never restart multiple RQLite voters in the same step.
 
 #### Safe Upgrade Procedure
 
@@ -95,7 +101,7 @@ orama monitor report --env testnet
 - **DON'T** stop all nodes, replace binaries, then start all nodes
 - **DON'T** run `orama node upgrade --restart` on multiple nodes in parallel
 - **DON'T** clear RQLite data directories unless doing a full cluster rebuild
-- **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously
+- **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously (that also stops `@index` via `PartOf`)
 
 #### Schema-Migration Ordering Invariant
 

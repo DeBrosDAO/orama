@@ -187,7 +187,7 @@ The service is `PartOf=orama-node.service`, meaning:
 
 ```bash
 # Client port: accessible from WireGuard overlay and optionally from gateway
-sudo ufw allow from 10.0.0.0/24 to any port 7500 proto tcp comment "vault-guardian client"
+sudo ufw allow from 10.0.0.0/24 to any port 10106 proto tcp comment "vault-guardian client"
 
 # Peer port: WireGuard overlay ONLY
 sudo ufw allow from 10.0.0.0/24 to any port 7501 proto tcp comment "vault-guardian peer"
@@ -197,14 +197,14 @@ sudo ufw allow from 10.0.0.0/24 to any port 7501 proto tcp comment "vault-guardi
 
 | Port | Protocol | Interface | Purpose |
 |------|----------|-----------|---------|
-| 7500 | TCP | WireGuard (10.0.0.x) | Client-facing HTTP API |
+| 10106 | TCP | WireGuard (10.0.0.x) | Client-facing HTTP API (Orama production `vault.yaml`) |
 | 7501 | TCP | WireGuard (10.0.0.x) only | Guardian-to-guardian binary protocol (reserved -- no listener yet) |
 
 > **Note:** In v0.1.0 the daemon does not start the peer listener, so nothing accepts connections on port 7501 yet. The firewall rule is forward-looking for when the peer protocol is wired in.
 
 **Port 7501 must NEVER be exposed on the public interface.** The peer protocol has no authentication beyond WireGuard -- it trusts that only authorized nodes can reach it.
 
-Port 7500 may be exposed on the public interface if the node runs without the Orama gateway reverse proxy, but this is not recommended for production.
+The standalone vault binary still defaults to `--port 7500` when run without Orama's `vault.yaml`. Production installs write `client_port = 10106`. Do not expose the client port on the public interface; the gateway reverse-proxies it.
 
 ---
 
@@ -249,13 +249,13 @@ For rolling upgrades across the cluster, follow the standard Orama network rolli
 sudo systemctl status orama-vault
 
 # Check health endpoint
-curl http://127.0.0.1:7500/v1/vault/health
+curl http://127.0.0.1:10106/v1/vault/health
 
 # Expected response:
 # {"status":"degraded","version":"0.1.0","shares":0,"peers":0,"data_dir_ok":true}
 
 # Check status endpoint
-curl http://127.0.0.1:7500/v1/vault/status
+curl http://127.0.0.1:10106/v1/vault/status
 ```
 
 `"status":"degraded"` with `"peers":0` is the expected healthy state today: peer discovery via RQLite is not yet implemented, so every node runs with zero alive peers. A failed deploy shows up as `"status":"unhealthy"` (data directory inaccessible), `"data_dir_ok":false`, or no response at all.
