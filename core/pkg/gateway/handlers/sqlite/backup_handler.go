@@ -120,7 +120,6 @@ func (h *BackupHandler) BackupDatabase(w http.ResponseWriter, r *http.Request) {
 		"database_name":  req.DatabaseName,
 		"backup_cid":     cid,
 		"backed_up_at":   now,
-		"ipfs_url":       "https://ipfs.io/ipfs/" + cid,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -193,7 +192,6 @@ func (h *BackupHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 			"backup_cid":   row.BackupCID,
 			"backed_up_at": row.BackedUpAt,
 			"size_bytes":   row.SizeBytes,
-			"ipfs_url":     "https://ipfs.io/ipfs/" + row.BackupCID,
 		}
 	}
 
