@@ -415,8 +415,8 @@ behind-proxy: true
 # per-instance, so a client recovering missed messages across the round-robin
 # fan-out must use since=<unix-timestamp>/<duration>, NOT since=<message-id>
 # (IDs differ between nodes). Each node's cache holds every fanned-out message.
-cache-file: "%s/cache.db"
-cache-duration: "12h"
+cache-file: "/run/ntfy/cache.db"
+cache-duration: "15m"
 
 # Keepalive (bugboard #858): ntfy's 45s default is too long for aggressive
 # carrier/mobile NATs, which silently drop idle long-lived /json streams — the
@@ -445,5 +445,5 @@ web-root: "disable"
 # Logs to stdout so systemd-journald captures them.
 log-level: "info"
 log-format: "json"
-`, publicBaseURL, NtfyListenPort, NtfyListenPort, ntfyDataDir)
+`, publicBaseURL, NtfyListenPort, NtfyListenPort)
 }

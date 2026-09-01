@@ -161,6 +161,10 @@ func (b *requestLogBatcher) flush() {
 		if _, err := db.Query(client.WithInternalAuth(ctx), sb.String(), args...); err != nil && b.gw.logger != nil {
 			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to flush request logs", zap.Error(err))
 		}
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			"DELETE FROM request_logs WHERE created_at < datetime('now', '-7 days')"); err != nil && b.gw.logger != nil {
+			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to prune request_logs", zap.Error(err))
+		}
 	}
 
 	// Batch UPDATE last_used_at for all API keys seen in this batch

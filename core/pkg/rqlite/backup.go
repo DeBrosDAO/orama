@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultBackupInterval = 1 * time.Hour
-	maxBackupRetention    = 24
+	maxBackupRetention    = 3
 	backupDirName         = "backups/rqlite"
 	backupPrefix          = "rqlite-backup-"
 	backupSuffix          = ".db"
@@ -69,12 +69,13 @@ func (r *RQLiteManager) performBackup() {
 	}
 
 	backupDir := r.backupDir()
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
+	if err := os.MkdirAll(backupDir, 0700); err != nil {
 		r.logger.Error("Failed to create backup directory",
 			zap.String("dir", backupDir),
 			zap.Error(err))
 		return
 	}
+	_ = os.Chmod(backupDir, 0700)
 
 	timestamp := time.Now().UTC().Format(backupTimestampFormat)
 	filename := fmt.Sprintf("%s%s%s", backupPrefix, timestamp, backupSuffix)
@@ -135,7 +136,7 @@ func (r *RQLiteManager) downloadBackup(destPath string) error {
 		return fmt.Errorf("backup endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	outFile, err := os.Create(destPath)
+	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create backup file: %w", err)
 	}
@@ -184,6 +185,10 @@ func (r *RQLiteManager) pruneOldBackups(backupDir string) {
 	toDelete := backupFiles[:len(backupFiles)-maxBackupRetention]
 	for _, entry := range toDelete {
 		path := filepath.Join(backupDir, entry.Name())
+		if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+			_, _ = f.Write(make([]byte, 64*1024))
+			_ = f.Close()
+		}
 		if err := os.Remove(path); err != nil {
 			r.logger.Warn("Failed to delete old backup",
 				zap.String("path", path),

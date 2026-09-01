@@ -19,6 +19,7 @@ ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ReadWritePaths=/var/lib/ntfy
+RuntimeDirectory=ntfy
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
