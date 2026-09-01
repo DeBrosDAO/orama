@@ -17,8 +17,6 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
-	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
-
 	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
@@ -28,9 +26,8 @@ type Client struct {
 	config *ClientConfig
 
 	// Network components
-	host     host.Host
-	libp2pPS *libp2ppubsub.PubSub
-	logger   *zap.Logger
+	host   host.Host
+	logger *zap.Logger
 
 	// Components
 	database *DatabaseClientImpl
@@ -189,43 +186,17 @@ func (c *Client) Connect() error {
 		zap.Strings("listen_addrs", addrStrs),
 	)
 
-	c.logger.Info("Creating GossipSub...")
-
-	// Create LibP2P GossipSub with PeerExchange enabled (gossip-based peer exchange).
-	// Peer exchange helps propagate peer addresses via pubsub gossip and is enabled
-	// globally so discovery works without Anchat-specific branches.
-	var ps *libp2ppubsub.PubSub
-	ps, err = libp2ppubsub.NewGossipSub(context.Background(), h,
-		libp2ppubsub.WithPeerExchange(true),
-		libp2ppubsub.WithFloodPublish(true), // Ensure messages reach all peers, not just mesh
-		libp2ppubsub.WithDirectPeers(nil),   // Enable direct peer connections
-	)
-	if err != nil {
-		h.Close()
-		return fmt.Errorf("failed to create pubsub: %w", err)
-	}
-	c.libp2pPS = ps
-	c.logger.Info("GossipSub created successfully")
-
-	c.logger.Info("Creating pubsub bridge...")
-
-	c.logger.Info("Getting app namespace for pubsub...")
-	// Access namespace directly to avoid deadlock (we already hold c.mu.Lock())
 	var namespace string
 	if c.resolvedNamespace != "" {
 		namespace = c.resolvedNamespace
 	} else {
 		namespace = c.config.AppName
 	}
-	c.logger.Info("App namespace retrieved", zap.String("namespace", namespace))
-
-	c.logger.Info("Calling pubsub.NewClientAdapter...")
-	adapter := pubsub.NewClientAdapter(c.libp2pPS, namespace, c.logger)
-	c.logger.Info("pubsub.NewClientAdapter completed successfully")
-
-	c.logger.Info("Creating pubSubBridge...")
+	adapter := pubsub.NewHTTPClient(c.config.PubSubURL, namespace, c.logger)
 	c.pubsub = &pubSubBridge{client: c, adapter: adapter}
-	c.logger.Info("Pubsub bridge created successfully")
+	c.logger.Info("Pubsub HTTP client attached",
+		zap.String("url", c.config.PubSubURL),
+		zap.String("namespace", namespace))
 
 	c.logger.Info("Starting peer connections...")
 
@@ -375,10 +346,8 @@ func (c *Client) getAppNamespace() string {
 	return c.config.AppName
 }
 
-// PubSubAdapter returns the underlying pubsub.ClientAdapter for direct use by serverless functions.
-// This bypasses the authentication checks used by PubSub() since serverless functions
-// are already authenticated via the gateway.
-func (c *Client) PubSubAdapter() *pubsub.ClientAdapter {
+// PubSubAdapter returns the underlying pubsub Bus for serverless functions.
+func (c *Client) PubSubAdapter() pubsub.Bus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.pubsub == nil {

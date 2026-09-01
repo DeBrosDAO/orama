@@ -428,6 +428,7 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 		"orama-namespace-gateway@.service",
 		"orama-namespace-sfu@.service",
 		"orama-namespace-turn@.service",
+		"orama-namespace-pubsub@.service",
 	}
 
 	installedCount := 0

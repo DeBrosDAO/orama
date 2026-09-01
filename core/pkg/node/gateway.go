@@ -12,6 +12,19 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/namespace"
 )
 
+func (n *Node) startIndexPubsub(ctx context.Context) error {
+	dataDir, err := config.ExpandPath(n.config.Node.DataDir)
+	if err != nil {
+		return err
+	}
+	sup := namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger)
+	nodeID := n.config.Node.ID
+	if nodeID == "" {
+		nodeID = "node"
+	}
+	return sup.EnsurePubsub(ctx, nodeID, n.config.Discovery.BootstrapPeers)
+}
+
 // startIndexGateway starts orama-namespace-gateway@index on :6001.
 // orama-node does not bind :6001; Caddy still reverse_proxies to localhost:6001.
 func (n *Node) startIndexGateway(ctx context.Context) error {

@@ -19,6 +19,7 @@ const (
 	ServiceTypeGateway ServiceType = "gateway"
 	ServiceTypeSFU     ServiceType = "sfu"
 	ServiceTypeTURN    ServiceType = "turn"
+	ServiceTypePubsub  ServiceType = "pubsub"
 )
 
 // Manager manages systemd units for namespace services
@@ -460,6 +461,7 @@ func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 		"orama-namespace-gateway@.service",
 		"orama-namespace-sfu@.service",
 		"orama-namespace-turn@.service",
+		"orama-namespace-pubsub@.service",
 	}
 
 	for _, template := range templates {

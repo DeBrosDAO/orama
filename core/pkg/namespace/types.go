@@ -95,6 +95,9 @@ const (
 	IndexOlricHTTPPort       = 3320
 	IndexOlricMemberlistPort = 3322
 	IndexGatewayHTTPPort     = 6001
+	// IndexPubsubPort is the localhost HTTP API for the app GossipSub mesh.
+	// Phase 8 keeps this number when internals move to 10100+.
+	IndexPubsubPort = 10105
 )
 
 // WebRTC port allocation constants

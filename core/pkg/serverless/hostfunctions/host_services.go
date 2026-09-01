@@ -31,7 +31,7 @@ func NewHostFunctions(
 	db rqlite.Client,
 	cacheClient olriclib.Client,
 	storage ipfs.IPFSClient,
-	pubsubAdapter *pubsub.ClientAdapter,
+	pubsubAdapter pubsub.Bus,
 	wsManager serverless.WebSocketManager,
 	secrets serverless.SecretsManager,
 	pushDispatcher *push.PushDispatcher,

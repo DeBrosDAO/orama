@@ -10,7 +10,7 @@ import (
 // pubSubBridge bridges between our PubSubClient interface and the pubsub package
 type pubSubBridge struct {
 	client  *Client
-	adapter *pkgpubsub.ClientAdapter
+	adapter pkgpubsub.Bus
 }
 
 func (p *pubSubBridge) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {

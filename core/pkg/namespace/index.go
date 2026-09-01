@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -147,6 +148,27 @@ func (s *IndexSupervisor) EnsureOlric(ctx context.Context, nodeID, bindAddr stri
 		}
 	}
 	return disableHostOlric()
+}
+
+// EnsurePubsub starts orama-namespace-pubsub@index on 127.0.0.1:10105.
+func (s *IndexSupervisor) EnsurePubsub(_ context.Context, nodeID string, bootstrap []string) error {
+	idDir := filepath.Join(s.dataDir, "pubsub")
+	if err := os.MkdirAll(idDir, 0755); err != nil {
+		return err
+	}
+	envVars := map[string]string{
+		"PUBSUB_LISTEN":   fmt.Sprintf("127.0.0.1:%d", IndexPubsubPort),
+		"IDENTITY_PATH":   filepath.Join(idDir, "identity.key"),
+		"BOOTSTRAP_PEERS": strings.Join(bootstrap, ","),
+		"NODE_ID":         nodeID,
+	}
+	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameIndex, nodeID, systemd.ServiceTypePubsub, envVars); err != nil {
+		return err
+	}
+	if err := s.systemdMgr.StartService(BlueprintNameIndex, systemd.ServiceTypePubsub); err != nil {
+		return fmt.Errorf("start orama-namespace-pubsub@index: %w", err)
+	}
+	return nil
 }
 
 // EnsureGateway starts orama-namespace-gateway@index on :6001.

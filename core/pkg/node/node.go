@@ -96,6 +96,10 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start RQLite: %w", err)
 	}
 
+	if err := n.startIndexPubsub(ctx); err != nil {
+		return fmt.Errorf("failed to start index pubsub: %w", err)
+	}
+
 	if err := n.startIndexGateway(ctx); err != nil {
 		return fmt.Errorf("failed to start index gateway: %w", err)
 	}

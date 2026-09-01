@@ -158,6 +158,7 @@ func (b *Builder) buildOramaBinaries() error {
 		{Name: "sfu", Package: "./cmd/sfu/"},
 		{Name: "turn", Package: "./cmd/turn/"},
 		{Name: "orama-sni-router", Package: "./cmd/sni-router/"},
+		{Name: "pubsub", Package: "./cmd/pubsub/"},
 	}
 
 	for _, bin := range binaries {

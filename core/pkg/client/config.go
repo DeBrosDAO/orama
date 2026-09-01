@@ -3,6 +3,8 @@ package client
 import (
 	"fmt"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
 // ClientConfig represents configuration for network clients
@@ -11,14 +13,15 @@ type ClientConfig struct {
 	DatabaseName      string        `json:"database_name"`
 	BootstrapPeers    []string      `json:"peers"`
 	DatabaseEndpoints []string      `json:"database_endpoints"`
-	GatewayURL        string        `json:"gateway_url"`    // Gateway URL for HTTP API access
+	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access
 	ConnectTimeout    time.Duration `json:"connect_timeout"`
 	RetryAttempts     int           `json:"retry_attempts"`
 	RetryDelay        time.Duration `json:"retry_delay"`
-	QuietMode         bool          `json:"quiet_mode"`     // Suppress debug/info logs
-	APIKey            string        `json:"api_key"`        // API key for gateway auth
-	JWT               string        `json:"jwt"`            // Optional JWT bearer token
-	IdentityPath      string        `json:"identity_path"`  // Path to persistent LibP2P identity key file
+	QuietMode         bool          `json:"quiet_mode"`    // Suppress debug/info logs
+	APIKey            string        `json:"api_key"`       // API key for gateway auth
+	JWT               string        `json:"jwt"`           // Optional JWT bearer token
+	IdentityPath      string        `json:"identity_path"` // Path to persistent LibP2P identity key file
+	PubSubURL         string        `json:"pubsub_url"`    // localhost HTTP API for app GossipSub (orama-namespace-pubsub@index)
 }
 
 // DefaultClientConfig returns a default client configuration
@@ -39,5 +42,6 @@ func DefaultClientConfig(appName string) *ClientConfig {
 		QuietMode:         false,
 		APIKey:            "",
 		JWT:               "",
+		PubSubURL:         "http://" + pubsub.DefaultListenAddr,
 	}
 }

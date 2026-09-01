@@ -67,6 +67,7 @@ func TestBlueprintTenant_rejectsIndexSingletons(t *testing.T) {
 		{Name: ServiceIPFS, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceWireGuard, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceCoreDNS, Scope: ScopeNameserver, Order: 99},
+		{Name: ServicePubsub, Scope: ScopeIndex, Order: 99},
 	}
 	for _, spec := range singletons {
 		bp := base
@@ -115,7 +116,7 @@ func TestBlueprintIndex_fixedPortsNotTenantRange(t *testing.T) {
 	if err := bp.Validate(); err != nil {
 		t.Fatalf("BlueprintIndex must be valid: %v", err)
 	}
-	want := []ServiceName{ServiceRQLite, ServiceOlric}
+	want := []ServiceName{ServiceRQLite, ServiceOlric, ServicePubsub}
 	if len(bp.Services) != len(want) {
 		t.Fatalf("len(Services) = %d, want %d", len(bp.Services), len(want))
 	}
@@ -131,8 +132,8 @@ func TestBlueprintIndex_fixedPortsNotTenantRange(t *testing.T) {
 	}
 
 	withGW := BlueprintIndexWithGateway()
-	if len(withGW.Services) != 3 || withGW.Services[2].Name != ServiceGateway {
-		t.Fatalf("BlueprintIndexWithGateway services = %v, want rqlite,olric,gateway", serviceNames(withGW))
+	if len(withGW.Services) != 4 || withGW.Services[3].Name != ServiceGateway {
+		t.Fatalf("BlueprintIndexWithGateway services = %v, want rqlite,olric,pubsub,gateway", serviceNames(withGW))
 	}
 	if err := withGW.Validate(); err != nil {
 		t.Fatalf("BlueprintIndexWithGateway must be valid: %v", err)

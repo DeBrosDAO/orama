@@ -36,6 +36,7 @@ const (
 	ServiceIPFS      ServiceName = "ipfs"
 	ServiceWireGuard ServiceName = "wireguard"
 	ServiceCoreDNS   ServiceName = "coredns"
+	ServicePubsub    ServiceName = "pubsub"
 )
 
 // Named blueprints. Index and nameserver are reserved; they are not
@@ -104,6 +105,14 @@ func BlueprintIndex() Blueprint {
 					{Fixed: IndexOlricMemberlistPort},
 				},
 			},
+			{
+				Name:  ServicePubsub,
+				Order: 3,
+				Scope: ScopeIndex,
+				PortNeeds: []PortNeed{
+					{Fixed: IndexPubsubPort},
+				},
+			},
 		},
 	}
 }
@@ -113,7 +122,7 @@ func BlueprintIndexWithGateway() Blueprint {
 	bp := BlueprintIndex()
 	bp.Services = append(bp.Services, ServiceSpec{
 		Name:  ServiceGateway,
-		Order: 3,
+		Order: 4,
 		Scope: ScopeReusable,
 		PortNeeds: []PortNeed{
 			{Fixed: IndexGatewayHTTPPort},

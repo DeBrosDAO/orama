@@ -38,7 +38,7 @@ type HostFunctions struct {
 	cacheClient olriclib.Client
 	storage     ipfs.IPFSClient
 	ipfsAPIURL  string
-	pubsub      *pubsub.ClientAdapter
+	pubsub      pubsub.Bus
 	wsManager   serverless.WebSocketManager
 	secrets     serverless.SecretsManager
 	httpClient  *http.Client

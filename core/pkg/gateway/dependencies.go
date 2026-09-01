@@ -593,7 +593,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	}
 
 	// Get pubsub adapter from client for serverless functions
-	var pubsubAdapter *pubsub.ClientAdapter
+	var pubsubAdapter pubsub.Bus
 	if networkClient != nil {
 		if concreteClient, ok := networkClient.(*client.Client); ok {
 			pubsubAdapter = concreteClient.PubSubAdapter()
