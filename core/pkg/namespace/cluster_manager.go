@@ -52,6 +52,12 @@ type ClusterManagerConfig struct {
 	// works there (bugboard #837 follow-up). Empty leaves namespace-gateway
 	// secrets management disabled (fail-loud).
 	SecretsEncryptionKey string
+
+	// NtfyBaseURL is the host's self-hosted ntfy base URL. Forwarded to
+	// spawned namespace gateways so their ntfy push provider is registered
+	// with a default server (bugboard #274). Empty means namespaces must
+	// supply their own base_url in stored ntfy credentials.
+	NtfyBaseURL string
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -87,6 +93,9 @@ type ClusterManager struct {
 	// Host's serverless secrets encryption key, forwarded to spawned
 	// namespace gateways (bugboard #837 follow-up). Empty = disabled.
 	secretsEncryptionKey string
+	// ntfyBaseURL is the host's self-hosted ntfy base URL, forwarded to
+	// spawned namespace gateways (bugboard #274).
+	ntfyBaseURL string
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -155,6 +164,7 @@ func NewClusterManager(
 		ipfsReplicationFactor: ipfsReplicationFactor,
 		turnEncryptionKey:     cfg.TurnEncryptionKey,
 		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		ntfyBaseURL:           cfg.NtfyBaseURL,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
@@ -204,6 +214,7 @@ func NewClusterManagerWithComponents(
 		ipfsReplicationFactor: ipfsReplicationFactor,
 		turnEncryptionKey:     cfg.TurnEncryptionKey,
 		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		ntfyBaseURL:           cfg.NtfyBaseURL,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
@@ -602,6 +613,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
+			NtfyBaseURL:           cm.ntfyBaseURL,
 		}
 
 		var instance *gateway.GatewayInstance
@@ -721,6 +733,9 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 		// Bugboard #837 follow-up: carry the host secrets encryption key to
 		// the remote node so its spawned namespace gateway can manage secrets.
 		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
+		// Bugboard #274: carry the host ntfy base URL so the remote node's
+		// spawned namespace gateway registers an ntfy push provider.
+		"gateway_ntfy_base_url": cfg.NtfyBaseURL,
 	})
 	if err != nil {
 		return nil, err
@@ -1636,6 +1651,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				IPFSTimeout:           cm.ipfsTimeout,
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 				SecretsEncryptionKey:  cm.secretsEncryptionKey,
+				NtfyBaseURL:           cm.ntfyBaseURL,
 			}
 
 			// Add WebRTC config if enabled for this namespace.
@@ -2240,6 +2256,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
+			NtfyBaseURL:           cm.ntfyBaseURL,
 		}
 
 		// Resolve WebRTC config. DB-FIRST (source of truth for the CURRENT

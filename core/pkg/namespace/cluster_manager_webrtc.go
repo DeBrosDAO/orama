@@ -803,6 +803,8 @@ func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP strin
 		"gateway_turn_secret":         cfg.TURNSecret,
 		// Bugboard #837 follow-up: preserve the secrets key on WebRTC restarts.
 		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
+		// Bugboard #274: preserve the ntfy base URL across WebRTC restarts.
+		"gateway_ntfy_base_url": cfg.NtfyBaseURL,
 	})
 	if err != nil {
 		cm.logger.Error("Failed to restart remote gateway with WebRTC config",

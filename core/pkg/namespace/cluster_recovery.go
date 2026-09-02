@@ -528,6 +528,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
+			NtfyBaseURL:           cm.ntfyBaseURL,
 		}
 
 		// Add WebRTC config if enabled for this namespace.
@@ -1171,6 +1172,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		IPFSTimeout:           cm.ipfsTimeout,
 		IPFSReplicationFactor: cm.ipfsReplicationFactor,
 		SecretsEncryptionKey:  cm.secretsEncryptionKey,
+		NtfyBaseURL:           cm.ntfyBaseURL,
 	}
 
 	// Add WebRTC config if enabled for this namespace. TURN/SFU decoupled — see

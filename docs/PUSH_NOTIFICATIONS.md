@@ -65,8 +65,16 @@ URL each device subscribes to. Three modes:
 | Mode      | Topic format                          | Privacy           | Notes                              |
 |-----------|---------------------------------------|-------------------|------------------------------------|
 | `opaque`  | `sha256(namespace + userId + secret)` | **Best**          | Recommended default                |
-| `path`    | `ns/<namespace>/<userId>`             | Readable          | Anyone enumerating topics sees IDs |
+| `path`    | `ns-<namespace>-<userId>`             | Readable          | Anyone enumerating topics sees IDs |
 | `user`    | `<userId>`                            | Reveals user IDs  | Minimal — rarely useful            |
+
+> **An ntfy topic is a single path segment.** ntfy serves topics at
+> `https://<host>/<topic>`, so a topic containing `/` is not a nested topic —
+> it is a different URL that ntfy answers with `404 page not found`, and every
+> push to it fails. Use a separator that is not `/` (this is why `path` mode
+> uses `-`). `topic_mode` is a convention between your client and your own
+> topic-derivation code: the gateway publishes to whatever token the device
+> registered and never re-derives it from the mode.
 
 For `opaque`, you generate a **topic_secret** once and bake it into
 both your gateway credential record AND your client's signed app
@@ -142,10 +150,14 @@ Content-Type: application/json
 }
 ```
 
-`base_url` and `auth_token` are both optional:
-- Leave `base_url` empty to use the platform's self-hosted ntfy.
-- Leave `auth_token` empty when using the platform ntfy (no auth
-  needed for opaque topics) or pointing at a public ntfy server.
+`auth_token` is optional — leave it empty when using the platform ntfy (no
+auth needed for opaque topics) or pointing at a public ntfy server.
+
+`base_url` falls back to the namespace gateway's own `ntfy_base_url`, which
+the host sets to `https://push.<dnsZone>` and forwards to every namespace
+gateway it spawns. Set it explicitly when you run your own ntfy server. If
+neither is set the ntfy provider is never registered and every ntfy push fails
+*before* any HTTP request — `http=0`, with `reason` naming the missing base URL.
 
 ### Expo (legacy, optional)
 
@@ -212,7 +224,8 @@ launch (`UIApplication.didRegisterForRemoteNotificationsWithDeviceToken`).
 For `ntfy` with `topic_mode=opaque`, the token is the sha256 hex digest
 your client computes locally from `(namespace, userId, topic_secret)`.
 
-For `ntfy` with `topic_mode=path`, the token is `ns/<namespace>/<userId>`.
+For `ntfy` with `topic_mode=path`, the token is `ns-<namespace>-<userId>` — a
+single path segment, per the topic rule in Step 2.
 
 ### UnifiedPush (Android / GrapheneOS, no Google Play Services)
 

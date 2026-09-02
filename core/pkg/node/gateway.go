@@ -135,6 +135,10 @@ func (n *Node) startHTTPGateway(ctx context.Context) error {
 			// can manage function secrets. Reuses the same variable the host
 			// gateway uses — no second file read.
 			SecretsEncryptionKey: secretsEncryptionKey,
+			// Bugboard #274: forward the host's self-hosted ntfy base URL so
+			// spawned namespace gateways register an ntfy push provider by
+			// default, matching what docs/PUSH_NOTIFICATIONS.md promises.
+			NtfyBaseURL: n.config.HTTPGateway.NtfyBaseURL,
 		}
 		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
 		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)

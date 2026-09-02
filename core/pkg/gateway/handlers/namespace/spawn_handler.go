@@ -58,6 +58,10 @@ type SpawnRequest struct {
 	// Host serverless secrets encryption key forwarded to the spawned
 	// namespace gateway (bugboard #837 follow-up). Same value on every node.
 	GatewaySecretsEncryptionKey string `json:"gateway_secrets_encryption_key,omitempty"`
+	// Host self-hosted ntfy base URL forwarded to the spawned namespace
+	// gateway (bugboard #274) so its ntfy push provider has a default
+	// server. Same value on every node.
+	GatewayNtfyBaseURL string `json:"gateway_ntfy_base_url,omitempty"`
 
 	// SFU config (when action = "spawn-sfu")
 	SFUListenAddr string                 `json:"sfu_listen_addr,omitempty"`
@@ -243,6 +247,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TURNStealthDomain:     req.GatewayTURNStealthDomain,
 			TURNSecret:            req.GatewayTURNSecret,
 			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
+			NtfyBaseURL:           req.GatewayNtfyBaseURL,
 		}
 		if err := h.systemdSpawner.SpawnGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
@@ -298,6 +303,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TURNStealthDomain:     req.GatewayTURNStealthDomain,
 			TURNSecret:            req.GatewayTURNSecret,
 			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
+			NtfyBaseURL:           req.GatewayNtfyBaseURL,
 		}
 		if err := h.systemdSpawner.RestartGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to restart Gateway instance", zap.Error(err))
