@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -21,11 +20,11 @@ type QueryRequest struct {
 
 // QueryResponse represents a SQL query response
 type QueryResponse struct {
-	Columns []string        `json:"columns,omitempty"`
-	Rows    [][]interface{} `json:"rows,omitempty"`
-	RowsAffected int64       `json:"rows_affected,omitempty"`
-	LastInsertID int64       `json:"last_insert_id,omitempty"`
-	Error        string      `json:"error,omitempty"`
+	Columns      []string        `json:"columns,omitempty"`
+	Rows         [][]interface{} `json:"rows,omitempty"`
+	RowsAffected int64           `json:"rows_affected,omitempty"`
+	LastInsertID int64           `json:"last_insert_id,omitempty"`
+	Error        string          `json:"error,omitempty"`
 }
 
 // writeJSONError writes an error response as JSON for consistency
@@ -95,8 +94,12 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Open database
-	db, err := sql.Open("sqlite3", filePath)
+	if err := rejectCrossDBSQL(req.Query); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	db, err := openTenantDB(filePath)
 	if err != nil {
 		h.logger.Error("Failed to open database", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "Failed to open database")
@@ -191,7 +194,7 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 func isWriteQuery(query string) bool {
 	upperQuery := strings.ToUpper(strings.TrimSpace(query))
 	writeKeywords := []string{
-		"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "REPLACE",
+		"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "REPLACE", "ATTACH", "DETACH",
 	}
 
 	for _, keyword := range writeKeywords {

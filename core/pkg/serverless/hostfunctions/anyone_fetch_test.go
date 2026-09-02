@@ -5,10 +5,29 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"go.uber.org/zap"
 )
+
+// publicURLClient wraps a httptest server so fetches use a public hostname
+// (denyInternalURL rejects loopback). The transport dials the test server.
+func publicURLClient(srv *httptest.Server) (*http.Client, string) {
+	publicURL := "https://example.com/fetch-test"
+	inner := srv.Client().Transport
+	return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		u, _ := url.Parse(srv.URL)
+		clone.URL.Scheme = u.Scheme
+		clone.URL.Host = u.Host
+		return inner.RoundTrip(clone)
+	})}, publicURL
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // feat-11 — AnyoneFetch (Anyone-routed outbound HTTP for serverless fns).
 //
@@ -69,12 +88,13 @@ func TestAnyoneFetch_routesThroughConfiguredClient(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	client, publicURL := publicURLClient(srv)
 	h := &HostFunctions{
 		logger:           zap.NewNop(),
-		anyoneHTTPClient: srv.Client(), // stand-in for the SOCKS-routed client
+		anyoneHTTPClient: client, // stand-in for the SOCKS-routed client
 	}
 
-	raw, err := h.AnyoneFetch(context.Background(), "POST", srv.URL,
+	raw, err := h.AnyoneFetch(context.Background(), "POST", publicURL,
 		map[string]string{"Content-Type": "application/json"},
 		[]byte(`{"method":"getBalance"}`))
 	if err != nil {
@@ -102,14 +122,15 @@ func TestAnyoneFetch_andHTTPFetch_shareEnvelopeShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	client, publicURL := publicURLClient(srv)
 	h := &HostFunctions{
 		logger:           zap.NewNop(),
-		httpClient:       srv.Client(),
-		anyoneHTTPClient: srv.Client(),
+		httpClient:       client,
+		anyoneHTTPClient: client,
 	}
 
-	directRaw, _ := h.HTTPFetch(context.Background(), "GET", srv.URL, nil, nil)
-	anyoneRaw, _ := h.AnyoneFetch(context.Background(), "GET", srv.URL, nil, nil)
+	directRaw, _ := h.HTTPFetch(context.Background(), "GET", publicURL, nil, nil)
+	anyoneRaw, _ := h.AnyoneFetch(context.Background(), "GET", publicURL, nil, nil)
 
 	var d, a map[string]interface{}
 	_ = json.Unmarshal(directRaw, &d)
@@ -125,5 +146,24 @@ func TestAnyoneFetch_andHTTPFetch_shareEnvelopeShape(t *testing.T) {
 	}
 	if d["body"] != a["body"] || d["body"] != "hello" {
 		t.Errorf("bodies differ: direct=%v anyone=%v", d["body"], a["body"])
+	}
+}
+
+func TestHTTPFetch_deniesLoopback(t *testing.T) {
+	h := &HostFunctions{logger: zap.NewNop(), httpClient: http.DefaultClient}
+	raw, err := h.HTTPFetch(context.Background(), "GET", "http://127.0.0.1:10100/db/query", nil, nil)
+	if err != nil {
+		t.Fatalf("HTTPFetch: %v", err)
+	}
+	var env map[string]interface{}
+	if e := json.Unmarshal(raw, &env); e != nil {
+		t.Fatal(e)
+	}
+	if env["status"] != float64(0) {
+		t.Errorf("status = %v; want 0 (denied before dial)", env["status"])
+	}
+	msg, _ := env["error"].(string)
+	if msg == "" {
+		t.Error("denied fetch must return an error envelope")
 	}
 }

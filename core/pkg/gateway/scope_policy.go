@@ -86,6 +86,20 @@ func requiredScope(method, path string) string {
 		return auth.ScopeCache
 	}
 
+	// Cluster node command/logs/leave/status: operator only (bugboard #54/#55).
+	// Enroll authenticates via invite token inside the handler, not an API-key
+	// admin grant (the CLI sends Bearer <invite>).
+	if strings.HasPrefix(path, "/v1/node/") {
+		if path == "/v1/node/enroll" {
+			return ""
+		}
+		return auth.ScopeAdmin
+	}
+	// Topology mutation: operator only (bugboard #56). Status/peers stay public.
+	if path == "/v1/network/connect" || path == "/v1/network/disconnect" {
+		return auth.ScopeAdmin
+	}
+
 	// --- Control-plane (admin only) ---
 	if path == "/rqlite" || path == "/v1/rqlite" || strings.HasPrefix(path, "/v1/rqlite/") {
 		return auth.ScopeAdmin

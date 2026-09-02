@@ -66,6 +66,9 @@ func (ici *IPFSClusterInstaller) Configure() error {
 // For existing installations, it ensures the cluster secret is up to date.
 // clusterPeers should be in format: ["/ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>"]
 func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret string, ipfsAPIPort int, clusterPeers []string) error {
+	if strings.TrimSpace(clusterSecret) == "" {
+		return fmt.Errorf("CLUSTER_SECRET is empty; refusing to initialize IPFS Cluster")
+	}
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	configExists := false
 	if _, err := os.Stat(serviceJSONPath); err == nil {
@@ -91,31 +94,21 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 		// This creates the service.json file with all required sections
 		fmt.Fprintf(ici.logWriter, "    Initializing IPFS Cluster config...\n")
 		cmd := exec.Command(clusterBinary, "init", "--force")
-		cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath)
-		// Pass CLUSTER_SECRET to init so it writes the correct secret to service.json directly
-		if clusterSecret != "" {
-			cmd.Env = append(cmd.Env, "CLUSTER_SECRET="+clusterSecret)
-		}
+		cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath, "CLUSTER_SECRET="+clusterSecret)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to initialize IPFS Cluster config: %v\n%s", err, string(output))
 		}
 	}
 
-	// Always update the cluster secret, IPFS port, and peer addresses (for both new and existing configs)
-	// This ensures existing installations get the secret and port synchronized
-	// We do this AFTER init to ensure our secret takes precedence
-	if clusterSecret != "" {
-		fmt.Fprintf(ici.logWriter, "    Updating cluster secret, IPFS port, and peer addresses...\n")
-		if err := ici.updateConfig(clusterPath, clusterSecret, ipfsAPIPort, clusterPeers); err != nil {
-			return fmt.Errorf("failed to update cluster config: %w", err)
-		}
-
-		// Verify the secret was written correctly
-		if err := ici.verifySecret(clusterPath, clusterSecret); err != nil {
-			return fmt.Errorf("cluster secret verification failed: %w", err)
-		}
-		fmt.Fprintf(ici.logWriter, "    ✓ Cluster secret verified\n")
+	fmt.Fprintf(ici.logWriter, "    Updating cluster secret, IPFS port, and peer addresses...\n")
+	if err := ici.updateConfig(clusterPath, clusterSecret, ipfsAPIPort, clusterPeers); err != nil {
+		return fmt.Errorf("failed to update cluster config: %w", err)
 	}
+
+	if err := ici.verifySecret(clusterPath, clusterSecret); err != nil {
+		return fmt.Errorf("cluster secret verification failed: %w", err)
+	}
+	fmt.Fprintf(ici.logWriter, "    ✓ Cluster secret verified\n")
 
 	return nil
 }

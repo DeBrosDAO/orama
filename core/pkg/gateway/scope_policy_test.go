@@ -18,8 +18,8 @@ func TestRequiredScope(t *testing.T) {
 		{"/health", ""},
 		{"/v1/invoke/ns/fn", ""},
 		{"/v1/functions/fn/invoke", ""},
-		{"/v1/auth/token", ""},   // not public, but any key may exchange
-		{"/v1/auth/whoami", ""},  // any valid credential
+		{"/v1/auth/token", ""},  // not public, but any key may exchange
+		{"/v1/auth/whoami", ""}, // any valid credential
 		// invoke transport
 		{"/v1/functions/fn/ws", auth.ScopeInvoke},
 		// functions control-plane
@@ -54,6 +54,15 @@ func TestRequiredScope(t *testing.T) {
 		{"/v1/namespace/rate-limit", auth.ScopeAdmin},
 		{"/v1/namespace/keys", auth.ScopeAdmin},
 		{"/v1/namespace/keys/5", auth.ScopeAdmin},
+		{"/v1/node/status", auth.ScopeAdmin},
+		{"/v1/node/command", auth.ScopeAdmin},
+		{"/v1/node/logs", auth.ScopeAdmin},
+		{"/v1/node/leave", auth.ScopeAdmin},
+		{"/v1/node/enroll", ""},
+		{"/v1/network/connect", auth.ScopeAdmin},
+		{"/v1/network/disconnect", auth.ScopeAdmin},
+		{"/v1/network/status", ""},
+		{"/v1/network/peers", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {

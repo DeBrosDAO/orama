@@ -752,7 +752,10 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("  ✓ IPFS GC service + timer created: orama-ipfs-gc.{service,timer}")
 
 	// IPFS Cluster service
-	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
+	clusterUnit, err := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
+	if err != nil {
+		return fmt.Errorf("failed to generate IPFS Cluster service: %w", err)
+	}
 	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-cluster.service", clusterUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS Cluster service: %w", err)
 	}

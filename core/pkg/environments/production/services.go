@@ -138,16 +138,20 @@ WantedBy=timers.target
 `, ipfsGCOnBootSec, ipfsGCInterval, ipfsGCRandomizedDelaySec)
 }
 
-// GenerateIPFSClusterService generates the IPFS Cluster systemd unit
-func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary string) string {
+// GenerateIPFSClusterService generates the IPFS Cluster systemd unit.
+// Refuses to emit a unit with an empty CLUSTER_SECRET (bugboard #109).
+func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary string) (string, error) {
 	clusterPath := filepath.Join(ssg.oramaDir, "data", "ipfs-cluster")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs-cluster.log")
 
-	// Read cluster secret from file to pass to daemon
 	clusterSecretPath := filepath.Join(ssg.oramaDir, "secrets", "cluster-secret")
-	clusterSecret := ""
-	if data, err := os.ReadFile(clusterSecretPath); err == nil {
-		clusterSecret = strings.TrimSpace(string(data))
+	data, err := os.ReadFile(clusterSecretPath)
+	if err != nil {
+		return "", fmt.Errorf("read cluster-secret: %w", err)
+	}
+	clusterSecret := strings.TrimSpace(string(data))
+	if clusterSecret == "" {
+		return "", fmt.Errorf("cluster-secret is empty; refusing to start IPFS Cluster without CLUSTER_SECRET")
 	}
 
 	return fmt.Sprintf(`[Unit]
@@ -182,7 +186,7 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret, oramaServiceHardening, ssg.oramaDir)
+`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret, oramaServiceHardening, ssg.oramaDir), nil
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit

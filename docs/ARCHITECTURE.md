@@ -377,6 +377,7 @@ Function Invocation:
    - Long-lived credentials
    - Stored in RQLite
    - Namespace-scoped
+   - Carry a grant set (`invoke`, `storage`, `push`, `webrtc`, `proxy`, `pubsub`, `cache`, or `admin`). HTTP `/v1/invoke` is a public path; private functions still require the `invoke` grant (or a SIWE wallet). Node command/logs/leave and network connect/disconnect require `admin`.
 
 3. **JWT Tokens**
    - Short-lived (15 min default)
@@ -396,12 +397,16 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 
 ### Service Authentication
 
-- **RQLite:** HTTP basic auth on all queries/executions — credentials generated at genesis, distributed via join response
+- **RQLite:** credentials are generated at genesis; `rqlited` is **not** started with `-auth` today. Overlay + firewall keep the HTTP API off the public internet
 - **Olric:** Memberlist gossip encrypted with a shared 32-byte key
-- **IPFS Cluster:** TrustedPeers restricted to known cluster peer IDs (not `*`)
+- **IPFS Cluster:** TrustedPeers restricted to known cluster peer IDs (not `*`). The systemd unit is not written if `CLUSTER_SECRET` is missing or empty
 - **Internal endpoints:** `/v1/internal/wg/peers` and `/v1/internal/wg/peer/remove` require cluster secret
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
+- **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH` and multi-statement queries are rejected
+- **WASM egress:** `http_fetch` / `anyone_fetch` deny loopback, private, link-local, unspecified, and multicast URLs
+- **WASM memory:** wazero `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB). Modules without a memory max still cannot grow past that
+- **WASM concurrency:** process-wide semaphore plus a per-namespace cap (`maxConcurrent/2`, min 1)
 
 ### Token & Key Security
 

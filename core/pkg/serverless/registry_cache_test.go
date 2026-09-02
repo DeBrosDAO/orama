@@ -103,17 +103,32 @@ func TestRegistryCache_keyDistinctNoCollision(t *testing.T) {
 }
 
 func TestCanInvokeFn(t *testing.T) {
-	if !canInvokeFn(&Function{IsPublic: true}, "", false) {
+	if !canInvokeFn(&Function{IsPublic: true}, "", false, false) {
 		t.Error("public function must be invokable by an anonymous caller")
 	}
-	if canInvokeFn(&Function{IsPublic: false}, "", false) {
+	if canInvokeFn(&Function{IsPublic: false}, "", false, false) {
 		t.Error("private function must reject an empty (anonymous) caller")
 	}
-	if canInvokeFn(&Function{IsPublic: false}, "   ", false) {
+	if canInvokeFn(&Function{IsPublic: false}, "   ", false, false) {
 		t.Error("private function must reject a whitespace-only caller")
 	}
-	if !canInvokeFn(&Function{IsPublic: false}, "wallet-abc", false) {
-		t.Error("private function must accept an identified caller")
+	if canInvokeFn(&Function{IsPublic: false}, "wallet-abc", false, false) {
+		t.Error("private function must reject a wallet without the invoke grant")
+	}
+	if !canInvokeFn(&Function{IsPublic: false}, "wallet-abc", false, true) {
+		t.Error("private function must accept a wallet with the invoke grant")
+	}
+	if canInvokeFn(&Function{IsPublic: false}, "anchat-test", false, false) {
+		t.Error("private function must reject an API-key namespace identity without invoke")
+	}
+	if !canInvokeFn(&Function{IsPublic: false}, "anchat-test", false, true) {
+		t.Error("private function must accept an API key with invoke")
+	}
+	if canInvokeFn(&Function{IsPublic: false}, "ak_runtime:ns", false, false) {
+		t.Error("private function must reject an API key without invoke")
+	}
+	if !canInvokeFn(&Function{IsPublic: false}, "ak_runtime:ns", false, true) {
+		t.Error("private function must accept an API key with invoke")
 	}
 }
 
@@ -137,11 +152,12 @@ func TestRowToFunction_isInternal(t *testing.T) {
 // external caller — admin required). Non-internal behavior is unchanged.
 func TestCanInvokeFn_internal(t *testing.T) {
 	tests := []struct {
-		name          string
-		fn            *Function
-		callerWallet  string
-		callerIsAdmin bool
-		want          bool
+		name            string
+		fn              *Function
+		callerWallet    string
+		callerIsAdmin   bool
+		callerHasInvoke bool
+		want            bool
 	}{
 		{
 			name:          "internal private, admin caller allowed",
@@ -179,11 +195,12 @@ func TestCanInvokeFn_internal(t *testing.T) {
 			want:          true,
 		},
 		{
-			name:          "non-internal private, identified caller allowed (unchanged)",
-			fn:            &Function{IsInternal: false, IsPublic: false},
-			callerWallet:  "wallet-abc",
-			callerIsAdmin: false,
-			want:          true,
+			name:            "non-internal private, identified caller with invoke allowed",
+			fn:              &Function{IsInternal: false, IsPublic: false},
+			callerWallet:    "wallet-abc",
+			callerIsAdmin:   false,
+			callerHasInvoke: true,
+			want:            true,
 		},
 		{
 			name:          "non-internal private, anonymous caller denied (unchanged)",
@@ -195,7 +212,7 @@ func TestCanInvokeFn_internal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := canInvokeFn(tt.fn, tt.callerWallet, tt.callerIsAdmin); got != tt.want {
+			if got := canInvokeFn(tt.fn, tt.callerWallet, tt.callerIsAdmin, tt.callerHasInvoke); got != tt.want {
 				t.Errorf("canInvokeFn = %v, want %v", got, tt.want)
 			}
 		})

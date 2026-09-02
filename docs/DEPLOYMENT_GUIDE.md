@@ -425,7 +425,7 @@ orama db backups my-database
 ### Database Features
 
 - ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
-- ✅ **Namespace Isolation**: Complete separation between namespaces
+- ✅ **Namespace Isolation**: Complete separation between namespaces. Tenant SQL cannot `ATTACH`/`DETACH` another database file, and extra statements in one query are rejected.
 - ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
 - ✅ **ACID Transactions**: Full SQLite transactional support
 - ✅ **Concurrent Reads**: Multiple readers can query simultaneously

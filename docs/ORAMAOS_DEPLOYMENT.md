@@ -122,22 +122,26 @@ If not enough peers are available, the agent retries the share fetch with expone
 
 ## Node Management
 
-Since OramaOS has no SSH, all management happens through the Gateway API:
+Since OramaOS has no SSH, all management happens through the Gateway API. Status, command, logs, and leave require an **admin** API key (or owner JWT). `service` on logs is an allowlist (`rqlite`, `olric`, `ipfs`, `ipfs-cluster`, `gateway`, `coredns`, `agent`).
 
 ```bash
 # Check node status
-curl "https://gateway.example.com/v1/node/status?node_id=<id>"
+curl "https://gateway.example.com/v1/node/status?node_id=<id>" \
+  -H "Authorization: Bearer <admin-api-key>"
 
 # Send a command (e.g., restart a service)
 curl -X POST "https://gateway.example.com/v1/node/command?node_id=<id>" \
+  -H "Authorization: Bearer <admin-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"action":"restart","service":"rqlite"}'
 
 # View logs
-curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway&lines=100"
+curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway&lines=100" \
+  -H "Authorization: Bearer <admin-api-key>"
 
 # Graceful node departure
 curl -X POST "https://gateway.example.com/v1/node/leave" \
+  -H "Authorization: Bearer <admin-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"node_id":"<id>"}'
 ```
