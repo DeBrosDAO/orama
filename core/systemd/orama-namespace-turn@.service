@@ -6,11 +6,23 @@ PartOf=orama-node.service
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
+InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/turn.env
 
-ExecStart=/bin/sh -c 'exec /opt/orama/bin/turn --config ${TURN_CONFIG}'
+ExecStart=/opt/orama/bin/turn --config ${TURN_CONFIG}
 
 TimeoutStopSec=30s
 KillMode=mixed

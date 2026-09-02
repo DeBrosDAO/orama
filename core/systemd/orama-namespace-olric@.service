@@ -7,9 +7,20 @@ PartOf=orama-node.service
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
+InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
-# Olric reads config from environment variable (set in env file)
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/olric.env
 
 ExecStart=/usr/local/bin/olric-server

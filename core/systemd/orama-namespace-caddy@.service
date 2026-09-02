@@ -16,7 +16,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths=/opt/orama/.orama /var/lib/caddy /etc/caddy
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/logs /var/lib/caddy /etc/caddy
+InaccessiblePaths=/opt/orama/.orama/secrets
 Environment=XDG_DATA_HOME=/var/lib/caddy
 EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/caddy.env
 AmbientCapabilities=CAP_NET_BIND_SERVICE

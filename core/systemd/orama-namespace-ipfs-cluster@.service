@@ -17,7 +17,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths=/opt/orama/.orama
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs-cluster
+InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs-cluster.env
 Environment=HOME=/opt/orama
