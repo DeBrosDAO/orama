@@ -43,6 +43,15 @@ type InstanceConfig struct {
 	// NOT set this: reusing the raft directory is exactly what makes a restart a
 	// restart.
 	FreshStart bool
+	// JoinVerifyURL is the HTTP base URL of the node this instance is about to
+	// join (e.g. "http://10.0.0.1:10000"). Bugboard #275: rqlited joins whatever
+	// answers at the -join address, with no check that the cluster belongs to
+	// this namespace. When a port collision put another namespace's rqlited on
+	// the expected port, a namespace node joined the FOREIGN raft group as a
+	// Voter and served that namespace's database — identical row counts on a
+	// namespace minutes old. Verifying the target's identity before starting
+	// makes that impossible. Empty skips the check (the leader joins nothing).
+	JoinVerifyURL string
 }
 
 // Instance represents a running RQLite instance

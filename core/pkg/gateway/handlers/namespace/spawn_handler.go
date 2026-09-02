@@ -32,6 +32,9 @@ type SpawnRequest struct {
 	// Bugboard #281: clear leftover raft state before starting a brand-new
 	// cluster, so re-creating a namespace of the same name is deterministic.
 	RQLiteFreshStart bool `json:"rqlite_fresh_start,omitempty"`
+	// Bugboard #275: HTTP base URL of the join target, verified to belong to this
+	// namespace before rqlited is started.
+	RQLiteJoinVerifyURL string `json:"rqlite_join_verify_url,omitempty"`
 
 	// Olric config (when action = "spawn-olric")
 	OlricHTTPPort       int      `json:"olric_http_port,omitempty"`
@@ -159,6 +162,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			JoinAddresses:  req.RQLiteJoinAddrs,
 			IsLeader:       req.RQLiteIsLeader,
 			FreshStart:     req.RQLiteFreshStart,
+			JoinVerifyURL:  req.RQLiteJoinVerifyURL,
 		}
 		if err := h.systemdSpawner.SpawnRQLite(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn RQLite instance", zap.Error(err))

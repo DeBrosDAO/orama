@@ -2,7 +2,10 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +69,108 @@ func NewSystemdSpawner(namespaceBase, clusterSecretPath string, logger *zap.Logg
 	}
 }
 
+// joinVerifyTimeout bounds the pre-join identity check.
+const joinVerifyTimeout = 10 * time.Second
+
+// verifyJoinTarget refuses to start an RQLite node whose join target belongs to a
+// DIFFERENT namespace (bugboard #275).
+//
+// rqlited joins whatever answers at its -join address; nothing in the protocol
+// asserts the cluster is the right one. When a port collision put another
+// namespace's rqlited on the expected port, a namespace node joined that foreign
+// raft group as a Voter and served its database — the two namespaces silently
+// shared storage, and the victim's quorum changed underneath it.
+//
+// The target's /status reports the data directory it is serving, which is rooted
+// at .../namespaces/<namespace>/rqlite/<nodeID>. That is an unforgeable statement
+// of which namespace the cluster belongs to, so require it to match ours.
+func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verifyURL string) error {
+	if strings.TrimSpace(verifyURL) == "" {
+		return nil
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, joinVerifyTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(verifyURL, "/")+"/status", nil)
+	if err != nil {
+		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, err)
+	}
+	defer resp.Body.Close()
+
+	var status struct {
+		Store struct {
+			Dir string `json:"dir"`
+		} `json:"store"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return fmt.Errorf("verify join target %s for namespace %s: decode status: %w", verifyURL, namespace, err)
+	}
+
+	want := string(os.PathSeparator) + "namespaces" + string(os.PathSeparator) + namespace + string(os.PathSeparator)
+	if !strings.Contains(status.Store.Dir, want) {
+		return fmt.Errorf(
+			"refusing to join RQLite at %s for namespace %s: it is serving %q, which belongs to a different namespace — "+
+				"joining it would put this node in another tenant's raft group and expose their database",
+			verifyURL, namespace, status.Store.Dir)
+	}
+	return nil
+}
+
+// portFreeWaitTimeout bounds how long ensurePortsFree waits for a port we are
+// about to bind to be released. A restart stops the old unit first, and systemd
+// returns before the socket is always fully closed, so a short wait absorbs that
+// without masking a genuine conflict.
+const portFreeWaitTimeout = 10 * time.Second
+
+// ensurePortsFree fails loudly when a port this namespace is about to bind is
+// held by something else (bugboard #276).
+//
+// The port allocator picks a block using only the namespace_port_allocations
+// table, so it cannot see a process that holds the port without a matching row —
+// an orphaned namespace, or any other listener. Previously the spawned service
+// simply crash-looped ("bind: address already in use", restart counter climbing)
+// while provisioning still reported the cluster ready, and on the one node where
+// the ports happened to be free the collision escalated into joining a FOREIGN
+// namespace's raft group (bugboard #275). Refusing to start, with the port named,
+// turns a silent corruption into an operator-actionable error.
+func (s *SystemdSpawner) ensurePortsFree(namespace string, ports map[string]int) error {
+	deadline := time.Now().Add(portFreeWaitTimeout)
+	for name, port := range ports {
+		if port <= 0 {
+			continue
+		}
+		for {
+			if !portInUse(port) {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf(
+					"cannot start %s for namespace %s: port %d is already in use by another process — "+
+						"the allocation for this namespace conflicts with something already listening on this node; "+
+						"check for an orphaned namespace holding this port before retrying",
+					name, namespace, port)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return nil
+}
+
+// portInUse reports whether anything is listening on the port locally.
+func portInUse(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return true
+	}
+	_ = ln.Close()
+	return false
+}
+
 // SpawnRQLite starts a RQLite instance using systemd
 func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID string, cfg rqlite.InstanceConfig) error {
 	s.logger.Info("Spawning RQLite via systemd",
@@ -98,6 +203,17 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		} else if !os.IsNotExist(statErr) {
 			return fmt.Errorf("failed to inspect RQLite state dir %s: %w", raftDir, statErr)
 		}
+	}
+
+	if err := s.ensurePortsFree(namespace, map[string]int{
+		"RQLite HTTP": cfg.HTTPPort,
+		"RQLite Raft": cfg.RaftPort,
+	}); err != nil {
+		return err
+	}
+
+	if err := s.verifyJoinTarget(ctx, namespace, cfg.JoinVerifyURL); err != nil {
+		return err
 	}
 
 	// Generate environment file
@@ -136,6 +252,13 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 	s.logger.Info("Spawning Olric via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
+
+	if err := s.ensurePortsFree(namespace, map[string]int{
+		"Olric HTTP":       cfg.HTTPPort,
+		"Olric memberlist": cfg.MemberlistPort,
+	}); err != nil {
+		return err
+	}
 
 	// Validate BindAddr: 0.0.0.0 or empty causes IPv6 resolution on dual-stack hosts,
 	// breaking memberlist UDP gossip over WireGuard. Resolve from wg0 as fallback.
@@ -254,6 +377,10 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 	s.logger.Info("Spawning Gateway via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
+
+	if err := s.ensurePortsFree(namespace, map[string]int{"Gateway HTTP": cfg.HTTPPort}); err != nil {
+		return err
+	}
 
 	// Create config directory
 	configDir := filepath.Join(s.namespaceBase, namespace, "configs")

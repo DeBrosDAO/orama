@@ -96,6 +96,10 @@ type ClusterManager struct {
 	// ntfyBaseURL is the host's self-hosted ntfy base URL, forwarded to
 	// spawned namespace gateways (bugboard #274).
 	ntfyBaseURL string
+	// readyTimeout overrides clusterReadyTimeout for the post-provision health
+	// check (bugboard #277). Zero uses the default; set in tests so the failure
+	// paths do not wait the full production window.
+	readyTimeout time.Duration
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -373,6 +377,17 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		// Don't fail provisioning for DNS errors
 	}
 
+	// Bugboard #277: verify the services actually came up before calling this
+	// ready. Reporting ready off the back of the spawn RPCs alone is what let a
+	// cluster with 6 of 9 processes crash-looping be handed over as healthy.
+	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
+		cm.logger.Error("Namespace cluster failed health verification after provisioning",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return nil, fmt.Errorf("namespace cluster did not come up healthy: %w", err)
+	}
+
 	// Update cluster status to ready
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
@@ -447,6 +462,9 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 			JoinAddresses:  []string{leaderRaftAddr},
 			IsLeader:       false,
 			FreshStart:     true, // bugboard #281 — see leaderCfg
+			// Bugboard #275: prove the node we are about to join belongs to THIS
+			// namespace before starting. rqlited joins whatever answers.
+			JoinVerifyURL: fmt.Sprintf("http://%s", leaderCfg.HTTPAdvAddress),
 		}
 
 		var followerInstance *rqlite.Instance
@@ -675,6 +693,9 @@ func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, 
 		// Bugboard #281: a fresh cluster must clear leftover raft state on the
 		// remote node too, otherwise only the local node starts clean.
 		"rqlite_fresh_start": cfg.FreshStart,
+		// Bugboard #275: the remote node must run the same identity check, or
+		// only the local node is protected from joining a foreign raft group.
+		"rqlite_join_verify_url": cfg.JoinVerifyURL,
 	})
 	if err != nil {
 		return nil, err
@@ -1396,6 +1417,17 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		// Don't fail provisioning for DNS errors
 	}
 
+	// Bugboard #277: verify the services actually came up before calling this
+	// ready. Reporting ready off the back of the spawn RPCs alone is what let a
+	// cluster with 6 of 9 processes crash-looping be handed over as healthy.
+	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
+		cm.logger.Error("Namespace cluster failed health verification after provisioning",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return
+	}
+
 	// Update cluster status to ready
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
@@ -1808,6 +1840,65 @@ type ClusterLocalStateNode struct {
 	RQLiteRaftPort      int    `json:"rqlite_raft_port"`
 	OlricHTTPPort       int    `json:"olric_http_port"`
 	OlricMemberlistPort int    `json:"olric_memberlist_port"`
+}
+
+// clusterReadyTimeout bounds how long provisioning waits for every spawned
+// service to actually answer before declaring the cluster ready.
+const clusterReadyTimeout = 90 * time.Second
+
+// verifyClusterHealthy polls every node's spawned services until they respond, or
+// the timeout expires (bugboard #277).
+//
+// Provisioning used to mark a cluster `ready` — and every node row `running` —
+// purely because the spawn RPCs returned. On devnet that produced a cluster
+// reported ready while 6 of its 9 processes were crash-looping on a port
+// collision, RQLite had no quorum, and the one surviving node had joined another
+// namespace's raft group. The operator saw a green result and would have handed
+// the namespace over. This is the check that turns every other provisioning
+// failure into a visible one.
+func (cm *ClusterManager) verifyClusterHealthy(ctx context.Context, nodes []NodeCapacity, portBlocks []*PortBlock) error {
+	timeout := cm.readyTimeout
+	if timeout <= 0 {
+		timeout = clusterReadyTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for {
+		lastErr = nil
+		for i, node := range nodes {
+			if i >= len(portBlocks) || portBlocks[i] == nil {
+				continue
+			}
+			addr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].GatewayHTTPPort)
+			if err := probeTCP(addr); err != nil {
+				lastErr = fmt.Errorf("gateway on node %s (%s) not answering: %w", node.NodeID, addr, err)
+				break
+			}
+			raftAddr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort)
+			if err := probeTCP(raftAddr); err != nil {
+				lastErr = fmt.Errorf("rqlite on node %s (%s) not answering: %w", node.NodeID, raftAddr, err)
+				break
+			}
+		}
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("cluster did not become healthy within %s: %w", timeout, lastErr)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// probeTCP reports whether something is accepting connections at addr.
+func probeTCP(addr string) error {
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
 }
 
 // saveClusterStateToAllNodes builds and saves cluster-state.json on every node in the cluster.
