@@ -886,7 +886,16 @@ orama namespace enable webrtc --namespace myapp
 orama namespace webrtc-status --namespace myapp
 ```
 
-This provisions SFU servers on all 3 nodes and TURN relay servers on 2 nodes, allocates port blocks, creates DNS records, and opens firewall ports.
+This provisions SFU servers on all 3 nodes and TURN relay servers on up to 2 nodes,
+allocates port blocks, creates DNS records, and opens firewall ports.
+
+> **TURN is one namespace per host.** TURN binds the fixed ports 3478/5349, which are
+> exclusive per physical host, so a node already running TURN for another namespace
+> cannot take a second one. Enabling WebRTC skips those hosts rather than creating an
+> allocation that cannot start, which means a namespace may get fewer than 2 relays —
+> `orama namespace webrtc-status` reports the number actually running. On a fleet
+> where an existing namespace already holds TURN on every node, a new namespace gets
+> none.
 
 ### Disable WebRTC
 

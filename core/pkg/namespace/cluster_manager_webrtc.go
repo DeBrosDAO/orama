@@ -103,6 +103,20 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// 7. Select TURN nodes (prefer nodes without existing TURN allocations)
 	turnNodes := cm.selectTURNNodes(ctx, clusterNodes, DefaultTURNNodeCount)
 
+	// Bugboard #283: record how many TURN nodes we ACTUALLY got, not how many we
+	// asked for. The config row is inserted with the requested count before
+	// selection runs, so webrtc/status reported turn_node_count: 2 while only one
+	// relay existed — the same allocate-and-report-without-verifying pattern as
+	// bugboard #277.
+	if len(turnNodes) != DefaultTURNNodeCount {
+		if _, err := cm.db.Exec(ctx,
+			`UPDATE namespace_webrtc_config SET turn_node_count = ? WHERE namespace_cluster_id = ?`,
+			len(turnNodes), cluster.ID); err != nil {
+			cm.logger.Warn("Failed to record actual TURN node count",
+				zap.String("namespace", namespaceName), zap.Error(err))
+		}
+	}
+
 	// 8. Allocate TURN ports on selected nodes
 	turnBlocks := make(map[string]*WebRTCPortBlock) // nodeID -> block
 	for _, node := range turnNodes {
@@ -419,36 +433,47 @@ func (cm *ClusterManager) getLocalNodePublicIP(ctx context.Context) (string, err
 	return rows[0].IP, nil
 }
 
-// selectTURNNodes selects the best N nodes for TURN, preferring nodes without existing TURN allocations.
+// selectTURNNodes selects up to count nodes that can actually run TURN.
+//
+// Bugboard #283: TURN binds the fixed ports 3478/5349, which are exclusive per
+// HOST — a fact the allocator already encodes in HostHasTURN. This used to merely
+// PREFER TURN-free nodes and then fall back to hosts that already ran TURN for
+// another namespace, producing an allocation that could never start. On devnet
+// anchat-test held TURN on two of three nodes, so enabling WebRTC for anchat-v2
+// picked the one free node plus an occupied one: that second TURN crash-looped on
+// "address already in use", a DNS record was published for it anyway (sending
+// roughly half of client ICE attempts to a relay that rejects their credentials),
+// and webrtc/status still reported turn_node_count: 2.
+//
+// Returning FEWER nodes is the honest outcome: the namespace gets less TURN
+// redundancy than requested, but every relay it is told about actually works. The
+// caller records the real count. Lifting the ceiling needs per-namespace TURN
+// ports, which is a separate change to the client contract.
 func (cm *ClusterManager) selectTURNNodes(ctx context.Context, nodes []clusterNodeInfo, count int) []clusterNodeInfo {
-	if count >= len(nodes) {
-		return nodes
-	}
-
-	// Prefer nodes without existing TURN allocations
-	var preferred, fallback []clusterNodeInfo
-	for _, node := range nodes {
-		hasTURN, err := cm.webrtcPortAllocator.NodeHasTURN(ctx, node.NodeID)
-		if err != nil || !hasTURN {
-			preferred = append(preferred, node)
-		} else {
-			fallback = append(fallback, node)
-		}
-	}
-
-	// Take from preferred first, then fallback
 	result := make([]clusterNodeInfo, 0, count)
-	for _, node := range preferred {
+	for _, node := range nodes {
 		if len(result) >= count {
 			break
+		}
+		busy, err := cm.webrtcPortAllocator.HostHasTURN(ctx, node.NodeID)
+		if err != nil {
+			// Unknown is treated as busy: allocating into an occupied host is
+			// worse than allocating one relay fewer.
+			cm.logger.Warn("TURN host-occupancy check failed; skipping node",
+				zap.String("node_id", node.NodeID), zap.Error(err))
+			continue
+		}
+		if busy {
+			cm.logger.Info("Skipping node for TURN — its host already runs TURN for another namespace (bugboard #283)",
+				zap.String("node_id", node.NodeID))
+			continue
 		}
 		result = append(result, node)
 	}
-	for _, node := range fallback {
-		if len(result) >= count {
-			break
-		}
-		result = append(result, node)
+
+	if len(result) < count {
+		cm.logger.Warn("Fewer TURN nodes available than requested — TURN ports are host-exclusive (bugboard #283)",
+			zap.Int("requested", count), zap.Int("selected", len(result)))
 	}
 	return result
 }
