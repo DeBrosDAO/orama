@@ -22,18 +22,18 @@ type ClusterNodeSelector struct {
 
 // NodeCapacity represents the capacity metrics for a single node
 type NodeCapacity struct {
-	NodeID                   string  `json:"node_id"`
-	IPAddress                string  `json:"ip_address"`
-	InternalIP               string  `json:"internal_ip"` // WireGuard IP for inter-node communication
-	DeploymentCount          int     `json:"deployment_count"`
-	AllocatedPorts           int     `json:"allocated_ports"`
-	AvailablePorts           int     `json:"available_ports"`
-	UsedMemoryMB             int     `json:"used_memory_mb"`
-	AvailableMemoryMB        int     `json:"available_memory_mb"`
-	UsedCPUPercent           int     `json:"used_cpu_percent"`
-	NamespaceInstanceCount   int     `json:"namespace_instance_count"`   // Number of namespace clusters on this node
-	AvailableNamespaceSlots  int     `json:"available_namespace_slots"`  // How many more namespace instances can fit
-	Score                    float64 `json:"score"`
+	NodeID                  string  `json:"node_id"`
+	IPAddress               string  `json:"ip_address"`
+	InternalIP              string  `json:"internal_ip"` // WireGuard IP for inter-node communication
+	DeploymentCount         int     `json:"deployment_count"`
+	AllocatedPorts          int     `json:"allocated_ports"`
+	AvailablePorts          int     `json:"available_ports"`
+	UsedMemoryMB            int     `json:"used_memory_mb"`
+	AvailableMemoryMB       int     `json:"available_memory_mb"`
+	UsedCPUPercent          int     `json:"used_cpu_percent"`
+	NamespaceInstanceCount  int     `json:"namespace_instance_count"`  // Number of namespace clusters on this node
+	AvailableNamespaceSlots int     `json:"available_namespace_slots"` // How many more namespace instances can fit
+	Score                   float64 `json:"score"`
 }
 
 // NewClusterNodeSelector creates a new node selector
@@ -177,7 +177,14 @@ type nodeInfo struct {
 // getActiveNodes retrieves all active nodes from dns_nodes table
 func (cns *ClusterNodeSelector) getActiveNodes(ctx context.Context) ([]nodeInfo, error) {
 	// Nodes must have checked in within last 2 minutes
-	cutoff := time.Now().Add(-2 * time.Minute)
+	// Bugboard #282: UTC, not local. dns_nodes.last_seen is written with
+	// SQLite datetime('now') (UTC), and this cutoff is string-compared against
+	// it. Formatting a local time here made the comparison wrong by the node's
+	// UTC offset — on a node set to Europe/Berlin the cutoff rendered ~2h ahead
+	// of every stored last_seen, so every OTHER node was filtered out and
+	// provisioning failed with "insufficient nodes available for cluster",
+	// non-deterministically depending on which node served the request.
+	cutoff := time.Now().UTC().Add(-2 * time.Minute)
 
 	var results []nodeInfo
 	query := `
@@ -411,4 +418,3 @@ func (cns *ClusterNodeSelector) calculateCapacityScore(
 
 	return totalScore
 }
-

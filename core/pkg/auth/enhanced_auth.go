@@ -178,9 +178,16 @@ func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Cr
 		store.Gateways[gatewayURL] = gatewayCredentials
 	}
 
-	// Check if credential already exists (by wallet address)
+	// Check if credential already exists (by wallet AND namespace).
+	//
+	// Bugboard #284: this used to match on wallet alone, so one wallet could hold
+	// only a single credential per gateway — logging into a second namespace
+	// silently REPLACED the first namespace's API key and refresh token, and the
+	// menu's "Add new wallet" appeared to add one while destroying another. A
+	// wallet legitimately owns several namespaces; key on the pair, matching
+	// RemoveCredentialByNamespace which already keys on namespace.
 	for i, existing := range gatewayCredentials.Credentials {
-		if strings.EqualFold(existing.Wallet, creds.Wallet) {
+		if strings.EqualFold(existing.Wallet, creds.Wallet) && existing.Namespace == creds.Namespace {
 			// Update existing credential
 			gatewayCredentials.Credentials[i] = creds
 			return

@@ -200,6 +200,30 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTCla
 //   - (namespace, nil, "") if auth is valid via API key.
 //   - ("", nil, errorMessage) if auth is invalid.
 //   - ("", nil, "") if no auth credentials provided (for public paths).
+//
+// namespaceGatewayTargetsQuery resolves the live gateway targets for a namespace.
+//
+// Bugboard #278: this used to require nc.status = 'ready', so a cluster marked
+// 'degraded' returned zero rows and the namespace 404'd on EVERY node —
+// including nodes whose gateways were perfectly healthy. One node's gateway row
+// flipping to 'failed' took a whole tenant offline, which defeats the point of
+// running three replicas. A degraded cluster is now served from its healthy
+// members: selection is on the per-node status, not the cluster-level rollup, so
+// the namespace 404s only when there is genuinely no live gateway.
+const namespaceGatewayTargetsQuery = `
+			SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
+			FROM namespace_port_allocations npa
+			JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
+			JOIN dns_nodes dn ON npa.node_id = dn.id
+			JOIN namespace_cluster_nodes ncn
+			  ON ncn.namespace_cluster_id = nc.id
+			 AND ncn.node_id = npa.node_id
+			 AND ncn.role = 'gateway'
+			WHERE nc.namespace_name = ?
+			  AND nc.status IN ('ready', 'degraded')
+			  AND ncn.status = 'running'
+		`
+
 func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, claims *auth.JWTClaims, scopes string, errMsg string) {
 	// 1) Try JWT Bearer first
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
@@ -1377,17 +1401,19 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		db := g.client.Database()
 		internalCtx := client.WithInternalAuth(r.Context())
 
-		// Query all ready namespace gateways and choose a stable target.
+		// Query the namespace's LIVE gateways and choose a stable target.
 		// Random selection causes WS subscribe and publish calls to hit different
 		// nodes, which makes pubsub delivery flaky for short-lived subscriptions.
-		query := `
-			SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
-			FROM namespace_port_allocations npa
-			JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
-			JOIN dns_nodes dn ON npa.node_id = dn.id
-			WHERE nc.namespace_name = ? AND nc.status = 'ready'
-		`
-		result, err := db.Query(internalCtx, query, namespaceName)
+		//
+		// Bugboard #278: this used to require nc.status = 'ready', which meant a
+		// cluster marked 'degraded' returned zero rows and the namespace 404'd on
+		// EVERY node — including the nodes whose gateways were perfectly healthy.
+		// One node's gateway row flipping to 'failed' took a whole tenant offline,
+		// which defeats the point of running three replicas. Serve a degraded
+		// cluster from its healthy members instead, selecting on the per-node
+		// status rather than the cluster-level rollup; 404 only when there is
+		// genuinely no live gateway.
+		result, err := db.Query(internalCtx, namespaceGatewayTargetsQuery, namespaceName)
 		if err != nil || result == nil || len(result.Rows) == 0 {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
 				zap.String("namespace", namespaceName),

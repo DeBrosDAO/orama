@@ -164,7 +164,8 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 		NamespaceName string `db:"namespace_name"`
 	}
 	var events []eventInfo
-	cutoff := time.Now().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
+	// Bugboard #282: compare in UTC — event timestamps are stored UTC.
+	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 	eventsQuery := `
 		SELECT DISTINCT c.namespace_name
 		FROM namespace_cluster_events e
@@ -339,6 +340,66 @@ func (cm *ClusterManager) HandleSuspectRecovery(ctx context.Context, nodeID stri
 		zap.Int("records_enabled", enabledCount))
 }
 
+// nodeIsLive reports whether a node is currently alive: marked active in
+// dns_nodes and heartbeating within the same freshness window the node selector
+// uses. Bugboard #279 — recovery must be able to tell "gone" from "restarting".
+func (cm *ClusterManager) nodeIsLive(ctx context.Context, nodeID string) bool {
+	var rows []struct {
+		ID string `db:"id"`
+	}
+	cutoff := time.Now().UTC().Add(-nodeLivenessWindow).Format("2006-01-02 15:04:05")
+	q := `SELECT id FROM dns_nodes WHERE id = ? AND status = 'active' AND last_seen > ?`
+	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows, q, nodeID, cutoff); err != nil {
+		// Unknown is not alive — fall through to the normal dead-node path rather
+		// than silently skipping recovery on a transient query failure.
+		cm.logger.Warn("Liveness check failed; treating node as not live",
+			zap.String("node_id", nodeID), zap.Error(err))
+		return false
+	}
+	return len(rows) > 0
+}
+
+// nodeLivenessWindow mirrors the node selector's 2-minute activity window.
+const nodeLivenessWindow = 2 * time.Minute
+
+// reinstateNode restores a cluster member whose services are expected to be
+// running again, clearing the failed marks left by an earlier dead-node event.
+func (cm *ClusterManager) reinstateNode(ctx context.Context, cluster *NamespaceCluster, nodeID string) error {
+	if err := cm.updateClusterNodeStatus(ctx, cluster.ID, nodeID, NodeStatusRunning); err != nil {
+		return fmt.Errorf("reinstate node %s: %w", nodeID, err)
+	}
+	cm.logger.Info("Reinstated cluster node that is alive again (bugboard #279)",
+		zap.String("cluster_id", cluster.ID),
+		zap.String("namespace", cluster.NamespaceName),
+		zap.String("node_id", nodeID))
+	cm.logEvent(ctx, cluster.ID, EventRecoveryComplete, nodeID,
+		fmt.Sprintf("Node %s is alive again — reinstated without replacement", nodeID), nil)
+	return nil
+}
+
+// settleClusterStatus recomputes the cluster-level status from its members and
+// writes it. Bugboard #279: RepairCluster used to return early when nothing was
+// missing WITHOUT clearing a stale 'degraded', so a cluster that had fully
+// recovered stayed marked degraded — and with bugboard #278 that kept the whole
+// namespace 404ing at the edge. Ready when every expected member is running.
+func (cm *ClusterManager) settleClusterStatus(ctx context.Context, cluster *NamespaceCluster) error {
+	nodes, err := cm.getClusterNodes(ctx, cluster.ID)
+	if err != nil {
+		return fmt.Errorf("settle cluster status: %w", err)
+	}
+	running := make(map[string]bool)
+	for _, cn := range nodes {
+		if cn.Status == NodeStatusRunning || cn.Status == NodeStatusStarting {
+			running[cn.NodeID] = true
+		}
+	}
+	if len(running) >= cluster.RQLiteNodeCount {
+		return cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	}
+	return cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDegraded,
+		fmt.Sprintf("%d of %d nodes running", len(running), cluster.RQLiteNodeCount))
+}
+
 // ReplaceClusterNode replaces a dead node in a specific namespace cluster.
 // It selects a new node, allocates ports, spawns services, updates DNS, and cleans up.
 func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *NamespaceCluster, deadNodeID string) error {
@@ -349,6 +410,18 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	)
 	cm.logEvent(ctx, cluster.ID, EventRecoveryStarted, deadNodeID,
 		fmt.Sprintf("Recovery started: replacing dead node %s", deadNodeID), nil)
+
+	// 0. Bugboard #279: the node may simply have restarted. Replacing a node that
+	// is alive again is wrong twice over — it discards a healthy member, and on a
+	// cluster that already spans the whole fleet there is no replacement to find,
+	// so steps 1-2 below would commit failed/degraded and then bail out, wedging
+	// the cluster there permanently. Reinstate instead.
+	if cm.nodeIsLive(ctx, deadNodeID) {
+		if err := cm.reinstateNode(ctx, cluster, deadNodeID); err != nil {
+			return err
+		}
+		return cm.settleClusterStatus(ctx, cluster)
+	}
 
 	// 1. Mark dead node's assignments as failed
 	if err := cm.updateClusterNodeStatus(ctx, cluster.ID, deadNodeID, NodeStatusFailed); err != nil {
@@ -653,7 +726,7 @@ func (cm *ClusterManager) getClustersByNodeID(ctx context.Context, nodeID string
 // updateClusterNodeStatus marks a specific cluster node assignment with a new status.
 func (cm *ClusterManager) updateClusterNodeStatus(ctx context.Context, clusterID, nodeID string, status NodeStatus) error {
 	query := `UPDATE namespace_cluster_nodes SET status = ?, updated_at = ? WHERE namespace_cluster_id = ? AND node_id = ?`
-	_, err := cm.db.Exec(ctx, query, status, time.Now().Format("2006-01-02 15:04:05"), clusterID, nodeID)
+	_, err := cm.db.Exec(ctx, query, status, time.Now().UTC().Format("2006-01-02 15:04:05"), clusterID, nodeID)
 	return err
 }
 
@@ -759,14 +832,14 @@ func (cm *ClusterManager) getNodeIPs(ctx context.Context, nodeID string) (*nodeI
 // markNodeOffline sets a node's status to 'offline' in dns_nodes.
 func (cm *ClusterManager) markNodeOffline(ctx context.Context, nodeID string) error {
 	query := `UPDATE dns_nodes SET status = 'offline', updated_at = ? WHERE id = ?`
-	_, err := cm.db.Exec(ctx, query, time.Now().Format("2006-01-02 15:04:05"), nodeID)
+	_, err := cm.db.Exec(ctx, query, time.Now().UTC().Format("2006-01-02 15:04:05"), nodeID)
 	return err
 }
 
 // markNodeActive sets a node's status to 'active' in dns_nodes.
 func (cm *ClusterManager) markNodeActive(ctx context.Context, nodeID string) {
 	query := `UPDATE dns_nodes SET status = 'active', updated_at = ? WHERE id = ?`
-	if _, err := cm.db.Exec(ctx, query, time.Now().Format("2006-01-02 15:04:05"), nodeID); err != nil {
+	if _, err := cm.db.Exec(ctx, query, time.Now().UTC().Format("2006-01-02 15:04:05"), nodeID); err != nil {
 		cm.logger.Warn("Failed to mark node active", zap.String("node_id", nodeID), zap.Error(err))
 	}
 }
@@ -940,6 +1013,33 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 		return fmt.Errorf("failed to get cluster nodes: %w", err)
 	}
 
+	// Bugboard #279: reinstate members that are marked failed but whose node is
+	// alive again. Without this a node that merely restarted stays failed forever:
+	// pruneStaleClusterNodes above only removes nodes that are NOT active, and the
+	// replacement path below excludes every current member, so on a fleet-wide
+	// cluster there is nothing to replace it with and the cluster never recovers.
+	reinstated := 0
+	for _, cn := range clusterNodes {
+		if cn.Status != NodeStatusFailed {
+			continue
+		}
+		if !cm.nodeIsLive(ctx, cn.NodeID) {
+			continue
+		}
+		if err := cm.reinstateNode(ctx, cluster, cn.NodeID); err != nil {
+			cm.logger.Warn("Failed to reinstate live cluster node",
+				zap.String("namespace", namespaceName),
+				zap.String("node_id", cn.NodeID), zap.Error(err))
+			continue
+		}
+		reinstated++
+	}
+	if reinstated > 0 {
+		if clusterNodes, err = cm.getClusterNodes(ctx, cluster.ID); err != nil {
+			return fmt.Errorf("failed to re-read cluster nodes after reinstate: %w", err)
+		}
+	}
+
 	// Count unique physical nodes with active services
 	activeNodes := make(map[string]bool)
 	for _, cn := range clusterNodes {
@@ -959,8 +1059,12 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 			zap.String("namespace", namespaceName),
 			zap.Int("active_nodes", activeCount),
 			zap.Int("expected", expectedCount),
+			zap.Int("reinstated", reinstated),
 		)
-		return nil
+		// Bugboard #279: clear a stale 'degraded' — returning early without doing
+		// this is what left a fully-recovered cluster marked degraded, which the
+		// edge router then refused to serve (bugboard #278).
+		return cm.settleClusterStatus(ctx, cluster)
 	}
 
 	cm.logger.Info("Cluster needs repair — adding missing nodes",
@@ -1260,7 +1364,7 @@ func (cm *ClusterManager) markDeadNodeReplicasFailed(ctx context.Context, deadNo
 	type replicaCount struct {
 		Count int `db:"count"`
 	}
-	now := time.Now().Format("2006-01-02 15:04:05")
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 
 	for _, a := range affected {
 		var counts []replicaCount
