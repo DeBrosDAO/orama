@@ -408,6 +408,7 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WASM memory:** wazero `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB). Modules without a memory max still cannot grow past that
 - **WASM concurrency:** process-wide semaphore plus a per-namespace cap (`maxConcurrent/2`, min 1)
 - **Process uid:** namespace gateway/rqlite/olric/sfu/turn/pubsub run as `User=orama` (not root). `/opt/orama/bin` is `root:orama` 0750. CoreDNS/Caddy `ReadWritePaths` do not include `secrets/`
+- **TLS:** internet-facing TLS is 1.2+ (`TCPSNIGateway`, CLI, tlsutil). Olric memberlist encryption is required at config render (missing key is a startup error, not cleartext)
 
 ### Token & Key Security
 

@@ -104,11 +104,7 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 // Only skips TLS verification for explicitly trusted domains when no CA cert is available.
 func NewHTTPClientForDomain(timeout time.Duration, hostname string) *http.Client {
 	tlsConfig := GetTLSConfig()
-
-	// Only skip TLS for explicitly trusted domains when no CA pool is configured
-	if caCertPool == nil && ShouldSkipTLSVerify(hostname) {
-		tlsConfig.InsecureSkipVerify = true
-	}
+	_ = hostname // domain is for callers; verification uses system/Caddy CAs (bugboard #112)
 
 	return &http.Client{
 		Timeout: timeout,

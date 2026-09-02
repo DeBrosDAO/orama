@@ -83,7 +83,7 @@ func getTLSCertFingerprint(domain string) string {
 		&net.Dialer{Timeout: 5 * time.Second},
 		"tcp",
 		domain+":443",
-		&tls.Config{InsecureSkipVerify: true},
+		&tls.Config{MinVersion: tls.VersionTLS12},
 	)
 	if err != nil {
 		return ""

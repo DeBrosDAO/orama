@@ -75,10 +75,11 @@ func HandleNamespaceCommand(args []string) {
 }
 
 // handleNamespaceKeys drives scoped API-key management (bugboard #148):
-//   orama namespace keys create --scope <profile|grants> [--label ...]
-//   orama namespace keys list
-//   orama namespace keys revoke --id <n>
-//   orama namespace keys revoke-legacy
+//
+//	orama namespace keys create --scope <profile|grants> [--label ...]
+//	orama namespace keys list
+//	orama namespace keys revoke --id <n>
+//	orama namespace keys revoke-legacy
 func handleNamespaceKeys(args []string) {
 	if len(args) == 0 {
 		showNamespaceKeysHelp()
@@ -125,7 +126,7 @@ func keysDo(method, url, apiKey string, body io.Reader) (map[string]interface{},
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
@@ -371,7 +372,7 @@ func handleNamespaceDelete(force bool) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 	resp, err := client.Do(req)
@@ -443,7 +444,7 @@ func handleNamespaceEnable(args []string) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 	resp, err := client.Do(req)
@@ -507,7 +508,7 @@ func handleNamespaceStealthToggle(args []string, enable bool) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 	resp, err := client.Do(req)
@@ -573,7 +574,7 @@ func handleNamespaceDisable(args []string) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 	resp, err := client.Do(req)
@@ -612,7 +613,7 @@ func handleNamespaceWebRTCStatus(ns string) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 	resp, err := client.Do(req)
@@ -707,7 +708,7 @@ func handleNamespaceList() {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 	resp, err := client.Do(req)
