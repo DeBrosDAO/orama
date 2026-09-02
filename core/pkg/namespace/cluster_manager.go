@@ -404,6 +404,9 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort),
 		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort),
 		IsLeader:       true,
+		// Bugboard #281: this path only runs when provisioning a NEW cluster, so
+		// any raft state already on disk is a leftover — never adopt it.
+		FreshStart: true,
 	}
 
 	var err error
@@ -443,6 +446,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteRaftPort),
 			JoinAddresses:  []string{leaderRaftAddr},
 			IsLeader:       false,
+			FreshStart:     true, // bugboard #281 — see leaderCfg
 		}
 
 		var followerInstance *rqlite.Instance
@@ -668,6 +672,9 @@ func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, 
 		"rqlite_raft_adv_addr": cfg.RaftAdvAddress,
 		"rqlite_join_addrs":    cfg.JoinAddresses,
 		"rqlite_is_leader":     cfg.IsLeader,
+		// Bugboard #281: a fresh cluster must clear leftover raft state on the
+		// remote node too, otherwise only the local node starts clean.
+		"rqlite_fresh_start": cfg.FreshStart,
 	})
 	if err != nil {
 		return nil, err
@@ -825,7 +832,7 @@ func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP,
 }
 
 // sendStopRequest sends a stop request to a remote node
-func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) {
+func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) error {
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":    action,
 		"namespace": namespace,
@@ -838,6 +845,7 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 			zap.Error(err),
 		)
 	}
+	return err
 }
 
 // createDNSRecords creates DNS records for the namespace gateway.
@@ -919,6 +927,12 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
 
+	// Set when the namespace's data directory could not be removed on some node
+	// (bugboard #281). The control-plane teardown still completes — leaving half
+	// the rows behind would be worse — but the caller is told, because the name
+	// is no longer safe to reuse until the leftovers are dealt with.
+	var deprovisionDataErr error
+
 	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
 	type deprovisionNodeInfo struct {
 		NodeID     string `db:"node_id"`
@@ -959,13 +973,30 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 			cm.stopRQLiteOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName, nil)
 		}
 
-		// 3. Delete cluster-state.json on all nodes
+		// 3. Delete the namespace data directory on all nodes.
+		//
+		// Bugboard #281: these failures used to be swallowed, so a delete that
+		// left the tenant's data on disk still reported success — and re-creating
+		// a namespace of the same name then inherited its raft state. Collect the
+		// failures and surface them; the caller decides, but it must be told.
+		var dataErrs []string
 		for _, node := range clusterNodes {
+			var derr error
 			if node.NodeID == cm.localNodeID {
-				cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
+				derr = cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
 			} else {
-				cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
+				derr = cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
 			}
+			if derr != nil {
+				dataErrs = append(dataErrs, fmt.Sprintf("%s: %v", node.NodeID, derr))
+			}
+		}
+		if len(dataErrs) > 0 {
+			cm.logger.Error("Namespace data directory was NOT removed on every node — re-creating this namespace would inherit its state (bugboard #281)",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.Strings("failures", dataErrs))
+			deprovisionDataErr = fmt.Errorf("namespace data not removed on %d node(s): %s",
+				len(dataErrs), strings.Join(dataErrs, "; "))
 		}
 	}
 
@@ -989,6 +1020,12 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
+
+	if deprovisionDataErr != nil {
+		cm.logger.Warn("Cluster deprovisioning completed with leftover data",
+			zap.String("cluster_id", cluster.ID), zap.Error(deprovisionDataErr))
+		return deprovisionDataErr
+	}
 
 	cm.logger.Info("Cluster deprovisioning completed", zap.String("cluster_id", cluster.ID))
 

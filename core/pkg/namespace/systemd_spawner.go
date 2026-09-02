@@ -81,6 +81,25 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		}
 	}
 
+	// Bugboard #281: a brand-new cluster must not inherit raft state left behind
+	// by a previous namespace of the same name. Clearing here (rather than
+	// trusting delete to have succeeded) is what makes re-creating a namespace
+	// deterministic.
+	if cfg.FreshStart {
+		raftDir := filepath.Join(s.namespaceBase, namespace, "rqlite", nodeID)
+		if _, statErr := os.Stat(raftDir); statErr == nil {
+			s.logger.Warn("Clearing leftover RQLite state for a fresh namespace cluster (bugboard #281)",
+				zap.String("namespace", namespace),
+				zap.String("node_id", nodeID),
+				zap.String("path", raftDir))
+			if err := os.RemoveAll(raftDir); err != nil {
+				return fmt.Errorf("failed to clear stale RQLite state at %s: %w", raftDir, err)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("failed to inspect RQLite state dir %s: %w", raftDir, statErr)
+		}
+	}
+
 	// Generate environment file
 	envVars := map[string]string{
 		"HTTP_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort),

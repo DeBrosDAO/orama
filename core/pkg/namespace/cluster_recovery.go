@@ -741,6 +741,96 @@ func (cm *ClusterManager) removeClusterNodeAssignment(ctx context.Context, clust
 	}
 }
 
+// regenerateClusterState rebuilds cluster-state.json on every node from the
+// CURRENT port allocations (bugboard #280).
+//
+// cluster-state.json is what the namespace gateway config is generated from —
+// olric_servers and the rqlite join list both come from its all_nodes. It was
+// only ever written by the provisioning paths, so after a node was permanently
+// removed the file kept naming it forever: RepairCluster never rewrote it, the
+// startup restore only reads it, and the warm-reconcile path compares just the
+// WebRTC fields. Regenerating it whenever membership changes is what stops a
+// namespace from pointing at departed nodes.
+func (cm *ClusterManager) regenerateClusterState(ctx context.Context, cluster *NamespaceCluster) error {
+	nodes, blocks, err := cm.clusterStateInputs(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	cm.saveClusterStateToAllNodes(ctx, cluster, nodes, blocks)
+	cm.logger.Info("Regenerated namespace cluster state from live allocations (bugboard #280)",
+		zap.String("namespace", cluster.NamespaceName),
+		zap.Int("nodes", len(nodes)))
+	return nil
+}
+
+// clusterStateInputs reads the cluster's CURRENT membership from the allocations
+// table and shapes it for saveClusterStateToAllNodes. Split out from
+// regenerateClusterState so the membership computation — the part that actually
+// went wrong in bugboard #280 — is testable without touching disk or the network.
+func (cm *ClusterManager) clusterStateInputs(ctx context.Context, cluster *NamespaceCluster) ([]NodeCapacity, []*PortBlock, error) {
+	type allocRow struct {
+		NodeID              string `db:"node_id"`
+		InternalIP          string `db:"internal_ip"`
+		IPAddress           string `db:"ip_address"`
+		RQLiteHTTPPort      int    `db:"rqlite_http_port"`
+		RQLiteRaftPort      int    `db:"rqlite_raft_port"`
+		OlricHTTPPort       int    `db:"olric_http_port"`
+		OlricMemberlistPort int    `db:"olric_memberlist_port"`
+		GatewayHTTPPort     int    `db:"gateway_http_port"`
+	}
+	var rows []allocRow
+	query := `
+		SELECT pa.node_id, COALESCE(dn.internal_ip, dn.ip_address) AS internal_ip, dn.ip_address,
+			pa.rqlite_http_port, pa.rqlite_raft_port, pa.olric_http_port,
+			pa.olric_memberlist_port, pa.gateway_http_port
+		FROM namespace_port_allocations pa
+		JOIN dns_nodes dn ON pa.node_id = dn.id
+		WHERE pa.namespace_cluster_id = ?
+		ORDER BY pa.node_id
+	`
+	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows, query, cluster.ID); err != nil {
+		return nil, nil, fmt.Errorf("regenerate cluster state: query allocations: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil, fmt.Errorf("regenerate cluster state: no port allocations for cluster %s", cluster.ID)
+	}
+
+	nodes := make([]NodeCapacity, 0, len(rows))
+	blocks := make([]*PortBlock, 0, len(rows))
+	for _, r := range rows {
+		nodes = append(nodes, NodeCapacity{
+			NodeID:     r.NodeID,
+			IPAddress:  r.IPAddress,
+			InternalIP: r.InternalIP,
+		})
+		blocks = append(blocks, &PortBlock{
+			NodeID:              r.NodeID,
+			NamespaceClusterID:  cluster.ID,
+			RQLiteHTTPPort:      r.RQLiteHTTPPort,
+			RQLiteRaftPort:      r.RQLiteRaftPort,
+			OlricHTTPPort:       r.OlricHTTPPort,
+			OlricMemberlistPort: r.OlricMemberlistPort,
+			GatewayHTTPPort:     r.GatewayHTTPPort,
+		})
+	}
+
+	return nodes, blocks, nil
+}
+
+// removeStalePortAllocation drops a departed node's namespace_port_allocations
+// row (bugboard #280). The counterpart to removeClusterNodeAssignment: both rows
+// describe the same membership, and leaving one behind is what let stale nodes
+// survive in generated namespace gateway config.
+func (cm *ClusterManager) removeStalePortAllocation(ctx context.Context, clusterID, nodeID string) {
+	query := `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`
+	if _, err := cm.db.Exec(ctx, query, clusterID, nodeID); err != nil {
+		cm.logger.Warn("Failed to remove stale port allocation",
+			zap.String("cluster_id", clusterID),
+			zap.String("node_id", nodeID),
+			zap.Error(err))
+	}
+}
+
 // clusterNodePurgeStaleAfter mirrors purgeStaleAfter in
 // pkg/node/dns_registration.go:514 (15m) — the DNS layer already treats a
 // node silent this long as genuinely gone and purges its records, so cluster
@@ -811,8 +901,17 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 	removed := make([]string, 0, len(rows))
 	for _, r := range rows {
 		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
+		// Bugboard #280: the port allocation must go too. Pruning only
+		// namespace_cluster_nodes left the allocation row behind, and that row is
+		// what cluster-state.json (and therefore the namespace gateway's
+		// olric_servers / rqlite join list) is built from — so a namespace kept
+		// pointing at a departed node forever. On devnet that left anchat-test
+		// with Olric discovery aimed at two removed nodes: its cache was down on
+		// every gateway, and each gateway restart stalled for MINUTES timing out
+		// against them before it would bind.
+		cm.removeStalePortAllocation(ctx, clusterID, r.NodeID)
 		removed = append(removed, r.NodeID)
-		cm.logger.Warn("Removed permanently-gone cluster node assignment (bugboard #173)",
+		cm.logger.Warn("Removed permanently-gone cluster node assignment and its port allocation (bugboard #173, #280)",
 			zap.String("cluster_id", clusterID),
 			zap.String("node_id", r.NodeID))
 	}
@@ -1005,6 +1104,13 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 	} else if len(removed) > 0 {
 		cm.logger.Warn("Repair pruned permanently-gone cluster node assignments (bugboard #173)",
 			zap.String("namespace", namespaceName), zap.Strings("removed_nodes", removed))
+		// Bugboard #280: membership changed, so the state file every namespace
+		// gateway config is generated from is now stale. Rewrite it, otherwise the
+		// pruned nodes stay in olric_servers and the rqlite join list forever.
+		if rerr := cm.regenerateClusterState(ctx, cluster); rerr != nil {
+			cm.logger.Warn("Failed to regenerate cluster state after pruning — namespace config may still name departed nodes",
+				zap.String("namespace", namespaceName), zap.Error(rerr))
+		}
 	}
 
 	// 4. Get current cluster nodes

@@ -32,6 +32,17 @@ type InstanceConfig struct {
 	DataDir        string   // Data directory for this instance
 	IsLeader       bool     // Whether this is the first node (creates cluster)
 	AuthFile       string   // Path to RQLite auth JSON file. Empty = no auth enforcement.
+	// FreshStart marks this as the first start of a BRAND-NEW cluster, as
+	// opposed to a restart/restore of an existing one. Bugboard #281: a
+	// namespace delete that failed to remove the data directory left raft state
+	// behind, and re-creating a namespace of the same name then booted on top of
+	// it — the nodes disagreed on membership (one inherited a peer set including
+	// a long-removed node and a different namespace's members) and never elected
+	// a leader. On a fresh cluster any pre-existing raft state is garbage by
+	// definition, so it is cleared rather than silently adopted. A restart must
+	// NOT set this: reusing the raft directory is exactly what makes a restart a
+	// restart.
+	FreshStart bool
 }
 
 // Instance represents a running RQLite instance

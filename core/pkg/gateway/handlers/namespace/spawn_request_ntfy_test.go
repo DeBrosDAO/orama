@@ -49,3 +49,30 @@ func TestSpawnRequest_ntfyBaseURLOmittedIsEmpty(t *testing.T) {
 		t.Errorf("GatewayNtfyBaseURL = %q; want empty", req.GatewayNtfyBaseURL)
 	}
 }
+
+// TestSpawnRequest_freshStartWireKey pins the JSON key that tells a remote node to
+// clear leftover RQLite state before starting a brand-new cluster (bugboard #281).
+// If only the local node honours it, a re-created namespace still inherits stale
+// raft membership on every other node — which is exactly how a rebuilt anchat-v2
+// ended up with three nodes disagreeing on membership and no leader.
+func TestSpawnRequest_freshStartWireKey(t *testing.T) {
+	var req SpawnRequest
+	if err := json.Unmarshal([]byte(`{"action":"spawn-rqlite","rqlite_fresh_start":true}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !req.RQLiteFreshStart {
+		t.Error(`RQLiteFreshStart not set — the wire key must stay "rqlite_fresh_start" to match ClusterManager's spawn payload`)
+	}
+}
+
+// A payload from an older node carries no such key; that must decode cleanly to
+// false (reuse existing state) rather than erroring during a rolling upgrade.
+func TestSpawnRequest_freshStartAbsentIsFalse(t *testing.T) {
+	var req SpawnRequest
+	if err := json.Unmarshal([]byte(`{"action":"spawn-rqlite"}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.RQLiteFreshStart {
+		t.Error("RQLiteFreshStart defaulted to true — an upgrade would wipe existing raft state")
+	}
+}
