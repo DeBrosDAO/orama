@@ -107,7 +107,6 @@ type OlricConfigData struct {
 	MemberlistEnvironment   string   // "local", "lan", or "wan"
 	MemberlistAdvertiseAddr string   // Advertise address (WG IP) so other nodes can reach us
 	Peers                   []string // Seed peers for memberlist (host:port)
-	EncryptionKey           string   // Base64-encoded 32-byte key for memberlist gossip encryption (empty = no encryption)
 }
 
 // SystemdIPFSData holds parameters for systemd IPFS service rendering

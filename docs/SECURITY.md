@@ -29,10 +29,9 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - What keeps the RQLite API off the public internet is the firewall / WireGuard overlay, not RQLite HTTP auth
 
 **Olric Gossip Encryption (Step 1.8)**
-- Olric memberlist uses a 32-byte encryption key for all gossip traffic
-- Key generated at genesis, distributed via join response
-- Prevents rogue nodes from joining the gossip ring and poisoning caches
-- Note: encryption is all-or-nothing (coordinated restart required when enabling)
+- Olric v0.7.0's YAML loader has **no** `encryptionKey` field; a generated key was shipped and silently dropped
+- That plumbing is removed. Memberlist confidentiality is the WireGuard overlay (`10.0.0.x`), not Olric AES-GCM
+- Wiring `MemberlistConfig.SecretKey` would require embedding Olric, not a YAML field
 
 **IPFS Cluster TrustedPeers (Step 1.9)**
 - IPFS Cluster `TrustedPeers` populated with actual cluster peer IDs (was `["*"]`)
@@ -84,7 +83,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Production CLI and `tlsutil.NewHTTPClientForDomain` do **not** set `InsecureSkipVerify` — public Caddy certs verify against system CAs
 - `TCPSNIGateway` sets `MinVersion: TLS 1.2`
 - Certificate serials are 128-bit `crypto/rand` values
-- Olric config generation refuses an empty `olric-encryption-key` (no cleartext memberlist)
+- wg0.conf is chmod 0600 after write (WriteFile and tee); umask is not trusted
 
 **WebSocket Origin Validation (Step 1.4)**
 - All WebSocket upgraders validate the `Origin` header against the node's configured domain
@@ -186,6 +185,8 @@ Stated so the gaps above are known positions, not implied protections:
 - **ntfy** — no auth-file in v1; listen-localhost is the control
 - **A captured disk snapshot of RQLite** — plaintext application data, including `deployment_env_vars`
 - **Immediate erase of deleted rows** — a SQL `DELETE` is a Raft log entry; the original INSERT remains in `raft.db` until size-driven compaction, not a privacy TTL
+- **Olric memberlist AES-GCM** — v0.7.0 YAML has no `encryptionKey`; WireGuard is the control
+- **WireGuard key rotation** — none; `wg0.conf` is 0600. Rotation would be a rolling mesh with a health gate
 
 ## Rollout Strategy
 
