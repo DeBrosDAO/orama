@@ -33,6 +33,26 @@ type InstanceConfig struct {
 	IsLeader       bool     // Whether this is the first node (creates cluster)
 	AuthFile       string   // Path to RQLite auth JSON file. Empty = no auth enforcement.
 	ExtraArgs      string   // Extra rqlited flags (raft timeouts). Empty for tenants.
+	// FreshStart marks this as the first start of a BRAND-NEW cluster, as
+	// opposed to a restart/restore of an existing one. Bugboard #281: a
+	// namespace delete that failed to remove the data directory left raft state
+	// behind, and re-creating a namespace of the same name then booted on top of
+	// it — the nodes disagreed on membership (one inherited a peer set including
+	// a long-removed node and a different namespace's members) and never elected
+	// a leader. On a fresh cluster any pre-existing raft state is garbage by
+	// definition, so it is cleared rather than silently adopted. A restart must
+	// NOT set this: reusing the raft directory is exactly what makes a restart a
+	// restart.
+	FreshStart bool
+	// JoinVerifyURL is the HTTP base URL of the node this instance is about to
+	// join (e.g. "http://10.0.0.1:10000"). Bugboard #275: rqlited joins whatever
+	// answers at the -join address, with no check that the cluster belongs to
+	// this namespace. When a port collision put another namespace's rqlited on
+	// the expected port, a namespace node joined the FOREIGN raft group as a
+	// Voter and served that namespace's database — identical row counts on a
+	// namespace minutes old. Verifying the target's identity before starting
+	// makes that impossible. Empty skips the check (the leader joins nothing).
+	JoinVerifyURL string
 }
 
 // Instance represents a running RQLite instance

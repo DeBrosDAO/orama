@@ -249,8 +249,16 @@ func (h *Handlers) SendHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "namespace not resolved")
 		return
 	}
-	if resolveCallerUserID(r) == "" {
-		writeError(w, http.StatusUnauthorized, "user authentication required")
+	// Bugboard #285: this route is admin-scoped, and the recipient is named in
+	// the body — the CALLER's own user identity is irrelevant here. Requiring a
+	// JWT made the endpoint unreachable: a wallet JWT never carries `admin` on
+	// this route (only the ownership middleware, which does not wrap push, grants
+	// it), and an admin API key is not a JWT. So the scope gate rejected the
+	// wallet and the identity gate rejected the key, and no credential could
+	// satisfy both. Use the same admin-caller resolution the other admin push
+	// routes use, which accepts the namespace-scoped API key identity.
+	if resolveAdminCaller(r) == "" {
+		writeError(w, http.StatusUnauthorized, "admin authentication required (namespace admin API key or owner wallet)")
 		return
 	}
 

@@ -403,3 +403,83 @@ func TestExtractIDFromPath(t *testing.T) {
 		}
 	}
 }
+
+// Bugboard #285. SendHandler required resolveCallerUserID — a JWT identity — while
+// the scope gate on the same route required the `admin` grant. A wallet JWT never
+// carries admin here (only the ownership middleware grants it, and it does not wrap
+// the push routes), and an admin API key is not a JWT. So the scope gate rejected
+// the wallet and the identity gate rejected the key, and no credential could
+// satisfy both: on devnet the namespace OWNER got
+// "insufficient scope: ... lacks the 'admin' grant" with their wallet JWT and
+// "user authentication required" with their admin key.
+//
+// The recipient is named in the body and the route is admin-scoped, so the
+// caller's own user identity was never needed.
+
+// TestSend_adminApiKeyWithoutJWTIsAccepted is the reproduction: namespace resolved
+// from an admin API key, no JWT claims at all.
+func TestSend_adminApiKeyWithoutJWTIsAccepted(t *testing.T) {
+	var sent int32
+	dispatcher := push.New(&fakeStore{
+		devices: []push.PushDevice{
+			{ID: "row-1", Namespace: "anchat-v2", UserID: "target-user", Provider: "fake", Token: "tok"},
+		},
+	}, zap.NewNop())
+	dispatcher.Register(&fakePushProvider{
+		name: "fake",
+		fn:   func(ctx context.Context, msg push.PushMessage) error { atomic.AddInt32(&sent, 1); return nil },
+	})
+	h := newHandlers(&fakeStore{}, dispatcher)
+
+	body, _ := json.Marshal(SendRequest{UserID: "target-user", Title: "hi", Body: "world"})
+	// namespace set (as an API key does), userID empty (no JWT).
+	req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body)), "anchat-v2", "")
+	rr := httptest.NewRecorder()
+	h.SendHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("admin API key rejected: got %d (body: %s) — combined with the admin scope gate this makes the endpoint unreachable by any credential", rr.Code, rr.Body.String())
+	}
+	if atomic.LoadInt32(&sent) != 1 {
+		t.Errorf("expected the push to be dispatched once, got %d", sent)
+	}
+}
+
+// A caller with no namespace at all is still rejected — the route must not become
+// open just because the JWT requirement was relaxed.
+func TestSend_withoutNamespaceIsRejected(t *testing.T) {
+	dispatcher := push.New(&fakeStore{}, zap.NewNop())
+	h := newHandlers(&fakeStore{}, dispatcher)
+
+	body, _ := json.Marshal(SendRequest{UserID: "target-user", Title: "hi"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.SendHandler(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 with no namespace resolved, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// A wallet JWT still works, so the owner path is unaffected.
+func TestSend_walletJWTStillAccepted(t *testing.T) {
+	dispatcher := push.New(&fakeStore{
+		devices: []push.PushDevice{
+			{ID: "row-1", Namespace: "anchat-v2", UserID: "target-user", Provider: "fake", Token: "tok"},
+		},
+	}, zap.NewNop())
+	dispatcher.Register(&fakePushProvider{
+		name: "fake",
+		fn:   func(ctx context.Context, msg push.PushMessage) error { return nil },
+	})
+	h := newHandlers(&fakeStore{}, dispatcher)
+
+	body, _ := json.Marshal(SendRequest{UserID: "target-user", Title: "hi"})
+	req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body)), "anchat-v2", "0xOwner")
+	rr := httptest.NewRecorder()
+	h.SendHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("wallet JWT caller rejected: got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}

@@ -148,6 +148,10 @@ func (d *PushDispatcher) SendToUserDetailed(
 		if !ok {
 			r.Success = false
 			r.Message = fmt.Sprintf("push: unknown provider %q (device not dispatched)", dev.Provider)
+			// Bugboard #274: no HTTP exchange happens here, so without an
+			// explicit reason the caller saw `http=0 reason=""` and could not
+			// tell this apart from a network failure.
+			r.Reason = "UnknownProvider"
 			// Preserve the sentinel error chain so legacy callers using
 			// errors.Is(err, ErrUnknownProvider) on the SendToUser
 			// return value keep working.
@@ -174,6 +178,15 @@ func (d *PushDispatcher) SendToUserDetailed(
 				r.Unregistered = perr.Unregistered
 			} else {
 				r.Message = sendErr.Error()
+			}
+			// Bugboard #274: a provider that fails BEFORE any HTTP exchange
+			// (e.g. ntfy with no base URL configured) returns either a plain
+			// error or a PushError with HTTPStatus 0 and no Reason — both left
+			// Reason empty, so the caller logged `http=0 reason=""` and had
+			// nothing to act on or report. Fall back to the error text, which
+			// is the most specific signal available for these cases.
+			if r.Reason == "" {
+				r.Reason = sendErr.Error()
 			}
 			d.logger.Warn("push: provider send failed",
 				zap.String("provider", dev.Provider),

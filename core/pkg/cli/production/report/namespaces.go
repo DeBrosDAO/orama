@@ -13,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/systemd"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 )
 
 // collectNamespaces discovers deployed namespaces and checks health of their
@@ -166,8 +169,13 @@ func collectNamespaceReport(ns nsInfo) NamespaceReport {
 	// 5. SFUUp: check if namespace SFU systemd service is active (optional)
 	r.SFUUp = isNamespaceServiceActive("sfu", ns.name)
 
-	// 6. TURNUp: check if namespace TURN systemd service is active (optional)
-	r.TURNUp = isNamespaceServiceActive("turn", ns.name)
+	// 6. TURNUp: TURN is host-level since bugboard #283 part 2 — one shared
+	// server per node serves every namespace allocated there. So "is TURN up for
+	// this namespace" is the shared unit running AND this namespace being one of
+	// the tenants it is configured to serve. Checking the old per-namespace unit
+	// here would report turn_up false on every node forever, silently removing
+	// TURN from the report the rolling-upgrade protocol depends on.
+	r.TURNUp = hostTURNServesNamespace(ns.name)
 
 	return r
 }
@@ -185,3 +193,27 @@ func isNamespaceServiceActive(serviceType, namespace string) bool {
 	cmd := exec.Command("systemctl", "is-active", "--quiet", svcName)
 	return cmd.Run() == nil
 }
+
+// hostTURNServesNamespace reports whether this host's shared TURN server is
+// running AND lists the namespace as a tenant (bugboard #283 part 2).
+//
+// Both halves matter: the unit being up says nothing about whether it relays for
+// THIS namespace, and a namespace listed in a config no process is reading has
+// no relay at all.
+func hostTURNServesNamespace(namespace string) bool {
+	data, err := os.ReadFile(hostTURNConfigPath)
+	if err != nil {
+		return false
+	}
+	cfg, perr := turn.ParseConfig(data)
+	if perr != nil {
+		return false
+	}
+	if _, served := cfg.TenantSecret(namespace); !served {
+		return false
+	}
+	return exec.Command("systemctl", "is-active", "--quiet", systemd.HostTURNServiceName).Run() == nil
+}
+
+// hostTURNConfigPath mirrors the path the shared TURN unit reads.
+const hostTURNConfigPath = "/opt/orama/.orama/configs/turn.yaml"

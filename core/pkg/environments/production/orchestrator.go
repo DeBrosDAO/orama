@@ -1029,6 +1029,16 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 // gating. A false negative would close the relay and break all calls, so the
 // detector must be reference-free.
 func (ps *ProductionSetup) hostRunsTURN() bool {
+	// Shared, host-level TURN (bugboard #283 part 2). This is the only form a
+	// freshly-installed node ever writes, so checking it is what keeps the relay
+	// ports open on new nodes — the per-namespace env files below exist only on
+	// hosts that predate the shared server.
+	if _, err := os.Stat(filepath.Join(ps.oramaDir, "configs", "turn.yaml")); err == nil {
+		return true
+	}
+	// Legacy per-namespace TURN instances, still present on nodes upgrading from
+	// before the shared server. Kept so an upgrade does not close the relay ports
+	// on a node whose migration has not run yet.
 	matches, err := filepath.Glob(filepath.Join(ps.oramaDir, "data", "namespaces", "*", "turn.env"))
 	if err != nil {
 		return false

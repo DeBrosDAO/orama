@@ -171,7 +171,10 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "missing all fields",
 			config: Config{},
-			wantErrs: 6, // listen_addr, public_ip, realm, auth_secret, relay_port_range, namespace
+			// bugboard #283: the separate auth_secret and namespace errors collapsed
+			// into one "no tenants configured" — a config with neither the legacy
+			// pair nor a tenants list serves nobody, which is a single fault.
+			wantErrs: 5, // listen_addr, public_ip, realm, no-tenants, relay_port_range
 		},
 		{
 			name: "invalid public IP",

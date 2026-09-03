@@ -109,6 +109,15 @@ type InstanceConfig struct {
 	// namespace cluster so a secret encrypted by one gateway decrypts on
 	// another. Empty means secrets management stays disabled (fail-loud).
 	SecretsEncryptionKey string
+
+	// NtfyBaseURL is the host-wide self-hosted ntfy base URL. Bugboard #274:
+	// the host gateway receives this via gateway.Config but spawned namespace
+	// gateways never did, so a tenant that followed the documented
+	// "leave base_url empty to use the platform's ntfy" advice got an ntfy
+	// provider that was never registered — every Android push failed with no
+	// HTTP call attempted. Empty means no platform default (a tenant may
+	// still point at its own server via stored credentials).
+	NtfyBaseURL string
 }
 
 // GatewayYAMLWebRTC represents the webrtc section of the gateway YAML config.
@@ -147,6 +156,12 @@ type GatewayYAMLConfig struct {
 	// startup. Because this is key material, generateConfig writes the file
 	// 0600. Empty omits the field (secrets management stays disabled).
 	SecretsEncryptionKey string `yaml:"secrets_encryption_key,omitempty"`
+	// NtfyBaseURL carries the host's self-hosted ntfy base URL into the
+	// spawned namespace gateway so the ntfy push provider is registered with
+	// a default server (bugboard #274). The standalone gateway binary loads
+	// this back into gateway.Config.NtfyBaseURL on startup. A namespace's
+	// stored ntfy credential still overrides it field-by-field.
+	NtfyBaseURL string `yaml:"ntfy_base_url,omitempty"`
 	// ClusterSecretPath points to the host's cluster-secret file. Bug #215
 	// follow-up: namespace gateways spawned by systemd previously had no
 	// way to access the cluster secret, so they fell back to per-node
@@ -356,6 +371,7 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 			TURNStealthDomain: cfg.TURNStealthDomain,
 		},
 		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
+		NtfyBaseURL:          cfg.NtfyBaseURL,
 	}
 	// Set Olric timeout if provided
 	if cfg.OlricTimeout > 0 {

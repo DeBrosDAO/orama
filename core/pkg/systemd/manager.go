@@ -75,6 +75,25 @@ var TemplateUnits = []string{
 	"orama-namespace-coredns@.service",
 }
 
+// UnitFilesToInstall is every unit file copied into /etc/systemd/system by
+// install and upgrade: the orama-namespace-*@ templates plus the shared,
+// host-level TURN unit.
+//
+// orama-turn.service has to be listed explicitly (bugboard #283 part 2). It is
+// not a template instance — one process serves every namespace on the host
+// because 3478/5349 are host-exclusive — so it matches none of the
+// orama-namespace-* globs. Without it the reconciler stops the legacy
+// per-namespace unit and is then refused permission to start the shared one,
+// leaving the node with no TURN at all.
+//
+// A fresh slice is returned so callers cannot alias TemplateUnits.
+func UnitFilesToInstall() []string {
+	units := make([]string, 0, len(TemplateUnits)+1)
+	units = append(units, TemplateUnits...)
+	units = append(units, HostTURNServiceName)
+	return units
+}
+
 // Manager manages systemd units for namespace services
 type Manager struct {
 	logger        *zap.Logger
@@ -527,7 +546,7 @@ func (m *Manager) GenerateEnvFile(namespace, nodeID string, serviceType ServiceT
 func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 	m.logger.Info("Installing systemd template units", zap.String("source", sourceDir))
 
-	for _, template := range TemplateUnits {
+	for _, template := range UnitFilesToInstall() {
 		source := filepath.Join(sourceDir, template)
 		dest := filepath.Join(m.systemdDir, template)
 
@@ -550,4 +569,66 @@ func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 
 	m.logger.Info("All template units installed successfully")
 	return nil
+}
+
+// HostTURNServiceName is the shared, host-level TURN unit (bugboard #283).
+//
+// TURN binds the well-known ports 3478/5349, which are exclusive per host, so
+// one process serves every namespace on the node instead of one unit per
+// namespace fighting over the same ports. It is a plain unit, not a template
+// instance, because it belongs to the host rather than to any namespace — the
+// same shape as orama-ipfs.service and orama-sni-router.service.
+const HostTURNServiceName = "orama-turn.service"
+
+// StartHostTURN enables and starts the shared TURN unit.
+//
+// Enabling is what makes the unit's [Install] section mean anything: without it
+// TURN would stay down across a host reboot until a reconcile tick noticed, so
+// every namespace on the node would lose its relay for up to a minute after
+// every boot. Idempotent, so it is safe on every start.
+func (m *Manager) StartHostTURN() error {
+	m.logger.Info("Starting shared TURN service", zap.String("service", HostTURNServiceName))
+	if output, err := systemctl("enable", HostTURNServiceName).CombinedOutput(); err != nil {
+		m.logger.Warn("Failed to enable shared TURN service; it will not start on boot",
+			zap.String("service", HostTURNServiceName), zap.String("output", string(output)), zap.Error(err))
+	}
+	output, err := systemctl("start", HostTURNServiceName).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to start %s: %w; output: %s", HostTURNServiceName, err, string(output))
+	}
+	return nil
+}
+
+// StopHostTURN stops the shared TURN unit. An already-stopped or not-installed
+// unit is not an error — this runs on every node, including ones that hold no
+// TURN allocation at all.
+func (m *Manager) StopHostTURN() error {
+	output, err := systemctl("stop", HostTURNServiceName).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "not loaded") || strings.Contains(string(output), "inactive") {
+			return nil
+		}
+		return fmt.Errorf("failed to stop %s: %w; output: %s", HostTURNServiceName, err, string(output))
+	}
+	m.logger.Info("Shared TURN service stopped", zap.String("service", HostTURNServiceName))
+	return nil
+}
+
+// IsHostTURNActive reports whether the shared TURN unit is running.
+func (m *Manager) IsHostTURNActive() (bool, error) {
+	// Deliberately NOT the sudo-aware systemctl() helper: `is-active` is a query
+	// that needs no privilege, and the sudoers drop-in grants only
+	// start/stop/restart/enable for this unit — routing it through sudo makes it
+	// fail always, which reads as "TURN is down" and silently disables the whole
+	// host-TURN reconcile. IsServiceActive uses a bare command for the same reason.
+	output, err := exec.Command("systemctl", "is-active", HostTURNServiceName).CombinedOutput()
+	status := strings.TrimSpace(string(output))
+	if err != nil {
+		switch status {
+		case "inactive", "failed", "activating", "deactivating", "unknown":
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check %s: %w; output: %s", HostTURNServiceName, err, status)
+	}
+	return status == "active", nil
 }

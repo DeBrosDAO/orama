@@ -103,6 +103,20 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// 7. Select TURN nodes (prefer nodes without existing TURN allocations)
 	turnNodes := cm.selectTURNNodes(ctx, clusterNodes, DefaultTURNNodeCount)
 
+	// Bugboard #283: record how many TURN nodes we ACTUALLY got, not how many we
+	// asked for. The config row is inserted with the requested count before
+	// selection runs, so webrtc/status reported turn_node_count: 2 while only one
+	// relay existed — the same allocate-and-report-without-verifying pattern as
+	// bugboard #277.
+	if len(turnNodes) != DefaultTURNNodeCount {
+		if _, err := cm.db.Exec(ctx,
+			`UPDATE namespace_webrtc_config SET turn_node_count = ? WHERE namespace_cluster_id = ?`,
+			len(turnNodes), cluster.ID); err != nil {
+			cm.logger.Warn("Failed to record actual TURN node count",
+				zap.String("namespace", namespaceName), zap.Error(err))
+		}
+	}
+
 	// 8. Allocate TURN ports on selected nodes
 	turnBlocks := make(map[string]*WebRTCPortBlock) // nodeID -> block
 	for _, node := range turnNodes {
@@ -134,33 +148,31 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 		nodePortBlocks[portBlocks[i].NodeID] = &portBlocks[i]
 	}
 
-	// 11. Spawn TURN on selected nodes
-	for _, node := range turnNodes {
-		turnBlock := turnBlocks[node.NodeID]
-		turnCfg := TURNInstanceConfig{
-			Namespace:       namespaceName,
-			NodeID:          node.NodeID,
-			ListenAddr:      fmt.Sprintf("0.0.0.0:%d", turnBlock.TURNListenPort),
-			TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", turnBlock.TURNTLSPort),
-			PublicIP:        node.PublicIP,
-			Realm:           cm.baseDomain,
-			AuthSecret:      turnSecret,
-			RelayPortStart:  turnBlock.TURNRelayPortStart,
-			RelayPortEnd:    turnBlock.TURNRelayPortEnd,
-			TURNDomain:      turnDomain,
-		}
+	// 11. Bring TURN up for this namespace.
+	//
+	// TURN is host-level since bugboard #283 part 2: one shared server per node
+	// serves every namespace allocated there, so this is not a per-node spawn.
+	// Each host derives its own tenant set from the allocations just written and
+	// applies it — locally right now, and on every other selected node within one
+	// reconcile tick. Config is never pushed between hosts: a host owning its own
+	// TURN config is what makes the shared server safe to change concurrently.
+	//
+	// The namespace therefore gains its remote relays shortly after this returns
+	// rather than during it. That is safe because a TURN DNS record is published
+	// only once the shared server is actually serving, so clients are never
+	// pointed at a relay that is not yet up.
+	cm.ReconcileHostTURN(ctx)
+	if len(turnNodes) > 0 {
+		cm.logger.Info("TURN allocated; hosts converge on their next reconcile",
+			zap.String("namespace", namespaceName),
+			zap.Int("turn_nodes", len(turnNodes)))
 
-		if err := cm.spawnTURNOnNode(ctx, node, namespaceName, turnCfg); err != nil {
-			cm.logger.Error("Failed to spawn TURN",
-				zap.String("namespace", namespaceName),
-				zap.String("node_id", node.NodeID),
-				zap.Error(err))
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
-			return fmt.Errorf("failed to spawn TURN on node %s: %w", node.NodeID, err)
+		for _, node := range turnNodes {
+			blk := turnBlocks[node.NodeID]
+			cm.logEvent(ctx, cluster.ID, EventTURNStarted, node.NodeID,
+				fmt.Sprintf("TURN allocated on %s (relay ports %d-%d), served by that host's shared TURN server",
+					node.NodeID, blk.TURNRelayPortStart, blk.TURNRelayPortEnd), nil)
 		}
-
-		cm.logEvent(ctx, cluster.ID, EventTURNStarted, node.NodeID,
-			fmt.Sprintf("TURN started on %s (relay ports %d-%d)", node.NodeID, turnBlock.TURNRelayPortStart, turnBlock.TURNRelayPortEnd), nil)
 	}
 
 	// 12. Spawn SFU on all nodes
@@ -419,36 +431,30 @@ func (cm *ClusterManager) getLocalNodePublicIP(ctx context.Context) (string, err
 	return rows[0].IP, nil
 }
 
-// selectTURNNodes selects the best N nodes for TURN, preferring nodes without existing TURN allocations.
+// selectTURNNodes selects up to count nodes to run TURN for a namespace.
+//
+// Bugboard #283, part 2: TURN binds the fixed ports 3478/5349, which are
+// exclusive per HOST. This used to skip any host already running TURN for
+// another namespace — correct at the time (a second per-namespace TURN unit
+// crash-looped on bind), but it capped a namespace at the hosts no one else had
+// taken, so on a 3-node fleet the second namespace to enable WebRTC got one
+// relay and no redundancy.
+//
+// A single shared TURN server now serves every namespace on a host, so
+// occupancy is no longer a reason to skip a node and the check is gone. Which
+// namespaces a host serves is reconciled by ReconcileHostTURN.
 func (cm *ClusterManager) selectTURNNodes(ctx context.Context, nodes []clusterNodeInfo, count int) []clusterNodeInfo {
-	if count >= len(nodes) {
-		return nodes
-	}
-
-	// Prefer nodes without existing TURN allocations
-	var preferred, fallback []clusterNodeInfo
-	for _, node := range nodes {
-		hasTURN, err := cm.webrtcPortAllocator.NodeHasTURN(ctx, node.NodeID)
-		if err != nil || !hasTURN {
-			preferred = append(preferred, node)
-		} else {
-			fallback = append(fallback, node)
-		}
-	}
-
-	// Take from preferred first, then fallback
 	result := make([]clusterNodeInfo, 0, count)
-	for _, node := range preferred {
+	for _, node := range nodes {
 		if len(result) >= count {
 			break
 		}
 		result = append(result, node)
 	}
-	for _, node := range fallback {
-		if len(result) >= count {
-			break
-		}
-		result = append(result, node)
+
+	if len(result) < count {
+		cm.logger.Warn("Fewer TURN nodes available than requested",
+			zap.Int("requested", count), zap.Int("selected", len(result)))
 	}
 	return result
 }
@@ -461,13 +467,6 @@ func (cm *ClusterManager) spawnSFUOnNode(ctx context.Context, node clusterNodeIn
 	return cm.spawnSFURemote(ctx, node.InternalIP, cfg)
 }
 
-// spawnTURNOnNode spawns TURN on a node (local or remote)
-func (cm *ClusterManager) spawnTURNOnNode(ctx context.Context, node clusterNodeInfo, namespace string, cfg TURNInstanceConfig) error {
-	if node.NodeID == cm.localNodeID {
-		return cm.systemdSpawner.SpawnTURN(ctx, namespace, node.NodeID, cfg)
-	}
-	return cm.spawnTURNRemote(ctx, node.InternalIP, cfg)
-}
 
 // stopSFUOnNode stops SFU on a node (local or remote)
 func (cm *ClusterManager) stopSFUOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
@@ -514,24 +513,6 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 	return err
 }
 
-// spawnTURNRemote sends a spawn-turn request to a remote node
-func (cm *ClusterManager) spawnTURNRemote(ctx context.Context, nodeIP string, cfg TURNInstanceConfig) error {
-	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":              "spawn-turn",
-		"namespace":           cfg.Namespace,
-		"node_id":             cfg.NodeID,
-		"turn_listen_addr":    cfg.ListenAddr,
-		"turn_turns_addr":     cfg.TURNSListenAddr,
-		"turn_public_ip":      cfg.PublicIP,
-		"turn_realm":          cfg.Realm,
-		"turn_auth_secret":    cfg.AuthSecret,
-		"turn_relay_start":    cfg.RelayPortStart,
-		"turn_relay_end":      cfg.RelayPortEnd,
-		"turn_domain":         cfg.TURNDomain,
-		"turn_stealth_domain": cfg.StealthDomain,
-	})
-	return err
-}
 
 // getWebRTCBlocksByType returns all WebRTC port blocks of a given type for a cluster.
 func (cm *ClusterManager) getWebRTCBlocksByType(ctx context.Context, clusterID, serviceType string) ([]WebRTCPortBlock, error) {
@@ -803,6 +784,8 @@ func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP strin
 		"gateway_turn_secret":         cfg.TURNSecret,
 		// Bugboard #837 follow-up: preserve the secrets key on WebRTC restarts.
 		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
+		// Bugboard #274: preserve the ntfy base URL across WebRTC restarts.
+		"gateway_ntfy_base_url": cfg.NtfyBaseURL,
 	})
 	if err != nil {
 		cm.logger.Error("Failed to restart remote gateway with WebRTC config",
@@ -1277,26 +1260,13 @@ func (cm *ClusterManager) ReconcileWebRTCAllocations(ctx context.Context, cluste
 			errs = append(errs, fmt.Errorf("allocate sfu on %s: %w", id, aerr))
 		}
 	}
-	// TURN binds the fixed 3478/5349, so a node already serving TURN for ANOTHER
-	// namespace cannot take a second one — it would crash-loop on
-	// "address already in use". EnableWebRTC avoids this via selectTURNNodes;
-	// honour the same exclusivity here rather than allocating blind.
+	// No host-occupancy check here (bugboard #283 part 2). TURN still binds the
+	// fixed 3478/5349, but a single shared server per host now serves every
+	// namespace allocated there, so a host already relaying for someone else can
+	// take this namespace too. Skipping such hosts — which this did, matching
+	// selectTURNNodes at the time — is what left the second namespace on a fleet
+	// with one relay and no redundancy after a node replacement.
 	for _, id := range plan.AllocateTURN {
-		// TURN binds the fixed 3478/5349, so a node already serving TURN for
-		// ANOTHER namespace cannot take a second one — the ports are exclusive per
-		// HOST, so the check joins colocated node IDs. If the check itself cannot
-		// be verified, BLOCK the allocation — waving it through on a DB error is
-		// how you get a crash-looping "address already in use" relay.
-		busy, herr := cm.webrtcPortAllocator.HostHasTURN(ctx, id)
-		if herr != nil {
-			errs = append(errs, fmt.Errorf("verify turn exclusivity on %s: %w", id, herr))
-			continue
-		}
-		if busy {
-			cm.logger.Warn("Skipping TURN allocation: node already serves TURN for another namespace (ports 3478/5349 are exclusive)",
-				zap.String("namespace", namespaceName), zap.String("node_id", id))
-			continue
-		}
 		if _, aerr := cm.webrtcPortAllocator.AllocateTURNPorts(ctx, id, clusterID); aerr != nil {
 			errs = append(errs, fmt.Errorf("allocate turn on %s: %w", id, aerr))
 		}
@@ -1308,6 +1278,36 @@ func (cm *ClusterManager) ReconcileWebRTCAllocations(ctx context.Context, cluste
 // assignments. Long enough that a rolling restart settles between sweeps, short
 // enough that a node replacement converges in about a minute.
 const webrtcReconcileInterval = 60 * time.Second
+
+// ensureNamespaceHostRecordIfServing re-asserts this node's `ns-<namespace>` DNS
+// record, but only while its namespace gateway is actually answering (bugboard
+// #286).
+//
+// Advertising is gated on real evidence rather than on the node merely believing
+// it holds the role: a record pointing at a gateway that is down is the #161
+// symptom in a different place — clients round-robin onto a dead endpoint.
+func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context, state *ClusterLocalState) {
+	port := state.LocalPorts.GatewayHTTPPort
+	if port <= 0 {
+		return
+	}
+	if err := probeTCP(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+		// Not serving yet — say nothing and retry on the next tick. This is the
+		// normal state for the first minute after a restart.
+		return
+	}
+
+	pip, perr := cm.getLocalNodePublicIP(ctx)
+	if perr != nil || pip == "" {
+		cm.logger.Warn("Cannot re-advertise namespace host DNS record: public IP unavailable",
+			zap.String("namespace", state.NamespaceName), zap.Error(perr))
+		return
+	}
+	if derr := cm.dnsManager.EnsureNamespaceHostRecordActiveForNode(ctx, state.NamespaceName, pip); derr != nil {
+		cm.logger.Warn("Periodic namespace host DNS ensure failed",
+			zap.String("namespace", state.NamespaceName), zap.Error(derr))
+	}
+}
 
 // StartWebRTCReconciler runs the periodic WebRTC role reconcile until ctx is
 // cancelled. Safe to call once at node boot.
@@ -1347,6 +1347,7 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 	if err != nil {
 		return
 	}
+	var turnNamespaces []turnDNSCandidate
 	for _, path := range matches {
 		if ctx.Err() != nil {
 			return
@@ -1379,7 +1380,32 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		} else if len(removed) > 0 {
 			cm.logger.Warn("Periodic sweep pruned permanently-gone cluster node assignments (bugboard #173)",
 				zap.String("namespace", state.NamespaceName), zap.Strings("removed_nodes", removed))
+			// Bugboard #280: membership just changed, so cluster-state.json — and
+			// therefore the namespace gateway's olric_servers and rqlite join list —
+			// now names nodes that are gone. Regeneration was only wired into
+			// RepairCluster, which nothing calls for a cluster that is not degraded,
+			// so a namespace could keep pointing at departed nodes indefinitely.
+			// Doing it here gives it a periodic catch-up on every node.
+			if rerr := cm.regenerateClusterState(ctx, cluster); rerr != nil {
+				cm.logger.Warn("Periodic cluster-state regeneration failed — namespace config may still name departed nodes",
+					zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+			}
 		}
+
+		// Bugboard #286: re-advertise this node in the `ns-<ns>` round-robin.
+		//
+		// The boot-time ensure needs this node's public IP from the MAIN rqlite,
+		// which is not up that early in boot, so it routinely loses that race and
+		// gives up — leaving a node that serves 200 absent from DNS for minutes
+		// after every restart, with nothing reporting it. During a rolling upgrade
+		// the lag compounds: at one point both devnet namespaces resolved to a
+		// single node while two healthy nodes sat idle.
+		//
+		// By the time this sweep runs, the cluster lookup above has already proven
+		// rqlite is reachable. Same discipline as the TURN ensure below: holding
+		// the role is not sufficient — require the local gateway to be ACTUALLY
+		// serving, so this can never advertise a node whose gateway is down.
+		cm.ensureNamespaceHostRecordIfServing(ctx, state)
 
 		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 		if werr != nil || webrtcCfg == nil {
@@ -1395,34 +1421,85 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		cm.spawnAllocatedWebRTCServices(ctx, state, webrtcCfg)
 		cm.stopUnallocatedWebRTCServices(ctx, state.ClusterID, state.NamespaceName)
 
-		// Re-advertise this node's TURN record once it actually runs TURN.
-		// The boot-time ensure is gated on TURNConfigExists but runs BEFORE the
-		// spawn that writes that config, so a node that has just GAINED the TURN
-		// role never advertises itself there. Repeating it here closes that
-		// ordering gap and gives the record a periodic catch-up instead of a
-		// single boot-time attempt. Additive and per-node — never touches a
-		// peer's record.
-		// Gate on the ALLOCATION, not on TURNConfigExists: StopService leaves the
-		// config file behind, so a config-file gate would re-advertise this node
-		// on the very tick it stopped serving — a black hole in the round-robin.
-		// Holding the allocation is necessary but NOT sufficient — a spawn can
-		// fail or still be starting, and DNS must never advertise a relay that is
-		// not up (that is the #161 symptom, clients round-robin onto a dead
-		// endpoint, recreated from the advertising side). Require the unit to be
-		// actually serving, which is why this runs AFTER the spawn above.
-		turnBlk, turnBlkErr := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID)
-		turnUp := false
-		if cm.systemdSpawner != nil && cm.systemdSpawner.systemdMgr != nil {
-			turnUp, _ = cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
+		// Collect this namespace for the TURN DNS pass that runs after the
+		// host-level TURN reconcile below. Advertising is deliberately NOT done
+		// here: TURN is one shared server per host now (#283 part 2), so whether
+		// this node relays at all is a host fact, not a per-namespace one, and it
+		// has to be decided after that server is reconciled. Holding the
+		// allocation is necessary but not sufficient — DNS must never advertise a
+		// relay that is not up (the #161 symptom, clients round-robin onto a dead
+		// endpoint).
+		turnNamespaces = append(turnNamespaces, turnDNSCandidate{
+			namespace: state.NamespaceName,
+			clusterID: state.ClusterID,
+			webrtcCfg: webrtcCfg,
+		})
+	}
+
+	// TURN is host-level (bugboard #283 part 2): one shared server per node,
+	// serving every namespace that holds an allocation here. Reconcile it ONCE,
+	// after every namespace's allocations have been reconciled above, then
+	// advertise — so a namespace that just gained TURN is serving before its DNS
+	// record appears, which is the ordering #161 requires.
+	served := cm.ReconcileHostTURN(ctx)
+	cm.ensureTURNRecordsForServingNamespaces(ctx, turnNamespaces, served)
+}
+
+// turnDNSCandidate is a namespace on this node that may need its TURN DNS
+// record advertised, collected during the sweep.
+type turnDNSCandidate struct {
+	namespace string
+	clusterID string
+	webrtcCfg *WebRTCConfig
+}
+
+// ensureTURNRecordsForServingNamespaces advertises this node's TURN record for
+// each namespace it actually relays for.
+//
+// Holding the allocation is necessary but NOT sufficient: DNS must never
+// advertise a relay that is not up, or clients round-robin onto a dead endpoint
+// (the #161 symptom, recreated from the advertising side). Since #283 part 2 the
+// evidence is the SHARED unit being active AND this namespace being one of the
+// tenants it was actually configured with — the per-namespace unit this used to
+// check no longer exists, and gating on it would silently stop advertising TURN
+// for every namespace on the fleet.
+func (cm *ClusterManager) ensureTURNRecordsForServingNamespaces(ctx context.Context, candidates []turnDNSCandidate, served []string) {
+	if len(candidates) == 0 || len(served) == 0 || cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil {
+		return
+	}
+	// Advertise ONLY namespaces the shared server is actually configured to relay
+	// for. Holding an allocation is not enough under the shared model: a
+	// namespace with no shared secret is dropped from the config, and a failed
+	// config write leaves the previous tenant set running — advertising on the
+	// allocation alone points clients at a relay that rejects their credentials,
+	// which is the #161 symptom recreated from the advertising side.
+	relaying := make(map[string]bool, len(served))
+	for _, ns := range served {
+		relaying[ns] = true
+	}
+	turnUp, err := cm.systemdSpawner.systemdMgr.IsHostTURNActive()
+	if err != nil || !turnUp {
+		return
+	}
+	publicIP, perr := cm.getLocalNodePublicIP(ctx)
+	if perr != nil || publicIP == "" {
+		return
+	}
+	for _, c := range candidates {
+		if ctx.Err() != nil {
+			return
 		}
-		if turnBlkErr == nil && turnBlk != nil && turnUp {
-			if pip, perr := cm.getLocalNodePublicIP(ctx); perr == nil && pip != "" {
-				if derr := cm.dnsManager.EnsureTURNRecordForNode(ctx, state.NamespaceName, pip,
-					cm.stealthDomainFor(state.NamespaceName, webrtcCfg)); derr != nil {
-					cm.logger.Warn("Periodic TURN DNS ensure failed",
-						zap.String("namespace", state.NamespaceName), zap.Error(derr))
-				}
-			}
+		if !relaying[c.namespace] {
+			continue
+		}
+		blk, berr := cm.webrtcPortAllocator.GetTURNPorts(ctx, c.clusterID, cm.localNodeID)
+		if berr != nil || blk == nil {
+			continue
+		}
+		if derr := cm.dnsManager.EnsureTURNRecordForNode(ctx, c.namespace, publicIP,
+			cm.stealthDomainFor(c.namespace, c.webrtcCfg)); derr != nil {
+			cm.logger.Warn("Periodic TURN DNS ensure failed",
+				zap.String("namespace", c.namespace), zap.Error(derr))
 		}
 	}
 }
@@ -1457,13 +1534,14 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 	definitelyUnallocated := func(b *WebRTCPortBlock, err error) bool {
 		return err == nil && b == nil
 	}
+	// TURN is not listed here: it is host-level since bugboard #283 part 2, so
+	// losing an allocation drops this namespace from the SHARED server's tenant
+	// list rather than stopping a per-namespace unit. ReconcileHostTURN derives
+	// that list from the allocations and owns both directions.
 	for _, svc := range []struct {
 		typ  systemd.ServiceType
 		gone func() bool
 	}{
-		{systemd.ServiceTypeTURN, func() bool {
-			return definitelyUnallocated(cm.webrtcPortAllocator.GetTURNPorts(ctx, clusterID, cm.localNodeID))
-		}},
 		{systemd.ServiceTypeSFU, func() bool {
 			return definitelyUnallocated(cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID))
 		}},
@@ -1547,43 +1625,11 @@ func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, stat
 	}
 	turnDomain := fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain)
 
-	// TURN — spawn only from a COMPLETE allocation. turnPortBlockSpawnable
-	// refuses a zero port, which would otherwise bind a random one and relay
-	// nothing while looking healthy.
-	if blk, err := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID); err == nil && turnPortBlockSpawnable(blk) {
-		if running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN); !running {
-			publicIP, ipErr := cm.getLocalNodePublicIP(ctx)
-			if ipErr != nil || publicIP == "" {
-				cm.logger.Warn("Cannot start newly-allocated TURN: public IP unresolved (an empty public_ip crash-loops the server)",
-					zap.String("namespace", state.NamespaceName), zap.Error(ipErr))
-			} else if busy, herr := cm.webrtcPortAllocator.HostHasTURNForOtherCluster(ctx, cm.localNodeID, state.ClusterID); herr != nil || busy {
-				// 3478/5349 are host-exclusive. The previous holder only stops on
-				// ITS next tick, so spawning here during that window would
-				// crash-loop on "address already in use" — and be retried forever.
-				cm.logger.Warn("Deferring TURN start: this host still serves TURN for another namespace",
-					zap.String("namespace", state.NamespaceName), zap.Error(herr))
-			} else if serr := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, TURNInstanceConfig{
-				Namespace:       state.NamespaceName,
-				NodeID:          cm.localNodeID,
-				ListenAddr:      fmt.Sprintf("0.0.0.0:%d", blk.TURNListenPort),
-				TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", blk.TURNTLSPort),
-				PublicIP:        publicIP,
-				Realm:           cm.baseDomain,
-				AuthSecret:      webrtcCfg.TURNSharedSecret,
-				RelayPortStart:  blk.TURNRelayPortStart,
-				RelayPortEnd:    blk.TURNRelayPortEnd,
-				TURNDomain:      turnDomain,
-				StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-			}); serr != nil {
-				cm.recordSpawnFailure(state.NamespaceName)
-				cm.logger.Warn("Failed to start newly-allocated TURN (backing off)",
-					zap.String("namespace", state.NamespaceName), zap.Error(serr))
-			} else {
-				cm.logger.Info("Started TURN for a newly-allocated role (bugboard #161)",
-					zap.String("namespace", state.NamespaceName))
-			}
-		}
-	}
+	// TURN is deliberately absent here. It binds 3478/5349, which are exclusive
+	// per host, so a single shared server serves every namespace on this node
+	// (bugboard #283 part 2) and is reconciled once per sweep by
+	// ReconcileHostTURN — not once per namespace. Driving it from here would
+	// re-derive the whole host's tenant set once for every namespace on the node.
 
 	// SFU — same shape; sfuPortBlockSpawnable refuses a zero media range.
 	if blk, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID); err == nil && sfuPortBlockSpawnable(blk) {
