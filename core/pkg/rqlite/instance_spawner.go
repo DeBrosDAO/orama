@@ -180,33 +180,15 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	return instance, nil
 }
 
-// waitForReady waits for the RQLite instance to be ready to accept connections
+// waitForReady waits for the RQLite instance to join raft, not merely to open
+// its port.
+//
+// The budget must exceed the join retry window (30 attempts * 10s) so a
+// follower still waiting for its leader is not killed mid-join.
+const instanceReadyTimeout = 6 * time.Minute
+
 func (is *InstanceSpawner) waitForReady(ctx context.Context, httpPort int) error {
-	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	// 6 minutes: must exceed the join retry window (30 attempts * 10s = 5min)
-	// so we don't kill followers that are still waiting for the leader
-	deadline := time.Now().Add(6 * time.Minute)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		resp, err := client.Get(url)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	return fmt.Errorf("timeout waiting for RQLite to be ready on port %d", httpPort)
+	return WaitForRaftReady(ctx, httpPort, instanceReadyTimeout)
 }
 
 // StopInstance stops a running RQLite instance

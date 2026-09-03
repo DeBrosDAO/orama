@@ -271,37 +271,12 @@ func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 	return nil
 }
 
-// waitForReady waits for RQLite to be ready to accept connections
+// rqliteReadyTimeout matches the previous 180 one-second attempts.
+const rqliteReadyTimeout = 3 * time.Minute
+
+// waitForReady waits until the local rqlited is participating in raft.
 func (r *RQLiteManager) waitForReady(ctx context.Context) error {
-	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
-	client := tlsutil.NewHTTPClient(2 * time.Second)
-
-	for i := 0; i < 180; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(1 * time.Second):
-		}
-
-		resp, err := client.Get(url)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			var statusResp map[string]interface{}
-			if err := json.Unmarshal(body, &statusResp); err == nil {
-				if raft, ok := statusResp["raft"].(map[string]interface{}); ok {
-					state, _ := raft["state"].(string)
-					if state == "leader" || state == "follower" {
-						return nil
-					}
-				} else {
-					return nil // Backwards compatibility
-				}
-			}
-		}
-	}
-
-	return fmt.Errorf("RQLite did not become ready within timeout")
+	return WaitForRaftReady(ctx, r.config.RQLitePort, rqliteReadyTimeout)
 }
 
 // waitForSQLAvailable waits until a simple query succeeds
