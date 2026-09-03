@@ -1,6 +1,6 @@
 module github.com/DeBrosOfficial/orama-os/agent
 
-go 1.24.0
+go 1.26.7
 
 require golang.org/x/crypto v0.48.0
 
