@@ -17,9 +17,9 @@ type NodeConfigData struct {
 	P2PPort                int
 	DataDir                string
 	RQLiteHTTPPort         int
-	RQLiteRaftPort         int      // External Raft port for advertisement
-	RQLiteRaftInternalPort int      // Internal Raft port for local binding (SNI only)
-	RQLiteJoinAddress      string   // Optional: join address for joining existing cluster
+	RQLiteRaftPort         int    // External Raft port for advertisement
+	RQLiteRaftInternalPort int    // Internal Raft port for local binding (SNI only)
+	RQLiteJoinAddress      string // Optional: join address for joining existing cluster
 
 	// RQLite HTTP basic auth. The username/password go into every client this
 	// node opens (SQL DSN and admin API); RQLiteAuthFile is the same
@@ -30,24 +30,24 @@ type NodeConfigData struct {
 	// the two passes that make enabling enforcement safe. Enforcement itself
 	// (rqlite_enforce_auth) is deliberately not rendered: it is switched on by
 	// an operator once every node in the fleet is sending credentials.
-	RQLiteUsername string
-	RQLitePassword string
-	RQLiteAuthFile string
-	BootstrapPeers         []string // List of peer multiaddrs to connect to
-	ClusterAPIPort         int
-	IPFSAPIPort            int
-	OlricHTTPPort          int
-	HTTPAdvAddress         string // Advertised HTTP address (IP:port)
-	RaftAdvAddress         string // Advertised Raft address (IP:port or domain:port for SNI)
-	UnifiedGatewayPort     int    // Unified gateway port for all node services
-	Domain                 string // Domain for this node (e.g., node-123.orama.network)
-	BaseDomain             string // Base domain for deployment routing (e.g., dbrs.space)
-	EnableHTTPS            bool   // Enable HTTPS/TLS with ACME
-	TLSCacheDir            string // Directory for ACME certificate cache
-	HTTPPort               int    // HTTP port for ACME challenges (usually 80)
-	HTTPSPort              int    // HTTPS port (usually 443)
-	WGIP                   string // WireGuard IP address (e.g., 10.0.0.1)
-	MinClusterSize         int    // Minimum cluster size for RQLite discovery (1 for genesis, 3 for joining)
+	RQLiteUsername     string
+	RQLitePassword     string
+	RQLiteAuthFile     string
+	BootstrapPeers     []string // List of peer multiaddrs to connect to
+	ClusterAPIPort     int
+	IPFSAPIPort        int
+	OlricHTTPPort      int
+	HTTPAdvAddress     string // Advertised HTTP address (IP:port)
+	RaftAdvAddress     string // Advertised Raft address (IP:port or domain:port for SNI)
+	UnifiedGatewayPort int    // Unified gateway port for all node services
+	Domain             string // Domain for this node (e.g., node-123.orama.network)
+	BaseDomain         string // Base domain for deployment routing (e.g., dbrs.space)
+	EnableHTTPS        bool   // Enable HTTPS/TLS with ACME
+	TLSCacheDir        string // Directory for ACME certificate cache
+	HTTPPort           int    // HTTP port for ACME challenges (usually 80)
+	HTTPSPort          int    // HTTPS port (usually 443)
+	WGIP               string // WireGuard IP address (e.g., 10.0.0.1)
+	MinClusterSize     int    // Minimum cluster size for RQLite discovery (1 for genesis, 3 for joining)
 
 	// Node-to-node TLS encryption for RQLite Raft communication
 	// Required when using SNI gateway for Raft traffic routing

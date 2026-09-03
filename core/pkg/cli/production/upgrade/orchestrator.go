@@ -17,6 +17,10 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
+
+	"context"
+
+	"github.com/DeBrosOfficial/network/pkg/nodehealth"
 )
 
 // newOramaBinaryPath is the on-disk path Phase 2b installs the new
@@ -24,6 +28,14 @@ import (
 const newOramaBinaryPath = "/opt/orama/bin/orama"
 
 // Orchestrator manages the upgrade process
+// clusterHealthBudget is how long this node has to rejoin after its own
+// restart before the upgrade fails.
+const clusterHealthBudget = 5 * time.Minute
+
+// shutdownDrainPause lets sockets close after systemd has stopped the services
+// that held them.
+const shutdownDrainPause = 3 * time.Second
+
 type Orchestrator struct {
 	oramaHome string
 	oramaDir  string
@@ -172,30 +184,43 @@ func (o *Orchestrator) Execute() error {
 		return fmt.Errorf("namespace template installation failed: %w", err)
 	}
 
-	// Phase 5: Update systemd services
+	// Phase 5: Update systemd services.
+	//
+	// Fatal. The unit files are what the supervisor runs; continuing past a
+	// failure here means restarting into the old ones and calling it an
+	// upgrade.
 	fmt.Printf("\n🔧 Phase 5: Updating systemd services...\n")
 	enableHTTPS, _, _ := o.extractGatewayConfig()
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
+		return fmt.Errorf("systemd service update failed: %w", err)
 	}
 
-	// Re-apply UFW firewall rules (idempotent)
-	fmt.Printf("\n🛡️  Re-applying firewall rules...\n")
+	// Re-apply the firewall.
+	//
+	// Fatal. The two outcomes of a wrong rule set are a node exposed to the
+	// internet and a node partitioned from the overlay, and neither is
+	// something to warn about and continue past.
+	fmt.Printf("\n🛡️  Reconciling firewall rules...\n")
 	if err := o.setup.Phase6bSetupFirewall(false); err != nil {
-		fmt.Fprintf(os.Stderr, "  ⚠️  Warning: Firewall re-apply failed: %v\n", err)
+		return fmt.Errorf("firewall reconcile failed: %w", err)
 	}
 
-	fmt.Printf("\n✅ Upgrade complete!\n")
-
-	// Restart services if requested
+	// Restart services if requested.
+	//
+	// The success line comes AFTER this. It used to be printed before the
+	// restart — the riskiest step in the upgrade — so an operator reading the
+	// output saw "✅ Upgrade complete!" and then a failure.
 	if o.flags.RestartServices {
-		return o.restartServices()
+		if err := o.restartServices(); err != nil {
+			return err
+		}
+		fmt.Printf("\n✅ Upgrade complete!\n")
+		return nil
 	}
 
-	fmt.Printf("   To apply changes, restart services:\n")
-	fmt.Printf("   sudo systemctl daemon-reload\n")
-	fmt.Printf("   sudo systemctl restart orama-*\n")
-	fmt.Printf("\n")
+	fmt.Printf("\n✅ Upgrade staged. Services have NOT been restarted.\n")
+	fmt.Printf("   To apply changes:\n")
+	fmt.Printf("   sudo orama node restart\n\n")
 
 	return nil
 }
@@ -381,8 +406,10 @@ func (o *Orchestrator) stopServices() error {
 			}
 		}
 	}
-	// Give services time to shut down gracefully
-	time.Sleep(3 * time.Second)
+	// A deliberate drain pause, not a readiness wait: systemd has already
+	// returned from each stop, and this gives sockets a moment to close before
+	// the next phase binds them.
+	time.Sleep(shutdownDrainPause)
 	return nil
 }
 
@@ -613,10 +640,14 @@ func (o *Orchestrator) regenerateConfigs() error {
 		fmt.Printf("    - Join address: %s\n", joinAddress)
 	}
 
-	// Phase 4: Generate configs
+	// Phase 4: Generate configs.
+	//
+	// Fatal. "Existing configs preserved" was a warning describing an upgrade
+	// that did not upgrade anything: the node restarts onto the new binary with
+	// the old config, which is the combination that has to work and the one
+	// least likely to have been tested.
 	if err := o.setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, baseDomain, joinAddress); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Config generation warning: %v\n", err)
-		fmt.Fprintf(os.Stderr, "   Existing configs preserved\n")
+		return fmt.Errorf("config generation failed (configs left unchanged): %w", err)
 	}
 
 	return nil
@@ -664,17 +695,18 @@ func (o *Orchestrator) restartServices() error {
 		return nil
 	}
 
-	// Define the order for rolling restart - node service first (contains RQLite)
-	// This ensures the cluster can reform before other services start
+	// Restart order. orama-node first: it is the supervisor, and it starts the
+	// whole orama-namespace-*@index stack itself.
+	//
+	// The pre-factory host daemons that used to be listed here — orama-olric,
+	// orama-ipfs, orama-ipfs-cluster, orama-vault, coredns, caddy — are
+	// systemd.LeftoverHostUnits. The installer disables them on purpose;
+	// restarting them here started them again, and they raced @index for
+	// 10102, 10107, :53 and :443 until IndexSupervisor stopped them on its next
+	// start. orama-gateway is the same story under an older name.
 	priorityOrder := []string{
-		"orama-node",         // Start node first - contains RQLite cluster
-		"orama-olric",        // Distributed cache
-		"orama-ipfs",         // IPFS daemon
-		"orama-ipfs-cluster", // IPFS cluster
-		"orama-vault",        // Vault guardian
-		"orama-gateway",      // Gateway (legacy)
-		"coredns",            // DNS server
-		"caddy",              // Reverse proxy
+		"orama-node",         // The supervisor: it brings up the @index stack
+		"orama-anyone-relay", // Independent of @index
 	}
 
 	// Restart services in priority order with health checks
@@ -682,21 +714,25 @@ func (o *Orchestrator) restartServices() error {
 		for _, svc := range services {
 			if svc == priority {
 				fmt.Printf("   Starting %s...\n", svc)
+				// Fatal. A supervisor that will not restart is not something
+				// to continue past: everything after this point assumes it
+				// came up.
 				if err := exec.Command("systemctl", "restart", svc).Run(); err != nil {
-					fmt.Printf("   ⚠️  Failed to restart %s: %v\n", svc, err)
-					continue
+					return fmt.Errorf("restart %s: %w", svc, err)
 				}
 				fmt.Printf("   ✓ Started %s\n", svc)
 
-				// For the node service, wait for RQLite cluster health
+				// Fatal, not a warning. This gate exists to stop the rollout
+				// before the next voter is restarted; "Continuing with restart
+				// (cluster may recover)" is precisely the behaviour that turns
+				// one unhealthy node into a lost quorum. The remote rollout
+				// stops here too, so the remaining nodes keep serving.
 				if svc == "orama-node" {
-					fmt.Printf("   Waiting for RQLite cluster to become healthy...\n")
-					if err := o.waitForClusterHealth(2 * time.Minute); err != nil {
-						fmt.Printf("   ⚠️  Cluster health check warning: %v\n", err)
-						fmt.Printf("   Continuing with restart (cluster may recover)...\n")
-					} else {
-						fmt.Printf("   ✓ RQLite cluster is healthy\n")
+					fmt.Printf("   Waiting for the node to rejoin the cluster...\n")
+					if err := o.waitForClusterHealth(clusterHealthBudget); err != nil {
+						return fmt.Errorf("this node did not rejoin the cluster after its restart: %w", err)
 					}
+					fmt.Printf("   ✓ Node is carrying its share again\n")
 				}
 				break
 			}
@@ -742,53 +778,18 @@ func (o *Orchestrator) restartServices() error {
 	return nil
 }
 
-// waitForClusterHealth waits for the RQLite cluster to become healthy
+// waitForClusterHealth waits for this node to be carrying its share again.
+//
+// Through nodehealth, which is the same gate install verification and the
+// rolling upgrade use. The version this replaces polled constants.LocalRQLiteURL
+// and accepted any Leader or Follower — so a node that rejoined but was 40,000
+// entries behind, or whose gateway never came back, counted as healthy.
 func (o *Orchestrator) waitForClusterHealth(timeout time.Duration) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		// Query RQLite status
-		resp, err := client.Get(constants.LocalRQLiteURL() + "/status")
-		if err != nil {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		// Parse status response
-		var status struct {
-			Store struct {
-				Raft struct {
-					State    string `json:"state"`
-					NumPeers int    `json:"num_peers"`
-				} `json:"raft"`
-			} `json:"store"`
-		}
-
-		if err := json.Unmarshal(body, &status); err != nil {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		raftState := status.Store.Raft.State
-		numPeers := status.Store.Raft.NumPeers
-
-		// Cluster is healthy if we're a Leader or Follower (not Candidate)
-		if raftState == "Leader" || raftState == "Follower" {
-			fmt.Printf("   RQLite state: %s (peers: %d)\n", raftState, numPeers)
-			return nil
-		}
-
-		fmt.Printf("   RQLite state: %s (waiting for Leader/Follower)...\n", raftState)
-		time.Sleep(3 * time.Second)
-	}
-
-	return fmt.Errorf("timeout waiting for cluster to become healthy")
+	return nodehealth.WaitReady(context.Background(), nodehealth.Target{
+		RQLiteBase:  constants.LocalRQLiteURL(),
+		GatewayBase: fmt.Sprintf("http://localhost:%d", constants.GatewayAPIPort),
+	}, nodehealth.Options{
+		Budget:             timeout,
+		RequireLeaderKnown: true,
+	})
 }

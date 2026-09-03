@@ -245,6 +245,23 @@ These checks compare data across all nodes:
 - **Clock Skew**: Node clocks within 5 seconds of each other
 - **Binary Version**: All nodes running the same version. Currently inert: `orama node report` always emits an empty `version`, so every node reads as "unknown" and this alert never fires.
 
+### The rolling-upgrade gate
+
+`orama node upgrade --env <env>` uses the same signals, in `pkg/nodehealth`, as
+its gate between nodes. A node passes when **all** of these hold:
+
+| Signal | Why |
+|--------|-----|
+| Raft state is `Leader` or `Follower` | `Candidate` means an election is running; restarting the next voter during one is how a rollout loses quorum |
+| A leader is known (`leader_id` non-empty) | A follower that reports no leader is in a cluster that cannot commit a write |
+| Applied index within 200 of the commit index | A follower tens of thousands of entries behind is not carrying reads |
+| Gateway `/health` returns 200 | The node serves no traffic until it does |
+
+Anything short of all four stops the rollout, leaving the remaining voters
+untouched. The same package backs `orama node install`'s post-install
+verification, `orama node start`, and `orama node post-upgrade`, so "ready"
+means one thing across the CLI.
+
 ### Per-Node Checks
 
 - **RQLite**: Responsive, ready, strong read

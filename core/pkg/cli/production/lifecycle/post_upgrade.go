@@ -1,16 +1,17 @@
 package lifecycle
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+
+	"context"
+
+	"github.com/DeBrosOfficial/network/pkg/nodehealth"
 )
 
 // HandlePostUpgrade brings the node back online after an upgrade:
@@ -19,6 +20,10 @@ import (
 //  3. Waits for global RQLite to be ready
 //  4. Waits for each namespace RQLite to be ready
 //  5. Removes maintenance flag
+//
+// indexReadyBudget is how long the index rqlite has to rejoin after a restart.
+const indexReadyBudget = 2 * time.Minute
+
 func HandlePostUpgrade() {
 	if os.Geteuid() != 0 {
 		fmt.Fprintf(os.Stderr, "Error: post-upgrade must be run as root (use sudo)\n")
@@ -58,12 +63,16 @@ func HandlePostUpgrade() {
 	fmt.Printf("  Services started\n")
 
 	// 3. Wait for the index RQLite to be ready
+	// Fatal. Post-upgrade's job is to bring the node back online, and the
+	// index rqlite is what "online" means; warning and carrying on to remove
+	// the maintenance flag puts a node that is not serving back into rotation.
 	fmt.Printf("  Waiting for index RQLite (port %d)...\n", constants.RQLiteHTTPPort)
-	if err := waitForRQLiteReady(constants.RQLiteHTTPPort, 120*time.Second); err != nil {
-		fmt.Printf("  Warning: global RQLite not ready: %v\n", err)
-	} else {
-		fmt.Printf("  Global RQLite ready\n")
+	if err := waitForRQLiteReady(constants.RQLiteHTTPPort, indexReadyBudget); err != nil {
+		fmt.Fprintf(os.Stderr, "  The index RQLite did not come back: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Leaving the maintenance flag in place — this node is not serving.\n")
+		os.Exit(1)
 	}
+	fmt.Printf("  Global RQLite ready\n")
 
 	// 4. Wait for each namespace RQLite with a global timeout of 5 minutes
 	nsPorts := getNamespaceRQLitePorts()
@@ -106,39 +115,17 @@ func HandlePostUpgrade() {
 	fmt.Printf("Post-upgrade complete. Node is back online.\n")
 }
 
-// waitForRQLiteReady polls an RQLite instance's /status endpoint until it
-// reports Leader or Follower state, or the timeout expires.
+// waitForRQLiteReady waits for an rqlite instance to be carrying its share.
+//
+// Through nodehealth, which is the one place that decides what "ready" means.
+// The hand-rolled poll this replaces accepted any Leader or Follower, so a node
+// that rejoined but was tens of thousands of entries behind counted as ready.
+//
+// No gateway base: this is called per rqlite port, including tenant instances
+// that have no gateway of their own. The node's own gateway is checked by the
+// upgrade orchestrator's own gate.
 func waitForRQLiteReady(port int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	client := &http.Client{Timeout: 2 * time.Second}
-	url := fmt.Sprintf("http://localhost:%d/status", port)
-
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
-		if err != nil {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		var status struct {
-			Store struct {
-				Raft struct {
-					State string `json:"state"`
-				} `json:"raft"`
-			} `json:"store"`
-		}
-		if err := json.Unmarshal(body, &status); err == nil {
-			state := status.Store.Raft.State
-			if state == "Leader" || state == "Follower" {
-				return nil
-			}
-		}
-
-		time.Sleep(2 * time.Second)
-	}
-
-	return fmt.Errorf("timeout after %s waiting for RQLite on port %d", timeout, port)
+	return nodehealth.WaitReady(context.Background(), nodehealth.Target{
+		RQLiteBase: fmt.Sprintf("http://localhost:%d", port),
+	}, nodehealth.Options{Budget: timeout})
 }

@@ -77,12 +77,17 @@ func (fp *FirewallProvisioner) Install() error {
 	return nil
 }
 
-// GenerateRules returns the list of UFW commands to apply
+// GenerateRules returns the desired firewall state as a list of commands.
+//
+// It no longer begins with `ufw --force reset`. The reset ran on every upgrade,
+// with every service already up: between it and the closing `ufw --force
+// enable` the node was firewalled to nothing and then to default-deny with no
+// rules. That window is why the TURN relay range needed a dedicated re-add to
+// survive an upgrade (bug #846) — a symptom of resetting a live firewall, not
+// of TURN. Reconcile converges to this set instead, adding what is missing and
+// removing what is extra.
 func (fp *FirewallProvisioner) GenerateRules() []string {
 	rules := []string{
-		// Reset to clean state
-		"ufw --force reset",
-
 		// Default policies
 		"ufw default deny incoming",
 		"ufw default allow outgoing",
@@ -136,30 +141,86 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 	return rules
 }
 
-// Setup applies all firewall rules. Idempotent — safe to call multiple times.
-func (fp *FirewallProvisioner) Setup() error {
+// DesiredAllowRules returns just the `ufw allow` rules this node should have,
+// with no reset and no enable. The set Reconcile compares against.
+func (fp *FirewallProvisioner) DesiredAllowRules() []string {
+	var allows []string
+	for _, r := range fp.GenerateRules() {
+		if strings.HasPrefix(r, "ufw allow ") {
+			allows = append(allows, strings.TrimPrefix(r, "ufw allow "))
+		}
+	}
+	return allows
+}
+
+// Reconcile brings the live firewall to the desired rule set without ever
+// taking it down: it adds what is missing and removes what is extra.
+//
+// `ufw allow` is idempotent on its own — re-adding an existing rule is a no-op —
+// so a correct rule set costs nothing and changes nothing, which is the
+// property an upgrade needs.
+func (fp *FirewallProvisioner) Reconcile() error {
 	if err := fp.Install(); err != nil {
 		return err
 	}
 
-	rules := fp.GenerateRules()
+	live, err := fp.liveAllowRules()
+	if err != nil {
+		return err
+	}
 
-	for _, rule := range rules {
-		parts := strings.Fields(rule)
-		cmd := exec.Command(parts[0], parts[1:]...)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to apply firewall rule '%s': %w\n%s", rule, err, string(output))
+	desired := fp.DesiredAllowRules()
+	wanted := make(map[string]bool, len(desired))
+	for _, rule := range desired {
+		wanted[rule] = true
+		if err := runFirewall("ufw", append([]string{"allow"}, strings.Fields(rule)...)...); err != nil {
+			return fmt.Errorf("add firewall rule %q: %w", rule, err)
 		}
 	}
 
-	// Persist IPv6 disable across reboots
+	for _, rule := range live {
+		if wanted[rule] {
+			continue
+		}
+		if err := runFirewall("ufw", append([]string{"delete", "allow"}, strings.Fields(rule)...)...); err != nil {
+			return fmt.Errorf("remove firewall rule %q: %w", rule, err)
+		}
+	}
+
+	// Everything that is not an allow rule: default policies, IPv6, enable,
+	// and the conntrack bypass. All idempotent, none of them a reset.
+	for _, cmd := range fp.GenerateRules() {
+		if strings.HasPrefix(cmd, "ufw allow ") {
+			continue
+		}
+		parts := strings.Fields(cmd)
+		if err := runFirewall(parts[0], parts[1:]...); err != nil {
+			return fmt.Errorf("apply %q: %w", cmd, err)
+		}
+	}
+
 	if err := fp.persistIPv6Disable(); err != nil {
 		return fmt.Errorf("failed to persist IPv6 disable: %w", err)
 	}
 	if err := fp.persistRAMHygiene(); err != nil {
 		return fmt.Errorf("failed to persist RAM hygiene: %w", err)
 	}
+	return nil
+}
 
+// liveAllowRules reads the allow rules ufw currently has.
+func (fp *FirewallProvisioner) liveAllowRules() ([]string, error) {
+	out, err := exec.Command("ufw", "status").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("read ufw status: %w\n%s", err, string(out))
+	}
+	return parseUFWAllowRules(string(out)), nil
+}
+
+func runFirewall(name string, args ...string) error {
+	if output, err := exec.Command(name, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%w\n%s", err, string(output))
+	}
 	return nil
 }
 
@@ -259,4 +320,57 @@ func (fp *FirewallProvisioner) GetStatus() (string, error) {
 		return "", fmt.Errorf("failed to get ufw status: %w\n%s", err, string(output))
 	}
 	return string(output), nil
+}
+
+// parseUFWAllowRules extracts the allow rules from `ufw status` output.
+//
+// The output looks like:
+//
+//	To                         Action      From
+//	--                         ------      ----
+//	22/tcp                     ALLOW       Anywhere
+//	Anywhere                   ALLOW       10.0.0.0/24
+//	22/tcp (v6)                ALLOW       Anywhere (v6)
+//
+// and is normalised back into the argument form `ufw allow` takes, so a live
+// rule can be compared against a desired one by string equality.
+//
+// v6 rows are skipped: IPv6 is disabled at the kernel level on these nodes, ufw
+// mirrors every v4 rule into one, and treating them as extra rules would make
+// Reconcile delete rules it had just added, forever.
+func parseUFWAllowRules(status string) []string {
+	var rules []string
+
+	for _, line := range strings.Split(status, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Contains(line, "(v6)") {
+			continue
+		}
+
+		// "To  ACTION  From", with the action as the anchor.
+		idx := strings.Index(line, "ALLOW")
+		if idx < 0 {
+			continue
+		}
+		to := strings.TrimSpace(line[:idx])
+		from := strings.TrimSpace(line[idx+len("ALLOW"):])
+		from = strings.TrimPrefix(from, "IN")
+		from = strings.TrimSpace(from)
+		if to == "" || from == "" {
+			continue
+		}
+
+		switch {
+		case from == "Anywhere":
+			// `ufw allow 22/tcp`
+			rules = append(rules, to)
+		case to == "Anywhere":
+			// `ufw allow from 10.0.0.0/24`
+			rules = append(rules, "from "+from)
+		default:
+			// `ufw allow from <src> to any port <port>`
+			rules = append(rules, "from "+from+" to any port "+to)
+		}
+	}
+	return rules
 }

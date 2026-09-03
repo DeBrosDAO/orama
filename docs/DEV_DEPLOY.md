@@ -81,7 +81,7 @@ Two related orderings changed in the same commit:
 
 The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.
 
-Use `orama node …` (start/stop/restart/upgrade). Do not enable leftover `orama-ipfs.service`, `orama-olric.service`, `caddy.service`, or `coredns.service`. Index RQLite data stays at `~/.orama/data/rqlite`. Internals are `10100–10109`; do not mix a voter still on 5001 with one on 10100.
+Use `orama node …` (start/stop/restart/upgrade). Do not enable leftover `orama-ipfs.service`, `orama-olric.service`, `caddy.service`, or `coredns.service` — the installer writes their unit files for rollback and disables them on purpose. Upgrade and restart used to start them again (they were listed in `GetProductionServices` and the restart priority order), so they raced `@index` for 10102, 10107, `:53` and `:443` until `IndexSupervisor` stopped them on its next start. `systemd.IsLeftoverHostUnit` now keeps them out of both lists. Index RQLite data stays at `~/.orama/data/rqlite`. Internals are `10100–10109`; do not mix a voter still on 5001 with one on 10100.
 
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
@@ -95,36 +95,54 @@ orama node rollout --env testnet
 
 # Or with more control:
 orama node push --env testnet                     # Push archive to all nodes
-orama node upgrade --env testnet                  # Rolling upgrade
+orama node upgrade --env testnet                  # Print the rolling upgrade plan
 orama node upgrade --env testnet --node 1.2.3.4   # Single node only
-orama node upgrade --env testnet --delay 60       # 60s between nodes
+orama node upgrade --env testnet --yes            # Execute the plan
+orama node upgrade --env testnet --delay 600      # Allow 10 min per node to rejoin
 ```
 
-What the rolling upgrade does **today**:
+What the rolling upgrade does:
 
-1. Upgrades nodes in the order they appear in the environment's node list.
-2. Waits `--delay` seconds between nodes (default: 30).
+1. **Reads every node's raft state** over SSH before touching anything.
+2. **Builds and prints a plan**: followers first, the leader last, nameservers
+   spaced apart so the zone always has one answering. The order is deterministic,
+   so the plan you approve is the plan that runs.
+3. **Stops before starting** if the state does not permit a rollout — no node
+   reports itself leader (no quorum), two do (mid-election), or any node's state
+   could not be read. An unreachable node is never assumed to be a healthy
+   follower.
+4. **Requires `--yes`.** Without it the plan is printed and nothing is restarted.
+5. **Gates on each node actually rejoining** before touching the next: raft state
+   `Leader` or `Follower`, a leader known to exist, an applied index caught up to
+   the leader's commit index, and a gateway serving `/health`.
+6. **Stops the rollout** the moment a node fails that gate, leaving the remaining
+   voters untouched and the cluster serving.
 
-It does **not** yet detect the leader or order followers first, and the delay is
-a fixed wait rather than a health check. Until it does (bugboard chg-309), order
-matters and is yours to control:
+`--delay` is now the per-node budget for step 5 (how long a node has to rejoin
+before the rollout stops), not an unconditional sleep between nodes. A sleep
+cannot tell a node that rejoined in 20 seconds from one that never came back, so
+the old rollout restarted the next voter either way — which is how a rolling
+upgrade takes out a quorum.
 
-```bash
-# Find the leader, then upgrade it LAST.
-orama monitor report --env testnet | grep -i leader
-orama node upgrade --env testnet --node <follower-1>
-orama node upgrade --env testnet --node <follower-2>
-orama node upgrade --env testnet --node <leader>
+Sample output:
+
+```
+Reading cluster state from 3 nodes...
+
+Rolling upgrade plan (3 nodes, 3 nameservers):
+
+  1. 10.0.0.1         nameserver-ns1         follower (nameserver — spaced so the zone keeps answering)
+  2. 10.0.0.3         nameserver-ns3         follower (nameserver — spaced so the zone keeps answering)
+  3. 10.0.0.2         nameserver-ns2         leader — last, after leadership transfer
+
+Each node is upgraded only after the previous one reports Leader or Follower,
+an applied index caught up to the leader, and a gateway serving /health.
 ```
 
-`orama node pre-upgrade` does hand index RQLite leadership to another voter
-before the node restarts, and **aborts** if it cannot — so upgrading the leader
-is not unsafe, it just costs an election that upgrading it last would avoid.
-
-After each node, verify health before starting the next:
-```bash
-orama monitor report --env testnet
-```
+`orama node pre-upgrade` hands index RQLite leadership to another voter before
+the node restarts, **aborts** if it cannot, and then confirms another node has
+actually taken leadership before allowing the stop — a node that stepped down
+into a cluster where nobody was elected must not be removed from it.
 
 #### What NOT to Do
 

@@ -632,3 +632,19 @@ func (m *Manager) IsHostTURNActive() (bool, error) {
 	}
 	return status == "active", nil
 }
+
+// IsLeftoverHostUnit reports whether name is one of the pre-factory host
+// daemons the installer disables.
+//
+// A guard rather than a comment, because the unit files stay on disk for
+// rollback: any code that decides what to start by looking for a unit file will
+// find these and start them, and they then race orama-namespace-*@index for the
+// same ports.
+func IsLeftoverHostUnit(name string) bool {
+	for _, u := range LeftoverHostUnits {
+		if u == name {
+			return true
+		}
+	}
+	return name == LeftoverWireGuardUnit || name == LeftoverNameserverUnit
+}

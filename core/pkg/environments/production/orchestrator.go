@@ -1017,14 +1017,14 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 		IsNameserver:  ps.isNameserver,
 		WireGuardPort: 51820,
 	}
-	// TURN relay ports (bugboard #846): this `ufw --force reset` also runs on
-	// every upgrade, so if this node hosts a TURN instance we MUST re-open the
-	// relay ports here — otherwise the reset closes them and the relay silently
-	// stops forwarding (calls reach ICE "checking" but never connect). This is
-	// the only firewall step that runs as root; orama-node itself runs as a
-	// non-root user and cannot re-add ufw rules, so the reconcile has to live
-	// here. The relay range is the full default (49152-65535), a superset of
-	// every namespace's per-tenant sub-range.
+	// TURN relay ports (bugboard #846). This node's rule set must include the
+	// relay range whenever it hosts a TURN instance, or the relay silently
+	// stops forwarding (calls reach ICE "checking" but never connect).
+	//
+	// This used to be a re-add after `ufw --force reset` closed the ports.
+	// Reconcile never resets, so the range is simply part of the desired set
+	// and stays open throughout. The relay range is the full default
+	// (49152-65535), a superset of every namespace's per-tenant sub-range.
 	if ps.hostRunsTURN() {
 		ps.logf("  TURN instance detected — opening relay ports")
 		fwCfg.TURNEnabled = true
@@ -1034,11 +1034,16 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 
 	fp := NewFirewallProvisioner(fwCfg)
 
-	if err := fp.Setup(); err != nil {
-		return fmt.Errorf("firewall setup failed: %w", err)
+	// Reconcile, not Setup. Setup starts with `ufw --force reset`, and this
+	// phase runs on every upgrade — with every service already up. Between the
+	// reset and the re-enable the node is firewalled to nothing and then to
+	// default-deny with no rules; that window is why the TURN relay range
+	// needed a dedicated re-add to survive an upgrade.
+	if err := fp.Reconcile(); err != nil {
+		return fmt.Errorf("firewall reconcile failed: %w", err)
 	}
 
-	ps.logf("  ✓ UFW firewall configured and enabled")
+	ps.logf("  ✓ UFW firewall reconciled")
 	return nil
 }
 

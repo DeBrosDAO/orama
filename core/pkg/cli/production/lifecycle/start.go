@@ -7,9 +7,18 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+
+	"context"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+
+	"github.com/DeBrosOfficial/network/pkg/nodehealth"
 )
 
 // HandleStart starts all production services
+// startReadyBudget is how long the node has to come up after a start.
+const startReadyBudget = 3 * time.Minute
+
 func HandleStart() {
 	if os.Geteuid() != 0 {
 		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
@@ -96,9 +105,17 @@ func HandleStart() {
 	// Start services in dependency order (namespace: rqlite → olric → gateway)
 	utils.StartServicesOrdered(inactive, "start")
 
-	// Give services more time to fully initialize before verification
-	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
-	time.Sleep(5 * time.Second)
+	// Wait for the node to be serving, not for a fixed five seconds. A sleep
+	// cannot tell a node that came up in two seconds from one that never came
+	// up, and "✅ All services started" printed either way.
+	fmt.Printf("  ⏳ Waiting for the node to come up...\n")
+	if err := nodehealth.WaitReady(context.Background(), nodehealth.Target{
+		RQLiteBase:  fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort),
+		GatewayBase: fmt.Sprintf("http://localhost:%d", constants.GatewayAPIPort),
+	}, nodehealth.Options{Budget: startReadyBudget}); err != nil {
+		fmt.Fprintf(os.Stderr, "\n❌ Services were started but the node is not serving: %v\n", err)
+		os.Exit(1)
+	}
 
-	fmt.Printf("\n✅ All services started\n")
+	fmt.Printf("\n✅ All services started and the node is serving\n")
 }

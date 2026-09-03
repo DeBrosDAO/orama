@@ -14,6 +14,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"gopkg.in/yaml.v3"
+
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 var ErrServiceNotFound = errors.New("service not found")
@@ -164,14 +166,21 @@ func IsServiceMasked(service string) (bool, error) {
 // GetProductionServices returns a list of all Orama production service names that exist,
 // including both global services and namespace-specific services
 func GetProductionServices() []string {
-	// Global/default service names
+	// Global/default service names.
+	//
+	// orama-node and orama-anyone-relay only. The pre-factory host daemons —
+	// orama-olric, orama-ipfs, orama-ipfs-cluster, orama-vault,
+	// orama-anyone-client — are systemd.LeftoverHostUnits: the installer still
+	// writes their unit files for rollback but deliberately disables them,
+	// because IndexSupervisor runs orama-namespace-*@index instead.
+	//
+	// This list started them again on every upgrade and restart. They then
+	// raced @index for 10102, 10107, :53 and :443, and IndexSupervisor stopped
+	// them again on its next start — an oscillation that looked like a flaky
+	// service and was really two owners for one port. The unit files exist on
+	// disk, so a presence check could never tell the difference.
 	globalServices := []string{
 		"orama-node",
-		"orama-olric",
-		"orama-ipfs-cluster",
-		"orama-ipfs",
-		"orama-vault",
-		"orama-anyone-client",
 		"orama-anyone-relay",
 	}
 
@@ -179,6 +188,9 @@ func GetProductionServices() []string {
 
 	// Add existing global services
 	for _, svc := range globalServices {
+		if systemd.IsLeftoverHostUnit(svc + ".service") {
+			continue
+		}
 		unitPath := filepath.Join("/etc/systemd/system", svc+".service")
 		if _, err := os.Stat(unitPath); err == nil {
 			existing = append(existing, svc)

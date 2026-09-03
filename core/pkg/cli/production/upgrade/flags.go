@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/DeBrosOfficial/network/pkg/rollout"
 )
 
 // Flags represents upgrade command flags
@@ -16,7 +18,21 @@ type Flags struct {
 	// Remote upgrade flags
 	Env        string // Target environment for remote rolling upgrade
 	NodeFilter string // Single node IP to upgrade (optional)
-	Delay      int    // Delay in seconds between nodes during rolling upgrade
+
+	// Yes executes the printed rollout plan. Without it the plan is printed
+	// and nothing is restarted: the plan is what an operator is approving —
+	// which node is the leader, what order the restarts happen in — and it was
+	// previously neither computed nor shown.
+	Yes bool
+
+	// Delay is how long a node has to rejoin the cluster after its upgrade
+	// before the rollout gives up, in seconds.
+	//
+	// It used to be an unconditional sleep between nodes, which is not a gate:
+	// it cannot tell a node that rejoined in 20 seconds from one that never
+	// came back, so the next voter was restarted either way. It is now the
+	// budget on a real readiness check.
+	Delay int
 
 	// ReexecedAfterBinarySwap is set by the orchestrator when it re-execs
 	// itself with the NEWLY-INSTALLED binary, post Phase 2b. The new
@@ -54,7 +70,9 @@ func ParseFlags(args []string) (*Flags, error) {
 	// Remote upgrade flags
 	fs.StringVar(&flags.Env, "env", "", "Target environment for remote rolling upgrade (devnet, testnet)")
 	fs.StringVar(&flags.NodeFilter, "node", "", "Upgrade a single node IP only")
-	fs.IntVar(&flags.Delay, "delay", 30, "Delay in seconds between nodes during rolling upgrade")
+	fs.BoolVar(&flags.Yes, "yes", false, "Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted)")
+	fs.IntVar(&flags.Delay, "delay", int(rollout.GateBudget.Seconds()),
+		"Seconds a node has to rejoin the cluster after its upgrade before the rollout stops")
 
 	// Nameserver flag - use pointer to detect if explicitly set
 	nameserver := fs.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
