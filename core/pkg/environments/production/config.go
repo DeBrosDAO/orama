@@ -2,7 +2,6 @@ package production
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -441,17 +440,9 @@ func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableH
 }
 
 // GenerateOlricConfig generates Olric configuration.
-// Reads the Olric encryption key from secrets if available.
+// Olric v0.7.0's YAML loader has no encryptionKey field (bugboard #246);
+// WireGuard is the confidentiality control for memberlist.
 func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string, advertiseAddr string, peers []string) (string, error) {
-	// Read encryption key from secrets if available
-	encryptionKey := ""
-	if data, err := os.ReadFile(filepath.Join(cg.oramaDir, "secrets", "olric-encryption-key")); err == nil {
-		encryptionKey = strings.TrimSpace(string(data))
-	}
-	if encryptionKey == "" {
-		return "", fmt.Errorf("olric-encryption-key missing or empty; refusing to start Olric without memberlist encryption")
-	}
-
 	data := templates.OlricConfigData{
 		ServerBindAddr:          serverBindAddr,
 		HTTPPort:                httpPort,
@@ -460,7 +451,6 @@ func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort i
 		MemberlistEnvironment:   memberlistEnv,
 		MemberlistAdvertiseAddr: advertiseAddr,
 		Peers:                   peers,
-		EncryptionKey:           encryptionKey,
 	}
 	return templates.RenderOlricConfig(data)
 }
@@ -582,47 +572,6 @@ func (sg *SecretGenerator) EnsureRQLiteAuth() (string, string, error) {
 	}
 
 	return username, password, nil
-}
-
-// EnsureOlricEncryptionKey gets or generates a 32-byte encryption key for Olric memberlist gossip.
-// The key is stored as base64 on disk and returned as base64 (what Olric expects).
-func (sg *SecretGenerator) EnsureOlricEncryptionKey() (string, error) {
-	secretPath := filepath.Join(sg.oramaDir, "secrets", "olric-encryption-key")
-	secretDir := filepath.Dir(secretPath)
-
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create secrets directory: %w", err)
-	}
-	if err := os.Chmod(secretDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
-	}
-
-	// Try to read existing key
-	if data, err := os.ReadFile(secretPath); err == nil {
-		key := strings.TrimSpace(string(data))
-		if key != "" {
-			if err := ensureSecretFilePermissions(secretPath); err != nil {
-				return "", err
-			}
-			return key, nil
-		}
-	}
-
-	// Generate new 32-byte key, base64 encoded
-	keyBytes := make([]byte, 32)
-	if _, err := rand.Read(keyBytes); err != nil {
-		return "", fmt.Errorf("failed to generate Olric encryption key: %w", err)
-	}
-	key := base64.StdEncoding.EncodeToString(keyBytes)
-
-	if err := os.WriteFile(secretPath, []byte(key), 0600); err != nil {
-		return "", fmt.Errorf("failed to save Olric encryption key: %w", err)
-	}
-	if err := ensureSecretFilePermissions(secretPath); err != nil {
-		return "", err
-	}
-
-	return key, nil
 }
 
 // EnsureAPIKeyHMACSecret gets or generates the HMAC secret used to hash API keys.

@@ -138,20 +138,33 @@ func (wp *WireGuardProvisioner) WriteConfig() error {
 	confPath := filepath.Join(wp.configDir, "wg0.conf")
 	content := wp.GenerateConfig()
 
-	// Try direct write first (works when running as root)
 	if err := os.MkdirAll(wp.configDir, 0700); err == nil {
 		if err := os.WriteFile(confPath, []byte(content), 0600); err == nil {
-			return nil
+			return forcePrivateMode(confPath)
 		}
 	}
 
-	// Fallback to tee (for non-root, e.g. orama user)
 	cmd := exec.Command("tee", confPath)
 	cmd.Stdin = strings.NewReader(content)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to write wg0.conf via tee: %w\n%s", err, string(output))
 	}
+	return forcePrivateMode(confPath)
+}
 
+// forcePrivateMode chmod 0600 and verifies the result (bugboard #247).
+// os.WriteFile's mode is umask-masked; tee inherits umask (often 0644).
+func forcePrivateMode(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod 0600 %s: %w", path, err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		return fmt.Errorf("%s mode %o, want 0600", path, fi.Mode().Perm())
+	}
 	return nil
 }
 

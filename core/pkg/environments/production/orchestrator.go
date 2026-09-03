@@ -504,12 +504,6 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	}
 	ps.logf("  ✓ RQLite auth credentials ensured")
 
-	// Olric gossip encryption key
-	if _, err := ps.secretGenerator.EnsureOlricEncryptionKey(); err != nil {
-		return fmt.Errorf("failed to ensure Olric encryption key: %w", err)
-	}
-	ps.logf("  ✓ Olric encryption key ensured")
-
 	// API key HMAC secret
 	if _, err := ps.secretGenerator.EnsureAPIKeyHMACSecret(); err != nil {
 		return fmt.Errorf("failed to ensure API key HMAC secret: %w", err)
