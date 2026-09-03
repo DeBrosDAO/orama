@@ -1336,6 +1336,36 @@ func (cm *ClusterManager) ReconcileWebRTCAllocations(ctx context.Context, cluste
 // enough that a node replacement converges in about a minute.
 const webrtcReconcileInterval = 60 * time.Second
 
+// ensureNamespaceHostRecordIfServing re-asserts this node's `ns-<namespace>` DNS
+// record, but only while its namespace gateway is actually answering (bugboard
+// #286).
+//
+// Advertising is gated on real evidence rather than on the node merely believing
+// it holds the role: a record pointing at a gateway that is down is the #161
+// symptom in a different place — clients round-robin onto a dead endpoint.
+func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context, state *ClusterLocalState) {
+	port := state.LocalPorts.GatewayHTTPPort
+	if port <= 0 {
+		return
+	}
+	if err := probeTCP(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+		// Not serving yet — say nothing and retry on the next tick. This is the
+		// normal state for the first minute after a restart.
+		return
+	}
+
+	pip, perr := cm.getLocalNodePublicIP(ctx)
+	if perr != nil || pip == "" {
+		cm.logger.Warn("Cannot re-advertise namespace host DNS record: public IP unavailable",
+			zap.String("namespace", state.NamespaceName), zap.Error(perr))
+		return
+	}
+	if derr := cm.dnsManager.EnsureNamespaceHostRecordForNode(ctx, state.NamespaceName, pip); derr != nil {
+		cm.logger.Warn("Periodic namespace host DNS ensure failed",
+			zap.String("namespace", state.NamespaceName), zap.Error(derr))
+	}
+}
+
 // StartWebRTCReconciler runs the periodic WebRTC role reconcile until ctx is
 // cancelled. Safe to call once at node boot.
 //
@@ -1406,7 +1436,32 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		} else if len(removed) > 0 {
 			cm.logger.Warn("Periodic sweep pruned permanently-gone cluster node assignments (bugboard #173)",
 				zap.String("namespace", state.NamespaceName), zap.Strings("removed_nodes", removed))
+			// Bugboard #280: membership just changed, so cluster-state.json — and
+			// therefore the namespace gateway's olric_servers and rqlite join list —
+			// now names nodes that are gone. Regeneration was only wired into
+			// RepairCluster, which nothing calls for a cluster that is not degraded,
+			// so a namespace could keep pointing at departed nodes indefinitely.
+			// Doing it here gives it a periodic catch-up on every node.
+			if rerr := cm.regenerateClusterState(ctx, cluster); rerr != nil {
+				cm.logger.Warn("Periodic cluster-state regeneration failed — namespace config may still name departed nodes",
+					zap.String("namespace", state.NamespaceName), zap.Error(rerr))
+			}
 		}
+
+		// Bugboard #286: re-advertise this node in the `ns-<ns>` round-robin.
+		//
+		// The boot-time ensure needs this node's public IP from the MAIN rqlite,
+		// which is not up that early in boot, so it routinely loses that race and
+		// gives up — leaving a node that serves 200 absent from DNS for minutes
+		// after every restart, with nothing reporting it. During a rolling upgrade
+		// the lag compounds: at one point both devnet namespaces resolved to a
+		// single node while two healthy nodes sat idle.
+		//
+		// By the time this sweep runs, the cluster lookup above has already proven
+		// rqlite is reachable. Same discipline as the TURN ensure below: holding
+		// the role is not sufficient — require the local gateway to be ACTUALLY
+		// serving, so this can never advertise a node whose gateway is down.
+		cm.ensureNamespaceHostRecordIfServing(ctx, state)
 
 		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 		if werr != nil || webrtcCfg == nil {
