@@ -241,6 +241,32 @@ render it today; read it from the node's own log
 (`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
 lists the components that have not converged.
 
+**The tenant plane converges.** rqlite, Olric and the gateway for each
+namespace used to be edge-triggered — provisioned once, repaired on a dead-node
+event, restored once at boot by a loop that gave up after twelve attempts.
+Anything that happened outside those moments stayed broken until someone ran a
+runbook, which is why seven manual steps existed.
+
+`pkg/namespace.StartTenantReconciler` runs every 60s with two legs. The
+**per-node** leg is what a node owes the namespaces it hosts: start what is
+missing, and rewrite a config that has drifted from live membership
+(`ReconcileOlric` / `ReconcileGateway`, which restart only on a real
+difference — peer lists are compared ignoring order, since that order comes
+from a query and means nothing to Olric). The **coordinator** leg is
+cluster-wide state and runs on exactly one member per namespace, elected as the
+lowest-sorted live node id: prune members that are permanently gone, release
+their ports, and remove them from that namespace's raft.
+
+The raft address is read BEFORE the prune, because pruning deletes the port
+allocation the address is built from — after that there is nothing left to name
+in the removal, and the departed node stays a configured voter for ever. That
+was the gap: pruning released the ports and the membership row and stopped.
+
+A remote stop that fails is recorded in `namespace_pending_cleanup` and retried
+every sweep, rather than logged. The unit keeps running and keeps holding a port
+the allocator has already released, and the next namespace given that port finds
+it occupied and joins a foreign raft group.
+
 **One writer for membership.** A node's existence is recorded in five places —
 `dns_nodes`, `wireguard_peers`, the index raft configuration, ipfs-cluster's
 peer list and IPFS's peering config — each with its own liveness definition and

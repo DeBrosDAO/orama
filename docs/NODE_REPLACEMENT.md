@@ -303,6 +303,14 @@ Namespace DNS A records (`ns-<namespace>.…`) were bulk-updated when we rewrote
 
 Also, **namespace RQLite** still listed dead voters (`10.0.0.6`, `10.0.0.11`). After removing the last peer, membership became **1/3 → Candidate, no leader**.
 
+**The tenant reconciler now does this.** Every node converges its own namespace
+services on a 60s loop, and one elected member per namespace prunes departed
+members, releases their ports and removes them from that namespace's raft. So
+this phase is now **verification**, not a set of steps: the survivors'
+`memberlist.peers` and `olric_servers` drop a departed node on the next sweep,
+and the namespace raft loses it once it is past the staleness cutoff. What
+follows is what to check, and what to do if the reconciler has not converged.
+
 ### Safe DNS rule for namespaces
 
 **Only advertise IPs that currently run that namespace's gateway.**

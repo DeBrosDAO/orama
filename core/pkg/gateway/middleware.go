@@ -211,6 +211,11 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTCla
 // running three replicas. A degraded cluster is now served from its healthy
 // members: selection is on the per-node status, not the cluster-level rollup, so
 // the namespace 404s only when there is genuinely no live gateway.
+//
+// dn.status = 'active' is the other half of that. A namespace_cluster_nodes row
+// says 'running' until something updates it, and nothing did when a NODE went
+// away rather than a service — so traffic kept being proxied to a machine the
+// fleet had already given up on, until the tenant reconciler pruned it.
 const namespaceGatewayTargetsQuery = `
 			SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
 			FROM namespace_port_allocations npa
@@ -223,6 +228,7 @@ const namespaceGatewayTargetsQuery = `
 			WHERE nc.namespace_name = ?
 			  AND nc.status IN ('ready', 'degraded')
 			  AND ncn.status = 'running'
+			  AND dn.status = 'active'
 		`
 
 func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, claims *auth.JWTClaims, scopes string, errMsg string) {

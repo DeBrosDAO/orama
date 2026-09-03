@@ -1041,11 +1041,18 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 		"node_id":   nodeID,
 	})
 	if err != nil {
-		cm.logger.Warn("Failed to send stop request to remote node",
+		// A stop that did not happen is work still owed, not a warning. The
+		// unit keeps running and keeps holding a port the allocator has
+		// already released — and the next namespace to be given that port
+		// finds it occupied and joins a foreign raft group (bugboard #275).
+		cm.logger.Warn("Failed to send stop request to remote node; recording it for retry",
 			zap.String("node_ip", nodeIP),
 			zap.String("action", action),
 			zap.Error(err),
 		)
+		cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, err)
+	} else {
+		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
 	}
 	return err
 }

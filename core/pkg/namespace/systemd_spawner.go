@@ -316,6 +316,128 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 }
 
 // SpawnOlric starts an Olric instance using systemd
+// Olric's on-disk config, shared by the spawn and reconcile paths so the two
+// cannot drift in what they consider a complete config.
+type olricServerConfig struct {
+	BindAddr string `yaml:"bindAddr"`
+	BindPort int    `yaml:"bindPort"`
+}
+
+type olricMemberlistConfig struct {
+	Environment string   `yaml:"environment"`
+	BindAddr    string   `yaml:"bindAddr"`
+	BindPort    int      `yaml:"bindPort"`
+	Peers       []string `yaml:"peers,omitempty"`
+}
+
+type olricConfig struct {
+	Server         olricServerConfig     `yaml:"server"`
+	Memberlist     olricMemberlistConfig `yaml:"memberlist"`
+	PartitionCount uint64                `yaml:"partitionCount"`
+}
+
+// olricPartitionCount is tuned for namespace clusters, against Olric's 256
+// default.
+const olricPartitionCount = 12
+
+func buildOlricConfig(cfg olric.InstanceConfig) olricConfig {
+	return olricConfig{
+		Server: olricServerConfig{
+			BindAddr: cfg.BindAddr,
+			BindPort: cfg.HTTPPort,
+		},
+		Memberlist: olricMemberlistConfig{
+			Environment: "lan",
+			BindAddr:    cfg.BindAddr,
+			BindPort:    cfg.MemberlistPort,
+			Peers:       cfg.PeerAddresses,
+		},
+		PartitionCount: olricPartitionCount,
+	}
+}
+
+// olricConfigInSync reports whether the on-disk config already expresses the
+// desired one.
+//
+// Peers are compared as a SET. Their order comes from a database query and is
+// not meaningful to Olric, so comparing slices directly would report drift on
+// every sweep and restart the cache in a loop.
+func olricConfigInSync(onDisk, desired olricConfig) bool {
+	if onDisk.Server != desired.Server {
+		return false
+	}
+	if onDisk.Memberlist.Environment != desired.Memberlist.Environment ||
+		onDisk.Memberlist.BindAddr != desired.Memberlist.BindAddr ||
+		onDisk.Memberlist.BindPort != desired.Memberlist.BindPort {
+		return false
+	}
+	if onDisk.PartitionCount != desired.PartitionCount {
+		return false
+	}
+	return sameStringSet(onDisk.Memberlist.Peers, desired.Memberlist.Peers)
+}
+
+// sameStringSet compares two lists ignoring ORDER but not multiplicity.
+//
+// Order is meaningless here — it comes from a database query — so ignoring it
+// is what stops every sweep reporting drift. Duplicates are a different matter:
+// the desired list is generated fresh and never contains one, so a duplicate on
+// disk is residue worth rewriting rather than accepting.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+		if counts[v] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ReconcileOlric rewrites this node's Olric config and restarts it ONLY when it
+// has drifted from the desired one.
+//
+// The counterpart to ReconcileGateway, which existed while this did not — so
+// when a namespace member was replaced, the survivors' `memberlist.peers` kept
+// the dead node's overlay address indefinitely and nothing but a hand-edit
+// removed it. That is one of the manual runbook steps this reconciler exists to
+// delete.
+func (s *SystemdSpawner) ReconcileOlric(ctx context.Context, namespace, nodeID string, cfg olric.InstanceConfig) error {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("olric-%s.yaml", nodeID))
+
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		// No readable config to compare against. Restarting a healthy Olric on
+		// that basis would be guessing; a missing config is the cold-spawn
+		// path's problem.
+		return fmt.Errorf("read olric config for reconcile: %w", err)
+	}
+
+	var onDisk olricConfig
+	if err := yaml.Unmarshal(existing, &onDisk); err != nil {
+		return fmt.Errorf("parse olric config for reconcile: %w", err)
+	}
+
+	desired := buildOlricConfig(cfg)
+	if olricConfigInSync(onDisk, desired) {
+		return nil
+	}
+
+	s.logger.Info("Olric config drifted from desired; reconciling (rewrite + restart)",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.Strings("ondisk_peers", onDisk.Memberlist.Peers),
+		zap.Strings("desired_peers", desired.Memberlist.Peers))
+
+	return s.SpawnOlric(ctx, namespace, nodeID, cfg)
+}
+
 func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID string, cfg olric.InstanceConfig) error {
 	s.logger.Info("Spawning Olric via systemd",
 		zap.String("namespace", namespace),
@@ -353,36 +475,7 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("olric-%s.yaml", nodeID))
 
-	// Generate Olric YAML config
-	type olricServerConfig struct {
-		BindAddr string `yaml:"bindAddr"`
-		BindPort int    `yaml:"bindPort"`
-	}
-	type olricMemberlistConfig struct {
-		Environment string   `yaml:"environment"`
-		BindAddr    string   `yaml:"bindAddr"`
-		BindPort    int      `yaml:"bindPort"`
-		Peers       []string `yaml:"peers,omitempty"`
-	}
-	type olricConfig struct {
-		Server         olricServerConfig     `yaml:"server"`
-		Memberlist     olricMemberlistConfig `yaml:"memberlist"`
-		PartitionCount uint64                `yaml:"partitionCount"`
-	}
-
-	config := olricConfig{
-		Server: olricServerConfig{
-			BindAddr: cfg.BindAddr,
-			BindPort: cfg.HTTPPort,
-		},
-		Memberlist: olricMemberlistConfig{
-			Environment: "lan",
-			BindAddr:    cfg.BindAddr,
-			BindPort:    cfg.MemberlistPort,
-			Peers:       cfg.PeerAddresses,
-		},
-		PartitionCount: 12, // Optimized for namespace clusters (vs 256 default)
-	}
+	config := buildOlricConfig(cfg)
 
 	configBytes, err := yaml.Marshal(config)
 	if err != nil {

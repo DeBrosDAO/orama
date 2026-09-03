@@ -6,6 +6,16 @@ Troubleshooting guide for known issues in the Orama Network.
 
 ## 1. Namespace Gateway: "Olric unavailable"
 
+> **First, check whether this is drift the reconciler has already fixed.** When
+> a namespace member is replaced, the survivors used to keep the departed node's
+> overlay address in `configs/olric-<node>.yaml` peers and `configs/gateway-<node>.yaml`
+> `olric_servers` for ever — nothing rewrote them, so every gateway restart
+> stalled for minutes timing out against a machine that was gone. The tenant
+> reconciler now rewrites both within 60s of the membership changing, and
+> restarts the service only when the config actually differs. If the config
+> still names a node that is gone, the reconciler is not running or not
+> converging; that is the bug, not the config.
+
 **Symptom:** `ns-<name>.orama-devnet.network/v1/health` returns `"olric": {"status": "unavailable"}`.
 
 **Cause:** The Olric memberlist gossip between namespace nodes is broken. Olric uses UDP pings for health checks — if those fail, the cluster can't bootstrap and the gateway reports Olric as unavailable.
@@ -121,7 +131,14 @@ This was fixed in code, so new namespaces get the correct config.
 ls /opt/orama/.orama/data/namespaces/<name>/cluster-state.json
 ```
 
-If the file doesn't exist, the node can't restore the namespace.
+If the file doesn't exist, the node can't restore the namespace **from disk** —
+but that is no longer terminal. The disk pass runs once at boot for speed; the
+tenant reconciler then converges from the database every 60s, so a node with no
+state file recovers as soon as its rqlite has a leader.
+
+Before this, the boot restore tried the database twelve times and gave up. A
+node whose cluster had no leader for two minutes left every tenant down until
+someone restarted the gateway by hand.
 
 **Fix:** Create the file manually from another node that has it, or reconstruct it. The format is:
 
@@ -171,6 +188,11 @@ sudo orama node restart
 ```
 
 This was fixed in code — the upgrade orchestrator now re-enables `@` services before restarting.
+
+If a tenant service is still down after that, the tenant reconciler restarts it
+within a minute; it no longer needs a hand-run restore. A service that stays
+down across several sweeps is a real failure — check its unit's logs rather than
+re-running the commands above.
 
 ---
 
