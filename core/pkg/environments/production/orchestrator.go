@@ -1313,3 +1313,17 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("  curl http://localhost:6001/health")
 	ps.logf("  curl http://localhost:5001/status\n")
 }
+
+// EnsureRuntimePermissions re-asserts the sudoers grants the unprivileged orama
+// user needs at runtime.
+//
+// Phase 2 already does this, but it runs under the OLD binary during an upgrade
+// and Phase 1/2/2b are skipped after the re-exec. A release that ADDS a grant
+// therefore would not apply it during the upgrade that introduces it. Exposed so
+// the upgrade can re-run it under the new binary (see bugboard #283 part 2 —
+// the shared TURN unit was ungranted, so a node ended up with no TURN at all).
+//
+// Idempotent: the rule is validated with visudo and atomically renamed in.
+func (ps *ProductionSetup) EnsureRuntimePermissions() error {
+	return ps.fsProvisioner.EnsureOramaUser()
+}

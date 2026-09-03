@@ -184,6 +184,23 @@ func (o *Orchestrator) Execute() error {
 		}
 	}
 
+	// Re-assert the sudoers grants under the NEW binary.
+	//
+	// Phase 2 already wrote them — but it ran under the OLD binary, before the
+	// re-exec, and Phase 1/2/2b are skipped on the resumed run. So a release that
+	// ADDS a sudoers grant never applies it during the upgrade that introduces
+	// it; the grant would first appear one upgrade later. Bugboard #283 part 2
+	// hit exactly this: orama-turn.service was ungranted, so the reconciler
+	// stopped the legacy per-namespace TURN units and was then refused permission
+	// to start the shared one, leaving the node with no TURN at all.
+	//
+	// Idempotent (validated by visudo, atomically renamed into place), so running
+	// it again here costs nothing on an upgrade that changed no grants.
+	if err := o.setup.EnsureRuntimePermissions(); err != nil {
+		return fmt.Errorf("failed to re-assert sudoers grants under the new binary: %w", err)
+	}
+	fmt.Printf("  ✓ Runtime permissions refreshed (sudoers)\n")
+
 	// Phase 3: Ensure secrets exist
 	fmt.Printf("\n🔐 Phase 3: Ensuring secrets...\n")
 	if err := o.setup.Phase3GenerateSecrets(); err != nil {

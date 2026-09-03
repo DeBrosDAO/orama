@@ -110,7 +110,12 @@ func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) []string {
 		cm.stopLegacyPerNamespaceTURN(ctx)
 
 		if serr := cm.systemdSpawner.systemdMgr.StartHostTURN(); serr != nil {
-			cm.logger.Warn("Failed to start shared TURN service", zap.Error(serr))
+			// Error, not Warn: the legacy units were just stopped, so this node is
+			// now relaying for nobody. The most likely cause is a missing sudoers
+			// grant for orama-turn.service, which produces "command not allowed"
+			// and is silent apart from this line.
+			cm.logger.Error("Shared TURN service failed to start; this node is relaying for NO namespace. If the cause is 'command not allowed', the sudoers grant for orama-turn.service is missing on this host.",
+				zap.Strings("tenants", tenantNames(tenants)), zap.Error(serr))
 			return nil
 		}
 		cm.logger.Info("Started shared TURN service (bugboard #283)",
