@@ -187,17 +187,13 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 		}
 		nsHealth.Services["olric"] = probeTCP(olricHost, olricPort)
 
-		// Probe Gateway (HTTP on all interfaces)
-		nsHealth.Services["gateway"] = probeTCP("127.0.0.1", gatewayPort)
+		// Probe the Gateway's readiness, not just its port. A namespace gateway
+		// binds and answers long before it has a usable schema; a TCP dial
+		// cannot tell the difference, so a gateway that could not serve a
+		// single request stayed in the DNS round-robin.
+		nsHealth.Services["gateway"] = probeGatewayReadiness(ctx, "127.0.0.1", gatewayPort)
 
-		// Aggregate status
-		nsHealth.Status = "healthy"
-		for _, svc := range nsHealth.Services {
-			if svc.Status == "error" {
-				nsHealth.Status = "unhealthy"
-				break
-			}
-		}
+		nsHealth.Status = aggregateNamespaceStatus(nsHealth.Services)
 
 		health[name] = nsHealth
 	}
@@ -529,6 +525,108 @@ func probeTCP(host string, port int) NamespaceServiceHealth {
 		Port:    port,
 		Latency: latency.String(),
 	}
+}
+
+// aggregateNamespaceStatus rolls per-service statuses up into the namespace
+// status the DNS reconcile keys on.
+//
+// Only "error" and "starting" keep this node out of the ns-<name> round-robin:
+// "error" is unreachable or unusable, and "starting" is a gateway that cannot
+// serve yet. "degraded" deliberately does not — a node whose cache or IPFS is
+// down still serves everything that does not need them, and withdrawing it
+// would turn one unavailable subsystem into an unavailable node. "starting"
+// stays distinguishable from "unhealthy" so an operator can tell a node that is
+// coming up from one that is broken.
+func aggregateNamespaceStatus(services map[string]NamespaceServiceHealth) string {
+	status := "healthy"
+	for _, svc := range services {
+		switch svc.Status {
+		case "error":
+			return "unhealthy"
+		case "starting":
+			status = "starting"
+		}
+	}
+	return status
+}
+
+// gatewayProbeTimeout bounds one readiness probe of a local namespace gateway.
+const gatewayProbeTimeout = 2 * time.Second
+
+// gatewayProbeClient is the HTTP client the readiness probe uses. It only ever
+// talks to localhost.
+var gatewayProbeClient = &http.Client{Timeout: gatewayProbeTimeout}
+
+// probeGatewayReadiness asks a local namespace gateway whether it can serve,
+// rather than only whether its port is open.
+//
+// A gateway reports 503 with `status: starting` while it is waiting for its
+// database schema, and 503 with `status: blocked` when the schema is below what
+// its binary requires. Both are reported here as their own status so the DNS
+// reconcile treats them as not-servable while an operator can still tell a node
+// that is coming up from one that needs attention.
+func probeGatewayReadiness(ctx context.Context, host string, port int) NamespaceServiceHealth {
+	start := time.Now()
+	result := NamespaceServiceHealth{Port: port}
+
+	probeCtx, cancel := context.WithTimeout(ctx, gatewayProbeTimeout)
+	defer cancel()
+
+	url := fmt.Sprintf("http://%s/v1/health", net.JoinHostPort(host, strconv.Itoa(port)))
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		result.Status = "error"
+		result.Error = err.Error()
+		return result
+	}
+
+	// A dedicated client, not http.DefaultClient: the default has no timeout of
+	// its own and its connection pool is shared with every other caller in the
+	// process. The context above bounds the request either way; this keeps a
+	// 30s probe cadence from parking idle connections in a pool other code
+	// depends on.
+	resp, err := gatewayProbeClient.Do(req)
+	result.Latency = time.Since(start).String()
+	if err != nil {
+		result.Status = "error"
+		result.Error = "gateway not reachable"
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		result.Status = "ok"
+		return result
+	}
+
+	// A non-200 carries the reason. Anything unparseable is not servable.
+	var body struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Status == "" {
+		result.Status = "error"
+		result.Error = fmt.Sprintf("gateway returned HTTP %d", resp.StatusCode)
+		return result
+	}
+
+	// This probe decides on READINESS, and nothing else. The gateway also
+	// answers 503 for "degraded" (a non-critical subsystem such as the cache or
+	// IPFS is down) and "unhealthy" (a critical one is) — but subsystem health
+	// never gated DNS before this change and must not start now: withdrawing a
+	// node because its IPFS daemon blipped turns one unavailable subsystem into
+	// an unavailable node, and rqlite and Olric already have their own probes
+	// above. Only the gateway's own inability to serve counts here.
+	switch body.Status {
+	case string(ReadinessStarting):
+		result.Status = "starting"
+	case string(ReadinessBlocked):
+		result.Status = "error"
+	default:
+		result.Status = "ok"
+	}
+	result.Error = body.Reason
+	return result
 }
 
 // namespaceHostFQDNs is the pair of records a node advertises for a namespace:

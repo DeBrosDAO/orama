@@ -112,6 +112,48 @@ in-memory cache with its own memberlist and never reads the database, so the
 only thing that coupling ever did was throw away the node's cache whenever
 rqlite restarted.
 
+**Gateway readiness.** A gateway reports its own start-up state on `/health`
+and `/v1/health`, separately from the health of the things it talks to:
+
+| State | Meaning | HTTP |
+|---|---|---|
+| `starting` | Listening, but the database schema is not yet at the version this binary requires — almost always because the local rqlite has no leader. Retried with backoff for as long as the process lives. | 503 |
+| `ready` | Schema is at the required version; the gateway serves. | 200 |
+| `blocked` | A leader answered and the schema is genuinely *below* what the binary requires. Retrying cannot fix it: migrate the database or roll the binary back. | 503 |
+
+While not `ready` the gateway refuses every request except a short passthrough
+list — `/health`, `/v1/health`, `/status`, `/v1/status`, `/v1/version`,
+`/v1/internal/ping`, `/v1/internal/tls/check` and the ACME challenge path — so a
+caller gets "gateway is starting, waiting for rqlite leader" instead of a
+cryptic SQL error from a handler talking to a leaderless database. That list is
+deliberately not the same as the "no API key needed" list: most of *those*
+endpoints (`/v1/auth/verify`, `/v1/invoke`, `/v1/vault/*`) write to the
+database, and letting them through would defeat the point of `blocked`.
+
+The refusal is issued inside the CORS middleware, so a browser client can read
+the reason rather than seeing an opaque network error. Background work that
+touches the database — the health checker, the health monitor, the namespace
+health loop, peer discovery — waits for `ready` before its first tick.
+
+This replaces a start-up path where the leader wait, the migrations and the
+schema contract were one call whose error the caller logged as a warning and
+carried on from. A namespace whose raft had no leader therefore ended up with
+every gateway serving on an unmigrated database. The two failures are now told
+apart: the transient one is retried, the permanent one refuses to serve.
+
+The per-attempt budgets are `gateway.Config.RQLiteReadyTimeout` (default 20s)
+and `SchemaApplyTimeout` (default 30s). They bound one attempt, not the
+gateway's patience — shortening them makes it notice a recovered leader sooner,
+not give up on one earlier.
+
+Only a genuine version mismatch is `blocked`. A failure to *read* the migration
+tracker — a leader lost mid-check, a context deadline — stays retryable, or a
+200ms blip would latch a namespace out of service until someone restarted it.
+
+The node's namespace-health probe asks each local gateway's `/v1/health` rather
+than dialling its port, so a gateway that is up but `starting` is withdrawn from
+the `ns-<name>` DNS round-robin instead of being sent traffic it cannot serve.
+
 **Unit restart policy.** Every long-running unit orama-node manages uses
 `Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`. Always, because
 `on-failure` leaves a daemon down after a clean exit that was not asked for. No

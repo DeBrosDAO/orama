@@ -108,7 +108,7 @@ func WaitForRaftReady(ctx context.Context, port int, timeout time.Duration) erro
 	var lastErr error
 
 	for {
-		state, err := readRaftState(client, url)
+		state, err := readRaftState(ctx, client, url)
 		if err == nil {
 			lastState = state
 			switch strings.ToLower(state) {
@@ -137,9 +137,31 @@ func WaitForRaftReady(ctx context.Context, port int, timeout time.Duration) erro
 	}
 }
 
+// RaftState reports the raft state of the rqlite at hostPort — Leader,
+// Follower, Candidate or Shutdown. Exposed for diagnostics: a caller that is
+// waiting for readiness wants to log WHY it is waiting, and "Candidate" is a
+// very different answer from "the port is not answering".
+//
+// It takes a host:port rather than a port because the caller's rqlite is not
+// always local — a namespace gateway can be configured against a remote DSN,
+// and reporting the LOCAL node's raft state under a remote address would be
+// confidently wrong rather than merely unknown.
+func RaftState(ctx context.Context, hostPort string) (string, error) {
+	return readRaftState(ctx, tlsutil.NewHTTPClient(raftStateTimeout),
+		fmt.Sprintf("http://%s/status", hostPort))
+}
+
+// raftStateTimeout bounds a single RaftState probe. It only ever talks to
+// localhost.
+const raftStateTimeout = 2 * time.Second
+
 // readRaftState fetches /status and returns store.raft.state.
-func readRaftState(client *http.Client, url string) (string, error) {
-	resp, err := client.Get(url)
+func readRaftState(ctx context.Context, client *http.Client, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

@@ -420,18 +420,28 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging -> security headers -> rate limit -> CORS -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	// Order: logging -> security headers -> rate limit -> CORS -> readiness -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	//
+	// The readiness gate sits directly INSIDE CORS, not above it. A gateway
+	// that is still starting refuses with a 503 carrying the reason, and a
+	// browser can only read that if the response has CORS headers and the
+	// preflight was answered — above corsMiddleware the SDK would see an
+	// opaque "failed to fetch" instead of the reason this change exists to
+	// deliver. It stays above domain routing and auth, so no handler and no
+	// WebSocket upgrade is reached while the gateway cannot serve.
+	//
 	// The scope gate (bugboard #148) runs after ownership so it only ever
 	// tightens an already-authorized request; it never authorizes on its own.
 	return g.loggingMiddleware(
 		g.securityHeadersMiddleware(
 			g.rateLimitMiddleware(
 				g.corsMiddleware(
-					g.domainRoutingMiddleware(
-						g.authMiddleware(
-							g.authorizationMiddleware(
-								g.scopeMiddleware(
-									g.namespaceRateLimitMiddleware(next)))))))))
+					g.readinessGate(
+						g.domainRoutingMiddleware(
+							g.authMiddleware(
+								g.authorizationMiddleware(
+									g.scopeMiddleware(
+										g.namespaceRateLimitMiddleware(next))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses

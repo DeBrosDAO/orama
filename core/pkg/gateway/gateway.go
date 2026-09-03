@@ -62,6 +62,20 @@ type Gateway struct {
 	startedAt        time.Time
 
 	// rqlite SQL connection and HTTP ORM gateway
+	// shutdownCtx is cancelled by Close. Background work owned by the gateway
+	// derives from it so nothing keeps running against torn-down dependencies.
+	shutdownCtx context.Context
+	shutdown    context.CancelFunc
+
+	// ready is the gateway's own start-up state — see readiness.go. Separate
+	// from the subsystem health in /health, which is about what the gateway
+	// talks to rather than whether the gateway itself can serve.
+	//
+	// A value, not a pointer, so a Gateway assembled without New cannot nil-
+	// deref here and cannot accidentally read as ready. Gateway is only ever
+	// used through a pointer, so the mutex inside is never copied.
+	ready readiness
+
 	sqlDB     *sql.DB
 	ormClient rqlite.Client
 	ormHTTP   *rqlite.HTTPGateway
@@ -309,6 +323,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
+	shutdownCtx, shutdown := context.WithCancel(context.Background())
 	gw := &Gateway{
 		logger:             logger,
 		cfg:                cfg,
@@ -316,6 +331,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		nodePeerID:         cfg.NodePeerID,
 		startedAt:          time.Now(),
 		tunnelLimiter:      newTunnelLimiter(),
+		ready:              newReadiness(),
+		shutdownCtx:        shutdownCtx,
+		shutdown:           shutdown,
 		sqlDB:              deps.SQLDB,
 		ormClient:          deps.ORMClient,
 		ormHTTP:            deps.ORMHTTP,
@@ -714,7 +732,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// Start health checker
 		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger, cfg.NodePeerID, gw.processManager)
 		gw.healthChecker.SetReconciler(cfg.RQLiteDSN, gw.replicaManager, gw.deploymentService)
-		go gw.healthChecker.Start(context.Background())
+		// Waits for readiness: it queries the deployment tables, which do not
+		// exist until the migrations this gateway is still applying have run.
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.healthChecker.Start(context.Background())
+			}
+		}()
 
 		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
 	}
@@ -730,6 +754,15 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		}
 		gw.startOlricReconnectLoop(olricCfg)
 	}
+
+	// Bring the schema up in the background. Until it succeeds the gateway
+	// serves /health as "starting" and refuses everything else; see
+	// readiness.go for why this is not part of start-up.
+	//
+	// Bound to the gateway's own lifetime: Close closes the database, and a
+	// loop still retrying against a closed handle would spin on
+	// "sql: database is closed" until the process exited.
+	gw.startSchemaReadiness(gw.shutdownCtx, cfg, deps)
 
 	// Initialize peer discovery for namespace gateways
 	// This allows the 3 namespace gateway instances to discover each other
@@ -757,15 +790,22 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 				logger.Logger,
 			)
 
-			// Start peer discovery
-			ctx := context.Background()
-			if err := gw.peerDiscovery.Start(ctx); err != nil {
-				logger.ComponentWarn(logging.ComponentGeneral, "Failed to start peer discovery",
-					zap.Error(err))
-			} else {
+			// Start peer discovery once the schema exists: it registers into
+			// gateway_peers, a table the migrations this gateway is still
+			// applying create.
+			go func() {
+				ctx := context.Background()
+				if !gw.AwaitReady(ctx) {
+					return
+				}
+				if err := gw.peerDiscovery.Start(ctx); err != nil {
+					logger.ComponentWarn(logging.ComponentGeneral, "Failed to start peer discovery",
+						zap.Error(err))
+					return
+				}
 				logger.ComponentInfo(logging.ComponentGeneral, "Peer discovery started successfully",
 					zap.String("namespace", cfg.ClientNamespace))
-			}
+			}()
 		} else {
 			logger.ComponentWarn(logging.ComponentGeneral, "Cannot initialize peer discovery: libp2p host not available")
 		}
@@ -817,14 +857,22 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 				go gw.nodeRecoverer.HandleSuspectNode(context.Background(), nodeID)
 			}
 		})
-		go gw.healthMonitor.Start(context.Background())
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.healthMonitor.Start(context.Background())
+			}
+		}()
 		logger.ComponentInfo(logging.ComponentGeneral, "Node health monitor started",
 			zap.String("node_id", cfg.NodePeerID))
 	}
 
 	// Start namespace health monitoring loop (local probes every 30s, reconciliation every 1h)
 	if cfg.NodePeerID != "" && deps.SQLDB != nil {
-		go gw.startNamespaceHealthLoop(context.Background())
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.startNamespaceHealthLoop(context.Background())
+			}
+		}()
 		logger.ComponentInfo(logging.ComponentGeneral, "Namespace health monitor started")
 	}
 

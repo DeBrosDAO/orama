@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -42,13 +43,6 @@ const (
 	olricInitMaxAttempts    = 5
 	olricInitInitialBackoff = 500 * time.Millisecond
 	olricInitMaxBackoff     = 5 * time.Second
-
-	// rqliteReadyTimeout bounds how long gateway startup waits for the local
-	// RQLite to become leader-reachable before giving up. Generous enough to
-	// cover a cold node whose raft is still replaying (a large namespace log
-	// can take tens of seconds), short enough that a genuinely broken cluster
-	// surfaces a clear error instead of hanging forever.
-	rqliteReadyTimeout = 90 * time.Second
 )
 
 // Dependencies holds all service clients and components required by the Gateway.
@@ -163,9 +157,14 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 
 	deps.Client = c
 
-	// Initialize RQLite ORM HTTP gateway
+	// Open the RQLite handles. This does not touch the database — sql.Open is
+	// lazy — so it fails only on a malformed DSN. The work that needs a live
+	// database (the leader wait, the migrations, the schema contract) runs in
+	// the background afterwards and is reported as readiness; see readiness.go.
 	if err := initializeRQLite(logger, cfg, deps); err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "RQLite initialization failed", zap.Error(err))
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"RQLite handles could not be opened; the gateway will report itself as starting until this is fixed",
+			zap.Error(err))
 	}
 
 	// Initialize Olric cache client (with retry and background reconnection)
@@ -240,6 +239,35 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 		return err
 	}
 
+	return nil
+}
+
+// errSchemaContract marks the one schema failure retrying cannot fix: a leader
+// answered, and the applied version is below what this binary requires.
+var errSchemaContract = errors.New("schema contract violation")
+
+// isSchemaContractViolation reports whether err is that failure.
+func isSchemaContractViolation(err error) bool {
+	return errors.Is(err, errSchemaContract)
+}
+
+// prepareSchema waits for a leader, applies the embedded migrations, and
+// asserts the schema contract.
+//
+// Every error it returns except errSchemaContract means "not yet": the caller
+// retries. That distinction is the whole point — "the local rqlite has no
+// leader" and "this database is behind the binary" used to be the same fatal
+// error, so a slow cross-region follower during a rolling upgrade was
+// indistinguishable from real schema drift.
+func prepareSchema(ctx context.Context, logger *logging.ColoredLogger, cfg *Config, deps *Dependencies) error {
+	db := deps.SQLDB
+	if db == nil {
+		// Only a malformed DSN gets here — sql.Open is lazy and fails on
+		// nothing else — so retrying cannot help any more than it can for a
+		// schema mismatch.
+		return fmt.Errorf("%w: no database handle, check the configured rqlite DSN", errSchemaContract)
+	}
+
 	// Wait for the local RQLite to actually be able to serve a leader-routed
 	// read before touching the schema.
 	//
@@ -249,9 +277,10 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// rqlite unit does not help: for Type=simple it orders process start, not
 	// readiness. Gating on the real signal turns "gateway dies at boot because
 	// the database was 3 seconds behind it" into "gateway waits 3 seconds".
-	readyCtx, readyCancel := context.WithTimeout(context.Background(), rqliteReadyTimeout)
+	readyTimeout := cfg.rqliteReadyTimeout()
+	readyCtx, readyCancel := context.WithTimeout(ctx, readyTimeout)
 	defer readyCancel()
-	if err := rqlite.WaitForLeader(readyCtx, db, rqliteReadyTimeout); err != nil {
+	if err := rqlite.WaitForLeader(readyCtx, db, readyTimeout); err != nil {
 		return fmt.Errorf("rqlite not ready for schema work: %w", err)
 	}
 	logger.ComponentInfo(logging.ComponentGeneral, "RQLite ready (leader reachable), applying schema")
@@ -259,7 +288,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Apply embedded migrations to ensure schema is up-to-date.
 	// This is critical for namespace gateways whose RQLite instances
 	// don't get migrations from the main cluster RQLiteManager.
-	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	migCtx, migCancel := context.WithTimeout(ctx, cfg.schemaApplyTimeout())
 	defer migCancel()
 
 	// A NAMESPACE gateway's RQLite is ALSO the tenant app's own database (they
@@ -272,8 +301,8 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	if isNamespaceGateway(cfg) {
 		if err := rqlite.ApplyEmbeddedMigrationsNamespace(migCtx, db, migrations.FS, logger.Logger); err != nil {
 			return fmt.Errorf("apply namespace embedded migrations failed: %w "+
-				"(hint: this namespace gateway can't safely run without its required schema; "+
-				"check the namespace RQLite health and re-run startup)", err)
+				"(hint: this namespace gateway will not serve without its required schema; "+
+				"check the namespace RQLite health — this is retried automatically)", err)
 		}
 		logger.ComponentInfo(logging.ComponentGeneral, "Namespace-isolated migrations applied to gateway RQLite")
 
@@ -285,7 +314,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 			return fmt.Errorf("namespace schema contract read failed: %w", err)
 		}
 		if required := migrations.RequiredVersion(); applied < required {
-			return fmt.Errorf("namespace schema contract violation: applied=%d, required=%d", applied, required)
+			return fmt.Errorf("%w: namespace schema applied=%d, required=%d", errSchemaContract, applied, required)
 		}
 		logger.ComponentInfo(logging.ComponentGeneral, "Namespace schema contract satisfied",
 			zap.Int("required_version", migrations.RequiredVersion()))
@@ -294,11 +323,12 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 
 	// Main cluster: full core schema, tracked in the standard schema_migrations.
 	//
-	// Failures here are FATAL: a gateway that can't bring its schema up
-	// to the version its binary expects will silently corrupt deploys
-	// later (e.g. INSERTing into missing columns and surfacing as a
-	// cryptic SQL error to end users). Better to refuse to start with
-	// a clear actionable error.
+	// An apply failure is retryable — it is almost always the leader going
+	// away mid-apply. A gateway that cannot bring its schema up to the version
+	// its binary expects must never serve, because it would silently corrupt
+	// deploys later (INSERTing into missing columns, surfacing as a cryptic SQL
+	// error to end users); that is what the readiness state below enforces, by
+	// refusing every request until the schema is right.
 	if err := rqlite.ApplyEmbeddedMigrations(migCtx, db, migrations.FS, logger.Logger); err != nil {
 		return fmt.Errorf("apply embedded migrations failed: %w "+
 			"(hint: this gateway can't safely run without its required schema; "+
@@ -313,7 +343,17 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	//   - clusters where the binary was upgraded but RQLite has stale schema
 	//   - operator manually deleted rows from schema_migrations
 	if err := migrations.AssertSchema(migCtx, db); err != nil {
-		return fmt.Errorf("schema contract violation: %w", err)
+		// AssertSchema returns two very different things: a real version
+		// mismatch, and a failure to READ schema_migrations at all. Only the
+		// first is permanent. Treating both as the contract violation would
+		// let a lost leader or a context deadline between the wait above and
+		// this read latch the gateway into blocked forever — a 200ms hiccup
+		// taking a namespace down until someone restarts it.
+		var mismatch *migrations.SchemaMismatchError
+		if errors.As(err, &mismatch) {
+			return fmt.Errorf("%w: %w", errSchemaContract, err)
+		}
+		return fmt.Errorf("schema contract read failed: %w", err)
 	}
 	logger.ComponentInfo(logging.ComponentGeneral, "Schema contract satisfied",
 		zap.Int("required_version", migrations.RequiredVersion()))

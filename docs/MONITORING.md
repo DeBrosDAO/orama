@@ -311,12 +311,32 @@ recovery action rather than one per observer.
 ## Namespace DNS self-management
 
 Separately from the ring monitor, each node probes the namespaces it hosts every
-30s (rqlite, Olric and gateway ports) and keeps its own DNS records in step:
+30s and keeps its own DNS records in step. rqlite and Olric are probed by
+dialling their ports; the gateway is asked `GET /v1/health`, because it binds
+and answers long before it has a usable schema and a TCP dial cannot tell the
+difference — a gateway that could not serve a single request used to stay in the
+round-robin.
+
+The gateway probe reads **readiness only**. `starting` (waiting for its schema)
+and `blocked` (schema below what the binary requires) count against the
+namespace; `degraded` and `unhealthy` do not, because those are subsystem
+health — rqlite and Olric have their own probes above, and withdrawing a node
+because its IPFS daemon blipped would turn one unavailable subsystem into an
+unavailable node.
+
+| Namespace status | When | In DNS |
+|---|---|---|
+| `healthy` | every service reachable and the gateway is ready | yes |
+| `starting` | the gateway is up but waiting for its schema | no |
+| `unhealthy` | a service is unreachable, or the gateway is blocked | no |
 
 | Transition | Threshold | Effect |
 |---|---|---|
-| healthy → unhealthy | 3 consecutive unhealthy probes (~90s) | withdraws this node's `ns-<ns>` and `*.ns-<ns>` A records |
-| unhealthy → healthy | 3 consecutive healthy probes (~90s) | restores the records it withdrew |
+| healthy → not healthy | 3 consecutive non-healthy probes (~90s) | withdraws this node's `ns-<ns>` and `*.ns-<ns>` A records |
+| not healthy → healthy | 3 consecutive healthy probes (~90s) | restores the records it withdrew |
+
+A gateway that is `starting` therefore adds its convergence time to the
+re-advertise lag after a restart (bug-286).
 
 Two safety rules:
 

@@ -17,6 +17,19 @@ type Config struct {
 	// If empty, uses RQLiteDSN (for main/global gateways)
 	GlobalRQLiteDSN string
 
+	// RQLiteReadyTimeout bounds ONE attempt at reaching a raft leader before
+	// the schema work is retried. Zero takes defaultRQLiteReadyTimeout.
+	//
+	// It is a per-attempt budget, not a deadline on the whole gateway: the
+	// readiness loop keeps retrying for as long as the process lives, so
+	// shortening this makes the gateway notice a recovered leader sooner
+	// rather than giving up on it earlier.
+	RQLiteReadyTimeout time.Duration
+
+	// SchemaApplyTimeout bounds applying the embedded migrations once a leader
+	// is reachable. Zero takes defaultSchemaApplyTimeout.
+	SchemaApplyTimeout time.Duration
+
 	// HTTPS configuration
 	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
 	DomainName  string // Domain name for HTTPS certificate
@@ -93,4 +106,32 @@ type Config struct {
 // registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
 func isNamespaceGateway(cfg *Config) bool {
 	return cfg != nil && cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
+}
+
+// Schema-readiness budget defaults.
+const (
+	// defaultRQLiteReadyTimeout is short because failing it is no longer
+	// terminal — the readiness loop retries. It used to be 90s, which made
+	// sense when giving up meant the gateway was broken; now a long budget only
+	// delays the gateway reporting WHY it is not ready, and two consecutive
+	// attempts could outlast the 120s window InstanceSpawner.waitForInstanceReady
+	// allows, turning a slow election into a failed spawn.
+	defaultRQLiteReadyTimeout = 20 * time.Second
+
+	// defaultSchemaApplyTimeout bounds the migration apply itself.
+	defaultSchemaApplyTimeout = 30 * time.Second
+)
+
+func (c *Config) rqliteReadyTimeout() time.Duration {
+	if c.RQLiteReadyTimeout > 0 {
+		return c.RQLiteReadyTimeout
+	}
+	return defaultRQLiteReadyTimeout
+}
+
+func (c *Config) schemaApplyTimeout() time.Duration {
+	if c.SchemaApplyTimeout > 0 {
+		return c.SchemaApplyTimeout
+	}
+	return defaultSchemaApplyTimeout
 }
