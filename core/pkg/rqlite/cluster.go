@@ -14,27 +14,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// establishLeadershipOrJoin handles post-startup cluster establishment
-func (r *RQLiteManager) establishLeadershipOrJoin(ctx context.Context, rqliteDataDir string) error {
-	timeout := 5 * time.Minute
-	if r.config.RQLiteJoinAddress == "" {
-		timeout = 2 * time.Minute
-	}
+// minClusterSizeWait bounds waitForMinClusterSizeBeforeStart. Past it the node
+// starts anyway: waiting longer for peers that may never come cannot make the
+// cluster larger, and a node that is up and retrying its join is strictly more
+// useful than one that is still blocked in start-up.
+const minClusterSizeWait = 2 * time.Minute
 
-	sqlCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	if err := r.waitForSQLAvailable(sqlCtx); err != nil {
-		if r.cmd != nil && r.cmd.Process != nil {
-			_ = r.cmd.Process.Kill()
-		}
-		return err
-	}
-
-	return nil
-}
-
-// waitForMinClusterSizeBeforeStart waits for minimum cluster size to be discovered
+// waitForMinClusterSizeBeforeStart waits for the configured minimum number of
+// peers to be discovered, up to minClusterSizeWait. Falling through the
+// deadline is not an error — see the constant.
 func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rqliteDataDir string) error {
 	if r.discoveryService == nil {
 		return fmt.Errorf("discovery service not available")
@@ -52,16 +40,27 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 		r.logger.Warn("Failed to trigger peer exchange before cluster wait", zap.Error(err))
 	}
 
+	deadline := time.Now().Add(minClusterSizeWait)
 	checkInterval := 2 * time.Second
+
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if time.Now().After(deadline) {
+			r.logger.Warn("Starting without the configured minimum cluster size — continuing so the node can serve locally and keep retrying its join",
+				zap.Int("min_cluster_size", r.config.MinClusterSize),
+				zap.Duration("waited", minClusterSizeWait))
+			return nil
 		}
 
 		r.discoveryService.TriggerSync()
-		time.Sleep(checkInterval)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(checkInterval):
+		}
 
 		allPeers := r.discoveryService.GetAllPeers()
 		remotePeerCount := 0
@@ -71,21 +70,31 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 			}
 		}
 
-		if remotePeerCount >= requiredRemotePeers {
-			// Check discovery-peers.json (safe location outside raft dir)
-			peersPath := filepath.Join(rqliteDataDir, "discovery-peers.json")
-			r.discoveryService.TriggerSync()
-			time.Sleep(500 * time.Millisecond)
+		if remotePeerCount < requiredRemotePeers {
+			continue
+		}
 
-			if info, err := os.Stat(peersPath); err == nil && info.Size() > 10 {
-				data, err := os.ReadFile(peersPath)
-				if err == nil {
-					var peers []map[string]interface{}
-					if err := json.Unmarshal(data, &peers); err == nil && len(peers) >= requiredRemotePeers {
-						return nil
-					}
-				}
-			}
+		// Check discovery-peers.json (safe location outside raft dir)
+		peersPath := filepath.Join(rqliteDataDir, "discovery-peers.json")
+		r.discoveryService.TriggerSync()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		info, err := os.Stat(peersPath)
+		if err != nil || info.Size() <= 10 {
+			continue
+		}
+		data, err := os.ReadFile(peersPath)
+		if err != nil {
+			continue
+		}
+		var peers []map[string]interface{}
+		if err := json.Unmarshal(data, &peers); err == nil && len(peers) >= requiredRemotePeers {
+			return nil
 		}
 	}
 }
@@ -158,7 +167,10 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 
 // recoverCluster restarts RQLite using peers.json
 func (r *RQLiteManager) recoverCluster(ctx context.Context, peersJSONPath string) error {
-	if err := r.Stop(); err != nil {
+	// shutdown, not Stop: Stop is once-only (it is also reached through
+	// RQLiteAdapter.Close on the shutdown path), and a recovery must actually
+	// stop the instance every time it runs.
+	if err := r.shutdown(); err != nil {
 		r.logger.Warn("Failed to stop RQLite during cluster recovery", zap.Error(err))
 	}
 	time.Sleep(2 * time.Second)
@@ -208,6 +220,11 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 
 	return nil
 }
+
+// splitBrainSettleDelay is how long the split-brain detector waits before its
+// first check, so a node that is simply still converging is not mistaken for
+// one that has bootstrapped alone.
+const splitBrainSettleDelay = 30 * time.Second
 
 // isInSplitBrainState detects if we're in a split-brain scenario
 func (r *RQLiteManager) isInSplitBrainState() bool {
@@ -267,7 +284,12 @@ func (r *RQLiteManager) getPeerRQLiteStatus(httpAddr string) (*RQLiteStatus, err
 }
 
 func (r *RQLiteManager) startHealthMonitoring(ctx context.Context) {
-	time.Sleep(30 * time.Second)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(splitBrainSettleDelay):
+	}
+
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 

@@ -314,6 +314,12 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 Description=Orama Network Node
 After=network-online.target
 Wants=network-online.target
+# The node no longer exits because the cluster is unreachable — it degrades and
+# keeps converging — so a restart now means a genuine crash. Disabling the start
+# limit explicitly keeps systemd from giving up on a node that crash-looped for
+# an unrelated reason, which would otherwise leave it in failed state until an
+# operator noticed. StartLimitIntervalSec belongs in [Unit], not [Service].
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -335,7 +341,11 @@ SyslogIdentifier=orama-node
 
 PrivateTmp=yes
 LimitNOFILE=65536
-TimeoutStopSec=30
+# Shutdown is: announce maintenance, wait up to 10s for the boot supervisor to
+# leave its current attempt, then tear services down and hand raft leadership
+# over. 60s leaves that sequence room; at 30s systemd used to SIGKILL right as
+# the leadership transfer began.
+TimeoutStopSec=60
 KillMode=mixed
 MemoryMax=8G
 MemorySwapMax=0

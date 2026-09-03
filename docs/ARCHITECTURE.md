@@ -90,6 +90,77 @@ Every unit that binds or reaches across the overlay — `rqlite@`, `olric@`,
 `After=orama-namespace-wireguard@index.service`, so a cold boot cannot start
 Olric or the SFU against an address that does not exist yet.
 
+### Boot: components, not a sequence
+
+`orama-node` converges its services; it does not start them in a line. Every
+piece of start-up is a **component** with declared dependencies
+(`pkg/node/boot`), and a supervisor runs each one whose dependencies are ready,
+retrying failures with exponential backoff (1s → 60s) instead of exiting.
+
+Components come in two tiers:
+
+| Tier | Components | Needs |
+|---|---|---|
+| **local** | `data-dir`, `wireguard`, `libp2p`, `peer-info`, `monitoring`, `pubsub`, `ipfs-cluster-config`, `storage`, `cluster-discovery`, `rqlite-local`, `nameserver`, `gateway`, `edge-serving`, `edge-aux`, `wireguard-sync`, `ipfs-swarm-sync` | this machine only |
+| **cluster** | `rqlite-cluster`, `dns-registration` | a raft quorum |
+
+`edge-serving` is vault, the optional SNI router and Caddy; `edge-aux` is ntfy
+and the anyone-client. They are separate because `dns-registration` depends on
+the first and not the second: a `dns_nodes` row saying `active` is a promise
+that this node terminates TLS and proxies tenants, so a node whose Caddy never
+started must not advertise itself — while a broken ntfy, which serves no
+traffic, must not take a healthy node out of DNS.
+
+Two components carry health checks, polled every 30s:
+
+- `rqlite-local` — `LocalHealthy`: the local `rqlited` answers `/status` and the
+  connection handle is open. It does *not* require a leader. A failure restarts
+  the unit and reopens the handle, and blocks everything that reads the local
+  replica until it is back.
+- `rqlite-cluster` — `LeaderReachable`: a leader-routed read still succeeds.
+  This is the single component that waits for consensus; it runs
+  `WaitForRaftReady` and the read under short per-attempt budgets, so losing
+  quorum puts it — and only it and its dependents — back into retry.
+
+Because components are reconciled repeatedly, spawning is idempotent: a port
+held by the unit a spawn is about to start is not a conflict (`ensurePortsFree`
+short-circuits on an already-active unit), so a retry after a transient failure
+does not report a port conflict against itself.
+
+That split is what the tiers buy: a node that boots with every peer down still
+brings up WireGuard, IPFS, the local rqlite replica, CoreDNS, the index gateway,
+Caddy, ntfy and its tenants. It announces itself as **degraded** rather than
+active, and returns to active on its own when quorum comes back — with no
+restart, because nothing exited.
+
+The mesh and swarm syncs are deliberately in the local tier even though they
+read cluster tables. Raft runs *over* the mesh, so `loadDesiredWireGuardPeers`
+falls back to this node's own replica and applies peers additively; gating that
+repair on a quorum would make fixing the transport depend on the transport.
+
+`orama-node.service` carries `StartLimitIntervalSec=0` and `TimeoutStopSec=60`.
+The process no longer exits because the cluster is unreachable, so a restart now
+means a real crash and systemd should keep restarting rather than park the unit
+in `failed`; the stop timeout leaves room for the shutdown sequence (announce
+maintenance → wait up to 10s for the supervisor → tear down → hand raft
+leadership over). `orama upgrade` rewrites the unit in Phase 5, so an existing
+fleet picks both settings up on the next upgrade, after `daemon-reload` and a
+node restart.
+
+**Lifecycle states** (`pkg/node/lifecycle`): `joining` → `active` ⇄ `degraded`,
+with `draining` and `maintenance` driven by operators and never overridden by
+the supervisor. `degraded` is a *serving* state, so a degraded node is not taken
+out of rotation; the leader's health monitor deliberately does not short-circuit
+it and verifies the claim with an HTTP probe instead. A node leaves `joining`
+once its **serving core** — `rqlite-local` and `gateway` — is up, so one local
+component that can never converge cannot pin it out of `IsAvailable` and stop it
+announcing maintenance on shutdown.
+
+The state is published in discovery metadata. `orama monitor report` does not
+render it today; read it from the node's own log
+(`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
+lists the components that have not converged.
+
 RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`. Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components

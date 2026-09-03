@@ -159,6 +159,26 @@ When adding a new platform table or column:
 2. Update the relevant Go code that reads/writes the new column
 3. Add an exemplar to `migrations/roundtrip_test.go` mirroring the new SQL — this enforces the contract permanently
 
+#### A node that boots without a quorum
+
+`orama-node` no longer exits when it cannot reach a raft leader. It brings up
+everything that needs only the local machine — WireGuard, IPFS, the local rqlite
+replica, CoreDNS, the index gateway, Caddy, ntfy, tenants — reports its
+lifecycle state as `degraded`, and keeps retrying the cluster half in the
+background. When quorum returns it goes to `active` with no restart.
+
+So a node in `degraded` is serving. Check which components have not converged
+before reaching for a recovery command:
+
+```bash
+journalctl -u orama-node -n 100 | grep "Boot component"
+```
+
+Every failed attempt logs the component name, the attempt count, the retry delay
+and the underlying error. `Node lifecycle state changed` lines carry the list of
+components that are not converged. Only escalate to `recover-raft` when the
+whole cluster is leaderless, not when one node reports `degraded`.
+
 #### Recovery from Cluster Split
 
 If nodes get stuck in "Candidate" state or show "leader not found" errors:

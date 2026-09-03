@@ -98,8 +98,24 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	return nil
 }
 
+// Tenant restore retry bounds. The disk-backed pass needs nothing but local
+// state and runs immediately; the database-backed pass needs a raft leader, so
+// it retries with backoff for as long as the process lives.
+const (
+	tenantRestoreBaseBackoff = 5 * time.Second
+	tenantRestoreMaxBackoff  = 2 * time.Minute
+)
+
+// restoreTenantClusters brings this node's namespace clusters back up after a
+// restart.
+//
+// It used to sleep five seconds, restore from disk, sleep five more, then try
+// the database twelve times and give up. Both sleeps were guesses at how long
+// rqlite needs, and the twelve-attempt cap meant a node whose cluster had no
+// leader for two minutes left every tenant down until someone restarted the
+// gateway by hand. The database pass now retries indefinitely with backoff:
+// failing that call IS the readiness signal, so there is nothing to sleep for.
 func restoreTenantClusters(ctx context.Context, clusterManager *namespacepkg.ClusterManager, logger *zap.Logger) {
-	time.Sleep(5 * time.Second)
 	restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
 	if err != nil {
 		logger.Warn("Disk-based namespace restore failed", zap.Error(err))
@@ -107,15 +123,28 @@ func restoreTenantClusters(ctx context.Context, clusterManager *namespacepkg.Clu
 	if restored > 0 {
 		logger.Info("Restored namespace clusters from local state", zap.Int("count", restored))
 	}
-	time.Sleep(5 * time.Second)
-	for attempt := 1; attempt <= 12; attempt++ {
-		if err := clusterManager.RestoreLocalClusters(ctx); err == nil {
+
+	backoff := tenantRestoreBaseBackoff
+	for {
+		err := clusterManager.RestoreLocalClusters(ctx)
+		if err == nil {
+			logger.Info("Restored namespace clusters from the cluster database")
 			return
-		} else {
-			logger.Warn("Namespace cluster DB restore failed, retrying",
-				zap.Int("attempt", attempt), zap.Error(err))
 		}
-		time.Sleep(10 * time.Second)
+		logger.Warn("Namespace cluster restore from the database failed, retrying",
+			zap.Duration("retry_in", backoff), zap.Error(err))
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		backoff *= 2
+		if backoff > tenantRestoreMaxBackoff {
+			backoff = tenantRestoreMaxBackoff
+		}
 	}
-	logger.Error("Failed to restore namespace clusters from DB after all retries")
 }

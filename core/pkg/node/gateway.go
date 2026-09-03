@@ -11,6 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/namespace"
+	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 func (n *Node) startIndexPubsub(ctx context.Context) error {
@@ -19,11 +20,7 @@ func (n *Node) startIndexPubsub(ctx context.Context) error {
 		return err
 	}
 	sup := namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger)
-	nodeID := n.config.Node.ID
-	if nodeID == "" {
-		nodeID = "node"
-	}
-	return sup.EnsurePubsub(ctx, nodeID, n.config.Discovery.BootstrapPeers)
+	return sup.EnsurePubsub(ctx, n.nodeID(), n.config.Discovery.BootstrapPeers)
 }
 
 // startIndexGateway starts orama-namespace-gateway@index.
@@ -41,10 +38,6 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 	oramaDir := filepath.Dir(dataDir)
 	sup := namespace.NewIndexSupervisor(oramaDir, n.logger.Logger)
 
-	nodeID := n.config.Node.ID
-	if nodeID == "" {
-		nodeID = "node"
-	}
 	bindAddr, _, _ := net.SplitHostPort(n.config.Discovery.HttpAdvAddress)
 	if bindAddr == "" {
 		bindAddr = "127.0.0.1"
@@ -56,7 +49,7 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 	}
 
 	return sup.EnsureGateway(ctx, gateway.InstanceConfig{
-		NodeID:                nodeID,
+		NodeID:                n.nodeID(),
 		BaseDomain:            n.config.HTTPGateway.BaseDomain,
 		OlricServers:          olricServers,
 		OlricTimeout:          n.config.HTTPGateway.OlricTimeout,
@@ -75,15 +68,33 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 	})
 }
 
-// startIPFSClusterConfig initializes and ensures IPFS Cluster configuration
+// startIPFSClusterConfig initializes and ensures IPFS Cluster configuration.
+// A node with no cluster API configured has nothing to do here.
+//
+// The manager is built at most once and published under depsMu, because the
+// monitoring loop reads it on its own goroutine and this component can still be
+// retrying when that loop starts. The config writes take clusterCfgMu for the
+// same reason: the monitoring loop repairs the same service.json.
 func (n *Node) startIPFSClusterConfig() error {
-	n.logger.ComponentInfo(logging.ComponentNode, "Initializing IPFS Cluster configuration")
-
-	cm, err := ipfs.NewClusterConfigManager(n.config, n.logger.Logger)
-	if err != nil {
-		return err
+	if n.config.Database.IPFS.ClusterAPIURL == "" {
+		return nil
 	}
-	n.clusterConfigManager = cm
+
+	cm := n.getClusterConfigManager()
+	if cm == nil {
+		n.logger.ComponentInfo(logging.ComponentNode, "Initializing IPFS Cluster configuration")
+		built, err := ipfs.NewClusterConfigManager(n.config, n.logger.Logger)
+		if err != nil {
+			return err
+		}
+		n.depsMu.Lock()
+		n.clusterConfigManager = built
+		n.depsMu.Unlock()
+		cm = built
+	}
+
+	n.clusterCfgMu.Lock()
+	defer n.clusterCfgMu.Unlock()
 
 	_ = cm.FixIPFSConfigAddresses()
 	if err := cm.EnsureConfig(); err != nil {
@@ -92,4 +103,40 @@ func (n *Node) startIPFSClusterConfig() error {
 
 	_ = cm.RepairPeerConfiguration()
 	return nil
+}
+
+// getClusterConfigManager returns the IPFS cluster config manager, or nil if
+// the config component has not built it yet.
+func (n *Node) getClusterConfigManager() *ipfs.ClusterConfigManager {
+	n.depsMu.RLock()
+	defer n.depsMu.RUnlock()
+	return n.clusterConfigManager
+}
+
+// getClusterDiscovery returns the cluster discovery service, or nil if the
+// cluster-discovery component has not started it yet.
+func (n *Node) getClusterDiscovery() *database.ClusterDiscoveryService {
+	n.depsMu.RLock()
+	defer n.depsMu.RUnlock()
+	return n.clusterDiscovery
+}
+
+// The three cluster-peer repairs below all rewrite service.json, so they take
+// the same lock the config component holds.
+func (n *Node) discoverClusterPeers(cm *ipfs.ClusterConfigManager) error {
+	n.clusterCfgMu.Lock()
+	defer n.clusterCfgMu.Unlock()
+	return cm.DiscoverClusterPeersFromLibP2P(n.host)
+}
+
+func (n *Node) updateClusterPeers(cm *ipfs.ClusterConfigManager) error {
+	n.clusterCfgMu.Lock()
+	defer n.clusterCfgMu.Unlock()
+	return cm.UpdateAllClusterPeers()
+}
+
+func (n *Node) repairClusterPeers(cm *ipfs.ClusterConfigManager) error {
+	n.clusterCfgMu.Lock()
+	defer n.clusterCfgMu.Unlock()
+	return cm.RepairPeerConfiguration()
 }

@@ -254,7 +254,10 @@ func (m *Monitor) probeNode(ctx context.Context, node nodeInfo) bool {
 				return true
 			}
 
-			// Recently seen active node → count as healthy (no HTTP needed)
+			// Recently seen active node → count as healthy (no HTTP needed).
+			// "degraded" is deliberately not short-circuited here: such a node
+			// claims to be serving from its local replica, and the probe below
+			// is what verifies the claim.
 			if state == "active" && time.Since(lastSeen) < 30*time.Second {
 				return true
 			}

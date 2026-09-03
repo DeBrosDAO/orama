@@ -17,6 +17,13 @@ const (
 	// voterChangeCooldown is how long to wait after a failed voter change
 	// before retrying the same node.
 	voterChangeCooldown = 10 * time.Minute
+
+	// voterReconcileSettleDelay and orphanRecoverySettleDelay are how long each
+	// reconciler waits after start-up before its first pass. Both used to be a
+	// bare time.Sleep, which meant a node that was asked to shut down inside
+	// the window kept a goroutine alive for minutes past cancellation.
+	voterReconcileSettleDelay = 3 * time.Minute
+	orphanRecoverySettleDelay = 5 * time.Minute
 )
 
 // voterReconciler holds voter change cooldown state.
@@ -33,8 +40,13 @@ func (r *RQLiteManager) startVoterReconciliation(ctx context.Context) {
 		cooldowns: make(map[string]time.Time),
 	}
 
-	// Wait for cluster to stabilize after startup
-	time.Sleep(3 * time.Minute)
+	// Wait for the cluster to stabilize after startup before correcting
+	// anything: mid-boot, the raft configuration is still moving.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(voterReconcileSettleDelay):
+	}
 
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
@@ -56,8 +68,12 @@ func (r *RQLiteManager) startVoterReconciliation(ctx context.Context) {
 // (orphaned by a failed remove+rejoin during voter reconciliation). For each
 // orphaned node, it re-adds them via POST /join. (C1 fix)
 func (r *RQLiteManager) startOrphanedNodeRecovery(ctx context.Context) {
-	// Wait for cluster to stabilize
-	time.Sleep(5 * time.Minute)
+	// Wait for the cluster to stabilize before treating any node as orphaned.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(orphanRecoverySettleDelay):
+	}
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()

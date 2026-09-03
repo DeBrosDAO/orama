@@ -217,58 +217,70 @@ func (r *RQLiteManager) launchProcess(ctx context.Context, rqliteDataDir string)
 	return nil
 }
 
-// waitForReadyAndConnect waits for RQLite to be ready and establishes connection
+// waitForReadyAndConnect waits for the local rqlited to be participating in
+// raft and then opens the connection. Used by the recovery path, which restarts
+// the unit and needs both halves before it can report success.
 func (r *RQLiteManager) waitForReadyAndConnect(ctx context.Context) error {
 	if err := r.waitForReady(ctx); err != nil {
-		if r.cmd != nil && r.cmd.Process != nil {
-			_ = r.cmd.Process.Kill()
-		}
 		return err
 	}
+	return r.connect(ctx)
+}
 
-	var conn *gorqlite.Connection
-	var err error
-	maxConnectAttempts := 10
-	connectBackoff := 1 * time.Second
+// connectMaxAttempts and connectBaseBackoff bound one connect call. "store is
+// not open" is the only retryable failure: rqlited has bound its HTTP port but
+// has not finished opening its SQLite store yet.
+const (
+	connectMaxAttempts   = 10
+	connectBaseBackoff   = 1 * time.Second
+	connectMaxBackoff    = 5 * time.Second
+	connectBackoffGrowth = 1.5
+)
 
+// connect opens the local gorqlite connection.
+//
+// It does NOT require a raft leader: the point of opening the connection early
+// is that a node without quorum can still read its own replica. Callers that
+// need leader-routed reads wait for them separately.
+func (r *RQLiteManager) connect(ctx context.Context) error {
 	// Use disableClusterDiscovery=true to avoid gorqlite calling /nodes on Open().
 	// The /nodes endpoint probes all cluster members including unreachable ones,
 	// which can block for the full HTTP timeout (~10s per attempt).
 	// This is safe because rqlited followers automatically forward writes to the leader.
 	connURL := fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort)
 
-	for attempt := 0; attempt < maxConnectAttempts; attempt++ {
-		conn, err = gorqlite.Open(connURL)
+	backoff := connectBaseBackoff
+	var lastErr error
+
+	for attempt := 0; attempt < connectMaxAttempts; attempt++ {
+		conn, err := gorqlite.Open(connURL)
 		if err == nil {
-			r.connection = conn
-			break
+			r.setConnection(conn)
+			_ = r.validateNodeID()
+			return nil
+		}
+		lastErr = err
+
+		if !strings.Contains(err.Error(), "store is not open") {
+			return fmt.Errorf("failed to connect to RQLite: %w", err)
 		}
 
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "store is not open") {
-			r.logger.Debug("RQLite not ready yet, retrying",
-				zap.Int("attempt", attempt+1),
-				zap.Error(err))
-			time.Sleep(connectBackoff)
-			connectBackoff = time.Duration(float64(connectBackoff) * 1.5)
-			if connectBackoff > 5*time.Second {
-				connectBackoff = 5 * time.Second
-			}
-			continue
-		}
+		r.logger.Debug("RQLite store not open yet, retrying",
+			zap.Int("attempt", attempt+1),
+			zap.Error(err))
 
-		if r.cmd != nil && r.cmd.Process != nil {
-			_ = r.cmd.Process.Kill()
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("connecting to RQLite cancelled after %d attempts (last error: %v): %w", attempt+1, lastErr, ctx.Err())
+		case <-time.After(backoff):
 		}
-		return fmt.Errorf("failed to connect to RQLite: %w", err)
+		backoff = time.Duration(float64(backoff) * connectBackoffGrowth)
+		if backoff > connectMaxBackoff {
+			backoff = connectMaxBackoff
+		}
 	}
 
-	if conn == nil {
-		return fmt.Errorf("failed to connect to RQLite after max attempts")
-	}
-
-	_ = r.validateNodeID()
-	return nil
+	return fmt.Errorf("RQLite store still not open after %d attempts: %w", connectMaxAttempts, lastErr)
 }
 
 // rqliteReadyTimeout matches the previous 180 one-second attempts.
@@ -293,11 +305,12 @@ func (r *RQLiteManager) waitForSQLAvailable(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			attempts++
-			if r.connection == nil {
+			conn := r.GetConnection()
+			if conn == nil {
 				r.logger.Warn("connection is nil in waitForSQLAvailable")
 				continue
 			}
-			_, err := r.connection.QueryOne("SELECT 1")
+			_, err := conn.QueryOne("SELECT 1")
 			if err == nil {
 				r.logger.Info("SQL is available", zap.Int("attempts", attempts))
 				return nil

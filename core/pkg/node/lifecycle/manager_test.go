@@ -318,3 +318,73 @@ func TestFullLifecycle(t *testing.T) {
 		t.Fatal("should be available after maintenance")
 	}
 }
+
+func TestManager_degradedIsAServingState(t *testing.T) {
+	m := NewManager()
+
+	// A node whose local tier came up but whose cluster tier has not.
+	if err := m.TransitionTo(StateDegraded); err != nil {
+		t.Fatalf("joining→degraded: %v", err)
+	}
+	if !m.IsAvailable() {
+		t.Fatal("a degraded node is serving and must count as available")
+	}
+	if m.State() != StateDegraded {
+		t.Fatalf("state = %q, want degraded", m.State())
+	}
+
+	// The cluster comes back with no restart in between.
+	if err := m.TransitionTo(StateActive); err != nil {
+		t.Fatalf("degraded→active: %v", err)
+	}
+	if m.State() != StateActive {
+		t.Fatalf("state = %q, want active", m.State())
+	}
+
+	// And can regress again without a restart.
+	if err := m.TransitionTo(StateDegraded); err != nil {
+		t.Fatalf("active→degraded: %v", err)
+	}
+}
+
+func TestManager_degradedNodeCanStillDrainAndEnterMaintenance(t *testing.T) {
+	m := NewManager()
+	if err := m.TransitionTo(StateDegraded); err != nil {
+		t.Fatalf("joining→degraded: %v", err)
+	}
+	if err := m.EnterMaintenance(time.Minute); err != nil {
+		t.Fatalf("degraded→maintenance: %v", err)
+	}
+	if !m.IsInMaintenance() {
+		t.Fatal("expected maintenance")
+	}
+
+	// Recovering from maintenance into a still-degraded cluster is allowed.
+	if err := m.TransitionTo(StateDegraded); err != nil {
+		t.Fatalf("maintenance→degraded: %v", err)
+	}
+
+	m2 := NewManager()
+	if err := m2.TransitionTo(StateDegraded); err != nil {
+		t.Fatalf("joining→degraded: %v", err)
+	}
+	if err := m2.TransitionTo(StateDraining); err != nil {
+		t.Fatalf("degraded→draining: %v", err)
+	}
+	if m2.IsAvailable() {
+		t.Fatal("a draining node is not available")
+	}
+}
+
+func TestManager_degradedRejectsInvalidTransitions(t *testing.T) {
+	m := NewManager()
+	if err := m.TransitionTo(StateDegraded); err != nil {
+		t.Fatalf("joining→degraded: %v", err)
+	}
+	if err := m.TransitionTo(StateJoining); err == nil {
+		t.Fatal("degraded→joining must be rejected")
+	}
+	if err := m.TransitionTo(StateDegraded); err == nil {
+		t.Fatal("degraded→degraded must be rejected")
+	}
+}

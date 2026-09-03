@@ -46,7 +46,7 @@ type RQLiteNodeMetadata struct {
 	// --- New: Lifecycle ---
 
 	// LifecycleState is the node's current lifecycle state:
-	// "joining", "active", "draining", or "maintenance".
+	// "joining", "active", "degraded", "draining", or "maintenance".
 	// Zero value (empty string) from old nodes is treated as "active".
 	LifecycleState string `json:"lifecycle_state,omitempty"`
 
@@ -83,8 +83,20 @@ func (m *RQLiteNodeMetadata) IsInMaintenance() bool {
 }
 
 // IsAvailable returns true if the node is in a state that can serve requests.
+// "degraded" counts: such a node is up and answering from its local replicas,
+// it has simply not finished converging on the cluster. See
+// lifecycle.StateDegraded.
+//
+// It is a claim by the node about itself, so callers must verify it rather than
+// route traffic on it alone — see health.Monitor.probeNode, which deliberately
+// does not short-circuit "degraded" and confirms with an HTTP probe.
 func (m *RQLiteNodeMetadata) IsAvailable() bool {
-	return m.EffectiveLifecycleState() == "active"
+	switch m.EffectiveLifecycleState() {
+	case "active", "degraded":
+		return true
+	default:
+		return false
+	}
 }
 
 // IsMaintenanceExpired returns true if the node is in maintenance and the

@@ -68,14 +68,14 @@ type desiredWGPeers struct {
 // has since left is self-correcting (it simply never handshakes, and the next
 // authoritative sync removes it); failing to add one is not.
 func (n *Node) loadDesiredWireGuardPeers(ctx context.Context, localPubKey string) (desiredWGPeers, error) {
-	leaderDB := n.rqliteAdapter.GetSQLDB()
+	leaderDB := n.getRQLiteAdapter().GetSQLDB()
 	peers, err := scanWGPeers(ctx, leaderDB, localPubKey)
 	if err == nil {
 		return desiredWGPeers{peers: peers, authoritative: true, source: "leader"}, nil
 	}
 	leaderErr := err
 
-	localDB, localErr := n.rqliteAdapter.LocalDB()
+	localDB, localErr := n.getRQLiteAdapter().LocalDB()
 	if localErr != nil {
 		return desiredWGPeers{}, fmt.Errorf("failed to query wireguard_peers (leader: %v; local handle: %w)", leaderErr, localErr)
 	}
@@ -135,10 +135,17 @@ func scanWGPeers(ctx context.Context, db *sql.DB, localPubKey string) (map[strin
 
 // syncWireGuardPeers reads the mesh membership and reconciles the local
 // WireGuard interface against it. Called at startup and every syncInterval.
+//
+// The lock matters: a retry on the supervisor goroutine can land on the same
+// moment as a tick of the periodic loop, and both write wg0.conf. `wg set` is
+// idempotent, but the config file rewrite is not.
 func (n *Node) syncWireGuardPeers(ctx context.Context) error {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return fmt.Errorf("rqlite adapter not initialized")
 	}
+
+	n.wgSyncMu.Lock()
+	defer n.wgSyncMu.Unlock()
 
 	// Check if WireGuard is installed and active
 	if _, err := exec.LookPath("wg"); err != nil {
@@ -330,7 +337,7 @@ func shortWGKey(pubKey string) string {
 // wireguard_peers table. Without this, joining nodes get an empty peer list
 // from the /v1/internal/join endpoint and can't establish WG tunnels.
 func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 
@@ -380,7 +387,7 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 	// Query local IPFS peer ID
 	ipfsPeerID := queryLocalIPFSPeerID()
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	// Clean up stale entries for this public IP with a different node_id.
 	// This prevents ghost peers from previous installs or from the temporary
@@ -422,34 +429,43 @@ func queryLocalIPFSPeerID() string {
 	return result.ID
 }
 
-// startWireGuardSyncLoop runs syncWireGuardPeers periodically
-func (n *Node) startWireGuardSyncLoop(ctx context.Context) {
+// startWireGuardSync registers this node in wireguard_peers, reconciles the
+// local interface once, and makes sure the periodic sync is running.
+//
+// The boot supervisor retries it after any failure, so the periodic loop starts
+// once while the immediate sync runs on every attempt — which is what you want
+// while the mesh is still being repaired: catch up now, then fall back to the
+// normal cadence.
+func (n *Node) startWireGuardSync(ctx context.Context) error {
+	n.wgSyncOnce.Do(func() { go n.wireGuardSyncLoop(ctx) })
+
 	// Ensure this node is registered in wireguard_peers (critical for join flow)
 	n.ensureWireGuardSelfRegistered(ctx)
 
-	// Run initial sync
 	if err := n.syncWireGuardPeers(ctx); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "initial WireGuard peer sync failed", zap.Error(err))
+		return fmt.Errorf("WireGuard peer sync failed: %w", err)
 	}
+	return nil
+}
 
-	// Periodic sync every wgSyncInterval
-	go func() {
-		ticker := time.NewTicker(wgSyncInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Re-register self on every tick to pick up IPFS peer ID if it wasn't
-				// ready at startup (INSERT OR REPLACE is idempotent)
-				n.ensureWireGuardSelfRegistered(ctx)
-				if err := n.syncWireGuardPeers(ctx); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "WireGuard peer sync failed", zap.Error(err))
-				}
+// wireGuardSyncLoop reconciles the local WireGuard interface every
+// wgSyncInterval until ctx is done.
+func (n *Node) wireGuardSyncLoop(ctx context.Context) {
+	ticker := time.NewTicker(wgSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Re-register self on every tick to pick up IPFS peer ID if it wasn't
+			// ready at startup (INSERT OR REPLACE is idempotent)
+			n.ensureWireGuardSelfRegistered(ctx)
+			if err := n.syncWireGuardPeers(ctx); err != nil {
+				n.logger.ComponentWarn(logging.ComponentNode, "WireGuard peer sync failed", zap.Error(err))
 			}
 		}
-	}()
+	}
 }
 
 // parseWGShowLocalKey extracts the local public key from `wg show wg0` output
@@ -468,10 +484,10 @@ func parseWGShowLocalKey(output string) string {
 //
 // This is the recovery path for a node whose mesh membership was lost. Raft
 // runs over the mesh, so such a node reaches no voter and its rqlite never
-// elects a leader; meanwhile the steady-state sync loop
-// (startWireGuardSyncLoop) runs later in Node.Start, which is never reached
-// because the leader wait fails first. The result is a node that cannot recover
-// without hands, while the peer rows sit readable on its own disk.
+// elects a leader; the steady-state sync (startWireGuardSync) cannot run yet
+// either, because it needs the adapter that rqlite start-up has not finished
+// building. The result would be a node that cannot recover without hands,
+// while the peer rows sit readable on its own disk.
 //
 // Running here breaks that cycle. It reads the local replica directly rather
 // than going through the adapter, because the adapter is only constructed after
