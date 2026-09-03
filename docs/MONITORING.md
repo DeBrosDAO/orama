@@ -245,6 +245,25 @@ These checks compare data across all nodes:
 - **Clock Skew**: Node clocks within 5 seconds of each other
 - **Binary Version**: All nodes running the same version. Currently inert: `orama node report` always emits an empty `version`, so every node reads as "unknown" and this alert never fires.
 
+### The lifecycle harness
+
+`e2e/lifecycle` consumes `orama monitor report --json` as its only view of the
+cluster, so the report's schema is a test contract. Its predicates assert:
+
+- **`Converged(n)`** — exactly `n` nodes, quorum `ok`, a leader, WG mesh `ok`,
+  zero critical alerts, and per node: responsive rqlite in `Leader`/`Follower`,
+  gateway 200, `wg0` up with N-1 peers, no crash-looping service, no failed unit.
+- **`LeaderAgreement()`** — every responsive node names the same leader. Split
+  brain is failed on by name, because both halves look healthy from inside.
+- **`Forgotten(wgIP)`** — no surviving node lists the address, in the node list
+  *or* as a WireGuard peer. A node evicted from raft but left in the mesh is the
+  failure that survives a restart.
+- **`Serving()`** — gateways respond and nameservers run CoreDNS, with raft
+  ignored entirely. A cluster mid-election must still serve.
+
+Adding a field is safe; renaming one that these read will fail
+`go test ./e2e/lifecycle/...` in `make test`.
+
 ### The rolling-upgrade gate
 
 `orama node upgrade --env <env>` uses the same signals, in `pkg/nodehealth`, as

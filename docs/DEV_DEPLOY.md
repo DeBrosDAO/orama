@@ -28,6 +28,59 @@ make build
 make test
 ```
 
+### Lifecycle harness
+
+`make test` and `make test-e2e` never reboot a node, kill a voter, join one, or
+upgrade one — `e2e/cluster` tests read-consistency levels and `e2e/production`
+stops a deployment process. That is why the change-287 stability audit's
+findings all had to be established by reading code: nothing could observe them.
+
+`e2e/lifecycle` closes that gap. It drives a real 3-node cluster **only through
+the `orama` CLI** and observes it **only through `orama monitor report --json`
+and `dig`** — a harness that reaches around the CLI would test a path no
+operator runs, and could pass while the CLI reported something different.
+
+```bash
+ORAMA_LIFECYCLE_ENV=<disposable-env> make test-lifecycle
+```
+
+**Never point it at testnet or mainnet.** These scenarios reboot nodes and
+destroy VMs; the harness refuses those two names outright.
+
+| Scenario | What it proves |
+|----------|----------------|
+| Reboot one node | Quorum holds; the node comes back with a complete mesh and no crash-loop |
+| Reboot all three | DNS and the gateway answer within 90s **before** raft has a leader, then the cluster converges |
+| Kill a voter (VM destroyed) | Survivors keep committing; every membership view — raft *and* WireGuard — forgets it |
+| Join a fourth node | It becomes a full member of every store, not just raft |
+| Decommission a node | Same end state as an abrupt death, reached cleanly |
+| Rolling upgrade, one node broken | The rollout **stops**, names the node, and leaves the leader untouched |
+| Rolling upgrade, healthy | The leader is the last step in the plan |
+| Index rqlite down everywhere | DNS still answers, from the stale cache |
+
+Four things have no CLI equivalent, because they are not things the CLI should
+be able to do: destroying a VM abruptly, breaking a node so an upgrade fails on
+it, creating a new VM, and (for DNS) naming the zone. Each is a command you
+supply — Multipass, Lima, a cloud CLI:
+
+| Variable | Purpose |
+|----------|---------|
+| `ORAMA_LIFECYCLE_ENV` | The disposable environment (required) |
+| `ORAMA_LIFECYCLE_DESTROY` | Destroy a node abruptly; receives the host as `$1` |
+| `ORAMA_LIFECYCLE_BREAK` | Make an upgrade fail on a node; receives the host as `$1` |
+| `ORAMA_LIFECYCLE_PROVISION` | Create a node; prints its IP on stdout |
+| `ORAMA_LIFECYCLE_BASE_DOMAIN` | The zone the DNS scenarios query |
+| `ORAMA_LIFECYCLE_RESOLVER` | Resolver for `dig` (defaults to the system resolver) |
+| `ORAMA_BIN` | The binary under test (defaults to `./bin/orama`) |
+
+A scenario whose hook is not set **skips** rather than passing — a green run
+that silently omitted the kill-a-voter scenario would be worse than no harness.
+
+The convergence predicates (`Converged`, `LeaderAgreement`, `Forgotten`,
+`Serving`) are plain Go with no build tag, so `make test` exercises them against
+recorded report shapes. That is what stops the harness from going green by
+asserting nothing.
+
 ## Deploying to VPS
 
 All binaries are pre-compiled locally and shipped as a binary archive. Zero compilation on the VPS.

@@ -54,6 +54,28 @@ test-e2e-production:
 	@echo "Running production-only E2E tests..."
 	go test -v -tags "e2e production" -timeout 15m ./e2e/production/...
 
+# Lifecycle harness (change-287). Drives a real 3-node cluster through the
+# orama CLI: reboot, kill a voter, join, decommission, rolling upgrade, DNS
+# with the index rqlite down.
+#
+# Build tag `lifecycle`, so `make test` never picks these up. Requires a
+# DISPOSABLE environment — these scenarios reboot nodes and destroy VMs.
+#
+#   ORAMA_LIFECYCLE_ENV=lifecycle make test-lifecycle
+#
+# Scenarios whose infrastructure hook is not configured SKIP rather than pass;
+# see docs/DEV_DEPLOY.md, "Lifecycle harness", for the hook variables.
+.PHONY: test-lifecycle
+test-lifecycle:
+	@if [ -z "$$ORAMA_LIFECYCLE_ENV" ]; then \
+		echo "❌ ORAMA_LIFECYCLE_ENV not set"; \
+		echo "Usage: ORAMA_LIFECYCLE_ENV=<disposable-env> make test-lifecycle"; \
+		echo "These scenarios reboot nodes and destroy VMs. Never point them at testnet or mainnet."; \
+		exit 1; \
+	fi
+	@echo "Running the lifecycle harness against $$ORAMA_LIFECYCLE_ENV..."
+	go test -v -tags lifecycle -timeout 120m ./e2e/lifecycle/...
+
 test-e2e-quick:
 	@echo "Running quick E2E smoke tests..."
 	go test -v -tags e2e -timeout 5m -run "TestStatic|TestHealth" ./e2e/...
