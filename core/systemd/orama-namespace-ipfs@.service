@@ -4,6 +4,11 @@ Documentation=https://github.com/DeBrosOfficial/network
 After=network-online.target orama-namespace-wireguard@%i.service
 Wants=network-online.target
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -24,7 +29,7 @@ Environment=HOME=/opt/orama
 ExecStartPre=/bin/bash -c 'if [ -f /opt/orama/.orama/secrets/swarm.key ] && [ ! -f ${IPFS_PATH}/swarm.key ]; then cp /opt/orama/.orama/secrets/swarm.key ${IPFS_PATH}/swarm.key && chmod 600 ${IPFS_PATH}/swarm.key; fi'
 ExecStart=/usr/local/bin/ipfs daemon --enable-pubsub-experiment --repo-dir=${IPFS_PATH}
 Restart=always
-RestartSec=5
+RestartSec=5s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=orama-ipfs-%i

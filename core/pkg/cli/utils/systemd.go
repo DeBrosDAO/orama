@@ -342,9 +342,15 @@ func StartServicesOrdered(services []string, action string) {
 		}
 
 		// After starting all Olric instances, wait for each one's memberlist
-		// port to accept TCP connections before starting gateways. Without this,
-		// gateways start before Olric is ready and the Olric client initialization
-		// fails permanently (no retry).
+		// port to accept TCP connections before starting gateways.
+		//
+		// This is an optimisation, not a correctness gate: a gateway that comes
+		// up before Olric retries the connection (initializeOlricClientWithRetry)
+		// and, failing that, keeps retrying in the background
+		// (startOlricReconnectLoop) with its cache endpoints disabled until it
+		// succeeds. Waiting here just means the gateway starts with a working
+		// cache instead of spending its first minute without one. A timeout is
+		// therefore a warning, not a failure.
 		if svcType == "olric" && len(svcs) > 0 {
 			fmt.Printf("  Waiting for namespace Olric instances to become ready...\n")
 			for _, svc := range svcs {

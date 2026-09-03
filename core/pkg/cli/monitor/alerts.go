@@ -606,8 +606,12 @@ func checkNodeServices(r *report.NodeReport, host string, nc *nodeContext) []Ale
 				fmt.Sprintf("Service %s is %s", svc.Name, svc.ActiveState)})
 		}
 		if svc.RestartLoopRisk {
+			detail := fmt.Sprintf("active for %ds", svc.ActiveSinceSec)
+			if svc.ActiveSinceSec == 0 {
+				detail = "never reached active"
+			}
 			alerts = append(alerts, Alert{AlertCritical, "service", host,
-				fmt.Sprintf("Service %s restart loop: %d restarts, active for %ds", svc.Name, svc.NRestarts, svc.ActiveSinceSec)})
+				fmt.Sprintf("Service %s restart loop: %d restarts, %s", svc.Name, svc.NRestarts, detail)})
 		}
 	}
 	for _, unit := range r.Services.FailedUnits {

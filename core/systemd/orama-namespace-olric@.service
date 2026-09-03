@@ -1,10 +1,19 @@
 [Unit]
 Description=Orama Namespace Olric Cache (%i)
 Documentation=https://github.com/DeBrosOfficial/network
-After=network.target orama-namespace-wireguard@index.service orama-namespace-rqlite@%i.service
+# Olric has no functional dependency on rqlite: it is an in-memory cache that
+# talks to its own memberlist over the overlay and never reads the database. It
+# used to declare Requires= AND After= on rqlite, which meant a rqlite restart
+# dropped every cached entry on the node and held Olric's own start behind a
+# raft convergence it does not need.
+After=network.target orama-namespace-wireguard@index.service
 Wants=orama-namespace-wireguard@index.service
-Requires=orama-namespace-rqlite@%i.service
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -30,7 +39,7 @@ TimeoutStopSec=30s
 KillMode=mixed
 KillSignal=SIGTERM
 
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 StandardOutput=journal

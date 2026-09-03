@@ -90,6 +90,44 @@ Every unit that binds or reaches across the overlay — `rqlite@`, `olric@`,
 `After=orama-namespace-wireguard@index.service`, so a cold boot cannot start
 Olric or the SFU against an address that does not exist yet.
 
+**Unit dependencies express ordering, not lifecycle.** `Requires=` propagates
+stop *and* restart, so it is reserved for the cases where one unit is genuinely
+useless without another. Two qualify: `ipfs-cluster@` and `ipfs-gc@` on
+`ipfs@` — a controller with no daemon has nothing to control, and `ipfs repo gc`
+works through the running daemon's API.
+
+Every other unit `orama-node` manages uses `Wants=` + `After=`. In particular
+`gateway@` no longer
+declares `Requires=` on `rqlite@` and `olric@`: a
+`systemctl restart orama-namespace-rqlite@<ns>` — which the split-brain recovery
+path issues by itself — used to bounce the gateway with it, restarting the
+leader wait, the health monitor, the cluster manager, every reconciler and the
+tenant restore, for a database restart the gateway is built to ride out. The
+gateway waits for rqlite itself (90s, then it exits and systemd restarts it —
+until the gateway starting-state work lands) and reconnects to Olric
+indefinitely in the background (`initializeOlricClientWithRetry`, then
+`startOlricReconnectLoop`) with its cache endpoints returning 503 meanwhile. So
+ordering is all either backend owes it. `olric@` dropped its rqlite dependency entirely: it is an
+in-memory cache with its own memberlist and never reads the database, so the
+only thing that coupling ever did was throw away the node's cache whenever
+rqlite restarted.
+
+**Unit restart policy.** Every long-running unit orama-node manages uses
+`Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`. Always, because
+`on-failure` leaves a daemon down after a clean exit that was not asked for. No
+start limit, because the boot supervisor reconciles these units and `systemctl
+start` on a rate-limited unit fails with "Start request repeated too quickly"
+until someone runs `reset-failed` — the default limit would turn a transient
+failure into one that needs a human. Retrying forever was already the effective
+behaviour for anything that takes a moment to fail (`RestartSec=5` never trips
+the default five-starts-in-ten-seconds window); it is now deliberate rather than
+accidental, and it also covers the unit that fails *instantly* — a missing
+binary, an unparseable config — which used to reach `failed` within ten seconds.
+Since nothing parks those any more, `orama monitor report` reads the restart
+counter instead: `restartLoopRisk` treats a unit that has restarted repeatedly
+and never reached active as a crash loop, and raises the same critical alert
+`failed` state used to.
+
 ### Boot: components, not a sequence
 
 `orama-node` converges its services; it does not start them in a line. Every
