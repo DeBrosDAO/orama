@@ -646,3 +646,28 @@ func newTestMonitor(t *testing.T, cfg Config) *Monitor {
 	}
 	return m
 }
+
+// The health ring has to keep probing a node the reaper has already flipped to
+// `inactive`. It used to drop out at exactly that moment — the ring window and
+// the reaper window were both two minutes — so no observer could ever
+// accumulate the consecutive misses needed to declare it dead, and
+// HandleDeadNode never fired for the failure it exists to catch.
+func TestRingMembershipWindow_outlivesTheDeadThreshold(t *testing.T) {
+	// The threshold is reached after DefaultDeadAfter consecutive misses,
+	// one per probe interval. The ring must hold a node for longer than that.
+	needed := time.Duration(DefaultDeadAfter) * DefaultProbeInterval
+	if ringMembershipWindow <= needed {
+		t.Fatalf("ringMembershipWindow is %s but reaching the dead threshold takes %s; "+
+			"a node drops out of the ring before it can be declared dead", ringMembershipWindow, needed)
+	}
+}
+
+func TestRingMembershipWindow_outlivesTheInactiveReaper(t *testing.T) {
+	// The reaper flips a silent node to `inactive` after 120s. If the ring
+	// window matches it, the node leaves the ring the moment it goes quiet.
+	const reaperWindow = 2 * time.Minute
+	if ringMembershipWindow <= reaperWindow {
+		t.Fatalf("ringMembershipWindow (%s) must outlive the %s inactive reaper, "+
+			"or a node leaves every ring at the moment it stops heartbeating", ringMembershipWindow, reaperWindow)
+	}
+}

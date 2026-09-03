@@ -35,7 +35,19 @@ const (
 	// ringMembershipWindow is how stale dns_nodes.last_seen may be before a peer
 	// drops out of every ring. A peer outside every ring cannot be probed and so
 	// can never reach the dead threshold.
-	ringMembershipWindow = 2 * time.Minute
+	//
+	// It was two minutes, which is the same window the dns_nodes reaper uses to
+	// flip a silent node to `inactive` — so a node left every ring at the exact
+	// moment it went quiet, long before any observer had accumulated the
+	// consecutive misses needed to declare it dead. HandleDeadNode could
+	// therefore never fire for the failure it exists to catch, and the gap was
+	// papered over downstream by pruneStaleClusterNodes.
+	//
+	// Fifteen minutes is comfortably past the dead threshold at the probe
+	// interval, so the decision can actually be reached. A node that is
+	// genuinely gone drops out afterwards; one that is merely restarting is
+	// back long before then.
+	ringMembershipWindow = 15 * time.Minute
 
 	// freshHeartbeatWindow is how recent a peer's heartbeat must be to stand in
 	// for an HTTP probe. The heartbeat ticks every 30s
@@ -448,7 +460,7 @@ func (m *Monitor) checkQuorum(ctx context.Context, targetID string) {
 	m.onDeadFn(targetID)
 }
 
-// getRingNeighbors queries dns_nodes for active nodes, sorts them, and
+// getRingNeighbors queries dns_nodes for the ring's members, sorts them, and
 // returns the K nodes after this node in the ring.
 func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 	if m.cfg.DB == nil {
@@ -456,10 +468,26 @@ func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 	}
 
 	// Bugboard #282: compare in UTC — last_seen is stored UTC.
-	cutoff := time.Now().UTC().Add(-2 * time.Minute).Format("2006-01-02 15:04:05")
-	query := `SELECT id, COALESCE(internal_ip, ip_address) AS internal_ip FROM dns_nodes WHERE status = 'active' AND last_seen > ? ORDER BY id`
+	now := time.Now().UTC()
+	ringCutoff := now.Add(-ringMembershipWindow).Format("2006-01-02 15:04:05")
+	freshCutoff := now.Add(-freshHeartbeatWindow).Format("2006-01-02 15:04:05")
 
-	rows, err := m.cfg.DB.QueryContext(ctx, query, cutoff)
+	// Three columns, because the scan wants three. It selected two and scanned
+	// three, so QueryContext succeeded and every Scan failed — getRingNeighbors
+	// returned an error on EVERY call and the health monitor never probed
+	// anything at all.
+	//
+	// Membership is not filtered on status: a node the reaper has already
+	// flipped to `inactive` is exactly the node this needs to keep probing.
+	query := `
+		SELECT id,
+		       COALESCE(internal_ip, ip_address) AS internal_ip,
+		       CASE WHEN COALESCE(last_seen, '') > ? THEN 1 ELSE 0 END AS heartbeat_fresh
+		  FROM dns_nodes
+		 WHERE COALESCE(last_seen, '') > ?
+		 ORDER BY id`
+
+	rows, err := m.cfg.DB.QueryContext(ctx, query, freshCutoff, ringCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("query dns_nodes: %w", err)
 	}
