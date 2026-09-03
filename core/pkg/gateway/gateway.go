@@ -743,6 +743,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
 	}
 
+	// Re-allocate IPFS content that has dropped below its replication factor.
+	// One node per interval does the work; the cluster lock decides which.
+	if ipfsClient, ok := deps.IPFSClient.(*ipfs.Client); ok && ipfsClient != nil {
+		gw.StartPinSweep(gw.shutdownCtx, ipfsClient, cfg.IPFSReplicationFactor)
+	}
+
 	// Supervise Olric for the life of the process, whether or not the initial
 	// connection worked. Arming this only on an initial failure meant the
 	// common case — up at start, dies later — was never covered.

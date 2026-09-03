@@ -303,6 +303,14 @@ Namespace DNS A records (`ns-<namespace>.…`) were bulk-updated when we rewrote
 
 Also, **namespace RQLite** still listed dead voters (`10.0.0.6`, `10.0.0.11`). After removing the last peer, membership became **1/3 → Candidate, no leader**.
 
+**IPFS content re-replicates on its own.** A pin fixes its replication factor
+at pin time and nothing revisited the allocation, so every CID a discarded node
+held stayed below RF permanently and a node joining later received nothing. One
+gateway per 15 minutes — elected through the `ipfs-pin-sweep` cluster lock —
+now walks the pin inventory and re-issues the pin for anything short, which is
+what forces ipfs-cluster to re-allocate onto live peers. Content already at its
+factor is left alone.
+
 **The tenant reconciler now does this.** Every node converges its own namespace
 services on a 60s loop, and one elected member per namespace prunes departed
 members, releases their ports and removes them from that namespace's raft. So
@@ -406,7 +414,7 @@ UPDATE namespace_cluster_nodes
 
 **Later:** re-provision HA (add second/third namespace peers) so you are not single-node forever.
 
-### Required: IPFS function-WASM backfill (bugboard #167)
+### Required: IPFS re-replication (automatic) (bugboard #167)
 
 **Why:** Namespace gateways load function code with `POST http://localhost:10107/api/v0/cat?arg=<wasm_cid>`. Metadata (function name → CID) is in **namespace RQLite** and is fine after replace. The **bytes** are in **Kubo**. A replaced VPS has a nearly empty repo (`repo/stat` shows tens of objects vs thousands on old peers). The first invoke of each function on that node (or any cold peer after restart) can hang until the IPFS deadline (**~15s** → function 100% errors). The same IPFS layer hanging on **`add`** surfaces as **`orama function deploy` 504** (proxy budget 30s) while other invokes still succeed.
 
