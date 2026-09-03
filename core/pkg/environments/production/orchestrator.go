@@ -842,9 +842,18 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable only orama-node. Host daemons are orama-namespace-*@index;
-	// CoreDNS is orama-namespace-coredns@nameserver. The supervisor starts both.
-	enable := []string{"orama-node.service"}
+	// orama-node is the supervisor: it starts the orama-namespace-*@index host
+	// daemons and, on nameservers, orama-namespace-coredns@nameserver.
+	//
+	// The WireGuard unit is enabled alongside it, NOT left to the supervisor.
+	// wg0 previously existed only if Node.Start got as far as
+	// startIndexWireGuard, so a bad node.yaml, a failed config validation or a
+	// missing binary left the node with no overlay at all - unreachable on
+	// 10.0.0.x by every orama CLI path, and diagnosable only over public-IP SSH.
+	// The overlay must come up at boot on its own; the unit is idempotent
+	// (`wg show wg0 || wg-quick up wg0`), so the supervisor starting it again is
+	// a no-op.
+	enable := []string{"orama-node.service", "orama-namespace-wireguard@index.service"}
 	for _, svc := range enable {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)

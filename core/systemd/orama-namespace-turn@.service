@@ -1,7 +1,8 @@
 [Unit]
 Description=Orama Namespace TURN (%i)
 Documentation=https://github.com/DeBrosOfficial/network
-After=network.target
+After=network.target orama-namespace-wireguard@index.service
+Wants=orama-namespace-wireguard@index.service
 PartOf=orama-node.service
 
 [Service]

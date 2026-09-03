@@ -1,8 +1,8 @@
 [Unit]
 Description=Orama Namespace SFU (%i)
 Documentation=https://github.com/DeBrosOfficial/network
-After=network.target orama-namespace-olric@%i.service
-Wants=orama-namespace-olric@%i.service
+After=network.target orama-namespace-wireguard@index.service orama-namespace-olric@%i.service
+Wants=orama-namespace-wireguard@index.service orama-namespace-olric@%i.service
 PartOf=orama-node.service
 
 [Service]

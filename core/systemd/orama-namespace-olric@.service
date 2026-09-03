@@ -1,7 +1,8 @@
 [Unit]
 Description=Orama Namespace Olric Cache (%i)
 Documentation=https://github.com/DeBrosOfficial/network
-After=network.target orama-namespace-rqlite@%i.service
+After=network.target orama-namespace-wireguard@index.service orama-namespace-rqlite@%i.service
+Wants=orama-namespace-wireguard@index.service
 Requires=orama-namespace-rqlite@%i.service
 PartOf=orama-node.service
 

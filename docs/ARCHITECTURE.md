@@ -75,6 +75,21 @@ Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-
 
 Drive nodes through the `orama` CLI (`orama node …`). Do not `systemctl start` leftover host units (`orama-ipfs`, `orama-olric`, `caddy.service`, `coredns.service`, `wg-quick@wg0`). Those files may still exist on disk for rollback; they are disabled. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
 
+**The overlay is not a child of the supervisor.** Install enables two units:
+`orama-node.service` and `orama-namespace-wireguard@index.service`. The mesh
+comes up at boot on its own, so a node whose supervisor cannot start — a bad
+`node.yaml`, a failed config validation, a missing binary — is still reachable
+on `10.0.0.x` for diagnosis. The WireGuard unit is deliberately **not**
+`PartOf=orama-node.service` and its `ExecStop` is a no-op: `PartOf` propagates
+restart, so `orama node restart` used to tear `wg0` down and sever every
+namespace raft and Olric memberlist on the node. Bring the interface down
+explicitly (`wg-quick down wg0`) when that is the actual intent.
+
+Every unit that binds or reaches across the overlay — `rqlite@`, `olric@`,
+`gateway@`, `pubsub@`, `sfu@`, `turn@`, `ipfs@`, `vault@` — is ordered
+`After=orama-namespace-wireguard@index.service`, so a cold boot cannot start
+Olric or the SFU against an address that does not exist yet.
+
 RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`. Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components
