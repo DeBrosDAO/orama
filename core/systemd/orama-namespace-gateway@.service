@@ -28,6 +28,7 @@ SyslogIdentifier=orama-gateway-%i
 PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=1G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

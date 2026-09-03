@@ -27,6 +27,7 @@ SyslogIdentifier=orama-vault-%i
 PrivateTmp=yes
 LimitMEMLOCK=67108864
 MemoryMax=512M
+MemorySwapMax=0
 TimeoutStopSec=30
 KillMode=mixed
 

@@ -74,6 +74,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=4G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -177,6 +178,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=2G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -260,6 +262,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=4G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -297,6 +300,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=8G
+MemorySwapMax=0
 OOMScoreAdjust=-500
 
 [Install]
@@ -340,6 +344,7 @@ SyslogIdentifier=orama-vault
 PrivateTmp=yes
 LimitMEMLOCK=67108864
 MemoryMax=512M
+MemorySwapMax=0
 TimeoutStopSec=30
 KillMode=mixed
 
@@ -374,6 +379,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=4G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -406,6 +412,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=1G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -436,6 +443,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=1G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -472,6 +480,7 @@ RestartSec=5
 SyslogIdentifier=caddy
 KillMode=mixed
 MemoryMax=2G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

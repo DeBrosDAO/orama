@@ -34,6 +34,7 @@ LimitNOFILE=65536
 TimeoutStopSec=30
 KillMode=mixed
 MemoryMax=2G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
