@@ -63,6 +63,20 @@ orama node install --vps-ip <ip> --nameserver --domain <domain> --base-domain <d
 
 The installer auto-detects the binary archive at `/opt/orama/manifest.json` and copies pre-built binaries instead of compiling from source.
 
+**Install verifies the node before it reports success.** The final phase waits for, in dependency order:
+
+1. `orama-node.service` active **and not crash-looping** (`NRestarts` is 0 — an active unit systemd is about to restart for the fifth time is the failure this catches)
+2. rqlite in raft state `Leader` or `Follower` — not merely answering on `:10100`, which it does while still Candidate or still replaying its log
+3. `wg0` up with an interface
+4. the gateway's `/health` returning 200
+
+The first component that does not come up is named, install exits **non-zero**, and no `✅` is printed. Before change-287 install printed `✅ Production installation complete!` unconditionally — after a partial template install, after a failed DNS seed, after a supervisor that started and exited — and the operator, the CLI and the next node's join all proceeded on the assumption that the node was up.
+
+Two related orderings changed in the same commit:
+
+- **Namespace systemd templates install before the services that use them.** Phase 5 starts `orama-node`, whose first act is to start `orama-namespace-wireguard@index`; with no template installed systemd answers `Unit ... not found` and the supervisor exits. Install used to depend on systemd's restart loop to converge past that. Any missing or unwritable template is now fatal and the error names it.
+- **DNS seeding runs after verification, and is fatal on a `--nameserver` genesis node** (advisory elsewhere). That node serves the zone and nothing else creates its records; the heartbeat "self-heal" the old warning promised re-advertises a node's own A record, it does not seed a zone's NS or SOA. Seeding now runs after the gateway answers `/health` — which is the signal that migrations completed — instead of behind six escalating sleeps totalling 105 seconds that could not tell "still migrating" from "broken".
+
 ### What runs on a node
 
 The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.

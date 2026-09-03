@@ -60,6 +60,8 @@ sudo orama node install \
 
 ## Verification
 
+`orama node install` verifies the node itself before printing `✅` — supervisor active and not crash-looping, rqlite in `Leader`/`Follower`, `wg0` up, gateway `/health` 200 — and exits non-zero naming the first component that did not come up. A successful install therefore already means the node works; the checks below verify the **cluster**.
+
 After all nodes are installed, verify cluster health:
 
 ```bash

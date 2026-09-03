@@ -6,6 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/systemd"
+	"go.uber.org/zap"
 )
 
 // oramaServiceHardening contains common systemd security directives for orama services.
@@ -644,4 +647,39 @@ func (sc *SystemdController) StatusService(name string) (bool, error) {
 	}
 
 	return false, fmt.Errorf("failed to check service status %s: %w", name, err)
+}
+
+// InstallNamespaceTemplates installs the systemd template units the namespace
+// services are instantiated from.
+//
+// This must run BEFORE anything starts orama-node: the supervisor's first act
+// is to start orama-namespace-wireguard@index, and with no template installed
+// systemd answers "Unit ... not found", the supervisor exits, and systemd
+// restarts it. Install used to depend on that retry loop to converge — it
+// worked, so nobody noticed the ordering was backwards.
+//
+// Every template is required, and the error names the one that failed. The two
+// byte-identical copies this replaces logged a warning and `continue`d past
+// each read or write error, so a node missing half its templates finished
+// installing and reported success; and when every template failed, the
+// installed count stayed zero, the daemon-reload was skipped, and the function
+// returned nil — total failure, reported as success.
+func (ps *ProductionSetup) InstallNamespaceTemplates() error {
+	sourceDir := OramaSystemdDir
+	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
+		sourceDir = filepath.Join(ps.oramaHome, "src", "systemd")
+	}
+	if _, err := os.Stat(sourceDir); err != nil {
+		return fmt.Errorf("no systemd template directory at %s or %s: %w",
+			OramaSystemdDir, filepath.Join(ps.oramaHome, "src", "systemd"), err)
+	}
+
+	// The manager logs each template; the operator-facing summary is ours.
+	if err := systemd.NewManager("", zap.NewNop()).InstallTemplateUnits(sourceDir); err != nil {
+		return fmt.Errorf("install namespace systemd templates from %s: %w", sourceDir, err)
+	}
+
+	ps.logf("  ✓ Installed %d namespace template units from %s (daemon reloaded)",
+		len(systemd.UnitFilesToInstall()), sourceDir)
+	return nil
 }

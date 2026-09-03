@@ -17,7 +17,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
-	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // newOramaBinaryPath is the on-disk path Phase 2b installs the new
@@ -164,17 +163,20 @@ func (o *Orchestrator) Execute() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
+	// Templates before the services that use them: Phase 5 restarts orama-node,
+	// whose first act is to start orama-namespace-wireguard@index. An upgrade
+	// that adds a template unit would otherwise land it after the restart that
+	// needs it.
+	fmt.Printf("\n🔧 Phase 4b: Installing namespace systemd templates...\n")
+	if err := o.setup.InstallNamespaceTemplates(); err != nil {
+		return fmt.Errorf("namespace template installation failed: %w", err)
+	}
+
 	// Phase 5: Update systemd services
 	fmt.Printf("\n🔧 Phase 5: Updating systemd services...\n")
 	enableHTTPS, _, _ := o.extractGatewayConfig()
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Service update warning: %v\n", err)
-	}
-
-	// Install namespace systemd template units
-	fmt.Printf("\n🔧 Phase 5b: Installing namespace systemd templates...\n")
-	if err := o.installNamespaceTemplates(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
 	}
 
 	// Re-apply UFW firewall rules (idempotent)
@@ -411,50 +413,6 @@ func (o *Orchestrator) stopAllNamespaceServices(serviceController *production.Sy
 
 	if stoppedCount > 0 {
 		fmt.Printf("  ✓ Stopped %d namespace service(s)\n", stoppedCount)
-	}
-
-	return nil
-}
-
-// installNamespaceTemplates installs systemd template unit files for namespace services
-func (o *Orchestrator) installNamespaceTemplates() error {
-	// Check pre-built archive path first, fall back to source path
-	sourceDir := production.OramaSystemdDir
-	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
-		sourceDir = filepath.Join(o.oramaHome, "src", "systemd")
-	}
-	systemdDir := "/etc/systemd/system"
-
-	templates := systemd.UnitFilesToInstall()
-
-	installedCount := 0
-	for _, template := range templates {
-		sourcePath := filepath.Join(sourceDir, template)
-		destPath := filepath.Join(systemdDir, template)
-
-		// Read template file
-		data, err := os.ReadFile(sourcePath)
-		if err != nil {
-			fmt.Printf("  ⚠️  Warning: Failed to read %s: %v\n", template, err)
-			continue
-		}
-
-		// Write to systemd directory
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
-			fmt.Printf("  ⚠️  Warning: Failed to install %s: %v\n", template, err)
-			continue
-		}
-
-		installedCount++
-		fmt.Printf("  ✓ Installed %s\n", template)
-	}
-
-	if installedCount > 0 {
-		// Reload systemd daemon to pick up new templates
-		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-			return fmt.Errorf("failed to reload systemd daemon: %w", err)
-		}
-		fmt.Printf("  ✓ Systemd daemon reloaded (%d templates installed)\n", installedCount)
 	}
 
 	return nil

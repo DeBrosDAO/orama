@@ -3,6 +3,7 @@ package install
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -21,10 +22,17 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
-	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // Orchestrator manages the install process
+// DNS seeding retry budget. The gateway health check in Phase8Verify has
+// already established that migrations ran, so these cover a write racing the
+// tail of start-up rather than a wait for readiness.
+const (
+	seedAttempts   = 3
+	seedRetryDelay = 3 * time.Second
+)
+
 type Orchestrator struct {
 	oramaHome string
 	oramaDir  string
@@ -172,36 +180,61 @@ func (o *Orchestrator) executeGenesisFlow() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
+	// Namespace templates BEFORE the services that use them. Phase 5 starts
+	// orama-node, whose first act is to start orama-namespace-wireguard@index;
+	// with no template installed systemd answers "Unit not found", the
+	// supervisor exits, and systemd restarts it. Install used to depend on that
+	// retry loop to converge, which worked well enough that nobody noticed the
+	// ordering was backwards.
+	fmt.Printf("\n🔧 Phase 4b: Installing namespace systemd templates...\n")
+	if err := o.setup.InstallNamespaceTemplates(); err != nil {
+		return fmt.Errorf("namespace template installation failed: %w", err)
+	}
+
 	// Phase 5: Create systemd services
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
-	// Install namespace systemd template units
-	fmt.Printf("\n🔧 Phase 5b: Installing namespace systemd templates...\n")
-	if err := o.installNamespaceTemplates(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
+	// Verify BEFORE seeding. Seeding needs a working rqlite, so a node whose
+	// rqlite never reached consensus would otherwise report "DNS seeding
+	// failed" — a symptom — instead of naming the component that did not come
+	// up.
+	if err := o.setup.Phase8Verify(context.Background()); err != nil {
+		return err
 	}
 
-	// Phase 7: Seed DNS records (with retry — migrations may still be running)
+	// Phase 7: Seed DNS records
 	if o.flags.Nameserver && o.flags.BaseDomain != "" {
 		fmt.Printf("\n🌐 Phase 7: Seeding DNS records...\n")
+
+		// The gateway answering /health is the readiness signal: it only does
+		// so once it holds its database, which means migrations have run. This
+		// replaces six escalating sleeps totalling 105 seconds that waited for
+		// exactly that and could not tell "still migrating" from "broken".
 		var seedErr error
-		for attempt := 1; attempt <= 6; attempt++ {
-			waitSec := 5 * attempt
-			fmt.Printf("  Waiting for RQLite + migrations (%ds, attempt %d/6)...\n", waitSec, attempt)
-			time.Sleep(time.Duration(waitSec) * time.Second)
+		for attempt := 1; attempt <= seedAttempts; attempt++ {
 			seedErr = o.setup.SeedDNSRecords(o.flags.BaseDomain, o.flags.VpsIP, o.peers)
 			if seedErr == nil {
 				fmt.Printf("  ✓ DNS records seeded\n")
 				break
 			}
-			fmt.Fprintf(os.Stderr, "  ⚠️  Attempt %d failed: %v\n", attempt, seedErr)
+			fmt.Fprintf(os.Stderr, "  ⚠️  Attempt %d/%d failed: %v\n", attempt, seedAttempts, seedErr)
+			if attempt < seedAttempts {
+				time.Sleep(seedRetryDelay)
+			}
 		}
+
+		// Fatal here, advisory elsewhere. This is genesis on a --nameserver
+		// node: it is the node that serves the zone, and nothing else will
+		// create these records. The heartbeat "self-heal" the old warning
+		// promised re-advertises a node's own A record; it does not seed a
+		// zone's NS, SOA or delegation. Printing a green tick over a nameserver
+		// with no zone left the operator to find out from a resolver.
 		if seedErr != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠️  Warning: DNS seeding failed after all attempts.\n")
-			fmt.Fprintf(os.Stderr, "     Records will self-heal via node heartbeat once running.\n")
+			return fmt.Errorf("DNS seeding failed after %d attempts on a --nameserver genesis node, "+
+				"which leaves the zone %s unserved: %w", seedAttempts, o.flags.BaseDomain, seedErr)
 		}
 	}
 
@@ -323,16 +356,25 @@ func (o *Orchestrator) executeJoinFlow() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
+	// Namespace templates BEFORE the services that use them. Phase 5 starts
+	// orama-node, whose first act is to start orama-namespace-wireguard@index;
+	// with no template installed systemd answers "Unit not found", the
+	// supervisor exits, and systemd restarts it. Install used to depend on that
+	// retry loop to converge, which worked well enough that nobody noticed the
+	// ordering was backwards.
+	fmt.Printf("\n🔧 Installing namespace systemd templates...\n")
+	if err := o.setup.InstallNamespaceTemplates(); err != nil {
+		return fmt.Errorf("namespace template installation failed: %w", err)
+	}
+
 	// Step 9: Create systemd services
 	fmt.Printf("\n🔧 Creating systemd services...\n")
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
-	// Install namespace systemd template units
-	fmt.Printf("\n🔧 Installing namespace systemd templates...\n")
-	if err := o.installNamespaceTemplates(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
+	if err := o.setup.Phase8Verify(context.Background()); err != nil {
+		return err
 	}
 
 	o.setup.LogSetupComplete(o.setup.NodePeerID)
@@ -593,50 +635,6 @@ func promptForBaseDomain() string {
 		fmt.Println("⚠️  Invalid option, using orama-devnet.network")
 		return "orama-devnet.network"
 	}
-}
-
-// installNamespaceTemplates installs systemd template unit files for namespace services
-func (o *Orchestrator) installNamespaceTemplates() error {
-	// Check pre-built archive path first, fall back to source path
-	sourceDir := production.OramaSystemdDir
-	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
-		sourceDir = filepath.Join(o.oramaHome, "src", "systemd")
-	}
-	systemdDir := "/etc/systemd/system"
-
-	templates := systemd.UnitFilesToInstall()
-
-	installedCount := 0
-	for _, template := range templates {
-		sourcePath := filepath.Join(sourceDir, template)
-		destPath := filepath.Join(systemdDir, template)
-
-		// Read template file
-		data, err := os.ReadFile(sourcePath)
-		if err != nil {
-			fmt.Printf("  ⚠️  Warning: Failed to read %s: %v\n", template, err)
-			continue
-		}
-
-		// Write to systemd directory
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
-			fmt.Printf("  ⚠️  Warning: Failed to install %s: %v\n", template, err)
-			continue
-		}
-
-		installedCount++
-		fmt.Printf("  ✓ Installed %s\n", template)
-	}
-
-	if installedCount > 0 {
-		// Reload systemd daemon to pick up new templates
-		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-			return fmt.Errorf("failed to reload systemd daemon: %w", err)
-		}
-		fmt.Printf("  ✓ Systemd daemon reloaded (%d templates installed)\n", installedCount)
-	}
-
-	return nil
 }
 
 // generateNodeDomain creates a random subdomain like "node-a3f8k2.example.com"
