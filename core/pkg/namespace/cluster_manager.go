@@ -491,10 +491,17 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		return nil, err
 	}
 
-	// Create DNS records for namespace gateway
+	// DNS is part of provisioning, not an optional extra. Without records the
+	// namespace resolves nowhere, so a cluster marked ready without them is a
+	// cluster nobody can reach — reported as a success. This used to log a
+	// warning and continue.
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
-		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
-		// Don't fail provisioning for DNS errors
+		cm.logger.Error("Failed to create DNS records for a new namespace",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return nil, fmt.Errorf("namespace cluster has no DNS records, so nothing can reach it: %w", err)
 	}
 
 	// Bugboard #277: verify the services actually came up before calling this
@@ -747,13 +754,13 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 		}
 	}
 
-	// All instances started — give memberlist time to converge.
-	// Olric's memberlist retries peer joins every ~1s for ~10 attempts.
-	// Since all instances are now up, they should discover each other quickly.
-	cm.logger.Info("All Olric instances started, waiting for memberlist convergence",
+	// No sleep here. Readiness is the driver's Ready probe, which walkServices
+	// runs against every node before the next service starts — the gateway was
+	// the thing this five-second guess was protecting, and it is now gated on
+	// Olric actually answering rather than on a timer.
+	cm.logger.Info("All Olric instances started",
 		zap.Int("node_count", len(nodes)),
 	)
-	time.Sleep(5 * time.Second)
 
 	// Log events and record cluster nodes
 	for i, node := range nodes {
@@ -1574,10 +1581,15 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		return
 	}
 
-	// Create DNS records for namespace gateway
+	// Same rule as the synchronous path: no DNS records means nothing can reach
+	// the namespace, so it is not ready.
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
-		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
-		// Don't fail provisioning for DNS errors
+		cm.logger.Error("Failed to create DNS records for a new namespace",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return
 	}
 
 	// Bugboard #277: verify the services actually came up before calling this
@@ -2009,58 +2021,47 @@ type ClusterLocalStateNode struct {
 // service to actually answer before declaring the cluster ready.
 const clusterReadyTimeout = 90 * time.Second
 
-// verifyClusterHealthy polls every node's spawned services until they respond, or
-// the timeout expires (bugboard #277).
+// verifyClusterHealthy waits for every service on every node to be genuinely
+// serving, and reports the first one that is not.
 //
-// Provisioning used to mark a cluster `ready` — and every node row `running` —
-// purely because the spawn RPCs returned. On devnet that produced a cluster
-// reported ready while 6 of its 9 processes were crash-looping on a port
-// collision, RQLite had no quorum, and the one surviving node had joined another
-// namespace's raft group. The operator saw a green result and would have handed
-// the namespace over. This is the check that turns every other provisioning
-// failure into a visible one.
+// It probes what each service does, not whether its port accepts a connection.
+// A TCP probe was the previous implementation and it is barely stronger than
+// the systemd `active` check it was written to replace: rqlite binds its HTTP
+// listener long before it has elected a leader, and a gateway answers TCP while
+// failing every request because it never reached Olric. Both would pass, and a
+// namespace with six of nine processes crash-looping was handed over as ready.
 func (cm *ClusterManager) verifyClusterHealthy(ctx context.Context, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	timeout := cm.readyTimeout
 	if timeout <= 0 {
 		timeout = clusterReadyTimeout
 	}
-	deadline := time.Now().Add(timeout)
-	var lastErr error
+	for i, node := range nodes {
+		if i >= len(portBlocks) || portBlocks[i] == nil {
+			return fmt.Errorf("node %s has no port block allocated, so it cannot be verified", node.NodeID)
+		}
+		block := portBlocks[i]
 
-	for {
-		lastErr = nil
-		for i, node := range nodes {
-			if i >= len(portBlocks) || portBlocks[i] == nil {
-				continue
-			}
-			addr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].GatewayHTTPPort)
-			if err := probeTCP(addr); err != nil {
-				lastErr = fmt.Errorf("gateway on node %s (%s) not answering: %w", node.NodeID, addr, err)
-				break
-			}
-			raftAddr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort)
-			if err := probeTCP(raftAddr); err != nil {
-				lastErr = fmt.Errorf("rqlite on node %s (%s) not answering: %w", node.NodeID, raftAddr, err)
-				break
-			}
+		checks := []struct {
+			what  string
+			probe func(context.Context) error
+		}{
+			{"rqlite", func(ctx context.Context) error {
+				return rqliteReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.RQLiteHTTPPort))
+			}},
+			{"olric", func(ctx context.Context) error {
+				return olricReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.OlricHTTPPort))
+			}},
+			{"gateway", func(ctx context.Context) error {
+				return gatewayReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.GatewayHTTPPort))
+			}},
 		}
-		if lastErr == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("cluster did not become healthy within %s: %w", timeout, lastErr)
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
 
-// probeTCP reports whether something is accepting connections at addr.
-func probeTCP(addr string) error {
-	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
-	if err != nil {
-		return err
+		for _, check := range checks {
+			if err := awaitReady(ctx, timeout, fmt.Sprintf("%s on node %s", check.what, node.NodeID), check.probe); err != nil {
+				return err
+			}
+		}
 	}
-	_ = conn.Close()
 	return nil
 }
 
