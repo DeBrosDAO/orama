@@ -39,7 +39,10 @@ my-function/
 
 ```yaml
 name: my-function       # Required. Letters, digits, hyphens, underscores.
-public: false           # Allow unauthenticated invocation (default: false)
+public: false           # Allow unauthenticated invocation (default: false).
+                        # Private functions require a SIWE wallet JWT or an
+                        # API key that holds the `invoke` grant. A storage-only
+                        # key is rejected.
 memory: 64              # Memory limit in MB (1-256, default: 64)
 timeout: 30             # Execution timeout in seconds (1-300, default: 30)
                         # Bump to 60-300 for batch DB ops, schema migrations,
@@ -299,7 +302,7 @@ if !res.Committed {
 
 | Function | Description |
 |----------|-------------|
-| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. |
+| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. Loopback, private, link-local, unspecified, and multicast destinations are rejected (same for `anyone_fetch`). |
 
 ### Storage (IPFS)
 

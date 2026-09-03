@@ -385,9 +385,11 @@ orama node unlock --genesis --node-ip <wg-ip>
 OramaOS nodes have no SSH access. All management happens through the Gateway API:
 
 ```bash
-# Status, logs, commands — all via Gateway proxy
-curl "https://gateway.example.com/v1/node/status?node_id=<id>"
-curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway"
+# Status, logs, commands — admin credential required
+curl "https://gateway.example.com/v1/node/status?node_id=<id>" \
+  -H "Authorization: Bearer <admin-api-key>"
+curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway" \
+  -H "Authorization: Bearer <admin-api-key>"
 ```
 
 See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.

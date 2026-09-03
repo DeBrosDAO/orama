@@ -89,9 +89,9 @@ func TestInvoke_systemTriggerBypassesAuth(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		trigger   TriggerType
-		wantAuth  bool // true → must hit ErrUnauthorized; false → must NOT
+		name     string
+		trigger  TriggerType
+		wantAuth bool // true → must hit ErrUnauthorized; false → must NOT
 	}{
 		// System triggers — must bypass auth. The original bug was every
 		// one of these returning ErrUnauthorized.
@@ -260,11 +260,12 @@ func TestInvoke_userTriggerWithCallerStillWorks(t *testing.T) {
 	cancel()
 
 	req := &InvokeRequest{
-		Namespace:    "anchat-test",
-		FunctionName: "user-create",
-		Input:        []byte(`{}`),
-		TriggerType:  TriggerTypeHTTP,
-		CallerWallet: "0xRealUser",
+		Namespace:       "anchat-test",
+		FunctionName:    "user-create",
+		Input:           []byte(`{}`),
+		TriggerType:     TriggerTypeHTTP,
+		CallerWallet:    "0xRealUser",
+		CallerHasInvoke: true,
 	}
 	_, err := inv.Invoke(ctx, req)
 	if errors.Is(err, ErrUnauthorized) {

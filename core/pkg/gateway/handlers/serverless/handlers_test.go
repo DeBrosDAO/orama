@@ -898,3 +898,33 @@ func TestGetCallerIsAdminFromRequest(t *testing.T) {
 		t.Error("no identity must not resolve to admin")
 	}
 }
+
+func TestGetCallerHasInvokeFromRequest(t *testing.T) {
+	h := newTestHandlers(nil)
+	withCtx := func(k, v any) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)
+		return r.WithContext(context.WithValue(r.Context(), k, v))
+	}
+
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeInvoke: {}})) {
+		t.Error("invoke scope must resolve to hasInvoke")
+	}
+	if h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeStorage: {}})) {
+		t.Error("storage-only key must not resolve to hasInvoke")
+	}
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeAdmin: {}})) {
+		t.Error("admin must resolve to hasInvoke")
+	}
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "0xWALLET"})) {
+		t.Error("SIWE wallet JWT must resolve to hasInvoke")
+	}
+	if h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "storage"}})) {
+		t.Error("exchanged storage-only key must not resolve to hasInvoke")
+	}
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke"}})) {
+		t.Error("exchanged invoke key must resolve to hasInvoke")
+	}
+	if h.getCallerHasInvokeFromRequest(httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)) {
+		t.Error("anonymous must not resolve to hasInvoke")
+	}
+}

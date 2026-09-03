@@ -43,6 +43,17 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - V1 push/pull endpoints require a valid session token when vault-guardian is configured
 - Previously, auth was optional for backward compatibility — any WG peer could read/overwrite Shamir shares
 
+### Tenant isolation
+
+- **SQLite ATTACH:** tenant query connections register `sqlite3_tenant_noattach` with `SQLITE_LIMIT_ATTACHED=0`. `ATTACH`/`DETACH` and extra statements in one query are rejected before exec
+- **WASM `http_fetch` / `anyone_fetch`:** loopback, private, link-local, unspecified, and multicast destinations are rejected so tenant code cannot reach RQLite/agent/Olric on the host
+- **WASM memory:** wazero runtime `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB)
+- **WASM concurrency:** global semaphore plus a per-namespace slot so one tenant cannot fill the process
+- **Private function invoke:** HTTP `/v1/invoke` is unauthenticated at the middleware; `canInvokeFn` requires the `invoke` grant (or a SIWE wallet) for private functions. Storage-only API keys cannot invoke
+- **Node/network control:** `/v1/node/{status,command,logs,leave}` and `/v1/network/{connect,disconnect}` require admin. `/v1/node/enroll` authenticates via invite token in the handler
+- **IPFS Cluster:** generated unit and `ipfs-cluster-service init` refuse an empty `CLUSTER_SECRET`
+- **Agent logs:** `/v1/agent/logs?service=` is an allowlist (`rqlite`, `olric`, `ipfs`, `ipfs-cluster`, `gateway`, `coredns`, `agent`); path traversal is rejected
+
 ### Token & Key Storage
 
 **Refresh Token Hashing (Step 1.5)**

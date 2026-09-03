@@ -21,7 +21,28 @@ import (
 const (
 	// ListenAddr is the address for the command receiver (WG-only).
 	ListenAddr = ":9998"
+	logsDir    = "/opt/orama/.orama/logs"
 )
+
+// knownLogServices is the only set of log files the agent will read
+// (bugboard #93). Query `service` is not concatenated into a path.
+var knownLogServices = []string{"rqlite", "olric", "ipfs", "ipfs-cluster", "gateway", "coredns", "agent"}
+
+func allowedLogService(service string) bool {
+	if service == "" || strings.ContainsAny(service, `/\:`) || strings.Contains(service, "..") {
+		return false
+	}
+	for _, s := range knownLogServices {
+		if s == service {
+			return true
+		}
+	}
+	return false
+}
+
+func logPathForService(service string) string {
+	return logsDir + "/" + service + ".log"
+}
 
 // Command represents an incoming command from the Gateway.
 type Command struct {
@@ -148,20 +169,18 @@ func (r *Receiver) handleLogs(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	const logsDir = "/opt/orama/.orama/logs"
 	result := make(map[string]string)
 
 	if service == "all" {
-		// Return tail of each service log
-		services := []string{"rqlite", "olric", "ipfs", "ipfs-cluster", "gateway", "coredns"}
-		for _, svc := range services {
-			logPath := logsDir + "/" + svc + ".log"
-			lines := tailFile(logPath, maxLines)
-			result[svc] = lines
+		for _, svc := range knownLogServices {
+			result[svc] = tailFile(logPathForService(svc), maxLines)
 		}
 	} else {
-		logPath := logsDir + "/" + service + ".log"
-		result[service] = tailFile(logPath, maxLines)
+		if !allowedLogService(service) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown service"})
+			return
+		}
+		result[service] = tailFile(logPathForService(service), maxLines)
 	}
 
 	writeJSON(w, http.StatusOK, result)
