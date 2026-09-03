@@ -425,7 +425,7 @@ orama db backups my-database
 ### Database Features
 
 - ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
-- ✅ **Namespace Isolation**: Complete separation between namespaces
+- ✅ **Namespace Isolation**: Complete separation between namespaces. Tenant SQL cannot `ATTACH`/`DETACH` another database file, and extra statements in one query are rejected.
 - ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
 - ✅ **ACID Transactions**: Full SQLite transactional support
 - ✅ **Concurrent Reads**: Multiple readers can query simultaneously
@@ -971,7 +971,7 @@ dig my-app.orama.network
 echo "127.0.0.1 my-app.orama.network" | sudo tee -a /etc/hosts
 
 # 4. Test with Host header
-curl -H "Host: my-app.orama.network" http://localhost:6001/
+curl -H "Host: my-app.orama.network" http://localhost:10104/
 ```
 
 ### Database Issues

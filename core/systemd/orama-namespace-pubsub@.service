@@ -1,0 +1,37 @@
+[Unit]
+Description=Orama Namespace PubSub (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
+InaccessiblePaths=/opt/orama/.orama/secrets
+WorkingDirectory=/opt/orama
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/pubsub.env
+ExecStart=/opt/orama/bin/pubsub
+TimeoutStopSec=15s
+KillMode=mixed
+KillSignal=SIGTERM
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-pubsub-%i
+PrivateTmp=yes
+LimitNOFILE=65536
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

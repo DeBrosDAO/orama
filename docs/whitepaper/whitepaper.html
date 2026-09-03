@@ -1,0 +1,2032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Orama Network</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ─────────────────────────────────────────────
+     Monochrome academic paper. No colour: emphasis
+     is carried by weight, rule thickness and fill
+     value only.
+     ───────────────────────────────────────────── */
+  :root {
+    --ink:   #000000;
+    --text:  #14161a;
+    --mid:   #55595f;
+    --grey:  #7c8085;
+    --rule:  #000000;
+    --hair:  #b9bbbe;
+    --soft:  #dedfe1;
+    --fill:  #f2f2f0;
+    --fill2: #e6e6e3;
+  }
+
+  @page { size: A4; margin: 19mm 16mm 17mm 16mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  body {
+    margin: 0; background: #fff; color: var(--text);
+    font-family: "Source Serif 4", Charter, Palatino, Georgia, serif;
+    font-size: 8.9pt; line-height: 1.4;
+    text-align: justify; hyphens: auto; -webkit-hyphens: auto;
+  }
+
+  code, .mono { font-family: "JetBrains Mono", Menlo, monospace; font-size: 0.85em; }
+  em { font-style: italic; }
+  b, strong { font-weight: 600; }
+
+  /* ───────── title block ───────── */
+  .titleblock { column-span: all; margin-bottom: 5mm; padding-bottom: 3.5mm;
+                border-bottom: 0.8pt solid var(--rule); text-align: left; }
+  .titleblock h1 { font-size: 20pt; line-height: 1.1; font-weight: 700; margin: 0 0 1.2mm;
+                   letter-spacing: -0.008em; font-family: "Source Serif 4", Georgia, serif; }
+  .subtitle { font-size: 10.5pt; font-style: italic; color: var(--mid); margin: 0 0 3.5mm; }
+  .byline { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6.9pt;
+            letter-spacing: 0.03em; color: var(--mid); line-height: 1.6; text-align: left; }
+
+  .abstract { column-span: all; margin-bottom: 5mm; padding: 0 12mm; }
+  .abstract h2 { font-size: 8.4pt; font-weight: 700; text-align: center; letter-spacing: 0.1em;
+                 text-transform: uppercase; margin: 0 0 1.8mm; font-family: "Source Serif 4", Georgia, serif; }
+  .abstract p { font-size: 8.4pt; line-height: 1.36; margin: 0 0 1.8mm; }
+
+  /* ───────── contents ───────── */
+  .contents { column-span: all; border-bottom: 0.5pt solid var(--hair);
+              padding-bottom: 4mm; margin-bottom: 5mm; }
+  .contents h2 { font-size: 9pt; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+                 margin: 0 0 2.5mm; font-family: "Source Serif 4", Georgia, serif; text-align: left; }
+  .toc { column-count: 3; column-gap: 8mm; font-size: 7.6pt; }
+  .toc-group { break-inside: avoid; margin-bottom: 2.5mm; }
+  .toc-group > .eyebrow { display: block; font-family: "JetBrains Mono", Menlo, monospace;
+                          font-size: 6.2pt; letter-spacing: 0.12em; text-transform: uppercase;
+                          color: var(--grey); margin: 0 0 1.2mm; }
+  .toc-item { display: flex; gap: 2.5mm; align-items: baseline; padding: 0.7mm 0; text-align: left; }
+  .toc-item .n { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6.4pt;
+                 color: var(--mid); width: 5mm; flex: none; }
+  .toc-item .t { flex: 1; }
+  .toc-item .f { display: none; }
+
+  /* ───────── two-column body ───────── */
+  .body { column-count: 2; column-gap: 7mm; column-fill: auto; }
+
+  h2 { font-family: "Source Serif 4", Georgia, serif; font-size: 10.5pt; font-weight: 700;
+       margin: 4.5mm 0 1.6mm; line-height: 1.18; break-after: avoid; text-align: left; }
+  h2 .sn { display: inline-block; min-width: 5.5mm; }
+  h2:first-child { margin-top: 0; }
+  h3 { font-family: "Source Serif 4", Georgia, serif; font-size: 9pt; font-weight: 700;
+       font-style: italic; margin: 3.2mm 0 1.1mm; break-after: avoid; text-align: left; }
+
+  p { margin: 0 0 1.9mm; }
+  p + p { text-indent: 3.4mm; }
+  p.noindent, h2 + p, h3 + p, .callout p, li p, .fig p, p.lead { text-indent: 0; }
+  p.lead { font-size: 9pt; }
+
+  ul, ol { margin: 0 0 2mm; padding-left: 4.2mm; }
+  li { margin-bottom: 0.9mm; }
+
+  /* ───────── tables ───────── */
+  table { width: 100%; border-collapse: collapse; margin: 2mm 0 2.8mm;
+          font-size: 7.4pt; line-height: 1.3; text-align: left; break-inside: avoid; }
+  th { font-family: "Source Serif 4", Georgia, serif; font-weight: 600; font-size: 7.1pt;
+       color: var(--text); text-align: left; padding: 0.8mm 2mm 1mm 0;
+       border-top: 0.8pt solid var(--rule); border-bottom: 0.4pt solid var(--rule); vertical-align: bottom; }
+  td { padding: 1mm 2mm 1mm 0; border-bottom: 0.3pt solid var(--soft); vertical-align: top; }
+  tr:last-child td { border-bottom: 0.8pt solid var(--rule); }
+  td.mono, th.mono { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6.8pt; }
+
+  /* verdict glyphs — weight, not colour */
+  .ok   { font-weight: 700; color: var(--ink); }
+  .no   { font-weight: 700; color: var(--ink); }
+  .part { font-weight: 400; color: var(--grey); font-style: italic; }
+
+  /* ───────── figures ───────── */
+  .fig { column-span: all; margin: 3mm 0 3.5mm; break-inside: avoid;
+         border: 0; padding: 0; background: #fff; }
+  .fig.narrow { column-span: none; }
+  .fig-title { font-family: "Source Serif 4", Georgia, serif; font-size: 7.4pt; font-weight: 600;
+               color: var(--text); margin-bottom: 1.8mm; text-align: left; letter-spacing: 0; }
+  .fig-title b { font-weight: 600; }
+  .fig-cap { font-size: 7.3pt; color: var(--mid); line-height: 1.34; margin-top: 1.8mm;
+             text-align: left; padding-top: 1.2mm; border-top: 0.3pt solid var(--soft); }
+  .fig-cap b { color: var(--text); font-weight: 600; }
+
+  /* the drawn area of a figure */
+  .fig > .band:first-of-type, .fig > .flow:first-of-type,
+  .fig > .g2:first-of-type, .fig > .g3:first-of-type,
+  .fig > .ladder:first-of-type, .fig > .split:first-of-type,
+  .fig > .stack:first-of-type { margin-top: 0; }
+
+  /* ───────── bands ───────── */
+  .band { border: 0.4pt solid var(--hair); padding: 1.8mm 2mm; margin-bottom: 1.2mm; background: #fff; }
+  .band:last-child { margin-bottom: 0; }
+  .band.hi   { border: 0.8pt solid var(--rule); background: var(--fill); }
+  .band.teal { border: 0.4pt solid var(--rule); background: var(--fill); }
+  .band.rust { border: 0.8pt solid var(--rule); background: #fff; }
+  .band-label { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6pt; letter-spacing: 0.1em;
+                text-transform: uppercase; color: var(--mid); margin-bottom: 1.5mm;
+                display: flex; justify-content: space-between; gap: 4mm; }
+  .band-label .r { text-transform: none; letter-spacing: 0.02em; font-style: italic; }
+
+  /* ───────── chips ───────── */
+  .chips { display: flex; flex-wrap: wrap; gap: 1.2mm; }
+  .chip { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6.4pt;
+          border: 0.35pt solid var(--hair); background: #fff; padding: 0.9mm 1.6mm;
+          white-space: nowrap; line-height: 1.22; color: var(--text); }
+  .chip.solid { background: var(--fill2); border-color: var(--rule); border-width: 0.7pt; font-weight: 500; }
+  .chip.teal  { border-color: var(--rule); border-width: 0.7pt; }
+  .chip.rust  { border-color: var(--rule); border-width: 0.7pt; border-style: solid; }
+  .chip.ghost { border-style: dashed; color: var(--grey); }
+  .chip small { display: block; font-size: 5.6pt; color: var(--grey); letter-spacing: 0; }
+
+  /* ───────── flow of steps ───────── */
+  .flow { display: flex; align-items: stretch; margin-bottom: 1.5mm; }
+  .flow:last-child { margin-bottom: 0; }
+  .flow .step { flex: 1; border: 0.4pt solid var(--hair); padding: 1.8mm; background: #fff; }
+  .flow .step.hi { border: 0.8pt solid var(--rule); background: var(--fill); }
+  .flow .sep { display: flex; align-items: center; padding: 0 1.2mm; color: var(--mid);
+               font-family: "JetBrains Mono", Menlo, monospace; font-size: 8pt; }
+  .step .st { font-family: "Source Serif 4", Georgia, serif; font-weight: 700; font-size: 7.6pt;
+              display: block; margin-bottom: 0.7mm; }
+  .step .sn { font-family: "JetBrains Mono", Menlo, monospace; font-size: 5.8pt; color: var(--grey);
+              display: block; margin-bottom: 0.6mm; letter-spacing: 0.09em; }
+  .step .sd { font-size: 6.8pt; color: var(--mid); line-height: 1.3; }
+
+  /* ───────── grids of boxes ───────── */
+  .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.8mm; }
+  .g3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.8mm; }
+  .g4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 1.5mm; }
+  .box { border: 0.4pt solid var(--hair); padding: 2mm; background: #fff; }
+  .box.hi   { border: 0.8pt solid var(--rule); background: var(--fill); }
+  .box.teal { border: 0.4pt solid var(--rule); background: var(--fill); }
+  .box.rust { border: 0.8pt solid var(--rule); background: #fff; }
+  .box .bt { font-family: "Source Serif 4", Georgia, serif; font-weight: 700; font-size: 7.6pt;
+             display: block; margin-bottom: 0.8mm; }
+  .box .bl { font-family: "JetBrains Mono", Menlo, monospace; font-size: 5.8pt; letter-spacing: 0.1em;
+             text-transform: uppercase; color: var(--grey); display: block; margin-bottom: 1mm; }
+  .box .bd { font-size: 6.9pt; line-height: 1.32; color: var(--mid); }
+  .box .bd strong { color: var(--text); font-weight: 600; }
+
+  /* ───────── ladder ───────── */
+  .ladder .rung { display: flex; gap: 2.5mm; align-items: flex-start;
+                  padding: 1.4mm 0; border-bottom: 0.3pt solid var(--soft); }
+  .ladder .rung:first-child { border-top: 0.8pt solid var(--rule); padding-top: 1.6mm; }
+  .ladder .rung:last-child { border-bottom: 0.8pt solid var(--rule); }
+  .ladder .lv { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6pt; color: var(--grey);
+                width: 16mm; flex: none; padding-top: 0.5mm; letter-spacing: 0.07em; }
+  .ladder .lb { flex: 1; }
+  .ladder .lt { font-family: "Source Serif 4", Georgia, serif; font-weight: 700; font-size: 7.6pt;
+                display: block; margin-bottom: 0.6mm; }
+  .ladder .ld { font-size: 6.9pt; color: var(--mid); line-height: 1.32; }
+
+  /* ───────── vertical stack ───────── */
+  .stack .node { border: 0.4pt solid var(--hair); padding: 1.7mm 2mm; background: #fff; }
+  .stack .node.hi { border: 0.8pt solid var(--rule); background: var(--fill); }
+  .stack .arrow { text-align: center; font-family: "JetBrains Mono", Menlo, monospace;
+                  font-size: 7pt; color: var(--grey); padding: 0.8mm 0; line-height: 1; }
+  .stack .nt { font-family: "Source Serif 4", Georgia, serif; font-weight: 700; font-size: 7.6pt; }
+  .stack .nd { font-size: 6.8pt; color: var(--mid); line-height: 1.3; margin-top: 0.6mm; }
+
+  /* ───────── split comparison ───────── */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+           border-top: 0.8pt solid var(--rule); border-bottom: 0.8pt solid var(--rule); }
+  .split > div { padding: 2.2mm 2.5mm; }
+  .split > div:first-child { border-right: 0.3pt solid var(--hair); }
+  .split .sh { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6pt; letter-spacing: 0.11em;
+               text-transform: uppercase; margin-bottom: 1.8mm; display: block; color: var(--text); }
+  .split ul { padding-left: 3.6mm; margin: 0; }
+  .split li { font-size: 6.9pt; line-height: 1.32; margin-bottom: 1mm; color: var(--mid); text-align: left; }
+  .split li strong { color: var(--text); font-weight: 600; }
+
+  /* ───────── matrix ───────── */
+  .matrix { width: 100%; border-collapse: collapse; font-size: 6.9pt; }
+  .matrix th { font-family: "Source Serif 4", Georgia, serif; font-size: 6.4pt; font-weight: 600;
+               color: var(--text); text-align: center; padding: 0.8mm 1.2mm 1mm;
+               border-top: 0.8pt solid var(--rule); border-bottom: 0.4pt solid var(--rule);
+               text-transform: none; letter-spacing: 0; }
+  .matrix th:first-child { text-align: left; }
+  .matrix td { padding: 1.1mm 1.2mm; border-bottom: 0.3pt solid var(--soft);
+               text-align: center; vertical-align: middle; }
+  .matrix td:first-child { text-align: left; }
+  .matrix tr:last-child td { border-bottom: 0.8pt solid var(--rule); }
+
+  /* ───────── callout — a ruled note, not a coloured box ───────── */
+  .callout { border-top: 0.5pt solid var(--rule); border-bottom: 0.5pt solid var(--rule);
+             padding: 1.6mm 0; margin: 2.4mm 0; break-inside: avoid; background: #fff; }
+  .callout.warn { border-top-width: 1.2pt; }
+  .callout .eyebrow { display: block; font-family: "JetBrains Mono", Menlo, monospace;
+                      font-size: 5.9pt; letter-spacing: 0.11em; text-transform: uppercase;
+                      color: var(--text); margin-bottom: 1mm; }
+  .callout p { font-size: 7.9pt; margin: 0; }
+  .callout p + p { margin-top: 1.2mm; }
+
+  /* ───────── misc ───────── */
+  .kv { display: grid; grid-template-columns: 26mm 1fr; gap: 1mm 3mm; font-size: 7.4pt; margin: 2mm 0 2.4mm; }
+  .kv .k { font-family: "JetBrains Mono", Menlo, monospace; font-size: 6.6pt; color: var(--mid); padding-top: 0.3mm; }
+  .pull { font-family: "Source Serif 4", Georgia, serif; font-size: 9.4pt; font-style: italic;
+          line-height: 1.34; border-top: 0.5pt solid var(--rule); border-bottom: 0.5pt solid var(--rule);
+          padding: 2.2mm 0; margin: 3mm 0; text-align: left; }
+  .footnote { font-size: 7.2pt; color: var(--mid); line-height: 1.34; }
+  .refs { font-size: 7.2pt; line-height: 1.3; text-align: left; }
+  .refs li { margin-bottom: 1mm; }
+
+  /* A grid or a wide table inside an 85mm column is unreadable — span both. */
+  section > .g2, section > .g3, section > .g4,
+  section > table, section > .split, section > .ladder { column-span: all; }
+  section > .g2, section > .g3, section > .g4 { margin: 2mm 0 3mm; }
+  section > table { margin: 2mm 0 3.5mm; }
+
+  /* section headings: small caps, the LNCS convention */
+  .body h2 { font-variant-caps: small-caps; letter-spacing: 0.02em; }
+
+  /* elements from the previous house style that must not appear */
+  .cover-rule, .statgrid, .sec-head .bar { display: none !important; }
+</style>
+</head>
+<body>
+<div class="titleblock">
+  <h1>Orama Network</h1>
+  <p class="subtitle">A decentralized, privacy-first substrate for ordinary cloud primitives</p>
+  <div class="byline">
+    Technical Whitepaper, First Edition &nbsp;·&nbsp; September 2026<br />
+    Written by members of DeBros, who remain anonymous for the same reasons this system exists.<br />
+    Written against the source, which is in <span style="font-weight:500">alpha</span>. Where this paper and the
+    project's documentation disagreed, the source was read and the source won.
+  </div>
+</div>
+
+<div class="abstract">
+  <h2>Abstract</h2>
+  <p>
+    The commercial cloud is a single operator holding the keys to everything that runs on it. That
+    arrangement is not incidental — visibility, control and identity all follow structurally from one
+    company owning the machines. Self-hosting escapes it and reintroduces the operational burden the
+    cloud removed. We describe a third position: a platform assembled from ordinary Linux services,
+    distributed across nodes that independent operators own, and presented through one SDK and one CLI.
+  </p>
+  <p>
+    Orama Network implements this today. Each tenant receives a physically isolated cluster — its own
+    consensus group, cache ring and gateway process — rather than a row prefix. All inter-node traffic
+    crosses a WireGuard mesh that constitutes the system's single security perimeter. Authentication is
+    a wallet signature, so no account, password or personal identifier is ever collected. Ten services
+    are implemented and in production use by a real tenant.
+  </p>
+  <p>
+    We state the threat model precisely, including what it does not cover: an adversary able to snapshot
+    the memory of a running node defeats every control described here. The engineering objective is
+    narrower and achievable — moving secrets and plaintext out of the cheap, retroactive, offline capture
+    path and into the expensive, targeted, live one. We report the current state without varnish,
+    including a security audit of our own system that produced ninety findings, and we enumerate the
+    open architectural questions that remain unresolved.
+  </p>
+</div>
+
+<div class="contents">
+  <h2>Contents</h2>
+<div class="toc">
+    <div class="toc-group">
+      <span class="eyebrow">Part I &nbsp;·&nbsp; Why</span>
+      <div class="toc-item"><span class="n">01</span><span class="t">The cloud is a landlord</span><span class="f">F1</span></div>
+      <div class="toc-item"><span class="n">02</span><span class="t">What Orama is</span><span class="f">F2</span></div>
+      <div class="toc-item"><span class="n">03</span><span class="t">What Orama is not</span></div>
+    </div>
+
+    <div class="toc-group">
+      <span class="eyebrow">Part II &nbsp;·&nbsp; The system</span>
+      <div class="toc-item"><span class="n">04</span><span class="t">Two planes, one gateway implementation</span><span class="f">F3</span></div>
+      <div class="toc-item"><span class="n">05</span><span class="t">One node, four tiers</span><span class="f">F4</span></div>
+      <div class="toc-item"><span class="n">06</span><span class="t">The trust boundary is the tunnel</span><span class="f">F5 F6</span></div>
+      <div class="toc-item"><span class="n">07</span><span class="t">One socket, three destinations</span><span class="f">F7</span></div>
+      <div class="toc-item"><span class="n">08</span><span class="t">The network is its own nameserver</span><span class="f">F8</span></div>
+      <div class="toc-item"><span class="n">09</span><span class="t">A namespace is a real cluster</span><span class="f">F9 F10</span></div>
+      <div class="toc-item"><span class="n">10</span><span class="t">Identity: wallet first, scopes second</span><span class="f">F11 F12</span></div>
+      <div class="toc-item"><span class="n">11</span><span class="t">The path a request takes</span><span class="f">F13</span></div>
+      <div class="toc-item"><span class="n">12</span><span class="t">The service surface</span><span class="f">F14</span></div>
+      <div class="toc-item"><span class="n">13</span><span class="t">Compute: WASM and five runtimes</span><span class="f">F15 F16</span></div>
+      <div class="toc-item"><span class="n">14</span><span class="t">Realtime: relay by design</span><span class="f">F17</span></div>
+      <div class="toc-item"><span class="n">15</span><span class="t">Storage, and what deletion means</span><span class="f">F18</span></div>
+    </div>
+
+    <div class="toc-group">
+      <span class="eyebrow">Part III &nbsp;·&nbsp; Threat model</span>
+      <div class="toc-item"><span class="n">16</span><span class="t">The adversary, stated plainly</span><span class="f">F19</span></div>
+      <div class="toc-item"><span class="n">17</span><span class="t">What holds, and what does not</span><span class="f">F20</span></div>
+    </div>
+
+    <div class="toc-group">
+      <span class="eyebrow">Part IV &nbsp;·&nbsp; Operating</span>
+      <div class="toc-item"><span class="n">18</span><span class="t">How a node joins</span><span class="f">F21</span></div>
+      <div class="toc-item"><span class="n">19</span><span class="t">The rule that cannot be bent</span><span class="f">F22</span></div>
+      <div class="toc-item"><span class="n">20</span><span class="t">A node an operator cannot log into</span></div>
+    </div>
+
+    <div class="toc-group">
+      <span class="eyebrow">Part V &nbsp;·&nbsp; Where this goes</span>
+      <div class="toc-item"><span class="n">21</span><span class="t">Honest state of the project</span><span class="f">F23</span></div>
+      <div class="toc-item"><span class="n">22</span><span class="t">Open decisions and direction</span><span class="f">F24</span></div>
+      <div class="toc-item"><span class="n">23</span><span class="t">Colophon</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="body">
+
+
+
+
+<!-- ═══════════════ 01 ═══════════════ -->
+<section>
+  <h2><span class="sn">1</span>The cloud is a landlord</h2>
+
+  <p class="lead">
+    The commercial cloud solved a real problem. Before it, shipping software
+    meant buying machines, racking them and hiring someone to keep them alive.
+    Now it means a credit card and an API call. Nobody sensible wants to go
+    back.
+  </p>
+
+  <p>
+    But the trade that made it work has a second half that is rarely priced. In
+    exchange for not owning the machines, you accept that <em>one company</em>
+    owns them — and everything that follows. Your database sits on their disks,
+    in a datacenter you cannot enter, under a jurisdiction you did not choose.
+    Your traffic crosses their network, where it is logged. Your users reach
+    you through an account system that identifies them to the provider too.
+  </p>
+
+  <p>
+    None of that is a bug in the cloud. It <em>is</em> the cloud. A landlord
+    holds the keys by definition.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 1. Two ways to not own the machines</div>
+    <div class="split">
+      <div class="lft">
+        <span class="sh">One operator — the hyperscaler</span>
+        <ul>
+          <li><strong>Visibility.</strong> The operator runs the hypervisor, the storage layer and the network. Data is plaintext when queried, in an address space they own. Encryption at rest is decrypted by a key they also hold.</li>
+          <li><strong>Control.</strong> Accounts suspended, regions withdrawn, prices and terms rewritten unilaterally. The dependency is asymmetric.</li>
+          <li><strong>Identity.</strong> Every service is reached through an account tied to a legal identity and a payment instrument. Anonymity is excluded at the front door.</li>
+          <li><strong>Failure domain.</strong> One company, one set of incentives, one legal jurisdiction.</li>
+        </ul>
+      </div>
+      <div class="rgt">
+        <span class="sh">Many operators — a network</span>
+        <ul>
+          <li><strong>Visibility.</strong> No single party sees the whole. Each tenant's data lives in its own processes on machines chosen from a pool, and the perimeter is a tunnel rather than a datacenter wall.</li>
+          <li><strong>Control.</strong> No account to suspend. Nodes are replaceable and the network reconciles around a departure.</li>
+          <li><strong>Identity.</strong> A signature, not an account. Nothing is collected, so nothing can be disclosed.</li>
+          <li><strong>Failure domain.</strong> Many operators, many jurisdictions — which is a security property, not a marketing one.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="fig-cap">
+      <b>The right-hand column is the claim, not the achievement.</b> Sections 16
+      and 17 state precisely how far it currently holds and where it stops.
+    </div>
+  </div>
+
+  <p>
+    The usual answer to the left-hand column is self-hosting, and it does
+    address all three rows. It also reintroduces exactly the problem the cloud
+    solved: you are racking machines again, at one machine's worth of
+    reliability. The honest version of that pitch is a trade of an operator you
+    do not control for an operations burden you cannot carry.
+  </p>
+
+  <div class="pull">
+    A cloud does not have to be one company's datacenter. It can be a network
+    of machines that many different people own, presenting one interface.
+  </div>
+
+  <p>
+    That reframing is not new — the internet already is such a network at the
+    transport layer, and BitTorrent, Tor and IPFS each demonstrated it for
+    storage and routing. What has not existed is the boring middle: a
+    decentralized substrate offering the ordinary primitives an application
+    needs. A SQL database. A cache. Somewhere to put files. A queue. Somewhere
+    to run a function. A domain name with a certificate on it.
+  </p>
+</section>
+
+<!-- ═══════════════ 02 ═══════════════ -->
+<section>
+  <h2><span class="sn">2</span>What Orama is</h2>
+
+  <p class="lead">
+    A decentralized application platform, assembled from ordinary
+    well-understood Linux services, running on VPS nodes that independent
+    operators own, and presented to a developer through one SDK and one CLI.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 2. Three commitments, and what each forces</div>
+    <div class="g3">
+      <div class="box hi">
+        <span class="bl">Commitment 01</span>
+        <span class="bt">No shared substrate between tenants</span>
+        <span class="bd">Multi-tenancy is <strong>physical</strong>, not a prefix on a row. A namespace is a real consensus group, a real cache ring and a real gateway process.<br /><br />
+        <strong>Forces:</strong> port blocks, process supervision, a scheduler — and a blast radius that ends at the tenant boundary.</span>
+      </div>
+      <div class="box hi">
+        <span class="bl">Commitment 02</span>
+        <span class="bt">No plaintext on the public internet</span>
+        <span class="bd">Exactly one security perimeter: a <strong>WireGuard mesh</strong>. Every service not deliberately public binds to an overlay address.<br /><br />
+        <strong>Forces:</strong> a short auditable public port list, and a join protocol that establishes the tunnel before any service starts.</span>
+      </div>
+      <div class="box hi">
+        <span class="bl">Commitment 03</span>
+        <span class="bt">No passwords, no accounts</span>
+        <span class="bd">Identity begins with a <strong>wallet signature</strong> and nothing else. No email, no password hash, no profile.<br /><br />
+        <strong>Forces:</strong> a scope system, because a credential that cannot be tied to a person must carry its own authority.</span>
+      </div>
+    </div>
+    <div class="fig-cap">
+      Everything in Part II is downstream of these three. Where the
+      architecture looks unusual, the cause is almost always one of them.
+    </div>
+  </div>
+
+  <h3>Every node is the same node</h3>
+  <p>
+    There is no coordinator machine, no special node type and no privileged
+    operator. Every node runs the same software; a node differs from its peers
+    only in flags — whether it answers DNS, whether its operator opted into
+    running an anonymity relay, and which tenants the scheduler placed on it.
+  </p>
+
+  <h3>What a developer gets</h3>
+  <p>
+    Eleven services, reachable through a single TypeScript client or the
+    <code>orama</code> CLI, scoped to a namespace owned by the wallet that
+    created it. Section 12 gives the full surface; the short version is that
+    the primitives are the familiar ones, deliberately.
+  </p>
+
+  <div class="fig plain">
+    <div class="fig-title">The eight binaries</div>
+    <div class="kv" style="margin:0;">
+      <span class="k">orama</span><span>the CLI — the largest component after the gateway</span>
+      <span class="k">orama-node</span><span>libp2p host, database manager, mesh and swarm sync, DNS heartbeat — <em>and the control-plane gateway, embedded in-process</em></span>
+      <span class="k">gateway</span><span>the per-tenant data plane, one process per namespace per node</span>
+      <span class="k">orama-sfu</span><span>selective forwarding unit for realtime media</span>
+      <span class="k">orama-turn</span><span>relay, including the TLS and stealth listeners</span>
+      <span class="k">orama-sni-router</span><span>the TCP ClientHello router that owns port 443</span>
+      <span class="k">orama-inspector</span><span>SSH-based deep health checks</span>
+      <span class="k">orama-identity</span><span>key and identity utility</span>
+    </div>
+    <div class="fig-cap">
+      Plus <code>orama-agent</code>, a separate module that is the entire
+      userland on dedicated-image nodes, and <code>vault-guardian</code>,
+      written in Zig.
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 03 ═══════════════ -->
+<section>
+  <h2><span class="sn">3</span>What Orama is not</h2>
+
+  <p class="lead">
+    A whitepaper that only lists strengths is marketing. These are deliberate
+    exclusions or honest current limits, and they belong before the
+    architecture rather than after it.
+  </p>
+
+  <div class="g2">
+    <div class="box">
+      <span class="bl">Not this</span>
+      <span class="bt">A blockchain</span>
+      <span class="bd">Wallet signatures are used for identity because public-key cryptography is a better login than a password and collects nothing. That is the entire relationship. No chain, no consensus over application state, no token required to use the network, no contract in the request path. Consensus exists only where a database needs it — Raft, inside a tenant's own cluster, over that tenant's own rows.</span>
+    </div>
+    <div class="box">
+      <span class="bl">Not this</span>
+      <span class="bt">Censorship-proof</span>
+      <span class="bd">Nodes are ordinary VPS instances at ordinary hosting providers. A provider can terminate a node and a determined adversary can lean on several. What the design buys is that no single node is load-bearing: a tenant's cluster spans three, deployments replicate, and the network reconciles around a departure. That is resilience, not immunity.</span>
+    </div>
+    <div class="box rust">
+      <span class="bl">Not this</span>
+      <span class="bt">A defence against a hostile hypervisor</span>
+      <span class="bd">The most important limit in this document, and Part III is devoted to it. Orama runs on machines whose firmware and hypervisor belong to someone else. An adversary who can snapshot the memory of a running node, repeatedly and on demand, defeats every control described here.</span>
+    </div>
+    <div class="box rust">
+      <span class="bl">Not this</span>
+      <span class="bt">Finished</span>
+      <span class="bd">Orama is alpha. It runs a development network and a test network with a real tenant in production use, and it is not open for public sign-ups. Several structural questions in Part V are genuinely unresolved — including whether the current two-plane split survives at all.</span>
+    </div>
+  </div>
+
+  <div class="callout warn" style="margin-top:5mm;">
+    <span class="eyebrow">On the word "whitepaper"</span>
+    <p>
+      In this industry the word has come to mean a fundraising document
+      describing a system that does not exist yet. This one describes software
+      that is running, and marks the parts that are not. It is not an offering
+      document, it does not describe a token, and it makes no financial claim.
+      Part V is the only forward-looking part; every item in it is written as
+      an open question with its blockers, because that is what those items are.
+    </p>
+  </div>
+
+  <h3>Three claims we will not make</h3>
+  <table>
+    <thead><tr><th style="width:52mm">A claim you will not find here</th><th>Why not</th></tr></thead>
+    <tbody>
+      <tr><td><strong>"Your data is encrypted, so it is private."</strong></td><td>Any store that answers a query holds the key and the plaintext in memory at query time. Encryption at rest addresses a disk, not a hypervisor.</td></tr>
+      <tr><td><strong>"Decentralized, therefore unstoppable."</strong></td><td>The current network is a small number of nodes run by a small number of people. Permissionless participation is deliberately out of scope until a hostile node cannot harm a tenant — see Section 22.</td></tr>
+      <tr><td><strong>"Production-ready."</strong></td><td>Section 21 lists what is not, including a security audit of our own system that produced ninety findings.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════════ 04 ═══════════════ -->
+<section>
+  <h2><span class="sn">4</span>Two planes, one gateway implementation</h2>
+
+  <p class="lead">
+    The single most important structural fact about Orama is that the same
+    gateway implementation runs in two different roles — once as the
+    cluster-wide control plane, and once per tenant as a data plane.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 3. The two planes</div>
+
+    <div class="band rust">
+      <div class="band-label"><span>Public internet — untrusted</span><span class="r">nothing below this line is directly reachable</span></div>
+      <div class="chips">
+        <span class="chip">web · mobile · CLI · SDK</span>
+        <span class="chip">tenant-owned custom domains</span>
+        <span class="chip">DNS resolvers</span>
+      </div>
+    </div>
+
+    <div class="arrow-row" style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:8pt;color:var(--muted);padding:1.5mm 0;">↓ &nbsp; tcp 443 · 80 · 53</div>
+
+    <div class="band hi">
+      <div class="band-label"><span>Edge — on every node</span><span class="r">terminates or forwards, never business logic</span></div>
+      <div class="chips">
+        <span class="chip solid">sni-router :443<small>routes by SNI, never decrypts</small></span>
+        <span class="chip">caddy :8443<small>TLS + ACME</small></span>
+        <span class="chip">coredns :53<small>zone is a SQL table</small></span>
+        <span class="chip">ntfy<small>self-hosted push</small></span>
+      </div>
+    </div>
+
+    <div class="arrow-row" style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:8pt;color:var(--muted);padding:1.5mm 0;">↓ &nbsp; reverse proxy to localhost</div>
+
+    <div class="band teal">
+      <div class="band-label"><span>Control plane — embedded in the orama-node process</span><span class="r">not a separate service</span></div>
+      <div class="chips">
+        <span class="chip teal">core gateway :6001</span>
+        <span class="chip">identity · scopes · rate limit</span>
+        <span class="chip">deployments · DNS records</span>
+        <span class="chip">namespace lifecycle</span>
+        <span class="chip">WireGuard peer exchange · ACME</span>
+      </div>
+    </div>
+
+    <div class="arrow-row" style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:8pt;color:var(--muted);padding:1.5mm 0;">↓ &nbsp; proxy inward with verified identity in internal headers &nbsp; ↓ &nbsp; spawn on demand</div>
+
+    <div class="band">
+      <div class="band-label"><span>Data planes — the standalone <code>gateway</code> binary, one unit per tenant per node</span><span class="r">owns nothing but that tenant's data</span></div>
+      <div class="chips">
+        <span class="chip rust">namespace “anchat”</span>
+        <span class="chip">gateway · own rqlite · own olric</span>
+        <span class="chip rust">namespace “demo”</span>
+        <span class="chip">gateway · own rqlite · own olric</span>
+        <span class="chip ghost">…up to 20 per node</span>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-label"><span>Cluster services — shared, overlay only</span><span class="r">reachable only through the tunnel</span></div>
+      <div class="chips">
+        <span class="chip">rqlite</span><span class="chip">raft</span><span class="chip">olric</span>
+        <span class="chip">ipfs</span><span class="chip">ipfs-cluster</span><span class="chip">libp2p</span>
+        <span class="chip">vault guardian</span><span class="chip">anon</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Read this figure first; the rest of Part II follows from it.</b> A
+      request to a tenant is authenticated on the core gateway — where the API
+      keys actually live — and then proxied inward with the verified identity
+      stamped into internal headers. The tenant's gateway never has to trust
+      the caller; it trusts the header, and the header only arrives over the
+      overlay.
+    </div>
+  </div>
+
+  <p>
+    The two roles are the same code but not the same process. The control plane
+    is <em>embedded</em>: <code>orama-node</code> starts it in-process, in its
+    own address space, which is why no core gateway systemd unit exists on a
+    node. The data plane is that same package compiled as a standalone
+    <code>gateway</code> binary and run as one template unit per tenant. A
+    reader looking for an <code>orama-gateway</code> service will not find one;
+    the name survives only in legacy cleanup paths.
+  </p>
+
+  <p>
+    Almost every other property of the system is a consequence of this split.
+    Ports are allocated in blocks because tenants get real processes. The trust
+    boundary has to be a VPN because those processes talk across machines.
+    Deployments need a home node because writes must land in exactly one place.
+  </p>
+
+  <div class="callout warn">
+    <span class="eyebrow">The seam is also a defect generator</span>
+    <p>
+      Honesty requires noting that this split is the leading candidate for
+      removal. Four separate defects trace directly to it: a gateway holding
+      two database handles and silently writing tenant rows to the wrong one,
+      API keys hashed differently by the two registries, namespace identifiers
+      that are not portable between them, and configuration drift between the
+      two gateway modes. Section 22 covers the proposal to collapse it.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 05 ═══════════════ -->
+<section>
+  <h2><span class="sn">5</span>One node, four tiers</h2>
+
+  <p class="lead">
+    A node is not special. Every node runs the same set of units, supervised in
+    four distinct ways — and only the first tier is reachable from the
+    internet.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 4. Everything running on one machine</div>
+
+    <div class="band hi">
+      <div class="band-label"><span>Tier 1 · Public edge</span><span class="r">plain systemd units · the firewall opens only these</span></div>
+      <div class="chips">
+        <span class="chip solid">sshd<small>:22 — absent on the dedicated image</small></span>
+        <span class="chip solid">orama-sni-router<small>:443</small></span>
+        <span class="chip solid">caddy<small>:80</small></span>
+        <span class="chip solid">coredns<small>:53 — nameserver nodes</small></span>
+        <span class="chip solid">wg-quick<small>:51820</small></span>
+        <span class="chip solid">orama-turn<small>3478 · 5349 · relay range</small></span>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-label"><span>Tier 2 · Cluster services</span><span class="r">plain systemd units · bound to the overlay or loopback</span></div>
+      <div class="chips">
+        <span class="chip">gateway<small>per-tenant binary</small></span>
+        <span class="chip">orama-node<small>embeds the control plane</small></span>
+        <span class="chip">rqlited<small>SQLite behind Raft</small></span>
+        <span class="chip">orama-olric<small>distributed cache</small></span>
+        <span class="chip">orama-ipfs<small>content storage</small></span>
+        <span class="chip">ipfs-cluster<small>coordinated pinning</small></span>
+        <span class="chip">orama-sfu<small>media forwarding</small></span>
+        <span class="chip">orama-vault<small>share custody</small></span>
+        <span class="chip">anon<small>anonymity client</small></span>
+        <span class="chip">ntfy<small>push</small></span>
+        <span class="chip">ipfs-gc timer<small>reclaims disk</small></span>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-label"><span>Tier 3 · Tenant instances</span><span class="r">systemd <em>template</em> units — started on demand by the gateway</span></div>
+      <div class="chips">
+        <span class="chip teal">rqlite@ns</span><span class="chip teal">olric@ns</span><span class="chip teal">gateway@ns</span>
+        <span class="chip teal">sfu@ns</span><span class="chip teal">turn@ns</span>
+        <span class="chip ghost">one set per namespace, on each of its three nodes</span>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-label"><span>Tier 4 · Deployment processes</span><span class="r">not systemd at all — the gateway's own process manager</span></div>
+      <div class="chips">
+        <span class="chip">go-backend</span><span class="chip">nodejs-backend</span><span class="chip">nextjs SSR</span>
+        <span class="chip ghost">static — served from IPFS, no process</span>
+        <span class="chip ghost">go-wasm — inside the serverless engine</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Four tiers, four supervision models.</b> The differentiators between
+      one node and another are only: the <code>--nameserver</code> flag, the
+      operator's anonymity-relay opt-in, and which tenants the scheduler placed
+      here. Everything runs as an unprivileged user under systemd hardening;
+      only the web server and DNS server may bind privileged ports, because
+      only they need to.
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">Ordering is a hard dependency, not a preference</span>
+    <p>
+      Tenant services are ordered database → cache → gateway by systemd
+      dependencies. A gateway that starts before the cache is reachable does
+      not fail permanently: it retries five times with exponential backoff,
+      then keeps retrying in the background and enables its cache endpoints
+      once the connection succeeds. Nothing in the codebase waits by sleeping —
+      readiness is polled against the actual indicator with a timeout, because
+      a sleep long enough on an idle machine is not long enough on a loaded
+      one.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 06 ═══════════════ -->
+<section>
+  <h2><span class="sn">6</span>The trust boundary is the tunnel</h2>
+
+  <p class="lead">
+    There is exactly one security perimeter in Orama and it is WireGuard. Every
+    node holds an overlay address; every service not deliberately public binds
+    to it.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 5. The mesh, and the short list outside it</div>
+
+    <div class="band rust">
+      <div class="band-label"><span>Public surface — the complete list</span><span class="r">only 22, 80, 443 and 51820 are open on <em>every</em> node</span></div>
+      <div class="chips">
+        <span class="chip rust">22 ssh</span><span class="chip rust">53 dns*</span>
+        <span class="chip rust">80 acme</span><span class="chip rust">443 sni</span>
+        <span class="chip rust">3478 · 5349 turn</span><span class="chip rust">9001 relay*</span>
+        <span class="chip rust">51820 wireguard</span><span class="chip rust">49152+ relay range</span>
+        <span class="chip ghost">* 53 on nameserver nodes · 9001 on opt-in relays · 3478/5349 and the relay range only on nodes hosting a namespace TURN instance</span>
+      </div>
+    </div>
+
+    <div style="margin:2.5mm 0;">
+      <div class="g3">
+        <div class="box hi"><span class="bl">node-1</span><span class="bt">10.0.0.1</span><span class="bd">nameserver · voter<br />ipfs · olric · gateway<br />ns-anchat · ns-demo</span></div>
+        <div class="box hi"><span class="bl">node-2</span><span class="bt">10.0.0.2</span><span class="bd">nameserver · voter<br />ipfs · olric · gateway<br />ns-anchat · turn</span></div>
+        <div class="box hi"><span class="bl">node-3</span><span class="bt">10.0.0.3</span><span class="bd">nameserver · voter<br />ipfs · olric · gateway<br />ns-anchat · turn</span></div>
+      </div>
+      <div style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:7pt;color:var(--teal);padding:2mm 0;">
+        ◀ ─────── full mesh · every peer dials every peer over wg0 ─────── ▶
+      </div>
+    </div>
+
+    <div class="band teal">
+      <div class="band-label"><span>Carried inside the tunnel</span><span class="r">never on a public interface</span></div>
+      <div class="chips">
+        <span class="chip">raft replication</span><span class="chip">database queries</span>
+        <span class="chip">cache gossip</span><span class="chip">ipfs swarm</span>
+        <span class="chip">cluster pinning</span><span class="chip">gateway ↔ gateway</span>
+        <span class="chip">vault peer</span><span class="chip">namespace ports</span><span class="chip">media RTP</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Nothing internal is exposed.</b> Peers are exchanged over internal
+      endpoints that require the cluster secret; the authoritative peer list is
+      a database table, and every node reconciles its live interface against it
+      on a loop — so a node that missed an update repairs itself rather than
+      staying silently partitioned. IPv6 is disabled system-wide so it cannot
+      be used to route around the IPv4 rules.
+    </div>
+  </div>
+
+  <h3>Authentication underneath the tunnel</h3>
+  <p>
+    The tunnel is the perimeter but not the only control. Each service
+    authenticates independently, so a process compromised inside the overlay
+    still cannot read everything.
+  </p>
+
+  <div class="fig plain">
+    <div class="fig-title">Figure 6. Defence in depth, and one gap</div>
+    <table class="matrix">
+      <thead><tr><th style="width:40mm">Service</th><th>Control beneath the tunnel</th><th style="width:20mm">Enforced?</th></tr></thead>
+      <tbody>
+        <tr><td>Cache gossip</td><td style="text-align:left">Memberlist encrypted with a shared 32-byte key</td><td class="ok">yes</td></tr>
+        <tr><td>Content pinning</td><td style="text-align:left">Membership gated by the cluster secret, the mesh and invite enrolment — the per-peer allowlist was deliberately removed</td><td class="part">By other means</td></tr>
+        <tr><td>Internal endpoints</td><td style="text-align:left">Cluster secret required; overlay-only</td><td class="ok">yes</td></tr>
+        <tr><td>WebSocket upgrades</td><td style="text-align:left">Origin validated against the node's configured domain</td><td class="ok">yes</td></tr>
+        <tr><td>Vault</td><td style="text-align:left">Session-token authentication</td><td class="part">Partial</td></tr>
+        <tr><td><strong>Cluster database</strong></td><td style="text-align:left"><strong>HTTP basic auth — documented, never applied</strong></td><td class="no">No</td></tr>
+      </tbody>
+    </table>
+    <div class="fig-cap">
+      <b>The last row is a defect we are choosing to publish.</b> Credentials
+      are generated and written to disk, but the configuration field that would
+      pass them to the database process is never assigned, so the flag is never
+      added. The firewall alone keeps the database off the public internet;
+      anything that reaches the overlay reaches it unauthenticated. A perimeter
+      you believe in but do not have is worse than one you know is missing.
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 07 ═══════════════ -->
+<section>
+  <h2><span class="sn">7</span>One socket, three destinations</h2>
+
+  <p class="lead">
+    Port 443 does not belong to the HTTPS server. It belongs to a TCP proxy
+    that reads the unencrypted TLS ClientHello, looks at the server name, and
+    forwards raw bytes onward without ever terminating TLS.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 7. What actually owns port 443</div>
+
+    <div class="band hi" style="text-align:center;">
+      <div class="band-label" style="justify-content:center;"><span>One public TCP socket — TLS bytes, not yet decrypted</span></div>
+      <div class="chips" style="justify-content:center;">
+        <span class="chip solid">orama-sni-router :443</span>
+        <span class="chip">peeks the ClientHello</span>
+        <span class="chip">never decrypts</span>
+        <span class="chip">copies bytes verbatim</span>
+      </div>
+    </div>
+
+    <div style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:8pt;color:var(--muted);padding:2mm 0;">
+      ┌──────────────────────────┼──────────────────────────┐
+    </div>
+
+    <div class="g3">
+      <div class="box teal">
+        <span class="bl">SNI matches</span>
+        <span class="bt">cdn-&lt;hash&gt;.&lt;base&gt;</span>
+        <span class="bd">TURN over TLS for one namespace — the <strong>stealth</strong> path. Hostname derived from a hash, so the SNI string does not name the app being blocked.</span>
+      </div>
+      <div class="box">
+        <span class="bl">SNI matches</span>
+        <span class="bt">turn.ns-&lt;name&gt;.&lt;base&gt;</span>
+        <span class="bd">The same relay under a human-readable alias, for operator convenience.</span>
+      </div>
+      <div class="box">
+        <span class="bl">Everything else</span>
+        <span class="bt">caddy :8443</span>
+        <span class="bd">Terminates TLS, handles ACME, reverse-proxies to the core gateway on loopback.</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Why bother:</b> so that a media relay can share the HTTPS port. To a
+      deep-packet-inspection middlebox in a jurisdiction that blocks voice
+      traffic, a relayed call is indistinguishable from an ordinary HTTPS
+      connection — same port, same handshake, and a hostname that looks like a
+      CDN. Static operator routes win over auto-discovered ones on conflict,
+      and a transient read failure keeps the previous route table rather than
+      blackholing live traffic.
+    </div>
+  </div>
+
+  <div class="pull">
+    Privacy properties here are obtained by arranging ordinary components
+    carefully, not by inventing cryptography. Nothing in that path is novel.
+    The novelty is that it is wired up at all.
+  </div>
+
+  <h3>Certificates</h3>
+  <p>
+    The web server holds every certificate and serves the wildcard and apex for
+    each zone. Certificates for tenant custom domains are issued on demand: the
+    web server asks the gateway whether a hostname is one it should get a
+    certificate for, and the gateway answers from its own domain table.
+    Challenges are answered through a small custom plugin that writes the
+    challenge record into the cluster's own DNS — so there is no external DNS
+    provider anywhere in the certificate path.
+  </p>
+</section>
+
+<!-- ═══════════════ 08 ═══════════════ -->
+<section>
+  <h2><span class="sn">8</span>The network is its own nameserver</h2>
+
+  <p class="lead">
+    Nameserver nodes run CoreDNS with a plugin that reads the cluster database.
+    The authoritative zone is a table. There is no zone file, and no external
+    DNS provider anywhere in the system.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 8. Topology changes are database writes</div>
+
+    <div class="flow">
+      <div class="step"><span class="sn">Event</span><span class="st">A thing happens</span><span class="sd">A deployment is created · a namespace is provisioned · a certificate challenge starts · a node joins</span></div>
+      <div class="sep">→</div>
+      <div class="step hi"><span class="sn">Write</span><span class="st">A row is inserted</span><span class="sd">The gateway writes to <code>dns_records</code> — replicated by Raft to every node</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">Answer</span><span class="st">CoreDNS serves it</span><span class="sd">The next query is answered from the table. No reload, no zone transfer, no propagation step</span></div>
+    </div>
+
+    <table style="margin-top:3.5mm;">
+      <thead><tr><th style="width:52mm">Table</th><th>Holds</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">dns_records</td><td>A, AAAA, CNAME and TXT for deployments, namespaces and certificate challenges</td></tr>
+        <tr><td class="mono">dns_nodes</td><td>Every node's peer ID, public address, overlay address, active flag, heartbeat</td></tr>
+        <tr><td class="mono">dns_nameservers</td><td>Which nodes answer on port 53 — the NS set</td></tr>
+        <tr><td class="mono">reserved_domains</td><td>Names tenants may not claim</td></tr>
+        <tr><td class="mono">global_deployment_subdomains</td><td>Cluster-unique subdomain reservations</td></tr>
+      </tbody>
+    </table>
+
+    <div class="fig-cap">
+      <b>Why this matters more than it sounds.</b> Adding a node, provisioning
+      a namespace and issuing a certificate all become the same kind of
+      operation: an insert. There is no configuration management system in the
+      architecture because there is no configuration to manage.
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">The heartbeat runs even when registration failed</span>
+    <p>
+      Each node registers itself at startup and re-asserts on a heartbeat. The
+      heartbeat is deliberately independent of the initial registration
+      succeeding — a node that boots during a leaderless window, which is
+      common during a rolling restart, would otherwise stay marked inactive
+      forever and silently drop out of both deployment routing and vault
+      guardian discovery.
+    </p>
+  </div>
+
+  <h3>Custom domains</h3>
+  <p>
+    A deployment gets a generated subdomain reserved cluster-wide. A tenant may
+    attach their own domain instead: add it, prove ownership with a TXT record,
+    point an A record at the deployment, and the certificate is provisioned
+    automatically. Ownership is verified before a certificate is requested, so
+    the platform cannot be used to obtain certificates for domains the
+    requester does not control.
+  </p>
+</section>
+
+<!-- ═══════════════ 09 ═══════════════ -->
+<section>
+  <h2><span class="sn">9</span>A namespace is a real cluster</h2>
+
+  <p class="lead">
+    In most platforms a tenant is a column. Here a tenant is a cluster —
+    its own consensus group, its own cache ring, its own gateway process, on
+    three real machines.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 9. Provisioning, and why it is recoverable</div>
+    <div class="flow">
+      <div class="step"><span class="sn">01</span><span class="st">Select</span><span class="sd">Three nodes, weighted by remaining capacity and leader locality. Co-located nodes sharing a public address are treated as one failure domain</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">02</span><span class="st">Allocate</span><span class="sd">A contiguous five-port block per node. Optimistic: scan for a free block, insert, and let a uniqueness constraint reject the loser of a race — retried ten times with backoff</span></div>
+      <div class="sep">→</div>
+      <div class="step hi"><span class="sn">03</span><span class="st">Spawn</span><span class="sd">Units written from templates and started in strict order — database, then cache, then gateway</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">04</span><span class="st">Publish</span><span class="sd">DNS records for all three nodes, plus relay hostnames when realtime is enabled. Status becomes <code>ready</code></span></div>
+    </div>
+    <div class="fig-cap">
+      <b>Every step writes an audit row — twenty-seven declared event types.</b>
+      That trail is what lets an operator see exactly which node reached which
+      service after a failed provision. It is an audit log rather than an event
+      source: authoritative state lives in mutable rows updated in place, and
+      the trail is deleted when the namespace is deprovisioned. The other
+      outcomes are <code>degraded</code>, <code>failed</code> and
+      <code>deprovisioning</code>.
+    </div>
+  </div>
+
+  <div class="fig plain">
+    <div class="fig-title">Figure 10. Port arithmetic — capacity is a division problem</div>
+
+    <div class="band">
+      <div class="band-label"><span>10000–10099 · namespace core</span><span class="r">5 ports each → <strong>20 tenants per node</strong></span></div>
+      <div class="chips">
+        <span class="chip teal">base+0<small>rqlite http</small></span>
+        <span class="chip teal">base+1<small>raft</small></span>
+        <span class="chip teal">base+2<small>olric http</small></span>
+        <span class="chip teal">base+3<small>memberlist</small></span>
+        <span class="chip teal">base+4<small>gateway</small></span>
+        <span class="chip ghost">× 20 blocks</span>
+      </div>
+    </div>
+    <div class="band">
+      <div class="band-label"><span>20000–29999 · media RTP</span><span class="r">500-port sub-range each → 20 tenants</span></div>
+      <div class="chips"><span class="chip">ns-A 20000–20499</span><span class="chip">ns-B 20500–20999</span><span class="chip ghost">… 18 more</span></div>
+    </div>
+    <div class="band">
+      <div class="band-label"><span>30000–30099 · media signaling</span><span class="r">one port each → 100 tenants</span></div>
+      <div class="chips"><span class="chip ghost">one slot per namespace per node</span></div>
+    </div>
+    <div class="band rust">
+      <div class="band-label"><span>49152–65535 · relay</span><span class="r">800-port sub-range each · publicly reachable UDP</span></div>
+      <div class="chips"><span class="chip rust">the only tenant range on a public interface</span></div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Four disjoint ranges, three allocators.</b> Realtime uses entirely
+      separate ranges so that adding voice to a namespace cannot disturb an
+      existing core allocation. Allocation is optimistic rather than
+      transactional — scan, insert, and let a uniqueness constraint reject the
+      loser of a race, which retries with backoff. The twenty-tenant ceiling is
+      a limit <em>per machine</em>, not on the network: growth is horizontal.
+    </div>
+  </div>
+
+  <p>
+    The tenant's tables live in the tenant's own database file, on the tenant's
+    own replication log, reached through the tenant's own gateway on the
+    tenant's own port. There is no query that can cross the boundary because
+    there is no shared table to cross it in.
+  </p>
+</section>
+
+<!-- ═══════════════ 10 ═══════════════ -->
+<section>
+  <h2><span class="sn">10</span>Identity: wallet first, scopes second</h2>
+
+  <p class="lead">
+    Orama has no passwords. Identity begins with a wallet signature and
+    everything downstream derives from it.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 11. The credential ladder</div>
+    <div class="ladder">
+      <div class="rung">
+        <span class="lv">START</span>
+        <span class="lb"><span class="lt">A wallet</span><span class="ld">EVM or Solana. Request a single-use nonce, sign it, submit the signature. The server recovers the address and binds it to a namespace.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">↓ ISSUES</span>
+        <span class="lb"><span class="lt">A short-lived token &nbsp;·&nbsp; and a scoped API key</span><span class="ld">Refresh tokens are stored as hashes, never plaintext. API keys are stored as HMAC hashes under a server-side secret. Both carry a grant set.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">↓ EXCHANGE</span>
+        <span class="lb"><span class="lt">A key may be traded for a token — keeping the key's narrow grants</span><span class="ld">This is the guard that closes exchange-then-escalate. A runtime key cannot be laundered into an administrative token by trading it in.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">↓ GATE</span>
+        <span class="lb"><span class="lt">The scope gate — required grant per method and path</span><span class="ld">Runs <em>after</em> ownership, so it can only ever tighten an already-authorized request. It never authorizes on its own.</span></span>
+      </div>
+    </div>
+    <div class="fig-cap">
+      <b>Two more guards make it hold.</b> A wallet token is never trusted for
+      a scope claim it happens to carry, even if a tenant's own claims provider
+      injected one — the field is reserved and ignored on wallet subjects
+      regardless. And a logged-in end user receives every data-plane grant and
+      never administrative access — unless that wallet is a confirmed
+      <em>owner</em> of the namespace, in which case the middleware marks the
+      request owner-confirmed and the gate grants it admin. Ownership, not the
+      token type, is what opens the control plane.
+    </div>
+  </div>
+
+  <div class="fig plain">
+    <div class="fig-title">Figure 12. Grants by profile — what a client bundle may safely ship</div>
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th style="width:36mm">Grant</th>
+          <th>admin key</th><th>app-runtime key</th><th>invoke-only key</th><th>user token</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>admin</strong> — deploy, secrets, migrations, key management, raw database</td><td class="ok">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+        <tr><td><strong>invoke</strong> — function invocation</td><td class="ok">✓</td><td class="ok">✓</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+        <tr><td><strong>storage</strong> — upload, pin, get, unpin</td><td class="ok">✓</td><td class="ok">✓</td><td class="no">✗</td><td class="ok">✓</td></tr>
+        <tr><td><strong>push</strong> — device registration, never send</td><td class="ok">✓</td><td class="ok">✓</td><td class="no">✗</td><td class="ok">✓</td></tr>
+        <tr><td><strong>webrtc</strong> — relay credentials, signaling, rooms</td><td class="ok">✓</td><td class="ok">✓</td><td class="no">✗</td><td class="ok">✓</td></tr>
+        <tr><td><strong>proxy</strong> — anonymous outbound HTTP</td><td class="ok">✓</td><td class="ok">✓</td><td class="no">✗</td><td class="ok">✓</td></tr>
+        <tr><td><strong>pubsub · cache</strong> — messaging and cache REST</td><td class="ok">✓</td><td class="no">✗</td><td class="no">✗</td><td class="ok">✓</td></tr>
+        <tr><td colspan="5" style="font-size:6.6pt;color:var(--grey);text-align:left;padding-top:1.5mm;">Eight grants are defined, but only seven can currently be minted onto a key: <code>pubsub</code> is missing from the issuance allow-list, so a request for it is rejected as unknown — by an error message that lists it as valid. A pubsub route is therefore reachable today only by a user token or an admin key.</td></tr>
+      </tbody>
+    </table>
+    <div class="fig-cap">
+      <b>Administrative access is a wildcard that satisfies every requirement.</b>
+      The only thing standing between a leaked client key and the control plane
+      is that the key was never minted with that grant — which is why the
+      profiles exist. Keys minted before scoping existed stored a null scope,
+      read as administrative; a grandfather branch kept them working across a
+      rolling upgrade and a sweep then revoked them so the branch stopped
+      mattering.
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ 11 ═══════════════ -->
+<section>
+  <h2><span class="sn">11</span>The path a request takes</h2>
+
+  <p class="lead">
+    Every request that survives the edge lands on one multiplexer wrapped in a
+    fixed nine-layer chain. The order is deliberate, and one ordering decision
+    in it is load-bearing.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 13. Nine layers, then a handler</div>
+    <div class="stack">
+      <div class="node"><span class="nt">1 · Logging</span><span class="nd">Request identifiers assigned before anything can fail</span></div>
+      <div class="arrow">↓</div>
+      <div class="node"><span class="nt">2 · Security headers &nbsp;&nbsp; 3 · Rate limit &nbsp;&nbsp; 4 · CORS</span><span class="nd">Per-IP limiting happens before any work is done on behalf of the caller</span></div>
+      <div class="arrow">↓</div>
+      <div class="node hi"><span class="nt">5 · Domain routing &nbsp;<span style="font-family:'JetBrains Mono',monospace;font-size:6.6pt;color:var(--rust);">— THE FORK</span></span><span class="nd">Runs <em>before</em> auth, because the Host header alone decides whether the request belongs to this gateway, to a tenant's gateway, or to a deployed application</span></div>
+      <div class="arrow">↓</div>
+      <div class="node"><span class="nt">6 · Authentication</span><span class="nd">Wallet token or API key resolved to a subject</span></div>
+      <div class="arrow">↓</div>
+      <div class="node"><span class="nt">7 · Authorization — ownership</span><span class="nd">Does this subject own the namespace it is addressing?</span></div>
+      <div class="arrow">↓</div>
+      <div class="node hi"><span class="nt">8 · Scope gate</span><span class="nd">Runs <em>after</em> ownership, so it can only tighten an already-authorized request — it never grants access on its own</span></div>
+      <div class="arrow">↓</div>
+      <div class="node"><span class="nt">9 · Per-namespace rate limit &nbsp;→&nbsp; handler</span><span class="nd">Tenant override beneath an operator ceiling</span></div>
+    </div>
+    <div class="fig-cap">
+      <b>Domain routing before auth, scope after ownership.</b> The first
+      ordering is required because a request for a deployed application is not
+      addressed to the gateway at all. The second is a safety property: a gate
+      that runs after authorization can only ever subtract.
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">One deliberate exception</span>
+    <p>
+      A host of the form <code>ns-&lt;name&gt;.&lt;base&gt;</code> is proxied
+      inward regardless of path — except for scoped key management, which
+      operates on the cluster database where keys are validated. Namespace
+      gateways have isolated databases without the authoritative key table, so
+      proxying those writes would land keys in a database that can never
+      authenticate them.
+    </p>
+  </div>
+
+  <h3>Reads are everywhere, writes are somewhere</h3>
+  <p>
+    Any node can answer a request for a deployment. State-changing operations
+    — update, delete, rollback, logs, statistics — are funnelled to that
+    deployment's <em>home node</em>, so two gateways never mutate the same
+    application concurrently. The forwarding proxy is loop-guarded by a header:
+    a request already forwarded once is handled locally rather than bounced
+    again.
+  </p>
+</section>
+
+<!-- ═══════════════ 12 ═══════════════ -->
+<section>
+  <h2><span class="sn">12</span>The service surface</h2>
+
+  <p class="lead">
+    Eleven services, one client, one CLI. The label on each box states the
+    <em>shape</em> of the service — not a claim of parity with providers that
+    have a decade of hardening behind them.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 14. What is offered, and what it is made of</div>
+    <div class="g2">
+      <div class="box"><span class="bl">replaces RDS / Aurora</span><span class="bt">Database</span><span class="bd">SQLite behind Raft, replicated across the tenant's own three nodes. Bounded-staleness reads reject a lagging follower rather than silently serving it.</span></div>
+      <div class="box"><span class="bl">replaces ElastiCache</span><span class="bt">Cache</span><span class="bd">Distributed maps with TTL and replication; members discover each other over encrypted gossip. Routes register even when the cache is not yet up, and reconnect.</span></div>
+      <div class="box"><span class="bl">replaces S3 / R2</span><span class="bt">Storage</span><span class="bd">Content-addressed storage on a <strong>private</strong> swarm — a shared swarm key means nodes peer only with each other, never the public network. Ownership tracked per namespace.</span></div>
+      <div class="box"><span class="bl">replaces SNS / SQS</span><span class="bt">PubSub</span><span class="bd">Gossip-based messaging over WebSocket and REST, with presence and a per-namespace sequence so a batch publish can be ordered by consumers.</span></div>
+      <div class="box"><span class="bl">replaces Lambda</span><span class="bt">Functions</span><span class="bd">WebAssembly executed in-process — no containers, no cold-start virtual machine. A module pool removed the per-invocation startup cost.</span></div>
+      <div class="box"><span class="bl">replaces Vercel / Fly</span><span class="bt">Deployments</span><span class="bd">Five deployable runtimes. Static served from content storage; SSR, Go and Node.js as supervised processes. Rollback is first-class, not a redeploy.</span></div>
+      <div class="box"><span class="bl">replaces Route 53</span><span class="bt">DNS &amp; domains</span><span class="bd">CoreDNS reading a SQL table as its zone. Automatic certificates; custom domains verified by ownership proof first.</span></div>
+      <div class="box"><span class="bl">replaces Twilio / Daily</span><span class="bt">WebRTC</span><span class="bd">Selective forwarding and relay in server-enforced relay-only mode, with a TLS listener that shares the HTTPS port.</span></div>
+      <div class="box"><span class="bl">replaces SNS Mobile</span><span class="bt">Push</span><span class="bd">Tenants supply their own credentials: direct to Apple, or a self-hosted server on the node for Android without Google. Never a shared platform account.</span></div>
+      <div class="box"><span class="bl">no cloud equivalent</span><span class="bt">Anonymity proxy</span><span class="bd">Outbound HTTP through a relay network, callable from application code or a WebAssembly function. Private addresses bypass the circuit.</span></div>
+      <div class="box"><span class="bl">— </span><span class="bt">SQLite</span><span class="bd">Per-namespace database files with content-addressed backups, separate from the tenant's replicated database.</span></div>
+      <div class="box rust"><span class="bl">replaces Secrets Manager</span><span class="bt">Vault &nbsp;<span style="font-family:'JetBrains Mono',monospace;font-size:6pt;">NOT READY</span></span><span class="bd">Shamir shares across guardians on separate nodes. Shipping on every node — but see the note below before relying on it.</span></div>
+    </div>
+    <div class="fig-cap">
+      <b>Eleven services; ten of them usable.</b> The twelfth box is included
+      because omitting it would be the more misleading choice.
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <span class="eyebrow">The vault: stated plainly</span>
+    <p>
+      The design is sound — the client, not the server, splits a secret, and
+      fewer than a threshold of guardians reveals zero information regardless
+      of computing power. The defects are in the implementation. Guardian
+      discovery is a stub: it returns an empty node list and reports success,
+      so the self-only fallback never fires and a guardian starts knowing no
+      peers. The newer named-secrets API authenticates with a session token
+      that any caller knowing the identity can mint, because the challenge is
+      the server's own value replayed back with no proof of key possession —
+      the older push and pull paths do require a real signature. And the node
+      agent carries a fourth, separate implementation of the sharing scheme
+      that infers each share's position from where it sits in the collected
+      slice, so skipping one unreachable guardian silently reconstructs the
+      wrong key. It is not a service to trust with a secret today.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 13 ═══════════════ -->
+<section>
+  <h2><span class="sn">13</span>Compute: WASM, and five deployable runtimes</h2>
+
+  <p class="lead">
+    Serverless on Orama is WebAssembly executed in-process. The security
+    property is unusually legible: capability is a list you can read.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 15. The sandbox — the host function table <em>is</em> the policy</div>
+
+    <div class="band rust">
+      <div class="band-label"><span>What a module cannot do on its own</span></div>
+      <div class="chips">
+        <span class="chip rust">open a socket</span><span class="chip rust">read a file</span>
+        <span class="chip rust">make a syscall</span><span class="chip rust">see another tenant</span>
+        <span class="chip rust">reach the host filesystem</span>
+      </div>
+    </div>
+
+    <div style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:7.5pt;color:var(--muted);padding:2mm 0;">
+      ── everything it <em>can</em> do arrives through an explicit host function ──
+    </div>
+
+    <div class="band teal">
+      <div class="band-label"><span>Host functions — the complete capability surface</span></div>
+      <div class="chips">
+        <span class="chip teal">db query · exec · batch · transaction</span>
+        <span class="chip teal">cache get · put · delete</span>
+        <span class="chip teal">storage</span>
+        <span class="chip teal">pubsub publish · publish-batch</span>
+        <span class="chip teal">push send</span>
+        <span class="chip teal">secrets get</span>
+        <span class="chip teal">http fetch</span>
+        <span class="chip teal">anonymous fetch</span>
+        <span class="chip teal">turn credentials</span>
+        <span class="chip teal">function invoke</span>
+        <span class="chip teal">caller identity</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Capability is enumerable.</b> Auditing what tenant code can reach is
+      reading one table rather than reasoning about a container escape. The
+      known gap: outbound HTTP currently has no address filter, so a function
+      can reach node-local services — a tracked defect, listed in Section 21.
+    </div>
+  </div>
+
+  <div class="fig plain">
+    <div class="fig-title">Figure 16. Five deployable runtimes, two fates</div>
+    <div class="g2">
+      <div class="box teal">
+        <span class="bl">Content-addressed — no process</span>
+        <span class="bt">static &nbsp;·&nbsp; nextjs-static</span>
+        <span class="bd">A directory of files becomes a content identifier, pinned across the cluster. <strong>Any node can serve it</strong> by streaming from storage. Nothing is running between requests.</span>
+      </div>
+      <div class="box">
+        <span class="bl">Supervised process — allocated port</span>
+        <span class="bt">nextjs SSR &nbsp;·&nbsp; go &nbsp;·&nbsp; nodejs</span>
+        <span class="bd">A binary or bundle runs under the gateway's own process manager, with health checks and a restart policy. Replicas on peer nodes are driven by the home node over the overlay.</span>
+      </div>
+    </div>
+    <div style="margin-top:2.5mm;">
+      <div class="box"><span class="bl">Declared but inert</span><span class="bt">go-wasm</span><span class="bd">A sixth constant exists in the deployment type enum with <strong>no upload route, no handler and no runtime wiring</strong>. WebAssembly does run on the platform — through the separate serverless API described above, which does not use the deployment system at all.</span></div>
+    </div>
+    <div class="fig-cap">
+      <b>The Host header decides everything.</b> A static deployment never
+      reaches a process; a dynamic one is proxied to a local replica; anything
+      that changes state is forwarded once to the node that owns the
+      deployment. The two subsystems are separate: deployments and functions
+      share neither a route nor a type.
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">Recursion is bounded, not forbidden</span>
+    <p>
+      A function can publish a message, and a published message can wake a
+      function. Dispatch therefore carries an explicit depth parameter, and
+      nested chains are bounded; the local fast path is subject to the same
+      depth accounting. Once-per-publish dedup — an in-process cache plus a
+      cluster-wide claim — guards the shared dispatch entry point, while the
+      local path fires only wildcard-pattern matches on the publishing gateway
+      itself.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 14 ═══════════════ -->
+<section>
+  <h2><span class="sn">14</span>Realtime: relay by design</h2>
+
+  <p class="lead">
+    A namespace can opt into voice, video and data channels. The security model
+    is the unusual part: relay is not a fallback here, it is the only path.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 17. Forced relay — peers never learn each other's addresses</div>
+
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:3mm;align-items:center;">
+      <div class="box hi" style="text-align:center;">
+        <span class="bt">Client A</span>
+        <span class="bd"><code>iceTransportPolicy: relay</code><br />enforced server-side</span>
+      </div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:7pt;color:var(--rust);text-align:center;line-height:1.5;">
+        ╳<br /><span style="font-size:6pt;">no direct path<br />refused server-side</span>
+      </div>
+      <div class="box hi" style="text-align:center;">
+        <span class="bt">Client B</span>
+        <span class="bd"><code>iceTransportPolicy: relay</code><br />enforced server-side</span>
+      </div>
+    </div>
+
+    <div style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:8pt;color:var(--muted);padding:2mm 0;">↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓</div>
+
+    <div class="g2">
+      <div class="box"><span class="bl">Relay · node-2</span><span class="bt">TURN</span><span class="bd">3478 UDP/TCP · 5349 TLS · or :443 behind the SNI router. Credentials are HMAC-derived from a per-namespace secret, encrypted at rest.</span></div>
+      <div class="box"><span class="bl">Relay · node-3</span><span class="bt">TURN</span><span class="bd">A second relay for redundancy. The reconcile path is colocation-aware — logical nodes sharing a public address count once — though this exists because the relay ports are host-exclusive rather than as failure-domain spreading.</span></div>
+    </div>
+
+    <div style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:8pt;color:var(--muted);padding:2mm 0;">↓ &nbsp; over the overlay only &nbsp; ↓</div>
+
+    <div class="band teal" style="text-align:center;">
+      <div class="chips" style="justify-content:center;">
+        <span class="chip teal">SFU — signalling bound to the overlay address; media ports never opened publicly</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Clients cannot reach the forwarding unit directly</b>, so all media
+      must traverse a relay, and the server enforces relay-only transport so
+      that no direct connection is even attempted. The consequence is that two
+      people on a call never learn each other's addresses. Combined with the
+      TLS listener sharing port 443, a call is both unlinkable between
+      participants and, to an on-path observer, not obviously a call.
+      <b>Stated precisely:</b> the signalling listener is configured to the
+      overlay address by provisioning convention rather than by a validated
+      invariant, and the media sockets are not interface-bound at all — what
+      keeps the unit off the public internet is the firewall, which never opens
+      its ports.
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">A gap that was real, and is closed</span>
+    <p>
+      Node replacement used to leave realtime role allocations attached to the
+      departed machine — one cause behind three visible symptoms: a namespace
+      losing relay redundancy, crash loops on replacement nodes, and orphaned
+      allocations. It is fixed. A reconciler now runs on a sixty-second loop,
+      revoking roles held by members that are no longer viable and
+      re-allocating to live ones, under a majority quorum guard and a single
+      deterministically elected coordinator. The residual is review follow-ups
+      on that fix, not a missing migration.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 15 ═══════════════ -->
+<section>
+  <h2><span class="sn">15</span>Storage, and what deletion means</h2>
+
+  <p class="lead">
+    Content-addressed storage is straightforward until a user asks for
+    something to be deleted. Then the question is whether the bytes actually
+    left the disks, and the honest answer requires more than an unpin.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 18. Two reclaim paths, and why both exist</div>
+
+    <div class="flow">
+      <div class="step"><span class="sn">01</span><span class="st">Upload</span><span class="sd">Content is added and pinned across the cluster; ownership is recorded against the namespace</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">02</span><span class="st">Unpin</span><span class="sd">Ownership is verified first, so unpinning is tenant-isolated. The pin is removed — but the blocks are still on disk</span></div>
+    </div>
+
+    <div class="g2" style="margin-top:2.5mm;">
+      <div class="box">
+        <span class="bl">Path A · scheduled</span>
+        <span class="bt">Garbage collection on a timer</span>
+        <span class="bd">A repository collection runs on a six-hour cycle and reclaims unpinned blocks. Adequate for ordinary space management. <strong>Not adequate</strong> when a user has asked for something to be gone.</span>
+      </div>
+      <div class="box teal">
+        <span class="bl">Path B · immediate</span>
+        <span class="bt">Overlay-driven eviction</span>
+        <span class="bd">An internal, overlay-only endpoint fans out per-node block eviction. This is the privacy-grade path: when someone deletes content and expects the bytes to leave the disks, <strong>waiting six hours is not an acceptable answer</strong>.</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Why the distinction is in a whitepaper at all:</b> because "delete"
+      meaning "eventually, probably" is the default behaviour of
+      content-addressed storage, and a platform that markets privacy has to
+      close that gap explicitly rather than inherit it.
+    </div>
+  </div>
+
+  <h3>Capacity is derived, not fixed</h3>
+  <p>
+    The storage ceiling on a node is a share of that node's actual disk rather
+    than a constant, so a larger machine contributes more without
+    reconfiguration. A swarm-sync loop keeps every node connected to every
+    cluster peer, so a node that restarts cannot silently end up isolated while
+    its daemon still reports healthy. Per-namespace byte quotas are checked
+    server-side before every upload and pin, with a replication-aware
+    projection — but they are <em>opt-in and currently dormant</em>: a
+    namespace with no quota row is treated as unlimited, nothing yet writes
+    that row, and a lookup error fails open.
+  </p>
+
+  <div class="callout warn">
+    <span class="eyebrow">The limit of "deleted"</span>
+    <p>
+      Even immediate eviction does not erase history everywhere. A deletion is
+      itself a replicated log entry, so the original write — with its payload —
+      persists in the replication log and its snapshots until compaction, which
+      is driven by size and count thresholds rather than by any privacy
+      requirement. Deleting is not erasing, and a system that claims otherwise
+      is not describing its own storage layer accurately.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 16 ═══════════════ -->
+<section>
+  <h2><span class="sn">16</span>The adversary, stated plainly</h2>
+
+  <p class="lead">
+    Most platforms describe their security posture in terms of what they
+    encrypt. That is the wrong frame, because it invites the reader to assume a
+    threat model that was never stated. This section states one.
+  </p>
+
+  <p>
+    The adversary Orama designs against is <strong>the hosting provider</strong>,
+    or an agency with legal or covert access to one. That adversary can take a
+    full disk snapshot, take a full memory snapshot at the hypervisor, boot a
+    clone of any disk image, and observe all datacenter traffic. We control
+    neither the hypervisor nor the firmware, and confidential computing is not
+    purchasable on budget hosting.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 19. The conversion this design buys</div>
+
+    <div class="split">
+      <div class="lft">
+        <span class="sh">Cheap path — what we move things out of</span>
+        <ul>
+          <li><strong>Retroactive.</strong> A backup taken months ago still yields today's secrets.</li>
+          <li><strong>Scales to everyone at once.</strong> One API call captures every customer on the host.</li>
+          <li><strong>Deniable and traceless.</strong> Nobody has to decide to target you specifically.</li>
+          <li><strong>Asynchronous.</strong> Grab the image now, read it whenever.</li>
+        </ul>
+      </div>
+      <div class="rgt">
+        <span class="sh">Expensive path — what we move things into</span>
+        <ul>
+          <li><strong>Targeted.</strong> Requires a decision about a named machine.</li>
+          <li><strong>Synchronous.</strong> The process has to be running at the moment of capture.</li>
+          <li><strong>Repeated.</strong> Once is not enough; keys rotate and sessions end.</li>
+          <li><strong>Human-visible.</strong> Somebody has to authorise it, and keep authorising it.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>That conversion is the entire product of the privacy work.</b> It is
+      not nothing — but it is also not invisibility, and it should never be
+      sold as such. Nothing here makes capture impossible, and any claim
+      otherwise about software running on rented machines is false.
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:56mm">Adversary capability</th><th style="width:30mm">Cheap / one-shot?</th><th>Addressed by anything here?</th></tr></thead>
+    <tbody>
+      <tr><td>Full disk snapshot of a running node</td><td>Yes — one API call</td><td><span class="ok">Yes</span> — by moving plaintext off disk</td></tr>
+      <tr><td>Backup image or decommissioned disk</td><td>Yes — retroactive</td><td><span class="ok">Yes</span> — same, plus retention limits</td></tr>
+      <tr><td>Boot a clone of a disk image</td><td>Yes</td><td><span class="part">Partially</span> — with real caveats</td></tr>
+      <tr><td>Full memory snapshot of a running node</td><td>No — targeted, timed</td><td><span class="no">No.</span> Only data minimisation and end-to-end encryption survive it</td></tr>
+      <tr><td>Observe all datacenter traffic</td><td>Yes</td><td><span class="part">Partially</span> — the tunnel covers content; topology and timing leak permanently</td></tr>
+      <tr><td>Compel the operator</td><td>—</td><td><span class="no">No.</span></td></tr>
+      <tr><td>Control the hypervisor or firmware</td><td>—</td><td><span class="no">No.</span> This is why hardware-sealed credential schemes are rejected rather than adopted</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="eyebrow">The current state, without euphemism</span>
+    <p>
+      A dedicated security review of this codebase — one that assumes the
+      hosting provider, not a remote attacker, is the adversary — produced
+      ninety findings, twenty-seven of them critical, and was independently
+      re-verified before being filed as seven pending workstreams. Measured
+      against today's baseline, where the cluster secret, the storage swarm
+      key, the key-hashing secret and the tunnel private key all sit in
+      plaintext on disk, its conclusion is that one disk snapshot of any single
+      node is a total, permanent, offline compromise — including from a backup
+      taken months ago or a disk decommissioned last year. Publishing the
+      number is the point: a platform asking to be trusted with private data
+      should show its audit, not its logo.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 17 ═══════════════ -->
+<section>
+  <h2><span class="sn">17</span>What holds, and what does not</h2>
+
+  <div class="fig">
+    <div class="fig-title">Figure 20. Property, mechanism, and the attack that still wins</div>
+    <table class="matrix">
+      <thead>
+        <tr><th style="width:44mm">Property</th><th style="width:52mm">Mechanism</th><th>Survives disk capture</th><th>Survives memory capture</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>No identity to disclose</strong></td><td style="text-align:left">Wallet signature — nothing is collected</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+        <tr><td><strong>Caller address hidden from third parties</strong></td><td style="text-align:left">Anonymity relay network, per request</td><td class="ok">✓</td><td class="part">partial</td></tr>
+        <tr><td><strong>Participants hidden from each other</strong></td><td style="text-align:left">Server-enforced relay-only transport</td><td class="ok">✓</td><td class="part">partial</td></tr>
+        <tr><td><strong>Call not obviously a call</strong></td><td style="text-align:left">TLS relay behind the SNI router on 443</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+        <tr><td><strong>Internal traffic not public</strong></td><td style="text-align:left">Encrypted mesh; overlay-bound services</td><td class="ok">✓</td><td class="no">✗</td></tr>
+        <tr><td><strong>Tenant cannot read tenant</strong></td><td style="text-align:left">Separate database, cache and gateway processes</td><td class="part">partial</td><td class="no">✗</td></tr>
+        <tr><td><strong>Deletion reclaims disk</strong></td><td style="text-align:left">Immediate overlay-driven eviction</td><td class="part">partial</td><td class="no">✗</td></tr>
+        <tr><td><strong>Data confidential at rest</strong></td><td style="text-align:left">Encryption at the value level</td><td class="ok">✓</td><td class="no">✗</td></tr>
+      </tbody>
+    </table>
+    <div class="fig-cap">
+      <b>The right-hand column is the honest one.</b> Only properties that are
+      absences — a credential never collected, a hostname that reveals nothing
+      — survive an adversary reading process memory. Everything achieved by
+      encryption fails there, because a store answering a query holds the key
+      and the plaintext at query time.
+    </div>
+  </div>
+
+  <h3>The strongest property is an absence</h3>
+  <p>
+    Authentication is a signature. There is no email address, no password hash,
+    no phone number and no profile — not because they are protected but because
+    they are never collected. A demand served on an operator for a user's
+    identity returns a public key, because a public key is all that exists.
+    This costs nothing to operate, because it is an absence rather than a
+    mechanism, and it is the only property in the table that no capture defeats.
+  </p>
+
+  <h3>Three things that are not defended</h3>
+  <div class="g3">
+    <div class="box rust"><span class="bt">Memory</span><span class="bd">A database answering a query holds key and plaintext in memory. True of every store, bespoke or not. Rewriting the storage engine would move plaintext from one address space to another that the same hypervisor reads.</span></div>
+    <div class="box rust"><span class="bt">Metadata</span><span class="bd">Which nodes talk to which, how often, in what volume, when. The tunnel does not hide it. Value-level encryption also leaves residue in log structures and write-ahead files. Metadata is the price.</span></div>
+    <div class="box rust"><span class="bt">Compulsion</span><span class="bd">An operator who can be compelled can be compelled. Splitting secrets raises the number of parties who must be — a real improvement in a jurisdictionally diverse network, and none at all if every node sits with one provider in one country.</span></div>
+  </div>
+
+  <div class="callout" style="margin-top:4mm;">
+    <span class="eyebrow">Why publish the limits</span>
+    <p>
+      Because a user who believes a system defends against memory capture will
+      make decisions — about what to store, and about whom to store it for —
+      that the system cannot support. Overstating a threat model does not
+      protect anyone; it transfers risk to the people least able to evaluate
+      it. It also has a direct architectural consequence: <strong>operator
+      diversity is a security property</strong>, not a marketing one, and it is
+      the property the network most needs to grow.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 18 ═══════════════ -->
+<section>
+  <h2><span class="sn">18</span>How a node joins</h2>
+
+  <p class="lead">
+    There are no shared secrets on a command line. A node joins with a
+    single-use, time-limited invite, and the tunnel is established before any
+    cluster service starts.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 21. The join sequence</div>
+    <div class="ladder">
+      <div class="rung">
+        <span class="lv">01 · MINT</span>
+        <span class="lb"><span class="lt">An operator mints an invite on an existing node</span><span class="ld">A row lands in the invite table and the CLI prints the full join command. The token is single-use and time-limited.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">02 · CALL</span>
+        <span class="lb"><span class="lt">The new node calls the join endpoint over HTTPS</span><span class="ld">With certificate pinning on first use. <strong>Never on the gateway's own port</strong> — the firewall blocks it, and that mistake is the most common failed install.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">03 · CONSUME</span>
+        <span class="lb"><span class="lt">The handler validates and <em>atomically</em> consumes the token</span><span class="ld">It allocates an overlay address and returns the cluster secret, database credentials, cache key, storage swarm key and the current peer set.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">04 · PEER</span>
+        <span class="lb"><span class="lt">The joiner brings up its tunnel and registers its public key</span><span class="ld">Every existing node reconciles the new peer from the authoritative peer table — no manual configuration on any other machine.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">05 · START</span>
+        <span class="lb"><span class="lt">Only now do database, cache, storage and gateway start</span><span class="ld">All of them dialling peers on overlay addresses, never public ones.</span></span>
+      </div>
+      <div class="rung">
+        <span class="lv">06 · ANNOUNCE</span>
+        <span class="lb"><span class="lt">The node registers in the DNS table and begins its heartbeat</span><span class="ld">Its lifecycle state moves from <code>joining</code> to <code>active</code>, and metadata is republished to the discovery layer.</span></span>
+      </div>
+    </div>
+    <div class="fig-cap">
+      <b>The ordering is the security property.</b> No cluster service is ever
+      reachable before the tunnel exists, and no secret ever travels outside
+      it — with one exception noted below, which is a defect rather than a
+      design.
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <span class="eyebrow">Not yet true for the dedicated image</span>
+    <p>
+      The flow above describes the standard install. The enrollment path used
+      by the dedicated node image is currently weaker: its completion endpoint
+      is unauthenticated, and it ships the node's own tunnel private key and
+      the cluster secret over plaintext HTTP. Rewriting that wire protocol is
+      tracked work, and until it lands the network cannot safely admit a node
+      operated by someone unknown — which is precisely the property a
+      decentralized network needs.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 19 ═══════════════ -->
+<section>
+  <h2><span class="sn">19</span>The rule that cannot be bent</h2>
+
+  <p class="lead">
+    The control plane is a Raft cluster, and Raft needs a majority of voters.
+    Everything about how Orama is operated follows from that one sentence.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 22. Extraction is parallel; restart is not</div>
+
+    <div class="band teal">
+      <div class="band-label"><span>Phase 1 · Extract — safe in parallel</span><span class="r">no service is interrupted</span></div>
+      <div class="chips">
+        <span class="chip">node-1 ← new binaries</span>
+        <span class="chip">node-2 ← new binaries</span>
+        <span class="chip">node-3 ← new binaries</span>
+        <span class="chip ghost">…all at once</span>
+      </div>
+    </div>
+
+    <div class="band rust">
+      <div class="band-label"><span>Phase 2 · Restart — strictly serial</span><span class="r">a majority must remain up at every instant</span></div>
+      <div class="flow" style="margin-top:1mm;">
+        <div class="step hi"><span class="sn">A</span><span class="st">Restart one node</span><span class="sd">One only</span></div>
+        <div class="sep">→</div>
+        <div class="step"><span class="sn">B</span><span class="st">Verify that node</span><span class="sd">Services active, database in follower or leader state, tunnel peers connected</span></div>
+        <div class="sep">→</div>
+        <div class="step"><span class="sn">C</span><span class="st">Verify the cluster</span><span class="sd">Leader stable, quorum OK, mesh OK, every node's replication index in sync</span></div>
+        <div class="sep">→</div>
+        <div class="step"><span class="sn">D</span><span class="st">Only then, the next</span><span class="sd">If a node shows problems, investigate — do not skip and hope</span></div>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>Losing a majority simultaneously loses the cluster.</b> This is stated
+      in a whitepaper rather than left to a runbook because it constrains the
+      architecture: any future change that makes restarts more frequent, or
+      that increases the number of quorum-holding services, is paying a real
+      cost that has to be justified.
+    </div>
+  </div>
+
+  <h3>Verification against the real thing</h3>
+  <p>
+    A lesson worth recording: the cluster database is not a local SQLite file,
+    and behaviour that passes against one can still fail on the cluster. A
+    row-eviction defect shipped exactly that way — correct against every local
+    test, wrong in production. Live verification against a real cluster, plus
+    reading the gateway logs, is the only sufficient test for storage-layer
+    changes.
+  </p>
+
+  <div class="callout warn">
+    <span class="eyebrow">Two handles, one silent failure</span>
+    <p>
+      The gateway holds a handle bound to the cluster's own database and a
+      handle bound to a namespace's. Namespace-scoped data written through the
+      wrong one lands in a database it will never be read back from — and
+      nothing errors. It fails silently, which is the worst failure mode
+      available, and it is the clearest example of the hazard the two-plane
+      architecture creates.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ 20 ═══════════════ -->
+<section>
+  <h2><span class="sn">20</span>A node an operator cannot log into</h2>
+
+  <p class="lead">
+    A purpose-built node image exists: no SSH, no shell, a read-only root
+    filesystem verified at the block level, an encrypted data partition, and
+    exactly one root process that is the entire userland. It has never been
+    run.
+  </p>
+
+  <div class="callout warn">
+    <span class="eyebrow">Read this before the rest of the section</span>
+    <p>
+      What follows is a design that is built but untested. The image has not
+      been booted in anger; its agent has no test files; integrity verification
+      is compiled but not wired into boot; the syscall filter is never loaded
+      into any process; and a signature-verification defect means no
+      over-the-air update can currently be applied in the field. The present
+      proposal is to <strong>exclude it from the first release</strong> and run
+      hardened Ubuntu instead. It is described here because it is the
+      direction, not because it is the status.
+    </p>
+  </div>
+
+  <div class="fig plain">
+    <div class="fig-title">Figure 23. The intended boot chain</div>
+    <div class="flow">
+      <div class="step"><span class="sn">01</span><span class="st">Verified boot</span><span class="sd">Read-only root, integrity-checked at block level; tampering prevents mount</span></div>
+      <div class="sep">→</div>
+      <div class="step hi"><span class="sn">02</span><span class="st">Key reassembly</span><span class="sd">The disk encryption key is reconstructed from shares held by <em>peer nodes</em></span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">03</span><span class="st">Tunnel up</span><span class="sd">Before any service starts</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">04</span><span class="st">Sandboxed services</span><span class="sd">Each in its own namespace with a syscall filter</span></div>
+    </div>
+    <div class="fig-cap">
+      <b>The intent:</b> no path from physical possession of a machine to
+      reading its data — the disk encrypted, the key existing only as shares on
+      other machines, and no shell in which to ask for it. A node removed from
+      the network cannot be booted in isolation either.
+      <b>Stages 01 and 04 are not yet wired up in the shipped image.</b>
+    </div>
+  </div>
+
+  <h3>The design claim, and its honest limit</h3>
+  <p>
+    Removing the shell removes the most common path from operator to tenant
+    data, and encrypting the disk with a key the operator never holds removes
+    the offline one. Neither removes the hypervisor. An operator who is also
+    the hosting provider — or who runs the image on hardware they control at
+    the firmware level — is outside what this defends.
+  </p>
+
+  <p>
+    The sharper research question, and the one currently on the table, is not
+    which distribution to fork but <em>what does this platform require that an
+    existing minimal, API-driven, shell-less operating system does not already
+    provide?</em> Forking one means inheriting a security-update treadmill
+    indefinitely, which for a small team is the thing most likely to kill the
+    project.
+  </p>
+</section>
+
+<!-- ═══════════════ 21 ═══════════════ -->
+<section>
+  <h2><span class="sn">21</span>Honest state of the project</h2>
+
+  <p class="lead">
+    Everything up to this point describes software that runs. This part
+    describes what is undecided, and it is separated so that no reader mistakes
+    one for the other.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 24. Shipped, in review, and not started</div>
+
+    <div class="band teal">
+      <div class="band-label"><span>Shipped and exercised by a real tenant</span></div>
+      <div class="chips">
+        <span class="chip teal">wallet auth + refresh rotation</span>
+        <span class="chip teal">scoped API keys</span>
+        <span class="chip teal">physical namespace isolation</span>
+        <span class="chip teal">six deployment runtimes</span>
+        <span class="chip teal">WASM engine + module pool</span>
+        <span class="chip teal">bounded-staleness reads</span>
+        <span class="chip teal">DNS + automatic certificates</span>
+        <span class="chip teal">relay-only realtime</span>
+        <span class="chip teal">stealth TLS relay on 443</span>
+        <span class="chip teal">push with no third party</span>
+        <span class="chip teal">anonymity proxy</span>
+        <span class="chip teal">immediate storage reclaim</span>
+        <span class="chip teal">server-side storage quotas</span>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-label"><span>Written, in review, not yet deployed</span></div>
+      <div class="chips">
+        <span class="chip">authenticated tunnelling proxy</span>
+        <span class="chip">cache-down returns 503 instead of hanging</span>
+      </div>
+    </div>
+
+    <div class="band rust">
+      <div class="band-label"><span>Not ready — stated plainly</span></div>
+      <div class="chips">
+        <span class="chip rust">secret custody (vault)</span>
+        <span class="chip rust">the dedicated node image</span>
+        <span class="chip rust">tenant-facing monitoring</span>
+        <span class="chip rust">secret rotation of any kind</span>
+        <span class="chip rust">public sign-ups</span>
+        <span class="chip rust">the 2026 audit backlog</span>
+      </div>
+    </div>
+
+    <div class="fig-cap">
+      <b>The middle band matters as much as the first.</b> Code that exists but
+      has not been deployed is not a capability, and a document that counts it
+      as one is misleading. The bottom band is what a prospective user should
+      read first.
+    </div>
+  </div>
+
+  <h3>What is not ready, in detail</h3>
+  <p>
+    The network is not open for public sign-ups and should not be. Secret
+    custody is not usable. The dedicated image has never booted. There is no
+    tenant-facing monitoring on either network: the only cluster observability
+    is a pair of CLI tools that connect to each machine over SSH, which makes
+    them operator-only. What a tenant can see is a health endpoint, a namespace
+    status and per-deployment logs. And that health endpoint is structurally
+    optimistic — a subsystem whose client was never constructed reports
+    <em>unavailable</em>, which the aggregate counts as healthy, so a gateway
+    with no cache connection at all still answers "healthy".
+  </p>
+  <p>
+    A security audit of our own system produced sixty-two findings that remain
+    entirely untouched, and a later hardening sweep added more. Secret rotation
+    is operationally impossible today: there is no key identifier in the
+    encryption envelope, no re-encryption tool, and no rotation mechanism for
+    the tunnel keys at all — so a key captured today stays valid indefinitely
+    and there is no response available to a suspected compromise.
+  </p>
+
+  <div class="callout warn">
+    <span class="eyebrow">The scale question, asked honestly</span>
+    <p>
+      The architecture has been exercised at the scale of a handful of nodes
+      and a handful of tenants. Twenty namespaces per node is a designed
+      ceiling; what has <em>not</em> been demonstrated is a network of hundreds
+      of nodes with hundreds of tenants, operated by people who do not know
+      each other. That is the real test of the thesis, and it has not been run.
+    </p>
+  </div>
+
+  <p class="footnote">
+    None of these are research problems. They are unfinished engineering, which
+    is a different and more tractable category — but the distance is real and
+    this document is not going to shorten it rhetorically.
+  </p>
+</section>
+
+<!-- ═══════════════ 22 ═══════════════ -->
+<section>
+  <h2><span class="sn">22</span>Open decisions and direction</h2>
+
+  <p class="lead">
+    Thirteen architectural decisions are formally open, under a rule that no
+    implementation tagged against them begins until an answer is recorded.
+    <strong>None has been answered.</strong> Three are ordered, and the order is
+    load-bearing. A fourth was settled by events: a dashboard and an
+    agent-facing control interface were both dropped, so the CLI and the SDK
+    are now the entire product surface.
+  </p>
+
+  <div class="fig">
+    <div class="fig-title">Figure 25. What blocks what</div>
+    <div class="flow">
+      <div class="step hi"><span class="sn">IN PROGRESS</span><span class="st">Merge the two planes?</span><span class="sd">Is cluster-wide state simply another namespace, so that only one kind of thing exists?</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">BLOCKED</span><span class="st">Binary topology</span><span class="sd">Merge the node and gateway binaries, or split to one per service?</span></div>
+      <div class="sep">→</div>
+      <div class="step"><span class="sn">BLOCKED</span><span class="st">Repository structure</span><span class="sd">Module boundaries and enforced dependency direction</span></div>
+    </div>
+    <div class="flow" style="margin-top:2mm;">
+      <div class="step" style="flex:0 0 32%;"><span class="sn">ALSO BLOCKED</span><span class="st">Can it run on one machine?</span><span class="sd">Downstream of the plane merge</span></div>
+      <div class="sep"></div>
+      <div class="step" style="flex:1;"><span class="sn">INDEPENDENT</span><span class="st">Everything else</span><span class="sd">Dependency strategy · IPv6 · public port 80 · the node image · audit identifier reconciliation · SDK and DNS audits</span></div>
+    </div>
+    <div class="fig-cap">
+      <b>You cannot lay out packages before you know the process boundaries.</b>
+      Starting at the wrong end of that chain means doing the work twice, which
+      is why the gate exists.
+    </div>
+  </div>
+
+  <div class="g3">
+    <div class="box hi">
+      <span class="bl">The consequential one</span>
+      <span class="bt">Should the two planes become one?</span>
+      <span class="bd">Make cluster-wide state another namespace, an <em>index</em> namespace. The argument is empirical: four separate defects trace to that seam (Section 04). The filing calls the duality a bug generator.</span>
+    </div>
+    <div class="box">
+      <span class="bl">Answered in the negative</span>
+      <span class="bt">Rewrite the dependencies?</span>
+      <span class="bd">No. Under a memory-snapshot adversary, security depends on <em>where the key lives</em>, not who wrote the store. Rewrite: 3–6 engineer-years, zero benefit. Wrapping: 9–14 months, the entire goal.</span>
+    </div>
+    <div class="box">
+      <span class="bl">Narrower than assumed</span>
+      <span class="bt">Can it run on one machine?</span>
+      <span class="bd">Two verified blockers, not a fundamental limit: cluster size is a hardcoded literal at five sites, and the sharing threshold floors at two. Whether that literal is a defect or a product constraint is undecided — and requiring three machines to evaluate the platform is a barrier to operator diversity.</span>
+    </div>
+  </div>
+
+  <h3>Toward a first release</h3>
+  <p>
+    The draft definition on the table: <em>a third-party developer can sign up,
+    deploy an application with a database and a custom domain, and reach
+    production without an operator touching anything — on a network where
+    losing one node loses nothing, and where a provider snapshotting a disk
+    gets ciphertext.</em> Its value is that every clause is falsifiable.
+  </p>
+
+  <table>
+    <thead><tr><th style="width:10mm" class="mono">#</th><th>Criterion</th><th style="width:22mm">Today</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">01</td><td>Signup to a running application with a database and a custom domain, using only the CLI, docs and SDK</td><td class="part">partial</td></tr>
+      <tr><td class="mono">02</td><td>Losing any single node loses no tenant data and no availability</td><td class="part">partial</td></tr>
+      <tr><td class="mono">03</td><td>A disk snapshot yields ciphertext and no usable credential</td><td class="no">fails</td></tr>
+      <tr><td class="mono">04</td><td>Every secret rotatable without downtime or data loss</td><td class="no">fails</td></tr>
+      <tr><td class="mono">05</td><td>Nothing in the documentation is false</td><td class="no">fails</td></tr>
+      <tr><td class="mono">06</td><td>A fleet upgrade is one command and cannot half-apply</td><td class="part">partial</td></tr>
+    </tbody>
+  </table>
+
+</section>
+
+<!-- ═══════════════ 23 ═══════════════ -->
+<section>
+  <h2><span class="sn">23</span>Colophon</h2>
+
+  <p class="lead">
+    Orama is a working decentralized application platform with a real tenant, a
+    coherent architecture, an unusually candid audit of itself, and a
+    substantial amount of unfinished work between here and something a stranger
+    should trust.
+  </p>
+
+  <p>
+    The thesis — that the ordinary primitives of a cloud can be delivered from
+    machines that many different people own, through an interface a developer
+    already understands — is demonstrated at small scale. Whether it survives
+    contact with hundreds of nodes and operators who do not know each other is
+    the open question, and the only one that ultimately matters. We have tried
+    to describe the system in terms that make that question answerable by
+    someone outside the project, including by reporting the defects that would
+    have been easier to omit.
+  </p>
+
+  <h3>Sources</h3>
+  <div class="kv">
+    <span class="k">Source tree</span><span>The Orama repository, read directly. Where it and the documentation disagreed, the source won.</span>
+    <span class="k">Atlas</span><span><em>Orama Network Atlas</em> — architecture reference, 51 pages. The complete technical mapping: binaries, systemd units, port arithmetic, the WASM sandbox, request paths.</span>
+    <span class="k">Volume II</span><span><em>The Hardening Playbook</em> — 90 findings across 8 tiers, each passed through adversarial review.</span>
+    <span class="k">Volume III</span><span><em>Rewrite or Replace?</em> — build-versus-buy analysis of five dependencies under the threat model of Part III.</span>
+    <span class="k">Task tracker</span><span>The project board — open decisions, audits and defects, read in full.</span>
+  </div>
+
+  <h3>Corrections carried in this edition</h3>
+  <p>
+    Three claims that appear in our own earlier documentation are corrected
+    here rather than repeated: that the cluster database enforces HTTP
+    authentication (it does not — Section 06); that secret custody is a usable
+    service (Section 12); and that the dedicated node image is operational
+    (Section 20). Each was found by reading the source against the document.
+  </p>
+
+  <div class="callout">
+    <span class="eyebrow">Why permissionless nodes are deliberately out of scope</span>
+    <p>
+      Permissionless participation requires that a hostile node be unable to
+      harm a tenant, and the gaps in Section 21 are why that is not yet true.
+      Opening node operation first would not be decentralization; it would be
+      an unguarded multi-tenant system with more participants. The order is:
+      <strong>make one tenant safe from another, then make the network safe
+      from its own nodes, then open it.</strong>
+    </p>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">On this document</span>
+    <p>
+      It is a technical description of a working system and an honest statement
+      of what it does not do. It is not an offering document, it does not
+      describe a token, and it makes no financial claim of any kind. Part V
+      describes open questions and is labelled as such; nothing in it is a
+      commitment or a schedule.
+    </p>
+    <p style="margin-top:2mm;">
+      Errors here are defects. Report them the way you would report a defect in
+      the code — with the section number and what the source actually says.
+    </p>
+  </div>
+
+  <p class="footnote" style="margin-top:6mm;">
+    Written by members of DeBros, who remain anonymous for the same reasons
+    this system exists. First edition.
+  </p>
+</section>
+
+</div>
+</body>
+</html>

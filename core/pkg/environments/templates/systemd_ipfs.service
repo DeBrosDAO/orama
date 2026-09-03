@@ -14,7 +14,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths={{.IPFSRepoPath}} {{.OramaDir}}
+ProtectProc=invisible
+ReadWritePaths={{.IPFSRepoPath}} {{.OramaDir}}/logs
+ReadOnlyPaths={{.SecretsDir}}
 Environment=HOME={{.HomeDir}}
 Environment=IPFS_PATH={{.IPFSRepoPath}}
 ExecStartPre=/bin/bash -c 'if [ -f {{.SecretsDir}}/swarm.key ] && [ ! -f {{.IPFSRepoPath}}/swarm.key ]; then cp {{.SecretsDir}}/swarm.key {{.IPFSRepoPath}}/swarm.key && chmod 600 {{.IPFSRepoPath}}/swarm.key; fi'

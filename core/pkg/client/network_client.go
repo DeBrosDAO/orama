@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -138,7 +139,7 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 func queryIPFSPeerInfo() *IPFSPeerInfo {
 	// IPFS API typically runs on port 4501 in our setup
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	resp, err := client.Post(fmt.Sprintf("http://localhost:%d/api/v0/id", constants.IPFSAPIPort), "", nil)
 	if err != nil {
 		return nil // IPFS not available
 	}
@@ -176,7 +177,7 @@ func queryIPFSPeerInfo() *IPFSPeerInfo {
 func queryIPFSClusterPeerInfo() *IPFSClusterPeerInfo {
 	// IPFS Cluster API typically runs on port 9094 in our setup
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:9094/id")
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/id", constants.IPFSClusterAPIPort))
 	if err != nil {
 		return nil // IPFS Cluster not available
 	}

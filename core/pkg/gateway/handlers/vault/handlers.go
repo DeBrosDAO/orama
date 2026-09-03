@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 const (
 	// VaultGuardianPort is the port vault guardians listen on (client API).
-	VaultGuardianPort = 7500
+	VaultGuardianPort = constants.VaultHTTPPort
 
 	// guardianTimeout is the per-guardian HTTP request timeout.
 	guardianTimeout = 5 * time.Second

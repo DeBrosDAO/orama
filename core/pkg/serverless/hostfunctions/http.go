@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
@@ -63,15 +66,23 @@ func (h *HostFunctions) AnyoneFetch(ctx context.Context, method, url string, hea
 // AnyoneFetch — identical except for which *http.Client (direct vs
 // SOCKS-routed) does the dialing and the function name used in logs +
 // HostFunctionError.
-func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http.Client, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http.Client, method, rawURL string, headers map[string]string, body []byte) ([]byte, error) {
+	if err := denyInternalURL(rawURL); err != nil {
+		errorResp := map[string]interface{}{
+			"error":  err.Error(),
+			"status": 0,
+		}
+		return json.Marshal(errorResp)
+	}
+
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
 	if err != nil {
-		h.logger.Error(fnName+" request creation error", zap.Error(err), zap.String("url", url))
+		h.logger.Error(fnName+" request creation error", zap.Error(err), zap.String("url", rawURL))
 		errorResp := map[string]interface{}{
 			"error":  "failed to create request: " + err.Error(),
 			"status": 0,
@@ -85,7 +96,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	resp, err := client.Do(req)
 	if err != nil {
-		h.logger.Error(fnName+" transport error", zap.Error(err), zap.String("url", url))
+		h.logger.Error(fnName+" transport error", zap.Error(err), zap.String("url", rawURL))
 		errorResp := map[string]interface{}{
 			"error":  err.Error(),
 			"status": 0, // Transport error
@@ -96,7 +107,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		h.logger.Error(fnName+" response read error", zap.Error(err), zap.String("url", url))
+		h.logger.Error(fnName+" response read error", zap.Error(err), zap.String("url", rawURL))
 		errorResp := map[string]interface{}{
 			"error":  "failed to read response: " + err.Error(),
 			"status": resp.StatusCode,
@@ -117,4 +128,30 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 	}
 
 	return data, nil
+}
+
+// denyInternalURL blocks fetches to loopback, private, link-local, and
+// unspecified addresses so tenant WASM cannot reach RQLite/agent/Olric
+// on the gateway host (bugboard #83).
+func denyInternalURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid url")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("url scheme not allowed")
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata.google.internal" {
+		return fmt.Errorf("url host not allowed")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return fmt.Errorf("url host not allowed")
+	}
+	return nil
 }

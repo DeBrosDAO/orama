@@ -458,7 +458,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	)
 
 	// 5. Allocate ports on replacement node
-	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID)
+	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
 		return fmt.Errorf("failed to allocate ports on replacement node: %w", err)
 	}
@@ -1288,7 +1288,7 @@ func (cm *ClusterManager) addNodeToCluster(
 	)
 
 	// 2. Allocate ports on the new node
-	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID)
+	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to allocate ports on new node: %w", err)
 	}

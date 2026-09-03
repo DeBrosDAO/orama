@@ -119,9 +119,9 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 **Symptom:** After `orama node upgrade --restart` or `orama node restart`, namespace gateway/olric/rqlite services don't start.
 
-**Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services.
+**Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services. Index host units (`@index`) are started by the supervisor on node start and do not need to be enabled.
 
-**Fix:** Re-enable the services before restarting:
+**Fix:** Re-enable the **tenant** services before restarting:
 
 ```bash
 systemctl enable orama-namespace-rqlite@<name>.service
@@ -154,11 +154,11 @@ ssh -n user@host 'command'
 
 ## 6. RQLite returns 401 Unauthorized
 
-**Symptom:** RQLite queries fail with HTTP 401 after security hardening.
+**Symptom:** RQLite queries fail with HTTP 401.
 
-**Cause:** RQLite now requires basic auth. The client isn't sending credentials.
+**Cause:** Not a configuration problem you can hit today. `rqlited` is not started with `-auth` — the `RQLiteAuthFile` field in `core/pkg/config/database_config.go` is never assigned, so the flag in `core/pkg/rqlite/process.go` is never added. RQLite's HTTP API accepts unauthenticated requests, and `rqlite-auth.json` is generated but unused by the server.
 
-**Fix:** Ensure the RQLite client is configured with the credentials from `/opt/orama/.orama/secrets/rqlite-auth.json`. The central RQLite client wrapper (`pkg/rqlite/client.go`) handles this automatically. If using a standalone client (e.g., CoreDNS plugin), ensure it's also configured.
+**Fix:** A 401 from RQLite means something other than Orama's own auth is in front of it — check for a reverse proxy or a hand-edited unit file. If HTTP auth is later enabled by setting `RQLiteAuthFile`, every client must send the credentials from `/opt/orama/.orama/secrets/rqlite-auth.json`, including standalone clients such as the CoreDNS plugin.
 
 ---
 

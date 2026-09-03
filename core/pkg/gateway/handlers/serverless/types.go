@@ -175,19 +175,43 @@ func (h *ServerlessHandlers) getJWTExpiryFromRequest(r *http.Request) int64 {
 	return claims.Exp
 }
 
-// getCallerIsAdminFromRequest reports whether the request's resolved scope
-// set holds the admin (control-plane) grant — the signal that gates invoking
-// an `internal: true` function (bugboard #152). It reads the same two sources
-// the gateway's scope policy trusts:
+// getCallerHasInvokeFromRequest reports whether the caller may invoke a
+// private function (bugboard #259). HTTP /invoke is a public path, so
+// scopeMiddleware never runs; this is the grant check.
 //
-//   - ctxkeys.Scopes: the auth.ScopeSet stashed by the auth middleware for an
-//     API-key (or API-key-exchanged JWT) request. Admin keys carry ScopeAdmin.
-//   - ctxkeys.OwnerConfirmed: set when a SIWE wallet JWT was verified to own
-//     the target namespace. A confirmed owner is admin for their namespace
-//     (mirrors Gateway.callerScopes, which returns {admin} in that case).
-//
-// A normal app-runtime key (data-plane scopes, no owner confirmation) is NOT
-// admin, so it cannot invoke an internal function by name.
+// True for: admin, an API key (or exchanged JWT) that holds ScopeInvoke,
+// or a SIWE wallet JWT (non-ak_ subject). Storage-only API keys are false.
+func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool {
+	if h.getCallerIsAdminFromRequest(r) {
+		return true
+	}
+	ctx := r.Context()
+	if v := ctx.Value(ctxkeys.Scopes); v != nil {
+		if s, ok := v.(auth.ScopeSet); ok && s.Has(auth.ScopeInvoke) {
+			return true
+		}
+	}
+	if v := ctx.Value(ctxkeys.JWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
+			if strings.HasPrefix(sub, "ak_") {
+				if claims.Custom != nil {
+					if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).Has(auth.ScopeInvoke) {
+						return true
+					}
+				}
+				return false
+			}
+			if sub != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getCallerIsAdminFromRequest reports whether the request holds the admin
+// grant used to invoke `internal: true` functions (bugboard #152).
 func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 	ctx := r.Context()
 	if v := ctx.Value(ctxkeys.Scopes); v != nil {

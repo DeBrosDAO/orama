@@ -115,7 +115,8 @@ func execute(flags *Flags) error {
 	}
 
 	fmt.Printf("✓ Clean complete (%d nodes)\n", len(nodes))
-	fmt.Printf("  Anyone relay keys preserved at /var/lib/anon/\n")
+	fmt.Printf("  Anyone relay keys preserved at /var/lib/anon/ (not erased; DESTROY_ANON=1 to remove)\n")
+	fmt.Printf("  rm -rf is unlink, not cryptographic erase. Decommissioned provider disks remain readable.\n")
 	fmt.Printf("  To reinstall: orama node install --vps-ip <ip> ...\n")
 	return nil
 }
@@ -162,6 +163,10 @@ ufw --force enable 2>/dev/null || true
 
 # Remove data
 rm -rf /opt/orama
+rm -rf /var/lib/ntfy /run/ntfy
+rm -rf /var/log/journal
+rm -rf /etc/anon
+swapoff -a 2>/dev/null || true
 
 # Clean configs
 rm -rf /etc/coredns
@@ -177,8 +182,11 @@ if [ -n "$NUCLEAR" ]; then
     rm -f /usr/bin/caddy
 fi
 
-# Verify Anyone keys preserved
-if [ -d /var/lib/anon ]; then
+# Anyone identity: preserved unless DESTROY_ANON=1
+if [ -n "$DESTROY_ANON" ]; then
+    rm -rf /var/lib/anon
+    echo "  Anyone relay keys destroyed"
+elif [ -d /var/lib/anon ]; then
     echo "  Anyone relay keys preserved at /var/lib/anon/"
 fi
 

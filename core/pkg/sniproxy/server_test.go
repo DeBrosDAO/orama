@@ -141,3 +141,40 @@ func TestServer_no_backend_drops_connection(t *testing.T) {
 	}
 }
 
+func TestServer_perIPCap(t *testing.T) {
+	backend, _ := startEchoBackend(t)
+	defer backend.Close()
+	router := NewRouter(Backend{Network: "tcp", Addr: backend.Addr().String()})
+	srv := NewServer(router, Config{MaxConnsPerIP: 1, MaxConcurrentConns: 100, IdleTimeout: time.Second}, zap.NewNop())
+	defer srv.Close()
+	frontLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer frontLn.Close()
+	go func() { _ = srv.Serve(frontLn) }()
+
+	hold, err := net.Dial("tcp", frontLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Close()
+	// Start a TLS hello so handle() is in-flight while we try a second conn.
+	go func() {
+		c := tls.Client(hold, &tls.Config{ServerName: "x.example.com", InsecureSkipVerify: true})
+		_ = c.Handshake()
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	second, err := net.Dial("tcp", frontLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	_ = second.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 1)
+	_, rerr := second.Read(buf)
+	if rerr == nil {
+		t.Error("second connection from same IP should be dropped at the per-IP cap")
+	}
+}

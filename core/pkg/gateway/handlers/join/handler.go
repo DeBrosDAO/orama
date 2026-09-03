@@ -34,10 +34,12 @@ type JoinResponse struct {
 	WGPeers []WGPeerInfo `json:"wg_peers"`
 
 	// Secrets
-	ClusterSecret      string `json:"cluster_secret"`
-	SwarmKey           string `json:"swarm_key"`
-	APIKeyHMACSecret   string `json:"api_key_hmac_secret,omitempty"`
-	RQLitePassword     string `json:"rqlite_password,omitempty"`
+	ClusterSecret    string `json:"cluster_secret"`
+	SwarmKey         string `json:"swarm_key"`
+	APIKeyHMACSecret string `json:"api_key_hmac_secret,omitempty"`
+	RQLitePassword   string `json:"rqlite_password,omitempty"`
+	// Unused: Olric v0.7.0 YAML loader ignores encryptionKey (bugboard #246).
+	// Kept so older joiners still decode the field.
 	OlricEncryptionKey string `json:"olric_encryption_key,omitempty"`
 	// Serverless secrets encryption key (bugboard #837) — must be identical on
 	// every node so namespace function secrets decrypt cluster-wide.
@@ -200,12 +202,6 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		rqlitePassword = strings.TrimSpace(string(data))
 	}
 
-	// Read Olric encryption key (optional — may not exist on older clusters)
-	olricEncryptionKey := ""
-	if data, err := os.ReadFile(h.oramaDir + "/secrets/olric-encryption-key"); err == nil {
-		olricEncryptionKey = strings.TrimSpace(string(data))
-	}
-
 	// Read serverless secrets encryption key (optional — may not exist on
 	// older clusters; bugboard #837)
 	secretsEncryptionKey := ""
@@ -290,7 +286,6 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		SwarmKey:             strings.TrimSpace(string(swarmKey)),
 		APIKeyHMACSecret:     apiKeyHMACSecret,
 		RQLitePassword:       rqlitePassword,
-		OlricEncryptionKey:   olricEncryptionKey,
 		SecretsEncryptionKey: secretsEncryptionKey,
 		TURNSecret:           turnSecret,
 		RQLiteJoinAddress:    fmt.Sprintf("%s:7001", myWGIP),
@@ -427,6 +422,18 @@ func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
 	writeCmd.Stdin = strings.NewReader(newConf)
 	if output, err := writeCmd.CombinedOutput(); err != nil {
 		h.logger.Warn("could not persist peer to wg0.conf", zap.Error(err), zap.String("output", string(output)))
+		return nil
+	}
+	if err := os.Chmod(confPath, 0o600); err != nil {
+		h.logger.Warn("could not chmod wg0.conf 0600 after tee", zap.Error(err))
+		return nil
+	}
+	fi, err := os.Stat(confPath)
+	if err != nil {
+		return nil
+	}
+	if fi.Mode().Perm() != 0o600 {
+		h.logger.Warn("wg0.conf mode not 0600 after chmod", zap.String("mode", fi.Mode().Perm().String()))
 	}
 
 	return nil
@@ -529,7 +536,7 @@ func (h *Handler) getMyPublicIP() (string, error) {
 // queryIPFSPeerInfo gets the local IPFS node's peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	resp, err := client.Post("http://localhost:10107/api/v0/id", "", nil)
 	if err != nil {
 		h.logger.Warn("failed to query IPFS peer info", zap.Error(err))
 		return PeerInfo{}
@@ -555,7 +562,7 @@ func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 // queryIPFSClusterPeerInfo gets the local IPFS Cluster peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:9094/id")
+	resp, err := client.Get("http://localhost:10108/id")
 	if err != nil {
 		h.logger.Warn("failed to query IPFS Cluster peer info", zap.Error(err))
 		return PeerInfo{}

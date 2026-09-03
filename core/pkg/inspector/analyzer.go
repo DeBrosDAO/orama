@@ -20,7 +20,8 @@ const systemPrompt = `You are a distributed systems expert analyzing health chec
 - **RQLite**: Raft consensus SQLite database. Requires N/2+1 quorum for writes. Each node runs one instance.
 - **Olric**: Distributed in-memory cache using memberlist protocol. Coordinates via elected coordinator node.
 - **IPFS**: Decentralized storage with private swarm (swarm key). Runs Kubo daemon + IPFS Cluster for pinning.
-- **CoreDNS + Caddy**: DNS resolution (port 53) and TLS termination (ports 80/443). Only on nameserver nodes.
+- **CoreDNS**: DNS resolution (port 53) on nameserver nodes (orama-namespace-coredns@nameserver).
+- **Caddy**: TLS termination (ports 80/443) on every node (orama-namespace-caddy@index).
 - **WireGuard**: Mesh VPN connecting all nodes via 10.0.0.0/8 on port 51820. All inter-node traffic goes over WG.
 - **Namespaces**: Isolated tenant environments. Each namespace runs its own RQLite + Olric + Gateway on a 5-port block (base+0=RQLite HTTP, +1=Raft, +2=Olric HTTP, +3=Memberlist, +4=Gateway).
 
@@ -619,25 +620,8 @@ func buildAnyoneContext(data *ClusterData) string {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", host))
-		b.WriteString(fmt.Sprintf("  relay=%v client=%v orport=%v socks=%v control=%v\n",
-			a.RelayActive, a.ClientActive, a.ORPortListening, a.SocksListening, a.ControlListening))
-		if a.RelayActive {
-			b.WriteString(fmt.Sprintf("  bootstrap=%d%% fingerprint=%s nickname=%s\n",
-				a.BootstrapPct, a.Fingerprint, a.Nickname))
-		}
-		if len(a.ORPortReachable) > 0 {
-			var unreachable []string
-			for h, ok := range a.ORPortReachable {
-				if !ok {
-					unreachable = append(unreachable, h)
-				}
-			}
-			if len(unreachable) > 0 {
-				b.WriteString(fmt.Sprintf("  orport_unreachable: %s\n", strings.Join(unreachable, ", ")))
-			} else {
-				b.WriteString(fmt.Sprintf("  orport: all %d peers reachable\n", len(a.ORPortReachable)))
-			}
-		}
+		b.WriteString(fmt.Sprintf("  client=%v leftover_relay=%v socks=%v control=%v bootstrap=%d%%\n",
+			a.ClientActive, a.RelayActive, a.SocksListening, a.ControlListening, a.BootstrapPct))
 	}
 	return b.String()
 }

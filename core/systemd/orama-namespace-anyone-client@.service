@@ -1,0 +1,35 @@
+[Unit]
+Description=Orama Namespace Anyone Client SOCKS5 (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network-online.target
+Wants=network-online.target
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=debian-anon
+Group=debian-anon
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/anyone-client.env
+ExecStart=/usr/bin/anon -f /etc/anon/anonrc
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-anyone-client-%i
+PrivateTmp=yes
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=1G
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

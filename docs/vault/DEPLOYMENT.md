@@ -145,35 +145,13 @@ sudo chmod 700 /opt/orama/.orama/data/vault
 
 ## Systemd Service
 
-The project includes a systemd service file at `systemd/orama-vault.service`:
+The live unit is `orama-namespace-vault@index`, started by `orama-node`. Data stays at `/opt/orama/.orama/data/vault` (adopt in place). The template lives at `core/systemd/orama-namespace-vault@.service`.
 
 ```ini
 [Unit]
-Description=Orama Vault Guardian
-Documentation=https://github.com/orama-network/debros
-After=network.target
+Description=Orama Namespace Vault Guardian (%i)
+After=network-online.target orama-namespace-wireguard@%i.service
 PartOf=orama-node.service
-
-[Service]
-Type=simple
-ExecStart=/opt/orama/bin/vault-guardian --config /opt/orama/.orama/data/vault/vault.yaml
-Restart=on-failure
-RestartSec=5s
-
-# Security hardening
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=/opt/orama/.orama/data/vault
-NoNewPrivileges=yes
-
-# Allow mlock for secure memory
-LimitMEMLOCK=67108864
-
-# Resource limits
-MemoryMax=512M
-
-[Install]
-WantedBy=multi-user.target
 ```
 
 ### Installation
@@ -183,27 +161,17 @@ WantedBy=multi-user.target
 sudo cp zig-out/bin/vault-guardian /opt/orama/bin/vault-guardian
 sudo chmod 755 /opt/orama/bin/vault-guardian
 
-# Copy service file
-sudo cp systemd/orama-vault.service /etc/systemd/system/orama-vault.service
-
-# Reload systemd
-sudo systemctl daemon-reload
-
-# Enable and start
-sudo systemctl enable orama-vault
-sudo systemctl start orama-vault
-
 # Check status
-sudo systemctl status orama-vault
+sudo systemctl status orama-namespace-vault@index
 ```
 
 ### Service Dependencies
 
 The service is `PartOf=orama-node.service`, meaning:
 
-- When `orama-node.service` is stopped, `orama-vault` is also stopped.
-- When `orama-node.service` is restarted, `orama-vault` is also restarted.
-- `After=network.target` ensures the network stack is up before the guardian starts.
+- When `orama-node.service` is stopped, `orama-namespace-vault@index` is also stopped.
+- When `orama-node.service` is restarted, the supervisor starts vault again.
+- WireGuard is up first (`After=orama-namespace-wireguard@index`).
 
 ### Restart Behavior
 
@@ -219,7 +187,7 @@ The service is `PartOf=orama-node.service`, meaning:
 
 ```bash
 # Client port: accessible from WireGuard overlay and optionally from gateway
-sudo ufw allow from 10.0.0.0/24 to any port 7500 proto tcp comment "vault-guardian client"
+sudo ufw allow from 10.0.0.0/24 to any port 10106 proto tcp comment "vault-guardian client"
 
 # Peer port: WireGuard overlay ONLY
 sudo ufw allow from 10.0.0.0/24 to any port 7501 proto tcp comment "vault-guardian peer"
@@ -229,14 +197,14 @@ sudo ufw allow from 10.0.0.0/24 to any port 7501 proto tcp comment "vault-guardi
 
 | Port | Protocol | Interface | Purpose |
 |------|----------|-----------|---------|
-| 7500 | TCP | WireGuard (10.0.0.x) | Client-facing HTTP API |
+| 10106 | TCP | WireGuard (10.0.0.x) | Client-facing HTTP API (Orama production `vault.yaml`) |
 | 7501 | TCP | WireGuard (10.0.0.x) only | Guardian-to-guardian binary protocol (reserved -- no listener yet) |
 
 > **Note:** In v0.1.0 the daemon does not start the peer listener, so nothing accepts connections on port 7501 yet. The firewall rule is forward-looking for when the peer protocol is wired in.
 
 **Port 7501 must NEVER be exposed on the public interface.** The peer protocol has no authentication beyond WireGuard -- it trusts that only authorized nodes can reach it.
 
-Port 7500 may be exposed on the public interface if the node runs without the Orama gateway reverse proxy, but this is not recommended for production.
+The standalone vault binary still defaults to `--port 7500` when run without Orama's `vault.yaml`. Production installs write `client_port = 10106`. Do not expose the client port on the public interface; the gateway reverse-proxies it.
 
 ---
 
@@ -281,13 +249,13 @@ For rolling upgrades across the cluster, follow the standard Orama network rolli
 sudo systemctl status orama-vault
 
 # Check health endpoint
-curl http://127.0.0.1:7500/v1/vault/health
+curl http://127.0.0.1:10106/v1/vault/health
 
 # Expected response:
 # {"status":"degraded","version":"0.1.0","shares":0,"peers":0,"data_dir_ok":true}
 
 # Check status endpoint
-curl http://127.0.0.1:7500/v1/vault/status
+curl http://127.0.0.1:10106/v1/vault/status
 ```
 
 `"status":"degraded"` with `"peers":0` is the expected healthy state today: peer discovery via RQLite is not yet implemented, so every node runs with zero alive peers. A failed deploy shows up as `"status":"unhealthy"` (data directory inaccessible), `"data_dir_ok":false`, or no response at all.

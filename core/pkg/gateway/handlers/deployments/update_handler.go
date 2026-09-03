@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"go.uber.org/zap"
 )
 
@@ -164,7 +165,7 @@ func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.
 
 	// Unpin old IPFS content (best-effort)
 	if oldContentCID != "" && oldContentCID != cid {
-		if unpinErr := h.staticHandler.ipfsClient.Unpin(ctx, oldContentCID); unpinErr != nil {
+		if unpinErr := storage.UnpinIfLastPinner(ctx, h.service.db, h.staticHandler.ipfsClient, oldContentCID, existing.Namespace); unpinErr != nil {
 			h.logger.Warn("Failed to unpin old content CID", zap.String("cid", oldContentCID), zap.Error(unpinErr))
 		}
 	}
@@ -277,7 +278,7 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 
 	// Unpin old IPFS build (best-effort)
 	if oldBuildCID != "" && oldBuildCID != cid {
-		if unpinErr := h.nextjsHandler.ipfsClient.Unpin(ctx, oldBuildCID); unpinErr != nil {
+		if unpinErr := storage.UnpinIfLastPinner(ctx, h.service.db, h.nextjsHandler.ipfsClient, oldBuildCID, existing.Namespace); unpinErr != nil {
 			h.logger.Warn("Failed to unpin old build CID", zap.String("cid", oldBuildCID), zap.Error(unpinErr))
 		}
 	}

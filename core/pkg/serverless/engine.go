@@ -174,8 +174,13 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 	cfg.ApplyDefaults()
 
 	// Create wazero runtime with compilation cache
+	maxPages := uint32(cfg.MaxMemoryLimitMB * 16) // 1 MB = 16 WASM pages
+	if maxPages == 0 {
+		maxPages = 256 * 16
+	}
 	runtimeConfig := wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(true)
+		WithCloseOnContextDone(true).
+		WithMemoryLimitPages(maxPages)
 
 	runtime := wazero.NewRuntimeWithConfig(context.Background(), runtimeConfig)
 
@@ -393,6 +398,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	if moduleIsReactor(module) {
 		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input, instTiming)
 	} else {
+		execCtx = execution.WithNamespace(execCtx, fn.Namespace)
 		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
 	}
 	executeDoneAt = time.Now()

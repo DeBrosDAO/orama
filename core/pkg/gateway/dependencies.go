@@ -14,6 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -138,16 +139,10 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	if len(cfg.BootstrapPeers) > 0 {
 		cliCfg.BootstrapPeers = cfg.BootstrapPeers
 	}
-	// Ensure the gorqlite client can reach the local RQLite instance.
-	// Without this, gorqlite has zero endpoints and all DB queries fail.
-	if len(cliCfg.DatabaseEndpoints) == 0 {
-		dsn := cfg.RQLiteDSN
-		if dsn == "" {
-			dsn = "http://localhost:5001"
-		}
-		dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
-		cliCfg.DatabaseEndpoints = []string{dsn}
-	}
+	// Explicit rqlite_dsn always wins (bugboard #162). DefaultClientConfig
+	// pre-fills DatabaseEndpoints from RQLITE_NODES / bootstrap peers on
+	// the index RQLite port, which used to swallow the tenant DSN.
+	cliCfg.DatabaseEndpoints = resolveDatabaseEndpoints(cfg, cliCfg.DatabaseEndpoints)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating network client...")
 	c, err := client.NewClient(cliCfg)
@@ -193,7 +188,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")
 	dsn := cfg.RQLiteDSN
 	if dsn == "" {
-		dsn = "http://localhost:5001"
+		dsn = "http://localhost:10100"
 	}
 
 	// Inject basic auth credentials into DSN if available
@@ -389,7 +384,7 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 				zap.Strings("servers", olricServers))
 		} else {
 			// Fallback to localhost for local development
-			olricServers = []string{"localhost:3320"}
+			olricServers = []string{"localhost:10102"}
 			logger.ComponentInfo(logging.ComponentGeneral, "No Olric servers discovered, using localhost fallback")
 		}
 	} else {
@@ -457,7 +452,6 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 	ipfsAPIURL := cfg.IPFSAPIURL
 	ipfsTimeout := cfg.IPFSTimeout
 	ipfsReplicationFactor := cfg.IPFSReplicationFactor
-	ipfsEnableEncryption := cfg.IPFSEnableEncryption
 
 	if ipfsClusterURL == "" {
 		logger.ComponentInfo(logging.ComponentGeneral, "IPFS Cluster URL not configured, discovering from node configs...")
@@ -471,35 +465,25 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 			if discovered.replicationFactor > 0 {
 				ipfsReplicationFactor = discovered.replicationFactor
 			}
-			ipfsEnableEncryption = discovered.enableEncryption
 			logger.ComponentInfo(logging.ComponentGeneral, "Discovered IPFS endpoints from node configs",
 				zap.String("cluster_url", ipfsClusterURL),
-				zap.String("api_url", ipfsAPIURL),
-				zap.Bool("encryption_enabled", ipfsEnableEncryption))
+				zap.String("api_url", ipfsAPIURL))
 		} else {
 			// Fallback to localhost defaults
-			ipfsClusterURL = "http://localhost:9094"
-			ipfsAPIURL = "http://localhost:5001"
-			ipfsEnableEncryption = true // Default to true
+			ipfsClusterURL = "http://localhost:10108"
+			ipfsAPIURL = "http://localhost:10107"
 			logger.ComponentInfo(logging.ComponentGeneral, "No IPFS config found in node configs, using localhost defaults")
 		}
 	}
 
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:5001"
+		ipfsAPIURL = "http://localhost:10107"
 	}
 	if ipfsTimeout == 0 {
 		ipfsTimeout = 60 * time.Second
 	}
 	if ipfsReplicationFactor == 0 {
 		ipfsReplicationFactor = 3
-	}
-	if !cfg.IPFSEnableEncryption && !ipfsEnableEncryption {
-		// Only disable if explicitly set to false in both places
-		ipfsEnableEncryption = false
-	} else {
-		// Default to true if not explicitly disabled
-		ipfsEnableEncryption = true
 	}
 
 	ipfsCfg := ipfs.Config{
@@ -539,13 +523,11 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 		zap.String("ipfs_api_url", ipfsAPIURL),
 		zap.Duration("timeout", ipfsCfg.Timeout),
 		zap.Int("replication_factor", ipfsReplicationFactor),
-		zap.Bool("encryption_enabled", ipfsEnableEncryption),
 	)
 
 	// Store IPFS settings back in config for use by handlers
 	cfg.IPFSAPIURL = ipfsAPIURL
 	cfg.IPFSReplicationFactor = ipfsReplicationFactor
-	cfg.IPFSEnableEncryption = ipfsEnableEncryption
 }
 
 // initializeServerless sets up the serverless function engine and related components
@@ -593,7 +575,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	}
 
 	// Get pubsub adapter from client for serverless functions
-	var pubsubAdapter *pubsub.ClientAdapter
+	var pubsubAdapter pubsub.Bus
 	if networkClient != nil {
 		if concreteClient, ok := networkClient.(*client.Client); ok {
 			pubsubAdapter = concreteClient.PubSubAdapter()
@@ -945,7 +927,6 @@ type ipfsDiscoveryResult struct {
 	apiURL            string
 	timeout           time.Duration
 	replicationFactor int
-	enableEncryption  bool
 }
 
 // discoverIPFSFromNodeConfigs discovers IPFS configuration from node.yaml files.
@@ -983,11 +964,10 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 				apiURL:            nodeCfg.Database.IPFS.APIURL,
 				timeout:           nodeCfg.Database.IPFS.Timeout,
 				replicationFactor: nodeCfg.Database.IPFS.ReplicationFactor,
-				enableEncryption:  nodeCfg.Database.IPFS.EnableEncryption,
 			}
 
 			if result.apiURL == "" {
-				result.apiURL = "http://localhost:5001"
+				result.apiURL = "http://localhost:10107"
 			}
 			if result.timeout == 0 {
 				result.timeout = 60 * time.Second
@@ -995,22 +975,32 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 			if result.replicationFactor == 0 {
 				result.replicationFactor = 3
 			}
-			// Default encryption to true if not set
-			if !result.enableEncryption {
-				result.enableEncryption = true
-			}
 
 			logger.Info("Discovered IPFS config from node config",
 				zap.String("file", filename),
 				zap.String("cluster_url", result.clusterURL),
-				zap.String("api_url", result.apiURL),
-				zap.Bool("encryption_enabled", result.enableEncryption))
+				zap.String("api_url", result.apiURL))
 
 			return result
 		}
 	}
 
 	return ipfsDiscoveryResult{}
+}
+
+// resolveDatabaseEndpoints picks the gorqlite endpoint list (bugboard #162).
+// A non-empty cfg.RQLiteDSN always wins over DefaultClientConfig's
+// peer-derived list. With no DSN and no defaults, fall back to the index
+// RQLite HTTP port.
+func resolveDatabaseEndpoints(cfg *Config, defaultEndpoints []string) []string {
+	if dsn := strings.TrimSpace(cfg.RQLiteDSN); dsn != "" {
+		return []string{injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)}
+	}
+	if len(defaultEndpoints) > 0 {
+		return defaultEndpoints
+	}
+	fallback := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
+	return []string{injectRQLiteAuth(fallback, cfg.RQLiteUsername, cfg.RQLitePassword)}
 }
 
 // injectRQLiteAuth injects HTTP basic auth credentials into a RQLite DSN URL.

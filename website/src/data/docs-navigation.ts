@@ -178,12 +178,6 @@ export const OPERATOR_DOCS: DocLink[] = [
     icon: Globe,
     description: "DNS and nameserver config",
   },
-  {
-    title: "Video Tutorials",
-    slug: "operator/video-tutorials",
-    icon: MonitorPlay,
-    description: "Step-by-step video guides",
-  },
 ];
 
 export const CONTRIBUTOR_DOCS: DocLink[] = [
@@ -216,12 +210,6 @@ export const CONTRIBUTOR_DOCS: DocLink[] = [
     slug: "contributor/deployment",
     icon: Upload,
     description: "CI/CD and release process",
-  },
-  {
-    title: "Video Tutorials",
-    slug: "contributor/video-tutorials",
-    icon: MonitorPlay,
-    description: "Step-by-step video guides",
   },
 ];
 

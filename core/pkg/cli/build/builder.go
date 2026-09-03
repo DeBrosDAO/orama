@@ -158,6 +158,7 @@ func (b *Builder) buildOramaBinaries() error {
 		{Name: "sfu", Package: "./cmd/sfu/"},
 		{Name: "turn", Package: "./cmd/turn/"},
 		{Name: "orama-sni-router", Package: "./cmd/sni-router/"},
+		{Name: "pubsub", Package: "./cmd/pubsub/"},
 	}
 
 	for _, bin := range binaries {
@@ -641,7 +642,10 @@ func (b *Builder) copySystemdTemplates() error {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".service") {
+		if entry.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".service") && !strings.HasSuffix(entry.Name(), ".timer") {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(systemdSrc, entry.Name()))
@@ -754,7 +758,7 @@ func (Provider) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the module.
 func (p *Provider) Provision(ctx caddy.Context) error {
 	if p.Endpoint == "" {
-		p.Endpoint = "http://localhost:6001/v1/internal/acme"
+		p.Endpoint = "` + fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort) + `"
 	}
 	return nil
 }

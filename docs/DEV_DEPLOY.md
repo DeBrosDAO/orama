@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.24.6+ (see `go.mod`)
+- Go 1.26.7+ (see `go.mod`)
 - Node.js 18+ (for anyone-client in dev mode)
 - macOS or Linux
 
@@ -63,9 +63,15 @@ orama node install --vps-ip <ip> --nameserver --domain <domain> --base-domain <d
 
 The installer auto-detects the binary archive at `/opt/orama/manifest.json` and copies pre-built binaries instead of compiling from source.
 
+### What runs on a node
+
+The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.
+
+Use `orama node …` (start/stop/restart/upgrade). Do not enable leftover `orama-ipfs.service`, `orama-olric.service`, `caddy.service`, or `coredns.service`. Index RQLite data stays at `~/.orama/data/rqlite`. Internals are `10100–10109`; do not mix a voter still on 5001 with one on 10100.
+
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
-**NEVER restart all nodes simultaneously.** RQLite uses Raft consensus and requires a majority (quorum) to function.
+**NEVER restart all nodes simultaneously.** Index RQLite uses Raft consensus and requires a majority (quorum) to function. Never restart multiple RQLite voters in the same step.
 
 #### Safe Upgrade Procedure
 
@@ -95,7 +101,7 @@ orama monitor report --env testnet
 - **DON'T** stop all nodes, replace binaries, then start all nodes
 - **DON'T** run `orama node upgrade --restart` on multiple nodes in parallel
 - **DON'T** clear RQLite data directories unless doing a full cluster rebuild
-- **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously
+- **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously (that also stops `@index` via `PartOf`)
 
 #### Schema-Migration Ordering Invariant
 
@@ -162,7 +168,7 @@ cutover; use the same process for testnet.
 ### Cleaning Nodes for Reinstallation
 
 ```bash
-# Wipe all data and services (preserves Anyone relay keys)
+# Wipe all data and services
 orama node clean --env testnet --force
 
 # Also remove shared binaries (rqlited, ipfs, caddy, etc.)
@@ -195,16 +201,7 @@ orama node push --env testnet --direct            # Sequential, no fanout
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
 | `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
-| `--anyone-relay` | Install and configure an Anyone relay on this node |
-| `--anyone-migrate` | Migrate existing Anyone relay installation (preserves keys/fingerprint) |
-| `--anyone-nickname <name>` | Relay nickname (required for relay mode) |
-| `--anyone-wallet <addr>` | Ethereum wallet for relay rewards (required for relay mode) |
-| `--anyone-contact <info>` | Contact info for relay (required for relay mode) |
-| `--anyone-family <fps>` | Comma-separated fingerprints of related relays (MyFamily) |
-| `--anyone-orport <port>` | ORPort for relay (default: 9001) |
-| `--anyone-exit` | Configure as an exit relay (default: non-exit) |
-| `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited). Runs a speedtest during install to measure available bandwidth |
-| `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
+| `--anyone-client` | Install Anyone as a SOCKS5 client on `:9050` (this is already the default) |
 
 #### `orama node invite`
 
@@ -226,9 +223,6 @@ orama node push --env testnet --direct            # Sequential, no fanout
 | `--env <env>` | Target environment for remote rolling upgrade |
 | `--node <ip>` | Upgrade a single node only |
 | `--delay <seconds>` | Delay between nodes during rolling upgrade (default: 30) |
-| `--anyone-relay` | Enable Anyone relay (same flags as install) |
-| `--anyone-bandwidth <pct>` | Limit relay to N% of VPS bandwidth (default: 30, 0=unlimited) |
-| `--anyone-accounting <GB>` | Monthly data cap for relay in GB (0=unlimited) |
 
 #### `orama build`
 
@@ -391,9 +385,11 @@ orama node unlock --genesis --node-ip <wg-ip>
 OramaOS nodes have no SSH access. All management happens through the Gateway API:
 
 ```bash
-# Status, logs, commands — all via Gateway proxy
-curl "https://gateway.example.com/v1/node/status?node_id=<id>"
-curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway"
+# Status, logs, commands — admin credential required
+curl "https://gateway.example.com/v1/node/status?node_id=<id>" \
+  -H "Authorization: Bearer <admin-api-key>"
+curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway" \
+  -H "Authorization: Bearer <admin-api-key>"
 ```
 
 See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.

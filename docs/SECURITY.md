@@ -23,16 +23,15 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Peer removal additionally validates the request originates from a WireGuard subnet IP
 
 **RQLite Authentication (Step 1.7)**
-- RQLite runs with `-auth` flag pointing to a credentials file
-- All RQLite HTTP requests include `Authorization: Basic <base64>` headers
-- Credentials generated at cluster genesis, distributed to joining nodes via join response
-- Both the central RQLite client wrapper and the standalone CoreDNS RQLite client send auth
+- Credentials are generated at genesis and written to `rqlite-auth.json` / `rqlite-password`
+- `rqlited` is **not** started with `-auth` today: `RQLiteAuthFile` is never assigned, so the HTTP API does not require those credentials
+- Clients still send `Authorization: Basic` when they have a password (harmless if the server ignores it)
+- What keeps the RQLite API off the public internet is the firewall / WireGuard overlay, not RQLite HTTP auth
 
 **Olric Gossip Encryption (Step 1.8)**
-- Olric memberlist uses a 32-byte encryption key for all gossip traffic
-- Key generated at genesis, distributed via join response
-- Prevents rogue nodes from joining the gossip ring and poisoning caches
-- Note: encryption is all-or-nothing (coordinated restart required when enabling)
+- Olric v0.7.0's YAML loader has **no** `encryptionKey` field; a generated key was shipped and silently dropped
+- That plumbing is removed. Memberlist confidentiality is the WireGuard overlay (`10.0.0.x`), not Olric AES-GCM
+- Wiring `MemberlistConfig.SecretKey` would require embedding Olric, not a YAML field
 
 **IPFS Cluster TrustedPeers (Step 1.9)**
 - IPFS Cluster `TrustedPeers` populated with actual cluster peer IDs (was `["*"]`)
@@ -42,6 +41,17 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 **Vault V1 Auth Enforcement (Step 1.14)**
 - V1 push/pull endpoints require a valid session token when vault-guardian is configured
 - Previously, auth was optional for backward compatibility — any WG peer could read/overwrite Shamir shares
+
+### Tenant isolation
+
+- **SQLite ATTACH:** tenant query connections register `sqlite3_tenant_noattach` with `SQLITE_LIMIT_ATTACHED=0`. `ATTACH`/`DETACH` and extra statements in one query are rejected before exec
+- **WASM `http_fetch` / `anyone_fetch`:** loopback, private, link-local, unspecified, and multicast destinations are rejected so tenant code cannot reach RQLite/agent/Olric on the host
+- **WASM memory:** wazero runtime `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB)
+- **WASM concurrency:** global semaphore plus a per-namespace slot so one tenant cannot fill the process
+- **Private function invoke:** HTTP `/v1/invoke` is unauthenticated at the middleware; `canInvokeFn` requires the `invoke` grant (or a SIWE wallet) for private functions. Storage-only API keys cannot invoke
+- **Node/network control:** `/v1/node/{status,command,logs,leave}` and `/v1/network/{connect,disconnect}` require admin. `/v1/node/enroll` authenticates via invite token in the handler
+- **IPFS Cluster:** generated unit and `ipfs-cluster-service init` refuse an empty `CLUSTER_SECRET`
+- **Agent logs:** `/v1/agent/logs?service=` is an allowlist (`rqlite`, `olric`, `ipfs`, `ipfs-cluster`, `gateway`, `coredns`, `agent`); path traversal is rejected
 
 ### Token & Key Storage
 
@@ -54,9 +64,10 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 **API Key Hashing (Step 1.6)**
 - API keys stored as HMAC-SHA256 hashes using a server-side secret
 - HMAC secret generated at cluster genesis, stored in `~/.orama/secrets/api-key-hmac-secret`
-- On lookup: compute HMAC, query by hash — fast enough for every request (unlike bcrypt)
+- Namespace and index gateway spawn refuse to start if that file is missing or empty
+- On lookup: compute HMAC, query by hash against the **core/index** RQLite registry (never a tenant RQLite)
 - In-memory cache uses raw key as cache key (never persisted)
-- During rolling upgrade: dual lookup (HMAC first, then raw as fallback) until all nodes upgraded
+- Startup migrates leftover plaintext `ak_…` rows to HMAC in place; lookup is hashed-only after that
 
 **TURN Secret Encryption (Step 1.15)**
 - TURN shared secrets encrypted at rest in RQLite using AES-256-GCM
@@ -69,6 +80,10 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Invite token output includes the CA certificate fingerprint (SHA-256)
 - Joining node verifies the server cert fingerprint matches before proceeding
 - After join: CA cert stored locally for future connections
+- Production CLI and `tlsutil.NewHTTPClientForDomain` do **not** set `InsecureSkipVerify` — public Caddy certs verify against system CAs
+- `TCPSNIGateway` sets `MinVersion: TLS 1.2`
+- Certificate serials are 128-bit `crypto/rand` values
+- wg0.conf is chmod 0600 after write (WriteFile and tee); umask is not trusted
 
 **WebSocket Origin Validation (Step 1.4)**
 - All WebSocket upgraders validate the `Origin` header against the node's configured domain
@@ -78,10 +93,12 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 ### Process Isolation
 
 **Dedicated User (Step 1.11)**
-- All services run as the `orama` user (not root)
+- Host and namespace daemons (gateway, rqlite, olric, sfu, turn, pubsub, ipfs, caddy, coredns) run as `User=orama`
 - Caddy and CoreDNS get `AmbientCapabilities=CAP_NET_BIND_SERVICE` for ports 80/443 and 53
 - WireGuard stays as root (kernel netlink requires it)
+- Anyone client/relay stay `debian-anon`
 - vault-guardian already had proper hardening
+- `/opt/orama/bin` is `root:orama` mode `0750` so the orama user can execute binaries but cannot replace them
 
 **systemd Hardening (Step 1.12)**
 - All service units include:
@@ -93,9 +110,11 @@ These measures apply to all nodes (Ubuntu and OramaOS).
   ProtectKernelTunables=yes
   ProtectKernelModules=yes
   RestrictNamespaces=yes
-  ReadWritePaths=/opt/orama/.orama
+  ProtectProc=invisible
   ```
-- Applied to both template files (`pkg/environments/templates/`) and hardcoded unit generators (`pkg/environments/production/services.go`)
+- `ReadWritePaths` is per-service (data dir + logs), not the whole `.orama` tree
+- Units that do not need cluster secrets set `InaccessiblePaths=…/secrets`; the gateway and node keep `ReadOnlyPaths` on `secrets/`
+- Applied to both template files (`pkg/environments/templates/`) and hardcoded unit generators (`pkg/environments/production/services.go`) plus `core/systemd/orama-namespace-*@.service`
 
 ### Supply Chain
 
@@ -110,7 +129,7 @@ These measures apply only to OramaOS nodes (mainnet, devnet, testnet).
 
 ### Immutable OS
 
-- **Read-only rootfs** — SquashFS with dm-verity integrity verification
+- **Read-only rootfs** — SquashFS. dm-verity hashes can be built into the image; they are **not** wired into the boot path, so integrity is not enforced at boot today
 - **No shell** — `/bin/sh` symlinked to `/bin/false`, no bash/ash/ssh
 - **No SSH** — OpenSSH not included in the image
 - **Minimal packages** — only what's needed for systemd, cryptsetup, and the agent
@@ -147,6 +166,27 @@ Note: CLONE_NEWPID is intentionally omitted — it makes services PID 1 in their
 - Management only through Gateway API → agent over WireGuard
 - All commands are logged and auditable
 - No root access, no console access, no file system access
+
+## RAM-to-disk (swap and cores)
+
+Guest `mlock`/`mlockall` is **not** used in the Go services. `mlock(2)` does not survive `execve`, so a launcher that locks then execs `rqlited`/`caddy`/`olric-server` gives those binaries zero locked pages. Go `string` values are also unzeroable. Against a hosting-provider RAM snapshot, mlock buys nothing.
+
+The control that keeps secrets off the **block device** is cgroup `MemorySwapMax=0` on secret-bearing units, plus install-time `swapoff` / `fs.suid_dumpable=0` / systemd-coredump `Storage=none`. That does **not** stop a RAM snapshot or provider VM-suspend.
+
+## What this does not defend against today
+
+Stated so the gaps above are known positions, not implied protections:
+
+- **RAM snapshot** of a running node (secrets in process memory, including gateway vault combine)
+- **Hosting-provider / hypervisor access** to the guest
+- **Ubuntu fleet SSH** — Zero Operator Access and LUKS FDE apply to OramaOS only
+- **dm-verity at boot** — hashes may exist in the OramaOS image; they are not wired into the boot path
+- **RQLite HTTP auth** — `rqlited -auth` is not enabled; overlay + firewall are the control
+- **ntfy** — no auth-file in v1; listen-localhost is the control
+- **A captured disk snapshot of RQLite** — plaintext application data, including `deployment_env_vars`
+- **Immediate erase of deleted rows** — a SQL `DELETE` is a Raft log entry; the original INSERT remains in `raft.db` until size-driven compaction, not a privacy TTL
+- **Olric memberlist AES-GCM** — v0.7.0 YAML has no `encryptionKey`; WireGuard is the control
+- **WireGuard key rotation** — none; `wg0.conf` is 0600. Rotation would be a rolling mesh with a health gate
 
 ## Rollout Strategy
 

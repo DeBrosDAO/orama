@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
@@ -195,38 +194,8 @@ func (r *RemoteOrchestrator) buildRemoteCommand() string {
 	}
 
 	// Anyone relay flags
-	if r.flags.AnyoneRelay {
-		args = append(args, "--anyone-relay")
-	}
 	if r.flags.AnyoneClient {
 		args = append(args, "--anyone-client")
-	}
-	if r.flags.AnyoneExit {
-		args = append(args, "--anyone-exit")
-	}
-	if r.flags.AnyoneMigrate {
-		args = append(args, "--anyone-migrate")
-	}
-	if r.flags.AnyoneNickname != "" {
-		args = append(args, "--anyone-nickname", r.flags.AnyoneNickname)
-	}
-	if r.flags.AnyoneContact != "" {
-		args = append(args, "--anyone-contact", r.flags.AnyoneContact)
-	}
-	if r.flags.AnyoneWallet != "" {
-		args = append(args, "--anyone-wallet", r.flags.AnyoneWallet)
-	}
-	if r.flags.AnyoneORPort != 9001 {
-		args = append(args, "--anyone-orport", strconv.Itoa(r.flags.AnyoneORPort))
-	}
-	if r.flags.AnyoneFamily != "" {
-		args = append(args, "--anyone-family", r.flags.AnyoneFamily)
-	}
-	if r.flags.AnyoneBandwidth != 30 {
-		args = append(args, "--anyone-bandwidth", strconv.Itoa(r.flags.AnyoneBandwidth))
-	}
-	if r.flags.AnyoneAccounting != 0 {
-		args = append(args, "--anyone-accounting", strconv.Itoa(r.flags.AnyoneAccounting))
 	}
 
 	return joinShellArgs(args)

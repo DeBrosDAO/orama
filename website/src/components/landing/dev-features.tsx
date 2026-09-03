@@ -6,7 +6,7 @@ import {
   Radio,
   Video,
   Globe,
-  Lock,
+  EyeOff,
 } from "lucide-react";
 import { Section } from "../layout/section";
 import { SectionHeader } from "../ui/section-header";
@@ -65,11 +65,11 @@ const features = [
       "CoreDNS distributed across the mesh. Custom domains built in.",
   },
   {
-    icon: <Lock className="w-5 h-5" />,
-    title: "Network Vault",
-    subtitle: "replaces Secrets Manager",
+    icon: <EyeOff className="w-5 h-5" />,
+    title: "Network Proxy",
+    subtitle: "no cloud equivalent",
     description:
-      "Shamir's Secret Sharing. Secrets split across nodes. No single point of compromise.",
+      "Outbound HTTP through the Anyone relay network. The service you call never sees your address.",
   },
 ];
 
@@ -80,8 +80,8 @@ export function DevFeatures() {
         <AnimateIn>
         <div className="flex flex-col gap-8">
           <SectionHeader
-            title="A complete cloud. Zero infrastructure."
-            subtitle="No databases to provision. No cache to configure. Import the SDK and you have everything."
+            title="The whole stack, not a piece of it."
+            subtitle="Nothing to provision and nothing to wire together. Import the SDK and every service is already there, on every node."
           />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0">

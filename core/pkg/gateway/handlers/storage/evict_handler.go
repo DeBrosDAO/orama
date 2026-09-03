@@ -70,21 +70,7 @@ func (h *Handlers) remainingPinsForCID(ctx context.Context, cid string) (int, er
 // while another namespace still references the content — doing so orphans that
 // namespace's data at the next GC. Used to gate the cluster-pin removal.
 func (h *Handlers) cidPinnedByOtherNamespace(ctx context.Context, cid, namespace string) (bool, error) {
-	if h.db == nil {
-		return false, nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	var result []map[string]interface{}
-	query := `SELECT COUNT(*) as count FROM ipfs_content_ownership WHERE cid = ? AND namespace != ? AND is_pinned = 1`
-	if err := h.db.Query(ctx, &result, query, cid, namespace); err != nil {
-		return false, err
-	}
-	if len(result) == 0 {
-		return false, nil
-	}
-	return countFromRow(result[0]["count"]) > 0, nil
+	return CIDInUseByOtherNamespace(ctx, h.db, cid, namespace)
 }
 
 // countFromRow coerces a COUNT(*) cell (rqlite returns float64 or int64) to int.

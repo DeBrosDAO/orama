@@ -7,12 +7,23 @@ PartOf=orama-node.service
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data /opt/orama/.orama/tls-cache
+ReadOnlyPaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/gateway.env
 
-# Use shell to properly expand NODE_ID from env file
-ExecStart=/bin/sh -c 'exec /opt/orama/bin/gateway --config ${GATEWAY_CONFIG}'
+ExecStart=/opt/orama/bin/gateway --config ${GATEWAY_CONFIG}
 
 TimeoutStopSec=30s
 KillMode=mixed
@@ -28,6 +39,7 @@ SyslogIdentifier=orama-gateway-%i
 PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=1G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

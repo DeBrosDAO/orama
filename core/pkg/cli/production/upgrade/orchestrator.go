@@ -15,6 +15,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // newOramaBinaryPath is the on-disk path Phase 2b installs the new
@@ -46,51 +47,9 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	setup := production.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(isNameserver)
 
-	// Configure Anyone mode (explicit flags > saved preferences > auto-detect)
-	// Explicit flags always win — they represent the user's current intent.
-	if flags.AnyoneRelay {
-		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
-			Enabled:       true,
-			Exit:          flags.AnyoneExit,
-			Migrate:       flags.AnyoneMigrate,
-			Nickname:      flags.AnyoneNickname,
-			Contact:       flags.AnyoneContact,
-			Wallet:        flags.AnyoneWallet,
-			ORPort:        flags.AnyoneORPort,
-			MyFamily:      flags.AnyoneFamily,
-			BandwidthPct:  flags.AnyoneBandwidth,
-			AccountingMax: flags.AnyoneAccounting,
-		})
-	} else if flags.AnyoneClient {
-		// Explicit --anyone-client flag overrides saved relay prefs and auto-detect.
-		setup.SetAnyoneClient(true)
-	} else if prefs.AnyoneRelay {
-		// Restore relay config from saved preferences (for firewall rules)
-		orPort := prefs.AnyoneORPort
-		if orPort == 0 {
-			orPort = 9001
-		}
-		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
-			Enabled: true,
-			ORPort:  orPort,
-		})
-	} else if prefs.AnyoneClient {
-		setup.SetAnyoneClient(true)
-	} else if detectAnyoneRelay(oramaDir) {
-		// Auto-detect: relay is installed but preferences weren't saved.
-		// This happens when upgrading from older versions that didn't persist
-		// the anyone_relay preference, or when preferences.yaml was reset.
-		orPort := detectAnyoneORPort(oramaDir)
-		setup.SetAnyoneRelayConfig(&production.AnyoneRelayConfig{
-			Enabled: true,
-			ORPort:  orPort,
-		})
-		// Save the detected preference for future upgrades
-		prefs.AnyoneRelay = true
-		prefs.AnyoneORPort = orPort
-		_ = production.SavePreferences(oramaDir, prefs)
-		fmt.Printf("  Auto-detected Anyone relay (ORPort: %d), saved to preferences\n", orPort)
-	}
+	// Anyone is client-only. Always enable the SOCKS client so a bare
+	// `orama node upgrade --restart` does not disable /v1/proxy/anon.
+	setup.SetAnyoneClient(true)
 
 	return &Orchestrator{
 		oramaHome: oramaHome,
@@ -251,19 +210,8 @@ func (o *Orchestrator) handleBranchPreferences() error {
 		fmt.Printf("  Nameserver mode: enabled (CoreDNS + Caddy)\n")
 	}
 
-	// Anyone client and relay are mutually exclusive — setting one clears the other.
-	if o.flags.AnyoneClient {
+	if !prefs.AnyoneClient {
 		prefs.AnyoneClient = true
-		prefs.AnyoneRelay = false
-		prefs.AnyoneORPort = 0
-		prefsChanged = true
-	} else if o.flags.AnyoneRelay {
-		prefs.AnyoneRelay = true
-		prefs.AnyoneClient = false
-		prefs.AnyoneORPort = o.flags.AnyoneORPort
-		if prefs.AnyoneORPort == 0 {
-			prefs.AnyoneORPort = 9001
-		}
 		prefsChanged = true
 	}
 
@@ -418,7 +366,6 @@ func (o *Orchestrator) stopServices() error {
 		"orama-olric.service",         // Independent
 		"orama-vault.service",         // Vault guardian
 		"orama-anyone-client.service", // Client mode
-		"orama-anyone-relay.service",  // Relay mode
 	}
 	for _, svc := range services {
 		unitPath := filepath.Join("/etc/systemd/system", svc)
@@ -476,17 +423,7 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 	}
 	systemdDir := "/etc/systemd/system"
 
-	templates := []string{
-		"orama-namespace-rqlite@.service",
-		"orama-namespace-olric@.service",
-		"orama-namespace-gateway@.service",
-		"orama-namespace-sfu@.service",
-		"orama-namespace-turn@.service",
-		// Shared, host-level TURN (bugboard #283 part 2). Not a template: it
-		// serves every namespace on this host from one process, because
-		// 3478/5349 are host-exclusive.
-		"orama-turn.service",
-	}
+	templates := systemd.UnitFilesToInstall()
 
 	installedCount := 0
 	for _, template := range templates {
@@ -887,47 +824,4 @@ func (o *Orchestrator) waitForClusterHealth(timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("timeout waiting for cluster to become healthy")
-}
-
-// detectAnyoneRelay checks if an Anyone relay is installed on this node
-// by looking for the systemd service file or the anonrc config file.
-func detectAnyoneRelay(oramaDir string) bool {
-	// Check if systemd service file exists
-	if _, err := os.Stat("/etc/systemd/system/orama-anyone-relay.service"); err == nil {
-		return true
-	}
-	// Check if anonrc config exists
-	if _, err := os.Stat(filepath.Join(oramaDir, "anyone", "anonrc")); err == nil {
-		return true
-	}
-	if _, err := os.Stat("/etc/anon/anonrc"); err == nil {
-		return true
-	}
-	return false
-}
-
-// detectAnyoneORPort reads the configured ORPort from anonrc, defaulting to 9001.
-func detectAnyoneORPort(oramaDir string) int {
-	for _, path := range []string{
-		filepath.Join(oramaDir, "anyone", "anonrc"),
-		"/etc/anon/anonrc",
-	} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "ORPort ") {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					port := 0
-					if _, err := fmt.Sscanf(parts[1], "%d", &port); err == nil && port > 0 {
-						return port
-					}
-				}
-			}
-		}
-	}
-	return 9001
 }

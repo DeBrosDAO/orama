@@ -1,0 +1,38 @@
+[Unit]
+Description=Orama Namespace ntfy (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network-online.target
+Wants=network-online.target
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=ntfy
+Group=ntfy
+EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/ntfy.env
+ExecStart=/usr/local/bin/ntfy serve --config /etc/ntfy/server.yml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/ntfy
+RuntimeDirectory=ntfy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+LimitNOFILE=65536
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-ntfy-%i
+
+[Install]
+WantedBy=multi-user.target

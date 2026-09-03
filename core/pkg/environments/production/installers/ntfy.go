@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // ntfy.go — feature #72. Self-hosted ntfy server installer.
@@ -52,14 +54,14 @@ const (
 
 	// NtfyListenPort is the localhost port ntfy binds to. Caddy reverse-
 	// proxies to it; exposed nowhere else.
-	NtfyListenPort = 8090
+	NtfyListenPort = constants.NtfyListenPort
 
-	ntfyBinaryPath   = "/usr/local/bin/ntfy"
-	ntfyConfigDir    = "/etc/ntfy"
-	ntfyConfigPath   = "/etc/ntfy/server.yml"
-	ntfyDataDir      = "/var/lib/ntfy"
-	ntfySystemdUnit  = "/etc/systemd/system/ntfy.service"
-	ntfyUser         = "ntfy"
+	ntfyBinaryPath  = "/usr/local/bin/ntfy"
+	ntfyConfigDir   = "/etc/ntfy"
+	ntfyConfigPath  = "/etc/ntfy/server.yml"
+	ntfyDataDir     = "/var/lib/ntfy"
+	ntfySystemdUnit = "/etc/systemd/system/ntfy.service"
+	ntfyUser        = "ntfy"
 )
 
 // NtfyInstaller installs and configures a self-hosted ntfy server.
@@ -387,9 +389,8 @@ WantedBy=multi-user.target
 
 // generateServerYAML produces the contents of /etc/ntfy/server.yml.
 // Hardened defaults: listens on localhost, behind-proxy mode on, cache
-// + persistence configured, attachments disabled (we don't need them
-// for transactional push), and access defaults to deny — auth is
-// per-topic via the operator-side `auth-file` (future, not in v1).
+// + persistence configured, attachments disabled. There is no auth-file
+// in v1 — ntfy 2.11.0 with no auth-file does **not** default to deny.
 func (ni *NtfyInstaller) generateServerYAML(publicBaseURL string) string {
 	return fmt.Sprintf(`# ntfy server config (Orama #72). Generated — do not edit by hand.
 # Re-running the orchestrator's Phase 4 will overwrite changes here.
@@ -414,8 +415,8 @@ behind-proxy: true
 # per-instance, so a client recovering missed messages across the round-robin
 # fan-out must use since=<unix-timestamp>/<duration>, NOT since=<message-id>
 # (IDs differ between nodes). Each node's cache holds every fanned-out message.
-cache-file: "%s/cache.db"
-cache-duration: "12h"
+cache-file: "/run/ntfy/cache.db"
+cache-duration: "15m"
 
 # Keepalive (bugboard #858): ntfy's 45s default is too long for aggressive
 # carrier/mobile NATs, which silently drop idle long-lived /json streams — the
@@ -444,5 +445,5 @@ web-root: "disable"
 # Logs to stdout so systemd-journald captures them.
 log-level: "info"
 log-format: "json"
-`, publicBaseURL, NtfyListenPort, NtfyListenPort, ntfyDataDir)
+`, publicBaseURL, NtfyListenPort, NtfyListenPort)
 }

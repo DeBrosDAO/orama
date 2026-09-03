@@ -1,0 +1,38 @@
+[Unit]
+Description=Orama Namespace CoreDNS (%i)
+Documentation=https://coredns.io
+After=network-online.target orama-namespace-rqlite@index.service
+Wants=network-online.target
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/logs
+InaccessiblePaths=/opt/orama/.orama/secrets
+EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/coredns.env
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Adopt in place: existing /etc/coredns/Corefile (RQLite DSN localhost:5001).
+ExecStart=/usr/local/bin/coredns -conf /etc/coredns/Corefile
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=orama-coredns-%i
+PrivateTmp=yes
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=1G
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

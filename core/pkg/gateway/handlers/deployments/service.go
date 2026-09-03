@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
@@ -363,18 +364,18 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 	envJSON, _ := json.Marshal(deployment.Environment)
 
 	payload := map[string]interface{}{
-		"deployment_id":        deployment.ID,
-		"namespace":            deployment.Namespace,
-		"name":                 deployment.Name,
-		"type":                 deployment.Type,
-		"content_cid":          deployment.ContentCID,
-		"build_cid":            deployment.BuildCID,
-		"environment":          string(envJSON),
-		"health_check_path":    deployment.HealthCheckPath,
-		"memory_limit_mb":      deployment.MemoryLimitMB,
-		"cpu_limit_percent":    deployment.CPULimitPercent,
-		"restart_policy":       deployment.RestartPolicy,
-		"max_restart_count":    deployment.MaxRestartCount,
+		"deployment_id":     deployment.ID,
+		"namespace":         deployment.Namespace,
+		"name":              deployment.Name,
+		"type":              deployment.Type,
+		"content_cid":       deployment.ContentCID,
+		"build_cid":         deployment.BuildCID,
+		"environment":       string(envJSON),
+		"health_check_path": deployment.HealthCheckPath,
+		"memory_limit_mb":   deployment.MemoryLimitMB,
+		"cpu_limit_percent": deployment.CPULimitPercent,
+		"restart_policy":    deployment.RestartPolicy,
+		"max_restart_count": deployment.MaxRestartCount,
 	}
 
 	resp, err := s.callInternalAPI(nodeIP, "/v1/internal/deployments/replica/setup", payload)
@@ -432,7 +433,7 @@ func (s *DeploymentService) callInternalAPI(nodeIP, path string, payload map[str
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	url := fmt.Sprintf("http://%s:6001%s", nodeIP, path)
+	url := fmt.Sprintf("http://%s:%d%s", nodeIP, constants.GatewayAPIPort, path)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {

@@ -8,7 +8,7 @@ OramaOS is a locked-down operating system designed specifically for Orama node o
 
 - **No SSH, no shell** — operators cannot access the filesystem or run commands on the machine
 - **LUKS full-disk encryption** — the data partition is encrypted; the key is split via Shamir's Secret Sharing across peer nodes
-- **Read-only rootfs** — the OS image uses SquashFS with dm-verity integrity verification
+- **Read-only rootfs** — SquashFS. dm-verity can be built into the image; it is **not** wired at boot, so rootfs integrity is not enforced today
 - **A/B partition updates** — signed OS images are applied atomically with automatic rollback on failure
 - **Service sandboxing** — each service runs in its own Linux namespace with seccomp syscall filtering
 - **Signed binaries** — all updates are cryptographically signed with the Orama rootwallet
@@ -122,22 +122,26 @@ If not enough peers are available, the agent retries the share fetch with expone
 
 ## Node Management
 
-Since OramaOS has no SSH, all management happens through the Gateway API:
+Since OramaOS has no SSH, all management happens through the Gateway API. Status, command, logs, and leave require an **admin** API key (or owner JWT). `service` on logs is an allowlist (`rqlite`, `olric`, `ipfs`, `ipfs-cluster`, `gateway`, `coredns`, `agent`).
 
 ```bash
 # Check node status
-curl "https://gateway.example.com/v1/node/status?node_id=<id>"
+curl "https://gateway.example.com/v1/node/status?node_id=<id>" \
+  -H "Authorization: Bearer <admin-api-key>"
 
 # Send a command (e.g., restart a service)
 curl -X POST "https://gateway.example.com/v1/node/command?node_id=<id>" \
+  -H "Authorization: Bearer <admin-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"action":"restart","service":"rqlite"}'
 
 # View logs
-curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway&lines=100"
+curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway&lines=100" \
+  -H "Authorization: Bearer <admin-api-key>"
 
 # Graceful node departure
 curl -X POST "https://gateway.example.com/v1/node/leave" \
+  -H "Authorization: Bearer <admin-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"node_id":"<id>"}'
 ```
@@ -186,7 +190,7 @@ Services and their sandbox profiles:
 | Disk encryption | No | LUKS2 (Shamir) |
 | OS updates | Manual (`orama node upgrade`) | Automatic (signed, A/B) |
 | Service isolation | systemd only | Namespaces + seccomp |
-| Rootfs integrity | None | dm-verity |
+| Rootfs integrity | None | dm-verity hashes exist in the image; not wired at boot |
 | Binary signing | Optional | Required |
 | Operator data access | Full | None |
 | Environments | All (including sandbox) | Mainnet, devnet, testnet |

@@ -7,11 +7,23 @@ PartOf=orama-node.service
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
+InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/sfu.env
 
-ExecStart=/bin/sh -c 'exec /opt/orama/bin/sfu --config ${SFU_CONFIG}'
+ExecStart=/opt/orama/bin/sfu --config ${SFU_CONFIG}
 
 TimeoutStopSec=45s
 KillMode=mixed
@@ -27,6 +39,7 @@ SyslogIdentifier=orama-sfu-%i
 PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=2G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

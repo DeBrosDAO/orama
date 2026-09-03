@@ -171,8 +171,8 @@ func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error
 		}
 	}
 
-	// Install Anyone relay from .deb package if available
-	if ps.IsAnyoneRelay() || ps.IsAnyoneClient() {
+	// Install Anyone (anon) from .deb if this node runs the SOCKS client
+	if ps.IsAnyoneClient() {
 		if err := ps.installAnyonFromPreBuilt(); err != nil {
 			ps.logf("  ⚠️  Anyone install warning: %v", err)
 		}

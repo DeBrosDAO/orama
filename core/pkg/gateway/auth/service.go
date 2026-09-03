@@ -37,6 +37,10 @@ type Service struct {
 	defaultNS        string
 	apiKeyHMACSecret string         // HMAC secret for hashing API keys before storage
 	claimsResolver   ClaimsResolver // namespace claims-provider hook (bugboard #548); nil = none
+	// apiKeyORM is the core/index RQLite client used for api_keys writes
+	// on a namespace gateway (bugboard #162). Nil means use s.orm (the
+	// main/index gateway, where orm already is the registry).
+	apiKeyORM client.NetworkClient
 }
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
@@ -70,6 +74,20 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 // When set, API keys are stored as HMAC-SHA256(key, secret) in the database.
 func (s *Service) SetAPIKeyHMACSecret(secret string) {
 	s.apiKeyHMACSecret = secret
+}
+
+// SetAPIKeyRegistry points API-key reads/writes at the core/index RQLite
+// client. Required on namespace gateways after rqlite_dsn wins for
+// deps.Client (bugboard #162): keys must not be stored in the tenant DB.
+func (s *Service) SetAPIKeyRegistry(orm client.NetworkClient) {
+	s.apiKeyORM = orm
+}
+
+func (s *Service) keyORM() client.NetworkClient {
+	if s.apiKeyORM != nil {
+		return s.apiKeyORM
+	}
+	return s.orm
 }
 
 // SetRqliteClient injects the lower-level rqlite client. Required for code
@@ -749,9 +767,9 @@ func (s *Service) RegisterApp(ctx context.Context, wallet, namespace, name, publ
 // GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace
 func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace string) (string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.keyORM().Database()
 
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
 		return "", err
 	}
@@ -801,7 +819,15 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 
 // ResolveNamespaceID ensures the given namespace exists and returns its primary key ID.
 func (s *Service) ResolveNamespaceID(ctx context.Context, ns string) (interface{}, error) {
-	if s.orm == nil {
+	return s.resolveNamespaceIDOn(ctx, s.orm, ns)
+}
+
+func (s *Service) resolveKeyNamespaceID(ctx context.Context, ns string) (interface{}, error) {
+	return s.resolveNamespaceIDOn(ctx, s.keyORM(), ns)
+}
+
+func (s *Service) resolveNamespaceIDOn(ctx context.Context, orm client.NetworkClient, ns string) (interface{}, error) {
+	if orm == nil {
 		return nil, fmt.Errorf("client not initialized")
 	}
 	ns = strings.TrimSpace(ns)
@@ -810,7 +836,7 @@ func (s *Service) ResolveNamespaceID(ctx context.Context, ns string) (interface{
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := orm.Database()
 
 	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", ns); err != nil {
 		return nil, err

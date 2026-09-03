@@ -2,6 +2,8 @@ package namespace
 
 import (
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // ClusterStatus represents the current state of a namespace cluster
@@ -80,12 +82,35 @@ const (
 	// NamespacePortRangeEnd is the end of the reserved port range for namespace services
 	NamespacePortRangeEnd = 10099
 
-	// PortsPerNamespace is the number of ports required per namespace instance on a node
+	// PortsPerNamespace is the tenant-default port block size (rqlite+olric+gateway).
+	// Must equal BlueprintTenant().PortNeedCount(). Other blueprints may use fewer.
 	// RQLite HTTP (0), RQLite Raft (1), Olric HTTP (2), Olric Memberlist (3), Gateway HTTP (4)
 	PortsPerNamespace = 5
 
-	// MaxNamespacesPerNode is the maximum number of namespace instances a single node can host
+	// MaxNamespacesPerNode is how many tenant-default (5-port) instances fit in 10000–10099.
 	MaxNamespacesPerNode = (NamespacePortRangeEnd - NamespacePortRangeStart + 1) / PortsPerNamespace // 20
+
+	// Index internals occupy 10100–10199. Do not place these in the tenant
+	// pool (10000–10099). Edge ports stay outside this block.
+	IndexRQLiteHTTPPort      = constants.RQLiteHTTPPort
+	IndexRQLiteRaftPort      = constants.RQLiteRaftPort
+	IndexOlricHTTPPort       = constants.OlricHTTPPort
+	IndexOlricMemberlistPort = constants.OlricMemberlistPort
+	IndexGatewayHTTPPort     = constants.GatewayAPIPort
+	IndexPubsubPort          = constants.PubsubAPIPort
+	IndexVaultPort           = constants.VaultHTTPPort
+	IndexIPFSAPIPort         = constants.IPFSAPIPort
+	IndexIPFSClusterAPIPort  = constants.IPFSClusterAPIPort
+	IndexNtfyPort            = constants.NtfyListenPort
+
+	// Host-stack edge / singleton ports. Not in 10100.
+	IndexWireGuardPort   = constants.WireGuardPort
+	IndexCaddyHTTPPort   = 80
+	IndexCaddyHTTPSPort  = 443
+	IndexAnyoneSOCKSPort = 9050
+
+	// NameserverDNSPort is CoreDNS on the nameserver blueprint. Edge; not 10100.
+	NameserverDNSPort = 53
 )
 
 // WebRTC port allocation constants
@@ -132,19 +157,21 @@ const (
 
 // NamespaceCluster represents a dedicated cluster for a namespace
 type NamespaceCluster struct {
-	ID               string        `json:"id" db:"id"`
-	NamespaceID      int           `json:"namespace_id" db:"namespace_id"`
-	NamespaceName    string        `json:"namespace_name" db:"namespace_name"`
-	Status           ClusterStatus `json:"status" db:"status"`
-	RQLiteNodeCount  int           `json:"rqlite_node_count" db:"rqlite_node_count"`
-	OlricNodeCount   int           `json:"olric_node_count" db:"olric_node_count"`
-	GatewayNodeCount int           `json:"gateway_node_count" db:"gateway_node_count"`
-	ProvisionedBy    string        `json:"provisioned_by" db:"provisioned_by"`
-	ProvisionedAt    time.Time     `json:"provisioned_at" db:"provisioned_at"`
-	ReadyAt          *time.Time    `json:"ready_at,omitempty" db:"ready_at"`
-	LastHealthCheck  *time.Time    `json:"last_health_check,omitempty" db:"last_health_check"`
-	ErrorMessage     string        `json:"error_message,omitempty" db:"error_message"`
-	RetryCount       int           `json:"retry_count" db:"retry_count"`
+	ID            string        `json:"id" db:"id"`
+	NamespaceID   int           `json:"namespace_id" db:"namespace_id"`
+	NamespaceName string        `json:"namespace_name" db:"namespace_name"`
+	Status        ClusterStatus `json:"status" db:"status"`
+	// Per-service replica counts among selected members. They can differ
+	// (10 members, RQLite on 3). Today's tenant writes 3/3/3.
+	RQLiteNodeCount  int        `json:"rqlite_node_count" db:"rqlite_node_count"`
+	OlricNodeCount   int        `json:"olric_node_count" db:"olric_node_count"`
+	GatewayNodeCount int        `json:"gateway_node_count" db:"gateway_node_count"`
+	ProvisionedBy    string     `json:"provisioned_by" db:"provisioned_by"`
+	ProvisionedAt    time.Time  `json:"provisioned_at" db:"provisioned_at"`
+	ReadyAt          *time.Time `json:"ready_at,omitempty" db:"ready_at"`
+	LastHealthCheck  *time.Time `json:"last_health_check,omitempty" db:"last_health_check"`
+	ErrorMessage     string     `json:"error_message,omitempty" db:"error_message"`
+	RetryCount       int        `json:"retry_count" db:"retry_count"`
 
 	// Populated by queries, not stored directly
 	Nodes []ClusterNode `json:"nodes,omitempty"`

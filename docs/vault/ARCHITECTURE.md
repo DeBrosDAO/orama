@@ -2,7 +2,9 @@
 
 ## What is Orama Vault?
 
-Orama Vault is a distributed secrets store. It runs as a guardian daemon (`vault-guardian`) on every node in the Orama Network, similar to how IPFS nodes run on every machine. Clients can store any sensitive data -- API keys, database passwords, SSH keys, crypto seeds, wallet recovery shares, or arbitrary encrypted blobs. The client splits each secret into Shamir shares and pushes one share to each guardian. To retrieve, the client pulls shares from K guardians and reconstructs the original secret via Lagrange interpolation.
+Orama Vault is a distributed secrets store. It runs as a guardian daemon (`vault-guardian`) on every node in the Orama Network. The guardian protocol is share-at-a-time: a direct client splits locally and pushes one share per guardian, then reconstructs locally on pull.
+
+Production HTTP clients go through the **Orama gateway**, which is not a reverse-proxy of those endpoints. The gateway splits on store and combines on retrieve, so that process holds the full secret in RAM for the request.
 
 The system provides information-theoretic security: compromising fewer than K guardians reveals zero information about the original secret. This is not computational security -- it is mathematically impossible to learn anything from K-1 shares, regardless of computing power.
 
@@ -13,7 +15,7 @@ The system provides information-theoretic security: compromising fewer than K gu
     +------------------------------------------------------------+
     |  orama-gateway (port 443)                                  |
     |    |                                                       |
-    |    +-- reverse-proxy --> vault-guardian (port 7500, client) |
+    |    +-- vault proxy (split/combine in-process) --> vault-guardian :7500 |
     |                          vault-guardian (port 7501, peer)   |
     |                                                            |
     |  RQLite (port 4001) -- cluster membership source of truth  |

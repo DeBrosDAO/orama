@@ -91,8 +91,8 @@ func TestGenerateCaddyService_GatewayReadinessCheck(t *testing.T) {
 	if !strings.Contains(unit, "ExecStartPre=") {
 		t.Error("missing ExecStartPre directive for gateway readiness check")
 	}
-	if !strings.Contains(unit, "localhost:6001/health") {
-		t.Error("ExecStartPre should poll localhost:6001/health")
+	if !strings.Contains(unit, "localhost:10104/health") {
+		t.Error("ExecStartPre should poll localhost:10104/health")
 	}
 
 	// Must use Requires= (hard dependency), not Wants= (soft dependency)
@@ -138,6 +138,32 @@ func TestGenerateRQLiteServiceArgs(t *testing.T) {
 	}
 	if !strings.Contains(unit, "-join-attempts 30") {
 		t.Error("missing -join-attempts 30")
+	}
+}
+
+func TestGenerateNodeService_supervisorOnly(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+	unit := ssg.GenerateNodeService()
+	for _, want := range []string{
+		"After=network-online.target",
+		"Wants=network-online.target",
+		"ExecStart=/opt/orama/bin/orama-node",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("node unit missing %q, got:\n%s", want, unit)
+		}
+	}
+	for _, not := range []string{
+		"Requires=wg-quick@wg0",
+		"After=orama-ipfs-cluster",
+		"After=orama-olric",
+	} {
+		if strings.Contains(unit, not) {
+			t.Errorf("node unit must not depend on leftover host unit %q, got:\n%s", not, unit)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tetratelabs/wazero"
@@ -36,25 +37,62 @@ func instantiateTimingFrom(ctx context.Context) *InstantiateTiming {
 	return t
 }
 
+type namespaceKey struct{}
+
+// WithNamespace tags an execution ctx so the limiter can cap one tenant
+// without letting it fill the process-wide semaphore (bugboard #85).
+func WithNamespace(ctx context.Context, ns string) context.Context {
+	return context.WithValue(ctx, namespaceKey{}, ns)
+}
+
+func namespaceFrom(ctx context.Context) string {
+	ns, _ := ctx.Value(namespaceKey{}).(string)
+	return ns
+}
+
 // Executor handles WASM module execution.
 type Executor struct {
 	runtime wazero.Runtime
 	logger  *zap.Logger
-	sem     chan struct{} // concurrency limiter
+	sem     chan struct{} // process-wide limiter
+	perNS   map[string]chan struct{}
+	perNSN  int
+	mu      sync.Mutex
 }
 
 // NewExecutor creates a new Executor.
 // maxConcurrent limits simultaneous module instantiations (0 = unlimited).
 func NewExecutor(runtime wazero.Runtime, logger *zap.Logger, maxConcurrent int) *Executor {
 	var sem chan struct{}
+	perNSN := 0
 	if maxConcurrent > 0 {
 		sem = make(chan struct{}, maxConcurrent)
+		perNSN = maxConcurrent / 2
+		if perNSN < 1 {
+			perNSN = 1
+		}
 	}
 	return &Executor{
 		runtime: runtime,
 		logger:  logger,
 		sem:     sem,
+		perNS:   make(map[string]chan struct{}),
+		perNSN:  perNSN,
 	}
+}
+
+func (e *Executor) nsSlot(ns string) chan struct{} {
+	if e.perNSN <= 0 || ns == "" {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ch := e.perNS[ns]
+	if ch == nil {
+		ch = make(chan struct{}, e.perNSN)
+		e.perNS[ns] = ch
+	}
+	return ch
 }
 
 // ExecuteModule instantiates and runs a WASM module with the given input.
@@ -115,13 +153,22 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		// engine.go for the persistent-WS path.
 		WithRandSource(cryptorand.Reader)
 
-	// Acquire concurrency slot
 	if e.sem != nil {
 		select {
 		case e.sem <- struct{}{}:
 			defer func() { <-e.sem }()
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		}
+	}
+	if ns := namespaceFrom(ctx); ns != "" {
+		if slot := e.nsSlot(ns); slot != nil {
+			select {
+			case slot <- struct{}{}:
+				defer func() { <-slot }()
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 	}
 

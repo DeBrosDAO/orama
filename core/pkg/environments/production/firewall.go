@@ -31,13 +31,12 @@ const (
 
 // FirewallConfig holds the configuration for UFW firewall rules
 type FirewallConfig struct {
-	SSHPort       int  // default 22
-	IsNameserver  bool // enables port 53 TCP+UDP
-	AnyoneORPort  int  // 0 = disabled, typically 9001
-	WireGuardPort int  // default 51820
-	TURNEnabled   bool // enables TURN relay ports (3478/udp+tcp, 5349/tcp, relay range)
-	TURNRelayStart int // start of TURN relay port range (default 49152)
-	TURNRelayEnd   int // end of TURN relay port range (default 65535)
+	SSHPort        int  // default 22
+	IsNameserver   bool // enables port 53 TCP+UDP
+	WireGuardPort  int  // default 51820
+	TURNEnabled    bool // enables TURN relay ports (3478/udp+tcp, 5349/tcp, relay range)
+	TURNRelayStart int  // start of TURN relay port range (default 49152)
+	TURNRelayEnd   int  // end of TURN relay port range (default 65535)
 }
 
 // FirewallProvisioner manages UFW firewall setup
@@ -96,7 +95,7 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 
 		// Public web services
 		"ufw allow 80/tcp",  // ACME / HTTP redirect
-		"ufw allow 443/tcp", // HTTPS (Caddy → Gateway)
+		"ufw allow 443/tcp", // HTTPS (SNI router when installed; otherwise Caddy)
 	}
 
 	// DNS (only for nameserver nodes)
@@ -105,16 +104,11 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 		rules = append(rules, "ufw allow 53/udp")
 	}
 
-	// Anyone relay ORPort
-	if fp.config.AnyoneORPort > 0 {
-		rules = append(rules, fmt.Sprintf("ufw allow %d/tcp", fp.config.AnyoneORPort))
-	}
-
 	// TURN relay (only for nodes running TURN servers)
 	if fp.config.TURNEnabled {
-		rules = append(rules, "ufw allow 3478/udp")  // TURN standard port (UDP)
-		rules = append(rules, "ufw allow 3478/tcp")  // TURN standard port (TCP fallback)
-		rules = append(rules, "ufw allow 5349/tcp")  // TURNS (TURN over TLS/TCP)
+		rules = append(rules, "ufw allow 3478/udp") // TURN standard port (UDP)
+		rules = append(rules, "ufw allow 3478/tcp") // TURN standard port (TCP fallback)
+		rules = append(rules, "ufw allow 5349/tcp") // TURNS (TURN over TLS/TCP)
 		if fp.config.TURNRelayStart > 0 && fp.config.TURNRelayEnd > 0 {
 			rules = append(rules, fmt.Sprintf("ufw allow %d:%d/udp", fp.config.TURNRelayStart, fp.config.TURNRelayEnd))
 		}
@@ -162,6 +156,9 @@ func (fp *FirewallProvisioner) Setup() error {
 	if err := fp.persistIPv6Disable(); err != nil {
 		return fmt.Errorf("failed to persist IPv6 disable: %w", err)
 	}
+	if err := fp.persistRAMHygiene(); err != nil {
+		return fmt.Errorf("failed to persist RAM hygiene: %w", err)
+	}
 
 	return nil
 }
@@ -173,6 +170,32 @@ func (fp *FirewallProvisioner) persistIPv6Disable() error {
 	cmd.Stdin = strings.NewReader(content)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to write sysctl config: %w\n%s", err, string(output))
+	}
+	return nil
+}
+
+// persistRAMHygiene turns off swap, disables suid core dumps, and stops
+// systemd-coredump from writing crash images to disk (bugboard #233).
+func (fp *FirewallProvisioner) persistRAMHygiene() error {
+	_ = exec.Command("swapoff", "-a").Run()
+	_ = exec.Command("systemctl", "mask", "swap.target").Run()
+
+	sysctl := "# Orama: keep secret-bearing pages off the block device\nfs.suid_dumpable = 0\n"
+	cmd := exec.Command("tee", "/etc/sysctl.d/99-orama-ram-hygiene.conf")
+	cmd.Stdin = strings.NewReader(sysctl)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to write ram-hygiene sysctl: %w\n%s", err, string(output))
+	}
+	_ = exec.Command("sysctl", "--system").Run()
+
+	if err := exec.Command("mkdir", "-p", "/etc/systemd/coredump.conf.d").Run(); err != nil {
+		return fmt.Errorf("mkdir coredump.conf.d: %w", err)
+	}
+	coredump := "[Coredump]\nStorage=none\nProcessSizeMax=0\n"
+	cmd = exec.Command("tee", "/etc/systemd/coredump.conf.d/orama.conf")
+	cmd.Stdin = strings.NewReader(coredump)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to write coredump.conf: %w\n%s", err, string(output))
 	}
 	return nil
 }

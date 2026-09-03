@@ -98,8 +98,17 @@ core/plans/
 # Claude Code local settings (machine-specific allowlists — never commit)
 .claude/settings.local.json
 
+# TypeScript incremental build artifact
+website/tsconfig.tsbuildinfo
+
 # Go build artifacts left in core/ by `go build ./cmd/...`
 core/turn
 core/sfu
 core/gateway
 core/identity
+
+# Local git worktrees (one per branch under .tree/<name>)
+.tree/
+
+# Scratch plans kept outside core/plans
+plans/

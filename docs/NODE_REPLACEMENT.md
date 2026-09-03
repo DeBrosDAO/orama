@@ -37,7 +37,7 @@ Inventory file: `core/scripts/nodes.conf`
 ```
                     ┌─────────────────────────────────────┐
   Public clients ──►│  Caddy :443  →  platform gateway     │  (each nameserver)
-                    │  reverse_proxy → localhost:6001     │
+                    │  reverse_proxy → localhost:10104     │
                     └──────────────┬──────────────────────┘
                                    │ proxies to
                                    ▼
@@ -46,7 +46,7 @@ Inventory file: `core/scripts/nodes.conf`
                     │  Namespace RQLite / Olric / SFU     │  ← separate Raft/cluster
                     └─────────────────────────────────────┘
 
-  Platform RQLite (port 5001 / raft 7001) = cluster membership, DNS DB, routing
+  Platform RQLite (port 10100 / raft 10101) = cluster membership, DNS DB, routing
   Namespace RQLite (e.g. 10000/10001)     = that namespace's app data
 ```
 
@@ -72,8 +72,8 @@ Replacing a **nameserver VPS** touches:
 cat core/scripts/nodes.conf | grep '^devnet\|^testnet'
 
 # Live Raft (run on any healthy node)
-curl -sS http://127.0.0.1:5001/nodes | python3 -m json.tool
-curl -sS http://127.0.0.1:5001/status | python3 -c \
+curl -sS http://127.0.0.1:10100/nodes | python3 -m json.tool
+curl -sS http://127.0.0.1:10100/status | python3 -c \
   "import sys,json; r=json.load(sys.stdin)['store']['raft']; print(r.get('state'), r.get('num_peers'))"
 ```
 
@@ -179,7 +179,7 @@ sudo orama node install \
 Notes:
 
 - Prefer **`http://<hub-ip>`** if DNS/TLS is flaky during cutover (docs allow this).
-- Never join via `:6001` (blocked by UFW).
+- Never join via `:10104` (blocked by UFW).
 - Installer may warn that the base domain does not yet resolve to the new IP — expected until DNS update.
 - Assigned WG IP example: `10.0.0.17`.
 
@@ -188,14 +188,14 @@ Notes:
 On **leader**:
 
 ```bash
-curl -sS http://127.0.0.1:5001/nodes | python3 -m json.tool
+curl -sS http://127.0.0.1:10100/nodes | python3 -m json.tool
 # NEW wg address must show: voter true, reachable true
 ```
 
 On **new node**:
 
 ```bash
-curl -sS http://127.0.0.1:5001/status | python3 -c "
+curl -sS http://127.0.0.1:10100/status | python3 -c "
 import sys,json
 r=json.load(sys.stdin)['store']['raft']
 print('state', r.get('state'), 'voter', r.get('voter'),
@@ -210,7 +210,7 @@ Also:
 # From leader
 ping -c 2 10.0.0.<new>
 systemctl is-active orama-node coredns caddy
-curl -sS http://127.0.0.1:6001/health   # or /v1/health
+curl -sS http://127.0.0.1:10104/health   # or /v1/health
 ```
 
 **Do not continue until the new node is a healthy platform voter with a non-zero applied index.** First minutes often show `voter: false` / empty `/nodes` while snapshotting — wait (can take several minutes on large DBs).
@@ -231,7 +231,7 @@ AUTH="orama:$PASS"
 ### B1. Inspect current NS / apex records
 
 ```bash
-curl -sS -u "$AUTH" -G 'http://127.0.0.1:5001/db/query' \
+curl -sS -u "$AUTH" -G 'http://127.0.0.1:10100/db/query' \
   --data-urlencode "q=SELECT id,fqdn,value,is_active FROM dns_records WHERE fqdn IN (
     'ns1.orama-devnet.network.','ns2.orama-devnet.network.','ns3.orama-devnet.network.',
     'orama-devnet.network.','*.orama-devnet.network.'
@@ -243,7 +243,7 @@ curl -sS -u "$AUTH" -G 'http://127.0.0.1:5001/db/query' \
 Also:
 
 ```bash
-curl -sS -u "$AUTH" -G 'http://127.0.0.1:5001/db/query' \
+curl -sS -u "$AUTH" -G 'http://127.0.0.1:10100/db/query' \
   --data-urlencode "q=SELECT * FROM dns_nameservers"
 ```
 
@@ -276,7 +276,7 @@ UPDATE dns_nameservers
 Execute via:
 
 ```bash
-curl -sS -u "$AUTH" -X POST 'http://127.0.0.1:5001/db/execute?pretty' \
+curl -sS -u "$AUTH" -X POST 'http://127.0.0.1:10100/db/execute?pretty' \
   -H 'Content-Type: application/json' \
   -d '["<SQL>"]'
 ```
@@ -389,7 +389,7 @@ UPDATE namespace_cluster_nodes
 
 ### Required: IPFS function-WASM backfill (bugboard #167)
 
-**Why:** Namespace gateways load function code with `POST http://localhost:4501/api/v0/cat?arg=<wasm_cid>`. Metadata (function name → CID) is in **namespace RQLite** and is fine after replace. The **bytes** are in **Kubo**. A replaced VPS has a nearly empty repo (`repo/stat` shows tens of objects vs thousands on old peers). The first invoke of each function on that node (or any cold peer after restart) can hang until the IPFS deadline (**~15s** → function 100% errors). The same IPFS layer hanging on **`add`** surfaces as **`orama function deploy` 504** (proxy budget 30s) while other invokes still succeed.
+**Why:** Namespace gateways load function code with `POST http://localhost:10107/api/v0/cat?arg=<wasm_cid>`. Metadata (function name → CID) is in **namespace RQLite** and is fine after replace. The **bytes** are in **Kubo**. A replaced VPS has a nearly empty repo (`repo/stat` shows tens of objects vs thousands on old peers). The first invoke of each function on that node (or any cold peer after restart) can hang until the IPFS deadline (**~15s** → function 100% errors). The same IPFS layer hanging on **`add`** surfaces as **`orama function deploy` 504** (proxy budget 30s) while other invokes still succeed.
 
 Gateway `/v1/health` `ipfs: ok` only means the daemon answers — **not** that every registered WASM is local.
 
@@ -407,24 +407,24 @@ curl -sS -G 'http://127.0.0.1:10000/db/query?level=none' \
 #    Local pin (bitswap from peers that already hold the blocks) — this is the critical step.
 while IFS= read -r cid; do
   [ -z "$cid" ] && continue
-  curl -sS -m 180 -X POST "http://127.0.0.1:4501/api/v0/pin/add?arg=${cid}&recursive=true" >/dev/null \
+  curl -sS -m 180 -X POST "http://127.0.0.1:10107/api/v0/pin/add?arg=${cid}&recursive=true" >/dev/null \
     || echo "FAIL $cid"
 done < /tmp/cids.txt
 
 # Optional: also ask cluster to pin everywhere (RF=-1). Useful but not sufficient alone
 # if a peer stays "unpinned" in peer_map — still do local pin/add above.
-# curl -sS -X POST "http://127.0.0.1:9094/pins/${cid}?replication-factor-min=-1&replication-factor-max=-1"
+# curl -sS -X POST "http://127.0.0.1:10108/pins/${cid}?replication-factor-min=-1&replication-factor-max=-1"
 
 # 3) Verify on EACH node (including the new one)
-curl -sS -X POST http://127.0.0.1:4501/api/v0/repo/stat   # new node repo size should jump (MB→100s MB)
+curl -sS -X POST http://127.0.0.1:10107/api/v0/repo/stat   # new node repo size should jump (MB→100s MB)
 # Hot CID from a real function (example from #167):
 curl -sS -m 20 -o /dev/null -w "%{http_code} %{size_download} %{time_total}\n" \
-  -X POST "http://127.0.0.1:4501/api/v0/cat?arg=<HOT_WASM_CID>"
+  -X POST "http://127.0.0.1:10107/api/v0/cat?arg=<HOT_WASM_CID>"
 # Expect http=200, size ~1MB+, time well under 1s after backfill.
 
 # 4) Upload path smoke test (same size class as AnChat deploys)
 dd if=/dev/urandom of=/tmp/big.bin bs=1024 count=1200 status=none
-curl -sS -m 60 -X POST -F file=@/tmp/big.bin http://127.0.0.1:4501/api/v0/add
+curl -sS -m 60 -X POST -F file=@/tmp/big.bin http://127.0.0.1:10107/api/v0/add
 ```
 
 **Done for IPFS only when:**
@@ -461,15 +461,15 @@ PASS=$(sudo cat /opt/orama/.orama/secrets/rqlite-password)
 AUTH="orama:$PASS"
 
 # Confirm 4 voters, all reachable
-curl -sS -u "$AUTH" http://127.0.0.1:5001/nodes | python3 -m json.tool
+curl -sS -u "$AUTH" http://127.0.0.1:10100/nodes | python3 -m json.tool
 
-# Remove old WG raft id, e.g. 10.0.0.6:7001
-curl -sS -u "$AUTH" -X DELETE http://127.0.0.1:5001/remove \
+# Remove old WG raft id, e.g. 10.0.0.6:10101
+curl -sS -u "$AUTH" -X DELETE http://127.0.0.1:10100/remove \
   -H 'Content-Type: application/json' \
-  -d '{"id":"10.0.0.6:7001"}'
+  -d '{"id":"10.0.0.6:10101"}'
 
 sleep 3
-curl -sS -u "$AUTH" http://127.0.0.1:5001/nodes | python3 -m json.tool
+curl -sS -u "$AUTH" http://127.0.0.1:10100/nodes | python3 -m json.tool
 # expect exactly 3 voters, all reachable; leader still elected
 ```
 
@@ -504,7 +504,7 @@ Optional: repurpose the cleaned box (e.g. new `jarvis` operator host).
 
 ```bash
 # Platform Raft = 3
-curl -sS http://127.0.0.1:5001/nodes   # 3 voters, all reachable
+curl -sS http://127.0.0.1:10100/nodes   # 3 voters, all reachable
 
 # Platform public
 curl -sS https://orama-<env>.network/v1/health

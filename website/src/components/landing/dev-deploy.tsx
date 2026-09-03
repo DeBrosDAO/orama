@@ -26,8 +26,8 @@ const deployTabs: DeployTab[] = [
     lines: [
       { prefix: "$", text: "orama deploy static ./dist --name my-app" },
       { prefix: "\u2192", text: "Uploading to IPFS... done" },
-      { prefix: "\u2192", text: "Pinned to 3 nodes" },
-      { prefix: "\u2713", text: "Live at https://my-app.orama.network" },
+      { prefix: "\u2192", text: "Pinned across the cluster" },
+      { prefix: "\u2713", text: "Live at https://my-app-f3o4if.orama-devnet.network" },
     ],
   },
   {
@@ -36,8 +36,8 @@ const deployTabs: DeployTab[] = [
     lines: [
       { prefix: "$", text: "orama deploy nextjs . --name my-next --ssr" },
       { prefix: "\u2192", text: "Building standalone output..." },
-      { prefix: "\u2192", text: "Deploying to 3 nodes" },
-      { prefix: "\u2713", text: "SSR running at https://my-next.orama.network" },
+      { prefix: "\u2192", text: "Deploying across the cluster" },
+      { prefix: "\u2713", text: "SSR running at https://my-next-k8x2mq.orama-devnet.network" },
     ],
   },
   {
@@ -47,7 +47,7 @@ const deployTabs: DeployTab[] = [
       { prefix: "$", text: "orama deploy go ./cmd/api --name my-api" },
       { prefix: "\u2192", text: "Cross-compiling linux/amd64..." },
       { prefix: "\u2192", text: "Health check /health verified" },
-      { prefix: "\u2713", text: "API live at https://api.orama.network" },
+      { prefix: "\u2713", text: "API live at https://my-api-q7v1ns.orama-devnet.network" },
     ],
   },
   {
@@ -56,8 +56,8 @@ const deployTabs: DeployTab[] = [
     lines: [
       { prefix: "$", text: "orama deploy nodejs . --name my-server" },
       { prefix: "\u2192", text: "Detecting start command..." },
-      { prefix: "\u2192", text: "Deploying to 3 nodes" },
-      { prefix: "\u2713", text: "Server running at https://srv.orama.network" },
+      { prefix: "\u2192", text: "Deploying across the cluster" },
+      { prefix: "\u2713", text: "Server running at https://my-server-b3d8pe.orama-devnet.network" },
     ],
   },
   {
@@ -78,7 +78,10 @@ export function DevDeploy() {
       <Section id="deploy">
         <AnimateIn>
         <div className="flex flex-col gap-8">
-          <SectionHeader title="Deploy anything. One command." />
+          <SectionHeader
+              title="Ship it with one command."
+              subtitle="Point the CLI at a build directory or a repo. It uploads, places the app across the cluster, and hands you back a URL."
+            />
 
           <div className="flex flex-wrap items-center gap-8">
             {[
@@ -89,16 +92,16 @@ export function DevDeploy() {
               { Logo: WasmLogo, name: "WASM" },
             ].map(({ Logo, name }) => (
               <div key={name} className="flex flex-col items-center gap-2">
-                <Logo className="w-8 h-8 text-muted" />
+                <Logo className="w-8 h-8 text-muted" aria-hidden="true" />
                 <span className="text-xs font-mono text-muted">{name}</span>
               </div>
             ))}
           </div>
 
           <p className="text-muted text-base leading-relaxed max-w-2xl">
-            Static sites, Next.js with SSR, Go APIs, Node.js servers, WASM
-            functions. Deploy from your terminal. No infrastructure to manage. No
-            YAML to write.
+            Static sites, Next.js with SSR, Go APIs, Node.js servers and WASM
+            functions — from your terminal. No dashboard to click through, no
+            YAML to write, no region to pick.
           </p>
 
           <Tabs defaultValue="static">
@@ -118,8 +121,9 @@ export function DevDeploy() {
           </Tabs>
 
           <p className="text-sm text-muted font-mono">
-            Every deploy lands on distributed nodes. Automatic TLS. Health
-            checks. Custom domains. Zero downtime.
+            Every deploy lands on the node mesh, gets a subdomain with
+            automatic TLS, and is health-checked before it serves traffic.
+            Custom domains are one CLI call away.
           </p>
         </div>
         </AnimateIn>

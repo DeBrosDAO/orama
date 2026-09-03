@@ -71,7 +71,7 @@ func rqliteExport(cmd *cobra.Command, args []string) error {
 	client := &http.Client{
 		Timeout: 0,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 
@@ -167,7 +167,7 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 	client := &http.Client{
 		Timeout: 0,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 

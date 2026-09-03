@@ -15,19 +15,21 @@ func collectVault() *VaultReport {
 	r := &VaultReport{}
 
 	// 1. Service active
-	if out, err := runCmd(ctx, "systemctl", "is-active", "orama-vault"); err == nil {
+	if out, err := runCmd(ctx, "systemctl", "is-active", "orama-namespace-vault@index"); err == nil && strings.TrimSpace(out) == "active" {
+		r.ServiceActive = true
+	} else if out, err := runCmd(ctx, "systemctl", "is-active", "orama-vault"); err == nil {
 		r.ServiceActive = strings.TrimSpace(out) == "active"
 	}
 
 	// 2. Restart count
-	if out, err := runCmd(ctx, "systemctl", "show", "orama-vault", "--property=NRestarts"); err == nil {
+	if out, err := runCmd(ctx, "systemctl", "show", "orama-namespace-vault@index", "--property=NRestarts"); err == nil {
 		if parts := strings.SplitN(out, "=", 2); len(parts) == 2 {
 			r.RestartCount, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
 		}
 	}
 
 	// 3. Process memory
-	if out, err := runCmd(ctx, "systemctl", "show", "orama-vault", "--property=MemoryCurrent"); err == nil {
+	if out, err := runCmd(ctx, "systemctl", "show", "orama-namespace-vault@index", "--property=MemoryCurrent"); err == nil {
 		if parts := strings.SplitN(out, "=", 2); len(parts) == 2 {
 			r.ProcessMemMB = parseMemoryMB(parts[1])
 		}
@@ -35,7 +37,7 @@ func collectVault() *VaultReport {
 
 	// 4. Log errors in last hour
 	if out, err := runCmd(ctx, "bash", "-c",
-		`journalctl -u orama-vault --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE "(error|ERR)" || echo 0`); err == nil {
+		`journalctl -u orama-namespace-vault@index -u orama-vault --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE "(error|ERR)" || echo 0`); err == nil {
 		r.LogErrors, _ = strconv.Atoi(strings.TrimSpace(out))
 	}
 

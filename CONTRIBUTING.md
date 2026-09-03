@@ -6,7 +6,7 @@ Thanks for helping improve the network! This monorepo contains multiple projects
 
 | Package | Language | Build |
 |---------|----------|-------|
-| `core/` | Go 1.24+ | `make core-build` |
+| `core/` | Go 1.26.7+ | `make core-build` |
 | `website/` | TypeScript (pnpm) | `make website-build` |
 | `vault/` | Zig 0.14+ | `make vault-build` |
 | `os/` | Go + Buildroot | `make os-build` |

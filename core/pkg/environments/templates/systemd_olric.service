@@ -14,7 +14,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths={{.OramaDir}}
+ProtectProc=invisible
+ReadWritePaths={{.OramaDir}}/configs/olric {{.OramaDir}}/logs
+InaccessiblePaths={{.OramaDir}}/secrets
 Environment=HOME={{.HomeDir}}
 Environment=OLRIC_SERVER_CONFIG={{.ConfigPath}}
 ExecStart=/usr/local/bin/olric-server

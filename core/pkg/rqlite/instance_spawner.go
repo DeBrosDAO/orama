@@ -32,6 +32,7 @@ type InstanceConfig struct {
 	DataDir        string   // Data directory for this instance
 	IsLeader       bool     // Whether this is the first node (creates cluster)
 	AuthFile       string   // Path to RQLite auth JSON file. Empty = no auth enforcement.
+	ExtraArgs      string   // Extra rqlited flags (raft timeouts). Empty for tenants.
 	// FreshStart marks this as the first start of a BRAND-NEW cluster, as
 	// opposed to a restart/restore of an existing one. Bugboard #281: a
 	// namespace delete that failed to remove the data directory left raft state

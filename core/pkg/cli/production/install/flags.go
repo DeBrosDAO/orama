@@ -8,12 +8,12 @@ import (
 
 // Flags represents install command flags
 type Flags struct {
-	VpsIP      string
-	Domain     string
-	BaseDomain string // Base domain for deployment routing (e.g., "dbrs.space")
-	Force      bool
-	DryRun     bool
-	SkipChecks bool
+	VpsIP         string
+	Domain        string
+	BaseDomain    string // Base domain for deployment routing (e.g., "dbrs.space")
+	Force         bool
+	DryRun        bool
+	SkipChecks    bool
 	Nameserver    bool   // Make this node a nameserver (runs CoreDNS + Caddy)
 	JoinAddress   string // HTTPS URL of existing node (e.g., https://node1.dbrs.space)
 	Token         string // Invite token for joining (from orama invite)
@@ -28,21 +28,11 @@ type Flags struct {
 	IPFSClusterAddrs  string
 
 	// Security flags
-	SkipFirewall    bool   // Skip UFW firewall setup (for users who manage their own firewall)
-	CAFingerprint   string // SHA-256 fingerprint of server TLS cert for TOFU verification
+	SkipFirewall  bool   // Skip UFW firewall setup (for users who manage their own firewall)
+	CAFingerprint string // SHA-256 fingerprint of server TLS cert for TOFU verification
 
 	// Anyone flags
-	AnyoneClient     bool   // Run Anyone as client-only (SOCKS5 proxy on port 9050, no relay)
-	AnyoneRelay      bool   // Run as relay operator instead of client
-	AnyoneExit       bool   // Run as exit relay (legal implications)
-	AnyoneMigrate    bool   // Migrate existing Anyone installation
-	AnyoneNickname   string // Relay nickname (1-19 alphanumeric)
-	AnyoneContact    string // Contact info (email or @telegram)
-	AnyoneWallet     string // Ethereum wallet for rewards
-	AnyoneORPort     int    // ORPort for relay (default 9001)
-	AnyoneFamily     string // Comma-separated fingerprints of other relays you operate
-	AnyoneBandwidth  int    // Percentage of VPS bandwidth for relay (default: 30, 0=unlimited)
-	AnyoneAccounting int    // Monthly data cap for relay in GB (0=unlimited)
+	AnyoneClient bool // Run Anyone as client-only (SOCKS5 proxy on port 9050, no relay)
 
 	// Operator metadata (set by orama node setup, written to node.yaml for registration)
 	SSHUser        string // SSH user for remote management
@@ -84,16 +74,6 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	// Anyone flags
 	fs.BoolVar(&flags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")
-	fs.BoolVar(&flags.AnyoneRelay, "anyone-relay", false, "Run as Anyone relay operator (earn rewards)")
-	fs.BoolVar(&flags.AnyoneExit, "anyone-exit", false, "Run as exit relay (requires --anyone-relay, legal implications)")
-	fs.BoolVar(&flags.AnyoneMigrate, "anyone-migrate", false, "Migrate existing Anyone installation into Orama Network")
-	fs.StringVar(&flags.AnyoneNickname, "anyone-nickname", "", "Relay nickname (1-19 alphanumeric chars)")
-	fs.StringVar(&flags.AnyoneContact, "anyone-contact", "", "Contact info (email or @telegram)")
-	fs.StringVar(&flags.AnyoneWallet, "anyone-wallet", "", "Ethereum wallet address for rewards")
-	fs.IntVar(&flags.AnyoneORPort, "anyone-orport", 9001, "ORPort for relay (default 9001)")
-	fs.StringVar(&flags.AnyoneFamily, "anyone-family", "", "Comma-separated fingerprints of other relays you operate")
-	fs.IntVar(&flags.AnyoneBandwidth, "anyone-bandwidth", 30, "Limit relay to N% of VPS bandwidth (0=unlimited, runs speedtest)")
-	fs.IntVar(&flags.AnyoneAccounting, "anyone-accounting", 0, "Monthly data cap for relay in GB (0=unlimited)")
 
 	// Operator metadata (set by orama node setup)
 	fs.StringVar(&flags.SSHUser, "ssh-user", "", "SSH user for remote management")

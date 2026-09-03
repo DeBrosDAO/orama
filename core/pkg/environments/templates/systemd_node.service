@@ -15,6 +15,7 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
+ProtectProc=invisible
 ReadWritePaths={{.OramaDir}}
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}

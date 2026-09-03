@@ -58,16 +58,6 @@ func TestFirewallProvisioner_GenerateRules_Nameserver(t *testing.T) {
 	assertContainsRule(t, rules, "ufw allow 53/udp")
 }
 
-func TestFirewallProvisioner_GenerateRules_WithAnyoneRelay(t *testing.T) {
-	fp := NewFirewallProvisioner(FirewallConfig{
-		AnyoneORPort: 9001,
-	})
-
-	rules := fp.GenerateRules()
-
-	assertContainsRule(t, rules, "ufw allow 9001/tcp")
-}
-
 func TestFirewallProvisioner_GenerateRules_CustomSSHPort(t *testing.T) {
 	fp := NewFirewallProvisioner(FirewallConfig{
 		SSHPort: 2222,
@@ -97,7 +87,6 @@ func TestFirewallProvisioner_GenerateRules_FullConfig(t *testing.T) {
 	fp := NewFirewallProvisioner(FirewallConfig{
 		SSHPort:       2222,
 		IsNameserver:  true,
-		AnyoneORPort:  9001,
 		WireGuardPort: 51821,
 	})
 
@@ -107,7 +96,6 @@ func TestFirewallProvisioner_GenerateRules_FullConfig(t *testing.T) {
 	assertContainsRule(t, rules, "ufw allow 51821/udp")
 	assertContainsRule(t, rules, "ufw allow 53/tcp")
 	assertContainsRule(t, rules, "ufw allow 53/udp")
-	assertContainsRule(t, rules, "ufw allow 9001/tcp")
 }
 
 func TestFirewallProvisioner_GenerateRules_WithTURN(t *testing.T) {

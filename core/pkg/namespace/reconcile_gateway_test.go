@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway"
@@ -91,60 +92,144 @@ func TestGatewayWebRTCInSync_bothDisabled_returnsTrue(t *testing.T) {
 	}
 }
 
-// Bugboard #837 follow-up (drift on the secrets encryption key) —
-// gatewayConfigInSync extends the bug-25 WebRTC drift check with the
-// serverless secrets key. A namespace gateway spawned before the key was
-// plumbed has an empty on-disk key; once the desired key is non-empty we
-// want a rewrite+restart so secrets management turns on. But both-empty must
-// stay a no-op so non-secrets hosts don't restart-loop.
+func cfgInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig, hmac string) bool {
+	return gatewayConfigInSync(onDisk, cfg, hmac, "")
+}
 
 func TestGatewayConfigInSync_secretsKeyMissingOnDisk_returnsFalse(t *testing.T) {
-	// On-disk YAML has no secrets key (pre-#837 gateway), desired has one.
-	// MUST drift so ReconcileGateway rewrites + restarts to enable secrets.
-	onDisk := gateway.GatewayYAMLConfig{} // empty secrets_encryption_key
-	desired := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
-	if gatewayConfigInSync(onDisk, desired) {
+	cfg := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
+	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk.SecretsEncryptionKey = ""
+	if cfgInSync(onDisk, cfg, "") {
 		t.Fatal("empty on-disk secrets key vs non-empty desired must be out-of-sync (needs restart to enable secrets)")
 	}
 }
 
 func TestGatewayConfigInSync_secretsKeyMatches_returnsTrue(t *testing.T) {
-	// After a reconcile, on-disk key matches desired. MUST be in-sync so the
-	// next boot does not restart again (no loop).
-	onDisk := gateway.GatewayYAMLConfig{SecretsEncryptionKey: "the-key"}
-	desired := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
-	if !gatewayConfigInSync(onDisk, desired) {
+	cfg := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
+	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	if !cfgInSync(onDisk, cfg, "") {
 		t.Error("matching secrets key must be in-sync (no restart) — else restart loop on every boot")
 	}
 }
 
 func TestGatewayConfigInSync_bothSecretsKeysEmpty_returnsTrue(t *testing.T) {
-	// A host with no secrets key (empty desired) and an on-disk config also
-	// without one MUST be in-sync — otherwise every boot would restart a
-	// namespace gateway that legitimately has no secrets key.
-	if !gatewayConfigInSync(gateway.GatewayYAMLConfig{}, gateway.InstanceConfig{}) {
+	cfg := gateway.InstanceConfig{}
+	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	if !cfgInSync(onDisk, cfg, "") {
 		t.Error("empty on-disk + empty desired secrets key must be in-sync (no restart loop)")
 	}
 }
 
 func TestGatewayConfigInSync_secretsKeyRotated_returnsFalse(t *testing.T) {
-	// A rotated key (both non-empty but different) must drift so the rewrite
-	// propagates the new key.
-	onDisk := gateway.GatewayYAMLConfig{SecretsEncryptionKey: "old-key"}
-	desired := gateway.InstanceConfig{SecretsEncryptionKey: "new-key"}
-	if gatewayConfigInSync(onDisk, desired) {
+	cfg := gateway.InstanceConfig{SecretsEncryptionKey: "new-key"}
+	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk.SecretsEncryptionKey = "old-key"
+	if cfgInSync(onDisk, cfg, "") {
 		t.Error("rotated secrets key (old != new) must be out-of-sync")
 	}
 }
 
 func TestGatewayConfigInSync_webrtcDriftStillDetected(t *testing.T) {
-	// The combined check must not lose the bug-25 WebRTC surface: WebRTC
-	// drift with matching (empty) secrets keys must still report out-of-sync.
-	onDisk := gateway.GatewayYAMLConfig{WebRTC: gateway.GatewayYAMLWebRTC{}}
-	desired := gateway.InstanceConfig{WebRTCEnabled: true, SFUPort: 30000}
-	if gatewayConfigInSync(onDisk, desired) {
+	cfg := gateway.InstanceConfig{WebRTCEnabled: true, SFUPort: 30000}
+	onDisk := gatewayYAMLFromInstance(gateway.InstanceConfig{}, "", "")
+	if cfgInSync(onDisk, cfg, "") {
 		t.Error("WebRTC drift must still be detected by the combined in-sync check")
 	}
+}
+
+func TestGatewayConfigInSync_hmacSecretMissingOnDisk_returnsFalse(t *testing.T) {
+	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
+	onDisk := gatewayYAMLFromInstance(cfg, "the-hmac", "")
+	onDisk.APIKeyHMACSecret = ""
+	if cfgInSync(onDisk, cfg, "the-hmac") {
+		t.Fatal("empty on-disk HMAC secret vs non-empty desired must be out-of-sync (bugboard #165)")
+	}
+}
+
+func TestGatewayConfigInSync_hmacSecretMatches_returnsTrue(t *testing.T) {
+	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
+	onDisk := gatewayYAMLFromInstance(cfg, "the-hmac", "")
+	if !cfgInSync(onDisk, cfg, "the-hmac") {
+		t.Error("matching HMAC secret must be in-sync (no restart loop)")
+	}
+}
+
+func TestGatewayConfigInSync_bothHmacSecretsEmpty_returnsTrue(t *testing.T) {
+	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
+	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	if !cfgInSync(onDisk, cfg, "") {
+		t.Error("empty on-disk + empty desired HMAC must be in-sync")
+	}
+}
+
+func TestGatewayConfigInSync_hmacSecretRotated_returnsFalse(t *testing.T) {
+	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
+	onDisk := gatewayYAMLFromInstance(cfg, "new-hmac", "")
+	onDisk.APIKeyHMACSecret = "old-hmac"
+	if cfgInSync(onDisk, cfg, "new-hmac") {
+		t.Error("rotated HMAC secret must be out-of-sync")
+	}
+}
+
+func TestGatewayYAMLEqual_anyFieldChangeIsDrift(t *testing.T) {
+	// Exhaustive-by-construction (bugboard #165): mutating any exported
+	// GatewayYAMLConfig / GatewayYAMLWebRTC field must make equality fail.
+	// A newly added YAML field that is not compared will fail this test.
+	base := gatewayYAMLFromInstance(gateway.InstanceConfig{
+		Namespace:            "ns",
+		HTTPPort:             6101,
+		SecretsEncryptionKey: "k",
+	}, "hmac", "/cluster-secret")
+	if !gatewayYAMLEqual(base, base) {
+		t.Fatal("a config must equal itself")
+	}
+
+	checkStruct := func(prefix string, sample any) {
+		t.Helper()
+		typ := reflect.TypeOf(sample)
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			t.Run(prefix+f.Name, func(t *testing.T) {
+				mutated := base
+				mv := reflect.ValueOf(&mutated).Elem()
+				var fv reflect.Value
+				if prefix == "WebRTC." {
+					fv = mv.FieldByName("WebRTC").FieldByName(f.Name)
+				} else {
+					fv = mv.FieldByName(f.Name)
+				}
+				if !fv.IsValid() || !fv.CanSet() {
+					t.Fatalf("cannot set %s%s", prefix, f.Name)
+				}
+				switch fv.Kind() {
+				case reflect.String:
+					fv.SetString(fv.String() + "-mutated")
+				case reflect.Bool:
+					fv.SetBool(!fv.Bool())
+				case reflect.Int:
+					fv.SetInt(fv.Int() + 1)
+				case reflect.Slice:
+					fv.Set(reflect.ValueOf([]string{"mutated"}))
+				case reflect.Struct:
+					if prefix == "" && f.Name == "WebRTC" {
+						t.Skip("nested WebRTC fields covered separately")
+					}
+					t.Fatalf("unhandled struct %s%s — add nested coverage", prefix, f.Name)
+				default:
+					t.Fatalf("unhandled kind %s for %s%s", fv.Kind(), prefix, f.Name)
+				}
+				if gatewayYAMLEqual(base, mutated) {
+					t.Errorf("mutating %s%s was not detected — add it to gatewayYAMLEqual", prefix, f.Name)
+				}
+			})
+		}
+	}
+	checkStruct("", gateway.GatewayYAMLConfig{})
+	checkStruct("WebRTC.", gateway.GatewayYAMLWebRTC{})
 }
 
 // ReconcileGateway I/O paths that DON'T restart (the restart path needs
@@ -165,19 +250,30 @@ func writeGatewayConfig(t *testing.T, base, ns, nodeID string, wr gateway.Gatewa
 }
 
 func TestReconcileGateway_inSyncIsNoOpNoError(t *testing.T) {
-	base := t.TempDir()
+	root, nsBase := setupOramaDirs(t)
+	writeAPIKeyHMACSecret(t, root, "the-hmac-secret\n")
 	ns, node := "anchat-test", "node-1"
-	writeGatewayConfig(t, base, ns, node, gateway.GatewayYAMLWebRTC{
-		Enabled: true, SFUPort: 30000,
-		TURNDomain: "turn.ns-anchat-test.orama-devnet.network", TURNSecret: "the-secret",
-	})
-	s := NewSystemdSpawner(base, "", zap.NewNop())
+	s := NewSystemdSpawner(nsBase, "", zap.NewNop())
+	cfg := desiredEnabled()
+	cfg.Namespace = ns
 
-	// Desired == on-disk → must return nil WITHOUT attempting a restart
-	// (RestartGateway would error here since there's no real systemd, so
-	// a nil return proves we never reached it).
-	err := s.ReconcileGateway(context.Background(), ns, node, desiredEnabled())
+	hmac, err := s.readAPIKeyHMACSecret()
 	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(nsBase, ns, "configs")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := yaml.Marshal(gatewayYAMLFromInstance(cfg, hmac, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gateway-"+node+".yaml"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ReconcileGateway(context.Background(), ns, node, cfg); err != nil {
 		t.Errorf("in-sync config must be a clean no-op; got %v (did it try to restart?)", err)
 	}
 }

@@ -21,16 +21,25 @@ type Config struct {
 	// MaxConcurrentConns caps total in-flight connections to prevent
 	// resource exhaustion. 0 selects 10000.
 	MaxConcurrentConns int
+	// MaxConnsPerIP caps in-flight connections from one client IP.
+	// 0 selects 32.
+	MaxConnsPerIP int
+	// IdleTimeout is the read/write idle deadline during the copy.
+	// 0 selects 60 seconds.
+	IdleTimeout time.Duration
 }
 
 // Server is a TCP-level SNI router. Create via NewServer, then call
 // Serve(listener) in a goroutine. Close cancels in-flight connections.
 type Server struct {
-	router  *Router
-	cfg     Config
-	logger  *zap.Logger
+	router *Router
+	cfg    Config
+	logger *zap.Logger
 
-	gate   chan struct{}      // bounded semaphore for concurrent connections
+	gate   chan struct{} // bounded semaphore for concurrent connections
+	perIP  map[string]chan struct{}
+	perIPN int
+	mu     sync.Mutex
 	wg     sync.WaitGroup
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -50,15 +59,34 @@ func NewServer(router *Router, cfg Config, logger *zap.Logger) *Server {
 	if cfg.MaxConcurrentConns <= 0 {
 		cfg.MaxConcurrentConns = 10000
 	}
+	if cfg.MaxConnsPerIP <= 0 {
+		cfg.MaxConnsPerIP = 32
+	}
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = 60 * time.Second
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		router: router,
 		cfg:    cfg,
 		logger: logger.Named("sniproxy"),
 		gate:   make(chan struct{}, cfg.MaxConcurrentConns),
+		perIP:  make(map[string]chan struct{}),
+		perIPN: cfg.MaxConnsPerIP,
 		ctx:    ctx,
 		cancel: cancel,
 	}
+}
+
+func (s *Server) ipSlot(ip string) chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch := s.perIP[ip]
+	if ch == nil {
+		ch = make(chan struct{}, s.perIPN)
+		s.perIP[ip] = ch
+	}
+	return ch
 }
 
 // Serve accepts connections from ln until ln.Accept returns a permanent
@@ -89,12 +117,29 @@ func (s *Server) Serve(ln net.Listener) error {
 			conn.Close()
 			continue
 		}
+		ip, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+		if ip == "" {
+			ip = conn.RemoteAddr().String()
+		}
+		slot := s.ipSlot(ip)
+		select {
+		case slot <- struct{}{}:
+		default:
+			<-s.gate
+			s.logger.Warn("max connections per IP reached, dropping",
+				zap.Int("limit", s.perIPN),
+				zap.String("ip", ip),
+			)
+			conn.Close()
+			continue
+		}
 		s.wg.Add(1)
-		go func(c net.Conn) {
+		go func(c net.Conn, ipSlot chan struct{}) {
 			defer s.wg.Done()
 			defer func() { <-s.gate }()
+			defer func() { <-ipSlot }()
 			s.handle(c)
-		}(conn)
+		}(conn, slot)
 	}
 }
 
@@ -154,16 +199,19 @@ func (s *Server) handle(conn net.Conn) {
 		}
 	}
 
+	src := idleConn{Conn: conn, idle: s.cfg.IdleTimeout}
+	dst := idleConn{Conn: upstream, idle: s.cfg.IdleTimeout}
+
 	// Bidirectional copy. We close both connections when either side
 	// finishes OR when the server is shutting down, so handle() can't
 	// hang forever on a half-stuck peer.
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(upstream, conn)
+		_, _ = io.Copy(dst, src)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(conn, upstream)
+		_, _ = io.Copy(src, dst)
 		done <- struct{}{}
 	}()
 	select {
@@ -174,4 +222,25 @@ func (s *Server) handle(conn net.Conn) {
 	upstream.Close()
 	conn.Close()
 	<-done // drain the second goroutine
+}
+
+// idleConn resets the deadline on every Read/Write so a stalled peer
+// cannot hold a backend slot forever (bugboard #117).
+type idleConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+func (c idleConn) Read(p []byte) (int, error) {
+	if c.idle > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
+	}
+	return c.Conn.Read(p)
+}
+
+func (c idleConn) Write(p []byte) (int, error) {
+	if c.idle > 0 {
+		_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
+	}
+	return c.Conn.Write(p)
 }

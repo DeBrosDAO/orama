@@ -1,0 +1,28 @@
+[Unit]
+Description=Orama Namespace IPFS repo garbage collection (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=orama-namespace-ipfs@%i.service
+Requires=orama-namespace-ipfs@%i.service
+PartOf=orama-node.service
+
+[Service]
+Type=oneshot
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs
+InaccessiblePaths=/opt/orama/.orama/secrets
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs-gc.env
+Environment=HOME=/opt/orama
+ExecStart=/usr/local/bin/ipfs repo gc
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-ipfs-gc-%i

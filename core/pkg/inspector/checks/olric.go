@@ -36,10 +36,10 @@ func checkOlricPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	// 2.1 Service active
 	if ol.ServiceActive {
 		r = append(r, inspector.Pass("olric.service_active", "Olric service active", olricSub, node,
-			"orama-olric is active", inspector.Critical))
+			"orama-namespace-olric@index is active", inspector.Critical))
 	} else {
 		r = append(r, inspector.Fail("olric.service_active", "Olric service active", olricSub, node,
-			"orama-olric is not active", inspector.Critical))
+			"orama-namespace-olric@index is not active", inspector.Critical))
 		return r
 	}
 

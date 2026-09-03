@@ -76,7 +76,8 @@ func TestLookupAPIKeyEntry_HashedKeyHappyPath(t *testing.T) {
 	}
 }
 
-func TestLookupAPIKeyEntry_RawKeyFallback(t *testing.T) {
+func TestLookupAPIKeyEntry_RawKeyNoLongerAccepted(t *testing.T) {
+	// Bugboard #163: after the hash-in-place migrator, lookup is hashed-only.
 	g := hashingGatewayFixture(t)
 	const rawKey = "ak_legacy_unhashed"
 	hashed := g.authService.HashAPIKey(rawKey)
@@ -90,15 +91,9 @@ func TestLookupAPIKeyEntry_RawKeyFallback(t *testing.T) {
 		return &client.QueryResult{Count: 0}, nil
 	}}
 
-	ns, _, err := g.lookupAPIKeyEntry(context.Background(), rawKey, q)
-	if err != nil {
-		t.Fatalf("expected raw-key fallback to succeed, got error: %v", err)
-	}
-	if ns != "vrf708" {
-		t.Errorf("expected namespace vrf708, got %q", ns)
-	}
-	if q.calls != 2 {
-		t.Errorf("expected 2 queries (hashed miss, then raw-key fallback hit), got %d", q.calls)
+	_, _, err := g.lookupAPIKeyEntry(context.Background(), rawKey, q)
+	if err == nil {
+		t.Fatal("raw (unhashed) key must not authenticate after dual-lookup removal")
 	}
 }
 
@@ -111,8 +106,8 @@ func TestLookupAPIKeyEntry_RevokedKeyRejected(t *testing.T) {
 	// perspective. Assert the query text carries the filter and that a
 	// revoked key resolves to the same "invalid API key" outcome as no rows.
 	q := &fakeAPIKeyQuerier{queryFn: func(_ context.Context, sql string, _ ...interface{}) (*client.QueryResult, error) {
-		if !strings.Contains(sql, "revoked_at IS NULL") {
-			t.Errorf("expected query to filter revoked keys, got: %s", sql)
+		if strings.Contains(sql, "api_keys.scopes") && !strings.Contains(sql, "revoked_at IS NULL") {
+			t.Errorf("expected lookup query to filter revoked keys, got: %s", sql)
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}}

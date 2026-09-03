@@ -106,6 +106,7 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		TriggerType:      serverless.TriggerTypeHTTP,
 		CallerWallet:     callerWallet,
 		CallerIsAdmin:    h.getCallerIsAdminFromRequest(r),
+		CallerHasInvoke:  h.getCallerHasInvokeFromRequest(r),
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),

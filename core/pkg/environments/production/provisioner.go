@@ -48,6 +48,9 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(fp.oramaDir, "secrets"), 0700); err != nil {
+		return fmt.Errorf("failed to set secrets directory permissions: %w", err)
+	}
 
 	// Remove any stray cluster-secret file from root .orama directory
 	// The correct location is .orama/secrets/cluster-secret
@@ -100,12 +103,8 @@ func (fp *FilesystemProvisioner) EnsureOramaUser() error {
 			return fmt.Errorf("failed to chown %s: %w\n%s", fp.oramaDir, err, string(output))
 		}
 
-		binDir := filepath.Join(fp.oramaHome, "bin")
-		if _, err := os.Stat(binDir); err == nil {
-			chown = exec.Command("chown", "-R", "orama:orama", binDir)
-			if output, err := chown.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to chown %s: %w\n%s", binDir, err, string(output))
-			}
+		if err := lockOramaBinDir(filepath.Join(fp.oramaHome, "bin")); err != nil {
+			return err
 		}
 	}
 
@@ -124,6 +123,37 @@ func (fp *FilesystemProvisioner) EnsureOramaUser() error {
 		return err
 	}
 
+	return nil
+}
+
+// lockOramaBinDir makes bin/ root:orama 0750 so the orama user can execute
+// binaries but cannot replace them (bugboard #242).
+func lockOramaBinDir(binDir string) error {
+	if _, err := os.Stat(binDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", binDir, err)
+	}
+	if output, err := exec.Command("chown", "root:orama", binDir).CombinedOutput(); err != nil {
+		return fmt.Errorf("chown %s: %w\n%s", binDir, err, string(output))
+	}
+	if err := os.Chmod(binDir, 0o750); err != nil {
+		return fmt.Errorf("chmod %s: %w", binDir, err)
+	}
+	entries, err := os.ReadDir(binDir)
+	if err != nil {
+		return fmt.Errorf("readdir %s: %w", binDir, err)
+	}
+	for _, e := range entries {
+		p := filepath.Join(binDir, e.Name())
+		if output, err := exec.Command("chown", "root:orama", p).CombinedOutput(); err != nil {
+			return fmt.Errorf("chown %s: %w\n%s", p, err, string(output))
+		}
+		if err := os.Chmod(p, 0o750); err != nil {
+			return fmt.Errorf("chmod %s: %w", p, err)
+		}
+	}
 	return nil
 }
 

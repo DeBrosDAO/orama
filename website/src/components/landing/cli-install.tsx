@@ -4,45 +4,46 @@ import { Terminal } from "../ui/terminal";
 import { CrosshairDivider } from "../ui/crosshair-divider";
 import { AnimateIn } from "../ui/animate-in";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
+import { GITHUB_URL } from "../../data/navigation";
 
 export function CliInstall() {
   return (
     <>
-      <Section>
+      <Section id="install">
         <AnimateIn>
           <div className="flex flex-col gap-8">
             <SectionHeader
               title="Install the CLI"
-              subtitle="Get started in seconds. Available on macOS, Linux, and from source."
+              subtitle="One Go binary. Homebrew, a Debian package, or built from source."
             />
 
             <Tabs defaultValue="brew">
               <TabsList>
-                <TabsTrigger value="brew">macOS (Homebrew)</TabsTrigger>
-                <TabsTrigger value="apt">Linux (Debian/Ubuntu)</TabsTrigger>
-                <TabsTrigger value="source">From Source</TabsTrigger>
+                <TabsTrigger value="brew">Homebrew</TabsTrigger>
+                <TabsTrigger value="deb">Debian / Ubuntu</TabsTrigger>
+                <TabsTrigger value="source">From source</TabsTrigger>
               </TabsList>
 
               <TabsContent value="brew">
                 <Terminal
                   lines={[
-                    { prefix: "$", text: "brew install DeBrosOfficial/tap/orama" },
-                    { prefix: "\u2192", text: "Downloading orama..." },
-                    { prefix: "\u2713", text: "orama installed successfully" },
+                    { prefix: "$", text: "brew install DeBrosDAO/tap/orama" },
+                    { prefix: "✓", text: "orama installed" },
                     { text: "" },
-                    { prefix: "$", text: "orama --version" },
-                    { prefix: "\u2192", text: "orama v2.0.0" },
+                    { prefix: "$", text: "orama version" },
                   ]}
                 />
               </TabsContent>
 
-              <TabsContent value="apt">
+              <TabsContent value="deb">
                 <Terminal
                   lines={[
-                    { prefix: "$", text: "curl -sL https://github.com/DeBrosOfficial/network/releases/latest/download/orama_linux_amd64.deb -o orama.deb" },
-                    { prefix: "$", text: "sudo dpkg -i orama.deb" },
-                    { prefix: "\u2192", text: "Selecting previously unselected package orama." },
-                    { prefix: "\u2713", text: "orama installed successfully" },
+                    {
+                      prefix: "#",
+                      text: "grab the .deb for your arch from the releases page",
+                    },
+                    { prefix: "$", text: "sudo dpkg -i orama_*_linux_amd64.deb" },
+                    { prefix: "✓", text: "orama installed to /usr/bin/orama" },
                   ]}
                 />
               </TabsContent>
@@ -50,13 +51,32 @@ export function CliInstall() {
               <TabsContent value="source">
                 <Terminal
                   lines={[
-                    { prefix: "$", text: "go install github.com/DeBrosOfficial/network/cmd/cli@latest" },
-                    { prefix: "\u2192", text: "Downloading modules..." },
-                    { prefix: "\u2713", text: "orama installed to $GOPATH/bin" },
+                    {
+                      prefix: "$",
+                      text: "git clone https://github.com/DeBrosDAO/orama.git",
+                    },
+                    { prefix: "$", text: "cd orama && make build" },
+                    { prefix: "✓", text: "binaries written to core/bin/" },
+                    { text: "" },
+                    { prefix: "$", text: "./core/bin/orama version" },
                   ]}
                 />
               </TabsContent>
             </Tabs>
+
+            <p className="text-sm text-muted">
+              Homebrew tracks the latest stable release. Nightly builds and the
+              Debian packages are published on the{" "}
+              <a
+                href={`${GITHUB_URL}/releases`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent hover:underline underline-offset-4"
+              >
+                releases page
+              </a>
+              .
+            </p>
           </div>
         </AnimateIn>
       </Section>

@@ -233,6 +233,11 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 		return nil, err
 	}
 
+	availableNamespaceSlots, err := cns.portAllocator.GetNodeCapacity(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Calculate available capacity
 	maxDeployments := constants.MaxDeploymentsPerNode
 	maxPorts := constants.MaxPortsPerNode
@@ -249,7 +254,6 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 		availableMemoryMB = 0
 	}
 
-	availableNamespaceSlots := MaxNamespacesPerNode - namespaceInstanceCount
 	if availableNamespaceSlots < 0 {
 		availableNamespaceSlots = 0
 	}

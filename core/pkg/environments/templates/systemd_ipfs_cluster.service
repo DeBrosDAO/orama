@@ -15,7 +15,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths={{.ClusterPath}} {{.OramaDir}}
+ProtectProc=invisible
+ReadWritePaths={{.ClusterPath}} {{.OramaDir}}/logs
+InaccessiblePaths={{.OramaDir}}/secrets
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 Environment=CLUSTER_PATH={{.ClusterPath}}

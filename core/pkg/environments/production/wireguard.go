@@ -138,56 +138,63 @@ func (wp *WireGuardProvisioner) WriteConfig() error {
 	confPath := filepath.Join(wp.configDir, "wg0.conf")
 	content := wp.GenerateConfig()
 
-	// Try direct write first (works when running as root)
 	if err := os.MkdirAll(wp.configDir, 0700); err == nil {
 		if err := os.WriteFile(confPath, []byte(content), 0600); err == nil {
-			return nil
+			return forcePrivateMode(confPath)
 		}
 	}
 
-	// Fallback to tee (for non-root, e.g. orama user)
 	cmd := exec.Command("tee", confPath)
 	cmd.Stdin = strings.NewReader(content)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to write wg0.conf via tee: %w\n%s", err, string(output))
 	}
+	return forcePrivateMode(confPath)
+}
 
+// forcePrivateMode chmod 0600 and verifies the result (bugboard #247).
+// os.WriteFile's mode is umask-masked; tee inherits umask (often 0644).
+func forcePrivateMode(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod 0600 %s: %w", path, err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		return fmt.Errorf("%s mode %o, want 0600", path, fi.Mode().Perm())
+	}
 	return nil
 }
 
-// Enable starts and enables the WireGuard interface
+// Enable brings wg0 up from the existing conf. It does not enable
+// wg-quick@wg0 — orama-node starts orama-namespace-wireguard@index, which
+// runs `wg-quick up` without rewriting wg0.conf. If the interface is already
+// up, this is a no-op (never bounce the mesh).
 func (wp *WireGuardProvisioner) Enable() error {
-	// Enable on boot
-	cmd := exec.Command("systemctl", "enable", "wg-quick@wg0")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to enable wg-quick@wg0: %w\n%s", err, string(output))
+	if exec.Command("wg", "show", "wg0").Run() == nil {
+		return nil
 	}
-
-	// Use restart instead of start. wg-quick@wg0 is a oneshot service with
-	// RemainAfterExit=yes, so "systemctl start" is a no-op if the service is
-	// already in "active (exited)" state (e.g. from a previous install that
-	// wasn't fully cleaned). "restart" always re-runs the ExecStart command.
-	cmd = exec.Command("systemctl", "restart", "wg-quick@wg0")
+	cmd := exec.Command("wg-quick", "up", "wg0")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to start wg-quick@wg0: %w\n%s", err, string(output))
+		return fmt.Errorf("failed to start wg0: %w\n%s", err, string(output))
 	}
-
 	return nil
 }
 
-// Restart restarts the WireGuard interface
+// Restart restarts the WireGuard interface via the index unit.
 func (wp *WireGuardProvisioner) Restart() error {
-	cmd := exec.Command("systemctl", "restart", "wg-quick@wg0")
+	cmd := exec.Command("systemctl", "restart", "orama-namespace-wireguard@index")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to restart wg-quick@wg0: %w\n%s", err, string(output))
+		return fmt.Errorf("failed to restart orama-namespace-wireguard@index: %w\n%s", err, string(output))
 	}
 	return nil
 }
 
 // IsActive checks if the WireGuard interface is up
 func (wp *WireGuardProvisioner) IsActive() bool {
-	cmd := exec.Command("systemctl", "is-active", "--quiet", "wg-quick@wg0")
-	return cmd.Run() == nil
+	return exec.Command("wg", "show", "wg0").Run() == nil
 }
 
 // AddPeer adds a peer to the running WireGuard interface without restart

@@ -67,7 +67,7 @@ type IPFSConfig struct {
 	// If zero, defaults to 3
 	ReplicationFactor int `yaml:"replication_factor"`
 
-	// EnableEncryption enables client-side encryption before upload
-	// Defaults to true
+	// EnableEncryption is accepted in node.yaml for DecodeStrict compatibility.
+	// No code path encrypts IPFS uploads; the value is ignored.
 	EnableEncryption bool `yaml:"enable_encryption"`
 }

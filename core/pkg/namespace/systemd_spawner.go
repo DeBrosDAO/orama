@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -215,6 +216,10 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 	}
 
 	// Generate environment file
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = rqliteUnitDataDir(namespace, nodeID, s.namespaceBase, "")
+	}
 	envVars := map[string]string{
 		"HTTP_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort),
 		"RAFT_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.RaftPort),
@@ -222,6 +227,11 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		"RAFT_ADV_ADDR": cfg.RaftAdvAddress,
 		"JOIN_ARGS":     joinArgs,
 		"NODE_ID":       nodeID,
+		"DATA_DIR":      dataDir,
+		"EXTRA_ARGS":    cfg.ExtraArgs,
+	}
+	if cfg.AuthFile != "" {
+		envVars["EXTRA_ARGS"] = strings.TrimSpace(envVars["EXTRA_ARGS"] + " -auth " + cfg.AuthFile)
 	}
 
 	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeRQLite, envVars); err != nil {
@@ -396,52 +406,12 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 	// issues itself in plaintext. A namespace gateway with no secret can
 	// never authenticate anything, so booting one without it is never the
 	// right outcome — fail loud instead of silently degrading.
-	apiKeyHMACSecretPath := filepath.Join(s.oramaDir(), "secrets", apiKeyHMACSecretFileName)
-	secretBytes, err := os.ReadFile(apiKeyHMACSecretPath)
+	apiKeyHMACSecret, err := s.readAPIKeyHMACSecret()
 	if err != nil {
-		return fmt.Errorf("read API-key HMAC secret at %s (required for namespace gateway auth): %w", apiKeyHMACSecretPath, err)
-	}
-	apiKeyHMACSecret := strings.TrimSpace(string(secretBytes))
-	if apiKeyHMACSecret == "" {
-		return fmt.Errorf("API-key HMAC secret file %s is empty; namespace gateway cannot authenticate without it", apiKeyHMACSecretPath)
+		return err
 	}
 
-	// Build Gateway YAML config using the shared type from gateway package
-	gatewayConfig := gateway.GatewayYAMLConfig{
-		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
-		ClientNamespace:       cfg.Namespace,
-		RQLiteDSN:             cfg.RQLiteDSN,
-		GlobalRQLiteDSN:       cfg.GlobalRQLiteDSN,
-		DomainName:            cfg.BaseDomain,
-		OlricServers:          cfg.OlricServers,
-		OlricTimeout:          cfg.OlricTimeout.String(),
-		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
-		IPFSAPIURL:            cfg.IPFSAPIURL,
-		IPFSTimeout:           cfg.IPFSTimeout.String(),
-		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
-		// Bug #215 fix: forward the host's cluster secret path so the
-		// spawned namespace gateway can derive the cluster-wide JWT
-		// signing key. Without this, namespace gateways used per-node
-		// random Ed25519 keys and host functions saw empty
-		// caller_jwt_subject.
-		ClusterSecretPath: s.clusterSecretPath,
-		// Bugboard #837 follow-up: forward the host's serverless secrets
-		// encryption key so the spawned namespace gateway can manage function
-		// secrets. Without this, `function secrets list` returned 501 on
-		// namespace gateways even though the host gateway had the key.
-		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
-		// Bugboard #160 fix: forward the API-key HMAC secret read above so
-		// this namespace gateway hashes/verifies API keys identically to
-		// the main gateway.
-		APIKeyHMACSecret: apiKeyHMACSecret,
-		WebRTC: gateway.GatewayYAMLWebRTC{
-			Enabled:           cfg.WebRTCEnabled,
-			SFUPort:           cfg.SFUPort,
-			TURNDomain:        cfg.TURNDomain,
-			TURNSecret:        cfg.TURNSecret,
-			TURNStealthDomain: cfg.TURNStealthDomain,
-		},
-	}
+	gatewayConfig := gatewayYAMLFromInstance(cfg, apiKeyHMACSecret, s.clusterSecretPath)
 
 	configBytes, err := yaml.Marshal(gatewayConfig)
 	if err != nil {
@@ -549,21 +519,114 @@ func gatewayWebRTCInSync(onDisk gateway.GatewayYAMLWebRTC, cfg gateway.InstanceC
 		onDisk.TURNStealthDomain == cfg.TURNStealthDomain
 }
 
-// gatewayConfigInSync reports whether the full reconcile-relevant config on
-// disk matches the desired config — i.e. no rewrite+restart is needed.
-// Combines the WebRTC drift surface (bugboard #25) with the secrets
-// encryption key (bugboard #837): a gateway that was spawned before the key
-// was plumbed has an empty on-disk key and `function secrets list` returns
-// 501; once the desired key is non-empty we want a rewrite+restart so the
-// running gateway picks it up.
-//
-// Plain string equality keeps the "both empty → in sync" case a no-op: a
-// namespace on a host with no secrets key (empty desired) whose on-disk key
-// is also empty is in-sync, so it never restart-loops. Only a genuine
-// difference (empty on-disk vs non-empty desired, or a rotated key) drifts.
-func gatewayConfigInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig) bool {
-	return gatewayWebRTCInSync(onDisk.WebRTC, cfg) &&
-		onDisk.SecretsEncryptionKey == cfg.SecretsEncryptionKey
+func (s *SystemdSpawner) readAPIKeyHMACSecret() (string, error) {
+	path := filepath.Join(s.oramaDir(), "secrets", apiKeyHMACSecretFileName)
+	secretBytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read API-key HMAC secret at %s (required for namespace gateway auth): %w", path, err)
+	}
+	secret := strings.TrimSpace(string(secretBytes))
+	if secret == "" {
+		return "", fmt.Errorf("API-key HMAC secret file %s is empty; namespace gateway cannot authenticate without it", path)
+	}
+	return secret, nil
+}
+
+// gatewayYAMLFromInstance is the single builder SpawnGateway and
+// ReconcileGateway share. Adding a field to GatewayYAMLConfig without
+// putting it here makes spawn and reconcile diverge; the field-coverage
+// test in reconcile_gateway_test.go fails when that happens.
+func gatewayYAMLFromInstance(cfg gateway.InstanceConfig, hmacSecret, clusterSecretPath string) gateway.GatewayYAMLConfig {
+	return gateway.GatewayYAMLConfig{
+		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
+		ClientNamespace:       cfg.Namespace,
+		RQLiteDSN:             cfg.RQLiteDSN,
+		GlobalRQLiteDSN:       cfg.GlobalRQLiteDSN,
+		DomainName:            cfg.BaseDomain,
+		OlricServers:          cfg.OlricServers,
+		OlricTimeout:          cfg.OlricTimeout.String(),
+		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,
+		IPFSAPIURL:            cfg.IPFSAPIURL,
+		IPFSTimeout:           cfg.IPFSTimeout.String(),
+		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
+		ClusterSecretPath:     clusterSecretPath,
+		SecretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		APIKeyHMACSecret:      hmacSecret,
+		WebRTC: gateway.GatewayYAMLWebRTC{
+			Enabled:           cfg.WebRTCEnabled,
+			SFUPort:           cfg.SFUPort,
+			TURNDomain:        cfg.TURNDomain,
+			TURNSecret:        cfg.TURNSecret,
+			TURNStealthDomain: cfg.TURNStealthDomain,
+		},
+	}
+}
+
+func timeoutEqual(a, b string) bool {
+	return normalizeTimeout(a) == normalizeTimeout(b)
+}
+
+func normalizeTimeout(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" || s == "0s" {
+		return ""
+	}
+	return s
+}
+
+func stringSetEqual(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]string(nil), a...)
+	bs := append([]string(nil), b...)
+	sort.Strings(as)
+	sort.Strings(bs)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// gatewayYAMLEqual compares every spawn-written GatewayYAMLConfig field.
+// Olric server order is ignored (discovery can reshuffle). Empty / "0s"
+// timeouts compare equal so omitempty on-disk values match a zero duration.
+func gatewayYAMLEqual(a, b gateway.GatewayYAMLConfig) bool {
+	return a.ListenAddr == b.ListenAddr &&
+		a.ClientNamespace == b.ClientNamespace &&
+		a.RQLiteDSN == b.RQLiteDSN &&
+		a.GlobalRQLiteDSN == b.GlobalRQLiteDSN &&
+		stringSetEqual(a.BootstrapPeers, b.BootstrapPeers) &&
+		a.EnableHTTPS == b.EnableHTTPS &&
+		a.DomainName == b.DomainName &&
+		a.TLSCacheDir == b.TLSCacheDir &&
+		stringSetEqual(a.OlricServers, b.OlricServers) &&
+		timeoutEqual(a.OlricTimeout, b.OlricTimeout) &&
+		a.IPFSClusterAPIURL == b.IPFSClusterAPIURL &&
+		a.IPFSAPIURL == b.IPFSAPIURL &&
+		timeoutEqual(a.IPFSTimeout, b.IPFSTimeout) &&
+		a.IPFSReplicationFactor == b.IPFSReplicationFactor &&
+		a.WebRTC.Enabled == b.WebRTC.Enabled &&
+		a.WebRTC.SFUPort == b.WebRTC.SFUPort &&
+		a.WebRTC.TURNDomain == b.WebRTC.TURNDomain &&
+		a.WebRTC.TURNSecret == b.WebRTC.TURNSecret &&
+		a.WebRTC.TURNStealthDomain == b.WebRTC.TURNStealthDomain &&
+		a.SecretsEncryptionKey == b.SecretsEncryptionKey &&
+		a.ClusterSecretPath == b.ClusterSecretPath &&
+		a.APIKeyHMACSecret == b.APIKeyHMACSecret &&
+		a.NtfyBaseURL == b.NtfyBaseURL
+}
+
+// gatewayConfigInSync reports whether on-disk YAML matches what spawn would
+// write for cfg. Comparison is exhaustive over GatewayYAMLConfig (bugboard
+// #165): a new YAML field that spawn writes cannot silently skip reconcile.
+func gatewayConfigInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig, hmacSecret, clusterSecretPath string) bool {
+	return gatewayYAMLEqual(onDisk, gatewayYAMLFromInstance(cfg, hmacSecret, clusterSecretPath))
 }
 
 // ReconcileGateway is the WARM counterpart to SpawnGateway: when a
@@ -599,14 +662,21 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 		return fmt.Errorf("parse gateway config for reconcile: %w", err)
 	}
 
-	if gatewayConfigInSync(onDisk, cfg) {
-		// Already in sync — nothing to do, no restart.
+	hmacSecret, err := s.readAPIKeyHMACSecret()
+	if err != nil {
+		// Host has no usable secret file. Compare as empty so we do not
+		// restart-loop; SpawnGateway on the restart path still fails loud
+		// if the file is required and missing.
+		hmacSecret = ""
+	}
+
+	if gatewayConfigInSync(onDisk, cfg, hmacSecret, s.clusterSecretPath) {
 		return nil
 	}
 
-	// secretsKeyDrifted is logged (as a bool, never the key material) so
-	// operators can see when a #837 rewrite fires vs a #25 WebRTC rewrite.
+	// Drift flags are bools — never log secret material (bugboard #165 / #837).
 	secretsKeyDrifted := onDisk.SecretsEncryptionKey != cfg.SecretsEncryptionKey
+	hmacSecretDrifted := onDisk.APIKeyHMACSecret != hmacSecret
 	s.logger.Info("Gateway config drifted from desired; reconciling (rewrite + restart)",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID),
@@ -614,7 +684,8 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 		zap.Int("ondisk_sfu_port", onDisk.WebRTC.SFUPort),
 		zap.Bool("desired_enabled", cfg.WebRTCEnabled),
 		zap.Int("desired_sfu_port", cfg.SFUPort),
-		zap.Bool("secrets_key_drifted", secretsKeyDrifted))
+		zap.Bool("secrets_key_drifted", secretsKeyDrifted),
+		zap.Bool("hmac_secret_drifted", hmacSecretDrifted))
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
@@ -720,7 +791,7 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 
 // acmeInternalEndpoint is the gateway's internal ACME endpoint that the
 // Caddyfile TURN-cert blocks point the orama DNS provider at.
-const acmeInternalEndpoint = "http://localhost:6001/v1/internal/acme"
+var acmeInternalEndpoint = fmt.Sprintf("http://localhost:%d/v1/internal/acme", IndexGatewayHTTPPort)
 
 // turnCertProvisionTimeout bounds how long a TURN spawn waits for Caddy to
 // provision a Let's Encrypt cert before falling back (primary domain) or

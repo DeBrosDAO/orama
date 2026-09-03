@@ -36,10 +36,10 @@ func checkDNSPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	// 4.1 CoreDNS service running
 	if dns.CoreDNSActive {
 		r = append(r, inspector.Pass("dns.coredns_active", "CoreDNS service active", dnsSub, node,
-			"coredns is active", inspector.Critical))
+			"orama-namespace-coredns@nameserver is active", inspector.Critical))
 	} else {
 		r = append(r, inspector.Fail("dns.coredns_active", "CoreDNS service active", dnsSub, node,
-			"coredns is not active", inspector.Critical))
+			"orama-namespace-coredns@nameserver is not active", inspector.Critical))
 		return r
 	}
 

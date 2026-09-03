@@ -15,6 +15,3 @@ memberlist:
     - "{{.}}"
 {{- end}}
 {{- end}}
-{{- if .EncryptionKey}}
-  encryptionKey: "{{.EncryptionKey}}"
-{{- end}}

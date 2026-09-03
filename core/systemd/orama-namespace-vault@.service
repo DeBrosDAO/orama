@@ -1,0 +1,35 @@
+[Unit]
+Description=Orama Namespace Vault Guardian (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network-online.target orama-namespace-wireguard@%i.service
+Wants=network-online.target
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths=/opt/orama/.orama/data/vault
+EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/vault.env
+ExecStart=/opt/orama/bin/vault-guardian --config /opt/orama/.orama/data/vault/vault.yaml
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-vault-%i
+PrivateTmp=yes
+LimitMEMLOCK=67108864
+MemoryMax=512M
+MemorySwapMax=0
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

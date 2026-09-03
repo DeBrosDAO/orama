@@ -126,11 +126,17 @@ Cluster secrets are stored in `/opt/orama/.orama/secrets/`:
 | Secret | Purpose |
 |--------|---------|
 | `cluster-secret` | Cluster identity, used for internal endpoint auth |
-| `rqlite-auth.json` | RQLite HTTP basic auth credentials |
+| `rqlite-password` / `rqlite-auth.json` | Written at genesis; **not** passed to `rqlited -auth` today |
 | `api-key-hmac-secret` | HMAC key for API key hashing |
 | `olric-encryption-key` | Olric memberlist gossip encryption |
 
 These are generated at cluster genesis and distributed to joining nodes via the encrypted join response over WireGuard.
+
+### RQLite HTTP auth is not currently enforced
+
+`rqlite-auth.json` is generated and written to the secrets directory, but `rqlited` is **not** started with `-auth`, so its HTTP API does not require those credentials. The config field that would enable it (`RQLiteAuthFile` in `core/pkg/config/database_config.go`) is never assigned, so the `-auth` flag in `core/pkg/rqlite/process.go` is never added to the command line.
+
+What keeps the RQLite API off the public internet is the firewall. `rqlited` binds `0.0.0.0`, but `ufw` denies incoming by default and only opens 22, 80, 443 and 51820 -- plus 53 and the TURN ports on nodes that serve them -- with a blanket `allow from 10.0.0.0/24` for the WireGuard overlay. Anything that can reach `10.0.0.x:5001`, meaning any node in the mesh or any process on the node itself, can query RQLite without credentials.
 
 ## Security Checklist for Operators
 
@@ -138,7 +144,7 @@ After setting up a node, verify:
 
 1. `ss -tlnp` — only expected ports are listening (22, 53, 80, 443, 51820)
 2. `ss -tlnp6` — no IPv6 listeners
-3. `curl http://10.0.0.x:5001/db/query` without auth — returns 401
+3. `ufw status` — incoming is `deny (default)` and the RQLite ports are not in the allow list
 4. `wg show wg0` — recent handshakes with all peers
 5. `ps aux | grep orama` — services running as `orama` user, not root
 6. `orama monitor report --env <env>` — all health checks pass

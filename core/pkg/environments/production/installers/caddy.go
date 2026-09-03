@@ -240,7 +240,7 @@ func init() {
 // Provider wraps the Orama DNS provider for Caddy.
 type Provider struct {
 	// Endpoint is the URL of the Orama gateway's ACME API
-	// Default: http://localhost:6001/v1/internal/acme
+	// Default: http://localhost:<index-gateway>/v1/internal/acme
 	Endpoint string ` + "`json:\"endpoint,omitempty\"`" + `
 }
 
@@ -255,7 +255,7 @@ func (Provider) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the module.
 func (p *Provider) Provision(ctx caddy.Context) error {
 	if p.Endpoint == "" {
-		p.Endpoint = "http://localhost:6001/v1/internal/acme"
+		p.Endpoint = "` + fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort) + `"
 	}
 	return nil
 }
@@ -451,24 +451,26 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	}
 	sb.WriteString(fmt.Sprintf("{\n    email %s\n%s    servers {\n        protocols h1\n    }\n}\n", email, httpsPortOption))
 
+	gw := fmt.Sprintf("localhost:%d", constants.GatewayAPIPort)
+
 	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
-	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))
-	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:6001\n}\n", domain, tlsBlock))
+	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy %s\n}\n", domain, tlsBlock, gw))
+	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy %s\n}\n", domain, tlsBlock, gw))
 
 	// Base domain blocks (e.g., dbrs.space, *.dbrs.space) — for app routing
 	if baseDomain != "" && baseDomain != domain {
-		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy localhost:6001\n}\n", baseDomain, tlsBlock))
-		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:6001\n}\n", baseDomain, tlsBlock))
+		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy %s\n}\n", baseDomain, tlsBlock, gw))
+		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy %s\n}\n", baseDomain, tlsBlock, gw))
 	}
 
 	// HTTP blocks — serve traffic over plain HTTP so the gateway is reachable
 	// even when TLS certificates are unavailable (e.g., Let's Encrypt rate limits).
 	// Without these, Caddy auto-redirects HTTP→HTTPS for the named domain blocks above.
-	sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy localhost:6001\n}\n", domain))
-	sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy localhost:6001\n}\n", domain))
+	sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy %s\n}\n", domain, gw))
+	sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy %s\n}\n", domain, gw))
 	if baseDomain != "" && baseDomain != domain {
-		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy localhost:6001\n}\n", baseDomain))
-		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy localhost:6001\n}\n", baseDomain))
+		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy %s\n}\n", baseDomain, gw))
+		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy %s\n}\n", baseDomain, gw))
 	}
 
 	// Self-hosted ntfy reverse-proxy (feature #72). Emitted only when
@@ -482,7 +484,7 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	}
 
 	// HTTP catch-all fallback (handles remaining plain HTTP traffic)
-	sb.WriteString("\n:80 {\n    reverse_proxy localhost:6001\n}\n")
+	sb.WriteString(fmt.Sprintf("\n:80 {\n    reverse_proxy %s\n}\n", gw))
 
 	return sb.String()
 }

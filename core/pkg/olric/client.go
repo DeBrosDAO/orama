@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	olriclib "github.com/olric-data/olric"
 	"github.com/olric-data/olric/config"
 	"go.uber.org/zap"
@@ -31,21 +32,21 @@ type Config struct {
 func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 	servers := cfg.Servers
 	if len(servers) == 0 {
-		servers = []string{"localhost:3320"}
+		servers = []string{fmt.Sprintf("localhost:%d", constants.OlricHTTPPort)}
 	}
 
 	timeout := cfg.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second  // Increased default timeout for slow SCAN operations
+		timeout = 30 * time.Second // Increased default timeout for slow SCAN operations
 	}
 
 	// Configure client with increased timeouts for slow operations
 	clientCfg := &config.Client{
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     timeout,        // 30s default - enough for slow SCAN operations
-		WriteTimeout:    timeout,
-		MaxRetries:      1,              // Reduce retries to 1 to avoid excessive delays
-		Authentication:  &config.Authentication{},  // Initialize to prevent nil pointer
+		DialTimeout:    5 * time.Second,
+		ReadTimeout:    timeout, // 30s default - enough for slow SCAN operations
+		WriteTimeout:   timeout,
+		MaxRetries:     1,                        // Reduce retries to 1 to avoid excessive delays
+		Authentication: &config.Authentication{}, // Initialize to prevent nil pointer
 	}
 
 	client, err := olriclib.NewClusterClient(servers, olriclib.WithConfig(clientCfg))

@@ -8,24 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production/installers"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
-
-// AnyoneRelayConfig holds configuration for Anyone relay mode
-type AnyoneRelayConfig struct {
-	Enabled       bool   // Whether to run as relay operator
-	Exit          bool   // Whether to run as exit relay
-	Migrate       bool   // Whether to migrate existing installation
-	Nickname      string // Relay nickname (1-19 alphanumeric)
-	Contact       string // Contact info (email or @telegram)
-	Wallet        string // Ethereum wallet for rewards
-	ORPort        int    // ORPort for relay (default 9001)
-	MyFamily      string // Comma-separated fingerprints of other relays (for multi-relay operators)
-	BandwidthPct  int    // Percentage of VPS bandwidth to allocate to relay (0 = unlimited)
-	AccountingMax int    // Monthly data cap in GB (0 = unlimited)
-}
 
 // ProductionSetup orchestrates the entire production deployment
 type ProductionSetup struct {
@@ -37,9 +24,8 @@ type ProductionSetup struct {
 	forceReconfigure   bool
 	skipOptionalDeps   bool
 	skipResourceChecks bool
-	isNameserver       bool               // Whether this node is a nameserver (runs CoreDNS + Caddy)
-	isAnyoneClient     bool               // Whether this node runs Anyone as client-only (SOCKS5 proxy)
-	anyoneRelayConfig  *AnyoneRelayConfig // Configuration for Anyone relay mode
+	isNameserver       bool // Whether this node is a nameserver (runs CoreDNS)
+	isAnyoneClient     bool // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	privChecker        *PrivilegeChecker
 	osDetector         *OSDetector
 	archDetector       *ArchitectureDetector
@@ -135,16 +121,6 @@ func (ps *ProductionSetup) IsNameserver() bool {
 	return ps.isNameserver
 }
 
-// SetAnyoneRelayConfig sets the Anyone relay configuration
-func (ps *ProductionSetup) SetAnyoneRelayConfig(config *AnyoneRelayConfig) {
-	ps.anyoneRelayConfig = config
-}
-
-// IsAnyoneRelay returns whether this node is configured as an Anyone relay operator
-func (ps *ProductionSetup) IsAnyoneRelay() bool {
-	return ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.Enabled
-}
-
 // SetAnyoneClient sets whether this node runs Anyone as client-only
 func (ps *ProductionSetup) SetAnyoneClient(enabled bool) {
 	ps.isAnyoneClient = enabled
@@ -156,7 +132,7 @@ func (ps *ProductionSetup) IsAnyoneClient() bool {
 }
 
 // disableConflictingAnyoneService stops, disables, and removes a conflicting
-// Anyone service file. A node must run either relay or client, never both.
+// Anyone service file. A node must run client, never both.
 // This is best-effort: errors are logged but do not abort the operation.
 func (ps *ProductionSetup) disableConflictingAnyoneService(serviceName string) {
 	unitPath := filepath.Join("/etc/systemd/system", serviceName)
@@ -298,9 +274,8 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		}
 	}
 
-	// Anyone relay/client configuration runs after BOTH paths.
+	// Anyone client configuration runs after BOTH paths.
 	// Pre-built mode installs the anon binary via .deb/apt;
-	// source mode installs it via the relay installer's Install().
 	// Configuration (anonrc, bandwidth, migration) is always needed.
 	if err := ps.configureAnyone(); err != nil {
 		ps.logf("  ⚠️  Anyone configuration warning: %v", err)
@@ -370,66 +345,14 @@ func (ps *ProductionSetup) installFromSource() error {
 	return nil
 }
 
-// configureAnyone handles Anyone relay/client installation and configuration.
+// configureAnyone handles Anyone client installation and configuration.
 // This runs after both pre-built and source mode binary installation.
 func (ps *ProductionSetup) configureAnyone() error {
-	if ps.IsAnyoneRelay() {
-		ps.logf("  Installing Anyone relay (operator mode)...")
-		relayConfig := installers.AnyoneRelayConfig{
-			Nickname:      ps.anyoneRelayConfig.Nickname,
-			Contact:       ps.anyoneRelayConfig.Contact,
-			Wallet:        ps.anyoneRelayConfig.Wallet,
-			ORPort:        ps.anyoneRelayConfig.ORPort,
-			ExitRelay:     ps.anyoneRelayConfig.Exit,
-			Migrate:       ps.anyoneRelayConfig.Migrate,
-			MyFamily:      ps.anyoneRelayConfig.MyFamily,
-			AccountingMax: ps.anyoneRelayConfig.AccountingMax,
-		}
-
-		// Run bandwidth test and calculate limits if percentage is set
-		if ps.anyoneRelayConfig.BandwidthPct > 0 {
-			measuredKBs, err := installers.MeasureBandwidth(ps.logWriter)
-			if err != nil {
-				ps.logf("  ⚠️  Bandwidth test failed, relay will run without bandwidth limits: %v", err)
-			} else if measuredKBs > 0 {
-				rate, burst := installers.CalculateBandwidthLimits(measuredKBs, ps.anyoneRelayConfig.BandwidthPct)
-				relayConfig.BandwidthRate = rate
-				relayConfig.BandwidthBurst = burst
-				rateMbps := float64(rate) * 8 / 1024
-				ps.logf("  ✓ Relay bandwidth limited to %d%% of measured speed (%d KBytes/s = %.1f Mbps)",
-					ps.anyoneRelayConfig.BandwidthPct, rate, rateMbps)
-			}
-		}
-
-		relayInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, relayConfig)
-
-		// Check for existing installation if migration is requested
-		if relayConfig.Migrate {
-			existing, err := installers.DetectExistingAnyoneInstallation()
-			if err != nil {
-				ps.logf("  ⚠️  Failed to detect existing installation: %v", err)
-			} else if existing != nil {
-				backupDir := filepath.Join(ps.oramaDir, "backups")
-				if err := relayInstaller.MigrateExistingInstallation(existing, backupDir); err != nil {
-					ps.logf("  ⚠️  Migration warning: %v", err)
-				}
-			}
-		}
-
-		// Install the relay (apt-based, not Go — idempotent if already installed via .deb)
-		if err := relayInstaller.Install(); err != nil {
-			ps.logf("  ⚠️  Anyone relay install warning: %v", err)
-		}
-
-		// Configure the relay
-		if err := relayInstaller.Configure(); err != nil {
-			ps.logf("  ⚠️  Anyone relay config warning: %v", err)
-		}
-	} else if ps.IsAnyoneClient() {
+	if ps.IsAnyoneClient() {
 		ps.logf("  Installing Anyone client-only mode (SOCKS5 proxy)...")
-		clientInstaller := installers.NewAnyoneRelayInstaller(ps.arch, ps.logWriter, installers.AnyoneRelayConfig{})
+		clientInstaller := installers.NewAnyoneInstaller(ps.arch, ps.logWriter)
 
-		// Install the anon binary (same apt package as relay — idempotent)
+		// Install the anon binary
 		if err := clientInstaller.Install(); err != nil {
 			ps.logf("  ⚠️  Anyone client install warning: %v", err)
 		}
@@ -460,7 +383,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	// Initialize IPFS repo with correct path structure
 	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4101 for swarm (to avoid conflict with LibP2P on 4001)
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), 4501, 8080, 4101, vpsIP, ipfsPeer); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, 8080, 4101, vpsIP, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -496,7 +419,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		}
 	}
 
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(clusterPath, clusterSecret, 4501, clusterPeers); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(clusterPath, clusterSecret, constants.IPFSAPIPort, clusterPeers); err != nil {
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
@@ -581,12 +504,6 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	}
 	ps.logf("  ✓ RQLite auth credentials ensured")
 
-	// Olric gossip encryption key
-	if _, err := ps.secretGenerator.EnsureOlricEncryptionKey(); err != nil {
-		return fmt.Errorf("failed to ensure Olric encryption key: %w", err)
-	}
-	ps.logf("  ✓ Olric encryption key ensured")
-
 	// API key HMAC secret
 	if _, err := ps.secretGenerator.EnsureAPIKeyHMACSecret(); err != nil {
 		return fmt.Errorf("failed to ensure API key HMAC secret: %w", err)
@@ -646,10 +563,10 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	ps.logf("  ✓ Node config generated: %s", configFile)
 
 	// Gateway configuration is now embedded in each node's config
-	// No separate gateway.yaml needed - each node runs its own embedded gateway
+	// Index gateway is orama-namespace-gateway@index; no separate host gateway.yaml
 
 	// Olric config:
-	// - HTTP API binds to localhost for security (accessed via gateway)
+	// - HTTP API binds to the WireGuard IP (unique per node; not localhost)
 	// - Memberlist binds to WG IP for cluster communication across nodes
 	// - Advertise WG IP so peers can reach this node
 	// - Seed peers from join response for initial cluster formation
@@ -659,9 +576,9 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 	olricConfig, err := ps.configGenerator.GenerateOlricConfig(
 		vpsIP, // HTTP API on WG IP (unique per node, avoids memberlist name conflict)
-		3320,
+		constants.OlricHTTPPort,
 		vpsIP, // Memberlist on WG IP for clustering
-		3322,
+		constants.OlricMemberlistPort,
 		"lan", // Production environment
 		vpsIP, // Advertise WG IP
 		olricSeedPeers,
@@ -711,7 +628,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 			ns3IP = peerAddresses[2]
 		}
 
-		rqliteDSN := "http://localhost:5001"
+		rqliteDSN := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
 		if err := ps.binaryInstaller.ConfigureCoreDNS(dnsZone, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
 			ps.logf("  ⚠️  CoreDNS config warning: %v", err)
 		} else {
@@ -724,7 +641,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 			caddyDomain = baseDomain
 		}
 		email := "admin@" + caddyDomain
-		acmeEndpoint := "http://localhost:6001/v1/internal/acme"
+		acmeEndpoint := fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort)
 
 		// Self-hosted ntfy (feature #72): always emit the Caddy
 		// push.<dnsZone> reverse-proxy block and write
@@ -784,14 +701,15 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Phases 2b-4 create files as root (IPFS repo, configs, secrets, etc.)
 	// that must be readable/writable by the orama service user.
 	if err := exec.Command("id", "orama").Run(); err == nil {
-		for _, dir := range []string{ps.oramaDir, filepath.Join(ps.oramaHome, "bin")} {
-			if _, statErr := os.Stat(dir); statErr == nil {
-				if output, chownErr := exec.Command("chown", "-R", "orama:orama", dir).CombinedOutput(); chownErr != nil {
-					ps.logf("  ⚠️  Failed to chown %s: %v\n%s", dir, chownErr, string(output))
-				}
+		if _, statErr := os.Stat(ps.oramaDir); statErr == nil {
+			if output, chownErr := exec.Command("chown", "-R", "orama:orama", ps.oramaDir).CombinedOutput(); chownErr != nil {
+				ps.logf("  ⚠️  Failed to chown %s: %v\n%s", ps.oramaDir, chownErr, string(output))
 			}
 		}
-		ps.logf("  ✓ File ownership updated for orama user")
+		if err := lockOramaBinDir(filepath.Join(ps.oramaHome, "bin")); err != nil {
+			ps.logf("  ⚠️  Failed to lock bin dir: %v", err)
+		}
+		ps.logf("  ✓ File ownership updated for orama user; bin/ is root:orama 0750")
 	}
 
 	// Validate all required binaries are available before creating services
@@ -829,7 +747,10 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("  ✓ IPFS GC service + timer created: orama-ipfs-gc.{service,timer}")
 
 	// IPFS Cluster service
-	clusterUnit := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
+	clusterUnit, err := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
+	if err != nil {
+		return fmt.Errorf("failed to generate IPFS Cluster service: %w", err)
+	}
 	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-cluster.service", clusterUnit); err != nil {
 		return fmt.Errorf("failed to write IPFS Cluster service: %w", err)
 	}
@@ -844,12 +765,12 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Olric service created")
 
-	// Node service (unified - includes embedded gateway)
+	// Node service (supervisor: starts orama-namespace-*@index)
 	nodeUnit := ps.serviceGenerator.GenerateNodeService()
 	if err := ps.serviceController.WriteServiceUnit("orama-node.service", nodeUnit); err != nil {
 		return fmt.Errorf("failed to write Node service: %w", err)
 	}
-	ps.logf("  ✓ Node service created: orama-node.service (with embedded gateway)")
+	ps.logf("  ✓ Node service created: orama-node.service (supervisor)")
 
 	// Vault Guardian service
 	vaultUnit := ps.serviceGenerator.GenerateVaultService()
@@ -858,18 +779,9 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Vault service created: orama-vault.service")
 
-	// Anyone Relay service (only created when --anyone-relay flag is used)
-	// A node must run EITHER relay OR client, never both. When writing one
-	// mode's service, we remove the other to prevent conflicts (they share
-	// the same anon binary and would fight over ports).
-	if ps.IsAnyoneRelay() {
-		anyoneUnit := ps.serviceGenerator.GenerateAnyoneRelayService()
-		if err := ps.serviceController.WriteServiceUnit("orama-anyone-relay.service", anyoneUnit); err != nil {
-			return fmt.Errorf("failed to write Anyone Relay service: %w", err)
-		}
-		ps.logf("  ✓ Anyone Relay service created (operator mode, ORPort: %d)", ps.anyoneRelayConfig.ORPort)
-		ps.disableConflictingAnyoneService("orama-anyone-client.service")
-	} else if ps.IsAnyoneClient() {
+	// Anyone client (SOCKS :9050 for /v1/proxy/anon). Always disable a leftover
+	// orama-anyone-relay unit if one is still on disk from older installs.
+	if ps.IsAnyoneClient() {
 		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
 		if err := ps.serviceController.WriteServiceUnit("orama-anyone-client.service", anyoneUnit); err != nil {
 			return fmt.Errorf("failed to write Anyone client service: %w", err)
@@ -877,7 +789,6 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
 		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
 	} else {
-		// Neither mode configured — clean up both
 		ps.disableConflictingAnyoneService("orama-anyone-client.service")
 		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
 	}
@@ -930,34 +841,10 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable services (unified names - no bootstrap/node distinction)
-	// Note: orama-gateway.service is no longer needed - each node has an embedded gateway
-	// Note: orama-rqlite.service is NOT created - RQLite is managed by each node internally
-	services := []string{"orama-ipfs.service", "orama-ipfs-cluster.service", "orama-olric.service", "orama-vault.service", "orama-node.service", "orama-ipfs-gc.timer"}
-
-	// Add Anyone service if configured (relay or client)
-	if ps.IsAnyoneRelay() {
-		services = append(services, "orama-anyone-relay.service")
-	} else if ps.IsAnyoneClient() {
-		services = append(services, "orama-anyone-client.service")
-	}
-
-	// Add CoreDNS only for nameserver nodes
-	if ps.isNameserver {
-		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			services = append(services, "coredns.service")
-		}
-	}
-	// Add Caddy on ALL nodes (any node may host namespaces and need TLS)
-	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		services = append(services, "caddy.service")
-	}
-	// Add ntfy on every node (#72). The unit file is written by
-	// installers/ntfy.go::writeSystemdUnit during Phase 2.
-	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
-		services = append(services, "ntfy.service")
-	}
-	for _, svc := range services {
+	// Enable only orama-node. Host daemons are orama-namespace-*@index;
+	// CoreDNS is orama-namespace-coredns@nameserver. The supervisor starts both.
+	enable := []string{"orama-node.service"}
+	for _, svc := range enable {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
 		} else {
@@ -965,116 +852,29 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		}
 	}
 
-	// Restart services in dependency order (restart instead of start ensures
-	// services pick up new configs even if already running from a previous install)
-	ps.logf("  Starting services...")
-
-	// Start infrastructure first (IPFS, Olric, Vault, Anyone) - RQLite is managed internally by each node
-	infraServices := []string{"orama-ipfs.service", "orama-olric.service", "orama-vault.service"}
-
-	// Add Anyone service if configured (relay or client)
-	if ps.IsAnyoneRelay() {
-		orPort := 9001
-		if ps.anyoneRelayConfig != nil && ps.anyoneRelayConfig.ORPort > 0 {
-			orPort = ps.anyoneRelayConfig.ORPort
-		}
-		if ps.portChecker.IsPortInUse(orPort) {
-			ps.logf("  ℹ️  ORPort %d is already in use (existing anon relay running)", orPort)
-			ps.logf("  ℹ️  Skipping orama-anyone-relay startup - using existing service")
+	for _, leftover := range systemd.LeftoverHostUnits {
+		if err := ps.serviceController.DisableService(leftover); err != nil {
+			ps.logf("  ℹ️  leftover %s not enabled: %v", leftover, err)
 		} else {
-			infraServices = append(infraServices, "orama-anyone-relay.service")
-		}
-	} else if ps.IsAnyoneClient() {
-		infraServices = append(infraServices, "orama-anyone-client.service")
-	}
-
-	for _, svc := range infraServices {
-		if err := ps.serviceController.RestartService(svc); err != nil {
-			ps.logf("  ⚠️  Failed to start %s: %v", svc, err)
-		} else {
-			ps.logf("    - %s started", svc)
+			ps.logf("  ✓ Leftover disabled: %s", leftover)
 		}
 	}
-
-	// Wait a moment for infrastructure to stabilize
-	time.Sleep(2 * time.Second)
-
-	// Start IPFS Cluster
-	if err := ps.serviceController.RestartService("orama-ipfs-cluster.service"); err != nil {
-		ps.logf("  ⚠️  Failed to start orama-ipfs-cluster.service: %v", err)
+	if err := ps.serviceController.DisableService(systemd.LeftoverWireGuardUnit); err != nil {
+		ps.logf("  ℹ️  leftover %s not enabled: %v", systemd.LeftoverWireGuardUnit, err)
 	} else {
-		ps.logf("    - orama-ipfs-cluster.service started")
+		ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
+	}
+	if err := ps.serviceController.DisableService(systemd.LeftoverNameserverUnit); err != nil {
+		ps.logf("  ℹ️  leftover %s not enabled: %v", systemd.LeftoverNameserverUnit, err)
+	} else {
+		ps.logf("  ✓ Leftover disabled: %s", systemd.LeftoverNameserverUnit)
 	}
 
-	// Start the IPFS GC timer (the daemon has no in-process GC; this drives reclaim).
-	// The one-shot service it triggers is ordered After/Requires orama-ipfs.service.
-	if err := ps.serviceController.RestartService("orama-ipfs-gc.timer"); err != nil {
-		ps.logf("  ⚠️  Failed to start orama-ipfs-gc.timer: %v", err)
-	} else {
-		ps.logf("    - orama-ipfs-gc.timer started")
-	}
-
-	// Start node service (gateway is embedded in node, no separate service needed)
+	ps.logf("  Starting orama-node (supervisor starts @index host stack and @nameserver CoreDNS)...")
 	if err := ps.serviceController.RestartService("orama-node.service"); err != nil {
 		ps.logf("  ⚠️  Failed to start orama-node.service: %v", err)
 	} else {
-		ps.logf("    - orama-node.service started (with embedded gateway)")
-	}
-
-	// Start CoreDNS (nameserver nodes only)
-	if ps.isNameserver {
-		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			if err := ps.serviceController.RestartService("coredns.service"); err != nil {
-				ps.logf("  ⚠️  Failed to start coredns.service: %v", err)
-			} else {
-				ps.logf("    - coredns.service started")
-			}
-		}
-	}
-	// Start Caddy on ALL nodes (any node may host namespaces and need TLS)
-	// Caddy depends on orama-node.service (gateway on :6001), so start after node
-	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		if err := ps.serviceController.RestartService("caddy.service"); err != nil {
-			ps.logf("  ⚠️  Failed to start caddy.service: %v", err)
-		} else {
-			ps.logf("    - caddy.service started")
-		}
-	}
-
-	// Stealth TURN-over-443 (feat-124) cutover. Caddy has just been
-	// reconfigured to :8443 and restarted above, so :443 is now free for the
-	// SNI router. When opted in, enable+start the router; when not, stop+disable
-	// it so a node that flipped the flag off cleanly returns :443 to Caddy.
-	sniSvc := ps.binaryInstaller.SNIRouterServiceName()
-	if ps.configGenerator.SNIRouterEnabled() {
-		if err := ps.serviceController.EnableService(sniSvc); err != nil {
-			ps.logf("  ⚠️  Failed to enable %s: %v", sniSvc, err)
-		}
-		if err := ps.serviceController.RestartService(sniSvc); err != nil {
-			ps.logf("  ⚠️  Failed to start %s: %v", sniSvc, err)
-		} else {
-			ps.logf("    - %s started (owns :443)", sniSvc)
-		}
-	} else {
-		// Not opted in: ensure the router is not holding :443. Errors are
-		// non-fatal — the unit may simply not be loaded on this node.
-		if err := ps.serviceController.StopService(sniSvc); err != nil {
-			ps.logf("  ℹ️  %s not running (expected when disabled): %v", sniSvc, err)
-		}
-		if err := ps.serviceController.DisableService(sniSvc); err != nil {
-			ps.logf("  ℹ️  %s not enabled (expected when disabled): %v", sniSvc, err)
-		}
-	}
-
-	// Start ntfy on every node (#72). Caddy must already be up (it
-	// terminates TLS for push.<dnsZone>), which the order above
-	// guarantees.
-	if _, err := os.Stat("/usr/local/bin/ntfy"); err == nil {
-		if err := ps.serviceController.RestartService("ntfy.service"); err != nil {
-			ps.logf("  ⚠️  Failed to start ntfy.service: %v", err)
-		} else {
-			ps.logf("    - ntfy.service started")
-		}
+		ps.logf("    - orama-node.service started")
 	}
 
 	ps.logf("  ✓ All services started")
@@ -1120,7 +920,7 @@ func (ps *ProductionSetup) SeedDNSRecords(baseDomain, vpsIP string, peerAddresse
 		ns3IP = extractedIPs[2]
 	}
 
-	rqliteDSN := "http://localhost:5001"
+	rqliteDSN := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
 	if err := ps.binaryInstaller.SeedDNS(baseDomain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
 		return fmt.Errorf("failed to seed DNS records: %w", err)
 	}
@@ -1184,15 +984,9 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 
 	ps.logf("Phase 6b: Setting up UFW firewall...")
 
-	anyoneORPort := 0
-	if ps.IsAnyoneRelay() && ps.anyoneRelayConfig != nil {
-		anyoneORPort = ps.anyoneRelayConfig.ORPort
-	}
-
 	fwCfg := FirewallConfig{
 		SSHPort:       22,
 		IsNameserver:  ps.isNameserver,
-		AnyoneORPort:  anyoneORPort,
 		WireGuardPort: 51820,
 	}
 	// TURN relay ports (bugboard #846): this `ufw --force reset` also runs on
@@ -1280,36 +1074,19 @@ func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf(strings.Repeat("=", 70))
 	ps.logf("\nNode Peer ID: %s", peerID)
 	ps.logf("\nService Management:")
-	ps.logf("  systemctl status orama-ipfs")
+	ps.logf("  systemctl status orama-node")
+	ps.logf("  systemctl status orama-namespace-ipfs@index")
 	ps.logf("  journalctl -u orama-node -f")
 	ps.logf("  tail -f %s/logs/node.log", ps.oramaDir)
 	ps.logf("\nLog Files:")
-	ps.logf("  %s/logs/ipfs.log", ps.oramaDir)
-	ps.logf("  %s/logs/ipfs-cluster.log", ps.oramaDir)
-	ps.logf("  %s/logs/olric.log", ps.oramaDir)
+	ps.logf("  journalctl -u orama-namespace-ipfs@index")
+	ps.logf("  journalctl -u orama-namespace-gateway@index")
 	ps.logf("  %s/logs/node.log", ps.oramaDir)
-	ps.logf("  %s/logs/gateway.log", ps.oramaDir)
-	ps.logf("  %s/logs/vault.log", ps.oramaDir)
 
-	// Anyone mode-specific logs and commands
-	if ps.IsAnyoneRelay() {
-		ps.logf("  /var/log/anon/notices.log (Anyone Relay)")
-		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-relay orama-node")
-		ps.logf("\nAnyone Relay Operator:")
-		ps.logf("  ORPort: %d", ps.anyoneRelayConfig.ORPort)
-		ps.logf("  Wallet: %s", ps.anyoneRelayConfig.Wallet)
-		ps.logf("  Config: /etc/anon/anonrc")
-		ps.logf("  Register at: https://dashboard.anyone.io")
-	} else if ps.IsAnyoneClient() {
-		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-anyone-client orama-node")
-	} else {
-		ps.logf("\nStart All Services:")
-		ps.logf("  systemctl start orama-ipfs orama-ipfs-cluster orama-olric orama-vault orama-node")
-	}
+	ps.logf("\nStart supervisor (starts @index host stack):")
+	ps.logf("  systemctl start orama-node")
 
 	ps.logf("\nVerify Installation:")
-	ps.logf("  curl http://localhost:6001/health")
-	ps.logf("  curl http://localhost:5001/status\n")
+	ps.logf("  curl http://localhost:%d/health", constants.GatewayAPIPort)
+	ps.logf("  curl http://localhost:%d/status\n", constants.RQLiteHTTPPort)
 }

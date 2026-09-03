@@ -101,7 +101,7 @@ func WriteResults(baseDir, env string, results *Results, data *ClusterData, anal
 	ts := time.Now().Format("2006-01-02_150405")
 	dir := filepath.Join(baseDir, env, ts)
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create output directory: %w", err)
 	}
 
@@ -231,7 +231,7 @@ func writeSummary(dir, env, ts string, results *Results, data *ClusterData, grou
 		b.WriteString("\n")
 	}
 
-	return os.WriteFile(filepath.Join(dir, "summary.md"), []byte(b.String()), 0o644)
+	return os.WriteFile(filepath.Join(dir, "summary.md"), []byte(b.String()), 0o600)
 }
 
 func writeSubsystem(dir, subsystem, ts string, checks []CheckResult, groups []FailureGroup, analysisMap map[string]string) error {
@@ -328,7 +328,7 @@ func writeSubsystem(dir, subsystem, ts string, checks []CheckResult, groups []Fa
 			statusIcon(c.Status), c.Severity, c.Name, node, msg))
 	}
 
-	return os.WriteFile(filepath.Join(dir, subsystem+".md"), []byte(b.String()), 0o644)
+	return os.WriteFile(filepath.Join(dir, subsystem+".md"), []byte(b.String()), 0o600)
 }
 
 func filterGroupsBySeverity(groups []FailureGroup, minSeverity Severity) []FailureGroup {

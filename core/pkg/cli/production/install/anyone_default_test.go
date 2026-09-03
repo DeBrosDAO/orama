@@ -1,12 +1,22 @@
 package install
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Every node's gateway serves /v1/proxy/anon, which needs a local anon SOCKS5
-// proxy on :9050. A node installed with neither --anyone-relay nor
-// --anyone-client previously had no SOCKS proxy, so /v1/proxy/anon returned
-// "Anyone proxy not available at localhost:9050". Non-relay nodes must now
-// default to Anyone client mode.
+// proxy on :9050. Install always enables Anyone client mode.
+
+func TestParseFlags_anyoneRelayRejected(t *testing.T) {
+	_, err := ParseFlags([]string{"--anyone-relay"})
+	if err == nil {
+		t.Fatal("expected error for removed --anyone-relay flag")
+	}
+	if !strings.Contains(err.Error(), "anyone-relay") {
+		t.Errorf("error should mention anyone-relay, got: %v", err)
+	}
+}
 
 func TestNewOrchestrator_defaultsToAnyoneClient(t *testing.T) {
 	o, err := NewOrchestrator(&Flags{})
@@ -15,18 +25,6 @@ func TestNewOrchestrator_defaultsToAnyoneClient(t *testing.T) {
 	}
 	if !o.setup.IsAnyoneClient() {
 		t.Error("with no anyone flag, node should default to AnyoneClient=true (SOCKS proxy for /v1/proxy/anon)")
-	}
-}
-
-func TestNewOrchestrator_relayIsNotClient(t *testing.T) {
-	// A relay already exposes :9050 via its own anonrc; it must NOT also be
-	// configured as a client (the two modes share one anon instance).
-	o, err := NewOrchestrator(&Flags{AnyoneRelay: true})
-	if err != nil {
-		t.Fatalf("NewOrchestrator: %v", err)
-	}
-	if o.setup.IsAnyoneClient() {
-		t.Error("relay node must not be configured as anyone-client")
 	}
 }
 

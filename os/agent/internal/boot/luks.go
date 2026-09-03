@@ -252,7 +252,7 @@ func vaultAuth(peerIP, identity string) (string, error) {
 	// Step 1: Request challenge
 	challengeBody, _ := json.Marshal(map[string]string{"identity": identity})
 	resp, err := client.Post(
-		fmt.Sprintf("http://%s:7500/v2/vault/auth/challenge", peerIP),
+		fmt.Sprintf("http://%s:10106/v2/vault/auth/challenge", peerIP),
 		"application/json",
 		bytes.NewReader(challengeBody),
 	)
@@ -280,7 +280,7 @@ func vaultAuth(peerIP, identity string) (string, error) {
 		"tag":      challengeResp.Tag,
 	})
 	resp2, err := client.Post(
-		fmt.Sprintf("http://%s:7500/v2/vault/auth/session", peerIP),
+		fmt.Sprintf("http://%s:10106/v2/vault/auth/session", peerIP),
 		"application/json",
 		bytes.NewReader(sessionBody),
 	)
@@ -312,7 +312,7 @@ func vaultPutSecret(peerIP, sessionToken, name, value string, version int) error
 	})
 
 	req, err := http.NewRequest("PUT",
-		fmt.Sprintf("http://%s:7500/v2/vault/secrets/%s", peerIP, name),
+		fmt.Sprintf("http://%s:10106/v2/vault/secrets/%s", peerIP, name),
 		bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -339,7 +339,7 @@ func vaultGetSecret(peerIP, sessionToken, name string) (string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	req, err := http.NewRequest("GET",
-		fmt.Sprintf("http://%s:7500/v2/vault/secrets/%s", peerIP, name), nil)
+		fmt.Sprintf("http://%s:10106/v2/vault/secrets/%s", peerIP, name), nil)
 	if err != nil {
 		return "", err
 	}
