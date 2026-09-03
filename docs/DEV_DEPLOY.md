@@ -155,6 +155,39 @@ The gateway calls `ApplyEmbeddedMigrations` during `NewDependencies` and asserts
 
 This is the default for both the genesis startup flow and rolling upgrades. No operator action required when it works.
 
+#### Registry backups and restore
+
+The index RQLite is backed up hourly by the leader. Each snapshot is written to
+the leader's local `backups/rqlite`, **and** encrypted and pinned into IPFS,
+with its CID, SHA-256 and size recorded in `rqlite_backups`.
+
+The off-box copy is the one that matters. A snapshot on the leader's own disk
+protects against nothing that actually happens: the disk fails, the VPS is
+deleted, `orama node wipe` removes it, or leadership moves and the series
+fragments across nodes so no node holds a usable history. And an unrecorded CID
+is unfindable, which is the same as no backup.
+
+Retention is 24 hourly plus one a day for 7 days, locally and pinned. It was
+three files — three hours of history, and only the hours that node was leader.
+
+To see what exists:
+
+```bash
+sudo orama node schema status --env <env>
+```
+
+...and query the index for the newest:
+
+```sql
+SELECT taken_at, taken_by, cid, size_bytes FROM rqlite_backups ORDER BY taken_at DESC LIMIT 5;
+```
+
+To restore, fetch the CID, decrypt it with the node's
+`secrets/secrets-encryption-key`, verify the SHA-256 against the recorded one,
+and hand the resulting SQLite file to `rqlited`'s restore path. **A backup is
+only as good as the last time someone restored it** — exercise this on a
+scratch cluster, not for the first time during an incident.
+
 #### Mixed-version window: WireGuard peer rows (migration 038)
 
 Migration 038 adds `confirmed_at` to `wireguard_peers` and is safe to apply while

@@ -21,6 +21,12 @@ type RQLiteManager struct {
 	config         *config.DatabaseConfig
 	discoverConfig *config.DiscoveryConfig
 
+	// Off-box backup destination. Without an uploader, snapshots stay on this
+	// node's disk — which is what they did before, and is now reported.
+	backupUploader    BackupUploader
+	backupReplication int
+	backupKey         []byte
+
 	// peerID is this node's libp2p peer id, the stable half of its raft
 	// identity. Empty until SetPeerID is called, in which case rqlite keeps
 	// defaulting the raft id to the advertise address.
