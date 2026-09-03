@@ -289,6 +289,30 @@ sudo orama node doctor
 
 **Note:** Always use `orama node stop` instead of manually running `systemctl stop`. The CLI ensures all related services (including CoreDNS and Caddy on nameserver nodes) are handled correctly.
 
+#### Quorum guard (`--force`)
+
+`stop`, `restart` and the pre-upgrade step refuse to run when stopping this node
+would cost the index RQLite its quorum, and print the arithmetic:
+
+```
+Quorum check: 3/3 voters reachable, 2 would remain (need 2).
+```
+
+Quorum is a majority of the **configured** voters. Stopping a node does not
+remove it from the raft configuration — it only makes it unreachable — so on
+three voters you may stop one, and on two voters you may stop neither.
+Membership shrinks only through an explicit remove.
+
+The guard **fails closed**. If the local RQLite is running but its status cannot
+be read, the command refuses rather than guessing: "I could not look" is not
+"go ahead". The one case it allows without a reading is `orama-namespace-rqlite@index`
+being stopped, since a node whose RQLite is already down contributes nothing to
+quorum.
+
+`--force` skips the check. Use it when you have confirmed the remaining voters
+can still form quorum — for example when deliberately taking down a cluster, or
+when the node is a non-voter the guard could not classify.
+
 #### `orama node report`
 
 Outputs comprehensive health data as JSON. Used by `orama monitor` over SSH:
