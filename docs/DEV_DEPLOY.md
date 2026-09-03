@@ -201,18 +201,40 @@ See **[NODE_REPLACEMENT.md](NODE_REPLACEMENT.md)** — join new node first, sync
 namespace safety, then Raft-remove and clean. Written from the 2026-08-03 devnet
 cutover; use the same process for testnet.
 
-### Cleaning Nodes for Reinstallation
+### Removing a node
+
+There are two operations, and picking the wrong one is how a deleted VPS ends up
+still counted toward raft quorum.
+
+**`decommission`** retires a node from the cluster and then erases it. Run this
+for a node that is or was a member. It works from a *survivor*: takes the node
+out of the raft configuration (refusing if that would cost the cluster its
+quorum), writes an eviction tombstone so nothing re-adds it automatically, and
+deletes its `wireguard_peers` and `dns_nodes` rows. Then it wipes the target.
 
 ```bash
-# Wipe all data and services
-orama node clean --env testnet --force
+orama node decommission --env testnet --node 1.2.3.4 --force
 
-# Also remove shared binaries (rqlited, ipfs, caddy, etc.)
-orama node clean --env testnet --nuclear --force
-
-# Single node only
-orama node clean --env testnet --node 1.2.3.4 --force
+# The machine is already gone: do the cluster-side removal only.
+orama node decommission --env testnet --node 1.2.3.4 --offline --force
 ```
+
+**`wipe`** erases a node and says nothing to the cluster. Use it for a node that
+is already retired, that never joined, or to finish a decommission whose wipe
+failed.
+
+```bash
+orama node wipe --env testnet --force                       # every node
+orama node wipe --env testnet --node 1.2.3.4 --force        # one node
+orama node wipe --env testnet --nuclear --force             # also shared binaries
+```
+
+`orama node clean` is deprecated and now runs `wipe`. It only ever erased the
+target, so a cleaned node stayed a configured raft voter, kept its
+`wireguard_peers` row re-applied to every survivor's interface, and kept its
+`dns_nodes` row. It also stopped only the legacy host unit names, leaving tenant
+`orama-namespace-*@*` units running under a data directory that had just been
+deleted — both fixed in `wipe`.
 
 ### Push Options
 
@@ -285,14 +307,28 @@ orama node push --env testnet --direct            # Sequential, no fanout
 | `--yes` | Skip confirmation |
 | `--delay <seconds>` | Delay between nodes (default: 30) |
 
-#### `orama node clean`
+#### `orama node decommission`
 
 | Flag | Description |
 |------|-------------|
 | `--env <env>` | Target environment (required) |
-| `--node <ip>` | Clean a single node only |
+| `--node <ip>` | Node to remove (required) |
+| `--offline` | The node is already gone: cluster-side removal only |
+| `--nuclear` | When wiping, also remove shared binaries |
+| `--force` | Skip confirmation (DESTRUCTIVE) |
+
+#### `orama node wipe`
+
+| Flag | Description |
+|------|-------------|
+| `--env <env>` | Target environment (required) |
+| `--node <ip>` | Wipe a single node only; omit for every node |
 | `--nuclear` | Also remove shared binaries |
 | `--force` | Skip confirmation (DESTRUCTIVE) |
+
+#### `orama node clean`
+
+Deprecated; runs `wipe`. See "Removing a node".
 
 #### `orama node recover-raft`
 
@@ -470,7 +506,7 @@ curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway" \
 
 See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.
 
-**Note:** `orama node clean` does not work on OramaOS nodes (no SSH). For graceful departure use the Gateway API (`POST /v1/node/leave`), or reflash the image for a factory reset. There is no `orama node leave` CLI command.
+**Note:** `orama node wipe` (and the deprecated `clean`) does not work on OramaOS nodes (no SSH). For graceful departure use the Gateway API (`POST /v1/node/leave`), or reflash the image for a factory reset. There is no `orama node leave` CLI command.
 
 ## Pre-Install Checklist (Ubuntu Only)
 

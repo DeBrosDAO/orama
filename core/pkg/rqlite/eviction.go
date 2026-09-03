@@ -10,16 +10,29 @@ import (
 	"go.uber.org/zap"
 )
 
-// raftMember is the subset of a /nodes entry the eviction decision needs.
-type raftMember struct {
+// RaftMember is the subset of a /nodes entry a membership decision needs.
+type RaftMember struct {
 	ID        string
 	Voter     bool
 	Reachable bool
 }
 
+// raftMember is the internal alias kept so existing call sites read naturally.
+type raftMember = RaftMember
+
 // evictionRefusal explains why a removal was not attempted. An empty string
 // means it may proceed.
 type evictionRefusal string
+
+// SafeToRemoveVoter reports why removing target from the raft configuration
+// would be unsafe, or "" if it may proceed.
+//
+// Exported so the operator-facing decommission command applies the same rule as
+// the automatic eviction. Two implementations of a quorum-safety check is one
+// too many: the version that is wrong is the one nobody reads.
+func SafeToRemoveVoter(members []RaftMember, target string) string {
+	return string(safeToEvict(members, target))
+}
 
 // safeToEvict reports whether removing target from the raft configuration
 // leaves a cluster that can still elect a leader and commit writes.

@@ -29,6 +29,8 @@ func init() {
 	Cmd.AddCommand(pushCmd)
 	Cmd.AddCommand(rolloutCmd)
 	Cmd.AddCommand(cleanCmd)
+	Cmd.AddCommand(decommissionCmd)
+	Cmd.AddCommand(wipeCmd)
 	Cmd.AddCommand(recoverRaftCmd)
 	Cmd.AddCommand(enrollCmd)
 	Cmd.AddCommand(unlockCmd)

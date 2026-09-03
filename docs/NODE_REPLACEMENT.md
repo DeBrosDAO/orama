@@ -468,7 +468,7 @@ in-memory breakers (never restart all voters at once).
 
 ---
 
-## Phase D — Remove old node from **platform** Raft
+## Phase D/E — Retire and erase the old node
 
 Only when:
 
@@ -477,41 +477,60 @@ Only when:
 - Namespace DNS only lists live gateway IPs
 - You accept namespace HA state (rebalanced or recovered)
 
-On **platform leader**:
+One command does both phases, from a survivor:
+
+```bash
+orama node decommission --env <env> --node <OLD_PUBLIC_IP>
+```
+
+It takes the old node out of the raft configuration — refusing if that would
+cost the cluster its quorum — writes an eviction tombstone so orphan recovery
+does not put it back within five minutes, deletes its `wireguard_peers` and
+`dns_nodes` rows, and then erases the machine. Add `--offline` if the VPS is
+already gone.
+
+Verify afterwards on the platform leader:
+
+```bash
+PASS=$(sudo cat /opt/orama/.orama/secrets/rqlite-password)
+curl -sS -u "orama:$PASS" http://127.0.0.1:10100/nodes | python3 -m json.tool
+# expect exactly the surviving voters, all reachable; leader still elected
+```
+
+<details>
+<summary>Manual equivalent, if the CLI cannot reach a survivor</summary>
+
+On the **platform leader**:
 
 ```bash
 PASS=$(sudo cat /opt/orama/.orama/secrets/rqlite-password)
 AUTH="orama:$PASS"
 
-# Confirm 4 voters, all reachable
+# Confirm the voter set first
 curl -sS -u "$AUTH" http://127.0.0.1:10100/nodes | python3 -m json.tool
 
 # Remove old WG raft id, e.g. 10.0.0.6:10101
 curl -sS -u "$AUTH" -X DELETE http://127.0.0.1:10100/remove \
   -H 'Content-Type: application/json' \
   -d '{"id":"10.0.0.6:10101"}'
-
-sleep 3
-curl -sS -u "$AUTH" http://127.0.0.1:10100/nodes | python3 -m json.tool
-# expect exactly 3 voters, all reachable; leader still elected
 ```
 
-Mark old `dns_nodes` inactive:
+Then write the tombstone, or orphan recovery re-adds the node within five
+minutes:
 
 ```sql
-UPDATE dns_nodes SET status='inactive', updated_at=CURRENT_TIMESTAMP
-  WHERE id='<OLD_LIBP2P_ID>';
+INSERT INTO raft_evicted_nodes (node_id, raft_addr, peer_id, reason, evicted_by)
+  VALUES ('10.0.0.6:10101','10.0.0.6:10101','<OLD_LIBP2P_ID>','operator','<THIS_NODE>');
+DELETE FROM wireguard_peers WHERE wg_ip = '10.0.0.6';
+DELETE FROM dns_nodes WHERE id = '<OLD_LIBP2P_ID>';
 ```
 
----
+Finally erase the box with `orama node wipe --env <env> --node <OLD_PUBLIC_IP>`,
+or follow [CLEAN_NODE.md](CLEAN_NODE.md) on it directly.
 
-## Phase E — Clean the old VPS
+</details>
 
-Only **after** platform remove succeeds and remaining cluster is healthy.
-
-Follow [CLEAN_NODE.md](CLEAN_NODE.md) on the old box (stop services, tear down WG, wipe `/opt/orama`, reset UFW to SSH-only).
-
-Optional: repurpose the cleaned box (e.g. new `jarvis` operator host).
+Optional: repurpose the erased box (e.g. new `jarvis` operator host).
 
 ---
 

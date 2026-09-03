@@ -2,6 +2,15 @@
 
 How to completely remove all Orama Network state from a VPS so it can be reinstalled fresh.
 
+> **Prefer the CLI.** For a node that is or was a cluster member, run
+> `orama node decommission --env <env> --node <ip>`: it retires the node from
+> raft, the mesh and the node registry from a *survivor* first, then erases it.
+> Doing only the erase — which is all this guide, and the deprecated
+> `orama node clean`, ever did — leaves the node a configured raft voter counted
+> toward quorum, with its `wireguard_peers` row still applied to every
+> survivor's interface. Use `orama node wipe` when the node is already retired,
+> and the manual steps below only when the CLI cannot reach the machine.
+
 > **OramaOS nodes:** This guide applies to Ubuntu-based nodes only. OramaOS has no SSH or shell access. To remove an OramaOS node: use `POST /v1/node/leave` via the Gateway API for graceful departure, or reflash the OramaOS image via your VPS provider's dashboard for a factory reset. See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for details.
 
 ## Quick Clean (Copy-Paste)
