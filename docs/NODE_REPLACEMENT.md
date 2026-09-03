@@ -305,7 +305,18 @@ Also, **namespace RQLite** still listed dead voters (`10.0.0.6`, `10.0.0.11`). A
 
 ### Safe DNS rule for namespaces
 
-**Only advertise IPs that currently run that namespace’s gateway.**
+**Only advertise IPs that currently run that namespace's gateway.**
+
+**Nodes now do this themselves.** Each node probes the namespaces it hosts every
+30s and, after 3 consecutive unhealthy probes (~90s), withdraws its own
+`ns-<ns>` and `*.ns-<ns>` records. It restores them after 3 consecutive healthy
+probes. A withdrawal never removes the **last** active record for a name —
+advertising a node that might still answer beats having no answer at all — and
+the guard is evaluated inside the UPDATE, so two nodes withdrawing at the same
+moment cannot both believe they are not the last.
+
+So the manual SQL below is a fallback for the case the probe cannot cover:
+records pointing at a node that is **gone entirely** and therefore not probing.
 
 ```sql
 -- After cutover: keep only live gateway IP(s) for a namespace

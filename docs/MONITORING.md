@@ -308,6 +308,34 @@ Observations land in `node_health_events`; recovery is triggered only by the
 lowest-id observer once quorum agrees, so a confirmed death produces one
 recovery action rather than one per observer.
 
+## Namespace DNS self-management
+
+Separately from the ring monitor, each node probes the namespaces it hosts every
+30s (rqlite, Olric and gateway ports) and keeps its own DNS records in step:
+
+| Transition | Threshold | Effect |
+|---|---|---|
+| healthy → unhealthy | 3 consecutive unhealthy probes (~90s) | withdraws this node's `ns-<ns>` and `*.ns-<ns>` A records |
+| unhealthy → healthy | 3 consecutive healthy probes (~90s) | restores the records it withdrew |
+
+Two safety rules:
+
+- **Never the last record.** A withdrawal is refused when this node's record is
+  the only active one for that name. The count is evaluated inside the UPDATE,
+  so simultaneous withdrawals on different nodes cannot empty the round-robin
+  between them.
+- **A peer's verdict outranks a stale one, not a live one.** Records this
+  process withdrew are restored as soon as its own probe recovers. A record a
+  *peer* disabled (the ring monitor's suspect path) is only reclaimed after it
+  has sat untouched for 10 minutes, so a monitor that still considers this node
+  suspect keeps it out.
+
+Watch it with:
+
+```bash
+journalctl -u orama-node --no-pager | grep -E 'namespace DNS round-robin'
+```
+
 ## Configuration
 
 Uses the same `scripts/nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.
