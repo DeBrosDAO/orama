@@ -62,7 +62,6 @@ type OlricInstance struct {
 	AdvertiseAddr  string
 	PeerAddresses  []string // Memberlist peer addresses for cluster discovery
 	ConfigPath     string
-	DataDir        string
 	PID            int
 	StartedAt      time.Time
 	cmd            *exec.Cmd
@@ -146,12 +145,12 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	}
 	is.mu.Unlock()
 
-	// Create data and config directories
-	dataDir := filepath.Join(is.baseDir, cfg.Namespace, "olric", cfg.NodeID)
+	// Config + logs only. Olric v0.7.0 is in-memory; a dataDir is never passed
+	// to olric-server and must not be created (empty dirs looked like persistence).
 	configDir := filepath.Join(is.baseDir, cfg.Namespace, "configs")
 	logsDir := filepath.Join(is.baseDir, cfg.Namespace, "logs")
 
-	for _, dir := range []string{dataDir, configDir, logsDir} {
+	for _, dir := range []string{configDir, logsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, &InstanceError{
 				Message: fmt.Sprintf("failed to create directory %s", dir),
@@ -175,7 +174,6 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		AdvertiseAddr:  cfg.AdvertiseAddr,
 		PeerAddresses:  cfg.PeerAddresses,
 		ConfigPath:     configPath,
-		DataDir:        dataDir,
 		Status:         InstanceStatusStarting,
 		waitDone:       make(chan struct{}),
 		logger:         is.logger.With(zap.String("namespace", cfg.Namespace), zap.String("node_id", cfg.NodeID)),

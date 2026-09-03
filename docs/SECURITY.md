@@ -23,10 +23,10 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Peer removal additionally validates the request originates from a WireGuard subnet IP
 
 **RQLite Authentication (Step 1.7)**
-- RQLite runs with `-auth` flag pointing to a credentials file
-- All RQLite HTTP requests include `Authorization: Basic <base64>` headers
-- Credentials generated at cluster genesis, distributed to joining nodes via join response
-- Both the central RQLite client wrapper and the standalone CoreDNS RQLite client send auth
+- Credentials are generated at genesis and written to `rqlite-auth.json` / `rqlite-password`
+- `rqlited` is **not** started with `-auth` today: `RQLiteAuthFile` is never assigned, so the HTTP API does not require those credentials
+- Clients still send `Authorization: Basic` when they have a password (harmless if the server ignores it)
+- What keeps the RQLite API off the public internet is the firewall / WireGuard overlay, not RQLite HTTP auth
 
 **Olric Gossip Encryption (Step 1.8)**
 - Olric memberlist uses a 32-byte encryption key for all gossip traffic
@@ -111,7 +111,7 @@ These measures apply only to OramaOS nodes (mainnet, devnet, testnet).
 
 ### Immutable OS
 
-- **Read-only rootfs** — SquashFS with dm-verity integrity verification
+- **Read-only rootfs** — SquashFS. dm-verity hashes can be built into the image; they are **not** wired into the boot path, so integrity is not enforced at boot today
 - **No shell** — `/bin/sh` symlinked to `/bin/false`, no bash/ash/ssh
 - **No SSH** — OpenSSH not included in the image
 - **Minimal packages** — only what's needed for systemd, cryptsetup, and the agent
@@ -148,6 +148,18 @@ Note: CLONE_NEWPID is intentionally omitted — it makes services PID 1 in their
 - Management only through Gateway API → agent over WireGuard
 - All commands are logged and auditable
 - No root access, no console access, no file system access
+
+## What this does not defend against today
+
+Stated so the gaps above are known positions, not implied protections:
+
+- **RAM snapshot** of a running node (secrets in process memory, including gateway vault combine)
+- **Hosting-provider / hypervisor access** to the guest
+- **Ubuntu fleet SSH** — Zero Operator Access and LUKS FDE apply to OramaOS only
+- **dm-verity at boot** — hashes may exist in the OramaOS image; they are not wired into the boot path
+- **RQLite HTTP auth** — `rqlited -auth` is not enabled; overlay + firewall are the control
+- **ntfy** — no auth-file in v1; listen-localhost is the control
+- **A captured disk snapshot of RQLite** — plaintext application data, including `deployment_env_vars`
 
 ## Rollout Strategy
 

@@ -126,7 +126,7 @@ Cluster secrets are stored in `/opt/orama/.orama/secrets/`:
 | Secret | Purpose |
 |--------|---------|
 | `cluster-secret` | Cluster identity, used for internal endpoint auth |
-| `rqlite-password` / `rqlite-auth.json` | RQLite credentials used by Orama's own RQLite clients |
+| `rqlite-password` / `rqlite-auth.json` | Written at genesis; **not** passed to `rqlited -auth` today |
 | `api-key-hmac-secret` | HMAC key for API key hashing |
 | `olric-encryption-key` | Olric memberlist gossip encryption |
 

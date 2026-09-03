@@ -95,7 +95,7 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 
 		// Public web services
 		"ufw allow 80/tcp",  // ACME / HTTP redirect
-		"ufw allow 443/tcp", // HTTPS (Caddy → Gateway)
+		"ufw allow 443/tcp", // HTTPS (SNI router when installed; otherwise Caddy)
 	}
 
 	// DNS (only for nameserver nodes)

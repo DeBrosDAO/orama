@@ -8,7 +8,7 @@ OramaOS is a locked-down operating system designed specifically for Orama node o
 
 - **No SSH, no shell** — operators cannot access the filesystem or run commands on the machine
 - **LUKS full-disk encryption** — the data partition is encrypted; the key is split via Shamir's Secret Sharing across peer nodes
-- **Read-only rootfs** — the OS image uses SquashFS with dm-verity integrity verification
+- **Read-only rootfs** — SquashFS. dm-verity can be built into the image; it is **not** wired at boot, so rootfs integrity is not enforced today
 - **A/B partition updates** — signed OS images are applied atomically with automatic rollback on failure
 - **Service sandboxing** — each service runs in its own Linux namespace with seccomp syscall filtering
 - **Signed binaries** — all updates are cryptographically signed with the Orama rootwallet
@@ -186,7 +186,7 @@ Services and their sandbox profiles:
 | Disk encryption | No | LUKS2 (Shamir) |
 | OS updates | Manual (`orama node upgrade`) | Automatic (signed, A/B) |
 | Service isolation | systemd only | Namespaces + seccomp |
-| Rootfs integrity | None | dm-verity |
+| Rootfs integrity | None | dm-verity hashes exist in the image; not wired at boot |
 | Binary signing | Optional | Required |
 | Operator data access | Full | None |
 | Environments | All (including sandbox) | Mainnet, devnet, testnet |

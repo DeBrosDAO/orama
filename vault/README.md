@@ -1,18 +1,18 @@
 # Orama Vault
 
-A distributed secrets store built on Shamir's Secret Sharing. Orama Vault splits sensitive data into cryptographic shares and distributes them across a network of guardian nodes. No single node ever holds enough information to reconstruct a secret — an attacker must compromise a threshold number of guardians simultaneously.
+A distributed secrets store built on Shamir's Secret Sharing. Orama Vault stores one share per guardian. The **guardian HTTP API** is share-at-a-time: a client that talks to guardians directly splits and reconstructs locally. The **production gateway path does not reverse-proxy that API** — the gateway splits on push and combines on pull, so the gateway process holds the reconstructed secret in memory for the duration of that request.
 
 ## How It Works
 
-1. **You split.** The client splits a secret into N shares using Shamir's Secret Sharing over GF(2^8), with a threshold K.
-2. **Guardians store.** Each share is pushed to a different guardian node in the Orama Network.
-3. **You reconstruct.** To recover, pull shares from any K guardians and reconstruct the original via Lagrange interpolation.
+1. **Split.** Shamir split over GF(2^8) with threshold K. Direct guardian clients split locally; the Orama gateway splits in the gateway process.
+2. **Guardians store.** Each share is stored on a different guardian (HMAC integrity, not encryption-at-rest in the file store).
+3. **Reconstruct.** Direct clients pull K shares and interpolate locally. The gateway pull path interpolates in the gateway and returns the secret to the caller.
 
 The security is **information-theoretic**: K-1 shares reveal exactly zero information about the secret, regardless of computing power. This is not a computational assumption — it is mathematically proven.
 
 ## Key Properties
 
-- **Zero-knowledge storage** — Each guardian holds a single share that is meaningless on its own
+- **Share isolation on disk** — Each guardian holds a single share that is meaningless on its own. This does **not** mean the gateway never sees the secret.
 - **Fault tolerant** — Up to N-K nodes can go offline or be destroyed without data loss
 - **No central authority** — No master key, no trusted coordinator, no single point of failure
 - **Tamper-evident** — Every share is protected by HMAC-SHA256 integrity checksums

@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/rqlite/gorqlite"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // safeWriteOne wraps gorqlite's WriteOneParameterized to recover from panics.
@@ -244,6 +246,7 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 	rqliteNodes := d.getRQLiteNodes()
 
 	var lastErr error
+	var lastURL string
 
 	for _, rqliteURL := range rqliteNodes {
 		var conn *gorqlite.Connection
@@ -261,6 +264,7 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 		conn, err = gorqlite.Open(openURL)
 		if err != nil {
 			lastErr = err
+			lastURL = openURL
 			continue
 		}
 
@@ -268,13 +272,14 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 		// and the node has leadership or can serve reads
 		if err := d.testConnection(conn); err != nil {
 			lastErr = err
+			lastURL = openURL
 			continue
 		}
 
 		return conn, nil
 	}
 
-	return nil, fmt.Errorf("failed to connect to any RQLite instance. Last error: %w", lastErr)
+	return nil, fmt.Errorf("failed to connect to any RQLite instance. Last error: %s", rqlite.RedactError(lastErr, lastURL))
 }
 
 // testConnection performs a health check on the RQLite connection
