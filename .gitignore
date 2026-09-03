@@ -97,3 +97,9 @@ core/plans/
 
 # Claude Code local settings (machine-specific allowlists — never commit)
 .claude/settings.local.json
+
+# Go build artifacts left in core/ by `go build ./cmd/...`
+core/turn
+core/sfu
+core/gateway
+core/identity

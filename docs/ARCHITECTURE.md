@@ -534,7 +534,7 @@ Namespaces can opt in to WebRTC support for real-time voice, video, and data cha
 ### Components
 
 - **SFU (Selective Forwarding Unit)** — Pion WebRTC server that handles signaling (WebSocket), SDP negotiation, and RTP forwarding. Runs on all 3 cluster nodes, binds only to WireGuard IPs.
-- **TURN Server** — Pion TURN relay that provides NAT traversal. Runs on 2 of 3 nodes for redundancy. Public-facing (UDP 3478, 443, relay range 49152-65535).
+- **TURN Server** — Pion TURN relay that provides NAT traversal. One shared server per host (`orama-turn.service`) serves every namespace allocated TURN there, each authenticated against its own secret; typically 2 of 3 nodes for redundancy. Public-facing (UDP 3478, 443, relay range 49152-65535).
 
 ### Security Model
 

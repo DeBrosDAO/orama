@@ -130,12 +130,18 @@ func (fp *FilesystemProvisioner) EnsureOramaUser() error {
 // oramaSudoersRule returns the /etc/sudoers.d/orama-namespaces content granting
 // the unprivileged orama user NOPASSWD access to exactly the systemctl and ufw
 // commands it needs at runtime: namespace/deployment service management, and
-// opening per-namespace TURN relay firewall ports when WebRTC is enabled
+// opening the TURN relay firewall ports when WebRTC is enabled
 // (FirewallProvisioner.AddWebRTCRules runs `ufw`, which needs root — without
 // these ufw entries TURN ports stayed firewalled after `webrtc enable`).
+//
+// orama-turn.service is listed explicitly (bugboard #283 part 2): the shared,
+// host-level TURN unit is not a namespace instance, so it matches none of the
+// orama-namespace-* globs. Without these entries the reconciler stops the legacy
+// per-namespace unit and is then refused permission to start the shared one,
+// leaving the node with no TURN at all.
 func oramaSudoersRule(systemctlPath, ufwPath string) string {
 	return fmt.Sprintf(
-		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s daemon-reload, %[2]s allow *, %[2]s delete allow *, %[2]s reload, %[2]s status, %[2]s status verbose\n",
+		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s start orama-turn.service, %[1]s stop orama-turn.service, %[1]s restart orama-turn.service, %[1]s enable orama-turn.service, %[1]s daemon-reload, %[2]s allow *, %[2]s delete allow *, %[2]s reload, %[2]s status, %[2]s status verbose\n",
 		systemctlPath, ufwPath,
 	)
 }

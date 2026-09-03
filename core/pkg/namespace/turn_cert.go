@@ -16,7 +16,7 @@ import (
 // could otherwise inject arbitrary Caddy directives) and to refuse cert
 // provisioning for non-hostname junk. Security: defense-in-depth at the
 // Caddyfile sink; the caller also pins the stealth domain to its deterministic
-// derivation (systemd_spawner.go SpawnTURN).
+// derivation (see desiredHostTURNTenants in host_turn.go).
 var dnsNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 
 const (

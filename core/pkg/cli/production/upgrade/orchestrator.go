@@ -482,6 +482,10 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 		"orama-namespace-gateway@.service",
 		"orama-namespace-sfu@.service",
 		"orama-namespace-turn@.service",
+		// Shared, host-level TURN (bugboard #283 part 2). Not a template: it
+		// serves every namespace on this host from one process, because
+		// 3478/5349 are host-exclusive.
+		"orama-turn.service",
 	}
 
 	installedCount := 0

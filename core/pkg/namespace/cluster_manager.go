@@ -2062,6 +2062,17 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 		}
 		restored++
 	}
+
+	// TURN is host-level (bugboard #283 part 2): one shared server per node
+	// serving every namespace allocated here. Reconcile it ONCE, after every
+	// namespace's state has been restored, so it sees the node's complete tenant
+	// set instead of being rebuilt from scratch per namespace.
+	//
+	// This also subsumes the #158 per-namespace secret-drift repair: the shared
+	// config is rebuilt from the DB every time, so a rotated secret and a
+	// self-signed→wildcard cert switch both fall out of it.
+	cm.ReconcileHostTURN(ctx)
+
 	return restored, nil
 }
 
@@ -2568,16 +2579,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 	}
 
 	// bugboard #158: keep the TURN server's auth_secret in sync with the current
-	// namespace DB secret, independently of the state file. Some namespaces'
-	// cluster-state.json does not persist TURN fields (only has_gateway), so the
-	// state-gated TURN restore below never fires for them — yet the gateway still
-	// re-syncs its turn_secret to the DB secret on every boot (ReconcileGateway).
-	// If TURN keeps a stale secret the gateway mints credentials TURN rejects and
-	// every call fails auth (Allocate 400 → zero relay candidates). ReconcileTURN
-	// also switches the TURNS cert from the self-signed fallback to the wildcard
-	// once it's available (browsers reject self-signed). Reads the on-disk turn
-	// config and patches only drifted fields; a no-op when there is no TURN on
-	// this node or it is already in sync.
+	// namespace DB secret, independently of the state file. If TURN keeps a stale
+	// secret the gateway mints credentials TURN rejects and every call fails auth
+	// (Allocate 400 → zero relay candidates). The TURNS cert must likewise move
+	// off the self-signed fallback to the wildcard once available, since browsers
+	// reject self-signed. Both now fall out of rebuilding the shared host config
+	// from the DB rather than patching an on-disk per-namespace config in place.
 	if turnWebRTCCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName); werr == nil && turnWebRTCCfg != nil {
 		// Before reconciling THIS node's services, bring the cluster-wide role
 		// assignments back in line with live membership (bugboard #161): node
@@ -2590,10 +2597,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				zap.String("namespace", state.NamespaceName), zap.Error(aerr))
 		}
 
-		if rerr := cm.systemdSpawner.ReconcileTURN(ctx, state.NamespaceName, cm.localNodeID, turnWebRTCCfg.TURNSharedSecret); rerr != nil {
-			cm.logger.Warn("TURN reconcile failed (leaving running config as-is)",
-				zap.String("namespace", state.NamespaceName), zap.Error(rerr))
-		}
+		// TURN is deliberately NOT reconciled here. It is host-level since
+		// bugboard #283 part 2, so it is reconciled ONCE by
+		// RestoreLocalClustersFromDisk after every namespace has been restored.
+		// Doing it per namespace would re-derive the whole host's tenant set, and
+		// re-issue its firewall calls, once for every namespace on the node — at
+		// boot, the worst possible moment.
 		// If this node runs TURN, make sure its TURN/stealth A record exists.
 		// The #158 sweep only DELETES records for inactive nodes; a node whose
 		// record was purged while briefly down (e.g. mid-deploy) would otherwise
@@ -2603,8 +2612,11 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		// config file. StopService leaves the config behind, so a file-existence
 		// gate re-advertises a node that lost the TURN role on its next boot,
 		// pointing clients at a relay that will never start (the #161 symptom).
+		// Since #283 part 2 the evidence is the SHARED unit: the per-namespace one
+		// this used to check no longer runs, and gating on it would leave every
+		// TURN node permanently unadvertised.
 		bootTurnBlk, bootTurnErr := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID)
-		bootTurnUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
+		bootTurnUp, _ := cm.systemdSpawner.systemdMgr.IsHostTURNActive()
 		if bootTurnErr == nil && bootTurnBlk != nil && bootTurnUp {
 			pip, perr := cm.getLocalNodePublicIP(ctx)
 			switch {
@@ -2634,52 +2646,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		state.TURNRelayPortStart = turnAlloc.TURNRelayPortStart
 		state.TURNRelayPortEnd = turnAlloc.TURNRelayPortEnd
 	}
-	if turnAllocated {
-		// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by
-		// the root-level Phase 6b firewall setup, which is TURN-aware. orama-node
-		// runs as a NON-root user and cannot modify ufw, so the firewall reconcile
-		// deliberately does NOT live here — it would just spawn a doomed `ufw`
-		// call. The restore below only re-spawns the TURN process itself.
-		turnRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
-		if !turnRunning {
-			// TURN config needs the shared secret from DB — we can't persist it to disk state.
-			// If DB is available, fetch it; otherwise skip TURN restore (it will come back when DB is ready).
-			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-			if err == nil && webrtcCfg != nil {
-				// Resolve this node's public IP. Passing an empty PublicIP here
-				// (the old behavior) produced a TURN config that crash-loops on
-				// "public_ip must not be empty" — killing TURN on the node and
-				// preventing AddWebRTCRules from ever running (bugboard #846).
-				publicIP, ipErr := cm.getLocalNodePublicIP(ctx)
-				if ipErr != nil {
-					cm.logger.Error("Skipping TURN restore: cannot resolve local node public IP (an empty public_ip crash-loops the TURN server)",
-						zap.String("namespace", state.NamespaceName), zap.Error(ipErr))
-				} else {
-					turnCfg := TURNInstanceConfig{
-						Namespace:       state.NamespaceName,
-						NodeID:          cm.localNodeID,
-						ListenAddr:      fmt.Sprintf("0.0.0.0:%d", turnAlloc.TURNListenPort),
-						TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", turnAlloc.TURNTLSPort),
-						PublicIP:        publicIP,
-						Realm:           cm.baseDomain,
-						AuthSecret:      webrtcCfg.TURNSharedSecret,
-						RelayPortStart:  state.TURNRelayPortStart,
-						RelayPortEnd:    state.TURNRelayPortEnd,
-						TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
-						StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-					}
-					if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
-						cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
-					} else {
-						cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName), zap.String("public_ip", publicIP))
-					}
-				}
-			} else {
-				cm.logger.Warn("Skipping TURN restore: WebRTC config not available from DB",
-					zap.String("namespace", state.NamespaceName))
-			}
-		}
-	}
+	// Restoring the TURN process itself is not done here: since #283 part 2 it is
+	// host-level, reconciled once by the ReconcileHostTURN call above from this
+	// node's full set of allocations. The allocation read above still matters —
+	// it carries the relay range back into the state file.
+	//
+	// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by the
+	// root-level Phase 6b firewall setup, which is TURN-aware. orama-node runs as
+	// a NON-root user and cannot modify ufw, so the firewall reconcile
+	// deliberately does not live here — it would just spawn a doomed `ufw` call.
 
 	// 5. Restore SFU — gated on this node's DB ALLOCATION, not the state file.
 	//

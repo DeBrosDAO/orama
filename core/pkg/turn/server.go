@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pionTurn "github.com/pion/turn/v4"
@@ -31,11 +32,15 @@ type Server struct {
 
 	certReloader        *certReloader // hot-reloads the primary TURNS cert; nil when TURNS disabled
 	stealthCertReloader *certReloader // hot-reloads the stealth-SNI cert; nil when stealth disabled
-	// stealthByHost maps a tenant's stealth SNI hostname to its cert reloader
-	// (bugboard #283). A shared server answers TURNS for several tenants, each
-	// with its own stealth hostname and cert, selected by ClientHello SNI.
-	stealthByHost map[string]*certReloader
-	certStop      chan struct{} // closed to stop the cert-reload watcher goroutine(s)
+	certStop            chan struct{} // closed to stop the cert-reload watcher goroutine(s)
+
+	// tenants is the live snapshot of who this server serves (bugboard #283),
+	// swapped wholesale by reloadTenants. It is read on every authentication and
+	// every stealth-SNI handshake, so it is guarded rather than copied: a shared
+	// server must be able to gain and lose tenants without a restart, because
+	// restarting drops every OTHER tenant's active relays.
+	tenantMu sync.RWMutex
+	tenants  *tenantSet
 }
 
 // NewServer creates and starts a TURN server.
@@ -53,6 +58,17 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		config: cfg,
 		logger: logger.With(zap.String("component", "turn"), zap.String("namespace", cfg.Namespace)),
 	}
+
+	// Build the initial tenant set before any listener exists, so a bad tenant
+	// or an unreadable stealth cert fails startup instead of opening a port that
+	// authorizes nobody. Each tenant's stealth watcher owns its own stop channel,
+	// so they start here and are stopped by closeListeners.
+	initial, pendingWatchers, err := s.buildTenantSet(cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	s.tenants = initial
+	startPendingWatchers(pendingWatchers)
 
 	// Create primary UDP listener (port 3478)
 	conn, err := net.ListenPacket("udp4", cfg.ListenAddr)
@@ -109,17 +125,13 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		// Stealth SNI: when configured, terminate TLS for a second (neutral)
 		// hostname using its own hot-reloading cert. The SNI router forwards the
 		// raw stealth-domain bytes to this listener; selection is by ServerName.
-		if err := s.loadTenantStealthCertReloaders(cfg); err != nil {
-			s.closeListeners()
-			return nil, err
-		}
 		if err := s.loadStealthCertReloader(cfg); err != nil {
 			s.closeListeners()
 			return nil, err
 		}
 
 		tlsConfig := &tls.Config{
-			GetCertificate: newGetCertificateMulti(cfg.StealthDomain, reloader, s.stealthCertReloader, s.stealthByHost),
+			GetCertificate: newGetCertificateMulti(cfg.StealthDomain, reloader, s.stealthCertReloader, s.stealthCertFor),
 			MinVersion:     tls.VersionTLS12,
 		}
 		tlsListener, err := tls.Listen("tcp", cfg.TURNSListenAddr, tlsConfig)
@@ -132,12 +144,6 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		go reloader.watch(turnCertReloadInterval, s.certStop)
 		if s.stealthCertReloader != nil {
 			go s.stealthCertReloader.watch(turnCertReloadInterval, s.certStop)
-		}
-		// Per-tenant stealth certs renew independently of each other, so each
-		// needs its own watcher — without this a tenant's stealth cert would go
-		// stale at renewal and its clients would hit an expired certificate.
-		for _, r := range s.stealthByHost {
-			go r.watch(turnCertReloadInterval, s.certStop)
 		}
 
 		listenerConfigs = append(listenerConfigs, pionTurn.ListenerConfig{
@@ -224,40 +230,6 @@ func (s *Server) loadStealthCertReloader(cfg *Config) error {
 	return nil
 }
 
-// loadTenantStealthCertReloaders loads a stealth cert per tenant that enables it
-// (bugboard #283). Same all-or-nothing rule as the single-tenant form: a tenant
-// with a partial stealth config is an operator mistake and fails startup rather
-// than quietly serving the wrong certificate for its hostname.
-func (s *Server) loadTenantStealthCertReloaders(cfg *Config) error {
-	for _, t := range cfg.ResolvedTenants() {
-		set := 0
-		if t.StealthDomain != "" {
-			set++
-		}
-		if t.TLSStealthCertPath != "" {
-			set++
-		}
-		if t.TLSStealthKeyPath != "" {
-			set++
-		}
-		if set == 0 {
-			continue // stealth disabled for this tenant
-		}
-		if set != stealthConfigFieldCount {
-			return fmt.Errorf("turn: partial stealth config for tenant %q — set all of [stealth_domain, tls_stealth_cert_path, tls_stealth_key_path] or none", t.Namespace)
-		}
-		reloader, err := newCertReloader(t.TLSStealthCertPath, t.TLSStealthKeyPath, s.logger)
-		if err != nil {
-			return fmt.Errorf("tenant %q: failed to load stealth TLS cert/key (cert=%s, key=%s): %w", t.Namespace, t.TLSStealthCertPath, t.TLSStealthKeyPath, err)
-		}
-		if s.stealthByHost == nil {
-			s.stealthByHost = make(map[string]*certReloader)
-		}
-		s.stealthByHost[strings.ToLower(t.StealthDomain)] = reloader
-	}
-	return nil
-}
-
 // newGetCertificate builds the tls.Config.GetCertificate callback. When the
 // ClientHello ServerName equals stealthDomain (case-insensitively), it serves
 // the stealth cert; every other case — including empty SNI and the primary TURN
@@ -272,11 +244,17 @@ func newGetCertificate(stealthDomain string, primary, stealth *certReloader) fun
 // against the per-tenant map first. Everything else — including empty SNI and the
 // primary TURN domain, which is covered by the zone wildcard cert — serves the
 // primary cert exactly as before.
-func newGetCertificateMulti(stealthDomain string, primary, stealth *certReloader, byHost map[string]*certReloader) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+// The per-tenant lookup is a function rather than a captured map because the
+// tenant set changes at runtime: a namespace that enables stealth after this
+// server started must be served without a restart, and a captured map would
+// pin the set as of process start.
+func newGetCertificateMulti(stealthDomain string, primary, stealth *certReloader, byHost func(string) (*certReloader, bool)) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if hello != nil {
-			if r, ok := byHost[strings.ToLower(hello.ServerName)]; ok && r != nil {
-				return r.GetCertificate(hello)
+			if byHost != nil {
+				if r, ok := byHost(hello.ServerName); ok && r != nil {
+					return r.GetCertificate(hello)
+				}
 			}
 			if stealth != nil && strings.EqualFold(hello.ServerName, stealthDomain) {
 				return stealth.GetCertificate(hello)
@@ -313,7 +291,7 @@ func (s *Server) authHandler(username, realm string, srcAddr net.Addr) ([]byte, 
 	// several tenants, so authorization is the per-tenant lookup: a namespace we
 	// do not serve is rejected exactly as a mismatch was before, and a miss must
 	// never fall through to another tenant's secret.
-	secret, ok := s.config.TenantSecret(ns)
+	secret, ok := s.tenantSecret(ns)
 	if !ok {
 		s.logger.Debug("TURN credential for a namespace this server does not serve",
 			zap.String("credential_namespace", ns),
@@ -363,6 +341,10 @@ func (s *Server) Close() error {
 // mutex-protected — it relies on its call sites being single-threaded relative
 // to each other (sequential construction, plus a single Close() from main).
 func (s *Server) closeListeners() {
+	// Per-tenant stealth watchers hold their own stop channels (they must
+	// outlive/undercut individual reloads), so shutting down means closing those
+	// too, not just the shared one.
+	s.stopAllStealthWatchers()
 	if s.certStop != nil {
 		close(s.certStop)
 		s.certStop = nil

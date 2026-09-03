@@ -174,37 +174,35 @@ func (cm *ClusterManager) respawnTURNWithStealth(
 	turnBlocks []WebRTCPortBlock,
 	turnSecret, stealthDomain string,
 ) error {
-	turnDomain := fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+	// Validate the allocation against live membership before claiming success:
+	// a TURN block naming a node that is no longer in the cluster means the
+	// allocation is stale, and enabling stealth on it would report a
+	// censorship-resistant path that nothing serves.
 	for _, block := range turnBlocks {
-		var node *clusterNodeInfo
+		found := false
 		for i := range clusterNodes {
 			if clusterNodes[i].NodeID == block.NodeID {
-				node = &clusterNodes[i]
+				found = true
 				break
 			}
 		}
-		if node == nil {
+		if !found {
 			return fmt.Errorf("TURN node %s not found in cluster nodes", block.NodeID)
 		}
-
-		cm.stopTURNOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		turnCfg := TURNInstanceConfig{
-			Namespace:       cluster.NamespaceName,
-			NodeID:          node.NodeID,
-			ListenAddr:      fmt.Sprintf("0.0.0.0:%d", block.TURNListenPort),
-			TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", block.TURNTLSPort),
-			PublicIP:        node.PublicIP,
-			Realm:           cm.baseDomain,
-			AuthSecret:      turnSecret,
-			RelayPortStart:  block.TURNRelayPortStart,
-			RelayPortEnd:    block.TURNRelayPortEnd,
-			TURNDomain:      turnDomain,
-			StealthDomain:   stealthDomain,
-		}
-		if err := cm.spawnTURNOnNode(ctx, *node, cluster.NamespaceName, turnCfg); err != nil {
-			return fmt.Errorf("failed to re-spawn TURN on node %s: %w", node.NodeID, err)
-		}
 	}
+
+	// Since bugboard #283 part 2 TURN is host-level: enabling stealth adds this
+	// namespace's stealth hostname and cert to its hosts' shared TURN config,
+	// which each host applies from its own reconcile.
+	//
+	// The stop-then-respawn this used to do is now actively wrong — it would tear
+	// down a server that is also relaying for OTHER namespaces, dropping their
+	// live calls to enable stealth for this one. The shared server picks up a new
+	// stealth cert by reloading its tenant set, with no restart at all.
+	cm.ReconcileHostTURN(ctx)
+	cm.logger.Info("Stealth TURNS enabled; hosts apply it on their next reconcile",
+		zap.String("namespace", cluster.NamespaceName),
+		zap.String("stealth_domain", stealthDomain))
 	return nil
 }
 

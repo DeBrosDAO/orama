@@ -581,6 +581,27 @@ func (drm *DNSRecordManager) CreateStealthTURNRecords(ctx context.Context, names
 		zap.Strings("turn_ips", turnIPs),
 	)
 
+	// Refuse to publish a stealth host another namespace already claims
+	// (bugboard #283 part 2). The host is a truncated hash of the namespace, so a
+	// second claimant is not an accident — it is a bid for another namespace's
+	// censorship-resistant identity. Because the DELETE below is scoped to the
+	// CALLER's namespace, two claimants would each insert A records for the same
+	// fqdn and neither would remove the other's: resolvers return the union, and
+	// the victim's stealth clients round-robin onto a node that cannot serve them
+	// while disclosing their addresses to whoever holds it.
+	var claimants []struct {
+		Namespace string `db:"namespace"`
+	}
+	if err := drm.db.Query(internalCtx, &claimants,
+		`SELECT DISTINCT namespace FROM dns_records WHERE fqdn = ? AND namespace != ?`,
+		fqdn, stealthDNSNamespace(namespaceName)); err != nil {
+		return &ClusterError{Message: "failed to check stealth host uniqueness", Cause: err}
+	}
+	if len(claimants) > 0 {
+		return &ClusterError{Message: fmt.Sprintf(
+			"stealth host %s is already claimed by another namespace; refusing to publish overlapping records", fqdn)}
+	}
+
 	deleteQuery := `DELETE FROM dns_records WHERE namespace = ?`
 	_, _ = drm.db.Exec(internalCtx, deleteQuery, stealthDNSNamespace(namespaceName))
 

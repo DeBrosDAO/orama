@@ -78,16 +78,10 @@ type SpawnRequest struct {
 	TURNCredTTL   int                    `json:"turn_cred_ttl,omitempty"`
 	RQLiteDSN     string                 `json:"rqlite_dsn,omitempty"`
 
-	// TURN config (when action = "spawn-turn")
-	TURNListenAddr    string `json:"turn_listen_addr,omitempty"`
-	TURNTURNSAddr     string `json:"turn_turns_addr,omitempty"`
-	TURNPublicIP      string `json:"turn_public_ip,omitempty"`
-	TURNRealm         string `json:"turn_realm,omitempty"`
-	TURNAuthSecret    string `json:"turn_auth_secret,omitempty"`
-	TURNRelayStart    int    `json:"turn_relay_start,omitempty"`
-	TURNRelayEnd      int    `json:"turn_relay_end,omitempty"`
-	TURNDomain        string `json:"turn_domain,omitempty"`
-	TURNStealthDomain string `json:"turn_stealth_domain,omitempty"`
+	// No TURN config fields: TURN is host-level since bugboard #283 part 2, so
+	// there is no remote spawn to carry one. The surviving "stop-turn" action
+	// needs only Namespace and NodeID. The removed set included turn_auth_secret,
+	// a secret this struct no longer carries over the wire at all.
 
 	// Cluster state (when action = "save-cluster-state")
 	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
@@ -362,27 +356,6 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop-sfu":
 		if err := h.systemdSpawner.StopSFU(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop SFU instance", zap.Error(err))
-			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
-			return
-		}
-		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
-
-	case "spawn-turn":
-		cfg := namespacepkg.TURNInstanceConfig{
-			Namespace:       req.Namespace,
-			NodeID:          req.NodeID,
-			ListenAddr:      req.TURNListenAddr,
-			TURNSListenAddr: req.TURNTURNSAddr,
-			PublicIP:        req.TURNPublicIP,
-			Realm:           req.TURNRealm,
-			AuthSecret:      req.TURNAuthSecret,
-			RelayPortStart:  req.TURNRelayStart,
-			RelayPortEnd:    req.TURNRelayEnd,
-			TURNDomain:      req.TURNDomain,
-			StealthDomain:   req.TURNStealthDomain,
-		}
-		if err := h.systemdSpawner.SpawnTURN(ctx, req.Namespace, req.NodeID, cfg); err != nil {
-			h.logger.Error("Failed to spawn TURN instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

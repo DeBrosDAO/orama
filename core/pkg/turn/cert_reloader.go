@@ -103,3 +103,9 @@ func (r *certReloader) watch(interval time.Duration, stop <-chan struct{}) {
 		}
 	}
 }
+
+// samePaths reports whether this reloader already serves the given cert/key
+// pair, so a tenant reload can reuse it instead of re-reading the files.
+func (r *certReloader) samePaths(certPath, keyPath string) bool {
+	return r != nil && r.certPath == certPath && r.keyPath == keyPath
+}
