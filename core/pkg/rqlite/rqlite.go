@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/migrations"
@@ -20,12 +18,16 @@ import (
 
 // RQLiteManager manages an RQLite node instance
 type RQLiteManager struct {
-	config           *config.DatabaseConfig
-	discoverConfig   *config.DiscoveryConfig
+	config         *config.DatabaseConfig
+	discoverConfig *config.DiscoveryConfig
+
+	// peerID is this node's libp2p peer id, the stable half of its raft
+	// identity. Empty until SetPeerID is called, in which case rqlite keeps
+	// defaulting the raft id to the advertise address.
+	peerID           string
 	dataDir          string
 	nodeType         string // Node type identifier
 	logger           *zap.Logger
-	cmd              *exec.Cmd
 	discoveryService *ClusterDiscoveryService
 
 	// connMu guards connection. The split-brain recovery path closes and
@@ -34,8 +36,6 @@ type RQLiteManager struct {
 	// field it used to be.
 	connMu     sync.RWMutex
 	connection *gorqlite.Connection
-
-	waitDone chan struct{} // closed when cmd.Wait() completes (reaps zombie)
 
 	// onProcessStarted, when set, runs after the local rqlited process is
 	// listening and before anything waits for a raft leader. See the call site
@@ -326,35 +326,17 @@ func (r *RQLiteManager) Stop() error {
 func (r *RQLiteManager) shutdown() error {
 	r.setConnection(nil)
 
-	// Hand leadership over BEFORE the child-process guard below. rqlited runs as
-	// orama-namespace-rqlite@index, never as a child of this process, so r.cmd
-	// is always nil in production and the guard returned before the transfer
-	// could ever run: every restart of the leader was a hard kill and a full
-	// election with in-flight writes failing. The transfer needs only the HTTP
-	// port, not a process handle.
+	// Hand leadership over. rqlited runs as orama-namespace-rqlite@index, never
+	// as a child of this process, so stopping it is systemd's job — all this
+	// has to do is make sure the node is not the leader when it goes.
+	//
+	// There used to be a child-process guard above this, and because r.cmd is
+	// always nil in production it returned before the transfer could ever run:
+	// every restart of the leader was a hard kill and a full election with
+	// in-flight writes failing. The transfer needs only the HTTP port.
 	r.transferLeadershipIfLeader()
 
-	if r.cmd == nil || r.cmd.Process == nil {
-		return nil
-	}
-
-	_ = r.cmd.Process.Signal(syscall.SIGTERM)
-
-	// Wait for the background reaper goroutine (started in launchProcess) to
-	// collect the child process. This avoids a double cmd.Wait() panic.
-	if r.waitDone != nil {
-		select {
-		case <-r.waitDone:
-		case <-time.After(30 * time.Second):
-			r.logger.Warn("RQLite did not stop within 30s, sending SIGKILL")
-			_ = r.cmd.Process.Kill()
-			<-r.waitDone // wait for reaper after kill
-		}
-	}
-
-	// Clean up PID file
 	r.cleanupPIDFile()
-
 	return nil
 }
 
@@ -371,4 +353,19 @@ func (r *RQLiteManager) cleanupPIDFile() {
 	logsDir := fmt.Sprintf("%s/../logs", r.dataDir)
 	pidPath := logsDir + "/rqlited.pid"
 	_ = os.Remove(pidPath)
+}
+
+// SetPeerID supplies this node's libp2p peer id, which becomes its raft node id
+// on a fresh node and after migration.
+//
+// It is set rather than passed to the constructor because the manager is built
+// before libp2p starts; the boot graph orders rqlite-local after libp2p, so the
+// id is available by the time the process is spawned.
+func (r *RQLiteManager) SetPeerID(peerID string) {
+	r.peerID = peerID
+}
+
+// PeerID returns the libp2p peer id this manager was given, if any.
+func (r *RQLiteManager) PeerID() string {
+	return r.peerID
 }
