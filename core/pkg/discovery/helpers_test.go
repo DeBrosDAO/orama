@@ -17,10 +17,10 @@ func mustMultiaddr(t *testing.T, s string) multiaddr.Multiaddr {
 
 func TestFilterLibp2pAddrs(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    []string
-		wantLen  int
-		wantAll  bool // if true, expect all input addrs returned
+		name    string
+		input   []string
+		wantLen int
+		wantAll bool // if true, expect all input addrs returned
 	}{
 		{
 			name:    "only port 4001 addresses are all returned",

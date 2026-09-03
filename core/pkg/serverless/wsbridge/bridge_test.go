@@ -14,10 +14,10 @@ import (
 // fakePubSub records subscribe/unsubscribe calls and lets tests deliver
 // synthetic messages.
 type fakePubSub struct {
-	mu       sync.Mutex
-	subs     map[string]pubsub.MessageHandler
-	subCalls int32
-	unsubCalls int32
+	mu            sync.Mutex
+	subs          map[string]pubsub.MessageHandler
+	subCalls      int32
+	unsubCalls    int32
 	failSubscribe bool
 }
 

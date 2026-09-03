@@ -470,4 +470,3 @@ func (c *ClusterDiscoveryService) writeRecoveryPeersJSON(peers []map[string]inte
 
 	return nil
 }
-

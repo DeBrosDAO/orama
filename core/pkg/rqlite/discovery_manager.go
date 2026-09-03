@@ -58,4 +58,3 @@ func (r *RQLiteManager) validateNodeID() error {
 	}
 	return nil
 }
-

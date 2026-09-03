@@ -23,11 +23,11 @@ const (
 
 // SandboxState holds the full state of an active sandbox cluster.
 type SandboxState struct {
-	Name      string         `yaml:"name"`
-	CreatedAt time.Time      `yaml:"created_at"`
-	Domain    string         `yaml:"domain"`
-	Status    SandboxStatus  `yaml:"status"`
-	Servers   []ServerState  `yaml:"servers"`
+	Name      string        `yaml:"name"`
+	CreatedAt time.Time     `yaml:"created_at"`
+	Domain    string        `yaml:"domain"`
+	Status    SandboxStatus `yaml:"status"`
+	Servers   []ServerState `yaml:"servers"`
 }
 
 // ServerState holds the state of a single server in the sandbox.

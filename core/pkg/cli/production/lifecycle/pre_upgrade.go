@@ -16,6 +16,10 @@ import (
 
 const (
 	maintenanceFlagPath = "/opt/orama/.orama/maintenance.flag"
+
+	// indexNamespace is the reserved namespace whose rqlite is the cluster
+	// registry. It lives under data/namespaces like a tenant but is not one.
+	indexNamespace = "index"
 )
 
 // HandlePreUpgrade prepares the node for a safe rolling upgrade:
@@ -56,16 +60,26 @@ func HandlePreUpgrade() {
 
 	fmt.Printf("  Checking index RQLite leadership (port %d)...\n", constants.RQLiteHTTPPort)
 	if err := rqlite.TransferLeadership(constants.RQLiteHTTPPort, logger); err != nil {
-		fmt.Printf("  Warning: global leadership transfer: %v\n", err)
-	} else {
-		fmt.Printf("  Global RQLite leadership handled\n")
+		fmt.Fprintf(os.Stderr, "  UNSAFE: this node still leads the index RQLite: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Restarting it now forces an election and fails in-flight writes.\n")
+		fmt.Fprintf(os.Stderr, "  Aborting pre-upgrade. Check the other voters are reachable, then retry.\n")
+		os.Exit(1)
 	}
+	fmt.Printf("  Index RQLite leadership handled\n")
 
-	// 4. Transfer leadership on each namespace RQLite
+	// 4. Transfer leadership on each namespace RQLite.
+	//
+	// getNamespaceRQLitePorts walks data/namespaces, which contains an "index"
+	// directory too, so the index would otherwise be transferred a second time -
+	// harmless but confusing in the log, and a second chance to abort on a node
+	// that already stepped down.
 	nsPorts := getNamespaceRQLitePorts()
+	delete(nsPorts, indexNamespace)
 	for ns, port := range nsPorts {
 		fmt.Printf("  Checking namespace '%s' RQLite leadership (port %d)...\n", ns, port)
 		if err := rqlite.TransferLeadership(port, logger); err != nil {
+			// A tenant namespace losing its leader degrades that namespace, not
+			// the node's ability to restart safely, so this stays a warning.
 			fmt.Printf("  Warning: namespace '%s' leadership transfer: %v\n", ns, err)
 		} else {
 			fmt.Printf("  Namespace '%s' RQLite leadership handled\n", ns)

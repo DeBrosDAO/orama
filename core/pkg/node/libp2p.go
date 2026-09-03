@@ -136,7 +136,7 @@ func (n *Node) peerReconnectionLoop(ctx context.Context) {
 			if err := n.connectToPeers(context.Background()); err != nil {
 				consecutiveFailures++
 				jitteredInterval := addJitter(interval)
-				
+
 				select {
 				case <-ctx.Done():
 					return
@@ -291,4 +291,3 @@ func peerSource(peerAddrs []string, logger *zap.Logger) func(context.Context, in
 		return out
 	}
 }
-

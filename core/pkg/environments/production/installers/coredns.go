@@ -424,7 +424,6 @@ func (ci *CoreDNSInstaller) seedStaticRecords(domain, rqliteDSN, ns1IP, ns2IP, n
 	return ci.executeRQLiteStatements(rqliteDSN, statements)
 }
 
-
 // rqliteResult represents the response from RQLite execute endpoint
 type rqliteResult struct {
 	Results []struct {

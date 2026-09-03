@@ -46,8 +46,8 @@ type CheckResult struct {
 	Subsystem string   `json:"subsystem"` // "rqlite"
 	Severity  Severity `json:"severity"`
 	Status    Status   `json:"status"`
-	Message   string   `json:"message"`          // human-readable detail
-	Node      string   `json:"node,omitempty"`   // which node (empty for cluster-wide)
+	Message   string   `json:"message"`        // human-readable detail
+	Node      string   `json:"node,omitempty"` // which node (empty for cluster-wide)
 }
 
 // Results holds all check outcomes.

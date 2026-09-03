@@ -225,7 +225,7 @@ func TestRoomBuildICEServersNoSecret(t *testing.T) {
 func TestRoomBuildICEServersMultipleTURN(t *testing.T) {
 	cfg := testConfig()
 	cfg.TURNServers = []TURNServerConfig{
-		{Host: "1.2.3.4", Port: 3478},              // non-secure → UDP + TCP = 2 URIs
+		{Host: "1.2.3.4", Port: 3478},               // non-secure → UDP + TCP = 2 URIs
 		{Host: "5.6.7.8", Port: 5349, Secure: true}, // secure → 1 URI
 	}
 

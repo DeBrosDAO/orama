@@ -65,7 +65,7 @@ type OlricInstance struct {
 	PID            int
 	StartedAt      time.Time
 	cmd            *exec.Cmd
-	logFile        *os.File     // kept open for process lifetime
+	logFile        *os.File      // kept open for process lifetime
 	waitDone       chan struct{} // closed when cmd.Wait() completes
 	logger         *zap.Logger
 
@@ -73,7 +73,7 @@ type OlricInstance struct {
 	// by the monitor goroutine and external callers.
 	mu              sync.RWMutex
 	Status          InstanceNodeStatus
-	LastHealthCheck  time.Time
+	LastHealthCheck time.Time
 }
 
 // InstanceConfig holds configuration for spawning an Olric instance

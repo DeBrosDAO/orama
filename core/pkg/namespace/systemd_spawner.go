@@ -689,15 +689,12 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
-
 // turnSecretDrift reports whether the on-disk TURN auth_secret differs from the
 // desired (current DB) secret — i.e. a rewrite+restart is needed. Pure function
 // so the reconcile decision is unit-testable.
 func turnSecretDrift(onDiskSecret, dbSecret string) bool {
 	return onDiskSecret != dbSecret
 }
-
-
 
 // SFUInstanceConfig holds configuration for spawning an SFU instance
 type SFUInstanceConfig struct {
@@ -787,7 +784,6 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeSFU)
 }
-
 
 // acmeInternalEndpoint is the gateway's internal ACME endpoint that the
 // Caddyfile TURN-cert blocks point the orama DNS provider at.
@@ -917,7 +913,6 @@ func isSingleLabelSubdomain(host, base string) bool {
 	label := strings.TrimSuffix(host, suffix)
 	return label != "" && !strings.Contains(label, ".")
 }
-
 
 // StopTURN stops a TURN instance
 func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string) error {

@@ -21,10 +21,10 @@ func TestNewManager(t *testing.T) {
 
 func TestValidTransitions(t *testing.T) {
 	tests := []struct {
-		name     string
-		from     State
-		to       State
-		wantErr  bool
+		name    string
+		from    State
+		to      State
+		wantErr bool
 	}{
 		{"joining→active", StateJoining, StateActive, false},
 		{"active→draining", StateActive, StateDraining, false},

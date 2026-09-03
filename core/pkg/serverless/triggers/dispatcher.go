@@ -411,7 +411,7 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 	)
 
 	var (
-		eventJSON []byte
+		eventJSON  []byte
 		marshalErr error
 	)
 
@@ -674,7 +674,6 @@ func (d *PubSubDispatcher) getMatches(ctx context.Context, namespace, topic stri
 	return d.store.GetByTopicAndNamespace(ctx, topic, namespace)
 }
 
-
 // invokeFunction invokes a single function for a trigger match.
 //
 // `handlerDepth` is the depth at which the INVOKED handler runs (the
@@ -712,4 +711,3 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, 
 		zap.Int64("duration_ms", resp.DurationMS),
 	)
 }
-

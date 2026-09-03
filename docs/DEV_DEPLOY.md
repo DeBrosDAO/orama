@@ -313,6 +313,22 @@ quorum.
 can still form quorum — for example when deliberately taking down a cluster, or
 when the node is a non-voter the guard could not classify.
 
+#### Leadership handover
+
+`orama node pre-upgrade` hands index RQLite leadership to another voter before
+the node restarts, and **aborts** if this node is still the leader afterwards.
+Restarting a leader that never stepped down forces an election and fails
+in-flight writes, so a failed handover stops the upgrade rather than warning
+about it.
+
+The handover is confirmed against `/status` — the POST only *starts* it, and
+raft still has to elect the target. A build whose rqlite has no
+`transfer-leadership` API is tolerated: the node falls back to SIGTERM
+step-down.
+
+Tenant namespace handovers stay advisory. Losing a namespace leader degrades
+that namespace, not the node's ability to restart safely.
+
 #### `orama node report`
 
 Outputs comprehensive health data as JSON. Used by `orama monitor` over SSH:

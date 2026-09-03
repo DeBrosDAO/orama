@@ -11,11 +11,11 @@ import (
 // fakeStore is an in-memory Store for unit tests. Tracks call counts so
 // we can assert cache hits.
 type fakeStore struct {
-	mu        sync.Mutex
-	rows      map[cacheKey]*Credential
-	getCount  int
-	getErrOn  cacheKey // if non-zero, Get returns errStub for this key
-	errStub   error
+	mu       sync.Mutex
+	rows     map[cacheKey]*Credential
+	getCount int
+	getErrOn cacheKey // if non-zero, Get returns errStub for this key
+	errStub  error
 }
 
 func newFakeStore() *fakeStore {

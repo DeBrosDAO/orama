@@ -9,18 +9,18 @@ import (
 
 // Confirm step for reviewing and confirming installation
 type Confirm struct {
-	VpsIP             string
-	Domain            string
-	Branch            string
-	NoPull            bool
-	IsFirstNode       bool
-	PeerDomain        string
-	JoinAddress       string
-	Peers             []string
-	ClusterSecret     string
-	SwarmKeyHex       string
-	IPFSPeerID        string
-	SNIWarning        string
+	VpsIP         string
+	Domain        string
+	Branch        string
+	NoPull        bool
+	IsFirstNode   bool
+	PeerDomain    string
+	JoinAddress   string
+	Peers         []string
+	ClusterSecret string
+	SwarmKeyHex   string
+	IPFSPeerID    string
+	SNIWarning    string
 }
 
 // View renders the confirmation step

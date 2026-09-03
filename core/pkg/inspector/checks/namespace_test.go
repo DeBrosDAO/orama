@@ -10,13 +10,13 @@ func TestCheckNamespace_PerNodeHealthy(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.Namespaces = []inspector.NamespaceData{
 		{
-			Name:        "myapp",
-			PortBase:    10000,
-			RQLiteUp:    true,
-			RQLiteState: "Leader",
-			RQLiteReady: true,
-			OlricUp:     true,
-			GatewayUp:   true,
+			Name:          "myapp",
+			PortBase:      10000,
+			RQLiteUp:      true,
+			RQLiteState:   "Leader",
+			RQLiteReady:   true,
+			OlricUp:       true,
+			GatewayUp:     true,
 			GatewayStatus: 200,
 		},
 	}

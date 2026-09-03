@@ -197,4 +197,3 @@ func runLive(cmd *cobra.Command, args []string) error {
 	cfg := newConfig()
 	return tui.Run(cfg)
 }
-

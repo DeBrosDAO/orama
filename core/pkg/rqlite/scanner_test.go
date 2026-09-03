@@ -224,20 +224,20 @@ func TestNormalizeColumnKey(t *testing.T) {
 
 // testTarget holds fields of various types for setReflectValue tests.
 type testTarget struct {
-	StringField   string
-	IntField      int
-	Int64Field    int64
-	UintField     uint
-	Uint64Field   uint64
-	BoolField     bool
-	Float64Field  float64
-	TimeField     time.Time
-	PtrString     *string
-	PtrInt        *int
-	NullString    sql.NullString
-	NullInt64     sql.NullInt64
-	NullBool      sql.NullBool
-	NullFloat64   sql.NullFloat64
+	StringField  string
+	IntField     int
+	Int64Field   int64
+	UintField    uint
+	Uint64Field  uint64
+	BoolField    bool
+	Float64Field float64
+	TimeField    time.Time
+	PtrString    *string
+	PtrInt       *int
+	NullString   sql.NullString
+	NullInt64    sql.NullInt64
+	NullBool     sql.NullBool
+	NullFloat64  sql.NullFloat64
 }
 
 // fieldOf returns a settable reflect.Value for the named field on *target.

@@ -38,11 +38,11 @@ type WalletSignData struct {
 
 // AppPermission represents an approved app in the permission database.
 type AppPermission struct {
-	BinaryHash   string               `json:"binaryHash"`
-	BinaryPath   string               `json:"binaryPath"`
-	Name         string               `json:"name"`
-	FirstSeen    string               `json:"firstSeen"`
-	LastUsed     string               `json:"lastUsed"`
+	BinaryHash   string                `json:"binaryHash"`
+	BinaryPath   string                `json:"binaryPath"`
+	Name         string                `json:"name"`
+	FirstSeen    string                `json:"firstSeen"`
+	LastUsed     string                `json:"lastUsed"`
 	Capabilities []PermittedCapability `json:"capabilities"`
 }
 

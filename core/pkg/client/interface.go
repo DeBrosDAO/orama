@@ -155,8 +155,8 @@ type IPFSPeerInfo struct {
 
 // IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster discovery
 type IPFSClusterPeerInfo struct {
-	PeerID    string   `json:"peer_id"`    // Cluster peer ID (different from IPFS peer ID)
-	Addresses []string `json:"addresses"`  // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
+	PeerID    string   `json:"peer_id"`   // Cluster peer ID (different from IPFS peer ID)
+	Addresses []string `json:"addresses"` // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
 }
 
 // HealthStatus contains health check information

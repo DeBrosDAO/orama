@@ -10,13 +10,13 @@ import (
 
 // Config holds sandbox configuration, stored at ~/.orama/sandbox.yaml.
 type Config struct {
-	HetznerAPIToken string      `yaml:"hetzner_api_token"`
-	Domain          string      `yaml:"domain"`
-	Location        string      `yaml:"location"`    // Hetzner datacenter (default: fsn1)
-	ServerType      string      `yaml:"server_type"` // Hetzner server type (default: cx22)
-	FloatingIPs     []FloatIP   `yaml:"floating_ips"`
+	HetznerAPIToken string       `yaml:"hetzner_api_token"`
+	Domain          string       `yaml:"domain"`
+	Location        string       `yaml:"location"`    // Hetzner datacenter (default: fsn1)
+	ServerType      string       `yaml:"server_type"` // Hetzner server type (default: cx22)
+	FloatingIPs     []FloatIP    `yaml:"floating_ips"`
 	SSHKey          SSHKeyConfig `yaml:"ssh_key"`
-	FirewallID      int64       `yaml:"firewall_id,omitempty"` // Hetzner firewall resource ID
+	FirewallID      int64        `yaml:"firewall_id,omitempty"` // Hetzner firewall resource ID
 }
 
 // FloatIP holds a Hetzner floating IP reference.

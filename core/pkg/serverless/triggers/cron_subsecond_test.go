@@ -69,7 +69,7 @@ func TestParseCron_subSecondStep_validation(t *testing.T) {
 		{"*/30 * * * * *", true}, // every 30s (already tested in cron_parser_test.go)
 		{"0 * * * * *", true},    // at second 0 of every minute (= once a minute, 6-field)
 		{"*/2 */1 * * * *", true},
-		{"*/1 * * * *", true},    // 5-field: every minute (NOT every second — different schedule!)
+		{"*/1 * * * *", true}, // 5-field: every minute (NOT every second — different schedule!)
 	}
 	for _, tc := range cases {
 		_, err := ParseCron(tc.expr)

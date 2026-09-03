@@ -10,8 +10,8 @@ import (
 type DeploymentType string
 
 const (
-	DeploymentTypeStatic        DeploymentType = "static"          // Static sites (React, Vite)
-	DeploymentTypeNextJS        DeploymentType = "nextjs"          // Next.js SSR
+	DeploymentTypeStatic        DeploymentType = "static"         // Static sites (React, Vite)
+	DeploymentTypeNextJS        DeploymentType = "nextjs"         // Next.js SSR
 	DeploymentTypeNextJSStatic  DeploymentType = "nextjs-static"  // Next.js static export
 	DeploymentTypeGoBackend     DeploymentType = "go-backend"     // Go native binary
 	DeploymentTypeGoWASM        DeploymentType = "go-wasm"        // Go compiled to WASM
@@ -61,15 +61,15 @@ type Deployment struct {
 	BuildCID   string `json:"build_cid,omitempty"`
 
 	// Runtime configuration
-	HomeNodeID string `json:"home_node_id,omitempty"`
-	Port       int    `json:"port,omitempty"`
-	Subdomain  string `json:"subdomain,omitempty"`
+	HomeNodeID  string            `json:"home_node_id,omitempty"`
+	Port        int               `json:"port,omitempty"`
+	Subdomain   string            `json:"subdomain,omitempty"`
 	Environment map[string]string `json:"environment,omitempty"` // Unmarshaled from JSON
 
 	// Resource limits
-	MemoryLimitMB    int `json:"memory_limit_mb"`
-	CPULimitPercent  int `json:"cpu_limit_percent"`
-	DiskLimitMB      int `json:"disk_limit_mb"`
+	MemoryLimitMB   int `json:"memory_limit_mb"`
+	CPULimitPercent int `json:"cpu_limit_percent"`
+	DiskLimitMB     int `json:"disk_limit_mb"`
 
 	// Health & monitoring
 	HealthCheckPath     string        `json:"health_check_path,omitempty"`
@@ -144,16 +144,16 @@ type DeploymentDomain struct {
 
 // DeploymentHistory tracks deployment versions for rollback
 type DeploymentHistory struct {
-	ID                 string    `json:"id"`
-	DeploymentID       string    `json:"deployment_id"`
-	Version            int       `json:"version"`
-	ContentCID         string    `json:"content_cid,omitempty"`
-	BuildCID           string    `json:"build_cid,omitempty"`
-	DeployedAt         time.Time `json:"deployed_at"`
-	DeployedBy         string    `json:"deployed_by"`
-	Status             string    `json:"status"`
-	ErrorMessage       string    `json:"error_message,omitempty"`
-	RollbackFromVersion *int     `json:"rollback_from_version,omitempty"`
+	ID                  string    `json:"id"`
+	DeploymentID        string    `json:"deployment_id"`
+	Version             int       `json:"version"`
+	ContentCID          string    `json:"content_cid,omitempty"`
+	BuildCID            string    `json:"build_cid,omitempty"`
+	DeployedAt          time.Time `json:"deployed_at"`
+	DeployedBy          string    `json:"deployed_by"`
+	Status              string    `json:"status"`
+	ErrorMessage        string    `json:"error_message,omitempty"`
+	RollbackFromVersion *int      `json:"rollback_from_version,omitempty"`
 }
 
 // DeploymentEvent represents an audit trail event
@@ -204,25 +204,25 @@ type DeploymentRequest struct {
 
 // DeploymentResponse represents the result of a deployment operation
 type DeploymentResponse struct {
-	DeploymentID string   `json:"deployment_id"`
-	Name         string   `json:"name"`
-	Namespace    string   `json:"namespace"`
-	Status       string   `json:"status"`
-	URLs         []string `json:"urls"` // All URLs where deployment is accessible
-	Version      int      `json:"version"`
+	DeploymentID string    `json:"deployment_id"`
+	Name         string    `json:"name"`
+	Namespace    string    `json:"namespace"`
+	Status       string    `json:"status"`
+	URLs         []string  `json:"urls"` // All URLs where deployment is accessible
+	Version      int       `json:"version"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
 // NodeCapacity represents available resources on a node
 type NodeCapacity struct {
-	NodeID            string `json:"node_id"`
-	DeploymentCount   int    `json:"deployment_count"`
-	AllocatedPorts    int    `json:"allocated_ports"`
-	AvailablePorts    int    `json:"available_ports"`
-	UsedMemoryMB      int    `json:"used_memory_mb"`
-	AvailableMemoryMB int    `json:"available_memory_mb"`
-	UsedCPUPercent    int    `json:"used_cpu_percent"`
-	AvailableDiskMB   int64  `json:"available_disk_mb"`
+	NodeID            string  `json:"node_id"`
+	DeploymentCount   int     `json:"deployment_count"`
+	AllocatedPorts    int     `json:"allocated_ports"`
+	AvailablePorts    int     `json:"available_ports"`
+	UsedMemoryMB      int     `json:"used_memory_mb"`
+	AvailableMemoryMB int     `json:"available_memory_mb"`
+	UsedCPUPercent    int     `json:"used_cpu_percent"`
+	AvailableDiskMB   int64   `json:"available_disk_mb"`
 	Score             float64 `json:"score"` // Calculated capacity score
 }
 
@@ -237,11 +237,11 @@ const (
 
 // Default resource limits
 const (
-	DefaultMemoryLimitMB    = 256
-	DefaultCPULimitPercent  = 50
-	DefaultDiskLimitMB      = 1024
+	DefaultMemoryLimitMB       = 256
+	DefaultCPULimitPercent     = 50
+	DefaultDiskLimitMB         = 1024
 	DefaultHealthCheckInterval = 30 // seconds
-	DefaultMaxRestartCount  = 10
+	DefaultMaxRestartCount     = 10
 )
 
 // Errors

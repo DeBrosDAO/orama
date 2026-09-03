@@ -18,6 +18,7 @@ import (
 //     namespace since the isolated path never creates schema_migrations.
 //   - a CREATE INDEX on subscriptions(namespace_id) — fails "no such column" when
 //     a tenant owns a differently shaped subscriptions.
+//
 // Both must be stripped in the namespace path (applySQLNamespace).
 func nsTestFS() fs.FS {
 	return fstest.MapFS{

@@ -467,7 +467,6 @@ func (cm *ClusterManager) spawnSFUOnNode(ctx context.Context, node clusterNodeIn
 	return cm.spawnSFURemote(ctx, node.InternalIP, cfg)
 }
 
-
 // stopSFUOnNode stops SFU on a node (local or remote)
 func (cm *ClusterManager) stopSFUOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
 	if nodeID == cm.localNodeID {
@@ -512,7 +511,6 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 	})
 	return err
 }
-
 
 // getWebRTCBlocksByType returns all WebRTC port blocks of a given type for a cluster.
 func (cm *ClusterManager) getWebRTCBlocksByType(ctx context.Context, clusterID, serviceType string) ([]WebRTCPortBlock, error) {

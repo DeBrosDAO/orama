@@ -152,12 +152,17 @@ func (r *RQLiteManager) Stop() error {
 		r.connection = nil
 	}
 
+	// Hand leadership over BEFORE the child-process guard below. rqlited runs as
+	// orama-namespace-rqlite@index, never as a child of this process, so r.cmd
+	// is always nil in production and the guard returned before the transfer
+	// could ever run: every restart of the leader was a hard kill and a full
+	// election with in-flight writes failing. The transfer needs only the HTTP
+	// port, not a process handle.
+	r.transferLeadershipIfLeader()
+
 	if r.cmd == nil || r.cmd.Process == nil {
 		return nil
 	}
-
-	// Attempt leadership transfer if we are the leader
-	r.transferLeadershipIfLeader()
 
 	_ = r.cmd.Process.Signal(syscall.SIGTERM)
 

@@ -55,7 +55,7 @@ import "github.com/DeBrosOfficial/network/sdk/fn"
 func main() {
 	fn.Run(func(input []byte) ([]byte, error) {
 		var req struct {
-			Name string `+"`"+`json:"name"`+"`"+`
+			Name string ` + "`" + `json:"name"` + "`" + `
 		}
 		fn.ParseJSON(input, &req)
 		if req.Name == "" {

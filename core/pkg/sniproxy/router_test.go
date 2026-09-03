@@ -53,11 +53,11 @@ func TestRouter_pick_wildcard_subdomain(t *testing.T) {
 	}, fb)
 
 	cases := map[string]bool{
-		"a.example.com":    true,
-		"foo.example.com":  true,
-		"a.b.example.com":  false, // multi-label not allowed
-		"example.com":      false, // bare domain doesn't match *.example.com
-		"other.com":        false,
+		"a.example.com":   true,
+		"foo.example.com": true,
+		"a.b.example.com": false, // multi-label not allowed
+		"example.com":     false, // bare domain doesn't match *.example.com
+		"other.com":       false,
 	}
 	for sni, want := range cases {
 		got := r.Pick(sni) == Backend{Name: "wild", Addr: "127.0.0.1:5349"}

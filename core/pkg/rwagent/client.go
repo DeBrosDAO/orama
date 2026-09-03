@@ -234,4 +234,3 @@ func isConnectionError(err error) bool {
 		strings.Contains(msg, "no such file or directory") ||
 		strings.Contains(msg, "connect: no such file")
 }
-

@@ -230,4 +230,3 @@ func shortPeerID(id peer.ID) string {
 	}
 	return s[:8] + "..."
 }
-

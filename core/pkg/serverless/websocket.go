@@ -443,4 +443,3 @@ func (m *WSManager) GetStats() *WSStats {
 		TopicStats:        topicStats,
 	}
 }
-

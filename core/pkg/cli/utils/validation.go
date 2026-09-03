@@ -110,4 +110,3 @@ func NormalizePeers(peersStr string) ([]string, error) {
 
 	return peers, nil
 }
-

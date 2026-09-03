@@ -238,7 +238,9 @@ func TestManager_concurrent_dispatcherFor_no_race(t *testing.T) {
 	// Run with -race.
 	store := newFakeConfigStore()
 	store.Upsert(context.Background(), Config{Namespace: "ns", NtfyBaseURL: "u"})
-	factory := func(_ context.Context, _ Config) []PushProvider { return []PushProvider{&managerFakeProvider{name: "ntfy"}} }
+	factory := func(_ context.Context, _ Config) []PushProvider {
+		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
+	}
 
 	m := NewManager(&fakeDeviceStore{}, store, Defaults{}, factory, zap.NewNop())
 
@@ -261,7 +263,7 @@ type fakeDeviceStore struct{}
 func (s *fakeDeviceStore) Upsert(_ context.Context, dev PushDevice) (string, error) {
 	return dev.ID, nil
 }
-func (s *fakeDeviceStore) Delete(_ context.Context, _, _ string) error  { return nil }
+func (s *fakeDeviceStore) Delete(_ context.Context, _, _ string) error { return nil }
 func (s *fakeDeviceStore) ListForUser(_ context.Context, _, _ string) ([]PushDevice, error) {
 	return nil, nil
 }

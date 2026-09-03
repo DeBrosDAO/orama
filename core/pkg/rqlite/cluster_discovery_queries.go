@@ -299,4 +299,3 @@ func (c *ClusterDiscoveryService) StoreRemotePeerMetadata(peerID peer.ID, metada
 
 	return nil
 }
-

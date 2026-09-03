@@ -535,7 +535,7 @@ func staleCutoff() string {
 // different rows on different nodes and diverge the cluster. A bound constant
 // travels identically to every replica.
 //
-// The IS NOT NULL / != '' filter is explicit rather than incidental: a single NULL
+// The IS NOT NULL / != ” filter is explicit rather than incidental: a single NULL
 // ip_address would make the outer `value NOT IN (…)` evaluate to NULL for every
 // row (SQL three-valued logic), silently turning the whole purge into a no-op.
 const inactiveNodeIPsSQL = `SELECT ip_address FROM dns_nodes WHERE status != 'active'
