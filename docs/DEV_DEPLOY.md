@@ -134,6 +134,27 @@ The gateway calls `ApplyEmbeddedMigrations` during `NewDependencies` and asserts
 
 This is the default for both the genesis startup flow and rolling upgrades. No operator action required when it works.
 
+#### Mixed-version window: WireGuard peer rows (migration 038)
+
+Migration 038 adds `confirmed_at` to `wireguard_peers` and is safe to apply while
+old-binary nodes are still writing: the column is nullable, the backfills are
+one-shot, and old binaries name their columns explicitly so they never trip on
+it. Two things about the window itself are worth knowing:
+
+- **Upgrade the node serving `/v1/internal/join` first.** An old binary handling
+  a join still allocates `max+1` and writes `INSERT OR REPLACE`, so it can
+  overwrite a row a new binary just inserted and take its overlay address. It
+  also ignores the `peer_id` a new installer sends and writes the old synthetic
+  id instead.
+- **Don't issue invite tokens during the roll.** Same reason: which behaviour a
+  join gets depends on which node answers it.
+
+An old-binary node also keeps self-registering without `confirmed_at`, so its row
+reads as unconfirmed on a new-binary leader. It is not at risk — the same
+statement refreshes `created_at`, keeping the row inside the 30-minute join
+grace, and a row is only ever dropped when it is *also* unmatched in `dns_nodes`.
+Once every node is on the new binary this resolves on the next 60s sync tick.
+
 **Pattern B — pre-apply migrations explicitly via the CLI.**
 On any node:
 ```bash

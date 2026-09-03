@@ -13,12 +13,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/overlay"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -79,6 +81,23 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// node_ip is stored in wireguard_peers.public_ip, from where it is rendered
+	// into `Endpoint = %s` in the wg0.conf of every OTHER node in the fleet. An
+	// unvalidated string there is a WireGuard config injection: a newline lets
+	// the caller append arbitrary directives — its own PublicKey, an
+	// AllowedIPs of 0.0.0.0/0 — to configs generated from then on. The join
+	// handler has always parsed its equivalent field; this one checked only
+	// that it was non-empty.
+	//
+	// The parsed form is stored rather than the raw string, so no alternative
+	// spelling of the same address can round-trip.
+	nodeIP := net.ParseIP(req.NodeIP)
+	if nodeIP == nil || nodeIP.To4() == nil {
+		http.Error(w, "node_ip must be a valid IPv4 address", http.StatusBadRequest)
+		return
+	}
+	req.NodeIP = nodeIP.String()
+
 	ctx := r.Context()
 
 	// 1. Validate invite token (single-use, same as join handler)
@@ -103,24 +122,28 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Assign WG IP
-	wgIP, err := h.assignWGIP(ctx)
+	// 4. Allocate an overlay address and register the peer.
+	//
+	// Through pkg/overlay, the same path the join handler uses. This handler
+	// had its own copy which read the table and then wrote it with
+	// INSERT OR REPLACE — so a concurrent enrolment silently deleted the
+	// winner's row and took its address — and which allocated max+1 and rolled
+	// explicitly into 10.0.1.x once .254 was used, outside the /24 the wg0
+	// PostUp rule and the internal-auth check accept.
+	//
+	// An enrolling node has no libp2p identity yet, so the id is left to
+	// overlay to synthesise. It used to be a third shape, `orama-node-10-0-0-N`,
+	// that nothing else in the system recognised.
+	wgIP, err := overlay.Register(ctx, h.rqliteClient, overlay.Peer{
+		PublicKey: wgPubKey,
+		PublicIP:  req.NodeIP,
+	})
 	if err != nil {
-		h.logger.Error("failed to assign WG IP", zap.Error(err))
-		http.Error(w, "failed to assign WG IP", http.StatusInternalServerError)
-		return
-	}
-
-	nodeID := fmt.Sprintf("orama-node-%s", strings.ReplaceAll(wgIP, ".", "-"))
-
-	// 5. Register WG peer in database
-	if _, err := h.rqliteClient.Exec(ctx,
-		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port) VALUES (?, ?, ?, ?, ?)",
-		nodeID, wgIP, wgPubKey, req.NodeIP, 51820); err != nil {
 		h.logger.Error("failed to register WG peer", zap.Error(err))
 		http.Error(w, "failed to register peer", http.StatusInternalServerError)
 		return
 	}
+	nodeID := fmt.Sprintf("node-%s", wgIP)
 
 	// 6. Add peer to local WireGuard interface
 	if err := h.addWGPeerLocally(wgPubKey, req.NodeIP, wgIP); err != nil {
@@ -162,6 +185,21 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 	if err := h.pushConfigToNode(req.NodeIP, &enrollResp); err != nil {
 		h.logger.Error("failed to push config to node", zap.Error(err))
 		http.Error(w, "failed to configure node: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// The node has its config and is coming up, which is what confirmed_at
+	// records. Without this an enrolled node has no writer that ever confirms
+	// it — no join handshake, no orama-node self-registration — so the
+	// membership reconciler would collect its mesh row as an unfinished join
+	// 30 minutes later.
+	if _, err := h.rqliteClient.Exec(ctx,
+		`UPDATE wireguard_peers SET confirmed_at = CURRENT_TIMESTAMP
+		  WHERE node_id = ? AND confirmed_at IS NULL`, nodeID); err != nil {
+		h.logger.Error("enrolled node was configured but its peer row could not be confirmed; "+
+			"it will be collected as an unfinished join unless this is corrected",
+			zap.String("node_id", nodeID), zap.Error(err))
+		http.Error(w, "failed to confirm node registration", http.StatusInternalServerError)
 		return
 	}
 
@@ -271,40 +309,6 @@ func generateWGKeypair() (privKey, pubKey string, err error) {
 	pubKey = strings.TrimSpace(string(pubOut))
 
 	return privKey, pubKey, nil
-}
-
-// assignWGIP finds the next available WG IP.
-func (h *Handler) assignWGIP(ctx context.Context) (string, error) {
-	var rows []struct {
-		WGIP string `db:"wg_ip"`
-	}
-	if err := h.rqliteClient.Query(ctx, &rows, "SELECT wg_ip FROM wireguard_peers"); err != nil {
-		return "", fmt.Errorf("failed to query WG IPs: %w", err)
-	}
-
-	if len(rows) == 0 {
-		return "10.0.0.2", nil
-	}
-
-	maxD := 0
-	maxC := 0
-	for _, row := range rows {
-		var a, b, c, d int
-		if _, err := fmt.Sscanf(row.WGIP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
-			continue
-		}
-		if c > maxC || (c == maxC && d > maxD) {
-			maxC, maxD = c, d
-		}
-	}
-
-	maxD++
-	if maxD > 254 {
-		maxC++
-		maxD = 1
-	}
-
-	return fmt.Sprintf("10.0.%d.%d", maxC, maxD), nil
 }
 
 // addWGPeerLocally adds a peer to the local wg0 interface.

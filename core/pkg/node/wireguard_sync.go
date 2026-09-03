@@ -392,14 +392,47 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 	// Clean up stale entries for this public IP with a different node_id.
 	// This prevents ghost peers from previous installs or from the temporary
 	// "node-10.0.0.X" ID that the join handler creates.
+	//
+	// Scoped to unconfirmed rows. Two nodes can legitimately share a public IP
+	// — anything behind one NAT — and without the scope each would delete the
+	// other's mesh row every 60 seconds, indefinitely. A confirmed row belongs
+	// to a machine that came up, and removing those is the membership
+	// reconciler's job, under evidence this function does not have.
 	if _, err := rqlite.SafeExecContext(db, ctx,
-		"DELETE FROM wireguard_peers WHERE public_ip = ? AND node_id != ?",
+		"DELETE FROM wireguard_peers WHERE public_ip = ? AND node_id != ? AND confirmed_at IS NULL",
 		publicIP, nodeID); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to clean stale WG entries", zap.Error(err))
 	}
 
+	// confirmed_at is set here, not left to the membership reconciler to infer
+	// from dns_nodes. A node writing its own row from its own boot process is
+	// the strongest evidence there is that it came up, and without it a running
+	// node whose dns_nodes row was missing for any reason would have this row
+	// garbage-collected as a failed join and be severed from the mesh.
+	//
+	// An upsert, not INSERT OR REPLACE. OR REPLACE deletes the conflicting row
+	// and inserts a new one, so every column absent from the statement is
+	// silently reset — this runs every 60 seconds, and it was quietly wiping
+	// the operator_wallet the join handler wrote and resetting created_at on
+	// every tick. Naming the columns to update leaves the rest alone.
+	//
+	// The upsert resolves a conflict on node_id — this node re-asserting its
+	// own row — and nothing else. A row held by a DIFFERENT node at this
+	// node's wg_ip or public key now fails loudly instead of being deleted:
+	// silently taking another machine's row is the same class of bug the join
+	// path was just fixed for, and the membership reconciler is what removes
+	// rows whose node has genuinely departed.
 	_, err = rqlite.SafeExecContext(db, ctx,
-		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id) VALUES (?, ?, ?, ?, ?, ?)",
+		`INSERT INTO wireguard_peers
+		   (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id, confirmed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(node_id) DO UPDATE SET
+		   wg_ip        = excluded.wg_ip,
+		   public_key   = excluded.public_key,
+		   public_ip    = excluded.public_ip,
+		   wg_port      = excluded.wg_port,
+		   ipfs_peer_id = excluded.ipfs_peer_id,
+		   confirmed_at = COALESCE(wireguard_peers.confirmed_at, excluded.confirmed_at)`,
 		nodeID, wgIP, localPubKey, publicIP, defaultWireGuardPort, ipfsPeerID)
 	if err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to self-register WG peer", zap.Error(err))

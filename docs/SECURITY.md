@@ -19,8 +19,19 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 ### Authentication
 
 **Internal Endpoint Auth (Step 1.3)**
-- `/v1/internal/wg/peers` and `/v1/internal/wg/peer/remove` now require cluster secret validation
-- Peer removal additionally validates the request originates from a WireGuard subnet IP
+- Every `/v1/internal/wg/*` endpoint requires both an overlay source address and the cluster secret
+- Peer *registration* (`POST /v1/internal/wg/peer`) enforces the same pair. It previously checked neither: there was no overlay check at all, and the secret check was written `if configured != "" && supplied != configured`, so a gateway with no cluster secret accepted a peer insertion from anyone who could reach it
+- A gateway with no cluster secret configured now refuses these endpoints (`503`) instead of allowing them, since there is no way to authenticate the caller
+- `node_id` and `public_key` on peer registration are parsed (libp2p peer id; base64 32-byte Curve25519, control characters rejected) before they are stored, because both are rendered into `wg0.conf` on every node
+
+**Node join (`/v1/internal/join`)**
+- An invite token is checked for liveness before any work is done on its behalf, and consumed atomically only once the request is known to be serviceable
+- A join is refused if the public IP, WireGuard key or peer id is already registered to a node that is up — liveness being `confirmed_at` **or** a `dns_nodes` row at the same overlay address, since a node on an older binary clears its own `confirmed_at`
+- The pre-join cleanup deletes only rows the refusal check exempted: residue of the caller's own unfinished joins, never a live node's row. `public_ip` is caller-supplied and unverified against the source address, so an unscoped delete here is a node-eviction primitive
+- A uniqueness conflict returns 409 and keeps the token spent; only a cluster fault releases it. Releasing on a caller-triggerable failure makes a single-use token replayable
+
+**Node enrolment (`/v1/node/enroll`)**
+- `node_ip` is parsed as IPv4 and stored canonicalised. It is rendered into `Endpoint =` in the `wg0.conf` of every other node, so an unvalidated value is a WireGuard config injection
 
 **RQLite Authentication (Step 1.7)**
 - Credentials are generated at genesis and written to `rqlite-auth.json` / `rqlite-password`

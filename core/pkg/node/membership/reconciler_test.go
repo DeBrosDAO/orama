@@ -30,7 +30,9 @@ func membershipDB(t *testing.T) *sql.DB {
 			wg_ip TEXT NOT NULL UNIQUE,
 			public_key TEXT NOT NULL UNIQUE,
 			public_ip TEXT NOT NULL DEFAULT '',
-			wg_port INTEGER DEFAULT 51820
+			wg_port INTEGER DEFAULT 51820,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			confirmed_at TIMESTAMP
 		);
 		CREATE TABLE raft_evicted_nodes (
 			node_id TEXT PRIMARY KEY,
@@ -55,11 +57,27 @@ func seedNode(t *testing.T, db *sql.DB, peerID, ip string, secondsAgo int) {
 	}
 }
 
+// seedWG inserts a peer row for a node that already came up — created a day
+// ago and confirmed, which is what every row looks like after migration 038.
+// The unconfirmed cases have their own seeder.
 func seedWG(t *testing.T, db *sql.DB, ip string) {
 	t.Helper()
 	if _, err := db.Exec(
-		`INSERT INTO wireguard_peers (node_id, wg_ip, public_key) VALUES (?, ?, ?)`,
+		`INSERT INTO wireguard_peers (node_id, wg_ip, public_key, created_at, confirmed_at)
+		 VALUES (?, ?, ?, datetime('now', '-1 day'), datetime('now', '-1 day'))`,
 		"node-"+ip, ip, "key-"+ip); err != nil {
+		t.Fatalf("seed wireguard_peers: %v", err)
+	}
+}
+
+// seedUnconfirmedWG inserts a peer row a join wrote and never confirmed,
+// created secondsAgo seconds ago.
+func seedUnconfirmedWG(t *testing.T, db *sql.DB, ip string, secondsAgo int) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO wireguard_peers (node_id, wg_ip, public_key, created_at)
+		 VALUES (?, ?, ?, datetime('now', ?))`,
+		"node-"+ip, ip, "key-"+ip, secondsAgoModifier(secondsAgo)); err != nil {
 		t.Fatalf("seed wireguard_peers: %v", err)
 	}
 }
@@ -228,5 +246,81 @@ func TestParseTimestamp(t *testing.T) {
 				t.Errorf("timestamp is not UTC: %v", got.Location())
 			}
 		})
+	}
+}
+
+func TestReconcile_confirmsThePeerRowOnceItsNodeAppears(t *testing.T) {
+	db := membershipDB(t)
+	seedNode(t, db, "peerA", "10.0.0.4", 5)
+	seedUnconfirmedWG(t, db, "10.0.0.4", 60)
+
+	r := NewReconciler(db, nil, func() bool { return true }, nil)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var confirmed sql.NullString
+	if err := db.QueryRow(
+		`SELECT confirmed_at FROM wireguard_peers WHERE wg_ip = '10.0.0.4'`).Scan(&confirmed); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !confirmed.Valid {
+		t.Fatal("the row of a node that came up was left unconfirmed")
+	}
+}
+
+func TestReconcile_removesTheRowLeftByAJoinThatNeverFinished(t *testing.T) {
+	db := membershipDB(t)
+	// No dns_nodes row was ever written for this address, and the join window
+	// is long past.
+	seedUnconfirmedWG(t, db, "10.0.0.9", int((JoinGrace + time.Minute).Seconds()))
+
+	r := NewReconciler(db, nil, func() bool { return true }, nil)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wireguard_peers`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("the ghost row survived; %d rows remain", count)
+	}
+}
+
+func TestReconcile_keepsARowForAJoinStillInFlight(t *testing.T) {
+	db := membershipDB(t)
+	seedUnconfirmedWG(t, db, "10.0.0.9", 30)
+
+	r := NewReconciler(db, nil, func() bool { return true }, nil)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wireguard_peers`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("a node mid-join had its peer row deleted before it could come up")
+	}
+}
+
+func TestReconcile_doesNothingOnAFollower(t *testing.T) {
+	db := membershipDB(t)
+	seedUnconfirmedWG(t, db, "10.0.0.9", int((JoinGrace + time.Minute).Seconds()))
+
+	r := NewReconciler(db, nil, func() bool { return false }, nil)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wireguard_peers`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("a follower made a cluster-wide write")
 	}
 }

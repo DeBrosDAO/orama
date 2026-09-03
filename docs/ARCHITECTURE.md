@@ -260,11 +260,32 @@ rows survive a further 6-hour tombstone grace so an operator looking at the
 table right after a node disappears still sees what was removed.
 
 `wireguard_peers` rows are matched to nodes on the **overlay address**, not on
-`node_id`. The join handler writes a synthetic `node-<wgip>` that matches no
-`dns_nodes.id` and never has, so the obvious rule — delete rows whose node id is
-unknown — would delete every row and sever the mesh. A row whose overlay address
-matches no node is reported, not deleted: a node mid-join has its WireGuard row
-before its `dns_nodes` row, so absence is not departure.
+`node_id`. A joining node now sends its libp2p peer id in the join request and
+the row carries it, but rows predating that carry a synthetic `node-<wgip>`
+(migration 038 backfills what it can from `dns_nodes`), so the overlay address
+remains the reliable join between the two tables.
+
+A row whose overlay address matches no node is resolved by `confirmed_at`, which
+is never cleared once set. There are two writers, and both only ever set it:
+each node sets it on its own row when it self-registers — a node writing its own
+row is the strongest evidence there is that it came up, and the self-register
+upsert keeps any existing value with `COALESCE` — and the reconciler sets it for
+any row whose node it can see in `dns_nodes`. An unmatched row is then read as:
+
+- **never confirmed, older than the 30-minute join grace** — a join that did not
+  finish. Dropped. Before `confirmed_at` existed this row was indistinguishable
+  from a live peer and every survivor re-applied it to `wg0` every 60 seconds
+  indefinitely.
+- **never confirmed, recent** — a join still in flight. Left alone: a node gets
+  its WireGuard row before its `dns_nodes` row, so absence is not departure.
+- **never confirmed, no usable `created_at`** — nothing distinguishes it from
+  either of the above. Kept, and reported, so it is not invisible.
+- **confirmed** — a node that came up and then vanished from `dns_nodes`.
+  Reported only. Deleting the mesh entry of a machine that may still be running
+  would sever it.
+
+The delete carries `AND confirmed_at IS NULL`, so a node that came up between
+the evidence read and the write is never cut off by a stale plan.
 
 **Dead voters are evicted.** A voter that is gone for good used to stay in the
 raft configuration for ever — quorum arithmetic kept counting a machine that no
@@ -650,14 +671,70 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
 - **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
 - **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
-- **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh
+- **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
+
+**Join ordering.** `/v1/internal/join` does everything that can fail without
+touching cluster state first — validate every field, check the invite token is
+live (without consuming it), refuse the request if any identity in it is already
+registered, read the secrets, read the local WireGuard identity, build the peer
+list — and only then burns the token and writes the `wireguard_peers` row.
+
+That ordering is what makes the token safe to release on failure. `public_ip` is
+a string the caller chooses and nothing checks against the source address, and
+the pre-join cleanup deletes rows by it, so releasing the token would otherwise
+let one invite evict any node in the fleet, repeatedly: name its IP, collide
+deliberately so the registration fails, get the token back.
+
+Three rules close that, and each is load-bearing:
+
+- **The refusal set is the complement of the cleanup set.** The check rejects
+  every row matching the submitted IP, key or peer id *except* the ones the
+  cleanup is about to delete. Restricting it to live rows was not enough — an
+  unconfirmed row at a different public IP is invisible to both, yet still
+  collides with the `INSERT`.
+- **Liveness is `confirmed_at IS NOT NULL` OR a `dns_nodes` row at the same
+  overlay address**, and it needs both halves. A node still on the old binary
+  nulls its own `confirmed_at` every 60s, so during the rolling upgrade of this
+  change `confirmed_at` alone would read every un-upgraded node as free to
+  displace. `dns_nodes` has no such hole; and a node mid-join has no `dns_nodes`
+  row yet, so neither signal suffices alone.
+- **A uniqueness conflict does not release the token.** It means the request
+  named a bad identity — the caller's problem. Only a genuine cluster fault
+  releases, so nothing an attacker controls makes the token replayable.
+
+The token-liveness gate exists because the refusal check answers whether a given
+IP, key or peer id belongs to a live node. Reachable without a token, that is a
+fleet-enumeration oracle, so the 409 body also names no field. The order used to be the reverse, so any failure
+after the write (an unreadable `swarm.key`, a joining node that died mid-install)
+cost the operator a token they could not reuse *and* left a ghost peer row. If
+the write itself fails the token is released.
+
+**Overlay address allocation** (`pkg/overlay`) is the single path every
+allocating writer uses — the join handler, `/v1/internal/wg/peer` and the
+OramaOS enrolment handler. A node's own WireGuard self-registration stays
+outside it because it allocates nothing: it re-asserts the row it was already
+given, keyed by its own node id, and so upserts (`ON CONFLICT(node_id) DO
+UPDATE`) rather than replacing. `INSERT OR REPLACE` there was deleting and
+re-inserting the row every 60 seconds, silently resetting every column it did
+not name — `operator_wallet` among them. It allocates the **lowest free** address in `10.0.0.2-254` with a plain
+`INSERT`, retrying only on a `UNIQUE` violation naming `wg_ip` — a conflict on
+the public key or the node id means the peer is already registered under another
+address, which no retry can fix. The client-supplied peer id is parsed before it
+is stored, since it becomes the row's primary key. The two
+previous implementations each read the table and wrote it in separate statements
+and wrote with `INSERT OR REPLACE`, so the loser of a race silently deleted the
+winner's row and took its address, cutting a node that had just joined out of
+the mesh. Allocating the lowest free address rather than `max+1` also keeps a
+cluster that has churned through nodes from rolling past `10.0.0.254` into
+`10.0.1.x`, which is outside the `/24` that the `wg0` PostUp rule and the
+internal-auth check both accept.
 
 ### Service Authentication
 
 - **RQLite:** credentials are generated at genesis; `rqlited` is **not** started with `-auth` today. Overlay + firewall keep the HTTP API off the public internet
 - **Olric:** memberlist binds the WireGuard address. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** TrustedPeers restricted to known cluster peer IDs (not `*`). The systemd unit is not written if `CLUSTER_SECRET` is missing or empty
-- **Internal endpoints:** `/v1/internal/wg/peers` and `/v1/internal/wg/peer/remove` require cluster secret
+- **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
 - **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH` and multi-statement queries are rejected

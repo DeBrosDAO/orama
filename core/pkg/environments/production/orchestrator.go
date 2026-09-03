@@ -526,15 +526,33 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	ps.logf("  ✓ TURN secret ensured")
 
 	// Node identity (unified architecture)
-	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
+	peerID, err := ps.EnsureNodeIdentity()
 	if err != nil {
-		return fmt.Errorf("failed to ensure node identity: %w", err)
+		return err
 	}
-	peerIDStr := peerID.String()
-	ps.NodePeerID = peerIDStr // Capture for later display
-	ps.logf("  ✓ Node identity ensured (Peer ID: %s)", peerIDStr)
+	ps.logf("  ✓ Node identity ensured (Peer ID: %s)", peerID)
 
 	return nil
+}
+
+// EnsureNodeIdentity creates the node's libp2p identity if it does not exist
+// and records the peer id on the setup, returning it.
+//
+// It is exported because the join flow needs the identity BEFORE it asks to
+// join: the peer id is what the cluster keys this machine by in every store, so
+// a join that cannot name it forces the receiving node to invent a synthetic id
+// that matches nothing and has to be backfilled later.
+//
+// Calling it early is safe and does not change what Phase 3 does: it creates
+// its own directory, and reads back the identity it already wrote rather than
+// generating a second one.
+func (ps *ProductionSetup) EnsureNodeIdentity() (string, error) {
+	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure node identity: %w", err)
+	}
+	ps.NodePeerID = peerID.String()
+	return ps.NodePeerID, nil
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs

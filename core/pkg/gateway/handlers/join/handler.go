@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/overlay"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -26,6 +28,11 @@ type JoinRequest struct {
 	Token       string `json:"token"`
 	WGPublicKey string `json:"wg_public_key"`
 	PublicIP    string `json:"public_ip"`
+
+	// PeerID is the joining node's libp2p peer id. Optional, because an older
+	// installer does not send one; when absent the row falls back to a
+	// synthetic id, which is what every row used to carry.
+	PeerID string `json:"peer_id,omitempty"`
 }
 
 // JoinResponse contains everything a joining node needs
@@ -129,103 +136,84 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The peer id becomes this row's primary key and is read back as a peer id
+	// by every consumer of the table. It is validated here with the other
+	// fields rather than deep inside the write, so a malformed one costs
+	// nothing: past this point the token is spent and rows have been deleted.
+	if req.PeerID != "" {
+		if _, err := peer.Decode(req.PeerID); err != nil {
+			http.Error(w, "peer_id must be a valid libp2p peer id", http.StatusBadRequest)
+			return
+		}
+	}
+
 	ctx := r.Context()
 
-	// 1. Validate and consume the invite token (atomic single-use)
-	if err := h.consumeToken(ctx, req.Token, req.PublicIP); err != nil {
-		h.logger.Warn("join token validation failed", zap.Error(err))
+	// Refuse a join that would displace a node that is already up.
+	//
+	// This is a validation, so it runs with the others, before anything is read
+	// off disk and long before anything is written. It is what keeps the token
+	// honest: with it, nothing an attacker controls can make the mutating half
+	// below fail, so releasing the token on failure cannot be farmed. Without
+	// it, a token holder could name any running node's public IP, have the
+	// cleanup evict it, collide on the public key so the registration failed,
+	// get the token back, and repeat — evicting any node from the mesh,
+	// indefinitely, from one invite.
+	// Prove the token is live before doing anything on its behalf.
+	//
+	// It is NOT consumed here — that stays atomic and happens once, below. This
+	// only stops an anonymous caller reaching the work that follows: the claim
+	// check answers whether a given IP, key or peer id belongs to a live node,
+	// which is a fleet-enumeration oracle if anyone can ask it, and the reads
+	// after it load every cluster secret off disk and shell out to `ip`.
+	if err := h.assertTokenLive(ctx, req.Token); err != nil {
+		h.logger.Warn("join rejected: token is not live", zap.Error(err))
 		http.Error(w, "unauthorized: invalid or expired token", http.StatusUnauthorized)
 		return
 	}
 
-	// 1b. Look up the operator wallet from the consumed token (may be empty for legacy tokens)
-	operatorWallet := h.tokenOperatorWallet(ctx, req.Token)
-
-	// 2. Clean up stale WG entries for this public IP (from previous installs).
-	//    This prevents ghost peers: old rows with different node_id/wg_key that
-	//    the sync loop would keep trying to reach.
-	if _, err := h.rqliteClient.Exec(ctx,
-		"DELETE FROM wireguard_peers WHERE public_ip = ?", req.PublicIP); err != nil {
-		h.logger.Warn("failed to clean up stale WG entries", zap.Error(err))
-		// Non-fatal: proceed with join
-	}
-
-	// 3. Assign WG IP with retry on conflict (runs after cleanup so ghost IPs
-	//    from this public_ip are not counted)
-	wgIP, err := h.assignWGIP(ctx)
-	if err != nil {
-		h.logger.Error("failed to assign WG IP", zap.Error(err))
-		http.Error(w, "failed to assign WG IP", http.StatusInternalServerError)
+	if err := h.refuseIfClaimed(ctx, req); err != nil {
+		if errors.Is(err, errClaimCheckUnavailable) {
+			// A backend outage is not a conflict, and its detail is not for an
+			// unauthenticated caller.
+			h.logger.Error("could not check whether the joining identity is already registered",
+				zap.Error(err))
+			http.Error(w, "cannot verify the request right now, retry shortly", http.StatusServiceUnavailable)
+			return
+		}
+		// The reason is logged, not returned: which of the three identities
+		// collided is fleet state, and this is still a pre-consume path.
+		h.logger.Warn("join rejected: the identity is already registered",
+			zap.Error(err), zap.String("public_ip", req.PublicIP))
+		http.Error(w, "identity already registered", http.StatusConflict)
 		return
 	}
 
-	// 4. Register WG peer in database
-	nodeID := fmt.Sprintf("node-%s", wgIP) // temporary ID based on WG IP
-	_, err = h.rqliteClient.Exec(ctx,
-		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, operator_wallet) VALUES (?, ?, ?, ?, ?, ?)",
-		nodeID, wgIP, req.WGPublicKey, req.PublicIP, 51820, operatorWallet)
+	// Everything that can fail WITHOUT touching cluster state happens first:
+	// the secrets, this node's own WireGuard identity, the peer list. Only then
+	// is the token burned and the peer row written.
+	//
+	// The old order was the other way round — consume token, write the row, add
+	// the peer to wg0, and only THEN read six files off disk. Any failure after
+	// the write (an unreadable swarm.key, a joining node that crashed
+	// mid-install, a tunnel verification that never came back) left a consumed
+	// token the operator could not reuse and a wireguard_peers row every
+	// survivor re-applied to its interface every 60 seconds, for ever, with
+	// nothing able to tell it from a real peer.
+	secrets, err := h.readJoinSecrets()
 	if err != nil {
-		h.logger.Error("failed to register WG peer", zap.Error(err))
-		http.Error(w, "failed to register peer", http.StatusInternalServerError)
-		return
-	}
-
-	// 5. Add peer to local WireGuard interface immediately
-	if err := h.addWGPeerLocally(req.WGPublicKey, req.PublicIP, wgIP); err != nil {
-		h.logger.Warn("failed to add WG peer to local interface", zap.Error(err))
-		// Non-fatal: the sync loop will pick it up
-	}
-
-	// 6. Read secrets from disk
-	clusterSecret, err := os.ReadFile(h.oramaDir + "/secrets/cluster-secret")
-	if err != nil {
-		h.logger.Error("failed to read cluster secret", zap.Error(err))
+		h.logger.Error("failed to read join secrets", zap.Error(err))
 		http.Error(w, "internal error reading secrets", http.StatusInternalServerError)
 		return
 	}
 
-	swarmKey, err := os.ReadFile(h.oramaDir + "/secrets/swarm.key")
-	if err != nil {
-		h.logger.Error("failed to read swarm key", zap.Error(err))
-		http.Error(w, "internal error reading secrets", http.StatusInternalServerError)
-		return
-	}
-
-	// Read API key HMAC secret (optional — may not exist on older clusters)
-	apiKeyHMACSecret := ""
-	if data, err := os.ReadFile(h.oramaDir + "/secrets/api-key-hmac-secret"); err == nil {
-		apiKeyHMACSecret = strings.TrimSpace(string(data))
-	}
-
-	// Read RQLite password (optional — may not exist on older clusters)
-	rqlitePassword := ""
-	if data, err := os.ReadFile(h.oramaDir + "/secrets/rqlite-password"); err == nil {
-		rqlitePassword = strings.TrimSpace(string(data))
-	}
-
-	// Read serverless secrets encryption key (optional — may not exist on
-	// older clusters; bugboard #837)
-	secretsEncryptionKey := ""
-	if data, err := os.ReadFile(h.oramaDir + "/secrets/secrets-encryption-key"); err == nil {
-		secretsEncryptionKey = strings.TrimSpace(string(data))
-	}
-
-	// Read TURN shared secret (optional — may not exist on older clusters;
-	// feat-124 #913)
-	turnSecret := ""
-	if data, err := os.ReadFile(h.oramaDir + "/secrets/turn-secret"); err == nil {
-		turnSecret = strings.TrimSpace(string(data))
-	}
-
-	// 7. Get this node's WG IP (needed before peer list to check self-inclusion)
-	myWGIP, err := h.getMyWGIP()
+	myWGIP, err := readLocalWGIP()
 	if err != nil {
 		h.logger.Error("failed to get local WG IP", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// 8. Get all WG peers
 	wgPeers, err := h.getWGPeers(ctx, req.WGPublicKey)
 	if err != nil {
 		h.logger.Error("failed to list WG peers", zap.Error(err))
@@ -237,13 +225,13 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// On a fresh genesis node, the WG sync loop may not have self-registered
 	// into wireguard_peers yet, causing 0 peers to be returned.
 	if !wgPeersContainsIP(wgPeers, myWGIP) {
-		myPubKey, err := h.getMyWGPublicKey()
+		myPubKey, err := readLocalWGPublicKey(h.oramaDir)
 		if err != nil {
 			h.logger.Error("failed to get local WG public key", zap.Error(err))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		myPublicIP, err := h.getMyPublicIP()
+		myPublicIP, err := readLocalPublicIP()
 		if err != nil {
 			h.logger.Error("failed to get local public IP", zap.Error(err))
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -258,17 +246,67 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 			zap.String("wg_ip", myWGIP))
 	}
 
-	// 9. Query IPFS and IPFS Cluster peer info
+	// From here on the request mutates cluster state.
+
+	// 1. Validate and consume the invite token (atomic single-use)
+	if err := h.consumeToken(ctx, req.Token, req.PublicIP); err != nil {
+		h.logger.Warn("join token validation failed", zap.Error(err))
+		http.Error(w, "unauthorized: invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	// 1b. Look up the operator wallet from the consumed token (may be empty for legacy tokens)
+	operatorWallet := h.tokenOperatorWallet(ctx, req.Token)
+
+	// 2. Clean up the residue of this machine's previous, unfinished joins.
+	if err := h.removeUnfinishedJoinRows(ctx, req.PublicIP); err != nil {
+		h.logger.Warn("failed to clean up stale WG entries", zap.Error(err))
+		// Non-fatal: proceed with join
+	}
+
+	// 3. Allocate an overlay address and register the peer, as one retryable step.
+	wgIP, err := overlay.Register(ctx, h.rqliteClient, overlay.Peer{
+		NodeID:         req.PeerID,
+		PublicKey:      req.WGPublicKey,
+		PublicIP:       req.PublicIP,
+		OperatorWallet: operatorWallet,
+	})
+	if err != nil {
+		// A uniqueness conflict here means the request named an identity the
+		// pre-check just cleared. That is the caller's problem, not the
+		// cluster's, and releasing the token on it is precisely what would
+		// make the token replayable.
+		if overlay.IsConflict(err) {
+			h.logger.Warn("join rejected: identity conflict after the pre-check",
+				zap.Error(err), zap.String("public_ip", req.PublicIP))
+			http.Error(w, "identity already registered", http.StatusConflict)
+			return
+		}
+		h.logger.Error("failed to register WG peer", zap.Error(err))
+		h.releaseToken(ctx, req.Token)
+		http.Error(w, "failed to register peer", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Add peer to local WireGuard interface immediately.
+	//    A failure here is not fatal — the sync loop applies the row within a
+	//    minute — but it is the last step that can fail, so anything worse than
+	//    a warning would have to undo the row above.
+	if err := h.addWGPeerLocally(req.WGPublicKey, req.PublicIP, wgIP); err != nil {
+		h.logger.Warn("failed to add WG peer to local interface", zap.Error(err))
+	}
+
+	// 5. Query IPFS and IPFS Cluster peer info
 	ipfsPeer := h.queryIPFSPeerInfo(myWGIP)
 	ipfsClusterPeer := h.queryIPFSClusterPeerInfo(myWGIP)
 
-	// 10. Get this node's libp2p peer ID for bootstrap peers
+	// 6. Get this node's libp2p peer ID for bootstrap peers
 	bootstrapPeers := h.buildBootstrapPeers(myWGIP, ipfsPeer.ID)
 
-	// 11. Read base domain from config
+	// 7. Read base domain from config
 	baseDomain := h.readBaseDomain()
 
-	// 12. Read IPFS Cluster trusted peer IDs
+	// 8. Read IPFS Cluster trusted peer IDs
 	ipfsClusterPeerIDs := h.readIPFSClusterTrustedPeers()
 
 	// Build Olric seed peers from all existing WG peer IPs (memberlist port 3322)
@@ -283,12 +321,12 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	resp := JoinResponse{
 		WGIP:                 wgIP,
 		WGPeers:              wgPeers,
-		ClusterSecret:        strings.TrimSpace(string(clusterSecret)),
-		SwarmKey:             strings.TrimSpace(string(swarmKey)),
-		APIKeyHMACSecret:     apiKeyHMACSecret,
-		RQLitePassword:       rqlitePassword,
-		SecretsEncryptionKey: secretsEncryptionKey,
-		TURNSecret:           turnSecret,
+		ClusterSecret:        secrets.ClusterSecret,
+		SwarmKey:             secrets.SwarmKey,
+		APIKeyHMACSecret:     secrets.APIKeyHMACSecret,
+		RQLitePassword:       secrets.RQLitePassword,
+		SecretsEncryptionKey: secrets.SecretsEncryptionKey,
+		TURNSecret:           secrets.TURNSecret,
 		RQLiteJoinAddress:    constants.RQLiteRaftAddrFor(myWGIP),
 		IPFSPeer:             ipfsPeer,
 		IPFSClusterPeer:      ipfsClusterPeer,
@@ -304,6 +342,186 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("node joined cluster",
 		zap.String("wg_ip", wgIP),
 		zap.String("public_ip", req.PublicIP))
+}
+
+// assertTokenLive reports whether the token exists, is unused and unexpired,
+// WITHOUT consuming it.
+//
+// Consumption stays atomic and single, in consumeToken. This is only a gate so
+// that unauthenticated callers cannot reach the work that follows.
+func (h *Handler) assertTokenLive(ctx context.Context, token string) error {
+	var rows []struct {
+		Token string `db:"token"`
+	}
+	if err := h.rqliteClient.Query(ctx, &rows,
+		`SELECT token FROM invite_tokens
+		  WHERE token = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
+		token); err != nil {
+		return fmt.Errorf("could not read the invite token: %w", err)
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("no live invite token matches")
+	}
+	return nil
+}
+
+// errClaimCheckUnavailable marks a refusal caused by not being able to read the
+// table, as opposed to a genuine conflict. The two get very different responses.
+var errClaimCheckUnavailable = errors.New("claim check unavailable")
+
+// liveRowPredicate matches wireguard_peers rows belonging to a node that is up.
+//
+// Liveness is `confirmed_at IS NOT NULL` OR a dns_nodes row at the same overlay
+// address, and it needs both halves.
+//
+// confirmed_at alone is not enough during a rolling upgrade of this very
+// change. A node still on the old binary self-registers with INSERT OR REPLACE,
+// which deletes and re-inserts its row, so it nulls its own confirmed_at every
+// 60 seconds — within a minute of migration 038 backfilling it. The deploy
+// order this change requires (upgrade the join-serving node first) is exactly
+// the arrangement where a new gateway would then read every old node as
+// unconfirmed and let a token holder evict it.
+//
+// dns_nodes is written the same way by both binaries, so it has no such hole.
+// Neither signal is sufficient alone — a node mid-join has no dns_nodes row
+// yet — so the check is the disjunction.
+const liveRowPredicate = `(w.confirmed_at IS NOT NULL
+       OR EXISTS (SELECT 1 FROM dns_nodes n WHERE n.internal_ip = w.wg_ip))`
+
+// refuseIfClaimed reports an error when any identity in the request already
+// belongs to a node that is up.
+//
+// Only live rows count. A row that is neither confirmed nor backed by a
+// dns_nodes entry is the residue of a join that did not finish — possibly this
+// machine's own previous attempt — and standing aside for it would make a retry
+// after a failed install impossible.
+func (h *Handler) refuseIfClaimed(ctx context.Context, req JoinRequest) error {
+	var rows []struct {
+		NodeID    string `db:"node_id"`
+		PublicIP  string `db:"public_ip"`
+		PublicKey string `db:"public_key"`
+	}
+	// The refusal set is "every row matching one of these identities that the
+	// cleanup below will NOT remove". Restricting it to live rows was not
+	// enough: an unconfirmed row at a DIFFERENT public IP is invisible to both
+	// the check and the cleanup, yet still collides with the INSERT — which
+	// released the token, making one invite replayable for ever.
+	//
+	// Defining the two in terms of each other is what closes that: the only
+	// rows allowed to survive this check are exactly the ones about to be
+	// deleted, so nothing the caller supplies can reach a constraint.
+	if err := h.rqliteClient.Query(ctx, &rows,
+		`SELECT w.node_id, w.public_ip, w.public_key FROM wireguard_peers w
+		  WHERE (w.public_ip = ? OR w.public_key = ? OR w.node_id = ?)
+		    AND NOT (w.public_ip = ? AND NOT `+liveRowPredicate+`)`,
+		req.PublicIP, req.WGPublicKey, req.PeerID, req.PublicIP); err != nil {
+		return fmt.Errorf("%w: %v", errClaimCheckUnavailable, err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	// Name the field that collided, not the row: the caller does not need the
+	// rest of the fleet's registration details to fix its own request.
+	for _, row := range rows {
+		switch {
+		case row.PublicIP == req.PublicIP:
+			return fmt.Errorf("a node is already registered at this public IP; decommission it before rejoining")
+		case row.PublicKey == req.WGPublicKey:
+			return fmt.Errorf("this WireGuard public key is already registered to another node")
+		case req.PeerID != "" && row.NodeID == req.PeerID:
+			return fmt.Errorf("this peer id is already registered to another node")
+		}
+	}
+	return fmt.Errorf("this identity is already registered to another node")
+}
+
+// removeUnfinishedJoinRows deletes rows this machine left behind by a previous
+// join that did not complete.
+//
+// It carries the same liveness predicate as refuseIfClaimed, and that is the
+// enforcement — the check reports a clear error, this predicate is what makes
+// the delete safe. It used to remove every row with the given public IP, and
+// the public IP is a string the caller chooses that nothing compares against
+// the source address, so the cleanup doubled as a way to evict any node in the
+// fleet by naming it. Re-evaluating liveness here also closes the window
+// between the check and the delete.
+func (h *Handler) removeUnfinishedJoinRows(ctx context.Context, publicIP string) error {
+	if _, err := h.rqliteClient.Exec(ctx,
+		`DELETE FROM wireguard_peers WHERE wg_ip IN (
+		   SELECT w.wg_ip FROM wireguard_peers w
+		    WHERE w.public_ip = ? AND NOT `+liveRowPredicate+`)`,
+		publicIP); err != nil {
+		return fmt.Errorf("delete unfinished join rows for %s: %w", publicIP, err)
+	}
+	return nil
+}
+
+// joinSecrets is everything a joining node needs that lives on disk.
+type joinSecrets struct {
+	ClusterSecret        string
+	SwarmKey             string
+	APIKeyHMACSecret     string
+	RQLitePassword       string
+	SecretsEncryptionKey string
+	TURNSecret           string
+}
+
+// readJoinSecrets loads every secret the response carries.
+//
+// Read before anything is written, so a missing or unreadable file fails the
+// join with the token still usable and no peer row left behind.
+func (h *Handler) readJoinSecrets() (joinSecrets, error) {
+	var out joinSecrets
+
+	clusterSecret, err := os.ReadFile(h.oramaDir + "/secrets/cluster-secret")
+	if err != nil {
+		return out, fmt.Errorf("read cluster secret: %w", err)
+	}
+	out.ClusterSecret = strings.TrimSpace(string(clusterSecret))
+
+	swarmKey, err := os.ReadFile(h.oramaDir + "/secrets/swarm.key")
+	if err != nil {
+		return out, fmt.Errorf("read swarm key: %w", err)
+	}
+	out.SwarmKey = strings.TrimSpace(string(swarmKey))
+
+	// The rest are optional: a cluster installed before they existed has none,
+	// and a joining node handles their absence.
+	for _, opt := range []struct {
+		file string
+		dst  *string
+	}{
+		{"api-key-hmac-secret", &out.APIKeyHMACSecret},
+		{"rqlite-password", &out.RQLitePassword},
+		{"secrets-encryption-key", &out.SecretsEncryptionKey},
+		{"turn-secret", &out.TURNSecret},
+	} {
+		if data, err := os.ReadFile(h.oramaDir + "/secrets/" + opt.file); err == nil {
+			*opt.dst = strings.TrimSpace(string(data))
+		}
+	}
+
+	return out, nil
+}
+
+// releaseToken un-consumes an invite token after a join that failed partway.
+//
+// The token is still single-use in the sense that matters — a successful join
+// consumes it for good — but an attempt that got as far as burning it and then
+// could not finish should not cost the operator a token and a support round
+// trip. Releasing is safe because the row it guards was rolled back with it:
+// there is no half-joined node for a replay to collide with.
+func (h *Handler) releaseToken(ctx context.Context, token string) {
+	// used_by_ip is deliberately kept: it is the record of who tried, and a
+	// failed attempt is exactly when that record matters.
+	if _, err := h.rqliteClient.Exec(ctx,
+		"UPDATE invite_tokens SET used_at = NULL WHERE token = ?", token); err != nil {
+		h.logger.Error("could not release the invite token after a failed join; it will need to be reissued",
+			zap.Error(err))
+		return
+	}
+	h.logger.Info("released the invite token after a failed join")
 }
 
 // consumeToken validates and marks an invite token as used (atomic single-use)
@@ -342,51 +560,6 @@ func (h *Handler) tokenOperatorWallet(ctx context.Context, token string) string 
 		return rows[0].Wallet
 	}
 	return ""
-}
-
-// assignWGIP finds the next available 10.0.0.x IP by querying all peers and
-// finding the numerically highest IP. This avoids lexicographic comparison issues
-// where MAX("10.0.0.9") > MAX("10.0.0.10") in SQL string comparison.
-func (h *Handler) assignWGIP(ctx context.Context) (string, error) {
-	var rows []struct {
-		WGIP string `db:"wg_ip"`
-	}
-
-	err := h.rqliteClient.Query(ctx, &rows, "SELECT wg_ip FROM wireguard_peers")
-	if err != nil {
-		return "", fmt.Errorf("failed to query WG IPs: %w", err)
-	}
-
-	if len(rows) == 0 {
-		return "10.0.0.2", nil // 10.0.0.1 is genesis
-	}
-
-	// Find the numerically highest IP
-	maxA, maxB, maxC, maxD := 0, 0, 0, 0
-	for _, row := range rows {
-		var a, b, c, d int
-		if _, err := fmt.Sscanf(row.WGIP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
-			continue
-		}
-		if c > maxC || (c == maxC && d > maxD) {
-			maxA, maxB, maxC, maxD = a, b, c, d
-		}
-	}
-
-	if maxA == 0 {
-		return "10.0.0.2", nil
-	}
-
-	maxD++
-	if maxD > 254 {
-		maxC++
-		maxD = 1
-		if maxC > 255 {
-			return "", fmt.Errorf("WireGuard IP space exhausted")
-		}
-	}
-
-	return fmt.Sprintf("%d.%d.%d.%d", maxA, maxB, maxC, maxD), nil
 }
 
 // addWGPeerLocally adds a peer to the local wg0 interface and persists to config
@@ -487,7 +660,12 @@ func (h *Handler) getWGPeers(ctx context.Context, excludePubKey string) ([]WGPee
 }
 
 // getMyWGIP gets this node's WireGuard IP from the wg0 interface
-func (h *Handler) getMyWGIP() (string, error) {
+// readLocalWGIP reads this node's own overlay address off wg0. A package-level
+// var so a test can drive HandleJoin's ordering — which token is spent, which
+// rows are written, in what order — without a WireGuard interface.
+var readLocalWGIP = defaultLocalWGIP
+
+func defaultLocalWGIP() (string, error) {
 	out, err := exec.Command("ip", "-4", "addr", "show", "wg0").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get wg0 info: %w", err)
@@ -511,10 +689,13 @@ func (h *Handler) getMyWGIP() (string, error) {
 // getMyWGPublicKey reads the local WireGuard public key from the orama secrets
 // directory. The key is saved there during install by Phase6SetupWireGuard.
 // This avoids needing root/CAP_NET_ADMIN permissions that `wg show wg0` requires.
-func (h *Handler) getMyWGPublicKey() (string, error) {
-	data, err := os.ReadFile(h.oramaDir + "/secrets/wg-public-key")
+// readLocalWGPublicKey and readLocalPublicIP are seams for the same reason.
+var readLocalWGPublicKey = defaultLocalWGPublicKey
+
+func defaultLocalWGPublicKey(oramaDir string) (string, error) {
+	data, err := os.ReadFile(oramaDir + "/secrets/wg-public-key")
 	if err != nil {
-		return "", fmt.Errorf("failed to read WG public key from %s/secrets/wg-public-key: %w", h.oramaDir, err)
+		return "", fmt.Errorf("failed to read WG public key from %s/secrets/wg-public-key: %w", oramaDir, err)
 	}
 	key := strings.TrimSpace(string(data))
 	if key == "" {
@@ -524,7 +705,9 @@ func (h *Handler) getMyWGPublicKey() (string, error) {
 }
 
 // getMyPublicIP determines this node's public IP by connecting to a public server
-func (h *Handler) getMyPublicIP() (string, error) {
+var readLocalPublicIP = defaultLocalPublicIP
+
+func defaultLocalPublicIP() (string, error) {
 	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 3*time.Second)
 	if err != nil {
 		return "", fmt.Errorf("failed to determine public IP: %w", err)

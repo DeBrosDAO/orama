@@ -213,6 +213,20 @@ func (o *Orchestrator) executeGenesisFlow() error {
 
 // executeJoinFlow runs the install for a node joining an existing cluster via invite token
 func (o *Orchestrator) executeJoinFlow() error {
+	// Step 0: Establish this node's identity before asking to join.
+	//
+	// The peer id is how every store in the cluster keys this machine, so the
+	// join request has to carry it. It used to be generated in Phase 3, well
+	// after the join, which left the receiving node no choice but to invent a
+	// synthetic "node-<wgip>" for the wireguard_peers row — an id that matched
+	// no dns_nodes row and never would.
+	fmt.Printf("\n🪪 Establishing node identity...\n")
+	peerID, err := o.setup.EnsureNodeIdentity()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  ✓ Node identity: %s\n", peerID)
+
 	// Step 1: Generate WG keypair
 	fmt.Printf("\n🔑 Generating WireGuard keypair...\n")
 	privKey, pubKey, err := production.GenerateKeyPair()
@@ -223,7 +237,7 @@ func (o *Orchestrator) executeJoinFlow() error {
 
 	// Step 2: Call join endpoint on existing node
 	fmt.Printf("\n🤝 Requesting cluster join from %s...\n", o.flags.JoinAddress)
-	joinResp, err := o.callJoinEndpoint(pubKey)
+	joinResp, err := o.callJoinEndpoint(pubKey, peerID)
 	if err != nil {
 		return fmt.Errorf("join request failed: %w", err)
 	}
@@ -327,11 +341,12 @@ func (o *Orchestrator) executeJoinFlow() error {
 }
 
 // callJoinEndpoint sends the join request to the existing node's HTTPS endpoint
-func (o *Orchestrator) callJoinEndpoint(wgPubKey string) (*joinhandlers.JoinResponse, error) {
+func (o *Orchestrator) callJoinEndpoint(wgPubKey, peerID string) (*joinhandlers.JoinResponse, error) {
 	reqBody := joinhandlers.JoinRequest{
 		Token:       o.flags.Token,
 		WGPublicKey: wgPubKey,
 		PublicIP:    o.flags.VpsIP,
+		PeerID:      peerID,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {

@@ -96,6 +96,30 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
+	// Confirmations first. They only ever protect rows, so doing them before
+	// the deletions means a node that appeared between the read and now is
+	// latched rather than raced against.
+	for _, nodeID := range plan.ConfirmWireGuardPeers {
+		if _, err := rqlite.SafeExecContext(r.db, ctx,
+			`UPDATE wireguard_peers SET confirmed_at = CURRENT_TIMESTAMP
+			  WHERE node_id = ? AND confirmed_at IS NULL`, nodeID); err != nil {
+			return fmt.Errorf("confirm wireguard peer %s: %w", nodeID, err)
+		}
+		r.logger.Info("Confirmed the WireGuard peer of a node that came up", zap.String("node_id", nodeID))
+	}
+
+	for _, nodeID := range plan.DropUnconfirmedWireGuardPeers {
+		// The confirmed_at IS NULL predicate makes the delete safe against the
+		// evidence read being stale: if the node came up in the meantime and
+		// something confirmed the row, this deletes nothing.
+		if _, err := rqlite.SafeExecContext(r.db, ctx,
+			`DELETE FROM wireguard_peers WHERE node_id = ? AND confirmed_at IS NULL`, nodeID); err != nil {
+			return fmt.Errorf("drop unconfirmed wireguard peer %s: %w", nodeID, err)
+		}
+		r.logger.Info("Removed the WireGuard peer left behind by a join that never completed",
+			zap.String("node_id", nodeID))
+	}
+
 	for _, nodeID := range plan.DropWireGuardPeers {
 		if _, err := rqlite.SafeExecContext(r.db, ctx,
 			`DELETE FROM wireguard_peers WHERE node_id = ?`, nodeID); err != nil {
@@ -174,7 +198,8 @@ func (r *Reconciler) readNodes(ctx context.Context) ([]Node, error) {
 
 func (r *Reconciler) readWireGuardRows(ctx context.Context) ([]WireGuardRow, error) {
 	rows, err := rqlite.SafeQueryContext(r.db, ctx,
-		`SELECT node_id, wg_ip, public_key FROM wireguard_peers`)
+		`SELECT node_id, wg_ip, public_key, COALESCE(created_at, ''), COALESCE(confirmed_at, '')
+		   FROM wireguard_peers`)
 	if err != nil {
 		return nil, fmt.Errorf("read wireguard_peers: %w", err)
 	}
@@ -183,9 +208,12 @@ func (r *Reconciler) readWireGuardRows(ctx context.Context) ([]WireGuardRow, err
 	var out []WireGuardRow
 	for rows.Next() {
 		var w WireGuardRow
-		if err := rows.Scan(&w.NodeID, &w.WGIP, &w.PublicKey); err != nil {
+		var createdAt, confirmedAt string
+		if err := rows.Scan(&w.NodeID, &w.WGIP, &w.PublicKey, &createdAt, &confirmedAt); err != nil {
 			return nil, fmt.Errorf("scan wireguard_peers: %w", err)
 		}
+		w.CreatedAt = parseTimestamp(createdAt)
+		w.ConfirmedAt = parseTimestamp(confirmedAt)
 		out = append(out, w)
 	}
 	if err := rows.Err(); err != nil {

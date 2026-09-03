@@ -14,8 +14,17 @@ func node(peerID, ip string, lastSeen time.Time) Node {
 	return Node{PeerID: peerID, InternalIP: ip, Status: "active", LastSeen: lastSeen}
 }
 
+// wgRow is a row for a node that already came up: created long ago and
+// confirmed. That is what every row looks like after migration 038, and the
+// unconfirmed cases are spelled out explicitly in the tests that need them.
 func wgRow(ip string) WireGuardRow {
-	return WireGuardRow{NodeID: "node-" + ip, WGIP: ip, PublicKey: "key-" + ip}
+	return WireGuardRow{
+		NodeID:      "node-" + ip,
+		WGIP:        ip,
+		PublicKey:   "key-" + ip,
+		CreatedAt:   ago(72 * time.Hour),
+		ConfirmedAt: ago(72 * time.Hour),
+	}
 }
 
 func TestBuildPlan_leavesALiveFleetAlone(t *testing.T) {
@@ -228,5 +237,105 @@ func TestBuildPlan_zeroLastSeenIsNotLiveness(t *testing.T) {
 	plan := BuildPlan(e)
 	if want := []string{"node-10.0.0.9"}; !reflect.DeepEqual(plan.DropWireGuardPeers, want) {
 		t.Fatalf("DropWireGuardPeers = %v, want %v", plan.DropWireGuardPeers, want)
+	}
+}
+
+func TestBuildPlan_confirms_a_row_once_its_node_appears(t *testing.T) {
+	plan := BuildPlan(Evidence{
+		Nodes: []Node{{PeerID: "peerA", InternalIP: "10.0.0.5", Status: "active", LastSeen: now}},
+		WireGuardRows: []WireGuardRow{
+			{NodeID: "node-10.0.0.5", WGIP: "10.0.0.5", CreatedAt: now.Add(-2 * time.Minute)},
+		},
+		Now: now,
+	})
+
+	if want := []string{"node-10.0.0.5"}; !reflect.DeepEqual(plan.ConfirmWireGuardPeers, want) {
+		t.Fatalf("ConfirmWireGuardPeers = %v, want %v", plan.ConfirmWireGuardPeers, want)
+	}
+	if len(plan.DropUnconfirmedWireGuardPeers) != 0 {
+		t.Fatalf("a row whose node appeared must not be dropped: %v", plan.DropUnconfirmedWireGuardPeers)
+	}
+}
+
+func TestBuildPlan_does_not_reconfirm_an_already_confirmed_row(t *testing.T) {
+	plan := BuildPlan(Evidence{
+		Nodes: []Node{{PeerID: "peerA", InternalIP: "10.0.0.5", Status: "active", LastSeen: now}},
+		WireGuardRows: []WireGuardRow{
+			{NodeID: "peerA", WGIP: "10.0.0.5", CreatedAt: now.Add(-time.Hour), ConfirmedAt: now.Add(-time.Hour)},
+		},
+		Now: now,
+	})
+
+	if len(plan.ConfirmWireGuardPeers) != 0 {
+		t.Fatalf("expected no confirmations, got %v", plan.ConfirmWireGuardPeers)
+	}
+	if !plan.Empty() {
+		t.Fatalf("expected an empty plan, got %+v", plan)
+	}
+}
+
+func TestBuildPlan_drops_the_residue_of_a_join_that_never_finished(t *testing.T) {
+	plan := BuildPlan(Evidence{
+		// No dns_nodes row ever appeared at this address.
+		WireGuardRows: []WireGuardRow{
+			{NodeID: "node-10.0.0.9", WGIP: "10.0.0.9", CreatedAt: now.Add(-JoinGrace - time.Minute)},
+		},
+		Now: now,
+	})
+
+	if want := []string{"node-10.0.0.9"}; !reflect.DeepEqual(plan.DropUnconfirmedWireGuardPeers, want) {
+		t.Fatalf("DropUnconfirmedWireGuardPeers = %v, want %v", plan.DropUnconfirmedWireGuardPeers, want)
+	}
+	if len(plan.OrphanWireGuardPeers) != 0 {
+		t.Fatalf("a failed join is dropped, not reported: %v", plan.OrphanWireGuardPeers)
+	}
+}
+
+func TestBuildPlan_leaves_a_join_still_in_flight_alone(t *testing.T) {
+	plan := BuildPlan(Evidence{
+		WireGuardRows: []WireGuardRow{
+			{NodeID: "node-10.0.0.9", WGIP: "10.0.0.9", CreatedAt: now.Add(-time.Minute)},
+		},
+		Now: now,
+	})
+
+	if !plan.Empty() {
+		t.Fatalf("a node mid-join gets its WireGuard row before its dns_nodes row; plan was %+v", plan)
+	}
+}
+
+func TestBuildPlan_never_drops_a_confirmed_row_for_being_unmatched(t *testing.T) {
+	plan := BuildPlan(Evidence{
+		// dns_nodes lost the row, but this node demonstrably came up once.
+		WireGuardRows: []WireGuardRow{
+			{NodeID: "peerA", WGIP: "10.0.0.9",
+				CreatedAt: now.Add(-72 * time.Hour), ConfirmedAt: now.Add(-71 * time.Hour)},
+		},
+		Now: now,
+	})
+
+	if len(plan.DropUnconfirmedWireGuardPeers) != 0 {
+		t.Fatalf("a confirmed row must never be dropped as a failed join: %v", plan.DropUnconfirmedWireGuardPeers)
+	}
+	if want := []string{"peerA"}; !reflect.DeepEqual(plan.OrphanWireGuardPeers, want) {
+		t.Fatalf("OrphanWireGuardPeers = %v, want %v", plan.OrphanWireGuardPeers, want)
+	}
+}
+
+func TestBuildPlan_unparseable_created_at_protects_the_row(t *testing.T) {
+	// A zero CreatedAt is what parseTimestamp yields for a malformed value. The
+	// safe direction is to keep the row, not to age it out immediately.
+	plan := BuildPlan(Evidence{
+		WireGuardRows: []WireGuardRow{{NodeID: "node-10.0.0.9", WGIP: "10.0.0.9"}},
+		Now:           now,
+	})
+
+	if len(plan.DropUnconfirmedWireGuardPeers) != 0 {
+		t.Fatalf("a row with no usable creation time must not be dropped: %v",
+			plan.DropUnconfirmedWireGuardPeers)
+	}
+	if want := []string{"node-10.0.0.9"}; !reflect.DeepEqual(plan.OrphanWireGuardPeers, want) {
+		t.Fatalf("OrphanWireGuardPeers = %v, want %v — keeping it is right, keeping it silently is not",
+			plan.OrphanWireGuardPeers, want)
 	}
 }

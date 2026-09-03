@@ -39,6 +39,18 @@ type WireGuardRow struct {
 	NodeID    string
 	WGIP      string
 	PublicKey string
+
+	// CreatedAt is when the join handshake wrote the row.
+	CreatedAt time.Time
+
+	// ConfirmedAt is when the node behind this row was first seen in
+	// dns_nodes, and is zero until then.
+	//
+	// It is a latch, not a liveness signal: once a node has proved it came up,
+	// its row is never dropped for being unconfirmed, only for the node having
+	// departed. That asymmetry is what makes it safe to garbage-collect failed
+	// joins without any risk of severing a live node from the mesh.
+	ConfirmedAt time.Time
 }
 
 // Plan is the set of changes that would bring the stores in line with the
@@ -53,14 +65,26 @@ type Plan struct {
 	// and past their grace period.
 	DropDNSNodes []string
 
-	// OrphanWireGuardPeers are rows whose overlay address matches no dns_nodes
-	// row at all. They are REPORTED, never dropped — see BuildPlan.
+	// OrphanWireGuardPeers are CONFIRMED rows whose overlay address matches no
+	// dns_nodes row. They are REPORTED, never dropped — see BuildPlan.
 	OrphanWireGuardPeers []string
+
+	// ConfirmWireGuardPeers are node_ids of rows whose node has now been seen
+	// in dns_nodes, and which should have confirmed_at set.
+	ConfirmWireGuardPeers []string
+
+	// DropUnconfirmedWireGuardPeers are node_ids of rows written by a join
+	// that never completed: no node ever appeared at that address, and the
+	// join window has long since passed.
+	DropUnconfirmedWireGuardPeers []string
 }
 
 // Empty reports whether the plan would change nothing.
 func (p Plan) Empty() bool {
-	return len(p.DropWireGuardPeers) == 0 && len(p.DropDNSNodes) == 0
+	return len(p.DropWireGuardPeers) == 0 &&
+		len(p.DropDNSNodes) == 0 &&
+		len(p.ConfirmWireGuardPeers) == 0 &&
+		len(p.DropUnconfirmedWireGuardPeers) == 0
 }
 
 // Grace periods. Both are deliberately long: the cost of forgetting a machine
@@ -76,6 +100,16 @@ const (
 	// after eviction, so an operator looking at the table right after a node
 	// disappears still sees what was removed and when.
 	TombstoneGrace = 6 * time.Hour
+
+	// JoinGrace is how long an unconfirmed wireguard_peers row is left alone
+	// before it is treated as the residue of a join that never finished.
+	//
+	// A real join takes minutes — install, first boot, raft join, DNS
+	// registration — so this is several times the longest plausible one. The
+	// only thing it costs a genuinely slow joiner is having to run join again,
+	// and the row it protects is the one that used to be re-applied to every
+	// survivor's interface every 60 seconds indefinitely.
+	JoinGrace = 30 * time.Minute
 )
 
 // Evidence is what the leader knows about the fleet when it builds a plan.
@@ -110,9 +144,16 @@ type Evidence struct {
 // Orphaned WireGuard rows are the sharp edge. The obvious rule — "delete rows
 // with no matching dns_nodes id" — would today delete EVERY row, because the
 // join handler writes a synthetic node id that matches nothing. Matching is
-// therefore done on the overlay address, and a row that still finds no match is
-// only reported: a node that is mid-join has its WireGuard row before its
-// dns_nodes row, so absence is not departure.
+// therefore done on the overlay address.
+//
+// A row that still finds no match is split on whether the node behind it was
+// ever confirmed. Never confirmed and older than JoinGrace is a join that did
+// not finish, and is dropped — that residue is the whole reason this rule
+// exists. Never confirmed but recent is a join still in flight, since a node
+// gets its WireGuard row before its dns_nodes row. Confirmed is a node that
+// came up and then vanished from dns_nodes, which is only reported: it is an
+// inconsistency in a store this package does not own, and deleting the mesh
+// entry of a machine that may well still be running would sever it.
 func BuildPlan(e Evidence) Plan {
 	byIP := make(map[string]Node, len(e.Nodes))
 	byPeer := make(map[string]Node, len(e.Nodes))
@@ -127,9 +168,33 @@ func BuildPlan(e Evidence) Plan {
 
 	for _, row := range e.WireGuardRows {
 		node, known := byIP[row.WGIP]
+		confirmed := !row.ConfirmedAt.IsZero()
+
 		if !known {
-			plan.OrphanWireGuardPeers = append(plan.OrphanWireGuardPeers, row.NodeID)
+			switch {
+			case confirmed:
+				// A node that demonstrably came up and is no longer in
+				// dns_nodes is an anomaly worth an operator's attention, not
+				// something to clean up silently.
+				plan.OrphanWireGuardPeers = append(plan.OrphanWireGuardPeers, row.NodeID)
+			case row.CreatedAt.IsZero():
+				// No usable creation time, so there is no way to tell a join
+				// still in flight from residue. Keeping it is the safe
+				// direction, but keeping it silently is not: this is exactly
+				// the ghost class the rule exists to surface.
+				plan.OrphanWireGuardPeers = append(plan.OrphanWireGuardPeers, row.NodeID)
+			case e.Now.Sub(row.CreatedAt) >= JoinGrace:
+				plan.DropUnconfirmedWireGuardPeers = append(plan.DropUnconfirmedWireGuardPeers, row.NodeID)
+			}
+			// An unconfirmed row still inside the join window belongs to a
+			// join that may yet succeed. Leave it.
 			continue
+		}
+
+		if !confirmed {
+			// The node appeared. Latch it, so its row is never again a
+			// candidate for the rule above.
+			plan.ConfirmWireGuardPeers = append(plan.ConfirmWireGuardPeers, row.NodeID)
 		}
 		if departed(node, e) {
 			plan.DropWireGuardPeers = append(plan.DropWireGuardPeers, row.NodeID)
@@ -156,6 +221,8 @@ func BuildPlan(e Evidence) Plan {
 	sort.Strings(plan.DropWireGuardPeers)
 	sort.Strings(plan.DropDNSNodes)
 	sort.Strings(plan.OrphanWireGuardPeers)
+	sort.Strings(plan.ConfirmWireGuardPeers)
+	sort.Strings(plan.DropUnconfirmedWireGuardPeers)
 	return plan
 }
 
