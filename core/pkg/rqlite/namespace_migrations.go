@@ -68,6 +68,15 @@ func ApplyEmbeddedMigrationsNamespace(ctx context.Context, db *sql.DB, fsys fs.F
 	if err != nil {
 		return fmt.Errorf("read embedded migration files: %w", err)
 	}
+
+	// Same cluster-wide lock as the main path, for the same reason: every node
+	// hosting this namespace runs its gateway, and they all start together.
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
 	applied, err := loadAppliedVersionsFrom(ctx, db, namespaceMigrationsTracker)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)

@@ -123,6 +123,27 @@ orama monitor report --env testnet
 
 The gateway binary embeds a set of SQL migrations. The highest-numbered migration is the schema version that binary REQUIRES — **the gateway will refuse to start if its required schema isn't applied** (the schema-version contract added after the 2026-05-06 incident).
 
+**Migrations take a cluster-wide lock.** Every runner — the node's rqlite, the
+index gateway, each namespace gateway, `orama node schema apply` — acquires
+`cluster_locks('schema-migrations')` before it reads which versions are applied,
+and holds it until it is done. rqlite serialises writes through raft, so a
+conditional UPDATE is a linearizable compare-and-swap and therefore a correct
+mutex across nodes.
+
+Without it, N gateways starting together each snapshotted the applied set
+*before* doing anything and each ran the whole pending list. DDL is guarded by
+`IF NOT EXISTS` and survives that; DML is not. Migration 019 was
+`UPDATE refresh_tokens SET revoked_at = ... WHERE revoked_at IS NULL`, so a
+second node reaching it a minute after the first revoked every token issued in
+between — a silent fleet-wide logout.
+
+The lock is TTL-bounded (10 minutes), so a node that dies mid-apply does not
+block the fleet. That also means **every migration's DML must be re-runnable**:
+an apply that dies before recording its version re-runs the whole file next
+start. `migrations/idempotence_test.go` applies every migration, snapshots the
+database, applies them all again and asserts nothing moved — a new migration
+whose DML is not guarded fails at `go test`, not in production.
+
 This means rolling upgrades have ONE invariant you must respect:
 
 > The new gateway binary's required migrations must be applied to RQLite **before or as part of** starting the new binary on a node.
