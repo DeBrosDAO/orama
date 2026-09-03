@@ -260,6 +260,40 @@ orama node unlock --genesis --node-ip <wg-ip>
 
 ---
 
+## 12. IPFS-Cluster: node starts but its pins never replicate
+
+**Symptom:** `ipfs-cluster` is running and `/v1/health` reports `ipfs: ok`, but
+content pinned on this node never appears on the others (or vice versa). The
+ipfs-cluster log shows only generic connection failures to peers.
+
+**Cause:** the shared secret differs from the rest of the fleet. It is the key to
+the cluster's libp2p **private network**, so a node holding a different value
+completes no handshake with any peer — while looking healthy to every local
+check.
+
+**Check:** compare the first characters across nodes (never paste the whole
+value into a ticket):
+
+```bash
+sudo head -c 8 /opt/orama/.orama/secrets/cluster-secret; echo
+```
+
+They must be identical on every node.
+
+**Fix:** copy the value from a healthy node and restart `orama-node`. The join
+handshake distributes this secret, so a node that joined properly has the right
+one.
+
+**This should no longer happen on its own.** The node used to generate a fresh
+secret whenever the file could not be read (permissions, a transient I/O error,
+a file the join handshake had not written yet) or was not exactly 64 characters,
+and it discarded write errors — so a failed write produced a *different* secret
+on each restart. It now refuses to start ipfs-cluster in all of those cases and
+says why. A secret is generated only when the file is genuinely absent **and**
+the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
