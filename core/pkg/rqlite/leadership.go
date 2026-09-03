@@ -1,10 +1,10 @@
 package rqlite
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"net/http"
 	"time"
 
@@ -12,48 +12,30 @@ import (
 )
 
 // GetRaftStatus queries a local rqlite node's /status endpoint.
+//
+// Package-level because CLI callers use it without a manager. Credentials come
+// from authFile when one is given; empty means unauthenticated, which is
+// correct while rqlited runs without -auth.
 func GetRaftStatus(port int) (*RQLiteStatus, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/status", port))
-	if err != nil {
-		return nil, fmt.Errorf("failed to query status: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read status: %w", err)
-	}
-	var status RQLiteStatus
-	if err := json.Unmarshal(body, &status); err != nil {
-		return nil, fmt.Errorf("failed to parse status: %w", err)
-	}
-	return &status, nil
+	return GetRaftStatusAuth(port, "")
+}
+
+// GetRaftStatusAuth is GetRaftStatus with an explicit rqlite auth file.
+func GetRaftStatusAuth(port int, authFile string) (*RQLiteStatus, error) {
+	user, pass := adminCredentialsFromFile(authFile)
+	return NewAdminClient(fmt.Sprintf("http://localhost:%d", port), user, pass).Status(context.Background())
 }
 
 // GetRaftNodes queries a local rqlite node's /nodes endpoint (voters +
 // non-voters, with reachability).
 func GetRaftNodes(port int) (RQLiteNodes, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/nodes?nonvoters&ver=2&timeout=5s", port))
-	if err != nil {
-		return nil, fmt.Errorf("failed to query nodes: %w", err)
-	}
-	defer resp.Body.Close()
-	nodesBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read nodes: %w", err)
-	}
-	// Try ver=2 wrapped format, fall back to plain array.
-	var nodes RQLiteNodes
-	var wrapped struct {
-		Nodes RQLiteNodes `json:"nodes"`
-	}
-	if err := json.Unmarshal(nodesBody, &wrapped); err == nil && wrapped.Nodes != nil {
-		nodes = wrapped.Nodes
-	} else {
-		_ = json.Unmarshal(nodesBody, &nodes)
-	}
-	return nodes, nil
+	return GetRaftNodesAuth(port, "")
+}
+
+// GetRaftNodesAuth is GetRaftNodes with an explicit rqlite auth file.
+func GetRaftNodesAuth(port int, authFile string) (RQLiteNodes, error) {
+	user, pass := adminCredentialsFromFile(authFile)
+	return NewAdminClient(fmt.Sprintf("http://localhost:%d", port), user, pass).Nodes(context.Background())
 }
 
 // ErrNoTransferTarget means this node is the leader but no other reachable
@@ -108,13 +90,35 @@ func TransferLeadership(port int, logger *zap.Logger) error {
 // transfer-leadership API, which is a capability gap rather than a failure, and
 // the caller falls back to SIGTERM step-down.
 func TransferLeadershipTo(port int, targetID string, logger *zap.Logger) error {
-	client := &http.Client{Timeout: 5 * time.Second}
+	return TransferLeadershipToAuth(port, targetID, "", logger)
+}
+
+// TransferLeadershipToAuth is TransferLeadershipTo with an explicit rqlite auth
+// file.
+//
+// This keeps its own request rather than going through AdminClient because it
+// needs the raw status code: a 404 means the rqlite build has no
+// transfer-leadership API, which is a capability gap the caller handles by
+// falling back to SIGTERM step-down, and AdminClient collapses every non-2xx
+// into one error.
+func TransferLeadershipToAuth(port int, targetID, authFile string, logger *zap.Logger) error {
+	client := tlsutil.NewHTTPClient(5 * time.Second)
+	user, pass := adminCredentialsFromFile(authFile)
 
 	logger.Info("Attempting Raft leadership transfer",
 		zap.Int("port", port), zap.String("target", targetID))
 
 	transferURL := fmt.Sprintf("http://localhost:%d/nodes/%s/transfer-leadership", port, targetID)
-	transferResp, err := client.Post(transferURL, "application/json", nil)
+	req, err := http.NewRequest(http.MethodPost, transferURL, nil)
+	if err != nil {
+		return fmt.Errorf("build leadership transfer request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if user != "" {
+		req.SetBasicAuth(user, pass)
+	}
+
+	transferResp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("leadership transfer request to %s: %w", targetID, err)
 	}

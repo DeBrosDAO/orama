@@ -20,6 +20,19 @@ type NodeConfigData struct {
 	RQLiteRaftPort         int      // External Raft port for advertisement
 	RQLiteRaftInternalPort int      // Internal Raft port for local binding (SNI only)
 	RQLiteJoinAddress      string   // Optional: join address for joining existing cluster
+
+	// RQLite HTTP basic auth. The username/password go into every client this
+	// node opens (SQL DSN and admin API); RQLiteAuthFile is the same
+	// credentials in rqlite's own JSON format.
+	//
+	// Rendered whenever they are known, because sending credentials to an
+	// rqlited that does not require them is harmless — and it is the first of
+	// the two passes that make enabling enforcement safe. Enforcement itself
+	// (rqlite_enforce_auth) is deliberately not rendered: it is switched on by
+	// an operator once every node in the fleet is sending credentials.
+	RQLiteUsername string
+	RQLitePassword string
+	RQLiteAuthFile string
 	BootstrapPeers         []string // List of peer multiaddrs to connect to
 	ClusterAPIPort         int
 	IPFSAPIPort            int

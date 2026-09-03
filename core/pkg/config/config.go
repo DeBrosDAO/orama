@@ -69,6 +69,8 @@ func (c *Config) Validate() []error {
 		ClusterSyncInterval: c.Database.ClusterSyncInterval,
 		PeerInactivityLimit: c.Database.PeerInactivityLimit,
 		MinClusterSize:      c.Database.MinClusterSize,
+		RQLiteAuthFile:      c.Database.RQLiteAuthFile,
+		RQLiteEnforceAuth:   c.Database.RQLiteEnforceAuth,
 	})...)
 
 	// Validate discovery config

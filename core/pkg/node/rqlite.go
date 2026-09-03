@@ -214,7 +214,9 @@ func indexRQLiteExtraArgs(db config.DatabaseConfig) string {
 	}
 	args := fmt.Sprintf("-raft-election-timeout %s -raft-timeout %s -raft-apply-timeout %s -raft-leader-lease-timeout %s",
 		election, heartbeat, apply, lease)
-	if db.RQLiteAuthFile != "" {
+	// Enforcement is opt-in and independent of merely having credentials: see
+	// DatabaseConfig.RQLiteEnforceAuth for why the two are separate.
+	if db.RQLiteEnforceAuth {
 		args += " -auth " + db.RQLiteAuthFile
 	}
 	return args

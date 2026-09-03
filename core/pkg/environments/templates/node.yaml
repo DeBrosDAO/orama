@@ -32,7 +32,10 @@ database:
   rqlite_port: {{.RQLiteHTTPPort}}
   rqlite_raft_port: {{.RQLiteRaftInternalPort}}
   rqlite_join_address: "{{.RQLiteJoinAddress}}"
-  {{if .NodeCert}}# Node-to-node TLS encryption for Raft communication (direct RQLite TLS on port 7002)
+  {{if .RQLiteUsername}}rqlite_username: "{{.RQLiteUsername}}"
+  rqlite_password: "{{.RQLitePassword}}"
+  {{end}}{{if .RQLiteAuthFile}}rqlite_auth_file: "{{.RQLiteAuthFile}}"
+  {{end}}{{if .NodeCert}}# Node-to-node TLS encryption for Raft communication (direct RQLite TLS on port 7002)
   node_cert: "{{.NodeCert}}"
   node_key: "{{.NodeKey}}"
   {{if .NodeCACert}}node_ca_cert: "{{.NodeCACert}}"

@@ -35,9 +35,18 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 
 **RQLite Authentication (Step 1.7)**
 - Credentials are generated at genesis and written to `rqlite-auth.json` / `rqlite-password`
-- `rqlited` is **not** started with `-auth` today: `RQLiteAuthFile` is never assigned, so the HTTP API does not require those credentials
-- Clients still send `Authorization: Basic` when they have a password (harmless if the server ignores it)
-- What keeps the RQLite API off the public internet is the firewall / WireGuard overlay, not RQLite HTTP auth
+- `rqlited` is **not** started with `-auth` today. What keeps the RQLite API off the public internet is the firewall / WireGuard overlay, not RQLite HTTP auth
+- Enabling it is a **two-pass rollout**, and the config has two settings so the passes can be separated:
+  - `database.rqlite_auth_file` — the credentials clients send. `GenerateNodeConfig` now writes this (plus `rqlite_username` / `rqlite_password`) into every generated `node.yaml`. Setting it is always safe: rqlite ignores credentials it does not require
+  - `database.rqlite_enforce_auth` — starts `rqlited` with `-auth`, making it reject unauthenticated callers. Default off
+- These were **one** setting until change-287. That made the rollout impossible: the only way to give a node credentials was to simultaneously start refusing every peer that had none — including every node still on the previous release, whose `/join`, `/status` and `/remove` calls would 401 mid-upgrade and look exactly like Raft breaking
+- Setting `rqlite_enforce_auth` with no `rqlite_auth_file` is a config **error**, not a silent no-op (`pkg/config/validate/database.go`)
+
+**RQLite admin client**
+- Every call to rqlite's admin API (`/status`, `/nodes`, `/join`, `/remove`, `/db/backup`, transfer-leadership) goes through one client, `pkg/rqlite/adminclient.go`, which attaches credentials from the auth file
+- Before change-287 these were fourteen bare `http.Client` calls, none sending credentials. Enabling `-auth` would have 401'd all of them at once: reconciliation, backups and leadership transfer would stop, and nothing in the logs would say "credentials". `AdminClient` names a 401 explicitly for that reason
+- The one remaining direct client in `pkg/rqlite` is `client.freshHTTP` — the SQL read path, which authenticates from its DSN
+- **Still unauthenticated:** the gateway and namespace SQL DSNs. `gateway.Config.RQLiteUsername` / `RQLitePassword` are read but never assigned outside tests, so those DSNs carry no credentials. `rqlite_enforce_auth` cannot be switched on fleet-wide until that is fixed
 
 **Olric Gossip Encryption (Step 1.8)**
 - Olric v0.7.0's YAML loader has **no** `encryptionKey` field; a generated key was shipped and silently dropped
@@ -192,7 +201,7 @@ Stated so the gaps above are known positions, not implied protections:
 - **Hosting-provider / hypervisor access** to the guest
 - **Ubuntu fleet SSH** — Zero Operator Access and LUKS FDE apply to OramaOS only
 - **dm-verity at boot** — hashes may exist in the OramaOS image; they are not wired into the boot path
-- **RQLite HTTP auth** — `rqlited -auth` is not enabled; overlay + firewall are the control
+- **RQLite HTTP auth** — `rqlited -auth` is not enabled; overlay + firewall are the control. The clients are ready (see above); the gateway/namespace DSNs are not
 - **ntfy** — no auth-file in v1; listen-localhost is the control
 - **A captured disk snapshot of RQLite** — plaintext application data, including `deployment_env_vars`
 - **Immediate erase of deleted rows** — a SQL `DELETE` is a Raft log entry; the original INSERT remains in `raft.db` until size-driven compaction, not a privacy TTL
@@ -218,7 +227,10 @@ Batch 2 (medium-risk, restart needed):
   - TURN secret encryption
 
 Batch 3 (high-risk, coordinated rollout):
-  - RQLite auth (followers first, leader last)
+  - RQLite auth — two passes, in this order:
+    1. Roll out binaries + configs carrying `rqlite_auth_file` (enforcement off) to **every** node. Nothing changes behaviourally; clients simply start sending credentials
+    2. Only once the whole fleet is on pass 1, set `rqlite_enforce_auth: true` and restart followers first, leader last
+    Doing these in one pass 401s every peer still on the old binary
   - Olric encryption (simultaneous restart)
   - IPFS Cluster TrustedPeers
 

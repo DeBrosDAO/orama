@@ -1,13 +1,11 @@
 package rqlite
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -129,66 +127,16 @@ func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 	return maxIndex, true
 }
 
-// getRQLiteStatus queries the /status endpoint for cluster information
+// getRQLiteStatus queries this node's /status through the admin client, so it
+// carries credentials when rqlite is started with -auth.
 func (r *RQLiteManager) getRQLiteStatus() (*RQLiteStatus, error) {
-	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query status: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("status endpoint returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var status RQLiteStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return nil, fmt.Errorf("failed to decode status: %w", err)
-	}
-
-	return &status, nil
+	return r.LocalAdminClient().Status(context.Background())
 }
 
-// getRQLiteNodes queries the /nodes endpoint for cluster membership
+// getRQLiteNodes queries the /nodes endpoint for cluster membership, with
+// credentials.
 func (r *RQLiteManager) getRQLiteNodes() (RQLiteNodes, error) {
-	url := fmt.Sprintf("http://localhost:%d/nodes?ver=2", r.config.RQLitePort)
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query nodes: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("nodes endpoint returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read nodes response: %w", err)
-	}
-
-	// rqlite v8 wraps nodes in a top-level object; fall back to a raw array for older versions.
-	var wrapped struct {
-		Nodes RQLiteNodes `json:"nodes"`
-	}
-	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Nodes != nil {
-		return wrapped.Nodes, nil
-	}
-
-	// Try legacy format (plain array)
-	var nodes RQLiteNodes
-	if err := json.Unmarshal(body, &nodes); err != nil {
-		return nil, fmt.Errorf("failed to decode nodes: %w", err)
-	}
-
-	return nodes, nil
+	return r.LocalAdminClient().Nodes(context.Background())
 }
 
 // getRQLiteLeader returns the current leader address
@@ -206,16 +154,14 @@ func (r *RQLiteManager) getRQLiteLeader() (string, error) {
 	return leaderAddr, nil
 }
 
-// isNodeReachable tests if a specific node is responding
+// isNodeReachable tests whether a specific node is responding.
+//
+// Through the admin client, so a node that is up but rejects unauthenticated
+// requests is not reported as unreachable — which would feed the eviction path
+// evidence that a healthy node is dead.
 func (r *RQLiteManager) isNodeReachable(httpAddress string) bool {
-	url := fmt.Sprintf("http://%s/status", httpAddress)
-	client := &http.Client{Timeout: 3 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-
-	return resp.StatusCode == http.StatusOK
+	user, pass := r.adminCredentials()
+	client := NewAdminClient("http://"+httpAddress, user, pass)
+	_, err := client.Status(context.Background())
+	return err == nil
 }

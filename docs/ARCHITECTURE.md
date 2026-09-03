@@ -867,7 +867,7 @@ internal-auth check both accept.
 
 ### Service Authentication
 
-- **RQLite:** credentials are generated at genesis; `rqlited` is **not** started with `-auth` today. Overlay + firewall keep the HTTP API off the public internet
+- **RQLite:** credentials are generated at genesis and written into every generated `node.yaml` (`database.rqlite_auth_file` / `rqlite_username` / `rqlite_password`). `rqlited` is **not** started with `-auth` today — that is a separate setting, `database.rqlite_enforce_auth`, default off — so overlay + firewall keep the HTTP API off the public internet. Every admin call (`/status`, `/nodes`, `/join`, `/remove`, `/db/backup`, transfer-leadership) goes through one client, `pkg/rqlite/adminclient.go`, which sends those credentials. The gateway and namespace SQL DSNs still do not, which is what blocks enforcement; see `docs/SECURITY.md`
 - **Olric:** memberlist binds the WireGuard address. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** TrustedPeers restricted to known cluster peer IDs (not `*`). The systemd unit is not written if `CLUSTER_SECRET` is missing or empty
 - **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated

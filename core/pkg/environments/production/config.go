@@ -162,8 +162,24 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		tlsCacheDir = filepath.Join(cg.oramaDir, "tls-cache")
 	}
 
+	// Credentials for every rqlite client this node opens. EnsureRQLiteAuth is
+	// idempotent — it reuses the existing password and rewrites the auth JSON —
+	// so the rendered config and the file rqlited would read cannot disagree.
+	//
+	// A failure here is fatal rather than "render without credentials": a node
+	// whose config silently lacks them is a node that cannot talk to a cluster
+	// that has enforcement switched on, and it would not say why.
+	sg := NewSecretGenerator(cg.oramaDir)
+	rqliteUser, rqlitePassword, err := sg.EnsureRQLiteAuth()
+	if err != nil {
+		return "", fmt.Errorf("prepare rqlite credentials for the node config: %w", err)
+	}
+
 	data := templates.NodeConfigData{
 		NodeID:                 nodeID,
+		RQLiteUsername:         rqliteUser,
+		RQLitePassword:         rqlitePassword,
+		RQLiteAuthFile:         filepath.Join(cg.oramaDir, "secrets", "rqlite-auth.json"),
 		P2PPort:                4001,
 		DataDir:                filepath.Join(cg.oramaDir, "data"),
 		RQLiteHTTPPort:         constants.RQLiteHTTPPort,

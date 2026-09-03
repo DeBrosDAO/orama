@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,7 +66,15 @@ type InstanceSpawner struct {
 	baseDataDir string // Base directory for namespace data (e.g., ~/.orama/data/namespaces)
 	rqlitePath  string // Path to rqlited binary
 	logger      *zap.Logger
+
+	// authFile is the rqlite auth JSON used when probing spawned instances.
+	// Empty means unauthenticated, which is correct while rqlited runs
+	// without -auth.
+	authFile string
 }
+
+// SetAuthFile supplies the rqlite auth file used when probing instances.
+func (is *InstanceSpawner) SetAuthFile(path string) { is.authFile = path }
 
 // NewInstanceSpawner creates a new RQLite instance spawner
 func NewInstanceSpawner(baseDataDir string, logger *zap.Logger) *InstanceSpawner {
@@ -254,17 +261,16 @@ func (is *InstanceSpawner) StopInstanceByPID(pid int) error {
 	return nil
 }
 
-// IsInstanceRunning checks if a RQLite instance is running
+// IsInstanceRunning checks if a RQLite instance is running.
+//
+// Through the admin client, with the spawner's auth file when one is set: a
+// tenant rqlite started with -auth answers 401 rather than 200, and reading
+// that as "not running" would re-spawn a healthy instance.
 func (is *InstanceSpawner) IsInstanceRunning(httpPort int) bool {
-	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	user, pass := adminCredentialsFromFile(is.authFile)
+	client := NewAdminClient(fmt.Sprintf("http://localhost:%d", httpPort), user, pass)
+	_, err := client.Status(context.Background())
+	return err == nil
 }
 
 // HasExistingData checks if a RQLite instance has existing data (raft.db indicates prior startup)

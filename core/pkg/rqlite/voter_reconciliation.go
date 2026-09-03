@@ -1,12 +1,9 @@
 package rqlite
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"sync"
 	"time"
 
@@ -528,72 +525,16 @@ func decodeNodes(body []byte) (RQLiteNodes, error) {
 // getAllClusterNodes queries /nodes?nonvoters&ver=2 to get all cluster members
 // including non-voters.
 func (r *RQLiteManager) getAllClusterNodes() (RQLiteNodes, error) {
-	url := fmt.Sprintf("http://localhost:%d/nodes?nonvoters&ver=2&timeout=5s", r.config.RQLitePort)
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("query nodes: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("nodes returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	return decodeNodes(body)
+	return r.LocalAdminClient().Nodes(context.Background())
 }
 
-// removeClusterNode sends DELETE /remove to remove a node from the Raft cluster.
+// removeClusterNode takes a member out of the raft configuration, by id.
 func (r *RQLiteManager) removeClusterNode(nodeID string) error {
-	url := fmt.Sprintf("http://localhost:%d/remove", r.config.RQLitePort)
-	payload, _ := json.Marshal(map[string]string{"id": nodeID})
-
-	req, err := http.NewRequest(http.MethodDelete, url, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("remove request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("remove returned %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
+	return r.LocalAdminClient().Remove(context.Background(), nodeID)
 }
 
 // joinClusterNode sends POST /join to add a node to the Raft cluster
 // with the specified voter status.
 func (r *RQLiteManager) joinClusterNode(nodeID, raftAddr string, voter bool) error {
-	url := fmt.Sprintf("http://localhost:%d/join", r.config.RQLitePort)
-	payload, _ := json.Marshal(map[string]interface{}{
-		"id":    nodeID,
-		"addr":  raftAddr,
-		"voter": voter,
-	})
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("join request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("join returned %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
+	return r.LocalAdminClient().Join(context.Background(), nodeID, raftAddr, voter)
 }

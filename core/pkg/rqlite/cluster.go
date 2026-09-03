@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -271,28 +270,21 @@ func (r *RQLiteManager) isInSplitBrainState() bool {
 	return false
 }
 
+// isPeerReachable reports whether a peer's rqlite answers.
+//
+// Through the admin client: a peer that is up but rejects unauthenticated
+// requests must not be reported unreachable, or the recovery paths act on
+// evidence that a healthy node is gone.
 func (r *RQLiteManager) isPeerReachable(httpAddr string) bool {
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://%s/status", httpAddr))
-	if err == nil {
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}
-	return false
+	user, pass := r.adminCredentials()
+	_, err := NewAdminClient("http://"+httpAddr, user, pass).Status(context.Background())
+	return err == nil
 }
 
+// getPeerRQLiteStatus reads a peer's /status, with credentials.
 func (r *RQLiteManager) getPeerRQLiteStatus(httpAddr string) (*RQLiteStatus, error) {
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://%s/status", httpAddr))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var status RQLiteStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return nil, err
-	}
-	return &status, nil
+	user, pass := r.adminCredentials()
+	return NewAdminClient("http://"+httpAddr, user, pass).Status(context.Background())
 }
 
 func (r *RQLiteManager) startHealthMonitoring(ctx context.Context) {

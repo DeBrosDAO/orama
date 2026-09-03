@@ -3,8 +3,6 @@ package rqlite
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -147,37 +145,19 @@ func (r *RQLiteManager) backupDir() string {
 	return filepath.Join(r.dataDir, backupDirName)
 }
 
-// downloadBackup calls the RQLite backup API and writes the SQLite snapshot to disk.
+// downloadBackup calls the RQLite backup API and writes the SQLite snapshot to
+// disk, through the admin client so it carries credentials.
 func (r *RQLiteManager) downloadBackup(destPath string) error {
-	url := fmt.Sprintf("http://localhost:%d/db/backup", r.config.RQLitePort)
-	client := &http.Client{Timeout: 2 * time.Minute}
-
-	resp, err := client.Get(url)
+	data, err := r.LocalAdminClient().Backup(context.Background())
 	if err != nil {
 		return fmt.Errorf("request backup endpoint: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("backup endpoint returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("create backup file: %w", err)
-	}
-	defer outFile.Close()
-
-	written, err := io.Copy(outFile, resp.Body)
-	if err != nil {
-		return fmt.Errorf("write backup data: %w", err)
-	}
-
-	if written == 0 {
+	if len(data) == 0 {
 		return fmt.Errorf("backup file is empty")
 	}
-
+	if err := os.WriteFile(destPath, data, 0600); err != nil {
+		return fmt.Errorf("write backup data: %w", err)
+	}
 	return nil
 }
 
