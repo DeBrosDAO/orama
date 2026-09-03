@@ -1360,7 +1360,7 @@ func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context
 			zap.String("namespace", state.NamespaceName), zap.Error(perr))
 		return
 	}
-	if derr := cm.dnsManager.EnsureNamespaceHostRecordForNode(ctx, state.NamespaceName, pip); derr != nil {
+	if derr := cm.dnsManager.EnsureNamespaceHostRecordActiveForNode(ctx, state.NamespaceName, pip); derr != nil {
 		cm.logger.Warn("Periodic namespace host DNS ensure failed",
 			zap.String("namespace", state.NamespaceName), zap.Error(derr))
 	}

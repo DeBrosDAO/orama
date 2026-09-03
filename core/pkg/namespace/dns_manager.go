@@ -487,6 +487,50 @@ func (drm *DNSRecordManager) EnsureNamespaceHostRecordForNode(ctx context.Contex
 	return nil
 }
 
+// reactivateNamespaceHostRecordSQL re-enables THIS node's own namespace-host A
+// record. Scoped to one (fqdn, value, namespace) triple, so it can only ever
+// touch the calling node's own row in the round-robin.
+//
+// Bugboard #286: the additive ensure below deliberately never re-enables a
+// soft-disabled row, on the grounds that doing so would fight the health monitor.
+// That is right for a node making claims about its peers, and wrong for a node
+// making a claim about ITSELF: the monitor disables a record because the node
+// looked dead, and a node that is running this sweep with its gateway answering
+// is demonstrably not dead. Without this the record stays disabled forever after
+// a restart and the node silently never rejoins the round-robin — the recovery
+// path the ensure's own doc comment says should exist.
+const reactivateNamespaceHostRecordSQL = `UPDATE dns_records
+	SET is_active = 1, updated_at = ?
+	WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = ? AND is_active = 0`
+
+// EnsureNamespaceHostRecordActiveForNode asserts that this node's namespace-host
+// records exist AND are active. Call it only with positive evidence that this
+// node is serving the namespace (bugboard #286).
+func (drm *DNSRecordManager) EnsureNamespaceHostRecordActiveForNode(ctx context.Context, namespaceName, nodeIP string) error {
+	if nodeIP == "" {
+		return nil
+	}
+	if err := drm.EnsureNamespaceHostRecordForNode(ctx, namespaceName, nodeIP); err != nil {
+		return err
+	}
+
+	internalCtx := client.WithInternalAuth(ctx)
+	now := time.Now()
+	tag := "namespace:" + namespaceName
+	for _, fqdn := range []string{
+		fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain),
+		fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain),
+	} {
+		if _, err := drm.db.Exec(internalCtx, reactivateNamespaceHostRecordSQL, now, fqdn, nodeIP, tag); err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("reactivate namespace host A record %s -> %s", fqdn, nodeIP),
+				Cause:   err,
+			}
+		}
+	}
+	return nil
+}
+
 // DeleteTURNRecords deletes all TURN DNS records for a namespace.
 func (drm *DNSRecordManager) DeleteTURNRecords(ctx context.Context, namespaceName string) error {
 	internalCtx := client.WithInternalAuth(ctx)
