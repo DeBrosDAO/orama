@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // HandlePostUpgrade brings the node back online after an upgrade:
@@ -56,9 +57,9 @@ func HandlePostUpgrade() {
 	utils.StartServicesOrdered(services, "start")
 	fmt.Printf("  Services started\n")
 
-	// 3. Wait for global RQLite (port 5001) to be ready
-	fmt.Printf("  Waiting for global RQLite (port 5001)...\n")
-	if err := waitForRQLiteReady(5001, 120*time.Second); err != nil {
+	// 3. Wait for the index RQLite to be ready
+	fmt.Printf("  Waiting for index RQLite (port %d)...\n", constants.RQLiteHTTPPort)
+	if err := waitForRQLiteReady(constants.RQLiteHTTPPort, 120*time.Second); err != nil {
 		fmt.Printf("  Warning: global RQLite not ready: %v\n", err)
 	} else {
 		fmt.Printf("  Global RQLite ready\n")

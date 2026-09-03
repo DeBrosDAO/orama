@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -69,7 +70,7 @@ func DefaultDatabaseEndpoints() []string {
 // MapAddrsToDBEndpoints converts a set of peer multiaddrs to DB HTTP endpoints using dbPort.
 func MapAddrsToDBEndpoints(addrs []multiaddr.Multiaddr, dbPort int) []string {
 	if dbPort <= 0 {
-		dbPort = 5001
+		dbPort = constants.RQLiteHTTPPort
 	}
 	eps := make([]string, 0, len(addrs))
 	for _, ma := range addrs {
@@ -113,7 +114,8 @@ func endpointFromMultiaddr(ma multiaddr.Multiaddr, port int) string {
 	return "http://" + host + ":" + strconv.Itoa(port)
 }
 
-// normalizeEndpoints ensures each endpoint has an http scheme and a port (defaults to 5001)
+// normalizeEndpoints ensures each endpoint has an http scheme and a port
+// (defaulting to the index RQLite HTTP port).
 func normalizeEndpoints(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, s := range in {
@@ -127,18 +129,13 @@ func normalizeEndpoints(in []string) []string {
 			s = "http://" + s
 		}
 
-		// Simple check for port (doesn't handle all cases but good enough)
-		if !strings.Contains(s, ":10100") && !strings.Contains(s, ":5001") && !strings.Contains(s, ":500") && !strings.Contains(s, ":501") {
-			// Check if there's already a port after the host
-			parts := strings.Split(s, "://")
-			if len(parts) == 2 {
-				hostPart := parts[1]
-				// Count colons to detect port (simple heuristic)
-				colonCount := strings.Count(hostPart, ":")
-				if colonCount == 0 || (strings.Contains(hostPart, "[") && colonCount == 1) {
-					// No port found, add default
-					s = s + ":10100"
-				}
+		// Append the default port when the endpoint carries none. A bare IPv6
+		// literal is bracketed, so one colon inside brackets is still portless.
+		if parts := strings.Split(s, "://"); len(parts) == 2 {
+			hostPart := parts[1]
+			colonCount := strings.Count(hostPart, ":")
+			if colonCount == 0 || (strings.Contains(hostPart, "[") && colonCount == 1) {
+				s = s + ":" + strconv.Itoa(constants.RQLiteHTTPPort)
 			}
 		}
 

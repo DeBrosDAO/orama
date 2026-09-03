@@ -17,8 +17,8 @@ type NodeConfigData struct {
 	P2PPort                int
 	DataDir                string
 	RQLiteHTTPPort         int
-	RQLiteRaftPort         int      // External Raft port for advertisement (7001 for SNI)
-	RQLiteRaftInternalPort int      // Internal Raft port for local binding (7002 when SNI enabled)
+	RQLiteRaftPort         int      // External Raft port for advertisement
+	RQLiteRaftInternalPort int      // Internal Raft port for local binding (SNI only)
 	RQLiteJoinAddress      string   // Optional: join address for joining existing cluster
 	BootstrapPeers         []string // List of peer multiaddrs to connect to
 	ClusterAPIPort         int
@@ -91,7 +91,7 @@ type GatewayConfigData struct {
 	BootstrapPeers []string
 	OlricServers   []string
 	ClusterAPIPort int
-	IPFSAPIPort    int // Default: 4501
+	IPFSAPIPort    int // Default: constants.IPFSAPIPort
 	EnableHTTPS    bool
 	DomainName     string
 	TLSCacheDir    string

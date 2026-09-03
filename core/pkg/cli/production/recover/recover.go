@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -30,12 +31,12 @@ type Flags struct {
 // reset the Raft configuration on the leader while preserving all data.
 const (
 	rqliteRoot     = "/opt/orama/.orama/data/rqlite"
-	raftDBFile     = rqliteRoot + "/raft.db"           // Raft log + stable store (BoltDB)
-	raftSubdir     = rqliteRoot + "/raft"              // recovery peers.json lives here
-	peersFile      = rqliteRoot + "/raft/peers.json"   // rqlite reads this iff raft.db is absent
+	raftDBFile     = rqliteRoot + "/raft.db"         // Raft log + stable store (BoltDB)
+	raftSubdir     = rqliteRoot + "/raft"            // recovery peers.json lives here
+	peersFile      = rqliteRoot + "/raft/peers.json" // rqlite reads this iff raft.db is absent
 	discoveryPeers = rqliteRoot + "/discovery-peers.json"
 	rqliteOwner    = "orama:orama"
-	rqlitePort     = 5001
+	rqlitePort     = constants.RQLiteHTTPPort
 )
 
 // Handle is the entry point for the recover-raft command.
@@ -62,7 +63,7 @@ func parseFlags(args []string) (*Flags, error) {
 	flags := &Flags{}
 	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	fs.StringVar(&flags.Leader, "leader", "", "Leader node IP (node with highest commit index) [required]")
-	fs.StringVar(&flags.LeaderRaftAddr, "leader-raft-addr", "", "Explicit leader raft address host:port (e.g. 10.0.0.1:7001). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check.")
+	fs.StringVar(&flags.LeaderRaftAddr, "leader-raft-addr", "", "Explicit leader raft address host:port (e.g. 10.0.0.1:10101). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check.")
 	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
 
 	if err := fs.Parse(args); err != nil {
@@ -106,7 +107,7 @@ func execute(flags *Flags) error {
 		}
 	}
 
-	// Resolve the leader's own Raft address (e.g. "10.0.0.1:7001"). This becomes
+	// Resolve the leader's own Raft address (e.g. "10.0.0.1:10101"). This becomes
 	// the sole member of the recovery peers.json.
 	//   - If --leader-raft-addr is given, trust it (validated). This is the
 	//     correct path when quorum is ALREADY lost (the usual recovery case),
@@ -191,7 +192,7 @@ func execute(flags *Flags) error {
 
 // resolveLeaderRaftAddr queries the given node's live /nodes endpoint and
 // returns the raft address of whichever member reports leader==true. This is
-// the node's own WireGuard raft address (e.g. "10.0.0.1:7001").
+// the node's own WireGuard raft address (e.g. "10.0.0.1:10101").
 func resolveLeaderRaftAddr(leader inspector.Node) (string, error) {
 	// Cross-check: the node the operator named must ITSELF currently be the raft
 	// leader. Otherwise its /nodes view could name a different (partitioned)
@@ -244,7 +245,7 @@ func parseLeaderRaftID(nodesJSON []byte) (string, error) {
 }
 
 // validateRaftAddr checks that s is a well-formed raft address: a WireGuard
-// host:port with an IP host (e.g. "10.0.0.1:7001"). Rejects shell-injection or
+// host:port with an IP host (e.g. "10.0.0.1:10101"). Rejects shell-injection or
 // corrupt values before they can reach a recovery peers.json.
 func validateRaftAddr(s string) error {
 	host, port, err := net.SplitHostPort(s)

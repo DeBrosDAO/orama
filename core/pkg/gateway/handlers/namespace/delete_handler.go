@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -225,7 +226,7 @@ func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, depl
 	}
 
 	for _, node := range nodes {
-		url := fmt.Sprintf("http://%s:6001/v1/internal/deployments/replica/teardown", node.InternalIP)
+		url := constants.GatewayURLFor(node.InternalIP) + "/v1/internal/deployments/replica/teardown"
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 		if err != nil {
 			h.logger.Warn("Failed to create teardown request",

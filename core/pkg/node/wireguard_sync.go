@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -331,7 +332,7 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 // queryLocalIPFSPeerID queries the local IPFS daemon for its peer ID
 func queryLocalIPFSPeerID() string {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/id", "", nil)
 	if err != nil {
 		return ""
 	}

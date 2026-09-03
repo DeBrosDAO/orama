@@ -381,9 +381,10 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	dataDir := filepath.Join(ps.oramaDir, "data")
 
 	// Initialize IPFS repo with correct path structure
-	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4101 for swarm (to avoid conflict with LibP2P on 4001)
+	// API on constants.IPFSAPIPort, Kubo gateway on IPFSGatewayPort, swarm on
+	// IPFSSwarmPort (kept off 4001 so it cannot collide with the node's libp2p host).
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, 8080, 4101, vpsIP, ipfsPeer); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, constants.IPFSGatewayPort, constants.IPFSSwarmPort, vpsIP, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -693,7 +694,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 }
 
 // Phase5CreateSystemdServices creates and enables systemd units
-// enableHTTPS determines the RQLite Raft port (7002 when SNI is enabled, 7001 otherwise)
+// enableHTTPS selects the SNI-aware RQLite Raft advertise port.
 func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 

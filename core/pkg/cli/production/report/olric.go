@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"strconv"
 	"strings"
 	"time"
@@ -92,12 +93,12 @@ func collectOlric() *OlricReport {
 		}
 	}
 
-	// 8. Member info: try HTTP GET to http://localhost:3320/
+	// 8. Member info: try HTTP GET to the index Olric HTTP API
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if body, err := httpGet(ctx, "http://localhost:3320/"); err == nil {
+		if body, err := httpGet(ctx, constants.LocalOlricURL()+"/"); err == nil {
 			var info struct {
 				Coordinator string `json:"coordinator"`
 				Members     []struct {

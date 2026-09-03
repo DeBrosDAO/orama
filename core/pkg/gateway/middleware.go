@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
@@ -1925,9 +1926,9 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 		zap.String("current_node", g.nodePeerID),
 	)
 
-	// Proxy to home node via internal HTTP port (6001)
-	// This is node-to-node internal communication - no TLS needed
-	targetHost := homeIP + ":6001"
+	// Proxy to the home node over the WireGuard overlay on the index gateway
+	// port. This is node-to-node internal communication - no TLS needed.
+	targetHost := net.JoinHostPort(homeIP, strconv.Itoa(constants.GatewayAPIPort))
 
 	// Handle WebSocket upgrade requests specially
 	if isWebSocketUpgrade(r) {
@@ -2061,7 +2062,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 		zap.String("node_ip", nodeIP),
 	)
 
-	targetHost := nodeIP + ":6001"
+	targetHost := net.JoinHostPort(nodeIP, strconv.Itoa(constants.GatewayAPIPort))
 
 	// Handle WebSocket upgrade requests specially
 	if isWebSocketUpgrade(r) {

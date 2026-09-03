@@ -112,7 +112,7 @@ func HandleRestartWithFlags(force bool) {
 
 	// Bring the TLS/DNS frontend back up (see capture above). Done last so the
 	// embedded gateway is already started; caddy's ExecStartPre then clears its
-	// localhost:6001/health wait quickly instead of timing out.
+	// index gateway /health wait quickly instead of timing out.
 	for _, svc := range frontendToRestore {
 		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
 			fmt.Printf("  Warning: Failed to start %s: %v\n", svc, err)

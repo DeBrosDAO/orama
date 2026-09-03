@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -829,7 +828,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 }
 
 // discoverOlricServers discovers Olric server addresses from LibP2P peers.
-// Returns a list of IP:port addresses where Olric servers are expected to run (port 3320).
+// Returns a list of IP:port addresses where index Olric servers are expected to run.
 func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger) []string {
 	// Get network info to access peer information
 	networkInfo := networkClient.Network()
@@ -868,13 +867,12 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 				continue
 			}
 
-			// Skip localhost loopback addresses (we'll use localhost:3320 as fallback)
+			// Skip localhost loopback addresses (the local Olric is the fallback)
 			if ip == "localhost" || ip == "::1" {
 				continue
 			}
 
-			// Build Olric server address (standard port 3320)
-			olricAddr := net.JoinHostPort(ip, "3320")
+			olricAddr := constants.OlricAddrFor(ip)
 			if !seen[olricAddr] {
 				olricServers = append(olricServers, olricAddr)
 				seen[olricAddr] = true
@@ -904,7 +902,7 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 				continue
 			}
 
-			olricAddr := net.JoinHostPort(ip, "3320")
+			olricAddr := constants.OlricAddrFor(ip)
 			if !seen[olricAddr] {
 				olricServers = append(olricServers, olricAddr)
 				seen[olricAddr] = true
@@ -1005,7 +1003,7 @@ func resolveDatabaseEndpoints(cfg *Config, defaultEndpoints []string) []string {
 
 // injectRQLiteAuth injects HTTP basic auth credentials into a RQLite DSN URL.
 // If username or password is empty, the DSN is returned unchanged.
-// Input: "http://localhost:5001" → Output: "http://orama:secret@localhost:5001"
+// Input: "http://localhost:10100" → Output: "http://orama:secret@localhost:10100"
 func injectRQLiteAuth(dsn, username, password string) string {
 	if username == "" || password == "" {
 		return dsn

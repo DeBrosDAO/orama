@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"gopkg.in/yaml.v3"
 )
 
@@ -134,7 +135,7 @@ func insertToken(token, createdBy, expiresAt string) error {
 		return fmt.Errorf("failed to marshal query: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "http://localhost:5001/db/execute", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", constants.LocalRQLiteURL()+"/db/execute", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

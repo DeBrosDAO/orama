@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"io"
 	"net/http"
 	"time"
@@ -15,7 +16,7 @@ func collectGateway() *GatewayReport {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:6001/v1/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, constants.LocalGatewayURL()+"/v1/health", nil)
 	if err != nil {
 		return r
 	}
@@ -38,9 +39,9 @@ func collectGateway() *GatewayReport {
 	// Try to parse the health response JSON.
 	// Expected: {"status":"ok","version":"...","subsystems":{"rqlite":{"status":"ok","latency":"2ms"},...}}
 	var health struct {
-		Status     string                       `json:"status"`
-		Version    string                       `json:"version"`
-		Subsystems map[string]json.RawMessage   `json:"subsystems"`
+		Status     string                     `json:"status"`
+		Version    string                     `json:"version"`
+		Subsystems map[string]json.RawMessage `json:"subsystems"`
 	}
 
 	if err := json.Unmarshal(body, &health); err != nil {

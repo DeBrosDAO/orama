@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"github.com/rqlite/gorqlite"
 	"go.uber.org/zap"
@@ -344,7 +345,7 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 		if idx := strings.Index(joinAddress, ":"); idx != -1 {
 			host = joinAddress[:idx]
 		}
-		statusURL = fmt.Sprintf("http://%s:%d/status", host, 5001)
+		statusURL = fmt.Sprintf("http://%s:%d/status", host, constants.RQLiteHTTPPort)
 	}
 
 	resp, err := client.Get(statusURL)
@@ -362,7 +363,7 @@ func (r *RQLiteManager) testJoinAddress(joinAddress string) error {
 // existing voters. Returns true if the cluster already has MaxDefaultVoters
 // voters, meaning this node should join as a non-voter.
 func (r *RQLiteManager) checkShouldBeNonVoter(joinAddress string) bool {
-	// Derive HTTP API URL from the join address (which is a raft address like 10.0.0.1:7001)
+	// Derive HTTP API URL from the join address (which is a raft address like 10.0.0.1:10101)
 	host := joinAddress
 	if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
 		host = strings.TrimPrefix(host, "http://")

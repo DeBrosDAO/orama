@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -103,7 +104,7 @@ func (f RolloutFlags) upgradeFlags() string {
 func findLeaderIndex(state *SandboxState, sshKeyPath string) int {
 	for i, srv := range state.Servers {
 		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-		out, err := runSSHOutput(node, "curl -sf http://localhost:5001/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'")
+		out, err := runSSHOutput(node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
 		if err == nil && contains(out, "Leader") {
 			return i
 		}

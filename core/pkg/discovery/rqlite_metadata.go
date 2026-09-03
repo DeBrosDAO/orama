@@ -27,8 +27,8 @@ type RQLiteNodeMetadata struct {
 	// --- Existing fields (unchanged) ---
 
 	NodeID         string    `json:"node_id"`         // RQLite node ID (raft address)
-	RaftAddress    string    `json:"raft_address"`    // Raft port address (e.g., "10.0.0.1:7001")
-	HTTPAddress    string    `json:"http_address"`    // HTTP API address (e.g., "10.0.0.1:5001")
+	RaftAddress    string    `json:"raft_address"`    // Raft port address (e.g., "10.0.0.1:10101")
+	HTTPAddress    string    `json:"http_address"`    // HTTP API address (e.g., "10.0.0.1:10100")
 	NodeType       string    `json:"node_type"`       // Node type identifier
 	RaftLogIndex   uint64    `json:"raft_log_index"`  // Current Raft log index (for data comparison)
 	LastSeen       time.Time `json:"last_seen"`       // Updated on every announcement

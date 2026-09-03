@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -214,7 +215,7 @@ func (m *Monitor) probeNode(ctx context.Context, node nodeInfo) bool {
 
 // probe sends an HTTP ping to a single node. Returns true if healthy.
 func (m *Monitor) probe(ctx context.Context, node nodeInfo) bool {
-	url := fmt.Sprintf("http://%s:6001/v1/internal/ping", node.InternalIP)
+	url := constants.GatewayURLFor(node.InternalIP) + "/v1/internal/ping"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false

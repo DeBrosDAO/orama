@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
 )
 
-const rqliteBase = "http://localhost:5001"
+var rqliteBase = constants.LocalRQLiteURL()
 
 // collectRQLite queries the local RQLite HTTP API to build a health report.
 func collectRQLite() *RQLiteReport {

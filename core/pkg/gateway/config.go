@@ -29,12 +29,12 @@ type Config struct {
 	DataDir string // Base directory for node-local data (SQLite databases, deployments). Defaults to ~/.orama
 
 	// Olric cache configuration
-	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:3320"]). If empty, defaults to ["localhost:3320"]
+	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:10102"]). If empty, defaults to the index Olric on localhost
 	OlricTimeout time.Duration // Timeout for Olric operations (default: 10s)
 
 	// IPFS Cluster configuration
 	IPFSClusterAPIURL     string        // IPFS Cluster HTTP API URL (e.g., "http://localhost:9094"). If empty, gateway will discover from node configs
-	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501"). If empty, gateway will discover from node configs
+	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:10107"). If empty, gateway will discover from node configs
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 

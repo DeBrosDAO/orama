@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/spf13/cobra"
 )
 
@@ -63,25 +64,25 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// 3. Check RQLite health
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:5001/status")
+	resp, err := client.Get(constants.LocalRQLiteURL() + "/status")
 	if err != nil {
 		checks = append(checks, check{"RQLite reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
-			checks = append(checks, check{"RQLite reachable", "PASS", "HTTP API responding on :5001"})
+			checks = append(checks, check{"RQLite reachable", "PASS", fmt.Sprintf("HTTP API responding on :%d", constants.RQLiteHTTPPort)})
 		} else {
 			checks = append(checks, check{"RQLite reachable", "WARN", fmt.Sprintf("HTTP %d", resp.StatusCode)})
 		}
 	}
 
 	// 4. Check Olric health
-	resp, err = client.Get("http://localhost:3320/")
+	resp, err = client.Get(constants.LocalOlricURL() + "/")
 	if err != nil {
 		checks = append(checks, check{"Olric reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {
 		resp.Body.Close()
-		checks = append(checks, check{"Olric reachable", "PASS", "Responding on :3320"})
+		checks = append(checks, check{"Olric reachable", "PASS", fmt.Sprintf("Responding on :%d", constants.OlricHTTPPort)})
 	}
 
 	// 5. Check Gateway health

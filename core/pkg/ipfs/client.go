@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -46,7 +47,7 @@ type Config struct {
 	// If empty, defaults to "http://localhost:9094"
 	ClusterAPIURL string
 
-	// IPFSAPIURL is the base URL for IPFS daemon API (e.g., "http://localhost:4501")
+	// IPFSAPIURL is the base URL for IPFS daemon API (e.g., "http://localhost:10107")
 	// Used for operations that require IPFS daemon directly (like directory uploads)
 	IPFSAPIURL string
 
@@ -122,7 +123,7 @@ func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = constants.LocalIPFSAPIURL()
 	}
 
 	timeout := cfg.Timeout
@@ -626,7 +627,7 @@ func (c *Client) Unpin(ctx context.Context, cid string) error {
 }
 
 // Get retrieves content from IPFS by CID
-// Note: This uses the IPFS HTTP API (typically on port 5001), not the Cluster API
+// Note: This uses the IPFS HTTP API, not the Cluster API
 func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
 	// Use the client's configured IPFS API URL if not provided
 	if ipfsAPIURL == "" {

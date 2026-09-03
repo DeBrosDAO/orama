@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"io"
 	"net/http"
 	"os"
@@ -39,7 +40,7 @@ func collectIPFS() *IPFSReport {
 
 	// 3. SwarmPeerCount: POST /api/v0/swarm/peers
 	{
-		body, err := ipfsPost("http://localhost:4501/api/v0/swarm/peers")
+		body, err := ipfsPost(constants.LocalIPFSAPIURL() + "/api/v0/swarm/peers")
 		if err == nil {
 			var resp struct {
 				Peers []interface{} `json:"Peers"`
@@ -82,7 +83,7 @@ func collectIPFS() *IPFSReport {
 
 	// 5. RepoSizeBytes/RepoMaxBytes: POST /api/v0/repo/stat
 	{
-		body, err := ipfsPost("http://localhost:4501/api/v0/repo/stat")
+		body, err := ipfsPost(constants.LocalIPFSAPIURL() + "/api/v0/repo/stat")
 		if err == nil {
 			var resp struct {
 				RepoSize   int64 `json:"RepoSize"`
@@ -100,7 +101,7 @@ func collectIPFS() *IPFSReport {
 
 	// 6. KuboVersion: POST /api/v0/version
 	{
-		body, err := ipfsPost("http://localhost:4501/api/v0/version")
+		body, err := ipfsPost(constants.LocalIPFSAPIURL() + "/api/v0/version")
 		if err == nil {
 			var resp struct {
 				Version string `json:"Version"`
@@ -132,7 +133,7 @@ func collectIPFS() *IPFSReport {
 
 	// 9. BootstrapEmpty: POST /api/v0/bootstrap/list
 	{
-		body, err := ipfsPost("http://localhost:4501/api/v0/bootstrap/list")
+		body, err := ipfsPost(constants.LocalIPFSAPIURL() + "/api/v0/bootstrap/list")
 		if err == nil {
 			var resp struct {
 				Peers []interface{} `json:"Peers"`

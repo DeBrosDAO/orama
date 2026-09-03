@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
@@ -475,7 +476,7 @@ func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Check RQLite cluster
-	out, err := runSSHOutput(node, "curl -s http://localhost:5001/status | grep -o '\"state\":\"[^\"]*\"' | head -1")
+	out, err := runSSHOutput(node, fmt.Sprintf("curl -s %s/status | grep -o '\"state\":\"[^\"]*\"' | head -1", constants.LocalRQLiteURL()))
 	if err == nil {
 		fmt.Printf("  RQLite: %s\n", strings.TrimSpace(out))
 	}
@@ -494,7 +495,7 @@ func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 func waitForRQLiteHealth(node inspector.Node, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := runSSHOutput(node, "curl -sf http://localhost:5001/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'")
+		out, err := runSSHOutput(node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
 		if err == nil {
 			result := strings.TrimSpace(out)
 			if strings.Contains(result, "Leader") || strings.Contains(result, "Follower") {
@@ -670,7 +671,7 @@ func registerNodesWithOperator(state *SandboxState, sshKeyPath string) {
 	// Use RQLite's parameterized query to avoid any injection risk.
 	// The JSON payload has the wallet as a parameter, not interpolated into SQL.
 	payload := fmt.Sprintf(`[["UPDATE dns_nodes SET operator_wallet = ?, environment = 'sandbox' WHERE operator_wallet IS NULL OR operator_wallet = ''", %q]]`, wallet)
-	cmd := fmt.Sprintf(`curl -sf -X POST http://localhost:5001/db/execute -H 'Content-Type: application/json' -d '%s'`, payload)
+	cmd := fmt.Sprintf(`curl -sf -X POST %s/db/execute -H 'Content-Type: application/json' -d '%s'`, constants.LocalRQLiteURL(), payload)
 	if _, err := runSSHOutput(node, cmd); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to tag nodes with operator wallet: %v\n", err)
 	}

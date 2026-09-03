@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"io"
 	"net/http"
 	"time"
@@ -71,7 +72,7 @@ func checkQuorumSafety() string {
 // getLocalRQLiteStatus queries local RQLite /status and extracts raft info
 func getLocalRQLiteStatus() (map[string]interface{}, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:5001/status")
+	resp, err := client.Get(constants.LocalRQLiteURL() + "/status")
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +110,7 @@ func getLocalRQLiteStatus() (map[string]interface{}, error) {
 // getLocalRQLiteNodes queries local RQLite /nodes?nonvoters to get cluster members
 func getLocalRQLiteNodes() ([]map[string]interface{}, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:5001/nodes?nonvoters&timeout=3s")
+	resp, err := client.Get(constants.LocalRQLiteURL() + "/nodes?nonvoters&timeout=3s")
 	if err != nil {
 		return nil, err
 	}

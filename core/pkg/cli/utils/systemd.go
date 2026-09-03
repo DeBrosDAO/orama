@@ -37,7 +37,7 @@ var ServicePorts = map[string][]PortSpec{
 	"orama-ipfs": {
 		{Name: "IPFS API", Port: constants.IPFSAPIPort},
 		{Name: "IPFS Gateway", Port: 8080},
-		{Name: "IPFS Swarm", Port: 4101},
+		{Name: "IPFS Swarm", Port: constants.IPFSSwarmPort},
 	},
 	"orama-ipfs-cluster": {
 		{Name: "IPFS Cluster API", Port: constants.IPFSClusterAPIPort},

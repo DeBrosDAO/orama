@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/node"
 	"go.uber.org/zap"
@@ -180,13 +181,13 @@ func apply_flag_overrides(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, rq
 	logger := setup_logger(logging.ComponentNode)
 
 	// Apply RQLite HTTP port override
-	if *rqlHTTP != 5001 {
+	if *rqlHTTP != constants.RQLiteHTTPPort {
 		cfg.Database.RQLitePort = *rqlHTTP
 		logger.ComponentInfo(logging.ComponentNode, "Overriding RQLite HTTP port", zap.Int("port", *rqlHTTP))
 	}
 
 	// Apply RQLite Raft port override
-	if *rqlRaft != 7001 {
+	if *rqlRaft != constants.RQLiteRaftPort {
 		cfg.Database.RQLiteRaftPort = *rqlRaft
 		logger.ComponentInfo(logging.ComponentNode, "Overriding RQLite Raft port", zap.Int("port", *rqlRaft))
 	}

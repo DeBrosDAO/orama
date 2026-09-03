@@ -362,7 +362,7 @@ sudo orama node install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123...
 This works because Caddy's `:80` block proxies all HTTP traffic to the gateway. However, once DNS
 is properly configured, always use the HTTPS domain URL.
 
-**Important:** Never use `http://<ip>:6001` — port 6001 is the internal gateway and is blocked by
+**Important:** Never use `http://<ip>:10104` — that is the internal index gateway and is blocked by
 UFW from external access. The join request goes through Caddy on port 80 (HTTP) or 443 (HTTPS),
 which proxies to the gateway internally.
 

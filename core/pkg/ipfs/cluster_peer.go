@@ -11,11 +11,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 	"go.uber.org/zap"
 )
+
+// ipfsSwarmMultiaddrSuffix matches the swarm leg of a peer multiaddr, e.g.
+// "/ip4/10.0.0.2/tcp/4101/p2p/12D3Koo...".
+var ipfsSwarmMultiaddrSuffix = fmt.Sprintf("/tcp/%d", constants.IPFSSwarmPort)
 
 // UpdatePeerAddresses updates the peer_addresses in service.json with given multiaddresses
 func (cm *ClusterConfigManager) UpdatePeerAddresses(addrs []string) error {
@@ -110,7 +115,7 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 		info := h.Peerstore().PeerInfo(p)
 		for _, addr := range info.Addrs {
 			// Extract IP from multiaddr — only use WireGuard IPs (10.0.0.x)
-			// for inter-node queries since port 6001 is blocked on public interfaces by UFW
+			// for inter-node queries since the index gateway port is blocked on public interfaces by UFW
 			ip := extractIPFromMultiaddr(addr)
 			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
 				peerIPs[ip] = true
@@ -125,7 +130,7 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 	// Query each peer's /v1/network/status endpoint to get IPFS and Cluster info
 	client := &http.Client{Timeout: 5 * time.Second}
 	for ip := range peerIPs {
-		statusURL := fmt.Sprintf("http://%s:6001/v1/network/status", ip)
+		statusURL := constants.GatewayURLFor(ip) + "/v1/network/status"
 		resp, err := client.Get(statusURL)
 		if err != nil {
 			cm.logger.Debug("Failed to query peer status", zap.String("ip", ip), zap.Error(err))
@@ -153,7 +158,7 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 		// Add IPFS peer if available
 		if status.IPFS != nil && status.IPFS.PeerID != "" {
 			for _, addr := range status.IPFS.SwarmAddresses {
-				if strings.Contains(addr, "/tcp/4101") && !strings.Contains(addr, "127.0.0.1") {
+				if strings.Contains(addr, ipfsSwarmMultiaddrSuffix) && !strings.Contains(addr, "127.0.0.1") {
 					ipfsPeers = append(ipfsPeers, IPFSPeerEntry{
 						ID:    status.IPFS.PeerID,
 						Addrs: []string{addr},
@@ -188,10 +193,10 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 
 // NetworkStatusResponse represents the response from /v1/network/status
 type NetworkStatusResponse struct {
-	PeerID      string                     `json:"peer_id"`
-	PeerCount   int                        `json:"peer_count"`
-	IPFS        *NetworkStatusIPFS         `json:"ipfs,omitempty"`
-	IPFSCluster *NetworkStatusIPFSCluster  `json:"ipfs_cluster,omitempty"`
+	PeerID      string                    `json:"peer_id"`
+	PeerCount   int                       `json:"peer_count"`
+	IPFS        *NetworkStatusIPFS        `json:"ipfs,omitempty"`
+	IPFSCluster *NetworkStatusIPFSCluster `json:"ipfs_cluster,omitempty"`
 }
 
 type NetworkStatusIPFS struct {
@@ -335,7 +340,7 @@ func (cm *ClusterConfigManager) UpdateIPFSPeeringConfig(peers []IPFSPeerEntry) e
 			if !strings.Contains(addr, "/p2p/") {
 				peeringMA = fmt.Sprintf("%s/p2p/%s", addr, p.ID)
 			}
-			addURL := fmt.Sprintf("http://localhost:4501/api/v0/swarm/peering/add?arg=%s", url.QueryEscape(peeringMA))
+			addURL := fmt.Sprintf("%s/api/v0/swarm/peering/add?arg=%s", constants.LocalIPFSAPIURL(), url.QueryEscape(peeringMA))
 			if resp, err := client.Post(addURL, "", nil); err == nil {
 				resp.Body.Close()
 				cm.logger.Debug("Added IPFS peering via live API", zap.String("multiaddr", peeringMA))
@@ -416,4 +421,3 @@ type ClusterPeerInfo struct {
 	NodeName     string    `json:"node_name"`
 	LastSeen     time.Time `json:"last_seen"`
 }
-

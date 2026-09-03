@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -20,7 +21,7 @@ const (
 // HandlePreUpgrade prepares the node for a safe rolling upgrade:
 //  1. Checks quorum safety
 //  2. Writes maintenance flag
-//  3. Transfers leadership on global RQLite (port 5001) if leader
+//  3. Transfers leadership on the index RQLite if leader
 //  4. Transfers leadership on each namespace RQLite
 //  5. Waits 15s for metadata propagation (H5 fix)
 func HandlePreUpgrade() {
@@ -49,12 +50,12 @@ func HandlePreUpgrade() {
 		fmt.Printf("  Maintenance flag written\n")
 	}
 
-	// 3. Transfer leadership on global RQLite (port 5001)
+	// 3. Transfer leadership on the index RQLite
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
-	fmt.Printf("  Checking global RQLite leadership (port 5001)...\n")
-	if err := rqlite.TransferLeadership(5001, logger); err != nil {
+	fmt.Printf("  Checking index RQLite leadership (port %d)...\n", constants.RQLiteHTTPPort)
+	if err := rqlite.TransferLeadership(constants.RQLiteHTTPPort, logger); err != nil {
 		fmt.Printf("  Warning: global leadership transfer: %v\n", err)
 	} else {
 		fmt.Printf("  Global RQLite leadership handled\n")

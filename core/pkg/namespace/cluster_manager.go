@@ -31,7 +31,7 @@ type ClusterManagerConfig struct {
 	GlobalRQLiteDSN string // Global RQLite DSN for API key validation (e.g., "http://localhost:4001")
 	// IPFS configuration for namespace gateways (defaults used if not set)
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (default: "http://localhost:9094")
-	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:4501")
+	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:10107")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // IPFS replication factor (default: 3)
 

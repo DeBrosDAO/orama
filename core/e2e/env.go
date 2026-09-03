@@ -24,6 +24,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
@@ -368,8 +369,8 @@ func queryAPIKeyFromRemoteRQLite(gatewayURL string) (string, error) {
 		return "", fmt.Errorf("failed to parse gateway URL: %w", err)
 	}
 
-	// RQLite HTTP API runs on port 5001 (not the gateway port 6001)
-	rqliteURL := fmt.Sprintf("http://%s:5001/db/query", parsed.Hostname())
+	// The RQLite HTTP API is a different port from the gateway.
+	rqliteURL := constants.RQLiteURLFor(parsed.Hostname()) + "/db/query"
 
 	// Create request body
 	reqBody := `["SELECT key FROM api_keys LIMIT 1"]`

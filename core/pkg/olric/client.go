@@ -19,8 +19,8 @@ type Client struct {
 
 // Config holds configuration for the Olric client
 type Config struct {
-	// Servers is a list of Olric server addresses (e.g., ["localhost:3320"])
-	// If empty, defaults to ["localhost:3320"]
+	// Servers is a list of Olric server addresses (e.g., ["localhost:10102"]).
+	// If empty, defaults to the index Olric on localhost.
 	Servers []string
 
 	// Timeout is the timeout for client operations

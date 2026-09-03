@@ -14,6 +14,7 @@ import (
 
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -288,7 +289,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		RQLitePassword:       rqlitePassword,
 		SecretsEncryptionKey: secretsEncryptionKey,
 		TURNSecret:           turnSecret,
-		RQLiteJoinAddress:    fmt.Sprintf("%s:7001", myWGIP),
+		RQLiteJoinAddress:    constants.RQLiteRaftAddrFor(myWGIP),
 		IPFSPeer:             ipfsPeer,
 		IPFSClusterPeer:      ipfsClusterPeer,
 		IPFSClusterPeerIDs:   ipfsClusterPeerIDs,
@@ -554,7 +555,7 @@ func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 	return PeerInfo{
 		ID: result.ID,
 		Addrs: []string{
-			fmt.Sprintf("/ip4/%s/tcp/4101/p2p/%s", myWGIP, result.ID),
+			fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", myWGIP, constants.IPFSSwarmPort, result.ID),
 		},
 	}
 }
@@ -586,7 +587,7 @@ func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
 }
 
 // buildBootstrapPeers constructs bootstrap peer multiaddrs using WG IPs
-// Uses the node's LibP2P peer ID (port 4001), NOT the IPFS peer ID (port 4101)
+// Uses the node's LibP2P peer ID (port 4001), NOT the IPFS peer ID (IPFS swarm port)
 func (h *Handler) buildBootstrapPeers(myWGIP, ipfsPeerID string) []string {
 	// Read the node's LibP2P identity from disk
 	keyPath := filepath.Join(h.oramaDir, "data", "identity.key")

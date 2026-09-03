@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
@@ -245,7 +247,7 @@ func (o *Orchestrator) captureClusterState() error {
 
 	// Query RQLite /nodes endpoint to get current cluster membership
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:5001/nodes?timeout=3s")
+	resp, err := client.Get(constants.LocalRQLiteURL() + "/nodes?timeout=3s")
 	if err != nil {
 		fmt.Printf("  ⚠️  Could not query cluster state: %v\n", err)
 		return nil // Non-fatal - continue with upgrade
@@ -491,6 +493,13 @@ func (o *Orchestrator) extractPeers() []string {
 	return peers
 }
 
+// Loopback advertise addresses mean "not yet configured with a real IP", so
+// extractNetworkConfig must not mistake them for the node's VPS address.
+var (
+	localRQLiteHTTPAddr = net.JoinHostPort("localhost", strconv.Itoa(constants.RQLiteHTTPPort))
+	localRQLiteRaftAddr = net.JoinHostPort("localhost", strconv.Itoa(constants.RQLiteRaftPort))
+)
+
 func (o *Orchestrator) extractNetworkConfig() (vpsIP, joinAddress string) {
 	nodeConfigPath := filepath.Join(o.oramaDir, "configs", "node.yaml")
 	if data, err := os.ReadFile(nodeConfigPath); err == nil {
@@ -503,7 +512,7 @@ func (o *Orchestrator) extractNetworkConfig() (vpsIP, joinAddress string) {
 				if len(parts) > 1 {
 					addr := strings.TrimSpace(parts[1])
 					addr = strings.Trim(addr, "\"'")
-					if addr != "" && addr != "null" && addr != "localhost:5001" && addr != "localhost:7001" {
+					if addr != "" && addr != "null" && addr != localRQLiteHTTPAddr && addr != localRQLiteRaftAddr {
 						// Extract IP from address (format: "IP:PORT" or "[IPv6]:PORT")
 						if host, _, err := net.SplitHostPort(addr); err == nil && host != "" && host != "localhost" {
 							vpsIP = host
@@ -782,7 +791,7 @@ func (o *Orchestrator) waitForClusterHealth(timeout time.Duration) error {
 
 	for time.Now().Before(deadline) {
 		// Query RQLite status
-		resp, err := client.Get("http://localhost:5001/status")
+		resp, err := client.Get(constants.LocalRQLiteURL() + "/status")
 		if err != nil {
 			time.Sleep(2 * time.Second)
 			continue

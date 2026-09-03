@@ -50,7 +50,7 @@ func (n *Node) startIndexStorage(_ context.Context) error {
 }
 
 // startIndexEdge starts vault, optional SNI router, Caddy, ntfy, and anyone-client
-// after the index gateway is on :6001 (Caddy reverse_proxies that port).
+// after the index gateway is up (Caddy reverse_proxies that port).
 func (n *Node) startIndexEdge(_ context.Context) error {
 	sup, nodeID, err := n.indexSupervisor()
 	if err != nil {

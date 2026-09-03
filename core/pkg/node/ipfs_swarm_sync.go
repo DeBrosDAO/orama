@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -73,7 +74,7 @@ func (n *Node) syncIPFSSwarmPeers(ctx context.Context) {
 			continue // already connected
 		}
 
-		multiaddr := fmt.Sprintf("/ip4/%s/tcp/4101/p2p/%s", p.wgIP, p.peerID)
+		multiaddr := fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", p.wgIP, constants.IPFSSwarmPort, p.peerID)
 		if err := ipfsSwarmConnect(multiaddr); err != nil {
 			n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect IPFS swarm peer",
 				zap.String("peer", p.peerID[:12]+"..."),
@@ -99,7 +100,7 @@ func getConnectedIPFSPeers() map[string]bool {
 	peers := make(map[string]bool)
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/swarm/peers", "", nil)
+	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/swarm/peers", "", nil)
 	if err != nil {
 		return peers
 	}
@@ -126,7 +127,7 @@ func getConnectedIPFSPeers() map[string]bool {
 // ipfsSwarmConnect connects to an IPFS peer via the HTTP API
 func ipfsSwarmConnect(multiaddr string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	apiURL := fmt.Sprintf("http://localhost:4501/api/v0/swarm/connect?arg=%s", url.QueryEscape(multiaddr))
+	apiURL := fmt.Sprintf("%s/api/v0/swarm/connect?arg=%s", constants.LocalIPFSAPIURL(), url.QueryEscape(multiaddr))
 	resp, err := client.Post(apiURL, "", nil)
 	if err != nil {
 		return err

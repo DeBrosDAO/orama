@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/spf13/cobra"
 )
@@ -124,7 +125,7 @@ func init() {
 func findLeaderIndex(nodes []inspector.Node) int {
 	for i, n := range nodes {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		result := inspector.RunSSH(ctx, n, "curl -sf http://localhost:5001/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'")
+		result := inspector.RunSSH(ctx, n, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
 		cancel()
 		if result.OK() && strings.Contains(result.Stdout, "Leader") {
 			return i
@@ -214,7 +215,7 @@ func waitForHealth(node inspector.Node, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		result := inspector.RunSSH(ctx, node, "curl -sf http://localhost:5001/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'")
+		result := inspector.RunSSH(ctx, node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
 		cancel()
 		if result.OK() && (strings.Contains(result.Stdout, "Leader") || strings.Contains(result.Stdout, "Follower")) {
 			return nil

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"net"
 	"net/http"
 	"net/url"
@@ -63,20 +64,19 @@ func parseIPFSPort(rawURL string) (int, error) {
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return 5001, nil
+		return constants.IPFSAPIPort, nil
 	}
 	_, portStr, err := net.SplitHostPort(u.Host)
 	if err != nil {
-		return 5001, nil
+		return constants.IPFSAPIPort, nil
 	}
 	var port int
 	fmt.Sscanf(portStr, "%d", &port)
 	if port == 0 {
-		return 5001, nil
+		return constants.IPFSAPIPort, nil
 	}
 	return port, nil
 }
-
 
 func extractIPFromMultiaddrForCluster(maddr string) string {
 	parts := strings.Split(maddr, "/")
@@ -103,4 +103,3 @@ func newStandardHTTPClient() *http.Client {
 		Timeout: 10 * time.Second,
 	}
 }
-

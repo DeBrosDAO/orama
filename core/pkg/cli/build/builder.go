@@ -743,7 +743,7 @@ func init() {
 // Provider wraps the Orama DNS provider for Caddy.
 type Provider struct {
 	// Endpoint is the URL of the Orama gateway's ACME API
-	// Default: http://localhost:6001/v1/internal/acme
+	// Default: the index gateway /v1/internal/acme
 	Endpoint string ` + "`json:\"endpoint,omitempty\"`" + `
 }
 

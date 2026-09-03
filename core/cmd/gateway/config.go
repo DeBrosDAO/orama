@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -143,7 +144,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 
 	// Build config from YAML
 	cfg := &gateway.Config{
-		ListenAddr:            ":6001",
+		ListenAddr:            fmt.Sprintf(":%d", constants.GatewayAPIPort),
 		ClientNamespace:       "default",
 		BootstrapPeers:        nil,
 		RQLiteDSN:             "",

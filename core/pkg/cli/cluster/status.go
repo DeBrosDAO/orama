@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"io"
 	"net/http"
 	"os"
@@ -10,10 +11,10 @@ import (
 	"time"
 )
 
-const (
-	rqliteBaseURL = "http://localhost:5001"
-	httpTimeout   = 10 * time.Second
-)
+const httpTimeout = 10 * time.Second
+
+// rqliteBaseURL is the index RQLite HTTP API on this node.
+var rqliteBaseURL = constants.LocalRQLiteURL()
 
 // rqliteStatus represents the relevant fields from the RQLite /status endpoint.
 type rqliteStatus struct {
@@ -39,13 +40,13 @@ type rqliteStatus struct {
 
 // rqliteNode represents a node from the /nodes endpoint.
 type rqliteNode struct {
-	ID      string `json:"id"`
-	Address string `json:"addr"`
-	Leader  bool   `json:"leader"`
-	Voter   bool   `json:"voter"`
-	Reachable bool `json:"reachable"`
-	Time    float64 `json:"time"`
-	TimeS   string  `json:"time_s"`
+	ID        string  `json:"id"`
+	Address   string  `json:"addr"`
+	Leader    bool    `json:"leader"`
+	Voter     bool    `json:"voter"`
+	Reachable bool    `json:"reachable"`
+	Time      float64 `json:"time"`
+	TimeS     string  `json:"time_s"`
 }
 
 // HandleStatus handles the "orama cluster status" command.
@@ -210,9 +211,9 @@ func printNodesTable(nodes map[string]*rqliteNode) {
 // printOlricStatus attempts to query the local Olric status endpoint.
 func printOlricStatus() {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:3320/")
+	resp, err := client.Get(constants.LocalOlricURL() + "/")
 	if err != nil {
-		fmt.Printf("Olric: not reachable on localhost:3320 (%v)\n\n", err)
+		fmt.Printf("Olric: not reachable on %s (%v)\n\n", constants.LocalOlricURL(), err)
 		return
 	}
 	defer resp.Body.Close()

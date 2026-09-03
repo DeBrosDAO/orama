@@ -119,7 +119,7 @@ func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, httpAdv, raf
 }
 
 // EnsureOlric starts orama-namespace-olric@index using the host olric YAML,
-// then stops/disables orama-olric.service so it cannot double-bind :3320.
+// then stops/disables orama-olric.service so it cannot double-bind the port.
 func (s *IndexSupervisor) EnsureOlric(ctx context.Context, nodeID, bindAddr string, peers []string) error {
 	hostCfg := filepath.Join(s.oramaDir, "configs", "olric", "config.yaml")
 	cfg := olric.InstanceConfig{

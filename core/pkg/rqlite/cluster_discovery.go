@@ -59,7 +59,7 @@ func NewClusterDiscoveryService(
 		minClusterSize = rqliteManager.config.MinClusterSize
 	}
 
-	// Extract WireGuard IP from the raft address (e.g., "10.0.0.1" from "10.0.0.1:7001")
+	// Extract WireGuard IP from the raft address (e.g., "10.0.0.1" from "10.0.0.1:10101")
 	wgIP := ""
 	if host, _, err := net.SplitHostPort(raftAddress); err == nil {
 		wgIP = host

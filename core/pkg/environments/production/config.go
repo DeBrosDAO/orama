@@ -132,8 +132,12 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 
 	var rqliteJoinAddr string
 	if joinAddress != "" {
-		if strings.Contains(joinAddress, ":7002") || strings.Contains(joinAddress, ":7001") {
-			rqliteJoinAddr = strings.Replace(strings.Replace(joinAddress, ":7002", ":"+raftPort, 1), ":7001", ":"+raftPort, 1)
+		// A join address given as host:port must name this cluster's raft port.
+		// Operators paste addresses carrying whatever port a previous release
+		// used, and rqlited would then dial a port nothing listens on. A URL
+		// (https://host) has no host:port to correct and is passed through.
+		if host, port, splitErr := net.SplitHostPort(joinAddress); splitErr == nil && port != raftPort {
+			rqliteJoinAddr = net.JoinHostPort(host, raftPort)
 		} else {
 			rqliteJoinAddr = joinAddress
 		}

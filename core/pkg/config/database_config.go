@@ -42,7 +42,7 @@ type DatabaseConfig struct {
 	MinClusterSize      int           `yaml:"min_cluster_size"`      // default: 1
 
 	// Olric cache configuration
-	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 3320)
+	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 10102)
 	OlricMemberlistPort int `yaml:"olric_memberlist_port"` // Olric memberlist port (default: 3322)
 
 	// IPFS storage configuration
@@ -55,8 +55,8 @@ type IPFSConfig struct {
 	// If empty, IPFS storage is disabled for this node
 	ClusterAPIURL string `yaml:"cluster_api_url"`
 
-	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501")
-	// If empty, defaults to "http://localhost:4501"
+	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:10107")
+	// If empty, defaults to "http://localhost:10107"
 	APIURL string `yaml:"api_url"`
 
 	// Timeout for IPFS operations
