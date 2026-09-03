@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -250,6 +251,152 @@ func (cm *ClusterManager) spawnOlricWithSystemd(ctx context.Context, cfg olric.I
 	// SystemdSpawner now handles config file creation
 	return cm.systemdSpawner.SpawnOlric(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
+
+// peersJSONSource says where the peer list for a disk restore came from.
+type peersJSONSource int
+
+const (
+	// peersFromDB: live membership was readable and is authoritative.
+	peersFromDB peersJSONSource = iota
+	// peersSkip: a peer is reachable, so rqlited can rejoin on its own raft
+	// state. Writing nothing is strictly safer than writing a guess.
+	peersSkip
+	// peersSelfOnly: nothing else is reachable and the DB is unreadable. A
+	// single-node configuration at least yields a leader; asserting a
+	// membership we cannot verify does not.
+	peersSelfOnly
+)
+
+func (s peersJSONSource) String() string {
+	switch s {
+	case peersFromDB:
+		return "live-membership"
+	case peersSkip:
+		return "skipped-peer-reachable"
+	case peersSelfOnly:
+		return "self-only"
+	}
+	return "unknown"
+}
+
+// choosePeersJSONSource decides what a disk restore may assert about raft
+// membership.
+//
+// peers.json is rqlite's FORCE RECOVERY mechanism: it overwrites the raft
+// configuration at startup. The disk path used to build it from
+// cluster-state.json's AllNodes, which is refreshed only by a best-effort HTTP
+// push - so the node most likely to hold a stale copy is exactly the node that
+// was down while the cluster changed. On its next boot it reinstated a removed
+// member as a voter, and the namespace went back to 2-of-3-with-a-corpse or to
+// Candidate with no leader. That is the recorded "namespace RQLite lost quorum"
+// incident.
+//
+// Preference order: verified membership, then no assertion at all, then the
+// minimal assertion that can still produce a leader.
+func choosePeersJSONSource(dbOK bool, anyPeerReachable bool) peersJSONSource {
+	switch {
+	case dbOK:
+		return peersFromDB
+	case anyPeerReachable:
+		return peersSkip
+	default:
+		return peersSelfOnly
+	}
+}
+
+// writeRestorePeersJSON applies choosePeersJSONSource for one namespace.
+func (cm *ClusterManager) writeRestorePeersJSON(ctx context.Context, state *ClusterLocalState, dataDir string) {
+	dbPeers, dbErr := cm.liveRaftPeers(ctx, state.ClusterID)
+	dbOK := dbErr == nil && len(dbPeers) > 0
+
+	anyReachable := false
+	if !dbOK {
+		for _, np := range state.AllNodes {
+			if np.NodeID == cm.localNodeID {
+				continue
+			}
+			if raftPortReachable(np.InternalIP, np.RQLiteRaftPort) {
+				anyReachable = true
+				break
+			}
+		}
+	}
+
+	switch choosePeersJSONSource(dbOK, anyReachable) {
+	case peersFromDB:
+		if err := cm.writePeersJSON(dataDir, dbPeers); err != nil {
+			cm.logger.Error("Failed to write peers.json from live membership",
+				zap.String("namespace", state.NamespaceName), zap.Error(err))
+			return
+		}
+		cm.logger.Info("Wrote peers.json from live membership",
+			zap.String("namespace", state.NamespaceName), zap.Int("peers", len(dbPeers)))
+
+	case peersSkip:
+		cm.logger.Warn("Not writing peers.json: membership unreadable but a peer is reachable, so rqlited can rejoin on its own raft state",
+			zap.String("namespace", state.NamespaceName),
+			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)),
+			zap.Error(dbErr))
+
+	case peersSelfOnly:
+		self := rqlite.RaftPeer{
+			ID:       fmt.Sprintf("%s:%d", state.LocalIP, state.LocalPorts.RQLiteRaftPort),
+			Address:  fmt.Sprintf("%s:%d", state.LocalIP, state.LocalPorts.RQLiteRaftPort),
+			NonVoter: false,
+		}
+		if err := cm.writePeersJSON(dataDir, []rqlite.RaftPeer{self}); err != nil {
+			cm.logger.Error("Failed to write single-node peers.json",
+				zap.String("namespace", state.NamespaceName), zap.Error(err))
+			return
+		}
+		cm.logger.Warn("Wrote a SINGLE-NODE peers.json: membership is unreadable and no peer is reachable. The namespace will serve from this node alone until the others return and are re-added.",
+			zap.String("namespace", state.NamespaceName),
+			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)))
+	}
+}
+
+// liveRaftPeers reads current membership for a namespace cluster from the index
+// database. This is the same query the DB-backed restore path uses.
+func (cm *ClusterManager) liveRaftPeers(ctx context.Context, clusterID string) ([]rqlite.RaftPeer, error) {
+	if cm.db == nil {
+		return nil, fmt.Errorf("no index database handle")
+	}
+	var rows []struct {
+		InternalIP     string `db:"internal_ip"`
+		RQLiteRaftPort int    `db:"rqlite_raft_port"`
+	}
+	const q = `
+		SELECT COALESCE(dn.internal_ip, dn.ip_address) as internal_ip, pa.rqlite_raft_port
+		FROM namespace_port_allocations pa
+		JOIN dns_nodes dn ON pa.node_id = dn.id
+		WHERE pa.namespace_cluster_id = ?
+	`
+	if err := cm.db.Query(ctx, &rows, q, clusterID); err != nil {
+		return nil, err
+	}
+	peers := make([]rqlite.RaftPeer, 0, len(rows))
+	for _, r := range rows {
+		addr := fmt.Sprintf("%s:%d", r.InternalIP, r.RQLiteRaftPort)
+		peers = append(peers, rqlite.RaftPeer{ID: addr, Address: addr, NonVoter: false})
+	}
+	return peers, nil
+}
+
+// raftPortReachable reports whether a peer is accepting raft connections. Used
+// only to decide whether asserting a membership is necessary at all.
+func raftPortReachable(host string, port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), raftReachableTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// raftReachableTimeout is short: this runs per peer during boot, and a peer
+// that cannot answer a TCP handshake promptly is not one this node should be
+// deferring to.
+const raftReachableTimeout = 2 * time.Second
 
 // writePeersJSON writes RQLite peers.json file for Raft cluster recovery
 func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer) error {
@@ -2286,14 +2433,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		}
 
 		if hasExistingData {
-			var peers []rqlite.RaftPeer
-			for _, np := range state.AllNodes {
-				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
-				peers = append(peers, rqlite.RaftPeer{ID: raftAddr, Address: raftAddr, NonVoter: false})
-			}
-			if err := cm.writePeersJSON(dataDir, peers); err != nil {
-				cm.logger.Error("Failed to write peers.json", zap.String("namespace", state.NamespaceName), zap.Error(err))
-			}
+			cm.writeRestorePeersJSON(ctx, state, dataDir)
 		}
 
 		var joinAddrs []string

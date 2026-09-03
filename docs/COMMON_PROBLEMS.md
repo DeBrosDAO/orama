@@ -136,6 +136,23 @@ If the file doesn't exist, the node can't restore the namespace.
 
 This was fixed in code — `ProvisionCluster` now saves state to all nodes (including remote ones via the `save-cluster-state` spawn action).
 
+**The state file is no longer trusted for raft membership.** `cluster-state.json`
+is refreshed by a best-effort push, so the node most likely to hold a stale copy
+is exactly the one that was down while the cluster changed. On restore, the peer
+list written into `peers.json` (rqlite's force-recovery mechanism) now comes from:
+
+1. **live membership in the index DB** when it is readable — authoritative, and
+   it outranks anything on local disk;
+2. **nothing at all** when the DB is unreadable but another member answers on
+   its raft port — rqlited rejoins using its own raft state, and writing a guess
+   would overwrite the real configuration;
+3. **a single-node entry for this node** only when the DB is unreadable *and*
+   no peer answers. That produces a working leader instead of a Candidate; the
+   other members must be re-added once they return.
+
+The state file is still used for everything else about the restore (ports, local
+IP, WebRTC roles) — just not for asserting who the voters are.
+
 ---
 
 ## 4. Namespace gateway processes not restarting after upgrade
