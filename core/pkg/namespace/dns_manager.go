@@ -166,34 +166,6 @@ func (drm *DNSRecordManager) GetNamespaceGatewayIPs(ctx context.Context, namespa
 	return ips, nil
 }
 
-// CountActiveNamespaceRecords returns the number of active A records for a namespace's main FQDN.
-// Used as a safety check before disabling records to prevent disabling the last one.
-func (drm *DNSRecordManager) CountActiveNamespaceRecords(ctx context.Context, namespaceName string) (int, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	fqdn := fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain)
-
-	type countResult struct {
-		Count int `db:"count"`
-	}
-
-	var results []countResult
-	query := `SELECT COUNT(*) as count FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND is_active = TRUE`
-	err := drm.db.Query(internalCtx, &results, query, fqdn)
-	if err != nil {
-		return 0, &ClusterError{
-			Message: "failed to count active namespace DNS records",
-			Cause:   err,
-		}
-	}
-
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	return results[0].Count, nil
-}
-
 // AddNamespaceRecord adds DNS A records for a single IP to an existing namespace.
 // Unlike CreateNamespaceRecords, this does NOT delete existing records — it's purely additive.
 // Used when adding a new node to an under-provisioned cluster (repair).
@@ -286,23 +258,56 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 }
 
 // DisableNamespaceRecord marks a specific IP's record as inactive (for temporary failover)
-func (drm *DNSRecordManager) DisableNamespaceRecord(ctx context.Context, namespaceName, ip string) error {
+func (drm *DNSRecordManager) DisableNamespaceRecord(ctx context.Context, namespaceName, ip string) (int64, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
 	fqdn := fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain)
 	wildcardFqdn := fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain)
 
-	drm.logger.Info("Disabling namespace DNS record",
-		zap.String("namespace", namespaceName),
-		zap.String("ip", ip),
-	)
-
+	var disabled int64
 	for _, f := range []string{fqdn, wildcardFqdn} {
-		updateQuery := `UPDATE dns_records SET is_active = FALSE, updated_at = ? WHERE fqdn = ? AND value = ?`
-		_, _ = drm.db.Exec(internalCtx, updateQuery, time.Now(), f, ip)
+		// The "never disable the last active record" guard is INSIDE the
+		// statement.
+		//
+		// It used to be a separate COUNT followed by an unconditional UPDATE.
+		// Every node that observes a suspect node runs this, so two observers
+		// could both read a count of 2, both conclude they were not the last,
+		// and both disable — leaving the namespace resolving nowhere. The
+		// window is small and the consequence is a total outage for that
+		// namespace, which is the worst trade a race can offer.
+		//
+		// Each name is guarded on its OWN count. Guarding the wildcard on the
+		// primary's count would let the last wildcard record go while the
+		// primary still had two.
+		res, err := drm.db.Exec(internalCtx, `
+			UPDATE dns_records SET is_active = FALSE, updated_at = ?
+			 WHERE fqdn = ? AND value = ? AND is_active = TRUE
+			   AND (SELECT COUNT(*) FROM dns_records d2
+			         WHERE d2.fqdn = dns_records.fqdn
+			           AND d2.record_type = 'A'
+			           AND d2.is_active = TRUE) > 1`,
+			time.Now(), f, ip)
+		if err != nil {
+			// This used to be `_, _ =` and the function always returned nil, so
+			// a failure to withdraw a dead node's record was invisible.
+			return disabled, &ClusterError{
+				Message: fmt.Sprintf("failed to disable DNS record %s for %s", f, ip),
+				Cause:   err,
+			}
+		}
+		if res != nil {
+			if n, err := res.RowsAffected(); err == nil {
+				disabled += n
+			}
+		}
 	}
 
-	return nil
+	drm.logger.Info("Disabled namespace DNS records",
+		zap.String("namespace", namespaceName),
+		zap.String("ip", ip),
+		zap.Int64("records_disabled", disabled))
+
+	return disabled, nil
 }
 
 // CreateTURNRecords creates DNS A records for TURN servers.
