@@ -32,6 +32,7 @@ const (
 	compWireGuardSync     = "wireguard-sync"
 	compIPFSSwarmSync     = "ipfs-swarm-sync"
 	compDNSRegistration   = "dns-registration"
+	compMembership        = "membership"
 )
 
 // Per-attempt budgets. Each one bounds a single Reconcile; the supervisor
@@ -183,6 +184,14 @@ func (n *Node) bootComponents() []boot.Component {
 			DependsOn: []string{compRQLiteLocal},
 			Reconcile: n.joinRQLiteCluster,
 			Health:    n.rqliteLeaderReachable,
+		},
+		// One writer for the stores a node's existence is recorded in. Only the
+		// raft leader acts, but every node runs the loop so leadership can move
+		// without anything being restarted.
+		{
+			Name:      compMembership,
+			DependsOn: []string{compRQLiteCluster},
+			Reconcile: n.startMembershipReconciler,
 		},
 		// A dns_nodes row saying `active` is a promise: this node terminates
 		// TLS, answers DNS and proxies tenants. So the registration depends on

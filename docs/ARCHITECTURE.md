@@ -241,6 +241,31 @@ render it today; read it from the node's own log
 (`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
 lists the components that have not converged.
 
+**One writer for membership.** A node's existence is recorded in five places —
+`dns_nodes`, `wireguard_peers`, the index raft configuration, ipfs-cluster's
+peer list and IPFS's peering config — each with its own liveness definition and
+its own timer, and until now with no single writer. A machine deleted without
+ceremony left a different residue in each: an `inactive` `dns_nodes` row that
+was never deleted, a `wireguard_peers` row re-applied to the interface every 60
+seconds for ever, a raft voter still counted toward quorum.
+
+`pkg/node/membership` computes what the membership should be and diffs it
+against what the stores hold. It runs on the raft leader only, every 60s, as the
+`membership` boot component. Removal needs positive evidence of departure — a
+raft eviction tombstone — and *any* sign of life vetoes it: discovery seeing the
+peer, or a heartbeat inside the 30-minute liveness grace. A node that merely
+stopped answering is missing, not gone; turning the first into the second is the
+raft eviction path's job, and it writes the tombstone when it does. `dns_nodes`
+rows survive a further 6-hour tombstone grace so an operator looking at the
+table right after a node disappears still sees what was removed.
+
+`wireguard_peers` rows are matched to nodes on the **overlay address**, not on
+`node_id`. The join handler writes a synthetic `node-<wgip>` that matches no
+`dns_nodes.id` and never has, so the obvious rule — delete rows whose node id is
+unknown — would delete every row and sever the mesh. A row whose overlay address
+matches no node is reported, not deleted: a node mid-join has its WireGuard row
+before its `dns_nodes` row, so absence is not departure.
+
 **Dead voters are evicted.** A voter that is gone for good used to stay in the
 raft configuration for ever — quorum arithmetic kept counting a machine that no
 longer existed, so on a three-voter cluster the second such event was permanent
