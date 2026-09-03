@@ -76,9 +76,8 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		}
 	}
 
-	if err := r.launchProcess(ctx, rqliteDataDir); err != nil {
-		return err
-	}
+	// rqlited is orama-namespace-rqlite@index, never a child of this process.
+	r.logger.Info("Connecting to systemd-managed RQLite (orama-namespace-rqlite@index)")
 
 	// The local rqlited is now listening but has not necessarily joined a
 	// quorum. This is the ONLY window in which a node can repair transport-layer
@@ -105,8 +104,7 @@ func (r *RQLiteManager) Start(ctx context.Context) error {
 		go r.startOrphanedNodeRecovery(ctx) // C1 fix: recover nodes orphaned by failed voter changes
 	}
 
-	// Start child process watchdog to detect and recover from crashes
-	go r.startProcessWatchdog(ctx)
+	// Process watchdog is systemd Restart= on @index, not a child reaper.
 
 	// Start periodic RQLite backup loop (leader-only, self-checking)
 	go r.startBackupLoop(ctx)

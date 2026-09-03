@@ -21,7 +21,7 @@ func TestRqliteBaseURL(t *testing.T) {
 		dsn  string
 		want string
 	}{
-		{"empty defaults to localhost:5001", "", "http://localhost:5001"},
+		{"empty defaults to localhost:10100", "", "http://localhost:10100"},
 		{"simple URL", "http://10.0.0.1:10000", "http://10.0.0.1:10000"},
 		{"strips query params", "http://10.0.0.1:10000?foo=bar", "http://10.0.0.1:10000"},
 		{"strips trailing slash", "http://10.0.0.1:10000/", "http://10.0.0.1:10000"},

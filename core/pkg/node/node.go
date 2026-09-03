@@ -79,9 +79,8 @@ func (n *Node) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Start HTTP Gateway first (doesn't depend on other services)
-	if err := n.startHTTPGateway(ctx); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to start HTTP Gateway", zap.Error(err))
+	if err := n.startIndexWireGuard(ctx); err != nil {
+		return fmt.Errorf("failed to start index wireguard: %w", err)
 	}
 
 	// Start LibP2P host first (needed for cluster discovery)
@@ -96,9 +95,29 @@ func (n *Node) Start(ctx context.Context) error {
 		}
 	}
 
+	if err := n.startIndexStorage(ctx); err != nil {
+		return fmt.Errorf("failed to start index storage: %w", err)
+	}
+
 	// Start RQLite with cluster discovery
 	if err := n.startRQLite(ctx); err != nil {
 		return fmt.Errorf("failed to start RQLite: %w", err)
+	}
+
+	if err := n.startNameserver(ctx); err != nil {
+		return fmt.Errorf("failed to start nameserver: %w", err)
+	}
+
+	if err := n.startIndexPubsub(ctx); err != nil {
+		return fmt.Errorf("failed to start index pubsub: %w", err)
+	}
+
+	if err := n.startIndexGateway(ctx); err != nil {
+		return fmt.Errorf("failed to start index gateway: %w", err)
+	}
+
+	if err := n.startIndexEdge(ctx); err != nil {
+		return fmt.Errorf("failed to start index edge: %w", err)
 	}
 
 	// Sync WireGuard peers from RQLite (if WG is active on this node)

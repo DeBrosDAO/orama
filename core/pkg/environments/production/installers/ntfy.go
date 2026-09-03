@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // ntfy.go — feature #72. Self-hosted ntfy server installer.
@@ -52,14 +54,14 @@ const (
 
 	// NtfyListenPort is the localhost port ntfy binds to. Caddy reverse-
 	// proxies to it; exposed nowhere else.
-	NtfyListenPort = 8090
+	NtfyListenPort = constants.NtfyListenPort
 
-	ntfyBinaryPath   = "/usr/local/bin/ntfy"
-	ntfyConfigDir    = "/etc/ntfy"
-	ntfyConfigPath   = "/etc/ntfy/server.yml"
-	ntfyDataDir      = "/var/lib/ntfy"
-	ntfySystemdUnit  = "/etc/systemd/system/ntfy.service"
-	ntfyUser         = "ntfy"
+	ntfyBinaryPath  = "/usr/local/bin/ntfy"
+	ntfyConfigDir   = "/etc/ntfy"
+	ntfyConfigPath  = "/etc/ntfy/server.yml"
+	ntfyDataDir     = "/var/lib/ntfy"
+	ntfySystemdUnit = "/etc/systemd/system/ntfy.service"
+	ntfyUser        = "ntfy"
 )
 
 // NtfyInstaller installs and configures a self-hosted ntfy server.

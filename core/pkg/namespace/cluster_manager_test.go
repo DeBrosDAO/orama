@@ -36,6 +36,85 @@ func TestNewClusterManager(t *testing.T) {
 	}
 }
 
+func TestRQLiteMemberConfigs_singleNodeNoJoin(t *testing.T) {
+	nodes := []NodeCapacity{{NodeID: "n1", InternalIP: "10.0.0.1"}}
+	blocks := []*PortBlock{{RQLiteHTTPPort: 10000, RQLiteRaftPort: 10001}}
+	cfgs := rqliteMemberConfigs("solo", nodes, blocks)
+	if len(cfgs) != 1 {
+		t.Fatalf("len(cfgs) = %d, want 1", len(cfgs))
+	}
+	if !cfgs[0].IsLeader {
+		t.Error("N=1 must be leader")
+	}
+	if len(cfgs[0].JoinAddresses) != 0 {
+		t.Errorf("N=1 JoinAddresses = %v, want none", cfgs[0].JoinAddresses)
+	}
+}
+
+func TestRQLiteMemberConfigs_threeNodeJoin(t *testing.T) {
+	nodes := []NodeCapacity{
+		{NodeID: "n1", InternalIP: "10.0.0.1"},
+		{NodeID: "n2", InternalIP: "10.0.0.2"},
+		{NodeID: "n3", InternalIP: "10.0.0.3"},
+	}
+	blocks := []*PortBlock{
+		{RQLiteHTTPPort: 10000, RQLiteRaftPort: 10001},
+		{RQLiteHTTPPort: 10005, RQLiteRaftPort: 10006},
+		{RQLiteHTTPPort: 10010, RQLiteRaftPort: 10011},
+	}
+	cfgs := rqliteMemberConfigs("ns", nodes, blocks)
+	if len(cfgs) != 3 {
+		t.Fatalf("len(cfgs) = %d, want 3", len(cfgs))
+	}
+	if !cfgs[0].IsLeader || len(cfgs[0].JoinAddresses) != 0 {
+		t.Errorf("node 0: leader=%v join=%v", cfgs[0].IsLeader, cfgs[0].JoinAddresses)
+	}
+	wantJoin := "10.0.0.1:10001"
+	for i := 1; i < 3; i++ {
+		if cfgs[i].IsLeader {
+			t.Errorf("node %d must not be leader", i)
+		}
+		if len(cfgs[i].JoinAddresses) != 1 || cfgs[i].JoinAddresses[0] != wantJoin {
+			t.Errorf("node %d JoinAddresses = %v, want [%s]", i, cfgs[i].JoinAddresses, wantJoin)
+		}
+	}
+}
+
+func TestNewProvisioningClusterFrom_N1andN5(t *testing.T) {
+	one := newProvisioningClusterFrom(BlueprintTenantN(1), 1, "solo", "w")
+	if one.RQLiteNodeCount != 1 || one.OlricNodeCount != 1 || one.GatewayNodeCount != 1 {
+		t.Errorf("N=1 counts = %d/%d/%d, want 1/1/1", one.RQLiteNodeCount, one.OlricNodeCount, one.GatewayNodeCount)
+	}
+	five := newProvisioningClusterFrom(BlueprintTenantN(5), 1, "wide", "w")
+	if five.RQLiteNodeCount != 5 || five.OlricNodeCount != 5 || five.GatewayNodeCount != 5 {
+		t.Errorf("N=5 counts = %d/%d/%d, want 5/5/5", five.RQLiteNodeCount, five.OlricNodeCount, five.GatewayNodeCount)
+	}
+}
+
+func TestNewProvisioningCluster_serviceCountsFromBlueprint(t *testing.T) {
+	bp := BlueprintTenant()
+	rqliteN, olricN, gatewayN := bp.serviceNodeCounts()
+	cluster := newProvisioningCluster(1, "test-ns", "wallet")
+	if cluster.RQLiteNodeCount != rqliteN || cluster.OlricNodeCount != olricN || cluster.GatewayNodeCount != gatewayN {
+		t.Errorf("node counts = rqlite %d olric %d gateway %d, want %d, %d, %d",
+			cluster.RQLiteNodeCount, cluster.OlricNodeCount, cluster.GatewayNodeCount,
+			rqliteN, olricN, gatewayN)
+	}
+}
+
+func TestNewClusterManager_registersTenantDrivers(t *testing.T) {
+	manager := NewClusterManager(newMockRQLiteClient(), ClusterManagerConfig{
+		BaseDomain:  "orama-devnet.network",
+		BaseDataDir: "/tmp/test-namespaces",
+	}, zap.NewNop())
+
+	for _, name := range []ServiceName{ServiceRQLite, ServiceOlric, ServiceGateway} {
+		if _, ok := manager.drivers.lookup(name); !ok {
+			t.Errorf("missing tenant driver %s", name)
+		}
+	}
+}
+
 func TestNamespaceCluster_InitialState(t *testing.T) {
 	now := time.Now()
 
@@ -370,13 +449,13 @@ func TestClusterManager_MinimumNodeRequirement(t *testing.T) {
 func TestClusterManager_QuorumCalculation(t *testing.T) {
 	// For RQLite Raft consensus, quorum = (n/2) + 1
 	tests := []struct {
-		nodes         int
+		nodes          int
 		expectedQuorum int
-		canLoseNodes  int
+		canLoseNodes   int
 	}{
-		{3, 2, 1},  // 3 nodes: quorum=2, can lose 1
-		{5, 3, 2},  // 5 nodes: quorum=3, can lose 2
-		{7, 4, 3},  // 7 nodes: quorum=4, can lose 3
+		{3, 2, 1}, // 3 nodes: quorum=2, can lose 1
+		{5, 3, 2}, // 5 nodes: quorum=3, can lose 2
+		{7, 4, 3}, // 7 nodes: quorum=4, can lose 3
 	}
 
 	for _, tt := range tests {

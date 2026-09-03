@@ -336,10 +336,10 @@ and nothing is persisted to `preferences.yaml`. Each node:
 
 - Installs the ntfy binary at `/usr/local/bin/ntfy`.
 - Runs ntfy as a `ntfy` system user with restricted privileges.
-- Listens on `127.0.0.1:8090` (Caddy fronts it for public TLS).
+- Listens on `127.0.0.1:10109` (Caddy fronts it for public TLS).
 - Persists message cache at `/var/lib/ntfy/` (owned by the ntfy user).
 - Generates a Caddy reverse-proxy block for `push.<dnsZone>` →
-  localhost:8090, with Let's Encrypt cert via the orama ACME DNS-01
+  localhost:10109, with Let's Encrypt cert via the orama ACME DNS-01
   flow.
 
 ntfy only binds to localhost, so nodes that don't host a public

@@ -1,9 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -126,8 +128,8 @@ func DefaultConfig() *Config {
 			BackupInterval:    time.Hour * 24,     // Daily backups
 
 			// RQLite-specific configuration
-			RQLitePort:        5001,
-			RQLiteRaftPort:    7001,
+			RQLitePort:        constants.RQLiteHTTPPort,
+			RQLiteRaftPort:    constants.RQLiteRaftPort,
 			RQLiteJoinAddress: "", // Empty for first node (creates cluster)
 
 			// Dynamic discovery (always enabled)
@@ -136,13 +138,13 @@ func DefaultConfig() *Config {
 			MinClusterSize:      1,
 
 			// Olric cache configuration
-			OlricHTTPPort:       3320,
-			OlricMemberlistPort: 3322,
+			OlricHTTPPort:       constants.OlricHTTPPort,
+			OlricMemberlistPort: constants.OlricMemberlistPort,
 
 			// IPFS storage configuration
 			IPFS: IPFSConfig{
 				ClusterAPIURL:     "", // Empty = disabled
-				APIURL:            "http://localhost:4501",
+				APIURL:            fmt.Sprintf("http://localhost:%d", constants.IPFSAPIPort),
 				Timeout:           60 * time.Second,
 				ReplicationFactor: 3,
 				EnableEncryption:  true,
@@ -169,11 +171,11 @@ func DefaultConfig() *Config {
 			NodeName:          "default",
 			Routes:            make(map[string]RouteConfig),
 			ClientNamespace:   "default",
-			RQLiteDSN:         "http://localhost:5001",
-			OlricServers:      []string{"localhost:3320"},
+			RQLiteDSN:         fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort),
+			OlricServers:      []string{fmt.Sprintf("localhost:%d", constants.OlricHTTPPort)},
 			OlricTimeout:      10 * time.Second,
-			IPFSClusterAPIURL: "http://localhost:9094",
-			IPFSAPIURL:        "http://localhost:4501",
+			IPFSClusterAPIURL: fmt.Sprintf("http://localhost:%d", constants.IPFSClusterAPIPort),
+			IPFSAPIURL:        fmt.Sprintf("http://localhost:%d", constants.IPFSAPIPort),
 			IPFSTimeout:       60 * time.Second,
 		},
 	}

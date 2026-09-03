@@ -35,7 +35,7 @@ func newTestCaddyInstaller() *CaddyInstaller {
 func TestGenerateCaddyfile_DisablesHTTP2(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space")
 
 	if !strings.Contains(cf, "protocols h1\n") {
 		t.Errorf("Caddyfile must declare `protocols h1` (bug #249); got:\n%s", cf)
@@ -51,13 +51,13 @@ func TestGenerateCaddyfile_DisablesHTTP2(t *testing.T) {
 func TestGenerateCaddyfile_ContainsCanonicalReverseProxy(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:6001/v1/internal/acme", "")
+		"http://localhost:10104/v1/internal/acme", "")
 
 	// Sanity checks on the basics; cheap insurance against fat-finger edits.
 	for _, want := range []string{
 		"*.node1.dbrs.space {",
 		"node1.dbrs.space {",
-		"reverse_proxy localhost:6001",
+		"reverse_proxy localhost:10104",
 		"http://*.node1.dbrs.space",
 		":80 {",
 	} {
@@ -70,7 +70,7 @@ func TestGenerateCaddyfile_ContainsCanonicalReverseProxy(t *testing.T) {
 func TestGenerateCaddyfile_BaseDomainAddsSeparateBlocks(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space")
 
 	// Both node-domain and base-domain blocks should be present.
 	for _, want := range []string{
@@ -87,7 +87,7 @@ func TestGenerateCaddyfile_BaseDomainAddsSeparateBlocks(t *testing.T) {
 func TestGenerateCaddyfile_BaseDomainSameAsDomainOmitsDuplicates(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("dbrs.space", "admin@dbrs.space",
-		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space")
 
 	// When base == node domain, the duplicate base blocks must be skipped:
 	// one TLS `*.dbrs.space { ... }` block + one HTTP `http://*.dbrs.space {
@@ -107,7 +107,7 @@ func TestGenerateCaddyfile_BaseDomainSameAsDomainOmitsDuplicates(t *testing.T) {
 func TestGenerateCaddyfile_SNIRouterDisabledByteIdentical(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space")
 
 	if strings.Contains(cf, "https_port") {
 		t.Errorf("default Caddyfile must NOT contain `https_port` (SNI router off); got:\n%s", cf)
@@ -129,7 +129,7 @@ func TestGenerateCaddyfile_SNIRouterEnabledMovesHTTPSTo8443(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	ci.EnableSNIRouterMode()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:6001/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space")
 
 	want := fmt.Sprintf("https_port %d", CaddyHTTPSPortBehindSNI)
 	if !strings.Contains(cf, want) {

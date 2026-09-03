@@ -1,0 +1,39 @@
+[Unit]
+Description=Orama Namespace IPFS Cluster (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+After=orama-namespace-ipfs@%i.service
+Wants=orama-namespace-ipfs@%i.service
+Requires=orama-namespace-ipfs@%i.service
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ReadWritePaths=/opt/orama/.orama
+WorkingDirectory=/opt/orama
+EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs-cluster.env
+Environment=HOME=/opt/orama
+ExecStartPre=/bin/bash -c 'mkdir -p ${IPFS_CLUSTER_PATH} && chmod 700 ${IPFS_CLUSTER_PATH}'
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:10107/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'
+ExecStart=/usr/local/bin/ipfs-cluster-service daemon
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-ipfs-cluster-%i
+PrivateTmp=yes
+LimitNOFILE=65536
+TimeoutStopSec=30
+KillMode=mixed
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

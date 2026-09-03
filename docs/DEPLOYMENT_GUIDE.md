@@ -956,7 +956,7 @@ dig my-app.orama.network
 echo "127.0.0.1 my-app.orama.network" | sudo tee -a /etc/hosts
 
 # 4. Test with Host header
-curl -H "Host: my-app.orama.network" http://localhost:6001/
+curl -H "Host: my-app.orama.network" http://localhost:10104/
 ```
 
 ### Database Issues

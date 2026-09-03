@@ -4,7 +4,7 @@
 #
 # The `anon` apt package ships /etc/logrotate.d/anon with:
 #   postrotate: invoke-rc.d anon reload
-# But we use orama-anyone-relay, not the anon service. So the relay
+# But we use orama-anyone-client, not the anon service. So anon
 # never gets SIGHUP after rotation, keeps writing to the old fd, and
 # the new notices.log stays empty (causing false "bootstrap=0%" in inspector).
 #

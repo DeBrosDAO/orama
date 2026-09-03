@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -106,6 +105,9 @@ type ClusterManager struct {
 	// case is always treated as "well past the grace period" rather than
 	// accidentally gating tests that don't care about startup timing.
 	startedAt time.Time
+
+	// drivers is the tenant ServiceDriver registry (rqlite, olric, gateway).
+	drivers *driverRegistry
 }
 
 // NewClusterManager creates a new cluster manager
@@ -124,11 +126,11 @@ func NewClusterManager(
 	// Set IPFS defaults
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
 	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = "http://localhost:9094"
+		ipfsClusterAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSClusterAPIPort)
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSAPIPort)
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -139,7 +141,7 @@ func NewClusterManager(
 		ipfsReplicationFactor = 3
 	}
 
-	return &ClusterManager{
+	cm := &ClusterManager{
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   webrtcPortAllocator,
@@ -159,6 +161,8 @@ func NewClusterManager(
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
 	}
+	cm.initTenantDrivers()
+	return cm
 }
 
 // NewClusterManagerWithComponents creates a cluster manager with custom components (useful for testing)
@@ -173,11 +177,11 @@ func NewClusterManagerWithComponents(
 	// Set IPFS defaults (same as NewClusterManager)
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
 	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = "http://localhost:9094"
+		ipfsClusterAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSClusterAPIPort)
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSAPIPort)
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -188,7 +192,7 @@ func NewClusterManagerWithComponents(
 		ipfsReplicationFactor = 3
 	}
 
-	return &ClusterManager{
+	cm := &ClusterManager{
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   NewWebRTCPortAllocator(db, logger),
@@ -208,6 +212,8 @@ func NewClusterManagerWithComponents(
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
 	}
+	cm.initTenantDrivers()
+	return cm
 }
 
 // SetLocalNodeID sets this node's peer ID for local/remote dispatch during provisioning
@@ -251,8 +257,9 @@ func (cm *ClusterManager) spawnGatewayWithSystemd(ctx context.Context, cfg gatew
 	return cm.systemdSpawner.SpawnGateway(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 
-// ProvisionCluster provisions a new 3-node cluster for a namespace
-// This is an async operation - returns immediately with cluster ID for polling
+// ProvisionCluster provisions a tenant namespace cluster (BlueprintTenant:
+// 3 nodes, rqlite → olric → gateway, 5-port block). Signature is unchanged;
+// the HTTP path uses ProvisionNamespaceCluster for background provision.
 func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int, namespaceName, provisionedBy string) (*NamespaceCluster, error) {
 	// Check if already provisioning
 	cm.provisioningMu.Lock()
@@ -275,18 +282,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		zap.String("provisioned_by", provisionedBy),
 	)
 
-	// Create cluster record
-	cluster := &NamespaceCluster{
-		ID:               uuid.New().String(),
-		NamespaceID:      namespaceID,
-		NamespaceName:    namespaceName,
-		Status:           ClusterStatusProvisioning,
-		RQLiteNodeCount:  3,
-		OlricNodeCount:   3,
-		GatewayNodeCount: 3,
-		ProvisionedBy:    provisionedBy,
-		ProvisionedAt:    time.Now(),
-	}
+	cluster := newProvisioningCluster(namespaceID, namespaceName, provisionedBy)
 
 	// Insert cluster record
 	if err := cm.insertCluster(ctx, cluster); err != nil {
@@ -296,8 +292,8 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Log event
 	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
 
-	// Select 3 nodes for the cluster
-	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, 3)
+	bp := BlueprintTenant()
+	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, bp.SelectCount)
 	if err != nil {
 		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
 		return nil, fmt.Errorf("failed to select nodes: %w", err)
@@ -312,7 +308,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Allocate ports on each node
 	portBlocks := make([]*PortBlock, len(nodes))
 	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
+		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID, bp)
 		if err != nil {
 			// Rollback previous allocations
 			for j := 0; j < i; j++ {
@@ -326,34 +322,10 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	// Start RQLite instances (leader first, then followers)
-	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
+	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, nil, nil)
-		return nil, fmt.Errorf("failed to start RQLite cluster: %w", err)
-	}
-
-	// Start Olric instances
-	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
-	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, nil)
-		return nil, fmt.Errorf("failed to start Olric cluster: %w", err)
-	}
-
-	// Start Gateway instances (optional - may not be available in dev mode)
-	_, err = cm.startGatewayCluster(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-	if err != nil {
-		// Check if this is a "binary not found" error - if so, continue without gateways
-		if strings.Contains(err.Error(), "gateway binary not found") {
-			cm.logger.Warn("Skipping namespace gateway spawning (binary not available)",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Error(err),
-			)
-			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
-		} else {
-			cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-			return nil, fmt.Errorf("failed to start Gateway cluster: %w", err)
-		}
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
+		return nil, err
 	}
 
 	// Create DNS records for namespace gateway
@@ -380,20 +352,78 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	return cluster, nil
 }
 
+// newProvisioningCluster writes each service's replica count. Tenant
+// default is all members (3/3/3). The columns are independent so a later
+// blueprint can select 10 nodes and run rqlite on only 3 of them.
+func newProvisioningCluster(namespaceID int, namespaceName, provisionedBy string) *NamespaceCluster {
+	return newProvisioningClusterFrom(BlueprintTenant(), namespaceID, namespaceName, provisionedBy)
+}
+
+func newProvisioningClusterFrom(bp Blueprint, namespaceID int, namespaceName, provisionedBy string) *NamespaceCluster {
+	rqliteN, olricN, gatewayN := bp.serviceNodeCounts()
+	return &NamespaceCluster{
+		ID:               uuid.New().String(),
+		NamespaceID:      namespaceID,
+		NamespaceName:    namespaceName,
+		Status:           ClusterStatusProvisioning,
+		RQLiteNodeCount:  rqliteN,
+		OlricNodeCount:   olricN,
+		GatewayNodeCount: gatewayN,
+		ProvisionedBy:    provisionedBy,
+		ProvisionedAt:    time.Now(),
+	}
+}
+
+func (cm *ClusterManager) startTenantServices(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, bp Blueprint) (*provisionState, error) {
+	state := &provisionState{}
+	req := SpawnRequest{
+		Cluster:    cluster,
+		Nodes:      nodes,
+		PortBlocks: portBlocks,
+		State:      state,
+	}
+	if err := walkServices(ctx, bp, cm.drivers, req); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+// rqliteMemberConfigs builds per-node RQLite configs. Node 0 is the leader
+// with no -join. Followers join the leader's Raft address. A single node
+// (N=1) is leader-only.
+func rqliteMemberConfigs(namespace string, nodes []NodeCapacity, portBlocks []*PortBlock) []rqlite.InstanceConfig {
+	cfgs := make([]rqlite.InstanceConfig, len(nodes))
+	if len(nodes) == 0 {
+		return cfgs
+	}
+	leaderRaft := fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort)
+	for i, node := range nodes {
+		cfg := rqlite.InstanceConfig{
+			Namespace:      namespace,
+			NodeID:         node.NodeID,
+			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
+			RaftPort:       portBlocks[i].RQLiteRaftPort,
+			HTTPAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort),
+			RaftAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteRaftPort),
+			IsLeader:       i == 0,
+		}
+		if i > 0 {
+			cfg.JoinAddresses = []string{leaderRaft}
+		}
+		cfgs[i] = cfg
+	}
+	return cfgs
+}
+
 // startRQLiteCluster starts RQLite instances on all nodes (locally or remotely)
 func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*rqlite.Instance, error) {
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no nodes for RQLite cluster")
+	}
+	configs := rqliteMemberConfigs(cluster.NamespaceName, nodes, portBlocks)
 	instances := make([]*rqlite.Instance, len(nodes))
 
-	// Start leader first (node 0)
-	leaderCfg := rqlite.InstanceConfig{
-		Namespace:      cluster.NamespaceName,
-		NodeID:         nodes[0].NodeID,
-		HTTPPort:       portBlocks[0].RQLiteHTTPPort,
-		RaftPort:       portBlocks[0].RQLiteRaftPort,
-		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort),
-		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort),
-		IsLeader:       true,
-	}
+	leaderCfg := configs[0]
 
 	var err error
 	if nodes[0].NodeID == cm.localNodeID {
@@ -420,19 +450,9 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		cm.logger.Warn("Failed to record cluster node", zap.Error(err))
 	}
 
-	// Start followers
-	leaderRaftAddr := leaderCfg.RaftAdvAddress
+	// Start followers (none when N=1)
 	for i := 1; i < len(nodes); i++ {
-		followerCfg := rqlite.InstanceConfig{
-			Namespace:      cluster.NamespaceName,
-			NodeID:         nodes[i].NodeID,
-			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
-			RaftPort:       portBlocks[i].RQLiteRaftPort,
-			HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteHTTPPort),
-			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteRaftPort),
-			JoinAddresses:  []string{leaderRaftAddr},
-			IsLeader:       false,
-		}
+		followerCfg := configs[i]
 
 		var followerInstance *rqlite.Instance
 		if nodes[i].NodeID == cm.localNodeID {
@@ -745,7 +765,7 @@ type spawnResponse struct {
 
 // sendSpawnRequest sends a spawn/stop request to a remote node's spawn endpoint
 func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error) {
-	url := fmt.Sprintf("http://%s:6001/v1/internal/namespace/spawn", nodeIP)
+	url := fmt.Sprintf("http://%s:%d/v1/internal/namespace/spawn", nodeIP, IndexGatewayHTTPPort)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal spawn request: %w", err)
@@ -1164,6 +1184,9 @@ func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceNa
 	if namespaceName == "default" || namespaceName == "" {
 		return "", "default", false, nil
 	}
+	if IsReservedNamespace(namespaceName) {
+		return "", "reserved", false, nil
+	}
 
 	cluster, err := cm.GetClusterByNamespace(ctx, namespaceName)
 	if err != nil {
@@ -1212,18 +1235,7 @@ func (cm *ClusterManager) ProvisionNamespaceCluster(ctx context.Context, namespa
 	cm.provisioning[namespaceName] = true
 	cm.provisioningMu.Unlock()
 
-	// Create cluster record synchronously to get the ID
-	cluster := &NamespaceCluster{
-		ID:               uuid.New().String(),
-		NamespaceID:      namespaceID,
-		NamespaceName:    namespaceName,
-		Status:           ClusterStatusProvisioning,
-		RQLiteNodeCount:  3,
-		OlricNodeCount:   3,
-		GatewayNodeCount: 3,
-		ProvisionedBy:    wallet,
-		ProvisionedAt:    time.Now(),
-	}
+	cluster := newProvisioningCluster(namespaceID, namespaceName, wallet)
 
 	// Insert cluster record
 	if err := cm.insertCluster(ctx, cluster); err != nil {
@@ -1273,8 +1285,8 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		zap.String("provisioned_by", provisionedBy),
 	)
 
-	// Select 3 nodes for the cluster
-	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, 3)
+	bp := BlueprintTenant()
+	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, bp.SelectCount)
 	if err != nil {
 		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
 		cm.logger.Error("Failed to select nodes for cluster", zap.Error(err))
@@ -1290,7 +1302,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	// Allocate ports on each node
 	portBlocks := make([]*PortBlock, len(nodes))
 	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
+		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID, bp)
 		if err != nil {
 			// Rollback previous allocations
 			for j := 0; j < i; j++ {
@@ -1305,37 +1317,11 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	// Start RQLite instances (leader first, then followers)
-	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
+	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, nil, nil)
-		cm.logger.Error("Failed to start RQLite cluster", zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
+		cm.logger.Error("Failed to start cluster services", zap.Error(err))
 		return
-	}
-
-	// Start Olric instances
-	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
-	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, nil)
-		cm.logger.Error("Failed to start Olric cluster", zap.Error(err))
-		return
-	}
-
-	// Start Gateway instances (optional - may not be available in dev mode)
-	_, err = cm.startGatewayCluster(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-	if err != nil {
-		// Check if this is a "binary not found" error - if so, continue without gateways
-		if strings.Contains(err.Error(), "gateway binary not found") {
-			cm.logger.Warn("Skipping namespace gateway spawning (binary not available)",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Error(err),
-			)
-			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
-		} else {
-			cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-			cm.logger.Error("Failed to start Gateway cluster", zap.Error(err))
-			return
-		}
 	}
 
 	// Create DNS records for namespace gateway

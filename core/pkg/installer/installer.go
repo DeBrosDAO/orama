@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/installer/discovery"
 	"github.com/DeBrosOfficial/network/pkg/installer/steps"
 	"github.com/DeBrosOfficial/network/pkg/installer/validation"
@@ -200,7 +201,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 
 		// Auto-populate join address using port 7001 (standard RQLite Raft port)
 		// config.go will adjust to 7002 if HTTPS/SNI is enabled
-		m.config.JoinAddress = fmt.Sprintf("%s:7001", peerIP)
+		m.config.JoinAddress = fmt.Sprintf("%s:%d", peerIP, constants.RQLiteRaftPort)
 		m.config.Peers = []string{
 			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, disc.PeerID),
 		}

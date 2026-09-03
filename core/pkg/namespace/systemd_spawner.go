@@ -82,6 +82,10 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 	}
 
 	// Generate environment file
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = rqliteUnitDataDir(namespace, nodeID, s.namespaceBase, "")
+	}
 	envVars := map[string]string{
 		"HTTP_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort),
 		"RAFT_ADDR":     fmt.Sprintf("0.0.0.0:%d", cfg.RaftPort),
@@ -89,6 +93,11 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		"RAFT_ADV_ADDR": cfg.RaftAdvAddress,
 		"JOIN_ARGS":     joinArgs,
 		"NODE_ID":       nodeID,
+		"DATA_DIR":      dataDir,
+		"EXTRA_ARGS":    cfg.ExtraArgs,
+	}
+	if cfg.AuthFile != "" {
+		envVars["EXTRA_ARGS"] = strings.TrimSpace(envVars["EXTRA_ARGS"] + " -auth " + cfg.AuthFile)
 	}
 
 	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeRQLite, envVars); err != nil {
@@ -696,7 +705,7 @@ type TURNInstanceConfig struct {
 
 // acmeInternalEndpoint is the gateway's internal ACME endpoint that the
 // Caddyfile TURN-cert blocks point the orama DNS provider at.
-const acmeInternalEndpoint = "http://localhost:6001/v1/internal/acme"
+var acmeInternalEndpoint = fmt.Sprintf("http://localhost:%d/v1/internal/acme", IndexGatewayHTTPPort)
 
 // turnCertProvisionTimeout bounds how long a TURN spawn waits for Caddy to
 // provision a Let's Encrypt cert before falling back (primary domain) or

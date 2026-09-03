@@ -546,7 +546,7 @@ func (hc *HealthChecker) reconcileDeployments(ctx context.Context) {
 func (hc *HealthChecker) isRQLiteLeader(ctx context.Context) bool {
 	dsn := hc.rqliteDSN
 	if dsn == "" {
-		dsn = "http://localhost:5001"
+		dsn = "http://localhost:10100"
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}

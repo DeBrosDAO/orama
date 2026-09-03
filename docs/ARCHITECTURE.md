@@ -43,14 +43,14 @@ The system follows a clean, layered architecture with clear separation of concer
 │   RQLite     │  │    Olric     │  │     IPFS     │
 │  (Database)  │  │   (Cache)    │  │  (Storage)   │
 │              │  │              │  │              │
-│  Port 5001   │  │  Port 3320   │  │  Port 4501   │
+│  Port 10100  │  │  Port 10102  │  │  Port 10107  │
 └──────────────┘  └──────────────┘  └──────────────┘
 
         ┌─────────────────┐         ┌──────────────┐
         │  IPFS Cluster   │         │  Serverless  │
         │   (Pinning)     │         │    (WASM)    │
         │                 │         │              │
-        │  Port 9094      │         │   In-Process │
+        │  Port 10108     │         │   In-Process │
         └─────────────────┘         └──────────────┘
 
         ┌─────────────────┐
@@ -60,6 +60,22 @@ The system follows a clean, layered architecture with clear separation of concer
         │  Port 9050      │
         └─────────────────┘
 ```
+
+## Node process model
+
+Install enables **only** `orama-node.service`. That process is a supervisor: it does not embed the HTTP gateway or exec `rqlited`. On start it brings up host and control-plane units as `orama-namespace-<driver>@index` (and CoreDNS as `orama-namespace-coredns@nameserver` when the node was installed with `--nameserver`).
+
+| Plane | Membership | Units | Ports |
+|---|---|---|---|
+| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,anyone-client}@index`; optional `sni-router@index` | internals `10100–10109`; edge `80`/`443`/`51820`/`9050` |
+| **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
+| **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
+
+Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-provisionable.
+
+Drive nodes through the `orama` CLI (`orama node …`). Do not `systemctl start` leftover host units (`orama-ipfs`, `orama-olric`, `caddy.service`, `coredns.service`, `wg-quick@wg0`). Those files may still exist on disk for rollback; they are disabled. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
+
+RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`.
 
 ## Core Components
 
@@ -254,24 +270,16 @@ pkg/config/
 
 Integration with the Anyone Protocol for anonymous routing.
 
-**Modes:**
-
-| Mode | Purpose | Port | Rewards |
-|------|---------|------|---------|
-| Client | Route traffic anonymously | 9050 (SOCKS5) | No |
-| Relay | Provide bandwidth to network | 9001 (ORPort) + 9050 | Yes ($ANYONE) |
+Every node runs Anyone as a **client** only: a local SOCKS5 proxy on `127.0.0.1:9050` used by `/v1/proxy/anon` and the anonymity tunnel. Relay/ORPort operator mode is not installed.
 
 **Key Files:**
 - `pkg/anyoneproxy/socks.go` - SOCKS5 proxy client interface
 - `pkg/gateway/anon_proxy_handler.go` - Anonymous request proxy endpoint
 - `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy (bugboard #168)
-- `pkg/environments/production/installers/anyone_relay.go` - Relay installation
+- `pkg/environments/production/installers/anyone_installer.go` - Client binary + anonrc
 
 **Features:**
 - Smart routing (bypasses proxy for local/private addresses)
-- Automatic detection of existing Anyone installations
-- Migration support for existing relay operators
-- Exit relay mode with legal warnings
 
 **API Endpoints:**
 - `POST /v1/proxy/anon` - Route a single HTTP request through the Anyone network.
@@ -285,12 +293,6 @@ Integration with the Anyone Protocol for anonymous routing.
 
 Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
 app-runtime API key alone is refused.
-
-**Relay Requirements:**
-- Linux OS (Debian/Ubuntu)
-- 100 $ANYONE tokens in wallet
-- ORPort accessible from internet
-- Registration at dashboard.anyone.io
 
 ### 7. Shared Utilities
 
@@ -388,7 +390,7 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
-- **Internal services** (RQLite 5001/7001, IPFS 4001/4501, Olric 3320/3322, Gateway 6001) are only accessible via WireGuard or localhost
+- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
 - **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
 - **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh
 
@@ -410,9 +412,9 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 
 ### Process Isolation
 
-- **Dedicated user:** All services run as `orama` user (not root)
-- **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc.
-- **Capabilities:** Caddy and CoreDNS get `CAP_NET_BIND_SERVICE` for privileged ports
+- **Dedicated user:** Most units run as `orama`. WireGuard (`wg-quick`) runs as root. Anyone client runs as `debian-anon`. ntfy runs as `ntfy`.
+- **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc. `orama-node` omits `NoNewPrivileges` so it can `sudo systemctl` the `@` units.
+- **Capabilities:** Caddy, CoreDNS, and the SNI router get `CAP_NET_BIND_SERVICE` for privileged ports.
 
 See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
@@ -519,7 +521,7 @@ sudo orama node install --join https://example.com --token <TOKEN> \
 **Security:** Nodes join via single-use invite tokens over HTTPS. A WireGuard VPN tunnel
 is established before any cluster services start. All inter-node traffic (RQLite, IPFS,
 Olric, LibP2P) flows over the encrypted WireGuard mesh — no cluster ports are exposed
-publicly. **Never use `http://<ip>:6001`** for joining — port 6001 is internal-only and
+publicly. **Never use `http://<ip>:10104`** for joining — the index gateway is internal-only and
 blocked by UFW. Use the domain (`https://node1.example.com`) or, if DNS is not yet
 configured, use the IP over HTTP port 80 (`http://<ip>`) which goes through Caddy.
 

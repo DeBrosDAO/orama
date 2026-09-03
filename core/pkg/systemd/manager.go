@@ -14,12 +14,66 @@ import (
 type ServiceType string
 
 const (
-	ServiceTypeRQLite  ServiceType = "rqlite"
-	ServiceTypeOlric   ServiceType = "olric"
-	ServiceTypeGateway ServiceType = "gateway"
-	ServiceTypeSFU     ServiceType = "sfu"
-	ServiceTypeTURN    ServiceType = "turn"
+	ServiceTypeRQLite       ServiceType = "rqlite"
+	ServiceTypeOlric        ServiceType = "olric"
+	ServiceTypeGateway      ServiceType = "gateway"
+	ServiceTypeSFU          ServiceType = "sfu"
+	ServiceTypeTURN         ServiceType = "turn"
+	ServiceTypePubsub       ServiceType = "pubsub"
+	ServiceTypeWireGuard    ServiceType = "wireguard"
+	ServiceTypeIPFS         ServiceType = "ipfs"
+	ServiceTypeIPFSCluster  ServiceType = "ipfs-cluster"
+	ServiceTypeIPFSGC       ServiceType = "ipfs-gc"
+	ServiceTypeVault        ServiceType = "vault"
+	ServiceTypeCaddy        ServiceType = "caddy"
+	ServiceTypeNtfy         ServiceType = "ntfy"
+	ServiceTypeAnyoneClient ServiceType = "anyone-client"
+	ServiceTypeSNIRouter    ServiceType = "sni-router"
+	ServiceTypeCoreDNS      ServiceType = "coredns"
 )
+
+// LeftoverHostUnits are pre-factory host daemons. The installer still writes
+// them for rollback but never enables them. IndexSupervisor starts
+// orama-namespace-*@index instead, then disables these.
+var LeftoverHostUnits = []string{
+	"orama-ipfs.service",
+	"orama-ipfs-cluster.service",
+	"orama-ipfs-gc.timer",
+	"orama-olric.service",
+	"orama-vault.service",
+	"orama-anyone-client.service",
+	"caddy.service",
+	"ntfy.service",
+	"orama-sni-router.service",
+}
+
+// LeftoverWireGuardUnit is disabled (not stopped) so wg0 is never bounced.
+const LeftoverWireGuardUnit = "wg-quick@wg0.service"
+
+// LeftoverNameserverUnit is the pre-factory CoreDNS unit. Disabled on install;
+// NameserverSupervisor starts orama-namespace-coredns@nameserver instead.
+const LeftoverNameserverUnit = "coredns.service"
+
+// TemplateUnits are the orama-namespace-*@ templates copied to /etc/systemd/system.
+var TemplateUnits = []string{
+	"orama-namespace-rqlite@.service",
+	"orama-namespace-olric@.service",
+	"orama-namespace-gateway@.service",
+	"orama-namespace-sfu@.service",
+	"orama-namespace-turn@.service",
+	"orama-namespace-pubsub@.service",
+	"orama-namespace-wireguard@.service",
+	"orama-namespace-ipfs@.service",
+	"orama-namespace-ipfs-cluster@.service",
+	"orama-namespace-ipfs-gc@.service",
+	"orama-namespace-ipfs-gc@.timer",
+	"orama-namespace-vault@.service",
+	"orama-namespace-caddy@.service",
+	"orama-namespace-ntfy@.service",
+	"orama-namespace-anyone-client@.service",
+	"orama-namespace-sni-router@.service",
+	"orama-namespace-coredns@.service",
+}
 
 // Manager manages systemd units for namespace services
 type Manager struct {
@@ -49,6 +103,25 @@ func systemctl(args ...string) *exec.Cmd {
 		return exec.Command("systemctl", args...)
 	}
 	return exec.Command("sudo", append([]string{"systemctl"}, args...)...)
+}
+
+// StartTimer starts a namespace instantiated timer (e.g. ipfs-gc@index.timer).
+func (m *Manager) StartTimer(namespace string, serviceType ServiceType) error {
+	svcName := fmt.Sprintf("orama-namespace-%s@%s.timer", serviceType, namespace)
+	m.logger.Info("Starting systemd timer",
+		zap.String("timer", svcName),
+		zap.String("namespace", namespace))
+
+	cmd := systemctl("start", svcName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logger.Error("Failed to start timer",
+			zap.String("timer", svcName),
+			zap.Error(err),
+			zap.String("output", string(output)))
+		return fmt.Errorf("failed to start %s: %w; output: %s", svcName, err, string(output))
+	}
+	return nil
 }
 
 // StartService starts a namespace service
@@ -454,15 +527,7 @@ func (m *Manager) GenerateEnvFile(namespace, nodeID string, serviceType ServiceT
 func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 	m.logger.Info("Installing systemd template units", zap.String("source", sourceDir))
 
-	templates := []string{
-		"orama-namespace-rqlite@.service",
-		"orama-namespace-olric@.service",
-		"orama-namespace-gateway@.service",
-		"orama-namespace-sfu@.service",
-		"orama-namespace-turn@.service",
-	}
-
-	for _, template := range templates {
+	for _, template := range TemplateUnits {
 		source := filepath.Join(sourceDir, template)
 		dest := filepath.Join(m.systemdDir, template)
 

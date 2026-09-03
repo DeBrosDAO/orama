@@ -128,7 +128,7 @@ func normalizeEndpoints(in []string) []string {
 		}
 
 		// Simple check for port (doesn't handle all cases but good enough)
-		if !strings.Contains(s, ":5001") && !strings.Contains(s, ":500") && !strings.Contains(s, ":501") {
+		if !strings.Contains(s, ":10100") && !strings.Contains(s, ":5001") && !strings.Contains(s, ":500") && !strings.Contains(s, ":501") {
 			// Check if there's already a port after the host
 			parts := strings.Split(s, "://")
 			if len(parts) == 2 {
@@ -137,7 +137,7 @@ func normalizeEndpoints(in []string) []string {
 				colonCount := strings.Count(hostPart, ":")
 				if colonCount == 0 || (strings.Contains(hostPart, "[") && colonCount == 1) {
 					// No port found, add default
-					s = s + ":5001"
+					s = s + ":10100"
 				}
 			}
 		}

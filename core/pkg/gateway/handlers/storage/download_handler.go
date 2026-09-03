@@ -65,7 +65,7 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	// Get IPFS API URL from config
 	ipfsAPIURL := h.config.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:5001"
+		ipfsAPIURL = "http://localhost:10107"
 	}
 
 	h.logger.ComponentDebug(logging.ComponentGeneral, "Fetching content from IPFS",

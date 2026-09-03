@@ -14,6 +14,21 @@ func init() {
 
 const systemSub = "system"
 
+func serviceStatus(services map[string]string, names ...string) string {
+	last := "unknown"
+	for _, n := range names {
+		s, ok := services[n]
+		if !ok {
+			continue
+		}
+		if s == "active" {
+			return s
+		}
+		last = s
+	}
+	return last
+}
+
 // CheckSystem runs all system-level health checks.
 func CheckSystem(data *inspector.ClusterData) []inspector.CheckResult {
 	var results []inspector.CheckResult
@@ -33,15 +48,21 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	sys := nd.System
 	node := nd.Node.Name()
 
-	// 6.1 Core services active
-	coreServices := []string{"orama-node", "orama-olric", "orama-ipfs", "orama-ipfs-cluster"}
-	for _, svc := range coreServices {
-		status, ok := sys.Services[svc]
-		if !ok {
-			status = "unknown"
-		}
-		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc, "-", "_"))
-		name := fmt.Sprintf("%s service active", svc)
+	// 6.1 Core services active. Accept leftover host unit names during rolling upgrade.
+	type coreSvc struct {
+		id   string
+		keys []string
+	}
+	for _, svc := range []coreSvc{
+		{"orama-node", []string{"orama-node"}},
+		{"orama-olric", []string{"orama-namespace-olric@index", "orama-olric"}},
+		{"orama-ipfs", []string{"orama-namespace-ipfs@index", "orama-ipfs"}},
+		{"orama-ipfs-cluster", []string{"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster"}},
+		{"caddy", []string{"orama-namespace-caddy@index", "caddy"}},
+	} {
+		status := serviceStatus(sys.Services, svc.keys...)
+		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc.id, "-", "_"))
+		name := fmt.Sprintf("%s service active", svc.id)
 		if status == "active" {
 			r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.Critical))
 		} else {
@@ -50,47 +71,37 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.2 Anyone relay/client services (only check if installed, don't fail if absent)
-	for _, svc := range []string{"orama-anyone-relay", "orama-anyone-client"} {
-		status, ok := sys.Services[svc]
-		if !ok || status == "inactive" {
-			continue // not installed or intentionally stopped
-		}
-		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc, "-", "_"))
-		name := fmt.Sprintf("%s service active", svc)
-		if status == "active" {
+	// 6.2 Anyone client (only check if installed; leftover relay is handled in CheckAnyone)
+	anyoneStatus := serviceStatus(sys.Services, "orama-namespace-anyone-client@index", "orama-anyone-client")
+	if anyoneStatus != "unknown" && anyoneStatus != "inactive" {
+		id := "system.svc_orama_anyone_client"
+		name := "orama-anyone-client service active"
+		if anyoneStatus == "active" {
 			r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.High))
 		} else {
 			r = append(r, inspector.Fail(id, name, systemSub, node,
-				fmt.Sprintf("status=%s (should be active or uninstalled)", status), inspector.High))
+				fmt.Sprintf("status=%s (should be active or uninstalled)", anyoneStatus), inspector.High))
 		}
 	}
 
 	// 6.5 WireGuard service
-	if status, ok := sys.Services["wg-quick@wg0"]; ok {
+	if status := serviceStatus(sys.Services, "orama-namespace-wireguard@index", "wg-quick@wg0"); status != "unknown" {
 		if status == "active" {
-			r = append(r, inspector.Pass("system.svc_wg", "wg-quick@wg0 active", systemSub, node, "active", inspector.Critical))
+			r = append(r, inspector.Pass("system.svc_wg", "wireguard @index active", systemSub, node, "active", inspector.Critical))
 		} else {
-			r = append(r, inspector.Fail("system.svc_wg", "wg-quick@wg0 active", systemSub, node,
+			r = append(r, inspector.Fail("system.svc_wg", "wireguard @index active", systemSub, node,
 				fmt.Sprintf("status=%s", status), inspector.Critical))
 		}
 	}
 
-	// 6.3 Nameserver services (if applicable)
+	// 6.3 CoreDNS (nameserver nodes only). Caddy is index, checked above.
 	if nd.Node.IsNameserver() {
-		for _, svc := range []string{"coredns", "caddy"} {
-			status, ok := sys.Services[svc]
-			if !ok {
-				status = "unknown"
-			}
-			id := fmt.Sprintf("system.svc_%s", svc)
-			name := fmt.Sprintf("%s service active", svc)
-			if status == "active" {
-				r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.Critical))
-			} else {
-				r = append(r, inspector.Fail(id, name, systemSub, node,
-					fmt.Sprintf("status=%s", status), inspector.Critical))
-			}
+		status := serviceStatus(sys.Services, "orama-namespace-coredns@nameserver", "coredns")
+		if status == "active" {
+			r = append(r, inspector.Pass("system.svc_coredns", "coredns service active", systemSub, node, "active", inspector.Critical))
+		} else {
+			r = append(r, inspector.Fail("system.svc_coredns", "coredns service active", systemSub, node,
+				fmt.Sprintf("status=%s", status), inspector.Critical))
 		}
 	}
 
@@ -240,10 +251,10 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	// 6.25 Expected ports listening
 	expectedPorts := map[int]string{
-		5001: "RQLite HTTP",
-		3322: "Olric Memberlist",
-		6001: "Gateway",
-		4501: "IPFS API",
+		10100: "RQLite HTTP",
+		10103: "Olric Memberlist",
+		10104: "Gateway",
+		10107: "IPFS API",
 	}
 	for port, svcName := range expectedPorts {
 		found := false

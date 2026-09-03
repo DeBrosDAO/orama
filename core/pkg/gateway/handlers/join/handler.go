@@ -529,7 +529,7 @@ func (h *Handler) getMyPublicIP() (string, error) {
 // queryIPFSPeerInfo gets the local IPFS node's peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	resp, err := client.Post("http://localhost:10107/api/v0/id", "", nil)
 	if err != nil {
 		h.logger.Warn("failed to query IPFS peer info", zap.Error(err))
 		return PeerInfo{}
@@ -555,7 +555,7 @@ func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 // queryIPFSClusterPeerInfo gets the local IPFS Cluster peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:9094/id")
+	resp, err := client.Get("http://localhost:10108/id")
 	if err != nil {
 		h.logger.Warn("failed to query IPFS Cluster peer info", zap.Error(err))
 		return PeerInfo{}

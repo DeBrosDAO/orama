@@ -164,7 +164,7 @@ Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
 Environment=CLUSTER_SECRET=%[5]s
 ExecStartPre=/bin/bash -c 'mkdir -p %[2]s && chmod 700 %[2]s'
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:4501/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:10107/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'
 ExecStart=%[4]s daemon
 Restart=always
 RestartSec=5
@@ -275,9 +275,8 @@ func (ssg *SystemdServiceGenerator) GenerateNodeService() string {
 
 	return fmt.Sprintf(`[Unit]
 Description=Orama Network Node
-After=orama-ipfs-cluster.service orama-olric.service wg-quick@wg0.service
-Wants=orama-ipfs-cluster.service orama-olric.service
-Requires=wg-quick@wg0.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -413,44 +412,6 @@ WantedBy=multi-user.target
 `, logFile)
 }
 
-// GenerateAnyoneRelayService generates the Anyone Relay operator systemd unit
-// Uses debian-anon user created by the anon apt package
-func (ssg *SystemdServiceGenerator) GenerateAnyoneRelayService() string {
-	return `[Unit]
-Description=Anyone Relay (Orama Network)
-Documentation=https://docs.anyone.io
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=debian-anon
-Group=debian-anon
-ExecStart=/usr/bin/anon --agree-to-terms
-Restart=always
-RestartSec=10
-SyslogIdentifier=anon-relay
-
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=full
-ProtectHome=read-only
-PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=/var/lib/anon /var/log/anon /etc/anon
-LimitNOFILE=65536
-TimeoutStopSec=30
-KillMode=mixed
-MemoryMax=2G
-
-[Install]
-WantedBy=multi-user.target
-`
-}
-
 // GenerateCoreDNSService generates the CoreDNS systemd unit
 func (ssg *SystemdServiceGenerator) GenerateCoreDNSService() string {
 	return fmt.Sprintf(`[Unit]
@@ -497,7 +458,7 @@ ReadWritePaths=%[2]s /var/lib/caddy /etc/caddy
 Environment=XDG_DATA_HOME=/var/lib/caddy
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-ExecStartPre=/bin/sh -c 'for i in $$(seq 1 30); do curl -so /dev/null http://localhost:6001/health 2>/dev/null && exit 0; sleep 2; done; echo "Gateway not ready after 60s"; exit 1'
+ExecStartPre=/bin/sh -c 'for i in $$(seq 1 30); do curl -so /dev/null http://localhost:10104/health 2>/dev/null && exit 0; sleep 2; done; echo "Gateway not ready after 60s"; exit 1'
 ExecStartPre=/bin/sh -c 'DOMAIN=$$(grep -oP "^\*\\.\K[^ {]+" /etc/caddy/Caddyfile | tail -1); [ -z "$$DOMAIN" ] && exit 0; for i in $$(seq 1 30); do dig +short +timeout=2 "$$DOMAIN" SOA 2>/dev/null | grep -q . && exit 0; sleep 2; done; echo "DNS not resolving $$DOMAIN after 60s (ACME may fail)"; exit 0'
 TimeoutStartSec=180
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile

@@ -186,8 +186,8 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 	}
 
 	// Base domain records (e.g., dbrs.space, *.dbrs.space) — only for nameserver nodes.
-	// Only nameserver nodes run Caddy (HTTPS), so only they should appear in base domain
-	// round-robin. Non-nameserver nodes would cause TLS failures for clients.
+	// Apex/wildcard NS identity stays on nameserver nodes. Tenant TLS is
+	// orama-namespace-caddy@index on every node that hosts a gateway.
 	if baseDomain != "" && n.isNameserverNode(ctx) {
 		records = append(records,
 			struct{ fqdn, value string }{baseDomain + ".", ipAddress},
@@ -845,7 +845,7 @@ func (n *Node) isNameserverPreference() bool {
 }
 
 // isNameserverNode checks if this node has claimed a nameserver slot (ns1/ns2/ns3).
-// Only nameserver nodes run Caddy for HTTPS, so only they should be in base domain DNS.
+// Only nameserver nodes claim NS slots, so only they should be in base domain DNS.
 func (n *Node) isNameserverNode(ctx context.Context) bool {
 	if n.rqliteAdapter == nil {
 		return false

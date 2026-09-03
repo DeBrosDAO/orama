@@ -705,7 +705,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			Timeout: cfg.OlricTimeout,
 		}
 		if len(olricCfg.Servers) == 0 {
-			olricCfg.Servers = []string{"localhost:3320"}
+			olricCfg.Servers = []string{"localhost:10102"}
 		}
 		gw.startOlricReconnectLoop(olricCfg)
 	}

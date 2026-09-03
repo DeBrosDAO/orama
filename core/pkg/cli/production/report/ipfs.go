@@ -19,7 +19,9 @@ func collectIPFS() *IPFSReport {
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		if out, err := runCmd(ctx, "systemctl", "is-active", "orama-ipfs"); err == nil {
+		if out, err := runCmd(ctx, "systemctl", "is-active", "orama-namespace-ipfs@index"); err == nil && strings.TrimSpace(out) == "active" {
+			r.DaemonActive = true
+		} else if out, err := runCmd(ctx, "systemctl", "is-active", "orama-ipfs"); err == nil {
 			r.DaemonActive = strings.TrimSpace(out) == "active"
 		}
 	}
@@ -28,7 +30,9 @@ func collectIPFS() *IPFSReport {
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		if out, err := runCmd(ctx, "systemctl", "is-active", "orama-ipfs-cluster"); err == nil {
+		if out, err := runCmd(ctx, "systemctl", "is-active", "orama-namespace-ipfs-cluster@index"); err == nil && strings.TrimSpace(out) == "active" {
+			r.ClusterActive = true
+		} else if out, err := runCmd(ctx, "systemctl", "is-active", "orama-ipfs-cluster"); err == nil {
 			r.ClusterActive = strings.TrimSpace(out) == "active"
 		}
 	}

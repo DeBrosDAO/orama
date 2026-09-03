@@ -266,9 +266,6 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 
 	wg.Wait()
 
-	// Second pass: cross-node ORPort reachability (needs all nodes collected first)
-	collectAnyoneReachability(ctx, data)
-
 	data.Duration = time.Since(start)
 	return data
 }
@@ -327,15 +324,15 @@ func collectRQLite(ctx context.Context, node Node, verbose bool) *RQLiteData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-curl -sf http://localhost:5001/status 2>/dev/null || echo '{"error":"unreachable"}'
+curl -sf http://localhost:10100/status 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf 'http://localhost:5001/nodes?nonvoters' 2>/dev/null || echo '{"error":"unreachable"}'
+curl -sf 'http://localhost:10100/nodes?nonvoters' 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf http://localhost:5001/readyz 2>/dev/null; echo "EXIT:$?"
+curl -sf http://localhost:10100/readyz 2>/dev/null; echo "EXIT:$?"
 echo "$SEP"
-curl -sf http://localhost:5001/debug/vars 2>/dev/null || echo '{"error":"unreachable"}'
+curl -sf http://localhost:10100/debug/vars 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf -H 'Content-Type: application/json' 'http://localhost:5001/db/query?level=strong' -d '["SELECT 1"]' 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
+curl -sf -H 'Content-Type: application/json' 'http://localhost:10100/db/query?level=strong' -d '["SELECT 1"]' 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
 `
 
 	result := RunSSH(ctx, node, cmd)
@@ -569,17 +566,17 @@ func collectOlric(ctx context.Context, node Node) *OlricData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active orama-olric 2>/dev/null
+(systemctl is-active --quiet orama-namespace-olric@index && echo active) || (systemctl is-active --quiet orama-olric && echo active) || echo inactive
 echo "$SEP"
-ss -tlnp 2>/dev/null | grep ':3322 ' | head -1
+ss -tlnp 2>/dev/null | grep ':10103 ' | head -1
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
+journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
+journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
+journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
 echo "$SEP"
-systemctl show orama-olric --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show orama-namespace-olric@index --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
 ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 `
@@ -613,23 +610,23 @@ func collectIPFS(ctx context.Context, node Node) *IPFSData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active orama-ipfs 2>/dev/null
+(systemctl is-active --quiet orama-namespace-ipfs@index && echo active) || (systemctl is-active --quiet orama-ipfs && echo active) || echo inactive
 echo "$SEP"
-systemctl is-active orama-ipfs-cluster 2>/dev/null
+(systemctl is-active --quiet orama-namespace-ipfs-cluster@index && echo active) || (systemctl is-active --quiet orama-ipfs-cluster && echo active) || echo inactive
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
+curl -sf -X POST 'http://localhost:10107/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf --max-time 10 'http://localhost:9094/peers' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
+curl -sf --max-time 10 'http://localhost:10108/peers' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (curl -sf 'http://localhost:10108/id' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
+curl -sf -X POST 'http://localhost:10107/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
+curl -sf -X POST 'http://localhost:10107/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
+curl -sf 'http://localhost:10108/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
 test -f /opt/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
+curl -sf -X POST 'http://localhost:10107/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
 	res := RunSSH(ctx, node, cmd)
 	if !res.OK() && res.Stdout == "" {
@@ -684,7 +681,7 @@ func collectDNS(ctx context.Context, node Node) *DNSData {
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active coredns 2>/dev/null
+(systemctl is-active --quiet orama-namespace-coredns@nameserver && echo active) || (systemctl is-active --quiet coredns && echo active) || echo inactive
 echo "$SEP"
 systemctl is-active caddy 2>/dev/null
 echo "$SEP"
@@ -696,9 +693,9 @@ ss -tlnp 2>/dev/null | grep ':443 ' | head -1
 echo "$SEP"
 ps -C coredns -o rss= 2>/dev/null | head -1 || echo 0
 echo "$SEP"
-systemctl show coredns --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show orama-namespace-coredns@nameserver --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
-journalctl -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
+journalctl -u orama-namespace-coredns@nameserver -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
 echo "$SEP"
 test -f /etc/coredns/Corefile && echo yes || echo no
 echo "$SEP"
@@ -820,7 +817,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 ip -4 addr show wg0 2>/dev/null | grep -oP 'inet \K[0-9.]+'
 echo "$SEP"
-systemctl is-active wg-quick@wg0 2>/dev/null
+(systemctl is-active --quiet orama-namespace-wireguard@index && echo active) || (systemctl is-active --quiet wg-quick@wg0 && echo active) || echo inactive
 echo "$SEP"
 cat /sys/class/net/wg0/mtu 2>/dev/null || echo 0
 echo "$SEP"
@@ -889,9 +886,13 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	}
 
 	services := []string{
-		"orama-node", "orama-ipfs", "orama-ipfs-cluster",
-		"orama-olric", "orama-anyone-relay", "orama-anyone-client",
-		"coredns", "caddy", "wg-quick@wg0",
+		"orama-node",
+		"orama-namespace-ipfs@index", "orama-ipfs",
+		"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster",
+		"orama-namespace-olric@index", "orama-olric",
+		"orama-namespace-anyone-client@index", "orama-anyone-relay", "orama-anyone-client",
+		"orama-namespace-caddy@index", "orama-namespace-coredns@nameserver", "coredns", "caddy",
+		"orama-namespace-wireguard@index", "wg-quick@wg0",
 	}
 
 	cmd := `SEP="===INSPECTOR_SEP==="`
@@ -1156,7 +1157,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 systemctl is-active orama-anyone-relay 2>/dev/null || echo inactive
 echo "$SEP"
-systemctl is-active orama-anyone-client 2>/dev/null || echo inactive
+(systemctl is-active --quiet orama-namespace-anyone-client@index && echo active) || (systemctl is-active --quiet orama-anyone-client && echo active) || echo inactive
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep -q ':9001 ' && echo yes || echo no
 echo "$SEP"
@@ -1225,69 +1226,6 @@ grep -qP '^\s*ORPort\s' /etc/anon/anonrc 2>/dev/null && echo relay || echo clien
 	}
 
 	return data
-}
-
-// collectAnyoneReachability runs a second pass to check ORPort reachability across nodes.
-// Called after all nodes are collected so we know which nodes run relays.
-func collectAnyoneReachability(ctx context.Context, data *ClusterData) {
-	// Find all nodes running the relay (have ORPort listening)
-	var relayHosts []string
-	for host, nd := range data.Nodes {
-		if nd.Anyone != nil && nd.Anyone.RelayActive && nd.Anyone.ORPortListening {
-			relayHosts = append(relayHosts, host)
-		}
-	}
-
-	if len(relayHosts) == 0 {
-		return
-	}
-
-	// From each node, try to TCP connect to each relay's ORPort 9001
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, nd := range data.Nodes {
-		if nd.Anyone == nil || nd.Anyone.Mode == "client" {
-			continue // skip nodes without Anyone data or in client mode
-		}
-		wg.Add(1)
-		go func(nd *NodeData) {
-			defer wg.Done()
-
-			// Build commands to test TCP connectivity to each relay
-			var tcpCmds string
-			for _, relayHost := range relayHosts {
-				if relayHost == nd.Node.Host {
-					continue // skip self
-				}
-				tcpCmds += fmt.Sprintf(
-					`echo "ORPORT:%s:$(timeout 3 bash -c 'echo >/dev/tcp/%s/9001' 2>/dev/null && echo ok || echo fail)"
-`, relayHost, relayHost)
-			}
-
-			if tcpCmds == "" {
-				return
-			}
-
-			res := RunSSH(ctx, nd.Node, tcpCmds)
-			if res.Stdout == "" {
-				return
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			for _, line := range strings.Split(res.Stdout, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "ORPORT:") {
-					p := strings.SplitN(line, ":", 3)
-					if len(p) == 3 {
-						nd.Anyone.ORPortReachable[p[1]] = p[2] == "ok"
-					}
-				}
-			}
-		}(nd)
-	}
-	wg.Wait()
 }
 
 func collectNamespaces(ctx context.Context, node Node) []NamespaceData {

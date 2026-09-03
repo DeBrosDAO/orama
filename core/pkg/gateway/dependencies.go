@@ -143,7 +143,7 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	if len(cliCfg.DatabaseEndpoints) == 0 {
 		dsn := cfg.RQLiteDSN
 		if dsn == "" {
-			dsn = "http://localhost:5001"
+			dsn = "http://localhost:10100"
 		}
 		dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
 		cliCfg.DatabaseEndpoints = []string{dsn}
@@ -193,7 +193,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")
 	dsn := cfg.RQLiteDSN
 	if dsn == "" {
-		dsn = "http://localhost:5001"
+		dsn = "http://localhost:10100"
 	}
 
 	// Inject basic auth credentials into DSN if available
@@ -389,7 +389,7 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 				zap.Strings("servers", olricServers))
 		} else {
 			// Fallback to localhost for local development
-			olricServers = []string{"localhost:3320"}
+			olricServers = []string{"localhost:10102"}
 			logger.ComponentInfo(logging.ComponentGeneral, "No Olric servers discovered, using localhost fallback")
 		}
 	} else {
@@ -478,15 +478,15 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 				zap.Bool("encryption_enabled", ipfsEnableEncryption))
 		} else {
 			// Fallback to localhost defaults
-			ipfsClusterURL = "http://localhost:9094"
-			ipfsAPIURL = "http://localhost:5001"
+			ipfsClusterURL = "http://localhost:10108"
+			ipfsAPIURL = "http://localhost:10107"
 			ipfsEnableEncryption = true // Default to true
 			logger.ComponentInfo(logging.ComponentGeneral, "No IPFS config found in node configs, using localhost defaults")
 		}
 	}
 
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:5001"
+		ipfsAPIURL = "http://localhost:10107"
 	}
 	if ipfsTimeout == 0 {
 		ipfsTimeout = 60 * time.Second
@@ -593,7 +593,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	}
 
 	// Get pubsub adapter from client for serverless functions
-	var pubsubAdapter *pubsub.ClientAdapter
+	var pubsubAdapter pubsub.Bus
 	if networkClient != nil {
 		if concreteClient, ok := networkClient.(*client.Client); ok {
 			pubsubAdapter = concreteClient.PubSubAdapter()
@@ -987,7 +987,7 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 			}
 
 			if result.apiURL == "" {
-				result.apiURL = "http://localhost:5001"
+				result.apiURL = "http://localhost:10107"
 			}
 			if result.timeout == 0 {
 				result.timeout = 60 * time.Second
