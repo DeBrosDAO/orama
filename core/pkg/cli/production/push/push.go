@@ -160,11 +160,16 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 	// ALL node keys — which the target's sshd rejects with "too many
 	// authentication failures" once the offered-key count exceeds MaxAuthTries
 	// (default 6). Keys are chmod 600 and removed (defer) when the fanout ends.
-	const fanoutKeyDir = "/tmp/.orama-fanout-keys"
+	const fanoutKeyDir = "/dev/shm/.orama-fanout-keys"
 	if err := remotessh.RunSSHStreaming(hub, "rm -rf "+fanoutKeyDir+" && mkdir -p "+fanoutKeyDir+" && chmod 700 "+fanoutKeyDir); err != nil {
 		return fmt.Errorf("prepare fanout key dir on hub: %w", err)
 	}
-	defer func() { _ = remotessh.RunSSHStreaming(hub, "rm -rf "+fanoutKeyDir) }()
+	defer func() {
+		wipe := "for f in " + fanoutKeyDir + "/*; do [ -f \"$f\" ] && dd if=/dev/zero of=\"$f\" bs=8192 count=1 conv=notrunc status=none 2>/dev/null; done; rm -rf " + fanoutKeyDir
+		if err := remotessh.RunSSHStreaming(hub, wipe); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to wipe fanout keys on hub: %v\n", err)
+		}
+	}()
 	for _, t := range remaining {
 		dst := fanoutKeyDir + "/" + t.Host
 		if err := remotessh.UploadFile(hub, t.SSHKey, dst); err != nil {

@@ -351,7 +351,6 @@ func backupDatabase(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\n✅ Backup successful!\n\n")
 	fmt.Printf("Database:   %s\n", result["database_name"])
 	fmt.Printf("Backup CID: %s\n", result["backup_cid"])
-	fmt.Printf("IPFS URL:   %s\n", result["ipfs_url"])
 	fmt.Printf("Backed up:  %s\n", result["backed_up_at"])
 
 	return nil

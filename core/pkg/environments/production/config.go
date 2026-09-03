@@ -379,8 +379,12 @@ func (cg *ConfigGenerator) readExistingWebRTC() *existingWebRTC {
 // and correct ownership, making it durable across future config regenerations.
 func (cg *ConfigGenerator) persistTURNSecret(secret string) error {
 	secretPath := filepath.Join(cg.oramaDir, "secrets", "turn-secret")
-	if err := os.MkdirAll(filepath.Dir(secretPath), 0700); err != nil {
+	secretDir := filepath.Dir(secretPath)
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
 		return fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return fmt.Errorf("failed to persist TURN secret: %w", err)

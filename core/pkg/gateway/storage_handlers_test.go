@@ -108,7 +108,6 @@ func newTestGatewayWithIPFS(t *testing.T, ipfsClient ipfs.IPFSClient) *Gateway {
 		ListenAddr:            ":6001",
 		ClientNamespace:       "test",
 		IPFSReplicationFactor: 3,
-		IPFSEnableEncryption:  true,
 		IPFSAPIURL:            "http://localhost:5001",
 	}
 
