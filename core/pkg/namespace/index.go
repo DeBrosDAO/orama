@@ -85,7 +85,7 @@ func (s *IndexSupervisor) CoreRQLiteDir() string {
 
 // EnsureRQLite writes @index env (DATA_DIR = existing core raft) and starts the unit.
 // If requireExisting is true, an empty dir is refused.
-func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, httpAdv, raftAdv, joinAddress, extraArgs string, requireExisting bool) error {
+func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, peerID, httpAdv, raftAdv, joinAddress, extraArgs string, requireExisting bool) error {
 	dataDir := s.CoreRQLiteDir()
 	if requireExisting {
 		if err := RefuseEmptyAdopt(dataDir); err != nil {
@@ -97,6 +97,21 @@ func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, httpAdv, raf
 	if !HasExistingRaft(dataDir) && joinAddress != "" {
 		joinArgs = "-join " + joinAddress
 	}
+
+	// Which raft id this node starts under. Resolved here because it is a
+	// property of the data directory, not of the caller, and getting it wrong
+	// in either direction creates a duplicate voter.
+	identity, err := rqlite.ResolveRaftIdentity(dataDir, peerID, raftAdv, HasExistingRaft(dataDir))
+	if err != nil {
+		return fmt.Errorf("resolve index raft identity: %w", err)
+	}
+	if identity.NodeID != "" {
+		extraArgs = strings.TrimSpace(extraArgs + " -node-id " + identity.NodeID)
+	}
+	s.logger.Info("Index RQLite raft identity",
+		zap.String("node_id", identity.NodeID),
+		zap.Bool("stable", identity.Migrated),
+		zap.String("raft_adv_addr", raftAdv))
 
 	cfg := rqlite.InstanceConfig{
 		Namespace:      BlueprintNameIndex,

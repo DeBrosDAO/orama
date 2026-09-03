@@ -304,10 +304,11 @@ a firewall change, a WireGuard key rotation:
    `node_health_events` within the last 30 minutes, with no later `recovered`.
 
 Only the third is independent of this node. It is also the one that has to
-cross an identifier boundary: a raft node id is the raft advertise address,
-while the health monitor keys on libp2p peer ids, so the candidate is resolved
-through `dns_nodes.internal_ip` before the corroboration query. Comparing the
-two id spaces directly matches nothing, silently.
+cross an identifier boundary: the health monitor keys on libp2p peer ids, while
+a raft node id is the peer id only after migration and the raft advertise
+address before it, so the candidate is resolved through `dns_nodes.internal_ip`
+before the corroboration query. Comparing the two id spaces directly matches
+nothing, silently.
 
 The removal is refused unless the reachable voters still meet quorum afterwards,
 the raft term has been stable for three ticks, and at most one member changes
@@ -316,8 +317,8 @@ per tick.
 An eviction writes a tombstone to `raft_evicted_nodes`. Without one,
 `recoverOrphanedNodes` re-added the node within five minutes — it re-adds every
 discovery peer absent from the raft configuration, so the eviction was undone
-automatically. (Removals made by hand still get no tombstone and are still
-undone; wiring the CLI and the decommission path to write one is chg-303.)
+automatically. `orama node decommission` and `orama node migrate-raft-id` both write one, so a
+removal made by hand is no longer undone within five minutes.
 
 Tombstones expire after 24 hours, and that expiry is load-bearing rather than
 housekeeping: an evicted node is the one node that *cannot* clear its own
@@ -338,18 +339,89 @@ remove-then-rejoin, which left the node outside the configuration for up to 59
 seconds while it retried with backoff; a leader change inside that window
 orphaned it, and the rollback path could fail too.
 
-**RQLite identity is still the raft address.** rqlited is not given a
-`-node-id`, so its raft node id defaults to the raft advertise address. That
-makes identity and routing the same value: change a node's WireGuard IP and the
-same machine becomes a second member, while the old entry stays and keeps
-counting toward quorum. Decoupling the two needs a rolling re-join per node and
-something able to retire the stale entry, so it is sequenced after the
-membership work (bugboard chg-302, bug-301, chg-303).
+**RQLite identity is the libp2p peer id, once migrated.** rqlited defaults its
+raft node id to the raft advertise address, which made identity and routing the
+same value: change a node's WireGuard IP and the same machine became a second
+member while the old entry stayed, counting toward quorum. Two such events on a
+five-voter cluster leave quorum at 3-of-7 with five live voters.
 
-Two consequences are already handled. Advertised addresses are always rewritten
-to a WireGuard address — selection used to prefer a *public* IP and fall back to
-the overlay, which replaced a reachable raft endpoint with one UFW blocks; with
-no overlay candidate it now refuses to rewrite rather than substituting a public
+The id a node starts under is recorded in `raft-node-id`, beside `raft.db` in
+its rqlite data directory, and that file is authoritative — it is what rqlite's
+persisted configuration has this node under, and starting on anything else
+creates a second member. Three cases, distinguished by what is on disk:
+
+| marker | raft state | id used |
+|---|---|---|
+| present | either | whatever it records |
+| absent | none | the libp2p peer id (a fresh node) |
+| absent | present | none passed; rqlite keeps defaulting to the address |
+
+So a fresh node is on a stable id from its first boot, and an existing node
+keeps the id it is registered under until it is migrated deliberately. rqlite
+cannot rename a member in place — the only supported paths are remove-then-rejoin
+and the `peers.json` disaster procedure — so an upgrade that simply started
+passing `-node-id` would make every node join as a NEW member and abandon its
+old id as an unreachable voter: the exact failure this prevents, applied
+fleet-wide at once.
+
+`orama node migrate-raft-id` performs the transition, one node at a time. It
+first refuses to start unless **every** node in the environment has booted on a
+binary that understands stable ids: an old-binary leader cannot see a migrated
+node's peer-id member, so it re-adds it as a duplicate every five minutes.
+Finish the rolling upgrade everywhere, then migrate.
+
+Per node: check the quorum arithmetic, remove the old id from the raft
+configuration, tombstone it so orphan recovery does not put it back, discard the
+node's local raft state, rewrite its unit's env file with the new `-node-id` and
+a `-join` pointing at a survivor, restart it, and wait for it to come back as a
+**reachable voter** before touching the next one. The env rewrite is not
+optional: `-node-id` and `-join` reach rqlited only through that file, and a
+wiped data directory with neither makes the node bootstrap a solo cluster on an
+empty database and elect itself leader.
+
+It is safe to re-run. Nodes already on a stable id are skipped, and a node a
+previous run removed but did not finish is recognised from its own marker and
+resumed rather than treated as un-migratable.
+
+Identity and routing are separate at every point they meet, and each of these
+was a way to mint a duplicate voter or lose a safety check once ids stopped
+being addresses:
+
+- **Orphan recovery** matches a peer against the configuration by id *and* by
+  address, and passes the two to `POST /join` as the distinct values they are.
+  They used to be the same variable, so re-adding a node whose address had
+  changed created a second member rather than moving the existing one.
+- **`/nodes` decoding** reads the address from `addr`, which is the field rqlite
+  actually sends. It was decoded as `address`, so it was silently always empty
+  and every consumer that wanted an address reached for the id instead.
+- **Dead-voter eviction** looks the candidate up in discovery, and resolves its
+  peer id, by address. Given the id, neither could match a migrated node, so
+  eviction would have become a permanent no-op.
+- **The voter set** is computed over addresses at all three call sites. One
+  computed it over ids, so the sites disagreed and fought: one promoting a node
+  the next demoted, indefinitely.
+- **`peers.json`** carries each peer's announced id. Writing addresses there
+  would revert every migrated node in one step, because rqlite resets the raft
+  configuration to that file.
+- **Self-detection** matches on the raft address through one helper. Eight sites
+  compared the announced id against this node's address, which works only while
+  an id is an address; afterwards a node stops recognising itself and starts
+  counting itself as a peer.
+- **`orama node decommission`** resolves the member's id from the configuration
+  before removing it. Removing by address matched nothing on a migrated cluster
+  and reported success, leaving the retired machine a configured voter for ever.
+
+Two rules govern removal. `SafeToRemoveVoter` is the eviction rule and refuses a
+member that is still answering — that is a demotion, not an eviction.
+`SafeToRemoveMember` is the quorum arithmetic alone, for a decommission or a
+migration, which remove a live member on purpose. `RaftMember` and
+`RQLiteNodeMetadata.NodeID` carry the id as an opaque identifier that must not
+be dialled.
+
+Two related consequences. Advertised addresses are always rewritten to a
+WireGuard address — selection used to prefer a *public* IP and fall back to the
+overlay, which replaced a reachable raft endpoint with one UFW blocks; with no
+overlay candidate it now refuses to rewrite rather than substituting a public
 IP. And a node that finds itself in the raft configuration under a different id
 logs it at Error on every start instead of discarding the result.
 

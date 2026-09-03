@@ -23,6 +23,7 @@ func init() {
 	Cmd.AddCommand(statusCmd)
 	Cmd.AddCommand(logsCmd)
 	Cmd.AddCommand(inviteCmd)
+	Cmd.AddCommand(migrateRaftIDCmd)
 	Cmd.AddCommand(migrateCmd)
 	Cmd.AddCommand(doctorCmd)
 	Cmd.AddCommand(reportCmd)

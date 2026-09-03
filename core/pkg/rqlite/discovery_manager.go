@@ -55,15 +55,20 @@ func (r *RQLiteManager) validateNodeID() error {
 			return nil
 		}
 
-		expectedID := r.discoverConfig.RaftAdvAddress
-		if expectedID == "" || len(nodes) == 0 {
+		raftAddr := r.discoverConfig.RaftAdvAddress
+		if raftAddr == "" || len(nodes) == 0 {
 			return nil
 		}
 
+		// What this node BELIEVES it is registered as, which after the stable-id
+		// migration is its peer id rather than its address.
+		expectedID := r.RaftNodeID()
+
 		for _, node := range nodes {
-			if node.Address == expectedID {
+			if node.Addr == raftAddr {
 				if node.ID != expectedID {
-					return fmt.Errorf("%w: raft knows %s as id %q", ErrNodeIDMismatch, node.Address, node.ID)
+					return fmt.Errorf("%w: raft knows %s as id %q, but this node starts as %q",
+						ErrNodeIDMismatch, node.Addr, node.ID, expectedID)
 				}
 				return nil
 			}

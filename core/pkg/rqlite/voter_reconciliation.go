@@ -187,20 +187,45 @@ func (r *RQLiteManager) recoverOrphanedNodes(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	raftNodeSet := make(map[string]bool, len(raftNodes))
+	// Keyed by raft id AND by raft address. The id is the correct key —
+	// rqlite's /nodes is keyed by it, and it is what a join adds or replaces —
+	// but during the migration to stable ids a peer may still announce itself
+	// under its address while the cluster already holds it under its peer id,
+	// or the reverse. Matching either means a node is never mistaken for
+	// missing and re-added a second time under its other name, which is exactly
+	// the duplicate-voter failure stable identity exists to prevent.
+	raftNodeSet := make(map[string]bool, len(raftNodes)*2)
 	for _, n := range raftNodes {
 		raftNodeSet[n.ID] = true
+		if n.Addr != "" {
+			raftNodeSet[n.Addr] = true
+		}
 	}
 
 	// Get all discovery peers
 	discoveryPeers := r.discoveryService.GetAllPeers()
 
+	selfID := r.RaftNodeID()
+
 	for _, peer := range discoveryPeers {
-		if peer.RaftAddress == r.discoverConfig.RaftAdvAddress {
+		// A peer's raft id is its identity; its address is where to reach it.
+		// Fall back to the address only for a peer whose announcement carries
+		// no id, which is what a node on an older binary sends.
+		peerNodeID := peer.NodeID
+		if peerNodeID == "" {
+			peerNodeID = peer.RaftAddress
+		}
+
+		if peerNodeID == selfID || peer.RaftAddress == r.discoverConfig.RaftAdvAddress {
 			continue // skip self
 		}
-		if raftNodeSet[peer.RaftAddress] {
-			continue // already in cluster
+		if raftNodeSet[peerNodeID] || raftNodeSet[peer.RaftAddress] {
+			continue // already in cluster, under either name
+		}
+		if _, evicted := tombstoned[peerNodeID]; evicted {
+			r.logger.Debug("Node is absent from raft because it was evicted on purpose; leaving it out",
+				zap.String("node_id", peerNodeID))
+			continue
 		}
 		if _, evicted := tombstoned[peer.RaftAddress]; evicted {
 			r.logger.Debug("Node is absent from raft because it was evicted on purpose; leaving it out",
@@ -221,14 +246,19 @@ func (r *RQLiteManager) recoverOrphanedNodes(ctx context.Context) {
 		voters := computeVoterSet(raftAddrs, MaxDefaultVoters)
 		_, shouldBeVoter := voters[peer.RaftAddress]
 
-		if err := r.joinClusterNode(peer.RaftAddress, peer.RaftAddress, shouldBeVoter); err != nil {
+		// id and address are passed separately. They used to be the same value,
+		// so re-adding a node whose address had changed created a SECOND member
+		// rather than moving the existing one.
+		if err := r.joinClusterNode(peerNodeID, peer.RaftAddress, shouldBeVoter); err != nil {
 			r.logger.Error("Failed to re-add orphaned node",
-				zap.String("node", peer.RaftAddress),
+				zap.String("node_id", peerNodeID),
+				zap.String("raft_addr", peer.RaftAddress),
 				zap.Bool("voter", shouldBeVoter),
 				zap.Error(err))
 		} else {
 			r.logger.Info("Successfully re-added orphaned node to Raft cluster",
-				zap.String("node", peer.RaftAddress),
+				zap.String("node_id", peerNodeID),
+				zap.String("raft_addr", peer.RaftAddress),
 				zap.Bool("voter", shouldBeVoter))
 		}
 	}
@@ -321,9 +351,19 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 	}
 
 	// 5. Compute desired voter set from raft addresses
+	// Addresses, not ids. computeVoterSet orders candidates by overlay IP, and
+	// the other two call sites feed it addresses; feeding it ids here made the
+	// three disagree the moment ids stopped being addresses, so orphan recovery
+	// would promote a node this pass then demoted, for ever.
 	raftAddrs := make([]string, 0, len(nodes))
+	addrByID := make(map[string]string, len(nodes))
 	for _, n := range nodes {
-		raftAddrs = append(raftAddrs, n.ID)
+		addr := n.Addr
+		if addr == "" {
+			addr = n.ID
+		}
+		raftAddrs = append(raftAddrs, addr)
+		addrByID[n.ID] = addr
 	}
 	desiredVoters := computeVoterSet(raftAddrs, MaxDefaultVoters)
 
@@ -337,7 +377,8 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 
 	// 7. Find one mismatch to fix (one change per cycle)
 	for _, n := range nodes {
-		_, shouldBeVoter := desiredVoters[n.ID]
+		// The voter set is keyed by address; the action is taken on the id.
+		_, shouldBeVoter := desiredVoters[addrByID[n.ID]]
 
 		// Check cooldown
 		reconciler.mu.Lock()
@@ -467,6 +508,23 @@ func (r *RQLiteManager) setVoterInPlace(nodeID string, voter bool) error {
 	return nil
 }
 
+// decodeNodes reads an rqlite /nodes response in either the ver=2 wrapped shape
+// or the plain array. Split out so the shapes can be tested without a server.
+func decodeNodes(body []byte) (RQLiteNodes, error) {
+	var wrapped struct {
+		Nodes RQLiteNodes `json:"nodes"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Nodes != nil {
+		return wrapped.Nodes, nil
+	}
+
+	var nodes RQLiteNodes
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return nil, fmt.Errorf("parse nodes: %w", err)
+	}
+	return nodes, nil
+}
+
 // getAllClusterNodes queries /nodes?nonvoters&ver=2 to get all cluster members
 // including non-voters.
 func (r *RQLiteManager) getAllClusterNodes() (RQLiteNodes, error) {
@@ -488,20 +546,7 @@ func (r *RQLiteManager) getAllClusterNodes() (RQLiteNodes, error) {
 		return nil, fmt.Errorf("nodes returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Try ver=2 wrapped format first
-	var wrapped struct {
-		Nodes RQLiteNodes `json:"nodes"`
-	}
-	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Nodes != nil {
-		return wrapped.Nodes, nil
-	}
-
-	// Fall back to plain array
-	var nodes RQLiteNodes
-	if err := json.Unmarshal(body, &nodes); err != nil {
-		return nil, fmt.Errorf("parse nodes: %w", err)
-	}
-	return nodes, nil
+	return decodeNodes(body)
 }
 
 // removeClusterNode sends DELETE /remove to remove a node from the Raft cluster.

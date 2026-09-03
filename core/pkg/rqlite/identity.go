@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/discovery"
+	"go.uber.org/zap"
 )
 
 // Raft node identity.
@@ -35,6 +38,10 @@ import (
 // wiped and backed up together.
 const raftIDMarker = "raft-node-id"
 
+// RaftIDMarkerName is the marker's filename, for tooling that has to write it
+// on a node from the outside (the one-time id migration).
+const RaftIDMarkerName = raftIDMarker
+
 // RaftIdentity is the decision about which id a node starts rqlited with.
 type RaftIdentity struct {
 	// NodeID is the id to pass as -node-id. Empty means "pass nothing and let
@@ -46,7 +53,7 @@ type RaftIdentity struct {
 	Migrated bool
 }
 
-// resolveRaftIdentity decides which raft id this node must start with, and
+// ResolveRaftIdentity decides which raft id this node must start with, and
 // records it.
 //
 // The three cases are distinguished by what is on disk, and the marker is
@@ -60,14 +67,14 @@ type RaftIdentity struct {
 //     contradict, so it starts life on the stable id.
 //   - No marker, raft state present: a node from before this scheme. Its id is
 //     its raft advertise address. It keeps it until migrated.
-func resolveRaftIdentity(dataDir, peerID, raftAdvAddress string, hasState bool) (RaftIdentity, error) {
+func ResolveRaftIdentity(dataDir, peerID, raftAdvAddress string, hasState bool) (RaftIdentity, error) {
 	if peerID == "" {
 		// Nothing to be stable about. Rather than invent an id, fall through to
 		// rqlite's default so behaviour is unchanged from before this existed.
 		return RaftIdentity{}, nil
 	}
 
-	recorded, err := readRaftIDMarker(dataDir)
+	recorded, err := ReadRaftIDMarker(dataDir)
 	if err != nil {
 		return RaftIdentity{}, err
 	}
@@ -80,21 +87,21 @@ func resolveRaftIdentity(dataDir, peerID, raftAdvAddress string, hasState bool) 
 		// Record what rqlite is already using, so the migration has something
 		// concrete to remove rather than having to re-derive it later from an
 		// address that may by then have changed.
-		if err := writeRaftIDMarker(dataDir, raftAdvAddress); err != nil {
+		if err := WriteRaftIDMarker(dataDir, raftAdvAddress); err != nil {
 			return RaftIdentity{}, err
 		}
 		return RaftIdentity{}, nil
 
 	default:
-		if err := writeRaftIDMarker(dataDir, peerID); err != nil {
+		if err := WriteRaftIDMarker(dataDir, peerID); err != nil {
 			return RaftIdentity{}, err
 		}
 		return RaftIdentity{NodeID: peerID, Migrated: true}, nil
 	}
 }
 
-// readRaftIDMarker returns the recorded raft id, or "" when there is none.
-func readRaftIDMarker(dataDir string) (string, error) {
+// ReadRaftIDMarker returns the recorded raft id, or "" when there is none.
+func ReadRaftIDMarker(dataDir string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dataDir, raftIDMarker))
 	if os.IsNotExist(err) {
 		return "", nil
@@ -105,12 +112,12 @@ func readRaftIDMarker(dataDir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// writeRaftIDMarker records the raft id, atomically.
+// WriteRaftIDMarker records the raft id, atomically.
 //
 // Atomically because a torn marker is worse than no marker: a half-written id
 // reads as an id nothing is registered under, and the node would start as a
 // member the cluster has never heard of.
-func writeRaftIDMarker(dataDir, id string) error {
+func WriteRaftIDMarker(dataDir, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("refusing to record an empty raft id")
 	}
@@ -128,4 +135,53 @@ func writeRaftIDMarker(dataDir, id string) error {
 		return fmt.Errorf("commit raft id marker: %w", err)
 	}
 	return nil
+}
+
+// RaftNodeID reports the raft id this node is registered under.
+//
+// It reads the marker rather than assuming, because the answer differs by node
+// during the migration and getting it wrong is what mints a duplicate voter:
+// announce an id the cluster does not have this node under and orphan recovery
+// concludes the node is missing and adds it a second time.
+//
+// With no marker it falls back to the raft advertise address, which is both
+// rqlite's own default and what a node predating this scheme is registered
+// under.
+func (r *RQLiteManager) RaftNodeID() string {
+	dataDir, err := r.rqliteDataDirPath()
+	if err != nil {
+		r.logger.Warn("Cannot locate the rqlite data directory to read this node's raft id; "+
+			"falling back to the raft advertise address", zap.Error(err))
+		return r.discoverConfig.RaftAdvAddress
+	}
+
+	recorded, readErr := ReadRaftIDMarker(dataDir)
+	if readErr != nil {
+		// Announcing an id the cluster does not have this node under is what
+		// mints a duplicate voter, so a marker that exists but cannot be read
+		// is worth saying out loud rather than quietly treating as absent.
+		r.logger.Warn("Cannot read this node's raft id marker; falling back to the raft advertise address",
+			zap.String("path", dataDir), zap.Error(readErr))
+		return r.discoverConfig.RaftAdvAddress
+	}
+	if recorded != "" {
+		return recorded
+	}
+	return r.discoverConfig.RaftAdvAddress
+}
+
+// isSelfPeer reports whether a discovery announcement is this node's own.
+//
+// Matched on the raft ADDRESS, which is unique to a machine and is what every
+// caller actually means by "me". The comparisons this replaces were against the
+// announced node id, which worked only while an id was an address: the moment a
+// node announces a stable peer id, it stops recognising itself and starts
+// counting itself as a peer — over-counting the cluster in the minimum-size
+// wait, comparing its own log index against itself when picking a recovery
+// source, and including itself in the active-peer list.
+func isSelfPeer(meta *discovery.RQLiteNodeMetadata, selfRaftAddr string) bool {
+	if meta == nil || selfRaftAddr == "" {
+		return false
+	}
+	return meta.RaftAddress == selfRaftAddr
 }

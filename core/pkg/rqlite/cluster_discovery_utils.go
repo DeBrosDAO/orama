@@ -140,8 +140,17 @@ func rewriteAdvertisedAddresses(meta *discovery.RQLiteNodeMetadata, newHost stri
 		}
 	}
 
+	// Only ever rewrite an id that IS an address whose host needs replacing.
+	//
+	// The condition used to include `meta.NodeID == originalNodeID`, which is
+	// vacuously true — originalNodeID is captured from meta.NodeID a few lines
+	// above and nothing mutates it in between — so the id was stamped back to
+	// the raft address on every announcement, including one that had already
+	// been set to a stable peer id. A peer id does not parse as host:port, so
+	// requiring that is what keeps it intact.
 	if allowNodeIDRewrite {
-		if meta.RaftAddress != "" && (meta.NodeID == "" || meta.NodeID == originalNodeID || shouldReplaceHost(hostFromAddress(meta.NodeID))) {
+		idHost := hostFromAddress(meta.NodeID)
+		if meta.RaftAddress != "" && (meta.NodeID == "" || (idHost != "" && shouldReplaceHost(idHost))) {
 			if meta.NodeID != meta.RaftAddress {
 				meta.NodeID = meta.RaftAddress
 				nodeIDChanged = meta.NodeID != originalNodeID

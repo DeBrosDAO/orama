@@ -12,7 +12,14 @@ import (
 
 // RaftMember is the subset of a /nodes entry a membership decision needs.
 type RaftMember struct {
-	ID        string
+	ID string
+
+	// Addr is the member's raft address. It is separate from ID because the two
+	// are separate things: the id is identity, the address is where to reach
+	// it. They happen to be equal on a node that predates stable raft ids, and
+	// conflating them is what let an address change mint a second member.
+	Addr string
+
 	Voter     bool
 	Reachable bool
 }
@@ -24,14 +31,34 @@ type raftMember = RaftMember
 // means it may proceed.
 type evictionRefusal string
 
-// SafeToRemoveVoter reports why removing target from the raft configuration
-// would be unsafe, or "" if it may proceed.
+// SafeToRemoveVoter reports why EVICTING target — removing a member believed
+// dead — would be unsafe, or "" if it may proceed.
 //
-// Exported so the operator-facing decommission command applies the same rule as
-// the automatic eviction. Two implementations of a quorum-safety check is one
-// too many: the version that is wrong is the one nobody reads.
+// Use SafeToRemoveMember for a planned removal of a member that is still up.
+// This one additionally refuses a reachable target, which is right for an
+// eviction and wrong for a decommission or an identity migration.
+//
+// Exported so the operator-facing commands apply the same arithmetic as the
+// automatic eviction. Two implementations of a quorum-safety check is one too
+// many: the version that is wrong is the one nobody reads.
 func SafeToRemoveVoter(members []RaftMember, target string) string {
 	return string(safeToEvict(members, target))
+}
+
+// SafeToRemoveMember reports why removing target from the raft configuration
+// would cost the cluster its quorum, or "" if it may proceed.
+//
+// This is the arithmetic alone, without eviction's "the target is answering, so
+// this is not an eviction" veto. A decommission and an identity migration both
+// remove a member that is up ON PURPOSE, and both were refused outright by the
+// eviction rule — the migration could not execute a single step, because a node
+// being migrated is by definition reachable.
+//
+// The target is counted as leaving whether or not it answers, which is the
+// conservative direction: a reachable voter that is about to go still stops
+// counting toward the quorum that has to survive without it.
+func SafeToRemoveMember(members []RaftMember, target string) string {
+	return string(quorumSurvivesRemoval(members, target))
 }
 
 // safeToEvict reports whether removing target from the raft configuration
@@ -49,6 +76,26 @@ func SafeToRemoveVoter(members []RaftMember, target string) string {
 // eviction, it is a voter-set change, and it belongs to reconcileVoters where
 // the node can be demoted in place instead of taken out of the configuration.
 func safeToEvict(members []raftMember, target string) evictionRefusal {
+	for _, m := range members {
+		if m.ID == target && m.Reachable {
+			return evictionRefusal(fmt.Sprintf(
+				"node %s is reachable; a live member is demoted, not evicted", target))
+		}
+	}
+	return quorumSurvivesRemoval(members, target)
+}
+
+// quorumSurvivesRemoval is the arithmetic both removal paths share.
+//
+// The invariant is stated over the configuration AFTER the removal: the voters
+// that can actually be reached must still meet the new quorum. That is a
+// weaker-looking rule than it sounds when the target is unreachable, because
+// removing a voter that was not answering can never make things worse — quorum
+// is floor(n/2)+1, which is monotonic in n, so dropping it either leaves the
+// threshold where it was or lowers it while the reachable count stays the same.
+// It bites when the target IS answering, which is the planned-removal case: the
+// cluster has to survive losing a voter it currently has.
+func quorumSurvivesRemoval(members []raftMember, target string) evictionRefusal {
 	var (
 		found          bool
 		targetIsVoter  bool
@@ -60,10 +107,6 @@ func safeToEvict(members []raftMember, target string) evictionRefusal {
 		if m.ID == target {
 			found = true
 			targetIsVoter = m.Voter
-			if m.Reachable {
-				return evictionRefusal(fmt.Sprintf(
-					"node %s is reachable; a live member is demoted, not evicted", target))
-			}
 			continue
 		}
 		if !m.Voter {
@@ -360,8 +403,10 @@ func tombstonedNodes(ctx context.Context, db *sql.DB) (map[string]struct{}, erro
 // membership change per tick across both passes.
 func (r *RQLiteManager) evictDeadVoters(ctx context.Context, reconciler *voterReconciler, nodes RQLiteNodes, termStable bool) (bool, error) {
 	members := make([]raftMember, 0, len(nodes))
+	addrByID := make(map[string]string, len(nodes))
 	for _, n := range nodes {
-		members = append(members, raftMember{ID: n.ID, Voter: n.Voter, Reachable: n.Reachable})
+		members = append(members, raftMember{ID: n.ID, Addr: n.Addr, Voter: n.Voter, Reachable: n.Reachable})
+		addrByID[n.ID] = n.Addr
 	}
 
 	reconciler.mu.Lock()
@@ -389,9 +434,24 @@ func (r *RQLiteManager) evictDeadVoters(ctx context.Context, reconciler *voterRe
 			continue
 		}
 
-		if r.discoveryService != nil && r.discoveryService.knowsRaftAddress(candidate) {
-			r.logger.Debug("Unreachable voter is still known to discovery; not evicting",
+		// Both of the checks below are keyed on the raft ADDRESS, not the id.
+		// They used to be given the candidate id, which is the same string only
+		// on a node that predates stable raft ids: after the migration the
+		// discovery lookup could never match and the peer-id resolution failed
+		// to split a peer id as host:port, so eviction became a permanent
+		// no-op — silently, and exactly on the clusters that had done the
+		// safest thing available to them.
+		candidateAddr := addrByID[candidate]
+		if candidateAddr == "" {
+			r.logger.Warn("Not evicting a voter whose raft address is unknown",
 				zap.String("node_id", candidate))
+			continue
+		}
+
+		if r.discoveryService != nil && r.discoveryService.knowsRaftAddress(candidateAddr) {
+			r.logger.Debug("Unreachable voter is still known to discovery; not evicting",
+				zap.String("node_id", candidate),
+				zap.String("raft_addr", candidateAddr))
 			continue
 		}
 
@@ -399,7 +459,7 @@ func (r *RQLiteManager) evictDeadVoters(ctx context.Context, reconciler *voterRe
 		if err != nil {
 			return false, fmt.Errorf("eviction needs a database handle: %w", err)
 		}
-		peerID, err := peerIDForRaftAddress(ctx, db, candidate)
+		peerID, err := peerIDForRaftAddress(ctx, db, candidateAddr)
 		if err != nil {
 			r.logger.Debug("Cannot resolve the peer id for an unreachable voter; not evicting",
 				zap.String("node_id", candidate), zap.Error(err))
@@ -423,7 +483,7 @@ func (r *RQLiteManager) evictDeadVoters(ctx context.Context, reconciler *voterRe
 		// does not, orphan recovery re-adds the node within five minutes and
 		// the eviction was pointless; the other order merely leaves a tombstone
 		// for a node still in the configuration, which is inert.
-		if err := tombstoneNode(ctx, db, candidate, candidate, peerID, "dead-voter", r.discoverConfig.RaftAdvAddress); err != nil {
+		if err := tombstoneNode(ctx, db, candidate, candidateAddr, peerID, "dead-voter", r.discoverConfig.RaftAdvAddress); err != nil {
 			return false, fmt.Errorf("tombstone %s: %w", candidate, err)
 		}
 

@@ -118,7 +118,11 @@ func (n *Node) startRQLiteLocal(ctx context.Context) error {
 	nodeID := n.nodeID()
 	extra := indexRQLiteExtraArgs(n.config.Database)
 	requireExisting := namespace.HasExistingRaft(sup.CoreRQLiteDir())
-	if err := sup.EnsureRQLite(ctx, nodeID, n.config.Discovery.HttpAdvAddress, n.config.Discovery.RaftAdvAddress, n.config.Database.RQLiteJoinAddress, extra, requireExisting); err != nil {
+	// The libp2p peer id is this node's stable raft identity. The boot graph
+	// orders rqlite-local after libp2p, so it is available here; an empty one
+	// means libp2p is not up and rqlite keeps defaulting the id to the raft
+	// advertise address, which is what it did before this existed.
+	if err := sup.EnsureRQLite(ctx, nodeID, n.GetPeerID(), n.config.Discovery.HttpAdvAddress, n.config.Discovery.RaftAdvAddress, n.config.Database.RQLiteJoinAddress, extra, requireExisting); err != nil {
 		return err
 	}
 

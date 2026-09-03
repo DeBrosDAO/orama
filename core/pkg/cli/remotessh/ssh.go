@@ -1,6 +1,7 @@
 package remotessh
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -101,4 +102,16 @@ func SudoPrefix(node inspector.Node) string {
 		return ""
 	}
 	return "sudo "
+}
+
+// RunSSHOutput runs a command on the node and returns its stdout.
+//
+// Distinct from RunSSHStreaming, which relays output to the operator's terminal
+// and returns nothing: this is for reading a value back.
+func RunSSHOutput(node inspector.Node, command string, opts ...SSHOption) (string, error) {
+	res := inspector.RunSSH(context.Background(), node, command)
+	if !res.OK() {
+		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, res.Stderr)
+	}
+	return res.Stdout, nil
 }

@@ -18,7 +18,7 @@ func (c *ClusterDiscoveryService) GetActivePeers() []*discovery.RQLiteNodeMetada
 
 	peers := make([]*discovery.RQLiteNodeMetadata, 0, len(c.knownPeers))
 	for _, peer := range c.knownPeers {
-		if peer.NodeID == c.raftAddress {
+		if isSelfPeer(peer, c.raftAddress) {
 			continue
 		}
 		peers = append(peers, peer)
@@ -65,7 +65,7 @@ func (c *ClusterDiscoveryService) GetNodeWithHighestLogIndex() *discovery.RQLite
 	var maxIndex uint64 = 0
 
 	for _, peer := range c.knownPeers {
-		if peer.NodeID == c.raftAddress {
+		if isSelfPeer(peer, c.raftAddress) {
 			continue
 		}
 
@@ -156,7 +156,7 @@ func (c *ClusterDiscoveryService) ForceWritePeersJSON() error {
 	c.mu.Lock()
 	for _, meta := range metadata {
 		c.knownPeers[meta.NodeID] = meta
-		if meta.NodeID != c.raftAddress {
+		if !isSelfPeer(meta, c.raftAddress) {
 			if _, ok := c.peerHealth[meta.NodeID]; !ok {
 				c.peerHealth[meta.NodeID] = &PeerHealth{
 					LastSeen:       time.Now(),

@@ -26,7 +26,12 @@ type NamespaceStatus struct {
 type RQLiteNodeMetadata struct {
 	// --- Existing fields (unchanged) ---
 
-	NodeID         string    `json:"node_id"`         // RQLite node ID (raft address)
+	// NodeID is the node's RQLite raft id. On a node that predates the stable
+	// identity scheme this is its raft address; on one that has it, it is the
+	// libp2p peer id. Consumers must treat it as an opaque identifier and must
+	// NOT assume it can be dialled — RaftAddress is the routing data.
+	NodeID string `json:"node_id"`
+
 	RaftAddress    string    `json:"raft_address"`    // Raft port address (e.g., "10.0.0.1:10101")
 	HTTPAddress    string    `json:"http_address"`    // HTTP API address (e.g., "10.0.0.1:10100")
 	NodeType       string    `json:"node_type"`       // Node type identifier

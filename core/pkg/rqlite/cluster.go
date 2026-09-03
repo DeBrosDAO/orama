@@ -65,7 +65,7 @@ func (r *RQLiteManager) waitForMinClusterSizeBeforeStart(ctx context.Context, rq
 		allPeers := r.discoveryService.GetAllPeers()
 		remotePeerCount := 0
 		for _, peer := range allPeers {
-			if peer.NodeID != r.discoverConfig.RaftAdvAddress {
+			if !isSelfPeer(peer, r.discoverConfig.RaftAdvAddress) {
 				remotePeerCount++
 			}
 		}
@@ -144,7 +144,7 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 		ourLogIndex := r.getRaftLogIndex()
 		maxPeerIndex := uint64(0)
 		for _, peer := range r.discoveryService.GetAllPeers() {
-			if peer.NodeID != r.discoverConfig.RaftAdvAddress && peer.RaftLogIndex > maxPeerIndex {
+			if !isSelfPeer(peer, r.discoverConfig.RaftAdvAddress) && peer.RaftLogIndex > maxPeerIndex {
 				maxPeerIndex = peer.RaftLogIndex
 			}
 		}
@@ -201,7 +201,7 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 
 	maxPeerIndex := uint64(0)
 	for _, peer := range r.discoveryService.GetAllPeers() {
-		if peer.NodeID != r.discoverConfig.RaftAdvAddress && peer.RaftLogIndex > maxPeerIndex {
+		if !isSelfPeer(peer, r.discoverConfig.RaftAdvAddress) && peer.RaftLogIndex > maxPeerIndex {
 			maxPeerIndex = peer.RaftLogIndex
 		}
 	}

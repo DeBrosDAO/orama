@@ -489,6 +489,18 @@ does not put it back within five minutes, deletes its `wireguard_peers` and
 `dns_nodes` rows, and then erases the machine. Add `--offline` if the VPS is
 already gone.
 
+**Raft identity.** A node whose raft id has been migrated to its libp2p peer id
+keeps that id across an address change, so replacing the machine's overlay
+address no longer mints a second raft member. On a cluster that has not run
+`orama node migrate-raft-id` yet, the id is still the raft advertise address and
+a changed address DOES create a duplicate voter that the old entry never leaves
+— which is what the manual `DELETE /remove` steps below exist to clean up. Check
+which you are on with:
+
+```bash
+orama node migrate-raft-id --env <env> --dry-run
+```
+
 Verify afterwards on the platform leader:
 
 ```bash

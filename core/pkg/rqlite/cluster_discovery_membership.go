@@ -32,7 +32,7 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 
 	// Add ourselves
 	ourMetadata := &discovery.RQLiteNodeMetadata{
-		NodeID:         currentRaftAddr, // RQLite uses raft address as node ID
+		NodeID:         c.rqliteManager.RaftNodeID(),
 		RaftAddress:    currentRaftAddr,
 		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
@@ -133,7 +133,7 @@ func (c *ClusterDiscoveryService) computeMembershipChangesLocked(metadata []*dis
 	updated := []string{}
 
 	for _, meta := range metadata {
-		isSelf := meta.NodeID == c.raftAddress
+		isSelf := isSelfPeer(meta, c.raftAddress)
 
 		if existing, ok := c.knownPeers[meta.NodeID]; ok {
 			if existing.RaftLogIndex != meta.RaftLogIndex ||
@@ -169,7 +169,7 @@ func (c *ClusterDiscoveryService) computeMembershipChangesLocked(metadata []*dis
 
 	remotePeerCount := 0
 	for _, peer := range c.knownPeers {
-		if peer.NodeID != c.raftAddress {
+		if !isSelfPeer(peer, c.raftAddress) {
 			remotePeerCount++
 		}
 	}
@@ -271,8 +271,15 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 	peers := make([]map[string]interface{}, 0, len(c.knownPeers))
 	for _, peer := range c.knownPeers {
 		_, isVoter := voterSet[peer.RaftAddress]
+
+		// The id must be the peer's REAL raft id, not its address. rqlite
+		// consumes peers.json by resetting the raft configuration to it, so
+		// writing addresses here would silently revert every migrated node to
+		// an address-derived id — the mass-duplicate scenario the migration
+		// exists to avoid, triggered by a recovery path with no operator
+		// involved.
 		peerEntry := map[string]interface{}{
-			"id":        peer.RaftAddress,
+			"id":        raftIDOf(peer),
 			"address":   peer.RaftAddress,
 			"non_voter": !isVoter,
 		}
@@ -280,6 +287,19 @@ func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{
 	}
 
 	return peers
+}
+
+// raftIDOf returns the raft id a peer announced, falling back to its raft
+// address — which is both rqlite's own default and what a node from before
+// stable identity is registered under.
+func raftIDOf(peer *discovery.RQLiteNodeMetadata) string {
+	if peer == nil {
+		return ""
+	}
+	if peer.NodeID != "" {
+		return peer.NodeID
+	}
+	return peer.RaftAddress
 }
 
 // computeVoterSet returns the set of raft addresses that should be voters.
