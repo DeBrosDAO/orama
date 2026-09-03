@@ -87,7 +87,7 @@ type RegisterDeviceRequest struct {
 	DeviceID   string `json:"device_id"`
 	Provider   string `json:"provider"` // "ntfy" | "expo" | "apns"
 	Token      string `json:"token"`
-	Platform   string `json:"platform,omitempty"`    // "ios" | "android" | "web"
+	Platform   string `json:"platform,omitempty"` // "ios" | "android" | "web"
 	AppVersion string `json:"app_version,omitempty"`
 }
 

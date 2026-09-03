@@ -269,7 +269,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// "subscriptions" — so core and app schema never collide (bugboard #150).
 	// Detection mirrors the global-auth-client check: a namespace gateway is the
 	// one configured with a separate GlobalRQLiteDSN pointing at the main cluster.
-	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
+	if isNamespaceGateway(cfg) {
 		if err := rqlite.ApplyEmbeddedMigrationsNamespace(migCtx, db, migrations.FS, logger.Logger); err != nil {
 			return fmt.Errorf("apply namespace embedded migrations failed: %w "+
 				"(hint: this namespace gateway can't safely run without its required schema; "+

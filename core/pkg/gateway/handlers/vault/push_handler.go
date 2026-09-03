@@ -28,7 +28,7 @@ type PushRequest struct {
 
 // PushResponse is returned to the client.
 type PushResponse struct {
-	Status    string `json:"status"`    // "ok" or "partial"
+	Status    string `json:"status"` // "ok" or "partial"
 	AckCount  int    `json:"ack_count"`
 	Total     int    `json:"total"`
 	Quorum    int    `json:"quorum"`
@@ -38,7 +38,7 @@ type PushResponse struct {
 // guardianPushRequest is sent to each vault guardian.
 type guardianPushRequest struct {
 	Identity  string `json:"identity"`
-	Share     string `json:"share"`     // base64([x:1byte][y:rest])
+	Share     string `json:"share"` // base64([x:1byte][y:rest])
 	Version   uint64 `json:"version"`
 	Threshold int    `json:"threshold"` // K the envelope was split with (persisted for reads)
 	PubKey    string `json:"pubkey"`    // forwarded for guardian-side ownership check

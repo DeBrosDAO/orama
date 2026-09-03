@@ -175,8 +175,8 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"status": "active",
-		"port":   port,
+		"status":  "active",
+		"port":    port,
 		"node_id": h.service.nodePeerID,
 	}
 

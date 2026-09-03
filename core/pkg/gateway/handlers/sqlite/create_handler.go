@@ -14,8 +14,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 	_ "github.com/mattn/go-sqlite3"
+	"go.uber.org/zap"
 )
 
 // SQLiteHandler handles namespace SQLite database operations

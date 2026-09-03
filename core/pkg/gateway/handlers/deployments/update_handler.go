@@ -109,14 +109,14 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// Return response
 	resp := map[string]interface{}{
-		"deployment_id":  updated.ID,
-		"name":           updated.Name,
-		"namespace":      updated.Namespace,
-		"status":         updated.Status,
-		"version":        updated.Version,
+		"deployment_id":    updated.ID,
+		"name":             updated.Name,
+		"namespace":        updated.Namespace,
+		"status":           updated.Status,
+		"version":          updated.Version,
 		"previous_version": existing.Version,
-		"content_cid":    updated.ContentCID,
-		"updated_at":     updated.UpdatedAt,
+		"content_cid":      updated.ContentCID,
+		"updated_at":       updated.UpdatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

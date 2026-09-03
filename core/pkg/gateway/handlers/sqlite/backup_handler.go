@@ -117,9 +117,9 @@ func (h *BackupHandler) BackupDatabase(w http.ResponseWriter, r *http.Request) {
 
 	// Return response
 	resp := map[string]interface{}{
-		"database_name":  req.DatabaseName,
-		"backup_cid":     cid,
-		"backed_up_at":   now,
+		"database_name": req.DatabaseName,
+		"backup_cid":    cid,
+		"backed_up_at":  now,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -165,9 +165,9 @@ func (h *BackupHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 
 	// Query backups
 	type backupRow struct {
-		BackupCID   string    `db:"backup_cid"`
-		BackedUpAt  time.Time `db:"backed_up_at"`
-		SizeBytes   int64     `db:"size_bytes"`
+		BackupCID  string    `db:"backup_cid"`
+		BackedUpAt time.Time `db:"backed_up_at"`
+		SizeBytes  int64     `db:"size_bytes"`
 	}
 
 	var rows []backupRow

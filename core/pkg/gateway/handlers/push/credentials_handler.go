@@ -338,4 +338,3 @@ func extractProvider(urlPath string) string {
 	}
 	return rest
 }
-

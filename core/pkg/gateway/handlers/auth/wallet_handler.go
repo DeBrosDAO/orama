@@ -117,4 +117,3 @@ func (h *Handlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		"signature_verified": true,
 	})
 }
-

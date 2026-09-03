@@ -272,6 +272,42 @@ Both tools check cluster health, but they serve different purposes:
 
 Use `monitor` for day-to-day health checks and the interactive TUI. Use `inspect` for deep diagnostics when something is already known to be broken.
 
+## In-cluster failure detection (the ring monitor)
+
+Separate from the SSH tooling above, every node runs a ring-based failure
+detector inside its **index gateway** process. It is what drives automatic
+recovery, so its thresholds decide how fast a dead node is noticed and how
+easily a healthy one is wrongly evicted.
+
+| Property | Value | Where |
+|---|---|---|
+| Runs on | index gateway only | a tenant gateway's RQLite has no `dns_nodes` rows |
+| Ring | the K nodes after this one in `dns_nodes` sorted by id | K = 3 |
+| Probe | `GET http://<internal_ip>:10104/v1/internal/ping` | port from `constants.GatewayAPIPort` |
+| Probe interval | 10s | |
+| Suspect | 3 consecutive misses (~30s) | disables that node's namespace DNS records |
+| Dead | 12 consecutive misses (~2min) | needs ≥2 distinct observers to agree |
+| Startup grace | 5min | no node is declared dead during it |
+
+**The probe port is configuration, not a literal.** It is the *index gateway*
+port on the peer, because the ring monitors nodes rather than namespaces and
+only the index gateway serves `/v1/internal/ping`. `health.NewMonitor` returns
+an error if it is unset: the port was hardcoded once, survived the move of the
+index internals into the 10100–10109 block untouched, and every probe on a
+healthy fleet then failed — which the ring turns into a cluster-wide false
+eviction about seven minutes after the gateways start.
+
+**A recent heartbeat outranks the probe.** Before issuing HTTP, the monitor
+checks whether the peer updated `dns_nodes.last_seen` within the last 65
+seconds (two heartbeat ticks). That row is a raft write, so a fresh value
+proves the peer was alive *and* had quorum — evidence that does not depend on
+the HTTP path. A stale heartbeat proves nothing either way and falls through to
+the probe rather than counting as a miss.
+
+Observations land in `node_health_events`; recovery is triggered only by the
+lowest-id observer once quorum agrees, so a confirmed death produces one
+recovery action rather than one per observer.
+
 ## Configuration
 
 Uses the same `scripts/nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.

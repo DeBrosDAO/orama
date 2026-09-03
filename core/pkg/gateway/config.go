@@ -83,3 +83,14 @@ type Config struct {
 	NtfyAuthToken   string // optional bearer token for ntfy
 	ExpoAccessToken string // optional Expo access token
 }
+
+// isNamespaceGateway reports whether this process serves a tenant namespace
+// rather than the index.
+//
+// A tenant gateway is the one configured with a GlobalRQLiteDSN pointing at a
+// DIFFERENT database from its own: its RQLiteDSN is the namespace's rqlite and
+// GlobalRQLiteDSN is the cluster registry. The index gateway is its own
+// registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
+func isNamespaceGateway(cfg *Config) bool {
+	return cfg != nil && cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
+}

@@ -29,8 +29,9 @@ var wsUpgrader = websocket.Upgrader{
 // send Origin) are rejected 403 because their Origin's public hostname will
 // never match the proxied IP. Curl tests without Origin slip through,
 // masking the bug. See namespace gateway log:
-//   E routes WebSocket upgrade failed
-//     {"error": "websocket: request origin not allowed by Upgrader.CheckOrigin"}
+//
+//	E routes WebSocket upgrade failed
+//	  {"error": "websocket: request origin not allowed by Upgrader.CheckOrigin"}
 func checkWSOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

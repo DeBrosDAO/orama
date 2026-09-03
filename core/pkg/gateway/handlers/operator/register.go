@@ -10,11 +10,11 @@ import (
 
 // RegisterRequest is the body for POST /v1/operator/node/register.
 type RegisterRequest struct {
-	NodeID      string `json:"node_id"`                // dns_nodes.id (peer ID or hostname)
-	IPAddress   string `json:"ip_address,omitempty"`    // Public IP (alternative lookup key)
-	Environment string `json:"environment,omitempty"`   // e.g., "devnet", "sandbox"
-	Role        string `json:"role,omitempty"`          // e.g., "node", "nameserver"
-	SSHUser     string `json:"ssh_user,omitempty"`      // SSH user (default: "root")
+	NodeID      string `json:"node_id"`               // dns_nodes.id (peer ID or hostname)
+	IPAddress   string `json:"ip_address,omitempty"`  // Public IP (alternative lookup key)
+	Environment string `json:"environment,omitempty"` // e.g., "devnet", "sandbox"
+	Role        string `json:"role,omitempty"`        // e.g., "node", "nameserver"
+	SSHUser     string `json:"ssh_user,omitempty"`    // SSH user (default: "root")
 }
 
 var (

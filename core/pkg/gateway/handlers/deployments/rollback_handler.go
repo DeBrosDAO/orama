@@ -389,11 +389,11 @@ func (h *RollbackHandler) HandleListVersions(w http.ResponseWriter, r *http.Requ
 	}
 
 	resp := map[string]interface{}{
-		"deployment_id":  deployment.ID,
-		"name":           deployment.Name,
+		"deployment_id":   deployment.ID,
+		"name":            deployment.Name,
 		"current_version": deployment.Version,
-		"versions":       versions,
-		"total":          len(versions),
+		"versions":        versions,
+		"total":           len(versions),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

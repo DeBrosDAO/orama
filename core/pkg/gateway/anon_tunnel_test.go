@@ -61,8 +61,8 @@ func TestParseTunnelTarget_rejectsNonPublicDestinations(t *testing.T) {
 		"localhost",
 		"api.localhost",
 		"LOCALHOST",
-		"10.0.0.1",      // WireGuard mesh
-		"10.0.0.17",     // a real devnet node's internal IP
+		"10.0.0.1",  // WireGuard mesh
+		"10.0.0.17", // a real devnet node's internal IP
 		"192.168.1.1",
 		"172.16.0.1",
 		"169.254.169.254", // cloud metadata

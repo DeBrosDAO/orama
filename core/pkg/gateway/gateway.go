@@ -12,13 +12,14 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/health"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
@@ -26,18 +27,18 @@ import (
 	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
-	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
-	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
-	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
-	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
 	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
-	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
-	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
+	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
+	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
 	ratelimithandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/ratelimit"
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
+	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
+	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
+	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	nodehealth "github.com/DeBrosOfficial/network/pkg/node/health"
@@ -52,11 +53,10 @@ import (
 	"go.uber.org/zap"
 )
 
-
 type Gateway struct {
-	logger     *logging.ColoredLogger
-	cfg        *Config
-	client     client.NetworkClient
+	logger           *logging.ColoredLogger
+	cfg              *Config
+	client           client.NetworkClient
 	nodePeerID       string // The node's actual peer ID from its identity file (overrides client's peer ID)
 	localWireGuardIP string // WireGuard IP of this node, used to prefer local namespace gateways
 	startedAt        time.Time
@@ -77,8 +77,8 @@ type Gateway struct {
 	tunnelIsolationSecret string
 
 	// Olric cache client
-	olricClient *olric.Client
-	olricMu     sync.RWMutex
+	olricClient   *olric.Client
+	olricMu       sync.RWMutex
 	cacheHandlers *cache.CacheHandlers
 
 	// Health check result cache (5s TTL)
@@ -98,39 +98,39 @@ type Gateway struct {
 	pushHandlers     *pushhandlers.Handlers
 
 	// Serverless function engine
-	serverlessEngine     *serverless.Engine
-	serverlessRegistry   *serverless.Registry
-	serverlessInvoker    *serverless.Invoker
-	serverlessWSMgr      *serverless.WSManager
-	serverlessHandlers   *serverlesshandlers.ServerlessHandlers
-	pubsubDispatcher     *triggers.PubSubDispatcher
-	persistentWSManager  *persistent.Manager
-	cronScheduler        *triggers.CronScheduler
+	serverlessEngine    *serverless.Engine
+	serverlessRegistry  *serverless.Registry
+	serverlessInvoker   *serverless.Invoker
+	serverlessWSMgr     *serverless.WSManager
+	serverlessHandlers  *serverlesshandlers.ServerlessHandlers
+	pubsubDispatcher    *triggers.PubSubDispatcher
+	persistentWSManager *persistent.Manager
+	cronScheduler       *triggers.CronScheduler
 
 	// Authentication service
 	authService  *auth.Service
 	authHandlers *authhandlers.Handlers
 
 	// Deployment system
-	deploymentService    *deploymentshandlers.DeploymentService
-	staticHandler        *deploymentshandlers.StaticDeploymentHandler
-	nextjsHandler        *deploymentshandlers.NextJSHandler
-	goHandler            *deploymentshandlers.GoHandler
-	nodejsHandler        *deploymentshandlers.NodeJSHandler
-	listHandler          *deploymentshandlers.ListHandler
-	updateHandler        *deploymentshandlers.UpdateHandler
-	rollbackHandler      *deploymentshandlers.RollbackHandler
-	logsHandler          *deploymentshandlers.LogsHandler
-	statsHandler         *deploymentshandlers.StatsHandler
-	domainHandler        *deploymentshandlers.DomainHandler
-	sqliteHandler        *sqlitehandlers.SQLiteHandler
-	sqliteBackupHandler  *sqlitehandlers.BackupHandler
-	replicaHandler       *deploymentshandlers.ReplicaHandler
-	portAllocator        *deployments.PortAllocator
-	homeNodeManager      *deployments.HomeNodeManager
-	replicaManager       *deployments.ReplicaManager
-	processManager       *process.Manager
-	healthChecker        *health.HealthChecker
+	deploymentService   *deploymentshandlers.DeploymentService
+	staticHandler       *deploymentshandlers.StaticDeploymentHandler
+	nextjsHandler       *deploymentshandlers.NextJSHandler
+	goHandler           *deploymentshandlers.GoHandler
+	nodejsHandler       *deploymentshandlers.NodeJSHandler
+	listHandler         *deploymentshandlers.ListHandler
+	updateHandler       *deploymentshandlers.UpdateHandler
+	rollbackHandler     *deploymentshandlers.RollbackHandler
+	logsHandler         *deploymentshandlers.LogsHandler
+	statsHandler        *deploymentshandlers.StatsHandler
+	domainHandler       *deploymentshandlers.DomainHandler
+	sqliteHandler       *sqlitehandlers.SQLiteHandler
+	sqliteBackupHandler *sqlitehandlers.BackupHandler
+	replicaHandler      *deploymentshandlers.ReplicaHandler
+	portAllocator       *deployments.PortAllocator
+	homeNodeManager     *deployments.HomeNodeManager
+	replicaManager      *deployments.ReplicaManager
+	processManager      *process.Manager
+	healthChecker       *health.HealthChecker
 
 	// Middleware cache for auth/routing lookups (eliminates redundant DB queries)
 	mwCache *middlewareCache
@@ -145,9 +145,9 @@ type Gateway struct {
 	// tenant self-service config via /v1/namespace/rate-limit. When set,
 	// namespaceRateLimitMiddleware uses it instead of the legacy
 	// hardcoded-defaults limiter above. nil = falls back to namespaceRateLimiter.
-	rateLimitManager       *ratelimit.Manager
-	rateLimitConfigStore   ratelimit.ConfigStore
-	rateLimitHandlers      *ratelimithandlers.Handlers
+	rateLimitManager     *ratelimit.Manager
+	rateLimitConfigStore ratelimit.ConfigStore
+	rateLimitHandlers    *ratelimithandlers.Handlers
 
 	// WebRTC signaling and TURN credentials
 	webrtcHandlers *webrtchandlers.WebRTCHandlers
@@ -200,8 +200,8 @@ type Gateway struct {
 	proxyTransport *http.Transport
 
 	// Vault proxy handlers
-	vaultHandlers    *vaulthandlers.Handlers
-	operatorHandler  *operatorhandlers.Handler
+	vaultHandlers   *vaulthandlers.Handlers
+	operatorHandler *operatorhandlers.Handler
 
 	// Namespace health state (local service probes + hourly reconciliation)
 	nsHealth *namespaceHealthState
@@ -771,15 +771,30 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		}
 	}
 
-	// Start node health monitor (ring-based peer failure detection)
-	if cfg.NodePeerID != "" && deps.SQLDB != nil {
-		gw.healthMonitor = nodehealth.NewMonitor(nodehealth.Config{
+	// Start node health monitor (ring-based peer failure detection).
+	//
+	// Index gateway only. The ring is built from dns_nodes, which is written by
+	// the node heartbeat into the INDEX rqlite; a tenant gateway's SQLDB is its
+	// own namespace rqlite, where core migrations create dns_nodes but nothing
+	// ever inserts a row (bugboard #153). Running the monitor there gave every
+	// tenant gateway an empty ring — wasted work at best, and one schema change
+	// away from acting on a half-populated table.
+	if cfg.NodePeerID != "" && deps.SQLDB != nil && !isNamespaceGateway(cfg) {
+		healthMonitor, healthErr := nodehealth.NewMonitor(nodehealth.Config{
 			NodeID:        cfg.NodePeerID,
 			DB:            deps.SQLDB,
 			Logger:        logger.Logger,
 			ProbeInterval: 10 * time.Second,
 			Neighbors:     3,
+			// Peers are probed on their index gateway, not on this process's
+			// own port: a tenant gateway listens on a namespace port that no
+			// other node serves /v1/internal/ping on.
+			ProbePort: constants.GatewayAPIPort,
 		})
+		if healthErr != nil {
+			return nil, fmt.Errorf("start node health monitor: %w", healthErr)
+		}
+		gw.healthMonitor = healthMonitor
 		gw.healthMonitor.OnNodeDead(func(nodeID string) {
 			logger.ComponentError(logging.ComponentGeneral, "Node confirmed dead by quorum — starting recovery",
 				zap.String("dead_node", nodeID))
@@ -1367,4 +1382,3 @@ func (g *Gateway) namespaceWebRTCStatusHandler(w http.ResponseWriter, r *http.Re
 		json.NewEncoder(w).Encode(config)
 	}
 }
-

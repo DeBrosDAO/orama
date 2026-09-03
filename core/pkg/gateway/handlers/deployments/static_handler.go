@@ -230,24 +230,24 @@ func (h *StaticDeploymentHandler) HandleServe(w http.ResponseWriter, r *http.Req
 func detectContentType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 	types := map[string]string{
-		".html": "text/html; charset=utf-8",
-		".css":  "text/css; charset=utf-8",
-		".js":   "application/javascript; charset=utf-8",
-		".json": "application/json",
-		".xml":  "application/xml",
-		".png":  "image/png",
-		".jpg":  "image/jpeg",
-		".jpeg": "image/jpeg",
-		".gif":  "image/gif",
-		".svg":  "image/svg+xml",
-		".ico":  "image/x-icon",
-		".woff": "font/woff",
+		".html":  "text/html; charset=utf-8",
+		".css":   "text/css; charset=utf-8",
+		".js":    "application/javascript; charset=utf-8",
+		".json":  "application/json",
+		".xml":   "application/xml",
+		".png":   "image/png",
+		".jpg":   "image/jpeg",
+		".jpeg":  "image/jpeg",
+		".gif":   "image/gif",
+		".svg":   "image/svg+xml",
+		".ico":   "image/x-icon",
+		".woff":  "font/woff",
 		".woff2": "font/woff2",
-		".ttf":  "font/ttf",
-		".eot":  "application/vnd.ms-fontobject",
-		".txt":  "text/plain; charset=utf-8",
-		".pdf":  "application/pdf",
-		".zip":  "application/zip",
+		".ttf":   "font/ttf",
+		".eot":   "application/vnd.ms-fontobject",
+		".txt":   "text/plain; charset=utf-8",
+		".pdf":   "application/pdf",
+		".zip":   "application/zip",
 	}
 
 	if contentType, ok := types[ext]; ok {
@@ -313,4 +313,3 @@ func extractTarball(reader io.Reader, destDir string) error {
 
 	return nil
 }
-

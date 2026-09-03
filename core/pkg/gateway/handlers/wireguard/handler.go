@@ -22,10 +22,10 @@ type PeerRecord struct {
 
 // RegisterPeerRequest is the request body for peer registration
 type RegisterPeerRequest struct {
-	NodeID       string `json:"node_id"`
-	PublicKey    string `json:"public_key"`
-	PublicIP     string `json:"public_ip"`
-	WGPort       int    `json:"wg_port,omitempty"`
+	NodeID        string `json:"node_id"`
+	PublicKey     string `json:"public_key"`
+	PublicIP      string `json:"public_ip"`
+	WGPort        int    `json:"wg_port,omitempty"`
 	ClusterSecret string `json:"cluster_secret"`
 }
 

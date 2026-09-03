@@ -79,7 +79,7 @@ type Handlers struct {
 	netClient          NetworkClient
 	defaultNS          string
 	internalAuthFn     func(context.Context) context.Context
-	clusterProvisioner ClusterProvisioner        // Optional: for namespace cluster provisioning
+	clusterProvisioner ClusterProvisioner         // Optional: for namespace cluster provisioning
 	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 
 	// apiKeyDB is the global/core API-key registry querier, wired via
