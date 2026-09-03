@@ -68,6 +68,13 @@ type Dependencies struct {
 	// Olric distributed cache client
 	OlricClient *olric.Client
 
+	// OlricServers is the address list the client above was built from, after
+	// discovery has resolved it. The supervisor needs it to reconnect: it used
+	// to fall back to a hardcoded "localhost:10102" while the resolved list
+	// sat here unused, so a namespace gateway that lost its cache tried to
+	// reconnect to the wrong place for ever.
+	OlricServers []string
+
 	// IPFS storage client
 	IPFSClient ipfs.IPFSClient
 
@@ -422,9 +429,10 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 			logger.ComponentInfo(logging.ComponentGeneral, "Discovered Olric servers from LibP2P peers",
 				zap.Strings("servers", olricServers))
 		} else {
-			// Fallback to localhost for local development
-			olricServers = []string{"localhost:10102"}
-			logger.ComponentInfo(logging.ComponentGeneral, "No Olric servers discovered, using localhost fallback")
+			// Fallback to the local index Olric, through the constant.
+			olricServers = []string{constants.OlricAddrFor("localhost")}
+			logger.ComponentInfo(logging.ComponentGeneral, "No Olric servers discovered, using localhost fallback",
+				zap.Strings("servers", olricServers))
 		}
 	} else {
 		logger.ComponentInfo(logging.ComponentGeneral, "Using explicitly configured Olric servers",
@@ -435,6 +443,10 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 		Servers: olricServers,
 		Timeout: cfg.OlricTimeout,
 	}
+
+	// Recorded whether or not the connection works, so the supervisor
+	// reconnects to where Olric actually is rather than to a guess.
+	deps.OlricServers = olricServers
 
 	olricClient, err := initializeOlricClientWithRetry(olricCfg, logger)
 	if err != nil {

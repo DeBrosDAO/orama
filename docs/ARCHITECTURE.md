@@ -241,6 +241,24 @@ render it today; read it from the node's own log
 (`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
 lists the components that have not converged.
 
+**Olric is supervised, not connected once.** The gateway keeps a background
+supervisor that probes its Olric client every 10s and, after three consecutive
+failures, drops it so cache handlers answer 503 — the honest answer — instead of
+returning transport errors from a client that cannot reach anything. It then
+reconnects with backoff, and re-wires without a restart.
+
+It replaces a one-shot loop that returned as soon as it connected once, and
+which was armed only when the INITIAL connection had failed. So the common case
+— Olric up at start, dies later — left a stale client wired in for ever, with
+`/health` reporting healthy while namespace requests hung. Note that the "Olric
+client doesn't retry" line in the older operational notes is stale twice over:
+it did retry, and now it supervises.
+
+The supervisor reconnects to the address list discovery actually resolved. The
+old fallback read an empty config field and then a hardcoded `localhost:10102`,
+so a namespace gateway that lost its cache spent the rest of its life
+reconnecting to the wrong place.
+
 **The tenant plane converges.** rqlite, Olric and the gateway for each
 namespace used to be edge-triggered — provisioned once, repaired on a dead-node
 event, restored once at boot by a loop that gave up after twelve attempts.

@@ -743,16 +743,25 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
 	}
 
-	// Start background Olric reconnection if initial connection failed
-	if deps.OlricClient == nil {
+	// Supervise Olric for the life of the process, whether or not the initial
+	// connection worked. Arming this only on an initial failure meant the
+	// common case — up at start, dies later — was never covered.
+	{
 		olricCfg := olric.Config{
 			Servers: cfg.OlricServers,
 			Timeout: cfg.OlricTimeout,
 		}
 		if len(olricCfg.Servers) == 0 {
-			olricCfg.Servers = []string{"localhost:10102"}
+			// The list discovery actually resolved, not a guess. The old
+			// fallback used cfg.OlricServers (empty on a namespace gateway)
+			// and then a hardcoded localhost, so a gateway that lost its cache
+			// spent the rest of its life reconnecting to the wrong address.
+			olricCfg.Servers = deps.OlricServers
 		}
-		gw.startOlricReconnectLoop(olricCfg)
+		if len(olricCfg.Servers) == 0 {
+			olricCfg.Servers = []string{constants.OlricAddrFor("localhost")}
+		}
+		gw.startOlricSupervisor(gw.shutdownCtx, olricCfg)
 	}
 
 	// Bring the schema up in the background. Until it succeeds the gateway
@@ -996,36 +1005,122 @@ func (g *Gateway) getOlricClient() *olric.Client {
 	return g.olricClient
 }
 
-// startOlricReconnectLoop starts a background goroutine that continuously attempts
-// to reconnect to the Olric cluster with exponential backoff.
-func (g *Gateway) startOlricReconnectLoop(cfg olric.Config) {
+// Olric supervision bounds.
+const (
+	// olricProbeInterval is how often a connected client is re-checked. Short
+	// enough that a namespace stops hanging on a dead cache within a probe or
+	// two, long enough not to be its own load.
+	olricProbeInterval = 10 * time.Second
+
+	// olricUnhealthyThreshold is how many consecutive failed probes before the
+	// client is dropped. One failure is a blip; three across half a minute is
+	// the cache being gone.
+	olricUnhealthyThreshold = 3
+
+	// olricReconnectBase / olricReconnectMax bound the retry while
+	// disconnected.
+	olricReconnectBase = 5 * time.Second
+	olricReconnectMax  = 30 * time.Second
+)
+
+// startOlricSupervisor keeps the Olric client in step with reality for the life
+// of the process.
+//
+// It replaces a one-shot reconnect loop that returned as soon as it connected
+// once, and which was only armed when the INITIAL connect had failed. So the
+// common case — Olric up at start, dies later — left a stale client wired in
+// for ever: handlers returned transport errors on every request instead of the
+// honest 503 the nil-client branch produces, and /health kept saying healthy
+// while namespace requests hung.
+//
+// Two states. Connected: probe, and on sustained failure drop the client so
+// handlers answer 503. Disconnected: retry with backoff until one works. It
+// never returns.
+func (g *Gateway) startOlricSupervisor(ctx context.Context, cfg olric.Config) {
 	go func() {
-		retryDelay := 5 * time.Second
-		maxBackoff := 30 * time.Second
+		failures := 0
+		retryDelay := olricReconnectBase
 
 		for {
+			if g.getOlricClient() != nil {
+				if err := g.probeOlric(ctx); err != nil {
+					failures++
+					g.logger.ComponentWarn(logging.ComponentGeneral, "Olric probe failed",
+						zap.Int("consecutive_failures", failures),
+						zap.Int("threshold", olricUnhealthyThreshold),
+						zap.Error(err))
+
+					if failures >= olricUnhealthyThreshold {
+						// Drop it. A client that cannot reach its cluster
+						// returns errors from every call; a nil one returns a
+						// 503, which is the truthful answer and the one a
+						// caller can act on.
+						g.logger.ComponentError(logging.ComponentGeneral,
+							"Olric is unreachable; cache requests will return 503 until it recovers",
+							zap.Int("consecutive_failures", failures))
+						g.setOlricClient(nil)
+						failures = 0
+						retryDelay = olricReconnectBase
+					}
+				} else {
+					failures = 0
+				}
+
+				if !sleepCtx(ctx, olricProbeInterval) {
+					return
+				}
+				continue
+			}
+
 			client, err := olric.NewClient(cfg, g.logger.Logger)
 			if err == nil {
 				g.setOlricClient(client)
-				g.logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client connected after background retries",
+				g.logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client connected",
 					zap.Strings("servers", cfg.Servers),
 					zap.Duration("timeout", cfg.Timeout))
-				return
+				retryDelay = olricReconnectBase
+				if !sleepCtx(ctx, olricProbeInterval) {
+					return
+				}
+				continue
 			}
 
 			g.logger.ComponentWarn(logging.ComponentGeneral, "Olric cache client reconnect failed",
 				zap.Duration("retry_in", retryDelay),
 				zap.Error(err))
 
-			time.Sleep(retryDelay)
-			if retryDelay < maxBackoff {
-				retryDelay *= 2
-				if retryDelay > maxBackoff {
-					retryDelay = maxBackoff
-				}
+			if !sleepCtx(ctx, retryDelay) {
+				return
+			}
+			retryDelay *= 2
+			if retryDelay > olricReconnectMax {
+				retryDelay = olricReconnectMax
 			}
 		}
 	}()
+}
+
+// probeOlric checks that the current client can still reach its cluster.
+func (g *Gateway) probeOlric(ctx context.Context) error {
+	client := g.getOlricClient()
+	if client == nil {
+		return fmt.Errorf("no olric client")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, olricProbeInterval)
+	defer cancel()
+	return client.Health(probeCtx)
+}
+
+// sleepCtx waits for d, and reports false if the context ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // Cache handler wrappers - these check cacheHandlers dynamically to support
