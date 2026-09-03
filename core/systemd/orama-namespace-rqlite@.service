@@ -7,9 +7,20 @@ StopWhenUnneeded=false
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
+InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
-# Environment file contains namespace-specific config
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/rqlite.env
 
 # Start rqlited with args from environment (using shell to properly expand JOIN_ARGS)

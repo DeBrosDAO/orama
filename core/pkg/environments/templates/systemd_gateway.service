@@ -14,7 +14,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths={{.OramaDir}}
+ProtectProc=invisible
+ReadWritePaths={{.OramaDir}}/data {{.OramaDir}}/logs {{.OramaDir}}/configs {{.OramaDir}}/tls-cache
+ReadOnlyPaths={{.OramaDir}}/secrets
 WorkingDirectory={{.HomeDir}}
 Environment=HOME={{.HomeDir}}
 ExecStart={{.HomeDir}}/bin/gateway --config {{.OramaDir}}/data/gateway.yaml

@@ -90,10 +90,12 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 ### Process Isolation
 
 **Dedicated User (Step 1.11)**
-- All services run as the `orama` user (not root)
+- Host and namespace daemons (gateway, rqlite, olric, sfu, turn, pubsub, ipfs, caddy, coredns) run as `User=orama`
 - Caddy and CoreDNS get `AmbientCapabilities=CAP_NET_BIND_SERVICE` for ports 80/443 and 53
 - WireGuard stays as root (kernel netlink requires it)
+- Anyone client/relay stay `debian-anon`
 - vault-guardian already had proper hardening
+- `/opt/orama/bin` is `root:orama` mode `0750` so the orama user can execute binaries but cannot replace them
 
 **systemd Hardening (Step 1.12)**
 - All service units include:
@@ -105,9 +107,11 @@ These measures apply to all nodes (Ubuntu and OramaOS).
   ProtectKernelTunables=yes
   ProtectKernelModules=yes
   RestrictNamespaces=yes
-  ReadWritePaths=/opt/orama/.orama
+  ProtectProc=invisible
   ```
-- Applied to both template files (`pkg/environments/templates/`) and hardcoded unit generators (`pkg/environments/production/services.go`)
+- `ReadWritePaths` is per-service (data dir + logs), not the whole `.orama` tree
+- Units that do not need cluster secrets set `InaccessiblePaths=…/secrets`; the gateway and node keep `ReadOnlyPaths` on `secrets/`
+- Applied to both template files (`pkg/environments/templates/`) and hardcoded unit generators (`pkg/environments/production/services.go`) plus `core/systemd/orama-namespace-*@.service`
 
 ### Supply Chain
 

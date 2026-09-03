@@ -16,7 +16,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths=/opt/orama/.orama
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs
+InaccessiblePaths=/opt/orama/.orama/secrets
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs-gc.env
 Environment=HOME=/opt/orama
 ExecStart=/usr/local/bin/ipfs repo gc

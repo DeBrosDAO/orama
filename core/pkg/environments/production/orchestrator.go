@@ -707,14 +707,15 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	// Phases 2b-4 create files as root (IPFS repo, configs, secrets, etc.)
 	// that must be readable/writable by the orama service user.
 	if err := exec.Command("id", "orama").Run(); err == nil {
-		for _, dir := range []string{ps.oramaDir, filepath.Join(ps.oramaHome, "bin")} {
-			if _, statErr := os.Stat(dir); statErr == nil {
-				if output, chownErr := exec.Command("chown", "-R", "orama:orama", dir).CombinedOutput(); chownErr != nil {
-					ps.logf("  ⚠️  Failed to chown %s: %v\n%s", dir, chownErr, string(output))
-				}
+		if _, statErr := os.Stat(ps.oramaDir); statErr == nil {
+			if output, chownErr := exec.Command("chown", "-R", "orama:orama", ps.oramaDir).CombinedOutput(); chownErr != nil {
+				ps.logf("  ⚠️  Failed to chown %s: %v\n%s", ps.oramaDir, chownErr, string(output))
 			}
 		}
-		ps.logf("  ✓ File ownership updated for orama user")
+		if err := lockOramaBinDir(filepath.Join(ps.oramaHome, "bin")); err != nil {
+			ps.logf("  ⚠️  Failed to lock bin dir: %v", err)
+		}
+		ps.logf("  ✓ File ownership updated for orama user; bin/ is root:orama 0750")
 	}
 
 	// Validate all required binaries are available before creating services

@@ -16,7 +16,9 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
-ReadWritePaths=/opt/orama/.orama
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs
+ReadOnlyPaths=/opt/orama/.orama/secrets
 EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs.env
 Environment=HOME=/opt/orama
 ExecStartPre=/bin/bash -c 'if [ -f /opt/orama/.orama/secrets/swarm.key ] && [ ! -f ${IPFS_PATH}/swarm.key ]; then cp /opt/orama/.orama/secrets/swarm.key ${IPFS_PATH}/swarm.key && chmod 600 ${IPFS_PATH}/swarm.key; fi'

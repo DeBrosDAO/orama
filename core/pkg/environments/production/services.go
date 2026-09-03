@@ -17,7 +17,20 @@ NoNewPrivileges=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
-RestrictNamespaces=yes`
+RestrictNamespaces=yes
+ProtectProc=invisible`
+
+// anyoneClientHardening is the host-service block for debian-anon (bugboard #244).
+const anyoneClientHardening = `User=debian-anon
+Group=debian-anon
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible`
 
 // oramaNodeHardening is like oramaServiceHardening but WITHOUT NoNewPrivileges.
 // The node process (which includes the gateway) needs to use sudo to manage
@@ -28,6 +41,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
+ProtectProc=invisible
 ProtectKernelModules=yes
 RestrictNamespaces=yes`
 
@@ -50,6 +64,8 @@ func (ssg *SystemdServiceGenerator) GenerateIPFSService(ipfsBinary string) strin
 	ipfsRepoPath := filepath.Join(ssg.oramaDir, "data", "ipfs", "repo")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs.log")
 
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 	return fmt.Sprintf(`[Unit]
 Description=IPFS Daemon
 After=network-online.target
@@ -58,10 +74,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 %[6]s
-ReadWritePaths=%[3]s
+ReadWritePaths=%[2]s %[7]s
+ReadOnlyPaths=%[8]s
 Environment=HOME=%[1]s
 Environment=IPFS_PATH=%[2]s
-ExecStartPre=/bin/bash -c 'if [ -f %[3]s/secrets/swarm.key ] && [ ! -f %[2]s/swarm.key ]; then cp %[3]s/secrets/swarm.key %[2]s/swarm.key && chmod 600 %[2]s/swarm.key; fi'
+ExecStartPre=/bin/bash -c 'if [ -f %[8]s/swarm.key ] && [ ! -f %[2]s/swarm.key ]; then cp %[8]s/swarm.key %[2]s/swarm.key && chmod 600 %[2]s/swarm.key; fi'
 ExecStart=%[5]s daemon --enable-pubsub-experiment --repo-dir=%[2]s
 Restart=always
 RestartSec=5
@@ -78,7 +95,7 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, logFile, ipfsBinary, oramaServiceHardening)
+`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, logFile, ipfsBinary, oramaServiceHardening, logsDir, secretsDir)
 }
 
 // IPFS garbage-collection schedule. The daemon runs WITHOUT --enable-gc by
@@ -101,6 +118,8 @@ const (
 func (ssg *SystemdServiceGenerator) GenerateIPFSGCService(ipfsBinary string) string {
 	ipfsRepoPath := filepath.Join(ssg.oramaDir, "data", "ipfs", "repo")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs-gc.log")
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 
 	// No [Install] section: the unit is triggered by the timer, never enabled directly.
 	return fmt.Sprintf(`[Unit]
@@ -111,7 +130,8 @@ Requires=orama-ipfs.service
 [Service]
 Type=oneshot
 %[5]s
-ReadWritePaths=%[3]s
+ReadWritePaths=%[2]s %[7]s
+InaccessiblePaths=%[8]s
 Environment=HOME=%[1]s
 Environment=IPFS_PATH=%[2]s
 ExecStart=%[4]s repo gc
@@ -119,7 +139,7 @@ TimeoutStartSec=1800
 StandardOutput=append:%[6]s
 StandardError=append:%[6]s
 SyslogIdentifier=orama-ipfs-gc
-`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, ipfsBinary, oramaServiceHardening, logFile)
+`, ssg.oramaHome, ipfsRepoPath, ssg.oramaDir, ipfsBinary, oramaServiceHardening, logFile, logsDir, secretsDir)
 }
 
 // GenerateIPFSGCTimer generates the timer that triggers orama-ipfs-gc.service.
@@ -143,6 +163,8 @@ WantedBy=timers.target
 func (ssg *SystemdServiceGenerator) GenerateIPFSClusterService(clusterBinary string) (string, error) {
 	clusterPath := filepath.Join(ssg.oramaDir, "data", "ipfs-cluster")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "ipfs-cluster.log")
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 
 	clusterSecretPath := filepath.Join(ssg.oramaDir, "secrets", "cluster-secret")
 	data, err := os.ReadFile(clusterSecretPath)
@@ -163,7 +185,8 @@ Requires=orama-ipfs.service
 [Service]
 Type=simple
 %[6]s
-ReadWritePaths=%[7]s
+ReadWritePaths=%[2]s %[8]s
+InaccessiblePaths=%[9]s
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 Environment=IPFS_CLUSTER_PATH=%[2]s
@@ -186,13 +209,15 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret, oramaServiceHardening, ssg.oramaDir), nil
+`, ssg.oramaHome, clusterPath, logFile, clusterBinary, clusterSecret, oramaServiceHardening, ssg.oramaDir, logsDir, secretsDir), nil
 }
 
 // GenerateRQLiteService generates the RQLite systemd unit
 func (ssg *SystemdServiceGenerator) GenerateRQLiteService(rqliteBinary string, httpPort, raftPort int, joinAddr string, advertiseIP string) string {
 	dataDir := filepath.Join(ssg.oramaDir, "data", "rqlite")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "rqlite.log")
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 
 	// Use public IP for advertise if provided, otherwise default to localhost
 	if advertiseIP == "" {
@@ -219,7 +244,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 %[6]s
-ReadWritePaths=%[7]s
+ReadWritePaths=%[4]s %[8]s
+InaccessiblePaths=%[9]s
 Environment=HOME=%[1]s
 ExecStart=%[5]s %[2]s
 Restart=always
@@ -235,13 +261,16 @@ KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, args, logFile, dataDir, rqliteBinary, oramaServiceHardening, ssg.oramaDir)
+`, ssg.oramaHome, args, logFile, dataDir, rqliteBinary, oramaServiceHardening, ssg.oramaDir, logsDir, secretsDir)
 }
 
 // GenerateOlricService generates the Olric systemd unit
 func (ssg *SystemdServiceGenerator) GenerateOlricService(olricBinary string) string {
 	olricConfigPath := filepath.Join(ssg.oramaDir, "configs", "olric", "config.yaml")
+	olricConfigDir := filepath.Join(ssg.oramaDir, "configs", "olric")
 	logFile := filepath.Join(ssg.oramaDir, "logs", "olric.log")
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 
 	return fmt.Sprintf(`[Unit]
 Description=Olric Cache Server
@@ -251,7 +280,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 %[6]s
-ReadWritePaths=%[4]s
+ReadWritePaths=%[7]s %[8]s
+InaccessiblePaths=%[9]s
 Environment=HOME=%[1]s
 Environment=OLRIC_SERVER_CONFIG=%[2]s
 ExecStart=%[5]s
@@ -270,7 +300,7 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, olricConfigPath, logFile, ssg.oramaDir, olricBinary, oramaServiceHardening)
+`, ssg.oramaHome, olricConfigPath, logFile, ssg.oramaDir, olricBinary, oramaServiceHardening, olricConfigDir, logsDir, secretsDir)
 }
 
 // GenerateNodeService generates the Orama Node systemd unit
@@ -360,6 +390,11 @@ WantedBy=multi-user.target
 // GenerateGatewayService generates the Orama Gateway systemd unit
 func (ssg *SystemdServiceGenerator) GenerateGatewayService() string {
 	logFile := filepath.Join(ssg.oramaDir, "logs", "gateway.log")
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	dataDir := filepath.Join(ssg.oramaDir, "data")
+	configsDir := filepath.Join(ssg.oramaDir, "configs")
+	tlsCache := filepath.Join(ssg.oramaDir, "tls-cache")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 	return fmt.Sprintf(`[Unit]
 Description=Orama Gateway
 After=orama-node.service orama-olric.service
@@ -368,7 +403,8 @@ Wants=orama-node.service orama-olric.service
 [Service]
 Type=simple
 %[4]s
-ReadWritePaths=%[2]s
+ReadWritePaths=%[5]s %[6]s %[7]s %[8]s
+ReadOnlyPaths=%[9]s
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/gateway --config %[2]s/data/gateway.yaml
@@ -387,7 +423,7 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, ssg.oramaHome, ssg.oramaDir, logFile, oramaServiceHardening)
+`, ssg.oramaHome, ssg.oramaDir, logFile, oramaServiceHardening, dataDir, logsDir, configsDir, tlsCache, secretsDir)
 }
 
 // GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit.
@@ -402,8 +438,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debian-anon
-Group=debian-anon
+%[2]s
 ExecStart=/usr/bin/anon -f /etc/anon/anonrc
 Restart=on-failure
 RestartSec=5
@@ -420,11 +455,13 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, logFile)
+`, logFile, anyoneClientHardening)
 }
 
 // GenerateCoreDNSService generates the CoreDNS systemd unit
 func (ssg *SystemdServiceGenerator) GenerateCoreDNSService() string {
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 	return fmt.Sprintf(`[Unit]
 Description=CoreDNS DNS Server with RQLite backend
 Documentation=https://coredns.io
@@ -435,6 +472,7 @@ Wants=network-online.target orama-node.service
 Type=simple
 %[1]s
 ReadWritePaths=%[2]s
+InaccessiblePaths=%[3]s
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/coredns -conf /etc/coredns/Corefile
@@ -451,11 +489,13 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, oramaServiceHardening, ssg.oramaDir)
+`, oramaServiceHardening, logsDir, secretsDir)
 }
 
 // GenerateCaddyService generates the Caddy systemd unit for SSL/TLS
 func (ssg *SystemdServiceGenerator) GenerateCaddyService() string {
+	logsDir := filepath.Join(ssg.oramaDir, "logs")
+	secretsDir := filepath.Join(ssg.oramaDir, "secrets")
 	return fmt.Sprintf(`[Unit]
 Description=Caddy HTTP/2 Server
 Documentation=https://caddyserver.com/docs/
@@ -467,6 +507,7 @@ Requires=orama-node.service
 Type=simple
 %[1]s
 ReadWritePaths=%[2]s /var/lib/caddy /etc/caddy
+InaccessiblePaths=%[3]s
 Environment=XDG_DATA_HOME=/var/lib/caddy
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -488,7 +529,7 @@ MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
-`, oramaServiceHardening, ssg.oramaDir)
+`, oramaServiceHardening, logsDir, secretsDir)
 }
 
 // SystemdController manages systemd service operations
