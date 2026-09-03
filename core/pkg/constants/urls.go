@@ -2,6 +2,7 @@ package constants
 
 import (
 	"net"
+	"net/netip"
 	"strconv"
 )
 
@@ -58,3 +59,16 @@ func OlricAddrFor(host string) string {
 func RQLiteRaftAddrFor(host string) string {
 	return net.JoinHostPort(host, strconv.Itoa(RQLiteRaftPort))
 }
+
+// WireGuardSubnet is the internal WireGuard mesh CIDR. Every inter-node
+// endpoint — raft, the HTTP API, Olric memberlist, the SFU — is advertised and
+// reached on an address inside it; the public interface has those ports closed.
+const WireGuardSubnet = "10.0.0.0/24"
+
+// wireGuardOverlay is WireGuardSubnet parsed once. The CIDR is a compile-time
+// constant, so a parse failure is a programming error rather than a runtime
+// condition.
+var wireGuardOverlay = netip.MustParsePrefix(WireGuardSubnet)
+
+// WireGuardOverlay returns the mesh prefix.
+func WireGuardOverlay() netip.Prefix { return wireGuardOverlay }

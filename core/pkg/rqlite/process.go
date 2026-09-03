@@ -256,7 +256,17 @@ func (r *RQLiteManager) connect(ctx context.Context) error {
 		conn, err := gorqlite.Open(connURL)
 		if err == nil {
 			r.setConnection(conn)
-			_ = r.validateNodeID()
+			// Logged, not returned: an id mismatch does not stop this node
+			// working, it means the cluster is carrying a duplicate entry for
+			// it. Discarding the result silently — which is what this used to
+			// do — is how a 5-voter cluster ends up needing 4 of 7 to agree
+			// with nobody having been told.
+			if idErr := r.validateNodeID(); idErr != nil {
+				r.logger.Error("RQLite raft membership carries a stale entry for this node; "+
+					"quorum arithmetic is counting a member that no longer exists at that address",
+					zap.String("advertise_address", r.discoverConfig.RaftAdvAddress),
+					zap.Error(idErr))
+			}
 			return nil
 		}
 		lastErr = err

@@ -241,6 +241,21 @@ render it today; read it from the node's own log
 (`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
 lists the components that have not converged.
 
+**RQLite identity is still the raft address.** rqlited is not given a
+`-node-id`, so its raft node id defaults to the raft advertise address. That
+makes identity and routing the same value: change a node's WireGuard IP and the
+same machine becomes a second member, while the old entry stays and keeps
+counting toward quorum. Decoupling the two needs a rolling re-join per node and
+something able to retire the stale entry, so it is sequenced after the
+membership work (bugboard chg-302, bug-301, chg-303).
+
+Two consequences are already handled. Advertised addresses are always rewritten
+to a WireGuard address — selection used to prefer a *public* IP and fall back to
+the overlay, which replaced a reachable raft endpoint with one UFW blocks; with
+no overlay candidate it now refuses to rewrite rather than substituting a public
+IP. And a node that finds itself in the raft configuration under a different id
+logs it at Error on every start instead of discarding the result.
+
 RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`. Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components
