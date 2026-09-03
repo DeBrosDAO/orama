@@ -40,6 +40,22 @@ func (c *ClusterDiscoveryService) GetAllPeers() []*discovery.RQLiteNodeMetadata 
 	return peers
 }
 
+// knowsRaftAddress reports whether discovery currently has a peer advertising
+// raftAddr. Used as one of the independent signals before a member is evicted
+// from the raft configuration: a node libp2p can still exchange metadata with
+// is not gone, whatever raft's reachability column says.
+func (c *ClusterDiscoveryService) knowsRaftAddress(raftAddr string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, peer := range c.knownPeers {
+		if peer != nil && peer.RaftAddress == raftAddr {
+			return true
+		}
+	}
+	return false
+}
+
 // GetNodeWithHighestLogIndex returns the node with the highest Raft log index
 func (c *ClusterDiscoveryService) GetNodeWithHighestLogIndex() *discovery.RQLiteNodeMetadata {
 	c.mu.RLock()

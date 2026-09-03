@@ -241,6 +241,57 @@ render it today; read it from the node's own log
 (`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
 lists the components that have not converged.
 
+**Dead voters are evicted.** A voter that is gone for good used to stay in the
+raft configuration for ever — quorum arithmetic kept counting a machine that no
+longer existed, so on a three-voter cluster the second such event was permanent
+quorum loss with `recover-raft` the only way out. The leader now removes one,
+but only when three separate sources agree, because the leader's own view of
+reachability has a failure mode where a healthy node looks dead — a route lost,
+a firewall change, a WireGuard key rotation:
+
+1. **raft**, sustained: the member is an unreachable *voter* on 10 consecutive
+   2-minute ticks. (A non-voter costs the cluster nothing, so there is no
+   availability argument for touching one.)
+2. **libp2p discovery** no longer knows the peer at all, which takes at least
+   the 2-hour inactivity window.
+3. **other nodes**: at least two *different* nodes recorded it `dead` in
+   `node_health_events` within the last 30 minutes, with no later `recovered`.
+
+Only the third is independent of this node. It is also the one that has to
+cross an identifier boundary: a raft node id is the raft advertise address,
+while the health monitor keys on libp2p peer ids, so the candidate is resolved
+through `dns_nodes.internal_ip` before the corroboration query. Comparing the
+two id spaces directly matches nothing, silently.
+
+The removal is refused unless the reachable voters still meet quorum afterwards,
+the raft term has been stable for three ticks, and at most one member changes
+per tick.
+
+An eviction writes a tombstone to `raft_evicted_nodes`. Without one,
+`recoverOrphanedNodes` re-added the node within five minutes — it re-adds every
+discovery peer absent from the raft configuration, so the eviction was undone
+automatically. (Removals made by hand still get no tombstone and are still
+undone; wiring the CLI and the decommission path to write one is chg-303.)
+
+Tombstones expire after 24 hours, and that expiry is load-bearing rather than
+housekeeping: an evicted node is the one node that *cannot* clear its own
+tombstone, because it is outside the raft configuration, so its local rqlite has
+no leader and it cannot write to the cluster at all. Without expiry, a node
+evicted after a long partition would be permanently removed with no automatic
+way back. The TTL is far longer than the 2-hour discovery window on purpose — a
+node that is genuinely gone has dropped out of discovery long before its
+tombstone lifts, so nothing is offering it for re-adding by then.
+
+Discovery itself now forgets an unanswering peer after 2 hours rather than 24.
+The same constant governs `waitForMinClusterSizeBeforeStart`, so a node
+restarting during an outage that has already lasted 2 hours sees fewer peers and
+waits out its (bounded) minimum-cluster-size window before continuing.
+
+Voter demotion is an in-place `POST /join` with `voter:false`. It used to be
+remove-then-rejoin, which left the node outside the configuration for up to 59
+seconds while it retried with backoff; a leader change inside that window
+orphaned it, and the rollback path could fail too.
+
 **RQLite identity is still the raft address.** rqlited is not given a
 `-node-id`, so its raft node id defaults to the raft advertise address. That
 makes identity and routing the same value: change a node's WireGuard IP and the

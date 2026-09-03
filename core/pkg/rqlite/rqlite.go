@@ -50,6 +50,12 @@ type RQLiteManager struct {
 	// which the boot supervisor may call more than once.
 	backgroundOnce sync.Once
 
+	// sqlDB is a lazily-opened database/sql handle on this node's own rqlite,
+	// for the reconcilers that need SQL rather than raft's HTTP API.
+	sqlOnce sync.Once
+	sqlDB   *sql.DB
+	sqlErr  error
+
 	// stopOnce guards Stop. It has two callers — RQLiteAdapter.Close and
 	// Node.Stop — and running the leadership transfer twice can push shutdown
 	// past the unit's TimeoutStopSec, so systemd SIGKILLs the process during
@@ -189,6 +195,23 @@ func (r *RQLiteManager) JoinCluster(ctx context.Context) error {
 		r.logger.Error("Failed to apply embedded migrations", zap.Error(err))
 	} else {
 		r.logger.Info("Database migrations applied successfully")
+	}
+
+	// This node is participating in raft again, so any tombstone against it is
+	// spent, and leaving the row would keep it out of orphan recovery until the
+	// TTL expires. Runs AFTER the migrations above, which is what creates the
+	// table on the first boot that carries this code.
+	//
+	// It only ever fires for a node that was tombstoned but stayed in the
+	// configuration — a tombstone written just before a removal that failed. A
+	// node that was actually removed cannot reach here at all: it has no
+	// leader, so JoinCluster returns above. That case is what tombstoneTTL is
+	// for.
+	if db, dbErr := r.localSQLHandle(); dbErr == nil {
+		if err := clearTombstone(ctx, db, r.discoverConfig.RaftAdvAddress); err != nil {
+			r.logger.Warn("Could not clear this node's raft eviction tombstone",
+				zap.String("node_id", r.discoverConfig.RaftAdvAddress), zap.Error(err))
+		}
 	}
 
 	// Schema-drift visibility: even when apply returned nil, log if the

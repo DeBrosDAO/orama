@@ -26,10 +26,69 @@ const (
 	orphanRecoverySettleDelay = 5 * time.Minute
 )
 
-// voterReconciler holds voter change cooldown state.
+// voterReconciler holds the state the reconciler needs across ticks: raft
+// itself remembers none of it.
 type voterReconciler struct {
 	mu        sync.Mutex
 	cooldowns map[string]time.Time // nodeID → earliest next attempt
+
+	// unreachable counts consecutive ticks each member has failed to answer.
+	unreachable unreachableStreaks
+
+	// lastTerm and stableTerms track how long the raft term has been steady.
+	// A membership change issued during an election can be lost or applied
+	// against a configuration that is already gone.
+	lastTerm    uint64
+	stableTerms int
+
+	// evictionCooldowns holds off a candidate whose eviction could not be
+	// completed, so a failure does not produce a fresh attempt — and a fresh
+	// tombstone write — every two minutes.
+	evictionCooldowns map[string]time.Time
+}
+
+// evictionCooldown is how long a failed eviction attempt is left alone. Long
+// enough that a transient cause has passed, short enough that a genuinely dead
+// voter is still evicted within the hour.
+const evictionCooldown = 10 * time.Minute
+
+// evictionOnCooldown reports whether this candidate was recently held off.
+func (v *voterReconciler) evictionOnCooldown(nodeID string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	until, held := v.evictionCooldowns[nodeID]
+	return held && time.Now().Before(until)
+}
+
+// holdOffEviction defers further attempts on this candidate.
+func (v *voterReconciler) holdOffEviction(nodeID string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.evictionCooldowns[nodeID] = time.Now().Add(evictionCooldown)
+}
+
+// termsBeforeMembershipChange is how many consecutive ticks the raft term must
+// be unchanged before this node will alter the configuration.
+//
+// The check it replaces read /status twice microseconds apart and compared the
+// term to itself, which proves only that two HTTP calls returned the same
+// number. Across ticks the term is a real stability signal: at 2 minutes a
+// cluster that is re-electing will change term inside the window.
+const termsBeforeMembershipChange = 3
+
+// noteTerm records this tick's raft term and reports whether the term has been
+// stable long enough to change membership.
+func (v *voterReconciler) noteTerm(term uint64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if term != v.lastTerm {
+		v.lastTerm = term
+		v.stableTerms = 1
+		return false
+	}
+	v.stableTerms++
+	return v.stableTerms >= termsBeforeMembershipChange
 }
 
 // startVoterReconciliation periodically checks and corrects voter/non-voter
@@ -37,7 +96,9 @@ type voterReconciler struct {
 // node per cycle to minimize disruption.
 func (r *RQLiteManager) startVoterReconciliation(ctx context.Context) {
 	reconciler := &voterReconciler{
-		cooldowns: make(map[string]time.Time),
+		cooldowns:         make(map[string]time.Time),
+		unreachable:       make(unreachableStreaks),
+		evictionCooldowns: make(map[string]time.Time),
 	}
 
 	// Wait for the cluster to stabilize after startup before correcting
@@ -56,9 +117,7 @@ func (r *RQLiteManager) startVoterReconciliation(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := r.reconcileVoters(reconciler); err != nil {
-				r.logger.Debug("Voter reconciliation skipped", zap.Error(err))
-			}
+			r.runMembershipTick(ctx, reconciler)
 		}
 	}
 }
@@ -83,21 +142,43 @@ func (r *RQLiteManager) startOrphanedNodeRecovery(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.recoverOrphanedNodes()
+			r.recoverOrphanedNodes(ctx)
 		}
 	}
 }
 
 // recoverOrphanedNodes finds nodes known to discovery but missing from the
 // Raft cluster and re-adds them.
-func (r *RQLiteManager) recoverOrphanedNodes() {
+func (r *RQLiteManager) recoverOrphanedNodes(ctx context.Context) {
 	if r.discoveryService == nil {
 		return
 	}
 
-	// Only the leader runs orphan recovery
+	// Only the leader runs orphan recovery. Checked first so followers do no
+	// work at all — the tombstone read below is a database query every node
+	// would otherwise issue every five minutes for nothing.
 	status, err := r.getRQLiteStatus()
 	if err != nil || status.Store.Raft.State != "Leader" {
+		return
+	}
+
+	// A node that was removed on purpose must not be re-added by this loop.
+	// Without the check, an operator's removal and an eviction were both undone
+	// within five minutes: the loop re-adds every discovery peer absent from
+	// the raft configuration, and discovery keeps a peer for hours.
+	db, err := r.localSQLHandle()
+	if err != nil {
+		r.logger.Warn("No database handle for eviction tombstones; not re-adding orphans this cycle",
+			zap.Error(err))
+		return
+	}
+	tombstoned, err := tombstonedNodes(ctx, db)
+	if err != nil {
+		// Fail closed: without the tombstone list this loop cannot tell an
+		// orphan from a node someone deliberately removed, and re-adding the
+		// latter is the more expensive mistake.
+		r.logger.Warn("Cannot read raft eviction tombstones; not re-adding orphans this cycle",
+			zap.Error(err))
 		return
 	}
 
@@ -120,6 +201,11 @@ func (r *RQLiteManager) recoverOrphanedNodes() {
 		}
 		if raftNodeSet[peer.RaftAddress] {
 			continue // already in cluster
+		}
+		if _, evicted := tombstoned[peer.RaftAddress]; evicted {
+			r.logger.Debug("Node is absent from raft because it was evicted on purpose; leaving it out",
+				zap.String("node_raft_addr", peer.RaftAddress))
+			continue
 		}
 
 		// This peer is in discovery but not in Raft — it's orphaned
@@ -148,47 +234,90 @@ func (r *RQLiteManager) recoverOrphanedNodes() {
 	}
 }
 
-// reconcileVoters compares actual cluster voter assignments (from RQLite's
-// /nodes endpoint) against the deterministic desired set (computeVoterSet)
-// and corrects mismatches.
+// runMembershipTick is one pass over raft membership: evict a member that is
+// demonstrably gone, or correct the voter set, but never both in the same tick.
 //
-// Improvements over original:
-//   - Promotion: tries direct POST /join with voter=true first (no remove needed)
-//   - Leader stability: verifies leader is stable before demotion
-//   - Cooldown: skips nodes that recently failed a voter change
-//   - Fixes at most one node per cycle
-func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler) error {
-	// 1. Only the leader reconciles
+// It reads /status and /nodes once and hands the same snapshot to both passes.
+// That is not only cheaper — each used to fetch its own — it is what makes
+// "one membership change per tick" and "the term has been stable for N ticks"
+// mean what they say. With each pass observing the term separately, a tick
+// where both ran counted twice toward the same stability budget.
+func (r *RQLiteManager) runMembershipTick(ctx context.Context, reconciler *voterReconciler) {
 	status, err := r.getRQLiteStatus()
 	if err != nil {
-		return fmt.Errorf("get status: %w", err)
+		r.logger.Debug("Membership tick skipped: cannot read status", zap.Error(err))
+		return
 	}
 	if status.Store.Raft.State != "Leader" {
-		return nil
+		return
 	}
 
-	// 2. Get all cluster nodes including non-voters
 	nodes, err := r.getAllClusterNodes()
 	if err != nil {
-		return fmt.Errorf("get all nodes: %w", err)
+		r.logger.Debug("Membership tick skipped: cannot read nodes", zap.Error(err))
+		return
 	}
 
+	termStable := reconciler.noteTerm(status.Store.Raft.Term)
+
+	changed, err := r.evictDeadVoters(ctx, reconciler, nodes, termStable)
+	if err != nil {
+		// Logged, not returned: the voter reconcile below is independent work,
+		// and coupling them meant a database hiccup in the eviction evidence
+		// silently stopped voter correction too.
+		r.logger.Warn("Dead-voter eviction failed", zap.Error(err))
+	}
+	if changed {
+		return // one membership change per tick
+	}
+
+	if err := r.reconcileVoters(reconciler, status, nodes, termStable); err != nil {
+		r.logger.Debug("Voter reconciliation skipped", zap.Error(err))
+	}
+}
+
+// reconcileVoters compares the cluster's actual voter assignments against the
+// deterministic desired set (computeVoterSet) and corrects one mismatch.
+//
+// Promotion and demotion are both a POST /join carrying the voter flag, so
+// neither takes the node out of the configuration. It corrects at most one node
+// per tick, skips nodes in cooldown after a failed change, and requires a live
+// quorum and a term the caller has watched stay stable — see runMembershipTick.
+func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQLiteStatus, nodes RQLiteNodes, termStable bool) error {
 	if len(nodes) <= MaxDefaultVoters {
 		return nil // Small cluster — all nodes should be voters
 	}
 
-	// 3. Only reconcile when every node is reachable (stable cluster)
+	// 3. Require a quorum of reachable voters, not a fully reachable cluster.
+	//
+	// "Every member must answer" meant one permanently dead node froze the
+	// voter set for ever — which is precisely the state that most needs
+	// correcting, and it is why nothing ever demoted an excess voter on a
+	// cluster carrying a corpse. What actually matters is that the change can
+	// be committed, so the condition is a live quorum.
+	reachableVoters, totalVoters := 0, 0
 	for _, n := range nodes {
-		if !n.Reachable {
-			return nil
+		if !n.Voter {
+			continue
+		}
+		totalVoters++
+		if n.Reachable {
+			reachableVoters++
 		}
 	}
+	if reachableVoters < totalVoters/2+1 {
+		return fmt.Errorf("only %d of %d voters reachable; not changing membership without a quorum",
+			reachableVoters, totalVoters)
+	}
 
-	// 4. Leader stability: verify term hasn't changed recently
-	// (Re-check status to confirm we're still the stable leader)
-	status2, err := r.getRQLiteStatus()
-	if err != nil || status2.Store.Raft.State != "Leader" || status2.Store.Raft.Term != status.Store.Raft.Term {
-		return fmt.Errorf("leader state changed during reconciliation check")
+	// 4. Leader stability, measured across ticks by the caller.
+	//
+	// This used to read /status twice, microseconds apart, and compare the term
+	// to itself — which proves only that two HTTP calls returned the same
+	// number. The term is only a stability signal when observed over time.
+	if !termStable {
+		return fmt.Errorf("raft term has not been stable for %d ticks; deferring membership change",
+			termsBeforeMembershipChange)
 	}
 
 	// 5. Compute desired voter set from raft addresses
@@ -228,7 +357,7 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler) error {
 			r.logger.Info("Demoting excess voter to non-voter",
 				zap.String("node_id", n.ID))
 
-			if err := r.changeNodeVoterStatus(n.ID, false); err != nil {
+			if err := r.setVoterInPlace(n.ID, false); err != nil {
 				r.logger.Warn("Failed to demote voter",
 					zap.String("node_id", n.ID),
 					zap.Error(err))
@@ -254,11 +383,11 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler) error {
 				return nil
 			}
 
-			// Direct join didn't change voter status, fall back to remove+rejoin
-			r.logger.Info("Direct promotion didn't work, trying remove+rejoin",
-				zap.String("node_id", n.ID))
-
-			if err := r.changeNodeVoterStatus(n.ID, true); err != nil {
+			// The join did not take. Report it and back off rather than
+			// falling back to remove-then-rejoin: that path left the node out
+			// of the configuration for up to 59s, and a leader change inside
+			// that window orphaned it entirely.
+			if err := r.setVoterInPlace(n.ID, true); err != nil {
 				r.logger.Warn("Failed to promote non-voter",
 					zap.String("node_id", n.ID),
 					zap.Error(err))
@@ -277,89 +406,65 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler) error {
 	return nil
 }
 
-// changeNodeVoterStatus changes a node's voter status by removing it from the
-// cluster and immediately re-adding it with the desired voter flag.
+// setVoterInPlace changes a member's voter status without taking it out of the
+// raft configuration.
 //
-// Safety improvements:
-//   - Pre-check: verify quorum would survive the temporary removal
-//   - Pre-check: verify target node is still reachable
-//   - Rollback: if rejoin fails, attempt to re-add with original status
-//   - Retry: 5 attempts with exponential backoff (2s, 4s, 8s, 15s, 30s)
-func (r *RQLiteManager) changeNodeVoterStatus(nodeID string, voter bool) error {
-	// Pre-check: if demoting a voter, verify quorum safety
+// It replaces a remove-then-rejoin sequence that left the node outside the
+// configuration for up to 59 seconds while it retried the join with backoff. A
+// leader change anywhere in that window orphaned the node — the code said so
+// itself, in a comment on the rollback path that admitted the rollback could
+// fail too. rqlite takes a voter flag on POST /join for an existing member, so
+// the configuration change is one committed entry with no window at all.
+//
+// The quorum guard is kept and narrowed. It refused to act whenever ANY member
+// was unreachable, which meant a cluster carrying one dead node could never
+// correct its voter set; what matters is that a quorum can commit the change
+// and that demoting this particular node does not cost the cluster its quorum.
+func (r *RQLiteManager) setVoterInPlace(nodeID string, voter bool) error {
 	if !voter {
 		nodes, err := r.getAllClusterNodes()
 		if err != nil {
 			return fmt.Errorf("quorum pre-check: %w", err)
 		}
-		voterCount := 0
+
+		reachableVoters, totalVoters := 0, 0
 		targetReachable := false
 		for _, n := range nodes {
-			if n.Voter && n.Reachable {
-				voterCount++
+			if n.Voter {
+				totalVoters++
+				if n.Reachable {
+					reachableVoters++
+				}
 			}
 			if n.ID == nodeID && n.Reachable {
 				targetReachable = true
 			}
 		}
+
+		// Demoting a node that is not answering is not a demotion, it is an
+		// eviction by another name, and it goes through evictDeadVoters where
+		// the evidence bar is much higher.
 		if !targetReachable {
-			return fmt.Errorf("target node %s is not reachable, skipping voter change", nodeID)
+			return fmt.Errorf("target node %s is not reachable; a dead voter is evicted, not demoted", nodeID)
 		}
-		// After removing this voter, we need (voterCount-1)/2 + 1 for quorum
-		if voterCount <= 2 {
-			return fmt.Errorf("cannot remove voter: only %d reachable voters, quorum would be lost", voterCount)
-		}
-	}
 
-	// Fresh quorum check immediately before removal
-	nodes, err := r.getAllClusterNodes()
-	if err != nil {
-		return fmt.Errorf("fresh quorum check: %w", err)
-	}
-	for _, n := range nodes {
-		if !n.Reachable {
-			return fmt.Errorf("node %s is unreachable, aborting voter change", n.ID)
+		// After the demotion there is one fewer voter, and this node was one of
+		// the reachable ones.
+		votersAfter := totalVoters - 1
+		reachableAfter := reachableVoters - 1
+		if votersAfter < 1 {
+			return fmt.Errorf("cannot demote the last voter")
+		}
+		if quorum := votersAfter/2 + 1; reachableAfter < quorum {
+			return fmt.Errorf("cannot demote %s: %d of %d voters would remain reachable, short of the %d needed",
+				nodeID, reachableAfter, votersAfter, quorum)
 		}
 	}
 
-	// Step 1: Remove the node from the cluster
-	if err := r.removeClusterNode(nodeID); err != nil {
-		return fmt.Errorf("remove node: %w", err)
+	if err := r.joinClusterNode(nodeID, nodeID, voter); err != nil {
+		return fmt.Errorf("set voter=%v for %s: %w", voter, nodeID, err)
 	}
-
-	// Wait for Raft to commit the configuration change, then rejoin with retries
-	// Exponential backoff: 2s, 4s, 8s, 15s, 30s
-	backoffs := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 30 * time.Second}
-	var lastErr error
-	for attempt, wait := range backoffs {
-		time.Sleep(wait)
-
-		if err := r.joinClusterNode(nodeID, nodeID, voter); err != nil {
-			lastErr = err
-			r.logger.Warn("Rejoin attempt failed, retrying",
-				zap.String("node_id", nodeID),
-				zap.Int("attempt", attempt+1),
-				zap.Int("max_attempts", len(backoffs)),
-				zap.Error(err))
-			continue
-		}
-		return nil // Success
-	}
-
-	// All rejoin attempts failed — try to re-add with the ORIGINAL status as rollback
-	r.logger.Error("All rejoin attempts failed, attempting rollback",
-		zap.String("node_id", nodeID),
-		zap.Bool("desired_voter", voter),
-		zap.Error(lastErr))
-
-	originalVoter := !voter
-	if err := r.joinClusterNode(nodeID, nodeID, originalVoter); err != nil {
-		r.logger.Error("Rollback also failed — node may be orphaned (orphan recovery will re-add it)",
-			zap.String("node_id", nodeID),
-			zap.Error(err))
-	}
-
-	return fmt.Errorf("rejoin node after %d attempts: %w", len(backoffs), lastErr)
+	return nil
 }
 
 // getAllClusterNodes queries /nodes?nonvoters&ver=2 to get all cluster members
