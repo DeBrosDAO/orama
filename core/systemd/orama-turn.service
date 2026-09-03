@@ -1,0 +1,65 @@
+[Unit]
+Description=Orama TURN (shared, all namespaces on this host)
+Documentation=https://github.com/DeBrosOfficial/network
+After=network.target
+
+# PartOf: a stop/restart of orama-node cycles this unit too, which drops every
+# tenant's active relays on the host — a wider blast radius than the
+# per-namespace units this replaces, where it cost one namespace.
+#
+# Kept deliberately. The alternative, letting TURN outlive orama-node, means a
+# binary upgrade leaves the OLD turn process running indefinitely: nothing else
+# restarts it, and the upgrade's rolling restart only walks namespace units. A
+# stale relay binary is a worse failure than a bounded restart, and matches
+# orama-sni-router.service, the other host-level public listener.
+PartOf=orama-node.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/orama
+
+# Host-level, not per-namespace: TURN binds the well-known ports 3478/5349,
+# which are exclusive per host, so one process serves every namespace on this
+# node and authenticates each against its own secret (bugboard #283). The tenant
+# list in this config is re-read at runtime, so namespaces are added and removed
+# WITHOUT restarting — a restart drops every tenant's active relays.
+Environment=TURN_CONFIG=/opt/orama/.orama/configs/turn.yaml
+
+ExecStart=/bin/sh -c 'exec /opt/orama/bin/turn --config ${TURN_CONFIG}'
+
+# Bind the privileged TURN ports (3478, 5349) without running as root.
+#
+# Hardening matters more here than it did for the per-namespace units this
+# replaces: one internet-facing process now holds EVERY tenant's HMAC secret and
+# reads the `*.<base-domain>` wildcard private key, so a parsing bug in the relay
+# path would otherwise hand an unauthenticated remote attacker root. Mirrors
+# orama-sni-router.service, the other host-level public listener.
+#
+# `orama` owns both the config (written by orama-node) and Caddy's cert storage,
+# so no additional ReadWritePaths are needed — TURN only ever reads.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+User=orama
+Group=orama
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-turn
+
+PrivateTmp=yes
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

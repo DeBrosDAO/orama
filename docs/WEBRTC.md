@@ -204,9 +204,38 @@ WebRTC uses a **separate port allocation system** from the core namespace ports:
 |---------|-----------|----------|---------------|
 | SFU signaling | 30000-30099 | TCP (WireGuard only) | 1 port |
 | SFU media (RTP) | 20000-29999 | UDP (WireGuard only) | 500 ports |
-| TURN listen | 3478 | UDP + TCP | fixed |
-| TURNS (TLS) | 5349 | TCP | fixed |
-| TURN relay | 49152-65535 | UDP | 800 ports |
+| TURN listen | 3478 | UDP + TCP | shared per host |
+| TURNS (TLS) | 5349 | TCP | shared per host |
+| TURN relay | 49152-65535 | UDP | shared per host |
+
+## TURN Topology
+
+One TURN server runs per **host** (`orama-turn.service`), serving every namespace
+allocated TURN on that node. TURN binds the well-known ports 3478/5349, which are
+exclusive per host, so a process per namespace would mean only one namespace could
+have TURN on a given node — the second crash-looped on bind.
+
+The alternative, giving each namespace its own ports, was rejected: it puts TURN on
+arbitrary high ports, which restrictive networks routinely block, and those are
+exactly the networks whose users most need a relay.
+
+Isolation is the per-tenant secret. The credential already carries the namespace, so
+the shared server resolves each one to its own HMAC secret; a namespace it does not
+serve is rejected rather than falling back to any default.
+
+The tenant list lives in `/opt/orama/.orama/configs/turn.yaml` (mode 0600 — it holds
+every tenant's HMAC secret) and is re-read by the running process (~15s). Namespaces
+are added and removed without a restart, because restarting drops every tenant's
+active relays on that host.
+
+Relay allocations come from the host-wide range 49152-65535, which is also what the
+firewall opens. Each namespace still gets its own 800-port block recorded in
+`webrtc_port_allocations`; that block is the record of which namespaces hold TURN on
+which node, not a per-tenant relay range — one process has one range.
+
+`orama-turn.service` runs as the unprivileged `orama` user with
+`CAP_NET_BIND_SERVICE` for ports 3478/5349, and `ProtectSystem=strict`. It reads its
+config and Caddy's wildcard certificate and writes nothing.
 
 ## TURN Credential Protocol
 
@@ -340,18 +369,22 @@ orama inspector --env devnet
 
 The monitoring report includes per-namespace `sfu_up` and `turn_up` fields. The inspector runs cross-node checks to verify SFU coverage (3 nodes) and TURN redundancy (2 nodes).
 
+`turn_up` is true when this host's shared TURN server is running **and** lists the
+namespace as a tenant — TURN is host-level, so the unit being up does not by itself
+mean it relays for a given namespace.
+
 ## Debugging
 
 ```bash
 # SFU logs
 journalctl -u orama-namespace-sfu@myapp -f
 
-# TURN logs
-journalctl -u orama-namespace-turn@myapp -f
+# TURN logs — one shared server per host, serving every namespace on it
+journalctl -u orama-turn -f
 
 # Check service status
 systemctl status orama-namespace-sfu@myapp
-systemctl status orama-namespace-turn@myapp
+systemctl status orama-turn
 ```
 
 ## Security Model

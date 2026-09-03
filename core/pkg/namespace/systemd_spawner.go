@@ -2,18 +2,19 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	production "github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
-	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/DeBrosOfficial/network/pkg/turn"
@@ -67,6 +68,108 @@ func NewSystemdSpawner(namespaceBase, clusterSecretPath string, logger *zap.Logg
 	}
 }
 
+// joinVerifyTimeout bounds the pre-join identity check.
+const joinVerifyTimeout = 10 * time.Second
+
+// verifyJoinTarget refuses to start an RQLite node whose join target belongs to a
+// DIFFERENT namespace (bugboard #275).
+//
+// rqlited joins whatever answers at its -join address; nothing in the protocol
+// asserts the cluster is the right one. When a port collision put another
+// namespace's rqlited on the expected port, a namespace node joined that foreign
+// raft group as a Voter and served its database — the two namespaces silently
+// shared storage, and the victim's quorum changed underneath it.
+//
+// The target's /status reports the data directory it is serving, which is rooted
+// at .../namespaces/<namespace>/rqlite/<nodeID>. That is an unforgeable statement
+// of which namespace the cluster belongs to, so require it to match ours.
+func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verifyURL string) error {
+	if strings.TrimSpace(verifyURL) == "" {
+		return nil
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, joinVerifyTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(verifyURL, "/")+"/status", nil)
+	if err != nil {
+		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, err)
+	}
+	defer resp.Body.Close()
+
+	var status struct {
+		Store struct {
+			Dir string `json:"dir"`
+		} `json:"store"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return fmt.Errorf("verify join target %s for namespace %s: decode status: %w", verifyURL, namespace, err)
+	}
+
+	want := string(os.PathSeparator) + "namespaces" + string(os.PathSeparator) + namespace + string(os.PathSeparator)
+	if !strings.Contains(status.Store.Dir, want) {
+		return fmt.Errorf(
+			"refusing to join RQLite at %s for namespace %s: it is serving %q, which belongs to a different namespace — "+
+				"joining it would put this node in another tenant's raft group and expose their database",
+			verifyURL, namespace, status.Store.Dir)
+	}
+	return nil
+}
+
+// portFreeWaitTimeout bounds how long ensurePortsFree waits for a port we are
+// about to bind to be released. A restart stops the old unit first, and systemd
+// returns before the socket is always fully closed, so a short wait absorbs that
+// without masking a genuine conflict.
+const portFreeWaitTimeout = 10 * time.Second
+
+// ensurePortsFree fails loudly when a port this namespace is about to bind is
+// held by something else (bugboard #276).
+//
+// The port allocator picks a block using only the namespace_port_allocations
+// table, so it cannot see a process that holds the port without a matching row —
+// an orphaned namespace, or any other listener. Previously the spawned service
+// simply crash-looped ("bind: address already in use", restart counter climbing)
+// while provisioning still reported the cluster ready, and on the one node where
+// the ports happened to be free the collision escalated into joining a FOREIGN
+// namespace's raft group (bugboard #275). Refusing to start, with the port named,
+// turns a silent corruption into an operator-actionable error.
+func (s *SystemdSpawner) ensurePortsFree(namespace string, ports map[string]int) error {
+	deadline := time.Now().Add(portFreeWaitTimeout)
+	for name, port := range ports {
+		if port <= 0 {
+			continue
+		}
+		for {
+			if !portInUse(port) {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf(
+					"cannot start %s for namespace %s: port %d is already in use by another process — "+
+						"the allocation for this namespace conflicts with something already listening on this node; "+
+						"check for an orphaned namespace holding this port before retrying",
+					name, namespace, port)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return nil
+}
+
+// portInUse reports whether anything is listening on the port locally.
+func portInUse(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return true
+	}
+	_ = ln.Close()
+	return false
+}
+
 // SpawnRQLite starts a RQLite instance using systemd
 func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID string, cfg rqlite.InstanceConfig) error {
 	s.logger.Info("Spawning RQLite via systemd",
@@ -80,6 +183,36 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		for _, addr := range cfg.JoinAddresses[1:] {
 			joinArgs += fmt.Sprintf(",%s", addr)
 		}
+	}
+
+	// Bugboard #281: a brand-new cluster must not inherit raft state left behind
+	// by a previous namespace of the same name. Clearing here (rather than
+	// trusting delete to have succeeded) is what makes re-creating a namespace
+	// deterministic.
+	if cfg.FreshStart {
+		raftDir := filepath.Join(s.namespaceBase, namespace, "rqlite", nodeID)
+		if _, statErr := os.Stat(raftDir); statErr == nil {
+			s.logger.Warn("Clearing leftover RQLite state for a fresh namespace cluster (bugboard #281)",
+				zap.String("namespace", namespace),
+				zap.String("node_id", nodeID),
+				zap.String("path", raftDir))
+			if err := os.RemoveAll(raftDir); err != nil {
+				return fmt.Errorf("failed to clear stale RQLite state at %s: %w", raftDir, err)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("failed to inspect RQLite state dir %s: %w", raftDir, statErr)
+		}
+	}
+
+	if err := s.ensurePortsFree(namespace, map[string]int{
+		"RQLite HTTP": cfg.HTTPPort,
+		"RQLite Raft": cfg.RaftPort,
+	}); err != nil {
+		return err
+	}
+
+	if err := s.verifyJoinTarget(ctx, namespace, cfg.JoinVerifyURL); err != nil {
+		return err
 	}
 
 	// Generate environment file
@@ -127,6 +260,13 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 	s.logger.Info("Spawning Olric via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
+
+	if err := s.ensurePortsFree(namespace, map[string]int{
+		"Olric HTTP":       cfg.HTTPPort,
+		"Olric memberlist": cfg.MemberlistPort,
+	}); err != nil {
+		return err
+	}
 
 	// Validate BindAddr: 0.0.0.0 or empty causes IPv6 resolution on dual-stack hosts,
 	// breaking memberlist UDP gossip over WireGuard. Resolve from wg0 as fallback.
@@ -245,6 +385,10 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 	s.logger.Info("Spawning Gateway via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
+
+	if err := s.ensurePortsFree(namespace, map[string]int{"Gateway HTTP": cfg.HTTPPort}); err != nil {
+		return err
+	}
 
 	// Create config directory
 	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
@@ -474,7 +618,8 @@ func gatewayYAMLEqual(a, b gateway.GatewayYAMLConfig) bool {
 		a.WebRTC.TURNStealthDomain == b.WebRTC.TURNStealthDomain &&
 		a.SecretsEncryptionKey == b.SecretsEncryptionKey &&
 		a.ClusterSecretPath == b.ClusterSecretPath &&
-		a.APIKeyHMACSecret == b.APIKeyHMACSecret
+		a.APIKeyHMACSecret == b.APIKeyHMACSecret &&
+		a.NtfyBaseURL == b.NtfyBaseURL
 }
 
 // gatewayConfigInSync reports whether on-disk YAML matches what spawn would
@@ -544,15 +689,6 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
-// TURNConfigExists reports whether this node has a TURN config for the
-// namespace on disk — i.e. it is provisioned to run TURN. Deterministic (unlike
-// checking the systemd unit state, which is racy during a restart), so callers
-// can reliably decide whether to advertise this node in TURN DNS (bugboard #158).
-func (s *SystemdSpawner) TURNConfigExists(namespace, nodeID string) bool {
-	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("turn-%s.yaml", nodeID))
-	_, err := os.Stat(configPath)
-	return err == nil
-}
 
 // turnSecretDrift reports whether the on-disk TURN auth_secret differs from the
 // desired (current DB) secret — i.e. a rewrite+restart is needed. Pure function
@@ -561,99 +697,7 @@ func turnSecretDrift(onDiskSecret, dbSecret string) bool {
 	return onDiskSecret != dbSecret
 }
 
-// reconcileTURNConfigFields applies desired state to a parsed TURN config in
-// place and returns the names of the fields that actually changed (empty slice
-// = no change, so the caller skips the rewrite+restart). Pure — the reconcile
-// decision is unit-testable without systemd or disk.
-//
-// wildcardCert/wildcardKey are the `*.<base>` wildcard paths, or "" when the
-// wildcard isn't available; the cert is switched only when both are non-empty,
-// TURNS is enabled, and the config isn't already pointing at it.
-func reconcileTURNConfigFields(cfg *turn.Config, dbSecret, wildcardCert, wildcardKey string) []string {
-	var reconciled []string
 
-	// (1) auth_secret drift. Never write an unresolved/encrypted secret (that
-	// would make TURN validate with ciphertext and break every call) — parity
-	// with the gateway's #130 skip.
-	if dbSecret != "" && !secrets.IsEncrypted(dbSecret) && turnSecretDrift(cfg.AuthSecret, dbSecret) {
-		cfg.AuthSecret = dbSecret
-		reconciled = append(reconciled, "auth_secret")
-	}
-
-	// (2) TURNS cert drift. Switch the self-signed fallback to the wildcard so
-	// the cert validates in browsers (self-signed is rejected).
-	if cfg.TURNSListenAddr != "" && wildcardCert != "" && wildcardKey != "" && cfg.TLSCertPath != wildcardCert {
-		cfg.TLSCertPath = wildcardCert
-		cfg.TLSKeyPath = wildcardKey
-		reconciled = append(reconciled, "tls_cert")
-	}
-
-	return reconciled
-}
-
-// ReconcileTURN keeps a running TURN server's on-disk config in sync with the
-// current namespace state, restarting TURN only when something actually changed:
-//   - auth_secret drift vs the DB secret (bugboard #158)
-//   - the TURNS TLS cert still on the browser-rejected self-signed pair while
-//     the `*.<base>` wildcard cert is now available on disk (TURNS cert fix)
-//
-// Both matter for the SAME reason: the TURN config is otherwise only (re)written
-// on a COLD spawn (unit DOWN). A rolling deploy RESTARTS the unit, so it re-reads
-// the stale file — a new binary's resolveTURNSCert / secret logic never runs. So
-// on a warm restart the gateway would mint creds TURN rejects (Allocate 400 →
-// zero candidates), and TURNS would keep presenting the self-signed cert browsers
-// reject. This warm reconcile closes both gaps.
-//
-// SELF-CONTAINED: reads everything else (ports, public IP, stealth domain, base
-// domain) from the on-disk turn config and patches ONLY the drifted fields — so
-// it works even for namespaces whose cluster-state.json doesn't persist TURN
-// fields. Idempotent: a no-op when there is no TURN config on this node or
-// nothing drifted, so it never restart-loops or drops calls on an in-sync node.
-func (s *SystemdSpawner) ReconcileTURN(ctx context.Context, namespace, nodeID, dbSecret string) error {
-	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("turn-%s.yaml", nodeID))
-	existing, err := os.ReadFile(configPath)
-	if err != nil {
-		// No TURN config on this node → this node doesn't run TURN for the
-		// namespace. Nothing to reconcile.
-		return nil
-	}
-	var cfg turn.Config
-	if err := yaml.Unmarshal(existing, &cfg); err != nil {
-		return fmt.Errorf("parse TURN config for reconcile: %w", err)
-	}
-
-	// Resolve the wildcard cert paths ONLY if TURNS is enabled and the wildcard
-	// actually exists on disk — otherwise pass "" so the cert stays untouched (a
-	// node without the wildcard keeps its self-signed baseline rather than losing
-	// TURNS). The reconcile decision itself is a pure function (testable).
-	var wcCert, wcKey string
-	if cfg.TURNSListenAddr != "" && cfg.Realm != "" {
-		c, k := s.wildcardCertPaths(cfg.Realm)
-		if _, e1 := os.Stat(c); e1 == nil {
-			if _, e2 := os.Stat(k); e2 == nil {
-				wcCert, wcKey = c, k
-			}
-		}
-	}
-
-	reconciled := reconcileTURNConfigFields(&cfg, dbSecret, wcCert, wcKey)
-	if len(reconciled) == 0 {
-		return nil // already in sync — no restart
-	}
-
-	out, err := yaml.Marshal(&cfg)
-	if err != nil {
-		return fmt.Errorf("marshal TURN config for reconcile: %w", err)
-	}
-	if err := writeConfigAtomic(configPath, out, 0644); err != nil {
-		return fmt.Errorf("write TURN config for reconcile: %w", err)
-	}
-
-	s.logger.Info("TURN config drifted from desired state — rewrote config and restarting TURN",
-		zap.String("namespace", namespace), zap.String("node_id", nodeID),
-		zap.Strings("reconciled", reconciled))
-	return s.systemdMgr.RestartService(namespace, systemd.ServiceTypeTURN)
-}
 
 // SFUInstanceConfig holds configuration for spawning an SFU instance
 type SFUInstanceConfig struct {
@@ -744,25 +788,6 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeSFU)
 }
 
-// TURNInstanceConfig holds configuration for spawning a TURN instance
-type TURNInstanceConfig struct {
-	Namespace       string
-	NodeID          string
-	ListenAddr      string // e.g., "0.0.0.0:3478"
-	TURNSListenAddr string // e.g., "0.0.0.0:5349" (TURNS over TLS/TCP)
-	PublicIP        string // Public IP for TURN relay allocations
-	Realm           string // TURN realm (typically base domain)
-	AuthSecret      string // HMAC-SHA1 shared secret
-	RelayPortStart  int    // Start of relay port range
-	RelayPortEnd    int    // End of relay port range
-	TURNDomain      string // TURN domain for Let's Encrypt cert (e.g., "turn.ns-myapp.orama-devnet.network")
-	// StealthDomain is the neutral stealth TURNS host (feat-124). When set,
-	// the TURN server carries a second Let's Encrypt cert for this name and
-	// serves it to TLS clients whose SNI matches — the path the SNI router
-	// forwards from :443. Stealth NEVER falls back to a self-signed cert: a
-	// cert clients reject is indistinguishable from being blocked.
-	StealthDomain string
-}
 
 // acmeInternalEndpoint is the gateway's internal ACME endpoint that the
 // Caddyfile TURN-cert blocks point the orama DNS provider at.
@@ -893,144 +918,6 @@ func isSingleLabelSubdomain(host, base string) bool {
 	return label != "" && !strings.Contains(label, ".")
 }
 
-// SpawnTURN starts a TURN instance using systemd
-func (s *SystemdSpawner) SpawnTURN(ctx context.Context, namespace, nodeID string, cfg TURNInstanceConfig) error {
-	s.logger.Info("Spawning TURN via systemd",
-		zap.String("namespace", namespace),
-		zap.String("node_id", nodeID),
-		zap.String("listen_addr", cfg.ListenAddr),
-		zap.String("public_ip", cfg.PublicIP))
-
-	// Guard (bugboard #846): the TURN server hard-fails on an empty public_ip
-	// ("turn.public_ip: must not be empty") and systemd then crash-loops it
-	// forever. A crash-looped TURN means (a) zero ICE relay candidates for any
-	// client round-robined to this node, and (b) SpawnTURN never reaches the
-	// AddWebRTCRules call below, so the relay UDP ports stay firewalled. The
-	// caller MUST resolve the node's public IP before spawning — fail loudly
-	// here instead of writing a config that is guaranteed to crash-loop.
-	if cfg.PublicIP == "" {
-		return fmt.Errorf("refusing to spawn TURN for namespace %s on node %s: public_ip is empty (would crash-loop the TURN server); the caller must resolve the node's public IP first", namespace, nodeID)
-	}
-
-	// Create config directory
-	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
-
-	// Provision TLS cert for TURNS — Let's Encrypt via Caddy first (idempotent,
-	// also upgrades nodes stuck on the self-signed fallback), self-signed as
-	// the primary-domain fallback only.
-	var certPath, keyPath string
-	if cfg.TURNSListenAddr != "" {
-		var certErr error
-		certPath, keyPath, certErr = s.resolveTURNSCert(namespace, cfg.TURNDomain, cfg.Realm, cfg.PublicIP, configDir, true)
-		if certErr != nil {
-			s.logger.Warn("Failed to resolve TURNS cert, TURNS will be disabled",
-				zap.String("namespace", namespace),
-				zap.Error(certErr))
-			cfg.TURNSListenAddr = "" // Disable TURNS if no cert is available
-		}
-	}
-
-	// Stealth TURNS cert (feat-124): requires a working TURNS listener and a
-	// CA-valid cert — hard error, never a silent downgrade, because the
-	// operator explicitly enabled stealth and a half-working stealth endpoint
-	// is invisible until a censored-region user fails to connect.
-	var stealthCertPath, stealthKeyPath string
-	if cfg.StealthDomain != "" {
-		// Security: the stealth domain arrives over the spawn protocol (mesh
-		// peers gated only by the static internal-auth header). Pin it to the
-		// deterministic derivation so a forged value can't select cert
-		// material for an attacker-chosen name. cfg.Realm is the base domain
-		// on every TURN spawn site.
-		if cfg.Realm == "" {
-			return fmt.Errorf("stealth TURNS for namespace %s requires a base domain (realm) to locate the wildcard cert", namespace)
-		}
-		want := turn.StealthHostForNamespace(cfg.Namespace, cfg.Realm)
-		if cfg.StealthDomain != want {
-			return fmt.Errorf("stealth domain %q does not match the derived host %q for namespace %s — refusing to provision", cfg.StealthDomain, want, cfg.Namespace)
-		}
-		if cfg.TURNSListenAddr == "" {
-			return fmt.Errorf("stealth TURNS for namespace %s requires an active TURNS listener (no TLS cert/listener available)", namespace)
-		}
-		var stealthErr error
-		stealthCertPath, stealthKeyPath, stealthErr = s.resolveStealthCert(cfg.StealthDomain, cfg.Realm)
-		if stealthErr != nil {
-			return fmt.Errorf("failed to resolve stealth TURNS cert for namespace %s: %w", namespace, stealthErr)
-		}
-	}
-
-	// Build TURN YAML config
-	turnConfig := turn.Config{
-		ListenAddr:      cfg.ListenAddr,
-		TURNSListenAddr: cfg.TURNSListenAddr,
-		PublicIP:        cfg.PublicIP,
-		Realm:           cfg.Realm,
-		AuthSecret:      cfg.AuthSecret,
-		RelayPortStart:  cfg.RelayPortStart,
-		RelayPortEnd:    cfg.RelayPortEnd,
-		Namespace:       cfg.Namespace,
-	}
-	if cfg.TURNSListenAddr != "" {
-		turnConfig.TLSCertPath = certPath
-		turnConfig.TLSKeyPath = keyPath
-	}
-	if stealthCertPath != "" {
-		turnConfig.StealthDomain = cfg.StealthDomain
-		turnConfig.TLSStealthCertPath = stealthCertPath
-		turnConfig.TLSStealthKeyPath = stealthKeyPath
-	}
-
-	configBytes, err := yaml.Marshal(turnConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TURN config: %w", err)
-	}
-
-	if err := writeConfigAtomic(configPath, configBytes, 0644); err != nil {
-		return fmt.Errorf("failed to write TURN config: %w", err)
-	}
-
-	s.logger.Info("Created TURN config file",
-		zap.String("path", configPath),
-		zap.String("namespace", namespace),
-		zap.String("node_id", nodeID))
-
-	// Generate environment file pointing to config
-	envVars := map[string]string{
-		"TURN_CONFIG": configPath,
-	}
-
-	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeTURN, envVars); err != nil {
-		return fmt.Errorf("failed to generate TURN env file: %w", err)
-	}
-
-	// Start the systemd service
-	if err := s.systemdMgr.StartService(namespace, systemd.ServiceTypeTURN); err != nil {
-		return fmt.Errorf("failed to start TURN service: %w", err)
-	}
-
-	// Wait for service to be active
-	if err := s.waitForService(namespace, systemd.ServiceTypeTURN, 30*time.Second); err != nil {
-		return fmt.Errorf("TURN service did not become active: %w", err)
-	}
-
-	// Add firewall rules for TURN ports
-	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
-	if err := fw.AddWebRTCRules(cfg.RelayPortStart, cfg.RelayPortEnd); err != nil {
-		s.logger.Warn("Failed to add WebRTC firewall rules (TURN service is running)",
-			zap.String("namespace", namespace),
-			zap.Error(err))
-	}
-
-	s.logger.Info("TURN spawned successfully via systemd",
-		zap.String("namespace", namespace),
-		zap.String("node_id", nodeID))
-
-	return nil
-}
 
 // StopTURN stops a TURN instance
 func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string) error {
@@ -1040,30 +927,18 @@ func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string)
 
 	err := s.systemdMgr.StopService(namespace, systemd.ServiceTypeTURN)
 
-	// Remove firewall rules for standard TURN ports
-	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
-	if fwErr := fw.RemoveWebRTCRules(0, 0); fwErr != nil {
-		s.logger.Warn("Failed to remove WebRTC firewall rules",
-			zap.String("namespace", namespace),
-			zap.Error(fwErr))
-	}
-
-	// Remove TURN cert block from Caddyfile (if provisioned via Let's Encrypt)
-	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
-	configPath := filepath.Join(configDir, fmt.Sprintf("turn-%s.yaml", nodeID))
-	if data, readErr := os.ReadFile(configPath); readErr == nil {
-		var turnCfg turn.Config
-		if yaml.Unmarshal(data, &turnCfg) == nil && turnCfg.Realm != "" {
-			turnDomain := fmt.Sprintf("turn.ns-%s.%s", namespace, turnCfg.Realm)
-			if removeErr := removeTURNCertFromCaddy(turnDomain); removeErr != nil {
-				s.logger.Warn("Failed to remove TURN cert from Caddyfile",
-					zap.String("namespace", namespace),
-					zap.String("domain", turnDomain),
-					zap.Error(removeErr))
-			}
-		}
-	}
-
+	// The TURN relay ports are deliberately NOT closed here (bugboard #283 part
+	// 2). 3478/5349 and the relay range are host-wide, shared by every namespace
+	// on this node, so closing them because ONE namespace stopped would black out
+	// TURN for all the others — recovering only on the next 60s reconcile, with
+	// in-flight calls dying rather than reconnecting. Only a host that serves no
+	// tenants at all should close them, which ReconcileHostTURN decides.
+	//
+	// Removing the per-namespace Caddyfile cert block is likewise gone: the realm
+	// used to come from the per-namespace TURN config, which the shared server
+	// replaced and stopLegacyPerNamespaceTURN deletes. The shared TURNS listener
+	// uses the zone wildcard cert, so there is no per-namespace cert block to
+	// retire.
 	return err
 }
 

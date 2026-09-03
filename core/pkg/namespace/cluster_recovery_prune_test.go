@@ -181,18 +181,27 @@ func TestPruneStaleClusterNodes_removesReturnedRowsAndReportsThem(t *testing.T) 
 		t.Fatalf("removed = %v, want 2 node IDs", removed)
 	}
 
+	// Each pruned node now yields TWO deletes: its namespace_cluster_nodes row and
+	// its namespace_port_allocations row (bugboard #280 — leaving the allocation
+	// behind is what kept departed nodes in generated namespace gateway config).
 	execCalls := db.getExecCalls()
-	if len(execCalls) != 2 {
-		t.Fatalf("expected 2 delete exec calls, got %d: %+v", len(execCalls), execCalls)
-	}
 	gotNodeIDs := make(map[string]bool, len(execCalls))
+	memberDeletes := 0
 	for _, ec := range execCalls {
-		if !strings.Contains(ec.Query, "DELETE FROM namespace_cluster_nodes") {
-			t.Errorf("exec query = %q, want a namespace_cluster_nodes delete", ec.Query)
+		switch {
+		case strings.Contains(ec.Query, "DELETE FROM namespace_cluster_nodes"):
+			memberDeletes++
+		case strings.Contains(ec.Query, "DELETE FROM namespace_port_allocations"):
+			// expected companion delete
+		default:
+			t.Errorf("unexpected exec query = %q", ec.Query)
 		}
 		if len(ec.Args) >= 2 {
 			gotNodeIDs[ec.Args[1].(string)] = true
 		}
+	}
+	if memberDeletes != 2 {
+		t.Fatalf("expected 2 namespace_cluster_nodes deletes, got %d: %+v", memberDeletes, execCalls)
 	}
 	if !gotNodeIDs["peer-gone-1"] || !gotNodeIDs["peer-gone-2"] {
 		t.Errorf("deleted node IDs = %v, want peer-gone-1 and peer-gone-2", gotNodeIDs)

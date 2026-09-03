@@ -29,6 +29,12 @@ type SpawnRequest struct {
 	RQLiteRaftAdvAddr string   `json:"rqlite_raft_adv_addr,omitempty"`
 	RQLiteJoinAddrs   []string `json:"rqlite_join_addrs,omitempty"`
 	RQLiteIsLeader    bool     `json:"rqlite_is_leader,omitempty"`
+	// Bugboard #281: clear leftover raft state before starting a brand-new
+	// cluster, so re-creating a namespace of the same name is deterministic.
+	RQLiteFreshStart bool `json:"rqlite_fresh_start,omitempty"`
+	// Bugboard #275: HTTP base URL of the join target, verified to belong to this
+	// namespace before rqlited is started.
+	RQLiteJoinVerifyURL string `json:"rqlite_join_verify_url,omitempty"`
 
 	// Olric config (when action = "spawn-olric")
 	OlricHTTPPort       int      `json:"olric_http_port,omitempty"`
@@ -58,6 +64,10 @@ type SpawnRequest struct {
 	// Host serverless secrets encryption key forwarded to the spawned
 	// namespace gateway (bugboard #837 follow-up). Same value on every node.
 	GatewaySecretsEncryptionKey string `json:"gateway_secrets_encryption_key,omitempty"`
+	// Host self-hosted ntfy base URL forwarded to the spawned namespace
+	// gateway (bugboard #274) so its ntfy push provider has a default
+	// server. Same value on every node.
+	GatewayNtfyBaseURL string `json:"gateway_ntfy_base_url,omitempty"`
 
 	// SFU config (when action = "spawn-sfu")
 	SFUListenAddr string                 `json:"sfu_listen_addr,omitempty"`
@@ -68,16 +78,10 @@ type SpawnRequest struct {
 	TURNCredTTL   int                    `json:"turn_cred_ttl,omitempty"`
 	RQLiteDSN     string                 `json:"rqlite_dsn,omitempty"`
 
-	// TURN config (when action = "spawn-turn")
-	TURNListenAddr    string `json:"turn_listen_addr,omitempty"`
-	TURNTURNSAddr     string `json:"turn_turns_addr,omitempty"`
-	TURNPublicIP      string `json:"turn_public_ip,omitempty"`
-	TURNRealm         string `json:"turn_realm,omitempty"`
-	TURNAuthSecret    string `json:"turn_auth_secret,omitempty"`
-	TURNRelayStart    int    `json:"turn_relay_start,omitempty"`
-	TURNRelayEnd      int    `json:"turn_relay_end,omitempty"`
-	TURNDomain        string `json:"turn_domain,omitempty"`
-	TURNStealthDomain string `json:"turn_stealth_domain,omitempty"`
+	// No TURN config fields: TURN is host-level since bugboard #283 part 2, so
+	// there is no remote spawn to carry one. The surviving "stop-turn" action
+	// needs only Namespace and NodeID. The removed set included turn_auth_secret,
+	// a secret this struct no longer carries over the wire at all.
 
 	// Cluster state (when action = "save-cluster-state")
 	ClusterState json.RawMessage `json:"cluster_state,omitempty"`
@@ -151,6 +155,8 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			RaftAdvAddress: req.RQLiteRaftAdvAddr,
 			JoinAddresses:  req.RQLiteJoinAddrs,
 			IsLeader:       req.RQLiteIsLeader,
+			FreshStart:     req.RQLiteFreshStart,
+			JoinVerifyURL:  req.RQLiteJoinVerifyURL,
 		}
 		if err := h.systemdSpawner.SpawnRQLite(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn RQLite instance", zap.Error(err))
@@ -243,6 +249,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TURNStealthDomain:     req.GatewayTURNStealthDomain,
 			TURNSecret:            req.GatewayTURNSecret,
 			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
+			NtfyBaseURL:           req.GatewayNtfyBaseURL,
 		}
 		if err := h.systemdSpawner.SpawnGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn Gateway instance", zap.Error(err))
@@ -298,6 +305,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TURNStealthDomain:     req.GatewayTURNStealthDomain,
 			TURNSecret:            req.GatewayTURNSecret,
 			SecretsEncryptionKey:  req.GatewaySecretsEncryptionKey,
+			NtfyBaseURL:           req.GatewayNtfyBaseURL,
 		}
 		if err := h.systemdSpawner.RestartGateway(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to restart Gateway instance", zap.Error(err))
@@ -348,27 +356,6 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop-sfu":
 		if err := h.systemdSpawner.StopSFU(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop SFU instance", zap.Error(err))
-			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
-			return
-		}
-		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
-
-	case "spawn-turn":
-		cfg := namespacepkg.TURNInstanceConfig{
-			Namespace:       req.Namespace,
-			NodeID:          req.NodeID,
-			ListenAddr:      req.TURNListenAddr,
-			TURNSListenAddr: req.TURNTURNSAddr,
-			PublicIP:        req.TURNPublicIP,
-			Realm:           req.TURNRealm,
-			AuthSecret:      req.TURNAuthSecret,
-			RelayPortStart:  req.TURNRelayStart,
-			RelayPortEnd:    req.TURNRelayEnd,
-			TURNDomain:      req.TURNDomain,
-			StealthDomain:   req.TURNStealthDomain,
-		}
-		if err := h.systemdSpawner.SpawnTURN(ctx, req.Namespace, req.NodeID, cfg); err != nil {
-			h.logger.Error("Failed to spawn TURN instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

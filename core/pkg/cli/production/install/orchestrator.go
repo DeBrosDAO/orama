@@ -589,7 +589,7 @@ func (o *Orchestrator) installNamespaceTemplates() error {
 	}
 	systemdDir := "/etc/systemd/system"
 
-	templates := systemd.TemplateUnits
+	templates := systemd.UnitFilesToInstall()
 
 	installedCount := 0
 	for _, template := range templates {

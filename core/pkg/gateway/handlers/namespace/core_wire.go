@@ -72,6 +72,9 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 		TurnEncryptionKey:     turnEncKey,
 		ClusterSecretPath:     clusterSecretPath,
 		SecretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		// Bugboard #274: forward the host's ntfy base URL so spawned namespace
+		// gateways register an ntfy push provider by default.
+		NtfyBaseURL: cfg.NtfyBaseURL,
 	}
 	clusterManager := namespacepkg.NewClusterManager(ormClient, clusterCfg, logger)
 	clusterManager.SetLocalNodeID(peerID)

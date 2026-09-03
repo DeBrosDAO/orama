@@ -65,8 +65,13 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 		IPFSTimeout:           n.config.HTTPGateway.IPFSTimeout,
 		IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
 		SecretsEncryptionKey:  n.config.HTTPGateway.SecretsEncryptionKey,
-		DataDir:               oramaDir,
-		NodePeerID:            loadNodePeerIDFromIdentity(n.config.Node.DataDir),
+		// Bugboard #274: carry the host's self-hosted ntfy base URL into the
+		// index gateway's YAML so the namespace cluster manager can forward it
+		// to spawned namespace gateways, which otherwise register no ntfy push
+		// provider at all.
+		NtfyBaseURL: n.config.HTTPGateway.NtfyBaseURL,
+		DataDir:     oramaDir,
+		NodePeerID:  loadNodePeerIDFromIdentity(n.config.Node.DataDir),
 	})
 }
 

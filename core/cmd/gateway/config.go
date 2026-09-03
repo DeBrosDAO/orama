@@ -115,6 +115,12 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// HMAC-SHA256 hashes) and would persist any key it issues itself
 		// in plaintext.
 		APIKeyHMACSecret string `yaml:"api_key_hmac_secret"`
+		// NtfyBaseURL: see GatewayYAMLConfig docstring. Optional; when set,
+		// the standalone gateway populates cfg.NtfyBaseURL so the ntfy push
+		// provider has a server to publish to (bugboard #274). Without it a
+		// namespace gateway can only reach ntfy if the tenant's stored
+		// credential carries its own base_url.
+		NtfyBaseURL string `yaml:"ntfy_base_url"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -255,6 +261,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	// gateways via systemd receives it through this YAML field. Without it,
 	// `function secrets list` returned 501 ("Secrets management not
 	// available") on namespace gateways even though the host had the key.
+	if v := strings.TrimSpace(y.NtfyBaseURL); v != "" {
+		cfg.NtfyBaseURL = v
+	}
 	if v := strings.TrimSpace(y.SecretsEncryptionKey); v != "" {
 		cfg.SecretsEncryptionKey = v
 	}

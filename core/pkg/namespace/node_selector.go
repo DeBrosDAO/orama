@@ -177,7 +177,14 @@ type nodeInfo struct {
 // getActiveNodes retrieves all active nodes from dns_nodes table
 func (cns *ClusterNodeSelector) getActiveNodes(ctx context.Context) ([]nodeInfo, error) {
 	// Nodes must have checked in within last 2 minutes
-	cutoff := time.Now().Add(-2 * time.Minute)
+	// Bugboard #282: UTC, not local. dns_nodes.last_seen is written with
+	// SQLite datetime('now') (UTC), and this cutoff is string-compared against
+	// it. Formatting a local time here made the comparison wrong by the node's
+	// UTC offset — on a node set to Europe/Berlin the cutoff rendered ~2h ahead
+	// of every stored last_seen, so every OTHER node was filtered out and
+	// provisioning failed with "insufficient nodes available for cluster",
+	// non-deterministically depending on which node served the request.
+	cutoff := time.Now().UTC().Add(-2 * time.Minute)
 
 	var results []nodeInfo
 	query := `

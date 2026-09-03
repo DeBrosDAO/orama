@@ -25,13 +25,17 @@ func main() {
 		zap.String("version", version),
 		zap.String("commit", commit))
 
-	cfg := parseTURNConfig(logger)
+	cfg, configPath := parseTURNConfig(logger)
 
 	server, err := turn.NewServer(cfg, logger.Logger)
 	if err != nil {
 		logger.ComponentError(logging.ComponentTURN, "Failed to start TURN server", zap.Error(err))
 		os.Exit(1)
 	}
+
+	// Pick up namespaces added to or removed from this shared server without a
+	// restart (bugboard #283) — restarting would drop every other tenant's relays.
+	server.WatchTenantConfig(configPath)
 
 	// Wait for termination signal
 	quit := make(chan os.Signal, 1)

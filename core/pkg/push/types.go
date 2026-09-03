@@ -176,10 +176,15 @@ func (e *PushError) Unwrap() error {
 // exactly what happened per device — and react (e.g. delete the device
 // row on Unregistered, retry on 5xx, log unknowns).
 type DeviceSendResult struct {
-	DeviceID     string `json:"device_id"`
-	Provider     string `json:"provider"`
-	Success      bool   `json:"success"`
-	HTTPStatus   int    `json:"http_status,omitempty"`
+	DeviceID   string `json:"device_id"`
+	Provider   string `json:"provider"`
+	Success    bool   `json:"success"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	// Reason is the machine-readable failure reason. On a failed send the
+	// dispatcher guarantees this is non-empty (bugboard #274): a provider
+	// reason when the remote gave one, otherwise a stable code or the error
+	// text for failures that never reached an HTTP exchange. Empty only on
+	// success.
 	Reason       string `json:"reason,omitempty"`
 	Message      string `json:"message,omitempty"`
 	Unregistered bool   `json:"unregistered,omitempty"`

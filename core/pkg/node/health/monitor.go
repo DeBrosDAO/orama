@@ -18,13 +18,13 @@ import (
 
 // Default tuning constants.
 const (
-	DefaultProbeInterval  = 10 * time.Second
-	DefaultProbeTimeout   = 3 * time.Second
-	DefaultNeighbors      = 3
-	DefaultSuspectAfter   = 3  // consecutive misses → suspect
-	DefaultDeadAfter      = 12 // consecutive misses → dead
-	DefaultQuorumWindow   = 5 * time.Minute
-	DefaultMinQuorum      = 2  // out of K observers must agree
+	DefaultProbeInterval = 10 * time.Second
+	DefaultProbeTimeout  = 3 * time.Second
+	DefaultNeighbors     = 3
+	DefaultSuspectAfter  = 3  // consecutive misses → suspect
+	DefaultDeadAfter     = 12 // consecutive misses → dead
+	DefaultQuorumWindow  = 5 * time.Minute
+	DefaultMinQuorum     = 2 // out of K observers must agree
 
 	// DefaultStartupGracePeriod prevents false dead declarations after
 	// cluster-wide restart. During this period, no nodes are declared dead.
@@ -40,8 +40,8 @@ type MetadataReader interface {
 
 // Config holds the configuration for a Monitor.
 type Config struct {
-	NodeID        string        // this node's ID (dns_nodes.id / peer ID)
-	DB            *sql.DB       // RQLite SQL connection
+	NodeID        string  // this node's ID (dns_nodes.id / peer ID)
+	DB            *sql.DB // RQLite SQL connection
 	Logger        *zap.Logger
 	ProbeInterval time.Duration // how often to probe (default 10s)
 	ProbeTimeout  time.Duration // per-probe HTTP timeout (default 3s)
@@ -66,10 +66,10 @@ type nodeInfo struct {
 
 // peerState tracks the in-memory health state for a single monitored peer.
 type peerState struct {
-	missCount int
-	status    string    // "healthy", "suspect", "dead"
-	suspectAt time.Time // when first moved to suspect
-	reportedDead bool   // whether we already wrote a "dead" event for this round
+	missCount    int
+	status       string    // "healthy", "suspect", "dead"
+	suspectAt    time.Time // when first moved to suspect
+	reportedDead bool      // whether we already wrote a "dead" event for this round
 }
 
 // Monitor implements ring-based failure detection.
@@ -348,7 +348,8 @@ func (m *Monitor) checkQuorum(ctx context.Context, targetID string) {
 		return
 	}
 
-	cutoff := time.Now().Add(-DefaultQuorumWindow).Format("2006-01-02 15:04:05")
+	// Bugboard #282: compare in UTC — created_at is stored UTC.
+	cutoff := time.Now().UTC().Add(-DefaultQuorumWindow).Format("2006-01-02 15:04:05")
 	query := `SELECT COUNT(DISTINCT observer_id) FROM node_health_events WHERE target_id = ? AND status = 'dead' AND created_at > ?`
 
 	var count int
@@ -397,7 +398,8 @@ func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 		return nil, fmt.Errorf("database not available")
 	}
 
-	cutoff := time.Now().Add(-2 * time.Minute).Format("2006-01-02 15:04:05")
+	// Bugboard #282: compare in UTC — last_seen is stored UTC.
+	cutoff := time.Now().UTC().Add(-2 * time.Minute).Format("2006-01-02 15:04:05")
 	query := `SELECT id, COALESCE(internal_ip, ip_address) AS internal_ip FROM dns_nodes WHERE status = 'active' AND last_seen > ? ORDER BY id`
 
 	rows, err := m.cfg.DB.QueryContext(ctx, query, cutoff)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,12 @@ type ClusterManagerConfig struct {
 	// works there (bugboard #837 follow-up). Empty leaves namespace-gateway
 	// secrets management disabled (fail-loud).
 	SecretsEncryptionKey string
+
+	// NtfyBaseURL is the host's self-hosted ntfy base URL. Forwarded to
+	// spawned namespace gateways so their ntfy push provider is registered
+	// with a default server (bugboard #274). Empty means namespaces must
+	// supply their own base_url in stored ntfy credentials.
+	NtfyBaseURL string
 }
 
 // ClusterManager orchestrates namespace cluster provisioning and lifecycle
@@ -86,6 +93,13 @@ type ClusterManager struct {
 	// Host's serverless secrets encryption key, forwarded to spawned
 	// namespace gateways (bugboard #837 follow-up). Empty = disabled.
 	secretsEncryptionKey string
+	// ntfyBaseURL is the host's self-hosted ntfy base URL, forwarded to
+	// spawned namespace gateways (bugboard #274).
+	ntfyBaseURL string
+	// readyTimeout overrides clusterReadyTimeout for the post-provision health
+	// check (bugboard #277). Zero uses the default; set in tests so the failure
+	// paths do not wait the full production window.
+	readyTimeout time.Duration
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -157,6 +171,7 @@ func NewClusterManager(
 		ipfsReplicationFactor: ipfsReplicationFactor,
 		turnEncryptionKey:     cfg.TurnEncryptionKey,
 		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		ntfyBaseURL:           cfg.NtfyBaseURL,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
@@ -208,6 +223,7 @@ func NewClusterManagerWithComponents(
 		ipfsReplicationFactor: ipfsReplicationFactor,
 		turnEncryptionKey:     cfg.TurnEncryptionKey,
 		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		ntfyBaseURL:           cfg.NtfyBaseURL,
 		logger:                logger.With(zap.String("component", "cluster-manager")),
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
@@ -334,6 +350,17 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		// Don't fail provisioning for DNS errors
 	}
 
+	// Bugboard #277: verify the services actually came up before calling this
+	// ready. Reporting ready off the back of the spawn RPCs alone is what let a
+	// cluster with 6 of 9 processes crash-looping be handed over as healthy.
+	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
+		cm.logger.Error("Namespace cluster failed health verification after provisioning",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return nil, fmt.Errorf("namespace cluster did not come up healthy: %w", err)
+	}
+
 	// Update cluster status to ready
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
@@ -397,6 +424,7 @@ func rqliteMemberConfigs(namespace string, nodes []NodeCapacity, portBlocks []*P
 		return cfgs
 	}
 	leaderRaft := fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort)
+	leaderHTTP := fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort)
 	for i, node := range nodes {
 		cfg := rqlite.InstanceConfig{
 			Namespace:      namespace,
@@ -406,9 +434,21 @@ func rqliteMemberConfigs(namespace string, nodes []NodeCapacity, portBlocks []*P
 			HTTPAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort),
 			RaftAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteRaftPort),
 			IsLeader:       i == 0,
+			// Bugboard #281: these configs are only ever built for a BRAND-NEW
+			// cluster (startRQLiteCluster runs from the provisioning paths
+			// only), so any raft state already in the data directory is a
+			// leftover from a delete that failed to remove it. Adopting it made
+			// nodes disagree on membership and never elect a leader.
+			FreshStart: true,
 		}
 		if i > 0 {
 			cfg.JoinAddresses = []string{leaderRaft}
+			// Bugboard #275: prove the node we are about to join belongs to
+			// THIS namespace before starting. rqlited joins whatever answers at
+			// the -join address, so a port collision once put a namespace node
+			// into a FOREIGN raft group as a voter, serving another namespace's
+			// database.
+			cfg.JoinVerifyURL = "http://" + leaderHTTP
 		}
 		cfgs[i] = cfg
 	}
@@ -622,6 +662,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
+			NtfyBaseURL:           cm.ntfyBaseURL,
 		}
 
 		var instance *gateway.GatewayInstance
@@ -676,6 +717,12 @@ func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, 
 		"rqlite_raft_adv_addr": cfg.RaftAdvAddress,
 		"rqlite_join_addrs":    cfg.JoinAddresses,
 		"rqlite_is_leader":     cfg.IsLeader,
+		// Bugboard #281: a fresh cluster must clear leftover raft state on the
+		// remote node too, otherwise only the local node starts clean.
+		"rqlite_fresh_start": cfg.FreshStart,
+		// Bugboard #275: the remote node must run the same identity check, or
+		// only the local node is protected from joining a foreign raft group.
+		"rqlite_join_verify_url": cfg.JoinVerifyURL,
 	})
 	if err != nil {
 		return nil, err
@@ -741,6 +788,9 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 		// Bugboard #837 follow-up: carry the host secrets encryption key to
 		// the remote node so its spawned namespace gateway can manage secrets.
 		"gateway_secrets_encryption_key": cfg.SecretsEncryptionKey,
+		// Bugboard #274: carry the host ntfy base URL so the remote node's
+		// spawned namespace gateway registers an ntfy push provider.
+		"gateway_ntfy_base_url": cfg.NtfyBaseURL,
 	})
 	if err != nil {
 		return nil, err
@@ -830,7 +880,7 @@ func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP,
 }
 
 // sendStopRequest sends a stop request to a remote node
-func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) {
+func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) error {
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":    action,
 		"namespace": namespace,
@@ -843,6 +893,7 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 			zap.Error(err),
 		)
 	}
+	return err
 }
 
 // createDNSRecords creates DNS records for the namespace gateway.
@@ -903,6 +954,24 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
 }
 
+// deprovisionActiveNodesQuery selects the cluster members a teardown should
+// actually talk to.
+//
+// Bugboard #323: this had no liveness filter, so deprovisioning fanned six
+// serial stop RPCs — each with a 60s HTTP timeout — at nodes that are no longer
+// in the fleet. Deleting a namespace stranded on three departed nodes therefore
+// blocked ~18 minutes before touching a single row, which reads as a hang and
+// gets interrupted, leaving the cluster half-torn-down. There is nothing to stop
+// on a node that is gone; skip the round trips. Row cleanup, port deallocation
+// and DNS removal below still cover those nodes, and if one ever returns the
+// periodic sweep stops services it no longer holds an allocation for.
+const deprovisionActiveNodesQuery = `
+		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
+		FROM namespace_cluster_nodes ncn
+		JOIN dns_nodes dn ON ncn.node_id = dn.id
+		WHERE ncn.namespace_cluster_id = ? AND dn.status = 'active'
+	`
+
 // DeprovisionCluster tears down a namespace cluster on all nodes.
 // Stops namespace infrastructure (Gateway, Olric, RQLite) on every cluster node,
 // deletes cluster-state.json, deallocates ports, removes DNS records, and cleans up DB.
@@ -924,19 +993,30 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
 
+	// Set when the namespace's data directory could not be removed on some node
+	// (bugboard #281). The control-plane teardown still completes — leaving half
+	// the rows behind would be worse — but the caller is told, because the name
+	// is no longer safe to reuse until the leftovers are dealt with.
+	var deprovisionDataErr error
+
 	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
 	type deprovisionNodeInfo struct {
 		NodeID     string `db:"node_id"`
 		InternalIP string `db:"internal_ip"`
 	}
 	var clusterNodes []deprovisionNodeInfo
-	nodeQuery := `
-		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
-		FROM namespace_cluster_nodes ncn
-		JOIN dns_nodes dn ON ncn.node_id = dn.id
-		WHERE ncn.namespace_cluster_id = ?
-	`
-	if err := cm.db.Query(ctx, &clusterNodes, nodeQuery, cluster.ID); err != nil {
+	// Only fan stop requests out to nodes that are still ACTIVE.
+	//
+	// Every stop RPC uses a 60s HTTP timeout, and deprovisioning issues roughly
+	// six per node (SFU, TURN, gateway, olric, rqlite, delete-cluster-state),
+	// serially. A namespace whose nodes are gone — the exact case you delete such
+	// a namespace for — therefore blocked for ~18 minutes on three dead hosts
+	// before the control-plane rows were touched, which reads as a hang. There is
+	// nothing to stop on a node that is no longer part of the fleet: skip the
+	// round trips and let the row cleanup below proceed. Should such a node ever
+	// return, the periodic sweep stops services it no longer holds an allocation
+	// for (stopUnallocatedWebRTCServices) and prunes its membership.
+	if err := cm.db.Query(ctx, &clusterNodes, deprovisionActiveNodesQuery, cluster.ID); err != nil {
 		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only stop", zap.Error(err))
 		// Fall back to local-only stop (individual methods, NOT StopAll which uses dangerous glob)
 		// Stop WebRTC services first (SFU → TURN), then core services (Gateway → Olric → RQLite)
@@ -964,13 +1044,30 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 			cm.stopRQLiteOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName, nil)
 		}
 
-		// 3. Delete cluster-state.json on all nodes
+		// 3. Delete the namespace data directory on all nodes.
+		//
+		// Bugboard #281: these failures used to be swallowed, so a delete that
+		// left the tenant's data on disk still reported success — and re-creating
+		// a namespace of the same name then inherited its raft state. Collect the
+		// failures and surface them; the caller decides, but it must be told.
+		var dataErrs []string
 		for _, node := range clusterNodes {
+			var derr error
 			if node.NodeID == cm.localNodeID {
-				cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
+				derr = cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
 			} else {
-				cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
+				derr = cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
 			}
+			if derr != nil {
+				dataErrs = append(dataErrs, fmt.Sprintf("%s: %v", node.NodeID, derr))
+			}
+		}
+		if len(dataErrs) > 0 {
+			cm.logger.Error("Namespace data directory was NOT removed on every node — re-creating this namespace would inherit its state (bugboard #281)",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.Strings("failures", dataErrs))
+			deprovisionDataErr = fmt.Errorf("namespace data not removed on %d node(s): %s",
+				len(dataErrs), strings.Join(dataErrs, "; "))
 		}
 	}
 
@@ -994,6 +1091,12 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
+
+	if deprovisionDataErr != nil {
+		cm.logger.Warn("Cluster deprovisioning completed with leftover data",
+			zap.String("cluster_id", cluster.ID), zap.Error(deprovisionDataErr))
+		return deprovisionDataErr
+	}
 
 	cm.logger.Info("Cluster deprovisioning completed", zap.String("cluster_id", cluster.ID))
 
@@ -1330,6 +1433,17 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		// Don't fail provisioning for DNS errors
 	}
 
+	// Bugboard #277: verify the services actually came up before calling this
+	// ready. Reporting ready off the back of the spawn RPCs alone is what let a
+	// cluster with 6 of 9 processes crash-looping be handed over as healthy.
+	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
+		cm.logger.Error("Namespace cluster failed health verification after provisioning",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return
+	}
+
 	// Update cluster status to ready
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
@@ -1622,6 +1736,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				IPFSTimeout:           cm.ipfsTimeout,
 				IPFSReplicationFactor: cm.ipfsReplicationFactor,
 				SecretsEncryptionKey:  cm.secretsEncryptionKey,
+				NtfyBaseURL:           cm.ntfyBaseURL,
 			}
 
 			// Add WebRTC config if enabled for this namespace.
@@ -1741,6 +1856,65 @@ type ClusterLocalStateNode struct {
 	RQLiteRaftPort      int    `json:"rqlite_raft_port"`
 	OlricHTTPPort       int    `json:"olric_http_port"`
 	OlricMemberlistPort int    `json:"olric_memberlist_port"`
+}
+
+// clusterReadyTimeout bounds how long provisioning waits for every spawned
+// service to actually answer before declaring the cluster ready.
+const clusterReadyTimeout = 90 * time.Second
+
+// verifyClusterHealthy polls every node's spawned services until they respond, or
+// the timeout expires (bugboard #277).
+//
+// Provisioning used to mark a cluster `ready` — and every node row `running` —
+// purely because the spawn RPCs returned. On devnet that produced a cluster
+// reported ready while 6 of its 9 processes were crash-looping on a port
+// collision, RQLite had no quorum, and the one surviving node had joined another
+// namespace's raft group. The operator saw a green result and would have handed
+// the namespace over. This is the check that turns every other provisioning
+// failure into a visible one.
+func (cm *ClusterManager) verifyClusterHealthy(ctx context.Context, nodes []NodeCapacity, portBlocks []*PortBlock) error {
+	timeout := cm.readyTimeout
+	if timeout <= 0 {
+		timeout = clusterReadyTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for {
+		lastErr = nil
+		for i, node := range nodes {
+			if i >= len(portBlocks) || portBlocks[i] == nil {
+				continue
+			}
+			addr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].GatewayHTTPPort)
+			if err := probeTCP(addr); err != nil {
+				lastErr = fmt.Errorf("gateway on node %s (%s) not answering: %w", node.NodeID, addr, err)
+				break
+			}
+			raftAddr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort)
+			if err := probeTCP(raftAddr); err != nil {
+				lastErr = fmt.Errorf("rqlite on node %s (%s) not answering: %w", node.NodeID, raftAddr, err)
+				break
+			}
+		}
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("cluster did not become healthy within %s: %w", timeout, lastErr)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// probeTCP reports whether something is accepting connections at addr.
+func probeTCP(addr string) error {
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
 }
 
 // saveClusterStateToAllNodes builds and saves cluster-state.json on every node in the cluster.
@@ -1881,6 +2055,17 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 		}
 		restored++
 	}
+
+	// TURN is host-level (bugboard #283 part 2): one shared server per node
+	// serving every namespace allocated here. Reconcile it ONCE, after every
+	// namespace's state has been restored, so it sees the node's complete tenant
+	// set instead of being rebuilt from scratch per namespace.
+	//
+	// This also subsumes the #158 per-namespace secret-drift repair: the shared
+	// config is rebuilt from the DB every time, so a rotated secret and a
+	// self-signed→wildcard cert switch both fall out of it.
+	cm.ReconcileHostTURN(ctx)
+
 	return restored, nil
 }
 
@@ -2226,6 +2411,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			IPFSTimeout:           cm.ipfsTimeout,
 			IPFSReplicationFactor: cm.ipfsReplicationFactor,
 			SecretsEncryptionKey:  cm.secretsEncryptionKey,
+			NtfyBaseURL:           cm.ntfyBaseURL,
 		}
 
 		// Resolve WebRTC config. DB-FIRST (source of truth for the CURRENT
@@ -2386,16 +2572,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 	}
 
 	// bugboard #158: keep the TURN server's auth_secret in sync with the current
-	// namespace DB secret, independently of the state file. Some namespaces'
-	// cluster-state.json does not persist TURN fields (only has_gateway), so the
-	// state-gated TURN restore below never fires for them — yet the gateway still
-	// re-syncs its turn_secret to the DB secret on every boot (ReconcileGateway).
-	// If TURN keeps a stale secret the gateway mints credentials TURN rejects and
-	// every call fails auth (Allocate 400 → zero relay candidates). ReconcileTURN
-	// also switches the TURNS cert from the self-signed fallback to the wildcard
-	// once it's available (browsers reject self-signed). Reads the on-disk turn
-	// config and patches only drifted fields; a no-op when there is no TURN on
-	// this node or it is already in sync.
+	// namespace DB secret, independently of the state file. If TURN keeps a stale
+	// secret the gateway mints credentials TURN rejects and every call fails auth
+	// (Allocate 400 → zero relay candidates). The TURNS cert must likewise move
+	// off the self-signed fallback to the wildcard once available, since browsers
+	// reject self-signed. Both now fall out of rebuilding the shared host config
+	// from the DB rather than patching an on-disk per-namespace config in place.
 	if turnWebRTCCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName); werr == nil && turnWebRTCCfg != nil {
 		// Before reconciling THIS node's services, bring the cluster-wide role
 		// assignments back in line with live membership (bugboard #161): node
@@ -2408,10 +2590,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 				zap.String("namespace", state.NamespaceName), zap.Error(aerr))
 		}
 
-		if rerr := cm.systemdSpawner.ReconcileTURN(ctx, state.NamespaceName, cm.localNodeID, turnWebRTCCfg.TURNSharedSecret); rerr != nil {
-			cm.logger.Warn("TURN reconcile failed (leaving running config as-is)",
-				zap.String("namespace", state.NamespaceName), zap.Error(rerr))
-		}
+		// TURN is deliberately NOT reconciled here. It is host-level since
+		// bugboard #283 part 2, so it is reconciled ONCE by
+		// RestoreLocalClustersFromDisk after every namespace has been restored.
+		// Doing it per namespace would re-derive the whole host's tenant set, and
+		// re-issue its firewall calls, once for every namespace on the node — at
+		// boot, the worst possible moment.
 		// If this node runs TURN, make sure its TURN/stealth A record exists.
 		// The #158 sweep only DELETES records for inactive nodes; a node whose
 		// record was purged while briefly down (e.g. mid-deploy) would otherwise
@@ -2421,8 +2605,11 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		// config file. StopService leaves the config behind, so a file-existence
 		// gate re-advertises a node that lost the TURN role on its next boot,
 		// pointing clients at a relay that will never start (the #161 symptom).
+		// Since #283 part 2 the evidence is the SHARED unit: the per-namespace one
+		// this used to check no longer runs, and gating on it would leave every
+		// TURN node permanently unadvertised.
 		bootTurnBlk, bootTurnErr := cm.webrtcPortAllocator.GetTURNPorts(ctx, state.ClusterID, cm.localNodeID)
-		bootTurnUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
+		bootTurnUp, _ := cm.systemdSpawner.systemdMgr.IsHostTURNActive()
 		if bootTurnErr == nil && bootTurnBlk != nil && bootTurnUp {
 			pip, perr := cm.getLocalNodePublicIP(ctx)
 			switch {
@@ -2452,52 +2639,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		state.TURNRelayPortStart = turnAlloc.TURNRelayPortStart
 		state.TURNRelayPortEnd = turnAlloc.TURNRelayPortEnd
 	}
-	if turnAllocated {
-		// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by
-		// the root-level Phase 6b firewall setup, which is TURN-aware. orama-node
-		// runs as a NON-root user and cannot modify ufw, so the firewall reconcile
-		// deliberately does NOT live here — it would just spawn a doomed `ufw`
-		// call. The restore below only re-spawns the TURN process itself.
-		turnRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeTURN)
-		if !turnRunning {
-			// TURN config needs the shared secret from DB — we can't persist it to disk state.
-			// If DB is available, fetch it; otherwise skip TURN restore (it will come back when DB is ready).
-			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-			if err == nil && webrtcCfg != nil {
-				// Resolve this node's public IP. Passing an empty PublicIP here
-				// (the old behavior) produced a TURN config that crash-loops on
-				// "public_ip must not be empty" — killing TURN on the node and
-				// preventing AddWebRTCRules from ever running (bugboard #846).
-				publicIP, ipErr := cm.getLocalNodePublicIP(ctx)
-				if ipErr != nil {
-					cm.logger.Error("Skipping TURN restore: cannot resolve local node public IP (an empty public_ip crash-loops the TURN server)",
-						zap.String("namespace", state.NamespaceName), zap.Error(ipErr))
-				} else {
-					turnCfg := TURNInstanceConfig{
-						Namespace:       state.NamespaceName,
-						NodeID:          cm.localNodeID,
-						ListenAddr:      fmt.Sprintf("0.0.0.0:%d", turnAlloc.TURNListenPort),
-						TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", turnAlloc.TURNTLSPort),
-						PublicIP:        publicIP,
-						Realm:           cm.baseDomain,
-						AuthSecret:      webrtcCfg.TURNSharedSecret,
-						RelayPortStart:  state.TURNRelayPortStart,
-						RelayPortEnd:    state.TURNRelayPortEnd,
-						TURNDomain:      fmt.Sprintf("turn.ns-%s.%s", state.NamespaceName, cm.baseDomain),
-						StealthDomain:   cm.stealthDomainFor(state.NamespaceName, webrtcCfg),
-					}
-					if err := cm.systemdSpawner.SpawnTURN(ctx, state.NamespaceName, cm.localNodeID, turnCfg); err != nil {
-						cm.logger.Error("Failed to restore TURN from state", zap.String("namespace", state.NamespaceName), zap.Error(err))
-					} else {
-						cm.logger.Info("Restored TURN instance from state", zap.String("namespace", state.NamespaceName), zap.String("public_ip", publicIP))
-					}
-				}
-			} else {
-				cm.logger.Warn("Skipping TURN restore: WebRTC config not available from DB",
-					zap.String("namespace", state.NamespaceName))
-			}
-		}
-	}
+	// Restoring the TURN process itself is not done here: since #283 part 2 it is
+	// host-level, reconciled once by the ReconcileHostTURN call above from this
+	// node's full set of allocations. The allocation read above still matters —
+	// it carries the relay range back into the state file.
+	//
+	// NOTE (bugboard #846): the TURN relay firewall rules are (re)applied by the
+	// root-level Phase 6b firewall setup, which is TURN-aware. orama-node runs as
+	// a NON-root user and cannot modify ufw, so the firewall reconcile
+	// deliberately does not live here — it would just spawn a doomed `ufw` call.
 
 	// 5. Restore SFU — gated on this node's DB ALLOCATION, not the state file.
 	//
