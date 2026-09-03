@@ -927,6 +927,24 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
 }
 
+// deprovisionActiveNodesQuery selects the cluster members a teardown should
+// actually talk to.
+//
+// Bugboard #323: this had no liveness filter, so deprovisioning fanned six
+// serial stop RPCs — each with a 60s HTTP timeout — at nodes that are no longer
+// in the fleet. Deleting a namespace stranded on three departed nodes therefore
+// blocked ~18 minutes before touching a single row, which reads as a hang and
+// gets interrupted, leaving the cluster half-torn-down. There is nothing to stop
+// on a node that is gone; skip the round trips. Row cleanup, port deallocation
+// and DNS removal below still cover those nodes, and if one ever returns the
+// periodic sweep stops services it no longer holds an allocation for.
+const deprovisionActiveNodesQuery = `
+		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
+		FROM namespace_cluster_nodes ncn
+		JOIN dns_nodes dn ON ncn.node_id = dn.id
+		WHERE ncn.namespace_cluster_id = ? AND dn.status = 'active'
+	`
+
 // DeprovisionCluster tears down a namespace cluster on all nodes.
 // Stops namespace infrastructure (Gateway, Olric, RQLite) on every cluster node,
 // deletes cluster-state.json, deallocates ports, removes DNS records, and cleans up DB.
@@ -960,13 +978,18 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 		InternalIP string `db:"internal_ip"`
 	}
 	var clusterNodes []deprovisionNodeInfo
-	nodeQuery := `
-		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
-		FROM namespace_cluster_nodes ncn
-		JOIN dns_nodes dn ON ncn.node_id = dn.id
-		WHERE ncn.namespace_cluster_id = ?
-	`
-	if err := cm.db.Query(ctx, &clusterNodes, nodeQuery, cluster.ID); err != nil {
+	// Only fan stop requests out to nodes that are still ACTIVE.
+	//
+	// Every stop RPC uses a 60s HTTP timeout, and deprovisioning issues roughly
+	// six per node (SFU, TURN, gateway, olric, rqlite, delete-cluster-state),
+	// serially. A namespace whose nodes are gone — the exact case you delete such
+	// a namespace for — therefore blocked for ~18 minutes on three dead hosts
+	// before the control-plane rows were touched, which reads as a hang. There is
+	// nothing to stop on a node that is no longer part of the fleet: skip the
+	// round trips and let the row cleanup below proceed. Should such a node ever
+	// return, the periodic sweep stops services it no longer holds an allocation
+	// for (stopUnallocatedWebRTCServices) and prunes its membership.
+	if err := cm.db.Query(ctx, &clusterNodes, deprovisionActiveNodesQuery, cluster.ID); err != nil {
 		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only stop", zap.Error(err))
 		// Fall back to local-only stop (individual methods, NOT StopAll which uses dangerous glob)
 		// Stop WebRTC services first (SFU → TURN), then core services (Gateway → Olric → RQLite)

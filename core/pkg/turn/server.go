@@ -31,7 +31,11 @@ type Server struct {
 
 	certReloader        *certReloader // hot-reloads the primary TURNS cert; nil when TURNS disabled
 	stealthCertReloader *certReloader // hot-reloads the stealth-SNI cert; nil when stealth disabled
-	certStop            chan struct{} // closed to stop the cert-reload watcher goroutine(s)
+	// stealthByHost maps a tenant's stealth SNI hostname to its cert reloader
+	// (bugboard #283). A shared server answers TURNS for several tenants, each
+	// with its own stealth hostname and cert, selected by ClientHello SNI.
+	stealthByHost map[string]*certReloader
+	certStop      chan struct{} // closed to stop the cert-reload watcher goroutine(s)
 }
 
 // NewServer creates and starts a TURN server.
@@ -105,13 +109,17 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		// Stealth SNI: when configured, terminate TLS for a second (neutral)
 		// hostname using its own hot-reloading cert. The SNI router forwards the
 		// raw stealth-domain bytes to this listener; selection is by ServerName.
+		if err := s.loadTenantStealthCertReloaders(cfg); err != nil {
+			s.closeListeners()
+			return nil, err
+		}
 		if err := s.loadStealthCertReloader(cfg); err != nil {
 			s.closeListeners()
 			return nil, err
 		}
 
 		tlsConfig := &tls.Config{
-			GetCertificate: newGetCertificate(cfg.StealthDomain, reloader, s.stealthCertReloader),
+			GetCertificate: newGetCertificateMulti(cfg.StealthDomain, reloader, s.stealthCertReloader, s.stealthByHost),
 			MinVersion:     tls.VersionTLS12,
 		}
 		tlsListener, err := tls.Listen("tcp", cfg.TURNSListenAddr, tlsConfig)
@@ -124,6 +132,12 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 		go reloader.watch(turnCertReloadInterval, s.certStop)
 		if s.stealthCertReloader != nil {
 			go s.stealthCertReloader.watch(turnCertReloadInterval, s.certStop)
+		}
+		// Per-tenant stealth certs renew independently of each other, so each
+		// needs its own watcher — without this a tenant's stealth cert would go
+		// stale at renewal and its clients would hit an expired certificate.
+		for _, r := range s.stealthByHost {
+			go r.watch(turnCertReloadInterval, s.certStop)
 		}
 
 		listenerConfigs = append(listenerConfigs, pionTurn.ListenerConfig{
@@ -210,15 +224,63 @@ func (s *Server) loadStealthCertReloader(cfg *Config) error {
 	return nil
 }
 
+// loadTenantStealthCertReloaders loads a stealth cert per tenant that enables it
+// (bugboard #283). Same all-or-nothing rule as the single-tenant form: a tenant
+// with a partial stealth config is an operator mistake and fails startup rather
+// than quietly serving the wrong certificate for its hostname.
+func (s *Server) loadTenantStealthCertReloaders(cfg *Config) error {
+	for _, t := range cfg.ResolvedTenants() {
+		set := 0
+		if t.StealthDomain != "" {
+			set++
+		}
+		if t.TLSStealthCertPath != "" {
+			set++
+		}
+		if t.TLSStealthKeyPath != "" {
+			set++
+		}
+		if set == 0 {
+			continue // stealth disabled for this tenant
+		}
+		if set != stealthConfigFieldCount {
+			return fmt.Errorf("turn: partial stealth config for tenant %q — set all of [stealth_domain, tls_stealth_cert_path, tls_stealth_key_path] or none", t.Namespace)
+		}
+		reloader, err := newCertReloader(t.TLSStealthCertPath, t.TLSStealthKeyPath, s.logger)
+		if err != nil {
+			return fmt.Errorf("tenant %q: failed to load stealth TLS cert/key (cert=%s, key=%s): %w", t.Namespace, t.TLSStealthCertPath, t.TLSStealthKeyPath, err)
+		}
+		if s.stealthByHost == nil {
+			s.stealthByHost = make(map[string]*certReloader)
+		}
+		s.stealthByHost[strings.ToLower(t.StealthDomain)] = reloader
+	}
+	return nil
+}
+
 // newGetCertificate builds the tls.Config.GetCertificate callback. When the
 // ClientHello ServerName equals stealthDomain (case-insensitively), it serves
 // the stealth cert; every other case — including empty SNI and the primary TURN
 // domain — serves the primary cert, preserving the pre-stealth behavior. When
 // stealth is disabled (stealthReloader nil) it is exactly primary.GetCertificate.
 func newGetCertificate(stealthDomain string, primary, stealth *certReloader) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return newGetCertificateMulti(stealthDomain, primary, stealth, nil)
+}
+
+// newGetCertificateMulti is the multi-tenant form (bugboard #283): a shared
+// server answers TURNS for several tenants, so stealth hostnames are matched
+// against the per-tenant map first. Everything else — including empty SNI and the
+// primary TURN domain, which is covered by the zone wildcard cert — serves the
+// primary cert exactly as before.
+func newGetCertificateMulti(stealthDomain string, primary, stealth *certReloader, byHost map[string]*certReloader) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-		if stealth != nil && hello != nil && strings.EqualFold(hello.ServerName, stealthDomain) {
-			return stealth.GetCertificate(hello)
+		if hello != nil {
+			if r, ok := byHost[strings.ToLower(hello.ServerName)]; ok && r != nil {
+				return r.GetCertificate(hello)
+			}
+			if stealth != nil && strings.EqualFold(hello.ServerName, stealthDomain) {
+				return stealth.GetCertificate(hello)
+			}
 		}
 		return primary.GetCertificate(hello)
 	}
@@ -247,11 +309,14 @@ func (s *Server) authHandler(username, realm string, srcAddr net.Addr) ([]byte, 
 
 	ns := parts[1]
 
-	// Verify namespace matches this TURN server's namespace
-	if ns != s.config.Namespace {
-		s.logger.Debug("TURN credential namespace mismatch",
+	// Resolve THIS namespace's secret (bugboard #283). A shared server serves
+	// several tenants, so authorization is the per-tenant lookup: a namespace we
+	// do not serve is rejected exactly as a mismatch was before, and a miss must
+	// never fall through to another tenant's secret.
+	secret, ok := s.config.TenantSecret(ns)
+	if !ok {
+		s.logger.Debug("TURN credential for a namespace this server does not serve",
 			zap.String("credential_namespace", ns),
-			zap.String("server_namespace", s.config.Namespace),
 			zap.String("src_addr", srcAddr.String()))
 		return nil, false
 	}
@@ -265,8 +330,9 @@ func (s *Server) authHandler(username, realm string, srcAddr net.Addr) ([]byte, 
 		return nil, false
 	}
 
-	// Generate expected password and derive auth key
-	password := GeneratePassword(s.config.AuthSecret, username)
+	// Generate expected password and derive auth key, using the secret belonging
+	// to the credential's OWN namespace.
+	password := GeneratePassword(secret, username)
 	key := pionTurn.GenerateAuthKey(username, realm, password)
 
 	s.logger.Debug("TURN auth accepted",
