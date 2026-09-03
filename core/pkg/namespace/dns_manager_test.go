@@ -298,3 +298,33 @@ func TestDisableNamespaceRecord_surfacesAWriteFailure(t *testing.T) {
 		t.Fatal("a failed withdrawal was reported as success")
 	}
 }
+
+func TestAddNamespaceRecord_revivesASoftDisabledRow(t *testing.T) {
+	// dns_records has UNIQUE(fqdn, record_type, value) and
+	// DisableNamespaceRecord leaves the row in place with is_active = 0. A bare
+	// INSERT therefore hit the constraint on the repair path — so a repaired
+	// node was never re-advertised, and the repair reported success.
+	mockDB := newMockRQLiteClient()
+	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", zap.NewNop())
+
+	if err := manager.AddNamespaceRecord(context.Background(), "alice", "203.0.113.1"); err != nil {
+		t.Fatalf("AddNamespaceRecord: %v", err)
+	}
+
+	inserts := 0
+	for _, call := range mockDB.execCalls {
+		if !strings.Contains(call.Query, "INSERT INTO dns_records") {
+			continue
+		}
+		inserts++
+		if !strings.Contains(call.Query, "ON CONFLICT(fqdn, record_type, value)") {
+			t.Fatalf("the insert is not an upsert, so it fails on a disabled row:\n%s", call.Query)
+		}
+		if !strings.Contains(call.Query, "is_active = TRUE") {
+			t.Fatalf("the upsert does not re-enable the row, so the node stays withdrawn:\n%s", call.Query)
+		}
+	}
+	if inserts != 2 {
+		t.Fatalf("expected both the primary and the wildcard name to be written, got %d", inserts)
+	}
+}

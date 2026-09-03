@@ -2,6 +2,7 @@ package rqlite
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/coredns/coredns/plugin"
@@ -34,12 +35,21 @@ func (p *RQLitePlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dn
 	}
 
 	// Check cache first
-	if cachedMsg := p.cache.Get(state.Name(), state.QType()); cachedMsg != nil {
+	if cachedMsg, negative := p.cache.Get(state.Name(), state.QType()); cachedMsg != nil {
 		p.logger.Debug("Cache hit",
 			zap.String("qname", state.Name()),
 			zap.Uint16("qtype", state.QType()),
+			zap.Bool("negative", negative),
 		)
+		// SetReply resets the rcode to success, so a cached NXDOMAIN has to
+		// have it put back — otherwise it is served as an empty NOERROR, which
+		// is a different answer and one resolvers cache differently.
 		cachedMsg.SetReply(r)
+		if negative {
+			cachedMsg.Rcode = dns.RcodeNameError
+			w.WriteMsg(cachedMsg)
+			return dns.RcodeNameError, nil
+		}
 		w.WriteMsg(cachedMsg)
 		return dns.RcodeSuccess, nil
 	}
@@ -47,24 +57,22 @@ func (p *RQLitePlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dn
 	// Query RQLite backend
 	records, err := p.backend.Query(ctx, state.Name(), state.QType())
 	if err != nil {
-		p.logger.Error("Backend query failed",
-			zap.String("qname", state.Name()),
-			zap.Error(err),
-		)
-		return dns.RcodeServerFailure, err
+		return p.serveStaleOrFail(w, r, &state, err)
 	}
 
-	// If no exact match, try wildcard
+	// If no exact match, walk the wildcards outward.
 	if len(records) == 0 {
-		wildcardName := p.getWildcardName(state.Name())
-		if wildcardName != "" {
+		for _, wildcardName := range p.wildcardCandidates(state.Name()) {
+			if !p.isOurZone(wildcardName) {
+				// Past the edge of what this server is authoritative for.
+				break
+			}
 			records, err = p.backend.Query(ctx, wildcardName, state.QType())
 			if err != nil {
-				p.logger.Error("Wildcard query failed",
-					zap.String("wildcard", wildcardName),
-					zap.Error(err),
-				)
-				return dns.RcodeServerFailure, err
+				return p.serveStaleOrFail(w, r, &state, err)
+			}
+			if len(records) > 0 {
+				break
 			}
 		}
 	}
@@ -107,17 +115,31 @@ func (p *RQLitePlugin) isOurZone(qname string) bool {
 	return false
 }
 
-// getWildcardName extracts the wildcard pattern for a given name
-// e.g., myapp.node-7prvNa.orama.network -> *.node-7prvNa.orama.network
-func (p *RQLitePlugin) getWildcardName(qname string) string {
+// wildcardCandidates returns the wildcard names that could match qname, from
+// most to least specific.
+//
+// Standard wildcard semantics: for a.b.c.d. the candidates are *.b.c.d., then
+// *.c.d., then *.d. — each label is dropped in turn and replaced by a wildcard
+// one level up.
+//
+// This used to build `"*." + labels[1] + "." + labels[2]` and stop, which is
+// only correct for a three-label name. For x.ns-anchat.orama-devnet.network. it
+// produced `*.ns-anchat.orama-devnet.` — the TLD dropped — so it matched none
+// of the `*.ns-<ns>.<base>.` rows CreateNamespaceRecords writes, and every
+// per-namespace sub-name (including turn.ns-<ns>.<base>) was unresolvable.
+func (p *RQLitePlugin) wildcardCandidates(qname string) []string {
 	labels := dns.SplitDomainName(qname)
-	if len(labels) < 3 {
-		return ""
+	if len(labels) < 2 {
+		return nil
 	}
 
-	// Replace first label with wildcard
-	labels[0] = "*"
-	return dns.Fqdn(dns.Fqdn(labels[0] + "." + labels[1] + "." + labels[2]))
+	candidates := make([]string, 0, len(labels)-1)
+	// Stop before the last label: "*." alone is not a name worth querying, and
+	// a wildcard at the TLD is never something this zone owns.
+	for i := 1; i < len(labels); i++ {
+		candidates = append(candidates, dns.Fqdn("*."+strings.Join(labels[i:], ".")))
+	}
+	return candidates
 }
 
 // buildRR builds a DNS resource record from a DNSRecord
@@ -191,6 +213,16 @@ func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter,
 	}
 	msg.Ns = append(msg.Ns, soa)
 
+	// Cache the NXDOMAIN, briefly.
+	//
+	// Without this a flood of random subdomains is a query amplifier pointed
+	// straight at index rqlite: every one missed the cache and became a
+	// database round trip. The TTL is short because "this name does not exist"
+	// is exactly the answer most likely to be wrong soon — a namespace being
+	// provisioned right now — and for the same reason a negative answer is
+	// never served stale.
+	p.cache.SetNegative(state.Name(), state.QType(), msg)
+
 	w.WriteMsg(msg)
 	return dns.RcodeNameError, nil
 }
@@ -198,4 +230,35 @@ func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter,
 // Ready implements the ready.Readiness interface
 func (p *RQLitePlugin) Ready() bool {
 	return p.backend.Healthy()
+}
+
+// serveStaleOrFail answers from the stale cache when the backend is
+// unreachable, and only SERVFAILs when there is genuinely nothing to say.
+//
+// This is the difference between "the database is down" and "the zone is gone".
+// Every backend error used to become SERVFAIL for the whole zone, so an index
+// rqlite with no leader took every name in the fleet offline — including the
+// names an operator needs to reach the machines and fix it.
+func (p *RQLitePlugin) serveStaleOrFail(w dns.ResponseWriter, r *dns.Msg, state *request.Request, cause error) (int, error) {
+	if msg := p.cache.GetStale(state.Name(), state.QType()); msg != nil {
+		msg.SetReply(r)
+		msg.Authoritative = true
+
+		p.logger.Warn("Backend unreachable; serving a stale answer",
+			zap.String("qname", state.Name()),
+			zap.Uint16("qtype", state.QType()),
+			zap.Duration("stale_ttl", StaleTTL),
+			zap.Error(cause))
+
+		if err := w.WriteMsg(msg); err != nil {
+			return dns.RcodeServerFailure, err
+		}
+		return dns.RcodeSuccess, nil
+	}
+
+	p.logger.Error("Backend query failed and nothing usable is cached",
+		zap.String("qname", state.Name()),
+		zap.Uint16("qtype", state.QType()),
+		zap.Error(cause))
+	return dns.RcodeServerFailure, cause
 }

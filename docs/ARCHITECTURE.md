@@ -241,6 +241,26 @@ render it today; read it from the node's own log
 (`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
 lists the components that have not converged.
 
+**DNS degrades rather than failing.** The CoreDNS rqlite plugin serves stale
+answers when the backend is unreachable: an entry stays usable for 24 hours past
+its TTL and is returned with a 30-second TTL so a resolver comes back promptly
+once the database recovers. Any backend error used to become SERVFAIL for the
+whole zone, so an index rqlite with no leader took every name in the fleet
+offline — including the names an operator needs to reach the machines and fix
+it.
+
+NXDOMAIN is cached for 30 seconds and never served stale. Without the cache a
+flood of random subdomains was a query amplifier pointed straight at index
+rqlite; without the "never stale" rule, a name that appeared moments later would
+stay invisible for a day.
+
+Wildcard lookup walks outward — `*.b.c.d.`, `*.c.d.`, `*.d.` — most specific
+first, stopping at the edge of the zone. It used to rebuild only the first three
+labels, so `x.ns-anchat.orama-devnet.network.` became
+`*.ns-anchat.orama-devnet.` with the TLD dropped, matching none of the
+`*.ns-<ns>.<base>.` rows the namespace manager writes. Every per-namespace
+sub-name, `turn.ns-<ns>.<base>` included, was unresolvable.
+
 **Olric is supervised, not connected once.** The gateway keeps a background
 supervisor that probes its Olric client every 10s and, after three consecutive
 failures, drops it so cache handlers answer 503 — the honest answer — instead of

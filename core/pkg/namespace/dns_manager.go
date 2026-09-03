@@ -182,10 +182,28 @@ func (drm *DNSRecordManager) AddNamespaceRecord(ctx context.Context, namespaceNa
 
 	now := time.Now()
 	for _, f := range []string{fqdn, wildcardFqdn} {
+		// An upsert, not a bare INSERT.
+		//
+		// dns_records has UNIQUE(fqdn, record_type, value), and
+		// DisableNamespaceRecord leaves the row in place with is_active = 0. So
+		// re-advertising a node that had been withdrawn — the repair path's
+		// whole purpose — hit the constraint, and the caller logged and
+		// continued: the repaired node was never advertised and the repair
+		// reported success.
+		//
+		// Re-enabling here is correct rather than surprising: this is the
+		// explicit "advertise this node" action, and the only reason the row
+		// was disabled is that something previously decided it should not
+		// serve. Saying it should now IS the decision.
 		insertQuery := `
 			INSERT INTO dns_records (
-				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at, is_active
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+			ON CONFLICT(fqdn, record_type, value) DO UPDATE SET
+				is_active = TRUE,
+				ttl = excluded.ttl,
+				namespace = excluded.namespace,
+				updated_at = excluded.updated_at
 		`
 		_, err := drm.db.Exec(internalCtx, insertQuery,
 			f, "A", ip, 60,
