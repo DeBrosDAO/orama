@@ -438,10 +438,22 @@ curl -sS -m 60 -X POST -F file=@/tmp/big.bin http://127.0.0.1:10107/api/v0/add
 
 ### Circuit breakers
 
-Platform gateway tracks `ns:<ip>` breakers. Dead backends open circuits → HTTP 503  
+Platform gateway tracks `ns:<ip>` breakers. Dead backends open circuits → HTTP 503
 `namespace gateway unavailable: all upstream circuits are open`.
 
-Fix: correct DNS + live gateways; wait or restart `orama-node` **one follower at a time** to clear in-memory breakers (never restart all voters at once).
+**Breakers now clear themselves.** A breaker opens after 5 consecutive backend
+failures, admits one probe every 30s, and closes on the first success. A probe
+that never reports an outcome falls back to open after 30s instead of holding
+the single probe slot — that latch is what previously made restarting
+`orama-node` the only cure, and it was reachable through any WebSocket upgrade,
+because the WS path recorded neither success nor failure.
+
+Fix: correct DNS so only live gateways are advertised, then wait. Recovery
+should take at most one 30s open-duration once the backend is healthy.
+
+If it does not recover, that is a bug worth filing rather than a restart. As a
+last resort `orama node restart` **one follower at a time** still clears
+in-memory breakers (never restart all voters at once).
 
 ---
 

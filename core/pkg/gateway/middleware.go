@@ -1534,10 +1534,20 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		r.URL.Scheme = "http"
 		r.URL.Host = targetHost
 		r.Host = targetHost
+		// Record the outcome. Without this a WS upgrade that happened to be the
+		// half-open probe held the breaker's single probe slot for the life of
+		// the process, silently removing a healthy node from the round-robin -
+		// and a target that failed ONLY on WS never opened a breaker at all, so
+		// it kept receiving signalling traffic forever.
 		if g.proxyWebSocket(w, r, targetHost) {
+			if cb != nil {
+				cb.RecordSuccess()
+			}
 			return
 		}
-		// If WebSocket proxy failed and already wrote error, return
+		if cb != nil {
+			cb.RecordFailure()
+		}
 		return
 	}
 

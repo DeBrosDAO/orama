@@ -45,7 +45,14 @@ const healthyProbesBeforeDNSReclaim = 3
 
 // startNamespaceHealthLoop runs two periodic tasks:
 //  1. Every 30s: probe local namespace services and cache health state
-//  2. Every 1h: (leader-only) check for under-provisioned namespaces and trigger repair
+//  2. Every 5m: (leader-only) check for under-provisioned namespaces and trigger repair
+//  3. Every 5m: drop circuit breakers for targets that no longer receive traffic
+//
+// breakerIdleTTL is how long a circuit breaker survives with no traffic before
+// it is dropped. Comfortably longer than the open duration, so a breaker that is
+// deliberately fast-failing a sick target is never mistaken for an idle one.
+const breakerIdleTTL = 30 * time.Minute
+
 func (g *Gateway) startNamespaceHealthLoop(ctx context.Context) {
 	g.nsHealth = &namespaceHealthState{
 		cache: make(map[string]*NamespaceHealth),
@@ -68,6 +75,15 @@ func (g *Gateway) startNamespaceHealthLoop(ctx context.Context) {
 			g.probeLocalNamespaces(ctx)
 		case <-reconcileTicker.C:
 			g.reconcileNamespaces(ctx)
+			// The breaker registry is keyed by target IP and never shed entries:
+			// every node ever removed from the cluster, and every namespace ever
+			// proxied, stayed in the map for the life of the process.
+			if g.circuitBreakers != nil {
+				if dropped := g.circuitBreakers.Prune(breakerIdleTTL); dropped > 0 {
+					g.logger.ComponentInfo(logging.ComponentGeneral,
+						"pruned idle circuit breakers", zap.Int("dropped", dropped))
+				}
+			}
 		}
 	}
 }
