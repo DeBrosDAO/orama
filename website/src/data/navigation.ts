@@ -15,50 +15,48 @@ export interface SocialLink {
   icon: string;
 }
 
-export const NAV_LINKS: NavItem[] = [
-  { label: "Blockchain", href: "/blockchain" },
-  { label: "Compute", href: "/compute" },
-  { label: "Investors", href: "/investors" },
-  { label: "Waitlist", href: "/whitelist" },
-  { label: "Whitepaper", href: "/whitepaper" },
-];
+export const GITHUB_URL = "https://github.com/DeBrosDAO/orama";
 
-export const MORE_LINKS: NavItem[] = [
-  { label: "Contributors", href: "/contributors" },
-  { label: "Documentation", href: "/docs" },
+export const NAV_LINKS: NavItem[] = [
+  { label: "Docs", href: "/docs" },
+  { label: "GitHub", href: GITHUB_URL, external: true },
 ];
 
 export const FOOTER_COLUMNS: FooterColumn[] = [
   {
-    title: "Platform",
+    title: "Documentation",
     links: [
-      { label: "Compute", href: "/compute" },
-      { label: "Blockchain", href: "/blockchain" },
-      { label: "Investors", href: "/investors" },
-      { label: "Contributors", href: "/contributors" },
+      { label: "Getting Started", href: "/docs/developer/getting-started" },
+      { label: "CLI Reference", href: "/docs/developer/cli-reference" },
+      { label: "SDK Reference", href: "/docs/developer/sdk-reference" },
+      { label: "Run a Node", href: "/docs/operator/getting-started" },
     ],
   },
   {
-    title: "Resources",
+    title: "Project",
     links: [
-      { label: "Documentation", href: "/docs" },
-      { label: "Whitepaper", href: "/whitepaper" },
+      { label: "GitHub", href: GITHUB_URL, external: true },
+      { label: "Contributing", href: "/docs/contributor/dev-setup" },
+      { label: "Architecture", href: "/docs/contributor/architecture" },
     ],
   },
   {
     title: "Community",
     links: [
-      { label: "GitHub", href: "https://github.com/DeBrosDAO", external: true },
       { label: "X", href: "https://x.com/debrosofficial", external: true },
       { label: "Telegram", href: "https://t.me/debrosportal", external: true },
-      { label: "AnChat", href: "https://anchat.io", external: true },
+      { label: "DeBros", href: "https://debros.io", external: true },
     ],
   },
 ];
 
 export const SOCIAL_LINKS: SocialLink[] = [
-  { label: "GitHub", href: "https://github.com/DeBrosDAO", icon: "github" },
+  { label: "GitHub", href: GITHUB_URL, icon: "github" },
   { label: "X", href: "https://x.com/debrosofficial", icon: "twitter" },
   { label: "Telegram", href: "https://t.me/debrosportal", icon: "send" },
-  { label: "YouTube", href: "https://www.youtube.com/@DeBrosOfficial", icon: "youtube" },
+  {
+    label: "YouTube",
+    href: "https://www.youtube.com/@DeBrosOfficial",
+    icon: "youtube",
+  },
 ];

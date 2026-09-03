@@ -97,3 +97,6 @@ core/plans/
 
 # Claude Code local settings (machine-specific allowlists — never commit)
 .claude/settings.local.json
+
+# TypeScript incremental build artifact
+website/tsconfig.tsbuildinfo

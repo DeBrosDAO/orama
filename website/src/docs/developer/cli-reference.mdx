@@ -4,16 +4,33 @@ The Orama CLI is the command-line tool for deploying applications, managing data
 
 ## Installation
 
-The CLI is a Go binary built from source:
+The CLI is a single Go binary. Homebrew tracks the latest stable release:
 
 ```bash
-git clone https://github.com/DeBrosOfficial/network.git
-cd network
+brew install DeBrosDAO/tap/orama
+orama version
+```
+
+Debian and Ubuntu packages, along with prebuilt tarballs for macOS and Linux on
+amd64 and arm64, are published on the [releases page](https://github.com/DeBrosDAO/orama/releases):
+
+```bash
+sudo dpkg -i orama_<version>_linux_amd64.deb
+```
+
+To build from source:
+
+```bash
+git clone https://github.com/DeBrosDAO/orama.git
+cd orama
 make build
 ./core/bin/orama version
 ```
 
 The build runs in the `core/` module and outputs binaries to `core/bin/`. You can also add `./core/bin` to your `PATH` or copy the binary to `/usr/local/bin`.
+
+> **Note:** nightly builds are published as pre-releases on the same page. Homebrew
+> installs the latest stable release, which can lag the nightlies by several versions.
 
 ## Global Flags
 

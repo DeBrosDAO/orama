@@ -1,11 +1,12 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router";
 import { ExternalLink, X } from "lucide-react";
-import { NAV_LINKS, MORE_LINKS } from "../../data/navigation";
+import { NAV_LINKS } from "../../data/navigation";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
-const menuLinkClass = "py-3 text-2xl font-display font-semibold tracking-tight transition-colors duration-150";
+const menuLinkClass =
+  "py-3 text-2xl font-display font-semibold tracking-tight transition-colors duration-150";
 
 export interface MobileMenuProps {
   open: boolean;
@@ -33,10 +34,13 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
   return (
     <div
       className={cn(
-        "fixed inset-0 z-[60] bg-bg/95 backdrop-blur-md md:hidden flex flex-col transition-all duration-300",
+        "fixed inset-0 z-[60] bg-bg/95 md:hidden flex flex-col transition-opacity duration-300",
+        // backdrop-blur is only applied while open: a full-screen backdrop-filter
+        // on a permanently mounted element rasterizes over the page even at
+        // opacity 0, and costs a compositing layer on every frame.
         open
-          ? "opacity-100 pointer-events-auto"
-          : "opacity-0 pointer-events-none",
+          ? "opacity-100 pointer-events-auto backdrop-blur-md"
+          : "opacity-0 pointer-events-none invisible",
       )}
     >
       <div className="flex items-center justify-end px-6 pt-5 pb-2">
@@ -59,32 +63,25 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
                 href={link.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={cn(menuLinkClass, "flex items-center gap-2 text-muted hover:text-fg")}
+                className={cn(
+                  menuLinkClass,
+                  "flex items-center gap-2 text-muted hover:text-fg",
+                )}
               >
                 {link.label}
                 <ExternalLink className="w-4 h-4" />
               </a>
             );
           }
-          const isActive = location.pathname === link.href;
+          const isActive = location.pathname.startsWith(link.href);
           return (
             <Link
               key={link.href}
               to={link.href}
-              className={cn(menuLinkClass, isActive ? "text-fg" : "text-muted hover:text-fg")}
-            >
-              {link.label}
-            </Link>
-          );
-        })}
-
-        {MORE_LINKS.map((link) => {
-          const isActive = location.pathname === link.href;
-          return (
-            <Link
-              key={link.href}
-              to={link.href}
-              className={cn(menuLinkClass, isActive ? "text-fg" : "text-muted hover:text-fg")}
+              className={cn(
+                menuLinkClass,
+                isActive ? "text-fg" : "text-muted hover:text-fg",
+              )}
             >
               {link.label}
             </Link>
@@ -94,7 +91,7 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
 
       <div className="mt-auto px-6 pb-8">
         <Button variant="primary" size="lg" className="w-full" asChild>
-          <Link to="/invest">Investors Dashboard</Link>
+          <Link to="/docs/developer/getting-started">Get Started</Link>
         </Button>
       </div>
     </div>
