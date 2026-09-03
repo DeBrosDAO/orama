@@ -350,18 +350,24 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 			continue
 		}
 		ns := state.NamespaceName
-		// Every local namespace, not just current tenants: a namespace that LOST
-		// its TURN allocation still has a legacy unit to retire, and that unit
-		// would go on holding 3478 against the shared server.
-		active, aerr := cm.systemdSpawner.systemdMgr.IsServiceActive(ns, systemd.ServiceTypeTURN)
-		if aerr == nil && active {
-			if serr := cm.systemdSpawner.systemdMgr.StopService(ns, systemd.ServiceTypeTURN); serr != nil {
-				cm.logger.Warn("Failed to stop legacy per-namespace TURN unit — it still holds 3478/5349, so the shared server cannot bind",
-					zap.String("namespace", ns), zap.Error(serr))
-				continue
-			}
-			cm.logger.Info("Retired legacy per-namespace TURN unit; the shared host TURN serves this namespace now (bugboard #283)",
-				zap.String("namespace", ns))
+
+		// Stop and disable UNCONDITIONALLY, without consulting IsServiceActive.
+		//
+		// That check reports a crash-looping unit as NOT active — and after the
+		// config migration the legacy units crash-loop by construction, because
+		// their configs are gone. Gating on "active" therefore skips exactly the
+		// units that most need retiring, leaving them restarting forever. Both
+		// calls are idempotent on an already-stopped or never-installed unit.
+		//
+		// Disabling matters as much as stopping: without it the unit returns on
+		// the next boot and starts crash-looping again.
+		if serr := cm.systemdSpawner.systemdMgr.StopService(ns, systemd.ServiceTypeTURN); serr != nil {
+			cm.logger.Warn("Failed to stop legacy per-namespace TURN unit",
+				zap.String("namespace", ns), zap.Error(serr))
+		}
+		if derr := cm.systemdSpawner.systemdMgr.DisableService(ns, systemd.ServiceTypeTURN); derr != nil {
+			cm.logger.Warn("Failed to disable legacy per-namespace TURN unit; it will return on the next boot",
+				zap.String("namespace", ns), zap.Error(derr))
 		}
 
 		// Deleting the legacy config is NOT conditional on having just stopped the
@@ -382,6 +388,16 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 // config would leave exactly the exposure the tighter mode exists to close, on
 // precisely the hosts this migration touches.
 func (cm *ClusterManager) removeLegacyTURNConfig(namespace, namespaceDir string) {
+	// turn.env is what marks the unit "provisioned": both the upgrade's rolling
+	// restart and hostRunsTURN() enumerate namespaces by the presence of this
+	// file. Leaving it behind makes the upgrade restart a configless unit into a
+	// permanent crash-loop, so the migration is not complete without removing it.
+	envPath := filepath.Join(namespaceDir, "turn.env")
+	if eerr := os.Remove(envPath); eerr != nil && !os.IsNotExist(eerr) {
+		cm.logger.Warn("Failed to remove the legacy TURN env file; the upgrade will keep restarting a configless unit",
+			zap.String("namespace", namespace), zap.String("path", envPath), zap.Error(eerr))
+	}
+
 	path := filepath.Join(namespaceDir, "configs",
 		fmt.Sprintf("turn-%s.yaml", cm.localNodeID))
 	err := os.Remove(path)

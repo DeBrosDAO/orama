@@ -316,3 +316,25 @@ func TestRemoveLegacyTURNConfig_confinedToTheGivenDirectory(t *testing.T) {
 		t.Error("a file outside the namespace directory was deleted — the namespace name must not steer the path")
 	}
 }
+
+// The migration is not complete until turn.env is gone: both the upgrade's
+// rolling restart and hostRunsTURN() enumerate namespaces by that file, so
+// leaving it makes the upgrade restart a unit whose config was just deleted —
+// a permanent crash-loop.
+func TestRemoveLegacyTURNConfig_alsoRemovesTheEnvFile(t *testing.T) {
+	nsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nsDir, "configs"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	envFile := filepath.Join(nsDir, "turn.env")
+	if err := os.WriteFile(envFile, []byte("TURN_CONFIG=/x.yaml\n"), 0644); err != nil {
+		t.Fatalf("seed env: %v", err)
+	}
+
+	cm := hostTURNCM(t, "203.0.113.7")
+	cm.removeLegacyTURNConfig("anchat-v2", nsDir)
+
+	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
+		t.Error("turn.env survived — the upgrade will keep restarting a configless TURN unit into a crash-loop")
+	}
+}

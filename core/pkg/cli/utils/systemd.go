@@ -173,6 +173,9 @@ func GetProductionServices() []string {
 		"orama-vault",
 		"orama-anyone-client",
 		"orama-anyone-relay",
+		// Shared, host-level TURN (bugboard #283 part 2). Global, not a namespace
+		// instance: one process serves every namespace on the host.
+		"orama-turn",
 	}
 
 	var existing []string
@@ -193,7 +196,11 @@ func GetProductionServices() []string {
 	namespacesDir := "/opt/orama/.orama/data/namespaces"
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
-		serviceTypes := []string{"rqlite", "olric", "gateway", "sfu", "turn"}
+		// "turn" is deliberately absent: TURN is host-level since bugboard #283
+		// part 2 and lives in globalServices above. Restarting the retired
+		// per-namespace units would start configless instances that crash-loop
+		// forever, since the migration deletes their configs.
+		serviceTypes := []string{"rqlite", "olric", "gateway", "sfu"}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {
 				continue
