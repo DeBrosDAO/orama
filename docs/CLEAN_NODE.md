@@ -46,6 +46,12 @@ sudo ufw --force enable
 
 # 5. Remove orama data directory
 sudo rm -rf /opt/orama
+sudo rm -rf /var/lib/ntfy /run/ntfy
+sudo rm -rf /etc/anon
+# /var/lib/anon (Anyone identity) is preserved unless you also:
+#   sudo rm -rf /var/lib/anon
+sudo swapoff -a 2>/dev/null || true
+# rm -rf is unlink, not cryptographic erase. Assume decommissioned provider disks are readable.
 
 # 6. Remove orama system user (created by every install; services run as it,
 #    so services must be stopped first or userdel fails with "user in use")

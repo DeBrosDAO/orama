@@ -166,6 +166,7 @@ Stated so the gaps above are known positions, not implied protections:
 - **RQLite HTTP auth** — `rqlited -auth` is not enabled; overlay + firewall are the control
 - **ntfy** — no auth-file in v1; listen-localhost is the control
 - **A captured disk snapshot of RQLite** — plaintext application data, including `deployment_env_vars`
+- **Immediate erase of deleted rows** — a SQL `DELETE` is a Raft log entry; the original INSERT remains in `raft.db` until size-driven compaction, not a privacy TTL
 
 ## Rollout Strategy
 
