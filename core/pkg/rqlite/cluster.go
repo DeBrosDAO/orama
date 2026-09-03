@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -141,7 +140,7 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 	}
 
 	if r.hasExistingRaftState(rqliteDataDir) {
-		ourLogIndex := r.getRaftLogIndex()
+		ourLogIndex, known := r.getRaftLogIndex()
 		maxPeerIndex := uint64(0)
 		for _, peer := range r.discoveryService.GetAllPeers() {
 			if !isSelfPeer(peer, r.discoverConfig.RaftAdvAddress) && peer.RaftLogIndex > maxPeerIndex {
@@ -149,7 +148,15 @@ func (r *RQLiteManager) performPreStartClusterDiscovery(ctx context.Context, rql
 			}
 		}
 
-		if ourLogIndex == 0 && maxPeerIndex > 0 {
+		// A zero this node cannot vouch for is not evidence of anything. It
+		// used to be treated as "we have no data" and the node destroyed its
+		// own raft log on the strength of an unreadable meta.json.
+		if !known {
+			r.logger.Warn("Not clearing raft state: this node's log index could not be determined, " +
+				"and a zero it cannot vouch for is not evidence that it holds no data")
+		}
+
+		if known && ourLogIndex == 0 && maxPeerIndex > 0 {
 			if err := r.clearRaftState(rqliteDataDir); err != nil {
 				r.logger.Warn("Failed to clear raft state during pre-start discovery", zap.Error(err))
 			}
@@ -197,7 +204,7 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 	time.Sleep(500 * time.Millisecond)
 
 	rqliteDataDir, _ := r.rqliteDataDirPath()
-	ourIndex := r.getRaftLogIndex()
+	ourIndex, known := r.getRaftLogIndex()
 
 	maxPeerIndex := uint64(0)
 	for _, peer := range r.discoveryService.GetAllPeers() {
@@ -206,7 +213,12 @@ func (r *RQLiteManager) recoverFromSplitBrain(ctx context.Context) error {
 		}
 	}
 
-	if ourIndex == 0 && maxPeerIndex > 0 {
+	if !known {
+		r.logger.Warn("Not clearing raft state during split-brain recovery: this node's log index " +
+			"could not be determined, and a zero it cannot vouch for is not evidence that it holds no data")
+	}
+
+	if known && ourIndex == 0 && maxPeerIndex > 0 {
 		if err := r.clearRaftState(rqliteDataDir); err != nil {
 			r.logger.Warn("Failed to clear raft state during split-brain recovery", zap.Error(err))
 		}
@@ -307,38 +319,85 @@ func (r *RQLiteManager) startHealthMonitoring(ctx context.Context) {
 	}
 }
 
-// checkNeedsClusterRecovery checks if the node has old cluster state that requires coordinated recovery
+// checkNeedsClusterRecovery reports whether this node's recorded membership is
+// stale enough that it needs peers.json written before rqlited starts.
+//
+// The test is on MEMBERSHIP, not on file sizes. It used to return true whenever
+// snapshots existed and raft.db was 8 MB or smaller — which is the normal
+// steady state of a healthy node just after a snapshot compacts its log. So the
+// pre-start discovery path, and the raft-state clear it can reach, ran on
+// ordinary boots rather than on broken ones.
+//
+// Positive evidence means: this node records peers, and the set it records
+// disagrees with the set discovery can currently see. A node whose recorded
+// peers are simply unreachable is not stale — that is an outage, and rewriting
+// its configuration during one is how a partition becomes a split brain.
 func (r *RQLiteManager) checkNeedsClusterRecovery(rqliteDataDir string) (bool, error) {
-	snapshotsDir := filepath.Join(rqliteDataDir, "rsnapshots")
-	if _, err := os.Stat(snapshotsDir); os.IsNotExist(err) {
-		return false, nil
-	}
-
-	entries, err := os.ReadDir(snapshotsDir)
+	recorded, err := r.recordedPeerAddresses(rqliteDataDir)
 	if err != nil {
 		return false, err
 	}
-
-	hasSnapshots := false
-	for _, entry := range entries {
-		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".db") {
-			hasSnapshots = true
-			break
-		}
-	}
-
-	if !hasSnapshots {
+	if len(recorded) == 0 {
+		// Nothing recorded to be stale about.
 		return false, nil
 	}
 
-	raftLogPath := filepath.Join(rqliteDataDir, "raft.db")
-	if info, err := os.Stat(raftLogPath); err == nil {
-		if info.Size() <= 8*1024*1024 {
-			return true, nil
+	if r.discoveryService == nil {
+		return false, nil
+	}
+	discovered := map[string]bool{}
+	for _, peer := range r.discoveryService.GetAllPeers() {
+		if peer.RaftAddress != "" {
+			discovered[peer.RaftAddress] = true
 		}
 	}
+	if len(discovered) == 0 {
+		// Discovery knows nothing yet. That is not evidence the recorded set is
+		// wrong — it is evidence this node has not finished starting.
+		return false, nil
+	}
 
+	// Self is always a member and never appears in discovery's peer list.
+	self := r.discoverConfig.RaftAdvAddress
+
+	for _, addr := range recorded {
+		if addr == self || discovered[addr] {
+			continue
+		}
+		r.logger.Info("Recorded raft membership disagrees with discovery; peers.json will be rewritten",
+			zap.String("recorded_peer", addr),
+			zap.Int("recorded", len(recorded)),
+			zap.Int("discovered", len(discovered)))
+		return true, nil
+	}
 	return false, nil
+}
+
+// recordedPeerAddresses reads the raft addresses this node has recorded as
+// members, from the peers.json rqlite maintains beside its raft state.
+func (r *RQLiteManager) recordedPeerAddresses(rqliteDataDir string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(rqliteDataDir, "raft", "peers.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read recorded raft peers: %w", err)
+	}
+
+	var peers []struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(raw, &peers); err != nil {
+		return nil, fmt.Errorf("parse recorded raft peers: %w", err)
+	}
+
+	out := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if p.Address != "" {
+			out = append(out, p.Address)
+		}
+	}
+	return out, nil
 }
 
 func (r *RQLiteManager) hasExistingRaftState(rqliteDataDir string) bool {
@@ -351,9 +410,52 @@ func (r *RQLiteManager) hasExistingRaftState(rqliteDataDir string) bool {
 	return false
 }
 
+// clearRaftState sets this node's raft state aside so it starts fresh.
+//
+// It MOVES rather than deletes. Every caller reaches here on inferred evidence
+// — "our log index is zero and a peer's is higher" — and that inference has
+// been wrong before: an unreadable snapshot file used to produce the same zero
+// as an empty node. Moving costs disk and keeps the only local copy of the
+// cluster's state recoverable by hand; deleting costs the data.
+//
+// rsnapshots is included, which it was not. Removing raft.db while leaving the
+// snapshots produced a node with snapshots and no log to apply them against —
+// a state neither rqlite nor the next recovery attempt reasons about correctly.
 func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
-	_ = os.Remove(filepath.Join(rqliteDataDir, "raft.db"))
-	_ = os.Remove(filepath.Join(rqliteDataDir, "raft", "peers.json"))
-	_ = os.Remove(filepath.Join(rqliteDataDir, "discovery-peers.json"))
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	discarded := filepath.Join(rqliteDataDir, fmt.Sprintf("raft.discarded-%s", stamp))
+
+	if err := os.MkdirAll(discarded, 0o755); err != nil {
+		return fmt.Errorf("create %s to set the raft state aside: %w", discarded, err)
+	}
+
+	// raft.db is the log; rsnapshots holds what it was compacted into; raft/
+	// carries peers.json. All three describe one membership, so they move
+	// together or the remainder is inconsistent.
+	moved := 0
+	for _, name := range []string{"raft.db", "rsnapshots", "raft", "discovery-peers.json"} {
+		src := filepath.Join(rqliteDataDir, name)
+		if _, err := os.Stat(src); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("inspect %s: %w", src, err)
+		}
+		if err := os.Rename(src, filepath.Join(discarded, name)); err != nil {
+			return fmt.Errorf("set %s aside: %w", src, err)
+		}
+		moved++
+	}
+
+	if moved == 0 {
+		// Nothing to move; do not leave an empty directory behind implying
+		// something was discarded.
+		_ = os.Remove(discarded)
+		return nil
+	}
+
+	r.logger.Warn("Set this node's raft state aside; it will rejoin and replicate from the leader",
+		zap.String("moved_to", discarded),
+		zap.Int("items", moved))
 	return nil
 }

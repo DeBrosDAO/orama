@@ -36,7 +36,7 @@ func (c *ClusterDiscoveryService) collectPeerMetadata() []*discovery.RQLiteNodeM
 		RaftAddress:    currentRaftAddr,
 		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
-		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
+		RaftLogIndex:   c.rqliteManagerLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
 		PeerID:         c.host.ID().String(),
@@ -489,4 +489,18 @@ func (c *ClusterDiscoveryService) writeRecoveryPeersJSON(peers []map[string]inte
 		zap.Strings("nodes", nodeIDs))
 
 	return nil
+}
+
+// rqliteManagerLogIndex reports this node's raft log index for an announcement.
+//
+// An index this node cannot determine is announced as zero, which is what it
+// already did. That is safe HERE — a peer reading a low index only declines to
+// recover from us — and unsafe in the recovery paths, which treat a zero as
+// grounds to destroy the local log and therefore require it to be known.
+func (c *ClusterDiscoveryService) rqliteManagerLogIndex() uint64 {
+	if c.rqliteManager == nil {
+		return 0
+	}
+	index, _ := c.rqliteManager.getRaftLogIndex()
+	return index
 }
