@@ -47,7 +47,7 @@ orama build
 # 2. Push archive to all nodes (fanout via hub node)
 orama node push --env testnet
 
-# 3. Rolling upgrade (one node at a time, followers first, leader last)
+# 3. Rolling upgrade (one node at a time, in node-list order)
 orama node upgrade --env testnet
 ```
 
@@ -81,17 +81,33 @@ orama node rollout --env testnet
 
 # Or with more control:
 orama node push --env testnet                     # Push archive to all nodes
-orama node upgrade --env testnet                  # Rolling upgrade (auto-detects leader)
+orama node upgrade --env testnet                  # Rolling upgrade
 orama node upgrade --env testnet --node 1.2.3.4   # Single node only
 orama node upgrade --env testnet --delay 60       # 60s between nodes
 ```
 
-The rolling upgrade automatically:
-1. Upgrades **follower** nodes first
-2. Upgrades the **leader** last
-3. Waits a configurable delay between nodes (default: 30s)
+What the rolling upgrade does **today**:
 
-After each node, verify health:
+1. Upgrades nodes in the order they appear in the environment's node list.
+2. Waits `--delay` seconds between nodes (default: 30).
+
+It does **not** yet detect the leader or order followers first, and the delay is
+a fixed wait rather than a health check. Until it does (bugboard chg-309), order
+matters and is yours to control:
+
+```bash
+# Find the leader, then upgrade it LAST.
+orama monitor report --env testnet | grep -i leader
+orama node upgrade --env testnet --node <follower-1>
+orama node upgrade --env testnet --node <follower-2>
+orama node upgrade --env testnet --node <leader>
+```
+
+`orama node pre-upgrade` does hand index RQLite leadership to another voter
+before the node restarts, and **aborts** if it cannot — so upgrading the leader
+is not unsafe, it just costs an election that upgrading it last would avoid.
+
+After each node, verify health before starting the next:
 ```bash
 orama monitor report --env testnet
 ```
