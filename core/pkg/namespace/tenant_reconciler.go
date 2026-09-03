@@ -489,3 +489,23 @@ func (cm *ClusterManager) replayPendingCleanups(ctx context.Context) error {
 	}
 	return nil
 }
+
+// serviceRunning reports whether a unit is active, and whether the answer is
+// KNOWN.
+//
+// `IsServiceActive`'s error was discarded at every call site, so a transient
+// systemctl or D-Bus failure read as "the service is down" and triggered a
+// re-spawn of something that was running perfectly well. Re-spawning is not
+// free: it stops the unit first, so a momentary inability to ask the question
+// caused the outage it was checking for.
+func serviceRunning(cm *ClusterManager, namespace string, serviceType systemd.ServiceType) (running, known bool) {
+	active, err := cm.systemdSpawner.systemdMgr.IsServiceActive(namespace, serviceType)
+	if err != nil {
+		cm.logger.Warn("Cannot read a unit's state; treating it as unknown rather than inactive",
+			zap.String("namespace", namespace),
+			zap.String("service", string(serviceType)),
+			zap.Error(err))
+		return false, false
+	}
+	return active, true
+}

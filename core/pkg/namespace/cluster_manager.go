@@ -1745,7 +1745,12 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	// 1. Restore RQLite
 	// Check if RQLite systemd service is already running
-	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, systemd.ServiceTypeRQLite)
+	// A transient systemctl/D-Bus failure is not "the service is down", and
+	// treating it as such re-spawns a service that is running fine.
+	rqliteRunning, known := serviceRunning(cm, namespaceName, systemd.ServiceTypeRQLite)
+	if !known {
+		return fmt.Errorf("cannot determine whether rqlite is running for %s, so not acting on a guess", namespaceName)
+	}
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, namespaceName, "rqlite", cm.localNodeID)
@@ -2431,7 +2436,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 1. Restore RQLite
 	// Check if RQLite systemd service is already running
-	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeRQLite)
+	rqliteRunning, known := serviceRunning(cm, state.NamespaceName, systemd.ServiceTypeRQLite)
+	if !known {
+		cm.logger.Warn("Cannot determine whether rqlite is running; skipping this pass rather than acting on a guess",
+			zap.String("namespace", state.NamespaceName))
+		return nil
+	}
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, state.NamespaceName, "rqlite", cm.localNodeID)
@@ -2811,7 +2821,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		sfuAllocated = sfuPortBlockSpawnable(blk)
 	}
 	if sfuAllocated {
-		sfuRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU)
+		sfuRunning, sfuKnown := serviceRunning(cm, state.NamespaceName, systemd.ServiceTypeSFU)
+		if !sfuKnown {
+			cm.logger.Warn("Cannot determine whether the SFU is running; leaving it alone this pass",
+				zap.String("namespace", state.NamespaceName))
+			sfuRunning = true // treat as running, so nothing is spawned on a guess
+		}
 		if !sfuRunning {
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {

@@ -4,6 +4,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/systemd"
+	"go.uber.org/zap"
+
 	"github.com/DeBrosOfficial/network/pkg/olric"
 )
 
@@ -123,4 +126,26 @@ func TestSameStringSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A transient systemctl/D-Bus failure must not read as "the service is down".
+// Re-spawning is not free — it stops the unit first — so a momentary inability
+// to ask the question caused the outage it was checking for.
+func TestServiceRunning_unknownIsNotInactive(t *testing.T) {
+	cm := &ClusterManager{
+		logger:         zap.NewNop(),
+		systemdSpawner: &SystemdSpawner{systemdMgr: systemd.NewManager(t.TempDir(), zap.NewNop()), logger: zap.NewNop()},
+	}
+
+	// No such unit on this machine: systemctl either is not present (darwin) or
+	// reports an unknown unit. Either way the answer must be usable.
+	running, known := serviceRunning(cm, "no-such-namespace", systemd.ServiceTypeRQLite)
+
+	if running {
+		t.Fatal("a namespace with no unit was reported as running")
+	}
+	// known may be true (systemctl answered "inactive") or false (it could not
+	// be asked). What must never happen is `running == true` on an error, or a
+	// panic — both are the failure modes the discarded error allowed.
+	_ = known
 }
