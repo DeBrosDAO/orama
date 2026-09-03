@@ -81,6 +81,10 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Invite token output includes the CA certificate fingerprint (SHA-256)
 - Joining node verifies the server cert fingerprint matches before proceeding
 - After join: CA cert stored locally for future connections
+- Production CLI and `tlsutil.NewHTTPClientForDomain` do **not** set `InsecureSkipVerify` — public Caddy certs verify against system CAs
+- `TCPSNIGateway` sets `MinVersion: TLS 1.2`
+- Certificate serials are 128-bit `crypto/rand` values
+- Olric config generation refuses an empty `olric-encryption-key` (no cleartext memberlist)
 
 **WebSocket Origin Validation (Step 1.4)**
 - All WebSocket upgraders validate the `Origin` header against the node's configured domain

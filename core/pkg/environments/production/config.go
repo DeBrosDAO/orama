@@ -448,6 +448,9 @@ func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort i
 	if data, err := os.ReadFile(filepath.Join(cg.oramaDir, "secrets", "olric-encryption-key")); err == nil {
 		encryptionKey = strings.TrimSpace(string(data))
 	}
+	if encryptionKey == "" {
+		return "", fmt.Errorf("olric-encryption-key missing or empty; refusing to start Olric without memberlist encryption")
+	}
 
 	data := templates.OlricConfigData{
 		ServerBindAddr:          serverBindAddr,
