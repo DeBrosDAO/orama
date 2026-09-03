@@ -153,9 +153,15 @@ func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 		return nil
 	}
 
-	// Parse current peers from wg show output
-	currentPeers := parseWGShowPeers(string(out))
 	localPubKey := parseWGShowLocalKey(string(out))
+
+	// Read the live peers WITH their endpoints and allowed IPs. `wg show` alone
+	// only yields keys, which is why an endpoint that moved could never be
+	// detected as drift.
+	currentPeers, err := production.ReadLiveWGPeers("wg0")
+	if err != nil {
+		return fmt.Errorf("read live wireguard peers: %w", err)
+	}
 
 	desired, err := n.loadDesiredWireGuardPeers(ctx, localPubKey)
 	if err != nil {
@@ -173,6 +179,11 @@ func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 type wgPeerProvisioner interface {
 	AddPeer(peer production.WireGuardPeer) error
 	RemovePeer(publicKey string) error
+	// PersistPeers writes the resulting peer set to wg0.conf so the mesh
+	// survives the next `wg-quick up`. Kernel state and file state are applied
+	// separately and reported separately: a peer that reached the interface is
+	// live even if the file could not be written.
+	PersistPeers(peers []production.WireGuardPeer) error
 }
 
 // reconcileWireGuardPeers applies desired onto the live interface.
@@ -184,22 +195,44 @@ type wgPeerProvisioner interface {
 // migration in flight all produce an empty read. Treating that as "remove every
 // peer" severs the mesh, and severing the mesh is what makes the loss
 // unrecoverable. Adding peers is always safe, so adds are unconditional.
-func (n *Node) reconcileWireGuardPeers(currentPeers map[string]struct{}, desired desiredWGPeers) {
-	n.reconcileWireGuardPeersWith(&production.WireGuardProvisioner{}, currentPeers, desired)
+func (n *Node) reconcileWireGuardPeers(currentPeers map[string]production.WireGuardPeer, desired desiredWGPeers) {
+	n.reconcileWireGuardPeersWith(production.NewWGPeerManager(""), currentPeers, desired)
 }
 
 // reconcileWireGuardPeersWith is reconcileWireGuardPeers against an injected
 // provisioner.
-func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers map[string]struct{}, desired desiredWGPeers) {
-	added := 0
+func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers map[string]production.WireGuardPeer, desired desiredWGPeers) {
+	// live tracks what the interface holds as we change it, so the file we
+	// persist at the end describes the mesh that actually exists.
+	live := make(map[string]production.WireGuardPeer, len(currentPeers))
+	for k, v := range currentPeers {
+		live[k] = v
+	}
+
+	added, updated := 0, 0
 	for pubKey, peer := range desired.peers {
-		if _, exists := currentPeers[pubKey]; exists {
+		existing, exists := live[pubKey]
+		if exists && !wgPeerDrifted(existing, peer) {
 			continue
 		}
 		if err := wp.AddPeer(peer); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "failed to add WG peer",
+			n.logger.ComponentWarn(logging.ComponentNode, "failed to apply WG peer to the interface",
 				zap.String("public_key", shortWGKey(pubKey)),
 				zap.Error(err))
+			continue
+		}
+		live[pubKey] = peer
+		if exists {
+			// `wg set` is idempotent, so re-applying a known key is how an
+			// endpoint or allowed-ips change is rolled out. Skipping known keys
+			// meant a peer that moved to a new public IP kept the dead endpoint
+			// forever, which is the manual "reset the peer on both sides" in
+			// docs/COMMON_PROBLEMS.md.
+			updated++
+			n.logger.ComponentInfo(logging.ComponentNode, "updated WG peer",
+				zap.String("public_key", shortWGKey(pubKey)),
+				zap.String("endpoint", peer.Endpoint),
+				zap.String("allowed_ip", peer.AllowedIP))
 			continue
 		}
 		added++
@@ -221,6 +254,7 @@ func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers ma
 					zap.Error(err))
 				continue
 			}
+			delete(live, pubKey)
 			removed++
 			n.logger.ComponentInfo(logging.ComponentNode, "removed stale WG peer",
 				zap.String("public_key", shortWGKey(pubKey)))
@@ -233,13 +267,54 @@ func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers ma
 			zap.String("source", desired.source))
 	}
 
+	// Persist whatever the interface now holds. Reported separately from the
+	// kernel result: a failure here means the mesh is correct now but will come
+	// back stale after the next `wg-quick up`, which is a different problem from
+	// a peer that never reached the interface at all.
+	persisted := true
+	if added+removed+updated > 0 {
+		if err := wp.PersistPeers(mapToPeerSlice(live)); err != nil {
+			persisted = false
+			n.logger.ComponentError(logging.ComponentNode,
+				"WG peers applied to the interface but NOT persisted — the mesh will regress on the next wg-quick up",
+				zap.Error(err))
+		}
+	}
+
 	n.logger.ComponentInfo(logging.ComponentNode, "WireGuard peer sync completed",
 		zap.Int("desired_peers", len(desired.peers)),
 		zap.Int("current_peers", len(currentPeers)),
 		zap.Int("added", added),
+		zap.Int("updated", updated),
 		zap.Int("removed", removed),
+		zap.Bool("persisted", persisted),
 		zap.Bool("authoritative", desired.authoritative),
 		zap.String("source", desired.source))
+}
+
+// wgPeerDrifted reports whether the live peer differs from what membership says
+// it should be. AllowedIP is compared with the /32 suffix normalised away
+// because `wg show dump` always prints a prefix length and the desired set may
+// not.
+func wgPeerDrifted(live, desired production.WireGuardPeer) bool {
+	if desired.Endpoint != "" && live.Endpoint != desired.Endpoint {
+		return true
+	}
+	return normalizeAllowedIP(live.AllowedIP) != normalizeAllowedIP(desired.AllowedIP)
+}
+
+func normalizeAllowedIP(v string) string {
+	v = strings.TrimSpace(v)
+	return strings.TrimSuffix(v, "/32")
+}
+
+// mapToPeerSlice flattens the live peer map for persistence.
+func mapToPeerSlice(peers map[string]production.WireGuardPeer) []production.WireGuardPeer {
+	out := make([]production.WireGuardPeer, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, p)
+	}
+	return out
 }
 
 // shortWGKey truncates a WireGuard public key for logging. Full keys are not
@@ -377,21 +452,6 @@ func (n *Node) startWireGuardSyncLoop(ctx context.Context) {
 	}()
 }
 
-// parseWGShowPeers extracts public keys of current peers from `wg show wg0` output
-func parseWGShowPeers(output string) map[string]struct{} {
-	peers := make(map[string]struct{})
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "peer:") {
-			key := strings.TrimSpace(strings.TrimPrefix(line, "peer:"))
-			if key != "" {
-				peers[key] = struct{}{}
-			}
-		}
-	}
-	return peers
-}
-
 // parseWGShowLocalKey extracts the local public key from `wg show wg0` output
 func parseWGShowLocalKey(output string) string {
 	for _, line := range strings.Split(output, "\n") {
@@ -426,8 +486,15 @@ func (n *Node) bootstrapWireGuardMesh(ctx context.Context) {
 	if err != nil {
 		return // wg0 not active
 	}
-	currentPeers := parseWGShowPeers(string(out))
 	localPubKey := parseWGShowLocalKey(string(out))
+
+	currentPeers, err := production.ReadLiveWGPeers("wg0")
+	if err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"WireGuard bootstrap: cannot read live peers — mesh repair skipped",
+			zap.Error(err))
+		return
+	}
 
 	db, err := n.openLocalRQLiteForBootstrap()
 	if err != nil {

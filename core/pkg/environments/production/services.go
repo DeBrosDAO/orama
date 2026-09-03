@@ -319,7 +319,11 @@ Wants=network-online.target
 Type=simple
 %[5]s
 AmbientCapabilities=CAP_NET_ADMIN
-ReadWritePaths=%[2]s
+# /etc/wireguard so the peer sync can persist mesh membership to wg0.conf.
+# Without it the sync applied peers to the running interface and silently failed
+# to write the file, so every wg-quick up after a reboot brought the mesh back
+# as it was at install time.
+ReadWritePaths=%[2]s /etc/wireguard
 WorkingDirectory=%[1]s
 Environment=HOME=%[1]s
 ExecStart=%[1]s/bin/orama-node --config %[2]s/configs/%[3]s

@@ -20,7 +20,31 @@ ping -c 10 -W 2 10.0.0.X   # replace with the WG IP of each peer
 
 If you see packet loss over WireGuard but **not** over the public IP (`ping <public-ip>`), the WireGuard peer session is corrupted.
 
-**Fix — Reset the WireGuard peer on both sides:**
+**This should no longer be needed.** The 60s peer sync now re-applies any peer
+whose endpoint or allowed IPs drifted from what cluster membership says, and
+persists the result to `/etc/wireguard/wg0.conf`. A peer whose public IP moved
+converges on its own within a minute. If you still have to reset a peer by hand,
+that is a bug worth filing rather than a routine fix.
+
+Check what the node believes before reaching for `wg set`:
+
+```bash
+# what the interface holds, with endpoints (machine-readable)
+wg show wg0 dump
+
+# what membership says it should hold
+sudo grep -A3 '\[Peer\]' /etc/wireguard/wg0.conf
+
+# the sync's own account of the last round
+journalctl -u orama-node --no-pager | grep 'WireGuard peer sync completed' | tail -3
+```
+
+The sync log line reports `added`, `updated`, `removed` and `persisted`
+separately. `persisted=false` means the mesh is correct **now** but will regress
+on the next `wg-quick up` — a different problem from a peer that never reached
+the interface.
+
+**Break-glass reset (both sides), if you genuinely need it:**
 
 ```bash
 # On Node A — replace <pubkey> and <endpoint> with Node B's values
@@ -32,9 +56,8 @@ wg set wg0 peer <NodeA-pubkey> remove
 wg set wg0 peer <NodeA-pubkey> endpoint <NodeA-public-ip>:51820 allowed-ips <NodeA-wg-ip>/32 persistent-keepalive 25
 ```
 
-Then restart services: `sudo orama node restart`
-
-You can find peer public keys with `wg show wg0`.
+The next sync round re-persists whatever the interface ends up holding, so you
+do not need to edit `wg0.conf` by hand.
 
 ### Check 2: Olric bound to 0.0.0.0 instead of WireGuard IP
 
