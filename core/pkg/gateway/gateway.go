@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"reflect"
 	"sync"
 	"time"
@@ -383,6 +384,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 				logger.ComponentWarn(logging.ComponentGeneral, "Failed to connect global auth client", zap.Error(err))
 			} else {
 				gw.authClient = authClient
+				if deps.AuthService != nil {
+					deps.AuthService.SetAPIKeyRegistry(authClient)
+				}
 				logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
 			}
 		}
@@ -509,6 +513,23 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// registry, never in a namespace's own RQLite, so every gateway must
 		// validate against it.
 		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
+
+		if strings.TrimSpace(cfg.APIKeyHMACSecret) != "" {
+			n, merr := deps.AuthService.MigratePlaintextAPIKeys(context.Background())
+			if merr != nil {
+				return nil, fmt.Errorf("migrate plaintext API keys: %w", merr)
+			}
+			if n > 0 {
+				logger.ComponentInfo(logging.ComponentGeneral, "Hashed leftover plaintext API keys",
+					zap.Int("count", n))
+			}
+		}
+		if on, oerr := deps.AuthService.RevokeOrphanedAPIKeys(context.Background()); oerr != nil {
+			logger.ComponentWarn(logging.ComponentGeneral, "revoke orphaned API keys failed", zap.Error(oerr))
+		} else if on > 0 {
+			logger.ComponentInfo(logging.ComponentGeneral, "Revoked orphaned API keys",
+				zap.Int("count", on))
+		}
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)

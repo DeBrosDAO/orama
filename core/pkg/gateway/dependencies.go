@@ -14,6 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -138,16 +139,10 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	if len(cfg.BootstrapPeers) > 0 {
 		cliCfg.BootstrapPeers = cfg.BootstrapPeers
 	}
-	// Ensure the gorqlite client can reach the local RQLite instance.
-	// Without this, gorqlite has zero endpoints and all DB queries fail.
-	if len(cliCfg.DatabaseEndpoints) == 0 {
-		dsn := cfg.RQLiteDSN
-		if dsn == "" {
-			dsn = "http://localhost:10100"
-		}
-		dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
-		cliCfg.DatabaseEndpoints = []string{dsn}
-	}
+	// Explicit rqlite_dsn always wins (bugboard #162). DefaultClientConfig
+	// pre-fills DatabaseEndpoints from RQLITE_NODES / bootstrap peers on
+	// the index RQLite port, which used to swallow the tenant DSN.
+	cliCfg.DatabaseEndpoints = resolveDatabaseEndpoints(cfg, cliCfg.DatabaseEndpoints)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating network client...")
 	c, err := client.NewClient(cliCfg)
@@ -1011,6 +1006,21 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 	}
 
 	return ipfsDiscoveryResult{}
+}
+
+// resolveDatabaseEndpoints picks the gorqlite endpoint list (bugboard #162).
+// A non-empty cfg.RQLiteDSN always wins over DefaultClientConfig's
+// peer-derived list. With no DSN and no defaults, fall back to the index
+// RQLite HTTP port.
+func resolveDatabaseEndpoints(cfg *Config, defaultEndpoints []string) []string {
+	if dsn := strings.TrimSpace(cfg.RQLiteDSN); dsn != "" {
+		return []string{injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)}
+	}
+	if len(defaultEndpoints) > 0 {
+		return defaultEndpoints
+	}
+	fallback := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
+	return []string{injectRQLiteAuth(fallback, cfg.RQLiteUsername, cfg.RQLitePassword)}
 }
 
 // injectRQLiteAuth injects HTTP basic auth credentials into a RQLite DSN URL.

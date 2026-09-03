@@ -549,9 +549,7 @@ func TestAPIKeyToJWTHandler_HashedKeyLookup(t *testing.T) {
 	}
 }
 
-// TestAPIKeyToJWTHandler_RawKeyFallback covers the rolling-upgrade fallback:
-// a legacy row stored under the RAW (unhashed) key still resolves.
-func TestAPIKeyToJWTHandler_RawKeyFallback(t *testing.T) {
+func TestAPIKeyToJWTHandler_RawKeyRejected(t *testing.T) {
 	const rawKey = "ak_legacy_unhashed"
 	svc := jwtCapableService(t, "hmac-secret-xyz")
 	hashed := svc.HashAPIKey(rawKey)
@@ -572,8 +570,8 @@ func TestAPIKeyToJWTHandler_RawKeyFallback(t *testing.T) {
 
 	h.APIKeyToJWTHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 via raw-key fallback, got %d (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("raw unhashed key must 401 after dual-lookup removal, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -685,12 +683,10 @@ func TestAPIKeyToJWTHandler_TrustsInternalAuthContext(t *testing.T) {
 }
 
 func TestApiKeyLookupCandidates(t *testing.T) {
-	// Distinct hash → hashed first, raw fallback.
 	got := apiKeyLookupCandidates("raw", "hashed")
-	if len(got) != 2 || got[0] != "hashed" || got[1] != "raw" {
-		t.Errorf("distinct: expected [hashed raw], got %v", got)
+	if len(got) != 1 || got[0] != "hashed" {
+		t.Errorf("distinct: expected [hashed], got %v", got)
 	}
-	// No HMAC secret (hashed == raw) → single candidate, no duplicate query.
 	got = apiKeyLookupCandidates("raw", "raw")
 	if len(got) != 1 || got[0] != "raw" {
 		t.Errorf("equal: expected [raw], got %v", got)

@@ -84,7 +84,7 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 		internalCtx := h.internalAuthFn(ctx)
 		const q = "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
 		rawScopes := ""
-		for _, candidate := range apiKeyLookupCandidates(key, h.authService.HashAPIKey(key)) {
+		for _, candidate := range apiKeyLookupCandidates(key, h.authService.HashAPIKey(key)) { // hashed only; raw fallback removed (bugboard #163)
 			res, err := db.Query(internalCtx, q, candidate)
 			if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 {
 				continue
@@ -241,10 +241,10 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 // fallback for legacy unhashed rows. The raw fallback is skipped when hashing
 // is a no-op (hashedKey == rawKey) so we never issue a duplicate query.
 func apiKeyLookupCandidates(rawKey, hashedKey string) []string {
-	if hashedKey == rawKey {
+	if hashedKey == "" || hashedKey == rawKey {
 		return []string{rawKey}
 	}
-	return []string{hashedKey, rawKey}
+	return []string{hashedKey}
 }
 
 // extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters

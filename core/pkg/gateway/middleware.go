@@ -290,7 +290,6 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 	// the 60s cache TTL). scopes is nullable — a NULL means a legacy key.
 	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
 
-	// Try HMAC-hashed lookup first (new keys stored as hashes)
 	hashedKey := g.authService.HashAPIKey(key)
 	res, err := q.Query(internalCtx, sqlQuery, hashedKey)
 	if err != nil {
@@ -309,24 +308,10 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 		}
 	}
 
-	// Fallback: try raw key lookup (existing unhashed keys during rolling upgrade)
-	if hashedKey != key {
-		res, err = q.Query(internalCtx, sqlQuery, key)
-		if err != nil {
-			return "", "", fmt.Errorf("lookupAPIKeyEntry: raw-key query failed: %w", err)
-		}
-		if res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-			if ns := getString(res.Rows[0][0]); ns != "" {
-				scopes := ""
-				if len(res.Rows[0]) > 1 {
-					scopes = getString(res.Rows[0][1])
-				}
-				if g.mwCache != nil {
-					g.mwCache.SetAPIKeyEntry(key, ns, scopes)
-				}
-				return ns, scopes, nil
-			}
-		}
+	orphanSQL := "SELECT api_keys.id FROM api_keys LEFT JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND namespaces.id IS NULL LIMIT 1"
+	if ores, oerr := q.Query(internalCtx, orphanSQL, hashedKey); oerr == nil && ores != nil && ores.Count > 0 && g.logger != nil {
+		g.logger.ComponentWarn("gateway", "API key row exists but namespace is gone (orphaned key)",
+			zap.Int64("hits", ores.Count))
 	}
 
 	return "", "", fmt.Errorf("invalid API key")
@@ -605,20 +590,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Look up API key → namespace against THIS gateway's own database.
-		//
-		// A namespace gateway owns its namespace's key registry: `orama namespace
-		// keys create` writes scoped keys into the namespace rqlite, so that is
-		// where they must be verified. Validating against the GLOBAL database
-		// instead (the old g.authClient path) meant a key could be valid,
-		// unrevoked and correctly scoped yet still 401 — because auth never
-		// looked in the database it lived in. Whether a key worked depended on
-		// which gateway happened to mint it, which is why devnet and testnet
-		// behaved differently with the identical command.
-		//
-		// Each gateway now verifies against the registry it owns. A namespace
-		// gateway therefore cannot authenticate a key belonging to a different
-		// namespace, which is the correct tenant boundary anyway.
+		// Look up API key → namespace against the core/index registry
+		// (g.apiKeyDB(): authClient when GlobalRQLiteDSN is set, else
+		// g.client). Keys are created only in that registry (bugboard #162).
+		// A namespace gateway's own RQLite is never authoritative for keys.
 		ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 		if err != nil {
 			if isPublic {
