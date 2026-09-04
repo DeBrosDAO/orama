@@ -749,21 +749,31 @@ func TestExtractAPIKey_ApiKeyScheme(t *testing.T) {
 	}
 }
 
-func TestExtractAPIKey_QueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/?api_key=ak_query", nil)
-
-	got := extractAPIKey(req)
-	if got != "ak_query" {
-		t.Fatalf("expected 'ak_query', got '%s'", got)
+// A credential in a URL reaches the access log, the Referer of whatever the
+// page loads next, and the browser's history. This handler used to accept one,
+// unlike the middleware, which takes a query-string key only on a WebSocket
+// upgrade — and /v1/auth/token is never an upgrade.
+func TestExtractAPIKey_refusesAQueryStringCredential(t *testing.T) {
+	for _, target := range []string{
+		"/v1/auth/token?api_key=ak_query",
+		"/v1/auth/token?token=ak_tokenval",
+		"/v1/auth/token?api_key=ak_query&token=ak_tokenval",
+	} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		if got := extractAPIKey(req); got != "" {
+			t.Errorf("%s: took a key from the URL: %q", target, got)
+		}
 	}
 }
 
-func TestExtractAPIKey_TokenQueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/?token=ak_tokenval", nil)
+// A header still works on the same request, so refusing the query string is
+// not refusing the caller.
+func TestExtractAPIKey_takesTheHeaderOnARequestThatAlsoHasAQueryString(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token?api_key=ak_from_url", nil)
+	req.Header.Set("X-API-Key", "ak_from_header")
 
-	got := extractAPIKey(req)
-	if got != "ak_tokenval" {
-		t.Fatalf("expected 'ak_tokenval', got '%s'", got)
+	if got := extractAPIKey(req); got != "ak_from_header" {
+		t.Fatalf("got %q, want the header's key", got)
 	}
 }
 

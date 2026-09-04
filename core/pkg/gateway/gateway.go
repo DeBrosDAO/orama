@@ -409,34 +409,17 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// each gateway restart, so a stable node-local input is preferred.
 	gw.tunnelIsolationSecret = tunnelSecretFrom(cfg)
 
-	// Create separate auth client for global RQLite if GlobalRQLiteDSN is provided
-	// This allows namespace gateways to validate API keys against the global database
-	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
-		logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
-			zap.String("global_dsn", cfg.GlobalRQLiteDSN),
-		)
-
-		// Create client config for global namespace
-		authCfg := client.DefaultClientConfig("default") // Use "default" namespace for global
-		authCfg.DatabaseEndpoints = []string{injectRQLiteAuth(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)}
-		if len(cfg.BootstrapPeers) > 0 {
-			authCfg.BootstrapPeers = cfg.BootstrapPeers
+	// A gateway configured with its own API-key registry must reach it.
+	registryClient, err := connectAPIKeyRegistry(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	if registryClient != nil {
+		gw.authClient = registryClient
+		if deps.AuthService != nil {
+			deps.AuthService.SetAPIKeyRegistry(registryClient)
 		}
-
-		authClient, err := client.NewClient(authCfg)
-		if err != nil {
-			logger.ComponentWarn(logging.ComponentGeneral, "Failed to create global auth client", zap.Error(err))
-		} else {
-			if err := authClient.Connect(); err != nil {
-				logger.ComponentWarn(logging.ComponentGeneral, "Failed to connect global auth client", zap.Error(err))
-			} else {
-				gw.authClient = authClient
-				if deps.AuthService != nil {
-					deps.AuthService.SetAPIKeyRegistry(authClient)
-				}
-				logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
-			}
-		}
+		logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
 	}
 
 	// Initialize handler instances
@@ -1605,6 +1588,76 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.authRateLimiter = NewRateLimiter(30, 10)
 	gw.authRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+}
+
+// apiKeyRegistryProbeTimeout bounds the one query that proves the registry is
+// there. Short: this runs on the boot path, and a registry that cannot answer
+// a trivial read in this long is not one to start serving against.
+const apiKeyRegistryProbeTimeout = 15 * time.Second
+
+// usesSeparateAPIKeyRegistry reports whether this gateway validates API keys
+// against a registry other than its own database.
+//
+// A namespace gateway does: its own rqlite is the tenant's, and keys live in
+// the cluster's. The index gateway does not — there, its own database is the
+// registry.
+func usesSeparateAPIKeyRegistry(cfg *Config) bool {
+	return cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
+}
+
+// connectAPIKeyRegistry opens the client API-key validation reads from, or
+// returns (nil, nil) when this gateway's own database is the registry.
+//
+// A failure here used to be a warning. The gateway then carried on with no
+// registry client, and apiKeyDB() fell back to the local database — which on a
+// namespace gateway is the tenant's own rqlite, holding an api_keys table the
+// core migrations created there and the tenant can write. A gateway that could
+// not reach the registry did not stop authenticating; it started authenticating
+// against a table the tenant controls.
+//
+// There is no safe store to fall back to, so this is fatal. The consequence is
+// deliberate: while the cluster's registry is unreachable, a namespace gateway
+// does not start. Serving with the wrong idea of who holds which key is worse
+// than not serving.
+func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.NetworkClient, error) {
+	if !usesSeparateAPIKeyRegistry(cfg) {
+		return nil, nil
+	}
+
+	logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
+		zap.String("global_dsn", cfg.GlobalRQLiteDSN),
+	)
+
+	authCfg := client.DefaultClientConfig("default") // the registry is not a tenant namespace
+	authCfg.DatabaseEndpoints = []string{injectRQLiteAuth(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)}
+	if len(cfg.BootstrapPeers) > 0 {
+		authCfg.BootstrapPeers = cfg.BootstrapPeers
+	}
+
+	registryClient, err := client.NewClient(authCfg)
+	if err != nil {
+		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but the client "+
+			"could not be created and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+	}
+	// Connect brings up the client's own P2P side. It reports success without
+	// having spoken to the database, so it is not evidence that the registry
+	// is there — the probe below is. It is still checked, because a client
+	// that could not start is a different failure and says so.
+	if err := registryClient.Connect(); err != nil {
+		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but its client "+
+			"could not start and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+	}
+
+	// Ask the registry a question only the registry can answer.
+	probeCtx, cancel := context.WithTimeout(context.Background(), apiKeyRegistryProbeTimeout)
+	defer cancel()
+	if _, err := registryClient.Database().Query(probeCtx, "SELECT 1 FROM api_keys LIMIT 1"); err != nil {
+		registryClient.Disconnect()
+		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but it did not "+
+			"answer and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+	}
+
+	return registryClient, nil
 }
 
 // deploymentEnvDir is where the deployments' environment files live: beside

@@ -226,6 +226,14 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A nested call carries the caller's invoke grant. It did not, so a caller who could run a function directly was refused by that same function's own nested call
 - `Invoker.InvokeByID` and the exported `Invoker.CanInvoke` are gone. The first ran a function with no authorization at all; the second re-read the function from the registry and then passed the invoke grant as a hardcoded `true`. Neither had a caller outside its own tests
 
+**Failing closed**
+- A gateway that validates API keys against the cluster's registry — every namespace gateway does; its own rqlite is the tenant's — does not start if that registry does not answer. It used to log a warning and carry on, and the key lookup then fell back to the local database: the tenant's own rqlite, which holds an `api_keys` table the core migrations created there. A gateway that could not reach the registry did not stop authenticating, it started authenticating against a table the tenant can write
+- `Connect()` on the registry client brings up its own side and reports success without having spoken to the database, so it is not evidence the registry is there. A single read against `api_keys` is, and that is what the boot path does
+- **The availability consequence is deliberate.** While the cluster's registry is unreachable, a namespace gateway does not start, and a running one cannot validate keys. Serving with the wrong idea of who holds which key is worse than not serving. Giving namespace gateways a signed key snapshot they can validate against locally is the way out, and belongs with feat-212
+- A credential in a query string is read only on a WebSocket upgrade, where a browser cannot set a header. There were two copies of the extraction and they disagreed: the middleware's was upgrade-only, the auth handler's took `?api_key=` on any request — so a POST to `/v1/auth/token` could carry a key in its URL, into the access log, into the Referer of whatever the page loaded next, and into history. One copy now, with the decision passed in by the caller, and a test fails if a second appears
+- A key whose stored scope column is empty grants nothing. It used to grant `admin`
+- The WireGuard peer endpoints refuse when the gateway has no cluster secret, rather than treating "nothing to check against" as "nothing to check", and compare in constant time
+
 ### Supply Chain
 
 **Binary Signing (Step 1.13)**

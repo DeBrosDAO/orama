@@ -248,40 +248,13 @@ func apiKeyLookupCandidates(rawKey, hashedKey string) []string {
 	return []string{hashedKey}
 }
 
-// extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
+// extractAPIKey reads the API key this handler's caller presents.
+//
+// It never reads the query string. Its own copy of this used to, unlike the
+// middleware's, so a POST to /v1/auth/token could carry a key in its URL —
+// into the access log, the Referer of anything the page loaded next, and the
+// browser's history. This endpoint is never a WebSocket upgrade, which is the
+// only place a query-string credential is defensible.
 func extractAPIKey(r *http.Request) string {
-	// Prefer X-API-Key header (most explicit)
-	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
-		return v
-	}
-
-	// Check Authorization header for ApiKey scheme or non-JWT Bearer tokens
-	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		lower := strings.ToLower(auth)
-		if strings.HasPrefix(lower, "bearer ") {
-			tok := strings.TrimSpace(auth[len("Bearer "):])
-			// Skip Bearer tokens that look like JWTs (have 2 dots)
-			if strings.Count(tok, ".") != 2 {
-				return tok
-			}
-		} else if strings.HasPrefix(lower, "apikey ") {
-			return strings.TrimSpace(auth[len("ApiKey "):])
-		} else if !strings.Contains(auth, " ") {
-			// If header has no scheme, treat the whole value as token
-			tok := strings.TrimSpace(auth)
-			if strings.Count(tok, ".") != 2 {
-				return tok
-			}
-		}
-	}
-
-	// Fallback to query parameter
-	if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
-		return v
-	}
-	return ""
+	return authsvc.APIKeyFromRequest(r, false)
 }

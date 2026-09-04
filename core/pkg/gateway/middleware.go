@@ -661,53 +661,13 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
-// Note: Bearer tokens that look like JWTs (have 2 dots) are skipped (they're JWTs, handled separately)
-// X-API-Key header is preferred when both Authorization and X-API-Key are present
+// extractAPIKey reads the API key a request presents.
+//
+// The query string is read only on a WebSocket upgrade, where a browser cannot
+// set a header. Everywhere else a credential in a URL ends up in the access
+// log, in the Referer of the next request the page makes, and in history.
 func extractAPIKey(r *http.Request) string {
-	// Prefer X-API-Key header (most explicit) - check this first
-	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
-		return v
-	}
-
-	// Check Authorization header for ApiKey scheme or non-JWT Bearer tokens
-	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		lower := strings.ToLower(auth)
-		if strings.HasPrefix(lower, "bearer ") {
-			tok := strings.TrimSpace(auth[len("Bearer "):])
-			// Skip Bearer tokens that look like JWTs (have 2 dots) - they're JWTs
-			// But allow Bearer tokens that don't look like JWTs (for backward compatibility)
-			if strings.Count(tok, ".") == 2 {
-				// This is a JWT, skip it
-			} else {
-				// This doesn't look like a JWT, treat as API key (backward compatibility)
-				return tok
-			}
-		} else if strings.HasPrefix(lower, "apikey ") {
-			return strings.TrimSpace(auth[len("ApiKey "):])
-		} else if !strings.Contains(auth, " ") {
-			// If header has no scheme, treat the whole value as token (lenient for dev)
-			// But skip if it looks like a JWT (has 2 dots)
-			tok := strings.TrimSpace(auth)
-			if strings.Count(tok, ".") != 2 {
-				return tok
-			}
-		}
-	}
-
-	// Fallback to query parameter ONLY for WebSocket upgrade requests.
-	// WebSocket clients cannot set custom headers, so query params are the
-	// only way to authenticate. For regular HTTP requests, require headers.
-	if isWebSocketUpgrade(r) {
-		if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
-			return v
-		}
-		if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
-			return v
-		}
-	}
-	return ""
+	return auth.APIKeyFromRequest(r, isWebSocketUpgrade(r))
 }
 
 // isPublicPath returns true for routes that should be accessible without API key auth
