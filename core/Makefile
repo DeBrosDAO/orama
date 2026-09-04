@@ -83,7 +83,7 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
+.PHONY: build clean test test-contracts deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
 
 # Single source of truth — repo-root VERSION file. Update with `make bump VER=X.Y.Z`
 # or by editing /VERSION directly. Release workflows verify this matches the tag.
@@ -155,6 +155,13 @@ rollout-testnet:
 	./bin/orama node rollout --env testnet --yes
 
 # Bump the repo-root VERSION file and sync sdk/package.json.
+# Contract tests against the fixtures in ../contracts.
+#
+# -count=1 is required: the fixtures live above this Go module, so the test
+# cache does not see them change and would report a stale pass.
+test-contracts:
+	go test -count=1 -run Contract ./...
+
 # Usage: make bump VER=0.122.9
 bump:
 	@if [ -z "$(VER)" ]; then \

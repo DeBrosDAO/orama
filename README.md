@@ -40,6 +40,7 @@ make vault-build
 | [TypeScript SDK](docs/TS_SDK.md) | `@debros/orama` — the client applications use |
 | [Go Client SDK](docs/GO_CLIENT_SDK.md) | The Go client for the same gateway |
 | [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
+| [API Surface](docs/API_SURFACE.md) | Every gateway route and which client owns it |
 | [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
 
 ## Contributing

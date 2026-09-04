@@ -1,0 +1,20 @@
+{
+  "route": "/v1/rqlite/drop-table",
+  "method": "POST",
+  "sdk": "db.dropTable()",
+  "goStruct": "rqlite.dropTableRequest",
+  "call": {
+    "module": "db",
+    "method": "dropTable",
+    "args": [
+      "posts"
+    ]
+  },
+  "request": {
+    "table": "posts"
+  },
+  "response": {
+    "status": "ok"
+  },
+  "returns": null
+}

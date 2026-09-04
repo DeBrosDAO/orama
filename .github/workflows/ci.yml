@@ -38,6 +38,13 @@ jobs:
         working-directory: core
         run: go test -race -timeout 5m ./...
 
+      # The contract fixtures live above the Go module, so the test cache does
+      # not treat them as an input and a fixture-only change would report a
+      # stale pass. -count=1 is the point of this step.
+      - name: Contract tests
+        working-directory: core
+        run: go test -count=1 -run Contract ./...
+
   sdk-build:
     name: SDK lint, typecheck, build, unit tests
     runs-on: ubuntu-latest

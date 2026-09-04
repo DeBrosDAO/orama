@@ -1,0 +1,32 @@
+{
+  "route": "/v1/auth/challenge",
+  "method": "POST",
+  "sdk": "auth.challenge()",
+  "goStruct": "auth.ChallengeRequest",
+  "call": {
+    "module": "auth",
+    "method": "challenge",
+    "args": [
+      {
+        "wallet": "0xWALLET"
+      }
+    ]
+  },
+  "request": {
+    "wallet": "0xWALLET",
+    "purpose": "authentication",
+    "namespace": "default"
+  },
+  "response": {
+    "nonce": "n-1",
+    "wallet": "0xWALLET",
+    "namespace": "default",
+    "expires_at": "2026-01-01T00:00:00Z"
+  },
+  "returns": {
+    "nonce": "n-1",
+    "wallet": "0xWALLET",
+    "namespace": "default",
+    "expires_at": "2026-01-01T00:00:00Z"
+  }
+}

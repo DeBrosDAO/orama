@@ -1,0 +1,37 @@
+{
+  "route": "/v1/auth/verify",
+  "method": "POST",
+  "sdk": "auth.verify()",
+  "goStruct": "auth.VerifyRequest",
+  "call": {
+    "module": "auth",
+    "method": "verify",
+    "args": [
+      {
+        "wallet": "0xWALLET",
+        "nonce": "n-1",
+        "signature": "0xSIG",
+        "chain_type": "ETH"
+      }
+    ]
+  },
+  "request": {
+    "wallet": "0xWALLET",
+    "nonce": "n-1",
+    "signature": "0xSIG",
+    "namespace": "default",
+    "chain_type": "ETH"
+  },
+  "response": {
+    "access_token": "jwt-1",
+    "refresh_token": "rt-1",
+    "subject": "0xWALLET",
+    "namespace": "default"
+  },
+  "returns": {
+    "access_token": "jwt-1",
+    "refresh_token": "rt-1",
+    "subject": "0xWALLET",
+    "namespace": "default"
+  }
+}

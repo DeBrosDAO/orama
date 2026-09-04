@@ -8,6 +8,10 @@ gateway URL.
 There is also a Go client, documented in [GO_CLIENT_SDK.md](GO_CLIENT_SDK.md).
 It talks to the same gateway. Use whichever matches the code you are writing.
 
+The SDK reaches a deliberate subset of the gateway: deploying an application,
+minting a key and managing nodes are the CLI's job. Every route and its owner is
+listed in [API_SURFACE.md](API_SURFACE.md).
+
 The vault is **not** in this package. See [Secrets](#secrets) below.
 
 ---

@@ -1,0 +1,28 @@
+{
+  "route": "/v1/cache/delete",
+  "method": "POST",
+  "sdk": "cache.delete()",
+  "goStruct": "cache.DeleteRequest",
+  "call": {
+    "module": "cache",
+    "method": "delete",
+    "args": [
+      "sessions",
+      "user-1"
+    ]
+  },
+  "request": {
+    "dmap": "sessions",
+    "key": "user-1"
+  },
+  "response": {
+    "status": "ok",
+    "key": "user-1",
+    "dmap": "sessions"
+  },
+  "returns": {
+    "status": "ok",
+    "key": "user-1",
+    "dmap": "sessions"
+  }
+}
