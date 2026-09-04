@@ -44,7 +44,11 @@ func getRootWalletAddress() (string, error) {
 // The desktop app may prompt the user for approval.
 func signWithRootWallet(message string) (string, error) {
 	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// The agent waits up to its own approval timeout for someone to answer the
+	// prompt. A context of exactly that length races it, and the loser is the
+	// user: they approve the request and the command has already given up with
+	// a context deadline instead of the agent's answer.
+	ctx, cancel := context.WithTimeout(context.Background(), rwagent.AgentApprovalTimeout+30*time.Second)
 	defer cancel()
 
 	data, err := client.Sign(ctx, message, "evm")

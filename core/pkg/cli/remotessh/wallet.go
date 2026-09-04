@@ -23,18 +23,21 @@ var newClient func() vaultClient = func() vaultClient {
 	return rwagent.New(os.Getenv("RW_AGENT_SOCK"))
 }
 
-// wrapAgentError wraps rwagent errors with user-friendly messages.
-// When the agent is locked, it also triggers the RootWallet desktop app
-// to show the unlock dialog via deep link (best-effort, fire-and-forget).
+// wrapAgentError names the operation that failed and leaves the reason to the
+// agent error, which now carries its own hint.
+//
+// This used to hand-write a message per outcome and knew three of the agent's
+// nine codes, so an unanswered approval prompt, a request over the size limit
+// and a peer the agent stopped trusting all arrived as a bare code with no
+// suggestion. It also told anyone hitting a locked wallet that the unlock had
+// "timed out after waiting", which is true of the vault routes and false of the
+// wallet routes — the error distinguishes them by status now.
 func wrapAgentError(err error, action string) error {
 	if rwagent.IsNotRunning(err) {
 		return fmt.Errorf("%s: rootwallet agent is not reachable — open the RootWallet desktop app and unlock it", action)
 	}
-	if rwagent.IsLocked(err) {
-		return fmt.Errorf("%s: rootwallet agent is locked — unlock timed out after waiting. Unlock it in the RootWallet desktop app", action)
-	}
-	if rwagent.IsApprovalDenied(err) {
-		return fmt.Errorf("%s: rootwallet access denied — approve this app in the RootWallet desktop app", action)
+	if rwagent.IsRetryable(err) {
+		return fmt.Errorf("%s: %w (running this again may succeed)", action, err)
 	}
 	return fmt.Errorf("%s: %w", action, err)
 }

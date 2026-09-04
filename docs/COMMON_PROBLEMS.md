@@ -335,6 +335,37 @@ the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
 
 ---
 
+## 13. RootWallet agent: locked, waiting, or unreachable
+
+Commands that need an SSH key or a wallet signature — `orama node setup`,
+`orama push`, `orama auth login` — talk to the RootWallet desktop app's agent
+over a Unix socket at `~/.rootwallet/agent.sock`. Override the path with
+`RW_AGENT_SOCK`.
+
+The agent answers with a code, and the CLI turns each one into an instruction:
+
+| Code | What happened | What to do |
+|------|---------------|------------|
+| `AGENT_LOCKED` (423) | A vault operation waited for an unlock and gave up | Unlock the desktop app and run the command again |
+| `AGENT_LOCKED` (401) | A wallet operation refused at once; these do not wait | Unlock the desktop app first, then run the command |
+| `APPROVAL_TIMEOUT` | The approval prompt went unanswered for two minutes | Run it again and approve it |
+| `APPROVAL_DENIED` | Someone refused the request | Approve this application in the desktop app |
+| `PERMISSION_DENIED` | The application lacks the capability | Grant it under app permissions |
+| `PEER_VANISHED` | The `orama` binary changed while the request was open | Run it again |
+| `NOT_FOUND` | No such vault entry | Nothing to do; the CLI creates SSH entries on demand |
+
+**A first run against a locked wallet can take four minutes.** The agent waits
+up to two minutes for approval, then up to two more for the unlock, and the CLI
+waits longer than both so the agent's own answer arrives instead of a timeout
+from this side. If `orama node setup` seems to hang, look at the desktop app:
+there is probably a prompt on it. `orama sandbox` reports how many prompts are
+waiting.
+
+**"rootwallet agent is not reachable"** means the socket is not there: the
+desktop app is closed. Open it.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands

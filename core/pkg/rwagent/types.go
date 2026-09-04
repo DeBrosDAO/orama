@@ -12,6 +12,11 @@ type StatusResponse struct {
 	Uptime        int    `json:"uptime"`
 	PID           int    `json:"pid"`
 	ConnectedApps int    `json:"connectedApps"`
+	// PendingUnlocks is how many approval prompts are waiting for someone to
+	// answer them. The agent has always sent it; this client dropped it, so a
+	// command could sit through a 120-second approval timeout with no way to
+	// say that a prompt was open on the user's screen.
+	PendingUnlocks int `json:"pendingUnlocks"`
 }
 
 // VaultSSHData from GET /v1/vault/ssh/:host/:user.

@@ -189,7 +189,8 @@ devnet|ubuntu@5.6.7.8|nameserver-ns1
 | `user@host` | SSH credentials |
 | `role` | `node` or `nameserver-ns1`, `nameserver-ns2`, etc. |
 
-SSH keys are resolved from rootwallet (`rw vault ssh get <host>/<user> --priv`).
+SSH keys are resolved from the RootWallet agent over its Unix socket, not by
+shelling out to `rw`. See [Troubleshooting](COMMON_PROBLEMS.md#13-rootwallet-agent-locked-waiting-or-unreachable).
 
 Blank lines and lines starting with `#` are ignored.
 
