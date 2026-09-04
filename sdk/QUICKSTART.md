@@ -14,7 +14,7 @@ npm install @debros/orama
 import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "http://localhost:6001",
+  baseURL: "https://ns-myapp.orama-devnet.network",
   apiKey: "ak_your_api_key:namespace", // Get from gateway
 });
 ```
@@ -46,20 +46,31 @@ const status = await client.network.status();
 
 ## Running Tests Locally
 
-### Prerequisites
-1. A running Orama gateway to test against (REST API on port 6001; RQLite on port 5001 behind it)
-2. An API key for that gateway
-
-The SDK lives in the `sdk/` directory of the Orama monorepo (the Go node/gateway code is under `core/`). Point the E2E tests at any running gateway:
+The unit tests need nothing:
 
 ```bash
 cd sdk
-export GATEWAY_BASE_URL=http://localhost:6001
-export GATEWAY_API_KEY=ak_your_api_key:default
-pnpm run test:e2e
+pnpm test        # one run, unit + end-to-end
+pnpm test:watch  # re-run on change
+pnpm test:unit   # unit only
 ```
 
-Without `GATEWAY_API_KEY` set, the tests skip gracefully instead of failing.
+`pnpm test` used to be `vitest` with no `run`, so it started watch mode and
+never returned — in a terminal or in CI.
+
+### End-to-end tests
+
+These need a gateway and an API key for it:
+
+```bash
+export GATEWAY_BASE_URL=https://ns-myapp.orama-devnet.network
+export GATEWAY_API_KEY=ak_your_api_key:default
+pnpm test:e2e
+```
+
+Without `GATEWAY_API_KEY` they are skipped, and reported as skipped. They used
+to log "Skipping ..." and then run anyway against a gateway that was not there,
+which is where 27 of the suite's 30 failures came from.
 
 ## Building for Production
 
@@ -162,4 +173,4 @@ const sub = await client.pubsub.subscribe("news", {
 
 **"Tests skip"**
 - Set `GATEWAY_API_KEY` environment variable
-- Tests gracefully skip without it
+- End-to-end tests are skipped without it; the unit tests need nothing

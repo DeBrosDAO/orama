@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createTestClient, skipIfNoGateway } from "./setup";
+import { createTestClient, hasGateway } from "./setup";
 
-describe("Cache", () => {
-  if (skipIfNoGateway()) {
+describe.skipIf(!hasGateway())("Cache", () => {
+  if (hasGateway()) {
     console.log("Skipping cache tests - gateway not available");
     return;
   }

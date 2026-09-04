@@ -1,5 +1,5 @@
 import { HttpClient } from "../core/http";
-import { AuthConfig, WhoAmI, StorageAdapter, MemoryStorage } from "./types";
+import { WhoAmI, StorageAdapter, MemoryStorage } from "./types";
 
 export class AuthClient {
   private httpClient: HttpClient;

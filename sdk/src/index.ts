@@ -8,11 +8,7 @@ import { StorageClient } from "./storage/client";
 import { FunctionsClient, FunctionsClientConfig } from "./functions/client";
 import { VaultClient } from "./vault/client";
 import { WSClientConfig } from "./core/ws";
-import {
-  StorageAdapter,
-  MemoryStorage,
-  LocalStorageAdapter,
-} from "./auth/types";
+import { StorageAdapter } from "./auth/types";
 import type { VaultConfig } from "./vault/types";
 
 export interface ClientConfig extends Omit<HttpClientConfig, "fetch"> {

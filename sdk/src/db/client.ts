@@ -4,8 +4,6 @@ import { Repository } from "./repository";
 import {
   QueryResponse,
   TransactionOp,
-  TransactionRequest,
-  Entity,
   FindOptions,
 } from "./types";
 

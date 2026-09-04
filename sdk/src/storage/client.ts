@@ -89,7 +89,7 @@ export class StorageClient {
       // This is a limitation - in practice, pass File/Blob/Buffer
       const chunks: ArrayBuffer[] = [];
       const reader = file.getReader();
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         const buffer = value.buffer.slice(

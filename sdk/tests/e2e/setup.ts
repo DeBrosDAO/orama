@@ -1,8 +1,9 @@
 import { createClient } from "../../src/index";
-import { SDKError } from "../../src/errors";
 
 export function getGatewayUrl(): string {
-  return process.env.GATEWAY_BASE_URL || "http://localhost:6001";
+  // The default is a node's index gateway on this machine. It used to be a
+  // port no gateway has listened on since the port block moved to 10100.
+  return process.env.GATEWAY_BASE_URL || "http://localhost:10104";
 }
 
 export function getApiKey(): string | undefined {
@@ -13,16 +14,23 @@ export function getJwt(): string | undefined {
   return process.env.GATEWAY_JWT;
 }
 
-export function skipIfNoGateway() {
-  const url = getGatewayUrl();
-  const apiKey = getApiKey();
-
-  if (!apiKey) {
-    console.log("Skipping: GATEWAY_API_KEY not set");
-    return true;
-  }
-
-  return false;
+/**
+ * Whether the end-to-end suite has a gateway to talk to.
+ *
+ * Use it as `describe.skipIf(!hasGateway())`, not as an `if` inside a describe
+ * block. Every e2e file used to do:
+ *
+ *     describe("Database", () => {
+ *       if (skipIfNoGateway()) { console.log("Skipping database tests"); }
+ *       it("should create a table", ...)
+ *     });
+ *
+ * which logs a line and then registers and runs every test anyway. That is 27
+ * of the 30 failures in a checkout with no gateway, and QUICKSTART.md said the
+ * suite skips gracefully.
+ */
+export function hasGateway(): boolean {
+  return Boolean(getApiKey());
 }
 
 export async function createTestClient() {

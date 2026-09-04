@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -54,6 +54,13 @@ describe('package.json', () => {
 
   it('has a runnable example script', () => {
     expect(pkg.scripts.example).toBeDefined();
+  });
+
+  it('runs its tests once rather than watching', () => {
+    // `"test": "vitest"` is watch mode: it never returns, in a terminal or in
+    // CI. Watch mode is `test:watch`.
+    expect(pkg.scripts.test).toBe('vitest run');
+    expect(pkg.scripts['test:watch']).toBe('vitest');
   });
 
   it('declares ws as an optional peer', () => {
@@ -119,5 +126,33 @@ describe('examples', () => {
       expect(source, `${name} does not read GATEWAY_BASE_URL`).toContain('GATEWAY_BASE_URL');
       expect(source, `${name} still points at the retired :6001`).not.toContain('6001');
     }
+  });
+});
+
+describe('the end-to-end suite', () => {
+  /**
+   * Every e2e file used to open with
+   *
+   *     if (skipIfNoGateway()) { console.log("Skipping ..."); }
+   *
+   * inside the describe block, which logs a line and then registers and runs
+   * every test anyway. That is 27 of the suite's 30 failures on a checkout with
+   * no gateway, while QUICKSTART.md said the tests skip gracefully.
+   */
+  const e2eFiles = readdirSync(join(root, 'tests/e2e')).filter((f) => f.endsWith('.test.ts'));
+
+  it('has end-to-end files to check', () => {
+    expect(e2eFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(e2eFiles)('%s skips itself when there is no gateway', (file) => {
+    const source = readFileSync(join(root, 'tests/e2e', file), 'utf8');
+
+    expect(source, `${file} does not gate its describe on a gateway`).toContain(
+      'describe.skipIf(!hasGateway())',
+    );
+    expect(source, `${file} still has a describe that always runs`).not.toMatch(
+      /^describe\(/m,
+    );
   });
 });

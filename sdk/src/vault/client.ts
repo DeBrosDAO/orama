@@ -1,5 +1,4 @@
 import { AuthClient } from './auth';
-import type { GuardianClient } from './transport/guardian';
 import { withTimeout, withRetry } from './transport/fanout';
 import { split, combine } from './crypto/shamir';
 import type { Share } from './crypto/shamir';

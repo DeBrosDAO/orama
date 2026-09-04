@@ -39,7 +39,7 @@ jobs:
         run: go test -race -timeout 5m ./...
 
   sdk-build:
-    name: SDK typecheck, build, unit tests
+    name: SDK lint, typecheck, build, unit tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,14 +60,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `pnpm lint` had no ESLint configuration anywhere in the package, so it
+      # exited 2 before linting anything and was never run here.
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Build
         run: pnpm build
 
+      # The unit suite runs after the build so the packaging tests have a dist
+      # to check: they assert the built package can be both required and
+      # imported, which is the thing that was broken.
       - name: Unit tests
-        run: pnpm vitest run tests/unit
+        run: pnpm test:unit
 
   version-sanity:
     name: Verify VERSION ↔ sdk/package.json sync
