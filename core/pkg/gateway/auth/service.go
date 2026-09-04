@@ -232,14 +232,24 @@ func (s *Service) CreateNonce(ctx context.Context, wallet, purpose, namespace st
 	// it was filed under.
 	namespace = s.nonceNamespace(namespace)
 
-	// Ensure namespace exists
-	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", namespace); err != nil {
-		return "", fmt.Errorf("failed to ensure namespace: %w", err)
+	// The namespace must already exist. This used to be an INSERT OR IGNORE,
+	// so an unauthenticated POST to /v1/auth/challenge created a namespace for
+	// any name at all — name squatting was free, and signing in to a name
+	// nobody had taken silently created it. Creating one is its own
+	// authenticated call now.
+	nsID, err := s.lookupNamespaceID(ctx, namespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
+	}
+	if nsID == nil {
+		return "", &ErrNamespaceUnknown{Namespace: namespace}
 	}
 
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve namespace ID: %w", err)
+	// A challenge writes a Raft-replicated row, and nothing proves the caller
+	// owns the wallet it names. Without a ceiling on how many can be
+	// outstanding at once, a grind fills the table for that wallet.
+	if err := s.checkOutstandingNonces(internalCtx, db, nsID, normalizeNonceWallet(wallet), namespace); err != nil {
+		return "", err
 	}
 
 	// Store nonce with 5 minute expiry. ConsumeNonce matches this row by exact

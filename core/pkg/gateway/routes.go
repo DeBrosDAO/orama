@@ -116,6 +116,13 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/namespace/list", g.namespaceListHandler)
 	}
 
+	// namespace create (authenticated — writes the namespace and its owner
+	// grant, and is the only thing that starts provisioning). Creating one
+	// used to be a side effect of asking for a login challenge.
+	if g.namespaceCreateHandler != nil {
+		mux.Handle("/v1/namespaces", g.namespaceCreateHandler)
+	}
+
 	// Scoped API-key management (bugboard #148) — admin-scoped + namespace-scoped.
 	// GET list / POST create; DELETE /{id} revoke one; POST /revoke-legacy sweep.
 	mux.HandleFunc("/v1/namespace/keys", g.namespaceKeysHandler)

@@ -525,3 +525,57 @@ func loadAuthForNamespace(ns string) (gatewayURL, apiKey string, err error) {
 	}
 	return gatewayURL, creds.APIKey, nil
 }
+
+// NamespaceCreate creates a namespace and starts its cluster.
+//
+// This used to happen by itself: `orama auth login --namespace X` asked for a
+// login challenge, and asking for a challenge created X. So a typo made a
+// namespace, and creating one cost nothing and belonged to nobody in
+// particular. It is a deliberate act now, and the wallet that makes it owns it.
+func NamespaceCreate(name string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return clierr.Usage("a namespace name is required: orama namespace create <name>")
+	}
+
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		return clierr.Failure("failed to load credentials: %w", err)
+	}
+
+	gatewayURL, err := getGatewayURL()
+	if err != nil {
+		return err
+	}
+
+	creds := store.GetDefaultCredential(gatewayURL)
+	if creds == nil || !creds.IsValid() {
+		return clierr.Auth("not authenticated: run 'orama auth login'")
+	}
+
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return clierr.Failure("failed to encode the request: %w", err)
+	}
+
+	result, err := nsRequest("create namespace", http.MethodPost,
+		gatewayURL+"/v1/namespaces", creds.APIKey, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+
+	status, _ := result["status"].(string)
+	switch status {
+	case "provisioning":
+		fmt.Printf("Namespace %s created; its cluster is being provisioned.\n", name)
+		fmt.Printf("Watch it with: orama namespace list\n")
+		fmt.Printf("Then sign in to it: orama auth login --namespace %s\n", name)
+	default:
+		fmt.Printf("Namespace %s created.\n", name)
+		if reason, ok := result["cluster"].(string); ok && reason != "" {
+			fmt.Printf("Its cluster was not started: %s\n", reason)
+		}
+		fmt.Printf("Sign in to it with: orama auth login --namespace %s\n", name)
+	}
+	return nil
+}

@@ -206,6 +206,10 @@ type Gateway struct {
 	// Namespace list handler
 	namespaceListHandler http.Handler
 
+	// namespaceCreateHandler serves POST /v1/namespaces. Creating a namespace
+	// used to be a side effect of asking for a login challenge.
+	namespaceCreateHandler http.Handler
+
 	// Peer discovery for namespace gateways (libp2p mesh formation)
 	peerDiscovery *PeerDiscovery
 
@@ -586,6 +590,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Per-IP: token bucket against the client IP. Generous so legitimate
 	// users behind shared NATs aren't squeezed.
 	configureRateLimiters(gw)
+
+	// Challenges are Raft-replicated rows that stop being claimable the moment
+	// they expire, and nothing removed them: the table only ever grew.
+	if deps.AuthService != nil {
+		deps.AuthService.StartNonceReaper(gw.shutdownCtx)
+	}
 
 	// Per-namespace: feature #69 — backed by an LRU manager with
 	// per-namespace overrides via /v1/namespace/rate-limit (config in
@@ -985,9 +995,6 @@ func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscribe
 // This enables automatic RQLite/Olric/Gateway cluster provisioning when new namespaces are created.
 func (g *Gateway) SetClusterProvisioner(cp authhandlers.ClusterProvisioner) {
 	g.clusterProvisioner = cp
-	if g.authHandlers != nil {
-		g.authHandlers.SetClusterProvisioner(cp)
-	}
 }
 
 // SetNodeRecoverer sets the handler for dead node recovery and revived node cleanup.
@@ -1013,6 +1020,11 @@ func (g *Gateway) SetNamespaceDeleteHandler(h http.Handler) {
 // SetNamespaceListHandler sets the handler for namespace list requests.
 func (g *Gateway) SetNamespaceListHandler(h http.Handler) {
 	g.namespaceListHandler = h
+}
+
+// SetNamespaceCreateHandler sets the handler for namespace creation.
+func (g *Gateway) SetNamespaceCreateHandler(h http.Handler) {
+	g.namespaceCreateHandler = h
 }
 
 // GetORMClient returns the RQLite ORM client for external use (e.g., by ClusterManager)

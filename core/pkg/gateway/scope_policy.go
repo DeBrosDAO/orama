@@ -122,6 +122,12 @@ func requiredScope(method, path string) string {
 	if path == "/v1/namespace/delete" || path == "/v1/namespace/list" {
 		return auth.ScopeAdmin
 	}
+	// Creating a namespace is a control-plane act by a signed-in wallet. The
+	// handler additionally refuses anything that is not a wallet JWT, since a
+	// namespace with no wallet owner is claimable by whoever signs in next.
+	if path == "/v1/namespaces" {
+		return auth.ScopeAdmin
+	}
 	// Operating the cluster: minting a cluster invite, listing nodes, claiming
 	// a node. This had no entry at all and fell through to "any valid
 	// credential", so a key out of a public app bundle could mint an invite —

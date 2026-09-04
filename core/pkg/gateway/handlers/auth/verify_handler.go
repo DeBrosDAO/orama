@@ -62,56 +62,13 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.clusterProvisioner != nil && namespace != "default" {
-		clusterID, status, needsProvisioning, checkErr := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if checkErr != nil {
-			_ = checkErr // Log but don't fail
-		} else if needsProvisioning || status == "provisioning" {
-			// Issue tokens and API key before returning provisioning status
-			token, refresh, expUnix, tokenErr := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
-			if tokenErr != nil {
-				writeError(w, http.StatusInternalServerError, tokenErr.Error())
-				return
-			}
-			apiKey, keyErr := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
-			if keyErr != nil {
-				writeCredentialError(w, namespace, keyErr)
-				return
-			}
-
-			pollURL := ""
-			if needsProvisioning {
-				nsIDInt := h.namespaceIDForProvisioning(ctx, namespace)
-
-				newClusterID, newPollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-				if provErr != nil {
-					writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
-					return
-				}
-				clusterID = newClusterID
-				pollURL = newPollURL
-			} else {
-				pollURL = "/v1/namespace/status?id=" + clusterID
-			}
-
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             clusterID,
-				"poll_url":               pollURL,
-				"estimated_time_seconds": 60,
-				"access_token":           token,
-				"token_type":             "Bearer",
-				"expires_in":             int(expUnix - time.Now().Unix()),
-				"refresh_token":          refresh,
-				"api_key":                apiKey,
-				"namespace":              req.Namespace,
-				"subject":                req.Wallet,
-				"nonce":                  req.Nonce,
-				"signature_verified":     true,
-			})
-			return
-		}
-	}
+	// Signing in does not provision anything. It used to: a challenge created
+	// the namespace and verifying the signature spun up its cluster, so an
+	// anonymous caller could create infrastructure by naming a name. Creating a
+	// namespace is POST /v1/namespaces, and that is what provisions it.
+	//
+	// A namespace whose cluster is still coming up is reported by
+	// /v1/namespace/status, which the create path hands back a poll URL for.
 
 	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
 	if err != nil {

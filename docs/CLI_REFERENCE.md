@@ -90,6 +90,7 @@ is the index.
   - [`orama monitor report`](#orama-monitor-report) — Full cluster report (JSON)
   - [`orama monitor service`](#orama-monitor-service) — Service status across the cluster (one-shot)
 - [`orama namespace`](#orama-namespace) — Manage namespaces
+  - [`orama namespace create`](#orama-namespace-create) — Create a namespace and start its cluster
   - [`orama namespace delete`](#orama-namespace-delete) — Delete the current namespace and all its resources
   - [`orama namespace disable`](#orama-namespace-disable) — Disable a feature for a namespace
   - [`orama namespace enable`](#orama-namespace-enable) — Enable a feature for a namespace
@@ -1074,7 +1075,24 @@ Aliases: `ns`
 
 List, delete, and repair namespaces on the Orama network.
 
-Subcommands: `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `rqlite`, `webrtc-status`
+Subcommands: `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `rqlite`, `webrtc-status`
+
+### orama namespace create
+
+Create a namespace and start its cluster
+
+```
+orama namespace create <name>
+```
+
+Create a namespace. The wallet you are signed in as becomes its owner.
+
+Creating a namespace used to happen by itself: signing in to a name that did
+not exist created it. So a typo made a namespace, and one belonged to whoever
+happened to sign in first.
+
+  orama namespace create myapp
+  orama auth login --namespace myapp
 
 ### orama namespace delete
 

@@ -57,6 +57,17 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - It required that *some* API key was present, then took the wallet and the namespace from the request body with no cross-check against the authenticated key, and minted a key for that namespace. A runtime key scraped from a browser bundle minted an admin key for anyone's namespace. It had no scope entry and no ownership entry either
 - Its only first-party caller was `orama auth login --simple`, a convenience for re-authenticating when credentials already existed. That flag is gone; `orama auth switch` picks a stored credential without a server call, which is what the convenience was for
 
+**Namespace creation**
+- Creating a namespace is `POST /v1/namespaces` (`orama namespace create`), authenticated by a wallet JWT. It writes the namespace and its single owner grant together, applies a per-wallet quota of 10, and is the only thing that starts provisioning
+- It used to be a side effect of asking for a login challenge: `/v1/auth/challenge` ran `INSERT OR IGNORE INTO namespaces`, unauthenticated, for whatever name the body carried. Squatting a name was free, a typo made a namespace, and verifying the signature afterwards spun up a real cluster — so an anonymous caller could create infrastructure
+- A challenge for a namespace that does not exist is a 404 with the code `NAMESPACE_UNKNOWN`. A challenge with no namespace uses the gateway's default, which is how a wallet signs in before it owns anything
+- A key-authenticated caller cannot create a namespace: a namespace's owner is a wallet, and one with no wallet owner is claimable by whoever signs in to it next
+- The name is validated as what it becomes — a DNS label, a systemd instance name and a directory — and platform names are reserved
+
+**Challenge nonces**
+- One wallet may hold 10 unanswered, unexpired challenges in a namespace. The row is written for whatever wallet the body names and nothing proves the caller owns it, so without a ceiling a grind fills the table for a victim's wallet
+- Spent and expired challenges are removed on a ticker. Nothing removed them before: every challenge ever issued stayed in a Raft-replicated table
+
 **Namespace ownership (`/v1/auth/verify`, `/v1/auth/api-key`)**
 - A namespace has at most one wallet owner, enforced by a partial unique index rather than by a check the code remembers to make. The first wallet to sign in to a namespace nobody owns becomes its owner; every later wallet is refused with `403` and the code `NAMESPACE_NOT_OWNED`, before a JWT, a refresh-token row, an API key or cluster provisioning exists
 - Ownership used to be written as a side effect of minting a key, unconditionally. Any wallet that signed a fresh nonce and named an existing namespace in the request body became an admin co-owner of it: the row satisfied the namespace gate, the gate marked the caller a confirmed owner, and a confirmed owner's wallet JWT carries admin

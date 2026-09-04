@@ -112,6 +112,23 @@ var keysRevokeCmd = &cobra.Command{
 	},
 }
 
+var createCmd = &cobra.Command{
+	Use:   "create <name>",
+	Short: "Create a namespace and start its cluster",
+	Long: `Create a namespace. The wallet you are signed in as becomes its owner.
+
+Creating a namespace used to happen by itself: signing in to a name that did
+not exist created it. So a typo made a namespace, and one belonged to whoever
+happened to sign in first.
+
+  orama namespace create myapp
+  orama auth login --namespace myapp`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.NamespaceCreate(args[0])
+	},
+}
+
 var keysRevokeLegacyCmd = &cobra.Command{
 	Use:   "revoke-legacy",
 	Short: "Revoke ALL legacy (unscoped) keys — the cutover step",
@@ -145,6 +162,7 @@ func init() {
 	keysCmd.AddCommand(keysRevokeCmd)
 	keysCmd.AddCommand(keysRevokeLegacyCmd)
 
+	Cmd.AddCommand(createCmd)
 	Cmd.AddCommand(listCmd)
 	Cmd.AddCommand(deleteCmd)
 	Cmd.AddCommand(repairCmd)

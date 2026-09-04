@@ -269,20 +269,8 @@ func (h *Handlers) PhantomCompleteHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Trigger namespace cluster provisioning if needed (for non-default namespaces)
-	if h.clusterProvisioner != nil && namespace != "default" {
-		_, _, needsProvisioning, checkErr := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if checkErr != nil {
-			_ = checkErr // Log but don't fail auth
-		} else if needsProvisioning {
-			nsIDInt := h.namespaceIDForProvisioning(ctx, namespace)
-			_, _, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-			if provErr != nil {
-				_ = provErr // Log but don't fail auth — provisioning is async
-			}
-		}
-	}
+	// Signing in does not provision anything. See VerifyHandler.
 
-	// Issue API key
 	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, namespace)
 	if err != nil {
 		h.updateSessionFailed(internalCtx, db, req.SessionID, "failed to issue API key")

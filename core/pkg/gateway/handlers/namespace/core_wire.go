@@ -85,6 +85,7 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	apiGateway.SetSpawnHandler(NewSpawnHandler(systemdSpawner, logger))
 	apiGateway.SetNamespaceDeleteHandler(NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), logger))
 	apiGateway.SetNamespaceListHandler(NewListHandler(ormClient, logger))
+	apiGateway.SetNamespaceCreateHandler(NewCreateHandler(ormClient, clusterManager, logger))
 
 	logger.Info("Namespace cluster provisioning enabled on index gateway",
 		zap.String("base_domain", clusterCfg.BaseDomain),

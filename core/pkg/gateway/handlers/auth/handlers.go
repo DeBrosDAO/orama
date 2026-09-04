@@ -39,7 +39,11 @@ type QueryResult struct {
 	Rows  []interface{} `json:"rows"`
 }
 
-// ClusterProvisioner defines the interface for namespace cluster provisioning
+// ClusterProvisioner defines the interface for namespace cluster provisioning.
+//
+// The auth handlers no longer hold one: signing in does not provision anything.
+// Creating a namespace does, and that is POST /v1/namespaces. The gateway keeps
+// a provisioner for /v1/namespace/status, which reads a cluster's progress.
 type ClusterProvisioner interface {
 	// CheckNamespaceCluster checks if a namespace has a cluster and returns its status
 	// Returns: (clusterID, status, needsProvisioning, error)
@@ -78,13 +82,12 @@ type WebRTCManager interface {
 
 // Handlers holds dependencies for authentication HTTP handlers
 type Handlers struct {
-	logger             *logging.ColoredLogger
-	authService        *authsvc.Service
-	netClient          NetworkClient
-	defaultNS          string
-	internalAuthFn     func(context.Context) context.Context
-	clusterProvisioner ClusterProvisioner         // Optional: for namespace cluster provisioning
-	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
+	logger         *logging.ColoredLogger
+	authService    *authsvc.Service
+	netClient      NetworkClient
+	defaultNS      string
+	internalAuthFn func(context.Context) context.Context
+	solanaVerifier *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 
 	// challengeLimiter caps how fast challenges can be issued for one wallet,
 	// whoever asks. See wallet_rate_limit.go.
@@ -122,11 +125,6 @@ func NewHandlers(
 	return h
 }
 
-// SetClusterProvisioner sets the cluster provisioner for namespace cluster management
-func (h *Handlers) SetClusterProvisioner(cp ClusterProvisioner) {
-	h.clusterProvisioner = cp
-}
-
 // SetSolanaVerifier sets the server-side NFT ownership verifier for Phantom auth
 func (h *Handlers) SetSolanaVerifier(verifier *authsvc.SolanaNFTVerifier) {
 	h.solanaVerifier = verifier
@@ -160,30 +158,6 @@ func (h *Handlers) consumeNonce(ctx context.Context, w http.ResponseWriter, wall
 	h.logger.Error("failed to consume authentication challenge", zap.Error(err))
 	writeError(w, http.StatusServiceUnavailable, authsvc.ErrNonceTransient.Error())
 	return false
-}
-
-// namespaceIDForProvisioning resolves a namespace name to the integer id the
-// cluster provisioner expects. The registry returns that id as whichever
-// numeric type the driver produced, so the conversion lives here instead of
-// being repeated at every provisioning call site.
-//
-// An unresolvable namespace yields 0, which is what each call site did before
-// this helper existed.
-func (h *Handlers) namespaceIDForProvisioning(ctx context.Context, namespace string) int {
-	nsID, err := h.resolveNamespace(ctx, namespace)
-	if err != nil {
-		return 0
-	}
-	switch id := nsID.(type) {
-	case int:
-		return id
-	case int64:
-		return int(id)
-	case float64:
-		return int(id)
-	default:
-		return 0
-	}
 }
 
 // resolveNamespace resolves a namespace name to its registry id

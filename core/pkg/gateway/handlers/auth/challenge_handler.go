@@ -47,7 +47,7 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 
 	nonce, err := h.authService.CreateNonce(r.Context(), req.Wallet, req.Purpose, req.Namespace)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChallengeError(w, req.Namespace, err)
 		return
 	}
 

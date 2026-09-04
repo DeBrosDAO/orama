@@ -54,6 +54,17 @@ orama auth status
 
 Your API key is stored securely and used for all deployment operations.
 
+Creating a namespace is its own step, and the wallet that makes it owns it:
+
+```bash
+orama namespace create myapp
+orama auth login --namespace myapp
+```
+
+Signing in to a namespace that does not exist used to create it, so a typo made
+a namespace and one belonged to whoever happened to sign in first. It answers
+404 now, naming the command above.
+
 One machine can hold credentials for several environments. `orama auth list`
 shows them, `orama auth switch` changes the active one, and `orama auth logout`
 clears it. Which gateway a command talks to is decided by the active

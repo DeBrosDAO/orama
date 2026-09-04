@@ -46,21 +46,6 @@ func (m *mockNetworkClient) Database() DatabaseClient {
 	return m.db
 }
 
-// mockClusterProvisioner implements ClusterProvisioner as a no-op.
-type mockClusterProvisioner struct{}
-
-func (m *mockClusterProvisioner) CheckNamespaceCluster(_ context.Context, _ string) (string, string, bool, error) {
-	return "", "", false, nil
-}
-
-func (m *mockClusterProvisioner) ProvisionNamespaceCluster(_ context.Context, _ int, _, _ string) (string, string, error) {
-	return "", "", nil
-}
-
-func (m *mockClusterProvisioner) GetClusterStatusByID(_ context.Context, _ string) (interface{}, error) {
-	return nil, nil
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -93,12 +78,6 @@ func TestNewHandlers(t *testing.T) {
 	if h == nil {
 		t.Fatal("NewHandlers returned nil")
 	}
-}
-
-func TestSetClusterProvisioner(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-	// Should not panic.
-	h.SetClusterProvisioner(&mockClusterProvisioner{})
 }
 
 // --- ChallengeHandler tests -----------------------------------------------

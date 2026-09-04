@@ -60,42 +60,8 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.clusterProvisioner != nil && namespace != "default" {
-		clusterID, status, needsProvisioning, err := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if err != nil {
-			// Log but don't fail - cluster provisioning is optional (error may just mean no cluster yet)
-			_ = err
-		} else if needsProvisioning {
-			// Trigger provisioning for new namespace
-			nsIDInt := h.namespaceIDForProvisioning(ctx, namespace)
-
-			newClusterID, pollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-			if provErr != nil {
-				writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
-				return
-			}
-
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             newClusterID,
-				"poll_url":               pollURL,
-				"estimated_time_seconds": 60,
-				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
-			})
-			return
-		} else if status == "provisioning" {
-			// Already provisioning, return poll URL
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             clusterID,
-				"poll_url":               "/v1/namespace/status?id=" + clusterID,
-				"estimated_time_seconds": 60,
-				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
-			})
-			return
-		}
-		// If status is "ready" or "default", proceed with API key generation
-	}
+	// Issuing a key does not provision anything. See VerifyHandler: creating a
+	// namespace is POST /v1/namespaces, and that is what provisions it.
 
 	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
 	if err != nil {
