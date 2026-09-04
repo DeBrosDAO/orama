@@ -745,9 +745,6 @@ func isPublicPath(p string) bool {
 	// endpoints unreachable — so `orama namespace enable webrtc` had no
 	// working path (the public endpoint hits a gateway without the WebRTC
 	// manager wired). Bugboard: internal webrtc mgmt endpoints unreachable.
-	if strings.HasPrefix(p, "/v1/internal/namespace/webrtc/") {
-		return true
-	}
 
 	// Internal storage eviction endpoint (bugboard #153). Auth is handled INSIDE
 	// the handler by the X-Orama-Internal-Auth header + WireGuard-peer source

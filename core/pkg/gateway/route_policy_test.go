@@ -85,9 +85,6 @@ var routeClasses = map[string]routeClass{
 	// classification here is what the route is meant to be.
 	"/v1/internal/namespace/spawn":              classHandlerAuth,
 	"/v1/internal/namespace/repair":             classHandlerAuth,
-	"/v1/internal/namespace/webrtc/enable":      classHandlerAuth,
-	"/v1/internal/namespace/webrtc/disable":     classHandlerAuth,
-	"/v1/internal/namespace/webrtc/status":      classHandlerAuth,
 	"/v1/internal/storage/evict":                classHandlerAuth,
 	"/v1/internal/deployments/replica/setup":    classHandlerAuth,
 	"/v1/internal/deployments/replica/update":   classHandlerAuth,

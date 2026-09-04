@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -1306,8 +1305,7 @@ func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Internal auth check: header + WireGuard subnet verification
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
+	if !g.verifyCoordination(r) {
 		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}
@@ -1456,124 +1454,6 @@ func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *h
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
 		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
-		return
-	}
-
-	if g.webrtcManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
-		return
-	}
-
-	config, err := g.webrtcManager.GetWebRTCStatus(r.Context(), namespaceName)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if config == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"namespace": namespaceName,
-			"enabled":   false,
-		})
-	} else {
-		json.NewEncoder(w).Encode(config)
-	}
-}
-
-// namespaceWebRTCEnableHandler handles POST /v1/internal/namespace/webrtc/enable?namespace={name}
-// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
-func (g *Gateway) namespaceWebRTCEnableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
-		return
-	}
-
-	namespaceName := r.URL.Query().Get("namespace")
-	if namespaceName == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter required")
-		return
-	}
-
-	if g.webrtcManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
-		return
-	}
-
-	if err := g.webrtcManager.EnableWebRTC(r.Context(), namespaceName, "cli"); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "ok",
-		"namespace": namespaceName,
-		"message":   "WebRTC enabled successfully",
-	})
-}
-
-// namespaceWebRTCDisableHandler handles POST /v1/internal/namespace/webrtc/disable?namespace={name}
-// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
-func (g *Gateway) namespaceWebRTCDisableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
-		return
-	}
-
-	namespaceName := r.URL.Query().Get("namespace")
-	if namespaceName == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter required")
-		return
-	}
-
-	if g.webrtcManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
-		return
-	}
-
-	if err := g.webrtcManager.DisableWebRTC(r.Context(), namespaceName); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "ok",
-		"namespace": namespaceName,
-		"message":   "WebRTC disabled successfully",
-	})
-}
-
-// namespaceWebRTCStatusHandler handles GET /v1/internal/namespace/webrtc/status?namespace={name}
-// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
-func (g *Gateway) namespaceWebRTCStatusHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
-		return
-	}
-
-	namespaceName := r.URL.Query().Get("namespace")
-	if namespaceName == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter required")
 		return
 	}
 

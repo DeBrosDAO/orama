@@ -173,12 +173,14 @@ func TestIsPublicPath(t *testing.T) {
 		{"internal join", "/v1/internal/join", true},
 		{"internal namespace spawn", "/v1/internal/namespace/spawn", true},
 		{"internal namespace repair", "/v1/internal/namespace/repair", true},
-		// Internal WebRTC mgmt endpoints — exempt from API-key middleware
-		// (handler enforces internal-auth header + WireGuard peer). Without
-		// these, `orama namespace enable webrtc` had no working path.
-		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", true},
-		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", true},
-		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", true},
+		// The internal WebRTC mgmt endpoints were removed: nothing in the
+		// repository called them — `orama namespace enable webrtc` goes to the
+		// public route, which does the work itself — and they were three paths
+		// exempt from the API-key middleware and authenticated by a constant
+		// that is in this source.
+		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", false},
+		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", false},
+		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", false},
 		// Internal storage eviction (bugboard #153) — exempt from API-key
 		// middleware; handler enforces internal-auth header + WireGuard peer.
 		// Without this the cross-node evict fan-out 401s and immediate reclaim

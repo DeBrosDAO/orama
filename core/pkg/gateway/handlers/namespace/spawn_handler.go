@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -99,14 +100,38 @@ type SpawnResponse struct {
 type SpawnHandler struct {
 	systemdSpawner *namespacepkg.SystemdSpawner
 	logger         *zap.Logger
+	// clusterSecretPath is where this node keeps the cluster secret. It is
+	// read per request rather than at construction so that a node whose secret
+	// is rotated does not have to be restarted to accept coordination calls.
+	clusterSecretPath string
 }
 
 // NewSpawnHandler creates a new spawn handler
-func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, logger *zap.Logger) *SpawnHandler {
+func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretPath string, logger *zap.Logger) *SpawnHandler {
 	return &SpawnHandler{
-		systemdSpawner: systemdSpawner,
-		logger:         logger.With(zap.String("component", "namespace-spawn-handler")),
+		systemdSpawner:    systemdSpawner,
+		clusterSecretPath: clusterSecretPath,
+		logger:            logger.With(zap.String("component", "namespace-spawn-handler")),
 	}
+}
+
+// verifyCoordination reports whether this spawn request came from inside the
+// cluster. See pkg/auth/coordination.go.
+func (h *SpawnHandler) verifyCoordination(r *http.Request) bool {
+	if !auth.IsWireGuardPeer(r.RemoteAddr) {
+		return false
+	}
+	secret, err := os.ReadFile(h.clusterSecretPath)
+	if err != nil {
+		h.logger.Error("cannot read the cluster secret, so no coordination request can be authenticated",
+			zap.String("path", h.clusterSecretPath), zap.Error(err))
+		return false
+	}
+	key, err := auth.CoordinationKey(string(secret))
+	if err != nil {
+		return false
+	}
+	return auth.VerifyCoordination(key, r, time.Now())
 }
 
 // ServeHTTP implements http.Handler
@@ -116,8 +141,12 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate via internal auth header + WireGuard subnet check
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !auth.IsWireGuardPeer(r.RemoteAddr) {
+	// Two independent things: the request carries a MAC produced with a key
+	// derived from the cluster secret, and it arrived over the WireGuard
+	// overlay. The MAC is the credential — the header this replaces was a
+	// constant in the source, and being on the overlay is not a privilege,
+	// since every namespace's services are on that mesh.
+	if !h.verifyCoordination(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

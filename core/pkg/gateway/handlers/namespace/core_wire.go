@@ -82,7 +82,7 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	apiGateway.SetWebRTCManager(clusterManager)
 
 	systemdSpawner := namespacepkg.NewSystemdSpawner(baseDataDir, clusterSecretPath, logger)
-	apiGateway.SetSpawnHandler(NewSpawnHandler(systemdSpawner, logger))
+	apiGateway.SetSpawnHandler(NewSpawnHandler(systemdSpawner, clusterSecretPath, logger))
 	apiGateway.SetNamespaceDeleteHandler(NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), logger))
 	apiGateway.SetNamespaceListHandler(NewListHandler(ormClient, logger))
 	apiGateway.SetNamespaceCreateHandler(NewCreateHandler(ormClient, clusterManager, apiGateway.GetAuditLog(), logger))

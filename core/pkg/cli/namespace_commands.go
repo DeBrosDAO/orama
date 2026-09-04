@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -284,7 +285,12 @@ func NamespaceRepair(namespaceName string) error {
 	if err != nil {
 		return clierr.Failure("failed to build the repair request: %w", err)
 	}
-	req.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	// This runs on a node, so the cluster secret is on disk here. The header
+	// this replaces was a constant in the source: anything that could reach a
+	// node's gateway port could repair — or mis-repair — any namespace on it.
+	if err := signCoordinationRequest(req); err != nil {
+		return clierr.Failure("%w", err)
+	}
 
 	resp, err := nsClient.Do(req)
 	if err != nil {
@@ -628,4 +634,29 @@ func NamespaceCreate(name string) error {
 		fmt.Printf("Sign in to it with: orama auth login --namespace %s\n", name)
 	}
 	return nil
+}
+
+// clusterSecretPath is where a node keeps the cluster secret. The commands that
+// talk to a node's own gateway over loopback run on that node, so it is here.
+func clusterSecretPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/root"
+	}
+	return filepath.Join(home, ".orama", "secrets", "cluster-secret")
+}
+
+// signCoordinationRequest stamps a node-to-node coordination request.
+func signCoordinationRequest(r *http.Request) error {
+	path := clusterSecretPath()
+	secret, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("cannot read the cluster secret at %s: this command talks to the node's "+
+			"own gateway and has to prove it is running on a node — run it on one: %w", path, err)
+	}
+	key, err := auth.CoordinationKey(string(secret))
+	if err != nil {
+		return err
+	}
+	return auth.SignCoordination(key, r, time.Now())
 }

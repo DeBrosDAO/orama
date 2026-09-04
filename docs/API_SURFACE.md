@@ -227,9 +227,6 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/internal/join` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/namespace/repair` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/namespace/spawn` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/namespace/webrtc/disable` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/namespace/webrtc/enable` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/namespace/webrtc/status` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/ping` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/storage/evict` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
