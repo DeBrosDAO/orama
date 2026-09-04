@@ -140,7 +140,26 @@ The DNS-01 challenge method is used instead of HTTP-01 because it does not requi
 
 ## Custom Domains
 
-You can map your own domain (like `api.example.com`) to an Orama deployment using the custom domains API.
+You can map your own domain (like `api.example.com`) to an Orama deployment.
+
+### CLI
+
+```bash
+# Register the domain and print the TXT record that proves you own it
+orama domain add api.example.com --app my-api
+
+# After creating the record, activate the domain
+orama domain verify api.example.com --wait 5m
+
+# Or do both in one step
+orama domain add api.example.com --app my-api --verify
+
+orama domain list                     # every domain in the namespace
+orama domain list --app my-api        # one app's domains
+orama domain remove api.example.com
+```
+
+Every subcommand takes `--json`. `verify --wait` re-asks the gateway every 10 seconds until the TXT record resolves or the wait runs out.
 
 ### REST API
 
@@ -149,7 +168,9 @@ You can map your own domain (like `api.example.com`) to an Orama deployment usin
 | `POST` | `/v1/deployments/domains/add` | Add a custom domain to a deployment |
 | `POST` | `/v1/deployments/domains/verify` | Verify domain ownership via DNS |
 | `GET` | `/v1/deployments/domains/list` | List all custom domains |
-| `DELETE` | `/v1/deployments/domains/remove` | Remove a custom domain |
+| `DELETE` | `/v1/deployments/domains/remove?domain=` | Remove a custom domain (`POST` also accepted) |
+
+`list` takes an optional `?deployment_name=` to narrow it to one app; without it, every domain in the namespace is returned. Methods are enforced -- a request with the wrong verb gets a `405` naming what the endpoint takes.
 
 ### Flow
 

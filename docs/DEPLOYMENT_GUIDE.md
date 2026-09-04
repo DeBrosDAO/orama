@@ -501,14 +501,44 @@ This is **transparent to users** - your app works regardless of which node handl
 
 ### Custom Domains
 
-The gateway supports attaching custom domains (e.g., `www.myapp.com`) to a deployment via HTTP API (no CLI subcommand yet):
+Attach a custom domain (e.g. `www.myapp.com`) to a deployment with `orama domain`.
+A domain does not serve traffic until you prove you own it with a TXT record.
 
-- `POST /v1/deployments/domains/add` — registers the domain and returns a verification token
-- `POST /v1/deployments/domains/verify` — checks for a TXT record at `_orama-verify.{domain}` matching the token
-- `GET /v1/deployments/domains/list` — lists domains for a deployment
-- `POST /v1/deployments/domains/remove` — detaches a domain
+```bash
+# Register the domain and print the TXT record to create
+orama domain add www.myapp.com --app my-api
+
+# After creating the record, activate the domain
+orama domain verify www.myapp.com --wait 5m
+
+# Or do both in one step
+orama domain add www.myapp.com --app my-api --verify
+
+orama domain list                    # every domain in the namespace
+orama domain list --app my-api       # one app's domains
+orama domain remove www.myapp.com
+```
+
+Every subcommand takes `--json`, which prints the gateway's reply verbatim.
+
+`verify --wait` re-asks the gateway every 10 seconds until the record resolves
+or the wait runs out. Only "the record is not visible yet" is retried; a domain
+that was never added fails immediately.
 
 After verification, point your domain's A record to your deployment's node IP.
+
+#### HTTP API
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/v1/deployments/domains/add` | Register the domain, return a verification token |
+| `POST` | `/v1/deployments/domains/verify` | Check for a TXT record at `_orama-verify.{domain}` matching the token |
+| `GET` | `/v1/deployments/domains/list` | List domains — the whole namespace, or one app with `?deployment_name=` |
+| `DELETE` | `/v1/deployments/domains/remove?domain=` | Detach a domain (`POST` also accepted) |
+
+Methods are enforced. These endpoints used to accept any verb, so a `GET` to
+`remove` deleted the domain and the documentation disagreed with itself about
+which verb each one took.
 
 ---
 

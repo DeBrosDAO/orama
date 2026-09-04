@@ -24,6 +24,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sandboxcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sshcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/statuscmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/domain"
 )
 
 // version metadata populated via -ldflags at build time
@@ -71,6 +72,9 @@ and interacting with the Orama distributed network.`,
 
 	// Database commands
 	rootCmd.AddCommand(dbcmd.Cmd)
+
+	// Custom domain commands
+	rootCmd.AddCommand(domain.Cmd)
 
 	// Namespace commands
 	rootCmd.AddCommand(namespacecmd.Cmd)
