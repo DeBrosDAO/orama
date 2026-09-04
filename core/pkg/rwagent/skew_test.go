@@ -219,13 +219,19 @@ func TestNonJSONBodyKeepsItsStatus(t *testing.T) {
 	}
 }
 
-func TestUnreachableAgentIsRecognised(t *testing.T) {
+// missingSocket returns a path where no agent is listening.
+func missingSocket(t *testing.T) string {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "rwa")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	client := New(filepath.Join(dir, "gone.sock"))
+	return filepath.Join(dir, "gone.sock")
+}
+
+func TestUnreachableAgentIsRecognised(t *testing.T) {
+	client := New(missingSocket(t))
 	_, statusErr := client.Status(context.Background())
 	if !IsNotRunning(statusErr) {
 		t.Errorf("an absent socket should read as a stopped agent, got: %v", statusErr)

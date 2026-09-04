@@ -5,6 +5,34 @@
 - Go 1.26.7+ (see `go.mod`)
 - Node.js 18+ (for anyone-client in dev mode)
 - macOS or Linux
+- **The RootWallet desktop app, open and unlocked** — every command in the
+  "Deploying to VPS" section below needs it
+
+### RootWallet
+
+There are no SSH keys on disk. Every command that reaches a node — `orama push`,
+`orama rollout`, `orama node setup`, `orama monitor report`, `orama ssh` — asks
+the RootWallet desktop app's agent for a wallet-derived key over a Unix socket
+at `~/.rootwallet/agent.sock`, writes it to a `0600` temp file for the length of
+the command, and wipes it afterwards. `RW_AGENT_SOCK` overrides the path.
+
+**Before a rollout: open the app and unlock it.** Then expect this:
+
+- **First run after a rebuild, one approval prompt.** Approval is keyed on the
+  hash of the calling binary, so every `make build` produces a new `orama` that
+  RootWallet has not seen before and asks about once.
+- **One unlock for the whole run.** The agent locks itself after 30 minutes of
+  no traffic, and a six-node rolling upgrade spends far longer than that in SSH
+  sessions the agent never sees. The CLI touches the agent every five minutes
+  for as long as it holds keys, so the window stays open until the command
+  finishes and closes immediately after.
+- **A command that seems to hang is usually a prompt.** Look at the desktop app.
+  A first run against a locked wallet waits up to two minutes for approval and
+  two more for the unlock before it gives up.
+
+If a command fails with a RootWallet error, the message says what to do; the
+codes are listed in
+[Troubleshooting](COMMON_PROBLEMS.md#13-rootwallet-agent-locked-waiting-or-unreachable).
 
 ## Building
 

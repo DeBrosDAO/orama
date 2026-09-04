@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
@@ -16,6 +17,7 @@ import (
 type vaultClient interface {
 	GetSSHKey(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error)
 	CreateSSHEntry(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error)
+	KeepUnlocked(interval time.Duration) (stop func())
 }
 
 // newClient creates the default vaultClient. Package-level var for test injection.
@@ -49,15 +51,24 @@ func wrapAgentError(err error, action string) error {
 // The nodes slice is modified in place — each node.SSHKey is set to
 // the path of the temporary key file.
 //
-// Returns a cleanup function that zero-overwrites and removes all temp files.
-// Caller must defer cleanup().
+// It also holds the agent's auto-lock window open until cleanup runs. Every
+// long command in this CLI takes its keys here and defers cleanup for the whole
+// operation, so that window is exactly the operation. Without it a rolling
+// upgrade — twenty-five minutes of SSH the agent never sees — locked the wallet
+// partway through and stopped at the next health gate waiting for someone to
+// answer an unlock prompt.
+//
+// Returns a cleanup function that zero-overwrites and removes all temp files,
+// and stops the keepalive. Caller must defer cleanup().
 func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 	client := newClient()
 	ctx := context.Background()
+	stopKeepalive := client.KeepUnlocked(rwagent.DefaultKeepaliveInterval)
 
 	// Create temp dir for all keys
 	tmpDir, err := os.MkdirTemp("", "orama-ssh-")
 	if err != nil {
+		stopKeepalive()
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 
@@ -80,11 +91,13 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 		host, user := parseVaultTarget(key)
 		data, err := client.GetSSHKey(ctx, host, user, "priv")
 		if err != nil {
+			stopKeepalive()
 			cleanupKeys(tmpDir, allKeyPaths)
 			return nil, wrapAgentError(err, fmt.Sprintf("resolve key for %s", nodes[i].Name()))
 		}
 
 		if !strings.Contains(data.PrivateKey, "BEGIN OPENSSH PRIVATE KEY") {
+			stopKeepalive()
 			cleanupKeys(tmpDir, allKeyPaths)
 			return nil, fmt.Errorf("agent returned invalid key for %s", nodes[i].Name())
 		}
@@ -92,6 +105,7 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 		// Write PEM to temp file with restrictive perms
 		keyFile := filepath.Join(tmpDir, fmt.Sprintf("id_%d", i))
 		if err := os.WriteFile(keyFile, []byte(data.PrivateKey), 0600); err != nil {
+			stopKeepalive()
 			cleanupKeys(tmpDir, allKeyPaths)
 			return nil, fmt.Errorf("write key for %s: %w", nodes[i].Name(), err)
 		}
@@ -102,6 +116,7 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 	}
 
 	cleanup = func() {
+		stopKeepalive()
 		cleanupKeys(tmpDir, allKeyPaths)
 	}
 	return cleanup, nil
