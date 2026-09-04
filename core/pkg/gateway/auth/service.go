@@ -217,12 +217,9 @@ func (s *Service) CreateNonce(ctx context.Context, wallet, purpose, namespace st
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.orm.Database()
 
-	if namespace == "" {
-		namespace = s.defaultNS
-		if namespace == "" {
-			namespace = "default"
-		}
-	}
+	// Shared with ConsumeNonce so a nonce is always claimed from the namespace
+	// it was filed under.
+	namespace = s.nonceNamespace(namespace)
 
 	// Ensure namespace exists
 	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", namespace); err != nil {
@@ -234,8 +231,9 @@ func (s *Service) CreateNonce(ctx context.Context, wallet, purpose, namespace st
 		return "", fmt.Errorf("failed to resolve namespace ID: %w", err)
 	}
 
-	// Store nonce with 5 minute expiry
-	walletLower := strings.ToLower(strings.TrimSpace(wallet))
+	// Store nonce with 5 minute expiry. ConsumeNonce matches this row by exact
+	// string equality, so both sides normalise the wallet the same way.
+	walletLower := normalizeNonceWallet(wallet)
 	if _, err := db.Query(internalCtx,
 		"INSERT INTO nonces(namespace_id, wallet, nonce, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+5 minutes'))",
 		nsID, walletLower, nonce, purpose,

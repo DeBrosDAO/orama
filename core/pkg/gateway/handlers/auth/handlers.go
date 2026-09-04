@@ -6,6 +6,10 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/http"
+
+	"go.uber.org/zap"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -125,17 +129,55 @@ func (h *Handlers) SetAPIKeyDB(db DatabaseClient) {
 	h.apiKeyDB = db
 }
 
-// markNonceUsed marks a nonce as used in the database
-func (h *Handlers) markNonceUsed(ctx context.Context, namespaceID interface{}, wallet, nonce string) {
-	if h.netClient == nil {
-		return
+// consumeNonce claims the challenge that authorised this request, writing the
+// HTTP error itself when the challenge cannot be claimed. It reports whether
+// the caller may continue.
+//
+// Every signature-authenticated handler must call this and stop on false.
+// Verifying the signature only proves possession of the wallet key; consuming
+// the nonce is what proves the signature is fresh and was issued by this
+// gateway. Without it a single captured signature is a permanent credential.
+func (h *Handlers) consumeNonce(ctx context.Context, w http.ResponseWriter, wallet, nonce, namespace string) bool {
+	err := h.authService.ConsumeNonce(ctx, wallet, nonce, namespace)
+	if err == nil {
+		return true
 	}
-	db := h.netClient.Database()
-	internalCtx := h.internalAuthFn(ctx)
-	_, _ = db.Query(internalCtx, "UPDATE nonces SET used_at = datetime('now') WHERE namespace_id = ? AND wallet = ? AND nonce = ?", namespaceID, wallet, nonce)
+	if errors.Is(err, authsvc.ErrNonceInvalid) {
+		writeError(w, http.StatusUnauthorized, authsvc.ErrNonceInvalid.Error())
+		return false
+	}
+	// Registry unreachable or single-use not guaranteed: fail closed, and do
+	// not report it as an authentication failure.
+	h.logger.Error("failed to consume authentication challenge", zap.Error(err))
+	writeError(w, http.StatusServiceUnavailable, authsvc.ErrNonceTransient.Error())
+	return false
 }
 
-// resolveNamespace resolves namespace ID for nonce marking
+// namespaceIDForProvisioning resolves a namespace name to the integer id the
+// cluster provisioner expects. The registry returns that id as whichever
+// numeric type the driver produced, so the conversion lives here instead of
+// being repeated at every provisioning call site.
+//
+// An unresolvable namespace yields 0, which is what each call site did before
+// this helper existed.
+func (h *Handlers) namespaceIDForProvisioning(ctx context.Context, namespace string) int {
+	nsID, err := h.resolveNamespace(ctx, namespace)
+	if err != nil {
+		return 0
+	}
+	switch id := nsID.(type) {
+	case int:
+		return id
+	case int64:
+		return int(id)
+	case float64:
+		return int(id)
+	default:
+		return 0
+	}
+}
+
+// resolveNamespace resolves a namespace name to its registry id
 func (h *Handlers) resolveNamespace(ctx context.Context, namespace string) (interface{}, error) {
 	if h.authService == nil {
 		return nil, sql.ErrNoRows

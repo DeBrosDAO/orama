@@ -784,7 +784,12 @@ Function Invocation:
 
 1. **Wallet Signatures** (Ethereum-style)
    - Challenge/response flow
-   - Nonce-based to prevent replay attacks
+   - The challenge is single-use. Every signature endpoint consumes it with one
+     conditional `UPDATE nonces … WHERE used_at IS NULL AND expires_at > now`
+     and refuses the request unless that statement affected a row, so a
+     captured signature cannot be replayed and an expired challenge is dead.
+     Verifying the signature alone is not enough — it proves possession of the
+     key, not freshness
    - Issues JWT tokens after verification
 
 2. **API Keys**

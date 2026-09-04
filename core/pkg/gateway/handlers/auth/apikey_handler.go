@@ -43,9 +43,10 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
+	// Claim the challenge. A valid signature over a stale nonce is a replay.
+	if !h.consumeNonce(ctx, w, req.Wallet, req.Nonce, req.Namespace) {
+		return
+	}
 
 	// Check if namespace cluster provisioning is needed (for non-default namespaces)
 	namespace := strings.TrimSpace(req.Namespace)
@@ -60,14 +61,7 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 			_ = err
 		} else if needsProvisioning {
 			// Trigger provisioning for new namespace
-			nsIDInt := 0
-			if id, ok := nsID.(int); ok {
-				nsIDInt = id
-			} else if id, ok := nsID.(int64); ok {
-				nsIDInt = int(id)
-			} else if id, ok := nsID.(float64); ok {
-				nsIDInt = int(id)
-			}
+			nsIDInt := h.namespaceIDForProvisioning(ctx, namespace)
 
 			newClusterID, pollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
 			if provErr != nil {

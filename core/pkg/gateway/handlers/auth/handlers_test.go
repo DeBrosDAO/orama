@@ -765,15 +765,28 @@ func TestRegisterHandler_NilAuthService(t *testing.T) {
 	}
 }
 
-// --- markNonceUsed (tested indirectly via nil safety) ----------------------
+// --- consumeNonce ---------------------------------------------------------
 
-func TestMarkNonceUsed_NilNetClient(t *testing.T) {
-	// markNonceUsed is unexported but returns early when h.netClient == nil.
-	// We verify it does not panic by constructing a Handlers with nil netClient
-	// and invoking it through the struct directly (same-package test).
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-	// This should not panic.
-	h.markNonceUsed(context.Background(), 1, "0xwallet", "nonce123")
+// A challenge that cannot be claimed must stop the request. This is the gate
+// that makes a wallet signature single-use, so it fails closed: when the
+// service cannot guarantee single use, the handler answers 503 rather than
+// letting the request through.
+func TestConsumeNonce_FailsClosedWhenSingleUseNotGuaranteed(t *testing.T) {
+	// A service with no rqlite client cannot perform the conditional UPDATE
+	// that makes consumption atomic.
+	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
+
+	rec := httptest.NewRecorder()
+	if h.consumeNonce(context.Background(), rec, "0xWallet", "nonce123", "default") {
+		t.Fatal("consumeNonce reported success without atomic single-use")
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+	}
 }
 
 // --- resolveNamespace (tested indirectly via nil safety) --------------------

@@ -243,13 +243,15 @@ func (h *Handlers) PhantomCompleteHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Mark nonce used
+	// Claim the challenge. A valid signature over a stale nonce is a replay.
 	namespace := strings.TrimSpace(req.Namespace)
 	if namespace == "" {
 		namespace = "default"
 	}
-	nsID, _ := h.resolveNamespace(ctx, namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
+	if !h.consumeNonce(ctx, w, req.Wallet, req.Nonce, namespace) {
+		h.updateSessionFailed(internalCtx, db, req.SessionID, "authentication challenge is invalid, expired, or already used")
+		return
+	}
 
 	// Verify NFT ownership (server-side)
 	if h.solanaVerifier != nil {
@@ -272,14 +274,7 @@ func (h *Handlers) PhantomCompleteHandler(w http.ResponseWriter, r *http.Request
 		if checkErr != nil {
 			_ = checkErr // Log but don't fail auth
 		} else if needsProvisioning {
-			nsIDInt := 0
-			if id, ok := nsID.(int); ok {
-				nsIDInt = id
-			} else if id, ok := nsID.(int64); ok {
-				nsIDInt = int(id)
-			} else if id, ok := nsID.(float64); ok {
-				nsIDInt = int(id)
-			}
+			nsIDInt := h.namespaceIDForProvisioning(ctx, namespace)
 			_, _, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
 			if provErr != nil {
 				_ = provErr // Log but don't fail auth — provisioning is async

@@ -91,9 +91,10 @@ func (h *Handlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
+	// Claim the challenge. A valid signature over a stale nonce is a replay.
+	if !h.consumeNonce(ctx, w, req.Wallet, req.Nonce, req.Namespace) {
+		return
+	}
 
 	// In a real app we'd derive the public key from the signature, but for simplicity here
 	// we just use a placeholder or expect it in the request if needed.
