@@ -170,9 +170,63 @@ func (s *Service) BindDevice(ctx context.Context, namespace, subject, publicKeyB
 	db := s.orm.Database()
 	now := time.Now().UTC()
 
-	// Insert-if-absent, then read back. The read is authoritative for
-	// first_seen_at: on a returning device the INSERT is a no-op and the stored
-	// (older) timestamp is what the claim must carry.
+	// READ FIRST, then insert only if absent.
+	//
+	// The obvious shape — INSERT OR IGNORE then SELECT back — is wrong on rqlite
+	// and failed on devnet the first time it ran: a write goes through raft, and
+	// an immediately-following read is not guaranteed to observe it. The row was
+	// committed correctly and the read microseconds later returned nothing, which
+	// the code then reported as "binding vanished". Unit tests could not catch it
+	// because the fake database is instantly consistent.
+	//
+	// This ordering needs no read-after-write at all: a returning device is found
+	// by the read and uses its STORED first_seen_at; a new device is inserted and
+	// is, by definition, first seen now.
+	existing, err := db.Query(internalCtx,
+		`SELECT public_key, first_seen_at, revoked_at FROM orama_device_bindings
+		  WHERE namespace_id = ? AND subject = ? AND device_fp = ?`,
+		nsID, subject, fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read device binding: %v", ErrDeviceBindTransient, err)
+	}
+
+	if existing != nil && existing.Count > 0 && len(existing.Rows) > 0 {
+		row := existing.Rows[0]
+		if len(row) < 3 {
+			return nil, fmt.Errorf("device binding row has %d columns, want 3", len(row))
+		}
+		if row[2] != nil && fmt.Sprint(row[2]) != "" {
+			return nil, fmt.Errorf("device %s is revoked for this account", fingerprint)
+		}
+		// Fail CLOSED on an unreadable stored timestamp: "now" is the newest
+		// possible first-seen, so the device gets the least archive access
+		// rather than the most.
+		firstSeen, ok := parseDeviceTime(row[1])
+		if !ok {
+			firstSeen = now
+		}
+
+		if _, uerr := db.Query(internalCtx,
+			`UPDATE orama_device_bindings SET last_seen_at = ?
+			  WHERE namespace_id = ? AND subject = ? AND device_fp = ?`,
+			now, nsID, subject, fingerprint); uerr != nil {
+			// Non-fatal: last_seen is observability, not authorization.
+			s.logger.ComponentWarn(logging.ComponentGeneral, "failed to update device last_seen_at",
+				zap.String("namespace", namespace), zap.String("device_fp", fingerprint), zap.Error(uerr))
+		}
+
+		return &DeviceBinding{
+			Fingerprint: fingerprint,
+			PublicKey:   fmt.Sprint(row[0]),
+			FirstSeen:   firstSeen,
+		}, nil
+	}
+
+	// First time this account has presented this key. OR IGNORE keeps a
+	// concurrent first login from erroring on the UNIQUE constraint; if we lose
+	// that race the stored first_seen_at is the other request's, milliseconds
+	// from ours, which is immaterial to a "did this device exist before that
+	// message" comparison.
 	if _, err := db.Query(internalCtx,
 		`INSERT OR IGNORE INTO orama_device_bindings
 		   (namespace_id, subject, device_fp, public_key, first_seen_at, last_seen_at)
@@ -181,46 +235,10 @@ func (s *Service) BindDevice(ctx context.Context, namespace, subject, publicKeyB
 		return nil, fmt.Errorf("%w: record device binding: %v", ErrDeviceBindTransient, err)
 	}
 
-	res, err := db.Query(internalCtx,
-		`SELECT public_key, first_seen_at, revoked_at FROM orama_device_bindings
-		  WHERE namespace_id = ? AND subject = ? AND device_fp = ?`,
-		nsID, subject, fingerprint)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read device binding: %v", ErrDeviceBindTransient, err)
-	}
-	if res == nil || res.Count == 0 || len(res.Rows) == 0 {
-		return nil, fmt.Errorf("device binding vanished immediately after insert (namespace %s)", namespace)
-	}
-	row := res.Rows[0]
-	if len(row) < 3 {
-		return nil, fmt.Errorf("device binding row has %d columns, want 3", len(row))
-	}
-	if row[2] != nil && fmt.Sprint(row[2]) != "" {
-		return nil, fmt.Errorf("device %s is revoked for this account", fingerprint)
-	}
-
-	// Fail CLOSED here: an unestablishable first-seen becomes "now", the newest
-	// possible value, so the device gets the least archive access rather than
-	// the most.
-	firstSeen, ok := parseDeviceTime(row[1])
-	if !ok {
-		firstSeen = now
-	}
-
-	if _, err := db.Query(internalCtx,
-		`UPDATE orama_device_bindings SET last_seen_at = ?
-		  WHERE namespace_id = ? AND subject = ? AND device_fp = ?`,
-		now, nsID, subject, fingerprint); err != nil {
-		// Non-fatal: last_seen is observability, not authorization. Losing the
-		// update must never fail a login that is otherwise fully verified.
-		s.logger.ComponentWarn(logging.ComponentGeneral, "failed to update device last_seen_at",
-			zap.String("namespace", namespace), zap.String("device_fp", fingerprint), zap.Error(err))
-	}
-
 	return &DeviceBinding{
 		Fingerprint: fingerprint,
-		PublicKey:   fmt.Sprint(row[0]),
-		FirstSeen:   firstSeen,
+		PublicKey:   publicKeyB64,
+		FirstSeen:   now,
 	}, nil
 }
 

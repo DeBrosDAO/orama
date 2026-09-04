@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
 // Device attribution (bugboard feat-384).
@@ -313,5 +316,107 @@ func TestParseDeviceTime_acceptsTheDriverFormats(t *testing.T) {
 				t.Errorf("got %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// --- read-after-write ------------------------------------------------------
+
+// bindDeviceDB models rqlite's actual consistency: a write goes through raft and
+// is NOT guaranteed visible to an immediately-following read.
+//
+// The first implementation did INSERT OR IGNORE then SELECT back, and failed on
+// devnet the first time it ran — the row committed correctly, the read
+// microseconds later returned nothing, and the code reported "binding vanished"
+// as a 401. Unit tests missed it because the fake was instantly consistent, so
+// this fake deliberately is not.
+type bindDeviceDB struct {
+	client.DatabaseClient
+	rowVisible bool // whether the SELECT finds an existing binding
+	selects    int
+	inserts    int
+}
+
+// bindDeviceOrm wraps the fake so it satisfies the service's client seam.
+type bindDeviceOrm struct {
+	client.NetworkClient
+	db *bindDeviceDB
+}
+
+func (o *bindDeviceOrm) Database() client.DatabaseClient { return o.db }
+
+// newDeviceTestService builds a Service backed by the supplied fake database.
+func newDeviceTestService(t *testing.T, db *bindDeviceDB) *Service {
+	t.Helper()
+	s := createDualKeyService(t)
+	s.orm = &bindDeviceOrm{db: db}
+	return s
+}
+
+func (d *bindDeviceDB) result(cols []string, rows [][]interface{}) *client.QueryResult {
+	return &client.QueryResult{Count: int64(len(rows)), Rows: rows, Columns: cols}
+}
+
+func (d *bindDeviceDB) Query(_ context.Context, sql string, _ ...interface{}) (*client.QueryResult, error) {
+	switch {
+	case strings.Contains(sql, "INSERT OR IGNORE INTO namespaces"):
+		return &client.QueryResult{Count: 0}, nil
+	case strings.Contains(sql, "FROM namespaces"):
+		return d.result([]string{"id"}, [][]interface{}{{int64(1)}}), nil
+	case strings.Contains(sql, "INSERT OR IGNORE INTO orama_device_bindings"):
+		d.inserts++
+		// The write "succeeds" but stays invisible to reads, as raft replication
+		// makes possible.
+		return &client.QueryResult{Count: 0}, nil
+	case strings.Contains(sql, "FROM orama_device_bindings"):
+		d.selects++
+		if !d.rowVisible {
+			return &client.QueryResult{Count: 0}, nil
+		}
+		return d.result(
+			[]string{"public_key", "first_seen_at", "revoked_at"},
+			[][]interface{}{{"stored-pubkey", time.Unix(1700000000, 0).UTC(), nil}},
+		), nil
+	}
+	return &client.QueryResult{Count: 0}, nil
+}
+
+// A first-time binding must succeed without ever reading back what it just
+// wrote. This is the devnet failure, reproduced.
+func TestBindDevice_firstBindDoesNotDependOnReadAfterWrite(t *testing.T) {
+	db := &bindDeviceDB{rowVisible: false}
+	s := newDeviceTestService(t, db)
+
+	binding, err := s.BindDevice(context.Background(), "anchat-v2", "0xWALLET", "pubkey-b64", "fp-1")
+	if err != nil {
+		t.Fatalf("first bind failed on a database that does not serve reads-after-writes: %v", err)
+	}
+	if binding.Fingerprint != "fp-1" {
+		t.Errorf("fingerprint = %q", binding.Fingerprint)
+	}
+	if binding.FirstSeen.IsZero() {
+		t.Error("first_seen not set on a newly-created binding")
+	}
+	if db.inserts != 1 {
+		t.Errorf("inserts = %d, want 1", db.inserts)
+	}
+}
+
+// A returning device takes first_seen from STORAGE, never from the clock —
+// otherwise device_since would advance on every login and a device would keep
+// re-earning "joined just now", which is the whole property the archive rule
+// depends on.
+func TestBindDevice_returningDeviceKeepsStoredFirstSeen(t *testing.T) {
+	db := &bindDeviceDB{rowVisible: true}
+	s := newDeviceTestService(t, db)
+
+	binding, err := s.BindDevice(context.Background(), "anchat-v2", "0xWALLET", "pubkey-b64", "fp-1")
+	if err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	if got := binding.FirstSeen.Unix(); got != 1700000000 {
+		t.Errorf("first_seen = %d, want the stored 1700000000 — device_since must not advance on re-login", got)
+	}
+	if db.inserts != 0 {
+		t.Errorf("a returning device re-inserted (%d); first_seen_at must be set once", db.inserts)
 	}
 }
