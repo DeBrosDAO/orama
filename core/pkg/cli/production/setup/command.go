@@ -40,6 +40,9 @@ type Options struct {
 	BaseDomain string
 	Gateway    string // Gateway URL to use for invite tokens (overrides env config)
 	Genesis    bool   // If true, create a new cluster instead of joining
+	// HostKey pins the VPS's expected SSH host-key fingerprint (SHA256:...) so
+	// enrollment can run unattended. Empty means confirm it interactively.
+	HostKey string
 }
 
 // Run executes the node setup.
@@ -88,10 +91,34 @@ func Run(opts Options) error {
 		return fmt.Errorf("failed to get public key: %w", err)
 	}
 
-	// 4. Install the public key on the VPS via password SSH
+	// 4. Install the public key on the VPS via password SSH.
+	//
+	// The password is only sent after the host key is pinned: this connection
+	// bootstraps every later trust relationship with the node, so accepting an
+	// unknown key here would hand the password to whoever answered.
 	if opts.Password != "" {
+		fmt.Printf("  Scanning SSH host key for %s...\n", opts.IP)
+		hk, err := scanHostKey(opts.IP)
+		if err != nil {
+			return err
+		}
+		if err := confirmHostKey(hk, opts.IP, opts.HostKey, os.Stdin, os.Stdout); err != nil {
+			return err
+		}
+
+		khDir, err := os.MkdirTemp("", "orama-setup-")
+		if err != nil {
+			return fmt.Errorf("create temp dir for known_hosts: %w", err)
+		}
+		defer os.RemoveAll(khDir)
+
+		knownHosts, err := hk.writeKnownHosts(khDir)
+		if err != nil {
+			return err
+		}
+
 		fmt.Printf("  Installing SSH key on %s...\n", opts.IP)
-		if err := installPublicKey(opts.IP, opts.User, opts.Password, pubKey); err != nil {
+		if err := installPublicKey(opts.IP, opts.User, opts.Password, pubKey, knownHosts); err != nil {
 			return fmt.Errorf("failed to install SSH key: %w", err)
 		}
 		fmt.Println("  SSH key installed")
@@ -177,36 +204,68 @@ func Run(opts Options) error {
 	return nil
 }
 
-// installPublicKey installs an SSH public key on a VPS using password authentication.
-func installPublicKey(ip, user, password, pubKey string) error {
+// installKeyScript appends the public key to authorized_keys unless it is
+// already there.
+//
+// The key arrives on stdin rather than interpolated into this script, so it
+// needs no shell quoting and cannot terminate the command it travels in. Each
+// step is checked (set -e) and the dedupe is an explicit if, because chaining
+// the append with `||` would also run it when an earlier step failed.
+const installKeyScript = `set -e
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+touch ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+key=$(cat)
+if ! grep -qxF "$key" ~/.ssh/authorized_keys; then
+  printf '%s\n' "$key" >> ~/.ssh/authorized_keys
+fi
+echo 'key installed'`
+
+// installKeyArgs builds the sshpass argument list for the enrollment
+// connection. It carries no secret: the password travels in SSHPASS, which
+// "-e" tells sshpass to read.
+func installKeyArgs(ip, user, knownHostsPath string) []string {
+	return []string{
+		"-e", // read the password from SSHPASS, never from argv
+		"ssh",
+		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile=" + knownHostsPath,
+		"-o", "ConnectTimeout=10",
+		"-o", "PreferredAuthentications=password",
+		"-o", "PubkeyAuthentication=no",
+		fmt.Sprintf("%s@%s", user, ip),
+		installKeyScript,
+	}
+}
+
+// installPublicKey installs an SSH public key on a VPS using password
+// authentication, against a host key the operator has already pinned.
+//
+// The password is handed to sshpass through the environment, never argv: an
+// argument is visible to every local process in ps, and this is the one
+// credential that can hand over the whole machine. Host-key checking stays on
+// and points at knownHostsPath, so the password is only ever sent to the host
+// the operator confirmed.
+func installPublicKey(ip, user, password, pubKey, knownHostsPath string) error {
 	sshpassBin, err := findBinary("sshpass")
 	if err != nil {
 		return fmt.Errorf("sshpass is required for password-based SSH key installation: %w", err)
 	}
 
-	// Ensure .ssh directory exists and install the key
-	cmd := fmt.Sprintf(
-		`mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo 'key installed'`,
-		strings.TrimSpace(pubKey),
+	args := installKeyArgs(ip, user, knownHostsPath)
+
+	out, err := runCommandWithEnvStdin(
+		sshpassBin,
+		[]string{"SSHPASS=" + password},
+		strings.TrimSpace(pubKey)+"\n",
+		args...,
 	)
-
-	args := []string{
-		"-p", password,
-		"ssh",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "ConnectTimeout=10",
-		"-o", "PreferredAuthentications=password",
-		"-o", "PubkeyAuthentication=no",
-		fmt.Sprintf("%s@%s", user, ip),
-		cmd,
-	}
-
-	out, err := runCommand(sshpassBin, args...)
 	if err != nil {
-		return fmt.Errorf("sshpass failed: %w (%s)", err, out)
+		return fmt.Errorf("installing the SSH key over password authentication failed: %w (%s)", err, strings.TrimSpace(out))
 	}
 	if !strings.Contains(out, "key installed") {
-		return fmt.Errorf("unexpected output: %s", out)
+		return fmt.Errorf("the VPS did not confirm the key was installed: %s", strings.TrimSpace(out))
 	}
 	return nil
 }

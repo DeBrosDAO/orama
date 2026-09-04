@@ -145,40 +145,25 @@ sudo rm -f /usr/local/bin/orama-sni-router
 
 ## Multi-Node Clean
 
-To clean all nodes at once from your local machine:
+Use the CLI. It resolves the environment's nodes and authenticates with the
+wallet-derived SSH key held in RootWallet, so no password is ever typed,
+pasted into a script, or left in shell history:
 
 ```bash
-# Define your nodes
-NODES=(
-  "ubuntu@141.227.165.168:password1"
-  "ubuntu@141.227.165.154:password2"
-  "ubuntu@141.227.156.51:password3"
-)
-
-for entry in "${NODES[@]}"; do
-  IFS=: read -r userhost pass <<< "$entry"
-  echo "Cleaning $userhost..."
-  sshpass -p "$pass" ssh -o StrictHostKeyChecking=no "$userhost" 'bash -s' << 'CLEAN'
-sudo systemctl stop orama-node 2>/dev/null
-sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
-sudo systemctl disable orama-node 2>/dev/null
-sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
-sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
-sudo rm -f /etc/systemd/system/orama-*.service /etc/systemd/system/orama-*.timer /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service /etc/systemd/system/ntfy.service
-sudo systemctl daemon-reload
-sudo systemctl stop wg-quick@wg0 2>/dev/null
-sudo wg-quick down wg0 2>/dev/null
-sudo systemctl disable wg-quick@wg0 2>/dev/null
-sudo rm -f /etc/wireguard/wg0.conf
-sudo ufw --force reset && sudo ufw allow 22/tcp && sudo ufw --force enable
-sudo rm -rf /opt/orama
-sudo userdel -r orama 2>/dev/null
-sudo rm -rf /home/orama
-sudo rm -f /etc/sudoers.d/orama-namespaces /etc/sudoers.d/orama-access /etc/sudoers.d/orama-deployments /etc/sudoers.d/orama-wireguard
-sudo rm -rf /etc/coredns /etc/caddy /var/lib/caddy
-sudo rm -f /tmp/orama /tmp/network-source.tar.gz
-sudo rm -rf /tmp/network-extract /tmp/coredns-build /tmp/caddy-build
-echo "Done"
-CLEAN
-done
+orama node wipe --env testnet                  # every node in the environment
+orama node wipe --env testnet --node 1.2.3.4   # one node
+orama node wipe --env testnet --nuclear        # also remove shared binaries
 ```
+
+`wipe` erases the target only. If the node is still part of a running cluster,
+use `decommission` instead — it removes the node from the cluster first (raft
+membership, WireGuard peers, DNS) and then erases it, which `wipe` does not do:
+
+```bash
+orama node decommission --env testnet --node 1.2.3.4
+orama node decommission --env testnet --node 1.2.3.4 --offline   # VPS already gone
+```
+
+The manual steps earlier in this document remain useful for a node the CLI
+cannot reach — one whose SSH key is lost, or that was never enrolled. Run them
+over your own SSH session on that host.
