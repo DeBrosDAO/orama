@@ -532,6 +532,9 @@ orama function logs my-function
 
 ## CLI Reference
 
+Every flag of every command is in the [CLI reference](CLI_REFERENCE.md), which
+is generated from the command tree.
+
 | Command | Description |
 |---------|-------------|
 | `orama function init <name>` | Scaffold a new function project |
@@ -543,6 +546,8 @@ orama function logs my-function
 | `orama function delete <name>` | Delete a function |
 | `orama function logs <name>` | View invocation logs |
 | `orama function versions <name>` | List function versions |
+| `orama function disable <name>` | Stop serving a function without deleting it |
+| `orama function enable <name>` | Serve a previously disabled function again |
 | `orama function secrets set <name> <value>` | Set an encrypted secret |
 | `orama function secrets list` | List secret names |
 | `orama function secrets delete <name>` | Delete a secret |

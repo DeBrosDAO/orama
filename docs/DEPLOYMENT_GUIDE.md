@@ -44,14 +44,44 @@ Orama Network provides a decentralized platform for deploying web applications a
 Before deploying, authenticate with your wallet:
 
 ```bash
-# Authenticate
+# Authenticate with your wallet
 orama auth login
 
-# Check authentication status
+# Who am I, and against which gateway?
 orama auth whoami
+orama auth status
 ```
 
 Your API key is stored securely and used for all deployment operations.
+
+One machine can hold credentials for several environments. `orama auth list`
+shows them, `orama auth switch` changes the active one, and `orama auth logout`
+clears it. Which gateway a command talks to is decided by the active
+environment — see `orama env` — not by a flag on each command.
+
+Every command and flag is in the [CLI reference](CLI_REFERENCE.md), which is
+generated from the command tree rather than written by hand.
+
+### API keys for your application
+
+Deploying uses your own credentials. An application that talks to the gateway at
+runtime needs a key of its own, and which one depends on where the code runs:
+
+```bash
+# Safe in a browser bundle: data-plane grants only
+orama namespace keys create --scope app-runtime --label web
+
+# Server-side only: the whole control plane
+orama namespace keys create --scope admin --label ci
+
+orama namespace keys list
+orama namespace keys revoke --id <id>
+```
+
+A key carries a set of grants and the gateway refuses an operation whose grant
+the key does not hold, naming the one it needed. `--scope` takes a profile
+(`invoke-only`, `app-runtime`, `admin`) or an explicit grant list. See
+[Where a key belongs](TS_SDK.md#where-a-key-belongs).
 
 ---
 
@@ -995,7 +1025,7 @@ Namespaces can enable WebRTC support for real-time communication (voice calls, v
 ### Enable WebRTC
 
 ```bash
-# Enable WebRTC for a namespace (must be run on a cluster node)
+# Enable WebRTC for a namespace
 orama namespace enable webrtc --namespace myapp
 
 # Check WebRTC status
@@ -1126,7 +1156,7 @@ orama auth status
 ### Need Help?
 
 - **Documentation**: Check `/docs` directory
-- **Logs**: Gateway logs at `~/.orama/logs/gateway.log`
+- **Logs**: `orama app logs <app>` for an application. The gateway's own log is at `~/.orama/logs/gateway.log` **on a node**, not on your machine — reach it with `orama node logs`.
 - **Issues**: Report bugs at GitHub repository
 - **Community**: Join our Discord/Telegram
 
@@ -1160,10 +1190,11 @@ orama auth status
 
 ## Next Steps
 
-- **Explore the API**: See `/docs/GATEWAY_API.md` for HTTP API details
-- **Advanced Features**: Custom domains (via gateway API, see [How Domains Work](#how-domains-work)); load balancing and autoscaling coming soon
+- **Every command and flag**: [CLI reference](CLI_REFERENCE.md), generated from the command tree
+- **Every gateway route**: [API surface](API_SURFACE.md), with which client owns each one
+- **Custom domains**: `orama domain add|verify|list|remove`, and [How Domains Work](#how-domains-work)
 - **Production Deployment**: Install nodes with `orama node install` for production clusters
-- **Client SDK**: Use the Go/JS SDK for programmatic deployments
+- **From code**: the [TypeScript SDK](TS_SDK.md) or the [Go client](GO_CLIENT_SDK.md)
 
 ---
 

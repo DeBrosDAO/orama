@@ -34,6 +34,11 @@ If a command fails with a RootWallet error, the message says what to do; the
 codes are listed in
 [Troubleshooting](COMMON_PROBLEMS.md#13-rootwallet-agent-locked-waiting-or-unreachable).
 
+Every command and flag the CLI defines is in the
+[CLI reference](CLI_REFERENCE.md), which is generated from the command tree and
+checked by a test, so it cannot drift from the code. This page covers the
+workflows.
+
 ## Building
 
 ```bash

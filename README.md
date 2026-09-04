@@ -41,6 +41,7 @@ make vault-build
 | [Go Client SDK](docs/GO_CLIENT_SDK.md) | The Go client for the same gateway |
 | [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
 | [API Surface](docs/API_SURFACE.md) | Every gateway route and which client owns it |
+| [CLI Reference](docs/CLI_REFERENCE.md) | Every command and flag, generated from the code |
 | [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
 
 ## Contributing

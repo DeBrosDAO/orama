@@ -45,6 +45,13 @@ jobs:
         working-directory: core
         run: go test -count=1 -run Contract ./...
 
+      # The CLI reference is generated from the cobra tree; this fails when the
+      # committed file and the tree disagree. It lives above the module too, so
+      # it needs the same -count=1.
+      - name: CLI reference is current
+        working-directory: core
+        run: go test -count=1 ./cmd/cli -run TestCLIReference
+
   sdk-build:
     name: SDK lint, typecheck, build, unit tests
     runs-on: ubuntu-latest
