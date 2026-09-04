@@ -398,11 +398,17 @@ deleted — both fixed in `wipe`.
 
 ### Push Options
 
+`orama push` and `orama node push` are the same command; so are `orama rollout`
+and `orama node rollout`, and `orama nodes` and `orama node list`.
+
 ```bash
-orama node push --env devnet                     # Fanout via hub (default, fastest)
-orama node push --env testnet --node 1.2.3.4     # Single node
-orama node push --env testnet --direct            # Sequential, no fanout
+orama push --env devnet                     # Fanout via hub (default, fastest)
+orama push --env testnet --node 1.2.3.4     # A single node from the inventory
+orama push --env testnet --direct           # Sequential, no fanout
+orama push --host 1.2.3.4                   # A node not in the inventory yet
 ```
+
+With no `--env`, push targets the active environment (`orama env current`).
 
 ### CLI Flags Reference
 
@@ -450,15 +456,20 @@ orama node push --env testnet --direct            # Sequential, no fanout
 | `--output <path>` | Output archive path |
 | `--verbose` | Verbose build output |
 
-#### `orama node push`
+#### `orama push` / `orama node push`
 
 | Flag | Description |
 |------|-------------|
-| `--env <env>` | Target environment (required) |
-| `--node <ip>` | Push to a single node only |
+| `--env <env>` | Target environment (default: the active one) |
+| `--node <ip>` | Push to a single node IP from the inventory |
+| `--host <ip>` | Push to a node that is not in the inventory yet |
+| `--user <user>` | SSH user for `--host` (default: root) |
 | `--direct` | Sequential upload (no hub fanout) |
 
-#### `orama node rollout`
+`--ip` and `--fanout` are deprecated. `--ip` is now `--host`; fanning out is the
+default, so `--fanout` is accepted and ignored, and `--direct` opts out.
+
+#### `orama rollout` / `orama node rollout`
 
 | Flag | Description |
 |------|-------------|

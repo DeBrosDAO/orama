@@ -7,7 +7,10 @@ import (
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show production service status",
+	Short: "Show the service status of the node on this machine",
+	Long: `Report the systemd units of the Orama node installed on this machine.
+
+For the health of your whole fleet from your own machine, use 'orama status'.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		status.Handle()
 	},

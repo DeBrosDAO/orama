@@ -52,9 +52,12 @@ type InspectOptions struct {
 	Timeout    time.Duration
 	Verbose    bool
 	OutputDir  string
-	AIEnabled  bool
-	AIModel    string
-	AIAPIKey   string
+	// Nodes, when set, is the fleet to inspect. The command resolves them so
+	// this package does not have to import the resolver (which imports it).
+	Nodes     []inspector.Node
+	AIEnabled bool
+	AIModel   string
+	AIAPIKey  string
 }
 
 // RunInspect inspects cluster health over SSH.
@@ -78,15 +81,16 @@ func RunInspect(opts InspectOptions) error {
 		os.Exit(1)
 	}
 
-	// Load nodes
-	nodes, err := inspector.LoadNodes(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
+	// Nodes come from the caller when it resolved them (the normal path), and
+	// from an explicit --config file otherwise.
+	nodes := opts.Nodes
+	if len(nodes) == 0 {
+		loaded, err := inspector.LoadNodes(*configPath)
+		if err != nil {
+			return fmt.Errorf("loading %s: %w", *configPath, err)
+		}
+		nodes = inspector.FilterByEnv(loaded, *env)
 	}
-
-	// Filter by environment
-	nodes = inspector.FilterByEnv(nodes, *env)
 	if len(nodes) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: no nodes found for environment %q\n", *env)
 		os.Exit(1)

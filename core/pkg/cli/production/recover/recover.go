@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -57,7 +58,7 @@ func (f *Flags) validate() error {
 }
 
 func execute(flags *Flags) error {
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := noderesolver.ResolveNodes(flags.Env)
 	if err != nil {
 		return err
 	}

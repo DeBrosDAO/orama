@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/cli"
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
@@ -26,20 +28,13 @@ func NewRemoteOrchestrator(flags *Flags) (*RemoteOrchestrator, error) {
 		return nil, fmt.Errorf("--vps-ip is required\nExample: orama node install --vps-ip 1.2.3.4 --nameserver --domain orama-testnet.network")
 	}
 
-	// Try to find this IP in nodes.conf for the correct user
-	user := resolveUser(flags.VpsIP)
-
-	node := inspector.Node{
-		User: user,
-		Host: flags.VpsIP,
-		Role: "node",
-	}
+	node := resolveTarget(flags.VpsIP)
 
 	// Prepare wallet-derived SSH key
 	nodes := []inspector.Node{node}
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare SSH key: %w\nEnsure you've run: rw vault ssh add %s/%s", err, flags.VpsIP, user)
+		return nil, fmt.Errorf("failed to prepare SSH key: %w\nEnsure you've run: rw vault ssh add %s/%s", err, node.Host, node.User)
 	}
 	// PrepareNodeKeys modifies nodes in place
 	node = nodes[0]
@@ -51,21 +46,33 @@ func NewRemoteOrchestrator(flags *Flags) (*RemoteOrchestrator, error) {
 	}, nil
 }
 
-// resolveUser looks up the SSH user for a VPS IP from nodes.conf.
-// Falls back to "root" if not found.
-func resolveUser(vpsIP string) string {
-	confPath := remotessh.FindNodesConf()
-	if confPath != "" {
-		nodes, err := inspector.LoadNodes(confPath)
-		if err == nil {
-			for _, n := range nodes {
-				if n.Host == vpsIP {
-					return n.User
-				}
-			}
+// resolveTarget describes the machine to install on.
+//
+// A node being installed is usually not in the inventory yet, which is the
+// point of the command, so the inventory is consulted only to pick up a
+// non-default SSH user for a machine that is already registered. This used to
+// read nodes.conf directly, a fourth node-lookup path that disagreed with the
+// resolver every other command uses.
+func resolveTarget(vpsIP string) inspector.Node {
+	env := ""
+	if active, err := cli.GetActiveEnvironment(); err == nil {
+		env = active.Name
+	}
+
+	node := noderesolver.NewNode(vpsIP, "", env)
+	node.Role = "node"
+
+	known, err := noderesolver.ResolveNodes(env)
+	if err != nil {
+		return node
+	}
+	for _, n := range known {
+		if n.Host == vpsIP {
+			n.Role = "node"
+			return n
 		}
 	}
-	return "root"
+	return node
 }
 
 // Execute runs the remote install process.

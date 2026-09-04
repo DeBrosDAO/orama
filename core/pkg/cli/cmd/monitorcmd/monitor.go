@@ -34,7 +34,7 @@ func init() {
 	Cmd.PersistentFlags().StringVar(&flagEnv, "env", "", "Environment: devnet, testnet, mainnet (required)")
 	Cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "Machine-readable JSON output")
 	Cmd.PersistentFlags().StringVar(&flagNode, "node", "", "Filter to specific node host/IP")
-	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "scripts/nodes.conf", "Path to nodes.conf")
+	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "", "Read nodes from this file instead of resolving them")
 	Cmd.MarkPersistentFlagRequired("env")
 
 	Cmd.AddCommand(liveCmd)

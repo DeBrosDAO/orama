@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 )
 
@@ -37,7 +38,7 @@ func (f *WipeFlags) validate() error {
 }
 
 func executeWipe(flags *WipeFlags) error {
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := noderesolver.ResolveNodes(flags.Env)
 	if err != nil {
 		return err
 	}

@@ -1,9 +1,11 @@
 package inspectcmd
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli"
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/spf13/cobra"
 )
 
@@ -16,13 +18,20 @@ var Cmd = &cobra.Command{
 	Long: `SSH into cluster nodes and run health checks.
 Supports AI-powered failure analysis and result export.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if inspectOpts.ConfigPath == "" {
+			nodes, err := noderesolver.ResolveNodes(inspectOpts.Env)
+			if err != nil {
+				return fmt.Errorf("resolve nodes for %q: %w", inspectOpts.Env, err)
+			}
+			inspectOpts.Nodes = nodes
+		}
 		return cli.RunInspect(inspectOpts)
 	},
 }
 
 func init() {
 	f := Cmd.Flags()
-	f.StringVar(&inspectOpts.ConfigPath, "config", "scripts/nodes.conf", "Path to nodes.conf")
+	f.StringVar(&inspectOpts.ConfigPath, "config", "", "Read nodes from this file instead of resolving them")
 	f.StringVar(&inspectOpts.Env, "env", "", "Environment to inspect (devnet, testnet)")
 	f.StringVar(&inspectOpts.Subsystem, "subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,anyone,all)")
 	f.StringVar(&inspectOpts.Format, "format", "table", "Output format (table, json)")

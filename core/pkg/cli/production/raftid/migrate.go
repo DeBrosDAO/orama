@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -108,7 +109,7 @@ type plan struct {
 func (p plan) NeedsMigration() bool { return p.Resume || p.CurrentID != p.PeerID }
 
 func execute(flags *Flags) error {
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := noderesolver.ResolveNodes(flags.Env)
 	if err != nil {
 		return err
 	}

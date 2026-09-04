@@ -54,7 +54,7 @@ Without a subcommand, launches the interactive TUI.
 | `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
 | `--json` | `false` | Machine-readable JSON output (for one-shot subcommands) |
 | `--node` | | Filter to a specific node host/IP |
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+| `--config` | *(resolver)* | Read nodes from this file instead of resolving them |
 
 ### Subcommands
 
@@ -394,7 +394,8 @@ journalctl -u orama-node --no-pager | grep -E 'namespace DNS round-robin'
 
 ## Configuration
 
-Uses the same `scripts/nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.
+Resolves nodes the same way the inspector does — network API first, `nodes.conf`
+as the fallback. See [INSPECTOR.md](INSPECTOR.md#configuration) for the file format.
 
 ## Prerequisites
 

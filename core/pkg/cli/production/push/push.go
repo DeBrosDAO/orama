@@ -7,15 +7,19 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/DeBrosOfficial/network/pkg/cli"
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
 // Flags holds push command flags.
 type Flags struct {
-	Env    string // Target environment (devnet, testnet)
-	Node   string // Single node IP (optional)
-	Direct bool   // Sequential upload to each node (no fanout)
+	Env    string // Target environment; empty means the active one
+	Node   string // Restrict to a single node IP from the inventory
+	Host   string // Push to a node that is not in the inventory
+	User   string // SSH user for Host (default root)
+	Direct bool   // Upload from here to each node in turn, instead of fanning out
 }
 
 // Run is the entry point for the push command.
@@ -27,10 +31,46 @@ func Run(flags *Flags) error {
 }
 
 func (f *Flags) validate() error {
-	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node push --env <devnet|testnet>")
+	if f.Env == "" && f.Host == "" {
+		return fmt.Errorf("specify --env <devnet|testnet> or --host <ip>")
 	}
 	return nil
+}
+
+// resolveTargets returns the nodes to push to.
+//
+// A --host names a machine that is not in the inventory yet, which is how a
+// node is seeded before it can be resolved. Otherwise the environment's nodes
+// come from the resolver, so this command sees the same fleet as every other.
+func resolveTargets(flags *Flags) ([]inspector.Node, error) {
+	env := flags.Env
+	if env == "" {
+		active, err := cli.GetActiveEnvironment()
+		if err != nil {
+			return nil, fmt.Errorf("no --env given and no active environment: %w", err)
+		}
+		env = active.Name
+	}
+
+	if flags.Host != "" {
+		return []inspector.Node{noderesolver.NewNode(flags.Host, flags.User, env)}, nil
+	}
+
+	nodes, err := noderesolver.ResolveNodes(env)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no nodes found for environment %q", env)
+	}
+
+	if flags.Node != "" {
+		nodes = remotessh.FilterByIP(nodes, flags.Node)
+		if len(nodes) == 0 {
+			return nil, fmt.Errorf("node %s not found in %s environment", flags.Node, env)
+		}
+	}
+	return nodes, nil
 }
 
 func execute(flags *Flags) error {
@@ -43,8 +83,7 @@ func execute(flags *Flags) error {
 	info, _ := os.Stat(archivePath)
 	fmt.Printf("Archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
 
-	// Resolve nodes
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := resolveTargets(flags)
 	if err != nil {
 		return err
 	}
@@ -56,15 +95,7 @@ func execute(flags *Flags) error {
 	}
 	defer cleanup()
 
-	// Filter to single node if specified
-	if flags.Node != "" {
-		nodes = remotessh.FilterByIP(nodes, flags.Node)
-		if len(nodes) == 0 {
-			return fmt.Errorf("node %s not found in %s environment", flags.Node, flags.Env)
-		}
-	}
-
-	fmt.Printf("Environment: %s (%d nodes)\n\n", flags.Env, len(nodes))
+	fmt.Printf("Targets: %d node(s)\n\n", len(nodes))
 
 	if flags.Direct || len(nodes) == 1 {
 		return pushDirect(archivePath, nodes)
