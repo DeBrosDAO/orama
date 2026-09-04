@@ -234,6 +234,13 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A key whose stored scope column is empty grants nothing. It used to grant `admin`
 - The WireGuard peer endpoints refuse when the gateway has no cluster secret, rather than treating "nothing to check against" as "nothing to check", and compare in constant time
 
+**Which routes need what**
+- Who may call what is decided by three hand-maintained lists of path prefixes — `isPublicPath`, `requiredScope` and `requiresNamespaceOwnership` — and nothing connects them to the routes they describe. A route can match none of them, or match two that contradict each other, and the only symptom is an endpoint answering the wrong thing to the wrong caller
+- That had already happened. `/v1/node/enroll` was exempted from the scope check because its handler validates and consumes a single-use invite token, and was never added to `isPublicPath`. The CLI sends that token as `Authorization: Bearer <token>`; the API-key middleware takes any non-JWT Bearer token as an API key, found nothing, and answered 401 — which the CLI reported as "invalid or expired invite token". Enrolling a node could not work, and the error blamed the token
+- Every registered route now carries an explicit classification — open to anyone, authenticated by its own handler, or needs a credential — and a test walks the route registrations and fails on a route nobody has classified, on a classification for a route that no longer exists, and on the contradictions: a handler-authenticated route that the middleware would refuse first, a credential route marked public, a public route carrying a scope or ownership requirement that can never run because both middlewares return early for a public path
+- This is not the fix. The fix is a policy declared where the route is registered, which is Phase 2; the classification is what keeps the lists honest until then
+- The middleware chain itself now has tests: anonymous, a runtime key, an admin key, a key from another namespace, a key the registry does not know, a signed-in wallet, and a wallet signed in to another namespace. Cross-namespace isolation had been covered only in a `//go:build e2e` suite that `make test` does not run, and `scopeMiddleware` and `authorizationMiddleware` were never invoked by a unit test at all
+
 ### Supply Chain
 
 **Binary Signing (Step 1.13)**

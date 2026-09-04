@@ -692,8 +692,17 @@ func isPublicPath(p string) bool {
 		return true
 	}
 
-	// Node join endpoint (auth handled by invite token in handler)
-	if p == "/v1/internal/join" {
+	// Node join and node enrollment (auth handled by the invite token in the
+	// handler, which validates and consumes it single-use).
+	//
+	// Enrollment was exempted from the scope check on exactly those grounds
+	// and then not listed here, so the API-key middleware got the request
+	// first. The CLI sends the invite token as `Authorization: Bearer
+	// <token>`; extractAPIKey takes any Bearer token that is not a JWT as an
+	// API key, looked it up, found nothing, and answered 401 — which the CLI
+	// reported as "invalid or expired invite token". Enrolling a node could
+	// not work, and the error blamed the token.
+	if p == "/v1/internal/join" || p == "/v1/node/enroll" {
 		return true
 	}
 
