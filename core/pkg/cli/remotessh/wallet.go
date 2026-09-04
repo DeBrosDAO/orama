@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -103,53 +102,6 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 		cleanupKeys(tmpDir, allKeyPaths)
 	}
 	return cleanup, nil
-}
-
-// LoadAgentKeys loads SSH keys for the given nodes into the system ssh-agent.
-// Used by push fanout to enable agent forwarding.
-// Retrieves private keys from the rootwallet agent and pipes them to ssh-add.
-func LoadAgentKeys(nodes []inspector.Node) error {
-	client := newClient()
-	ctx := context.Background()
-
-	// Deduplicate host/user pairs
-	seen := make(map[string]bool)
-	var targets []string
-	for _, n := range nodes {
-		var key string
-		if n.VaultTarget != "" {
-			key = n.VaultTarget
-		} else {
-			key = n.Host + "/" + n.User
-		}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		targets = append(targets, key)
-	}
-
-	if len(targets) == 0 {
-		return nil
-	}
-
-	for _, target := range targets {
-		host, user := parseVaultTarget(target)
-		data, err := client.GetSSHKey(ctx, host, user, "priv")
-		if err != nil {
-			return wrapAgentError(err, fmt.Sprintf("get key for %s", target))
-		}
-
-		// Pipe private key to ssh-add via stdin
-		cmd := exec.Command("ssh-add", "-")
-		cmd.Stdin = strings.NewReader(data.PrivateKey)
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("ssh-add failed for %s: %w", target, err)
-		}
-	}
-
-	return nil
 }
 
 // EnsureVaultEntry creates a wallet SSH entry if it doesn't already exist.

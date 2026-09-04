@@ -366,11 +366,40 @@ func TestResolveVaultPublicKey_notFound(t *testing.T) {
 	}
 }
 
-func TestLoadAgentKeys_emptyNodes(t *testing.T) {
-	mock := &mockClient{}
-	withMockClient(t, mock)
+// Wallet-derived node keys are handed to ssh only as ephemeral 0600 files that
+// PrepareNodeKeys zero-overwrites on cleanup. They must never be added to the
+// operator's ssh-agent: an agent holds a key until it is explicitly removed or
+// the agent dies, which outlives the deploy and defeats keeping the key in a
+// lockable vault. Push fanout stages each target's key on the hub and
+// authenticates with "-i <key> -o IdentitiesOnly=yes", so agent forwarding is
+// not needed by anything.
+//
+// This reads the package source because the property being protected is the
+// absence of code — a behavioural test cannot observe a call that is not there.
+func TestPackageNeverLoadsKeysIntoSSHAgent(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
 
-	if err := LoadAgentKeys(nil); err != nil {
-		t.Fatalf("expected no error for empty nodes, got: %v", err)
+	forbidden := map[string]string{
+		"ssh-add": "adds a wallet-derived key to the operator's ssh-agent, where it outlives the deploy",
+		`"-A"`:    "enables ssh agent forwarding, which exposes every loaded key to the remote host",
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for needle, why := range forbidden {
+			if strings.Contains(string(src), needle) {
+				t.Errorf("%s contains %s, which %s", name, needle, why)
+			}
+		}
 	}
 }

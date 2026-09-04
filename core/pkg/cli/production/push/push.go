@@ -93,11 +93,6 @@ func execute(flags *Flags) error {
 		return pushDirect(archivePath, nodes)
 	}
 
-	// Load keys into ssh-agent for fanout forwarding
-	if err := remotessh.LoadAgentKeys(nodes); err != nil {
-		return fmt.Errorf("load agent keys for fanout: %w", err)
-	}
-
 	return pushFanout(archivePath, nodes)
 }
 
