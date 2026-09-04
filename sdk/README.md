@@ -363,6 +363,32 @@ interface ClientConfig {
 }
 ```
 
+### Connecting to a gateway with an untrusted certificate
+
+Test clusters and staging environments often present a certificate your runtime
+does not trust — a Let's Encrypt staging certificate, or a self-signed one.
+Handle it by supplying a `fetch` that relaxes verification **for that connection
+only**:
+
+```typescript
+import { Agent, fetch as undiciFetch } from "undici";
+import { createClient } from "@debros/orama";
+
+const dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+
+const client = createClient({
+  baseURL: "https://gateway.staging.example",
+  apiKey: process.env.ORAMA_API_KEY,
+  fetch: (input, init) =>
+    undiciFetch(input as any, { ...init, dispatcher }) as unknown as Promise<Response>,
+});
+```
+
+The SDK never modifies your process's TLS settings. Setting
+`NODE_TLS_REJECT_UNAUTHORIZED=0` would turn off certificate verification for
+every HTTPS client in the same process — your database driver and payment SDK
+included — so scoping it to one dispatcher, as above, is the safe equivalent.
+
 ### Storage Adapters
 
 By default, credentials are stored in memory. For browser apps, use localStorage:

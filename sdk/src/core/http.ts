@@ -24,6 +24,29 @@ export interface HttpClientConfig {
   timeout?: number;
   maxRetries?: number;
   retryDelayMs?: number;
+  /**
+   * Replaces the `fetch` used for every request. Defaults to the platform's
+   * global `fetch`.
+   *
+   * This is also the supported way to reach a gateway presenting a certificate
+   * your runtime does not trust (a Let's Encrypt staging certificate, or a
+   * self-signed one in a test cluster). Build a fetch that relaxes
+   * verification for that connection only — for example, in Node:
+   *
+   * ```ts
+   * import { Agent, fetch as undiciFetch } from "undici";
+   * const dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+   * const client = createClient({
+   *   baseURL,
+   *   apiKey,
+   *   fetch: (input, init) => undiciFetch(input, { ...init, dispatcher }) as unknown as Promise<Response>,
+   * });
+   * ```
+   *
+   * The SDK never changes the process's TLS settings on your behalf: doing so
+   * would disable certificate verification for every other HTTPS client in the
+   * same process, not just for Orama.
+   */
   fetch?: typeof fetch;
   /**
    * Enable debug logging (includes full SQL queries and args). Default: false
@@ -34,29 +57,6 @@ export interface HttpClientConfig {
    * Use this to trigger gateway failover at the application layer.
    */
   onNetworkError?: NetworkErrorCallback;
-}
-
-/**
- * Create a fetch function with proper TLS configuration for staging certificates
- * In Node.js, we need to configure TLS to accept Let's Encrypt staging certificates
- */
-function createFetchWithTLSConfig(): typeof fetch {
-  // Check if we're in a Node.js environment
-  if (typeof process !== "undefined" && process.versions?.node) {
-    // For testing/staging/development: allow staging certificates
-    // Let's Encrypt staging certificates are self-signed and not trusted by default
-    const isDevelopmentOrStaging =
-      process.env.NODE_ENV !== "production" ||
-      process.env.DEBROS_ALLOW_STAGING_CERTS === "true" ||
-      process.env.DEBROS_USE_HTTPS === "true";
-
-    if (isDevelopmentOrStaging) {
-      // Allow self-signed/staging certificates
-      // WARNING: Only use this in development/testing environments
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-    }
-  }
-  return globalThis.fetch;
 }
 
 export class HttpClient {
@@ -75,8 +75,9 @@ export class HttpClient {
     this.timeout = config.timeout ?? 60000;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryDelayMs = config.retryDelayMs ?? 1000;
-    // Use provided fetch or create one with proper TLS configuration for staging certificates
-    this.fetch = config.fetch ?? createFetchWithTLSConfig();
+    // The platform's fetch, unless the caller supplied one. See the `fetch`
+    // option for how to reach a gateway with an untrusted certificate.
+    this.fetch = config.fetch ?? globalThis.fetch;
     this.debug = config.debug ?? false;
     this.onNetworkError = config.onNetworkError;
   }
