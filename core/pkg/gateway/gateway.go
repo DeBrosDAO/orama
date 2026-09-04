@@ -566,6 +566,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// of the revocations still in flight rather than growing forever.
 		deps.AuthService.Revocations().StartPruning(context.Background())
 
+		// Same reason, different table: every authenticated request can add to
+		// the audit trail, and it is replicated to every node, so without this
+		// it grows for ever (the shape of bug-237).
+		deps.AuthService.Audit().StartPruning(context.Background())
+
 		if on, oerr := deps.AuthService.RevokeOrphanedAPIKeys(context.Background()); oerr != nil {
 			logger.ComponentWarn(logging.ComponentGeneral, "revoke orphaned API keys failed", zap.Error(oerr))
 		} else if on > 0 {
@@ -624,6 +629,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	if deps.ORMClient != nil {
 		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
+		gw.joinHandler.SetAuditLog(deps.AuthService.Audit())
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
 		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
@@ -672,6 +678,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			logger.Logger,
 			baseDomain,
 			envCodec,
+			deps.AuthService.Audit(),
 		)
 		// Set node peer ID so deployments run on the node that receives the request
 		if gw.cfg.NodePeerID != "" {

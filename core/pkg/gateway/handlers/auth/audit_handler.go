@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
@@ -71,12 +73,34 @@ func (h *Handlers) AuditHandler(w http.ResponseWriter, r *http.Request) {
 	// An optional filter, checked against the actions this gateway records so
 	// a typo comes back as a refusal rather than an empty page.
 	action := strings.TrimSpace(r.URL.Query().Get("action"))
-	if action != "" && !knownAuditAction(action) {
+	if action != "" && !authsvc.IsAuditAction(action) {
 		writeError(w, http.StatusBadRequest, "unknown action: "+action)
 		return
 	}
 
-	entries, err := h.readAuditEvents(r.Context(), namespace, action, limit)
+	// Only this actor's events. The value is matched exactly, which is what
+	// makes it useful on a wallet.
+	principal := strings.TrimSpace(r.URL.Query().Get("principal"))
+
+	// Everything after a point in time. The value the API itself returns in
+	// created_at is accepted verbatim, so a follower can echo back the last
+	// row it saw without reformatting it.
+	since := ""
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		parsed, err := parseAuditSince(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		since = parsed
+	}
+
+	entries, err := h.readAuditEvents(r.Context(), namespace, auditFilter{
+		Action:    action,
+		Principal: principal,
+		Since:     since,
+		Limit:     limit,
+	})
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "the audit trail could not be read: "+err.Error())
 		return
@@ -89,15 +113,6 @@ func (h *Handlers) AuditHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func knownAuditAction(action string) bool {
-	for _, known := range authsvc.AuditActions {
-		if known == action {
-			return true
-		}
-	}
-	return false
-}
-
 // namespaceFromContext reads the namespace the caller's credential resolved to.
 func namespaceFromContext(r *http.Request) string {
 	if v := r.Context().Value(CtxKeyNamespaceOverride); v != nil {
@@ -108,8 +123,37 @@ func namespaceFromContext(r *http.Request) string {
 	return ""
 }
 
+// auditFilter is what a caller asked for. Every field is optional except the
+// limit, which the handler has already bounded.
+type auditFilter struct {
+	Action    string
+	Principal string
+	Since     string
+	Limit     int
+}
+
+// auditTimeLayout is how SQLite's CURRENT_TIMESTAMP renders, and so how
+// created_at compares: UTC, no zone, second resolution.
+const auditTimeLayout = "2006-01-02 15:04:05"
+
+// parseAuditSince normalises a caller's timestamp to the stored form.
+//
+// Comparing timestamps as strings is only correct when both sides are written
+// the same way, so an RFC3339 value is converted to UTC first rather than
+// compared as it arrived — "2026-01-01T00:00:00+02:00" sorts after every row
+// written that day if it is not.
+func parseAuditSince(raw string) (string, error) {
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC().Format(auditTimeLayout), nil
+	}
+	if t, err := time.Parse(auditTimeLayout, raw); err == nil {
+		return t.Format(auditTimeLayout), nil
+	}
+	return "", fmt.Errorf("since must be RFC3339 (2026-01-02T15:04:05Z) or %q, got %q", auditTimeLayout, raw)
+}
+
 // readAuditEvents returns this namespace's events, most recent first.
-func (h *Handlers) readAuditEvents(ctx context.Context, namespace, action string, limit int) ([]AuditEntry, error) {
+func (h *Handlers) readAuditEvents(ctx context.Context, namespace string, filter auditFilter) ([]AuditEntry, error) {
 	db := h.auditDB()
 	if db == nil {
 		return nil, errNoAuditDatabase
@@ -118,12 +162,20 @@ func (h *Handlers) readAuditEvents(ctx context.Context, namespace, action string
 	query := `SELECT action, actor, resource, result, ip, user_agent, metadata, created_at
 	          FROM audit_events WHERE namespace = ?`
 	args := []interface{}{namespace}
-	if action != "" {
+	if filter.Action != "" {
 		query += " AND action = ?"
-		args = append(args, action)
+		args = append(args, filter.Action)
+	}
+	if filter.Principal != "" {
+		query += " AND actor = ?"
+		args = append(args, filter.Principal)
+	}
+	if filter.Since != "" {
+		query += " AND created_at > ?"
+		args = append(args, filter.Since)
 	}
 	query += " ORDER BY created_at DESC, id DESC LIMIT ?"
-	args = append(args, limit)
+	args = append(args, filter.Limit)
 
 	res, err := db.Query(h.internalCtx(ctx), query, args...)
 	if err != nil {

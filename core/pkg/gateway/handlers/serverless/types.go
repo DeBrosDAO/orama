@@ -35,10 +35,14 @@ type ServerlessHandlers struct {
 	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
 	secretsManager serverless.SecretsManager
 	jwtVerifier    JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
+	audit          *auth.AuditLog
 	logger         *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
+//
+// audit records the deploy, delete and secret events; a nil one drops them,
+// which is the test case.
 //
 // engine, persistentMgr, and wsBridge may be nil — persistent-WS
 // functions then return 503 on upgrade, and bridged WS clients can't
@@ -55,6 +59,7 @@ func NewServerlessHandlers(
 	persistentMgr *persistent.Manager,
 	wsBridge *wsbridge.Bridge,
 	secretsManager serverless.SecretsManager,
+	audit *auth.AuditLog,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
 	return &ServerlessHandlers{
@@ -68,6 +73,7 @@ func NewServerlessHandlers(
 		persistentMgr:  persistentMgr,
 		wsBridge:       wsBridge,
 		secretsManager: secretsManager,
+		audit:          audit,
 		logger:         logger,
 	}
 }
@@ -272,4 +278,17 @@ func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
 	}
 
 	return ""
+}
+
+// recordAudit records one control-plane event for this namespace: who deployed,
+// deleted, or changed a secret, and when. Invokes are not recorded — they are
+// the data plane, and one row per call would fill a replicated table.
+func (h *ServerlessHandlers) recordAudit(r *http.Request, namespace, action, resource string) {
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Namespace: namespace,
+		Actor:     auth.ActorFromRequest(r),
+		Action:    action,
+		Resource:  resource,
+		Result:    auth.AuditSuccess,
+	})
 }

@@ -111,6 +111,7 @@ func newTestHandlers(reg serverless.FunctionRegistry) *ServerlessHandlers {
 		nil, // persistentMgr
 		nil, // wsBridge
 		nil, // secretsManager
+		nil, // audit
 		logger,
 	)
 }

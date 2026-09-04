@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -63,6 +64,10 @@ func (h *ServerlessHandlers) HandleSetSecret(w http.ResponseWriter, r *http.Requ
 		zap.String("namespace", namespace),
 		zap.String("name", req.Name),
 	)
+
+	// The name only. A secret's value is the one thing that must never reach a
+	// replicated table.
+	h.recordAudit(r, namespace, auth.AuditSecretSet, req.Name)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":   "Secret set",
@@ -139,6 +144,8 @@ func (h *ServerlessHandlers) HandleDeleteSecret(w http.ResponseWriter, r *http.R
 		zap.String("namespace", namespace),
 		zap.String("name", secretName),
 	)
+
+	h.recordAudit(r, namespace, auth.AuditSecretDeleted, secretName)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": "Secret deleted",

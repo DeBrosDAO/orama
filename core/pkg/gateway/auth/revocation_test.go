@@ -250,12 +250,8 @@ func TestRevocationList_prunesExpiredRows(t *testing.T) {
 	}
 
 	*clock = clock.Add(2 * time.Minute)
-	n, err := list.Prune(context.Background())
-	if err != nil {
+	if err := list.Prune(context.Background()); err != nil {
 		t.Fatalf("Prune: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("pruned %d rows, want 1", n)
 	}
 	db.mu.Lock()
 	remaining := len(db.rows)
@@ -278,12 +274,8 @@ func TestRevocationList_pruneLeavesLiveRows(t *testing.T) {
 	}
 
 	*clock = clock.Add(time.Minute)
-	n, err := list.Prune(context.Background())
-	if err != nil {
+	if err := list.Prune(context.Background()); err != nil {
 		t.Fatalf("Prune: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("pruned %d live rows", n)
 	}
 	db.mu.Lock()
 	remaining := len(db.rows)

@@ -850,6 +850,16 @@ Function Invocation:
    - Refresh token support
    - Claims-based authorization
 
+5. **The audit trail**
+   - `audit_events` records what changed and who changed it: sign-ins, keys,
+     grants, namespaces, deployments, functions, secrets, operator actions. It
+     is a Raft-replicated table, so a timer removes anything past 90 days —
+     without that it grows for ever
+   - Actors are never credentials. The JWT the API-key exchange mints carries
+     the key as its subject, so a non-wallet actor is recorded as a fingerprint
+   - `GET /v1/audit` and `orama audit [--follow]` read it, scoped to the
+     caller's own namespace. See `docs/SECURITY.md`
+
 ### Network Security (WireGuard Mesh)
 
 All inter-node communication is encrypted via a WireGuard VPN mesh:

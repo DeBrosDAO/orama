@@ -171,3 +171,78 @@ func TestAuditHandler_saysSoWhenItCannotRead(t *testing.T) {
 		t.Fatalf("an unreadable trail came back as an empty one: %s", rec.Body.String())
 	}
 }
+
+// `since` and `principal` are what make the trail answerable: "what has this
+// wallet done", "what has happened since I last looked".
+
+func TestAuditHandler_filtersByPrincipal(t *testing.T) {
+	db := &auditQueryDB{}
+	rec := httptest.NewRecorder()
+	auditHandlers(t, db).AuditHandler(rec, auditRequest("acme", "?principal=0xowner"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(db.lastSQL, "actor = ?") {
+		t.Fatalf("principal did not reach the query: %s", db.lastSQL)
+	}
+	if len(db.lastArgs) < 2 || db.lastArgs[1] != "0xowner" {
+		t.Errorf("args = %v, want the principal bound", db.lastArgs)
+	}
+}
+
+// The timestamps the table holds are SQLite's own — UTC, no zone — and they are
+// compared as strings. An offset that is not converted first sorts as if it
+// were UTC, so "since 00:00+02:00" would hide two hours of events.
+func TestAuditHandler_convertsSinceToTheStoredForm(t *testing.T) {
+	db := &auditQueryDB{}
+	rec := httptest.NewRecorder()
+	auditHandlers(t, db).AuditHandler(rec, auditRequest("acme", "?since=2026-09-04T12:00:00%2B02:00"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(db.lastSQL, "created_at > ?") {
+		t.Fatalf("since did not reach the query: %s", db.lastSQL)
+	}
+	if len(db.lastArgs) < 2 || db.lastArgs[1] != "2026-09-04 10:00:00" {
+		t.Errorf("bound %v, want the UTC stored form 2026-09-04 10:00:00", db.lastArgs)
+	}
+}
+
+// The created_at the API itself returns has to be accepted back, or --follow
+// cannot ask for "everything after the last row I saw".
+func TestAuditHandler_acceptsAStoredTimestampAsSince(t *testing.T) {
+	db := &auditQueryDB{}
+	rec := httptest.NewRecorder()
+	auditHandlers(t, db).AuditHandler(rec, auditRequest("acme", "?since=2026-09-04+10:00:00"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(db.lastArgs) < 2 || db.lastArgs[1] != "2026-09-04 10:00:00" {
+		t.Errorf("bound %v", db.lastArgs)
+	}
+}
+
+func TestAuditHandler_refusesAnUnreadableSince(t *testing.T) {
+	rec := httptest.NewRecorder()
+	auditHandlers(t, &auditQueryDB{}).AuditHandler(rec, auditRequest("acme", "?since=yesterday"))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+// An empty filter must not narrow anything: no actor clause, no time clause.
+func TestAuditHandler_withNoFiltersBindsOnlyTheNamespaceAndLimit(t *testing.T) {
+	db := &auditQueryDB{}
+	rec := httptest.NewRecorder()
+	auditHandlers(t, db).AuditHandler(rec, auditRequest("acme", ""))
+
+	if strings.Contains(db.lastSQL, "actor = ?") || strings.Contains(db.lastSQL, "created_at > ?") {
+		t.Errorf("an unfiltered read narrowed the query: %s", db.lastSQL)
+	}
+	if len(db.lastArgs) != 2 {
+		t.Errorf("args = %v, want namespace and limit only", db.lastArgs)
+	}
+}

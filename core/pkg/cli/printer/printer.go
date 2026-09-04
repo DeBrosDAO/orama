@@ -169,6 +169,31 @@ func (p *Printer) Table(headers []string, rows [][]string) error {
 	return nil
 }
 
+// Rows writes rows in the shape of a table already printed, without repeating
+// its header. It is what a `--follow` stream appends: the header belongs to the
+// first page, not to every batch after it.
+//
+// In JSON mode it writes the same objects Table would, so a follower reading
+// JSON gets one array per batch rather than a different shape from the first.
+//
+// Each batch is aligned on its own, so a wide value in a later one widens only
+// that batch: alignment across a stream would mean holding output back until
+// the stream ended, which is the opposite of what a follower is for.
+func (p *Printer) Rows(headers []string, rows [][]string) error {
+	if p.json {
+		return p.JSON(tableToObjects(headers, rows))
+	}
+
+	w := tabwriter.NewWriter(p.out, 0, 4, 2, ' ', 0)
+	for _, row := range rows {
+		fmt.Fprintln(w, strings.Join(row, "\t"))
+	}
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("write rows: %w", err)
+	}
+	return nil
+}
+
 // tableToObjects turns rows into one object per row, keyed by lowercased
 // header with spaces as underscores, so `NODE ID` becomes `node_id`.
 func tableToObjects(headers []string, rows [][]string) []map[string]string {

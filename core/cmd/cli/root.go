@@ -11,6 +11,7 @@ import (
 
 	// Command groups
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/app"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/auditcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/authcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/buildcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/dbcmd"
@@ -88,6 +89,9 @@ and interacting with the Orama distributed network.`,
 
 	// Auth commands
 	rootCmd.AddCommand(authcmd.Cmd)
+
+	// The audit trail
+	rootCmd.AddCommand(auditcmd.Cmd)
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)

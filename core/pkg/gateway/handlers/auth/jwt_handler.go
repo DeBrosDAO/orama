@@ -195,7 +195,7 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 
 	h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
 		Namespace: req.Namespace,
-		Actor:     subject,
+		Actor:     authsvc.RedactSubject(subject),
 		Action:    authsvc.AuditRefreshed,
 		Result:    authsvc.AuditSuccess,
 	})
@@ -278,8 +278,11 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 
 	actor := subject
 	if actor == "" && claims != nil {
-		actor = strings.TrimSpace(claims.Sub)
+		actor = claims.Sub
 	}
+	// A subject is not necessarily an identity: the exchange endpoint mints
+	// tokens whose subject is the API key itself.
+	actor = authsvc.RedactSubject(actor)
 	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
 		Namespace: req.Namespace,
 		Actor:     actor,

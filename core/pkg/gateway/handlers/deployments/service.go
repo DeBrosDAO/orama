@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -40,6 +41,10 @@ type DeploymentService struct {
 	// database passwords sat in a Raft-replicated table and in every backup of
 	// it.
 	envCodec *deployments.EnvCodec
+
+	// audit records who deployed and who deleted. A nil one drops the event,
+	// which is the test case; a gateway always has one.
+	audit *auth.AuditLog
 }
 
 // NewDeploymentService creates a new deployment service.
@@ -54,6 +59,7 @@ func NewDeploymentService(
 	logger *zap.Logger,
 	baseDomain string,
 	envCodec *deployments.EnvCodec,
+	audit *auth.AuditLog,
 ) *DeploymentService {
 	return &DeploymentService{
 		db:              db,
@@ -63,7 +69,21 @@ func NewDeploymentService(
 		logger:          logger,
 		baseDomain:      baseDomain,
 		envCodec:        envCodec,
+		audit:           audit,
 	}
+}
+
+// RecordAudit records one deployment-plane event. Every handler in this package
+// reaches the audit trail through here: they all hold the service and none of
+// them holds the log.
+func (s *DeploymentService) RecordAudit(r *http.Request, namespace, action, resource string) {
+	s.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Namespace: namespace,
+		Actor:     auth.ActorFromRequest(r),
+		Action:    action,
+		Resource:  resource,
+		Result:    auth.AuditSuccess,
+	})
 }
 
 // EncodeEnvironment returns the stored form of a deployment's environment.

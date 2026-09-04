@@ -30,6 +30,7 @@ func newTestService(baseDomain string) *DeploymentService {
 		zap.NewNop(),        // silent logger
 		baseDomain,
 		testEnvCodec(),
+		nil, // audit — these tests do not record
 	)
 }
 

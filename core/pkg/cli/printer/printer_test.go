@@ -3,6 +3,7 @@ package printer
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -172,5 +173,40 @@ func TestWithJSON_does_not_mutate_the_original(t *testing.T) {
 
 	if p.JSONMode() {
 		t.Error("WithJSON must return a copy, not change the receiver")
+	}
+}
+
+// Rows continues a table already printed. It exists for --follow: a header on
+// every batch is noise in a stream, and a JSON reader needs the same object
+// shape in the second batch as in the first.
+func TestRows_writesNoHeader(t *testing.T) {
+	var out bytes.Buffer
+	p := New(&out, io.Discard)
+
+	if err := p.Rows([]string{"TIME", "ACTION"}, [][]string{{"10:00", "key.issue"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "TIME") || strings.Contains(got, "ACTION") {
+		t.Errorf("the header was repeated: %q", got)
+	}
+	if !strings.Contains(got, "key.issue") {
+		t.Errorf("the row is missing: %q", got)
+	}
+}
+
+func TestRows_inJSONModeKeysByTheHeader(t *testing.T) {
+	var out bytes.Buffer
+	p := New(&out, io.Discard).WithJSON(true)
+
+	if err := p.Rows([]string{"TIME", "ACTION"}, [][]string{{"10:00", "key.issue"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]string
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", out.String(), err)
+	}
+	if len(got) != 1 || got[0]["action"] != "key.issue" || got[0]["time"] != "10:00" {
+		t.Errorf("got %v", got)
 	}
 }

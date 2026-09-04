@@ -270,20 +270,16 @@ func (r *RevocationList) Refresh(ctx context.Context) {
 }
 
 // Prune deletes rows whose tokens have all expired. Returns how many went.
-func (r *RevocationList) Prune(ctx context.Context) (int, error) {
+func (r *RevocationList) Prune(ctx context.Context) error {
 	db := r.database()
 	if db == nil {
-		return 0, nil
+		return nil
 	}
 	internalCtx := client.WithInternalAuth(ctx)
-	res, err := db.Query(internalCtx, "DELETE FROM revoked_tokens WHERE expires_at <= ?", r.now().Unix())
-	if err != nil {
-		return 0, fmt.Errorf("prune expired revocations: %w", err)
+	if _, err := db.Query(internalCtx, "DELETE FROM revoked_tokens WHERE expires_at <= ?", r.now().Unix()); err != nil {
+		return fmt.Errorf("prune expired revocations: %w", err)
 	}
-	if res == nil {
-		return 0, nil
-	}
-	return int(res.Count), nil
+	return nil
 }
 
 // StartPruning removes expired rows on a timer until ctx is done.
@@ -299,7 +295,7 @@ func (r *RevocationList) StartPruning(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := r.Prune(ctx); err != nil && r.logger != nil {
+				if err := r.Prune(ctx); err != nil && r.logger != nil {
 					r.logger.ComponentWarn(logging.ComponentGeneral,
 						"could not prune expired token revocations", zap.Error(err))
 				}

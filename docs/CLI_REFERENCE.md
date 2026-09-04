@@ -26,6 +26,7 @@ is the index.
   - [`orama app logs`](#orama-app-logs) — Stream deployment logs
   - [`orama app rollback`](#orama-app-rollback) — Rollback a deployment to a previous version
   - [`orama app stats`](#orama-app-stats) — Show resource usage for a deployment
+- [`orama audit`](#orama-audit) — Read this namespace's audit trail
 - [`orama auth`](#orama-auth) — Authentication management
   - [`orama auth list`](#orama-auth-list) — List all stored credentials
   - [`orama auth login`](#orama-auth-login) — Authenticate with wallet
@@ -278,6 +279,31 @@ Show resource usage for a deployment
 ```
 orama app stats <name>
 ```
+
+### orama audit
+
+Read this namespace's audit trail
+
+```
+orama audit [flags]
+```
+
+Print what has happened in a namespace: sign-ins, keys minted and revoked,
+grants given and taken away, deployments, functions, secrets and namespace changes.
+
+Events are shown oldest first. --follow keeps the command running and prints new
+ones as they are recorded.
+
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, grant.add, grant.revoke, namespace.transfer
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--action` | — | Show only this action |
+| `--limit` | `0` | How many events to fetch at once (default 50, max 200) |
+| `--namespace` | — | Namespace name |
+| `--principal` | — | Show only what this wallet or key did |
+| `--since` | — | Show only what happened after this time (RFC3339, or the created_at of a row) |
+| `-f`, `--follow` | `false` | Keep running and print new events as they are recorded |
 
 ### orama auth
 

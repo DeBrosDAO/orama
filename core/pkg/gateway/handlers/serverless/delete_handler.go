@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
@@ -32,6 +33,8 @@ func (h *ServerlessHandlers) DeleteFunction(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
+
+	h.recordAudit(r, namespace, auth.AuditFunctionDeleted, name)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Function deleted successfully",

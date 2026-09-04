@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/overlay"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -89,7 +90,16 @@ type Handler struct {
 	logger       *zap.Logger
 	rqliteClient rqlite.Client
 	oramaDir     string // e.g., /opt/orama/.orama
+
+	// audit records the joins. This endpoint hands a caller every secret the
+	// cluster holds, so it is the single most consequential thing that
+	// happens on it.
+	audit *auth.AuditLog
 }
+
+// SetAuditLog wires the record. Set by the gateway after construction; nil
+// leaves the joins unrecorded, which is the test case.
+func (h *Handler) SetAuditLog(a *auth.AuditLog) { h.audit = a }
 
 // NewHandler creates a new join handler
 func NewHandler(logger *zap.Logger, rqliteClient rqlite.Client, oramaDir string) *Handler {
@@ -351,6 +361,14 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("node joined cluster",
 		zap.String("wg_ip", wgIP),
 		zap.String("public_ip", req.PublicIP))
+
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Actor:    h.tokenOperatorWallet(r.Context(), req.Token),
+		Action:   auth.AuditOperatorAction,
+		Resource: "join",
+		Result:   auth.AuditSuccess,
+		Metadata: map[string]string{"wg_ip": wgIP, "public_ip": req.PublicIP},
+	})
 }
 
 // assertTokenLive reports whether the token exists, is unused and unexpired,

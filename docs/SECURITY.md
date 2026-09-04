@@ -293,11 +293,18 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 
 **The record**
 - `audit_events` has existed since the first migration and had never been written to. Nothing recorded who minted a key, who was granted what, who revoked it, or who signed in — so the first question anyone asks about a credential, when did this appear and who made it, had no answer anywhere
-- Recorded now: a challenge issued, a sign-in succeeding or failing, a refresh, the refresh-replay tripwire, a logout, a key minted or revoked, the legacy-key sweep, a namespace created, an operator minting an invite. Each with the actor, the namespace, the client's address, the user agent and whether it succeeded
+- Recorded now: a challenge issued, a sign-in succeeding or failing, a refresh, the refresh-replay tripwire, a logout, a key minted, rotated or revoked, the legacy-key sweep, a grant added or revoked, an ownership transfer, a namespace created or deleted, a function deployed or deleted, an app deployed or deleted, a secret set or deleted, an operator minting an invite, a node joining the cluster and a node being claimed. Each with the actor, the namespace, the client's address, the user agent and whether it succeeded
+- The list is `auth.AuditActions`, and two tests hold it to the code: one fails if an action is declared without being listed, the other walks the tree and fails if an action is advertised that nothing records. An action `orama audit --action` accepts and nothing ever writes is a promise the trail does not keep
+- The actor is never a credential. The JWT minted by the API-key exchange carries the key ITSELF as its subject, so a handler that recorded the subject verbatim would put a live key in a replicated table that every owner can read back. A wallet is kept; anything else is recorded as a fingerprint that groups one caller's events without revealing what it is
+- A secret is recorded by name. Its value never reaches the table, and a test fails if it does
+- Deleting a namespace is recorded at cluster level rather than against the namespace. Names are reusable, and whoever creates the name next would otherwise open their trail on the previous tenant's wallet
 - A refused request is deliberately **not** recorded. One row per 401 would let anyone with a network connection fill a Raft-replicated table
 - The table's old shape could not hold these: `namespace_id` was `NOT NULL` with a foreign key, so an attempt against a namespace that does not exist — exactly the interesting case — could not be written. It is a name now, nullable, with `result` and `user_agent` as columns
 - Readable at `GET /v1/audit`, admin grant, and the namespace comes from the caller's own credential rather than the query string: reading another namespace's trail would say who its owners are and when they sign in
 - A failed write is logged, not returned. The record is evidence, not a control; refusing a login because the audit row could not be written would turn a database blip into an outage
+- `?action=`, `?principal=` and `?since=` narrow it. `since` takes RFC3339 or the `created_at` a row came back with, and is converted to UTC before it is compared: the timestamps are compared as strings, so an unconverted offset would hide events
+- Events are kept 90 days and a timer removes the rest, 5000 at a time. The table is replicated to every node and every authenticated request can add to it, so without this it grows for ever — the shape of bug-237. Its rows go when the namespace does
+- `orama audit` reads it from a terminal, and `orama audit --follow` tails it
 
 **Saying why a request was refused**
 - A 401 had at least six distinct causes and told them apart only by an English string, so nothing could distinguish "you sent nothing" from "your key was revoked" from "your token expired" without matching on prose. That is what cost days on bug-160 and bug-164
