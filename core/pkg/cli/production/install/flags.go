@@ -1,5 +1,12 @@
 package install
 
+import (
+	"regexp"
+	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
+)
+
 // Flags represents install command flags
 type Flags struct {
 	VpsIP         string
@@ -40,3 +47,27 @@ type Flags struct {
 }
 
 // ParseFlags parses install command flags
+
+// operatorWalletPattern is a 0x-prefixed 20-byte EVM address.
+var operatorWalletPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+
+// validateOperatorWallet refuses an --operator-wallet that is not an address.
+//
+// The value used to be a free-form string written into node.yaml and echoed
+// into a dns_nodes column, so a typo produced a node nobody owned and nothing
+// said so. It seeds the cluster's operator list now (migration 044), and an
+// operator list built from typos is an operator list nobody is on.
+func (f *Flags) validateOperatorWallet() error {
+	wallet := strings.TrimSpace(f.OperatorWallet)
+	if wallet == "" {
+		return nil
+	}
+	if !operatorWalletPattern.MatchString(wallet) {
+		return clierr.Usage("--operator-wallet %q is not a wallet address: expected 0x "+
+			"followed by 40 hex characters.\n"+
+			"  This address becomes an operator of the cluster, so a typo means "+
+			"nobody can mint an invite or list nodes.", wallet)
+	}
+	f.OperatorWallet = strings.ToLower(wallet)
+	return nil
+}

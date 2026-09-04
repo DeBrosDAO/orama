@@ -223,3 +223,20 @@ func TestUnpinException_decision(t *testing.T) {
 		t.Error("upload must keep the strict wallet-JWT requirement, not the unpin exception")
 	}
 }
+
+// Minting a cluster invite hands the holder every secret the cluster has, and
+// the JWT signing key is derived from one of them. These paths had no entry at
+// all, so they fell through to "any valid credential is enough" — and a key out
+// of a public app bundle is a valid credential.
+func TestRequiredScope_operatorEndpointsNeedAdmin(t *testing.T) {
+	for _, path := range []string{
+		"/v1/operator/invite",
+		"/v1/operator/nodes",
+		"/v1/operator/node/register",
+	} {
+		if got := requiredScope("POST", path); got != auth.ScopeAdmin {
+			t.Errorf("requiredScope(%s) = %q, want %q — an invoke-only key must not "+
+				"reach it", path, got, auth.ScopeAdmin)
+		}
+	}
+}

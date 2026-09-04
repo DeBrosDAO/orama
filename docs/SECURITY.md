@@ -32,6 +32,16 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Caddy strips all six headers on the way up (`header_up -X-Internal-Auth-*` in every `reverse_proxy` block) as defence in depth: two independent places have to fail before a forged header is believed
 - A gateway with no cluster secret derives no key. It trusts no internal-auth header, and it refuses to proxy a request it cannot sign rather than forwarding an assertion it cannot back
 
+**Operating the cluster (`/v1/operator/*`)**
+- Minting a cluster invite, listing the cluster's nodes and claiming a node require the `admin` grant **and** a wallet on the cluster's operator list (`operators` table). The endpoints had no scope entry and no ownership entry, so they fell through to "any valid credential is enough" — and an invite token is handed every secret the cluster holds, including the cluster secret the JWT signing key is derived from. A key extracted from a public app bundle reached it
+- The list is seeded at migration 044 from `dns_nodes.operator_wallet`, which is what `orama node install --operator-wallet` writes. That flag is validated as a `0x` + 40-hex address and normalised, because it used to be a free-form string a typo could silently ruin
+- A cluster with an empty operator list refuses every operator endpoint. An unreadable list refuses too: not knowing whether someone is an operator is not permission to treat them as one
+- **Residual, closed by Phase 1/3:** a wallet is still resolved from a bare API key (`namespace_ownership` → the namespace's owner), because the CLI authenticates with an API key rather than a wallet session. So an *admin* key belonging to a namespace whose owner is an operator still reaches these endpoints. The scope requirement closes the app-bundle path; separating an operator credential from a namespace-admin credential is the device-flow login and key-profile work
+
+**Invite tokens**
+- Stored as `sha256:<hex>` of the token, never the token. The column was the raw token as a primary key, so a disk snapshot, a raw rqlite query or the export endpoint yielded a credential for the whole cluster. Migration 044 deletes every plaintext row rather than converting it — SQLite cannot hash — so an unconsumed invite has to be re-minted once
+- Maximum lifetime is one hour, down from seven days. An invite is a credential for every secret the cluster has, and a week outlived the reason it was minted
+
 **Node join (`/v1/internal/join`)**
 - An invite token is checked for liveness before any work is done on its behalf, and consumed atomically only once the request is known to be serviceable
 - A join is refused if the public IP, WireGuard key or peer id is already registered to a node that is up — liveness being `confirmed_at` **or** a `dns_nodes` row at the same overlay address, since a node on an older binary clears its own `confirmed_at`

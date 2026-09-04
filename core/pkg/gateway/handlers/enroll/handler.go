@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"net"
 	"net/http"
 	"os"
@@ -220,7 +221,7 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) consumeToken(ctx context.Context, token, usedByIP string) error {
 	result, err := h.rqliteClient.Exec(ctx,
 		"UPDATE invite_tokens SET used_at = datetime('now'), used_by_ip = ? WHERE token = ? AND used_at IS NULL AND expires_at > datetime('now')",
-		usedByIP, token)
+		usedByIP, operator.HashInviteToken(token))
 	if err != nil {
 		return fmt.Errorf("database error: %w", err)
 	}

@@ -20,6 +20,9 @@ func Run(flags *Flags) error {
 	if err := flags.applyInvite(); err != nil {
 		return err
 	}
+	if err := flags.validateOperatorWallet(); err != nil {
+		return err
+	}
 	if err := flags.resolveBaseDomain(); err != nil {
 		return err
 	}

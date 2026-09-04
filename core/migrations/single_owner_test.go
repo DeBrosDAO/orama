@@ -13,10 +13,7 @@ package migrations_test
 
 import (
 	"database/sql"
-	"io/fs"
-	"strings"
 	"testing"
-	"testing/fstest"
 
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -24,42 +21,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// migrationsBefore43 is the embedded migration set with 043 removed, so a test
-// can reach the schema as it was, seed the rows the bug produced, and then let
-// the real runner apply 043 over them.
-func migrationsBefore43(t *testing.T) fs.FS {
-	t.Helper()
-
-	entries, err := fs.ReadDir(migrations.FS, ".")
-	if err != nil {
-		t.Fatalf("read embedded migrations: %v", err)
-	}
-
-	out := fstest.MapFS{}
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".sql") || strings.HasPrefix(name, "043_") {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		out[name] = &fstest.MapFile{Data: body}
-	}
-	if len(out) == 0 {
-		t.Fatal("no migrations before 043 — the filter is wrong")
-	}
-	return out
-}
-
 // takenOverRegistry is a database in the state the bug produced: one namespace
 // with three wallet owners, another with one, and keys minted with no scopes.
 func takenOverRegistry(t *testing.T) *sql.DB {
 	t.Helper()
 	db := openRoundtripDB(t)
 
-	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrationsBefore43(t), zap.NewNop()); err != nil {
+	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrationsBefore(t, "043"), zap.NewNop()); err != nil {
 		t.Fatalf("apply migrations before 043: %v", err)
 	}
 

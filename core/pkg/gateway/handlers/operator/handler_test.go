@@ -166,7 +166,10 @@ func TestHandleRegister_noAuth(t *testing.T) {
 }
 
 func TestHandleRegister_missingFields(t *testing.T) {
-	h := NewHandler(nil, nil)
+	// Authorization runs first now, so the caller has to be an operator before
+	// the request body is looked at: an unauthorized caller should not learn
+	// which inputs are valid.
+	h, _ := operatorHandler(t, "0xabc")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/operator/node/register", strings.NewReader(`{}`))
 	claims := &auth.JWTClaims{Sub: "0xabc"}
@@ -180,7 +183,7 @@ func TestHandleRegister_missingFields(t *testing.T) {
 }
 
 func TestHandleRegister_invalidEnvironment(t *testing.T) {
-	h := NewHandler(nil, nil)
+	h, _ := operatorHandler(t, "0xabc")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/operator/node/register",
 		strings.NewReader(`{"node_id":"test","environment":"<script>alert(1)</script>"}`))
@@ -195,7 +198,7 @@ func TestHandleRegister_invalidEnvironment(t *testing.T) {
 }
 
 func TestHandleRegister_invalidRole(t *testing.T) {
-	h := NewHandler(nil, nil)
+	h, _ := operatorHandler(t, "0xabc")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/operator/node/register",
 		strings.NewReader(`{"node_id":"test","role":"admin"}`))

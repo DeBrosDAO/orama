@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"github.com/DeBrosOfficial/network/pkg/invite"
 	"net/http"
 	"os"
@@ -112,11 +113,15 @@ func readNodeDomain() (string, error) {
 	return config.Node.Domain, nil
 }
 
-// insertToken inserts an invite token into RQLite via HTTP API using parameterized queries
+// insertToken inserts an invite token into RQLite via HTTP API using parameterized queries.
+//
+// What is stored is the hash. The token itself is printed to the operator once
+// and exists nowhere else — a registry that holds a usable invite token holds a
+// key to every secret the cluster has.
 func insertToken(token, createdBy, expiresAt string) error {
 	stmt := []interface{}{
 		"INSERT INTO invite_tokens (token, created_by, expires_at) VALUES (?, ?, ?)",
-		token, createdBy, expiresAt,
+		operator.HashInviteToken(token), createdBy, expiresAt,
 	}
 	payload, err := json.Marshal([]interface{}{stmt})
 	if err != nil {

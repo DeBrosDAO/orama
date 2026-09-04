@@ -37,9 +37,8 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallet := h.walletFromRequest(r)
-	if wallet == "" {
-		writeError(w, http.StatusUnauthorized, "wallet authentication required")
+	wallet, ok := h.requireOperator(w, r)
+	if !ok {
 		return
 	}
 

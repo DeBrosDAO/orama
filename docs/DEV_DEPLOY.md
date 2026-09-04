@@ -351,6 +351,34 @@ a namespace has several wallet owners today — which the takeover bug allowed �
 only the earliest survives the migration, and the others lose access to it. That
 is the fix, not a side effect: they should never have had it.
 
+#### Cutover: invite tokens and the operator list (migration 044)
+
+Migration 044 deletes every invite token in the registry. They were stored in
+plaintext, and SQLite has no hash function, so there is no way to convert them
+from inside a migration. **Any invite minted before the upgrade stops working**;
+re-mint with `orama node invite`. The maximum lifetime is also now one hour,
+down from seven days.
+
+It also creates the `operators` table and seeds it from
+`dns_nodes.operator_wallet` — what `orama node install --operator-wallet` wrote.
+`/v1/operator/*` refuses a wallet that is not on that list, so **a cluster
+installed without `--operator-wallet` seeds nothing and no one can mint an
+invite or list nodes** until a row is inserted:
+
+```sql
+INSERT INTO operators (wallet, added_by) VALUES (LOWER('0x…'), 'manual');
+```
+
+Check what was seeded before upgrading the first node:
+
+```bash
+sudo orama node logs node --since -5min | grep -i migration
+```
+
+```sql
+SELECT wallet, added_by FROM operators;
+```
+
 **Pattern B — pre-apply migrations explicitly via the CLI.**
 On any node:
 ```bash

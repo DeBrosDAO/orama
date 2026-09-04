@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"net"
 	"net/http"
 	"os"
@@ -375,7 +376,7 @@ func (h *Handler) assertTokenLive(ctx context.Context, token string) error {
 		`SELECT CASE WHEN used_at IS NOT NULL THEN 1 ELSE 0 END AS used,
 		        CASE WHEN expires_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END AS expired
 		   FROM invite_tokens WHERE token = ?`,
-		token); err != nil {
+		operator.HashInviteToken(token)); err != nil {
 		return fmt.Errorf("could not read the invite token: %w", err)
 	}
 
@@ -574,7 +575,7 @@ func (h *Handler) releaseToken(ctx context.Context, token string) {
 	// used_by_ip is deliberately kept: it is the record of who tried, and a
 	// failed attempt is exactly when that record matters.
 	if _, err := h.rqliteClient.Exec(ctx,
-		"UPDATE invite_tokens SET used_at = NULL WHERE token = ?", token); err != nil {
+		"UPDATE invite_tokens SET used_at = NULL WHERE token = ?", operator.HashInviteToken(token)); err != nil {
 		h.logger.Error("could not release the invite token after a failed join; it will need to be reissued",
 			zap.Error(err))
 		return
@@ -587,7 +588,7 @@ func (h *Handler) consumeToken(ctx context.Context, token, usedByIP string) erro
 	// Atomically mark as used — only succeeds if token exists, is unused, and not expired
 	result, err := h.rqliteClient.Exec(ctx,
 		"UPDATE invite_tokens SET used_at = datetime('now'), used_by_ip = ? WHERE token = ? AND used_at IS NULL AND expires_at > datetime('now')",
-		usedByIP, token)
+		usedByIP, operator.HashInviteToken(token))
 	if err != nil {
 		return fmt.Errorf("database error: %w", err)
 	}
@@ -611,7 +612,7 @@ func (h *Handler) tokenOperatorWallet(ctx context.Context, token string) string 
 		Wallet string `db:"operator_wallet"`
 	}
 	if err := h.rqliteClient.Query(ctx, &rows,
-		"SELECT COALESCE(operator_wallet, '') AS operator_wallet FROM invite_tokens WHERE token = ?", token); err != nil {
+		"SELECT COALESCE(operator_wallet, '') AS operator_wallet FROM invite_tokens WHERE token = ?", operator.HashInviteToken(token)); err != nil {
 		return ""
 	}
 	if len(rows) > 0 {

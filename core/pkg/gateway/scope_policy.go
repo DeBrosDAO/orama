@@ -122,6 +122,15 @@ func requiredScope(method, path string) string {
 	if path == "/v1/namespace/delete" || path == "/v1/namespace/list" {
 		return auth.ScopeAdmin
 	}
+	// Operating the cluster: minting a cluster invite, listing nodes, claiming
+	// a node. This had no entry at all and fell through to "any valid
+	// credential", so a key out of a public app bundle could mint an invite —
+	// and an invite is handed the cluster secret, the swarm key and every other
+	// secret the cluster holds. The handlers additionally require the caller's
+	// wallet to be on the operator list.
+	if strings.HasPrefix(path, "/v1/operator/") {
+		return auth.ScopeAdmin
+	}
 
 	// Default: a valid credential is enough; no elevated grant required.
 	return ""
