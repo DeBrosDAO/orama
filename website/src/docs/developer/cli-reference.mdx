@@ -37,6 +37,53 @@ The build runs in the `core/` module and outputs binaries to `core/bin/`. You ca
 | Flag | Description |
 |------|-------------|
 | `--help` | Show help for any command |
+| `--json` | Print machine-readable JSON instead of tables and status lines |
+
+`--json` works on every command, not only the ones that render a table. A
+command that prints a table emits one JSON object per row, keyed by the column
+headers lowercased with spaces as underscores, so `NODE ID` becomes `node_id`.
+Commands that forward a gateway reply print it verbatim, so a field the CLI
+does not render is still there for whatever is parsing it.
+
+Status lines and progress output are suppressed under `--json`, so the output
+is one parseable document.
+
+## Colour and emoji
+
+Colour and emoji appear only when the output is a terminal. Piping to a file,
+to `grep`, or into a CI log gives plain ASCII markers (`OK`, `WARN`, `ERROR`)
+instead. Setting `NO_COLOR` to any value, including empty, turns styling off
+even on a terminal ([no-color.org](https://no-color.org)).
+
+## Exit Codes
+
+Every failure used to exit `1`, so a script could not tell a mistyped flag from
+a cluster that had lost quorum. The codes are now:
+
+| Code | Meaning | Worth retrying? |
+|------|---------|-----------------|
+| `0` | Success | — |
+| `1` | Failed, with no more specific classification | Maybe |
+| `2` | The command line was wrong: a missing flag, a bad value, an unknown subcommand | No |
+| `3` | Not authenticated, or the credential is not permitted. Run `orama auth login` | No, until you log in |
+| `4` | The named thing does not exist | No |
+| `5` | The gateway or a node could not be reached | Yes |
+| `6` | The cluster refused because doing it would break an invariant, most often quorum | No, not unchanged |
+| `7` | You declined a confirmation. Nothing happened | — |
+
+## Version
+
+```bash
+orama version
+# orama 0.122.108
+```
+
+The version is compiled in, so `go build`, `go install` and a release build all
+report the real number. A release build additionally stamps the commit and the
+build date.
+
+`orama node upgrade` expects the CLI and the node to be on the same version.
+See [Release & Rollout](/docs/developer/release-and-rollout).
 
 ---
 

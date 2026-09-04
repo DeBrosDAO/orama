@@ -11,9 +11,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -33,9 +33,8 @@ func Run(flags *Flags) error {
 	} else {
 		fetchedCode, err := fetchRegistrationCode(flags.NodeIP)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not reach OramaOS node: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Make sure the node is booted and port 9999 is reachable.\n")
-			os.Exit(1)
+			return clierr.Unavailable("could not reach the OramaOS node: %w\n"+
+				"  Make sure the node is booted and port 9999 is reachable", err)
 		}
 		code = fetchedCode
 	}
@@ -46,8 +45,7 @@ func Run(flags *Flags) error {
 	fmt.Printf("Sending enrollment to Gateway at %s...\n", flags.GatewayURL)
 
 	if err := enrollWithGateway(flags.GatewayURL, flags.Token, code, flags.NodeIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: enrollment failed: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("enrollment failed: %w", err)
 	}
 
 	fmt.Printf("Node %s enrolled successfully.\n", flags.NodeIP)

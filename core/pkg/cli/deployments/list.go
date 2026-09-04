@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"io"
 	"net/http"
-	"os"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -93,38 +92,39 @@ func listDeployments(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	deployments, ok := result["deployments"].([]interface{})
-	if !ok || len(deployments) == 0 {
-		fmt.Println("No deployments found")
+	out := printer.For(cmd)
+	if out.JSONMode() {
+		// The gateway's reply verbatim, so a field the CLI does not render is
+		// still there for whatever is parsing it.
+		fmt.Fprintln(out.Out(), string(body))
 		return nil
 	}
 
-	// Print table
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tTYPE\tSTATUS\tVERSION\tCREATED")
+	deployments, ok := result["deployments"].([]interface{})
+	if !ok || len(deployments) == 0 {
+		out.Printf("No deployments found\n")
+		return nil
+	}
 
+	rows := make([][]string, 0, len(deployments))
 	for _, dep := range deployments {
-		d := dep.(map[string]interface{})
+		d, _ := dep.(map[string]interface{})
 		createdAt := ""
 		if created, ok := d["created_at"].(string); ok {
 			if t, err := time.Parse(time.RFC3339, created); err == nil {
 				createdAt = t.Format("2006-01-02 15:04")
 			}
 		}
-
-		fmt.Fprintf(w, "%s\t%s\t%s\t%v\t%s\n",
-			d["name"],
-			d["type"],
-			d["status"],
-			d["version"],
-			createdAt,
-		)
+		rows = append(rows, []string{
+			fmt.Sprint(d["name"]), fmt.Sprint(d["type"]), fmt.Sprint(d["status"]),
+			fmt.Sprint(d["version"]), createdAt,
+		})
 	}
 
-	w.Flush()
-
-	fmt.Printf("\nTotal: %v\n", result["total"])
-
+	if err := out.Table([]string{"NAME", "TYPE", "STATUS", "VERSION", "CREATED"}, rows); err != nil {
+		return err
+	}
+	out.Printf("\nTotal: %v\n", result["total"])
 	return nil
 }
 

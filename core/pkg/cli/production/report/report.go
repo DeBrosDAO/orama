@@ -16,7 +16,14 @@ import (
 // Handle is the main entry point for `orama node report`.
 // It collects system, service, and component information in parallel,
 // then outputs the full NodeReport as JSON to stdout.
-func Handle(jsonFlag bool, version string) error {
+// Handle collects this node's health data and writes it as JSON.
+//
+// compact selects one line rather than indented output. The output is JSON
+// either way: `orama monitor` parses it over SSH, and a person reading it on
+// the node wants it indented. The parameter used to be called jsonFlag, which
+// made the command's flag read as "output JSON" when it only chose the
+// formatting — and since it defaulted to true, setting it changed nothing.
+func Handle(compact bool, version string) error {
 	start := time.Now()
 
 	rpt := &NodeReport{
@@ -124,7 +131,7 @@ func Handle(jsonFlag bool, version string) error {
 	rpt.CollectMS = time.Since(start).Milliseconds()
 
 	enc := json.NewEncoder(os.Stdout)
-	if !jsonFlag {
+	if !compact {
 		enc.SetIndent("", "  ")
 	}
 	return enc.Encode(rpt)

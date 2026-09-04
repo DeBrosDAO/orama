@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,13 +56,13 @@ func Create(name string) error {
 	fmt.Println(" ok")
 
 	// 4. Check binary archive — auto-build if missing
-	archivePath := findNewestArchive()
+	archivePath := build.FindNewestArchive()
 	if archivePath == "" {
 		fmt.Println("  [--] No binary archive found, building...")
 		if err := autoBuildArchive(); err != nil {
 			return fmt.Errorf("auto-build archive: %w", err)
 		}
-		archivePath = findNewestArchive()
+		archivePath = build.FindNewestArchive()
 		if archivePath == "" {
 			return fmt.Errorf("build succeeded but no archive found in /tmp/")
 		}
@@ -69,7 +71,7 @@ func Create(name string) error {
 	if err != nil {
 		return fmt.Errorf("stat archive %s: %w", archivePath, err)
 	}
-	fmt.Printf("  [ok] Binary archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	fmt.Printf("  [ok] Binary archive: %s (%s)\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
 	// 5. Verify Hetzner API token works
 	client := NewHetznerClient(cfg.HetznerAPIToken)
@@ -578,46 +580,6 @@ func runSSHOutput(node inspector.Node, command string) (string, error) {
 // execCommand runs a command and returns its output.
 func execCommand(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).Output()
-}
-
-// findNewestArchive finds the newest binary archive in /tmp/.
-func findNewestArchive() string {
-	entries, err := os.ReadDir("/tmp")
-	if err != nil {
-		return ""
-	}
-
-	var best string
-	var bestMod int64
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "orama-") && strings.Contains(name, "-linux-") && strings.HasSuffix(name, ".tar.gz") {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Unix() > bestMod {
-				best = filepath.Join("/tmp", name)
-				bestMod = info.ModTime().Unix()
-			}
-		}
-	}
-
-	return best
-}
-
-// formatBytes formats a byte count as human-readable.
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // printCreateSummary prints the cluster summary after creation.

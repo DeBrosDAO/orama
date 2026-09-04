@@ -10,8 +10,8 @@ var migrateOpts migrate.Options
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Migrate from old unified setup (requires sudo)",
-	Run: func(cmd *cobra.Command, args []string) {
-		migrate.Run(migrateOpts)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return migrate.Run(migrateOpts)
 	},
 }
 

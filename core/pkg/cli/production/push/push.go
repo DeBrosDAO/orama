@@ -2,6 +2,8 @@ package push
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,13 +77,13 @@ func resolveTargets(flags *Flags) ([]inspector.Node, error) {
 
 func execute(flags *Flags) error {
 	// Find archive
-	archivePath := findNewestArchive()
+	archivePath := build.FindNewestArchive()
 	if archivePath == "" {
 		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
 	}
 
 	info, _ := os.Stat(archivePath)
-	fmt.Printf("Archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	fmt.Printf("Archive: %s (%s)\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
 	nodes, err := resolveTargets(flags)
 	if err != nil {
@@ -259,43 +261,4 @@ func extractOnNodeVia(hub, target inspector.Node, remotePath, keyPath string) er
 		keyPath, target.User, target.Host, extractCmd)
 
 	return remotessh.RunSSHStreaming(hub, sshCmd)
-}
-
-// findNewestArchive finds the newest binary archive in /tmp/.
-func findNewestArchive() string {
-	entries, err := os.ReadDir("/tmp")
-	if err != nil {
-		return ""
-	}
-
-	var best string
-	var bestMod int64
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "orama-") && strings.Contains(name, "-linux-") && strings.HasSuffix(name, ".tar.gz") {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Unix() > bestMod {
-				best = filepath.Join("/tmp", name)
-				bestMod = info.ModTime().Unix()
-			}
-		}
-	}
-
-	return best
-}
-
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

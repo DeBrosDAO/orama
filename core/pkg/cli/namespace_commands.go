@@ -10,78 +10,123 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
-// HandleNamespaceCommand handles namespace management commands
-
-// handleNamespaceKeys drives scoped API-key management (bugboard #148):
+// nsRequestTimeout bounds one namespace API call.
 //
-//	orama namespace keys create --scope <profile|grants> [--label ...]
-//	orama namespace keys list
-//	orama namespace keys revoke --id <n>
-//	orama namespace keys revoke-legacy
+// Enabling WebRTC stealth waits on a Let's Encrypt issuance, which the command
+// tells the operator may take about two minutes, so the bound has to clear it.
+const nsRequestTimeout = 3 * time.Minute
 
-func showNamespaceKeysHelp() {
-	fmt.Printf("Scoped API-key management (bugboard #148)\n\n")
-	fmt.Printf("Usage: orama namespace keys <subcommand>\n\n")
-	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  create --scope <profile|grants> [--label L] [--namespace NS]\n")
-	fmt.Printf("      Mint a new key. Profiles: invoke-only | app-runtime | admin.\n")
-	fmt.Printf("      Or an explicit grant list, e.g. --scope \"invoke,storage,push\".\n")
-	fmt.Printf("  list [--namespace NS]                 List keys (id, scopes, status).\n")
-	fmt.Printf("  revoke --id N [--namespace NS]        Revoke a single key by id.\n")
-	fmt.Printf("  revoke-legacy [--force] [--namespace NS]\n")
-	fmt.Printf("      Revoke ALL legacy (unscoped) keys — the cutover step.\n\n")
-	fmt.Printf("Note: key management requires an admin-scoped key (or the owner wallet).\n")
+// nsClient is the shared client for namespace API calls. Seven copies of this
+// construction existed in this file, all identical.
+var nsClient = &http.Client{
+	Timeout:   nsRequestTimeout,
+	Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
 }
 
-// keysDo performs an authenticated JSON request to the gateway and returns the
-// decoded body + status. Exits on transport failure.
-func keysDo(method, url, apiKey string, body io.Reader) (map[string]interface{}, int) {
+// nsRequest performs one authenticated namespace API call and decodes the reply.
+//
+// what names the operation for the error message, as in "enable WebRTC".
+// A non-2xx reply becomes an error carrying an exit code, so a script can tell
+// "you are not authenticated" from "the gateway is unreachable" from "that
+// namespace does not exist".
+func nsRequest(what, method, url, apiKey string, body io.Reader) (map[string]any, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
+		return nil, clierr.Failure("failed to build the %s request: %w", what, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
-	resp, err := client.Do(req)
+
+	resp, err := nsClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
+		return nil, clierr.Unavailable("failed to reach the gateway to %s: %w", what, err)
 	}
 	defer resp.Body.Close()
-	var result map[string]interface{}
+
+	var result map[string]any
+	// A body that is not JSON leaves result nil, and nsError falls back to the
+	// status line. Decoding is not the operation being reported on.
 	_ = json.NewDecoder(resp.Body).Decode(&result)
-	return result, resp.StatusCode
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return result, nsError(what, resp.StatusCode, result)
+	}
+	return result, nil
 }
 
-func keysErr(result map[string]interface{}) string {
+// nsError classifies a gateway refusal by status.
+func nsError(what string, status int, result map[string]any) error {
+	message := "unknown error"
 	if e, ok := result["error"].(string); ok && e != "" {
-		return e
+		message = e
 	}
-	return "unknown error"
+
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return clierr.Auth("failed to %s: %s", what, message)
+	case http.StatusNotFound:
+		return clierr.NotFound("failed to %s: %s", what, message)
+	case http.StatusConflict, http.StatusPreconditionFailed:
+		return clierr.Conflict("failed to %s: %s", what, message)
+	case http.StatusBadRequest:
+		return clierr.Usage("failed to %s: %s", what, message)
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return clierr.Unavailable("failed to %s: %s", what, message)
+	default:
+		return clierr.Failure("failed to %s: %s (HTTP %d)", what, message, status)
+	}
 }
 
-// HandleNamespaceKeysCreate mints a scoped API key. Flags are parsed by cobra.
-func HandleNamespaceKeysCreate(ns, scope, label string) {
+// confirmExact reads a line and requires it to equal want.
+//
+// Typing the thing back is the confirmation, not y/n: a y/n is answered
+// reflexively, and what these commands guard against is the right command
+// aimed at the wrong namespace.
+func confirmExact(prompt, want string) error {
+	fmt.Print(prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	if strings.TrimSpace(scanner.Text()) != want {
+		return clierr.Aborted("cancelled: what you typed did not match %q", want)
+	}
+	return nil
+}
+
+// --- API keys (bugboard #148) ---------------------------------------------
+
+// NamespaceKeysCreate mints a scoped API key.
+func NamespaceKeysCreate(ns, scope, label string) error {
 	if strings.TrimSpace(scope) == "" {
-		fmt.Fprintf(os.Stderr, "Usage: orama namespace keys create --scope <profile|grants> [--label L] [--namespace NS]\n")
-		os.Exit(1)
+		return clierr.Usage("--scope is required: a profile (invoke-only, app-runtime, admin) " +
+			"or an explicit grant list such as \"invoke,storage,push\"")
 	}
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
-	payload, _ := json.Marshal(map[string]string{"scope": scope, "label": label})
-	result, status := keysDo(http.MethodPost, gatewayURL+"/v1/namespace/keys", apiKey, bytes.NewReader(payload))
-	if status != http.StatusCreated && status != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Failed to create key: %s\n", keysErr(result))
-		os.Exit(1)
+
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
 	}
+
+	payload, err := json.Marshal(map[string]string{"scope": scope, "label": label})
+	if err != nil {
+		return clierr.Failure("failed to encode the request: %w", err)
+	}
+
+	result, err := nsRequest("create the key", http.MethodPost,
+		gatewayURL+"/v1/namespace/keys", apiKey, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+
 	fmt.Printf("API key created.\n")
 	fmt.Printf("  id:        %v\n", result["id"])
 	fmt.Printf("  scopes:    %v\n", result["scopes"])
@@ -90,24 +135,31 @@ func HandleNamespaceKeysCreate(ns, scope, label string) {
 		fmt.Printf("  label:     %s\n", l)
 	}
 	fmt.Printf("\n  API KEY (shown once — store it now):\n  %v\n", result["api_key"])
+	return nil
 }
 
-// HandleNamespaceKeysList lists a namespace's API keys.
-func HandleNamespaceKeysList(ns string) {
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
-	result, status := keysDo(http.MethodGet, gatewayURL+"/v1/namespace/keys", apiKey, nil)
-	if status != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Failed to list keys: %s\n", keysErr(result))
-		os.Exit(1)
+// NamespaceKeysList lists a namespace's API keys.
+func NamespaceKeysList(ns string) error {
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
 	}
-	keys, _ := result["keys"].([]interface{})
+
+	result, err := nsRequest("list the keys", http.MethodGet,
+		gatewayURL+"/v1/namespace/keys", apiKey, nil)
+	if err != nil {
+		return err
+	}
+
+	keys, _ := result["keys"].([]any)
 	if len(keys) == 0 {
 		fmt.Println("No API keys found.")
-		return
+		return nil
 	}
+
 	fmt.Printf("API keys for namespace '%v' (%d):\n\n", result["namespace"], len(keys))
 	for _, k := range keys {
-		km, _ := k.(map[string]interface{})
+		km, _ := k.(map[string]any)
 		scopes, _ := km["scopes"].(string)
 		if scopes == "" {
 			scopes = "(legacy: admin)"
@@ -119,134 +171,113 @@ func HandleNamespaceKeysList(ns string) {
 		label, _ := km["name"].(string)
 		fmt.Printf("  #%-4v  %-8s  %-40s  %s\n", km["id"], state, scopes, label)
 	}
+	return nil
 }
 
-// HandleNamespaceKeysRevoke revokes one API key by id.
-func HandleNamespaceKeysRevoke(ns string, id int) {
+// NamespaceKeysRevoke revokes one API key by id.
+func NamespaceKeysRevoke(ns string, id int) error {
 	if id <= 0 {
-		fmt.Fprintf(os.Stderr, "Usage: orama namespace keys revoke --id <n> [--namespace NS]\n")
-		os.Exit(1)
+		return clierr.Usage("--id must be a positive key id; 'orama namespace keys list' shows them")
 	}
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
-	result, status := keysDo(http.MethodDelete, fmt.Sprintf("%s/v1/namespace/keys/%d", gatewayURL, id), apiKey, nil)
-	if status != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Failed to revoke key: %s\n", keysErr(result))
-		os.Exit(1)
+
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
 	}
+
+	if _, err := nsRequest("revoke the key", http.MethodDelete,
+		fmt.Sprintf("%s/v1/namespace/keys/%d", gatewayURL, id), apiKey, nil); err != nil {
+		return err
+	}
+
 	fmt.Printf("Key %d revoked.\n", id)
+	return nil
 }
 
-// HandleNamespaceKeysRevokeLegacy revokes every unscoped (legacy) key.
-func HandleNamespaceKeysRevokeLegacy(ns string, force bool) {
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
+// NamespaceKeysRevokeLegacy revokes every unscoped (legacy) key.
+func NamespaceKeysRevokeLegacy(ns string, force bool) error {
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
+	}
+
 	if !force {
 		fmt.Printf("This will revoke ALL legacy (unscoped) API keys for this namespace.\n")
 		fmt.Printf("Any consumer still using an old omnipotent key will stop working.\n")
-		fmt.Printf("Type 'revoke' to confirm: ")
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Scan()
-		if strings.TrimSpace(scanner.Text()) != "revoke" {
-			fmt.Println("Aborted.")
-			os.Exit(1)
+		if err := confirmExact("Type 'revoke' to confirm: ", "revoke"); err != nil {
+			return err
 		}
 	}
-	result, status := keysDo(http.MethodPost, gatewayURL+"/v1/namespace/keys/revoke-legacy", apiKey, nil)
-	if status != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Failed to revoke legacy keys: %s\n", keysErr(result))
-		os.Exit(1)
+
+	result, err := nsRequest("revoke the legacy keys", http.MethodPost,
+		gatewayURL+"/v1/namespace/keys/revoke-legacy", apiKey, nil)
+	if err != nil {
+		return err
 	}
+
 	fmt.Printf("Revoked %v legacy key(s).\n", result["revoked"])
+	return nil
 }
 
-func showNamespaceHelp() {
-	fmt.Printf("Namespace Management Commands\n\n")
-	fmt.Printf("Usage: orama namespace <subcommand>\n\n")
-	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  list                          - List namespaces owned by the current wallet\n")
-	fmt.Printf("  delete                        - Delete the current namespace and all its resources\n")
-	fmt.Printf("  repair <namespace>            - Repair an under-provisioned namespace cluster\n")
-	fmt.Printf("  enable webrtc --namespace NS  - Enable WebRTC (SFU + TURN) for a namespace\n")
-	fmt.Printf("  disable webrtc --namespace NS - Disable WebRTC for a namespace\n")
-	fmt.Printf("  enable webrtc-stealth --namespace NS  - Enable stealth TURNS over :443 (feat-124)\n")
-	fmt.Printf("  disable webrtc-stealth --namespace NS - Disable stealth TURNS\n")
-	fmt.Printf("  webrtc-status --namespace NS  - Show WebRTC service status\n")
-	fmt.Printf("  help                          - Show this help message\n\n")
-	fmt.Printf("Flags:\n")
-	fmt.Printf("  --force       - Skip confirmation prompt (delete only)\n")
-	fmt.Printf("  --namespace   - Namespace name (enable/disable/webrtc-status)\n\n")
-	fmt.Printf("Examples:\n")
-	fmt.Printf("  orama namespace list\n")
-	fmt.Printf("  orama namespace delete\n")
-	fmt.Printf("  orama namespace delete --force\n")
-	fmt.Printf("  orama namespace repair anchat\n")
-	fmt.Printf("  orama namespace enable webrtc --namespace myapp\n")
-	fmt.Printf("  orama namespace disable webrtc --namespace myapp\n")
-	fmt.Printf("  orama namespace webrtc-status --namespace myapp\n")
-}
+// --- Namespace lifecycle ---------------------------------------------------
 
-// HandleNamespaceRepair repairs an under-provisioned namespace cluster.
-func HandleNamespaceRepair(namespaceName string) {
+// NamespaceRepair repairs an under-provisioned namespace cluster.
+//
+// This one talks to the node's own gateway over loopback with the internal
+// auth header, not to the operator's gateway, so it must be run on a node.
+func NamespaceRepair(namespaceName string) error {
 	fmt.Printf("Repairing namespace cluster '%s'...\n", namespaceName)
 
-	// Call the internal repair endpoint on the local gateway
-	url := fmt.Sprintf("http://localhost:%d/v1/internal/namespace/repair?namespace=%s", constants.GatewayAPIPort, namespaceName)
+	url := fmt.Sprintf("http://localhost:%d/v1/internal/namespace/repair?namespace=%s",
+		constants.GatewayAPIPort, namespaceName)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to build the repair request: %w", err)
 	}
 	req.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := nsClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to local gateway (is the node running?): %v\n", err)
-		os.Exit(1)
+		return clierr.Unavailable("failed to reach the local gateway (is the node running?): %w", err)
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	var result map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&result)
 
 	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		fmt.Fprintf(os.Stderr, "Repair failed: %s\n", errMsg)
-		os.Exit(1)
+		return nsError("repair the namespace", resp.StatusCode, result)
 	}
 
-	fmt.Printf("Namespace '%s' cluster repaired successfully.\n", namespaceName)
+	fmt.Printf("Namespace '%s' cluster repaired.\n", namespaceName)
 	if msg, ok := result["message"].(string); ok {
 		fmt.Printf("  %s\n", msg)
 	}
+	return nil
 }
 
-// HandleNamespaceDelete deletes the current namespace.
-func HandleNamespaceDelete(force bool) {
-	// Load credentials
+// NamespaceDelete deletes the namespace the active credential belongs to.
+func NamespaceDelete(force bool) error {
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load credentials: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to load credentials: %w", err)
 	}
 
-	gatewayURL := getGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
+	gatewayURL, err := getGatewayURL()
+	if err != nil {
+		return err
+	}
 
+	creds := store.GetDefaultCredential(gatewayURL)
 	if creds == nil || !creds.IsValid() {
-		fmt.Fprintf(os.Stderr, "Not authenticated. Run 'orama auth login' first.\n")
-		os.Exit(1)
+		return clierr.Auth("not authenticated: run 'orama auth login'")
 	}
 
 	namespace := creds.Namespace
 	if namespace == "" || namespace == "default" {
-		fmt.Fprintf(os.Stderr, "Cannot delete default namespace.\n")
-		os.Exit(1)
+		return clierr.Usage("the default namespace cannot be deleted")
 	}
 
-	// Confirm deletion
 	if !force {
 		fmt.Printf("This will permanently delete namespace '%s' and all its resources:\n", namespace)
 		fmt.Printf("  - All deployments and their processes\n")
@@ -255,56 +286,22 @@ func HandleNamespaceDelete(force bool) {
 		fmt.Printf("  - Gateway instances\n")
 		fmt.Printf("  - API keys and credentials\n")
 		fmt.Printf("  - IPFS content and DNS records\n\n")
-		fmt.Printf("Type the namespace name to confirm: ")
-
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Scan()
-		input := strings.TrimSpace(scanner.Text())
-
-		if input != namespace {
-			fmt.Println("Aborted - namespace name did not match.")
-			os.Exit(1)
+		if err := confirmExact("Type the namespace name to confirm: ", namespace); err != nil {
+			return err
 		}
 	}
 
 	fmt.Printf("Deleting namespace '%s'...\n", namespace)
 
-	// Make DELETE request to gateway
-	url := fmt.Sprintf("%s/v1/namespace/delete", gatewayURL)
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
-	}
-	req.Header.Set("Authorization", "Bearer "+creds.APIKey)
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		fmt.Fprintf(os.Stderr, "Failed to delete namespace: %s\n", errMsg)
-		os.Exit(1)
+	if _, err := nsRequest("delete the namespace", http.MethodDelete,
+		gatewayURL+"/v1/namespace/delete", creds.APIKey, nil); err != nil {
+		return err
 	}
 
-	fmt.Printf("Namespace '%s' deleted successfully.\n", namespace)
+	fmt.Printf("Namespace '%s' deleted.\n", namespace)
 
-	// Clean up local credentials for the deleted namespace
+	// The remote namespace is gone either way, so a failure to tidy the local
+	// credential file is reported without failing the command.
 	if store.RemoveCredentialByNamespace(gatewayURL, namespace) {
 		if err := store.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to clean up local credentials: %v\n", err)
@@ -314,80 +311,139 @@ func HandleNamespaceDelete(force bool) {
 	}
 
 	fmt.Printf("Run 'orama auth login' to create a new namespace.\n")
+	return nil
 }
 
-// HandleNamespaceEnable enables a namespace feature. Flags are parsed by cobra.
-func HandleNamespaceEnable(feature, ns string) {
-	if feature == "webrtc-stealth" {
-		handleNamespaceStealthToggle(ns, true)
-		return
-	}
-	if feature != "webrtc" {
-		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc, webrtc-stealth\n", feature)
-		os.Exit(1)
-	}
-
-	if ns == "" {
-		fmt.Fprintf(os.Stderr, "Usage: orama namespace enable webrtc --namespace <name>\n")
-		os.Exit(1)
-	}
-
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
-
-	fmt.Printf("Enabling WebRTC for namespace '%s'...\n", ns)
-	fmt.Printf("This will provision SFU (3 nodes) and TURN (2 nodes) services.\n")
-
-	url := fmt.Sprintf("%s/v1/namespace/webrtc/enable", gatewayURL)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+// NamespaceList lists namespaces owned by the current wallet.
+func NamespaceList(out *printer.Printer) error {
+	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to load credentials: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	resp, err := client.Do(req)
+	gatewayURL, err := getGatewayURL()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	creds := store.GetDefaultCredential(gatewayURL)
+	if creds == nil || !creds.IsValid() {
+		return clierr.Auth("not authenticated: run 'orama auth login'")
+	}
 
-	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
+	result, err := nsRequest("list namespaces", http.MethodGet,
+		gatewayURL+"/v1/namespace/list", creds.APIKey, nil)
+	if err != nil {
+		return err
+	}
+
+	namespaces, _ := result["namespaces"].([]any)
+	activeNS := creds.Namespace
+
+	rows := make([][]string, 0, len(namespaces))
+	for _, ns := range namespaces {
+		nsMap, _ := ns.(map[string]any)
+		name, _ := nsMap["name"].(string)
+		status, _ := nsMap["cluster_status"].(string)
+
+		active := ""
+		if name == activeNS {
+			active = "yes"
 		}
-		fmt.Fprintf(os.Stderr, "Failed to enable WebRTC: %s\n", errMsg)
-		os.Exit(1)
+		rows = append(rows, []string{name, status, active})
 	}
 
-	fmt.Printf("WebRTC enabled for namespace '%s'.\n", ns)
-	fmt.Printf("  SFU instances: 3 nodes (signaling via WireGuard)\n")
-	fmt.Printf("  TURN instances: 2 nodes (relay on public IPs)\n")
+	if len(rows) == 0 && !out.JSONMode() {
+		fmt.Println("No namespaces found.")
+		return nil
+	}
+	return out.Table([]string{"NAME", "CLUSTER", "ACTIVE"}, rows)
 }
 
-// handleNamespaceStealthToggle drives /v1/namespace/webrtc/stealth/{enable|disable}
-// (feat-124 — censorship-resistant TURNS over :443).
-func handleNamespaceStealthToggle(ns string, enable bool) {
+// --- WebRTC ----------------------------------------------------------------
+
+// namespaceFeatures are the features enable and disable accept.
+var namespaceFeatures = []string{"webrtc", "webrtc-stealth"}
+
+// NamespaceEnable turns on a namespace feature.
+func NamespaceEnable(feature, ns string) error {
+	switch feature {
+	case "webrtc-stealth":
+		return namespaceStealthToggle(ns, true)
+	case "webrtc":
+		return namespaceWebRTCToggle(ns, true)
+	default:
+		return clierr.Usage("unknown feature %q; supported: %s",
+			feature, strings.Join(namespaceFeatures, ", "))
+	}
+}
+
+// NamespaceDisable turns off a namespace feature.
+func NamespaceDisable(feature, ns string) error {
+	switch feature {
+	case "webrtc-stealth":
+		return namespaceStealthToggle(ns, false)
+	case "webrtc":
+		return namespaceWebRTCToggle(ns, false)
+	default:
+		return clierr.Usage("unknown feature %q; supported: %s",
+			feature, strings.Join(namespaceFeatures, ", "))
+	}
+}
+
+// namespaceWebRTCToggle drives /v1/namespace/webrtc/{enable,disable}.
+func namespaceWebRTCToggle(ns string, enable bool) error {
 	verb := "disable"
 	if enable {
 		verb = "enable"
 	}
-
 	if ns == "" {
-		fmt.Fprintf(os.Stderr, "Usage: orama namespace %s webrtc-stealth --namespace <name>\n", verb)
-		os.Exit(1)
+		return clierr.Usage("--namespace is required: orama namespace %s webrtc --namespace <name>", verb)
 	}
 
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
+	}
+
+	if enable {
+		fmt.Printf("Enabling WebRTC for namespace '%s'...\n", ns)
+		fmt.Printf("This will provision SFU (3 nodes) and TURN (2 nodes) services.\n")
+	} else {
+		fmt.Printf("Disabling WebRTC for namespace '%s'...\n", ns)
+	}
+
+	if _, err := nsRequest(verb+" WebRTC", http.MethodPost,
+		fmt.Sprintf("%s/v1/namespace/webrtc/%s", gatewayURL, verb), apiKey, nil); err != nil {
+		return err
+	}
+
+	if enable {
+		fmt.Printf("WebRTC enabled for namespace '%s'.\n", ns)
+		fmt.Printf("  SFU instances: 3 nodes (signaling via WireGuard)\n")
+		fmt.Printf("  TURN instances: 2 nodes (relay on public IPs)\n")
+	} else {
+		fmt.Printf("WebRTC disabled for namespace '%s'.\n", ns)
+		fmt.Printf("  SFU and TURN services stopped, ports deallocated, DNS records removed.\n")
+	}
+	return nil
+}
+
+// namespaceStealthToggle drives /v1/namespace/webrtc/stealth/{enable,disable}
+// (feat-124 — censorship-resistant TURNS over :443).
+func namespaceStealthToggle(ns string, enable bool) error {
+	verb := "disable"
+	if enable {
+		verb = "enable"
+	}
+	if ns == "" {
+		return clierr.Usage("--namespace is required: orama namespace %s webrtc-stealth --namespace <name>", verb)
+	}
+
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
+	}
 
 	if enable {
 		fmt.Printf("Enabling WebRTC stealth (TURNS over :443) for namespace '%s'...\n", ns)
@@ -396,36 +452,9 @@ func handleNamespaceStealthToggle(ns string, enable bool) {
 		fmt.Printf("Disabling WebRTC stealth for namespace '%s'...\n", ns)
 	}
 
-	url := fmt.Sprintf("%s/v1/namespace/webrtc/stealth/%s", gatewayURL, verb)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		fmt.Fprintf(os.Stderr, "Failed to %s WebRTC stealth: %s\n", verb, errMsg)
-		os.Exit(1)
+	if _, err := nsRequest(verb+" WebRTC stealth", http.MethodPost,
+		fmt.Sprintf("%s/v1/namespace/webrtc/stealth/%s", gatewayURL, verb), apiKey, nil); err != nil {
+		return err
 	}
 
 	if enable {
@@ -435,108 +464,30 @@ func handleNamespaceStealthToggle(ns string, enable bool) {
 	} else {
 		fmt.Printf("WebRTC stealth disabled for namespace '%s'.\n", ns)
 	}
+	return nil
 }
 
-// HandleNamespaceDisable disables a namespace feature.
-func HandleNamespaceDisable(feature, ns string) {
-	if feature == "webrtc-stealth" {
-		handleNamespaceStealthToggle(ns, false)
-		return
-	}
-	if feature != "webrtc" {
-		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc, webrtc-stealth\n", feature)
-		os.Exit(1)
-	}
-
-	if ns == "" {
-		fmt.Fprintf(os.Stderr, "Usage: orama namespace disable webrtc --namespace <name>\n")
-		os.Exit(1)
-	}
-
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
-
-	fmt.Printf("Disabling WebRTC for namespace '%s'...\n", ns)
-
-	url := fmt.Sprintf("%s/v1/namespace/webrtc/disable", gatewayURL)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+// NamespaceWebRTCStatus reports a namespace's WebRTC configuration.
+func NamespaceWebRTCStatus(ns string) error {
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	resp, err := client.Do(req)
+	result, err := nsRequest("read the WebRTC status", http.MethodGet,
+		gatewayURL+"/v1/namespace/webrtc/status", apiKey, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		fmt.Fprintf(os.Stderr, "Failed to disable WebRTC: %s\n", errMsg)
-		os.Exit(1)
-	}
-
-	fmt.Printf("WebRTC disabled for namespace '%s'.\n", ns)
-	fmt.Printf("  SFU and TURN services stopped, ports deallocated, DNS records removed.\n")
-}
-
-// HandleNamespaceWebRTCStatus reports a namespace's WebRTC configuration.
-func HandleNamespaceWebRTCStatus(ns string) {
-	gatewayURL, apiKey := loadAuthForNamespace(ns)
-
-	url := fmt.Sprintf("%s/v1/namespace/webrtc/status", gatewayURL)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		fmt.Fprintf(os.Stderr, "Failed to get WebRTC status: %s\n", errMsg)
-		os.Exit(1)
+		return err
 	}
 
 	enabled, _ := result["enabled"].(bool)
 	if !enabled {
 		fmt.Printf("WebRTC is not enabled for namespace '%s'.\n", ns)
 		fmt.Printf("  Enable with: orama namespace enable webrtc --namespace %s\n", ns)
-		return
+		return nil
 	}
 
-	fmt.Printf("WebRTC Status for namespace '%s'\n\n", ns)
+	fmt.Printf("WebRTC status for namespace '%s'\n\n", ns)
 	fmt.Printf("  Enabled:          yes\n")
 	if sfuCount, ok := result["sfu_node_count"].(float64); ok {
 		fmt.Printf("  SFU nodes:        %.0f\n", sfuCount)
@@ -553,98 +504,24 @@ func HandleNamespaceWebRTCStatus(ns string) {
 	if enabledAt, ok := result["enabled_at"].(string); ok {
 		fmt.Printf("  Enabled at:       %s\n", enabledAt)
 	}
+	return nil
 }
 
-// loadAuthForNamespace loads credentials and returns the gateway URL and API key.
-// Exits with an error message if not authenticated.
-func loadAuthForNamespace(ns string) (gatewayURL, apiKey string) {
+// loadAuthForNamespace resolves the gateway and the API key to call it with.
+func loadAuthForNamespace(ns string) (gatewayURL, apiKey string, err error) {
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load credentials: %v\n", err)
-		os.Exit(1)
+		return "", "", clierr.Failure("failed to load credentials: %w", err)
 	}
 
-	gatewayURL = getGatewayURL()
+	gatewayURL, err = getGatewayURL()
+	if err != nil {
+		return "", "", err
+	}
+
 	creds := store.GetDefaultCredential(gatewayURL)
-
 	if creds == nil || !creds.IsValid() {
-		fmt.Fprintf(os.Stderr, "Not authenticated. Run 'orama auth login' first.\n")
-		os.Exit(1)
+		return "", "", clierr.Auth("not authenticated for %s: run 'orama auth login'", gatewayURL)
 	}
-
-	return gatewayURL, creds.APIKey
-}
-
-// HandleNamespaceList lists namespaces owned by the current wallet.
-func HandleNamespaceList() {
-	// Load credentials
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load credentials: %v\n", err)
-		os.Exit(1)
-	}
-
-	gatewayURL := getGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
-
-	if creds == nil || !creds.IsValid() {
-		fmt.Fprintf(os.Stderr, "Not authenticated. Run 'orama auth login' first.\n")
-		os.Exit(1)
-	}
-
-	// Make GET request to namespace list endpoint
-	url := fmt.Sprintf("%s/v1/namespace/list", gatewayURL)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
-		os.Exit(1)
-	}
-	req.Header.Set("Authorization", "Bearer "+creds.APIKey)
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to gateway: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if resp.StatusCode != http.StatusOK {
-		errMsg := "unknown error"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		fmt.Fprintf(os.Stderr, "Failed to list namespaces: %s\n", errMsg)
-		os.Exit(1)
-	}
-
-	namespaces, _ := result["namespaces"].([]interface{})
-	if len(namespaces) == 0 {
-		fmt.Println("No namespaces found.")
-		return
-	}
-
-	activeNS := creds.Namespace
-
-	fmt.Printf("Namespaces (%d):\n\n", len(namespaces))
-	for _, ns := range namespaces {
-		nsMap, _ := ns.(map[string]interface{})
-		name, _ := nsMap["name"].(string)
-		status, _ := nsMap["cluster_status"].(string)
-
-		marker := "  "
-		if name == activeNS {
-			marker = "* "
-		}
-
-		fmt.Printf("%s%-20s  cluster: %s\n", marker, name, status)
-	}
-	fmt.Printf("\n* = active namespace\n")
+	return gatewayURL, creds.APIKey, nil
 }

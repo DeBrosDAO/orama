@@ -69,12 +69,15 @@ func TestSubcommandsDoNotShareFlagStorage(t *testing.T) {
 	}
 }
 
-func TestEverySubcommandTakesJSON(t *testing.T) {
+// --json is a persistent flag on the root, so no subcommand defines its own.
+// A local one would shadow the root's, which is how three commands came to
+// have machine-readable output and the rest did not.
+func TestNoSubcommandDefinesItsOwnJSONFlag(t *testing.T) {
 	names := map[string]bool{}
 	for _, c := range Cmd.Commands() {
 		names[c.Name()] = true
-		if c.Flags().Lookup("json") == nil {
-			t.Errorf("orama domain %s has no --json", c.Name())
+		if c.Flags().Lookup("json") != nil {
+			t.Errorf("orama domain %s defines its own --json, shadowing the root's", c.Name())
 		}
 	}
 	for _, want := range []string{"add", "verify", "list", "remove"} {

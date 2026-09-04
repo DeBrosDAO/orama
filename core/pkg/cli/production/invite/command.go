@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"net"
 	"net/http"
 	"os"
@@ -24,20 +25,18 @@ type Options struct {
 }
 
 // Run creates a new invite token.
-func Run(opts Options) {
+func Run(opts Options) error {
 	// Must run on a cluster node with RQLite running locally
 	domain, err := readNodeDomain()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: could not read node config: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure you're running this on an installed node.\n")
-		os.Exit(1)
+		return clierr.NotFound("could not read the node config: %w\n"+
+			"  Run this on an installed node", err)
 	}
 
 	// Generate random token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		fmt.Fprintf(os.Stderr, "Error generating token: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to generate the token: %w", err)
 	}
 	token := hex.EncodeToString(tokenBytes)
 
@@ -56,9 +55,8 @@ func Run(opts Options) {
 
 	// Insert token into RQLite via HTTP API
 	if err := insertToken(token, nodeID, expiresAt); err != nil {
-		fmt.Fprintf(os.Stderr, "Error storing invite token: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure RQLite is running on this node.\n")
-		os.Exit(1)
+		return clierr.Unavailable("failed to store the invite token: %w\n"+
+			"  Make sure RQLite is running on this node", err)
 	}
 
 	// Get TLS certificate fingerprint for TOFU verification
@@ -73,6 +71,7 @@ func Run(opts Options) {
 		fmt.Printf("  sudo orama node install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
 	}
 	fmt.Printf("Replace <NEW_NODE_IP> with the new node's public IP address.\n")
+	return nil
 }
 
 // getTLSCertFingerprint connects to the domain over TLS and returns the

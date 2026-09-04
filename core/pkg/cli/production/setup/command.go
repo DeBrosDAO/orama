@@ -14,12 +14,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -151,7 +151,7 @@ func Run(opts Options) error {
 
 	// 6. Check if binary archive needs uploading
 	if needsArchiveUpload(node) {
-		archivePath := findNewestArchive()
+		archivePath := build.FindNewestArchive()
 		if archivePath == "" {
 			return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
 		}
@@ -379,23 +379,6 @@ func requestInviteToken(gatewayURL string) (string, error) {
 func needsArchiveUpload(node inspector.Node) bool {
 	result := inspector.RunSSH(context.Background(), node, "/opt/orama/bin/orama version 2>/dev/null")
 	return !result.OK()
-}
-
-// findNewestArchive finds the newest orama binary archive in /tmp/.
-func findNewestArchive() string {
-	matches, _ := filepath.Glob("/tmp/orama-*-linux-*.tar.gz")
-	if len(matches) == 0 {
-		return ""
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		fi, _ := os.Stat(matches[i])
-		fj, _ := os.Stat(matches[j])
-		if fi == nil || fj == nil {
-			return false
-		}
-		return fi.ModTime().After(fj.ModTime())
-	})
-	return matches[0]
 }
 
 func findBinary(name string) (string, error) {

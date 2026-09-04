@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"io"
 	"net/http"
 	"os"
@@ -27,31 +28,27 @@ type Flags struct {
 }
 
 // Run processes the unlock command.
-func Run(flags *Flags) {
+func Run(flags *Flags) error {
 	if err := flags.validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return clierr.Wrap(clierr.CodeUsage, err)
 	}
 
 	if !flags.Genesis {
-		fmt.Fprintf(os.Stderr, "Error: --genesis flag is required to confirm genesis unlock\n")
-		os.Exit(1)
+		return clierr.Usage("--genesis is required to confirm a genesis unlock")
 	}
 
 	// Step 1: Read the encrypted genesis key from the node
 	fmt.Printf("Fetching encrypted genesis key from %s...\n", flags.NodeIP)
 	encKey, err := fetchGenesisKey(flags.NodeIP)
 	if err != nil && flags.KeyFile == "" {
-		fmt.Fprintf(os.Stderr, "Error: could not fetch genesis key from node: %v\n", err)
-		fmt.Fprintf(os.Stderr, "You can provide the key file directly with --key-file\n")
-		os.Exit(1)
+		return clierr.Unavailable("could not fetch the genesis key from the node: %w\n"+
+			"  Provide the key file directly with --key-file", err)
 	}
 
 	if flags.KeyFile != "" {
 		data, readErr := os.ReadFile(flags.KeyFile)
 		if readErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not read key file: %v\n", readErr)
-			os.Exit(1)
+			return clierr.NotFound("could not read the key file: %w", readErr)
 		}
 		encKey = strings.TrimSpace(string(data))
 	}
@@ -60,19 +57,18 @@ func Run(flags *Flags) {
 	fmt.Println("Decrypting genesis key with rootwallet...")
 	luksKey, err := decryptGenesisKey(encKey)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: decryption failed: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("decryption failed: %w", err)
 	}
 
 	// Step 3: Send LUKS key to the agent over WireGuard
 	fmt.Printf("Sending LUKS key to agent at %s:9998...\n", flags.NodeIP)
 	if err := sendUnlockKey(flags.NodeIP, luksKey); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: unlock failed: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("unlock failed: %w", err)
 	}
 
 	fmt.Println("Genesis node unlocked successfully.")
 	fmt.Println("The node is decrypting and mounting its data partition.")
+	return nil
 }
 
 // validate checks the flag combination.

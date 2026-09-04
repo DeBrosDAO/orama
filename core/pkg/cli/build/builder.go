@@ -127,7 +127,7 @@ func (b *Builder) Build() error {
 	// Step 12: Create archive
 	outputPath := b.flags.Output
 	if outputPath == "" {
-		outputPath = fmt.Sprintf("/tmp/orama-%s-linux-%s.tar.gz", b.version, b.flags.Arch)
+		outputPath = filepath.Join(ArchiveDir, ArchiveName(b.version, b.flags.Arch))
 	}
 
 	if err := b.createArchive(outputPath, manifest); err != nil {

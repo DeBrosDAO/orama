@@ -2,6 +2,7 @@ package namespacecmd
 
 import (
 	"github.com/DeBrosOfficial/network/pkg/cli"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/spf13/cobra"
 )
 
@@ -16,9 +17,9 @@ var Cmd = &cobra.Command{
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete the current namespace and all its resources",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		forceFlag, _ := cmd.Flags().GetBool("force")
-		cli.HandleNamespaceDelete(forceFlag)
+		return cli.NamespaceDelete(forceFlag)
 	},
 }
 
@@ -26,8 +27,8 @@ var listCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List namespaces owned by the current wallet",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleNamespaceList()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.NamespaceList(printer.For(cmd))
 	},
 }
 
@@ -35,8 +36,8 @@ var repairCmd = &cobra.Command{
 	Use:   "repair <namespace>",
 	Short: "Repair an under-provisioned namespace cluster",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleNamespaceRepair(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.NamespaceRepair(args[0])
 	},
 }
 
@@ -45,9 +46,9 @@ var enableCmd = &cobra.Command{
 	Short: "Enable a feature for a namespace",
 	Long:  "Enable a feature for a namespace. Supported features: webrtc",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceEnable(args[0], ns)
+		return cli.NamespaceEnable(args[0], ns)
 	},
 }
 
@@ -56,18 +57,18 @@ var disableCmd = &cobra.Command{
 	Short: "Disable a feature for a namespace",
 	Long:  "Disable a feature for a namespace. Supported features: webrtc",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceDisable(args[0], ns)
+		return cli.NamespaceDisable(args[0], ns)
 	},
 }
 
 var webrtcStatusCmd = &cobra.Command{
 	Use:   "webrtc-status",
 	Short: "Show WebRTC service status for a namespace",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceWebRTCStatus(ns)
+		return cli.NamespaceWebRTCStatus(ns)
 	},
 }
 
@@ -80,11 +81,11 @@ var keysCmd = &cobra.Command{
 var keysCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Mint a new scoped API key",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, _ := cmd.Flags().GetString("scope")
 		label, _ := cmd.Flags().GetString("label")
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceKeysCreate(ns, scope, label)
+		return cli.NamespaceKeysCreate(ns, scope, label)
 	},
 }
 
@@ -92,29 +93,29 @@ var keysListCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List scoped API keys",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceKeysList(ns)
+		return cli.NamespaceKeysList(ns)
 	},
 }
 
 var keysRevokeCmd = &cobra.Command{
 	Use:   "revoke",
 	Short: "Revoke a single API key by id",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		id, _ := cmd.Flags().GetInt("id")
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceKeysRevoke(ns, id)
+		return cli.NamespaceKeysRevoke(ns, id)
 	},
 }
 
 var keysRevokeLegacyCmd = &cobra.Command{
 	Use:   "revoke-legacy",
 	Short: "Revoke ALL legacy (unscoped) keys — the cutover step",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
 		ns, _ := cmd.Flags().GetString("namespace")
-		cli.HandleNamespaceKeysRevokeLegacy(ns, force)
+		return cli.NamespaceKeysRevokeLegacy(ns, force)
 	},
 }
 

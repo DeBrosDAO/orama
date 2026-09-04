@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,13 +40,13 @@ func Rollout(name string, flags RolloutFlags) error {
 	fmt.Printf("Rolling out to sandbox %q (%d nodes)\n\n", state.Name, len(state.Servers))
 
 	// Step 1: Find or require binary archive
-	archivePath := findNewestArchive()
+	archivePath := build.FindNewestArchive()
 	if archivePath == "" {
 		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
 	}
 
 	info, _ := os.Stat(archivePath)
-	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
 	// Build extra flags string for upgrade command
 	extraFlags := flags.upgradeFlags()

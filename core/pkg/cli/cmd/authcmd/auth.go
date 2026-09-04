@@ -22,8 +22,8 @@ var (
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate with wallet",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthLogin(loginWallet, loginNamespace, loginSimple)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthLogin(loginWallet, loginNamespace, loginSimple)
 	},
 }
 
@@ -37,40 +37,40 @@ func init() {
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Clear stored credentials",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"logout"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthLogout()
 	},
 }
 
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Show current authentication status",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"whoami"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthWhoami()
 	},
 }
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show detailed authentication info",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"status"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthStatus()
 	},
 }
 
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all stored credentials",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"list"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthList()
 	},
 }
 
 var switchCmd = &cobra.Command{
 	Use:   "switch",
 	Short: "Switch between stored credentials",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"switch"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthSwitch()
 	},
 }
 

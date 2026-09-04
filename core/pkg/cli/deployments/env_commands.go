@@ -8,6 +8,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
@@ -28,10 +29,10 @@ Values are never printed back. They are where secrets live, so 'list' shows
 names only.`,
 }
 
+// --json is a persistent flag on the root, so it is not defined here.
 var (
 	envSetPairs []string
 	envSetFile  string
-	envJSON     bool
 )
 
 func init() {
@@ -41,7 +42,6 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		RunE:  runEnvList,
 	}
-	list.Flags().BoolVar(&envJSON, "json", false, "Print the gateway's reply as JSON")
 
 	set := &cobra.Command{
 		Use:   "set <app>",
@@ -73,7 +73,7 @@ func runEnvList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if envJSON {
+	if printer.For(cmd).JSONMode() {
 		fmt.Println(string(raw))
 		return nil
 	}

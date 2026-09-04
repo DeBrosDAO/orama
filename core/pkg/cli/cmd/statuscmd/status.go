@@ -16,13 +16,12 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/monitor"
 	"github.com/DeBrosOfficial/network/pkg/cli/monitor/display"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/spf13/cobra"
 )
 
-var (
-	envFlag  string
-	jsonFlag bool
-)
+// --json is a persistent flag on the root, so it is not defined here.
+var envFlag string
 
 // collectTimeout bounds each node's report; a node slower than this is
 // reported unreachable rather than holding up the whole summary.
@@ -55,7 +54,7 @@ status'.`,
 		if err != nil {
 			return err
 		}
-		if jsonFlag {
+		if printer.For(cmd).JSONMode() {
 			return display.StatusJSON(snap, os.Stdout)
 		}
 		return display.StatusTable(snap, os.Stdout)
@@ -64,5 +63,4 @@ status'.`,
 
 func init() {
 	Cmd.Flags().StringVar(&envFlag, "env", "", "Environment (default: active)")
-	Cmd.Flags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
 }

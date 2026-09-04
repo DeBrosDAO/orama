@@ -8,7 +8,7 @@ import (
 var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Remove production services (requires sudo)",
-	Run: func(cmd *cobra.Command, args []string) {
-		uninstall.Handle()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return uninstall.Handle()
 	},
 }

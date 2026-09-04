@@ -122,10 +122,17 @@ If the victim is a **namespace RQLite voter**, removing it without recovery can 
 # On an existing node
 cat /opt/orama/manifest.json   # version, e.g. 0.122.99
 
+# What your local CLI is
+orama version
+
 # Locally you need the same archive, e.g.
 # /tmp/orama-0.122.99-linux-amd64.tar.gz
 # or: orama build  (then use the produced archive)
 ```
+
+`orama version` is truthful in every build path: the version is compiled in
+rather than injected only by `make build`, so a binary built with `go build` or
+installed with `go install` reports its real number instead of `dev`.
 
 ### 5. Secrets / SSH
 

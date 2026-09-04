@@ -21,8 +21,8 @@ Usage:
   orama node unlock --genesis --node-ip <wg-ip>
 
 The node must be reachable over WireGuard on port 9998.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		unlock.Run(&unlockFlags)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return unlock.Run(&unlockFlags)
 	},
 }
 

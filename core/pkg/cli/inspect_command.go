@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"strings"
 	"time"
@@ -77,8 +78,7 @@ func RunInspect(opts InspectOptions) error {
 	aiAPIKey := &opts.AIAPIKey
 
 	if *env == "" {
-		fmt.Fprintf(os.Stderr, "Error: --env is required (devnet, testnet)\n")
-		os.Exit(1)
+		return clierr.Usage("--env is required (devnet, testnet)")
 	}
 
 	// Nodes come from the caller when it resolved them (the normal path), and
@@ -92,15 +92,13 @@ func RunInspect(opts InspectOptions) error {
 		nodes = inspector.FilterByEnv(loaded, *env)
 	}
 	if len(nodes) == 0 {
-		fmt.Fprintf(os.Stderr, "Error: no nodes found for environment %q\n", *env)
-		os.Exit(1)
+		return clierr.NotFound("no nodes found for environment %q", *env)
 	}
 
 	// Prepare wallet-derived SSH keys
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error preparing SSH keys: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to prepare SSH keys: %w", err)
 	}
 	defer cleanup()
 

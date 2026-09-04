@@ -2,7 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
-	"os"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os/exec"
 	"time"
 
@@ -19,10 +19,9 @@ import (
 // startReadyBudget is how long the node has to come up after a start.
 const startReadyBudget = 3 * time.Minute
 
-func HandleStart() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
-		os.Exit(1)
+func HandleStart() error {
+	if err := clierr.RequireRoot("starting the node services"); err != nil {
+		return err
 	}
 
 	fmt.Printf("Starting all Orama production services...\n")
@@ -30,7 +29,7 @@ func HandleStart() {
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
 		fmt.Printf("  ⚠️  No Orama services found\n")
-		return
+		return nil
 	}
 
 	// Reset failed state for all services before starting
@@ -76,18 +75,16 @@ func HandleStart() {
 
 	if len(inactive) == 0 {
 		fmt.Printf("\n✅ All services already running\n")
-		return
+		return nil
 	}
 
 	// Check port availability for services we're about to start
 	ports, err := utils.CollectPortsForServices(inactive, false)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("%v", err)
 	}
 	if err := utils.EnsurePortsAvailable("prod start", ports); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("%v", err)
 	}
 
 	// Re-enable inactive services first (in case they were disabled by 'orama node stop')
@@ -113,9 +110,9 @@ func HandleStart() {
 		RQLiteBase:  fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort),
 		GatewayBase: fmt.Sprintf("http://localhost:%d", constants.GatewayAPIPort),
 	}, nodehealth.Options{Budget: startReadyBudget}); err != nil {
-		fmt.Fprintf(os.Stderr, "\n❌ Services were started but the node is not serving: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("Services were started but the node is not serving: %v", err)
 	}
 
 	fmt.Printf("\n✅ All services started and the node is serving\n")
+	return nil
 }

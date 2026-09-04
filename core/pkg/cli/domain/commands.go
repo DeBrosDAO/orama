@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
@@ -33,23 +34,20 @@ prints the record to create, 'verify' checks it.`,
 // Flag storage is per command. A single set of package-level variables would
 // be shared by every subcommand that binds them, so `add --wait` and
 // `verify --wait` would have whichever default was registered last.
+//
+// --json is not here: it is a persistent flag on the root, so every command
+// answers to it and none of them defines it twice.
 var (
 	addFlags struct {
 		app    string
-		json   bool
 		verify bool
 		wait   time.Duration
 	}
 	verifyFlags struct {
-		json bool
 		wait time.Duration
 	}
 	listFlags struct {
-		app  string
-		json bool
-	}
-	removeFlags struct {
-		json bool
+		app string
 	}
 )
 
@@ -71,7 +69,6 @@ The domain does not serve traffic until 'orama domain verify' succeeds.`,
 		RunE: runAdd,
 	}
 	add.Flags().StringVar(&addFlags.app, "app", "", "Deployment to attach the domain to [required]")
-	add.Flags().BoolVar(&addFlags.json, "json", false, "Print the gateway's reply as JSON")
 	add.Flags().BoolVar(&addFlags.verify, "verify", false, "Wait for the TXT record and verify in one step")
 	add.Flags().DurationVar(&addFlags.wait, "wait", 5*time.Minute, "How long --verify waits for the record to propagate")
 	_ = add.MarkFlagRequired("app")
@@ -87,7 +84,6 @@ freshly created DNS record needs.`,
 		Args: cobra.ExactArgs(1),
 		RunE: runVerify,
 	}
-	verify.Flags().BoolVar(&verifyFlags.json, "json", false, "Print the gateway's reply as JSON")
 	verify.Flags().DurationVar(&verifyFlags.wait, "wait", 0, "Keep checking until the record appears, up to this long")
 
 	list := &cobra.Command{
@@ -98,7 +94,6 @@ freshly created DNS record needs.`,
 		RunE:  runList,
 	}
 	list.Flags().StringVar(&listFlags.app, "app", "", "Only this deployment's domains")
-	list.Flags().BoolVar(&listFlags.json, "json", false, "Print the gateway's reply as JSON")
 
 	remove := &cobra.Command{
 		Use:   "remove <domain>",
@@ -107,7 +102,6 @@ freshly created DNS record needs.`,
 		Args:  cobra.ExactArgs(1),
 		RunE:  runRemove,
 	}
-	remove.Flags().BoolVar(&removeFlags.json, "json", false, "Print the gateway's reply as JSON")
 
 	Cmd.AddCommand(add, verify, list, remove)
 }
@@ -139,7 +133,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if addFlags.json {
+	if printer.For(cmd).JSONMode() {
 		return printJSON(raw)
 	}
 
@@ -160,11 +154,11 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Waiting for the record, up to %s...\n", addFlags.wait)
-	return verifyDomain(resp.Domain, addFlags.wait, addFlags.json)
+	return verifyDomain(resp.Domain, addFlags.wait, printer.For(cmd).JSONMode())
 }
 
 func runVerify(cmd *cobra.Command, args []string) error {
-	return verifyDomain(normalizeDomain(args[0]), verifyFlags.wait, verifyFlags.json)
+	return verifyDomain(normalizeDomain(args[0]), verifyFlags.wait, printer.For(cmd).JSONMode())
 }
 
 // retryVerify reports whether a failed verify is worth asking again.
@@ -228,7 +222,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if listFlags.json {
+	if printer.For(cmd).JSONMode() {
 		return printJSON(raw)
 	}
 
@@ -264,7 +258,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if removeFlags.json {
+	if printer.For(cmd).JSONMode() {
 		return printJSON(raw)
 	}
 	fmt.Printf("✓ %s removed.\n", domain)

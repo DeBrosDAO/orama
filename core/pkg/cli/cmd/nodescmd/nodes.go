@@ -7,11 +7,10 @@ package nodescmd
 
 import (
 	"fmt"
-	"os"
-	"text/tabwriter"
 
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/spf13/cobra"
 )
 
@@ -33,14 +32,14 @@ with your stored credentials, falling back to nodes.conf.
 
 Requires: orama auth login (for API-based resolution)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(envFlag)
+			return runList(printer.For(cmd), envFlag)
 		},
 	}
 	cmd.Flags().StringVar(&envFlag, "env", "", "Filter by environment (default: active environment)")
 	return cmd
 }
 
-func runList(envFlag string) error {
+func runList(out *printer.Printer, envFlag string) error {
 	env := envFlag
 	if env == "" {
 		active, err := cli.GetActiveEnvironment()
@@ -56,20 +55,22 @@ func runList(envFlag string) error {
 	}
 
 	if len(nodes) == 0 {
-		fmt.Printf("No nodes found for environment %q\n", env)
-		fmt.Printf("Register nodes with: orama node setup --ip <ip> --env %s\n", env)
+		if out.JSONMode() {
+			return out.Table([]string{"IP", "ROLE", "USER", "ENVIRONMENT"}, nil)
+		}
+		out.Printf("No nodes found for environment %q\n", env)
+		out.Printf("Register nodes with: orama node setup --ip <ip> --env %s\n", env)
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "IP\tROLE\tUSER\tENVIRONMENT\n")
+	rows := make([][]string, 0, len(nodes))
 	for _, n := range nodes {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", n.Host, n.Role, n.User, n.Environment)
+		rows = append(rows, []string{n.Host, n.Role, n.User, n.Environment})
 	}
-	if err := w.Flush(); err != nil {
-		return fmt.Errorf("write node table: %w", err)
+	if err := out.Table([]string{"IP", "ROLE", "USER", "ENVIRONMENT"}, rows); err != nil {
+		return err
 	}
 
-	fmt.Printf("\n%d node(s) in %s\n", len(nodes), env)
+	out.Printf("\n%d node(s) in %s\n", len(nodes), env)
 	return nil
 }

@@ -3,10 +3,10 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -172,7 +172,14 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nSummary: %d passed, %d failed, %d warnings\n", pass, fail, warn)
 
 	if fail > 0 {
-		os.Exit(1)
+		// A failing check is the answer this command exists to give, so the
+		// message is the summary above, not a second error line.
+		return clierr.Wrap(clierr.CodeFailure, errCheckFailed(fail))
 	}
 	return nil
+}
+
+// errCheckFailed names how many diagnostics failed.
+func errCheckFailed(n int) error {
+	return fmt.Errorf("%d diagnostic check(s) failed", n)
 }

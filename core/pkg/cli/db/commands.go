@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"io"
 	"net/http"
 	"os"
@@ -258,22 +259,27 @@ func listDatabases(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	databases, ok := result["databases"].([]interface{})
-	if !ok || len(databases) == 0 {
-		fmt.Println("No databases found")
+	out := printer.For(cmd)
+	if out.JSONMode() {
+		// The gateway's reply verbatim, including the exact byte counts rather
+		// than the rounded sizes the table shows.
+		fmt.Fprintln(out.Out(), string(body))
 		return nil
 	}
 
-	// Print table
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSIZE\tBACKUP CID\tCREATED")
+	databases, ok := result["databases"].([]interface{})
+	if !ok || len(databases) == 0 {
+		out.Printf("No databases found\n")
+		return nil
+	}
 
+	rows := make([][]string, 0, len(databases))
 	for _, db := range databases {
-		d := db.(map[string]interface{})
+		d, _ := db.(map[string]interface{})
 
 		size := "0 B"
 		if sizeBytes, ok := d["size_bytes"].(float64); ok {
-			size = formatBytes(int64(sizeBytes))
+			size = printer.FormatBytes(int64(sizeBytes))
 		}
 
 		backupCID := "-"
@@ -292,18 +298,13 @@ func listDatabases(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			d["database_name"],
-			size,
-			backupCID,
-			createdAt,
-		)
+		rows = append(rows, []string{fmt.Sprint(d["database_name"]), size, backupCID, createdAt})
 	}
 
-	w.Flush()
-
-	fmt.Printf("\nTotal: %v\n", result["total"])
-
+	if err := out.Table([]string{"NAME", "SIZE", "BACKUP CID", "CREATED"}, rows); err != nil {
+		return err
+	}
+	out.Printf("\nTotal: %v\n", result["total"])
 	return nil
 }
 
@@ -432,7 +433,7 @@ func listBackups(cmd *cobra.Command, args []string) error {
 
 		size := "0 B"
 		if sizeBytes, ok := b["size_bytes"].(float64); ok {
-			size = formatBytes(int64(sizeBytes))
+			size = printer.FormatBytes(int64(sizeBytes))
 		}
 
 		backedUpAt := ""
@@ -456,19 +457,6 @@ func listBackups(cmd *cobra.Command, args []string) error {
 // the one shared resolver, so a request can never carry another gateway's key.
 func getAPIURL() (string, error)    { return shared.GetAPIURL() }
 func getAuthToken() (string, error) { return shared.GetAuthToken() }
-
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
 
 // DeleteCmd deletes a database and its file.
 var DeleteCmd = &cobra.Command{
