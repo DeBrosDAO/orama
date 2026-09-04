@@ -35,6 +35,20 @@ func NewHandler(logger *zap.Logger, rqliteClient rqlite.Client) *Handler {
 // Supports both JWT auth (wallet in Sub claim) and API key auth (wallet looked
 // up from wallet_api_keys table).
 func (h *Handler) walletFromRequest(r *http.Request) string {
+	return WalletFromRequest(r, h.rqliteClient)
+}
+
+// WalletFromRequest resolves the caller's wallet: the JWT subject when it is a
+// wallet, and otherwise the wallet that owns the API key's namespace.
+//
+// Exported for the gateway, which asks the same question before letting a
+// caller read the cluster registry.
+func WalletFromRequest(r *http.Request, db rqlite.Client) string {
+	h := &Handler{rqliteClient: db}
+	return h.resolveWallet(r)
+}
+
+func (h *Handler) resolveWallet(r *http.Request) string {
 	// 1. Try JWT claims first (wallet JWT auth sets Sub = "0x...")
 	if claims, ok := r.Context().Value(ctxkeys.JWT).(*auth.JWTClaims); ok && claims != nil {
 		sub := strings.TrimSpace(claims.Sub)

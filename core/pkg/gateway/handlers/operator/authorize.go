@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
 
@@ -60,12 +61,21 @@ func (h *Handler) requireOperator(w http.ResponseWriter, r *http.Request) (strin
 }
 
 // isOperator reports whether a wallet is on the cluster's operator list.
+func (h *Handler) isOperator(ctx context.Context, wallet string) (bool, error) {
+	return IsOperator(ctx, h.rqliteClient, wallet)
+}
+
+// IsOperator reports whether a wallet is on the cluster's operator list.
+//
+// Exported because the gateway asks the same question of the raw-database
+// routes: on the gateway that serves the cluster registry, exporting the
+// database is an operator act, not a tenant one.
 //
 // The comparison is on the normalised address, because the same wallet is
 // written checksummed in one place and lowercase in another and an operator
 // locked out by capitalisation would be a worse bug than the one this closes.
-func (h *Handler) isOperator(ctx context.Context, wallet string) (bool, error) {
-	if h.rqliteClient == nil {
+func IsOperator(ctx context.Context, db rqlite.Client, wallet string) (bool, error) {
+	if db == nil {
 		return false, errNoRegistry
 	}
 	normalised := strings.ToLower(strings.TrimSpace(wallet))
@@ -76,7 +86,7 @@ func (h *Handler) isOperator(ctx context.Context, wallet string) (bool, error) {
 	var rows []struct {
 		Wallet string `db:"wallet"`
 	}
-	if err := h.rqliteClient.Query(ctx, &rows,
+	if err := db.Query(ctx, &rows,
 		"SELECT wallet FROM operators WHERE LOWER(wallet) = ? LIMIT 1", normalised); err != nil {
 		return false, err
 	}

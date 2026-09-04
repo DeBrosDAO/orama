@@ -829,6 +829,15 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// The raw-database routes on the gateway that serves the cluster
+		// registry are an operator's. The cross-namespace check below runs
+		// only when this gateway serves a named namespace, which the cluster
+		// gateway does not — so nothing stopped a tenant's admin key from
+		// exporting the registry, or importing over it.
+		if !g.requireOperatorForCoreRegistry(w, r) {
+			return
+		}
+
 		// Cross-namespace access control for namespace gateways
 		// The gateway's ClientNamespace determines which namespace this gateway serves
 		gatewayNamespace := "default"

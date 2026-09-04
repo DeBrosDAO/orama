@@ -37,6 +37,12 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Caddy strips all six headers on the way up (`header_up -X-Internal-Auth-*` in every `reverse_proxy` block) as defence in depth: two independent places have to fail before a forged header is believed
 - A gateway with no cluster secret derives no key. It trusts no internal-auth header, and it refuses to proxy a request it cannot sign rather than forwarding an assertion it cannot back
 
+**The raw-database routes (`/v1/rqlite*`)**
+- They serve whatever database the gateway they reach is configured against. On a namespace gateway that is the tenant's own; on the gateway that fronts the cluster it is the registry — `api_keys`, `namespace_ownership`, `refresh_tokens`, `wireguard_peers`, `deployment_env_vars`, `invite_tokens`
+- On the cluster gateway they now require an operator. They needed the `admin` grant and ownership of *some* namespace, and the cross-namespace check that would have caught the mismatch runs only when the gateway serves a named namespace — which the cluster gateway does not. So any tenant's admin key could export the registry, or import over it
+- This covers the whole surface, not just export and import: the ORM HTTP gateway mounts `query`, `exec`, `select`, `find` and `transaction` under the same prefix and against the same database
+- A tenant's own database is reached through their namespace gateway (`ns-<namespace>.<base domain>`), which the refusal names
+
 **Operating the cluster (`/v1/operator/*`)**
 - Minting a cluster invite, listing the cluster's nodes and claiming a node require the `admin` grant **and** a wallet on the cluster's operator list (`operators` table). The endpoints had no scope entry and no ownership entry, so they fell through to "any valid credential is enough" — and an invite token is handed every secret the cluster holds, including the cluster secret the JWT signing key is derived from. A key extracted from a public app bundle reached it
 - The list is seeded at migration 044 from `dns_nodes.operator_wallet`, which is what `orama node install --operator-wallet` writes. That flag is validated as a `0x` + 40-hex address and normalised, because it used to be a free-form string a typo could silently ruin
