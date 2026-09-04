@@ -286,7 +286,7 @@ func (h *Handlers) PhantomCompleteHandler(w http.ResponseWriter, r *http.Request
 	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, namespace)
 	if err != nil {
 		h.updateSessionFailed(internalCtx, db, req.SessionID, "failed to issue API key")
-		writeError(w, http.StatusInternalServerError, "failed to issue API key")
+		writeCredentialError(w, namespace, err)
 		return
 	}
 

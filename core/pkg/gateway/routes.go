@@ -85,7 +85,6 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/token", g.authHandlers.APIKeyToJWTHandler)
 		mux.HandleFunc("/v1/auth/api-key", g.authHandlers.IssueAPIKeyHandler)
 		mux.HandleFunc("/v1/auth/simple-key", g.authHandlers.SimpleAPIKeyHandler)
-		mux.HandleFunc("/v1/auth/register", g.authHandlers.RegisterHandler)
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)

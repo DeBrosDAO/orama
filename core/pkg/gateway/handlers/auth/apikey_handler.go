@@ -54,6 +54,13 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// Refuse before anything is issued or provisioned: a namespace that belongs
+	// to another wallet is not this caller's to sign in to.
+	if err := h.authService.RequireNamespaceOwner(ctx, req.Wallet, namespace); err != nil {
+		writeCredentialError(w, namespace, err)
+		return
+	}
+
 	if h.clusterProvisioner != nil && namespace != "default" {
 		clusterID, status, needsProvisioning, err := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
 		if err != nil {
@@ -93,7 +100,7 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCredentialError(w, namespace, err)
 		return
 	}
 
@@ -199,7 +206,7 @@ func (h *Handlers) SimpleAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCredentialError(w, namespace, err)
 		return
 	}
 

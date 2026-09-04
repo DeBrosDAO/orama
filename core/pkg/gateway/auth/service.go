@@ -745,41 +745,24 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	return fmt.Errorf("nothing to revoke")
 }
 
-// RegisterApp registers a new client application
-func (s *Service) RegisterApp(ctx context.Context, wallet, namespace, name, publicKey string) (string, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
-
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
-	if err != nil {
-		return "", err
-	}
-
-	// Generate client app_id
-	buf := make([]byte, 12)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate app id: %w", err)
-	}
-	appID := "app_" + base64.RawURLEncoding.EncodeToString(buf)
-
-	// Persist app
-	if _, err := db.Query(internalCtx, "INSERT INTO apps(namespace_id, app_id, name, public_key) VALUES (?, ?, ?, ?)", nsID, appID, name, publicKey); err != nil {
-		return "", err
-	}
-
-	// Record ownership
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, ?, ?)", nsID, "wallet", NormalizeWallet(wallet))
-
-	return appID, nil
-}
-
-// GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace
+// GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace.
+//
+// It refuses when the namespace belongs to another wallet. This used to be the
+// takeover: the ownership row it wrote unconditionally made any wallet that
+// named an existing namespace an admin co-owner of it, and the key it returned
+// carried no scopes, which the read path treated as admin. Both halves are
+// closed here — ownership is claimed before anything is minted, and the key is
+// minted with the grant written down.
 func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace string) (string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.keyORM().Database()
 
 	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
+		return "", err
+	}
+
+	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, namespace, wallet); err != nil {
 		return "", err
 	}
 
@@ -806,22 +789,43 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	}
 	apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + namespace
 
-	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured
+	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured.
+	//
+	// The scope set is written, never left NULL. This is the owner's own key, so
+	// the grant is admin — the same access an empty column used to be read as,
+	// with the difference that it is now a decision on the row rather than an
+	// inference in the reader, and a key minted with no scopes denies.
 	hashedKey := s.HashAPIKey(apiKey)
-	if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", hashedKey, "", nsID); err != nil {
+	ownerScopes := ScopeSet{ScopeAdmin: {}}.Canonical()
+	if _, err := db.Query(internalCtx,
+		"INSERT INTO api_keys(key, name, namespace_id, scopes) VALUES (?, ?, ?, ?)",
+		hashedKey, "", nsID, ownerScopes,
+	); err != nil {
 		return "", fmt.Errorf("failed to store api key: %w", err)
 	}
 
-	// Link wallet -> api_key
+	// Link wallet -> api_key. A key the caller cannot find again on their next
+	// login is a new key every time, so this is not best-effort.
 	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
-	if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
-		apiKeyID := rid.Rows[0][0]
-		_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, NormalizeWallet(wallet), apiKeyID)
+	if err != nil || rid == nil || rid.Count == 0 || len(rid.Rows) == 0 || len(rid.Rows[0]) == 0 {
+		return "", fmt.Errorf("api key stored for namespace %q but its id could not be read back: %w", namespace, err)
+	}
+	if _, err := db.Query(internalCtx,
+		"INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)",
+		nsID, NormalizeWallet(wallet), rid.Rows[0][0],
+	); err != nil {
+		return "", fmt.Errorf("failed to link the api key to wallet in namespace %q: %w", namespace, err)
 	}
 
-	// Record ownerships — store the hash in ownership too
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, hashedKey)
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, NormalizeWallet(wallet))
+	// The key owns the namespace as well: that row is how the namespace gate
+	// recognizes a request authenticated by the key rather than by the wallet.
+	// Without it the caller holds a key that is refused everywhere.
+	if _, err := db.Query(internalCtx,
+		"INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)",
+		nsID, hashedKey,
+	); err != nil {
+		return "", fmt.Errorf("failed to record key ownership of namespace %q: %w", namespace, err)
+	}
 
 	return apiKey, nil
 }

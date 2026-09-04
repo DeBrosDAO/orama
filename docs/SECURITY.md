@@ -30,6 +30,12 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - The pre-join cleanup deletes only rows the refusal check exempted: residue of the caller's own unfinished joins, never a live node's row. `public_ip` is caller-supplied and unverified against the source address, so an unscoped delete here is a node-eviction primitive
 - A uniqueness conflict returns 409 and keeps the token spent; only a cluster fault releases it. Releasing on a caller-triggerable failure makes a single-use token replayable
 
+**Namespace ownership (`/v1/auth/verify`, `/v1/auth/api-key`)**
+- A namespace has at most one wallet owner, enforced by a partial unique index rather than by a check the code remembers to make. The first wallet to sign in to a namespace nobody owns becomes its owner; every later wallet is refused with `403` and the code `NAMESPACE_NOT_OWNED`, before a JWT, a refresh-token row, an API key or cluster provisioning exists
+- Ownership used to be written as a side effect of minting a key, unconditionally. Any wallet that signed a fresh nonce and named an existing namespace in the request body became an admin co-owner of it: the row satisfied the namespace gate, the gate marked the caller a confirmed owner, and a confirmed owner's wallet JWT carries admin
+- Every key is minted with its grant written on the row. An empty `scopes` column grants nothing; it used to mean "predates scoping" and was read as admin, and `GetOrCreateAPIKey` wrote no scopes column at all — so every key minted by a wallet login was an admin key, and the legacy-key cutover was undone on each login
+- `/v1/auth/register` was removed. Nothing called it, the `apps` row it wrote was never read, it stored a literal placeholder as the app's public key, and it took namespace ownership the same way
+
 **Node enrolment (`/v1/node/enroll`)**
 - `node_ip` is parsed as IPv4 and stored canonicalised. It is rendered into `Endpoint =` in the `wg0.conf` of every other node, so an unvalidated value is a WireGuard config injection
 

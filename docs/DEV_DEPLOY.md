@@ -332,6 +332,25 @@ statement refreshes `created_at`, keeping the row inside the 30-minute join
 grace, and a row is only ever dropped when it is *also* unmatched in `dns_nodes`.
 Once every node is on the new binary this resolves on the next 60s sync tick.
 
+#### Mixed-version window: unscoped API keys (migration 043)
+
+Migration 043 writes `scopes = 'admin'` onto every live key whose scopes column
+was empty, because an empty column used to be *read* as admin and the new
+binary reads it as no access at all. Access does not change: the grant that was
+being inferred is written down.
+
+The window is one-directional. An old binary still mints a key with no scopes on
+every wallet login, and a new binary denies that key everywhere. So during the
+roll a wallet that logs in against a not-yet-upgraded node can come away with a
+key that an upgraded node refuses. Logging in again once the node is upgraded
+mints a correct one, and `orama namespace keys revoke-legacy` sweeps any that
+were left behind.
+
+The same migration makes one wallet owner per namespace a database invariant. If
+a namespace has several wallet owners today — which the takeover bug allowed —
+only the earliest survives the migration, and the others lose access to it. That
+is the fix, not a side effect: they should never have had it.
+
 **Pattern B — pre-apply migrations explicitly via the CLI.**
 On any node:
 ```bash

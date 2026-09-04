@@ -152,7 +152,9 @@ func TestIsPublicPath(t *testing.T) {
 		{"v1 status", "/v1/status", true},
 		{"auth challenge", "/v1/auth/challenge", true},
 		{"auth verify", "/v1/auth/verify", true},
-		{"auth register", "/v1/auth/register", true},
+		// /v1/auth/register was removed: nothing called it, the apps row it wrote
+		// was never read, and it made the caller an owner of any namespace.
+		{"auth register", "/v1/auth/register", false},
 		{"auth refresh", "/v1/auth/refresh", true},
 		{"auth logout", "/v1/auth/logout", true},
 		{"auth api-key", "/v1/auth/api-key", true},

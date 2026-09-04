@@ -103,7 +103,8 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		// Embed the key's effective scopes (grandfather NULL→admin).
+		// Embed the key's scopes. An empty column is an empty set, so an
+		// unscoped key cannot be exchanged for a JWT that reaches anything.
 		scopesCanonical = authsvc.ScopesFromStored(rawScopes).Canonical()
 	}
 

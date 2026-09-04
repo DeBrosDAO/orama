@@ -274,9 +274,8 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 		return "", nil, "", "" // No credentials provided
 	}
 
-	// Resolve namespace AND the key's effective (grandfather-applied) scopes so
-	// they can be forwarded to the namespace gateway, which does not re-look-up
-	// the key (bugboard #148).
+	// Resolve namespace AND the key's scopes so they can be forwarded to the
+	// namespace gateway, which does not re-look-up the key (bugboard #148).
 	ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 	if err != nil {
 		return "", nil, "", "invalid API key"
@@ -647,8 +646,8 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Attach auth metadata to context for downstream use. The scope set
-		// (bugboard #148) is applied by scopeMiddleware; a NULL/empty scopes
-		// column grandfathers to admin (ScopesFromStored).
+		// (bugboard #148) is applied by scopeMiddleware; a key whose scopes
+		// column is empty grants nothing.
 		reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
 		reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, ns)
 		reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ScopesFromStored(rawScopes))
@@ -775,7 +774,7 @@ func isPublicPath(p string) bool {
 	}
 
 	switch p {
-	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/network/status", "/v1/network/peers", "/v1/internal/tls/check", "/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/ping":
+	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/network/status", "/v1/network/peers", "/v1/internal/tls/check", "/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/ping":
 		return true
 	default:
 		// Also exempt namespace status polling endpoint

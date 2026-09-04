@@ -109,15 +109,15 @@ func ParseScopes(raw string) ScopeSet {
 	return set
 }
 
-// ScopesFromStored converts a stored api_keys.scopes value into a ScopeSet,
-// applying the grandfather policy: a NULL/empty scopes column means the key was
-// minted before scoping existed, so it is treated as admin (full access). This
-// keeps every legacy key working across the rolling upgrade; the cutover then
-// revokes all legacy (NULL-scope) keys so this branch stops mattering.
+// ScopesFromStored converts a stored api_keys.scopes value into a ScopeSet.
+//
+// An empty column grants nothing. It used to mean "minted before scoping
+// existed" and was read as admin, which made every key minted by a wallet login
+// an admin key — GetOrCreateAPIKey wrote no scopes column at all — and undid
+// the legacy-key cutover on every login. Migration 043 writes the grant those
+// keys were relying on onto the rows themselves, so the inference has nothing
+// left to do and an empty set is what it says it is.
 func ScopesFromStored(raw string) ScopeSet {
-	if strings.TrimSpace(raw) == "" {
-		return ScopeSet{ScopeAdmin: {}}
-	}
 	return ParseScopes(raw)
 }
 

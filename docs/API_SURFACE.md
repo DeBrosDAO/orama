@@ -46,7 +46,6 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/auth/phantom/session` | direct | Phantom wallet deep-link session. Browser redirect flow, not an SDK call. |
 | `/v1/auth/phantom/session/` | direct | Phantom wallet deep-link session by id. |
 | `/v1/auth/refresh` | SDK | Session renewal, called by the client on a 401. |
-| `/v1/auth/register` | direct | Register an application after a wallet signature. Provisioning, not runtime. |
 | `/v1/auth/simple-key` | direct | Development key issuance. Not for production code. |
 | `/v1/auth/token` | direct | Exchange an API key for a JWT. A server-side concern; the SDK sends the key itself. |
 | `/v1/auth/verify` | SDK | `auth.verify()` |

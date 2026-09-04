@@ -63,11 +63,14 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, l
 
 	// Record namespace ownership (hashed, mirroring GetOrCreateAPIKey) so the
 	// authorization middleware recognizes the key as an owner of the namespace.
-	// Best-effort + idempotent (INSERT OR IGNORE), matching GetOrCreateAPIKey —
-	// this avoids leaving a key row with no ownership row on a transient error.
-	_, _ = db.Query(internalCtx,
+	// A key with no ownership row is refused everywhere, so a failure here is
+	// the caller's problem and not something to swallow.
+	if _, err := db.Query(internalCtx,
 		"INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)",
-		nsID, hashedKey)
+		nsID, hashedKey,
+	); err != nil {
+		return "", 0, fmt.Errorf("failed to record key ownership of namespace %q: %w", namespace, err)
+	}
 
 	var id int64
 	if rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey); err == nil &&

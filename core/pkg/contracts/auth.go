@@ -48,10 +48,6 @@ type AuthService interface {
 	// Returns: token, expirationUnix, error.
 	GenerateJWT(namespace, subject string, ttl time.Duration, custom map[string]string) (string, int64, error)
 
-	// RegisterApp registers a new client application with the gateway.
-	// Returns an application ID that can be used for OAuth flows.
-	RegisterApp(ctx context.Context, wallet, namespace, name, publicKey string) (string, error)
-
 	// GetOrCreateAPIKey retrieves an existing API key or creates a new one.
 	// API keys provide programmatic access without interactive authentication.
 	GetOrCreateAPIKey(ctx context.Context, wallet, namespace string) (string, error)
