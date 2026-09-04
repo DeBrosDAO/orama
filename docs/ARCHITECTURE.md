@@ -381,7 +381,7 @@ per tick.
 An eviction writes a tombstone to `raft_evicted_nodes`. Without one,
 `recoverOrphanedNodes` re-added the node within five minutes — it re-adds every
 discovery peer absent from the raft configuration, so the eviction was undone
-automatically. `orama node decommission` and `orama node migrate-raft-id` both write one, so a
+automatically. `orama node remove` and `orama node migrate-raft-id` both write one, so a
 removal made by hand is no longer undone within five minutes.
 
 Tombstones expire after 24 hours, and that expiry is load-bearing rather than
@@ -471,13 +471,13 @@ being addresses:
   compared the announced id against this node's address, which works only while
   an id is an address; afterwards a node stops recognising itself and starts
   counting itself as a peer.
-- **`orama node decommission`** resolves the member's id from the configuration
+- **`orama node remove`** resolves the member's id from the configuration
   before removing it. Removing by address matched nothing on a migrated cluster
   and reported success, leaving the retired machine a configured voter for ever.
 
 Two rules govern removal. `SafeToRemoveVoter` is the eviction rule and refuses a
 member that is still answering — that is a demotion, not an eviction.
-`SafeToRemoveMember` is the quorum arithmetic alone, for a decommission or a
+`SafeToRemoveMember` is the quorum arithmetic alone, for a removal or a
 migration, which remove a live member on purpose. `RaftMember` and
 `RQLiteNodeMetadata.NodeID` carry the id as an opaque identifier that must not
 be dialled.

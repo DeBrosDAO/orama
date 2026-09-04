@@ -200,6 +200,7 @@ Services and their sandbox profiles:
 OramaOS nodes cannot be cleaned with the standard `orama node clean` command (no SSH access). Instead:
 
 - **Graceful departure:** `POST /v1/node/leave` on the Gateway API (see [Node Management](#node-management); there is no `orama node leave` CLI subcommand) — stops services, redistributes Shamir shares, removes WG peer
+- **Cluster-side removal:** once the node is gone, `orama node remove --env <env> --node <ip> --offline` takes it out of raft, every namespace it served and the node registry from a survivor. `--offline` is required: the command never tries to reach an OramaOS node
 - **Factory reset:** Reflash the OramaOS image on the VPS via the hosting provider's dashboard
 - **Data is unrecoverable:** Since the LUKS key is distributed across peers, reflashing destroys all data permanently
 

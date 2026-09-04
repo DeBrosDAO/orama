@@ -3,13 +3,14 @@
 How to completely remove all Orama Network state from a VPS so it can be reinstalled fresh.
 
 > **Prefer the CLI.** For a node that is or was a cluster member, run
-> `orama node decommission --env <env> --node <ip>`: it retires the node from
-> raft, the mesh and the node registry from a *survivor* first, then erases it.
-> Doing only the erase — which is all this guide, and the deprecated
-> `orama node clean`, ever did — leaves the node a configured raft voter counted
-> toward quorum, with its `wireguard_peers` row still applied to every
-> survivor's interface. Use `orama node wipe` when the node is already retired,
-> and the manual steps below only when the CLI cannot reach the machine.
+> `orama node remove --env <env> --node <ip>`: from a *survivor* it checks that
+> no cluster loses quorum, retires the node from raft, the mesh, every namespace
+> it served and the node registry, and only then erases it. Doing only the erase
+> — which is all this guide, and the deprecated `orama node clean`, ever did —
+> leaves the node a configured raft voter counted toward quorum, with its
+> `wireguard_peers` row still applied to every survivor's interface. Use
+> `orama node wipe` when the node is already retired, and the manual steps below
+> only when the CLI cannot reach the machine.
 
 > **OramaOS nodes:** This guide applies to Ubuntu-based nodes only. OramaOS has no SSH or shell access. To remove an OramaOS node: use `POST /v1/node/leave` via the Gateway API for graceful departure, or reflash the OramaOS image via your VPS provider's dashboard for a factory reset. See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for details.
 
@@ -156,12 +157,14 @@ orama node wipe --env testnet --nuclear        # also remove shared binaries
 ```
 
 `wipe` erases the target only. If the node is still part of a running cluster,
-use `decommission` instead — it removes the node from the cluster first (raft
-membership, WireGuard peers, DNS) and then erases it, which `wipe` does not do:
+use `remove` instead — it takes the node out of the cluster first (raft
+membership, WireGuard peer, nameserver slot, namespace memberships and ports,
+TURN and SFU allocations, DNS) and then erases it, which `wipe` does not do:
 
 ```bash
-orama node decommission --env testnet --node 1.2.3.4
-orama node decommission --env testnet --node 1.2.3.4 --offline   # VPS already gone
+orama node remove --env testnet --node 1.2.3.4 --dry-run   # Show the plan only
+orama node remove --env testnet --node 1.2.3.4
+orama node remove --env testnet --node 1.2.3.4 --offline   # VPS already gone
 ```
 
 The manual steps earlier in this document remain useful for a node the CLI

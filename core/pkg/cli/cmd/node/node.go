@@ -15,7 +15,7 @@ Local, run on the node itself and needing root (sudo):
   report, invite, unlock, schema, migrate, migrate-raft-id, migrate-conf
 
 Remote, run from your machine and reaching nodes over SSH:
-  list, setup, enroll, push, rollout, clean, decommission, wipe, recover-raft
+  list, setup, enroll, push, rollout, clean, remove, wipe, recover-raft
 
 The remote commands are the same implementations as the top-level 'orama push',
 'orama rollout' and 'orama nodes'.`,

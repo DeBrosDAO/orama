@@ -366,21 +366,31 @@ cutover; use the same process for testnet.
 There are two operations, and picking the wrong one is how a deleted VPS ends up
 still counted toward raft quorum.
 
-**`decommission`** retires a node from the cluster and then erases it. Run this
-for a node that is or was a member. It works from a *survivor*: takes the node
-out of the raft configuration (refusing if that would cost the cluster its
-quorum), writes an eviction tombstone so nothing re-adds it automatically, and
-deletes its `wireguard_peers` and `dns_nodes` rows. Then it wipes the target.
+**`remove`** retires a node from the cluster and then erases it. Run this for a
+node that is or was a member. It works from a *survivor*: prints what the
+removal costs every raft cluster the node is a voter in — the platform cluster
+and each namespace it serves — and refuses if any would lose quorum; takes the
+node out of the platform raft configuration; writes an eviction tombstone so
+nothing re-adds it automatically; releases its mesh address, nameserver slot,
+namespace memberships, namespace port blocks and its TURN and SFU allocations;
+and marks it retired so the cluster purges its DNS records. Then it wipes the
+target. `decommission` is accepted as an alias.
 
 ```bash
-orama node decommission --env testnet --node 1.2.3.4 --force
+# Show the quorum impact and the statements, change nothing.
+orama node remove --env testnet --node 1.2.3.4 --dry-run
+
+orama node remove --env testnet --node 1.2.3.4 --force
 
 # The machine is already gone: do the cluster-side removal only.
-orama node decommission --env testnet --node 1.2.3.4 --offline --force
+orama node remove --env testnet --node 1.2.3.4 --offline --force
 ```
 
+Every step is keyed on the node and safe to repeat, so a removal that failed
+part way through is finished by running it again.
+
 **`wipe`** erases a node and says nothing to the cluster. Use it for a node that
-is already retired, that never joined, or to finish a decommission whose wipe
+is already retired, that never joined, or to finish a removal whose wipe
 failed.
 
 ```bash
@@ -478,12 +488,13 @@ default, so `--fanout` is accepted and ignored, and `--direct` opts out.
 | `--yes` | Skip confirmation |
 | `--delay <seconds>` | Delay between nodes (default: 30) |
 
-#### `orama node decommission`
+#### `orama node remove` (alias: `decommission`)
 
 | Flag | Description |
 |------|-------------|
 | `--env <env>` | Target environment (required) |
 | `--node <ip>` | Node to remove (required) |
+| `--dry-run` | Print the quorum impact and the statements, change nothing |
 | `--offline` | The node is already gone: cluster-side removal only |
 | `--nuclear` | When wiping, also remove shared binaries |
 | `--force` | Skip confirmation (DESTRUCTIVE) |
