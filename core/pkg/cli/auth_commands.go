@@ -344,20 +344,23 @@ func promptForGatewayURL() string {
 
 // getGatewayURL returns the gateway URL based on environment or env var
 // Used by other commands that don't need interactive node selection
+// getGatewayURL resolves the gateway for the auth and namespace commands.
+//
+// It goes through auth.ResolveGatewayURL like every other command, so these
+// commands cannot end up pointed at a different gateway than the one whose
+// credential they read. It previously honoured only ORAMA_GATEWAY_URL and fell
+// back to a hardcoded devnet URL, which meant an unconfigured shell silently
+// talked to a live network.
+//
+// Reporting the failure by exiting matches how these handlers report every
+// other error; chg-336 converts the whole file to returned errors.
 func getGatewayURL() string {
-	// Check environment variable first (for backwards compatibility)
-	if url := os.Getenv("ORAMA_GATEWAY_URL"); url != "" {
-		return url
+	url, err := auth.ResolveGatewayURL()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
 	}
-
-	// Get from active environment
-	env, err := GetActiveEnvironment()
-	if err == nil {
-		return env.GatewayURL
-	}
-
-	// Fallback to devnet
-	return "https://orama-devnet.network"
+	return url
 }
 
 func handleAuthList() {

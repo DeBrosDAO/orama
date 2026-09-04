@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -540,7 +540,10 @@ func uploadDeployment(endpoint, tarballPath string, formData map[string]string) 
 	writer.Close()
 
 	// Get API URL from config
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return nil, err
+	}
 	url := apiURL + endpoint
 
 	// Create request
@@ -603,36 +606,7 @@ func printDeploymentInfo(resp map[string]interface{}) {
 	}
 }
 
-func getAPIURL() string {
-	// Check environment variable first
-	if url := os.Getenv("ORAMA_API_URL"); url != "" {
-		return url
-	}
-	// Get from active environment config
-	return auth.GetDefaultGatewayURL()
-}
-
-func getAuthToken() (string, error) {
-	// Check environment variable first
-	if token := os.Getenv("ORAMA_TOKEN"); token != "" {
-		return token, nil
-	}
-
-	// Try to get from enhanced credentials store
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
-	}
-
-	gatewayURL := auth.GetDefaultGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
-	}
-
-	if !creds.IsValid() {
-		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
-	}
-
-	return creds.APIKey, nil
-}
+// getAPIURL and getAuthToken resolve the gateway and its credential through
+// the one shared resolver, so a request can never carry another gateway's key.
+func getAPIURL() (string, error)    { return shared.GetAPIURL() }
+func getAuthToken() (string, error) { return shared.GetAuthToken() }

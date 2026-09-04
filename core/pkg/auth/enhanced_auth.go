@@ -461,7 +461,10 @@ func HasValidEnhancedCredentials() (bool, error) {
 		return false, err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return false, err
+	}
 	defaultCreds := store.GetDefaultCredential(gatewayURL)
 
 	return defaultCreds != nil && defaultCreds.IsValid(), nil
@@ -474,7 +477,10 @@ func GetValidEnhancedCredentials() (*Credentials, error) {
 		return nil, err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return nil, err
+	}
 	defaultCreds := store.GetDefaultCredential(gatewayURL)
 
 	if defaultCreds == nil {

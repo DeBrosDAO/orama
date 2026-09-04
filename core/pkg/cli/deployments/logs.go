@@ -30,7 +30,10 @@ func init() {
 func streamLogs(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/v1/deployments/logs?name=%s&lines=%d&follow=%t",
 		apiURL, name, logsLines, logsFollow)
 

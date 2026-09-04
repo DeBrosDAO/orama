@@ -54,7 +54,10 @@ func init() {
 }
 
 func listDeployments(cmd *cobra.Command, args []string) error {
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/deployments/list"
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -128,7 +131,10 @@ func listDeployments(cmd *cobra.Command, args []string) error {
 func getDeployment(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/v1/deployments/get?name=%s", apiURL, name)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -224,7 +230,10 @@ func deleteDeployment(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/v1/deployments/delete?name=%s", apiURL, name)
 
 	req, err := http.NewRequest("DELETE", url, nil)
@@ -275,7 +284,10 @@ func rollbackDeployment(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/deployments/rollback?name=" + name
 
 	payload := map[string]interface{}{

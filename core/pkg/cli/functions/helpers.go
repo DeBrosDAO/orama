@@ -134,7 +134,10 @@ func ValidateWASMFile(path string) error {
 
 // apiRequest performs an authenticated HTTP request to the gateway API.
 func apiRequest(method, endpoint string, body io.Reader, contentType string) (*http.Response, error) {
-	apiURL := shared.GetAPIURL()
+	apiURL, err := shared.GetAPIURL()
+	if err != nil {
+		return nil, err
+	}
 	url := apiURL + endpoint
 
 	req, err := http.NewRequest(method, url, body)

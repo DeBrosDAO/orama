@@ -118,8 +118,15 @@ tinygo build -o function.wasm -target wasi function.go
 > ℹ️ **Deploys are per-gateway.** `orama function deploy` targets the gateway of your
 > **active CLI environment** (`orama env`). To deploy into a namespace, point the CLI
 > at that namespace's gateway (`orama env add <name> https://ns-<ns>.<domain>` then
-> `orama env use <name>`), or set `ORAMA_GATEWAY_URL`. Verify against the same
+> `orama env use <name>`), or set `ORAMA_API_URL`. Verify against the same
 > namespace host — the bare/main gateway has a different function registry + DB view.
+>
+> `ORAMA_API_URL`, `ORAMA_GATEWAY_URL` and `ORAMA_GATEWAY` all name the gateway
+> and are read in that order; the credential is always the one stored for
+> whichever gateway wins, so pointing the CLI at a namespace gateway you have
+> not authenticated against fails instead of sending another gateway's key. With
+> none of them set and no active environment, commands stop with an error rather
+> than defaulting to a network.
 
 ## Host Functions API
 

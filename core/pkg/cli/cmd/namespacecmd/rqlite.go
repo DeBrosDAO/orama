@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -54,7 +55,10 @@ func rqliteExport(cmd *cobra.Command, args []string) error {
 		output = "rqlite-export.db"
 	}
 
-	apiURL := nsRQLiteAPIURL()
+	apiURL, err := nsRQLiteAPIURL()
+	if err != nil {
+		return err
+	}
 	token, err := nsRQLiteAuthToken()
 	if err != nil {
 		return err
@@ -119,7 +123,10 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load credentials: %w", err)
 	}
-	gatewayURL := auth.GetDefaultGatewayURL()
+	gatewayURL, err := shared.GetAPIURL()
+	if err != nil {
+		return err
+	}
 	creds := store.GetDefaultCredential(gatewayURL)
 	if creds == nil || !creds.IsValid() {
 		return fmt.Errorf("not authenticated. Run 'orama auth login' first")
@@ -142,7 +149,10 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("aborted - namespace name did not match")
 	}
 
-	apiURL := nsRQLiteAPIURL()
+	apiURL, err := nsRQLiteAPIURL()
+	if err != nil {
+		return err
+	}
 	token, err := nsRQLiteAuthToken()
 	if err != nil {
 		return err
@@ -188,32 +198,8 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func nsRQLiteAPIURL() string {
-	if url := os.Getenv("ORAMA_API_URL"); url != "" {
-		return url
-	}
-	return auth.GetDefaultGatewayURL()
-}
-
-func nsRQLiteAuthToken() (string, error) {
-	if token := os.Getenv("ORAMA_TOKEN"); token != "" {
-		return token, nil
-	}
-
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
-	}
-
-	gatewayURL := auth.GetDefaultGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
-	}
-
-	if !creds.IsValid() {
-		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
-	}
-
-	return creds.APIKey, nil
-}
+// nsRQLiteAPIURL and nsRQLiteAuthToken resolve the gateway and its credential
+// through the one shared resolver, so a request can never carry another
+// gateway's key.
+func nsRQLiteAPIURL() (string, error)    { return shared.GetAPIURL() }
+func nsRQLiteAuthToken() (string, error) { return shared.GetAuthToken() }

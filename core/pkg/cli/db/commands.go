@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -71,7 +71,10 @@ func init() {
 func createDatabase(cmd *cobra.Command, args []string) error {
 	dbName := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/create"
 
 	payload := map[string]string{
@@ -130,7 +133,10 @@ func queryDatabase(cmd *cobra.Command, args []string) error {
 	dbName := args[0]
 	sql := args[1]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/query"
 
 	payload := map[string]interface{}{
@@ -211,7 +217,10 @@ func queryDatabase(cmd *cobra.Command, args []string) error {
 }
 
 func listDatabases(cmd *cobra.Command, args []string) error {
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/list"
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -301,7 +310,10 @@ func backupDatabase(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("📦 Backing up database '%s' to IPFS...\n", dbName)
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/backup"
 
 	payload := map[string]string{
@@ -359,7 +371,10 @@ func backupDatabase(cmd *cobra.Command, args []string) error {
 func listBackups(cmd *cobra.Command, args []string) error {
 	dbName := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/v1/db/sqlite/backups?database_name=%s", apiURL, dbName)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -435,36 +450,10 @@ func listBackups(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func getAPIURL() string {
-	if url := os.Getenv("ORAMA_API_URL"); url != "" {
-		return url
-	}
-	return auth.GetDefaultGatewayURL()
-}
-
-func getAuthToken() (string, error) {
-	if token := os.Getenv("ORAMA_TOKEN"); token != "" {
-		return token, nil
-	}
-
-	// Try to get from enhanced credentials store
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
-	}
-
-	gatewayURL := auth.GetDefaultGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
-	}
-
-	if !creds.IsValid() {
-		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
-	}
-
-	return creds.APIKey, nil
-}
+// getAPIURL and getAuthToken resolve the gateway and its credential through
+// the one shared resolver, so a request can never carry another gateway's key.
+func getAPIURL() (string, error)    { return shared.GetAPIURL() }
+func getAuthToken() (string, error) { return shared.GetAuthToken() }
 
 func formatBytes(bytes int64) string {
 	const unit = 1024
