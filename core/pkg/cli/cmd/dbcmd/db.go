@@ -16,6 +16,7 @@ func init() {
 	Cmd.AddCommand(db.CreateCmd)
 	Cmd.AddCommand(db.QueryCmd)
 	Cmd.AddCommand(db.ListCmd)
+	Cmd.AddCommand(db.DeleteCmd)
 	Cmd.AddCommand(db.BackupCmd)
 	Cmd.AddCommand(db.BackupsCmd)
 }

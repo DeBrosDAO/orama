@@ -132,6 +132,7 @@ type Gateway struct {
 	goHandler           *deploymentshandlers.GoHandler
 	nodejsHandler       *deploymentshandlers.NodeJSHandler
 	listHandler         *deploymentshandlers.ListHandler
+	envHandler          *deploymentshandlers.EnvHandler
 	updateHandler       *deploymentshandlers.UpdateHandler
 	rollbackHandler     *deploymentshandlers.RollbackHandler
 	logsHandler         *deploymentshandlers.LogsHandler
@@ -670,6 +671,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.deploymentService,
 			gw.processManager,
 			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.envHandler = deploymentshandlers.NewEnvHandler(
+			gw.deploymentService,
+			gw.processManager,
 			logger.Logger,
 			baseDeployPath,
 		)

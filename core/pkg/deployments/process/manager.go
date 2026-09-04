@@ -231,6 +231,42 @@ func (m *Manager) Restart(ctx context.Context, deployment *deployments.Deploymen
 	return m.systemdRestart(serviceName)
 }
 
+// Reconfigure rewrites the deployment's unit file from its current
+// configuration and restarts it.
+//
+// Restart alone is not enough to change a deployment's environment: the
+// variables live in the systemd unit, which is written once at Start and never
+// touched again. `systemctl restart` re-executes the same unit with the same
+// Environment= lines, so an environment change made in the database would take
+// effect only the next time the app was redeployed.
+//
+// workDir is the deployment's directory, which the unit's start command and
+// WorkingDirectory are built from.
+func (m *Manager) Reconfigure(ctx context.Context, deployment *deployments.Deployment, workDir string) error {
+	if !m.useSystemd {
+		// Direct mode holds the environment in the process it spawned, so the
+		// only way to change it is to spawn a new one.
+		m.stopDirect(m.getServiceName(deployment))
+		return m.startDirect(ctx, deployment, workDir)
+	}
+
+	if err := m.createSystemdService(deployment, workDir); err != nil {
+		return fmt.Errorf("failed to rewrite systemd service: %w", err)
+	}
+	if err := m.systemdReload(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %w", err)
+	}
+	if err := m.systemdRestart(m.getServiceName(deployment)); err != nil {
+		return fmt.Errorf("failed to restart service: %w", err)
+	}
+
+	m.logger.Info("Deployment process reconfigured",
+		zap.String("deployment", deployment.Name),
+		zap.String("service", m.getServiceName(deployment)),
+	)
+	return nil
+}
+
 // Status gets the status of a deployment process
 func (m *Manager) Status(ctx context.Context, deployment *deployments.Deployment) (string, error) {
 	serviceName := m.getServiceName(deployment)

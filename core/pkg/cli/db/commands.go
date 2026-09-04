@@ -1,12 +1,14 @@
 package db
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -466,4 +468,63 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// DeleteCmd deletes a database and its file.
+var DeleteCmd = &cobra.Command{
+	Use:   "delete <database_name>",
+	Short: "Delete a database and its file",
+	Long: `Permanently delete a database.
+
+The file and its write-ahead log are removed from the node that holds them.
+There is no undo: restore from a backup with 'orama db backups' if you need the
+data again.`,
+	Args: cobra.ExactArgs(1),
+	RunE: deleteDatabase,
+}
+
+var dbDeleteYes bool
+
+func init() {
+	DeleteCmd.Flags().BoolVar(&dbDeleteYes, "yes", false, "Skip the confirmation prompt")
+	DBCmd.AddCommand(DeleteCmd)
+}
+
+// deleteDatabase removes a database after the operator types its name back.
+//
+// A y/n prompt is answered reflexively; typing the name is not, and it is the
+// one check that catches the case that matters here — the right command aimed
+// at the wrong database.
+func deleteDatabase(cmd *cobra.Command, args []string) error {
+	dbName := args[0]
+
+	if !dbDeleteYes {
+		fmt.Printf("This permanently deletes %q and its file. There is no undo.\n", dbName)
+		fmt.Printf("Type the database name to confirm: ")
+
+		typed, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read confirmation: %w", err)
+		}
+		if strings.TrimSpace(typed) != dbName {
+			fmt.Println("Names do not match. Nothing was deleted.")
+			return nil
+		}
+	}
+
+	raw, err := shared.Request("POST", "/v1/db/sqlite/delete",
+		map[string]string{"database_name": dbName})
+	if err != nil {
+		return err
+	}
+
+	var resp struct {
+		FilesRemoved []string `json:"files_removed"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("parse gateway response: %w", err)
+	}
+
+	fmt.Printf("✓ %s deleted (%d file(s) removed).\n", dbName, len(resp.FilesRemoved))
+	return nil
 }

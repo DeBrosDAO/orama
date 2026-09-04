@@ -77,13 +77,11 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		healthCheckPath = "/health"
 	}
 
-	// Parse environment variables (form fields starting with "env_")
-	envVars := make(map[string]string)
-	for key, values := range r.MultipartForm.Value {
-		if strings.HasPrefix(key, "env_") && len(values) > 0 {
-			envName := strings.TrimPrefix(key, "env_")
-			envVars[envName] = values[0]
-		}
+	// Environment variables arrive as env_<NAME> form fields.
+	envVars, err := parseFormEnv(r.MultipartForm.Value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Get tarball file

@@ -11,6 +11,7 @@ Complete guide for deploying applications and managing databases on Orama Networ
 - [Deploying Go Backends](#deploying-go-backends)
 - [Deploying Node.js Backends](#deploying-nodejs-backends)
 - [Managing SQLite Databases](#managing-sqlite-databases)
+- [Environment Variables](#environment-variables)
 - [How Domains Work](#how-domains-work)
 - [Full-Stack Application Example](#full-stack-application-example)
 - [Managing Deployments](#managing-deployments)
@@ -422,6 +423,23 @@ orama db backups my-database
 # QmZxxx...         15.1 KB     2024-01-22 14:20
 ```
 
+### Deleting a Database
+
+```bash
+orama db delete my-database
+
+# This permanently deletes "my-database" and its file. There is no undo.
+# Type the database name to confirm: my-database
+# ✓ my-database deleted (3 file(s) removed).
+```
+
+Typing the name back is the confirmation, not a y/n prompt: a y/n is answered
+reflexively, and the mistake this guards against is the right command aimed at
+the wrong database. `--yes` skips the prompt for scripts.
+
+The database file and its write-ahead log are removed from the node that holds
+them. Back up first with `orama db backup` if you may want the data again.
+
 ### Database Features
 
 - ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
@@ -429,6 +447,74 @@ orama db backups my-database
 - ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
 - ✅ **ACID Transactions**: Full SQLite transactional support
 - ✅ **Concurrent Reads**: Multiple readers can query simultaneously
+
+---
+
+## Environment Variables
+
+Go, Node.js and Next.js SSR deployments run as a process, and that process reads
+its configuration from environment variables. Set them at deploy time, or change
+them afterwards without redeploying.
+
+### At deploy time
+
+```bash
+orama deploy go ./my-api --name my-api \
+  --env DATABASE_URL=postgres://... \
+  --env LOG_LEVEL=debug
+
+# Or read them from a file
+orama deploy go ./my-api --name my-api --env-file .env.production
+```
+
+`--env` is repeatable and splits on the first `=` only, so a value may contain
+one. `--env-file` reads a `.env`: `KEY=VALUE` per line, `#` comments and blank
+lines skipped, one layer of surrounding quotes removed. It does **not** expand
+`$VAR` — the literal text in the file is what gets sent, not whatever the
+machine running the deploy happens to have set. A `--env` on the command line
+overrides the same name from the file.
+
+### After deploying
+
+```bash
+orama app env list my-api
+orama app env set my-api --env DATABASE_URL=postgres://...
+orama app env set my-api --env-file .env.production
+orama app env unset my-api OLD_FLAG DEBUG_MODE
+```
+
+Setting or removing a variable rewrites the app's systemd unit and restarts it,
+so the change takes effect immediately. A static site has no process, so its
+variables are recorded and nothing is restarted.
+
+**`list` shows names, never values.** Environment variables are where secrets
+live, so an endpoint that echoed them would put every secret behind nothing more
+than a read scope, and into whatever terminal scrollback or CI log the caller is
+writing to. To change a value, set it again.
+
+### Reserved names
+
+`PORT` and `ENTRY_POINT` are set by the platform and cannot be overwritten or
+removed. `PORT` is how the gateway reaches your app; `ENTRY_POINT` is how a
+Node.js deployment knows what to run.
+
+### Health check path
+
+```bash
+orama deploy go ./my-api --name my-api --health-check /healthz
+```
+
+The platform polls this path to decide the app has started. It defaults to
+`/health`.
+
+### Why there is no `orama.yaml`
+
+Repeated deploys still retype `--name`. A project file holding the name, type,
+environment and health-check path would remove that, and it is worth doing — but
+it is a design commitment, not a convenience: it needs precedence rules against
+flags, a version field, validation, and an answer for what a checked-in file
+does with secrets. `--env-file` already covers the part that hurt most. The
+project file is tracked separately rather than half-built here.
 
 ---
 
@@ -1050,7 +1136,7 @@ orama auth status
 
 ### Security
 
-1. **Never commit sensitive data**: Use environment variables for secrets
+1. **Never commit sensitive data**: Keep secrets in environment variables, set with `orama app env set --env-file` rather than a flag so they stay out of shell history. See [Environment Variables](#environment-variables)
 2. **Validate inputs**: Always sanitize user input in your backend
 3. **HTTPS only**: All deployments automatically use HTTPS in production
 4. **CORS**: Configure CORS appropriately for your API

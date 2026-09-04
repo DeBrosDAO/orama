@@ -267,6 +267,11 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/deployments/stats", g.withHomeNodeProxy(g.statsHandler.HandleStats))
 		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
 
+		// Environment variables. The write runs on the home node because the
+		// variables live in a systemd unit on the machine the process runs on.
+		mux.HandleFunc("/v1/deployments/env", g.envHandler.HandleGetEnv)
+		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeProxy(g.envHandler.HandleSetEnv))
+
 		// Internal replica coordination endpoints
 		if g.replicaHandler != nil {
 			mux.HandleFunc("/v1/internal/deployments/replica/setup", g.replicaHandler.HandleSetup)
@@ -287,6 +292,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/db/sqlite/create", g.sqliteHandler.CreateDatabase)
 		mux.HandleFunc("/v1/db/sqlite/query", g.sqliteHandler.QueryDatabase)
 		mux.HandleFunc("/v1/db/sqlite/list", g.sqliteHandler.ListDatabases)
+		mux.HandleFunc("/v1/db/sqlite/delete", g.sqliteHandler.DeleteDatabase)
 		mux.HandleFunc("/v1/db/sqlite/backup", g.sqliteBackupHandler.BackupDatabase)
 		mux.HandleFunc("/v1/db/sqlite/backups", g.sqliteBackupHandler.ListBackups)
 	}
