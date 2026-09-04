@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
 
 // ChallengeHandler generates a cryptographic nonce for wallet signature challenges.
@@ -47,9 +49,24 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 
 	nonce, err := h.authService.CreateNonce(r.Context(), req.Wallet, req.Purpose, req.Namespace)
 	if err != nil {
+		h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+			Namespace: req.Namespace,
+			Actor:     req.Wallet,
+			Action:    authsvc.AuditChallengeIssued,
+			Result:    authsvc.AuditFailure,
+			Metadata:  map[string]string{"reason": err.Error()},
+		})
 		writeChallengeError(w, req.Namespace, err)
 		return
 	}
+
+	h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+		Namespace: req.Namespace,
+		Actor:     req.Wallet,
+		Action:    authsvc.AuditChallengeIssued,
+		Result:    authsvc.AuditSuccess,
+		Metadata:  map[string]string{"purpose": req.Purpose},
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"wallet":     req.Wallet,

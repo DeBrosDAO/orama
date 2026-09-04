@@ -568,6 +568,10 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 					zap.Int("count", n))
 			}
 		}
+		// Expired revocations deny nothing. Pruning keeps the table the size
+		// of the revocations still in flight rather than growing forever.
+		deps.AuthService.Revocations().StartPruning(context.Background())
+
 		if on, oerr := deps.AuthService.RevokeOrphanedAPIKeys(context.Background()); oerr != nil {
 			logger.ComponentWarn(logging.ComponentGeneral, "revoke orphaned API keys failed", zap.Error(oerr))
 		} else if on > 0 {
@@ -629,6 +633,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
 		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
+		if deps.AuthService != nil {
+			gw.operatorHandler.SetAuditLog(deps.AuthService.Audit())
+		}
 	}
 
 	// Initialize deployment system.
@@ -1047,6 +1054,15 @@ func (g *Gateway) GetORMClient() rqlite.Client {
 }
 
 // GetIPFSClient returns the IPFS client for external use (e.g., by namespace delete handler)
+// GetAuditLog returns the record of auth events, so handlers wired from
+// outside this package can write to the same one.
+func (g *Gateway) GetAuditLog() *auth.AuditLog {
+	if g.authService == nil {
+		return nil
+	}
+	return g.authService.Audit()
+}
+
 func (g *Gateway) GetIPFSClient() ipfs.IPFSClient {
 	return g.ipfsClient
 }
@@ -1297,7 +1313,7 @@ func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.R
 
 	// Internal auth check: header + WireGuard subnet verification
 	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}
 
@@ -1336,7 +1352,7 @@ func (g *Gateway) namespaceWebRTCEnablePublicHandler(w http.ResponseWriter, r *h
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1369,7 +1385,7 @@ func (g *Gateway) namespaceWebRTCDisablePublicHandler(w http.ResponseWriter, r *
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1403,7 +1419,7 @@ func (g *Gateway) namespaceWebRTCStealthPublicHandler(w http.ResponseWriter, r *
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1444,7 +1460,7 @@ func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *h
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1480,7 +1496,7 @@ func (g *Gateway) namespaceWebRTCEnableHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}
 
@@ -1518,7 +1534,7 @@ func (g *Gateway) namespaceWebRTCDisableHandler(w http.ResponseWriter, r *http.R
 	}
 
 	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}
 
@@ -1556,7 +1572,7 @@ func (g *Gateway) namespaceWebRTCStatusHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}
 

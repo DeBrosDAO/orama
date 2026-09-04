@@ -56,7 +56,7 @@ func (g *Gateway) namespaceKeysByIDHandler(w http.ResponseWriter, r *http.Reques
 	}
 	ns := keysNamespace(r)
 	if ns == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 	if err := g.authService.RevokeKey(r.Context(), ns, id); err != nil {
@@ -69,7 +69,7 @@ func (g *Gateway) namespaceKeysByIDHandler(w http.ResponseWriter, r *http.Reques
 func (g *Gateway) createNamespaceKey(w http.ResponseWriter, r *http.Request) {
 	ns := keysNamespace(r)
 	if ns == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
@@ -110,7 +110,7 @@ func (g *Gateway) createNamespaceKey(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) listNamespaceKeys(w http.ResponseWriter, r *http.Request) {
 	ns := keysNamespace(r)
 	if ns == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 	keys, err := g.authService.ListKeys(r.Context(), ns)
@@ -124,7 +124,7 @@ func (g *Gateway) listNamespaceKeys(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) revokeLegacyKeys(w http.ResponseWriter, r *http.Request) {
 	ns := keysNamespace(r)
 	if ns == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 	n, err := g.authService.RevokeAllLegacy(r.Context(), ns)

@@ -1,0 +1,170 @@
+package auth
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
+)
+
+// Nothing recorded who minted a key, who was granted what, who revoked it, or
+// who signed in. The table to hold it has existed since the first migration and
+// was never written to, so the first question anyone asks about a credential —
+// when did this appear, and who made it — had no answer anywhere.
+//
+// These are the events worth a durable record. They are all rare: a login, a
+// key being minted or revoked, an operator acting. A refused request is not on
+// the list, deliberately — writing one per 401 would let anyone with a network
+// connection fill a Raft-replicated table.
+
+const (
+	AuditChallengeIssued  = "auth.challenge"
+	AuditVerifySucceeded  = "auth.verify"
+	AuditRefreshed        = "auth.refresh"
+	AuditRefreshReplayed  = "auth.refresh.replay"
+	AuditLoggedOut        = "auth.logout"
+	AuditKeyIssued        = "key.issue"
+	AuditKeyRevoked       = "key.revoke"
+	AuditKeysRevokedBulk  = "key.revoke_all"
+	AuditNamespaceCreated = "namespace.create"
+	AuditOperatorAction   = "operator.action"
+)
+
+// AuditActions is every action this gateway records. A new one has to be added
+// here, which is what keeps `orama audit` and the docs able to describe what
+// they are showing.
+var AuditActions = []string{
+	AuditChallengeIssued, AuditVerifySucceeded, AuditRefreshed, AuditRefreshReplayed,
+	AuditLoggedOut, AuditKeyIssued, AuditKeyRevoked, AuditKeysRevokedBulk,
+	AuditNamespaceCreated, AuditOperatorAction,
+}
+
+const (
+	AuditSuccess = "success"
+	AuditFailure = "failure"
+)
+
+// AuditEvent is one line of the record.
+type AuditEvent struct {
+	// Namespace the event belongs to. Empty for a cluster-level event.
+	Namespace string
+	// Actor is who did it: a wallet, an API key's id, or "system".
+	Actor string
+	// Action is one of the constants above.
+	Action string
+	// Resource is what it was done to, when that is not the actor.
+	Resource string
+	// Result is AuditSuccess or AuditFailure.
+	Result string
+	IP     string
+	// UserAgent as sent. Truncated; it is attacker-controlled text.
+	UserAgent string
+	// Metadata is anything else worth keeping. Never a credential.
+	Metadata map[string]string
+}
+
+// maxAuditFieldLength bounds the fields a caller controls. A user agent is
+// whatever the client sends, and this table is replicated to every node.
+const maxAuditFieldLength = 512
+
+// AuditLog writes the record.
+type AuditLog struct {
+	orm    client.NetworkClient
+	logger *logging.ColoredLogger
+}
+
+// NewAuditLog builds the writer. A nil orm makes every write a no-op, which is
+// the test case; a gateway always has one.
+func NewAuditLog(orm client.NetworkClient, logger *logging.ColoredLogger) *AuditLog {
+	return &AuditLog{orm: orm, logger: logger}
+}
+
+// Record writes one event.
+//
+// A failed write is logged and not returned. The record is evidence, not a
+// control: refusing a login because the audit row could not be written would
+// turn a database blip into an outage, and the caller has already been
+// authenticated or refused on its own merits by the time this runs.
+func (a *AuditLog) Record(ctx context.Context, event AuditEvent) {
+	if a == nil || a.orm == nil {
+		return
+	}
+	db := a.orm.Database()
+	if db == nil {
+		return
+	}
+
+	if strings.TrimSpace(event.Action) == "" {
+		return
+	}
+	if event.Result == "" {
+		event.Result = AuditSuccess
+	}
+
+	metadata := ""
+	if len(event.Metadata) > 0 {
+		if encoded, err := json.Marshal(event.Metadata); err == nil {
+			metadata = truncate(string(encoded), maxAuditFieldLength*4)
+		}
+	}
+
+	internalCtx := client.WithInternalAuth(ctx)
+	if _, err := db.Query(internalCtx,
+		`INSERT INTO audit_events(namespace, actor, action, resource, result, ip, user_agent, metadata)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		nullable(strings.TrimSpace(event.Namespace)),
+		nullable(truncate(event.Actor, maxAuditFieldLength)),
+		event.Action,
+		nullable(truncate(event.Resource, maxAuditFieldLength)),
+		event.Result,
+		nullable(truncate(event.IP, maxAuditFieldLength)),
+		nullable(truncate(event.UserAgent, maxAuditFieldLength)),
+		nullable(metadata),
+	); err != nil && a.logger != nil {
+		a.logger.ComponentWarn(logging.ComponentGeneral,
+			"an auth event was not recorded; the audit trail has a hole in it",
+			zap.String("action", event.Action),
+			zap.String("namespace", event.Namespace),
+			zap.Error(err))
+	}
+}
+
+// RecordFromRequest fills in the parts of an event that come from the request.
+func (a *AuditLog) RecordFromRequest(ctx context.Context, r *http.Request, event AuditEvent) {
+	if r != nil {
+		if event.IP == "" {
+			event.IP = clientIP(r)
+		}
+		if event.UserAgent == "" {
+			event.UserAgent = r.Header.Get("User-Agent")
+		}
+	}
+	a.Record(ctx, event)
+}
+
+// clientIP is the address to record. X-Forwarded-For is what the reverse proxy
+// in front of the gateway sets; its first entry is the client.
+func clientIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		if comma := strings.IndexByte(forwarded, ','); comma >= 0 {
+			return strings.TrimSpace(forwarded[:comma])
+		}
+		return forwarded
+	}
+	return r.RemoteAddr
+}
+
+func truncate(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
+}
+
+// Audit exposes the log so handlers outside this package can record.
+func (s *Service) Audit() *AuditLog { return s.audit }

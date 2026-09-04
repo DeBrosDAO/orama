@@ -563,18 +563,27 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 1) Try JWT Bearer first if Authorization looks like one
-		if auth := r.Header.Get("Authorization"); auth != "" {
-			lower := strings.ToLower(auth)
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			lower := strings.ToLower(authHeader)
 			if strings.HasPrefix(lower, "bearer ") {
-				tok := strings.TrimSpace(auth[len("Bearer "):])
+				tok := strings.TrimSpace(authHeader[len("Bearer "):])
 				if strings.Count(tok, ".") == 2 {
-					if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+					claims, err := g.authService.ParseAndVerifyJWT(tok)
+					if err == nil {
 						// Attach JWT claims and namespace to context
 						ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
 							ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+					// A revoked token is not a malformed one. Falling through
+					// would have it looked up as an API key and refused as an
+					// unknown credential, which tells the holder nothing about
+					// why their session stopped working.
+					if errors.Is(err, auth.ErrTokenRevoked) && !isPublic {
+						unauthorized(w, CodeAuthRevoked, "this session was ended, or the key it came from was revoked", nil)
 						return
 					}
 					// If it looked like a JWT but failed verification, fall through to API key check
@@ -631,8 +640,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\", charset=\"UTF-8\"")
-			writeError(w, http.StatusUnauthorized, "missing API key")
+			unauthorized(w, CodeAuthMissing, "no credential was presented", nil)
 			return
 		}
 
@@ -646,8 +654,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
-			writeError(w, http.StatusUnauthorized, "invalid API key")
+			unauthorized(w, CodeAuthInvalidKey, "this API key is not one this cluster knows", nil)
 			return
 		}
 
@@ -830,7 +837,8 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 				zap.String("gateway_namespace", gatewayNamespace),
 				zap.String("path", r.URL.Path),
 			)
-			writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
+			forbidden(w, CodeNamespaceMismatch, "this credential belongs to another namespace",
+				map[string]any{"namespace": gatewayNamespace, "credential_namespace": userNamespace})
 			return
 		}
 
@@ -852,7 +860,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			ns = strings.TrimSpace(g.cfg.ClientNamespace)
 		}
 		if ns == "" {
-			writeError(w, http.StatusForbidden, "namespace not resolved")
+			forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 			return
 		}
 
@@ -894,7 +902,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 
 		if ownerType == "" || ownerID == "" {
-			writeError(w, http.StatusForbidden, "missing identity")
+			forbidden(w, CodeAuthMissing, "this route needs an identity and the credential carries none", nil)
 			return
 		}
 
@@ -914,7 +922,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 		nres, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
 		if err != nil || nres == nil || nres.Count == 0 || len(nres.Rows) == 0 || len(nres.Rows[0]) == 0 {
-			writeError(w, http.StatusForbidden, "namespace not found")
+			forbidden(w, CodeNamespaceMismatch, "no such namespace", nil)
 			return
 		}
 		nsID := nres.Rows[0][0]
@@ -949,7 +957,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 
 		if !owns {
-			writeError(w, http.StatusForbidden, "forbidden: not an owner of namespace")
+			forbidden(w, CodeOwnershipRequired, "this credential is not an owner of this namespace", nil)
 			return
 		}
 
@@ -1309,8 +1317,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 				zap.String("user_agent", r.Header.Get("User-Agent")),
 			)
 		}
-		w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
-		writeError(w, http.StatusUnauthorized, authErr)
+		unauthorized(w, CodeAuthInvalidKey, authErr, nil)
 		return
 	}
 
@@ -1337,9 +1344,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			zap.String("user_agent", r.Header.Get("User-Agent")),
 			zap.Int("raw_query_len", len(r.URL.RawQuery)),
 		)
-		w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\"")
-		writeError(w, http.StatusUnauthorized,
-			"authentication required for namespace endpoint (no api_key/token/jwt extracted)")
+		unauthorized(w, CodeAuthMissing, "no credential was presented", nil)
 		return
 	}
 
@@ -1353,7 +1358,8 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			zap.Bool("is_ws_upgrade", isWS),
 			zap.String("client_ip", getClientIP(r)),
 		)
-		writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
+		forbidden(w, CodeNamespaceMismatch, "this credential belongs to another namespace",
+			map[string]any{"namespace": namespaceName, "credential_namespace": validatedNamespace})
 		return
 	}
 

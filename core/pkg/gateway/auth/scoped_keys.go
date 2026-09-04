@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
@@ -81,8 +82,27 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, l
 		return "", 0, fmt.Errorf("key stored but id could not be resolved")
 	}
 
+	// Recorded here rather than in the handler: a key minted by any path is a
+	// key somebody will later ask about, and there was no record of any of it.
+	s.audit.Record(ctx, AuditEvent{
+		Namespace: namespace,
+		Action:    AuditKeyIssued,
+		Resource:  fmt.Sprintf("key %d", id),
+		Result:    AuditSuccess,
+		Metadata:  map[string]string{"label": label, "scopes": storedScopes},
+	})
+
 	return rawKey, id, nil
 }
+
+// maxExchangedTokenLifetime is how long a JWT exchanged from an API key can
+// live, and so how long a revocation of that key has to be remembered. Past it
+// there is nothing left to deny and the row is pruned.
+//
+// It must be at least the TTL the exchange handler mints with. A margin is
+// cheap — an extra row for an extra hour — and being short is not: the
+// revocation would stop applying while a token it covers is still valid.
+const maxExchangedTokenLifetime = 1 * time.Hour
 
 // RevokeKey soft-revokes a single key by id within a namespace (bugboard #148).
 // Revocation sets revoked_at (so the audit trail survives) and drops the
@@ -120,6 +140,31 @@ func (s *Service) RevokeKey(ctx context.Context, namespace string, id int64) err
 		_, _ = db.Query(internalCtx,
 			"DELETE FROM namespace_ownership WHERE namespace_id = ? AND owner_type = 'api_key' AND owner_id = ?", nsID, hashedKey)
 	}
+
+	// The key stops authenticating here, but the JWTs already exchanged from
+	// it do not — they were minted with the raw key as their subject and
+	// verify on the signature alone. Revoking the key used to leave every one
+	// of them working for the rest of its lifetime, so an operator was told
+	// the credential was gone while it still had up to fifteen minutes of full
+	// access.
+	//
+	// A revocation of the subject covers all of them at once. It is recorded
+	// under the hash, which is what this function has; the verifier looks
+	// under both the subject it was given and its hash.
+	if hashedKey != "" {
+		if err := s.revocations.RevokeSubject(ctx, hashedKey,
+			fmt.Sprintf("api key %d revoked in namespace %s", id, namespace), maxExchangedTokenLifetime); err != nil {
+			return fmt.Errorf("the key was revoked but the tokens already issued from it were not, "+
+				"so they would keep working until they expire: %w", err)
+		}
+	}
+
+	s.audit.Record(ctx, AuditEvent{
+		Namespace: namespace,
+		Action:    AuditKeyRevoked,
+		Resource:  fmt.Sprintf("key %d", id),
+		Result:    AuditSuccess,
+	})
 	return nil
 }
 
@@ -163,6 +208,23 @@ func (s *Service) RevokeAllLegacy(ctx context.Context, namespace string) (int, e
 	for _, h := range hashes {
 		_, _ = db.Query(internalCtx,
 			"DELETE FROM namespace_ownership WHERE namespace_id = ? AND owner_type = 'api_key' AND owner_id = ?", nsID, h)
+
+		// Same reason as RevokeKey: the key stops authenticating, and the
+		// tokens exchanged from it do not until they expire.
+		if err := s.revocations.RevokeSubject(ctx, h,
+			"legacy key swept in namespace "+namespace, maxExchangedTokenLifetime); err != nil {
+			return len(hashes), fmt.Errorf("the legacy keys were revoked but the tokens already issued "+
+				"from them were not, so they would keep working until they expire: %w", err)
+		}
+	}
+
+	if len(hashes) > 0 {
+		s.audit.Record(ctx, AuditEvent{
+			Namespace: namespace,
+			Action:    AuditKeysRevokedBulk,
+			Result:    AuditSuccess,
+			Metadata:  map[string]string{"count": strconv.Itoa(len(hashes))},
+		})
 	}
 	return len(hashes), nil
 }

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AuthCode,
   AuthError,
   NetworkError,
   NotFoundError,
+  RevokedCredentialError,
   ScopeError,
   SDKError,
 } from '../../src/errors';
@@ -129,5 +131,70 @@ describe('every error', () => {
     expect(SDKError.fromResponse(403, {}).name).toBe('ScopeError');
     expect(SDKError.fromResponse(404, {}).name).toBe('NotFoundError');
     expect(new NetworkError('x').name).toBe('NetworkError');
+  });
+});
+
+/**
+ * A 401 had at least six causes and told them apart only by an English string,
+ * so nothing could distinguish "you sent nothing" from "your key was revoked"
+ * without matching on prose. Every refusal carries a code now, and the one an
+ * application has to handle differently — the credential is gone, sign in
+ * again — gets its own class.
+ */
+describe('auth codes', () => {
+  it('gives a revoked credential its own error', () => {
+    const error = SDKError.fromResponse(401, {
+      error: 'this session was ended',
+      code: AuthCode.Revoked,
+      hint: 'this credential or session was revoked; sign in again or use a new key',
+    });
+
+    expect(error).toBeInstanceOf(RevokedCredentialError);
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error).toBeInstanceOf(SDKError);
+    expect(error.code).toBe('AUTH_REVOKED');
+  });
+
+  it('keeps a plain AuthError for the other 401 causes', () => {
+    for (const code of [AuthCode.Missing, AuthCode.InvalidKey, AuthCode.Expired]) {
+      const error = SDKError.fromResponse(401, { error: 'nope', code });
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error).not.toBeInstanceOf(RevokedCredentialError);
+      expect(error.code).toBe(code);
+    }
+  });
+
+  it('surfaces the hint the gateway sent', () => {
+    const error = SDKError.fromResponse(401, {
+      error: 'no credential was presented',
+      code: AuthCode.Missing,
+      hint: 'send the credential in an Authorization header, or X-API-Key',
+    });
+    expect(error.hint).toContain('Authorization');
+  });
+
+  it('has no hint when the gateway sent none', () => {
+    expect(SDKError.fromResponse(500, { error: 'boom' }).hint).toBeUndefined();
+  });
+
+  it('names the grant a scope refusal requires without parsing the message', () => {
+    const error = SDKError.fromResponse(403, {
+      error: "insufficient scope: this credential lacks the 'admin' grant required for /v1/deployments/list",
+      code: AuthCode.ScopeMissing,
+      required_scope: 'admin',
+    });
+    expect(error).toBeInstanceOf(ScopeError);
+    expect((error as ScopeError).requiredScope).toBe('admin');
+  });
+
+  it('carries the namespaces on a mismatch', () => {
+    const error = SDKError.fromResponse(403, {
+      error: 'this credential belongs to another namespace',
+      code: AuthCode.NamespaceMismatch,
+      namespace: 'alice',
+      credential_namespace: 'bob',
+    });
+    expect(error.code).toBe('NAMESPACE_MISMATCH');
+    expect(error.details.credential_namespace).toBe('bob');
   });
 });

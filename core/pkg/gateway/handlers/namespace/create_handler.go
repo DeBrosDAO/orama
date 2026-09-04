@@ -66,14 +66,16 @@ type Provisioner interface {
 type CreateHandler struct {
 	ormClient   rqlite.Client
 	provisioner Provisioner
+	audit       *auth.AuditLog
 	logger      *zap.Logger
 }
 
 // NewCreateHandler creates the namespace-creation handler.
-func NewCreateHandler(orm rqlite.Client, provisioner Provisioner, logger *zap.Logger) *CreateHandler {
+func NewCreateHandler(orm rqlite.Client, provisioner Provisioner, audit *auth.AuditLog, logger *zap.Logger) *CreateHandler {
 	return &CreateHandler{
 		ormClient:   orm,
 		provisioner: provisioner,
+		audit:       audit,
 		logger:      logger.With(zap.String("component", "namespace-create-handler")),
 	}
 }
@@ -165,6 +167,13 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
+		Namespace: name,
+		Actor:     wallet,
+		Action:    auth.AuditNamespaceCreated,
+		Result:    auth.AuditSuccess,
+	})
 
 	response := map[string]any{"name": name, "owner": wallet, "status": "created"}
 

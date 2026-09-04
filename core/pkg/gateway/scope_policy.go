@@ -42,6 +42,13 @@ func requiredScope(method, path string) string {
 		return auth.ScopeAdmin
 	}
 
+	// The audit trail is the record of who was given what and when. It names
+	// the namespace's wallets and the times they sign in, so reading it is the
+	// owner's, not any credential that happens to belong to the namespace.
+	if path == "/v1/audit" {
+		return auth.ScopeAdmin
+	}
+
 	// --- Storage (data-plane) ---
 	if strings.HasPrefix(path, "/v1/storage/") {
 		return auth.ScopeStorage
@@ -275,11 +282,9 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 			// The grant goes in a field, not only in the prose. A client that
 			// has to regex the message to find out what it lacks cannot act on
 			// it; @debros/orama turns this into a ScopeError naming the grant.
-			writeJSON(w, http.StatusForbidden, map[string]any{
-				"error":          "insufficient scope: this credential lacks the '" + required + "' grant required for " + r.URL.Path,
-				"code":           "INSUFFICIENT_SCOPE",
-				"required_scope": required,
-			})
+			forbidden(w, CodeScopeMissing,
+				"insufficient scope: this credential lacks the '"+required+"' grant required for "+r.URL.Path,
+				map[string]any{"required_scope": required})
 			return
 		}
 		if requiresUserJWT(required) && !scopes.IsAdmin() && !hasWalletJWT(r) {
@@ -298,11 +303,9 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 				zap.String("path", r.URL.Path),
 				zap.String("required_scope", required),
 			)
-			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"error":          "user authentication required (JWT): the '" + required + "' operation requires a logged-in user; an API key alone is not sufficient",
-				"code":           "USER_JWT_REQUIRED",
-				"required_scope": required,
-			})
+			unauthorized(w, CodeAuthUserJWTRequired,
+				"user authentication required (JWT): the '"+required+"' operation requires a logged-in user; an API key alone is not sufficient",
+				map[string]any{"required_scope": required})
 			return
 		}
 		next.ServeHTTP(w, r)

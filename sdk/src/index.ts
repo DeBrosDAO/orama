@@ -96,6 +96,8 @@ export {
   ScopeError,
   NotFoundError,
   NetworkError,
+  RevokedCredentialError,
+  AuthCode,
 } from "./errors";
 export { SCOPES, DATA_PLANE_SCOPES, KEY_PROFILES, PROFILE_SCOPES, isScope, satisfiesScope } from "./scopes";
 export type { Scope, KeyProfile } from "./scopes";

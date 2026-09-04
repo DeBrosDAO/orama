@@ -49,6 +49,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/auth/token` | direct | Exchange an API key for a JWT. A server-side concern; the SDK sends the key itself. |
 | `/v1/auth/verify` | SDK | `auth.verify()` |
 | `/v1/auth/whoami` | SDK | `auth.whoami()` |
+| `/v1/audit` | CLI | The namespace's record of who was given what and when. Admin grant; the namespace comes from the credential, never the query string. |
 
 ### Database (RQLite)
 

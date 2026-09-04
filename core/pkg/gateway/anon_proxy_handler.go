@@ -70,7 +70,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Block requests to private/local addresses
 	if isPrivateOrLocalHost(targetURL.Host) {
-		writeError(w, http.StatusForbidden, "requests to private/local addresses are not allowed")
+		forbidden(w, CodeDestinationNotAllowed, "requests to private or local addresses are not allowed", nil)
 		return
 	}
 

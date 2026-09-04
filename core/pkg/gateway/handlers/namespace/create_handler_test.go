@@ -129,7 +129,7 @@ func decodeCreate(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 func TestCreate_writesTheNamespaceAndItsOwner(t *testing.T) {
 	db := newRegistry()
 	prov := &recordingProvisioner{}
-	h := NewCreateHandler(db, prov, zap.NewNop())
+	h := NewCreateHandler(db, prov, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
@@ -152,7 +152,7 @@ func TestCreate_writesTheNamespaceAndItsOwner(t *testing.T) {
 // Signing in used to create the namespace and provision it. Creating one is
 // the only thing that provisions now, so this is where it has to happen.
 func TestCreate_startsProvisioning(t *testing.T) {
-	h := NewCreateHandler(newRegistry(), &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(newRegistry(), &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
@@ -168,7 +168,7 @@ func TestCreate_startsProvisioning(t *testing.T) {
 
 func TestCreate_requiresAWallet(t *testing.T) {
 	db := newRegistry()
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("", "myapp"))
@@ -185,7 +185,7 @@ func TestCreate_requiresAWallet(t *testing.T) {
 // is a wallet. Accepting one would create a namespace nobody owns.
 func TestCreate_refusesAnAPIKeySubject(t *testing.T) {
 	db := newRegistry()
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("ak_something:myapp", "myapp"))
@@ -201,7 +201,7 @@ func TestCreate_refusesAnAPIKeySubject(t *testing.T) {
 func TestCreate_refusesATakenName(t *testing.T) {
 	db := newRegistry()
 	db.existing["myapp"] = 1
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xsomeoneelse", "myapp"))
@@ -222,7 +222,7 @@ func TestCreate_refusesATakenName(t *testing.T) {
 func TestCreate_appliesTheQuota(t *testing.T) {
 	db := newRegistry()
 	db.owned["0xowner"] = maxNamespacesPerWallet
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "onemore"))
@@ -245,7 +245,7 @@ func TestCreate_refusesNamesThatCannotBeUsed(t *testing.T) {
 		"with.dot", "with/slash", strings.Repeat("x", 41), "../escape", "ns$(id)",
 	} {
 		db := newRegistry()
-		h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+		h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, createRequest("0xowner", name))
@@ -262,7 +262,7 @@ func TestCreate_refusesNamesThatCannotBeUsed(t *testing.T) {
 func TestCreate_refusesReservedNames(t *testing.T) {
 	for name := range reservedNamespaces {
 		db := newRegistry()
-		h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+		h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, createRequest("0xowner", name))
@@ -281,7 +281,7 @@ func TestCreate_refusesReservedNames(t *testing.T) {
 func TestCreate_deniesWhenTheNameCannotBeChecked(t *testing.T) {
 	db := newRegistry()
 	db.failNamespaceQuery = true
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
@@ -297,7 +297,7 @@ func TestCreate_deniesWhenTheNameCannotBeChecked(t *testing.T) {
 func TestCreate_deniesWhenTheRegistryCannotBeRead(t *testing.T) {
 	db := newRegistry()
 	db.failQuery = true
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
@@ -313,7 +313,7 @@ func TestCreate_deniesWhenTheRegistryCannotBeRead(t *testing.T) {
 // A namespace whose cluster did not start is reported as created but not
 // provisioned, rather than as a cluster that will never appear.
 func TestCreate_saysSoWhenProvisioningDoesNotStart(t *testing.T) {
-	h := NewCreateHandler(newRegistry(), &recordingProvisioner{err: errString("no capacity")}, zap.NewNop())
+	h := NewCreateHandler(newRegistry(), &recordingProvisioner{err: errString("no capacity")}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
@@ -330,7 +330,7 @@ func TestCreate_saysSoWhenProvisioningDoesNotStart(t *testing.T) {
 
 func TestCreate_normalisesTheName(t *testing.T) {
 	db := newRegistry()
-	h := NewCreateHandler(db, &recordingProvisioner{}, zap.NewNop())
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xOwner", "  MyApp  "))

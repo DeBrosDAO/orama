@@ -21,7 +21,15 @@ import (
 type Handler struct {
 	logger       *zap.Logger
 	rqliteClient rqlite.Client
+
+	// audit records what an operator did. An operator action is the highest
+	// authority anything on this cluster has, and none of it was recorded.
+	audit *auth.AuditLog
 }
+
+// SetAuditLog wires the record. Set by the gateway after construction; nil
+// leaves the actions unrecorded, which is the test case.
+func (h *Handler) SetAuditLog(a *auth.AuditLog) { h.audit = a }
 
 // NewHandler creates an operator handler.
 func NewHandler(logger *zap.Logger, rqliteClient rqlite.Client) *Handler {

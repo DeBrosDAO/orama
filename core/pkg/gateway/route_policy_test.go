@@ -105,6 +105,7 @@ var routeClasses = map[string]routeClass{
 	// --- Needs a credential at the middleware -------------------------
 	"/v1/auth/token":    classCredential,
 	"/v1/auth/whoami":   classCredential,
+	"/v1/audit":         classCredential,
 	"/v1/schema-status": classCredential,
 
 	"/v1/cache/get":    classCredential,

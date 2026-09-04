@@ -47,6 +47,12 @@ function loadFixtures(): Fixture[] {
       ...(JSON.parse(readFileSync(file, 'utf8')) as Omit<Fixture, 'name'>),
       name: relative(contractsDir, file).replace(/\\/g, '/').replace(/\.json$/, ''),
     }))
+    // Not every contract in this directory is an HTTP call. `enrollment/seal`
+    // is a cryptographic vector shared between two Go modules that cannot
+    // import each other, and it has no route, no SDK method and no request
+    // body — the tests below are about request bodies, and applying them to it
+    // asserted that a key derivation has an HTTP verb.
+    .filter((fixture) => typeof fixture.route === 'string' && fixture.route !== '')
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

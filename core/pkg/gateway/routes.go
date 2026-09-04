@@ -87,6 +87,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
+		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
 		// Phantom Solana auth (QR code + deep link)
 		mux.HandleFunc("/v1/auth/phantom/session", g.authHandlers.PhantomSessionHandler)
 		mux.HandleFunc("/v1/auth/phantom/session/", g.authHandlers.PhantomSessionStatusHandler)

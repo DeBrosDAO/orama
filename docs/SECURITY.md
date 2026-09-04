@@ -247,6 +247,29 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A namespace's own rqlite has an `api_keys` table, because the core migrations run there. Nothing validates against it, but rows written before keys were hashed hold the raw `ak_…` value — working credentials for the platform, in the clear, in a database the tenant can read. `MigratePlaintextAPIKeys` hashes such rows but runs against the registry and never sees these. A namespace gateway removes them at boot, and only the plaintext ones: a hashed row is inert too, but it is not a credential
 - Still open, and split out as its own ticket: a TURN credential is `<expiry>:<namespace>` with nothing per-user in it, so one credential relays for every user of the namespace and nothing can be revoked before it expires. Changing that is a protocol change on both ends and interacts with a TTL that was set deliberately for a live tenant
 
+**Revoking a credential**
+- Revoking an API key stopped the key and did nothing to the JWTs already exchanged from it. They verify on the signature alone, so an operator was told the credential was gone while it still had up to fifteen minutes of full access. Logging out was the same shape: it dropped the refresh token and left the access token valid, so "log me out" meant "stop me getting a new one"
+- Tokens carry a `jti` now, and there is a list of revocations checked on every request: one token by its id, or every token issued to a subject before a moment. Revoking a key writes the second kind — one row covers every outstanding token from that key. A token minted *after* the revocation is a new grant and is deliberately not covered
+- A token exchanged from a key carries the raw key as its subject while the revoking code only ever has the hash, so the check looks under both
+- The list is held in memory and reloaded every 10 seconds, because a database round trip per request costs a cross-region hop. That interval is the staleness: a revocation takes effect within it. Fifteen minutes became ten seconds. A failed reload keeps the previous list rather than clearing it — forgetting the revocations because one query failed would turn a database blip into every revoked token working again
+- A token that names no key is refused. There used to be a branch accepting a token with no `kid` at all and verifying it against the RSA key, so a token that named no key selected one by omission
+- An RSA signing key under 2048 bits is refused at boot. The size was never checked
+
+**The record**
+- `audit_events` has existed since the first migration and had never been written to. Nothing recorded who minted a key, who was granted what, who revoked it, or who signed in — so the first question anyone asks about a credential, when did this appear and who made it, had no answer anywhere
+- Recorded now: a challenge issued, a sign-in succeeding or failing, a refresh, the refresh-replay tripwire, a logout, a key minted or revoked, the legacy-key sweep, a namespace created, an operator minting an invite. Each with the actor, the namespace, the client's address, the user agent and whether it succeeded
+- A refused request is deliberately **not** recorded. One row per 401 would let anyone with a network connection fill a Raft-replicated table
+- The table's old shape could not hold these: `namespace_id` was `NOT NULL` with a foreign key, so an attempt against a namespace that does not exist — exactly the interesting case — could not be written. It is a name now, nullable, with `result` and `user_agent` as columns
+- Readable at `GET /v1/audit`, admin grant, and the namespace comes from the caller's own credential rather than the query string: reading another namespace's trail would say who its owners are and when they sign in
+- A failed write is logged, not returned. The record is evidence, not a control; refusing a login because the audit row could not be written would turn a database blip into an outage
+
+**Saying why a request was refused**
+- A 401 had at least six distinct causes and told them apart only by an English string, so nothing could distinguish "you sent nothing" from "your key was revoked" from "your token expired" without matching on prose. That is what cost days on bug-160 and bug-164
+- Every 401 and 403 now carries `{error, code, hint}` — what happened, and what to do about it — plus the fields that make it actionable: `required_scope` on a missing grant, both namespaces on a mismatch. The codes are `AUTH_MISSING`, `AUTH_INVALID_KEY`, `AUTH_REVOKED`, `AUTH_EXPIRED`, `USER_JWT_REQUIRED`, `INSUFFICIENT_SCOPE`, `NAMESPACE_MISMATCH`, `OWNERSHIP_REQUIRED`, `NOT_AN_OPERATOR`, `DESTINATION_NOT_ALLOWED`
+- `INSUFFICIENT_SCOPE`, `USER_JWT_REQUIRED` and `NOT_AN_OPERATOR` keep the spellings already on the wire. The audit proposed different ones; renaming a code the SDK already switches on would break every client that does
+- A test walks the source and fails on a 401 or 403 written without a code
+- The SDK mirrors the list as `AuthCode`, and a revoked credential gets its own error class because it is the one case where the answer is "sign in again" rather than "check what you sent"
+
 ### Supply Chain
 
 **Binary Signing (Step 1.13)**

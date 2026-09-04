@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -41,13 +42,37 @@ type Service struct {
 	// on a namespace gateway (bugboard #162). Nil means use s.orm (the
 	// main/index gateway, where orm already is the registry).
 	apiKeyORM client.NetworkClient
+
+	// revocations is the list of tokens this gateway refuses. Built in
+	// NewService whenever there is a database to read it from.
+	revocations *RevocationList
+
+	// audit records the auth events worth keeping. Built alongside the
+	// revocations, for the same reason: a Service with a database has one.
+	audit *AuditLog
 }
+
+// minRSAKeyBits is the smallest RSA signing key this gateway will use. 2048 is
+// the floor everyone agrees on; below it the signature on an access token is
+// not worth checking.
+const minRSAKeyBits = 2048
+
+// ErrTokenRevoked is returned for a token whose signature verifies but which
+// has been revoked — a key that was revoked, or a session that was ended.
+var ErrTokenRevoked = errors.New("token revoked")
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
 	s := &Service{
 		logger:    logger,
 		orm:       orm,
 		defaultNS: defaultNS,
+	}
+
+	// Every Service with a database consults the revocations. There is no way
+	// to build one that verifies tokens against a database and does not.
+	if orm != nil {
+		s.revocations = NewRevocationList(orm, logger)
+		s.audit = NewAuditLog(orm, logger)
 	}
 
 	if signingKeyPEM != "" {
@@ -58,6 +83,12 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse RSA private key: %w", err)
+		}
+		// A short RSA key signs tokens anybody can forge. The size was never
+		// checked, so whatever PEM the operator supplied was used.
+		if bits := key.N.BitLen(); bits < minRSAKeyBits {
+			return nil, fmt.Errorf("the configured RSA signing key is %d bits; %d is the minimum, "+
+				"below which the signature on an access token is not worth checking", bits, minRSAKeyBits)
 		}
 		s.signingKey = key
 

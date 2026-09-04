@@ -185,7 +185,10 @@ func TestChain_aKeyFromAnotherNamespaceIsRefused(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", status)
 	}
-	if !strings.Contains(body, "does not belong to this namespace") {
+	if !strings.Contains(body, CodeNamespaceMismatch) {
+		t.Errorf("the refusal carries no machine-readable code: %s", strings.TrimSpace(body))
+	}
+	if !strings.Contains(body, "belongs to another namespace") {
 		t.Errorf("the refusal does not say why: %s", strings.TrimSpace(body))
 	}
 }

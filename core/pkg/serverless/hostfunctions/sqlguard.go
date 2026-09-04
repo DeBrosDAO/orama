@@ -48,6 +48,8 @@ var protectedTables = map[string]string{
 	"namespace_push_credentials": "push credentials",
 	"function_secrets":           "every function's secrets",
 	"function_env_vars":          "every function's environment",
+	// Deleting a row here un-revokes a credential somebody revoked.
+	"revoked_tokens": "which tokens are refused",
 
 	// Platform limits. Writing these lifts the caller's own ceilings.
 	"namespace_quotas":            "storage and resource quotas",

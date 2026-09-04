@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
 
 // VerifyHandler verifies a wallet signature and issues JWT tokens and an API key.
@@ -40,6 +42,13 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
 	if err != nil || !verified {
+		h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+			Namespace: req.Namespace,
+			Actor:     req.Wallet,
+			Action:    authsvc.AuditVerifySucceeded,
+			Result:    authsvc.AuditFailure,
+			Metadata:  map[string]string{"reason": "signature verification failed"},
+		})
 		writeError(w, http.StatusUnauthorized, "signature verification failed")
 		return
 	}
@@ -81,6 +90,13 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		writeCredentialError(w, namespace, err)
 		return
 	}
+
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: namespace,
+		Actor:     req.Wallet,
+		Action:    authsvc.AuditVerifySucceeded,
+		Result:    authsvc.AuditSuccess,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":       token,

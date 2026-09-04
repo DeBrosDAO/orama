@@ -65,12 +65,10 @@ func (g *Gateway) requireOperatorForCoreRegistry(w http.ResponseWriter, r *http.
 	if !isOperator {
 		g.logger.ComponentWarn("gateway", "refused raw database access to the cluster registry",
 			zap.String("wallet", wallet), zap.String("path", r.URL.Path))
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "this gateway's database is the cluster registry, which only an operator " +
-				"may read or write. Your namespace's own database is at " +
-				g.namespaceGatewayHint(r) + r.URL.Path,
-			"code": operator.ErrCodeNotAnOperator,
-		})
+		forbidden(w, CodeOperatorRequired,
+			"this gateway's database is the cluster registry, which only an operator "+
+				"may read or write. Your namespace's own database is at "+
+				g.namespaceGatewayHint(r)+r.URL.Path, nil)
 		return false
 	}
 	return true

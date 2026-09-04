@@ -176,9 +176,29 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 		// replay (ErrRefreshTokenReplay) so the operator can investigate. We
 		// surface a generic 401 regardless — leaking "your token was already
 		// used" would help an attacker confirm a stolen token was rotated.
+		//
+		// The replay tripwire is the one refusal worth a durable record: it
+		// means either two clients raced or somebody is using a token they
+		// should not have, and a WARN in a log nobody reads is not a record.
+		action := authsvc.AuditRefreshed
+		if errors.Is(err, authsvc.ErrRefreshTokenReplay) {
+			action = authsvc.AuditRefreshReplayed
+		}
+		h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+			Namespace: req.Namespace,
+			Action:    action,
+			Result:    authsvc.AuditFailure,
+		})
 		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}
+
+	h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+		Namespace: req.Namespace,
+		Actor:     subject,
+		Action:    authsvc.AuditRefreshed,
+		Result:    authsvc.AuditSuccess,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  token,
@@ -216,12 +236,15 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	var claims *authsvc.JWTClaims
+	if v := ctx.Value(CtxKeyJWT); v != nil {
+		claims, _ = v.(*authsvc.JWTClaims)
+	}
+
 	var subject string
 	if req.All {
-		if v := ctx.Value(CtxKeyJWT); v != nil {
-			if claims, ok := v.(*authsvc.JWTClaims); ok && claims != nil {
-				subject = strings.TrimSpace(claims.Sub)
-			}
+		if claims != nil {
+			subject = strings.TrimSpace(claims.Sub)
 		}
 		if subject == "" {
 			writeError(w, http.StatusUnauthorized, "jwt required for all=true")
@@ -234,7 +257,46 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dropping the refresh token stops the caller getting a new access token.
+	// It did nothing to the one they are holding, which stayed valid until it
+	// expired — so logging out did not log anybody out.
+	if req.All {
+		if err := h.authService.RevokeAllSessions(ctx, subject); err != nil {
+			writeError(w, http.StatusInternalServerError,
+				"the refresh token was dropped but the access tokens already issued were not, "+
+					"so they would keep working until they expire: "+err.Error())
+			return
+		}
+	} else if claims != nil && claims.Jti != "" {
+		if err := h.authService.RevokeSession(ctx, claims); err != nil {
+			writeError(w, http.StatusInternalServerError,
+				"the refresh token was dropped but this access token was not, "+
+					"so it would keep working until it expires: "+err.Error())
+			return
+		}
+	}
+
+	actor := subject
+	if actor == "" && claims != nil {
+		actor = strings.TrimSpace(claims.Sub)
+	}
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: req.Namespace,
+		Actor:     actor,
+		Action:    authsvc.AuditLoggedOut,
+		Result:    authsvc.AuditSuccess,
+		Metadata:  map[string]string{"all_sessions": boolText(req.All)},
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// boolText keeps the metadata blob string-to-string.
+func boolText(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // apiKeyLookupCandidates returns the api_keys.key values to try, hashed first

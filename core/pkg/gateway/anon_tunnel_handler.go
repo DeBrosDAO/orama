@@ -308,7 +308,7 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		// Defence in depth: /v1/proxy/ already requires a wallet JWT. Reaching
 		// here without one means the auth chain changed shape, and a tunnel is
 		// the last thing that should fail open.
-		writeError(w, http.StatusUnauthorized, "an authenticated user is required for the tunnel")
+		unauthorized(w, CodeAuthUserJWTRequired, "an authenticated user is required for the tunnel", nil)
 		return
 	}
 

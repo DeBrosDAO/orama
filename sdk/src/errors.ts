@@ -41,6 +41,9 @@ export class SDKError extends Error {
     const details = body && typeof body === "object" ? body : {};
 
     if (status === 401) {
+      if (code === AuthCode.Revoked) {
+        return new RevokedCredentialError(errorMsg, status, code, details);
+      }
       return new AuthError(errorMsg, status, code, details);
     }
     if (status === 403) {
@@ -50,6 +53,14 @@ export class SDKError extends Error {
       return new NotFoundError(errorMsg, status, code, details);
     }
     return new SDKError(errorMsg, status, code, details);
+  }
+
+  /**
+   * What to do about it, when the gateway said. Every refusal carries one: the
+   * code says what happened, the hint says what to do next.
+   */
+  get hint(): string | undefined {
+    return this.details?.hint;
   }
 
   toJSON() {
@@ -62,6 +73,40 @@ export class SDKError extends Error {
     };
   }
 }
+
+/**
+ * The codes the gateway puts on a refusal.
+ *
+ * A 401 had at least six causes and told them apart only by an English string,
+ * so nothing could distinguish "you sent nothing" from "your key was revoked"
+ * without matching on prose. Switch on `error.code` against these.
+ *
+ * Mirrors `core/pkg/gateway/auth_errors.go`; the list only ever grows.
+ */
+export const AuthCode = {
+  /** No credential was presented. */
+  Missing: "AUTH_MISSING",
+  /** A credential was presented and is not one this cluster knows. */
+  InvalidKey: "AUTH_INVALID_KEY",
+  /** The credential or session was revoked. Sign in again. */
+  Revoked: "AUTH_REVOKED",
+  /** The credential expired. Refresh, or sign in again. */
+  Expired: "AUTH_EXPIRED",
+  /** The grant is held but the operation needs a logged-in user. */
+  UserLoginRequired: "USER_JWT_REQUIRED",
+  /** The credential lacks the grant named in `requiredScope`. */
+  ScopeMissing: "INSUFFICIENT_SCOPE",
+  /** The credential belongs to another namespace. */
+  NamespaceMismatch: "NAMESPACE_MISMATCH",
+  /** The credential is not an owner of this namespace. */
+  OwnershipRequired: "OWNERSHIP_REQUIRED",
+  /** The route is the cluster operator's. */
+  OperatorRequired: "NOT_AN_OPERATOR",
+  /** The destination is refused; a different credential will not help. */
+  DestinationNotAllowed: "DESTINATION_NOT_ALLOWED",
+} as const;
+
+export type AuthCode = (typeof AuthCode)[keyof typeof AuthCode];
 
 /**
  * The credential was missing, malformed, expired, or is not enough on its own.
@@ -136,5 +181,22 @@ export class NetworkError extends SDKError {
   ) {
     super(message, 0, code, details);
     this.name = "NetworkError";
+  }
+}
+
+/**
+ * The credential or the session was revoked, so retrying with it will never
+ * work. Distinct from every other 401 because the answer is "sign in again"
+ * rather than "check what you sent".
+ */
+export class RevokedCredentialError extends AuthError {
+  constructor(
+    message: string,
+    httpStatus: number = 401,
+    code: string = AuthCode.Revoked,
+    details: Record<string, any> = {}
+  ) {
+    super(message, httpStatus, code, details);
+    this.name = "RevokedCredentialError";
   }
 }

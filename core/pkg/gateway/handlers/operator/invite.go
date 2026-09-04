@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"net/http"
 	"time"
 
@@ -74,6 +75,16 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create invite token")
 		return
 	}
+
+	// An invite is a credential for every secret this cluster holds, and
+	// nothing recorded that one had been minted.
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Actor:    wallet,
+		Action:   auth.AuditOperatorAction,
+		Resource: "invite",
+		Result:   auth.AuditSuccess,
+		Metadata: map[string]string{"expires_at": expiresAtStr},
+	})
 
 	writeJSON(w, http.StatusOK, InviteResponse{
 		Token:     token,
