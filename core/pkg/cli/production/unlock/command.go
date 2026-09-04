@@ -37,20 +37,20 @@ func Run(flags *Flags) error {
 		return clierr.Usage("--genesis is required to confirm a genesis unlock")
 	}
 
-	// Step 1: Read the encrypted genesis key from the node
-	fmt.Printf("Fetching encrypted genesis key from %s...\n", flags.NodeIP)
-	encKey, err := fetchGenesisKey(flags.NodeIP)
-	if err != nil && flags.KeyFile == "" {
-		return clierr.Unavailable("could not fetch the genesis key from the node: %w\n"+
-			"  Provide the key file directly with --key-file", err)
+	// Step 1: read the encrypted genesis key.
+	//
+	// This used to try GET /v1/agent/genesis-key on the node first. The
+	// OramaOS agent serves /v1/agent/unlock, /v1/agent/command, /status,
+	// /health and /logs, and has never served that path — so the fetch always
+	// failed, and every run reached the "provide --key-file" fallback after a
+	// ten-second timeout. Requiring the flag says so up front.
+	data, err := os.ReadFile(flags.KeyFile)
+	if err != nil {
+		return clierr.NotFound("could not read the key file: %w", err)
 	}
-
-	if flags.KeyFile != "" {
-		data, readErr := os.ReadFile(flags.KeyFile)
-		if readErr != nil {
-			return clierr.NotFound("could not read the key file: %w", readErr)
-		}
-		encKey = strings.TrimSpace(string(data))
+	encKey := strings.TrimSpace(string(data))
+	if encKey == "" {
+		return clierr.Usage("%s is empty; it must hold the encrypted genesis key", flags.KeyFile)
 	}
 
 	// Step 2: Decrypt with rootwallet
@@ -76,32 +76,11 @@ func (f *Flags) validate() error {
 	if f.NodeIP == "" {
 		return fmt.Errorf("--node-ip is required")
 	}
+	if f.KeyFile == "" {
+		return fmt.Errorf("--key-file is required: the encrypted genesis key is written " +
+			"where the node was created, and the OramaOS agent does not serve it")
+	}
 	return nil
-}
-
-// fetchGenesisKey retrieves the encrypted genesis key from the node.
-// The agent serves it at GET /v1/agent/genesis-key (only during genesis unlock mode).
-func fetchGenesisKey(nodeIP string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://%s:9998/v1/agent/genesis-key", nodeIP))
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		EncryptedKey string `json:"encrypted_key"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("invalid response: %w", err)
-	}
-
-	return result.EncryptedKey, nil
 }
 
 // decryptGenesisKey decrypts the AES-256-GCM encrypted LUKS key using rootwallet.

@@ -103,7 +103,7 @@ Not yet implemented (do not rely on any of this):
 
 - **Genesis enrollment.** Enrollment always tries to distribute Shamir shares and fails with "no peers available for key distribution" when the cluster has zero peers — there is no genesis fallback in the enrollment flow, so a genesis OramaOS node cannot currently complete enrollment.
 - **Key escrow.** The agent never creates or stores a rootwallet-encrypted copy of the LUKS key, and serves no `GET /v1/agent/genesis-key` endpoint.
-- **`orama node unlock --genesis --node-ip <wg-ip>`.** The CLI command exists, but its first step fetches the encrypted genesis key from `GET /v1/agent/genesis-key`, which the agent does not serve — so it always fails unless `--key-file` supplies a rootwallet-encrypted key, which nothing currently produces.
+- **`orama node unlock --genesis --node-ip <wg-ip> --key-file <path>`.** `--key-file` is required, and it must hold a rootwallet-encrypted LUKS key. The command used to try `GET /v1/agent/genesis-key` first and spend ten seconds timing out on a path the agent has never served; that fetch is gone. Nothing currently produces the key file, so the flow is still not usable end to end — the missing piece is key escrow, not the CLI.
 - **The 5-peer transition.** No agent code distributes Shamir shares once 5+ peers join, deletes a local escrowed key, or transitions to normal Shamir-based unlock.
 
 ## Normal Reboot (Shamir Unlock)
@@ -218,7 +218,7 @@ After reboot, the node can't reconstruct its LUKS key.
 
 **Check:** How many peer nodes are online? The node needs at least K peers (threshold) to be reachable over WireGuard.
 
-**Fix:** Ensure enough cluster nodes are online. If reconstruction keeps failing, the agent falls back to genesis unlock mode and waits for a manual `POST /v1/agent/unlock` on port 9998 — see [Genesis Node](#genesis-node). (The `orama node unlock --genesis` CLI flow is not functional yet; it depends on an unimplemented key-escrow endpoint.)
+**Fix:** Ensure enough cluster nodes are online. If reconstruction keeps failing, the agent falls back to genesis unlock mode and waits for a manual `POST /v1/agent/unlock` on port 9998 — see [Genesis Node](#genesis-node). (`orama node unlock --genesis` needs `--key-file` holding a rootwallet-encrypted LUKS key, and nothing produces one yet: key escrow is unimplemented.)
 
 ### Update failed, node rolled back
 The node applied an update but reverted to the previous version.

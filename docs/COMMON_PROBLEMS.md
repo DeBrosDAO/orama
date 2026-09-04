@@ -178,7 +178,12 @@ IP, WebRTC roles) — just not for asserting who the voters are.
 
 **Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services. Index host units (`@index`) are started by the supervisor on node start and do not need to be enabled.
 
-**Fix:** Re-enable the **tenant** services before restarting:
+**Fix:** `sudo orama node restart` — the upgrade orchestrator re-enables `@`
+services before restarting them, so nothing has to be enabled by hand.
+
+If you are on a node old enough not to do that, re-enable the tenant services
+first. Raw `systemctl` bypasses the CLI's dependency ordering, quorum checks and
+health verification, so this is a last resort, not a routine step:
 
 ```bash
 systemctl enable orama-namespace-rqlite@<name>.service
@@ -186,8 +191,6 @@ systemctl enable orama-namespace-olric@<name>.service
 systemctl enable orama-namespace-gateway@<name>.service
 sudo orama node restart
 ```
-
-This was fixed in code — the upgrade orchestrator now re-enables `@` services before restarting.
 
 If a tenant service is still down after that, the tenant reconciler restarts it
 within a minute; it no longer needs a hand-run restore. A service that stays
@@ -336,7 +339,7 @@ the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
 - **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
-- **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
+- **Check service logs:** `sudo orama node logs orama-namespace-olric@<name>` — it wraps `journalctl` and knows the unit names
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
 - **Node IPs:** `orama nodes --env <env>` lists them from the network API; `core/scripts/nodes.conf` is the local fallback inventory. `wg show wg0` for WG IPs. SSH keys come from the RootWallet vault, never from a file.

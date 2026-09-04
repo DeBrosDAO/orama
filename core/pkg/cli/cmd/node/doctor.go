@@ -86,7 +86,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Check Gateway health
-	resp, err = client.Get("http://localhost:8443/health")
+	// 8443 was never the gateway's port on a node; the index gateway listens on
+	// constants.GatewayAPIPort. The check therefore always failed, which is
+	// half of why doctor exited 1 on a healthy node.
+	resp, err = client.Get(constants.LocalGatewayURL() + "/health")
 	if err != nil {
 		checks = append(checks, check{"Gateway reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {
