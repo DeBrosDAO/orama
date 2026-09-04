@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -32,6 +33,8 @@ type rotationMockORMDB struct {
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
 	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
+	deviceByToken  map[string]string // hashedToken -> device_fp (feat-384)
+	liveBindings   map[string]bool   // device_fp -> binding exists and is NOT revoked (feat-384)
 	// claimsBySubject: subject -> last-known-good custom_claims JSON. Serves the
 	// lastKnownCustomClaims lookup (bugboard #143): the anti-fragmentation reuse
 	// reads the most recent stored account_id for a wallet at login.
@@ -73,6 +76,20 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
+	// device_bindings lookup (feat-384): the refresh path re-derives the device
+	// claim from a LIVE binding, so the fake must be able to say "revoked or
+	// unknown" as well as "live" — that distinction is what makes revocation
+	// testable at all.
+	if containsCI(sql, "orama_device_bindings") {
+		if len(args) < 3 {
+			return &client.QueryResult{Count: 0}, nil
+		}
+		fp, _ := args[2].(string)
+		if m.liveBindings != nil && m.liveBindings[fp] {
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{"pubkey-b64", time.Unix(1700000000, 0).UTC()}}}, nil
+		}
+		return &client.QueryResult{Count: 0}, nil
+	}
 	// Grace-path SELECT (bugboard #125): SELECT subject for a recently-revoked,
 	// grace-available token. Distinguished from the active-path SELECT by the
 	// grace_used_at predicate. Must be checked BEFORE the generic handler.
@@ -86,11 +103,11 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 			if m.claimsByToken != nil {
 				claims = m.claimsByToken[hashedTok]
 			}
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims, m.deviceFor(hashedTok)}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
-	// SELECT subject (+ custom_claims, bugboard #548) for the lookup.
+	// SELECT subject (+ custom_claims, bugboard #548, + device_fp, feat-384).
 	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") {
 		m.selectAttemptsTaken++
 		if m.selectErrRemaining > 0 {
@@ -106,7 +123,7 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 			if m.claimsByToken != nil {
 				claims = m.claimsByToken[hashedTok]
 			}
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims, m.deviceFor(hashedTok)}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
@@ -140,18 +157,50 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 				m.subjectByToken = map[string]string{}
 			}
 			m.subjectByToken[hashedTok] = subj
-			// custom_claims is the LAST arg (bugboard #548) — capture it so
-			// rotation-propagation tests can assert it carries forward.
+			// custom_claims is arg index 4 — (namespace_id, subject, token,
+			// audience, custom_claims, device_fp), with expires_at inlined as
+			// datetime(). Captured by position, NOT as "the last arg": that
+			// assumption silently broke when device_fp was appended for
+			// feat-384, and a positional read fails loudly instead.
 			if m.claimsByToken == nil {
 				m.claimsByToken = map[string]string{}
 			}
-			if cc, ok := args[len(args)-1].(string); ok {
-				m.claimsByToken[hashedTok] = cc
+			if len(args) > refreshInsertCustomClaimsArg {
+				if cc, ok := args[refreshInsertCustomClaimsArg].(string); ok {
+					m.claimsByToken[hashedTok] = cc
+				}
+			}
+			if m.deviceByToken == nil {
+				m.deviceByToken = map[string]string{}
+			}
+			if len(args) > refreshInsertDeviceFPArg {
+				if fp, ok := args[refreshInsertDeviceFPArg].(string); ok {
+					m.deviceByToken[hashedTok] = fp
+				}
 			}
 		}
 		return &client.QueryResult{Count: 1}, nil
 	}
 	return &client.QueryResult{Count: 0}, nil
+}
+
+// refreshInsertCustomClaimsArg / refreshInsertDeviceFPArg are the positions of
+// custom_claims and device_fp in the INSERT INTO refresh_tokens argument list.
+const (
+	refreshInsertCustomClaimsArg = 4
+	refreshInsertDeviceFPArg     = 5
+)
+
+// deviceFor returns the device_fp the fake holds for a token, as the driver
+// would: a real NULL column comes back as nil, not "".
+func (m *rotationMockORMDB) deviceFor(hashedTok string) interface{} {
+	if m.deviceByToken == nil {
+		return nil
+	}
+	if fp, ok := m.deviceByToken[hashedTok]; ok && fp != "" {
+		return fp
+	}
+	return nil
 }
 
 // rotationMockRqlite is the lower-level client used for the CAS UPDATE.
@@ -918,5 +967,120 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 	}
 	if ormDB.inserted != 0 {
 		t.Errorf("no session should be minted for a logged-out token; inserts=%d", ormDB.inserted)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// feat-384 — device attribution across the refresh paths.
+// ----------------------------------------------------------------------------
+
+// A device that recovers through the reuse grace must keep its device binding.
+//
+// The grace path exists for a legitimate client whose rotation response was lost
+// — a VoIP-woken locked device being the motivating case. Its first version
+// selected only (subject, custom_claims), so the recovered session came back
+// with device_fp NULL: the device silently lost its attribution, and every
+// function requiring it would deny the very client the grace window was built to
+// rescue. It failed closed rather than forging, but it broke the feature exactly
+// where it was needed.
+func TestRefreshToken_reuseGrace_preservesTheDeviceBinding(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+
+	const lostTok = "rotated-but-response-lost"
+	hashed := sha256Hex(lostTok)
+	ormDB.graceableTokens = map[string]string{hashed: "0xWALLET"}
+	ormDB.deviceByToken = map[string]string{hashed: "device-fp-1"}
+	ormDB.liveBindings = map[string]bool{"device-fp-1": true}
+
+	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
+	if err != nil {
+		t.Fatalf("grace recovery failed: %v", err)
+	}
+
+	if got := ormDB.deviceByToken[sha256Hex(newRefresh)]; got != "device-fp-1" {
+		t.Errorf("device binding lost through the reuse grace: got %q, want device-fp-1", got)
+	}
+}
+
+// An account-only session (no device assertion at login) must keep device_fp
+// NULL through rotation — never "", which would compare equal in the revocation
+// UPDATE and let a device revocation sweep up unrelated account-only chains.
+func TestRefreshToken_accountOnlySessionStaysUnbound(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+
+	const tok = "account-only-token"
+	ormDB.subjectByToken = map[string]string{sha256Hex(tok): "0xWALLET"}
+
+	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+
+	if got, ok := ormDB.deviceByToken[sha256Hex(newRefresh)]; ok && got != "" {
+		t.Errorf("an account-only session acquired a device binding: %q", got)
+	}
+}
+
+// The revocation requirement, on the path that actually decides it.
+//
+// A revoked device holds a live refresh chain. It must NOT be able to rotate
+// that chain into a new device-stamped access token — otherwise "a revoked
+// device stops being served" would take the chain's full 30-day life instead of
+// one 15-minute access token. The claim is re-derived from the live binding on
+// every refresh precisely so this fails.
+func TestRefreshToken_revokedDevice_mintsNoDeviceClaim(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+
+	const tok = "chain-held-by-a-revoked-device"
+	hashed := sha256Hex(tok)
+	ormDB.subjectByToken = map[string]string{hashed: "0xWALLET"}
+	ormDB.deviceByToken = map[string]string{hashed: "device-fp-revoked"}
+	// The binding was revoked: the lookup finds nothing live.
+	ormDB.liveBindings = map[string]bool{}
+
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if fp := claims.Custom[DeviceClaimFingerprint]; fp != "" {
+		t.Errorf("a revoked device still received a device claim (%q) — revocation would take 30 days, not 15 minutes", fp)
+	}
+	// And the rotated chain must not carry the binding forward either, or the
+	// next rotation would resurrect it.
+	if got, ok := ormDB.deviceByToken[sha256Hex(newRefresh)]; ok && got != "" {
+		t.Errorf("the revoked device's binding survived rotation: %q", got)
+	}
+}
+
+// The complement: a device that is still current keeps its claim across
+// rotation. Without this the revocation test above would pass trivially on a
+// refresh path that simply never stamps a device claim.
+func TestRefreshToken_liveDevice_keepsItsClaim(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+
+	const tok = "chain-held-by-a-live-device"
+	hashed := sha256Hex(tok)
+	ormDB.subjectByToken = map[string]string{hashed: "0xWALLET"}
+	ormDB.deviceByToken = map[string]string{hashed: "device-fp-live"}
+	ormDB.liveBindings = map[string]bool{"device-fp-live": true}
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	if err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom[DeviceClaimFingerprint] != "device-fp-live" {
+		t.Errorf("a live device lost its claim on refresh; custom=%v", claims.Custom)
+	}
+	if claims.Custom[DeviceClaimSince] != "1700000000" {
+		t.Errorf("device_since = %q, want the binding's first-seen time", claims.Custom[DeviceClaimSince])
 	}
 }

@@ -214,3 +214,24 @@ func TestUnpinException_decision(t *testing.T) {
 		t.Error("upload must keep the strict wallet-JWT requirement, not the unpin exception")
 	}
 }
+
+// Device revocation is namespace administration (feat-384).
+//
+// An end-user JWT sets CtxKeyNamespaceOverride from its own `namespace` claim,
+// so the handler's namespace resolution alone does NOT restrict this endpoint
+// to admins. Without an explicit admin scope any authenticated user of the
+// namespace could revoke devices — other accounts' included — and a compromised
+// device could revoke the legitimate ones to keep itself the only one serving.
+func TestRequiredScope_deviceRevokeIsAdminOnly(t *testing.T) {
+	if got := requiredScope(http.MethodPost, "/v1/auth/device/revoke"); got != auth.ScopeAdmin {
+		t.Errorf("requiredScope(/v1/auth/device/revoke) = %q, want %q", got, auth.ScopeAdmin)
+	}
+}
+
+// The endpoint must NOT be on the public path list, or the scope gate is never
+// consulted at all.
+func TestDeviceRevoke_isNotAPublicPath(t *testing.T) {
+	if isPublicPath("/v1/auth/device/revoke") {
+		t.Error("/v1/auth/device/revoke is public — it would accept unauthenticated device revocations")
+	}
+}

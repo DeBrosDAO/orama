@@ -201,3 +201,24 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// A namespace claims provider must not be able to mint device claims.
+//
+// The provider is tenant-deployed WASM. If it could set device_fp, the forgery
+// would be handed to the exact layer that is supposed to be CHECKING it — an
+// app compromise would silently become a device-attribution bypass.
+func TestSanitizeProviderClaims_dropsDeviceClaims(t *testing.T) {
+	raw := []byte(`{"device_fp":"forged","device_since":"0","account_id":"acct-1"}`)
+
+	out := sanitizeProviderClaims(raw)
+
+	if _, ok := out["device_fp"]; ok {
+		t.Error("a namespace provider injected device_fp — device attribution would be forgeable by the app itself")
+	}
+	if _, ok := out["device_since"]; ok {
+		t.Error("a namespace provider injected device_since")
+	}
+	if out["account_id"] != "acct-1" {
+		t.Errorf("the provider's own claims were dropped: %v", out)
+	}
+}

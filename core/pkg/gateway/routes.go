@@ -89,6 +89,10 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
+		// Device attribution (feat-384): the namespace tells the gateway a
+		// device is no longer current. NOT on the public-path list — it needs
+		// namespace-scoped admin credentials.
+		mux.HandleFunc("/v1/auth/device/revoke", g.authHandlers.DeviceRevokeHandler)
 		// Phantom Solana auth (QR code + deep link)
 		mux.HandleFunc("/v1/auth/phantom/session", g.authHandlers.PhantomSessionHandler)
 		mux.HandleFunc("/v1/auth/phantom/session/", g.authHandlers.PhantomSessionStatusHandler)

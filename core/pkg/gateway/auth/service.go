@@ -296,8 +296,20 @@ func (s *Service) verifySolSignature(wallet, nonce, signature string) (bool, err
 	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), message, sig), nil
 }
 
-// IssueTokens generates access and refresh tokens for a verified wallet
+// IssueTokens generates access and refresh tokens for a verified wallet.
 func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (string, string, int64, error) {
+	return s.IssueTokensForDevice(ctx, wallet, namespace, nil)
+}
+
+// IssueTokensForDevice is IssueTokens with an optional verified device binding
+// (bugboard feat-384).
+//
+// A nil device is the ordinary account-only login — the CLI, the SDK and any
+// client that presents no device assertion. Those tokens carry no device claim,
+// and a function that requires one must treat its absence as DENY rather than
+// as "legacy client, allow": the whole point is that the claim cannot be
+// omitted by a caller trying to escape the check.
+func (s *Service) IssueTokensForDevice(ctx context.Context, wallet, namespace string, device *DeviceBinding) (string, string, int64, error) {
 	if s.signingKey == nil {
 		return "", "", 0, fmt.Errorf("signing key unavailable")
 	}
@@ -313,6 +325,18 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	}
 
 	custom = s.reuseLastKnownClaims(ctx, nsID, wallet, namespace, custom)
+
+	// Stamp the device claims LAST, after the namespace provider and after the
+	// last-known-claims fallback (bugboard feat-384).
+	//
+	// The ordering is a security property, not tidiness. reuseLastKnownClaims
+	// replays the most recent stored claims for this WALLET, with no device
+	// dimension — so if device claims were part of that set, a provider hiccup
+	// during device B's login would replay device A's fingerprint into a
+	// correctly-signed token. That is worse than having no claim: a forged
+	// attribution the function has every reason to trust. Stamping afterwards,
+	// from the binding just verified in THIS request, makes that impossible.
+	custom = withDeviceClaims(custom, device)
 
 	// Issue access token (15m)
 	token, expUnix, err := s.GenerateJWT(namespace, wallet, 15*time.Minute, custom)
@@ -330,9 +354,18 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.orm.Database()
 	hashedRefresh := sha256Hex(refresh)
+	// Store the refresh token WITHOUT the device claims, and record the device
+	// in its own column instead.
+	//
+	// Two reasons. The stored claims are the input to reuseLastKnownClaims, so
+	// leaving device claims in them would reintroduce the cross-device replay
+	// described above through the back door. And the refresh path must re-derive
+	// the device claim from a LIVE binding each time — a claim frozen into this
+	// row would keep minting for a device the namespace has since revoked, for
+	// the refresh token's full 30-day life.
 	if _, err := db.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
-		nsID, wallet, hashedRefresh, "gateway", marshalClaims(custom),
+		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims, device_fp) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?, ?)",
+		nsID, wallet, hashedRefresh, "gateway", marshalClaims(stripDeviceClaims(custom)), deviceFingerprintOf(device),
 	); err != nil {
 		return "", "", 0, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -447,11 +480,14 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// retries). An actual empty result (Count == 0) is a real bad/expired
 	// token → "invalid or expired" (→ 401). Collapsing the two used to 401 a
 	// valid session during every restart, defeating the VoIP-wake refresh.
-	selectQ := `SELECT subject, custom_claims FROM refresh_tokens
+	selectQ := `SELECT subject, custom_claims, device_fp FROM refresh_tokens
 	            WHERE namespace_id = ? AND token = ?
 	              AND revoked_at IS NULL
 	              AND (expires_at IS NULL OR expires_at > datetime('now'))
 	            LIMIT 1`
+	// deviceFP is the device that obtained this refresh chain, "" for an
+	// account-only login (feat-384).
+	var deviceFP string
 	var res *client.QueryResult
 	var selErr error
 	for attempt := 0; attempt < refreshSelectRetries; attempt++ {
@@ -481,7 +517,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	graceRecovery := false
 	var custom map[string]string
 	if res.Count == 0 {
-		gSubject, gCustom, gOK, gErr := s.tryRefreshReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
+		gSubject, gCustom, gDeviceFP, gOK, gErr := s.tryRefreshReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
 		if gErr != nil {
 			// Transient rqlite error during the grace lookup/claim — retryable,
 			// not a verdict on the token (bugboard #125).
@@ -497,6 +533,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		}
 		subject = gSubject
 		custom = gCustom
+		deviceFP = gDeviceFP
 		graceRecovery = true
 		s.logger.ComponentInfo(logging.ComponentGeneral,
 			"refresh token reuse-grace recovery (lost-response retry, single-use)",
@@ -515,6 +552,12 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			if len(res.Rows[0]) > 1 {
 				if cc, ok := res.Rows[0][1].(string); ok {
 					customClaimsJSON = cc
+				}
+			}
+			// device_fp (feat-384) — which device obtained this refresh chain.
+			if len(res.Rows[0]) > 2 && res.Rows[0][2] != nil {
+				if fp, ok := res.Rows[0][2].(string); ok {
+					deviceFP = fp
 				}
 			}
 		}
@@ -582,6 +625,39 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 
 	// Step 3: mint the new access JWT, carrying forward the stored custom
 	// claims so a rotated token keeps the same account_id etc. (bugboard #548).
+	//
+	// The device claim is deliberately NOT carried forward from storage — it is
+	// re-derived here from the LIVE binding (feat-384). That re-check is what
+	// makes revocation mean anything: a claim frozen into the refresh row would
+	// keep minting valid device-stamped tokens for the chain's full 30-day life
+	// after the namespace revoked the device. Re-deriving bounds a revoked
+	// device to one access-token TTL.
+	//
+	// A revoked (or vanished) binding drops the claim rather than failing the
+	// refresh: the account is still legitimately authenticated, it simply stops
+	// being able to prove it is that device, and the function's deny-on-absent
+	// rule takes it from there.
+	custom = stripDeviceClaims(custom)
+	if deviceFP != "" {
+		binding, bErr := s.liveDeviceBinding(ctx, nsID, subject, deviceFP)
+		switch {
+		case bErr != nil:
+			// Unknown state, not positive evidence of revocation. Minting the
+			// claim on an unreadable control plane would be the fail-open we
+			// are trying to avoid, so drop it and let the caller re-login.
+			s.logger.ComponentWarn(logging.ComponentGeneral,
+				"device binding lookup failed on refresh; minting without the device claim",
+				zap.String("namespace", namespace), zap.Error(bErr))
+		case binding == nil:
+			s.logger.ComponentInfo(logging.ComponentGeneral,
+				"refresh for a revoked or unknown device; minting without the device claim",
+				zap.String("namespace", namespace), zap.String("device_fp", deviceFP))
+			deviceFP = ""
+		default:
+			custom = withDeviceClaims(custom, binding)
+		}
+	}
+
 	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, 15*time.Minute, custom)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
@@ -604,8 +680,8 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// rather than being propagated forward verbatim. custom_claims is written
 	// ONLY here and in IssueTokens, both from a sanitized map (bugboard #548).
 	if _, err := ormDB.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
-		nsID, subject, hashedNew, "gateway", marshalClaims(custom)); err != nil {
+		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims, device_fp) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?, ?)",
+		nsID, subject, hashedNew, "gateway", marshalClaims(stripDeviceClaims(custom)), nullableFingerprint(deviceFP)); err != nil {
 		// The old token is already revoked (step 2). A retryable error here
 		// leaves the client to re-attempt — which will re-auth since the old
 		// token is gone — but that's strictly better than masking a transient
@@ -635,9 +711,14 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 // grace_used_at), so a stolen token cannot be replayed repeatedly; and it never
 // touches the concurrent-rotation replay tripwire, which fires on the active
 // path only.
-func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (subject string, custom map[string]string, ok bool, err error) {
+func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (subject string, custom map[string]string, deviceFP string, ok bool, err error) {
 	graceArg := fmt.Sprintf("-%d seconds", int(refreshReuseGrace.Seconds()))
-	sel := `SELECT subject, custom_claims FROM refresh_tokens
+	// device_fp is selected here too (feat-384). Omitting it would silently
+	// strip device attribution from the recovering client and leave its whole
+	// future chain unattributed — and this path exists precisely for a
+	// legitimate device whose rotation response was lost, so dropping its
+	// device identity breaks the case the grace window was built to rescue.
+	sel := `SELECT subject, custom_claims, device_fp FROM refresh_tokens
 	        WHERE namespace_id = ? AND token = ?
 	          AND revoked_at IS NOT NULL
 	          AND revoked_at > datetime('now', ?)
@@ -646,10 +727,10 @@ func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.Databas
 	        LIMIT 1`
 	res, qerr := ormDB.Query(ctx, sel, nsID, hashedRefresh, graceArg)
 	if qerr != nil {
-		return "", nil, false, qerr // transient rqlite error → caller 503
+		return "", nil, "", false, qerr // transient rqlite error → caller 503
 	}
 	if res == nil || res.Count == 0 {
-		return "", nil, false, nil // no eligible grace row → caller 401
+		return "", nil, "", false, nil // no eligible grace row → caller 401
 	}
 
 	var customClaimsJSON string
@@ -665,9 +746,14 @@ func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.Databas
 				customClaimsJSON = cc
 			}
 		}
+		if len(res.Rows[0]) > 2 && res.Rows[0][2] != nil {
+			if fp, fok := res.Rows[0][2].(string); fok {
+				deviceFP = fp
+			}
+		}
 	}
 	if subject == "" {
-		return "", nil, false, nil // defensive: never grace-mint an anonymous session
+		return "", nil, "", false, nil // defensive: never grace-mint an anonymous session
 	}
 
 	// Single-use CAS: claim the grace. Exactly one caller wins; a concurrent
@@ -680,12 +766,12 @@ func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.Databas
 		   AND revoked_at IS NOT NULL AND revoked_at > datetime('now', ?)`,
 		nsID, hashedRefresh, graceArg)
 	if uerr != nil {
-		return "", nil, false, uerr // transient
+		return "", nil, "", false, uerr // transient
 	}
 	if affected, _ := updRes.RowsAffected(); affected == 0 {
-		return "", nil, false, nil // grace already consumed (concurrent) → caller 401
+		return "", nil, "", false, nil // grace already consumed (concurrent) → caller 401
 	}
-	return subject, unmarshalClaims(customClaimsJSON), true, nil
+	return subject, unmarshalClaims(customClaimsJSON), deviceFP, true, nil
 }
 
 // RevokeToken revokes a specific refresh token or all tokens for a subject

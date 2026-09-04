@@ -14,6 +14,19 @@ type VerifyRequest struct {
 	Signature string `json:"signature"`
 	Namespace string `json:"namespace"`
 	ChainType string `json:"chain_type"`
+
+	// DevicePublicKey / DeviceSignature are the OPTIONAL device assertion
+	// (bugboard feat-384): an ed25519 signature over the same login challenge
+	// the account signed, made with the device's own key. Presenting both binds
+	// the issued token to that device and stamps an unforgeable device claim
+	// the namespace's functions can authorize against.
+	//
+	// Optional by design. The CLI, the SDK and RootWallet-signed operator
+	// logins cannot produce one, and making it mandatory would break every
+	// existing client. A function that REQUIRES device attribution must deny
+	// when the claim is absent — absence is not permission.
+	DevicePublicKey string `json:"device_public_key,omitempty"`
+	DeviceSignature string `json:"device_signature,omitempty"`
 }
 
 // APIKeyRequest is the request body for API key generation

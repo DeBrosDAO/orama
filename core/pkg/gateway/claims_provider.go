@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/registry"
 	"go.uber.org/zap"
@@ -68,6 +69,13 @@ var reservedClaimKeys = map[string]struct{}{
 	// tenant could mint admin for every end-user's JWT. Only the API-key→JWT
 	// exchange path sets it, and callerScopes only trusts it on an ak_ subject.
 	"scopes": {},
+	// Device attribution (feat-384). These are stamped by the gateway from a
+	// signature it verified itself. A provider that could set them could mint
+	// any device identity for any caller — which is the exact forgery the
+	// feature exists to prevent, handed to the app layer that is supposed to be
+	// the one CHECKING it.
+	auth.DeviceClaimFingerprint: {},
+	auth.DeviceClaimSince:       {},
 }
 
 // claimsInvoker is the narrow invoke seam the claims provider depends on —
