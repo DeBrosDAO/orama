@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -891,4 +892,104 @@ func TestRefreshHandler_InvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
+}
+
+// The exchanged token used to carry the raw API key as its subject. A JWT
+// payload is base64, not encryption, so anyone who saw such a token — in an
+// access log, a proxy trace, a devtools tab, the internal-auth header on the
+// hop to a namespace gateway, or the `subject` /v1/auth/whoami echoes back —
+// could decode a live 90-day credential out of a 15-minute one.
+func TestAPIKeyToJWTHandler_theTokenDoesNotCarryTheKey(t *testing.T) {
+	const rawKey = "orama_sk_3kFj9sPqR2vX7mNb_1a2b3c"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := httptest.NewRecorder()
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	token, _ := decodeBody(t, rec)["access_token"].(string)
+	if token == "" {
+		t.Fatal("no access token")
+	}
+
+	// The whole token, decoded the way anyone holding it can.
+	if strings.Contains(decodedJWTPayload(t, token), rawKey) {
+		t.Fatal("the API key is recoverable from the access token")
+	}
+
+	claims, err := svc.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("the token does not verify: %v", err)
+	}
+	if claims.Sub != hashed {
+		t.Errorf("subject = %q, want the stored form of the key", claims.Sub)
+	}
+}
+
+// The subject has to stay the one the rest of the system already writes and
+// looks under, or revoking a key stops reaching the tokens exchanged from it.
+func TestAPIKeyToJWTHandler_theSubjectIsWhatRevocationWrites(t *testing.T) {
+	const rawKey = "orama_sk_3kFj9sPqR2vX7mNb_1a2b3c"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := httptest.NewRecorder()
+	h.APIKeyToJWTHandler(rec, req)
+
+	token, _ := decodeBody(t, rec)["access_token"].(string)
+	claims, err := svc.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("the token does not verify: %v", err)
+	}
+	// RevokeKey records the hash; the token's subject must be the same string
+	// or the revocation covers nothing.
+	if claims.Sub != svc.HashAPIKey(rawKey) {
+		t.Errorf("subject %q is not what RevokeKey records", claims.Sub)
+	}
+}
+
+// decodedJWTPayload returns a token's header and payload as text, which is all
+// anyone holding the token has to do to read them.
+func decodedJWTPayload(t *testing.T, token string) string {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a JWT: %q", token)
+	}
+	out := ""
+	for _, part := range parts[:2] {
+		raw, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			t.Fatalf("decode %q: %v", part, err)
+		}
+		out += string(raw)
+	}
+	return out
 }

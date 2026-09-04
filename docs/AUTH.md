@@ -157,7 +157,10 @@ the control plane belongs on a server.
 Authorization: Bearer <token>
 ```
 
-That is the form to use, for a key and for a JWT alike. On a WebSocket upgrade,
+That is the form to use, for a key and for a JWT alike. A token exchanged from
+a key carries the key's **stored** form as its subject, not the key: a JWT
+payload is base64, not encryption, and a 15-minute token goes to more places
+than a 90-day credential should. On a WebSocket upgrade,
 where a browser cannot set a header, `?api_key=` or `?token=` is read instead
 — and only there: a credential in a query string ends up in the access log, in
 the Referer of the next request the page makes, and in history.
@@ -243,9 +246,10 @@ anyone with a network connection fill a table replicated to every node. Events
 are kept 90 days.
 
 The actor is never a credential. A wallet is recorded as itself; anything else
-is recorded as a fingerprint, because the JWT minted by the key exchange carries
-the key as its subject and the trail is readable by every owner of the
-namespace.
+is recorded as a fingerprint. The trail is readable by every owner of the
+namespace, so a subject goes through that redaction whatever it turns out to
+be — which is what stopped the exchanged token's subject reaching the table
+while that subject was still the raw key.
 
 ---
 
@@ -284,7 +288,5 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 - Resource selectors are enforced on pubsub and function invocation. Storage and
   the database resolve no grant on the request, so a selector naming them
   authorises nothing yet (chg-392).
-- The JWT minted by the key exchange carries the key itself as its subject, so
-  anyone who sees such a token can recover the key from it (bug-395).
 - Namespace gateways and namespace RQLite bind every interface; the firewall,
   not the bind address, is what keeps them off the internet (chg-387).

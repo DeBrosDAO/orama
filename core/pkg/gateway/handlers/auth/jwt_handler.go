@@ -116,7 +116,20 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 	// Embed the key's effective scopes so the gateway scope gate enforces them on
 	// the exchanged JWT exactly as on the raw key (bugboard #148).
 	custom := map[string]string{"scopes": scopesCanonical}
-	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute, custom)
+
+	// The subject is the key as it is STORED, never the key as it was
+	// presented. A JWT payload is base64, not encryption, so a token minted
+	// with the raw key carries a live 90-day credential to everywhere a
+	// 15-minute token goes: an access log, a proxy trace, a browser devtools
+	// tab, the internal-auth header on the hop to a namespace gateway, and the
+	// `subject` field /v1/auth/whoami echoes back.
+	//
+	// The stored form is what everything else already uses: RevokeKey writes
+	// the hash, the revocation check looks under it, and the grant lookup tries
+	// it first. It looks under the raw form too, which is what carries tokens
+	// minted before this through their remaining 15 minutes.
+	subject := h.authService.HashAPIKey(key)
+	token, expUnix, err := h.authService.GenerateJWT(ns, subject, 15*time.Minute, custom)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
