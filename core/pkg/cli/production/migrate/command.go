@@ -65,7 +65,7 @@ func Handle(args []string) {
 	exec.Command("systemctl", "daemon-reload").Run()
 
 	fmt.Printf("\n✅ Migration complete!\n")
-	fmt.Printf("   Run 'sudo orama upgrade --restart' to regenerate services with new names\n\n")
+	fmt.Printf("   Run 'sudo orama node upgrade --restart' to regenerate services with new names\n\n")
 }
 
 func stopOldServices() {

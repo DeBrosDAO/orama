@@ -45,7 +45,7 @@ func HandlePreUpgrade() {
 	// 1. Check quorum safety
 	if warning := checkQuorumSafety(); warning != "" {
 		fmt.Fprintf(os.Stderr, "  UNSAFE: %s\n", warning)
-		fmt.Fprintf(os.Stderr, "  Aborting pre-upgrade. Use 'orama stop --force' to override.\n")
+		fmt.Fprintf(os.Stderr, "  Aborting pre-upgrade. Use 'orama node stop --force' to override.\n")
 		os.Exit(1)
 	}
 	fmt.Printf("  Quorum check passed\n")

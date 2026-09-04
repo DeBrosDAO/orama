@@ -54,4 +54,4 @@ func IsApprovalDenied(err error) bool {
 }
 
 // ErrAgentNotRunning is returned when the agent socket is not reachable.
-var ErrAgentNotRunning = fmt.Errorf("rootwallet agent is not running — start with: rw agent start && rw agent unlock")
+var ErrAgentNotRunning = fmt.Errorf("rootwallet agent is not reachable — open the RootWallet desktop app and unlock it")

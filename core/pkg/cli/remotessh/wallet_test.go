@@ -64,10 +64,10 @@ func TestParseVaultTarget(t *testing.T) {
 
 func TestWrapAgentError_notRunning(t *testing.T) {
 	err := wrapAgentError(rwagent.ErrAgentNotRunning, "test action")
-	if !strings.Contains(err.Error(), "not running") {
-		t.Errorf("expected 'not running' message, got: %s", err)
+	if !strings.Contains(err.Error(), "not reachable") {
+		t.Errorf("expected 'not reachable' message, got: %s", err)
 	}
-	if !strings.Contains(err.Error(), "rw agent start") {
+	if !strings.Contains(err.Error(), "RootWallet desktop app") {
 		t.Errorf("expected actionable hint, got: %s", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestWrapAgentError_locked(t *testing.T) {
 	if !strings.Contains(err.Error(), "locked") {
 		t.Errorf("expected 'locked' message, got: %s", err)
 	}
-	if !strings.Contains(err.Error(), "rw agent unlock") {
+	if !strings.Contains(err.Error(), "RootWallet desktop app") {
 		t.Errorf("expected actionable hint, got: %s", err)
 	}
 }
@@ -196,8 +196,8 @@ func TestPrepareNodeKeys_agentNotRunning(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "not running") {
-		t.Errorf("expected 'not running' error, got: %s", err)
+	if !strings.Contains(err.Error(), "not reachable") {
+		t.Errorf("expected 'not reachable' error, got: %s", err)
 	}
 }
 

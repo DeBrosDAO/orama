@@ -116,9 +116,9 @@ func ShowHelp() {
 	fmt.Printf("  uninstall                 - Remove production services (requires root/sudo)\n\n")
 	fmt.Printf("Examples:\n")
 	fmt.Printf("  # First node (creates new cluster)\n")
-	fmt.Printf("  sudo orama install --vps-ip 203.0.113.1 --domain node-1.orama.network\n\n")
+	fmt.Printf("  sudo orama node install --vps-ip 203.0.113.1 --domain node-1.orama.network\n\n")
 	fmt.Printf("  # Join existing cluster\n")
-	fmt.Printf("  sudo orama install --vps-ip 203.0.113.2 --domain node-2.orama.network \\\n")
+	fmt.Printf("  sudo orama node install --vps-ip 203.0.113.2 --domain node-2.orama.network \\\n")
 	fmt.Printf("    --peers /ip4/203.0.113.1/tcp/4001/p2p/12D3KooW... \\\n")
 	fmt.Printf("    --cluster-secret <64-hex-secret> --swarm-key <64-hex-swarm-key>\n\n")
 	fmt.Printf("  # Upgrade\n")
@@ -128,5 +128,5 @@ func ShowHelp() {
 	fmt.Printf("  sudo orama stop\n")
 	fmt.Printf("  sudo orama restart\n\n")
 	fmt.Printf("  orama status\n")
-	fmt.Printf("  orama logs node --follow\n")
+	fmt.Printf("  orama node logs node --follow\n")
 }

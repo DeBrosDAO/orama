@@ -23,7 +23,7 @@ type RemoteOrchestrator struct {
 // Resolves SSH credentials via wallet-derived keys and checks prerequisites.
 func NewRemoteOrchestrator(flags *Flags) (*RemoteOrchestrator, error) {
 	if flags.VpsIP == "" {
-		return nil, fmt.Errorf("--vps-ip is required\nExample: orama install --vps-ip 1.2.3.4 --nameserver --domain orama-testnet.network")
+		return nil, fmt.Errorf("--vps-ip is required\nExample: orama node install --vps-ip 1.2.3.4 --nameserver --domain orama-testnet.network")
 	}
 
 	// Try to find this IP in nodes.conf for the correct user
@@ -148,13 +148,13 @@ func (r *RemoteOrchestrator) findLocalArchive() string {
 	return best
 }
 
-// runRemoteInstall executes `orama install` on the VPS.
+// runRemoteInstall executes `orama node install` on the VPS.
 func (r *RemoteOrchestrator) runRemoteInstall() error {
 	cmd := r.buildRemoteCommand()
 	return remotessh.RunSSHStreaming(r.node, cmd)
 }
 
-// buildRemoteCommand constructs the `sudo orama install` command string
+// buildRemoteCommand constructs the `sudo orama node install` command string
 // with all flags passed through.
 func (r *RemoteOrchestrator) buildRemoteCommand() string {
 	var args []string

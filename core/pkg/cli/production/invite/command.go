@@ -70,9 +70,9 @@ func Handle(args []string) {
 	fmt.Printf("\nInvite token created (expires in %s)\n\n", expiry)
 	fmt.Printf("Run this on the new node:\n\n")
 	if certFingerprint != "" {
-		fmt.Printf("  sudo orama install --join https://%s --token %s --ca-fingerprint %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token, certFingerprint)
+		fmt.Printf("  sudo orama node install --join https://%s --token %s --ca-fingerprint %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token, certFingerprint)
 	} else {
-		fmt.Printf("  sudo orama install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
+		fmt.Printf("  sudo orama node install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
 	}
 	fmt.Printf("Replace <NEW_NODE_IP> with the new node's public IP address.\n")
 }

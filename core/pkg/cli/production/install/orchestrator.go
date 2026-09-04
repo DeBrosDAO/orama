@@ -583,7 +583,7 @@ func extractHost(addr string) string {
 func (o *Orchestrator) printFirstNodeSecrets() {
 	fmt.Printf("📋 To add more nodes to this cluster:\n\n")
 	fmt.Printf("  1. Generate an invite token:\n")
-	fmt.Printf("     orama invite\n\n")
+	fmt.Printf("     orama node invite\n\n")
 	fmt.Printf("  2. Run the printed command on the new VPS.\n\n")
 	fmt.Printf("  Node Peer ID: %s\n\n", o.setup.NodePeerID)
 }

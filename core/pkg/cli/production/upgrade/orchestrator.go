@@ -128,7 +128,7 @@ func (o *Orchestrator) Execute() error {
 			fmt.Printf("  Detected existing installation\n")
 		} else {
 			fmt.Printf("  ⚠️  No existing installation detected, treating as fresh install\n")
-			fmt.Printf("  Use 'orama install' for fresh installation\n")
+			fmt.Printf("  Use 'orama node install' for fresh installation\n")
 		}
 	}
 

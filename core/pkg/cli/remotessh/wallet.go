@@ -28,10 +28,10 @@ var newClient func() vaultClient = func() vaultClient {
 // to show the unlock dialog via deep link (best-effort, fire-and-forget).
 func wrapAgentError(err error, action string) error {
 	if rwagent.IsNotRunning(err) {
-		return fmt.Errorf("%s: rootwallet agent is not running — start with: rw agent start && rw agent unlock", action)
+		return fmt.Errorf("%s: rootwallet agent is not reachable — open the RootWallet desktop app and unlock it", action)
 	}
 	if rwagent.IsLocked(err) {
-		return fmt.Errorf("%s: rootwallet agent is locked — unlock timed out after waiting. Unlock via the RootWallet app or run: rw agent unlock", action)
+		return fmt.Errorf("%s: rootwallet agent is locked — unlock timed out after waiting. Unlock it in the RootWallet desktop app", action)
 	}
 	if rwagent.IsApprovalDenied(err) {
 		return fmt.Errorf("%s: rootwallet access denied — approve this app in the RootWallet desktop app", action)

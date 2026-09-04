@@ -16,7 +16,7 @@ type Flags struct {
 	SkipChecks    bool
 	Nameserver    bool   // Make this node a nameserver (runs CoreDNS + Caddy)
 	JoinAddress   string // HTTPS URL of existing node (e.g., https://node1.dbrs.space)
-	Token         string // Invite token for joining (from orama invite)
+	Token         string // Invite token for joining (from orama node invite)
 	ClusterSecret string // Deprecated: use --token instead
 	SwarmKey      string // Deprecated: use --token instead
 	PeersStr      string // Deprecated: use --token instead
@@ -57,7 +57,7 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	// Cluster join flags
 	fs.StringVar(&flags.JoinAddress, "join", "", "Join existing cluster via HTTPS URL (e.g. https://node1.dbrs.space)")
-	fs.StringVar(&flags.Token, "token", "", "Invite token for joining (from orama invite on existing node)")
+	fs.StringVar(&flags.Token, "token", "", "Invite token for joining (from orama node invite on existing node)")
 	fs.StringVar(&flags.ClusterSecret, "cluster-secret", "", "Deprecated: use --token instead")
 	fs.StringVar(&flags.SwarmKey, "swarm-key", "", "Deprecated: use --token instead")
 	fs.StringVar(&flags.PeersStr, "peers", "", "Comma-separated list of bootstrap peer multiaddrs")
@@ -70,7 +70,7 @@ func ParseFlags(args []string) (*Flags, error) {
 
 	// Security flags
 	fs.BoolVar(&flags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
-	fs.StringVar(&flags.CAFingerprint, "ca-fingerprint", "", "SHA-256 fingerprint of server TLS cert (from orama invite output)")
+	fs.StringVar(&flags.CAFingerprint, "ca-fingerprint", "", "SHA-256 fingerprint of server TLS cert (from orama node invite output)")
 
 	// Anyone flags
 	fs.BoolVar(&flags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")

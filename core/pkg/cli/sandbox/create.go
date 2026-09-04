@@ -172,7 +172,7 @@ func checkAgentReady() error {
 	status, err := client.Status(ctx)
 	if err != nil {
 		if rwagent.IsNotRunning(err) {
-			return fmt.Errorf("rootwallet agent is not running\n\n  Start it with:\n    rw agent start && rw agent unlock")
+			return fmt.Errorf("rootwallet agent is not reachable\n\n  Open the RootWallet desktop app and unlock it.")
 		}
 		return fmt.Errorf("rootwallet agent: %w", err)
 	}
@@ -184,7 +184,7 @@ func checkAgentReady() error {
 // Separated from checkAgentReady for testability.
 func validateAgentStatus(status *rwagent.StatusResponse) error {
 	if status.Locked {
-		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it with:\n    rw agent unlock")
+		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it in the RootWallet desktop app.")
 	}
 
 	if status.ConnectedApps == 0 {
@@ -515,7 +515,7 @@ func generateInviteToken(node inspector.Node) (string, error) {
 	}
 
 	// Parse token from output — the invite command outputs:
-	//   "sudo orama install --join https://... --token <64-char-hex> --vps-ip ..."
+	//   "sudo orama node install --join https://... --token <64-char-hex> --vps-ip ..."
 	// Look for the --token flag value first
 	fields := strings.Fields(out)
 	for i, field := range fields {

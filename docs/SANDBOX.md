@@ -144,7 +144,7 @@ Hetzner Floating IPs are persistent IPv4 addresses that can be reassigned betwee
 
 ### SSH Authentication
 
-Sandbox uses a rootwallet-derived SSH key (`sandbox/root` vault entry), the same mechanism as production. The rootwallet agent must be running and unlocked (`rw agent start && rw agent unlock`) before running sandbox commands that use SSH; first-time use also requires the RootWallet desktop app to be open to approve access. The public key is uploaded to Hetzner during setup and injected into every server at creation time.
+Sandbox uses a rootwallet-derived SSH key (`sandbox/root` vault entry), the same mechanism as production. The RootWallet desktop app must be open and unlocked before running sandbox commands that use SSH; it also prompts to approve access on first use. The public key is uploaded to Hetzner during setup and injected into every server at creation time.
 
 ### Server Naming
 

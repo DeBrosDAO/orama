@@ -37,7 +37,7 @@ Requires: orama auth login (for API-based resolution)`,
 
 		if len(nodes) == 0 {
 			fmt.Printf("No nodes found for environment %q\n", env)
-			fmt.Println("Register nodes with: orama node setup <ip> --env", env)
+			fmt.Printf("Register nodes with: orama node setup --ip <ip> --env %s\n", env)
 			return nil
 		}
 

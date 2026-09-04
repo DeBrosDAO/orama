@@ -601,10 +601,9 @@ sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
 
 # 2. On genesis node, generate an invite
 orama node invite --expiry 24h
-# Prints: sudo orama install --join https://example.com --token <TOKEN> \
+# Prints: sudo orama node install --join https://example.com --token <TOKEN> \
 #           [--ca-fingerprint <FP>] --vps-ip <NEW_NODE_IP> --nameserver
-# Note: the printed command says `orama install`; the registered command is
-# `orama node install`. Drop --nameserver when joining as a regular node.
+# Drop --nameserver when joining as a regular node.
 
 # 3a. Join as nameserver (requires --domain set to base domain)
 sudo orama node install --join http://1.2.3.4 --token abc123... \
