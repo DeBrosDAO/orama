@@ -1,8 +1,11 @@
-# Orama Network Client SDK
+# Orama Network Go Client SDK
 
 ## Overview
 
-The Orama Network Client SDK provides a clean, type-safe Go interface for interacting with the Orama Network. It abstracts away the complexity of peer connections, authentication, and error handling.
+The Orama Network Go Client SDK provides a clean, type-safe Go interface for interacting with the Orama Network. It abstracts away the complexity of peer connections, authentication, and error handling.
+
+For TypeScript, see [TS_SDK.md](TS_SDK.md). Both talk to the same gateway; use
+whichever matches the code you are writing.
 
 ## Installation
 

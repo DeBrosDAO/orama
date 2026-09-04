@@ -570,6 +570,27 @@ orama function logs my-function
 | DELETE | `/v1/functions/{name}/triggers/{id}` | Delete trigger |
 | POST | `/v1/invoke/{namespace}/{name}` | Direct invoke (alt endpoint) |
 
+## Invoking from application code
+
+The TypeScript SDK calls the direct-invoke endpoint for you:
+
+```typescript
+import { createClient } from "@debros/orama";
+
+const client = createClient({
+  baseURL: "https://ns-myapp.orama-devnet.network",
+  apiKey: process.env.ORAMA_API_KEY,
+  functionsConfig: { namespace: "myapp" },
+});
+
+const result = await client.functions.invoke("my-function", { name: "World" });
+```
+
+Invoking needs the `invoke` grant, which the `invoke-only` and `app-runtime` key
+profiles both carry; deploying, secrets and triggers are control-plane and need
+an `admin` key. See [TS_SDK.md](TS_SDK.md), and
+[GO_CLIENT_SDK.md](GO_CLIENT_SDK.md) for the Go client.
+
 ## Example: Call Push Handler
 
 A real-world function that sends VoIP push notifications when a call invite is published to PubSub:

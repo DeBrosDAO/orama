@@ -15,9 +15,14 @@ import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://ns-myapp.orama-devnet.network",
-  apiKey: "ak_your_api_key:namespace", // Get from gateway
+  apiKey: process.env.ORAMA_API_KEY, // ak_<id>:<namespace>
 });
 ```
+
+Mint one with `orama namespace keys create --scope <profile>`. **Which profile
+depends on where the code runs:** an `app-runtime` key is safe in a browser
+bundle, an `admin` key is not — it carries the whole control plane. See
+[Browser and server](./README.md#browser-and-server).
 
 ### 3. Use It
 
@@ -91,6 +96,10 @@ npm run build
 | `PubSubClient` | Pub/sub operations |
 | `NetworkClient` | Network status, peers |
 | `SDKError` | All errors inherit from this |
+| `AuthError` | 401 — the credential was rejected |
+| `ScopeError` | 403 — the credential's grants do not cover the operation; `requiredScope` names the one it needed |
+| `NotFoundError` | 404 |
+| `NetworkError` | The gateway was never reached; `httpStatus` is 0 |
 
 ## Common Patterns
 
@@ -128,16 +137,23 @@ await client.db.transaction([
 
 ### Error Handling
 ```typescript
-import { SDKError } from "@debros/orama";
+import { NetworkError, ScopeError, SDKError } from "@debros/orama";
 
 try {
   await client.db.query("SELECT * FROM invalid_table");
 } catch (error) {
-  if (error instanceof SDKError) {
+  if (error instanceof ScopeError) {
+    console.error(`this key needs the ${error.requiredScope} grant`);
+  } else if (error instanceof NetworkError) {
+    console.error("the gateway was never reached");
+  } else if (error instanceof SDKError) {
     console.error(`${error.httpStatus}: ${error.message}`);
   }
 }
 ```
+
+The four subclasses all extend `SDKError`, so one `catch` still covers
+everything.
 
 ## TypeScript Types
 
@@ -153,8 +169,9 @@ const sub = await client.pubsub.subscribe("news", {
 ## Next Steps
 
 1. Read the full [README.md](./README.md)
-2. Explore [tests/e2e/](./tests/e2e/) for examples
-3. Explore [examples/](./examples/) for runnable code samples
+2. Read [docs/TS_SDK.md](../docs/TS_SDK.md) for the module-by-module reference
+3. Explore [tests/e2e/](./tests/e2e/) for examples
+4. Explore [examples/](./examples/) for runnable code samples
 
 ## Troubleshooting
 
@@ -164,8 +181,13 @@ const sub = await client.pubsub.subscribe("news", {
 - Verify network connectivity
 
 **"API key invalid"**
-- Confirm `apiKey` format: `ak_key:namespace`
+- Confirm `apiKey` format: `ak_<id>:<namespace>`
 - Get a fresh API key from gateway admin
+
+**"insufficient scope"**
+- The key is valid but lacks the grant the operation needs. The error is a
+  `ScopeError` and `error.requiredScope` names it.
+- Mint a key that has it: `orama namespace keys create --scope <grant list>`
 
 **"WebSocket connection failed"**
 - Gateway must support WebSocket at `/v1/pubsub/ws`

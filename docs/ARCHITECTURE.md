@@ -703,7 +703,7 @@ Every node runs Anyone as a **client** only: a local SOCKS5 proxy on `127.0.0.1:
   `?host=&port=` through the Anyone network. TLS is negotiated end-to-end
   between the client and the destination *through* the tunnel, so the gateway
   relays ciphertext and sees only the destination host and port. See
-  "Anonymity Tunnel" in `docs/CLIENT_SDK.md`.
+  "Anonymity Tunnel" in `docs/GO_CLIENT_SDK.md`.
 
 Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
 app-runtime API key alone is refused.

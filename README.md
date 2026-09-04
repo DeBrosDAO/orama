@@ -37,7 +37,8 @@ make vault-build
 | [Dev & Deploy](docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
 | [Security](docs/SECURITY.md) | Security hardening and threat model |
 | [Monitoring](docs/MONITORING.md) | Cluster health monitoring |
-| [Client SDK](docs/CLIENT_SDK.md) | Go SDK documentation |
+| [TypeScript SDK](docs/TS_SDK.md) | `@debros/orama` — the client applications use |
+| [Go Client SDK](docs/GO_CLIENT_SDK.md) | The Go client for the same gateway |
 | [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
 | [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
 

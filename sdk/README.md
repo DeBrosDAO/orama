@@ -308,7 +308,7 @@ client.auth.setJwt("new_jwt_token");
 #### Get Current Token
 
 ```typescript
-const token = client.auth.getToken(); // Returns API key or JWT
+const token = client.auth.getToken(); // The JWT when one is set, otherwise the API key
 ```
 
 #### Get Authentication Info
@@ -397,9 +397,25 @@ interface ClientConfig {
   retryDelayMs?: number; // Delay between retries (default: 1000)
   debug?: boolean; // Print diagnostics to the console (default: false)
   storage?: StorageAdapter; // For persisting JWT/API key (default: MemoryStorage)
-  wsConfig?: Partial<WSClientConfig>; // WebSocket configuration
+  wsConfig?: Partial<WSClientConfig>; // WebSocket options, including `reconnect`
+  functionsConfig?: FunctionsClientConfig; // `namespace`, and an optional separate `gatewayURL`
   fetch?: typeof fetch; // Custom fetch implementation
+  onNetworkError?: NetworkErrorCallback; // Called when a request never reached the gateway
 }
+```
+
+`onNetworkError` is where gateway failover belongs: the SDK does not choose a
+different gateway on your behalf, because only the application knows which
+others it has.
+
+```typescript
+const client = createClient({
+  baseURL: gateways[0],
+  apiKey,
+  onNetworkError: (error, context) => {
+    if (error.httpStatus === 0) rotateGateway(context.path);
+  },
+});
 ```
 
 ### Logging
@@ -738,24 +754,38 @@ await client.auth.logout({ server: false });    // clear local state only
 throws for anything else, so a gateway that is down is not reported as a signed
 out user.
 
-## Browser Usage
+## Browser and server
 
-The SDK works in browsers with minimal setup:
+The SDK runs in both, but **which key you use depends on where the code runs**.
+A key in a browser bundle is a key in the hands of everyone who loads the page.
 
-```typescript
-// Browser example
-import { createClient } from "@debros/orama";
+| | Key | Why |
+|---|---|---|
+| Browser, mobile, anything shipped to a user | `app-runtime` | Data-plane grants only. The gateway additionally requires the signed-in user's wallet JWT for storage, WebRTC and proxy, so an extracted key on its own cannot act as anybody. |
+| Server, CI, a developer's machine | `admin` | The whole control plane: deploys, secrets, migrations, key management, raw RQLite. Never ship this to a client. |
 
-const client = createClient({
-  baseURL: "https://gateway.example.com",
-  apiKey: "ak_browser_key:my-app",
-});
-
-// Use like any other API client
-const data = await client.db.query("SELECT * FROM items");
+```bash
+orama namespace keys create --scope app-runtime --label web
+orama namespace keys create --scope admin --label ci
 ```
 
-**Note**: For WebSocket connections in browsers with authentication, ensure your gateway supports either header-based auth or query parameter auth.
+```typescript
+// In a browser bundle
+const client = createClient({
+  baseURL: "https://ns-myapp.orama-devnet.network",
+  apiKey: import.meta.env.VITE_ORAMA_RUNTIME_KEY, // app-runtime
+  storage: new LocalStorageAdapter(),
+});
+
+// In a server process
+const admin = createClient({
+  baseURL: "https://ns-myapp.orama-devnet.network",
+  apiKey: process.env.ORAMA_ADMIN_KEY, // never bundled
+});
+```
+
+An operation the key's grants do not cover is refused with a `ScopeError` naming
+the grant it needed, so the mistake is visible rather than mysterious.
 
 ## Testing
 
