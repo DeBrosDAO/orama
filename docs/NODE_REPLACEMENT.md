@@ -730,7 +730,7 @@ testnet|ubuntu@51.38.130.69|nameserver-ns1     # hulk
 
 | Symptom | Action |
 |---------|--------|
-| Platform no leader / Candidate | [DEV_DEPLOY.md](DEV_DEPLOY.md) `orama node recover-raft --env … --leader <ip>` |
+| Platform no leader / Candidate | [DEV_DEPLOY.md](DEV_DEPLOY.md) `orama node recover-raft --env …` — it picks the node with the highest applied index and prints what each one reported. Every other node's data is DELETED, with no backup |
 | New node never becomes voter | Check WG ping, logs, re-invite + reinstall if partial |
 | Namespace health 503 circuit open | Fix DNS to live gateways; restart one platform gateway |
 | Namespace rqlite `leader not found` | Single-node `peers.json` recovery on survivor |

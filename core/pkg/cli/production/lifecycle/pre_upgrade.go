@@ -197,3 +197,15 @@ func waitForOtherLeader(port int, budget time.Duration) error {
 		time.Sleep(2 * time.Second)
 	}
 }
+
+// ClearMaintenanceFlag removes the flag HandlePreUpgrade wrote.
+//
+// It is separate from HandlePostUpgrade because the upgrade orchestrator
+// restarts the services itself and only needs this last step; calling the whole
+// post-upgrade would start everything a second time.
+func ClearMaintenanceFlag() error {
+	if err := os.Remove(maintenanceFlagPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove the maintenance flag: %w", err)
+	}
+	return nil
+}

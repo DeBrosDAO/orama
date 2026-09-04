@@ -49,11 +49,11 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
+		return fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet>")
 	}
-	if f.Leader == "" {
-		return fmt.Errorf("--leader is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
-	}
+	// --leader is optional: without it the command reads every node's applied
+	// index and keeps the furthest-ahead one, printing what it found so the
+	// operator can check before approving.
 	return nil
 }
 
@@ -69,12 +69,17 @@ func execute(flags *Flags) error {
 	}
 	defer cleanup()
 
-	// Find leader node
-	leaderNodes := remotessh.FilterByIP(nodes, flags.Leader)
-	if len(leaderNodes) == 0 {
-		return fmt.Errorf("leader %s not found in %s environment", flags.Leader, flags.Env)
+	// Choose whose data survives.
+	//
+	// This used to be --leader, required, described as "the node with the
+	// highest commit index" and never computed. It decides which copy of the
+	// cluster's data is kept: every other node's raft log and database are
+	// deleted. Working that out by hand, across six nodes, while quorum is
+	// already lost, is how the wrong one gets named.
+	leader, err := chooseLeader(nodes, flags.Leader)
+	if err != nil {
+		return err
 	}
-	leader := leaderNodes[0]
 
 	// Separate leader from followers
 	var followers []inspector.Node
@@ -590,4 +595,28 @@ func raftState(node inspector.Node) string {
 		return ""
 	}
 	return status.Store.Raft.State
+}
+
+// chooseLeader resolves the node whose data a recovery keeps.
+//
+// An explicit --leader wins and is only checked for membership: an operator who
+// names one has a reason, and this command exists for situations the automatic
+// answer may not cover.
+func chooseLeader(nodes []inspector.Node, explicit string) (inspector.Node, error) {
+	if explicit != "" {
+		named := remotessh.FilterByIP(nodes, explicit)
+		if len(named) == 0 {
+			return inspector.Node{}, fmt.Errorf("--leader %s is not a node in this environment", explicit)
+		}
+		return named[0], nil
+	}
+
+	fmt.Printf("Reading the applied index of %d node(s)...\n\n", len(nodes))
+	picked, indexes, err := PickLeader(nodes)
+	if err != nil {
+		return inspector.Node{}, err
+	}
+	fmt.Print(FormatIndexes(indexes, picked))
+	fmt.Println()
+	return picked, nil
 }

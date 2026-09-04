@@ -165,13 +165,18 @@ What the rolling upgrade does:
    could not be read. An unreachable node is never assumed to be a healthy
    follower.
 4. **Requires `--yes`.** Without it the plan is printed and nothing is restarted.
-5. **Gates on each node actually rejoining** before touching the next: raft state
+5. **Hands leadership to another voter** before restarting a node that is
+   leading, and refuses to restart it if no other voter takes it. The plan said
+   "leader — last, after leadership transfer" while nothing performed the
+   transfer, so restarting the leader forced an election that failed every
+   in-flight write.
+6. **Gates on each node actually rejoining** before touching the next: raft state
    `Leader` or `Follower`, a leader known to exist, an applied index caught up to
    the leader's commit index, and a gateway serving `/health`.
-6. **Stops the rollout** the moment a node fails that gate, leaving the remaining
+7. **Stops the rollout** the moment a node fails that gate, leaving the remaining
    voters untouched and the cluster serving.
 
-`--delay` is now the per-node budget for step 5 (how long a node has to rejoin
+`--delay` is now the per-node budget for step 6 (how long a node has to rejoin
 before the rollout stops), not an unconditional sleep between nodes. A sleep
 cannot tell a node that rejoined in 20 seconds from one that never came back, so
 the old rollout restarted the next voter either way — which is how a rolling
@@ -344,16 +349,32 @@ whole cluster is leaderless, not when one node reports `degraded`.
 If nodes get stuck in "Candidate" state or show "leader not found" errors:
 
 ```bash
-# Recover the Raft cluster (specify the node with highest commit index as leader)
+# Reads every node's applied index, keeps the furthest ahead, and prints what
+# each one reported before asking you to confirm.
+orama node recover-raft --env testnet
+
+# Or name the node whose data to keep yourself.
 orama node recover-raft --env testnet --leader 1.2.3.4
+
+# When rqlite is not answering anywhere, so the leader's raft address cannot be
+# read from the cluster.
+orama node recover-raft --env testnet --leader-raft-addr 10.0.0.1:10101
 ```
 
-This will:
-1. Stop orama-node on ALL nodes
-2. Backup + delete raft/ on non-leader nodes
-3. Start the leader, wait for Leader state
-4. Start remaining nodes in batches
-5. Verify cluster health
+**One node's data is kept. Every other node's raft log and database are
+DELETED.** Nothing is backed up: there is no copy to restore from afterwards.
+Take a backup yourself first if the surviving node might not be the right one.
+This document used to say "backup + delete"; there was never a backup.
+
+What happens:
+1. Stop orama-node on every node
+2. Reset the kept node to a single-member cluster, preserving its data
+3. Start it and confirm it comes back as Leader with its data intact — before
+   touching any other node, so a failed recovery leaves every copy intact
+4. Delete `raft.db`, `raft/`, `db.sqlite` (+`-shm`/`-wal`) and `rsnapshots` on
+   every other node
+5. Start them one at a time; each pulls a full snapshot from the kept node
+6. Verify cluster health
 
 ### Replacing a nameserver VPS (keep cluster alive)
 
@@ -517,7 +538,8 @@ Deprecated; runs `wipe`. See "Removing a node".
 | Flag | Description |
 |------|-------------|
 | `--env <env>` | Target environment (required) |
-| `--leader <ip>` | Leader node IP — highest commit index (required) |
+| `--leader <ip>` | IP of the node whose data to keep. Default: the node with the highest applied index, which the command reads and prints |
+| `--leader-raft-addr <host:port>` | The kept node's raft address, e.g. `10.0.0.1:10101`. Use when rqlite is not answering anywhere, so it cannot be read from the cluster |
 | `--force` | Skip confirmation (DESTRUCTIVE) |
 
 #### `orama node` (Service Management)
