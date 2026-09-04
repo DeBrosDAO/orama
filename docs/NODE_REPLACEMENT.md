@@ -137,25 +137,36 @@ installed with `go install` reports its real number instead of `dev`.
 ### 5. Secrets / SSH
 
 - Prefer SSH key on the new VPS (`debros-nodes` or rootwallet vault).
-- `orama node setup` needs unlocked rootwallet; manual path below does not.
+- `orama node setup` is the path (one command per node, no SSH by hand) and needs an unlocked RootWallet. The manual path below does not. See [DEVNET_INSTALL.md](DEVNET_INSTALL.md).
 
 ---
 
 ## Phase A — Join new node (old node stays fully up)
 
-### A1. Invite token (on an existing installed node)
+### A1. Invite
+
+From your own machine:
+
+```bash
+orama invite --expiry 2h
+```
+
+Or on an existing installed node:
 
 ```bash
 sudo /opt/orama/bin/orama node invite --expiry 2h
 ```
 
-Save:
+Either prints **one** string to save. It carries the gateway to join and the
+fingerprint of that gateway's TLS certificate, so there is no separate
+`--join`, no separate `--ca-fingerprint`, and nothing to get the wrong way
+round. It used to be three values, two of them indistinguishable strings of
+hex, and the fingerprint was the one people left out — which silently dropped
+the join to trust-on-first-use.
 
-- `--token …`
-- `--ca-fingerprint …` (if printed)
-- Join URL hint (HTTPS domain or `http://<hub-public-ip>`)
-
-Tokens are **single-use**. Generate one per join.
+Invites are **single-use**. Mint one per join. A retry after a failed install
+is told the invite was already used, rather than that it was "invalid or
+expired".
 
 ### A2. Bootstrap new VPS
 
@@ -174,9 +185,7 @@ systemctl disable docker docker.socket 2>/dev/null || true
 
 ```bash
 sudo orama node install \
-  --join http://<HUB_PUBLIC_IP> \
-  --token <TOKEN> \
-  --ca-fingerprint <FP> \
+  --token <INVITE> \
   --vps-ip <NEW_PUBLIC_IP> \
   --domain <base-domain> \
   --base-domain <base-domain> \
@@ -185,9 +194,26 @@ sudo orama node install \
   --ssh-user ubuntu
 ```
 
+Or from your own machine, which drives the same install over SSH:
+
+```bash
+orama node install --remote \
+  --token <INVITE> \
+  --vps-ip <NEW_PUBLIC_IP> \
+  --base-domain <base-domain> \
+  --nameserver --environment <devnet|testnet> --ssh-user ubuntu
+```
+
+`--remote` is required: which machine gets installed used to be inferred from
+whether you had used sudo. A remote install now forwards every flag, including
+`--ca-fingerprint`, `--environment`, `--ssh-user` and `--operator-wallet` —
+they were silently dropped, so a laptop-driven join fell back to
+trust-on-first-use and the node registered with no environment or owner.
+
 Notes:
 
-- Prefer **`http://<hub-ip>`** if DNS/TLS is flaky during cutover (docs allow this).
+- The invite carries the join URL. To override it — `http://<hub-ip>` if DNS or
+  TLS is flaky during cutover — pass `--join` as well; an explicit flag wins.
 - Never join via `:10104` (blocked by UFW).
 - Installer may warn that the base domain does not yet resolve to the new IP — expected until DNS update.
 - Assigned WG IP example: `10.0.0.17`.

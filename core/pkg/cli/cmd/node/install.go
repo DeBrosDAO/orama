@@ -12,7 +12,11 @@ var installCmd = &cobra.Command{
 	Short: "Install production node (requires sudo)",
 	Long: `Install and configure an Orama production node on this machine.
 For the first node, this creates a new cluster. For subsequent nodes,
-use --join and --token to join an existing cluster.`,
+use --join and --token to join an existing cluster.
+
+Run it on the node itself with sudo, or from your own machine with --remote to
+drive the install over SSH against --vps-ip. Which of the two happened used to
+be decided by whether you had used sudo.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return install.Run(&installFlags)
 	},
@@ -21,15 +25,20 @@ use --join and --token to join an existing cluster.`,
 func init() {
 	f := installCmd.Flags()
 	f.StringVar(&installFlags.VpsIP, "vps-ip", "", "Public IP of this VPS (required)")
+	f.BoolVar(&installFlags.Remote, "remote", false,
+		"Install the machine at --vps-ip over SSH, instead of this machine")
 	f.StringVar(&installFlags.Domain, "domain", "", "Domain for HTTPS (auto-generated for non-nameserver nodes if omitted)")
 	f.StringVar(&installFlags.BaseDomain, "base-domain", "", "Base domain for deployment routing (e.g., dbrs.space)")
 	f.BoolVar(&installFlags.Force, "force", false, "Force reconfiguration even if already installed")
 	f.BoolVar(&installFlags.DryRun, "dry-run", false, "Show what would be done without making changes")
 	f.BoolVar(&installFlags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
 	f.BoolVar(&installFlags.Nameserver, "nameserver", false, "Make this node a nameserver (runs CoreDNS + Caddy)")
-	f.StringVar(&installFlags.JoinAddress, "join", "", "Join existing cluster via HTTPS URL (e.g. https://node1.dbrs.space)")
-	f.StringVar(&installFlags.Token, "token", "", "Invite token for joining (from orama node invite on existing node)")
-	f.StringVar(&installFlags.CAFingerprint, "ca-fingerprint", "", "SHA-256 fingerprint of server TLS cert (from orama node invite output)")
+	f.StringVar(&installFlags.JoinAddress, "join", "",
+		"Gateway to join; the invite carries this, so it is only needed to override it")
+	f.StringVar(&installFlags.Token, "token", "",
+		"Invite from 'orama invite'; it carries the gateway to join and the certificate to pin")
+	f.StringVar(&installFlags.CAFingerprint, "ca-fingerprint", "",
+		"SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it")
 	f.BoolVar(&installFlags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
 	f.BoolVar(&installFlags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")
 	f.StringVar(&installFlags.SSHUser, "ssh-user", "", "SSH user for remote management")

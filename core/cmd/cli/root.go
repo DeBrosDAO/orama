@@ -18,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/envcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/functioncmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/inspectcmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/invitecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
@@ -61,6 +62,9 @@ and interacting with the Orama distributed network.`,
 
 	// Node operator commands (was "prod")
 	rootCmd.AddCommand(node.Cmd)
+
+	// Mint an invite for a new node, from here rather than from a node
+	rootCmd.AddCommand(invitecmd.Cmd)
 
 	// Deploy command (top-level, upsert)
 	rootCmd.AddCommand(deploycmd.Cmd)

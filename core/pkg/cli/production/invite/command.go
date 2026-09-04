@@ -3,13 +3,11 @@ package invite
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
-	"net"
+	"github.com/DeBrosOfficial/network/pkg/invite"
 	"net/http"
 	"os"
 	"time"
@@ -59,43 +57,36 @@ func Run(opts Options) error {
 			"  Make sure RQLite is running on this node", err)
 	}
 
-	// Get TLS certificate fingerprint for TOFU verification
-	certFingerprint := getTLSCertFingerprint(domain)
+	joinURL := "https://" + domain
 
-	// Print the invite command
-	fmt.Printf("\nInvite token created (expires in %s)\n\n", expiry)
-	fmt.Printf("Run this on the new node:\n\n")
-	if certFingerprint != "" {
-		fmt.Printf("  sudo orama node install --join https://%s --token %s --ca-fingerprint %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token, certFingerprint)
-	} else {
-		fmt.Printf("  sudo orama node install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
+	// The fingerprint the joining node pins instead of trusting whatever
+	// certificate it is first shown. Failing to read it is reported rather
+	// than quietly producing an invite with no pinning.
+	fingerprint, err := invite.Fingerprint(domain)
+	if err != nil {
+		return clierr.Unavailable("could not read this node's TLS certificate: %w\n"+
+			"  The joining node needs its fingerprint to verify the cluster", err)
 	}
+
+	encoded, err := invite.Encode(invite.Invite{
+		JoinURL:       joinURL,
+		Token:         token,
+		CAFingerprint: fingerprint,
+	})
+	if err != nil {
+		return clierr.Failure("could not encode the invite: %w", err)
+	}
+
+	fmt.Printf("\nInvite created (expires in %s)\n\n", expiry)
+	fmt.Printf("Run this on the new node:\n\n")
+	fmt.Printf("  sudo orama node install --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", encoded)
 	fmt.Printf("Replace <NEW_NODE_IP> with the new node's public IP address.\n")
+	fmt.Printf("The invite carries the gateway to join and the certificate to pin,\n")
+	fmt.Printf("so there is nothing else to copy across.\n")
 	return nil
 }
 
 // getTLSCertFingerprint connects to the domain over TLS and returns the
-// SHA-256 fingerprint of the leaf certificate. Returns empty string on failure.
-func getTLSCertFingerprint(domain string) string {
-	conn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: 5 * time.Second},
-		"tcp",
-		domain+":443",
-		&tls.Config{MinVersion: tls.VersionTLS12},
-	)
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-
-	certs := conn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return ""
-	}
-
-	hash := sha256.Sum256(certs[0].Raw)
-	return hex.EncodeToString(hash[:])
-}
 
 // readNodeDomain reads the domain from the node config file
 func readNodeDomain() (string, error) {

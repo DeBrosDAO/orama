@@ -167,8 +167,16 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// which is a fleet-enumeration oracle if anyone can ask it, and the reads
 	// after it load every cluster secret off disk and shell out to `ip`.
 	if err := h.assertTokenLive(ctx, req.Token); err != nil {
-		h.logger.Warn("join rejected: token is not live", zap.Error(err))
-		http.Error(w, "unauthorized: invalid or expired token", http.StatusUnauthorized)
+		if !isTokenRefusal(err) {
+			// Not being able to read the table is an outage, not a bad token.
+			// Answering 401 would tell the operator to mint a new invite,
+			// which would fail the same way.
+			h.logger.Error("could not verify the invite token", zap.Error(err))
+			http.Error(w, "cannot verify the invite right now, retry shortly", http.StatusServiceUnavailable)
+			return
+		}
+		h.logger.Warn("join rejected", zap.Error(err))
+		http.Error(w, tokenRefusal(err), http.StatusUnauthorized)
 		return
 	}
 
@@ -351,18 +359,68 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 // that unauthenticated callers cannot reach the work that follows.
 func (h *Handler) assertTokenLive(ctx context.Context, token string) error {
 	var rows []struct {
-		Token string `db:"token"`
+		Used    int `db:"used"`
+		Expired int `db:"expired"`
 	}
+	// The row is fetched with the two predicates as columns rather than as a
+	// filter, so a token that exists can be told apart from one that does not,
+	// and a used one from an expired one. The single "invalid or expired"
+	// answer sent an operator whose install had failed part way through
+	// looking for a clock problem when the token had simply been spent.
+	//
+	// Saying which is not an oracle: distinguishing them requires already
+	// holding a 32-byte random token, so anyone who can ask has nothing left
+	// to learn.
 	if err := h.rqliteClient.Query(ctx, &rows,
-		`SELECT token FROM invite_tokens
-		  WHERE token = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
+		`SELECT CASE WHEN used_at IS NOT NULL THEN 1 ELSE 0 END AS used,
+		        CASE WHEN expires_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END AS expired
+		   FROM invite_tokens WHERE token = ?`,
 		token); err != nil {
 		return fmt.Errorf("could not read the invite token: %w", err)
 	}
+
 	if len(rows) == 0 {
-		return fmt.Errorf("no live invite token matches")
+		return errTokenUnknown
+	}
+	if rows[0].Used == 1 {
+		return errTokenUsed
+	}
+	if rows[0].Expired == 1 {
+		return errTokenExpired
 	}
 	return nil
+}
+
+// Why a token was refused. Each one tells the operator something different
+// about what to do next.
+var (
+	// errTokenUnknown means no invite has ever had this value.
+	errTokenUnknown = errors.New("no invite matches this token")
+	// errTokenUsed means a node already joined with it. Invites are
+	// single-use, so this is what a retry after a partly-failed install sees.
+	errTokenUsed = errors.New("this invite has already been used")
+	// errTokenExpired means it was never used and its window has passed.
+	errTokenExpired = errors.New("this invite has expired")
+)
+
+// isTokenRefusal reports whether the error is a verdict about the token, as
+// opposed to not having been able to reach a verdict at all.
+func isTokenRefusal(err error) bool {
+	return errors.Is(err, errTokenUsed) ||
+		errors.Is(err, errTokenExpired) ||
+		errors.Is(err, errTokenUnknown)
+}
+
+// tokenRefusal renders why a token was refused, for the joining node.
+func tokenRefusal(err error) string {
+	switch {
+	case errors.Is(err, errTokenUsed):
+		return "unauthorized: this invite has already been used. Invites are single-use — mint another with 'orama invite'"
+	case errors.Is(err, errTokenExpired):
+		return "unauthorized: this invite has expired. Mint another with 'orama invite'"
+	default:
+		return "unauthorized: no invite matches this token"
+	}
 }
 
 // errClaimCheckUnavailable marks a refusal caused by not being able to read the

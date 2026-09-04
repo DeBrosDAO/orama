@@ -161,51 +161,79 @@ func (r *RemoteOrchestrator) runRemoteInstall() error {
 	return remotessh.RunSSHStreaming(r.node, cmd)
 }
 
-// buildRemoteCommand constructs the `sudo orama node install` command string
-// with all flags passed through.
+// buildRemoteCommand constructs the `sudo orama node install` command line.
+//
+// Every flag the operator gave has to reach the node, and the list used to be
+// written out by hand and had drifted: --ca-fingerprint, --environment,
+// --ssh-user, --operator-wallet, --peers and the four --ipfs-* flags were
+// silently dropped. Dropping --ca-fingerprint is the one that matters —
+// without it the joining node has nothing to pin the cluster's certificate
+// against and falls back to trust-on-first-use, so a laptop-driven join
+// quietly did not get the verification the operator asked for. The others
+// meant a node registered with no environment, no SSH user and no owner.
+//
+// remoteInstallArgs is the list, so a new install flag is added in one place
+// and a guard test can check none is missing.
 func (r *RemoteOrchestrator) buildRemoteCommand() string {
 	var args []string
 	if r.node.User != "root" {
 		args = append(args, "sudo")
 	}
 	args = append(args, "orama", "node", "install")
-
-	args = append(args, "--vps-ip", r.flags.VpsIP)
-
-	if r.flags.Domain != "" {
-		args = append(args, "--domain", r.flags.Domain)
-	}
-	if r.flags.BaseDomain != "" {
-		args = append(args, "--base-domain", r.flags.BaseDomain)
-	}
-	if r.flags.Nameserver {
-		args = append(args, "--nameserver")
-	}
-	if r.flags.JoinAddress != "" {
-		args = append(args, "--join", r.flags.JoinAddress)
-	}
-	if r.flags.Token != "" {
-		args = append(args, "--token", r.flags.Token)
-	}
-	if r.flags.Force {
-		args = append(args, "--force")
-	}
-	if r.flags.SkipChecks {
-		args = append(args, "--skip-checks")
-	}
-	if r.flags.SkipFirewall {
-		args = append(args, "--skip-firewall")
-	}
-	if r.flags.DryRun {
-		args = append(args, "--dry-run")
-	}
-
-	// Anyone relay flags
-	if r.flags.AnyoneClient {
-		args = append(args, "--anyone-client")
-	}
+	args = append(args, remoteInstallArgs(r.flags)...)
 
 	return joinShellArgs(args)
+}
+
+// remoteInstallArgs renders the flags to forward to the node.
+func remoteInstallArgs(flags *Flags) []string {
+	var args []string
+
+	strFlags := []struct {
+		name  string
+		value string
+	}{
+		{"vps-ip", flags.VpsIP},
+		{"domain", flags.Domain},
+		{"base-domain", flags.BaseDomain},
+		{"join", flags.JoinAddress},
+		{"token", flags.Token},
+		{"ca-fingerprint", flags.CAFingerprint},
+		{"ssh-user", flags.SSHUser},
+		{"environment", flags.Environment},
+		{"operator-wallet", flags.OperatorWallet},
+		{"peers", flags.PeersStr},
+		{"ipfs-peer", flags.IPFSPeerID},
+		{"ipfs-addrs", flags.IPFSAddrs},
+		{"ipfs-cluster-peer", flags.IPFSClusterPeerID},
+		{"ipfs-cluster-addrs", flags.IPFSClusterAddrs},
+		{"cluster-secret", flags.ClusterSecret},
+		{"swarm-key", flags.SwarmKey},
+	}
+	for _, f := range strFlags {
+		if f.value != "" {
+			args = append(args, "--"+f.name, f.value)
+		}
+	}
+
+	boolFlags := []struct {
+		name string
+		set  bool
+	}{
+		{"nameserver", flags.Nameserver},
+		{"force", flags.Force},
+		{"skip-checks", flags.SkipChecks},
+		{"skip-firewall", flags.SkipFirewall},
+		{"dry-run", flags.DryRun},
+		{"anyone-client", flags.AnyoneClient},
+	}
+	for _, f := range boolFlags {
+		if f.set {
+			args = append(args, "--"+f.name)
+		}
+	}
+
+	return args
 }
 
 // sudoPrefix returns "sudo " for non-root SSH users, empty for root.

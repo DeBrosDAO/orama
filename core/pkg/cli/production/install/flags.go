@@ -28,6 +28,11 @@ type Flags struct {
 	// Anyone flags
 	AnyoneClient bool // Run Anyone as client-only (SOCKS5 proxy on port 9050, no relay)
 
+	// Remote drives the install over SSH against VpsIP instead of installing
+	// on this machine. This used to be inferred from whether the process was
+	// root, so the same command line meant two different things.
+	Remote bool
+
 	// Operator metadata (set by orama node setup, written to node.yaml for registration)
 	SSHUser        string // SSH user for remote management
 	Environment    string // Environment name (devnet, testnet, etc.)
