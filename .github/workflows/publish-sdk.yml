@@ -85,13 +85,27 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # The dist-tag is decided by the version, not by the branch.
+      #
+      # It used to be "not main means nightly", so a release cut from main
+      # carrying a -nightly version published with no tag — and npm's default
+      # tag is `latest` regardless of whether the version is a prerelease. That
+      # is how `latest` came to be 0.122.80-nightly while the repo was 23
+      # versions ahead, so `npm install @debros/orama` installed a stale
+      # prerelease.
+      #
+      # A version with a prerelease component can now only ever reach the
+      # `nightly` tag, whatever branch it was cut from.
       - name: Publish
         if: github.event_name == 'release' || inputs.dry-run != true
         run: |
-          if [[ "${{ github.event.release.target_commitish }}" != "main" && "${{ github.event_name }}" == "release" ]]; then
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *-* ]]; then
+            echo "$VERSION is a prerelease — publishing under the 'nightly' tag"
             npm publish --access public --tag nightly
           else
-            npm publish --access public
+            echo "$VERSION is a release — publishing under 'latest'"
+            npm publish --access public --tag latest
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -17,6 +17,23 @@ A modern, isomorphic TypeScript SDK for the Orama Network gateway. Works seamles
 npm install @debros/orama
 ```
 
+Works from both module systems:
+
+```js
+import { createClient } from "@debros/orama"; // ESM
+const { createClient } = require("@debros/orama"); // CommonJS
+```
+
+## Running the examples
+
+`examples/` holds runnable scripts. They read the gateway and the key from the
+environment, so nothing has to be edited:
+
+```bash
+GATEWAY_BASE_URL=https://ns-myapp.orama-devnet.network \
+ORAMA_API_KEY=ak_... pnpm example
+```
+
 ## Quick Start
 
 ### Initialize the Client
@@ -25,13 +42,13 @@ npm install @debros/orama
 import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "http://localhost:6001",
+  baseURL: "https://ns-myapp.orama-devnet.network",
   apiKey: "ak_your_api_key:namespace",
 });
 
 // Or with JWT
 const client = createClient({
-  baseURL: "http://localhost:6001",
+  baseURL: "https://ns-myapp.orama-devnet.network",
   jwt: "your_jwt_token",
 });
 ```
@@ -397,7 +414,7 @@ By default, credentials are stored in memory. For browser apps, use localStorage
 import { createClient, LocalStorageAdapter } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "http://localhost:6001",
+  baseURL: "https://ns-myapp.orama-devnet.network",
   storage: new LocalStorageAdapter(),
   apiKey: "ak_your_key:namespace",
 });
@@ -516,7 +533,7 @@ Invoke WebAssembly serverless functions deployed on the network.
 ```typescript
 // Configure functions namespace
 const client = createClient({
-  baseURL: "http://localhost:6001",
+  baseURL: "https://ns-myapp.orama-devnet.network",
   apiKey: "ak_your_key:namespace",
   functionsConfig: {
     namespace: "my-namespace",
@@ -546,7 +563,7 @@ The vault client provides Shamir-split secret storage across guardian nodes. Sec
 
 ```typescript
 const client = createClient({
-  baseURL: "http://localhost:6001",
+  baseURL: "https://ns-myapp.orama-devnet.network",
   apiKey: "ak_your_key:namespace",
   vaultConfig: {
     guardians: [
@@ -652,7 +669,7 @@ Run E2E tests against a running gateway:
 
 ```bash
 # Set environment variables
-export GATEWAY_BASE_URL=http://localhost:6001
+export GATEWAY_BASE_URL=https://ns-myapp.orama-devnet.network
 export GATEWAY_API_KEY=ak_test_key:default
 
 # Run tests
