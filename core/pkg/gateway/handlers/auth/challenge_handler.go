@@ -9,13 +9,19 @@ import (
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
 
-// ChallengeHandler generates a cryptographic nonce for wallet signature challenges.
-// This is the first step in the authentication flow where clients request a nonce
-// to sign with their wallet.
+// ChallengeHandler issues the message a wallet is asked to sign.
+//
+// It used to answer with a bare 32-byte nonce. A signature over that says only
+// "the holder of this key signed these bytes" — nothing about who asked, what
+// for, or when — so the wallet dialog showed the user an opaque blob and any
+// signature they had ever made was, in principle, an Orama login. The answer is
+// an EIP-4361 message now (or its Solana counterpart): the domain, the
+// namespace, the nonce and the deadline are all inside the bytes that get
+// signed. See pkg/gateway/auth/challenge.go.
 //
 // POST /v1/auth/challenge
 // Request body: ChallengeRequest
-// Response: { "wallet", "namespace", "nonce", "purpose", "expires_at" }
+// Response: { "message", "nonce", "wallet", "namespace", "chain_type", "issued_at", "expires_at" }
 func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	if h.authService == nil {
 		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
@@ -37,6 +43,18 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	chain, err := authsvc.ParseChain(req.ChainType)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	domain, uri, err := requestOrigin(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// The wallet in the body is not the caller's to prove, and each challenge
 	// writes a nonce row for it. Limiting the address alone caps one client,
 	// not a distributed grind against one victim's wallet.
@@ -47,7 +65,14 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nonce, err := h.authService.CreateNonce(r.Context(), req.Wallet, req.Purpose, req.Namespace)
+	challenge, err := h.authService.CreateChallenge(r.Context(), authsvc.ChallengeParams{
+		Wallet:    req.Wallet,
+		Purpose:   req.Purpose,
+		Namespace: req.Namespace,
+		Chain:     chain,
+		Domain:    domain,
+		URI:       uri,
+	})
 	if err != nil {
 		h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
 			Namespace: req.Namespace,
@@ -61,7 +86,7 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
-		Namespace: req.Namespace,
+		Namespace: challenge.Namespace,
 		Actor:     req.Wallet,
 		Action:    authsvc.AuditChallengeIssued,
 		Result:    authsvc.AuditSuccess,
@@ -69,11 +94,14 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
+		"message":    challenge.Message,
+		"nonce":      challenge.Nonce,
 		"wallet":     req.Wallet,
-		"namespace":  req.Namespace,
-		"nonce":      nonce,
+		"namespace":  challenge.Namespace,
+		"chain_type": string(chain),
 		"purpose":    req.Purpose,
-		"expires_at": time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
+		"issued_at":  challenge.IssuedAt.UTC().Format(time.RFC3339),
+		"expires_at": challenge.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 }
 

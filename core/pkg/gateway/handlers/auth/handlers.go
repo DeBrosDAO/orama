@@ -143,14 +143,12 @@ func (h *Handlers) consumeNonce(ctx context.Context, w http.ResponseWriter, wall
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, authsvc.ErrNonceInvalid) {
-		writeError(w, http.StatusUnauthorized, authsvc.ErrNonceInvalid.Error())
-		return false
+	if !errors.Is(err, authsvc.ErrNonceInvalid) {
+		// Registry unreachable or single-use not guaranteed: fail closed, and
+		// do not report it as an authentication failure.
+		h.logger.Error("failed to consume authentication challenge", zap.Error(err))
 	}
-	// Registry unreachable or single-use not guaranteed: fail closed, and do
-	// not report it as an authentication failure.
-	h.logger.Error("failed to consume authentication challenge", zap.Error(err))
-	writeError(w, http.StatusServiceUnavailable, authsvc.ErrNonceTransient.Error())
+	writeChallengeConsumeError(w, err)
 	return false
 }
 

@@ -216,35 +216,52 @@ export class AuthClient {
   }
 
   /**
-   * Request a challenge nonce for wallet authentication
+   * Ask the gateway for the message this wallet should sign.
+   *
+   * `message` is a Sign-In with Ethereum (EIP-4361) message, or its Solana
+   * counterpart for `chain_type: "SOL"`. Sign it **verbatim** — it is what the
+   * wallet shows the user, and the gateway verifies the signature against the
+   * exact text it issued, so re-rendering the same fields produces a signature
+   * over different bytes and a failed login.
+   *
+   * The domain, namespace, nonce and expiry are all inside it. That is the
+   * point: a signature over a bare nonce says only that someone holding the key
+   * signed some bytes, which makes it valid for any site that ever sees it.
    */
   async challenge(params: {
     wallet: string;
     purpose?: string;
     namespace?: string;
+    chain_type?: "ETH" | "SOL";
   }): Promise<{
+    message: string;
     nonce: string;
     wallet: string;
     namespace: string;
+    chain_type: string;
+    issued_at: string;
     expires_at: string;
   }> {
     const response = await this.httpClient.post("/v1/auth/challenge", {
       wallet: params.wallet,
       purpose: params.purpose || "authentication",
       namespace: params.namespace || "default",
+      chain_type: params.chain_type || "ETH",
     });
     return response;
   }
 
   /**
-   * Verify wallet signature and get JWT token
+   * Verify a signed sign-in message and get a JWT.
+   *
+   * Send back the `message` from {@link challenge} exactly as received, with
+   * the signature over it. The wallet, the nonce and the namespace are read out
+   * of the message rather than passed beside it — those are the fields the user
+   * approved, and the ones the signature covers.
    */
   async verify(params: {
-    wallet: string;
-    nonce: string;
+    message: string;
     signature: string;
-    namespace?: string;
-    chain_type?: "ETH" | "SOL";
   }): Promise<{
     access_token: string;
     refresh_token?: string;
@@ -255,11 +272,8 @@ export class AuthClient {
     token_type?: string;
   }> {
     const response = await this.httpClient.post("/v1/auth/verify", {
-      wallet: params.wallet,
-      nonce: params.nonce,
+      message: params.message,
       signature: params.signature,
-      namespace: params.namespace || "default",
-      chain_type: params.chain_type || "ETH",
     });
 
     // Persist JWT
@@ -279,33 +293,29 @@ export class AuthClient {
     // include it in the refresh request body (the gateway scopes refresh
     // tokens to the issuing namespace). Bug #239 — without this, refresh
     // would default to "default" and fail for namespace-scoped sessions.
-    const issuedNamespace =
-      (response as any).namespace || params.namespace || "default";
+    const issuedNamespace = (response as any).namespace || "default";
     await this.storage.set("namespace", issuedNamespace);
 
     return response as any;
   }
 
   /**
-   * Get API key for wallet (creates namespace ownership)
+   * Get an API key for the wallet that signed the message (creates namespace
+   * ownership). Takes the same signed message as {@link verify}.
    */
   async getApiKey(params: {
-    wallet: string;
-    nonce: string;
+    message: string;
     signature: string;
-    namespace?: string;
-    chain_type?: "ETH" | "SOL";
+    plan?: string;
   }): Promise<{
     api_key: string;
     namespace: string;
     wallet: string;
   }> {
     const response = await this.httpClient.post("/v1/auth/api-key", {
-      wallet: params.wallet,
-      nonce: params.nonce,
+      message: params.message,
       signature: params.signature,
-      namespace: params.namespace || "default",
-      chain_type: params.chain_type || "ETH",
+      ...(params.plan ? { plan: params.plan } : {}),
     });
 
     // Automatically set the API key

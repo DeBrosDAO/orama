@@ -158,13 +158,13 @@ func TestChallengeHandler_limitsBeforeWritingTheNonce(t *testing.T) {
 	body := string(src)
 
 	limit := strings.Index(body, "h.challengeLimiter.allow(")
-	write := strings.Index(body, "h.authService.CreateNonce(")
+	write := strings.Index(body, "h.authService.CreateChallenge(")
 
 	if limit < 0 {
 		t.Fatal("the challenge handler does not consult the per-wallet limiter")
 	}
 	if write < 0 {
-		t.Fatal("the challenge handler no longer writes a nonce; update this test")
+		t.Fatal("the challenge handler no longer issues a challenge; update this test")
 	}
 	if limit > write {
 		t.Error("the nonce is written before the limit is checked, so the row the " +

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/contracttest"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
 )
 
 // The bodies the TypeScript SDK sends to /v1/auth/* must decode into these
@@ -42,8 +43,8 @@ func TestAuthContract(t *testing.T) {
 	}
 }
 
-// A wallet login is a wallet, a nonce and a signature. A renewal is a refresh
-// token. Losing any of them turns the call into an unauthenticated one.
+// A wallet login is a signed sign-in message. A renewal is a refresh token.
+// Losing either turns the call into an unauthenticated one.
 func TestAuthContractCarriesTheCredentials(t *testing.T) {
 	fixtures, err := contracttest.For(".", "auth/")
 	if err != nil {
@@ -65,9 +66,18 @@ func TestAuthContractCarriesTheCredentials(t *testing.T) {
 			if err := fixture.DecodeStrict(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body.Wallet == "" || body.Nonce == "" || body.Signature == "" {
-				t.Errorf("verify: wallet=%q nonce=%q signature=%q — all three are required",
-					body.Wallet, body.Nonce, body.Signature)
+			if body.Message == "" || body.Signature == "" {
+				t.Errorf("verify: message=%q signature=%q — both are required",
+					body.Message, body.Signature)
+			}
+			// The message is not an opaque token the SDK relays: everything
+			// the gateway acts on is read out of it, so a fixture carrying one
+			// the parser rejects would let the contract drift from the format.
+			m, err := siw.Parse(body.Message)
+			if err != nil {
+				t.Errorf("verify: the message the SDK sends is not a sign-in message: %v", err)
+			} else if m.Nonce == "" || m.Address == "" {
+				t.Errorf("verify: the message carries no wallet or nonce: %+v", m)
 			}
 		case "/v1/auth/refresh":
 			var body RefreshRequest

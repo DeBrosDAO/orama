@@ -103,27 +103,39 @@ const client = createClient({ baseURL, apiKey: process.env.ORAMA_API_KEY });
 
 ### Wallet login
 
-A user proves ownership of an address by signing a nonce. The result is a JWT
-scoped to the namespace.
+A user proves ownership of an address by signing a Sign-In with Ethereum
+message (EIP-4361), or its Solana counterpart for `chain_type: "SOL"`. The
+result is a JWT scoped to the namespace.
 
 ```typescript
-const challenge = await client.auth.challenge({ wallet: "0xYourWallet" });
-const signature = await wallet.signMessage(challenge.nonce);
+const challenge = await client.auth.challenge({
+  wallet: "0xYourWallet",
+  namespace: "acme",
+  chain_type: "ETH", // or "SOL"
+});
+
+// Sign the message verbatim. It is what the wallet shows the user, and the
+// gateway verifies the signature against the exact text it issued.
+const signature = await wallet.signMessage(challenge.message);
 
 const session = await client.auth.verify({
-  wallet: "0xYourWallet",
-  nonce: challenge.nonce,
+  message: challenge.message,
   signature,
-  chain_type: "ETH", // or "SOL"
 });
 ```
 
-`verify` stores the access token, the refresh token and the namespace the token
-was issued for, so renewal below happens on its own. Nonces are single-use: sign
-a fresh challenge for each call.
+The message carries the gateway's domain, the namespace, the nonce and a
+five-minute expiry, and the signature covers all of it. That is what makes the
+signature a login *here* rather than a credential anyone who sees it can use
+anywhere — so `verify` takes the message, not the fields beside it: the wallet
+and namespace it acts on are read out of the bytes the user approved.
 
-`client.auth.getApiKey({ wallet, nonce, signature })` mints a long-lived key the
-same way, from its own fresh challenge.
+`verify` stores the access token, the refresh token and the namespace the token
+was issued for, so renewal below happens on its own. Challenges are single-use:
+ask for a fresh one for each call.
+
+`client.auth.getApiKey({ message, signature })` mints a long-lived key the same
+way, from its own fresh challenge.
 
 ### Sessions renew themselves
 

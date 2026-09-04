@@ -34,39 +34,22 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
+	if strings.TrimSpace(req.Message) == "" || strings.TrimSpace(req.Signature) == "" {
+		writeError(w, http.StatusBadRequest, "message and signature are required: sign the message "+
+			"returned by /v1/auth/challenge and send it back verbatim")
 		return
 	}
 
 	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
-			Namespace: req.Namespace,
-			Actor:     req.Wallet,
-			Action:    authsvc.AuditVerifySucceeded,
-			Result:    authsvc.AuditFailure,
-			Metadata:  map[string]string{"reason": "signature verification failed"},
-		})
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
+	in, ok := h.signIn(w, r, req.Message, req.Signature)
+	if !ok {
 		return
 	}
-
-	// Claim the challenge. A valid signature over a stale nonce is a replay.
-	if !h.consumeNonce(ctx, w, req.Wallet, req.Nonce, req.Namespace) {
-		return
-	}
-
-	// Check if namespace cluster provisioning is needed (for non-default namespaces)
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
+	wallet, namespace := in.Wallet, in.Namespace
 
 	// Refuse before anything is issued or provisioned: a namespace that belongs
 	// to another wallet is not this caller's to sign in to.
-	if err := h.authService.RequireNamespaceOwner(ctx, req.Wallet, namespace); err != nil {
+	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
 		writeCredentialError(w, namespace, err)
 		return
 	}
@@ -79,13 +62,13 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	// A namespace whose cluster is still coming up is reported by
 	// /v1/namespace/status, which the create path hands back a poll URL for.
 
-	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
+	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, wallet, namespace)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
+	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
 	if err != nil {
 		writeCredentialError(w, namespace, err)
 		return
@@ -93,7 +76,7 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
 		Namespace: namespace,
-		Actor:     req.Wallet,
+		Actor:     wallet,
 		Action:    authsvc.AuditVerifySucceeded,
 		Result:    authsvc.AuditSuccess,
 	})
@@ -103,10 +86,10 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		"token_type":         "Bearer",
 		"expires_in":         int(expUnix - time.Now().Unix()),
 		"refresh_token":      refresh,
-		"subject":            req.Wallet,
-		"namespace":          req.Namespace,
+		"subject":            wallet,
+		"namespace":          namespace,
 		"api_key":            apiKey,
-		"nonce":              req.Nonce,
+		"nonce":              in.Message.Nonce,
 		"signature_verified": true,
 	})
 }

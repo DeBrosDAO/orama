@@ -70,6 +70,13 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A key-authenticated caller cannot create a namespace: a namespace's owner is a wallet, and one with no wallet owner is claimable by whoever signs in to it next
 - The name is validated as what it becomes — a DNS label, a systemd instance name and a directory — and platform names are reserved
 
+**What a wallet signs (`/v1/auth/challenge`)**
+- The challenge is a Sign-In with Ethereum message (EIP-4361), or the Solana equivalent — the same grammar with one word changed in the header line. `/v1/auth/verify` and `/v1/auth/api-key` take the signed message back and read the wallet, the nonce and the namespace out of it; nothing beside it in the request body is read, because nothing beside it was signed
+- The message names this gateway's own host, taken from the request's `Host`, so a signature collected by any other site does not verify here. It used to be a bare 32-byte nonce: a signature over that proves possession of the key and nothing else, so any signature that wallet had ever made anywhere was in principle an Orama login — and the wallet dialog showed the user a base64 blob they had no way to judge
+- The namespace is in the message twice: in the statement the user reads, and as a `urn:orama:namespace:<name>` resource the gateway acts on. Both are inside the signature, so the namespace a caller is signed in to is the one the user approved
+- The message states its own expiry, five minutes, checked independently of the nonce row's. A refusal carries a code: `AUTH_DOMAIN_MISMATCH`, `AUTH_MESSAGE_EXPIRED`, `AUTH_MESSAGE_MALFORMED`, `AUTH_SIGNATURE_INVALID`, or `AUTH_CHALLENGE_INVALID`
+- `AUTH_CHALLENGE_INVALID` is one code for three causes — never issued, already used, expired. Telling them apart would make the endpoint an oracle for which wallets hold outstanding challenges, and the caller's next move is the same in all three
+
 **Challenge nonces**
 - One wallet may hold 10 unanswered, unexpired challenges in a namespace. The row is written for whatever wallet the body names and nothing proves the caller owns it, so without a ceiling a grind fills the table for a victim's wallet
 - Spent and expired challenges are removed on a ticker. Nothing removed them before: every challenge ever issued stayed in a Raft-replicated table

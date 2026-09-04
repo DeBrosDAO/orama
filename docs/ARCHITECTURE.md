@@ -782,8 +782,22 @@ Function Invocation:
 
 ### Authentication Methods
 
-1. **Wallet Signatures** (Ethereum-style)
-   - Challenge/response flow
+1. **Wallet Signatures** (EVM and Solana)
+   - Challenge/response. `/v1/auth/challenge` returns a Sign-In with Ethereum
+     message (EIP-4361), or the Solana equivalent — the same grammar with one
+     word changed in the header line — and the wallet signs that text verbatim.
+     `/v1/auth/verify` and `/v1/auth/api-key` take the message back and read the
+     wallet, the nonce and the namespace out of it; nothing beside it in the
+     request body is trusted, because nothing beside it was signed
+   - The message carries the gateway's own host as its domain, so a signature
+     collected by any other site does not verify here. It used to be a bare
+     32-byte nonce: a signature over that says only that someone holding the key
+     signed some bytes, so any signature that wallet had ever produced was in
+     principle an Orama login, and the wallet dialog showed the user a blob they
+     had no way to judge
+   - The message states its own five-minute expiry, and names the namespace both
+     in words the user reads and as a `urn:orama:namespace:<name>` resource the
+     gateway acts on
    - The challenge is single-use. Every signature endpoint consumes it with one
      conditional `UPDATE nonces … WHERE used_at IS NULL AND expires_at > now`
      and refuses the request unless that statement affected a row, so a

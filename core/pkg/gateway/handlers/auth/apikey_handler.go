@@ -30,32 +30,22 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
+	if strings.TrimSpace(req.Message) == "" || strings.TrimSpace(req.Signature) == "" {
+		writeError(w, http.StatusBadRequest, "message and signature are required: sign the message "+
+			"returned by /v1/auth/challenge and send it back verbatim")
 		return
 	}
 
 	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
+	in, ok := h.signIn(w, r, req.Message, req.Signature)
+	if !ok {
 		return
 	}
-
-	// Claim the challenge. A valid signature over a stale nonce is a replay.
-	if !h.consumeNonce(ctx, w, req.Wallet, req.Nonce, req.Namespace) {
-		return
-	}
-
-	// Check if namespace cluster provisioning is needed (for non-default namespaces)
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
+	wallet, namespace := in.Wallet, in.Namespace
 
 	// Refuse before anything is issued or provisioned: a namespace that belongs
 	// to another wallet is not this caller's to sign in to.
-	if err := h.authService.RequireNamespaceOwner(ctx, req.Wallet, namespace); err != nil {
+	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
 		writeCredentialError(w, namespace, err)
 		return
 	}
@@ -63,7 +53,7 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 	// Issuing a key does not provision anything. See VerifyHandler: creating a
 	// namespace is POST /v1/namespaces, and that is what provisions it.
 
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
+	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
 	if err != nil {
 		writeCredentialError(w, namespace, err)
 		return
@@ -71,13 +61,13 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"api_key":   apiKey,
-		"namespace": req.Namespace,
+		"namespace": namespace,
 		"plan": func() string {
 			if strings.TrimSpace(req.Plan) == "" {
 				return "free"
 			}
 			return req.Plan
 		}(),
-		"wallet": strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(req.Wallet, "0x"), "0X")),
+		"wallet": wallet,
 	})
 }

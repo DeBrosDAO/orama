@@ -635,29 +635,30 @@ could call.
 For wallet-based auth (challenge-response flow):
 
 ```typescript
-// 1. Request a challenge nonce for your wallet
+// 1. Ask the gateway for the message to sign. It is a Sign-In with Ethereum
+//    (EIP-4361) message, or its Solana counterpart for chain_type "SOL",
+//    carrying the gateway's domain, the namespace, a nonce and an expiry.
 const challenge = await client.auth.challenge({ wallet: "0xYourWallet" });
 
-// 2. Sign the nonce with your wallet (external)
-const signature = await wallet.signMessage(challenge.nonce);
+// 2. Sign it verbatim. This is the text the wallet shows the user, and the
+//    gateway checks the signature against exactly what it issued.
+const signature = await wallet.signMessage(challenge.message);
 
-// 3. Verify signature and get JWT (persisted on the client automatically)
+// 3. Send the message back with the signature (persisted automatically).
+//    The wallet and namespace come out of the message, not from beside it.
 const session = await client.auth.verify({
-  wallet: "0xYourWallet",
-  nonce: challenge.nonce,
+  message: challenge.message,
   signature,
-  chain_type: "ETH", // or "SOL"
 });
 console.log(session.access_token);
 console.log(session.api_key); // API key for long-lived access, if issued
 
-// Alternatively, request an API key directly. Nonces are single-use,
-// so sign a fresh challenge:
+// Alternatively, request an API key directly. Challenges are single-use,
+// so ask for a fresh one:
 const fresh = await client.auth.challenge({ wallet: "0xYourWallet" });
 const apiKey = await client.auth.getApiKey({
-  wallet: "0xYourWallet",
-  nonce: fresh.nonce,
-  signature: await wallet.signMessage(fresh.nonce),
+  message: fresh.message,
+  signature: await wallet.signMessage(fresh.message),
 });
 console.log(apiKey.api_key);
 ```

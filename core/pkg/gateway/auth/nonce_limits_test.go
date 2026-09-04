@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
 )
 
 // nonceDB answers what CreateNonce asks: does the namespace exist, and how many
@@ -59,6 +60,23 @@ type nonceNet struct {
 
 func (n *nonceNet) Database() client.DatabaseClient { return n.db }
 
+// testWallet is a real EIP-55 checksummed address: a challenge renders the
+// wallet into the message before it writes anything, so a placeholder would
+// fail for the wrong reason.
+const testWallet = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+
+// createChallenge is CreateChallenge with the fields these tests do not vary.
+func createChallenge(s *Service, wallet, namespace string) (*Challenge, error) {
+	return s.CreateChallenge(context.Background(), ChallengeParams{
+		Wallet:    wallet,
+		Purpose:   "login",
+		Namespace: namespace,
+		Chain:     siw.Ethereum,
+		Domain:    "gateway.example",
+		URI:       "https://gateway.example",
+	})
+}
+
 func nonceService(t *testing.T, db *nonceDB) *Service {
 	t.Helper()
 	s := createTestService(t)
@@ -70,11 +88,11 @@ func nonceService(t *testing.T, db *nonceDB) *Service {
 // The bug: an unauthenticated POST to /v1/auth/challenge ran
 // INSERT OR IGNORE INTO namespaces, so squatting a name was free and signing in
 // to a name nobody had taken silently created it.
-func TestCreateNonce_refusesAnUnknownNamespace(t *testing.T) {
+func TestCreateChallenge_refusesAnUnknownNamespace(t *testing.T) {
 	db := &nonceDB{namespaces: map[string]int64{"default": 1}}
 	s := nonceService(t, db)
 
-	_, err := s.CreateNonce(context.Background(), "0xwallet", "login", "nobody-has-this")
+	_, err := createChallenge(s, testWallet, "nobody-has-this")
 
 	var unknown *ErrNamespaceUnknown
 	if !errors.As(err, &unknown) {
@@ -88,16 +106,19 @@ func TestCreateNonce_refusesAnUnknownNamespace(t *testing.T) {
 	}
 }
 
-func TestCreateNonce_issuesForAnExistingNamespace(t *testing.T) {
+func TestCreateChallenge_issuesForAnExistingNamespace(t *testing.T) {
 	db := &nonceDB{namespaces: map[string]int64{"anchat": 7}}
 	s := nonceService(t, db)
 
-	nonce, err := s.CreateNonce(context.Background(), "0xwallet", "login", "anchat")
+	challenge, err := createChallenge(s, testWallet, "anchat")
 	if err != nil {
 		t.Fatalf("a challenge for an existing namespace was refused: %v", err)
 	}
-	if nonce == "" {
+	if challenge.Nonce == "" {
 		t.Error("no nonce was returned")
+	}
+	if challenge.Message == "" {
+		t.Error("no message was returned, so there is nothing for a wallet to sign")
 	}
 	if db.inserted != 1 {
 		t.Errorf("%d nonces written, want 1", db.inserted)
@@ -106,11 +127,11 @@ func TestCreateNonce_issuesForAnExistingNamespace(t *testing.T) {
 
 // A challenge writes a Raft-replicated row for whatever wallet the body names,
 // and nothing proves the caller owns it.
-func TestCreateNonce_capsOutstandingChallengesPerWallet(t *testing.T) {
+func TestCreateChallenge_capsOutstandingChallengesPerWallet(t *testing.T) {
 	db := &nonceDB{namespaces: map[string]int64{"anchat": 7}, outstanding: maxOutstandingNonces}
 	s := nonceService(t, db)
 
-	_, err := s.CreateNonce(context.Background(), "0xvictim", "login", "anchat")
+	_, err := createChallenge(s, testWallet, "anchat")
 
 	var tooMany *ErrTooManyOutstandingNonces
 	if !errors.As(err, &tooMany) {
@@ -121,21 +142,21 @@ func TestCreateNonce_capsOutstandingChallengesPerWallet(t *testing.T) {
 	}
 }
 
-func TestCreateNonce_allowsUpToTheCap(t *testing.T) {
+func TestCreateChallenge_allowsUpToTheCap(t *testing.T) {
 	db := &nonceDB{namespaces: map[string]int64{"anchat": 7}, outstanding: maxOutstandingNonces - 1}
 	s := nonceService(t, db)
 
-	if _, err := s.CreateNonce(context.Background(), "0xwallet", "login", "anchat"); err != nil {
+	if _, err := createChallenge(s, testWallet, "anchat"); err != nil {
 		t.Fatalf("a challenge inside the cap was refused: %v", err)
 	}
 }
 
 // Not being able to count is not permission to skip the ceiling.
-func TestCreateNonce_refusesWhenTheCountCannotBeRead(t *testing.T) {
+func TestCreateChallenge_refusesWhenTheCountCannotBeRead(t *testing.T) {
 	db := &nonceDB{namespaces: map[string]int64{"anchat": 7}, failCount: true}
 	s := nonceService(t, db)
 
-	if _, err := s.CreateNonce(context.Background(), "0xwallet", "login", "anchat"); err == nil {
+	if _, err := createChallenge(s, testWallet, "anchat"); err == nil {
 		t.Fatal("a challenge was issued without checking the cap")
 	}
 	if db.inserted != 0 {
@@ -144,11 +165,11 @@ func TestCreateNonce_refusesWhenTheCountCannotBeRead(t *testing.T) {
 }
 
 // An empty namespace means the gateway's default, which exists.
-func TestCreateNonce_anEmptyNamespaceUsesTheDefault(t *testing.T) {
+func TestCreateChallenge_anEmptyNamespaceUsesTheDefault(t *testing.T) {
 	db := &nonceDB{namespaces: map[string]int64{"test-ns": 1}}
 	s := nonceService(t, db)
 
-	if _, err := s.CreateNonce(context.Background(), "0xwallet", "login", ""); err != nil {
+	if _, err := createChallenge(s, testWallet, ""); err != nil {
 		t.Fatalf("a namespace-less challenge was refused: %v", err)
 	}
 }

@@ -104,6 +104,24 @@ export const AuthCode = {
   OperatorRequired: "NOT_AN_OPERATOR",
   /** The destination is refused; a different credential will not help. */
   DestinationNotAllowed: "DESTINATION_NOT_ALLOWED",
+
+  // --- Signing in with a wallet ------------------------------------------
+  /** The sign-in message could not be read. Send the one `challenge()` returned, verbatim. */
+  MessageMalformed: "AUTH_MESSAGE_MALFORMED",
+  /** The message was signed for another host. Ask this gateway for the challenge. */
+  DomainMismatch: "AUTH_DOMAIN_MISMATCH",
+  /** The message's own expiry has passed. Ask for a new challenge. */
+  MessageExpired: "AUTH_MESSAGE_EXPIRED",
+  /** The message is fine and the signature over it is not. */
+  SignatureInvalid: "AUTH_SIGNATURE_INVALID",
+  /**
+   * The challenge cannot be claimed: never issued, already used, or expired.
+   *
+   * One code for three causes on purpose — telling them apart would say which
+   * wallets hold outstanding challenges, and the answer is the same in all
+   * three: ask for a new one.
+   */
+  ChallengeInvalid: "AUTH_CHALLENGE_INVALID",
 } as const;
 
 export type AuthCode = (typeof AuthCode)[keyof typeof AuthCode];

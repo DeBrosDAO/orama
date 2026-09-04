@@ -105,14 +105,20 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 	domain := extractDomainFromURL(gatewayURL)
 	client := tlsutil.NewHTTPClientForDomain(30*time.Second, domain)
 
-	nonce, err := requestChallenge(client, gatewayURL, wallet, namespace)
+	message, err := requestChallenge(client, gatewayURL, wallet, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get challenge: %w", err)
 	}
 
-	// 4. Sign the nonce with RootWallet
+	// 4. Sign the message with RootWallet, byte for byte.
+	//
+	// The gateway verifies the signature against the text it issued, so
+	// anything that alters it — trimming, re-wrapping, re-rendering the same
+	// fields — produces a signature over different bytes and a failed login.
+	// It is also what the RootWallet dialog shows the user, which is the point:
+	// it names the domain, the namespace and the deadline in words.
 	fmt.Println("⏳ Signing challenge with RootWallet...")
-	signature, err := signWithRootWallet(nonce)
+	signature, err := signWithRootWallet(message)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign challenge: %w", err)
 	}
@@ -120,7 +126,7 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 
 	// 5. Verify signature with gateway
 	fmt.Println("⏳ Verifying signature with gateway...")
-	creds, err := verifySignature(client, gatewayURL, wallet, nonce, signature, namespace)
+	creds, err := verifySignature(client, gatewayURL, message, signature, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify signature: %w", err)
 	}
@@ -144,10 +150,13 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 }
 
 // requestChallenge sends POST /v1/auth/challenge and returns the nonce
+// requestChallenge asks the gateway for the sign-in message to put in front of
+// the user, and returns it verbatim.
 func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string) (string, error) {
 	reqBody := map[string]string{
-		"wallet":    wallet,
-		"namespace": namespace,
+		"wallet":     wallet,
+		"namespace":  namespace,
+		"chain_type": "ETH",
 	}
 
 	payload, err := json.Marshal(reqBody)
@@ -167,6 +176,7 @@ func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string)
 	}
 
 	var result struct {
+		Message   string `json:"message"`
 		Nonce     string `json:"nonce"`
 		Wallet    string `json:"wallet"`
 		Namespace string `json:"namespace"`
@@ -176,21 +186,23 @@ func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string)
 		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if result.Nonce == "" {
-		return "", fmt.Errorf("no nonce in challenge response")
+	if result.Message == "" {
+		return "", fmt.Errorf("no sign-in message in challenge response: this gateway is older than " +
+			"this CLI and still answers with a bare nonce; upgrade the gateway")
 	}
 
-	return result.Nonce, nil
+	return result.Message, nil
 }
 
-// verifySignature sends POST /v1/auth/verify and returns credentials
-func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, namespace string) (*Credentials, error) {
+// verifySignature sends POST /v1/auth/verify and returns credentials.
+//
+// The message is the whole credential: the wallet, the nonce and the namespace
+// are read out of it by the gateway, because those are the fields the user saw
+// and the signature covers.
+func verifySignature(client *http.Client, gatewayURL, message, signature, namespace string) (*Credentials, error) {
 	reqBody := map[string]string{
-		"wallet":     wallet,
-		"nonce":      nonce,
-		"signature":  signature,
-		"namespace":  namespace,
-		"chain_type": "ETH",
+		"message":   message,
+		"signature": signature,
 	}
 
 	payload, err := json.Marshal(reqBody)
