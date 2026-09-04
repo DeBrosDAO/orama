@@ -54,6 +54,15 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Every key is minted with its grant written on the row. An empty `scopes` column grants nothing; it used to mean "predates scoping" and was read as admin, and `GetOrCreateAPIKey` wrote no scopes column at all — so every key minted by a wallet login was an admin key, and the legacy-key cutover was undone on each login
 - `/v1/auth/register` was removed. Nothing called it, the `apps` row it wrote was never read, it stored a literal placeholder as the app's public key, and it took namespace ownership the same way
 
+**OramaOS agent (`:9998`) and enrollment (`:9999`)**
+- The agent's command receiver binds the node's overlay address and requires a per-node bearer token on every route. It bound every interface — under a comment claiming WireGuard only — and checked nothing, so restarting any service on any node took one POST from anywhere that could route to it. Being on the mesh is not the credential: every namespace's services are on that mesh
+- The token is minted by the node at enrollment, written `0600` on its encrypted data partition, and stored on the gateway encrypted with a key derived from the cluster secret (`HKDF(cluster secret, "node-agent-token")`), because the gateway has to present it and so cannot hash it
+- A node with no address or no token starts **no** receiver. Falling back to listening on everything without a credential is the state this exists to end
+- Enrollment is sealed under the registration code the operator carries from the node's console: AES-256-GCM with `HKDF(code, "orama-enrollment-seal-v1")`, in both directions. The cluster secret, the swarm key and the WireGuard configuration used to cross the network as plaintext JSON over HTTP on the node's public IP, to an endpoint that accepted any POST — so anyone who reached a booting node first could enrol it into their own cluster
+- The code is never served. A `GET` on `:9999` returned it to whoever asked, which published the one secret the operator carried and let anyone race them for it. The gateway proves it holds the code instead of fetching it, and a wrong one fails to decrypt at the node
+- The code is 80 bits, up from 32. It keys the payload that carries the cluster secret, so it is a key rather than an identifier
+- The seal has a copy in each of two Go modules, which cannot import each other. `contracts/enrollment/seal.json` pins the derivation, and each side's tests check against it
+
 **Node enrolment (`/v1/node/enroll`)**
 - `node_ip` is parsed as IPv4 and stored canonicalised. It is rendered into `Endpoint =` in the `wg0.conf` of every other node, so an unvalidated value is a WireGuard config injection
 

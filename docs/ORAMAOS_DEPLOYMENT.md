@@ -99,6 +99,18 @@ curl -X POST "http://<wg-ip>:9998/v1/agent/unlock" \
   -d '{"key":"<base64-encoded 32-byte LUKS key>"}'
 ```
 
+Enrollment is authenticated by the registration code the node prints on its
+console. The code is **not** served over the network — a `GET` on port 9999
+used to return it — so it has to be read from the console and given to `orama
+node enroll`. The gateway proves it holds the code and sends the cluster
+configuration encrypted under it; a wrong code fails at the node and configures
+nothing.
+
+Each node mints its own agent token during enrollment. The gateway presents it
+on every later command, and the agent's command receiver binds only the node's
+overlay address. A node enrolled before agent tokens existed keeps running its
+services but accepts no commands until it is re-enrolled.
+
 Not yet implemented (do not rely on any of this):
 
 - **Genesis enrollment.** Enrollment always tries to distribute Shamir shares and fails with "no peers available for key distribution" when the cluster has zero peers — there is no genesis fallback in the enrollment flow, so a genesis OramaOS node cannot currently complete enrollment.

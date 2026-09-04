@@ -52,6 +52,41 @@ jobs:
         working-directory: core
         run: go test -count=1 ./cmd/cli -run TestCLIReference
 
+  agent-test:
+    name: OramaOS agent tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.7"
+          cache-dependency-path: os/agent/go.sum
+
+      - name: Vet
+        working-directory: os/agent
+        run: go vet ./...
+
+      # Nothing built or tested this module. It is the only root process on an
+      # OramaOS node, and its command receiver had no authentication at all.
+      - name: Test
+        working-directory: os/agent
+        run: go test -race -timeout 5m ./...
+
+      # The enrollment seal has a copy in each of two Go modules, and the
+      # shared vector lives above both, so the test cache does not treat it as
+      # an input.
+      - name: Enrollment seal matches the gateway
+        working-directory: os/agent
+        run: go test -count=1 -run TestSeal ./internal/enroll/
+
+      # The agent ships as a Linux binary; the non-Linux build exists only so
+      # the module can be tested on a developer's machine.
+      - name: Build for the target
+        working-directory: os/agent
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+
   sdk-build:
     name: SDK lint, typecheck, build, unit tests
     runs-on: ubuntu-latest

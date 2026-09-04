@@ -9,11 +9,11 @@
 package enroll
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -108,12 +108,12 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Verify registration code against the OramaOS node
-	if err := h.verifyCode(req.NodeIP, req.Code); err != nil {
-		h.logger.Warn("registration code verification failed", zap.Error(err))
-		http.Error(w, "code verification failed: "+err.Error(), http.StatusBadRequest)
-		return
-	}
+	// The registration code is not verified here, and is deliberately not
+	// fetched from the node. It used to be: a GET on the node's :9999 returned
+	// the code to whoever asked, which published the one secret the operator
+	// carried and let anyone race them for it. The code is proved to the node
+	// instead, in step 10 — a wrong one fails to decrypt there, and nothing is
+	// configured.
 
 	// 3. Generate WG keypair for the OramaOS node
 	wgPrivKey, wgPubKey, err := generateWGKeypair()
@@ -183,9 +183,21 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		Peers:           peers,
 	}
 
-	if err := h.pushConfigToNode(req.NodeIP, &enrollResp); err != nil {
+	agentToken, err := h.pushConfigToNode(req.NodeIP, req.Code, &enrollResp)
+	if err != nil {
 		h.logger.Error("failed to push config to node", zap.Error(err))
 		http.Error(w, "failed to configure node: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// The node minted its own credential and handed it back. Every command
+	// this gateway later sends it has to carry it, so losing it here means the
+	// node can never be commanded again — it is not best-effort.
+	if err := h.storeAgentToken(ctx, nodeID, agentToken); err != nil {
+		h.logger.Error("the node was configured but its agent token could not be stored; "+
+			"it will accept no commands from this gateway",
+			zap.String("node_id", nodeID), zap.Error(err))
+		http.Error(w, "failed to store the node's agent credential", http.StatusInternalServerError)
 		return
 	}
 
@@ -238,59 +250,73 @@ func (h *Handler) consumeToken(ctx context.Context, token, usedByIP string) erro
 	return nil
 }
 
-// verifyCode checks that the OramaOS node has the expected registration code.
-func (h *Handler) verifyCode(nodeIP, expectedCode string) error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://%s:9999/", nodeIP))
-	if err != nil {
-		return fmt.Errorf("cannot reach node at %s:9999: %w", nodeIP, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusGone {
-		return fmt.Errorf("node already served its registration code")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("node returned status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Code string `json:"code"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("invalid response from node: %w", err)
-	}
-
-	if result.Code != expectedCode {
-		return fmt.Errorf("registration code mismatch")
-	}
-
-	return nil
+// pushConfigToNode sends cluster configuration to the OramaOS node, sealed
+// under the registration code the operator carried from its console, and
+// returns the credential the node mints for this gateway.
+//
+// The payload carries the cluster secret, the swarm key and the node's
+// WireGuard configuration. It used to be plaintext JSON over HTTP on the node's
+// public IP, to an endpoint that accepted any POST at all — so it could be read
+// by anyone on the path and written by anyone who got there first.
+func (h *Handler) pushConfigToNode(nodeIP, code string, config *EnrollResponse) (string, error) {
+	return h.pushConfigTo(fmt.Sprintf("http://%s:9999/v1/agent/enroll/complete", nodeIP), code, config)
 }
 
-// pushConfigToNode sends cluster configuration to the OramaOS node.
-func (h *Handler) pushConfigToNode(nodeIP string, config *EnrollResponse) error {
+// pushConfigTo is pushConfigToNode against an explicit endpoint, so the
+// exchange can be exercised against a stand-in for the agent rather than
+// against a hardcoded port.
+func (h *Handler) pushConfigTo(endpoint, code string, config *EnrollResponse) (string, error) {
 	body, err := json.Marshal(config)
 	if err != nil {
-		return err
+		return "", err
+	}
+	sealed, err := Seal(code, body)
+	if err != nil {
+		return "", fmt.Errorf("could not seal the enrollment payload: %w", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(
-		fmt.Sprintf("http://%s:9999/v1/agent/enroll/complete", nodeIP),
-		"application/json",
-		bytes.NewReader(body),
-	)
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(sealed))
 	if err != nil {
-		return fmt.Errorf("failed to push config: %w", err)
+		return "", err
+	}
+	req.Header.Set(HeaderEnrollmentCode, code)
+	req.Header.Set("Content-Type", "text/plain")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to push config: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", fmt.Errorf("the node rejected the registration code: check the code " +
+			"shown on its console")
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("node returned status %d", resp.StatusCode)
+		return "", fmt.Errorf("node returned status %d", resp.StatusCode)
 	}
 
-	return nil
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("could not read the node's response: %w", err)
+	}
+	plaintext, err := Open(code, string(raw))
+	if err != nil {
+		return "", fmt.Errorf("the node's response did not decrypt, so this is not the node "+
+			"the operator read the code from: %w", err)
+	}
+
+	var completion struct {
+		AgentToken string `json:"agent_token"`
+	}
+	if err := json.Unmarshal(plaintext, &completion); err != nil {
+		return "", fmt.Errorf("the node's response was not valid JSON: %w", err)
+	}
+	if strings.TrimSpace(completion.AgentToken) == "" {
+		return "", fmt.Errorf("the node returned no agent token, so it could never be commanded")
+	}
+	return completion.AgentToken, nil
 }
 
 // generateWGKeypair generates a WireGuard private/public keypair.

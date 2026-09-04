@@ -58,6 +58,11 @@ type Agent struct {
 	cmdRecv    *command.Receiver
 	reporter   *health.Reporter
 
+	// agentToken is this node's own credential, minted at enrollment and
+	// required on every command the gateway sends. Empty on a node enrolled
+	// before it existed, which means no command receiver.
+	agentToken string
+
 	mu       sync.Mutex
 	shutdown bool
 }
@@ -90,9 +95,13 @@ func (a *Agent) enrollmentBoot() error {
 
 	// 1. Start enrollment server on port 9999
 	enrollServer := enroll.NewServer(resolveGatewayEndpoint())
-	result, err := enrollServer.Run()
+	result, agentToken, err := enrollServer.Run()
 	if err != nil {
 		return fmt.Errorf("enrollment failed: %w", err)
+	}
+	if err := a.storeAgentToken(agentToken); err != nil {
+		return fmt.Errorf("enrollment succeeded but this node's agent token could not be "+
+			"stored, so it would not survive a reboot: %w", err)
 	}
 
 	log.Println("enrollment complete, configuring node")
@@ -142,6 +151,14 @@ func (a *Agent) enrollmentBoot() error {
 // standardBoot handles normal reboot sequence.
 func (a *Agent) standardBoot() error {
 	log.Println("STANDARD BOOT: enrolled node")
+
+	// The token was written at enrollment. A node that predates it keeps
+	// serving; it just cannot be commanded until it is re-enrolled, which is
+	// better than a receiver that listens on every interface with no
+	// credential.
+	if err := a.loadAgentToken(); err != nil {
+		log.Printf("no agent token on this node, so no command receiver will start: %v", err)
+	}
 
 	// 1. Bring up WireGuard
 	if err := a.wg.Up(); err != nil {
@@ -253,8 +270,16 @@ func (a *Agent) startServices() error {
 		return fmt.Errorf("failed to start services: %w", err)
 	}
 
-	// Start command receiver (listen for Gateway commands over WG)
-	a.cmdRecv = command.NewReceiver(a.supervisor)
+	// Start command receiver, bound to this node's WireGuard address and
+	// authenticated by its agent token. Both come from enrollment; a node
+	// enrolled before either existed has neither, and the receiver refuses to
+	// start rather than listening on everything with no credential.
+	wgIP, err := a.wg.LocalIP()
+	if err != nil {
+		return fmt.Errorf("cannot start the command receiver: this node's WireGuard address "+
+			"is unknown, so the receiver would have to bind every interface: %w", err)
+	}
+	a.cmdRecv = command.NewReceiver(a.supervisor, wgIP, a.agentToken)
 	go a.cmdRecv.Listen()
 
 	// Start update checker (periodic)
